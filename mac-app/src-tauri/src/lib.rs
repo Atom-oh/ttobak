@@ -37,7 +37,9 @@ mod meeting_detect;
 mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
+mod sleep;
 mod upload;
+mod zoom_mute;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -399,6 +401,34 @@ async fn list_input_devices() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::Value::Array(Vec::new()))
 }
 
+/// Switches the running recording's microphone (ADR-061); `None` follows the
+/// meeting app. The recording continues; returns the new input.
+#[tauri::command]
+async fn switch_recording_input(
+    state: State<'_, RecorderState>,
+    input_device_uid: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let backend = state
+            .recorder
+            .lock()
+            .backend()
+            .ok_or(AppError::NotRunning)?;
+        // Core Audio FFI runs off the recorder lock.
+        let selected =
+            tauri::async_runtime::spawn_blocking(move || backend.switch_input(input_device_uid))
+                .await
+                .map_err(|e| AppError::Backend(format!("microphone switch panicked: {e}")))??;
+        Ok(serde_json::to_value(selected).unwrap_or_default())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (state, input_device_uid);
+        Err(AppError::Unsupported)
+    }
+}
+
 #[tauri::command]
 async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse, AppError> {
     // Take the handle out AND mark its path `finalizing`, in the SAME
@@ -690,6 +720,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             list_input_devices,
+            switch_recording_input,
             recording_status,
             upload::upload_recording,
             cleanup_recording,
@@ -707,6 +738,8 @@ pub fn run() {
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            sleep::start(app.handle().clone());
             // Adopt any leftover temp WAVs from a previous run (crash, force
             // quit, or a stop that never got a chance to finalize) into
             // `recorded_paths` AND `adopted_paths`, so `upload_recording`/

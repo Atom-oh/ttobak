@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { usePathname } from 'next/navigation';
@@ -222,7 +223,7 @@ export default function ProjectDetailClient() {
 
   const handleRemoveMember = async (userId: string) => {
     if (!isOwner) return;
-    if (!confirm('Remove this member?')) return;
+    if (!await confirmDialog('Remove this member?')) return;
     setError(null);
     try {
       await projectApi.removeMember(projectId, userId);
@@ -251,7 +252,7 @@ export default function ProjectDetailClient() {
 
   const handleUnlinkAccount = async (linkedAccountId: string) => {
     if (!isOwner) return;
-    if (!confirm('Unlink this account? Its members will lose inherited access to this project.')) return;
+    if (!await confirmDialog('Unlink this account? Its members will lose inherited access to this project.')) return;
     setError(null);
     try {
       await projectApi.unlinkAccount(projectId, linkedAccountId);

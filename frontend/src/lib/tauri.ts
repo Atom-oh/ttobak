@@ -172,6 +172,12 @@ export async function listNativeInputDevices(): Promise<NativeInputDevice[] | nu
   }
 }
 
+/** Switches the running recording's microphone; `''` follows the meeting app.
+ * The recording continues. Rejects on app builds without the command. */
+export function switchNativeRecordingInput(inputDeviceUid: string): Promise<NativeSelectedInput> {
+  return invoke<NativeSelectedInput>('switch_recording_input', { inputDeviceUid: inputDeviceUid || null });
+}
+
 export function stopNativeRecording(): Promise<TauriStopResponse> {
   return invoke<TauriStopResponse>('stop_recording');
 }
@@ -585,6 +591,34 @@ export function onNativeMeetingResumed(handler: (d: NativeMeetingDetection) => v
     decodeMeetingDetection,
     (d) => { if (d) handler(d); },
   );
+}
+
+/** The recording follows a meeting app's own mute (ADR-061): while `muted`,
+ * the microphone is mixed silent. */
+export interface NativeMicMuted {
+  muted: boolean;
+  app: string;
+  /** Why, while muted: the app's own mute or its meeting ended. */
+  reason?: 'muted' | 'meeting_ended';
+}
+
+export function onNativeMicMuted(handler: (m: NativeMicMuted) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeMicMuted | null>(
+    'native-mic-muted',
+    (raw) => {
+      const r = raw as Partial<NativeMicMuted> | null;
+      if (!r || typeof r.muted !== 'boolean' || typeof r.app !== 'string') return null;
+      const reason = r.reason === 'muted' || r.reason === 'meeting_ended' ? r.reason : undefined;
+      return { muted: r.muted, app: r.app, reason };
+    },
+    (m) => { if (m) handler(m); },
+  );
+}
+
+/** The Mac woke from sleep (ADR-061): a recording stopped for sleep may
+ * have an interrupted upload to resume. */
+export function onNativeSystemWake(handler: () => void): () => void {
+  return subscribeTauriEvent<unknown, true>('native-system-wake', () => true, () => handler());
 }
 
 /** Detection preference and the meeting announced right now. `null` when

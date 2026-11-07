@@ -263,8 +263,28 @@ impl Detector {
         self.active.as_ref()
     }
 
+    #[cfg(test)]
     pub fn observe(&mut self, now_ms: u64, sources: &[Source], recording: bool) -> Vec<Event> {
+        self.observe_with_ended(now_ms, sources, recording, &[])
+    }
+
+    /// Like `observe`; `ended` lists source keys whose meeting the app itself
+    /// confirms is over (e.g. Zoom's meeting window closed). Those end at
+    /// once, without waiting out `END_GRACE_MS`.
+    pub fn observe_with_ended(
+        &mut self,
+        now_ms: u64,
+        sources: &[Source],
+        recording: bool,
+        ended: &[String],
+    ) -> Vec<Event> {
         let mut events = Vec::new();
+        let sources: Vec<Source> = sources
+            .iter()
+            .copied()
+            .filter(|s| !ended.contains(&s.key()))
+            .collect();
+        let sources = &sources[..];
         let present: HashSet<String> = sources.iter().map(|s| s.key()).collect();
         for key in &present {
             self.first_seen.entry(key.clone()).or_insert(now_ms);
@@ -275,7 +295,8 @@ impl Detector {
             .last_seen
             .iter()
             .filter(|(k, last)| {
-                !present.contains(*k) && now_ms.saturating_sub(**last) >= END_GRACE_MS
+                !present.contains(*k)
+                    && (ended.contains(*k) || now_ms.saturating_sub(**last) >= END_GRACE_MS)
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -367,6 +388,11 @@ impl Detector {
         self.present.contains(&source.key())
     }
 
+    /// Whether this source is the tracked meeting (announced or silent).
+    pub fn tracks(&self, source: &Source) -> bool {
+        self.active.as_ref().is_some_and(|d| d.source == *source)
+    }
+
     /// The announced meeting, if any (a silently tracked one is not offered).
     pub fn announced(&self) -> Option<&Detection> {
         self.active.as_ref().filter(|_| !self.silent)
@@ -378,6 +404,26 @@ impl Detector {
             counter: self.counter,
             ..Detector::default()
         };
+    }
+}
+
+#[cfg(test)]
+mod confirmed_end_tests {
+    use super::*;
+
+    #[test]
+    fn a_confirmed_end_skips_the_grace_period() {
+        let zoom = Source {
+            kind: MeetingKind::Zoom,
+            browser: None,
+        };
+        let mut d = Detector::default();
+        d.observe(0, &[zoom], true);
+        d.observe(SUSTAIN_MS, &[zoom], true);
+        assert!(d.active().is_some());
+        // Zoom's audio still runs, but its meeting window is gone.
+        let events = d.observe_with_ended(SUSTAIN_MS + 1_000, &[zoom], true, &[zoom.key()]);
+        assert!(matches!(&events[..], [Event::Ended(det)] if det.source == zoom));
     }
 }
 
