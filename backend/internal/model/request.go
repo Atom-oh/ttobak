@@ -606,6 +606,7 @@ func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *
 		Sentiment:              m.Sentiment,
 		Duration:               m.Duration,
 		IsShared:               isShared,
+		OwnerUserID:            sharedOwner(m, isShared),
 		SharedBy:               sharedBy,
 		Permission:             permission,
 		CreatedAt:              m.CreatedAt.Format(time.RFC3339),
@@ -641,4 +642,11 @@ func ToMeetingDetailResponse(m *Meeting, attachments []AttachmentResponse, share
 		CreatedAt:          m.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:          m.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+func sharedOwner(m *Meeting, isShared bool) string {
+	if !isShared {
+		return ""
+	}
+	return m.UserID
 }

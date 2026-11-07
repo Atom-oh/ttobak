@@ -455,6 +455,7 @@ export function ShareButton({
                       </p>
                       <p className="text-xs text-slate-500">
                         {user.permission === 'edit' ? 'Can edit' : 'Can view'}
+                        {user.sharedByEmail && ` · 공유: ${user.sharedByEmail}`}
                       </p>
                     </div>
                     <button

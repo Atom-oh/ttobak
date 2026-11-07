@@ -152,6 +152,7 @@ type Attachment struct {
 	AttachmentID      string                `dynamodbav:"attachmentId"`
 	MeetingID         string                `dynamodbav:"meetingId"`
 	UserID            string                `dynamodbav:"userId"`
+	UploadedBy        string                `dynamodbav:"uploadedBy,omitempty"` // account member uploading for the creator
 	OriginalKey       string                `dynamodbav:"originalKey"`
 	ProcessedKey      string                `dynamodbav:"processedKey,omitempty"`
 	Type              string                `dynamodbav:"type"`   // photo, screenshot, diagram, whiteboard

@@ -442,25 +442,54 @@ func (r *DynamoDBRepository) ProjectAccountUnlinkTransactional(ctx context.Conte
 // TransactWriteItems call (same interleaving hazard/fix as
 // ProjectAccountLinkTransactional above).
 func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context, ownerUserID, meetingID, projectID string, ref *model.ProjectMeetingRef) error {
+	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, "", "", ref)
+}
+
+// MeetingProjectLinkInAccount links the creator's meeting on behalf of a
+// managing account member: the meeting must still be published to
+// accountID, the project must still be linked to that account, and the
+// member's live grant is fenced in the same transaction.
+func (r *DynamoDBRepository) MeetingProjectLinkInAccount(ctx context.Context, ownerUserID, actorID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
+	if accountID == "" || actorID == "" || actorID == ownerUserID {
+		return ErrConditionFailed
+	}
+	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, accountID, actorID, ref)
+}
+
+func (r *DynamoDBRepository) meetingProjectLink(ctx context.Context, ownerUserID, meetingID, projectID, accountID, actorID string, ref *model.ProjectMeetingRef) error {
 	refItem, err := attributevalue.MarshalMap(ref)
 	if err != nil {
 		return fmt.Errorf("marshal project meeting ref: %w", err)
 	}
+	meetingCondition := expression.AttributeExists(expression.Name("PK"))
+	projectCondition := expression.AttributeExists(expression.Name("PK"))
+	if accountID != "" {
+		meetingCondition = meetingCondition.And(expression.Name("accountId").Equal(expression.Value(accountID))).
+			And(expression.Name("sharedToAccount").Equal(expression.Value(true)))
+		projectCondition = projectCondition.And(expression.Contains(expression.Name("accountIds"), accountID))
+	}
 	updateExpr, err := expression.NewBuilder().
-		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithCondition(meetingCondition).
 		WithUpdate(expression.Add(expression.Name("projectIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{projectID}}))).
 		Build()
 	if err != nil {
 		return fmt.Errorf("build meeting project link expression: %w", err)
 	}
 	projectExistsExpr, err := expression.NewBuilder().
-		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithCondition(projectCondition).
 		Build()
 	if err != nil {
 		return fmt.Errorf("build project-exists condition: %w", err)
 	}
+	// A member's link also fences the member's live grant in that account.
+	var grant []types.TransactWriteItem
+	if actorID != "" {
+		if grant, err = r.memberGrantItems(ctx, accountID, actorID); err != nil {
+			return err
+		}
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
+		TransactItems: append([]types.TransactWriteItem{
 			{Update: &types.Update{
 				TableName: aws.String(r.tableName),
 				Key: map[string]types.AttributeValue{
@@ -486,10 +515,11 @@ func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
 					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
 				},
-				ConditionExpression:      projectExistsExpr.Condition(),
-				ExpressionAttributeNames: projectExistsExpr.Names(),
+				ConditionExpression:       projectExistsExpr.Condition(),
+				ExpressionAttributeNames:  projectExistsExpr.Names(),
+				ExpressionAttributeValues: projectExistsExpr.Values(),
 			}},
-		},
+		}, grant...),
 	})
 	if err != nil {
 		return mapProjectTransactionCanceledError(err, meetingID, "meeting", "link meeting project")
