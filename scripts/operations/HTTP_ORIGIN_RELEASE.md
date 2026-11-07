@@ -129,3 +129,9 @@ consumer secret read grants, old-cache cutover, interrupted/resumed rotation, lo
 responses, expired windows and their recovery receipts,
 idempotent completion and value-free CDK diagnostics. A live completed receipt is
 still required to establish the deployed outcome.
+
+An unexpected (non-category) failure still reports
+`OPERATION_FAILED_OR_OUTCOME_UNKNOWN`, plus message-free diagnostics: the
+exception class (`errorType`), an AWS error code and operation when present,
+and the raising function and line in this script (`errorSite`). Messages and
+SDK payloads are never printed.
