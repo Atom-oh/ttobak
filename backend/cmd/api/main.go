@@ -516,6 +516,8 @@ func init() {
 			Router: r,
 			Mutate: handler.NewConnectorNoteHandler(service.NewConnectorNoteService(repo,
 				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
+			ContactMutate: handler.NewConnectorContactHandler(service.NewConnectorContactService(repo,
+				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
 		}
 	}
 }
