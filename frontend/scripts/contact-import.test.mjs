@@ -69,19 +69,21 @@ test('Excel preflight rejects sparse or expanded workbooks before materializing 
   vm.runInNewContext(outputText, { exports, require: req, TextDecoder, Uint8Array, Error });
   const check = exports.validateContactWorkbook;
   const sample = contactWorkbook();
+  // Validate the limit message so a TypeError from the parser cannot pass.
+  const limitError = { message: /최대 2,000행, 100열/ };
   assert.doesNotThrow(() => check(new Uint8Array(sample)));
   for (const xml of ['<worksheet><sheetData><row r="2000000"/></sheetData></worksheet>', '<worksheet><sheetData><row r="1"><c r="XFD1"><v>1</v></c></row></sheetData></worksheet>']) {
-    assert.throws(() => check(zipSync({ 'xl/worksheets/sheet1.xml': strToU8(xml) })));
-    assert.throws(() => check(zipSync({ 'xl/custom-sheet.xml': strToU8(xml) })));
+    assert.throws(() => check(zipSync({ 'xl/worksheets/sheet1.xml': strToU8(xml) })), limitError);
+    assert.throws(() => check(zipSync({ 'xl/custom-sheet.xml': strToU8(xml) })), limitError);
   }
-  assert.throws(() => check(zipSync({ 'xl/sharedStrings.xml': strToU8('x'.repeat(17 * 1024 * 1024)) })));
+  assert.throws(() => check(zipSync({ 'xl/sharedStrings.xml': strToU8('x'.repeat(17 * 1024 * 1024)) })), limitError);
   const chunks = [];
   const zip = new Zip((error, chunk) => { if (error) throw error; chunks.push(chunk); });
   const entry = new ZipDeflate('xl/sharedStrings.xml');
   zip.add(entry);
   entry.push(strToU8('x'.repeat(17 * 1024 * 1024)), true);
   zip.end();
-  assert.throws(() => check(new Uint8Array(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))))));
+  assert.throws(() => check(new Uint8Array(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))))), limitError);
 });
 
 test('import checks all existing pages and continues after an individual failure', async () => {
