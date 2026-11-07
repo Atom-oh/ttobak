@@ -584,6 +584,40 @@ class ReleaseTests(unittest.TestCase):
                     with self.assertRaisesRegex(ReleaseError, f"^{code}$"):
                         runner.validate_activation_templates()
 
+    def test_idempotent_reads_retry_only_transient_transport_errors(self):
+        import http_origin_release as release
+
+        class ConnectionClosedError(Exception):
+            pass
+
+        class AccessDenied(Exception):
+            pass
+
+        calls = []
+        def flaky(**arguments):
+            calls.append(arguments)
+            if len(calls) == 1:
+                raise ConnectionClosedError()
+            return {"ok": True}
+        self.assertEqual(release.read_with_retry(flaky, sleep=lambda _: None, FunctionName="ttobak-api"), {"ok": True})
+        self.assertEqual(calls, [{"FunctionName": "ttobak-api"}] * 2)
+
+        def denied(**arguments):
+            calls.append(arguments)
+            raise AccessDenied()
+        calls.clear()
+        with self.assertRaises(AccessDenied):
+            release.read_with_retry(denied, sleep=lambda _: None)
+        self.assertEqual(len(calls), 1)  # Non-transport errors never retry.
+
+        def always_closed(**arguments):
+            calls.append(arguments)
+            raise ConnectionClosedError()
+        calls.clear()
+        with self.assertRaises(ConnectionClosedError):
+            release.read_with_retry(always_closed, attempts=3, sleep=lambda _: None)
+        self.assertEqual(len(calls), 3)  # Bounded.
+
     def test_unexpected_failure_diagnostic_reports_type_and_site_without_messages(self):
         import http_origin_release as release
 
