@@ -29,9 +29,13 @@ import (
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
+	"github.com/ttobak/backend/internal/telemetry"
 )
 
 var chiLambda *chiadapter.ChiLambda
+
+// apiTelemetry is disabled (no-op) when no collector endpoint is configured.
+var apiTelemetry = telemetry.Disabled()
 
 func init() {
 	// Load AWS config
@@ -40,16 +44,22 @@ func init() {
 		log.Fatalf("failed to load AWS config: %v", err)
 	}
 
+	// Optional OpenTelemetry (disabled unless OTEL_EXPORTER_OTLP_ENDPOINT
+	// is set). Each SDK client gets an operation-level span adapter that
+	// records no request/response payloads.
+	apiTelemetry = telemetry.FromEnv()
+	awsTracing := apiTelemetry.AWSTracerProvider()
+
 	// Initialize AWS clients
-	dynamoClient := dynamodb.NewFromConfig(cfg)
-	s3Client := s3.NewFromConfig(cfg)
-	ebClient := eventbridge.NewFromConfig(cfg)
-	bedrockAgentClient := bedrockagent.NewFromConfig(cfg)
-	translateClient := translate.NewFromConfig(cfg)
-	bedrockRuntimeClient2 := bedrockruntime.NewFromConfig(cfg)
-	transcribeClient := transcribe.NewFromConfig(cfg)
-	kmsClient := kms.NewFromConfig(cfg)
-	cognitoClient := cognitoidentityprovider.NewFromConfig(cfg)
+	dynamoClient := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) { o.TracerProvider = awsTracing })
+	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) { o.TracerProvider = awsTracing })
+	ebClient := eventbridge.NewFromConfig(cfg, func(o *eventbridge.Options) { o.TracerProvider = awsTracing })
+	bedrockAgentClient := bedrockagent.NewFromConfig(cfg, func(o *bedrockagent.Options) { o.TracerProvider = awsTracing })
+	translateClient := translate.NewFromConfig(cfg, func(o *translate.Options) { o.TracerProvider = awsTracing })
+	bedrockRuntimeClient2 := bedrockruntime.NewFromConfig(cfg, func(o *bedrockruntime.Options) { o.TracerProvider = awsTracing })
+	transcribeClient := transcribe.NewFromConfig(cfg, func(o *transcribe.Options) { o.TracerProvider = awsTracing })
+	kmsClient := kms.NewFromConfig(cfg, func(o *kms.Options) { o.TracerProvider = awsTracing })
+	cognitoClient := cognitoidentityprovider.NewFromConfig(cfg, func(o *cognitoidentityprovider.Options) { o.TracerProvider = awsTracing })
 	cognitoPoolID := os.Getenv("COGNITO_USER_POOL_ID")
 	// Get environment variables (per API spec: TABLE_NAME, BUCKET_NAME)
 	tableName := os.Getenv("TABLE_NAME")
@@ -96,7 +106,7 @@ func init() {
 	// FrontendStack publishing the key-pair-id SSM param would otherwise pin
 	// that instance to the S3 fallback until it's recycled.
 	if mediaBaseURL := os.Getenv("MEDIA_BASE_URL"); mediaBaseURL != "" {
-		ssmClient := ssm.NewFromConfig(cfg)
+		ssmClient := ssm.NewFromConfig(cfg, func(o *ssm.Options) { o.TracerProvider = awsTracing })
 		reload := func(ctx context.Context) (*service.CloudFrontSigner, error) {
 			return service.NewCloudFrontSigner(ctx, ssmClient, mediaBaseURL)
 		}
@@ -181,7 +191,7 @@ func init() {
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	insightsHandler := handler.NewInsightsHandler(insightsService, kbService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
-	sfnClient := sfn.NewFromConfig(cfg)
+	sfnClient := sfn.NewFromConfig(cfg, func(o *sfn.Options) { o.TracerProvider = awsTracing })
 	researchService := service.NewResearchService(researchRepo, repo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
 	researchHandler := handler.NewResearchHandler(researchService, notionService, repo, cryptoService)
 	researchShareHandler := handler.NewResearchShareHandler(researchService)
@@ -201,7 +211,7 @@ func init() {
 	bedrockService.SetAttachmentTextService(attachmentTextService)
 	resummaryService := service.NewResummaryService(metadata, service.NewMeetingService(metadata), nil, nil, service.ResummaryPublisher(ebClient))
 	resummaryHandler := handler.NewResummaryHandler(resummaryService)
-	lambdaClient := lambdasdk.NewFromConfig(cfg)
+	lambdaClient := lambdasdk.NewFromConfig(cfg, func(o *lambdasdk.Options) { o.TracerProvider = awsTracing })
 	simFunctionName := os.Getenv("SIM_FUNCTION_NAME")
 	if simFunctionName == "" {
 		simFunctionName = "ttobak-sim"
@@ -244,11 +254,12 @@ func init() {
 	// Global middleware
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
+	r.Use(apiTelemetry.Middleware) // server span named by method + route pattern
 	r.Use(middleware.RequestLog)
 	r.Use(middleware.Recovery)
 	originVerifier := middleware.NewOriginVerifier(
 		os.Getenv("ORIGIN_VERIFY_SECRET_ARN"),
-		secretsmanager.NewFromConfig(cfg),
+		secretsmanager.NewFromConfig(cfg, func(o *secretsmanager.Options) { o.TracerProvider = awsTracing }),
 		os.Getenv("TTOBAK_ORIGIN_LOCAL_DEV") == "1" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "",
 		os.Getenv("ORIGIN_VERIFY_SECRET_VERSION_ID"),
 	)
@@ -510,5 +521,7 @@ func init() {
 }
 
 func main() {
-	lambda.Start(dispatchAPI)
+	// Spans and logs are flushed (bounded by telemetry.FlushTimeout) before
+	// each response returns, because a frozen Lambda cannot export later.
+	lambda.Start(telemetry.WrapInvocation(apiTelemetry, dispatchAPI))
 }

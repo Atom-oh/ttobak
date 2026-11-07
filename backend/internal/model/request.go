@@ -134,17 +134,23 @@ type MeetingListItem struct {
 	Sentiment              string   `json:"sentiment,omitempty"`
 	Duration               int      `json:"duration,omitempty"`
 	IsShared               bool     `json:"isShared"`
-	SharedBy               *string  `json:"sharedBy,omitempty"`   // owner email if shared
-	Permission             *string  `json:"permission,omitempty"` // "read" | "edit" if shared
-	CreatedAt              string   `json:"createdAt"`
-	UpdatedAt              string   `json:"updatedAt"`
+	// OwnerUserID names the creator of a shared item (omitted for own meetings),
+	// so a managing member can pick the creator's predecessors.
+	OwnerUserID string  `json:"ownerUserId,omitempty"`
+	SharedBy    *string `json:"sharedBy,omitempty"`   // owner email if shared
+	Permission  *string `json:"permission,omitempty"` // "read" | "edit" if shared
+	CreatedAt   string  `json:"createdAt"`
+	UpdatedAt   string  `json:"updatedAt"`
 }
 
 // MeetingDetailResponse represents a meeting in detail view
 type MeetingDetailResponse struct {
-	SupportsAudioCrop          bool                  `json:"supportsAudioCrop"`
-	SupportsMeetingTranslation bool                  `json:"supportsMeetingTranslation"`
-	CanRecoverRecording        bool                  `json:"canRecoverRecording"`
+	SupportsAudioCrop          bool `json:"supportsAudioCrop"`
+	SupportsMeetingTranslation bool `json:"supportsMeetingTranslation"`
+	CanRecoverRecording        bool `json:"canRecoverRecording"`
+	// CanManage: creator or live account-team member; every creator action
+	// except delete (ADR-016 2026-11-06 amendment).
+	CanManage                  bool                  `json:"canManage"`
 	CanCorrectSpeakers         bool                  `json:"canCorrectSpeakers"`
 	AudioCrop                  *AudioCrop            `json:"audioCrop,omitempty"`
 	Duration                   int                   `json:"duration,omitempty"`
@@ -265,10 +271,12 @@ type UserSearchListResponse struct {
 
 // ShareResponse represents a share record in API responses
 type ShareResponse struct {
-	UserID     string     `json:"userId,omitempty"`
-	Email      string     `json:"email"`
-	Permission string     `json:"permission"`
-	SharedAt   *time.Time `json:"sharedAt,omitempty"`
+	UserID     string `json:"userId,omitempty"`
+	Email      string `json:"email"`
+	Permission string `json:"permission"`
+	// SharedByEmail names an account member who shared on the creator's behalf.
+	SharedByEmail string     `json:"sharedByEmail,omitempty"`
+	SharedAt      *time.Time `json:"sharedAt,omitempty"`
 	// Pending is true when the share was queued as a PendingShare because
 	// the target has an invited-but-not-yet-logged-in Cognito account;
 	// UserID is empty in that case.
@@ -598,6 +606,7 @@ func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *
 		Sentiment:              m.Sentiment,
 		Duration:               m.Duration,
 		IsShared:               isShared,
+		OwnerUserID:            sharedOwner(m, isShared),
 		SharedBy:               sharedBy,
 		Permission:             permission,
 		CreatedAt:              m.CreatedAt.Format(time.RFC3339),
@@ -633,4 +642,11 @@ func ToMeetingDetailResponse(m *Meeting, attachments []AttachmentResponse, share
 		CreatedAt:          m.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:          m.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+func sharedOwner(m *Meeting, isShared bool) string {
+	if !isShared {
+		return ""
+	}
+	return m.UserID
 }

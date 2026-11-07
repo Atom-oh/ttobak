@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, forwardRef, useImperativeHandle } from 'react';
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, releaseRecordingPower, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type TauriStatusResponse } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, releaseRecordingPower, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type NativeSelectedInput, type TauriStatusResponse } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 import { BrowserRecordingBackup } from '@/lib/browserRecordingBackup';
 
@@ -44,6 +44,11 @@ interface RecordButtonProps {
    * source such as a denied System Audio Recording permission, dropped
    * buffers). Newer app builds only. */
   onNativeWarnings?: (warnings: string[]) => void;
+  /** Mac app microphone for System Audio mode; empty follows the meeting
+   * app's microphone (ADR-061). */
+  nativeInputDeviceUid?: string;
+  /** The microphone the Mac app actually records (newer app builds). */
+  onNativeInput?: (input: NativeSelectedInput) => void;
   /** Called for each 16kHz mono 16-bit PCM chunk emitted from Rust during a
    * System Audio recording — feeds `useRecordingSession`'s
    * `pushNativePcmChunk` for live captions via Amazon Transcribe
@@ -116,6 +121,16 @@ function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
+/** The Mac app reports `rms / 0.25` (linear), so ordinary speech around
+ * -45 dBFS would draw as a flat line. Map it onto -60..-10 dBFS instead, the
+ * range a meeting microphone actually produces. */
+function nativeLevelToBar(level: number): number {
+  const rms = level * 0.25;
+  if (rms <= 0) return 0;
+  const db = 20 * Math.log10(rms);
+  return Math.min(1, Math.max(0, (db + 60) / 50));
+}
+
 export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(function RecordButton({
   meetingId,
   meetingTitle = 'Meeting',
@@ -128,6 +143,8 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   serverMeetingId,
   onNativeFileReady,
   onNativeWarnings,
+  nativeInputDeviceUid,
+  onNativeInput,
   onNativePcmChunk,
   onError,
   onRecordingStart,
@@ -434,7 +451,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       for (let i = 0; i < barCount; i++) {
         const idx = i - offset;
         const value = idx >= 0 ? history[idx] : 0;
-        const height = Math.max(3, value * 32);
+        const height = Math.max(3, nativeLevelToBar(value) * 32);
         (bars[i] as HTMLElement).style.height = `${height}px`;
       }
       frameId = requestAnimationFrame(draw);
@@ -511,8 +528,9 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           ? subscribeNativePcmChunk((chunk) => onNativePcmChunk(chunk))
           : null;
 
-        const resp = await startNativeRecording(meetingId);
+        const resp = await startNativeRecording(meetingId, nativeInputDeviceUid);
         if (resp.warnings?.length) onNativeWarnings?.(resp.warnings);
+        if (resp.input) onNativeInput?.(resp.input);
         nativeTempPathRef.current = resp.temp_path;
         isRecordingRef.current = true;
         setRecordingState('recording');

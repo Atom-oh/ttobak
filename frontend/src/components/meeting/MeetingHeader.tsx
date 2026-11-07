@@ -58,6 +58,9 @@ function DesktopDeleteButton({ meetingId }: { meetingId: string }) {
 
 interface MeetingHeaderProps {
   meeting: MeetingDetail;
+  /** Delete is creator-only; sharing and links follow canManage. */
+  isCreator?: boolean;
+  canManage?: boolean;
   onShare: (user: SharedUser) => void;
   onUnshare: (userId: string) => void;
   onTitleChange?: (newTitle: string) => void | Promise<void>;
@@ -66,7 +69,7 @@ interface MeetingHeaderProps {
   onLinkedMeetingsChange?: (linkedMeetingIds: string[]) => void;
 }
 
-export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTitleDirtyChange, onLinkedMeetingsChange }: MeetingHeaderProps) {
+export function MeetingHeader({ meeting, isCreator = true, canManage = true, onShare, onUnshare, onTitleChange, onTitleDirtyChange, onLinkedMeetingsChange }: MeetingHeaderProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(meeting.title);
   const [isSavingTitle, setIsSavingTitle] = useState(false);
@@ -177,19 +180,21 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTi
               ))}
             </>
           ) : null}
-          <button
+          {canManage && <button
             onClick={() => setShowLinkPicker(true)}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-dashed border-slate-300 dark:border-white/15 text-slate-500 dark:text-text-muted hover:border-primary/40 hover:text-primary transition-colors"
             title="이전 미팅 연결"
           >
             <span className="material-symbols-outlined text-sm">add_link</span>
             {meeting.linkedMeetingIds && meeting.linkedMeetingIds.length > 0 ? '편집' : '이전 미팅 연결'}
-          </button>
+          </button>}
         </div>
 
-        {showLinkPicker && (
+        {showLinkPicker && canManage && (
           <LinkMeetingsModal
             meetingId={meeting.meetingId}
+            ownerUserId={meeting.userId}
+            viewerIsCreator={isCreator}
             meetingDate={meeting.date}
             initialLinkedIds={meeting.linkedMeetingIds ?? []}
             onClose={() => setShowLinkPicker(false)}
@@ -226,14 +231,14 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTi
           </div>
 
           <div className="flex items-center gap-2">
-            <DesktopDeleteButton meetingId={meeting.meetingId} />
+            {isCreator && <DesktopDeleteButton meetingId={meeting.meetingId} />}
             <ExportMenu meetingId={meeting.meetingId} />
-            <MeetingShareButton
+            {canManage && <MeetingShareButton
               meetingId={meeting.meetingId}
               sharedWith={meeting.sharedWith}
               onShare={onShare}
               onUnshare={onUnshare}
-            />
+            />}
           </div>
         </div>
       </header>

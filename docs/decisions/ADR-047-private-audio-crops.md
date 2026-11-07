@@ -3,6 +3,15 @@
 Status: Accepted; production activation is gated
 Date: 2026-09-25
 
+Note (2026-11-06, ADR-016 management amendment): an account-team member may crop
+a published meeting. The copy still belongs to the creator (the worker revalidates
+the source in that partition) and is published to the same account with a team
+reference so the member and team can open it. The copy, its team reference, a
+check that the source is still published to that account and the member's live
+grant (direct member row, or ancestor member row plus parent links) commit in one
+transaction; the copy has no derived content, so it carries only the account and
+publication fields. The creator's own crop stays private.
+
 ## Decision
 
 An owner can select a range from a completed/error single-file meeting. Create a

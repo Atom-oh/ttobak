@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d3f6f94b347a · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: a7703b6cb532 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -161,7 +161,7 @@ limit instead of claiming a Mac build passed.
 - **Accounts:** members add/change non-owner roles (ADR-034/054). Creation permits
   another Owner and optional creator AM (ADR-055). Removal/revocation/reparenting
   are owner-only. Ancestor reads permit Billing (ADR-058/060); filters classify
-  (ADR-036); members edit published meetings (ADR-016).
+  (ADR-036); members manage published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
   `ProjectService.ListMyProjects` unions all three; its repository primitive only
