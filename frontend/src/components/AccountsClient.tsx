@@ -53,7 +53,8 @@ export default function AccountsClient() {
 
   const fetchAccounts = useCallback(async () => {
     const generation = ++requestGeneration.current;
-    // Paint the last loaded list at once; the request below refreshes it.
+    // Paint the last loaded list at once; list() reuses it within its TTL and
+    // otherwise reloads it from the server.
     const cached = accountApi.peekList();
     if (cached) setAccounts(cached.accounts);
     setLoading(!cached);

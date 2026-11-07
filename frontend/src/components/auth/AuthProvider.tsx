@@ -191,8 +191,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const inviteStatus = inviteStatusMessage({ pendingGrants, retryPending, projectContinuation });
 
   const logout = useCallback(async () => {
-    await signOut();
-    invalidateAccountList();
+    try {
+      await signOut();
+    } finally {
+      invalidateAccountList();
+    }
     setUser(null);
   }, []);
 

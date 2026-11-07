@@ -759,7 +759,9 @@ export const researchChatApi = {
 };
 
 // Account API
-async function getAccounts(options?: { scope?: 'direct' }): Promise<{ accounts: AccountSummary[] }> {
+// expectedUserId binds every page to one signed-in subject: credentials live in
+// shared localStorage, so another tab can change them between pages.
+async function getAccounts(options?: { scope?: 'direct' }, expectedUserId?: string): Promise<{ accounts: AccountSummary[] }> {
   const accounts: AccountSummary[] = [];
   const accountIds = new Map<string, number>();
   const cursors = new Set<string>();
@@ -771,13 +773,13 @@ async function getAccounts(options?: { scope?: 'direct' }): Promise<{ accounts: 
     if (cursor) query.set('cursor', cursor);
     let page: { accounts: AccountSummary[]; nextCursor?: string; overlapPossible?: boolean; unionKey?: string };
     try {
-      page = await api.get<typeof page>(`/api/accounts?${query}`);
+      page = await api.get<typeof page>(`/api/accounts?${query}`, expectedUserId ? { expectedUserId } : undefined);
     } catch (error) {
       // API and frontend deployments have independent jobs. An older API
       // rejects the new option; the existing picker still filters edit grants.
       if (options?.scope === 'direct' && pageIndex === 0 &&
         error instanceof ApiError && error.status === 400 && error.code === 'BAD_REQUEST') {
-        return getAccounts();
+        return getAccounts(undefined, expectedUserId);
       }
       throw error;
     }
@@ -807,18 +809,24 @@ async function getAccounts(options?: { scope?: 'direct' }): Promise<{ accounts: 
 
 type AccountList = { accounts: AccountSummary[] };
 const copyAccountList = (list: AccountList): AccountList => ({ accounts: list.accounts.map(a => ({ ...a })) });
-const accountListKey = (options?: { scope?: 'direct' }) => {
-  const userId = tokenUserId(getIdToken());
-  return userId ? `${userId}|${options?.scope ?? 'all'}` : null;
-};
+const accountListKey = (options?: { scope?: 'direct' }, userId = tokenUserId(getIdToken())) =>
+  userId ? `${userId}|${options?.scope ?? 'all'}` : null;
 // Any Account mutation may change the caller's list (role, parent, membership).
 // Invalidate whether it succeeded or not, since a failed request may have applied.
 const invalidatingAccountList = <T>(request: Promise<T>): Promise<T> =>
   request.finally(invalidateAccountList);
 
 export const accountApi = {
-  list: (options?: { scope?: 'direct' }) =>
-    cachedAccountList(accountListKey(options), () => getAccounts(options)).then(copyAccountList),
+  list: (options?: { scope?: 'direct' }) => {
+    const userId = tokenUserId(getIdToken());
+    // Every page asserts the subject the cache key names, and the result is
+    // checked again before it is stored or returned.
+    return cachedAccountList(accountListKey(options, userId), async () => {
+      const list = await getAccounts(options, userId ?? undefined);
+      if (userId) assertRequestUser(userId);
+      return list;
+    }).then(copyAccountList);
+  },
   /** Last loaded list for the signed-in user, possibly stale, for instant paint. */
   peekList: (options?: { scope?: 'direct' }) => {
     const cached = peekAccountList<AccountList>(accountListKey(options));

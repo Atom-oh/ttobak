@@ -18,7 +18,7 @@ function loadCache() {
 
 const tokenFor = sub => `synthetic.${Buffer.from(JSON.stringify({ sub, exp: Date.now() / 1000 + 3600 })).toString('base64url')}.signature`;
 
-function loadApi() {
+function loadApi({ onFetch } = {}) {
   const cache = loadCache();
   const state = { token: tokenFor('reader'), requests: [] };
   const dependencies = {
@@ -33,6 +33,8 @@ function loadApi() {
     require: name => { assert.ok(name in dependencies, name); return dependencies[name]; },
     fetch: async (url, init) => {
       state.requests.push(`${init?.method || 'GET'} ${url}`);
+      const custom = onFetch?.(String(url), state);
+      if (custom) return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => custom };
       const body = String(url).includes('/members') ? { accountId: 'a', userId: 'u' }
         : { accounts: [{ accountId: `acct-${state.requests.length}`, name: 'A', role: 'owner', accessPermission: 'edit' }] };
       return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => body };
@@ -103,4 +105,26 @@ test('accountApi.list caches per user and Account mutations invalidate it', asyn
   assert.deepEqual(state.requests.slice(-2).map(r => r.split('?')[0]), ['POST /api/accounts/a/members', 'GET /api/accounts']);
   await api.list({ scope: 'direct' });
   assert.ok(state.requests.at(-1).includes('scope=direct'), 'scopes are cached separately');
+});
+
+test('a sign-in as another user during a multi-page load is never cached under the first user', async () => {
+  const pageA = { accounts: [{ accountId: 'a-1', name: 'A', role: 'owner', accessPermission: 'edit' }], nextCursor: 'nextpage' };
+  const pageB = { accounts: [{ accountId: 'b-1', name: 'B', role: 'owner', accessPermission: 'edit' }] };
+  let switched = false;
+  const { api, state } = loadApi({
+    onFetch: (url, st) => {
+      if (!url.includes('cursor=')) {
+        // Another tab signs in as someone else before the next page.
+        st.token = tokenFor('intruder');
+        switched = true;
+        return pageA;
+      }
+      return pageB;
+    },
+  });
+  await assert.rejects(api.list(), err => err.code === 'AUTH_CHANGED');
+  assert.ok(switched);
+  assert.equal(state.requests.length, 1, 'the next page was never requested under another subject');
+  state.token = tokenFor('reader');
+  assert.equal(api.peekList(), undefined, 'nothing was stored under the first user');
 });
