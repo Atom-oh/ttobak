@@ -1,12 +1,30 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions for the TTOBAK Mac App. The window loads the remote production SPA (see tauri.conf.json's `build.devUrl`/window `url`), not a local `tauri://` origin, so a capability without an explicit `remote` grant only matches the local context — commands still work (they bypass the ACL entirely when the app has no ACL manifest), but `plugin:event|listen` and other ACL-gated APIs are silently rejected for the remote origin without this.",
-  "windows": ["main"],
+  "description": "Core permissions for the TTOBAK Mac App. The window loads the remote production SPA (see tauri.conf.json's window `url`), not a local `tauri://` origin. Tauri checks the ACL for every command called from a remote origin, so this capability's `remote` grant must list each app command's `allow-*` permission (generated from `build.rs` COMMANDS) as well as event access (`core:default`).",
+  "windows": [
+    "main"
+  ],
   "remote": {
-    "urls": ["https://ttobak.atomai.click"]
+    "urls": [
+      "https://ttobak.atomai.click"
+    ]
   },
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-start-recording",
+    "allow-stop-recording",
+    "allow-list-input-devices",
+    "allow-recording-status",
+    "allow-upload-recording",
+    "allow-cleanup-recording",
+    "allow-release-recording-power",
+    "allow-list-leftover-recordings",
+    "allow-control-ready",
+    "allow-control-reply",
+    "allow-control-report-state",
+    "allow-meeting-detection-get",
+    "allow-meeting-detection-set-enabled",
+    "allow-meeting-detection-respond"
   ]
 }

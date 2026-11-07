@@ -25,7 +25,8 @@ import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { BrowserRecordingsCard } from '@/components/record/BrowserRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
-import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording } from '@/lib/tauri';
+import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording, type NativeSelectedInput } from '@/lib/tauri';
+import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
 import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
@@ -74,6 +75,12 @@ function RecordPageInner() {
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   // Mac app capture notes (silent source, no microphone); reset per recording.
   const [nativeWarnings, setNativeWarnings] = useState<string[]>([]);
+  // Mac app microphone: '' follows the meeting app's microphone (ADR-061).
+  const [nativeInputUid, setNativeInputUid] = useState('');
+  const [nativeInput, setNativeInput] = useState<NativeSelectedInput | null>(null);
+  useEffect(() => {
+    setNativeInputUid(readNativeInputPreference());
+  }, []);
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
   // Tauri System Audio mode has no MediaStream, so `session.isRecording`
   // (which only flips true inside session.startSession, given a stream)
@@ -488,7 +495,8 @@ function RecordPageInner() {
   // page-side timeout: the app's socket deadline reports an unknown outcome,
   // and a start that completes later still shows as MCP-started.
   const [controlTick, setControlTick] = useState(0);
-  const [controlStarted, setControlStarted] = useState(false);
+  // Who started the current native recording remotely, if anyone.
+  const [controlStarted, setControlStarted] = useState<false | NativeControlRequest['origin']>(false);
   const controlStartRef = useRef<{ request: NativeControlRequest; fired: boolean } | null>(null);
   const controlStopRef = useRef<{ requestId: string; upload: boolean } | null>(null);
   const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null, uploadMode: isUploadMode });
@@ -499,7 +507,7 @@ function RecordPageInner() {
     const pending = controlStartRef.current;
     if (!pending) return;
     controlStartRef.current = null;
-    if (result.ok) setControlStarted(true);
+    if (result.ok) setControlStarted(pending.request.origin);
     void replyNativeControl(pending.request.requestId, result);
   }, []);
 
@@ -1265,6 +1273,9 @@ function RecordPageInner() {
                 Record 버튼을 누르면 공유할 탭을 선택할 수 있습니다
               </div>
             )}
+            {audioSource === 'system' && isTauri() && !isNativeRecording && (
+              <NativeMicSelector value={nativeInputUid} onChange={setNativeInputUid} disabled={session.isRecording} />
+            )}
             {audioSource === 'system' && !session.isRecording && (
               <div className="flex flex-col gap-1 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300">
                 <div className="flex items-center gap-2">
@@ -1322,7 +1333,15 @@ function RecordPageInner() {
         {audioSource === 'system' && isNativeRecording && (
           <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300 mb-4">
             <span className="material-symbols-outlined text-base animate-pulse">speaker</span>
-            시스템 오디오 캡처 중 — 실시간 자막은 연결되면 표시됩니다. 녹음 종료 후 자동으로 전사·요약됩니다.
+            <span>
+              시스템 오디오 캡처 중 — 실시간 자막은 연결되면 표시됩니다. 녹음 종료 후 자동으로 전사·요약됩니다.
+              {nativeInput && (
+                <span className="block text-xs opacity-80">
+                  마이크: {nativeInput.name}
+                  {nativeInput.reason === 'meeting' && nativeInput.app ? ` (${nativeInput.app}와 같은 마이크)` : ''}
+                </span>
+              )}
+            </span>
           </div>
         )}
 
@@ -1339,7 +1358,9 @@ function RecordPageInner() {
         <div className={`${isUploadMode && !isNativeRecording ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
           {controlStarted && isNativeRecording && (
             <p className="mb-2 text-center text-xs font-medium text-purple-600 dark:text-purple-300">
-              MCP에서 시작한 녹음입니다 — 시스템 오디오와 마이크를 녹음하고 있습니다
+              {controlStarted === 'detection'
+                ? '감지된 회의 녹음입니다 — 시스템 오디오와 마이크를 녹음하고 있습니다'
+                : 'MCP에서 시작한 녹음입니다 — 시스템 오디오와 마이크를 녹음하고 있습니다'}
             </p>
           )}
           <RecordButton
@@ -1365,6 +1386,8 @@ function RecordPageInner() {
             serverMeetingId={postRecording.serverMeetingId}
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
+            nativeInputDeviceUid={nativeInputUid}
+            onNativeInput={setNativeInput}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
               finishControlStart({ ok: false, error: { code: 'start_failed', message: error } });
@@ -1419,7 +1442,7 @@ function RecordPageInner() {
             onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); }}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); }}
             onPermissionGranted={() => {
               refreshDevices();
               // Native capture is running: answer a pending MCP start.

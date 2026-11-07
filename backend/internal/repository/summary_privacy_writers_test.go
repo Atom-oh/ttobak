@@ -81,7 +81,7 @@ func privacyParent() *model.Meeting {
 func TestAllNewGrantPathsRejectUnknownAndPrivateDerivation(t *testing.T) {
 	privacyWriterEnabled(t)
 	for _, private := range []bool{false, true} {
-		for _, path := range []string{"direct", "pending", "materialized", "account"} {
+		for _, path := range []string{"direct", "direct-by-member", "pending", "pending-by-member", "materialized", "account"} {
 			t.Run(path+map[bool]string{false: "-unknown", true: "-private"}[private], func(t *testing.T) {
 				parent := privacyParent()
 				parent.Content = "PRIVATE_PREDECESSOR_DERIVATION"
@@ -100,8 +100,15 @@ func TestAllNewGrantPathsRejectUnknownAndPrivateDerivation(t *testing.T) {
 				switch path {
 				case "direct":
 					_, err = repo.CreateShare(context.Background(), "meeting", "owner", "", "reader", "", "read", "")
+				case "direct-by-member":
+					// A managing member's share runs the creator path's gate.
+					_, err = repo.CreateShareBy(context.Background(), "meeting", "owner", "", "reader", "", "edit", "member", "member@example.test")
 				case "pending":
 					err = repo.PutPendingShare(context.Background(), pending)
+				case "pending-by-member":
+					byMember := *pending
+					byMember.SharedByUserID, byMember.SharedByEmail = "member", "member@example.test"
+					err = repo.PutPendingShare(context.Background(), &byMember)
 				case "materialized":
 					done, e := repo.MaterializePendingMeetingGrant(context.Background(), pending, "reader", pending.Email)
 					if done || e != nil {
@@ -432,5 +439,48 @@ func TestSimulatorClaimFencesCapturedGeneration(t *testing.T) {
 	})
 	if !errors.Is(err, ErrConditionFailed) {
 		t.Fatalf("old-generation simulator claim survived reset: %v", err)
+	}
+}
+
+// A member run conditions on the creator's row, its publication and the
+// member's live grant; each cancellation reason maps to its own error.
+func TestMemberSimulatorClaimFencesPublicationAndGrant(t *testing.T) {
+	member := map[string]interface{}{"ACCOUNT#acc/MEMBER#member": map[string]string{"accountId": "acc", "userId": "member", "addedAt": "t"}}
+	for _, tc := range []struct {
+		name, user string
+		rows       map[string]interface{}
+		reply      string // "" accepts
+		want       error
+		writes     int
+	}{
+		{"creator unchanged", "owner", nil, "", nil, 1},
+		{"creator busy", "owner", nil, projectCancellation(2, 1), ErrSimRunActive, 1},
+		{"member", "member", member, "", nil, 1},
+		{"removed member writes nothing", "member", nil, "", ErrSummaryAccess, 0},
+		{"unpublished concurrently", "member", member, projectCancellation(3, 0), ErrConditionFailed, 1},
+		{"member busy", "member", member, projectCancellation(3, 1), ErrSimRunActive, 1},
+		{"grant lost in the race", "member", member, projectCancellation(3, 2), ErrSummaryAccess, 1},
+	} {
+		writes := 0
+		repo := privacyWriterWire(t, tc.rows, func(_ string, body map[string]any) (int, string) {
+			writes++
+			ops := body["TransactItems"].([]any)
+			check := ops[0].(map[string]any)["ConditionCheck"].(map[string]any)
+			names, _ := json.Marshal(check["ExpressionAttributeNames"])
+			published := strings.Contains(string(names), "sharedToAccount")
+			if pk := check["Key"].(map[string]any)["PK"].(map[string]any)["S"]; pk != "USER#owner" || published != (tc.user == "member") || len(ops) != map[bool]int{true: 3, false: 2}[published] {
+				t.Fatalf("%s: pk=%v published=%v ops=%d", tc.name, pk, published, len(ops))
+			}
+			if tc.reply != "" {
+				return 400, tc.reply
+			}
+			return 200, `{}`
+		})
+		run := &model.SimRun{MeetingID: "meeting", UserID: tc.user, OwnerUserID: "owner", AccountID: "acc", SimRunID: "run", Status: model.SimStatusQueued}
+		err := repo.PutSimRunIfNotRunning(context.Background(), run)
+		if (tc.want == nil) != (err == nil) || !errors.Is(err, tc.want) || writes != tc.writes ||
+			(tc.want == ErrConditionFailed && (errors.Is(err, ErrSimRunActive) || errors.Is(err, ErrSummaryAccess))) {
+			t.Fatalf("%s: err=%v writes=%d", tc.name, err, writes)
+		}
 	}
 }

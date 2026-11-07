@@ -16,6 +16,7 @@
  *   summarize Lambda prepends them in the order they happened.
  */
 
+import { isPredecessorOwnerMatch } from '@/lib/meetingManagement';
 import { useEffect, useMemo, useState } from 'react';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting } from '@/types/meeting';
@@ -23,6 +24,10 @@ import type { Meeting } from '@/types/meeting';
 interface LinkMeetingsModalProps {
   meetingId: string;
   meetingDate: string;
+  /** Creator of this meeting; predecessors must be the creator's meetings. */
+  ownerUserId?: string;
+  /** Whether the viewer is that creator (own list items are then candidates). */
+  viewerIsCreator?: boolean;
   /** Currently linked predecessor ids (initial selection). */
   initialLinkedIds?: string[];
   onClose: () => void;
@@ -45,6 +50,8 @@ function formatShortDate(iso: string): string {
 export function LinkMeetingsModal({
   meetingId,
   meetingDate,
+  ownerUserId,
+  viewerIsCreator = true,
   initialLinkedIds = [],
   onClose,
   onLinked,
@@ -88,6 +95,8 @@ export function LinkMeetingsModal({
     const q = query.trim().toLowerCase();
     return meetings
       .filter((m) => m.meetingId !== meetingId)
+      // Own list items omit ownerUserId; shared ones name their creator.
+      .filter((m) => isPredecessorOwnerMatch(m, ownerUserId, viewerIsCreator))
       .filter((m) => {
         // Allow if no date on the candidate (legacy) — backend will validate;
         // otherwise require candidate predates this meeting.
@@ -96,7 +105,7 @@ export function LinkMeetingsModal({
       })
       .filter((m) => !q || (m.title?.toLowerCase().includes(q) ?? false))
       .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
-  }, [meetings, meetingId, meetingDate, query]);
+  }, [meetings, meetingId, meetingDate, query, ownerUserId, viewerIsCreator]);
 
   const toggle = (id: string) => {
     setSelected((prev) => {

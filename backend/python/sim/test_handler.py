@@ -230,5 +230,14 @@ class TestRunCodegenLoop(unittest.TestCase):
         self.assertEqual(bedrock_client.converse.call_count, codegen.MAX_EXECUTE_ATTEMPTS)
 
 
+class TestArtifactOwner(unittest.TestCase):
+    def test_member_run_writes_under_the_creator_prefix(self):
+        self.assertEqual(handler.artifact_owner({"userId": "member", "ownerUserId": "creator"}), "creator")
+
+    def test_legacy_payload_falls_back_to_the_actor(self):
+        self.assertEqual(handler.artifact_owner({"userId": "creator"}), "creator")
+        self.assertEqual(handler.artifact_owner({"userId": "creator", "ownerUserId": ""}), "creator")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,12 @@
 - Status: Accepted; uses ADR-013 transcript anchors and ADR-027 media prefixes.
 - Decision date: 2026-08-18.
 - Code checked: 2026-09-13; configured isolation is not verification of a deployed execution role or network.
+- Note (2026-11-06, ADR-016 management amendment): account-team members may run the
+  simulator. The invoke payload adds `ownerUserId` for artifact prefixes
+  (`images|files/{creator}/...`); `userId` stays the actor for the per-user quota and
+  the `SIMRUN` row. A member claim conditions on the creator's meeting row, its
+  publication and the member's live grant in one transaction (lost grant 403,
+  unpublished 409). The singleton and `simRunId` guards are unchanged.
 
 ## Original decision and rationale
 

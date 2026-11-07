@@ -202,10 +202,21 @@ def _read_output_bytes(ci_client, session_id, path):
     raise RuntimeError(f"readFiles returned no content for {path}")
 
 
+def artifact_owner(event):
+    """Artifacts live under the meeting creator's prefix (Go SimAssetPrefixes).
+
+    The actor (``userId``) may be a managing account member; older payloads
+    carry no ``ownerUserId`` because the actor was always the creator.
+    """
+    owner = event.get("ownerUserId")
+    return owner if isinstance(owner, str) and owner else event["userId"]
+
+
 def lambda_handler(event, context):
     sim_run_id = event["simRunId"]
     meeting_id = event["meetingId"]
-    user_id = event["userId"]
+    user_id = event["userId"]  # the actor: quota and audit
+    owner_user_id = artifact_owner(event)
     requirements = event.get("requirements", [])
     options = event.get("options", [])
 
@@ -251,7 +262,7 @@ def lambda_handler(event, context):
             except Exception as e:  # noqa: BLE001 -- never let cleanup mask the real result
                 logger.warning("failed to stop code interpreter session %s: %s", session_id, e)
 
-        prefix = f"{user_id}/{meeting_id}/sim/{sim_run_id}"
+        prefix = f"{owner_user_id}/{meeting_id}/sim/{sim_run_id}"
         report_key = f"files/{prefix}/report.md"
         code_key = f"files/{prefix}/generated.py"
         price_key = f"files/{prefix}/prices.json"
