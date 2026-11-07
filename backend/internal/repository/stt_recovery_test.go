@@ -455,3 +455,21 @@ func TestIsSttMeetingTranscriptKey(t *testing.T) {
 		}
 	}
 }
+
+// ADR-062: grace deletion of a failed recording also lists its playback copies.
+func TestDeleteSttFailedMeetingObjectsListsPlaybackCopies(t *testing.T) {
+	repo, calls := sttWire(t, func(string, map[string]any) (int, string) { return 200, `{}` })
+	if _, err := repo.DeleteSttFailedMeetingObjects(context.Background(), "owner", "m"); err != nil {
+		t.Fatal(err)
+	}
+	var listed []string
+	for _, call := range *calls {
+		if strings.HasPrefix(call.op, "S3:GET:") {
+			listed = append(listed, strings.TrimPrefix(call.op, "S3:GET:"))
+		}
+	}
+	want := []string{"audio/owner/m/", "audio-playback/owner/m/", "images/owner/m/", "files/owner/m/", "transcripts/m"}
+	if strings.Join(listed, ",") != strings.Join(want, ",") {
+		t.Fatalf("listed %v, want %v", listed, want)
+	}
+}

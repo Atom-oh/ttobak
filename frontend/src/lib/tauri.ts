@@ -60,6 +60,17 @@ export interface TauriStartResponse {
   temp_path: string;
   /** Non-fatal capture notes (e.g. no microphone); newer app builds only. */
   warnings?: string[];
+  /** The microphone being recorded; newer app builds only. */
+  input?: NativeSelectedInput;
+}
+
+/** The microphone a native recording captures. */
+export interface NativeSelectedInput {
+  uid: string;
+  name: string;
+  reason: 'requested' | 'meeting' | 'default';
+  /** The meeting app whose microphone was followed. */
+  app?: string;
 }
 
 export interface TauriStopResponse {
@@ -132,8 +143,33 @@ export interface TauriUploadProgress {
   total: number;
 }
 
-export function startNativeRecording(meetingId: string): Promise<TauriStartResponse> {
-  return invoke<TauriStartResponse>('start_recording', { meetingId });
+/** `inputDeviceUid` from `listNativeInputDevices`; omit to follow the
+ * meeting app's microphone, else the system default (ADR-061). Older app
+ * builds ignore it and record the system default. */
+export function startNativeRecording(meetingId: string, inputDeviceUid?: string): Promise<TauriStartResponse> {
+  return invoke<TauriStartResponse>('start_recording', { meetingId, inputDeviceUid: inputDeviceUid || null });
+}
+
+/** A microphone the Mac app can record. */
+export interface NativeInputDevice {
+  uid: string;
+  name: string;
+  channels: number;
+  is_default: boolean;
+  /** Virtual or aggregate device, usually a loopback; newer app builds. */
+  is_virtual?: boolean;
+  /** Meeting apps capturing from this device now, e.g. ["Zoom"]. */
+  used_by: string[];
+}
+
+/** Input devices for the native microphone picker; `null` when the
+ * installed app predates the picker. */
+export async function listNativeInputDevices(): Promise<NativeInputDevice[] | null> {
+  try {
+    return await invoke<NativeInputDevice[]>('list_input_devices');
+  } catch {
+    return null;
+  }
 }
 
 export function stopNativeRecording(): Promise<TauriStopResponse> {
@@ -425,6 +461,8 @@ export interface NativeControlRequest {
   requestId: string;
   action: 'start' | 'stop';
   params: { title?: string; accountId?: string; upload?: boolean };
+  /** Who asked: the MCP control socket or a meeting-detection prompt. */
+  origin: 'mcp' | 'detection';
 }
 
 export type NativeControlReply =
@@ -444,6 +482,7 @@ function decodeControlRequest(raw: unknown): NativeControlRequest | null {
       accountId: typeof p.accountId === 'string' ? p.accountId : undefined,
       upload: typeof p.upload === 'boolean' ? p.upload : undefined,
     },
+    origin: r.origin === 'detection' ? 'detection' : 'mcp',
   };
 }
 
@@ -500,6 +539,8 @@ export interface NativeMeetingDetection {
 export interface NativeMeetingDetectionState {
   supported: boolean;
   enabled: boolean;
+  /** The app reports resumed meetings, so an ended meeting may auto-stop. */
+  autoStop?: boolean;
   active: NativeMeetingDetection | null;
 }
 
@@ -531,6 +572,16 @@ export function onNativeMeetingDetected(handler: (d: NativeMeetingDetection) => 
 export function onNativeMeetingEnded(handler: (d: NativeMeetingDetection) => void): () => void {
   return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
     'native-meeting-ended',
+    decodeMeetingDetection,
+    (d) => { if (d) handler(d); },
+  );
+}
+
+/** The meeting's audio resumed during a recording after its end was
+ * reported; any pending automatic stop must be cancelled. */
+export function onNativeMeetingResumed(handler: (d: NativeMeetingDetection) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
+    'native-meeting-resumed',
     decodeMeetingDetection,
     (d) => { if (d) handler(d); },
   );

@@ -89,3 +89,36 @@ func TestPrivateAccountRelinkUsesSingleAtomicPartialWrite(t *testing.T) {
 		t.Fatalf("private link status=%d writes=%d body=%s", w.Code, writes, w.Body.String())
 	}
 }
+
+// A concurrent unpublish/move or membership change surfaces as 409, not 500.
+func TestAccountLinkConditionFailureIsConflict(t *testing.T) {
+	db := dynamodb.New(dynamodb.Options{
+		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+		HTTPClient: readingHTTP(func(r *http.Request) (*http.Response, error) {
+			switch r.Header.Get("X-Amz-Target") {
+			case "DynamoDB_20120810.GetItem":
+				var input struct{ Key map[string]map[string]string }
+				json.NewDecoder(r.Body).Decode(&input)
+				switch {
+				case input.Key["PK"]["S"] == "USER#owner" && input.Key["SK"]["S"] == "MEETING#meeting":
+					return preparationWireResponse(200, `{"Item":{"PK":{"S":"USER#owner"},"SK":{"S":"MEETING#meeting"},"meetingId":{"S":"meeting"},"userId":{"S":"owner"}}}`), nil
+				case input.Key["PK"]["S"] == "ACCOUNT#account-b" && input.Key["SK"]["S"] == "MEMBER#owner":
+					return preparationWireResponse(200, `{"Item":{"accountId":{"S":"account-b"},"userId":{"S":"owner"},"role":{"S":"SA"}}}`), nil
+				}
+				return preparationWireResponse(200, `{}`), nil
+			case "DynamoDB_20120810.UpdateItem":
+				return preparationWireResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"The conditional request failed"}`), nil
+			}
+			return preparationWireResponse(200, `{}`), nil
+		}),
+	})
+	repo := repository.NewDynamoDBRepository(db, "private-link-test")
+	h := NewMeetingHandler(service.NewMeetingService(repo), repo)
+	w := httptest.NewRecorder()
+	req := withUserCtx(withChiParam(httptest.NewRequest("POST", "/api/meetings/meeting/account",
+		strings.NewReader(`{"accountId":"account-b"}`)), "meetingId", "meeting"), "owner")
+	h.LinkToAccount(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "CONFLICT") {
+		t.Fatalf("condition failure status=%d body=%s", w.Code, w.Body.String())
+	}
+}

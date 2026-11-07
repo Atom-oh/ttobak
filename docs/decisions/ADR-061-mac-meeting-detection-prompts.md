@@ -22,11 +22,16 @@ microphone use, because the browser process is the one using the input.
 The Mac app detects meetings and **offers** a recording; it never starts one
 without a user confirmation.
 
-- A background thread polls Core Audio: the default input device's
-  `kAudioDevicePropertyDeviceIsRunningSomewhere` every 2 s, then once per second
-  while the microphone is in use, `kAudioHardwarePropertyProcessObjectList`
-  with each process's `IsRunningInput`, `PID` and `BundleID`. The app's own
-  process is excluded. Recorder locks are not held during these calls.
+- A background thread polls `kAudioHardwarePropertyProcessObjectList` (every
+  2 s, every second while any process has audio running) and reads each
+  process's `IsRunningInput`, `IsRunningOutput`, `PID` and `BundleID`. The app's
+  own process is excluded and recorder locks are not held. The default input
+  device's `IsRunningSomewhere` is not used: Zoom was observed capturing from a
+  non-default USB microphone while that flag stayed false.
+- Input or output counts, so a listen-only participant is detected even after
+  the app or browser releases the microphone. Output-only browser audio checks
+  tabs only for a browser whose tab script already succeeded in this run, so a
+  video never raises the first Automation prompt.
 - Native meeting apps (Zoom including its capture host, Teams, Webex, Slack,
   FaceTime, Amazon Chime, Discord) are matched by bundle ID or helper ID.
 - A browser using the microphone counts only when one of its tabs is a meeting
@@ -40,11 +45,22 @@ without a user confirmation.
   other WebKit hosts share it. Firefox has no tab
   scripting and is not detected.
 - `meeting.rs` holds the pure rules: a 3 s sustain before announcing, one
-  announcement at a time, no announcement while the app records, and an end
-  after 20 s of absent microphone use. A dismissal silences that source until it
-  ends.
-- A stop prompt can stop only the recording its own confirmed start produced
-  (bound to that WAV path); a manually started recording is never stopped by it.
+  tracked meeting at a time, and an end after 20 s of absent audio. A meeting
+  that starts during a recording is tracked silently; it is announced if the
+  recording stops while the meeting continues. A dismissal silences that source
+  until it ends.
+- When a tracked meeting ends during a native recording (started from the
+  prompt or by hand), the SPA shows a 30 s countdown, then stops and uploads that
+  recording unless the user keeps recording. The stop is bound to the WAV path
+  running when the meeting ended, so a later recording is never stopped by it.
+  The automatic path only ever sends that one stop. If the meeting's audio
+  returns during the countdown, the app resumes it at the first sighting (no
+  sustain), reports it as resumed and clears the binding, and the stop command
+  also refuses while that audio is present. The SPA auto-stops only when
+  `meeting_detection_get` reports `autoStop`; older app builds keep the manual
+  stop prompt.
+- Automatic microphone choice prefers native meeting apps over browsers and
+  ignores Safari's shared WebKit process.
 - Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window
   and posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same
@@ -52,6 +68,11 @@ without a user confirmation.
   unchanged. Detection starts do not post the MCP "started" notification.
 - Detection is on by default and toggled in Settings; the preference is stored
   in the app config directory.
+- A recording uses the microphone the user picks in System Audio mode, or by
+  default the input device the meeting app is capturing from (process
+  `Devices`, input scope), else the system default. This keeps multi-microphone
+  and clamshell setups aligned with what Zoom hears. Switching the microphone
+  during a recording is not yet supported.
 
 ## Consequences
 

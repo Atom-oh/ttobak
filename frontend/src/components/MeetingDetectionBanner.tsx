@@ -1,17 +1,22 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import {
   getMeetingDetection,
   isTauri,
   onNativeMeetingDetected,
   onNativeMeetingEnded,
+  onNativeMeetingResumed,
   respondMeetingDetection,
   type NativeMeetingDetection,
 } from '@/lib/tauri';
 
 type Prompt = { phase: 'detected' | 'ended'; detection: NativeMeetingDetection };
+
+/** After a meeting ends, the running recording stops and uploads after this
+ * many seconds unless the user keeps recording. */
+const AUTO_STOP_SECONDS = 30;
 
 function meetingTitle(label: string): string {
   const when = new Intl.DateTimeFormat('ko-KR', {
@@ -23,15 +28,53 @@ function meetingTitle(label: string): string {
   return `${label} 회의 · ${when}`;
 }
 
-/** Mac app only: offers to record when the app detects a meeting using the
- * microphone, and to stop when that meeting ends (ADR-061). Nothing records
- * until the user confirms; the start follows the normal control path to the
- * record page. Renders nothing in a browser or an older app build. */
+/** Mac app only: offers to record when the app detects a meeting, and when
+ * that meeting ends stops the running recording after a short countdown the
+ * user can cancel (ADR-061). Nothing records until the user confirms; start
+ * and stop follow the normal control path to the record page. Renders
+ * nothing in a browser or an older app build. */
 export function MeetingDetectionBanner() {
   const { isAuthenticated } = useAuth();
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only app builds that report resumes may auto-stop; older ones keep the
+  // manual stop prompt, since nothing could cancel a resumed meeting.
+  const [autoStop, setAutoStop] = useState(false);
+  // Countdown to the automatic stop, bound to one ended detection.
+  const [countdown, setCountdown] = useState<{ id: string; remaining: number } | null>(null);
+  // Detections whose automatic stop already ran: it is attempted once only.
+  const autoStopped = useRef(new Set<string>());
+
+  const endedId = autoStop && prompt?.phase === 'ended' ? prompt.detection.detectionId : null;
+  useEffect(() => {
+    if (!endedId) {
+      setCountdown(null);
+      return;
+    }
+    setCountdown({ id: endedId, remaining: AUTO_STOP_SECONDS });
+    const timer = setInterval(() => {
+      setCountdown((c) => (c && c.id === endedId && c.remaining > 0 ? { ...c, remaining: c.remaining - 1 } : c));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [endedId]);
+
+  // The automatic path can only stop, and only the ended detection it counted
+  // for; it never confirms any other prompt (ADR-061: no unconfirmed start).
+  useEffect(() => {
+    if (!countdown || countdown.remaining > 0 || countdown.id !== endedId) return;
+    if (autoStopped.current.has(countdown.id)) return;
+    autoStopped.current.add(countdown.id);
+    const id = countdown.id;
+    setBusy(true);
+    void respondMeetingDetection(id, 'stop')
+      .then((reply) => {
+        if ('error' in reply && !reply.ok) setError(reply.error.message);
+        else setPrompt((current) => (current?.detection.detectionId === id ? null : current));
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setBusy(false));
+  }, [countdown, endedId]);
 
   useEffect(() => {
     if (!isTauri() || !isAuthenticated) return;
@@ -39,6 +82,10 @@ export function MeetingDetectionBanner() {
     const offDetected = onNativeMeetingDetected((detection) => {
       setError(null);
       setPrompt({ phase: 'detected', detection });
+    });
+    // The meeting's audio came back during the countdown: keep recording.
+    const offResumed = onNativeMeetingResumed(() => {
+      setPrompt((current) => (current?.phase === 'ended' ? null : current));
     });
     const offEnded = onNativeMeetingEnded((detection) => {
       setError(null);
@@ -51,6 +98,7 @@ export function MeetingDetectionBanner() {
     // A meeting announced before this page loaded; read after subscribing so
     // an announcement in between is not lost. Live events take precedence.
     void getMeetingDetection().then((state) => {
+      if (!cancelled) setAutoStop(state?.autoStop === true);
       if (!cancelled && state?.enabled && state.active) {
         setPrompt((current) => current ?? { phase: 'detected', detection: state.active! });
       }
@@ -59,6 +107,7 @@ export function MeetingDetectionBanner() {
       cancelled = true;
       offDetected();
       offEnded();
+      offResumed();
     };
   }, [isAuthenticated]);
 
@@ -71,7 +120,7 @@ export function MeetingDetectionBanner() {
     setError(null);
   };
 
-  const confirm = async () => {
+  const confirm = async (): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
@@ -96,7 +145,11 @@ export function MeetingDetectionBanner() {
   const body =
     phase === 'detected'
       ? '녹음을 시작하면 시스템 소리와 내 마이크를 함께 녹음합니다. 참석자에게 녹음 사실을 알려주세요.'
-      : '녹음을 종료하고 업로드할까요?';
+      : !autoStop
+        ? '녹음을 종료하고 업로드할까요?'
+        : countdown && countdown.id === detection.detectionId && countdown.remaining > 0
+          ? `${countdown.remaining}초 후 녹음을 종료하고 업로드합니다.`
+          : '녹음을 종료하고 업로드하는 중입니다.';
 
   return (
     <div
@@ -128,7 +181,7 @@ export function MeetingDetectionBanner() {
           disabled={busy}
           className="min-h-9 px-3 rounded-lg text-sm font-bold text-white bg-primary hover:bg-primary-hover disabled:opacity-50"
         >
-          {busy ? '처리 중…' : phase === 'detected' ? '녹음 시작' : '녹음 종료'}
+          {busy ? '처리 중…' : phase === 'detected' ? '녹음 시작' : autoStop ? '지금 종료' : '녹음 종료'}
         </button>
       </div>
     </div>

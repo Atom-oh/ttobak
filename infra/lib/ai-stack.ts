@@ -34,6 +34,7 @@ export class AiStack extends cdk.Stack {
   public readonly crawlerRole: iam.Role;
   public readonly researchWorkerRole: iam.Role;
   public readonly convertDocRole: iam.Role;
+  public readonly audioRemuxRole: iam.Role;
   public readonly simRole: iam.Role;
   /** aws.codeinterpreter.v1's custom sibling (ADR-033) -- SANDBOX network,
    * no policy ever attached to its own execution role. */
@@ -448,6 +449,23 @@ export class AiStack extends cdk.Stack {
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
     );
 
+    // ==================== Audio Remux Role (ADR-062) ====================
+    // Reads meeting audio (including the pinned source version) and writes
+    // only playback copies. No DynamoDB access: copies bind to the source
+    // object's ETag/VersionId, not to meeting rows.
+    this.audioRemuxRole = createLambdaRole(
+      'TtobakAudioRemuxRole',
+      'ttobak-audio-remux-role',
+      'Role for ttobak-audio-remux Lambda function'
+    );
+    props.bucket.grantRead(this.audioRemuxRole, 'audio/*');
+    // HEAD the current copy for a conditional replacement.
+    props.bucket.grantRead(this.audioRemuxRole, 'audio-playback/*');
+    props.bucket.grantPut(this.audioRemuxRole, 'audio-playback/*');
+    this.audioRemuxRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
+    );
+
     // ==================== Sim Code Interpreter (ADR-033) ====================
     // usingSandboxNetwork() must be explicit -- the L2 construct's default
     // is usingPublicNetwork(), which would silently give the sandbox
@@ -808,6 +826,11 @@ export class AiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ConvertDocRoleArn', {
       value: this.convertDocRole.roleArn,
       exportName: 'TtobakConvertDocRoleArn',
+    });
+
+    new cdk.CfnOutput(this, 'AudioRemuxRoleArn', {
+      value: this.audioRemuxRole.roleArn,
+      exportName: 'TtobakAudioRemuxRoleArn',
     });
 
     new cdk.CfnOutput(this, 'KbRoleArn', {
