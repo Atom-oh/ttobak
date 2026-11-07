@@ -30,6 +30,10 @@ export interface Meeting {
   linkedMeetingIds?: string[];
   /** ADR-033 cost/sizing simulator, singleton per meeting. */
   simRun?: SimRun;
+  /** List items: true for meetings shared with the viewer. */
+  isShared?: boolean;
+  /** List items: creator of a shared meeting (omitted for own meetings). */
+  ownerUserId?: string;
 }
 
 /** Mirrors backend/internal/model.SimRequirement's JSON shape exactly. */
@@ -226,6 +230,8 @@ export interface SharedUser {
   name?: string;
   permission: 'read' | 'edit';
   sharedAt: string;
+  /** Account member who shared on the creator's behalf. */
+  sharedByEmail?: string;
 }
 
 export interface TranscriptComparison {
@@ -284,6 +290,8 @@ export interface MeetingDetail extends Meeting {
   };
   transcriptQuality?: TranscriptQuality;
   canRecoverRecording?: boolean;
+  /** Creator or live account-team member: every creator action except delete. */
+  canManage?: boolean;
   canCorrectSpeakers?: boolean;
   supportsAudioCrop?: boolean;
   /** Server flag for POST /api/meetings/{id}/translation; absent means off. */

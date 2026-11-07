@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/ttobak/backend/internal/telemetry"
 )
 
 // RequestLog records registered route patterns, never request URLs. Public
@@ -36,9 +37,16 @@ func RequestLog(next http.Handler) http.Handler {
 				digest := sha256.Sum256([]byte(requestID))
 				requestIDHash = fmt.Sprintf("%x", digest[:16])
 			}
+			completion := telemetry.RequestCompletion{
+				Method: loggedMethod(r.Method), Route: route, Status: status,
+				Bytes: wrapped.BytesWritten(), Duration: time.Since(start), RequestIDHash: requestIDHash,
+			}
 			log.Printf("request completed method=%s route=%q status=%d bytes=%d duration_ms=%d request_id_hash=%s",
-				loggedMethod(r.Method), route, status, wrapped.BytesWritten(),
-				time.Since(start).Milliseconds(), requestIDHash)
+				completion.Method, completion.Route, completion.Status, completion.Bytes,
+				completion.Duration.Milliseconds(), completion.RequestIDHash)
+			// Same fields as an OTLP record, correlated with the server span;
+			// a no-op unless telemetry is enabled.
+			telemetry.EmitRequestCompleted(r.Context(), completion)
 		}()
 		next.ServeHTTP(wrapped, r)
 	})

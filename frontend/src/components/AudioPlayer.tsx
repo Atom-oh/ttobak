@@ -1,6 +1,15 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  AUDIO_SEEK_EVENT,
+  type AudioSeekDetail,
+  canSeekTo,
+  effectiveDuration,
+  formatPlayerTime,
+  seekFraction,
+  skipTarget,
+} from '@/lib/audioSeek';
 
 interface AudioPlayerProps {
   audioUrl?: string;
@@ -12,36 +21,49 @@ interface AudioPlayerProps {
    * summarize Lambda's `mergePartTranscripts` runs).
    */
   audioUrls?: string[];
+  /**
+   * Server-recorded meeting length in seconds. Browser-recorded WebM has no
+   * Duration element, so the element reports Infinity/NaN; this keeps the
+   * progress bar and skip controls usable. Ignored for multi-part playback,
+   * whose merged length differs from the first part being played.
+   */
+  durationSeconds?: number;
 }
 
-function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-}
-
-export function AudioPlayer({ audioUrl, audioUrls }: AudioPlayerProps) {
+export function AudioPlayer({ audioUrl, audioUrls, durationSeconds }: AudioPlayerProps) {
   // Multi-file fallback: play the first part. Sequential playback across
   // parts can be added later — most users will get a merged single file
   // from the summarize Lambda before they ever hit this UI.
   const effectiveUrl = audioUrl ?? audioUrls?.[0];
+  const singleSource = (audioUrls?.length ?? 0) <= 1;
   // Mute is a user preference; playback state belongs to each source.
   const [volume, setVolume] = useState(1);
 
   if (!effectiveUrl) return null;
 
-  return <SourceAudioPlayer key={effectiveUrl} audioUrl={effectiveUrl} volume={volume} onVolumeChange={setVolume} />;
+  return (
+    <SourceAudioPlayer
+      key={effectiveUrl}
+      audioUrl={effectiveUrl}
+      singleSource={singleSource}
+      fallbackDuration={singleSource ? durationSeconds : undefined}
+      volume={volume}
+      onVolumeChange={setVolume}
+    />
+  );
 }
 
-function SourceAudioPlayer({ audioUrl, volume, onVolumeChange }: {
+function SourceAudioPlayer({ audioUrl, singleSource, fallbackDuration, volume, onVolumeChange }: {
   audioUrl: string;
+  singleSource: boolean;
+  fallbackDuration?: number;
   volume: number;
   onVolumeChange: (volume: number) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [mediaDuration, setMediaDuration] = useState(NaN);
   const [error, setError] = useState(false);
 
   useEffect(() => {
@@ -52,45 +74,74 @@ function SourceAudioPlayer({ audioUrl, volume, onVolumeChange }: {
     const audio = audioRef.current;
     if (!audio) return;
     const onTime = () => setCurrentTime(audio.currentTime);
-    const onMeta = () => setDuration(audio.duration);
-    const onEnd = () => setIsPlaying(false);
+    // durationchange also fires once a cue-less WebM has been fully read.
+    const onDuration = () => setMediaDuration(audio.duration);
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
     audio.addEventListener('timeupdate', onTime);
-    audio.addEventListener('loadedmetadata', onMeta);
-    audio.addEventListener('ended', onEnd);
+    audio.addEventListener('loadedmetadata', onDuration);
+    audio.addEventListener('durationchange', onDuration);
+    audio.addEventListener('play', onPlay);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('ended', onPause);
     return () => {
       audio.removeEventListener('timeupdate', onTime);
-      audio.removeEventListener('loadedmetadata', onMeta);
-      audio.removeEventListener('ended', onEnd);
+      audio.removeEventListener('loadedmetadata', onDuration);
+      audio.removeEventListener('durationchange', onDuration);
+      audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('ended', onPause);
       audio.pause();
     };
   }, []);
 
+  const duration = effectiveDuration(mediaDuration, fallbackDuration);
+
+  const seekTo = useCallback((seconds: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = seconds;
+    setCurrentTime(seconds);
+  }, []);
+
+  // Transcript deep links (summary timestamps) move playback to that turn.
+  useEffect(() => {
+    const onSeekRequest = (event: Event) => {
+      const audio = audioRef.current;
+      const seconds = (event as CustomEvent<AudioSeekDetail>).detail?.seconds;
+      if (!audio || typeof seconds !== 'number' || !canSeekTo(seconds, duration, singleSource)) return;
+      seekTo(seconds);
+      void audio.play().catch(() => setIsPlaying(false));
+    };
+    window.addEventListener(AUDIO_SEEK_EVENT, onSeekRequest);
+    return () => window.removeEventListener(AUDIO_SEEK_EVENT, onSeekRequest);
+  }, [duration, singleSource, seekTo]);
+
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (isPlaying) { audio.pause(); } else {
+    if (audio.paused) {
       void audio.play().catch(() => setIsPlaying(false));
+    } else {
+      audio.pause();
     }
-    setIsPlaying(!isPlaying);
-  }, [isPlaying]);
+  }, []);
 
   const seek = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const audio = audioRef.current;
-    if (!audio || !duration) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    audio.currentTime = pct * duration;
-  }, [duration]);
+    const target = seekFraction((e.clientX - rect.left) / rect.width, duration);
+    if (target !== null) seekTo(target);
+  }, [duration, seekTo]);
 
   const skip = useCallback((seconds: number) => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + seconds));
-  }, [duration]);
+    seekTo(skipTarget(audio.currentTime, seconds, duration));
+  }, [duration, seekTo]);
 
   if (error) return null;
 
-  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const progress = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
   return (
     <div className="sticky bottom-6 mt-12 w-full max-w-2xl mx-auto z-30 animate-slide-up">
@@ -105,8 +156,8 @@ function SourceAudioPlayer({ audioUrl, volume, onVolumeChange }: {
         {/* Progress */}
         <div className="flex-1 min-w-0">
           <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
+            <span>{formatPlayerTime(currentTime)}</span>
+            <span>{duration > 0 ? formatPlayerTime(duration) : '--:--'}</span>
           </div>
           <div className="h-1 w-full bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden cursor-pointer" onClick={seek}>
             <div className="h-full bg-primary rounded-full transition-all duration-150" style={{ width: `${progress}%` }} />
