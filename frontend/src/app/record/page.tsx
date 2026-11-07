@@ -273,14 +273,26 @@ function RecordPageInner() {
   // Plain functions, like `handleRecordingStart` below (not useCallback):
   // they close over `resetSessionStateForNewMeeting`, which is itself a
   // per-render function, so memoizing would only add a stale-deps hazard.
+  // The confirmation is asynchronous (an in-page dialog in the Mac app), so
+  // the flow is reserved BEFORE it opens: a recording started meanwhile (e.g.
+  // over MCP) is refused as busy instead of being replaced by a stale accept.
+  const reserveLeftoverFlow = () => {
+    if (isMeetingFlowBusy() || postRecording.step !== null) return false;
+    setFlowBusy(true);
+    return true;
+  };
+
   const handleLeftoverUpload = async (item: TauriLeftoverRecording) => {
+    if (!reserveLeftoverFlow()) return;
     const ok = await confirmDialog(
       `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
       '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
       '본인의 녹음이 맞다면 내 미팅으로 업로드합니다. 계속할까요?',
-    );
-    if (!ok || isMeetingFlowBusy()) return;
-    setFlowBusy(true);
+    ).catch(() => false);
+    if (!ok) {
+      setFlowBusy(false);
+      return;
+    }
     try {
       // Same shape as a fresh native recording from here on: a draft meeting
       // (falls back to create-at-upload inside resumeUploadFlow if this
@@ -296,13 +308,16 @@ function RecordPageInner() {
   };
 
   const handleLeftoverDelete = async (item: TauriLeftoverRecording) => {
+    if (!reserveLeftoverFlow()) return;
     const ok = await confirmDialog(
       `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
       '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
       '삭제하면 복구할 수 없습니다. 삭제할까요?',
-    );
-    if (!ok || isMeetingFlowBusy()) return;
-    setFlowBusy(true);
+    ).catch(() => false);
+    if (!ok) {
+      setFlowBusy(false);
+      return;
+    }
     try {
       await cleanupRecording(item.path);
       leftovers.remove(item.path);
