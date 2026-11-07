@@ -13,7 +13,7 @@ import type { NavigationKind } from './navigation-catalog.js';
 import type { MeetingCatalogOptions } from './meeting-catalog.js';
 import type { VaultReadingOptions } from './vault-reading.js';
 import { billingReadingOptions, type BillingReadingOptions } from './billing-reading.js';
-import type { ContactInput, ContactListOptions } from './account-contacts.js';
+import { canonicalContact, type ContactInput, type ContactListOptions } from './account-contacts.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -282,7 +282,8 @@ export class TtobakApi {
   async createAccountContact(accountId: string, contact: ContactInput, idempotencyKey?: string, replayOnly = false) {
     if (!this.options.privateTransport && idempotencyKey !== undefined) throw new Error('idempotencyKey requires private connector transport');
     if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error('INVALID_ARGUMENT: idempotencyKey required');
-    const body = this.options.privateTransport ? { contact, idempotencyKey } : contact;
+    const ordered = canonicalContact(contact);
+    const body = this.options.privateTransport ? { contact: ordered, idempotencyKey } : ordered;
     return this.request('POST', `/api/accounts/${identifier(accountId, 'accountId')}/contacts${replayOnly ? '?replay=1' : ''}`, body, MAX_READING_BYTES);
   }
 

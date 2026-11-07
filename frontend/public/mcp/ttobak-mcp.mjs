@@ -23206,6 +23206,23 @@ var BILLING_TOOLS = ["account", "dataset", "report"].map((kind) => ({
   }
 }));
 
+// src/account-contacts.ts
+var fields = ["name", "company", "title", "department", "email", "address", "workPhone", "fax", "phone", "cardRegisteredAt", "cardBook", "group", "notes"];
+function canonicalContact(contact) {
+  const source = contact;
+  const known = new Set(fields);
+  const ordered = {};
+  for (const field of fields) if (Object.hasOwn(source, field)) ordered[field] = source[field];
+  for (const key of Object.keys(source).filter((key2) => !known.has(key2)).sort()) ordered[key] = source[key];
+  return ordered;
+}
+var fieldLimit = (field) => field === "notes" ? 8192 : field === "address" ? 1024 : 256;
+var CONTACT_PROPERTIES = Object.fromEntries(fields.map((field) => [field, {
+  type: "string",
+  maxLength: fieldLimit(field),
+  description: `Maximum ${fieldLimit(field)} UTF-8 bytes`
+}]));
+
 // src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
@@ -23387,7 +23404,8 @@ var TtobakApi = class {
   async createAccountContact(accountId, contact, idempotencyKey, replayOnly = false) {
     if (!this.options.privateTransport && idempotencyKey !== void 0) throw new Error("idempotencyKey requires private connector transport");
     if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error("INVALID_ARGUMENT: idempotencyKey required");
-    const body = this.options.privateTransport ? { contact, idempotencyKey } : contact;
+    const ordered = canonicalContact(contact);
+    const body = this.options.privateTransport ? { contact: ordered, idempotencyKey } : ordered;
     return this.request("POST", `/api/accounts/${identifier(accountId, "accountId")}/contacts${replayOnly ? "?replay=1" : ""}`, body, MAX_READING_BYTES);
   }
   async replayAccountContact(accountId, contact, idempotencyKey) {
