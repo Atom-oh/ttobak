@@ -5,6 +5,18 @@ import { MAX_READING_BYTES } from './reading.js';
 const fields = ['name', 'company', 'title', 'department', 'email', 'address', 'workPhone', 'fax', 'phone', 'cardRegisteredAt', 'cardBook', 'group', 'notes'] as const;
 export type ContactInput = { name: string } & Partial<Record<typeof fields[number], string>>;
 export type ContactListOptions = { limit: number; cursor?: string };
+
+// The private bridge binds an idempotent write to the exact request bytes, so a
+// retry must serialize the same contact identically regardless of the caller's
+// property order: known fields in schema order, then any others sorted.
+export function canonicalContact(contact: ContactInput): ContactInput {
+  const source = contact as Record<string, unknown>;
+  const known = new Set<string>(fields);
+  const ordered: Record<string, unknown> = {};
+  for (const field of fields) if (Object.hasOwn(source, field)) ordered[field] = source[field];
+  for (const key of Object.keys(source).filter(key => !known.has(key)).sort()) ordered[key] = source[key];
+  return ordered as ContactInput;
+}
 type ContactApi = {
   listAccountContacts(accountId: string, options: ContactListOptions): Promise<unknown>;
   createAccountContact(accountId: string, contact: ContactInput, idempotencyKey?: string): Promise<unknown>;

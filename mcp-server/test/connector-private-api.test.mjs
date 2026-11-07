@@ -338,3 +338,16 @@ test('contact replay probes keep the exact create body and use a signed read-onl
   assert.equal(seen[1].path, seen[0].path + '?replay=1');
   assert.equal(JSON.stringify(seen[0].body), JSON.stringify(seen[1].body));
 });
+
+test('a retried contact create serializes identically regardless of property order', async () => {
+  const seen = [];
+  const api = new TtobakApi({ getIdToken: async () => { throw new Error('unexpected bearer'); } }, 'https://example.invalid', {
+    privateTransport: async request => { seen.push(request); return { contactId: 'contact' }; },
+  });
+  await api.createAccountContact('acct', { name: 'A', email: 'a@example.com', company: 'C', notes: 'n' }, 'key');
+  await api.createAccountContact('acct', { notes: 'n', company: 'C', email: 'a@example.com', name: 'A' }, 'key');
+  await api.replayAccountContact('acct', { email: 'a@example.com', notes: 'n', name: 'A', company: 'C' }, 'key');
+  assert.equal(JSON.stringify(seen[0].body), JSON.stringify(seen[1].body));
+  assert.equal(JSON.stringify(seen[0].body), JSON.stringify(seen[2].body));
+  assert.deepEqual(Object.keys(seen[0].body.contact), ['name', 'company', 'email', 'notes']);
+});
