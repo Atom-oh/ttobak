@@ -35,9 +35,9 @@ func NewConnectorEventService(repo connectorEventRepository, audience, issuer st
 	return &ConnectorEventService{repo: repo, audience: audience, issuer: issuer, now: time.Now}
 }
 
-// maxConnectorEventJSONBytes keeps a connector-created event readable through
-// the bridge's 14,000-byte response cap.
-const maxConnectorEventJSONBytes = 12000
+// maxConnectorEventJSONBytes equals the API bound; both keep an event readable
+// through the bridge's 14,000-byte response cap.
+const maxConnectorEventJSONBytes = maxEventJSONBytes
 
 var connectorEventFields = []string{"title", "startAt", "endAt", "allDay", "location", "attendees", "notes"}
 
