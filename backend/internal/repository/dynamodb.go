@@ -23,7 +23,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
-	"github.com/ttobak/backend/internal/fanout"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -1929,60 +1928,35 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			return nil, fmt.Errorf("failed to build expression: %w", err)
 		}
 
-		// The owned GSI1 page and the caller's share rows are independent
-		// reads, so they overlap. Ordered keeps the sequential error order:
-		// an owned-query failure wins, and a share-query failure is returned
-		// only when the owned page succeeded.
 		var meetings []model.Meeting
-		var shares []model.Share
-		owned := func(ctx context.Context) error {
-			const maxPages = 25 // retain a cursor when a sparse account filter reaches this work bound
-			for i := 0; i < maxPages; i++ {
-				queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
-					TableName:                 aws.String(r.tableName),
-					IndexName:                 aws.String("GSI1"),
-					KeyConditionExpression:    expr.KeyCondition(),
-					FilterExpression:          expr.Filter(),
-					ProjectionExpression:      expr.Projection(),
-					ExpressionAttributeNames:  expr.Names(),
-					ExpressionAttributeValues: expr.Values(),
-					Limit:                     aws.Int32(params.Limit),
-					ExclusiveStartKey:         exclusiveStartKey,
-					ScanIndexForward:          aws.Bool(false),
-				})
-				if err != nil {
-					return fmt.Errorf("failed to query meetings: %w", err)
-				}
-
-				var page []model.Meeting
-				if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &page); err != nil {
-					return fmt.Errorf("failed to unmarshal meetings: %w", err)
-				}
-				meetings = append(meetings, page...)
-				exclusiveStartKey = queryResult.LastEvaluatedKey
-
-				if len(meetings) >= int(params.Limit) || exclusiveStartKey == nil {
-					break
-				}
-			}
-			return nil
-		}
-		reads := []func(context.Context) error{owned}
-		if params.AccountIDs == nil {
-			reads = append(reads, func(ctx context.Context) error {
-				var err error
-				if shares, err = r.ListSharesForUser(ctx, params.UserID); err != nil {
-					return fmt.Errorf("failed to list shares: %w", err)
-				}
-				return nil
+		const maxPages = 25 // retain a cursor when a sparse account filter reaches this work bound
+		for i := 0; i < maxPages; i++ {
+			queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
+				TableName:                 aws.String(r.tableName),
+				IndexName:                 aws.String("GSI1"),
+				KeyConditionExpression:    expr.KeyCondition(),
+				FilterExpression:          expr.Filter(),
+				ProjectionExpression:      expr.Projection(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+				Limit:                     aws.Int32(params.Limit),
+				ExclusiveStartKey:         exclusiveStartKey,
+				ScanIndexForward:          aws.Bool(false),
 			})
-		}
-		errs := make([]error, len(reads))
-		if stop := fanout.Ordered(ctx, len(reads), len(reads), func(ctx context.Context, i int) error {
-			errs[i] = reads[i](ctx)
-			return errs[i]
-		}); stop < len(reads) {
-			return nil, errs[stop]
+			if err != nil {
+				return nil, fmt.Errorf("failed to query meetings: %w", err)
+			}
+
+			var page []model.Meeting
+			if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &page); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal meetings: %w", err)
+			}
+			meetings = append(meetings, page...)
+			exclusiveStartKey = queryResult.LastEvaluatedKey
+
+			if len(meetings) >= int(params.Limit) || exclusiveStartKey == nil {
+				break
+			}
 		}
 
 		result.Meetings, exclusiveStartKey = paginateMeetingsPage(meetings, params.Limit, exclusiveStartKey)
@@ -1991,7 +1965,14 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			cursor := encodeCursor(exclusiveStartKey)
 			result.NextCursor = &cursor
 		}
-		result.Shares = shares
+
+		if params.AccountIDs == nil {
+			shares, err := r.ListSharesForUser(ctx, params.UserID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list shares: %w", err)
+			}
+			result.Shares = shares
+		}
 	}
 
 	return result, nil
