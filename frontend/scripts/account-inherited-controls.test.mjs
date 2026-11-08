@@ -47,10 +47,11 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }) },
     '@/components/layout/AppLayout': { AppLayout: passthrough },
     '@/lib/api': { accountApi: {}, docApi: {}, projectApi: {}, settingsApi: {}, researchApi },
-    '@/lib/upload': { uploadDocFile() { throw new Error('Unexpected upload'); } },
+    '@/lib/dialog': { confirmDialog: async () => true, alertDialog: async () => {} }, '@/lib/upload': { uploadDocFile() { throw new Error('Unexpected upload'); } },
     '@/components/MemberPicker': { MemberPicker: none },
     '@/components/FieldInsightsSection': { FieldInsightsSection: none },
     '@/components/AccountBillingTab': { AccountBillingTab: none },
+    '@/components/AccountContacts': { AccountContacts: () => React.createElement('div', null, 'customer contacts panel') },
     '@/components/ShareButton': { DocumentShareButton: none },
     '@/components/IndexStatus': { IndexStatus: none },
   };
@@ -102,6 +103,7 @@ test('ancestor Owner keeps child management restrictions with authorized Billing
   });
   assert.match(html, /id="account-tab-billing"/);
   assert.doesNotMatch(html, /Search colleague|Remove member|Owner 초대 메일|<select/);
+  assert.doesNotMatch(html, /customer contacts panel/);
   assert.match(html, /member@example.invalid/);
 });
 
@@ -111,6 +113,7 @@ test('direct child Owner retains document creation and member management', () =>
   assert.match(docs, />Slide<|>Slide<\/button>|Uploading/);
   assert.match(docs, /Note/);
   const general = render('AccountDetailClient', { states: accountStates(direct), pathname: '/accounts/child', userId: directMember }).html;
+  assert.match(general, /customer contacts panel/);
   assert.match(general, /<select/);
   assert.doesNotMatch(general, /상위 어카운트.*읽기 전용/);
 });

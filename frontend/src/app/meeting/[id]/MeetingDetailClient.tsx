@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog, alertDialog } from '@/lib/dialog';
 import { meetingCapabilities } from '@/lib/meetingManagement';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
@@ -165,14 +166,14 @@ function MobileMoreMenu({ meetingId }: { meetingId: string }) {
 
   const handleDelete = async () => {
     setOpen(false);
-    if (!confirm('이 미팅을 삭제하시겠습니까?')) return;
+    if (!await confirmDialog('이 미팅을 삭제하시겠습니까?')) return;
     setIsDeleting(true);
     try {
       await meetingsApi.delete(meetingId);
       router.push('/');
     } catch (err) {
       console.error('Failed to delete meeting:', err);
-      alert('미팅 삭제에 실패했습니다.');
+      void alertDialog('미팅 삭제에 실패했습니다.');
       setIsDeleting(false);
     }
   };
@@ -281,7 +282,7 @@ function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecov
 
 function MeetingDetailContent() {
   const router = useRouter();
-  const { isAuthenticated, isLoading: authLoading, user } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, user, membershipRevision } = useAuth();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [summarySave, setSummarySave] = useState<{ revision: number; hasContent: boolean } | null>(null);
   const summaryRevisionRef = useRef(0);
@@ -636,6 +637,9 @@ function MeetingDetailContent() {
           {/* Speaker Name Mapping — show when transcript exists (done or error with partial data) */}
           {meeting.canCorrectSpeakers !== false && (meeting.status === 'done' || displayedSegments.length > 0) && (
             <SpeakerMapEditor
+              accountId={meeting.accountId}
+              userId={user?.userId}
+              membershipRevision={membershipRevision}
               transcription={displayedSegments}
               content={meeting.content}
               speakerMap={meeting.speakerMap}

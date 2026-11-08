@@ -623,6 +623,39 @@ Notes-only reads avoid transcript hydration on the server; transcript reads stil
 load the chosen source to validate/page it. See the
 [API contract](../docs/API-SPEC.md#bounded-meeting-reading) for response/error details.
 
+## Account contacts
+
+The authenticated `ttobak_list_account_contacts`, `ttobak_create_account_contact`
+and `ttobak_import_account_contacts` require direct membership. Private writes
+also require approval. Deploy the API first. List uses `limit` 1–25 and `nextCursor`; oversized
+pages retry with a smaller limit.
+
+Create takes `accountId` and `contact`; import takes 1–25 contacts, up to 512 KiB.
+See [contact fields and limits](../docs/API-SPEC.md#accounts-and-projects).
+Parse files client-side.
+
+Import scans up to 1,000 pages, skipping email or phone matches, including shared
+work numbers. Concurrent writes may duplicate. Results are one-based `created`,
+`duplicate` or `failed`; unknown writes may succeed and block matching later rows.
+
+Private OAuth writes require an `idempotencyKey`; retry identical input with the
+same key. Receipts never expire automatically or replay edited/deleted contacts.
+Bearer transport lacks retry keys. MCP clients and AI providers may see data.
+
+## Account events
+
+`ttobak_list_account_events` and `ttobak_create_account_event` manage an
+account's shared events (schedules) and require direct membership; private
+writes also require approval. List takes `from`, `to`, `order` (`asc` by default:
+upcoming events; for past events use `desc` with `to` set to now), `limit`
+1–25 and `cursor` (pass the returned `nextCursor`); oversized pages retry with a
+smaller limit. Create takes `accountId` and `event` (`title`, RFC 3339 `startAt`,
+optional `endAt`, `allDay`, `location`, `notes`, and up to 50 `attendees` that may
+reference the account's contacts by `contactId`), at most 12,000 bytes.
+Private OAuth writes require an `idempotencyKey`; retry identical input with the
+same key. These are separate from the private `ttobak_*_calendar_*` tools.
+See [event fields and limits](../docs/API-SPEC.md#accounts-and-projects).
+
 ## Public bundle provenance
 
 `frontend/public/mcp/ttobak-mcp.mjs` is generated from this module, never hand-edited.

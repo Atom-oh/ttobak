@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -136,7 +137,7 @@ export function KBFileList() {
   };
 
   const handleDelete = async (fileId: string) => {
-    if (!confirm('Are you sure you want to delete this file?')) return;
+    if (!await confirmDialog('Are you sure you want to delete this file?')) return;
 
     try {
       await kbApi.deleteFile(fileId);

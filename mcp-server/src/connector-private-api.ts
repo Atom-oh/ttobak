@@ -23,7 +23,8 @@ interface Dependencies {
 }
 const reads = new Set(['api.reading.get', 'api.documentReading.get', 'api.accountReading.get',
   'api.projectReading.get', 'api.navigationCatalog.accounts', 'api.navigationCatalog.projects',
-  'api.documentCatalog.get', 'api.kb.readFiles', 'api.meetingCatalog.get', 'api.vaultReading.get']);
+  'api.documentCatalog.get', 'api.kb.readFiles', 'api.meetingCatalog.get', 'api.vaultReading.get', 'api.accountContacts.list',
+  'api.accountEvents.list', 'api.accountEvents.get']);
 const functionARN = /^arn:aws:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?$/;
 
 export function httpOperation(method: string, path: string): string {
@@ -77,11 +78,34 @@ export function privateApiTransport(
     const qa = request.method === 'POST' && request.path === '/api/qa/readonly-ask';
     const note = request.method === 'POST' && request.path === '/api/documents';
     const operation = qa ? 'qa.readonlyAsk' : httpOperation(request.method, url.pathname);
+    const contact = request.method === 'POST' && operation === 'api.accountContacts.create' && (url.search === '' || url.search === '?replay=1') && !request.path.endsWith('?');
+    const event = request.method === 'POST' && operation === 'api.accountEvents.create' && (url.search === '' || url.search === '?replay=1') && !request.path.endsWith('?');
+    const mutation = note || contact || event;
     const destination = qa ? 'ttobak-qa-bridge' : 'ttobak-api-bridge';
-    if (!qa && !note && (request.method !== 'GET' || !reads.has(operation) || request.body !== null)) {
+    if (!qa && !mutation && (request.method !== 'GET' || !reads.has(operation) || request.body !== null)) {
       throw new ConnectorError('CAPABILITY_DENIED');
     }
     let noteKey: string | undefined;
+    if (contact) {
+      const body = request.body as Record<string, unknown> | null;
+      if (!body || Array.isArray(body) || !Object.keys(body).every(k => ['contact', 'idempotencyKey'].includes(k)) ||
+          !body.contact || typeof body.contact !== 'object' || Array.isArray(body.contact) ||
+          typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.idempotencyKey) ||
+          Buffer.byteLength(JSON.stringify(body)) > 65_536) {
+        throw new ConnectorError('CAPABILITY_DENIED');
+      }
+      noteKey = body.idempotencyKey;
+    }
+    if (event) {
+      const body = request.body as Record<string, unknown> | null;
+      if (!body || Array.isArray(body) || !Object.keys(body).every(k => ['event', 'idempotencyKey'].includes(k)) ||
+          !body.event || typeof body.event !== 'object' || Array.isArray(body.event) ||
+          typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.idempotencyKey) ||
+          Buffer.byteLength(JSON.stringify(body)) > 65_536) {
+        throw new ConnectorError('CAPABILITY_DENIED');
+      }
+      noteKey = body.idempotencyKey;
+    }
     if (note) {
       const body = request.body as Record<string, unknown> | null;
       if (!body || Array.isArray(body) || Object.keys(body).length !== 4 ||
@@ -104,8 +128,8 @@ export function privateApiTransport(
     if (args.byteLength > (qa ? 32_000 : 512 * 1024)) throw new ConnectorError('REQUEST_MISMATCH');
     const grants = await dependencies.resolve(verified.subject, verified.clientId, signal);
     const now = clock(), expiresAt = Math.min(now + MAX_LIFETIME_SECONDS, verified.expiresAt,
-      note ? grants.approval?.expiresAt ?? 0 : verified.expiresAt);
-    const generation = note ? grants.approval?.generation ?? 0 : 0;
+      mutation ? grants.approval?.expiresAt ?? 0 : verified.expiresAt);
+    const generation = mutation ? grants.approval?.generation ?? 0 : 0;
     if (!Number.isSafeInteger(now) || now <= 0 || expiresAt <= now) throw new ConnectorError('EXPIRED_DELEGATION');
     effectiveCapabilities(verified.subject, verified.clientId, required, generation, expiresAt, grants, now);
     const requestId = noteKey ?? (dependencies.requestId ?? randomUUID)();
@@ -137,7 +161,7 @@ export function privateApiTransport(
       output = await dependencies.lambda.send(new InvokeCommand({
         FunctionName: qa ? qaARN : apiARN, InvocationType: 'RequestResponse', Payload: wire,
       }), { abortSignal: signal });
-    } catch { throw new Error(note
+    } catch { throw new Error(mutation
       ? 'PRIVATE_WRITE_UNCONFIRMED: retry the same idempotency key and content'
       : 'PRIVATE_READ_UNAVAILABLE'); }
     if (clock() >= expiresAt) throw new ConnectorError('EXPIRED_DELEGATION');
@@ -153,6 +177,8 @@ export function privateApiTransport(
         Buffer.byteLength(result.body) > Math.min(14_000, request.maxResponseBytes)) {
       throw new Error('PRIVATE_API_INVALID_RESPONSE');
     }
+    if (result.statusCode === 413 && operation === 'api.accountContacts.list') throw new Error('RESULT_TOO_LARGE: reduce the contact page limit');
+    if (result.statusCode === 413 && (operation === 'api.accountEvents.list' || operation === 'api.accountEvents.get')) throw new Error('RESULT_TOO_LARGE: reduce the event page limit');
     if (result.statusCode < 200 || result.statusCode >= 300) throw new Error(`HTTP ${result.statusCode}: private request rejected`);
     try { return JSON.parse(result.body); }
     catch { throw new Error('PRIVATE_API_INVALID_RESPONSE'); }
