@@ -31,6 +31,7 @@ test('maps the supplied Remember headers to distinct fields', () => {
 
 test('parses quoted CSV including embedded commas and newlines', () => {
   const { parseContactCsv } = load();
+  assert.deepEqual(parseContactCsv('이름\n김\n이\n'), [['이름'], ['김'], ['이']], 'single-column exports are valid');
   const result = parseContactCsv('이름,메모\r\n김,"첫 줄, 추가\n둘째 줄"\r\n');
   assert.deepEqual(JSON.parse(JSON.stringify(result)), [['이름', '메모'], ['김', '첫 줄, 추가\n둘째 줄']]);
 });
@@ -72,6 +73,15 @@ test('Excel preflight rejects sparse or expanded workbooks before materializing 
   // Validate the limit message so a TypeError from the parser cannot pass.
   const limitError = { message: /최대 2,000행, 100열/ };
   assert.doesNotThrow(() => check(new Uint8Array(sample)));
+  // A same-named element nested in a cell must not end the sheet scope early.
+  const nested = '<worksheet><sheetData><row r="1"><c r="A1"><extLst><sheetData/></extLst><v>1</v></c></row><row r="2000000"/></sheetData></worksheet>';
+  assert.throws(() => check(zipSync({ 'xl/worksheets/sheet1.xml': strToU8(nested) })), limitError);
+  // A worksheet part without an .xml suffix is still inspected.
+  assert.throws(() => check(zipSync({ 'xl/worksheets/sheet1.dat': strToU8('<worksheet><sheetData><row r="2000000"/></sheetData></worksheet>') })), limitError);
+  // A nested sheetData can never open a scope by itself.
+  assert.doesNotThrow(() => check(zipSync({ 'xl/worksheets/sheet1.xml': strToU8('<worksheet><extLst><x><sheetData><row r="5"/></sheetData></x></extLst><sheetData><row r="1"><c r="A1"/></row></sheetData></worksheet>') })));
+  // Image parts are not parsed as XML.
+  assert.doesNotThrow(() => check(zipSync({ 'xl/media/image1.png': new Uint8Array([0x89, 0x50, 0xff, 0xfe]), 'xl/worksheets/sheet1.xml': strToU8('<worksheet><sheetData/></worksheet>') })));
   for (const xml of ['<worksheet><sheetData><row r="2000000"/></sheetData></worksheet>', '<worksheet><sheetData><row r="1"><c r="XFD1"><v>1</v></c></row></sheetData></worksheet>']) {
     assert.throws(() => check(zipSync({ 'xl/worksheets/sheet1.xml': strToU8(xml) })), limitError);
     assert.throws(() => check(zipSync({ 'xl/custom-sheet.xml': strToU8(xml) })), limitError);
