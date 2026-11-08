@@ -51,7 +51,9 @@ const (
 	eventTimeLayout   = "2006-01-02T15:04:05Z"
 	maxEventAttendees = 50
 	maxEventSpan      = 31 * 24 * time.Hour
-	maxEventJSONBytes = 16000
+	// A serialized event must fit one bridge read (14,000-byte response cap)
+	// with room for the page envelope, so every path uses the same bound.
+	maxEventJSONBytes = 12000
 	eventRangeStart   = "0001-01-01T00:00:00Z"
 	eventRangeEnd     = "9999-12-31T23:59:59Z"
 )

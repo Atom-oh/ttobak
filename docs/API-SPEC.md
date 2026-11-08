@@ -701,7 +701,9 @@ contacts. An event has `eventId`, `revision`, `title` (1-256 bytes), `startAt`
 and optional `endAt` (RFC 3339, normalized to UTC seconds; at most 31 days
 apart), `allDay`, `location` (512 bytes), `attendees` (at most 50 of
 `{contactId?, name, email?}`; a `contactId` must name a contact in the same
-account), `notes` (8,192 bytes), `createdBy`, `createdAt` and `updatedAt`.
+account), `notes` (8,192 bytes), `createdBy`, `createdAt` and `updatedAt`; the
+serialized event is at most 12,000 bytes on every path, so one event always fits
+a private bridge read.
 POST returns 201; PUT requires the observed `revision` and DELETE its
 `revision` query parameter; a stale revision returns 409. Clients cannot set
 the author or timestamps.
@@ -728,9 +730,7 @@ with different bytes, or the replayed event moved, changed or disappeared), 503
 policy or approval change between the pre-checks and the transaction also
 surfaces as 409. Attendee contact IDs are resolved only after membership and
 approval checks and only for a fresh create, so a replay returns its receipt
-even if a referenced contact was deleted since. Connector-created events are
-limited to 12,000 serialized bytes so they stay readable through the bridge's
-14,000-byte response cap. Event list and get are available bridge reads.
+even if a referenced contact was deleted since. Event list and get are available bridge reads.
 Events have no TTL and remain until a direct member deletes them.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:

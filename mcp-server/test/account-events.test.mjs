@@ -109,3 +109,15 @@ test('oversized event pages retry at a smaller limit', async t => {
   parse(await client.callTool({ name: 'ttobak_list_account_events', arguments: { accountId: 'a', limit: 10 } }));
   assert.deepEqual(limits, [10, 5, 2]);
 });
+
+test('an always-oversized event page terminates instead of looping', async t => {
+  const limits = [];
+  const client = await connect(t, 'stdio', {
+    async listAccountEvents(_id, options) { limits.push(options.limit); throw new Error('RESULT_TOO_LARGE: reduce the event page limit'); },
+    async createAccountEvent() { throw new Error('unused'); },
+  });
+  const result = await client.callTool({ name: 'ttobak_list_account_events', arguments: { accountId: 'a', limit: 4 } });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /RESULT_TOO_LARGE/);
+  assert.deepEqual(limits, [4, 2, 1]);
+});
