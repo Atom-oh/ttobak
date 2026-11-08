@@ -1,4 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { CALENDAR_TOOL_NAMES } from './calendar.js';
 
 export const MAX_HTTP_REQUEST_BYTES = 1024 * 1024;
 export const MAX_HTTP_UPLOAD_BYTES = 512 * 1024;
@@ -22,6 +23,7 @@ export function mutationReceipt(name: string, value: string): string | undefined
 // audio files, the Mac app's control socket). ADR-045/046: the HTTP transport
 // never exposes them.
 export const LOCAL_ONLY_TOOLS = [
+  ...CALENDAR_TOOL_NAMES,
   'ttobak_login', 'ttobak_logout',
   'ttobak_list_audio_devices', 'ttobak_start_recording', 'ttobak_recording_status',
   'ttobak_stop_recording', 'ttobak_upload_audio',
