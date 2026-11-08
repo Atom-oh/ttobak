@@ -351,3 +351,33 @@ test('a retried contact create serializes identically regardless of property ord
   assert.equal(JSON.stringify(seen[0].body), JSON.stringify(seen[2].body));
   assert.deepEqual(Object.keys(seen[0].body.contact), ['name', 'company', 'email', 'notes']);
 });
+
+test('private event operations use approved stable writes and bounded reads', async () => {
+  const seen = [];
+  const transport = privateApiTransport(writeIdentity, key, apiARN, qaARN, {
+    now: () => 1800000000, resolve: async () => writeGrants(), requestId: () => 'read-id',
+    kms: { send: async () => ({ KeyId: key, SigningAlgorithm: 'RSASSA_PSS_SHA_256', Signature: Buffer.alloc(256) }) },
+    lambda: { send: async cmd => {
+      seen.push(JSON.parse(Buffer.from(cmd.input.Payload).toString()));
+      return response({ events: [] });
+    } },
+  });
+  const create = { event: { title: 'T', startAt: '2026-11-10T14:00:00+09:00' }, idempotencyKey: 'stable' };
+  await transport({ method: 'GET', path: '/api/accounts/acct/events?limit=25', body: null, maxResponseBytes: 32000 });
+  await transport({ method: 'GET', path: '/api/accounts/acct/events/11111111-2222-4333-8444-555555555555', body: null, maxResponseBytes: 32000 });
+  await transport({ method: 'POST', path: '/api/accounts/acct/events', body: create, maxResponseBytes: 32000 });
+  await transport({ method: 'POST', path: '/api/accounts/acct/events?replay=1', body: create, maxResponseBytes: 32000 });
+  assert.deepEqual(seen.map(f => f.operation), ['api.accountEvents.list', 'api.accountEvents.get', 'api.accountEvents.create', 'api.accountEvents.create']);
+  assert.equal(seen[2].requestId, 'stable');
+  for (const body of [
+    { event: create.event }, { ...create, extra: 1 }, { event: [], idempotencyKey: 'stable' },
+    { event: create.event, idempotencyKey: 'bad key' }, { event: { notes: 'x'.repeat(70_000) }, idempotencyKey: 'stable' },
+  ]) {
+    await assert.rejects(transport({ method: 'POST', path: '/api/accounts/acct/events', body, maxResponseBytes: 32000 }), /CAPABILITY_DENIED/);
+  }
+  for (const path of ['/api/accounts/acct/events?other=1', '/api/accounts/acct/events?']) {
+    await assert.rejects(transport({ method: 'POST', path, body: create, maxResponseBytes: 32000 }), /CAPABILITY_DENIED/);
+  }
+  await assert.rejects(transport({ method: 'PUT', path: '/api/accounts/acct/events/11111111-2222-4333-8444-555555555555', body: create, maxResponseBytes: 32000 }), /CAPABILITY_DENIED/);
+  assert.equal(seen.length, 4);
+});

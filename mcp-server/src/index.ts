@@ -24,8 +24,10 @@ import { navigationOptions, navigationResult } from './navigation-catalog.js';
 import { meetingCatalogOptions, meetingCatalogResult } from './meeting-catalog.js';
 import { vaultReadingOptions, vaultReadingResult } from './vault-reading.js';
 import { BILLING_TOOLS, billingReadingOptions, billingReadingResult } from './billing-reading.js';
+import { CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, callCalendarTool } from './calendar.js';
 import { Recorder, MAX_MAX_MINUTES, type UploadProgress } from './recorder.js';
 import { AppControlError, defaultAppSocketPath, sendAppRequest, type AppAction } from './app-control.js';
+import { ACCOUNT_EVENT_TOOLS, callAccountEventTool } from './account-events.js';
 
 declare const TTOBAK_STANDALONE_STDIO: boolean;
 
@@ -52,6 +54,7 @@ const registry: { tools: Tool[] } = {
   tools: [
     ...BILLING_TOOLS,
     ...ACCOUNT_CONTACT_TOOLS,
+    ...ACCOUNT_EVENT_TOOLS,
     {
       name: 'ttobak_login',
       description:
@@ -641,11 +644,15 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
   const { name, arguments: args = {} } = request.params;
 
   try {
+    if (CALENDAR_TOOL_NAMES.includes(name)) return await callCalendarTool(name, args, api);
     switch (name) {
       case 'ttobak_list_account_contacts':
       case 'ttobak_create_account_contact':
       case 'ttobak_import_account_contacts':
         return await callAccountContactTool(name, args, api);
+      case 'ttobak_list_account_events':
+      case 'ttobak_create_account_event':
+        return await callAccountEventTool(name, args, api);
       case 'ttobak_get_billing_account':
       case 'ttobak_get_billing_dataset':
       case 'ttobak_get_billing_report': {
@@ -1164,6 +1171,7 @@ export function createMcpServer(options: ServerOptions): Server {
   });
   const stdioTools = [
     ...registry.tools,
+    ...CALENDAR_TOOLS,
     ...(options.recorder ? RECORDING_TOOLS : []),
     ...(options.appControl ? APP_TOOLS : []),
   ];
@@ -1178,8 +1186,9 @@ export function createMcpServer(options: ServerOptions): Server {
     }
     const result = await call;
     if (options.mode === 'http' && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
+      const content = result.content[0];
       const receipt = !('isError' in result && result.isError) &&
-        mutationReceipt(request.params.name, result.content[0]?.text ?? '');
+        mutationReceipt(request.params.name, content?.type === 'text' ? content.text : '');
       return receipt ? text(receipt) : error('RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.');
     }
     return result;

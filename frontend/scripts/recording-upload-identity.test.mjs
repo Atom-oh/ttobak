@@ -152,5 +152,5 @@ test('the initiating user can refresh and finish both audio parts', async () => 
   assert.equal(f.puts.length, 2);
   assert.equal(f.requests.filter(request => request.url === '/api/upload/complete').length, 2);
   assert.ok(f.requests.every(request => request.userId === 'creator'));
-  assert.deepEqual(f.navigations, ['/meeting/draft']);
+  assert.deepEqual(f.navigations, ['/?uploaded=draft']);
 });

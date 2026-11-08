@@ -9,6 +9,7 @@ import { ForgotPasswordForm } from '@/components/auth/ForgotPasswordForm';
 import { MeetingList } from '@/components/MeetingList';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, meetingsApi } from '@/lib/api';
+import { isProcessing, PROCESSING_REFRESH_LIMIT_MS, PROCESSING_REFRESH_MS, refreshListed } from '@/lib/meetingStatus';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 
 function mergeMeetings(existing: Meeting[], incoming: Meeting[]): Meeting[] {
@@ -104,6 +105,23 @@ export default function HomePage() {
   // Recent is a local date filter over all meetings, including after Shared.
   const apiTab = activeTab === 'shared' ? 'shared' : 'all';
   const userId = user?.userId;
+  const uploadSeedRef = useRef<{ owner?: string; id: string | null }>({ id: null });
+
+  useEffect(() => {
+    if (!isAuthenticated || !userId) {
+      uploadSeedRef.current.id = null;
+      return;
+    }
+    if (uploadSeedRef.current.owner) {
+      if (uploadSeedRef.current.owner !== userId) uploadSeedRef.current.id = null;
+      return;
+    }
+    const uploadedId = new URLSearchParams(window.location.search).get('uploaded');
+    uploadSeedRef.current = {
+      owner: userId,
+      id: uploadedId && /^[a-zA-Z0-9_-]{1,128}$/.test(uploadedId) ? uploadedId : null,
+    };
+  }, [isAuthenticated, userId]);
 
   const fetchMeetings = useCallback(async (cursor?: string) => {
     requestRef.current?.abort();
@@ -124,7 +142,8 @@ export default function HomePage() {
       }, { signal: controller.signal });
       // Guard even if a response finished parsing just before cancellation.
       if (controller.signal.aborted) return;
-      setMeetings(prev => mergeMeetings(cursor ? prev : [], result.meetings));
+      const uploadedId = uploadSeedRef.current.id;
+      setMeetings(prev => refreshListed(mergeMeetings(cursor ? prev : [], result.meetings), [], uploadedId ?? undefined));
       setNextCursor(result.nextCursor);
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -147,6 +166,40 @@ export default function HomePage() {
     void fetchMeetings();
     return () => requestRef.current?.abort();
   }, [isAuthenticated, userId, fetchMeetings, membershipRevision]);
+
+  const hasProcessing = meetings.some(m => isProcessing(m.status));
+  const refreshStartedRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isAuthenticated || (!hasProcessing && !uploadSeedRef.current.id)) { refreshStartedRef.current = null; return; }
+    refreshStartedRef.current ??= Date.now();
+    let controller: AbortController | null = null;
+    const timer = setInterval(() => {
+      if ((!hasProcessing && !uploadSeedRef.current.id)
+          || Date.now() - (refreshStartedRef.current ?? 0) > PROCESSING_REFRESH_LIMIT_MS) {
+        clearInterval(timer);
+        return;
+      }
+      if (document.visibilityState !== 'visible' || requestRef.current || controller) return;
+      const current = new AbortController();
+      controller = current;
+      meetingsApi.list({
+        tab: apiTab,
+        accountIds: selectedAccountIds.length ? selectedAccountIds : undefined,
+      }, { signal: current.signal })
+        .then(result => {
+          if (current.signal.aborted) return;
+          const uploadedId = uploadSeedRef.current.id;
+          setMeetings(prev => refreshListed(prev, result.meetings, uploadedId ?? undefined));
+          if (uploadedId && result.meetings.some(meeting =>
+            meeting.meetingId === uploadedId && meeting.status && meeting.status !== 'recording')) {
+            uploadSeedRef.current.id = null;
+          }
+        })
+        .catch(err => { if (!current.signal.aborted) console.warn('Meeting status refresh failed:', err); })
+        .finally(() => { if (controller === current) controller = null; });
+    }, PROCESSING_REFRESH_MS);
+    return () => { clearInterval(timer); controller?.abort(); };
+  }, [isAuthenticated, userId, hasProcessing, apiTab, selectedAccountIds, membershipRevision]);
 
   useEffect(() => {
     if (!isAuthenticated) return;

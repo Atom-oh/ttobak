@@ -100,6 +100,7 @@ type Bridge struct {
 	Router        http.Handler
 	Mutate        func(context.Context, Principal, json.RawMessage) InvokeResult
 	ContactMutate func(context.Context, Principal, string, json.RawMessage, bool) InvokeResult
+	EventMutate   func(context.Context, Principal, string, json.RawMessage, bool) InvokeResult
 }
 
 type limitedResponse struct {
@@ -167,7 +168,8 @@ func (b *Bridge) Invoke(ctx context.Context, raw []byte) InvokeResult {
 	op, err := HTTPOperation(input.Method, u.EscapedPath())
 	noteMutation := op == "api.document.putDocument" && input.Method == http.MethodPost && input.Path == "/api/documents"
 	contactMutation := op == "api.accountContacts.create" && input.Method == http.MethodPost && !u.ForceQuery && (u.RawQuery == "" || u.RawQuery == "replay=1")
-	mutation := noteMutation || contactMutation
+	eventMutation := op == "api.accountEvents.create" && input.Method == http.MethodPost && !u.ForceQuery && (u.RawQuery == "" || u.RawQuery == "replay=1")
+	mutation := noteMutation || contactMutation || eventMutation
 	if err != nil || op != frame.Operation || (!mutation && !AvailableReadOperation(op)) ||
 		(!mutation && (input.Method != http.MethodGet || !bytes.Equal(input.Body, []byte("null")))) {
 		return bridgeFailure(403, "CAPABILITY_DENIED")
@@ -178,14 +180,17 @@ func (b *Bridge) Invoke(ctx context.Context, raw []byte) InvokeResult {
 		return bridgeFailure(403, "CAPABILITY_DENIED")
 	}
 	if mutation {
-		if (noteMutation && b.Mutate == nil) || (contactMutation && b.ContactMutate == nil) || principal.Require(op, "ttobak-api-bridge", time.Now().Unix()) != nil {
+		if (noteMutation && b.Mutate == nil) || (contactMutation && b.ContactMutate == nil) || (eventMutation && b.EventMutate == nil) || principal.Require(op, "ttobak-api-bridge", time.Now().Unix()) != nil {
 			return bridgeFailure(403, "CAPABILITY_DENIED")
 		}
 		var result InvokeResult
-		if noteMutation {
+		switch {
+		case noteMutation:
 			result = b.Mutate(ctx, principal, input.Body)
-		} else {
+		case contactMutation:
 			result = b.ContactMutate(ctx, principal, strings.Split(u.Path, "/")[3], input.Body, u.RawQuery == "replay=1")
+		default:
+			result = b.EventMutate(ctx, principal, strings.Split(u.Path, "/")[3], input.Body, u.RawQuery == "replay=1")
 		}
 		// The atomic executor controls whether a write can commit. Rechecking
 		// here separately controls publication of its receipt after revocation.

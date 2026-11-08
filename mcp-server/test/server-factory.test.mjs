@@ -10,6 +10,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { meetingCatalogPage } from './fixtures/meeting-catalog-data.mjs';
+import { CALENDAR_NAMES } from './fixtures/calendar-data.mjs';
 
 test('server factory keeps each caller API and authentication context separate', async t => {
   const connect = async owner => {
@@ -31,7 +32,9 @@ test('server factory keeps each caller API and authentication context separate',
   const status = await alice.callTool({ name: 'ttobak_status', arguments: {} });
   assert.match(status.content[0].text, /alice\.example\.com/);
   assert.doesNotMatch(status.content[0].text, /bob/);
-  assert.ok((await bob.listTools()).tools.some(tool => tool.name === 'ttobak_list_account_contacts'));
+  const tools = (await bob.listTools()).tools;
+  assert.ok(tools.some(tool => tool.name === 'ttobak_list_account_contacts'));
+  assert.deepEqual(tools.filter(tool => CALENDAR_NAMES.includes(tool.name)).map(tool => tool.name), CALENDAR_NAMES);
 });
 
 test('stdio startup works through file and directory symlinks for source and published bundle', async t => {
@@ -53,10 +56,12 @@ test('stdio startup works through file and directory symlinks for source and pub
         stderr: 'pipe',
       }));
       try {
-        const names = (await client.listTools()).tools.map(tool => tool.name);
+        const tools = (await client.listTools()).tools;
+        const names = tools.map(tool => tool.name);
         assert.ok(names.includes('ttobak_start_recording'));
         assert.ok(names.includes('ttobak_get_meeting'));
         if (relative === '../dist/index.js') assert.ok(names.includes('ttobak_list_account_contacts'));
+        assert.deepEqual(tools.filter(tool => CALENDAR_NAMES.includes(tool.name)).map(tool => tool.name), CALENDAR_NAMES);
       } finally {
         await client.close();
       }

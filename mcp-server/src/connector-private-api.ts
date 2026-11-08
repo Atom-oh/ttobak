@@ -23,7 +23,8 @@ interface Dependencies {
 }
 const reads = new Set(['api.reading.get', 'api.documentReading.get', 'api.accountReading.get',
   'api.projectReading.get', 'api.navigationCatalog.accounts', 'api.navigationCatalog.projects',
-  'api.documentCatalog.get', 'api.kb.readFiles', 'api.meetingCatalog.get', 'api.vaultReading.get', 'api.accountContacts.list']);
+  'api.documentCatalog.get', 'api.kb.readFiles', 'api.meetingCatalog.get', 'api.vaultReading.get', 'api.accountContacts.list',
+  'api.accountEvents.list', 'api.accountEvents.get']);
 const functionARN = /^arn:aws:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?$/;
 
 export function httpOperation(method: string, path: string): string {
@@ -78,7 +79,8 @@ export function privateApiTransport(
     const note = request.method === 'POST' && request.path === '/api/documents';
     const operation = qa ? 'qa.readonlyAsk' : httpOperation(request.method, url.pathname);
     const contact = request.method === 'POST' && operation === 'api.accountContacts.create' && (url.search === '' || url.search === '?replay=1') && !request.path.endsWith('?');
-    const mutation = note || contact;
+    const event = request.method === 'POST' && operation === 'api.accountEvents.create' && (url.search === '' || url.search === '?replay=1') && !request.path.endsWith('?');
+    const mutation = note || contact || event;
     const destination = qa ? 'ttobak-qa-bridge' : 'ttobak-api-bridge';
     if (!qa && !mutation && (request.method !== 'GET' || !reads.has(operation) || request.body !== null)) {
       throw new ConnectorError('CAPABILITY_DENIED');
@@ -88,6 +90,16 @@ export function privateApiTransport(
       const body = request.body as Record<string, unknown> | null;
       if (!body || Array.isArray(body) || !Object.keys(body).every(k => ['contact', 'idempotencyKey'].includes(k)) ||
           !body.contact || typeof body.contact !== 'object' || Array.isArray(body.contact) ||
+          typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.idempotencyKey) ||
+          Buffer.byteLength(JSON.stringify(body)) > 65_536) {
+        throw new ConnectorError('CAPABILITY_DENIED');
+      }
+      noteKey = body.idempotencyKey;
+    }
+    if (event) {
+      const body = request.body as Record<string, unknown> | null;
+      if (!body || Array.isArray(body) || !Object.keys(body).every(k => ['event', 'idempotencyKey'].includes(k)) ||
+          !body.event || typeof body.event !== 'object' || Array.isArray(body.event) ||
           typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.idempotencyKey) ||
           Buffer.byteLength(JSON.stringify(body)) > 65_536) {
         throw new ConnectorError('CAPABILITY_DENIED');
@@ -166,6 +178,7 @@ export function privateApiTransport(
       throw new Error('PRIVATE_API_INVALID_RESPONSE');
     }
     if (result.statusCode === 413 && operation === 'api.accountContacts.list') throw new Error('RESULT_TOO_LARGE: reduce the contact page limit');
+    if (result.statusCode === 413 && (operation === 'api.accountEvents.list' || operation === 'api.accountEvents.get')) throw new Error('RESULT_TOO_LARGE: reduce the event page limit');
     if (result.statusCode < 200 || result.statusCode >= 300) throw new Error(`HTTP ${result.statusCode}: private request rejected`);
     try { return JSON.parse(result.body); }
     catch { throw new Error('PRIVATE_API_INVALID_RESPONSE'); }
