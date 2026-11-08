@@ -556,6 +556,27 @@ export interface ContactInput {
 }
 
 export interface AccountContact extends ContactInput { contactId: string; revision: string }
+
+/** A shared event (schedule) of an account; direct members only (ADR-063). */
+export interface EventAttendee { contactId?: string; name: string; email?: string }
+export interface AccountEventInput {
+  revision?: string;
+  title: string;
+  startAt: string;
+  endAt?: string;
+  allDay?: boolean;
+  location?: string;
+  attendees?: EventAttendee[];
+  notes?: string;
+}
+export interface AccountEvent extends AccountEventInput {
+  eventId: string;
+  revision: string;
+  attendees: EventAttendee[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
 export interface AccountSpeakerTeamMember { userId: string; name: string; email: string; role: string }
 
 export interface Account {

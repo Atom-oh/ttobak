@@ -1,22 +1,24 @@
-export const ACCOUNT_TABS = ['general', 'meetings', 'insights', 'projects', 'docs', 'billing'] as const;
+export const ACCOUNT_TABS = ['general', 'meetings', 'events', 'insights', 'projects', 'docs', 'billing'] as const;
 export type AccountTab = (typeof ACCOUNT_TABS)[number];
 
 export const ACCOUNT_TAB_LABELS: Record<AccountTab, string> = {
   general: '개요',
   meetings: '미팅',
+  events: '일정',
   insights: '인사이트',
   projects: '프로젝트',
   docs: '문서',
   billing: 'Billing',
 };
 
-export function visibleAccountTabs(billingVisible: boolean): AccountTab[] {
-  return ACCOUNT_TABS.filter((tab) => tab !== 'billing' || billingVisible);
+/** Events (shared schedules) are visible to direct members only, like contacts. */
+export function visibleAccountTabs(billingVisible: boolean, eventsVisible = false): AccountTab[] {
+  return ACCOUNT_TABS.filter((tab) => (tab !== 'billing' || billingVisible) && (tab !== 'events' || eventsVisible));
 }
 
-export function parseAccountTab(value: string | null, billingVisible: boolean): AccountTab {
+export function parseAccountTab(value: string | null, billingVisible: boolean, eventsVisible = false): AccountTab {
   const tab = ACCOUNT_TABS.find((t) => t === value);
-  if (!tab || (tab === 'billing' && !billingVisible)) return 'general';
+  if (!tab || (tab === 'billing' && !billingVisible) || (tab === 'events' && !eventsVisible)) return 'general';
   return tab;
 }
 

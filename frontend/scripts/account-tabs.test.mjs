@@ -73,3 +73,11 @@ test('every_existing_control_still_rendered', () => {
   }
   assert.match(jsx.slice(0, tablist), /\bhandleRevokePendingMember\b/, 'pending notice must stay above the tabs');
 });
+
+test('events_tab_is_only_for_direct_members', () => {
+  assert.equal(tabs.parseAccountTab('events', false), 'general');
+  assert.equal(tabs.parseAccountTab('events', false, true), 'events');
+  assert.ok(!tabs.visibleAccountTabs(true).includes('events'));
+  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'projects', 'docs']);
+  assert.equal(tabs.ACCOUNT_TAB_LABELS.events, '일정');
+});
