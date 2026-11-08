@@ -1,10 +1,11 @@
 'use client';
 
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 const pathLabels: Record<string, string> = {
-  '/': 'Meetings',
+  '/': 'Home',
+  '/meetings': 'Meetings',
   '/chat': 'Assistant',
   '/kb': 'Library',
   '/insights': 'Insights',
@@ -26,15 +27,12 @@ interface DesktopHeaderProps {
 }
 
 /**
- * Header search, wired to the meeting list through the URL (`/?q=`):
- * - on `/` every keystroke (debounced) rewrites `?q=` in place and
+ * Header search, wired to the meeting list through the URL (`/meetings?q=`):
+ * - on `/meetings` every keystroke rewrites `?q=` in place and
  *   `MeetingList` filters live off that param;
- * - on any other page, Enter navigates to `/?q=<query>`.
+ * - on any other page, Enter navigates to `/meetings?q=<query>`.
  * The URL is the source of truth for header → list, back/forward, and
- * shared links. (The mobile bar in MeetingList still filters via its own
- * local state and does not write the URL; the two are never visible at the
- * same breakpoint.) This used to be a dead input that only wrote to local
- * state — "Search notes..." did nothing at all.
+ * shared links.
  *
  * Client-side filter over the loaded meeting pages (title / summary /
  * tags), same as the mobile bar — there is no server-side meeting search
@@ -45,9 +43,8 @@ function HeaderSearch() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const urlQuery = searchParams.get('q') ?? '';
-  const onHome = pathname === '/';
+  const onHome = pathname === '/meetings';
   const [value, setValue] = useState(onHome ? urlQuery : '');
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The trimmed query this component itself last wrote to the URL. A URL
   // change that merely echoes our own push must NOT re-sync the box: the
   // push is trimmed ("AWS " → "AWS") and commits asynchronously, so an
@@ -78,10 +75,6 @@ function HeaderSearch() {
     }
   }
 
-  useEffect(() => () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-  }, []);
-
   const pushHome = (raw: string, mode: 'replace' | 'push') => {
     const trimmed = raw.trim();
     // Only arm the echo marker when the URL will actually change — a push
@@ -89,14 +82,13 @@ function HeaderSearch() {
     // searchParams change to consume, and a stale marker would swallow the
     // next real external change to that value.
     if (!(onHome && trimmed === urlQuery)) setLastPushed(trimmed);
-    const href = trimmed ? `/?q=${encodeURIComponent(trimmed)}` : '/';
-    if (mode === 'replace') router.replace(href, { scroll: false });
+    const params = new URLSearchParams(onHome ? window.location.search : '');
+    if (trimmed) params.set('q', trimmed);
+    else params.delete('q');
+    const query = params.toString();
+    const href = `${onHome ? pathname : '/meetings'}${query ? `?${query}` : ''}${onHome ? window.location.hash : ''}`;
+    if (mode === 'replace') window.history.replaceState(null, '', href);
     else router.push(href);
-  };
-
-  const applyOnHome = (next: string) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => pushHome(next, 'replace'), 150);
   };
 
   return (
@@ -107,16 +99,15 @@ function HeaderSearch() {
       <input
         type="search"
         value={value}
-        onChange={(e) => {
-          setValue(e.target.value);
-          if (onHome) applyOnHome(e.target.value);
+        onChange={(event) => {
+          setValue(event.target.value);
+          if (onHome) pushHome(event.target.value, 'replace');
         }}
-        onKeyDown={(e) => {
+        onKeyDown={(event) => {
           // isComposing: the Enter that commits a Hangul/IME composition
           // must not fire a search with a half-composed query.
-          if (e.nativeEvent.isComposing || e.key !== 'Enter') return;
+          if (event.nativeEvent.isComposing || event.key !== 'Enter') return;
           if (onHome) {
-            if (debounceRef.current) clearTimeout(debounceRef.current);
             pushHome(value, 'replace');
           } else if (value.trim()) {
             pushHome(value, 'push');

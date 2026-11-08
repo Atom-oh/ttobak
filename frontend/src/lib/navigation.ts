@@ -16,11 +16,14 @@ export interface NavGroup {
 }
 
 export const NAV_GROUPS: NavGroup[] = [
-  { name: '', items: [{ href: '/chat', icon: 'smart_toy', label: 'Assistant' }] },
+  { name: '', items: [
+    { href: '/', icon: 'home', label: 'Home' },
+    { href: '/chat', icon: 'smart_toy', label: 'Assistant' },
+  ] },
   {
     name: '업무',
     items: [
-      { href: '/', icon: 'video_camera_front', label: 'Meetings' },
+      { href: '/meetings', icon: 'video_camera_front', label: 'Meetings' },
       { href: '/accounts', icon: 'corporate_fare', label: 'Accounts' },
       { href: '/projects', icon: 'work', label: 'Projects' },
       { href: '/docs', icon: 'article', label: 'Docs' },
