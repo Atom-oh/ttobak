@@ -35,11 +35,12 @@ binds the operation, request ID and exact argument bytes to a signed delegation.
 When `CONNECTOR_SIGNING_KEY_ARN` is configured, the consumer loads that exact
 public key and reads current client/user grants before and after one of the
 bounded API read operations (the eight original read families plus the account
-contact list). Only the verified in-process principal reaches
+contact list and account event list/get). Only the verified in-process principal reaches
 the existing router; caller headers and nested HTTP bodies cannot create it.
 Response bodies are capped at 14,000 bytes. Empty key configuration denies the
-private consumer. Its mutations are personal note creation and account contact
-creation, each with its own atomic executor, as described below.
+private consumer. Its mutations are personal note creation, account contact
+creation and account event creation, each with its own atomic executor, as
+described below.
 
 Delegated contact creation signs `api.accountContacts.create` for `POST
 /api/accounts/{accountId}/contacts` with the body `{contact, idempotencyKey}`;
@@ -710,6 +711,25 @@ order and resolved range. Without `from`, ascending lists start now (upcoming)
 and descending lists cover all past times. Responses are `{events,
 nextCursor}` and are not cached. Event fields except `startAt` are sealed like
 contacts (ADR-063); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
+Delegated MCP clients create events through the private bridge like contacts:
+`{event, idempotencyKey}` with strict decoding (no unknown, server-owned or
+null fields), direct membership and current read+write approval pinned in the
+same transaction as the event, its reference row and an arguments-bound receipt.
+`?replay=1` only replays an existing receipt. The receipt
+(`CONNECTOR_MUTATION#{clientId}#{requestId}`) holds the operation, account,
+event ID, event sort key and revision, approval generation, creation time and a
+SHA-256 of the account and exact request body bytes, with no expiry. Responses
+are `{eventId, replayed?}` (200); 400 `BAD_REQUEST`, 403 `CAPABILITY_DENIED`,
+404 `RECEIPT_NOT_FOUND` (replay probe only), 409 `CONNECTOR_CONFLICT` (same key
+with different bytes, or the replayed event moved, changed or disappeared), 503
+`EVENTS_UNAVAILABLE` (no key; nothing written) and 503
+`CONNECTOR_WRITE_UNCONFIRMED` (retry the same key and bytes). A membership,
+policy or approval change between the pre-checks and the transaction also
+surfaces as 409. Attendee contact IDs are resolved only after membership and
+approval checks and only for a fresh create, so a replay returns its receipt
+even if a referenced contact was deleted since. Connector-created events are
+limited to 12,000 serialized bytes so they stay readable through the bridge's
+14,000-byte response cap. Event list and get are available bridge reads.
 Events have no TTL and remain until a direct member deletes them.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
