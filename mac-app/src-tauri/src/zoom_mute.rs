@@ -145,13 +145,36 @@ impl Gate {
     }
 }
 
+/// Outcome of one Accessibility attribute read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxRead {
+    Value,
+    /// The element has no such attribute or value (e.g. a leaf's children).
+    Missing,
+    /// The call failed (timed out, element gone, ...): the read is incomplete.
+    Failed,
+}
+
+/// `kAXErrorAttributeUnsupported` and `kAXErrorNoValue`.
+pub const AX_ATTRIBUTE_UNSUPPORTED: i32 = -25205;
+pub const AX_NO_VALUE: i32 = -25212;
+
+/// Maps an `AXUIElementCopyAttributeValue` status to a read outcome.
+pub fn ax_read(status: i32, has_value: bool) -> AxRead {
+    match status {
+        0 if has_value => AxRead::Value,
+        0 | AX_ATTRIBUTE_UNSUPPORTED | AX_NO_VALUE => AxRead::Missing,
+        _ => AxRead::Failed,
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub use mac::{meeting_over, watch, Watch};
 
 /// Accessibility helpers shared with `meet_mute`.
 #[cfg(target_os = "macos")]
 pub(crate) mod ax {
-    pub(crate) use super::mac::{as_array, children_checked, copy_attr, create_app};
+    pub(crate) use super::mac::{as_array, children_checked, copy_attr_checked, create_app};
 }
 
 #[cfg(target_os = "macos")]
@@ -225,15 +248,10 @@ mod mac {
         (status == 0 && !value.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(value) })
     }
 
-    /// `kAXErrorAttributeUnsupported` / `kAXErrorNoValue`: a leaf, not a failure.
-    const AX_ATTRIBUTE_UNSUPPORTED: i32 = -25205;
-    const AX_NO_VALUE: i32 = -25212;
-
-    /// An element's children, or `None` when reading them failed (e.g. the
-    /// call timed out or the element went away), so callers can tell an
-    /// incomplete read from an element without children.
-    pub(crate) fn children_checked(element: &CFType) -> Option<Vec<CFType>> {
-        let name = CFString::new("AXChildren");
+    /// An attribute's value, `Ok(None)` when the element has none, or `Err`
+    /// when the read failed, so callers can tell an incomplete read apart.
+    pub(crate) fn copy_attr_checked(element: &CFType, name: &str) -> Result<Option<CFType>, ()> {
+        let name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
         let status = unsafe {
             AXUIElementCopyAttributeValue(
@@ -242,12 +260,19 @@ mod mac {
                 &mut value,
             )
         };
-        match status {
-            0 if !value.is_null() => {
-                Some(as_array(unsafe { CFType::wrap_under_create_rule(value) }))
-            }
-            0 | AX_ATTRIBUTE_UNSUPPORTED | AX_NO_VALUE => Some(Vec::new()),
-            _ => None,
+        match super::ax_read(status, !value.is_null()) {
+            super::AxRead::Value => Ok(Some(unsafe { CFType::wrap_under_create_rule(value) })),
+            super::AxRead::Missing => Ok(None),
+            super::AxRead::Failed => Err(()),
+        }
+    }
+
+    /// An element's children, or `None` when reading them failed.
+    pub(crate) fn children_checked(element: &CFType) -> Option<Vec<CFType>> {
+        match copy_attr_checked(element, "AXChildren") {
+            Ok(Some(value)) => Some(as_array(value)),
+            Ok(None) => Some(Vec::new()),
+            Err(()) => None,
         }
     }
 
@@ -655,5 +680,16 @@ mod tests {
             classify_window_ids([Some("settings"), Some("chat")]),
             MicState::NoMeeting
         );
+    }
+
+    #[test]
+    fn accessibility_statuses_separate_failures_from_missing_values() {
+        assert_eq!(ax_read(0, true), AxRead::Value);
+        assert_eq!(ax_read(0, false), AxRead::Missing);
+        assert_eq!(ax_read(AX_ATTRIBUTE_UNSUPPORTED, false), AxRead::Missing);
+        assert_eq!(ax_read(AX_NO_VALUE, false), AxRead::Missing);
+        // kAXErrorCannotComplete (timeout) and kAXErrorInvalidUIElement.
+        assert_eq!(ax_read(-25204, false), AxRead::Failed);
+        assert_eq!(ax_read(-25202, false), AxRead::Failed);
     }
 }
