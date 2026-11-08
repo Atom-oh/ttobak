@@ -49,7 +49,7 @@ use CSS variants.
 | Authentication | auth/LoginForm, ForgotPasswordForm, AuthProvider: login, NEW_PASSWORD_REQUIRED, reset; no self-signup |
 | App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route. Menu groups come from `lib/navigation.ts`: Assistant on top; Work (Meetings, Accounts, Projects, Docs); Knowledge (Library `/kb`, Deep Research `/insights?tab=research`, News & Updates `/insights`, Custom Dictionary `/dictionary`); Customer Analytics (Billing); Settings. Mobile keeps five bottom tabs; the Knowledge tab opens the grouped menu sheet. `/files` redirects to `/kb?source=meeting` (Library's meeting-attachment source). layout/BillingInsightButton is the Customer Analytics › Billing item (sidebar, menu sheet and profile menu, only with runtime `billingInsight: true`): it opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure. With runtime `billingService: true` the same entry is a plain link to `/billing`, which hosts the Billing dashboard in a same-origin iframe (`/billing-app/index.html`, `upload.html` for `?view=upload`) and gives it tokens through `window.ttobakBilling` (`lib/billingBridge.ts`) |
 | Meeting list | MeetingList: owned/shared/team streams, search, account selection and opaque pagination |
-| Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner |
+| Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner, record/RecordingLinkControls: customer and project links stay editable during browser and native recording; they apply to an existing draft immediately, otherwise when the meeting is created at save (`lib/recordingLinks.ts`) |
 | Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links |
 | Markdown | MarkdownRenderer, MermaidBlock, CodeBlock, DataTable, DiagramLightbox |
 | Documents | Personal document hub, editor/preview, share dialogs and public document viewer |
@@ -65,6 +65,11 @@ exhaustive file inventory. New static pages need the CloudFront knownPages mappi
 Recording `SAPreparation` requests `scope=direct` customer pages, independently
 of personal preparation documents. It excludes inherited read-only customers
 because selecting a recording customer creates a private account link.
+`RecordingLinkControls` in the recording header uses the same direct, editable
+customer catalog plus accessible projects. A customer already on the server
+meeting can be replaced but not removed (no unlink API). A failed immediate link
+is shown inline and retried at save; a failed project link at save stops before
+upload with retry or skip-project-retry actions.
 `PreparationReferences` mounts reference catalogs on the first expansion of
 its details section, then retains panel state on collapse so question drafts
 and answers survive reopening. The picker continues browsing inherited customers.

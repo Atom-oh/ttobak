@@ -2,7 +2,8 @@
 
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
-import { ApiError, meetingAccountApi, meetingsApi, uploadsApi } from '@/lib/api';
+import { ApiError, meetingAccountApi, meetingsApi, projectApi, uploadsApi } from '@/lib/api';
+import { hasPendingProjectLinks, normalizeProjectIds, planRecordingAccountChange,projectLinkFailureMessage, syncProjectLinks } from '@/lib/recordingLinks';
 import { preparationNotes, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { RecordingNotes } from '@/lib/recordingNotes';
 import { resolveRecordingAccountId } from '@/lib/recordingAccount';
@@ -117,6 +118,25 @@ export function usePostRecording({
     pendingAccountRef.current = id; setPendingAccount(id);
   }, []);
   const preparationRef = useRef<{ notes: string; accountId?: string }>({ notes: '' });
+  // Links chosen while recording (see lib/recordingLinks). `boundAccountRef`
+  // is the account the server meeting is known to carry; project IDs track
+  // what was confirmed linked to `persistedMeetingIdRef`'s meeting.
+  const boundAccountRef = useRef<string | undefined>(undefined);
+  const desiredProjectsRef = useRef<string[]>([]);
+  const linkedProjectsRef = useRef<string[]>([]);
+  const projectSyncRef = useRef<Promise<unknown>>(Promise.resolve());
+  const [recordingLinks, setRecordingLinks] = useState<{ accountId?: string; boundAccountId?: string; projectIds: string[]; linkedProjectIds: string[] }>({ projectIds: [], linkedProjectIds: [] });
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const publishLinks = useCallback(() => {
+    setRecordingLinks({
+      accountId: preparationRef.current.accountId, boundAccountId: boundAccountRef.current,
+      projectIds: desiredProjectsRef.current, linkedProjectIds: linkedProjectsRef.current,
+    });
+  }, []);
+  const resetLinks = useCallback(() => {
+    boundAccountRef.current = undefined; desiredProjectsRef.current = []; linkedProjectsRef.current = [];
+    setLinkError(null);
+  }, []);
   const submittedNotesRef = useRef<string | undefined>(undefined);
   const persistedMeetingIdRef = useRef<string | null>(null);
 
@@ -177,7 +197,7 @@ export function usePostRecording({
     submittedNotesRef.current = undefined;
     preparationRef.current = { notes: '' };
     notesWriter.reset(); setCreatedNotes(null); setNotesConflict(null); setHasPendingAudio(false); setPendingAccountValue(null);
-    setPreparationError(null);
+    setPreparationError(null); resetLinks();
     releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
@@ -190,6 +210,7 @@ export function usePostRecording({
       // replace this candidate with the freshly validated Account ID.
       preparationRef.current = { notes: preparationNotes(preparationContext || ''), accountId: accountId || undefined };
       setPendingAccountValue(preparationRef.current.accountId || null);
+      publishLinks();
       const creationAccountId = await withTimeout(
         resolveRecordingAccountId(accountId, notesUserIdRef.current), 15000, 'Validate preparation account',
       );
@@ -211,7 +232,12 @@ export function usePostRecording({
       const acknowledged = result.preparationApplied ? prepared.notes : '';
       notesWriter.initialize(result.meetingId, acknowledged, result.supportsNotesComparison === true, result.notesRevision || '');
       setCreatedNotes({ meetingId: result.meetingId, notes: acknowledged });
-      if (result.preparationApplied) setPendingAccountValue(null);
+      if (result.preparationApplied) { boundAccountRef.current = prepared.accountId; setPendingAccountValue(null); }
+      // A customer chosen while creation was in flight is linked at save.
+      const latestAccountId = preparationRef.current.accountId;
+      if (latestAccountId && latestAccountId !== boundAccountRef.current) setPendingAccountValue(latestAccountId);
+      linkedProjectsRef.current = [];
+      publishLinks();
       // Never launch an untracked legacy preparation PUT. Recording autosave
       // and finalization share the comparison-guarded writer instead.
       if (!result.preparationApplied && (prepared.notes || prepared.accountId)) {
@@ -223,7 +249,82 @@ export function usePostRecording({
       if (mountedRef.current && flowGenerationRef.current === generation) setPreparationError('미팅 생성에 실패했습니다. 녹음과 준비 내용은 유지되며 저장 단계에서 다시 시도합니다.');
       return null;
     }
-  }, [meetingTitle, userId, preparationContext, accountId, notesWriter, setPendingAccountValue]);
+  }, [meetingTitle, userId, preparationContext, accountId, notesWriter, setPendingAccountValue, resetLinks, publishLinks]);
+
+  /** Links `pendingAccount` to an existing meeting; shared by the in-recording
+   * selector and the save step. Throws so callers surface the failure. */
+  const linkPendingAccount = useCallback(async (meetingId: string, expectedUserId?: string) => {
+    const accountToLink = pendingAccountRef.current;
+    if (!accountToLink) return;
+    const options = expectedUserId ? { expectedUserId } : undefined;
+    const capabilities = await meetingsApi.get(meetingId, options);
+    if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 재시도하거나 고객 연결 재시도를 생략해 주세요.');
+    await withTimeout(meetingAccountApi.link(meetingId, accountToLink, options), 15000, 'Link preparation account');
+    if (persistedMeetingIdRef.current !== meetingId) return;
+    boundAccountRef.current = accountToLink;
+    // A newer selection made while this request ran stays pending.
+    if (pendingAccountRef.current === accountToLink) setPendingAccountValue(null);
+    publishLinks();
+  }, [setPendingAccountValue, publishLinks]);
+
+  /** Serialized project sync for the current meeting; resolves to a
+   * user-facing failure message (null on success), never swallowing one. */
+  const syncProjects = useCallback((meetingId: string): Promise<string | null> => {
+    const run = projectSyncRef.current.then(async () => {
+      if (persistedMeetingIdRef.current !== meetingId) return null;
+      const result = await syncProjectLinks(meetingId, linkedProjectsRef.current, desiredProjectsRef.current, {
+        link: (projectId, id) => withTimeout(projectApi.linkMeeting(projectId, id), 15000, 'Link project'),
+        unlink: (projectId, id) => withTimeout(projectApi.unlinkMeeting(projectId, id), 15000, 'Unlink project'),
+      });
+      if (persistedMeetingIdRef.current !== meetingId) return null;
+      linkedProjectsRef.current = result.linked;
+      publishLinks();
+      return projectLinkFailureMessage(result.failures);
+    });
+    projectSyncRef.current = run.catch(() => undefined);
+    return run;
+  }, [publishLinks]);
+
+  /** Customer selection while recording. Before a server meeting exists the
+   * creation path validates and applies it; afterwards it links immediately
+   * and, if that fails, stays pending for the save step's retry. */
+  const changeRecordingAccount = useCallback(async (nextAccountId: string) => {
+    const next = nextAccountId || undefined;
+    const meetingId = persistedMeetingIdRef.current;
+    const plan = planRecordingAccountChange(meetingId, boundAccountRef.current, next);
+    if (plan.kind === 'locked') {
+      setLinkError('이미 연결된 고객은 해제할 수 없습니다. 다른 고객으로 변경할 수 있습니다.');
+      return;
+    }
+    setLinkError(null);
+    preparationRef.current = { ...preparationRef.current, accountId: next };
+    if (plan.kind !== 'link') {
+      // 'defer': creation applies preparationRef; 'none': already bound.
+      setPendingAccountValue(plan.kind === 'defer' ? next || null : null);
+      publishLinks();
+      return;
+    }
+    setPendingAccountValue(plan.accountId);
+    publishLinks();
+    try {
+      await linkPendingAccount(plan.meetingId, notesUserIdRef.current);
+    } catch (err) {
+      if (persistedMeetingIdRef.current === plan.meetingId && pendingAccountRef.current === plan.accountId) {
+        setLinkError(`고객 연결에 실패했습니다. 저장 단계에서 다시 시도합니다. (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+  }, [linkPendingAccount, setPendingAccountValue, publishLinks]);
+
+  /** Project selection while recording; applied once the meeting exists. */
+  const changeRecordingProjects = useCallback(async (projectIds: string[]) => {
+    desiredProjectsRef.current = normalizeProjectIds(projectIds);
+    setLinkError(null);
+    publishLinks();
+    const meetingId = persistedMeetingIdRef.current;
+    if (!meetingId) return;
+    const failure = await syncProjects(meetingId);
+    if (failure && persistedMeetingIdRef.current === meetingId) setLinkError(`${failure} 저장 단계에서 다시 시도합니다.`);
+  }, [publishLinks, syncProjects]);
 
   /** Resume the save+upload flow after notes step (or a retry). Safe to
    * call more than once for the same `payload` — if the PUT already
@@ -267,18 +368,23 @@ export function usePostRecording({
         const acknowledged = result.preparationApplied ? notes : '';
         notesWriter.initialize(meetingId, acknowledged, result.supportsNotesComparison === true, result.notesRevision || '');
         setCreatedNotes({ meetingId, notes: acknowledged });
+        boundAccountRef.current = result.preparationApplied ? preparationRef.current.accountId : undefined;
+        linkedProjectsRef.current = [];
         setPendingAccountValue(result.preparationApplied ? null : preparationRef.current.accountId || null);
+        publishLinks();
       }
       if (!isCurrent()) return;
       setStep('saving');
       if (pendingAccountRef.current) {
-        const capabilities = await meetingsApi.get(meetingId);
+        await linkPendingAccount(meetingId);
         if (!isCurrent()) return;
-        if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 재시도하거나 고객 연결 재시도를 생략해 주세요.');
-        await withTimeout(meetingAccountApi.link(meetingId, pendingAccountRef.current), 15000, 'Link preparation account');
-        if (!isCurrent()) return;
-        setPendingAccountValue(null);
       }
+      // Projects chosen while recording, including those deferred because no
+      // draft meeting existed. A failure stops before upload so the banner can
+      // retry or skip it instead of silently dropping the link.
+      const projectFailure = await syncProjects(meetingId);
+      if (!isCurrent()) return;
+      if (projectFailure) throw new Error(`${projectFailure} 다시 시도하거나 프로젝트 연결 재시도를 생략해 주세요.`);
       if (submittedNotesRef.current !== undefined) {
         await persistNotes(meetingId, submittedNotesRef.current);
         if (!isCurrent()) return;
@@ -425,7 +531,7 @@ export function usePostRecording({
       // what makes handleRetry (below) able to resume instead of losing
       // the recording.
     }
-  }, [meetingTitle, router, serverMeetingId, liveSummaryRef, flushPendingSummary, notesWriter, persistNotes, setPendingAccountValue]);
+  }, [meetingTitle, router, serverMeetingId, liveSummaryRef, flushPendingSummary, notesWriter, persistNotes, setPendingAccountValue, linkPendingAccount, syncProjects, publishLinks]);
 
   /** Called when a browser-mode (mic/tab) recording blob is ready — pause
    * for notes input. */
@@ -615,6 +721,13 @@ export function usePostRecording({
     void runUploadFlow(pendingAudioRef.current);
   }, [runUploadFlow, setPendingAccountValue]);
 
+  const skipProjectRetry = useCallback(() => {
+    if (!pendingAudioRef.current || uploadInFlightRef.current) return;
+    desiredProjectsRef.current = linkedProjectsRef.current;
+    publishLinks();
+    void runUploadFlow(pendingAudioRef.current);
+  }, [runUploadFlow, publishLinks]);
+
   /** Legacy callback for iOS native capture fallback */
   const handleRecordingComplete = useCallback(async () => {
     try {
@@ -666,6 +779,7 @@ export function usePostRecording({
     setErrorMessage(null);
     setPreparationError(null);
     setHasPendingAudio(false); notesWriter.reset(); setCreatedNotes(null); setNotesConflict(null); setPendingAccountValue(null);
+    resetLinks(); publishLinks();
     setCanKeepLocally(false);
     setUploadProgress(null);
     releasePendingPower(pendingAudioRef.current);
@@ -683,7 +797,9 @@ export function usePostRecording({
     // block from resurrecting a banner for a recording the user just
     // dismissed.
     flowGenerationRef.current++;
-  }, [notesWriter, setPendingAccountValue]);
+  }, [notesWriter, setPendingAccountValue, resetLinks, publishLinks]);
+
+  const hasPendingProjects = hasPendingProjectLinks(recordingLinks.linkedProjectIds, recordingLinks.projectIds);
 
   return {
     step,
@@ -692,6 +808,7 @@ export function usePostRecording({
     uploadProgress,
     preparationError,
     createdNotes, notesConflict, notesEditorVersion, hasPendingAudio, pendingAccount, persistNotes, retainNotesError, editNotes, skipAccountRetry,
+    recordingLinks, linkError, hasPendingProjects, changeRecordingAccount, changeRecordingProjects, skipProjectRetry,
     createDraftMeeting,
     canKeepLocally,
     keepLocally,
