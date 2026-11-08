@@ -296,7 +296,10 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// Description and other unbounded fields, verified with at most
 	// listReadConcurrency in flight, summarized, and dropped before the next
 	// chunk is read. Without one, each verification reads its own full row,
-	// which is dropped as soon as its candidate is verified.
+	// which is dropped as soon as its candidate is verified. Account and
+	// ancestor rows come from one memo per chunk (accountRowMemo) instead of
+	// per-candidate reads; account grants it yields are rechecked against a
+	// fresh view before the chunk's candidates are kept.
 	verified := make([]*model.ProjectSummary, len(candidateOrder))
 	candidateErrs := make([]error, len(candidateOrder))
 	batch, batched := s.repo.(projectListRowReader)
@@ -324,20 +327,40 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 				return nil, ErrReadingData
 			}
 		}
+		// One memo per chunk serves every candidate's account and ancestor
+		// rows; with a batch reader it is primed with the chunk's links.
+		reads := newAccountRowMemo(s.repo)
+		if batched {
+			if err := reads.prime(ctx, userID, listChunkAccountIDs(userID, ids, canonical)); err != nil {
+				return nil, err
+			}
+		}
+		grants := make([]*accountReadGrant, len(ids))
+		readable := make([]bool, len(ids))
 		stop = fanout.Ordered(ctx, len(ids), listReadConcurrency, func(ctx context.Context, j int) error {
 			k := start + j
-			project, err := s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]], canonical)
+			project, grant, err := s.verifyInheritedProjectCandidate(ctx, reads, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]], canonical)
 			if err != nil {
 				candidateErrs[k] = err
 				return err
 			}
 			if project != nil {
+				readable[j], grants[j] = true, grant
 				verified[k] = &model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID}
 			}
 			return nil
 		})
+		var verifyErr error
 		if stop < len(ids) {
-			return nil, candidateErrs[start+stop]
+			verifyErr = candidateErrs[start+stop]
+		}
+		if err := s.recheckListCandidates(ctx, userID, ids, grants, readable, stop, verifyErr); err != nil {
+			return nil, err
+		}
+		for j := range ids {
+			if !readable[j] {
+				verified[start+j] = nil
+			}
 		}
 	}
 	for k, projectID := range candidateOrder {
@@ -353,21 +376,24 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 
 // verifyInheritedProjectCandidate returns the canonical project when a
 // reverse-index candidate is still linked to one of the accounts that surfaced
-// it and the caller passes requireProjectReadAccess; nil when it must be
-// skipped; an error for any other failure.
+// it and the caller passes listCandidateAccess; nil when it must be skipped;
+// an error for any other failure. A non-nil grant must still pass
+// recheckListCandidates before the project is listed.
 // canonical, when non-nil, holds the projected batch-read candidate rows
-// (absent means missing); requireProjectReadAccess still performs its own
-// current reads.
-func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, userID, projectID string, accountIDs []string, canonical map[string]*model.Project) (*model.Project, error) {
+// (absent means missing): a consistent read of ownerUserId and accountIds, so
+// the access decision uses that row rather than reading the project twice
+// more as requireProjectReadAccess does. Without it the row is read once
+// here. Account rows come from reads, the chunk's request-scoped memo.
+func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, reads accountReadMembershipRepo, userID, projectID string, accountIDs []string, canonical map[string]*model.Project) (*model.Project, *accountReadGrant, error) {
 	project := canonical[projectID]
 	if canonical == nil {
 		var err error
 		if project, err = s.repo.GetProject(ctx, projectID); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if project == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// A reverse-index ref is a candidate only -- never trust one without
 	// checking the canonical AccountIDs set (same principle as
@@ -387,15 +413,13 @@ func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, us
 		}
 	}
 	if !linked {
-		return nil, nil
+		return nil, nil, nil
 	}
-	if _, _, err := s.requireProjectReadAccess(ctx, userID, projectID); err != nil {
-		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
-			return nil, nil
-		}
-		return nil, err
+	ok, grant, err := s.listCandidateAccess(ctx, reads, userID, projectID, project)
+	if err != nil || !ok {
+		return nil, nil, err
 	}
-	return project, nil
+	return project, grant, nil
 }
 
 func (s *ProjectService) UpdateProject(ctx context.Context, userID, projectID string, req *model.UpdateProjectRequest) (*model.ProjectResponse, error) {
