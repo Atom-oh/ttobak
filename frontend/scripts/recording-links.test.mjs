@@ -17,11 +17,13 @@ const transpile = source => ts.transpileModule(source, {
 
 // Runs the real usePostRecording hook with recorded transport calls, following
 // recording-account-binding.test.mjs's fixture.
-function fixture({ draftFails = false, failProject } = {}) {
+function fixture({ draftFails = false, failProject, accountGate, accountResponseLost, projectGate, projectResponseLost, timeoutMs } = {}) {
   const calls = [];
   const navigations = [];
   const states = [];
   let createAttempt = 0;
+  let serverAccount;
+  const serverProjects = new Set();
   class ApiError extends Error {
     constructor(status, code, message) { super(message); this.status = status; this.code = code; }
   }
@@ -29,6 +31,7 @@ function fixture({ draftFails = false, failProject } = {}) {
     async create(payload) {
       calls.push(['create', payload.accountId]);
       if (draftFails && createAttempt++ === 0) throw new Error('Temporary creation failure');
+      serverAccount = payload.accountId;
       return { meetingId: 'm1', preparationApplied: true, supportsNotesComparison: true, notesRevision: 'r1' };
     },
     get: async () => ({ notes: '', notesRevision: 'r1', supportsPrivateAccountLink: true, supportsNotesComparison: true }),
@@ -43,13 +46,27 @@ function fixture({ draftFails = false, failProject } = {}) {
     '@/lib/api': {
       ApiError, meetingsApi,
       accountApi: { get: async id => editable(id) },
-      meetingAccountApi: { link: async (meetingId, accountId) => { calls.push(['linkAccount', meetingId, accountId]); } },
+      meetingAccountApi: { link: async (meetingId, accountId, options) => {
+        assert.equal(options?.expectedUserId, userId);
+        calls.push(['linkAccount', meetingId, accountId]);
+        await accountGate?.(accountId);
+        serverAccount = accountId;
+        if (accountResponseLost?.(accountId)) throw new Error('Account response lost after commit');
+      } },
       projectApi: {
-        linkMeeting: async (projectId, meetingId) => {
+        linkMeeting: async (projectId, meetingId, options) => {
           calls.push(['linkProject', projectId, meetingId]);
+          if (projectGate) assert.equal(options?.expectedUserId, userId);
+          await projectGate?.(projectId);
           if (failProject?.(projectId)) throw new Error('Project unavailable');
+          serverProjects.add(projectId);
+          if (projectResponseLost?.(projectId)) throw new Error('Project response lost after commit');
         },
-        unlinkMeeting: async (projectId, meetingId) => { calls.push(['unlinkProject', projectId, meetingId]); },
+        unlinkMeeting: async (projectId, meetingId, options) => {
+          calls.push(['unlinkProject', projectId, meetingId]);
+          if (projectGate) assert.equal(options?.expectedUserId, userId);
+          serverProjects.delete(projectId);
+        },
       },
       uploadsApi: {
         getPresignedUrl: async () => { calls.push(['presign']); return { uploadUrl: 'https://example.invalid/upload', key: 'audio/final' }; },
@@ -69,7 +86,11 @@ function fixture({ draftFails = false, failProject } = {}) {
     cache.set(name, exports);
     vm.runInNewContext(transpile(readFileSync(new URL(`../src/${path}.ts`, import.meta.url), 'utf8')), {
       exports, Blob, AbortController,
-      setTimeout: (...args) => { const timer = setTimeout(...args); timer.unref(); return timer; },
+      setTimeout: (callback, milliseconds) => {
+        const timer = setTimeout(callback, timeoutMs && milliseconds === 15000 ? timeoutMs : milliseconds);
+        if (!timeoutMs) timer.unref();
+        return timer;
+      },
       clearTimeout, console: { error() {}, warn() {} },
       require: dependency => load(dependency.startsWith('.')
         ? `@/${posix.normalize(posix.join(posix.dirname(path), dependency))}` : dependency),
@@ -82,7 +103,7 @@ function fixture({ draftFails = false, failProject } = {}) {
     hook.handleBlobReady(new Blob(['audio']), 'audio/webm');
     await hook.handleNotesSubmit('');
   }
-  return { hook, links, calls, navigations, states, stopAndSave };
+  return { hook, links, calls, navigations, states, stopAndSave, serverProjects, serverAccount: () => serverAccount };
 }
 
 test('account changes defer without a meeting, link an existing one, and never clear a bound account', () => {
@@ -154,5 +175,101 @@ test('a failed deferred project link stops before upload and can be skipped', as
   for (let n = 0; n < 30 && f.navigations.length === 0; n++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.deepEqual(f.calls.filter(([kind, id]) => kind === 'linkProject' && id === 'good').length, 1);
   assert.ok(f.calls.some(([kind]) => kind === 'presign'));
+  const cleanupIndex = f.calls.findIndex(([kind, id]) => kind === 'unlinkProject' && id === 'bad');
+  assert.ok(cleanupIndex >= 0);
+  assert.ok(cleanupIndex < f.calls.findIndex(([kind]) => kind === 'presign'));
   assert.deepEqual(f.navigations, ['/meeting/m1']);
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(settle => { resolve = settle; });
+  return { promise, resolve };
+}
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+for (const ambiguous of [false, true]) {
+  test(`latest account wins A-to-B-to-A with ${ambiguous ? 'an ambiguous' : 'a delayed'} B response`, async () => {
+    const pending = deferred();
+    const fixtureState = fixture({
+      accountGate: accountId => accountId === 'other' ? pending.promise : undefined,
+      accountResponseLost: accountId => ambiguous && accountId === 'other',
+    });
+    await fixtureState.hook.createDraftMeeting();
+    const change = fixtureState.hook.changeRecordingAccount('other');
+    await tick();
+    const restore = fixtureState.hook.changeRecordingAccount('initial');
+    const save = fixtureState.stopAndSave();
+    await tick();
+    assert.equal(fixtureState.calls.some(([kind]) => kind === 'presign'), false);
+    pending.resolve();
+    await Promise.all([change, restore, save]);
+    assert.equal(fixtureState.serverAccount(), 'initial');
+    assert.deepEqual(fixtureState.calls.filter(([kind]) => kind === 'linkAccount'), [
+      ['linkAccount', 'm1', 'other'], ['linkAccount', 'm1', 'initial'],
+    ]);
+    assert.ok(fixtureState.calls.some(([kind]) => kind === 'presign'));
+  });
+}
+
+test('an applied but rejected project link remains removable and retryable', async () => {
+  const { links } = fixture();
+  const actual = new Set();
+  const failed = await links.syncProjectLinks('m1', [], ['project'], {
+    link: async projectId => { actual.add(projectId); throw new Error('Response lost'); },
+    unlink: async projectId => { actual.delete(projectId); },
+  });
+  assert.deepEqual(plain(failed.linked), []);
+  assert.deepEqual(plain(failed.attempted), ['project']);
+  assert.equal(links.hasPendingProjectLinks(failed.linked, ['project'], failed.attempted), true);
+  const removed = await links.syncProjectLinks('m1', failed.linked, [], {
+    link: async () => assert.fail('An undesired project must not be linked'),
+    unlink: async projectId => { actual.delete(projectId); },
+  }, failed.attempted);
+  assert.equal(actual.size, 0);
+  assert.deepEqual(plain(removed.attempted), []);
+  assert.deepEqual(plain(removed.failures), []);
+});
+
+test('a project timeout does not release serialization before the actual request settles', async () => {
+  const pending = deferred();
+  const fixtureState = fixture({ projectGate: () => pending.promise, timeoutMs: 15 });
+  await fixtureState.hook.createDraftMeeting();
+  await fixtureState.hook.changeRecordingProjects(['project']);
+  const remove = fixtureState.hook.changeRecordingProjects([]);
+  await tick();
+  assert.equal(fixtureState.calls.some(([kind]) => kind === 'unlinkProject'), false);
+  pending.resolve();
+  await remove;
+  assert.equal(fixtureState.serverProjects.size, 0);
+  assert.deepEqual(fixtureState.calls.filter(([kind]) => kind.endsWith('Project')), [
+    ['linkProject', 'project', 'm1'], ['unlinkProject', 'project', 'm1'],
+  ]);
+  await fixtureState.stopAndSave();
+  assert.ok(fixtureState.calls.some(([kind]) => kind === 'presign'));
+});
+
+test('removing an applied but rejected project cleans up before saving', async () => {
+  const fixtureState = fixture({ projectResponseLost: () => true });
+  await fixtureState.hook.createDraftMeeting();
+  await fixtureState.hook.changeRecordingProjects(['project']);
+  assert.equal(fixtureState.serverProjects.has('project'), true);
+  await fixtureState.hook.changeRecordingProjects([]);
+  assert.equal(fixtureState.serverProjects.size, 0);
+  await fixtureState.stopAndSave();
+  assert.ok(fixtureState.calls.some(([kind]) => kind === 'presign'));
+});
+
+test('a reset stops queued project writes after the in-flight request settles', async () => {
+  const pending = deferred();
+  const fixtureState = fixture({ projectGate: () => pending.promise });
+  await fixtureState.hook.createDraftMeeting();
+  const changing = fixtureState.hook.changeRecordingProjects(['first', 'second']);
+  await tick();
+  fixtureState.hook.reset();
+  pending.resolve();
+  await changing;
+  assert.deepEqual(fixtureState.calls.filter(([kind]) => kind.endsWith('Project')), [
+    ['linkProject', 'first', 'm1'],
+  ]);
 });

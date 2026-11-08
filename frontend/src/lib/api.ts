@@ -927,10 +927,10 @@ export const projectApi = {
     api.post<{ accountIds: string[] }>(`/api/projects/${encodeURIComponent(id)}/accounts`, { accountId }),
   unlinkAccount: (id: string, accountId: string) =>
     api.delete<void>(`/api/projects/${encodeURIComponent(id)}/accounts/${encodeURIComponent(accountId)}`),
-  linkMeeting: (id: string, meetingId: string) =>
-    api.post<void>(`/api/projects/${encodeURIComponent(id)}/meetings`, { meetingId }),
-  unlinkMeeting: (id: string, meetingId: string) =>
-    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/meetings/${encodeURIComponent(meetingId)}`),
+  linkMeeting: (id: string, meetingId: string, options?: FetchOptions) =>
+    api.post<void>(`/api/projects/${encodeURIComponent(id)}/meetings`, { meetingId }, options),
+  unlinkMeeting: (id: string, meetingId: string, options?: FetchOptions) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/meetings/${encodeURIComponent(meetingId)}`, options),
   linkResearch: (id: string, researchId: string) =>
     api.post<void>(`/api/projects/${encodeURIComponent(id)}/research`, { researchId }),
   unlinkResearch: (id: string, researchId: string) =>

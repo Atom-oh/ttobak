@@ -122,8 +122,11 @@ export function usePostRecording({
   // is the account the server meeting is known to carry; project IDs track
   // what was confirmed linked to `persistedMeetingIdRef`'s meeting.
   const boundAccountRef = useRef<string | undefined>(undefined);
+  const accountUncertainRef = useRef(false);
+  const accountSyncRef = useRef<Promise<void>>(Promise.resolve());
   const desiredProjectsRef = useRef<string[]>([]);
   const linkedProjectsRef = useRef<string[]>([]);
+  const attemptedProjectsRef = useRef<string[]>([]);
   const projectSyncRef = useRef<Promise<unknown>>(Promise.resolve());
   const [recordingLinks, setRecordingLinks] = useState<{ accountId?: string; boundAccountId?: string; projectIds: string[]; linkedProjectIds: string[] }>({ projectIds: [], linkedProjectIds: [] });
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -135,6 +138,7 @@ export function usePostRecording({
   }, []);
   const resetLinks = useCallback(() => {
     boundAccountRef.current = undefined; desiredProjectsRef.current = []; linkedProjectsRef.current = [];
+    accountUncertainRef.current = false; attemptedProjectsRef.current = [];
     setLinkError(null);
   }, []);
   const submittedNotesRef = useRef<string | undefined>(undefined);
@@ -237,6 +241,7 @@ export function usePostRecording({
       const latestAccountId = preparationRef.current.accountId;
       if (latestAccountId && latestAccountId !== boundAccountRef.current) setPendingAccountValue(latestAccountId);
       linkedProjectsRef.current = [];
+      attemptedProjectsRef.current = [];
       publishLinks();
       // Never launch an untracked legacy preparation PUT. Recording autosave
       // and finalization share the comparison-guarded writer instead.
@@ -254,35 +259,68 @@ export function usePostRecording({
   /** Links `pendingAccount` to an existing meeting; shared by the in-recording
    * selector and the save step. Throws so callers surface the failure. */
   const linkPendingAccount = useCallback(async (meetingId: string, expectedUserId?: string) => {
-    const accountToLink = pendingAccountRef.current;
-    if (!accountToLink) return;
-    const options = expectedUserId ? { expectedUserId } : undefined;
-    const capabilities = await meetingsApi.get(meetingId, options);
-    if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 재시도하거나 고객 연결 재시도를 생략해 주세요.');
-    await withTimeout(meetingAccountApi.link(meetingId, accountToLink, options), 15000, 'Link preparation account');
-    if (persistedMeetingIdRef.current !== meetingId) return;
-    boundAccountRef.current = accountToLink;
-    // A newer selection made while this request ran stays pending.
-    if (pendingAccountRef.current === accountToLink) setPendingAccountValue(null);
-    publishLinks();
+    const generation = flowGenerationRef.current;
+    const principal = expectedUserId ?? notesUserIdRef.current;
+    const isCurrent = () => mountedRef.current && flowGenerationRef.current === generation
+      && persistedMeetingIdRef.current === meetingId && notesUserIdRef.current === principal;
+    const options = { expectedUserId: principal };
+    const run = accountSyncRef.current.then(async () => {
+      while (isCurrent() && pendingAccountRef.current) {
+        const accountToLink = pendingAccountRef.current;
+        if (accountToLink === boundAccountRef.current && !accountUncertainRef.current) {
+          setPendingAccountValue(null);
+          publishLinks();
+          continue;
+        }
+        const capabilities = await meetingsApi.get(meetingId, options);
+        if (!isCurrent()) return;
+        if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 재시도하거나 고객 연결 재시도를 생략해 주세요.');
+        accountUncertainRef.current = true;
+        await meetingAccountApi.link(meetingId, accountToLink, options);
+        if (!isCurrent()) return;
+        boundAccountRef.current = accountToLink;
+        accountUncertainRef.current = false;
+        if (pendingAccountRef.current === accountToLink) setPendingAccountValue(null);
+        publishLinks();
+      }
+    });
+    accountSyncRef.current = run.catch(() => undefined);
+    return withTimeout(run, 15000, 'Link preparation account');
   }, [setPendingAccountValue, publishLinks]);
 
   /** Serialized project sync for the current meeting; resolves to a
    * user-facing failure message (null on success), never swallowing one. */
   const syncProjects = useCallback((meetingId: string): Promise<string | null> => {
+    const generation = flowGenerationRef.current;
+    const principal = notesUserIdRef.current;
+    const isCurrent = () => mountedRef.current && flowGenerationRef.current === generation
+      && persistedMeetingIdRef.current === meetingId && notesUserIdRef.current === principal;
+    const options = { expectedUserId: principal };
     const run = projectSyncRef.current.then(async () => {
-      if (persistedMeetingIdRef.current !== meetingId) return null;
-      const result = await syncProjectLinks(meetingId, linkedProjectsRef.current, desiredProjectsRef.current, {
-        link: (projectId, id) => withTimeout(projectApi.linkMeeting(projectId, id), 15000, 'Link project'),
-        unlink: (projectId, id) => withTimeout(projectApi.unlinkMeeting(projectId, id), 15000, 'Unlink project'),
-      });
-      if (persistedMeetingIdRef.current !== meetingId) return null;
-      linkedProjectsRef.current = result.linked;
-      publishLinks();
-      return projectLinkFailureMessage(result.failures);
+      while (isCurrent()) {
+        const result = await syncProjectLinks(meetingId, linkedProjectsRef.current, desiredProjectsRef.current, {
+          link: async (projectId, id) => {
+            if (!isCurrent()) throw new Error('Recording changed');
+            return projectApi.linkMeeting(projectId, id, options);
+          },
+          unlink: async (projectId, id) => {
+            if (!isCurrent()) throw new Error('Recording changed');
+            return projectApi.unlinkMeeting(projectId, id, options);
+          },
+        }, attemptedProjectsRef.current);
+        if (!isCurrent()) return null;
+        linkedProjectsRef.current = result.linked;
+        attemptedProjectsRef.current = result.attempted;
+        publishLinks();
+        const failure = projectLinkFailureMessage(result.failures);
+        if (failure) return failure;
+        if (!hasPendingProjectLinks(result.linked, desiredProjectsRef.current, result.attempted)) return null;
+      }
+      return null;
     });
     projectSyncRef.current = run.catch(() => undefined);
-    return run;
+    return withTimeout(run, 15000, 'Sync projects')
+      .catch((error) => isCurrent() ? `프로젝트 연결·해제 확인에 실패했습니다. (${error instanceof Error ? error.message : String(error)})` : null);
   }, [publishLinks]);
 
   /** Customer selection while recording. Before a server meeting exists the
@@ -298,18 +336,17 @@ export function usePostRecording({
     }
     setLinkError(null);
     preparationRef.current = { ...preparationRef.current, accountId: next };
-    if (plan.kind !== 'link') {
-      // 'defer': creation applies preparationRef; 'none': already bound.
+    if (!meetingId || !next) {
       setPendingAccountValue(plan.kind === 'defer' ? next || null : null);
       publishLinks();
       return;
     }
-    setPendingAccountValue(plan.accountId);
+    setPendingAccountValue(next);
     publishLinks();
     try {
-      await linkPendingAccount(plan.meetingId, notesUserIdRef.current);
+      await linkPendingAccount(meetingId, notesUserIdRef.current);
     } catch (err) {
-      if (persistedMeetingIdRef.current === plan.meetingId && pendingAccountRef.current === plan.accountId) {
+      if (mountedRef.current && persistedMeetingIdRef.current === meetingId && pendingAccountRef.current === next) {
         setLinkError(`고객 연결에 실패했습니다. 저장 단계에서 다시 시도합니다. (${err instanceof Error ? err.message : String(err)})`);
       }
     }
@@ -370,15 +407,14 @@ export function usePostRecording({
         setCreatedNotes({ meetingId, notes: acknowledged });
         boundAccountRef.current = result.preparationApplied ? preparationRef.current.accountId : undefined;
         linkedProjectsRef.current = [];
+        attemptedProjectsRef.current = [];
         setPendingAccountValue(result.preparationApplied ? null : preparationRef.current.accountId || null);
         publishLinks();
       }
       if (!isCurrent()) return;
       setStep('saving');
-      if (pendingAccountRef.current) {
-        await linkPendingAccount(meetingId);
-        if (!isCurrent()) return;
-      }
+      await linkPendingAccount(meetingId, identity.expectedUserId);
+      if (!isCurrent()) return;
       // Projects chosen while recording, including those deferred because no
       // draft meeting existed. A failure stops before upload so the banner can
       // retry or skip it instead of silently dropping the link.
@@ -799,7 +835,7 @@ export function usePostRecording({
     flowGenerationRef.current++;
   }, [notesWriter, setPendingAccountValue, resetLinks, publishLinks]);
 
-  const hasPendingProjects = hasPendingProjectLinks(recordingLinks.linkedProjectIds, recordingLinks.projectIds);
+  const hasPendingProjects = hasPendingProjectLinks(recordingLinks.linkedProjectIds, recordingLinks.projectIds, attemptedProjectsRef.current);
 
   return {
     step,

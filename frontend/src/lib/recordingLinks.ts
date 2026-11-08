@@ -26,16 +26,16 @@ export function normalizeProjectIds(ids: readonly string[]): string[] {
   return [...new Set(ids.filter(Boolean))];
 }
 
-export function planProjectLinks(linked: readonly string[], desired: readonly string[]) {
+export function planProjectLinks(linked: readonly string[], desired: readonly string[], attempted: readonly string[] = []) {
   const have = new Set(linked), want = new Set(desired);
   return {
     link: normalizeProjectIds(desired).filter((id) => !have.has(id)),
-    unlink: normalizeProjectIds(linked).filter((id) => !want.has(id)),
+    unlink: normalizeProjectIds([...linked, ...attempted]).filter((id) => !want.has(id)),
   };
 }
 
-export function hasPendingProjectLinks(linked: readonly string[], desired: readonly string[]) {
-  const plan = planProjectLinks(linked, desired);
+export function hasPendingProjectLinks(linked: readonly string[], desired: readonly string[], attempted: readonly string[] = []) {
+  const plan = planProjectLinks(linked, desired, attempted);
   return plan.link.length > 0 || plan.unlink.length > 0;
 }
 
@@ -53,11 +53,14 @@ export interface ProjectLinkFailure { projectId: string; action: 'link' | 'unlin
  */
 export async function syncProjectLinks(
   meetingId: string, linked: readonly string[], desired: readonly string[], transport: ProjectLinkTransport,
-): Promise<{ linked: string[]; failures: ProjectLinkFailure[] }> {
-  const plan = planProjectLinks(linked, desired);
+  attempted: readonly string[] = [],
+): Promise<{ linked: string[]; attempted: string[]; failures: ProjectLinkFailure[] }> {
+  const plan = planProjectLinks(linked, desired, attempted);
   const current = new Set(linked);
+  const possiblyLinked = new Set(attempted);
   const failures: ProjectLinkFailure[] = [];
   for (const projectId of plan.link) {
+    possiblyLinked.add(projectId);
     try {
       await transport.link(projectId, meetingId);
       current.add(projectId);
@@ -69,11 +72,12 @@ export async function syncProjectLinks(
     try {
       await transport.unlink(projectId, meetingId);
       current.delete(projectId);
+      possiblyLinked.delete(projectId);
     } catch (error) {
       failures.push({ projectId, action: 'unlink', message: error instanceof Error ? error.message : String(error) });
     }
   }
-  return { linked: [...current], failures };
+  return { linked: [...current], attempted: [...possiblyLinked], failures };
 }
 
 export function projectLinkFailureMessage(failures: readonly ProjectLinkFailure[]): string | null {
