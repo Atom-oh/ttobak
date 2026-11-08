@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useCallback } from 'react';
 import { crawlerApi } from '@/lib/api';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -670,7 +671,7 @@ export function CrawlerSettings() {
   };
 
   const handleUnsubscribe = async (sourceId: string) => {
-    if (!confirm('Are you sure you want to unsubscribe from this source?')) return;
+    if (!await confirmDialog('Are you sure you want to unsubscribe from this source?')) return;
     try {
       await crawlerApi.unsubscribe(sourceId);
       setSuccess('Unsubscribed successfully');
