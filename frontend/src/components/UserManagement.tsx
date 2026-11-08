@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { adminUsersApi, type AdminUserSummary } from '@/lib/api';
@@ -109,13 +110,13 @@ export function UserManagement() {
     }
   };
 
-  const handleDelete = (user: AdminUserSummary) => {
-    if (!confirm(`${user.email} 계정을 삭제하시겠습니까? Cognito 계정만 삭제되며 되돌릴 수 없습니다.`)) return;
+  const handleDelete = async (user: AdminUserSummary) => {
+    if (!await confirmDialog(`${user.email} 계정을 삭제하시겠습니까? Cognito 계정만 삭제되며 되돌릴 수 없습니다.`)) return;
     runAction(user.userId, () => adminUsersApi.delete(user.userId), `${user.email} 계정을 삭제했습니다.`);
   };
 
-  const handleDisable = (user: AdminUserSummary) => {
-    if (!confirm(`${user.email} 계정을 비활성화하시겠습니까?`)) return;
+  const handleDisable = async (user: AdminUserSummary) => {
+    if (!await confirmDialog(`${user.email} 계정을 비활성화하시겠습니까?`)) return;
     runAction(user.userId, () => adminUsersApi.disable(user.userId), `${user.email} 계정을 비활성화했습니다.`);
   };
 
@@ -131,8 +132,8 @@ export function UserManagement() {
     );
   };
 
-  const handleResetPassword = (user: AdminUserSummary) => {
-    if (!confirm(`${user.email} 계정의 비밀번호를 강제로 재설정하시겠습니까? 사용자에게 인증 코드 이메일이 발송됩니다.`)) return;
+  const handleResetPassword = async (user: AdminUserSummary) => {
+    if (!await confirmDialog(`${user.email} 계정의 비밀번호를 강제로 재설정하시겠습니까? 사용자에게 인증 코드 이메일이 발송됩니다.`)) return;
     runAction(
       user.userId,
       () => adminUsersApi.resetPassword(user.userId),

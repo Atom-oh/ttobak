@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -187,7 +188,7 @@ export default function InsightDetailPage() {
 
   const handleDelete = async () => {
     if (!doc || !sourceId || !docHash) return;
-    if (!window.confirm('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
+    if (!await confirmDialog('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
     setDeleting(true);
     setDeleteError(null);
     try {

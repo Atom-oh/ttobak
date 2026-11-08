@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useCallback } from 'react';
 import { settingsApi } from '@/lib/api';
 import type { IntegrationsResponse } from '@/types/meeting';
@@ -53,7 +54,7 @@ export function IntegrationSettings() {
   };
 
   const handleDisconnectNotion = async () => {
-    if (!confirm('Are you sure you want to disconnect Notion?')) return;
+    if (!await confirmDialog('Are you sure you want to disconnect Notion?')) return;
 
     setDeleting(true);
     setError(null);
