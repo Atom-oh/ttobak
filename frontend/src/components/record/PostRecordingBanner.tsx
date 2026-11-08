@@ -133,8 +133,8 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
             {onSkipAccountRetry && <button type="button" onClick={onSkipAccountRetry} className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
               고객 연결 재시도 생략
             </button>}
-            {onSkipProjectRetry && <button type="button" onClick={onSkipProjectRetry} className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
-              프로젝트 연결 재시도 생략
+            {onSkipProjectRetry && <button type="button" onClick={onSkipProjectRetry} className="max-w-full rounded-lg border border-amber-300 px-3 py-1.5 text-base font-medium text-amber-800 dark:text-amber-300">
+              연결 추가 생략·해제 재시도
             </button>}
             <button
               onClick={onDismiss}

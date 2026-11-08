@@ -17,7 +17,7 @@ const transpile = source => ts.transpileModule(source, {
 
 // Runs the real usePostRecording hook with recorded transport calls, following
 // recording-account-binding.test.mjs's fixture.
-function fixture({ draftFails = false, failProject, accountGate, accountResponseLost, projectGate, projectResponseLost, timeoutMs } = {}) {
+function fixture({ draftFails = false, initialAccount = 'initial', failProject, missingProject, accountGate, accountResponseLost, projectGate, projectResponseLost, unlinkResponseLost, timeoutMs } = {}) {
   const calls = [];
   const navigations = [];
   const states = [];
@@ -56,6 +56,7 @@ function fixture({ draftFails = false, failProject, accountGate, accountResponse
       projectApi: {
         linkMeeting: async (projectId, meetingId, options) => {
           calls.push(['linkProject', projectId, meetingId]);
+          if (missingProject) throw new ApiError(404, 'NOT_FOUND', 'Project not found');
           if (projectGate) assert.equal(options?.expectedUserId, userId);
           await projectGate?.(projectId);
           if (failProject?.(projectId)) throw new Error('Project unavailable');
@@ -64,8 +65,10 @@ function fixture({ draftFails = false, failProject, accountGate, accountResponse
         },
         unlinkMeeting: async (projectId, meetingId, options) => {
           calls.push(['unlinkProject', projectId, meetingId]);
+          if (missingProject) throw new ApiError(404, 'NOT_FOUND', 'Project not found');
           if (projectGate) assert.equal(options?.expectedUserId, userId);
           serverProjects.delete(projectId);
+          if (unlinkResponseLost?.(projectId)) throw new Error('Unlink response lost after commit');
         },
       },
       uploadsApi: {
@@ -97,7 +100,7 @@ function fixture({ draftFails = false, failProject, accountGate, accountResponse
     });
     return exports;
   }
-  const hook = load('@/hooks/usePostRecording').usePostRecording({ meetingTitle: 'Recording', accountId: 'initial', userId });
+  const hook = load('@/hooks/usePostRecording').usePostRecording({ meetingTitle: 'Recording', accountId: initialAccount, userId });
   const links = load('@/lib/recordingLinks');
   async function stopAndSave() {
     hook.handleBlobReady(new Blob(['audio']), 'audio/webm');
@@ -122,7 +125,8 @@ test('project sync continues past a failure and reports every failed project', a
     link: async projectId => { if (projectId === 'x') throw new Error('denied'); },
     unlink: async () => { throw new Error('busy'); },
   });
-  assert.deepEqual(plain(result.linked.sort()), ['a', 'y']);
+  assert.deepEqual(plain(result.linked.sort()), ['y']);
+  assert.ok(result.attempted.includes('a'));
   assert.deepEqual(plain(result.failures.map(failure => [failure.projectId, failure.action])), [['x', 'link'], ['a', 'unlink']]);
   assert.match(links.projectLinkFailureMessage(result.failures), /프로젝트 연결·해제에 실패했습니다 \(2건\)/);
   assert.equal(links.projectLinkFailureMessage([]), null);
@@ -272,4 +276,84 @@ test('a reset stops queued project writes after the in-flight request settles', 
   assert.deepEqual(fixtureState.calls.filter(([kind]) => kind.endsWith('Project')), [
     ['linkProject', 'first', 'm1'],
   ]);
+});
+
+test('a deleted project can be skipped without blocking the recording upload', async () => {
+  const fixtureState = fixture({ missingProject: true });
+  await fixtureState.hook.createDraftMeeting();
+  await fixtureState.hook.changeRecordingProjects(['deleted']);
+  await fixtureState.stopAndSave();
+  assert.equal(fixtureState.calls.some(([kind]) => kind === 'presign'), false);
+  fixtureState.hook.skipProjectRetry();
+  for (let attempt = 0; attempt < 30 && fixtureState.navigations.length === 0; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.ok(fixtureState.calls.some(([kind]) => kind === 'presign'));
+});
+
+test('reselecting a project after a lost unlink response restores the server link', async () => {
+  const fixtureState = fixture({ unlinkResponseLost: () => true });
+  await fixtureState.hook.createDraftMeeting();
+  await fixtureState.hook.changeRecordingProjects(['project']);
+  await fixtureState.hook.changeRecordingProjects([]);
+  assert.equal(fixtureState.serverProjects.size, 0);
+  await fixtureState.hook.changeRecordingProjects(['project']);
+  assert.equal(fixtureState.serverProjects.has('project'), true);
+  await fixtureState.stopAndSave();
+  assert.ok(fixtureState.calls.some(([kind]) => kind === 'presign'));
+});
+
+test('an uncertain unlink is not confirmed and remains pending cleanup', async () => {
+  const { links } = fixture();
+  const removed = await links.syncProjectLinks('meeting', ['project'], [], {
+    link: async () => assert.fail('No addition requested'),
+    unlink: async () => { throw new Error('Response lost'); },
+  });
+  assert.deepEqual(plain(removed.linked), []);
+  assert.deepEqual(plain(removed.attempted), ['project']);
+  assert.equal(links.hasPendingProjectLinks(removed.linked, [], removed.attempted), true);
+  assert.equal(links.hasPendingProjectLinks(removed.linked, ['project'], removed.attempted), true);
+});
+
+test('only authoritative not-found cleanup clears possible links', async () => {
+  const { links } = fixture();
+  const missing = new Error('Authoritative absence');
+  for (const failure of [missing, new Error('Forbidden'), new Error('404 from proxy')]) {
+    const removed = await links.syncProjectLinks('meeting', [], [], {
+      link: async () => assert.fail('No addition requested'),
+      unlink: async () => { throw failure; },
+      isNotFound: error => error === missing,
+    }, ['project']);
+    assert.deepEqual(plain(removed.attempted), failure === missing ? [] : ['project']);
+    assert.equal(removed.failures.length, failure === missing ? 0 : 1);
+  }
+});
+
+for (const ambiguous of [false, true]) {
+  test(`the first ${ambiguous ? 'ambiguous' : 'pending'} customer link cannot be cleared`, async () => {
+    const pending = deferred();
+    const fixtureState = fixture({
+      initialAccount: '',
+      accountGate: () => pending.promise,
+      accountResponseLost: () => ambiguous,
+    });
+    await fixtureState.hook.createDraftMeeting();
+    const change = fixtureState.hook.changeRecordingAccount('other');
+    await tick();
+    if (ambiguous) {
+      pending.resolve();
+      await change;
+    }
+    await fixtureState.hook.changeRecordingAccount('');
+    pending.resolve();
+    await change;
+    const published = fixtureState.states.filter(value => value && typeof value === 'object' && 'projectIds' in value);
+    assert.equal(published.at(-1).accountId, 'other');
+    assert.ok(fixtureState.states.some(value => typeof value === 'string' && value.includes('해제할 수 없습니다')));
+  });
+}
+
+test('the project skip action explicitly retries removals', () => {
+  const banner = readFileSync(new URL('../src/components/record/PostRecordingBanner.tsx', import.meta.url), 'utf8');
+  assert.equal(banner.includes('연결 추가 생략·해제 재시도'), true);
 });

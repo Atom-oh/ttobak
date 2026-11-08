@@ -42,6 +42,7 @@ export function hasPendingProjectLinks(linked: readonly string[], desired: reado
 export interface ProjectLinkTransport {
   link: (projectId: string, meetingId: string) => Promise<unknown>;
   unlink: (projectId: string, meetingId: string) => Promise<unknown>;
+  isNotFound?: (error: unknown) => boolean;
 }
 
 export interface ProjectLinkFailure { projectId: string; action: 'link' | 'unlink'; message: string }
@@ -69,12 +70,17 @@ export async function syncProjectLinks(
     }
   }
   for (const projectId of plan.unlink) {
+    current.delete(projectId);
+    possiblyLinked.add(projectId);
     try {
       await transport.unlink(projectId, meetingId);
-      current.delete(projectId);
       possiblyLinked.delete(projectId);
     } catch (error) {
-      failures.push({ projectId, action: 'unlink', message: error instanceof Error ? error.message : String(error) });
+      if (transport.isNotFound?.(error)) {
+        possiblyLinked.delete(projectId);
+      } else {
+        failures.push({ projectId, action: 'unlink', message: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
   return { linked: [...current], attempted: [...possiblyLinked], failures };

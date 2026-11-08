@@ -307,6 +307,7 @@ export function usePostRecording({
             if (!isCurrent()) throw new Error('Recording changed');
             return projectApi.unlinkMeeting(projectId, id, options);
           },
+          isNotFound: (error) => error instanceof ApiError && error.status === 404 && error.code === 'NOT_FOUND',
         }, attemptedProjectsRef.current);
         if (!isCurrent()) return null;
         linkedProjectsRef.current = result.linked;
@@ -330,7 +331,7 @@ export function usePostRecording({
     const next = nextAccountId || undefined;
     const meetingId = persistedMeetingIdRef.current;
     const plan = planRecordingAccountChange(meetingId, boundAccountRef.current, next);
-    if (plan.kind === 'locked') {
+    if (plan.kind === 'locked' || (meetingId && !next && (pendingAccountRef.current || accountUncertainRef.current))) {
       setLinkError('이미 연결된 고객은 해제할 수 없습니다. 다른 고객으로 변경할 수 있습니다.');
       return;
     }
@@ -420,7 +421,7 @@ export function usePostRecording({
       // retry or skip it instead of silently dropping the link.
       const projectFailure = await syncProjects(meetingId);
       if (!isCurrent()) return;
-      if (projectFailure) throw new Error(`${projectFailure} 다시 시도하거나 프로젝트 연결 재시도를 생략해 주세요.`);
+      if (projectFailure) throw new Error(`${projectFailure} 다시 시도해 주세요. 연결 추가는 생략할 수 있지만, 연결 해제는 확인이 필요합니다.`);
       if (submittedNotesRef.current !== undefined) {
         await persistNotes(meetingId, submittedNotesRef.current);
         if (!isCurrent()) return;
