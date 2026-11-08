@@ -90,7 +90,7 @@ export function AccountTreePicker({ accounts, selectedIds, onChange, disabled, l
           <span className="material-symbols-outlined text-base" aria-hidden="true">expand_more</span>
         </button>
         {open && (
-          <div id={panelId} className="absolute left-0 top-full z-40 mt-2 w-80 max-w-[calc(100vw-3rem)] rounded-xl border border-slate-200 bg-white p-3 shadow-xl sm:left-auto sm:right-0 dark:border-white/10 dark:bg-surface-low">
+          <div id={panelId} className="absolute left-0 top-full z-40 mt-2 w-80 max-w-[calc(100vw-3rem)] rounded-xl border border-slate-200 bg-white p-3 shadow-xl dark:border-white/10 dark:bg-surface-lowest">
             <input autoFocus value={search} onChange={event => setSearch(event.target.value)} aria-label="어카운트 검색"
               placeholder="그룹 또는 어카운트 검색"
               className="mb-2 w-full rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-white/10" />
