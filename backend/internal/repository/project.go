@@ -224,13 +224,22 @@ func (r *DynamoDBRepository) ListProjectsForUser(ctx context.Context, userID str
 			projectIDs = append(projectIDs, member.ProjectID)
 		}
 	}
+	// One consistent batch read per 100 projects replaces a GetProject per
+	// project; the index/membership order is kept and missing rows skipped.
+	readable := make([]string, 0, len(projectIDs))
+	for _, projectID := range projectIDs {
+		// An empty legacy reference never names a canonical project row.
+		if projectID != "" {
+			readable = append(readable, projectID)
+		}
+	}
+	rows, err := r.BatchGetProjects(ctx, readable)
+	if err != nil {
+		return nil, err
+	}
 	projects := make([]model.Project, 0, len(projectIDs))
 	for _, projectID := range projectIDs {
-		project, err := r.GetProject(ctx, projectID)
-		if err != nil {
-			return nil, fmt.Errorf("get project %s: %w", projectID, err)
-		}
-		if project != nil {
+		if project := rows[projectID]; project != nil {
 			projects = append(projects, *project)
 		}
 	}

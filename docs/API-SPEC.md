@@ -33,11 +33,31 @@ The connector API consumer (ADR-053) is a service-IAM Lambda invocation,
 not an additional HTTP route. Its top-level `ttobak.connector.invoke.v1` frame
 binds the operation, request ID and exact argument bytes to a signed delegation.
 When `CONNECTOR_SIGNING_KEY_ARN` is configured, the consumer loads that exact
-public key and reads current client/user grants before and after one of the eight
-bounded API read operations. Only the verified in-process principal reaches
+public key and reads current client/user grants before and after one of the
+bounded API read operations (the eight original read families plus the account
+contact list). Only the verified in-process principal reaches
 the existing router; caller headers and nested HTTP bodies cannot create it.
 Response bodies are capped at 14,000 bytes. Empty key configuration denies the
-private consumer. Its only mutation is personal note creation as described below.
+private consumer. Its mutations are personal note creation and account contact
+creation, each with its own atomic executor, as described below.
+
+Delegated contact creation signs `api.accountContacts.create` for `POST
+/api/accounts/{accountId}/contacts` with the body `{contact, idempotencyKey}`;
+`idempotencyKey` must equal the signed request ID and `contact` takes only the
+contact fields above, as strings, without nulls, duplicates or server-owned
+fields. The executor checks direct membership and a current read+write approval,
+then writes the sealed contact and a receipt
+`USER#{userId}/CONNECTOR_MUTATION#{clientId}#{requestId}` in one transaction
+with the policy, approval, account and member checks. The receipt holds only the
+operation, account, contact ID and revision, approval generation, creation time
+and a SHA-256 of the account and exact request body bytes; it has no expiry, so a
+retry with the same key and bytes stays idempotent. Responses are
+`{contactId, replayed?}` (200); 400 `BAD_REQUEST`, 403 `CAPABILITY_DENIED`, 409
+`CONNECTOR_CONFLICT` (same key with different bytes, or a replayed contact that
+changed or disappeared), 503 `CONTACTS_UNAVAILABLE` (no key; nothing written)
+and 503 `CONNECTOR_WRITE_UNCONFIRMED` (outcome unknown; retry the same key and
+bytes). `?replay=1` never creates: it returns an existing receipt or 404
+`RECEIPT_NOT_FOUND`.
 No OAuth issuance or IAM invocation permission is installed by the consumer code.
 
 The private QA companion accepts only the signed `qa.readonlyAsk` operation,
@@ -54,8 +74,9 @@ reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
 dependency before that activation.
 
-The MCP HTTP private transport signs ten bounded API reads,
-`qa.readonlyAsk` and personal note creation. It derives identity and scopes from the verified request,
+The MCP HTTP private transport signs eleven bounded API reads (including the
+account contact list), `qa.readonlyAsk`, personal note creation and account
+contact creation (with `?replay=1` probes for retry recovery). It derives identity and scopes from the verified request,
 checks atomic current grants before signing and before delivery, and invokes the
 configured API/QA Lambda through service IAM. It forwards no bearer token and
 never retries a rejected private request through the legacy HTTP transport.

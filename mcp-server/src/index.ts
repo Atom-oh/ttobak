@@ -1,4 +1,5 @@
 import { accountSectionOptions, accountSectionResult } from './section-reading.js';
+import { ACCOUNT_CONTACT_TOOLS, callAccountContactTool } from './account-contacts.js';
 import { projectSectionOptions, projectSectionResult } from './project-sections.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -50,6 +51,7 @@ export interface ServerOptions {
 const registry: { tools: Tool[] } = {
   tools: [
     ...BILLING_TOOLS,
+    ...ACCOUNT_CONTACT_TOOLS,
     {
       name: 'ttobak_login',
       description:
@@ -640,6 +642,10 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
 
   try {
     switch (name) {
+      case 'ttobak_list_account_contacts':
+      case 'ttobak_create_account_contact':
+      case 'ttobak_import_account_contacts':
+        return await callAccountContactTool(name, args, api);
       case 'ttobak_get_billing_account':
       case 'ttobak_get_billing_dataset':
       case 'ttobak_get_billing_report': {
