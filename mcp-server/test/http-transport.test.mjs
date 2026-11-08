@@ -11,6 +11,9 @@ import { TtobakApi } from '../dist/api.js';
 import { decodeUpload, MAX_HTTP_UPLOAD_BYTES } from '../dist/remote-tools.js';
 import { NOTES_PAGES } from './fixtures/reading-data.mjs';
 import { meetingCatalogPage } from './fixtures/meeting-catalog-data.mjs';
+import { CALENDAR_NAMES, SYNC, QUERY } from './fixtures/calendar-data.mjs';
+import { requiredCapabilities } from '../dist/connector-contract.js';
+import { httpOperation, privateApiTransport } from '../dist/connector-private-api.js';
 
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { ...pair.publicKey.export({ format: 'jwk' }), kid: 'test-key', alg: 'RS256', use: 'sig' };
@@ -137,6 +140,55 @@ const parsed = result => {
   assert.notEqual(result.isError, true, result.content?.[0]?.text);
   return JSON.parse(result.content[0].text);
 };
+
+for (const privateBridge of [false, true]) {
+  test(`calendar discovery and invocation stay unavailable over ${privateBridge ? 'private' : 'generic'} HTTP`, async context => {
+    const config = httpConfig({ ...baseEnv, TTOBAK_CONNECTOR_PRIVATE_BRIDGE: String(privateBridge),
+      CONNECTOR_READ_CLIENT_ID: 'readclient', CONNECTOR_WRITE_CLIENT_ID: 'writeclient' });
+    const invoked = [];
+    const serverFixture = await fixture(context, api => {
+      for (const method of ['syncCalendarEvents', 'listCalendarEvents', 'calendarSyncStatus']) {
+        api[method] = async () => { invoked.push(method); throw new Error('Calendar HTTP invocation'); };
+      }
+    }, config);
+    const token = privateBridge ? jwt({ client_id: 'readclient',
+      scope: 'openid email profile https://ttobak.example.com/api/mcp/read' }) : jwt();
+    const client = await serverFixture.connect(token);
+    const tools = (await client.listTools()).tools;
+    for (const [index, name] of CALENDAR_NAMES.entries()) {
+      assert.equal(tools.some(tool => tool.name === name), false);
+      const result = await client.callTool({ name, arguments: index === 0 ? SYNC : index === 1 ? QUERY : {} });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /Unknown or unavailable tool/);
+    }
+    assert.deepEqual(invoked, []);
+  });
+}
+
+test('calendar inventory remains nondelegable and private transport cannot sign or resolve approvals', async () => {
+  const touched = [];
+  const transport = privateApiTransport({
+    subject: 'alice', clientId: 'readclient', audience: baseEnv.TTOBAK_MCP_PUBLIC_URL,
+    scopes: ['openid', 'email', 'profile', baseEnv.TTOBAK_MCP_PUBLIC_URL + '/read'],
+    expiresAt: 1800004000,
+  }, 'synthetic-key', 'arn:aws:lambda:ap-northeast-2:123456789012:function:api',
+  'arn:aws:lambda:ap-northeast-2:123456789012:function:qa', {
+    kms: { send: async () => { touched.push('kms'); throw new Error('Unexpected signing'); } },
+    lambda: { send: async () => { touched.push('lambda'); throw new Error('Unexpected invocation'); } },
+    resolve: async () => { touched.push('approval'); throw new Error('Unexpected approval lookup'); },
+    now: () => 1800000000,
+  });
+  for (const [method, path, operation] of [
+    ['POST', `/api/calendar/sources/${SYNC.sourceId}/sync`, 'api.calendar.sync'],
+    ['GET', '/api/calendar/events', 'api.calendar.listEvents'],
+    ['GET', '/api/calendar/sources', 'api.calendar.listSources'],
+  ]) {
+    assert.equal(httpOperation(method, path), operation);
+    assert.throws(() => requiredCapabilities(operation, 'ttobak-api-bridge'), /CAPABILITY_DENIED/);
+    await assert.rejects(transport({ method, path, body: null, maxResponseBytes: 14000 }), /CAPABILITY_DENIED/);
+  }
+  assert.deepEqual(touched, []);
+});
 
 test('HTTP SDK discovery, instructions and concurrent clients preserve caller isolation', async t => {
   const f = await fixture(t);
