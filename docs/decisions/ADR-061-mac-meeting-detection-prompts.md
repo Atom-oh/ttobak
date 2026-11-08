@@ -79,9 +79,10 @@ without a user confirmation.
   `Devices`, input scope), else the system default. This keeps multi-microphone
   and clamshell setups aligned with what Zoom hears. `switch_recording_input`
   changes the microphone during a recording: the tap, WAV and worker continue
-  while only the aggregate is rebuilt (a sub-second gap). A device that cannot
-  run at the recording's sample rate is refused, and a failed start restores
-  the previous device.
+  while only the aggregate is rebuilt; the capture gap needs native measurement.
+  A device that cannot run at the recording's sample rate is refused. A failed
+  start attempts to restore the previous device. If restoration also fails,
+  capture stops and the already-recorded data must be finalized.
 - The recording follows Zoom's own mute, as Notion's meeting notes do
   (observed in Notion's shipped `mac_utils.node`: an Accessibility observer of
   Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
@@ -90,8 +91,9 @@ without a user confirmation.
   at zero gain while Zoom shows the user muted. Once a recording has followed
   Zoom, a confirmed end (Zoom quit, or neither the `zm.meeting.window.main`
   window nor an audio item remains) silences the microphone at once, and an
-  unreadable stretch over 3 s does too: Zoom no longer hears the user. A
-  recording that never saw a Zoom state records the microphone as before.
+  unreadable stretch over 3 s does too. Unreadable inspection does not establish
+  whether the meeting ended or what Zoom itself captures; the UI preserves this
+  uncertainty. A recording that never saw a Zoom state records the microphone as before.
   The same confirmed end lets detection end the Zoom meeting without the 20 s
   audio grace.
 - Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads

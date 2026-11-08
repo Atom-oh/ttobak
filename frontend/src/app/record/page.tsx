@@ -91,9 +91,11 @@ function RecordPageInner() {
         setNativeInput(input);
         setMicSwitch({ busy: false, error: null });
       })
-      .catch((err: unknown) => {
-        const message = typeof err === 'string' ? err : err instanceof Error ? err.message : '마이크를 바꾸지 못했습니다.';
-        setMicSwitch({ busy: false, error: message });
+      .catch(() => {
+        setMicSwitch({
+          busy: false,
+          error: '마이크를 바꾸지 못했습니다. 장치 연결을 확인하고, 소리가 들어오지 않으면 녹음을 종료해 저장한 뒤 다시 시작해 주세요.',
+        });
       });
   };
   useEffect(() => {
@@ -1387,15 +1389,19 @@ function RecordPageInner() {
         {audioSource === 'system' && isNativeRecording && (
           <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300 mb-4">
             <span className="material-symbols-outlined text-base animate-pulse">speaker</span>
-            <span>
+            <span role="status" aria-live="polite" aria-atomic="true" className="min-w-0 break-words">
               시스템 오디오 캡처 중 — 실시간 자막은 연결되면 표시됩니다. 녹음 종료 후 자동으로 전사·요약됩니다.
               {nativeInput && (
                 <span className="block text-xs opacity-80">
                   마이크: {nativeInput.name}
                   {nativeInput.reason === 'meeting' && nativeInput.app ? ` (${nativeInput.app}와 같은 마이크)` : ''}
-                  {nativeMicMuted && (nativeMicMuted.reason === 'meeting_ended'
-                    ? ` · ${nativeMicMuted.app} 회의가 끝나 내 목소리는 녹음하지 않습니다`
-                    : ` · ${nativeMicMuted.app}에서 음소거 중이라 내 목소리는 녹음하지 않습니다`)}
+                </span>
+              )}
+              {nativeMicMuted && (
+                <span className="block text-xl leading-relaxed">
+                  {nativeMicMuted.reason === 'meeting_ended'
+                    ? `${nativeMicMuted.app} 상태를 확인할 수 없거나 회의가 끝나 내 목소리는 녹음하지 않습니다.`
+                    : `${nativeMicMuted.app}에서 음소거 중이라 내 목소리는 녹음하지 않습니다.`}
                 </span>
               )}
             </span>
@@ -1403,8 +1409,16 @@ function RecordPageInner() {
         )}
         {audioSource === 'system' && isNativeRecording && (
           <div className="mb-4 flex flex-col gap-1">
-            <NativeMicSelector value={nativeInputUid} onChange={switchNativeMic} disabled={micSwitch.busy} />
-            {micSwitch.error && <p className="text-xs text-red-600 dark:text-red-400">{micSwitch.error}</p>}
+            <NativeMicSelector value={nativeInputUid} onChange={switchNativeMic} disabled={micSwitch.busy}
+              errorId={micSwitch.error ? 'native-mic-switch-error' : undefined} />
+            <p role="status" aria-live="polite" className="text-xl leading-relaxed">
+              {micSwitch.busy ? '마이크를 바꾸는 중입니다.' : ''}
+            </p>
+            {micSwitch.error && (
+              <p id="native-mic-switch-error" role="alert" className="text-xl leading-relaxed text-red-700 dark:text-red-400">
+                {micSwitch.error}
+              </p>
+            )}
           </div>
         )}
 
