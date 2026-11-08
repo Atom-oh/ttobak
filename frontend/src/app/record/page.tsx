@@ -1044,7 +1044,8 @@ function RecordPageInner() {
       }
 
       setUploadProgress('전사 처리 시작...');
-      router.push(`/meeting/${meetingId}`);
+      // Processing continues on the server; the meeting list shows its status.
+      router.push(`/?uploaded=${encodeURIComponent(meetingId)}`);
     } catch (err) {
       console.error('Audio upload failed:', err);
       setUploadProgress(null);
