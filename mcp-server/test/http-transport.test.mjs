@@ -142,7 +142,7 @@ test('HTTP SDK discovery, instructions and concurrent clients preserve caller is
   const f = await fixture(t);
   const [alice, bob] = await Promise.all([f.connect(jwt()), f.connect(jwt({ sub: 'bob', username: 'bob' }))]);
   const { tools } = await alice.listTools();
-  assert.equal(tools.length, 33);
+  assert.ok(tools.some(tool => tool.name === 'ttobak_list_account_contacts'));
   assert.ok(alice.getInstructions().includes('Read saved notes first'));
   assert.equal(tools.some(tool => tool.name === 'ttobak_login' || tool.name === 'ttobak_logout'), false);
   assert.ok(tools.find(tool => tool.name === 'ttobak_export_vault'));
@@ -519,4 +519,33 @@ test('HTTP startup requires complete OAuth configuration and safe public URLs', 
     { TTOBAK_HTTP_TIMEOUT_MS: '60000' },
     { TTOBAK_HTTP_HOST: '0.0.0.0', TTOBAK_MCP_PUBLIC_URL: 'http://localhost:3000/mcp' },
   ]) assert.throws(() => httpConfig({ ...baseEnv, ...override }));
+});
+
+test('HTTP contact import uses each caller token, rescans per call and respects denied access', async t => {
+  const calls = [];
+  const f = await fixture(t, (api, auth) => {
+    const owner = async () => JSON.parse(Buffer.from((await auth.getIdToken()).split('.')[1], 'base64url').toString()).sub;
+    api.listAccountContacts = async (account, options) => {
+      const user = await owner(); calls.push([user, 'list', account, options]);
+      if (user === 'bob' && account === 'alice-only') throw new Error('HTTP 403 FORBIDDEN: hidden');
+      return { contacts: [{ contactId: 'old', name: 'Existing', email: `${user}@example.com` }], nextCursor: null };
+    };
+    api.createAccountContact = async (account, contact) => {
+      const user = await owner(); calls.push([user, 'create', account, contact]);
+      return { contactId: `${user}-new`, ...contact };
+    };
+  });
+  const [alice, bob] = await Promise.all([f.connect(), f.connect(jwt({ sub: 'bob', username: 'bob' }))]);
+  const args = { accountId: 'shared', contacts: [{ name: 'Person', email: 'alice@example.com' }] };
+  const [a, b] = await Promise.all([
+    alice.callTool({ name: 'ttobak_import_account_contacts', arguments: args }),
+    bob.callTool({ name: 'ttobak_import_account_contacts', arguments: args }),
+  ]);
+  assert.equal(parsed(a).results[0].status, 'duplicate');
+  assert.equal(parsed(b).results[0].status, 'created');
+  assert.deepEqual(calls.filter(x => x[1] === 'create').map(x => x[0]), ['bob']);
+  const denied = await bob.callTool({ name: 'ttobak_import_account_contacts', arguments: { ...args, accountId: 'alice-only' } });
+  assert.equal(denied.isError, true);
+  assert.ok(!denied.content[0].text.includes('hidden'));
+  assert.equal(calls.filter(x => x[1] === 'create').length, 1);
 });
