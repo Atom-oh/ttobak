@@ -1,5 +1,6 @@
 'use client';
 
+import { dismissDialogs } from '@/lib/dialog';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -69,6 +70,8 @@ export function NativeControlBridge() {
         });
         return;
       }
+      // A dialog opened on the current screen must not survive this move.
+      dismissDialogs();
       router.push('/record');
     }, () => setListening(true));
   }, [router]);
