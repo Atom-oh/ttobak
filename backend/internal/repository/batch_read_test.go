@@ -50,14 +50,9 @@ func (w *batchWire) repo(t *testing.T) *DynamoDBRepository {
 		w.consistent = append(w.consistent, request["ConsistentRead"] == true)
 		projection, _ := request["ProjectionExpression"].(string)
 		if names, ok := request["ExpressionAttributeNames"].(map[string]any); ok {
-			// Replace whole aliases so #1 never rewrites part of #13.
-			parts := strings.Split(projection, ", ")
-			for i, part := range parts {
-				if name, ok := names[part].(string); ok {
-					parts[i] = name
-				}
+			for alias, name := range names {
+				projection = strings.ReplaceAll(projection, alias, name.(string))
 			}
-			projection = strings.Join(parts, ", ")
 		}
 		w.projections = append(w.projections, projection)
 		w.mu.Unlock()

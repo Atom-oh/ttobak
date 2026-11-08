@@ -186,7 +186,7 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 		if len(keys) == 0 {
 			continue
 		}
-		meetings, canonical, err := s.loadListMeetings(ctx, keys)
+		meetings, err := s.repo.BatchGetMeetings(ctx, keys)
 		if err != nil {
 			return nil, fmt.Errorf("load team meetings: %w", err)
 		}
@@ -196,7 +196,7 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 				byID[meeting.MeetingID] = meeting
 			}
 		}
-		pre := s.prefetchTeamPageReads(ctx, keys, byID, canonical, listed, userID, id)
+		pre := s.prefetchTeamPageReads(ctx, keys, byID, listed, userID, id)
 		for k, key := range keys {
 			meeting := byID[key.MeetingID]
 			if meeting != nil {
