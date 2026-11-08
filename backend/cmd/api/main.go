@@ -28,6 +28,7 @@ import (
 	"github.com/ttobak/backend/internal/handler"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/sealing"
 	"github.com/ttobak/backend/internal/service"
 	"github.com/ttobak/backend/internal/telemetry"
 )
@@ -80,6 +81,11 @@ func init() {
 
 	// Initialize repository with S3 support for large transcript storage
 	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
+	// Account contacts are third-party personal data: envelope-encrypted with
+	// the KMS key, and unavailable (503) when it is not configured (ADR-063).
+	if sealer := sealing.NewEnvelope(kmsClient, os.Getenv("KMS_KEY_ID")); sealer != nil {
+		repo.SetRecordSealer(sealer)
+	}
 	connectorGrants := repo.ConnectorGrantResolver(os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"),
 		"https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)
 
@@ -144,6 +150,7 @@ func init() {
 	healthHandler := handler.NewHealthHandler()
 	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
 	accountHandler := handler.NewAccountHandler(accountService, uploadService)
+	accountContactsHandler := handler.NewAccountContactsHandler(service.NewAccountContactsService(repo))
 	accountReadingHandler := handler.NewAccountReadingHandler(service.NewAccountReadingService(repo.MetadataView()))
 	meetingCatalogHandler := handler.NewMeetingCatalogHandler(service.NewMeetingCatalogService(repo.MetadataView()))
 	vaultReadingHandler := handler.NewVaultReadingHandler(service.NewVaultReadingService(repo.MetadataView()))
@@ -292,6 +299,11 @@ func init() {
 		r.Post("/api/accounts/{accountId}/owner-invitation", accountHandler.ResendOwnerInvitation)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Get("/api/accounts/{accountId}/reading", accountReadingHandler.Get)
+		r.Get("/api/accounts/{accountId}/contacts", accountContactsHandler.List)
+		r.Post("/api/accounts/{accountId}/contacts", accountContactsHandler.Create)
+		r.Put("/api/accounts/{accountId}/contacts/{contactId}", accountContactsHandler.Update)
+		r.Delete("/api/accounts/{accountId}/contacts/{contactId}", accountContactsHandler.Delete)
+		r.Get("/api/accounts/{accountId}/speaker-team", accountContactsHandler.SpeakerTeam)
 		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
 		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)
@@ -509,6 +521,8 @@ func init() {
 			Verify: lazyConnectorVerifier(kmsClient, keyARN, connectorGrants),
 			Router: r,
 			Mutate: handler.NewConnectorNoteHandler(service.NewConnectorNoteService(repo,
+				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
+			ContactMutate: handler.NewConnectorContactHandler(service.NewConnectorContactService(repo,
 				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
 		}
 	}
