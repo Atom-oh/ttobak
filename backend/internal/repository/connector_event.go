@@ -24,6 +24,10 @@ type ConnectorEventWrite struct {
 	Account, ArgumentsHash string
 	Event                  model.AccountEvent
 	ReplayOnly             bool
+	// BeforeCreate runs only when no receipt exists and a new event will be
+	// written. State-dependent checks (attendee contacts) belong here so a
+	// replay of a committed event is never refused by later edits elsewhere.
+	BeforeCreate func(context.Context) error
 }
 
 type ConnectorEventReceipt struct {
@@ -120,6 +124,11 @@ func (r *DynamoDBRepository) CreateConnectorEvent(ctx context.Context, in Connec
 			return empty, connectorWriteError(err)
 		}
 		return empty, ErrConnectorReceiptMissing
+	}
+	if in.BeforeCreate != nil {
+		if err := in.BeforeCreate(ctx); err != nil {
+			return empty, err
+		}
 	}
 	eventSK := EventSortKey(e.StartAt, e.EventID)
 	// The event row is sealed before any write; without a key nothing is written.

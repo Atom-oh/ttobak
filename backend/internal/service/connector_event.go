@@ -35,6 +35,10 @@ func NewConnectorEventService(repo connectorEventRepository, audience, issuer st
 	return &ConnectorEventService{repo: repo, audience: audience, issuer: issuer, now: time.Now}
 }
 
+// maxConnectorEventJSONBytes keeps a connector-created event readable through
+// the bridge's 14,000-byte response cap.
+const maxConnectorEventJSONBytes = 12000
+
 var connectorEventFields = []string{"title", "startAt", "endAt", "allDay", "location", "attendees", "notes"}
 
 // decodeConnectorEvent rejects duplicate keys, nulls, unknown or server-owned
@@ -130,25 +134,32 @@ func (s *ConnectorEventService) Create(ctx context.Context, p connector.Principa
 	if !view.Enabled || !slices.Contains(view.Maximum, "read") || !slices.Contains(view.Maximum, "write") || a == nil || a.Blocked || a.Revoked || a.Generation != p.ApprovalGeneration() || a.ExpiresAt < p.ExpiresAt() || !slices.Contains(a.Capabilities, "read") || !slices.Contains(a.Capabilities, "write") {
 		return empty, ErrForbidden
 	}
-	// Contact references are resolved only after membership and approval.
-	if len(refs) > 0 {
-		found, err := s.repo.ExistingAccountContactIDs(ctx, account, refs)
-		if err != nil {
-			return empty, err
-		}
-		for _, id := range refs {
-			if !found[id] {
-				return empty, ErrInvalidInput
-			}
-		}
-	}
 	now := s.now().UTC().Format(time.RFC3339)
 	event.EventID, event.Revision = uuid.NewString(), uuid.NewString()
 	event.CreatedBy, event.CreatedAt, event.UpdatedAt = p.UserID(), now, now
-	if encoded, err := json.Marshal(event); err != nil || len(encoded) > maxEventJSONBytes {
+	// Connector-created events must fit a bridge read (14,000 bytes) back.
+	if encoded, err := json.Marshal(event); err != nil || len(encoded) > maxConnectorEventJSONBytes {
 		return empty, ErrInvalidInput
+	}
+	// Attendee contacts are resolved after membership and approval, and only
+	// for a fresh create: a replay returns its receipt even if a referenced
+	// contact was deleted since.
+	beforeCreate := func(ctx context.Context) error {
+		if len(refs) == 0 {
+			return nil
+		}
+		found, err := s.repo.ExistingAccountContactIDs(ctx, account, refs)
+		if err != nil {
+			return err
+		}
+		for _, id := range refs {
+			if !found[id] {
+				return ErrInvalidInput
+			}
+		}
+		return nil
 	}
 	bound := append(append([]byte(account), 0), raw...)
 	digest := sha256.Sum256(bound)
-	return s.repo.CreateConnectorEvent(ctx, repository.ConnectorEventWrite{Principal: p, Audience: s.audience, Issuer: s.issuer, PolicyGeneration: view.PolicyGeneration, Account: account, ArgumentsHash: hex.EncodeToString(digest[:]), Event: event, ReplayOnly: replayOnly})
+	return s.repo.CreateConnectorEvent(ctx, repository.ConnectorEventWrite{Principal: p, Audience: s.audience, Issuer: s.issuer, PolicyGeneration: view.PolicyGeneration, Account: account, ArgumentsHash: hex.EncodeToString(digest[:]), Event: event, ReplayOnly: replayOnly, BeforeCreate: beforeCreate})
 }

@@ -723,9 +723,13 @@ are `{eventId, replayed?}` (200); 400 `BAD_REQUEST`, 403 `CAPABILITY_DENIED`,
 404 `RECEIPT_NOT_FOUND` (replay probe only), 409 `CONNECTOR_CONFLICT` (same key
 with different bytes, or the replayed event moved, changed or disappeared), 503
 `EVENTS_UNAVAILABLE` (no key; nothing written) and 503
-`CONNECTOR_WRITE_UNCONFIRMED` (retry the same key and bytes). Attendee contact
-IDs are resolved only after membership and approval checks. Event list and get
-are available bridge reads.
+`CONNECTOR_WRITE_UNCONFIRMED` (retry the same key and bytes). A membership,
+policy or approval change between the pre-checks and the transaction also
+surfaces as 409. Attendee contact IDs are resolved only after membership and
+approval checks and only for a fresh create, so a replay returns its receipt
+even if a referenced contact was deleted since. Connector-created events are
+limited to 12,000 serialized bytes so they stay readable through the bridge's
+14,000-byte response cap. Event list and get are available bridge reads.
 Events have no TTL and remain until a direct member deletes them.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:

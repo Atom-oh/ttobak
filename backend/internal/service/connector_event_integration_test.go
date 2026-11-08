@@ -247,3 +247,40 @@ func TestConnectorEventContactReferencesNeedMembershipFirst(t *testing.T) {
 		t.Fatalf("known contact: %+v", out)
 	}
 }
+
+func TestConnectorEventReplaySurvivesADeletedAttendeeContact(t *testing.T) {
+	const contact = "11111111-2222-4333-8444-555555555555"
+	body := strings.Replace(eventBody, `{"name":"홍길동"`, `{"contactId":"`+contact+`","name":"홍길동"`, 1)
+	w := &eventWire{noteWire: newNoteWire(t), account: true, member: true, contacts: map[string]bool{contact: true}}
+	bridge, sign := eventBridge(t, w)
+	call := func(path string) connector.InvokeResult {
+		return bridge.Invoke(context.Background(), sign("POST", path, body, "api.accountEvents.create"))
+	}
+	if out := call("/api/accounts/acct/events"); out.StatusCode != 200 || w.writes != 1 {
+		t.Fatalf("create: %+v", out)
+	}
+	id := w.event["eventId"].(map[string]any)["S"].(string)
+	delete(w.contacts, contact) // a member deletes the referenced contact
+	gets := w.batchGets
+	for _, path := range []string{"/api/accounts/acct/events", "/api/accounts/acct/events?replay=1"} {
+		if out := call(path); out.StatusCode != 200 || !strings.Contains(out.Body, id) || w.writes != 1 {
+			t.Fatalf("%s after the contact was deleted: %+v", path, out)
+		}
+	}
+	if w.batchGets != gets {
+		t.Fatal("a replay must not re-check attendee contacts")
+	}
+}
+
+func TestConnectorEventsStayReadableThroughTheBridge(t *testing.T) {
+	w := &eventWire{noteWire: newNoteWire(t), account: true, member: true}
+	bridge, sign := eventBridge(t, w)
+	big := strings.Replace(eventBody, `"location":"본사"`, `"location":"본사","notes":"`+strings.Repeat("x", 8000)+`"`, 1)
+	big = strings.Replace(big, `"title":"고객 리뷰"`, `"title":"`+strings.Repeat("t", 250)+`"`, 1)
+	attendees := strings.Repeat(`{"name":"`+strings.Repeat("n", 200)+`"},`, 20)
+	big = strings.Replace(big, `"attendees":[`, `"attendees":[`+attendees, 1)
+	out := bridge.Invoke(context.Background(), sign("POST", "/api/accounts/acct/events", big, "api.accountEvents.create"))
+	if out.StatusCode != 400 || w.writes != 0 {
+		t.Fatalf("an event larger than a bridge read was created: %d writes=%d", out.StatusCode, w.writes)
+	}
+}
