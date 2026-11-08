@@ -72,7 +72,8 @@ Gateway payload 1.0. A configured exact KMS signing-key ARN enables a lazy,
 bounded public-key lookup and local signature verification; empty configuration
 keeps the private consumer unavailable. The bridge binds operation, exact argument
 bytes and current grants before calling only the bounded API read families (the
-original eight plus the account contact list, 2026-11-08),
+original eight plus the account contact list and account event list/get,
+2026-11-08),
 then verifies again before releasing at most 14,000 body bytes. The router accepts
 only its verifier-created in-process principal; no HTTP header or nested request
 body selects this path. Existing services still check resource ownership and
@@ -80,7 +81,9 @@ source revisions. The API's dedicated HTTP read boundary now receives the same
 atomic grant resolver. Its private mutations are the personal-note executor below
 and, since 2026-11-08, account contact creation: a separate executor with direct
 membership, current approval and an arguments-bound receipt in one transaction,
-storing contacts sealed under ADR-063 (contract in `docs/API-SPEC.md`).
+storing contacts sealed under ADR-063 (contract in `docs/API-SPEC.md`). Account
+event creation uses an equivalent executor that also writes the event's
+reference row in the same transaction.
 
 The private QA consumer now accepts only `qa.readonlyAsk`, with a question and
 optional meeting ID. It verifies the same signed delegation against the QA
