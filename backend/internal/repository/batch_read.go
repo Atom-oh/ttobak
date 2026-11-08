@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/fanout"
@@ -19,28 +20,38 @@ import (
 const (
 	batchReadChunk       = 100
 	batchReadConcurrency = 4
-	batchReadAttempts    = 4
-	batchReadKeyLimit    = 10000
+	// batchReadStalls bounds responses per chunk that drain no keys. A
+	// partial response that drains some keys (DynamoDB's 16 MB response or
+	// per-partition limits) is progress and does not count; every chunk
+	// therefore finishes within 100 progressing responses plus the stalls.
+	batchReadStalls   = 4
+	batchReadKeyLimit = 10000
 )
 
-// batchReadBackoff is the base delay before retrying UnprocessedKeys.
-var batchReadBackoff = 25 * time.Millisecond
+// batchReadBackoff is the base delay before retrying UnprocessedKeys, and
+// batchReadDeadline caps one batch read call however its chunks progress.
+var (
+	batchReadBackoff  = 25 * time.Millisecond
+	batchReadDeadline = 10 * time.Second
+)
 
 type batchRowKey struct{ PK, SK string }
 
-// batchGetConsistent reads every distinct key with ConsistentRead. Missing rows
-// are absent from the result. Persistent UnprocessedKeys, a response outside
-// the requested keys, or a duplicate response fail the whole read: a partial
-// result is never reported as a set of missing rows.
-func (r *DynamoDBRepository) batchGetConsistent(ctx context.Context, keys []batchRowKey) (map[batchRowKey]map[string]types.AttributeValue, error) {
+// batchGetConsistent reads every distinct key with ConsistentRead and hands
+// each returned row to decode exactly once, so raw items are dropped as they
+// arrive. Missing rows are never passed to decode. Persistent UnprocessedKeys,
+// the call deadline, a response outside the requested keys, a duplicate
+// response, or a decode error fail the whole read: a partial result is never
+// reported as a set of missing rows.
+func (r *DynamoDBRepository) batchGetConsistent(ctx context.Context, keys []batchRowKey, projection *expression.Expression, decode func(batchRowKey, map[string]types.AttributeValue) error) error {
 	if len(keys) > batchReadKeyLimit {
-		return nil, fmt.Errorf("batch read selection exceeds limit")
+		return fmt.Errorf("batch read selection exceeds limit")
 	}
 	requested := make(map[batchRowKey]bool, len(keys))
 	pending := make([]map[string]types.AttributeValue, 0, len(keys))
 	for _, key := range keys {
 		if key.PK == "" || key.SK == "" {
-			return nil, fmt.Errorf("invalid batch read key")
+			return fmt.Errorf("invalid batch read key")
 		}
 		if requested[key] {
 			continue
@@ -51,8 +62,13 @@ func (r *DynamoDBRepository) batchGetConsistent(ctx context.Context, keys []batc
 			"SK": &types.AttributeValueMemberS{Value: key.SK},
 		})
 	}
-	rows := make(map[batchRowKey]map[string]types.AttributeValue, len(pending))
+	if len(pending) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, batchReadDeadline)
+	defer cancel()
 	var mu sync.Mutex
+	received := make(map[batchRowKey]bool, len(pending))
 	accept := func(row map[string]types.AttributeValue) error {
 		pk, pkOK := row["PK"].(*types.AttributeValueMemberS)
 		sk, skOK := row["SK"].(*types.AttributeValueMemberS)
@@ -62,18 +78,24 @@ func (r *DynamoDBRepository) batchGetConsistent(ctx context.Context, keys []batc
 		key := batchRowKey{PK: pk.Value, SK: sk.Value}
 		mu.Lock()
 		defer mu.Unlock()
-		if !requested[key] || rows[key] != nil {
+		if !requested[key] || received[key] {
 			return fmt.Errorf("unexpected batch read response")
 		}
-		rows[key] = row
-		return nil
+		received[key] = true
+		return decode(key, row)
+	}
+	request := func(chunk []map[string]types.AttributeValue) types.KeysAndAttributes {
+		batch := types.KeysAndAttributes{Keys: chunk, ConsistentRead: aws.Bool(true)}
+		if projection != nil {
+			batch.ProjectionExpression = projection.Projection()
+			batch.ExpressionAttributeNames = projection.Names()
+		}
+		return batch
 	}
 	readChunk := func(ctx context.Context, chunk []map[string]types.AttributeValue) error {
-		for attempt := 1; ; attempt++ {
+		for stalls := 0; ; {
 			out, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
-				RequestItems: map[string]types.KeysAndAttributes{
-					r.tableName: {Keys: chunk, ConsistentRead: aws.Bool(true)},
-				},
+				RequestItems: map[string]types.KeysAndAttributes{r.tableName: request(chunk)},
 			})
 			if err != nil {
 				return fmt.Errorf("batch get rows: %w", err)
@@ -83,18 +105,21 @@ func (r *DynamoDBRepository) batchGetConsistent(ctx context.Context, keys []batc
 					return err
 				}
 			}
-			chunk = out.UnprocessedKeys[r.tableName].Keys
-			if len(chunk) == 0 {
+			next := out.UnprocessedKeys[r.tableName].Keys
+			if len(next) == 0 {
 				return nil
 			}
-			if attempt >= batchReadAttempts {
-				return fmt.Errorf("batch get rows: unprocessed keys remain after %d attempts", attempt)
+			if len(next) >= len(chunk) {
+				if stalls++; stalls >= batchReadStalls {
+					return fmt.Errorf("batch get rows: unprocessed keys remain after %d stalled responses", stalls)
+				}
 			}
-			timer := time.NewTimer(time.Duration(attempt) * batchReadBackoff)
+			chunk = next
+			timer := time.NewTimer(time.Duration(stalls+1) * batchReadBackoff)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return ctx.Err()
+				return fmt.Errorf("batch get rows: %w", ctx.Err())
 			case <-timer.C:
 			}
 		}
@@ -106,9 +131,9 @@ func (r *DynamoDBRepository) batchGetConsistent(ctx context.Context, keys []batc
 		return errs[c]
 	})
 	if stop < chunks {
-		return nil, errs[stop]
+		return errs[stop]
 	}
-	return rows, nil
+	return nil
 }
 
 // AccountRowKey selects an account META row (UserID empty) or the exact
@@ -127,51 +152,67 @@ type AccountRows struct {
 // the single-item primitives do not make either.
 func (r *DynamoDBRepository) BatchGetAccountRows(ctx context.Context, keys []AccountRowKey) (*AccountRows, error) {
 	rowKeys := make([]batchRowKey, 0, len(keys))
+	members := map[batchRowKey]AccountRowKey{}
 	for _, key := range keys {
 		if key.AccountID == "" {
 			return nil, fmt.Errorf("invalid account row key")
 		}
-		sk := model.SKAccountMeta
+		row := batchRowKey{PK: model.PrefixAccount + key.AccountID, SK: model.SKAccountMeta}
 		if key.UserID != "" {
-			sk = model.PrefixMember + key.UserID
+			row.SK = model.PrefixMember + key.UserID
+			members[row] = key
 		}
-		rowKeys = append(rowKeys, batchRowKey{PK: model.PrefixAccount + key.AccountID, SK: sk})
-	}
-	rows, err := r.batchGetConsistent(ctx, rowKeys)
-	if err != nil {
-		return nil, fmt.Errorf("batch get account rows: %w", err)
+		rowKeys = append(rowKeys, row)
 	}
 	out := &AccountRows{Accounts: map[string]*model.Account{}, Members: map[AccountRowKey]*model.AccountMember{}}
-	for _, key := range keys {
-		pk := model.PrefixAccount + key.AccountID
-		if key.UserID == "" {
-			item := rows[batchRowKey{PK: pk, SK: model.SKAccountMeta}]
-			if item == nil || out.Accounts[key.AccountID] != nil {
-				continue
+	err := r.batchGetConsistent(ctx, rowKeys, nil, func(row batchRowKey, item map[string]types.AttributeValue) error {
+		if key, ok := members[row]; ok {
+			var member model.AccountMember
+			if err := attributevalue.UnmarshalMap(item, &member); err != nil {
+				return fmt.Errorf("unmarshal member: %w", err)
 			}
-			var account model.Account
-			if err := attributevalue.UnmarshalMap(item, &account); err != nil {
-				return nil, fmt.Errorf("unmarshal account: %w", err)
-			}
-			out.Accounts[key.AccountID] = &account
-			continue
+			out.Members[key] = &member
+			return nil
 		}
-		item := rows[batchRowKey{PK: pk, SK: model.PrefixMember + key.UserID}]
-		if item == nil || out.Members[key] != nil {
-			continue
+		var account model.Account
+		if err := attributevalue.UnmarshalMap(item, &account); err != nil {
+			return fmt.Errorf("unmarshal account: %w", err)
 		}
-		var member model.AccountMember
-		if err := attributevalue.UnmarshalMap(item, &member); err != nil {
-			return nil, fmt.Errorf("unmarshal member: %w", err)
-		}
-		out.Members[key] = &member
+		out.Accounts[row.PK[len(model.PrefixAccount):]] = &account
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("batch get account rows: %w", err)
 	}
 	return out, nil
 }
 
+// ProjectListRowFields are the only attributes BatchGetProjectListRows reads:
+// row identity, the ProjectSummary fields and the canonical account links.
+// Description and other unbounded fields are never transferred.
+var ProjectListRowFields = []string{"PK", "SK", "entityType", "projectId", "name", "stage", "sfdcOpptyId", "ownerUserId", "accountIds"}
+
 // BatchGetProjects is the batched equivalent of GetProject for canonical
 // PROJECT#/CONFIG rows. Missing projects are absent from the result.
 func (r *DynamoDBRepository) BatchGetProjects(ctx context.Context, projectIDs []string) (map[string]*model.Project, error) {
+	return r.batchGetProjects(ctx, projectIDs, nil)
+}
+
+// BatchGetProjectListRows reads only ProjectListRowFields of canonical project
+// rows; the returned records are partial and must not be written back.
+func (r *DynamoDBRepository) BatchGetProjectListRows(ctx context.Context, projectIDs []string) (map[string]*model.Project, error) {
+	names := make([]expression.NameBuilder, 0, len(ProjectListRowFields))
+	for _, name := range ProjectListRowFields {
+		names = append(names, expression.Name(name))
+	}
+	projection, err := expression.NewBuilder().WithProjection(expression.NamesList(names[0], names[1:]...)).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build project list projection: %w", err)
+	}
+	return r.batchGetProjects(ctx, projectIDs, &projection)
+}
+
+func (r *DynamoDBRepository) batchGetProjects(ctx context.Context, projectIDs []string, projection *expression.Expression) (map[string]*model.Project, error) {
 	rowKeys := make([]batchRowKey, 0, len(projectIDs))
 	for _, id := range projectIDs {
 		if id == "" {
@@ -179,21 +220,17 @@ func (r *DynamoDBRepository) BatchGetProjects(ctx context.Context, projectIDs []
 		}
 		rowKeys = append(rowKeys, batchRowKey{PK: model.PrefixProject + id, SK: model.SKProjectConfig})
 	}
-	rows, err := r.batchGetConsistent(ctx, rowKeys)
-	if err != nil {
-		return nil, fmt.Errorf("batch get projects: %w", err)
-	}
-	out := make(map[string]*model.Project, len(rows))
-	for _, id := range projectIDs {
-		item := rows[batchRowKey{PK: model.PrefixProject + id, SK: model.SKProjectConfig}]
-		if item == nil || out[id] != nil {
-			continue
-		}
+	out := make(map[string]*model.Project, len(rowKeys))
+	err := r.batchGetConsistent(ctx, rowKeys, projection, func(row batchRowKey, item map[string]types.AttributeValue) error {
 		var project model.Project
 		if err := attributevalue.UnmarshalMap(item, &project); err != nil {
-			return nil, fmt.Errorf("unmarshal project: %w", err)
+			return fmt.Errorf("unmarshal project: %w", err)
 		}
-		out[id] = &project
+		out[row.PK[len(model.PrefixProject):]] = &project
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("batch get projects: %w", err)
 	}
 	return out, nil
 }

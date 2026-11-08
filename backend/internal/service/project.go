@@ -26,12 +26,17 @@ import (
 // rather than accepting silent, permanently-unreachable garbage.
 var ErrProjectHasLinks = errors.New("project still has linked accounts, meetings, research, or members")
 
-// projectRepo is the narrow persistence seam used by ProjectService.
-// projectBatchReader is the consistent batched form of GetProject.
-type projectBatchReader interface {
-	BatchGetProjects(context.Context, []string) (map[string]*model.Project, error)
+// projectCandidateChunk is the number of inherited candidates whose canonical
+// rows are read and held at once: one BatchGetItem request.
+const projectCandidateChunk = 100
+
+// projectListRowReader batch-reads only the canonical project fields that
+// inherited-candidate verification and ProjectSummary need.
+type projectListRowReader interface {
+	BatchGetProjectListRows(context.Context, []string) (map[string]*model.Project, error)
 }
 
+// projectRepo is the narrow persistence seam used by ProjectService.
 type projectRepo interface {
 	CreateProject(context.Context, *model.Project) error
 	GetProject(context.Context, string) (*model.Project, error)
@@ -285,36 +290,55 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// run concurrently and are replayed in discovery order. Candidates were
 	// previously visited in map order, so their relative order was never
 	// defined; the first failure in discovery order is returned.
-	// Each slot keeps only the summary: the full record (Description included)
-	// is dropped as soon as its candidate is verified, so retained memory stays
-	// bounded by the in-flight limit as in the sequential loop.
-	// The canonical candidate rows are read in consistent batches when the
-	// repository supports it; a nil map keeps one GetProject per candidate.
-	var canonical map[string]*model.Project
-	if batch, ok := s.repo.(projectBatchReader); ok && len(candidateOrder) != 0 {
-		canonical, err = batch.BatchGetProjects(ctx, candidateOrder)
-		if err != nil {
-			return nil, err
-		}
-		if canonical == nil {
-			return nil, ErrReadingData
-		}
-	}
+	// Each slot keeps only the summary. With a batch reader, candidates are
+	// processed one chunk of at most projectCandidateChunk at a time: the
+	// chunk's canonical rows are read with a projection that excludes
+	// Description and other unbounded fields, verified with at most
+	// listReadConcurrency in flight, summarized, and dropped before the next
+	// chunk is read. Without one, each verification reads its own full row,
+	// which is dropped as soon as its candidate is verified.
 	verified := make([]*model.ProjectSummary, len(candidateOrder))
 	candidateErrs := make([]error, len(candidateOrder))
-	stop = fanout.Ordered(ctx, len(candidateOrder), listReadConcurrency, func(ctx context.Context, k int) error {
-		project, err := s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]], canonical)
-		if err != nil {
-			candidateErrs[k] = err
-			return err
+	batch, batched := s.repo.(projectListRowReader)
+	chunk := len(candidateOrder)
+	if batched {
+		chunk = projectCandidateChunk
+	}
+	for start := 0; start < len(candidateOrder); start += chunk {
+		ids := candidateOrder[start:min(start+chunk, len(candidateOrder))]
+		var canonical map[string]*model.Project
+		if batched {
+			readable := make([]string, 0, len(ids))
+			for _, id := range ids {
+				// An empty reference never names a canonical row; like the
+				// per-item read, it verifies as missing and is skipped.
+				if id != "" {
+					readable = append(readable, id)
+				}
+			}
+			canonical, err = batch.BatchGetProjectListRows(ctx, readable)
+			if err != nil {
+				return nil, err
+			}
+			if canonical == nil {
+				return nil, ErrReadingData
+			}
 		}
-		if project != nil {
-			verified[k] = &model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID}
+		stop = fanout.Ordered(ctx, len(ids), listReadConcurrency, func(ctx context.Context, j int) error {
+			k := start + j
+			project, err := s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]], canonical)
+			if err != nil {
+				candidateErrs[k] = err
+				return err
+			}
+			if project != nil {
+				verified[k] = &model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID}
+			}
+			return nil
+		})
+		if stop < len(ids) {
+			return nil, candidateErrs[start+stop]
 		}
-		return nil
-	})
-	if stop < len(candidateOrder) {
-		return nil, candidateErrs[stop]
 	}
 	for k, projectID := range candidateOrder {
 		summary := verified[k]
@@ -331,8 +355,9 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 // reverse-index candidate is still linked to one of the accounts that surfaced
 // it and the caller passes requireProjectReadAccess; nil when it must be
 // skipped; an error for any other failure.
-// canonical, when non-nil, holds the batch-read candidate rows (absent means
-// missing); requireProjectReadAccess still performs its own current reads.
+// canonical, when non-nil, holds the projected batch-read candidate rows
+// (absent means missing); requireProjectReadAccess still performs its own
+// current reads.
 func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, userID, projectID string, accountIDs []string, canonical map[string]*model.Project) (*model.Project, error) {
 	project := canonical[projectID]
 	if canonical == nil {

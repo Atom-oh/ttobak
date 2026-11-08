@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -103,6 +104,13 @@ func batchListFixture(children int) *countingAccountListRepo {
 	r.accountIndex = []string{"child-0001", "gone", "parent"}
 	r.hierarchy.members[memberKey("child-0001", "reader")] = batchMember("child-0001")
 	r.hierarchy.accounts["gone"] = &model.Account{PK: "ACCOUNT#gone", SK: "META", AccountID: "gone", EntityType: model.EntityTypeAccount}
+	// Forty more direct grants on descendants make the direct scope span two
+	// 25-candidate pages, exercising its continuation.
+	for i := 100; i < 140 && i < children; i++ {
+		id := fmt.Sprintf("child-%04d", i)
+		r.accountIndex = append(r.accountIndex, id)
+		r.hierarchy.members[memberKey(id, "reader")] = batchMember(id)
+	}
 	if a := r.hierarchy.accounts["child-0002"]; a != nil {
 		a.EntityType = "NOT_ACCOUNT"
 	}
@@ -121,10 +129,11 @@ func listAllAccountPages(t *testing.T, s *AccountService, q url.Values) ([]*Acco
 		if page.NextCursor == "" {
 			return pages, nil
 		}
-		q = url.Values{"pageSize": q["pageSize"], "cursor": {page.NextCursor}}
+		next := url.Values{"pageSize": q["pageSize"], "cursor": {page.NextCursor}}
 		if scope := q.Get("scope"); scope != "" {
-			q.Set("scope", scope)
+			next.Set("scope", scope)
 		}
+		q = next
 	}
 	t.Fatal("account listing never completed")
 	return nil, nil
@@ -141,7 +150,11 @@ func TestAccountListingBatchReadsMatchPerItemReads(t *testing.T) {
 			return listAllAccountPages(t, s, url.Values{"pageSize": {"100"}})
 		}},
 		{"direct scope", "1", 150, func(t *testing.T, s *AccountService) (interface{}, error) {
-			return listAllAccountPages(t, s, url.Values{"pageSize": {"100"}, "scope": {"direct"}})
+			pages, err := listAllAccountPages(t, s, url.Values{"pageSize": {"100"}, "scope": {"direct"}})
+			if err == nil && len(pages) < 2 {
+				t.Fatalf("direct scope continuation not exercised: %d page(s)", len(pages))
+			}
+			return pages, err
 		}},
 		{"direct scope flag off", "0", 10, func(t *testing.T, s *AccountService) (interface{}, error) {
 			return listAllAccountPages(t, s, url.Values{"pageSize": {"100"}, "scope": {"direct"}})
@@ -263,28 +276,50 @@ func TestAccountListingBatchRecheckReadsCurrentRows(t *testing.T) {
 	}
 }
 
-// batchProjectRepo serves BatchGetProjects from the same project rows.
+// batchProjectRepo serves BatchGetProjectListRows from the same project rows,
+// keeping only repository.ProjectListRowFields as the projection does. events
+// records batch calls ("B") and per-candidate membership reads ("V:<id>").
 type batchProjectRepo struct {
 	*latencyProjectRepo
-	batchCalls int
-	batchErr   error
+	batchCalls, inBatch int
+	batchErr            error
+	events              []string
+	chunks              [][]string
 }
 
-func (r *batchProjectRepo) BatchGetProjects(_ context.Context, ids []string) (map[string]*model.Project, error) {
+func (r *batchProjectRepo) BatchGetProjectListRows(_ context.Context, ids []string) (map[string]*model.Project, error) {
 	r.mu.Lock()
 	r.batchCalls += (len(ids) + 99) / 100
+	r.inBatch++
+	inBatch := r.inBatch
+	r.events = append(r.events, "B")
+	r.chunks = append(r.chunks, append([]string{}, ids...))
 	r.mu.Unlock()
+	defer func() { r.mu.Lock(); r.inBatch--; r.mu.Unlock() }()
+	if inBatch > 1 || len(ids) > 100 {
+		return nil, fmt.Errorf("overlapping or oversized candidate batch: %d ids", len(ids))
+	}
 	if r.batchErr != nil {
 		return nil, r.batchErr
 	}
 	out := map[string]*model.Project{}
 	for _, id := range ids {
+		if id == "" {
+			return nil, errors.New("empty project key")
+		}
 		if p := r.projects[id]; p != nil {
-			cp := *p
-			out[id] = &cp
+			out[id] = &model.Project{PK: p.PK, SK: p.SK, EntityType: p.EntityType, ProjectID: p.ProjectID, Name: p.Name,
+				Stage: p.Stage, SfdcOpptyID: p.SfdcOpptyID, OwnerUserID: p.OwnerUserID, AccountIDs: append([]string{}, p.AccountIDs...)}
 		}
 	}
 	return out, nil
+}
+
+func (r *batchProjectRepo) GetProjectMember(ctx context.Context, projectID, userID string) (*model.ProjectMember, error) {
+	r.mu.Lock()
+	r.events = append(r.events, "V:"+projectID)
+	r.mu.Unlock()
+	return r.latencyProjectRepo.GetProjectMember(ctx, projectID, userID)
 }
 
 func TestListMyProjectsBatchCandidateReadsMatchPerItemReads(t *testing.T) {
@@ -292,11 +327,14 @@ func TestListMyProjectsBatchCandidateReadsMatchPerItemReads(t *testing.T) {
 		repo := inheritedProjectsFixture(0)
 		repo.projects["p-3-0"].AccountIDs = []string{"acc-9"} // revoked link
 		delete(repo.projects, "p-2-1")                        // deleted project, stale ref
-		for i := 0; i < 120; i++ {                            // >100 candidates
+		for i := 0; i < 220; i++ {                            // three candidate chunks
 			id := fmt.Sprintf("q-%03d", i)
-			seedProject(repo.mockProjectRepo, id, "owner").AccountIDs = []string{"acc-1"}
+			p := seedProject(repo.mockProjectRepo, id, "owner")
+			p.AccountIDs, p.Description = []string{"acc-1"}, strings.Repeat("large description ", 64)
 			repo.projectRefs["acc-1"] = append(repo.projectRefs["acc-1"], model.ProjectRef{ProjectID: id, AccountID: "acc-1"})
 		}
+		// An empty legacy reference is skipped, as the per-item read did.
+		repo.projectRefs["acc-3"] = append(repo.projectRefs["acc-3"], model.ProjectRef{AccountID: "acc-3"})
 		return repo
 	}
 	perItem := fixture()
@@ -306,7 +344,25 @@ func TestListMyProjectsBatchCandidateReadsMatchPerItemReads(t *testing.T) {
 	if wantErr != nil || gotErr != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("batched projects differ:\n got %v / %v\nwant %v / %v", projectIDs(got), gotErr, projectIDs(want), wantErr)
 	}
-	if batched.batchCalls != 2 || batched.calls >= perItem.calls {
+	// Each chunk's rows are used only between its own read and the next
+	// chunk's read: at most one chunk of projected rows is held at a time.
+	chunkOf := map[string]int{}
+	for n, ids := range batched.chunks {
+		for _, id := range ids {
+			chunkOf[id] = n
+		}
+	}
+	current := -1
+	for _, event := range batched.events {
+		if event == "B" {
+			current++
+			continue
+		}
+		if n, ok := chunkOf[strings.TrimPrefix(event, "V:")]; ok && n != current {
+			t.Fatalf("candidate %s of chunk %d verified while chunk %d was held", event, n, current)
+		}
+	}
+	if batched.batchCalls != 3 || len(batched.chunks) != 3 || batched.calls >= perItem.calls {
 		t.Fatalf("calls: per-item %d, batched %d + %d batch requests", perItem.calls, batched.calls, batched.batchCalls)
 	}
 	t.Logf("per-item calls %d -> %d + %d BatchGetItem", perItem.calls, batched.calls, batched.batchCalls)

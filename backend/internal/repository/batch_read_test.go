@@ -21,6 +21,7 @@ type batchWire struct {
 	rows        map[batchWireKey]map[string]any
 	requests    [][]batchWireKey
 	consistent  []bool
+	projections []string
 	unprocessed func(n int, keys []batchWireKey) []batchWireKey
 	extra       map[string]any
 	query       func(map[string]any) (int, string)
@@ -47,6 +48,13 @@ func (w *batchWire) repo(t *testing.T) *DynamoDBRepository {
 		n := len(w.requests)
 		w.requests = append(w.requests, keys)
 		w.consistent = append(w.consistent, request["ConsistentRead"] == true)
+		projection, _ := request["ProjectionExpression"].(string)
+		if names, ok := request["ExpressionAttributeNames"].(map[string]any); ok {
+			for alias, name := range names {
+				projection = strings.ReplaceAll(projection, alias, name.(string))
+			}
+		}
+		w.projections = append(w.projections, projection)
 		w.mu.Unlock()
 		skip := map[batchWireKey]bool{}
 		unprocessed := []any{}
@@ -123,8 +131,12 @@ func TestBatchGetAccountRows(t *testing.T) {
 				}
 				return nil
 			}},
-		{name: "persistent unprocessed keys fail closed", accounts: 10, wantErr: "unprocessed keys remain", requests: 4,
+		{name: "progressing partial responses succeed past the stall limit", accounts: 10, requests: 20,
+			unprocessed: func(_ int, keys []batchWireKey) []batchWireKey { return keys[1:] }},
+		{name: "stalls after progress fail closed", accounts: 10, wantErr: "unprocessed keys remain", requests: 5,
 			unprocessed: func(_ int, keys []batchWireKey) []batchWireKey { return keys[:1] }},
+		{name: "never progressing fails closed", accounts: 10, wantErr: "unprocessed keys remain", requests: 4,
+			unprocessed: func(_ int, keys []batchWireKey) []batchWireKey { return keys }},
 		{name: "response outside the selection fails closed", accounts: 2, wantErr: "unexpected batch read response", requests: 1,
 			extra: batchAccountRow("intruder")},
 		{name: "malformed row fails closed", accounts: 2, wantErr: "unmarshal account", requests: 1},
@@ -211,5 +223,38 @@ func TestListProjectsForUserBatchesCanonicalRows(t *testing.T) {
 	}
 	if len(w.requests) != 2 || queries != 2 {
 		t.Fatalf("BatchGetItem requests = %d, queries = %d", len(w.requests), queries)
+	}
+}
+
+func TestBatchGetProjectListRowsProjectsAwayLargeFields(t *testing.T) {
+	row := batchProjectRow("p")
+	row["description"] = map[string]any{"S": strings.Repeat("x", 4096)}
+	row["accountIds"] = map[string]any{"SS": []any{"a"}}
+	w := &batchWire{rows: map[batchWireKey]map[string]any{{"PROJECT#p", "CONFIG"}: row}}
+	got, err := w.repo(t).BatchGetProjectListRows(context.Background(), []string{"p", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w.projections) != 1 || strings.Contains(w.projections[0], "description") {
+		t.Fatalf("projection = %q", w.projections)
+	}
+	for _, field := range ProjectListRowFields {
+		if !strings.Contains(w.projections[0], field) {
+			t.Fatalf("projection %q lacks %s", w.projections[0], field)
+		}
+	}
+	if p := got["p"]; p == nil || p.Name != "Project p" || len(p.AccountIDs) != 1 || got["missing"] != nil {
+		t.Fatalf("rows = %+v", got)
+	}
+}
+
+func TestBatchReadDeadlineFailsClosed(t *testing.T) {
+	defer func(backoff, deadline time.Duration) { batchReadBackoff, batchReadDeadline = backoff, deadline }(batchReadBackoff, batchReadDeadline)
+	batchReadBackoff, batchReadDeadline = time.Second, 20*time.Millisecond
+	w := &batchWire{rows: map[batchWireKey]map[string]any{}, unprocessed: func(_ int, keys []batchWireKey) []batchWireKey { return keys }}
+	start := time.Now()
+	_, err := w.repo(t).BatchGetAccountRows(context.Background(), []AccountRowKey{{AccountID: "a"}})
+	if err == nil || !strings.Contains(err.Error(), "deadline") || time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("err = %v after %v", err, time.Since(start))
 	}
 }

@@ -85,8 +85,9 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 	candidateIDs := append([]string{}, hints...)
 	if nav, ok := repo.(accountReadNavigationRepo); ok {
 		// Each page holds up to accountNavigationPageSize ascending IDs. The
-		// collection still fails at 10,000 index candidates, as the former
-		// one-ID-per-page walk did at its 10,000-page bound.
+		// former one-ID-per-page walk failed on its 10,001st page: above
+		// 10,000 candidates (or at exactly 10,000 when the index returned a
+		// trailing cursor). This fails above 10,000 candidates.
 		after := ""
 		indexed := 0
 		for pages := 0; ; pages++ {
@@ -108,7 +109,7 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 				previous = id
 				candidateIDs = append(candidateIDs, id)
 			}
-			if indexed += len(page.IDs); indexed >= 10000 {
+			if indexed += len(page.IDs); indexed > 10000 {
 				return nil, ErrReadingData
 			}
 			if page.NextID == "" {
