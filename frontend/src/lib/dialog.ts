@@ -14,11 +14,28 @@ type Button = { label: string; value: boolean; primary: boolean };
 // Native dialogs are modal and serialize; in-page ones queue the same way,
 // so only the topmost dialog ever owns the keyboard.
 let queue: Promise<unknown> = Promise.resolve();
+// A dialog belongs to the screen that asked. Navigation bumps the generation
+// and cancels open dialogs, so a stale accept never runs the old screen's
+// action (e.g. a delete) after an MCP start moved the app to /record.
+let generation = 0;
+const openDialogs = new Set<(value: boolean) => void>();
 
 function showDialog(message: string, buttons: Button[]): Promise<boolean> {
-  const run = queue.then(() => openDialog(message, buttons));
+  const mine = generation;
+  const run = queue.then(() => (mine === generation ? openDialog(message, buttons) : false));
   queue = run.catch(() => undefined);
   return run;
+}
+
+/** Cancels every open or queued in-app dialog (each resolves as declined). */
+export function dismissDialogs(): void {
+  generation += 1;
+  for (const finish of [...openDialogs]) finish(false);
+}
+
+/** True while an in-app dialog is waiting for the user. */
+export function isDialogOpen(): boolean {
+  return openDialogs.size > 0;
 }
 
 function openDialog(message: string, buttons: Button[]): Promise<boolean> {
@@ -49,6 +66,7 @@ function openDialog(message: string, buttons: Button[]): Promise<boolean> {
     const finish = (value: boolean) => {
       if (settled) return;
       settled = true;
+      openDialogs.delete(finish);
       document.removeEventListener('keydown', onKey, true);
       overlay.remove();
       previous?.focus();
@@ -83,6 +101,7 @@ function openDialog(message: string, buttons: Button[]): Promise<boolean> {
       if (!b.primary || !initial) initial = el;
     }
 
+    openDialogs.add(finish);
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(overlay);
     initial?.focus();

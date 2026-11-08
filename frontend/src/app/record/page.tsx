@@ -1,6 +1,6 @@
 'use client';
 
-import { confirmDialog } from '@/lib/dialog';
+import { confirmDialog, isDialogOpen } from '@/lib/dialog';
 import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -542,7 +542,8 @@ function RecordPageInner() {
           fail('busy', 'The TTOBAK app is on the file upload screen; open the recording screen first.');
           return;
         }
-        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null || latest.importing) {
+        // An open confirmation belongs to an action the user has not finished.
+        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null || latest.importing || isDialogOpen()) {
           fail('busy', 'A recording or its upload is already in progress in the TTOBAK app.');
           return;
         }
