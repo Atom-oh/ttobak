@@ -131,10 +131,15 @@ type AccountService struct {
 	cognito           cognitoAdminAPI
 	cognitoPoolID     string
 	invitationCounter *WindowCounter
+
+	// recheckConcurrency bounds parallel fresh rechecks of a discovery page.
+	// Zero is sequential; only the concurrency-safe DynamoDB repository
+	// enables parallelism.
+	recheckConcurrency int
 }
 
 func NewAccountService(repo *repository.DynamoDBRepository, s3Client *s3.Client, bucketName string) *AccountService {
-	return &AccountService{repo: repo, s3: s3Client, bucketName: bucketName}
+	return &AccountService{repo: repo, s3: s3Client, bucketName: bucketName, recheckConcurrency: accountRecheckConcurrency}
 }
 
 // SetCognitoAdminAPI wires a Cognito client for identity-bound member invitations.
@@ -237,14 +242,23 @@ func (s *AccountService) CreateAccount(ctx context.Context, ownerUserID, ownerEm
 }
 
 func (s *AccountService) requireReadGrant(ctx context.Context, userID, accountID string) (*accountReadGrant, error) {
-	grant, err := resolveAccountReadGrant(ctx, s.repo, accountID, userID)
+	return requireReadGrantVia(ctx, s.repo, userID, accountID)
+}
+
+// requireReadGrantVia maps an absent grant to ErrNotFound or ErrForbidden. The
+// repository may be a request-scoped discovery cache.
+func requireReadGrantVia(ctx context.Context, repo interface {
+	accountReadMembershipRepo
+	accountReadHierarchyRepo
+}, userID, accountID string) (*accountReadGrant, error) {
+	grant, err := resolveAccountReadGrant(ctx, repo, accountID, userID)
 	if err != nil {
 		return nil, err
 	}
 	if grant != nil {
 		return grant, nil
 	}
-	account, err := s.repo.GetAccount(ctx, accountID)
+	account, err := repo.GetAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -296,12 +310,18 @@ func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]mod
 	}
 	out := make([]model.AccountSummary, 0, len(ids))
 	grants := make([]*accountReadGrant, 0, len(ids))
+	// Rows are read through a fresh batch-primed view; the rechecks below use
+	// another fresh view primed after assembly, as the per-item reads did.
+	reads, err := primedAccountReads(ctx, s.repo, userID, ids, true)
+	if err != nil {
+		return nil, err
+	}
 	for _, id := range ids {
-		grant, err := s.requireReadGrant(ctx, userID, id)
+		grant, err := requireReadGrantVia(ctx, reads, userID, id)
 		if err != nil {
 			return nil, err
 		}
-		account, err := s.repo.GetAccount(ctx, id)
+		account, err := reads.GetAccount(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -315,9 +335,17 @@ func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]mod
 		out = append(out, model.AccountSummary{AccountID: id, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: role, AccessPermission: grant.permission(), InheritedFromAccountID: grant.InheritedFromAccountID})
 		grants = append(grants, grant)
 	}
+	recheck, err := primedAccountReads(ctx, s.repo, userID, grantAccountIDs(grants), true)
+	if err != nil {
+		return nil, err
+	}
 	for _, grant := range grants {
-		if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+		valid, err := revalidateAccountReadGrant(ctx, recheck, grant, userID)
+		if err != nil {
 			return nil, err
+		}
+		if !valid {
+			return nil, ErrForbidden
 		}
 	}
 	return out, nil

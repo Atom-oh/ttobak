@@ -47,6 +47,7 @@ function fixture(overrides = {}) {
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId, email: `${userId}@example.com` }, isAuthenticated: true, membershipRevision: 0 }) },
     '@/lib/api': { accountApi: {
       list: async () => ({ accounts: [] }),
+      peekList: () => undefined,
       create: async (request, expectedUserId) => {
         calls.creates.push(request);
         calls.creationUsers.push(expectedUserId);

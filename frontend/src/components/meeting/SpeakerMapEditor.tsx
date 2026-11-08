@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { getSpeakerColor } from '@/lib/speakerColors';
+import { accountApi } from '@/lib/api';
+import { suggestionScope, visibleSuggestions, type SpeakerSuggestions } from '@/lib/contactSuggestions';
 
 interface SpeakerMapEditorProps {
   transcription?: { speaker: string }[];
@@ -13,6 +15,9 @@ interface SpeakerMapEditorProps {
   /** Multi-part audio isn't supported yet (v1 scope). */
   audioPartCount?: number;
   onRediarize?: (speakerCount: number) => Promise<void>;
+  accountId?: string;
+  userId?: string;
+  membershipRevision?: number;
 }
 
 const UNMAPPED_PATTERN = /^(spk_\d+|화자[A-Z])$/;
@@ -23,7 +28,7 @@ function speakerSortKey(label: string): number {
   return 2000;
 }
 
-export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave, sttProvider, audioPartCount, onRediarize }: SpeakerMapEditorProps) {
+export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave, sttProvider, audioPartCount, onRediarize, accountId, userId, membershipRevision = 0 }: SpeakerMapEditorProps) {
   const speakers = useMemo(() => {
     const labels = new Set<string>();
     transcription?.forEach((seg) => {
@@ -50,6 +55,53 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
   const [isOpen, setIsOpen] = useState(false);
   const [rediarizeCount, setRediarizeCount] = useState(speakers.length + 1);
   const [rediarizing, setRediarizing] = useState(false);
+  const [loadedSuggestions, setLoadedSuggestions] = useState<SpeakerSuggestions | null>(null);
+  const [moreLoading, setMoreLoading] = useState('');
+  const suggestionController = useRef<AbortController | null>(null);
+  const scope = suggestionScope(accountId || '', userId || '', membershipRevision);
+  const suggestions = visibleSuggestions(loadedSuggestions, scope);
+
+  useEffect(() => {
+    if (!isOpen || !accountId || !userId) return;
+    const active = new AbortController();
+    suggestionController.current = active;
+    Promise.all([accountApi.speakerTeam(accountId, userId, '', active.signal), accountApi.contacts(accountId, userId, '', active.signal)])
+      .then(([team, contacts]) => {
+        if (!active.signal.aborted) setLoadedSuggestions({ scope, members: team.members, contacts: contacts.contacts, nextCursor: contacts.nextCursor || '', teamCursor: team.nextCursor || '' });
+      })
+      .catch(() => {
+        if (!active.signal.aborted) setLoadedSuggestions({ scope, members: [], contacts: [], nextCursor: '', teamCursor: '' });
+      });
+    return () => {
+      active.abort();
+      setLoadedSuggestions((old) => old?.scope === scope ? null : old);
+      setMoreLoading((old) => old.endsWith(scope) ? '' : old);
+    };
+  }, [isOpen, accountId, userId, scope]);
+
+  const loadMoreSuggestions = async () => {
+    const active = suggestionController.current;
+    if (!active || active.signal.aborted || !accountId || !userId || !suggestions.nextCursor || moreLoading) return;
+    setMoreLoading(`contacts:${scope}`);
+    try {
+      const page = await accountApi.contacts(accountId, userId, suggestions.nextCursor, active.signal);
+      if (!active.signal.aborted) setLoadedSuggestions((old) => old?.scope === scope ? { ...old, contacts: [...old.contacts, ...page.contacts], nextCursor: page.nextCursor || '' } : old);
+    } catch {
+      if (!active.signal.aborted) setLoadedSuggestions({ scope, members: [], contacts: [], nextCursor: '', teamCursor: '' });
+    } finally { if (!active.signal.aborted) setMoreLoading(''); }
+  };
+
+  const loadMoreTeam = async () => {
+    const active = suggestionController.current;
+    if (!active || active.signal.aborted || !accountId || !userId || !suggestions.teamCursor || moreLoading) return;
+    setMoreLoading(`team:${scope}`);
+    try {
+      const page = await accountApi.speakerTeam(accountId, userId, suggestions.teamCursor, active.signal);
+      if (!active.signal.aborted) setLoadedSuggestions((old) => old?.scope === scope ? { ...old, members: [...old.members, ...page.members], teamCursor: page.nextCursor || '' } : old);
+    } catch {
+      if (!active.signal.aborted) setLoadedSuggestions({ scope, members: [], contacts: [], nextCursor: '', teamCursor: '' });
+    } finally { if (!active.signal.aborted) setMoreLoading(''); }
+  };
 
   // Re-sync after a rediarize: the server clears speakerMap and the
   // transcript is regenerated with a fresh (possibly different-length)
@@ -105,7 +157,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
     }`}>
       {saveError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-400">{saveError}</p>}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => { if (isOpen) setLoadedSuggestions(null); setIsOpen(!isOpen); }}
         className="flex items-center gap-2 w-full text-left"
       >
         <span className={`material-symbols-outlined ${hasUnmapped ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}`}>
@@ -145,8 +197,19 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
                 placeholder={existingSpeakerMap?.[label] || '새 이름 입력...'}
                 className="min-w-0 flex-1 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white placeholder:text-slate-400 focus:ring-2 focus:ring-primary/20 outline-none"
               />
+              {(suggestions.members.length > 0 || suggestions.contacts.length > 0) && <select aria-label={`${label} 추천 이름`} value="" onChange={(e) => {
+                const [kind, index] = e.target.value.split(':');
+                const candidate = kind === 'team' ? suggestions.members[Number(index)] : suggestions.contacts[Number(index)];
+                if (candidate?.name) setMapping((old) => ({ ...old, [label]: candidate.name }));
+              }} className="max-w-40 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-white/10 dark:bg-slate-900">
+                <option value="">추천 선택</option>
+                {suggestions.members.length > 0 && <optgroup label="Account 팀">{suggestions.members.map((member, index) => <option key={member.userId} value={`team:${index}`} disabled={Array.from(member.name).length > 100 || /\p{Cc}/u.test(member.name)}>{member.name} · {member.role} · {member.email}</option>)}</optgroup>}
+                {suggestions.contacts.length > 0 && <optgroup label="고객 연락처">{suggestions.contacts.map((contact, index) => <option key={contact.contactId} value={`contact:${index}`} disabled={Array.from(contact.name).length > 100 || /\p{Cc}/u.test(contact.name)}>{[contact.name, contact.company, contact.title].filter(Boolean).join(' · ')}</option>)}</optgroup>}
+              </select>}
             </div>
           ))}
+          {suggestions.teamCursor && <button type="button" disabled={!!moreLoading} onClick={() => void loadMoreTeam()} className="mr-3 text-xs text-primary disabled:opacity-40">계정 팀 더 보기</button>}
+          {suggestions.nextCursor && <button type="button" disabled={!!moreLoading} onClick={() => void loadMoreSuggestions()} className="text-xs text-primary disabled:opacity-40">고객 연락처 더 보기</button>}
           <button
             onClick={handleSave}
             disabled={saving || !hasAnyName}

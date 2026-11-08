@@ -28,6 +28,7 @@ import (
 	"github.com/ttobak/backend/internal/handler"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/sealing"
 	"github.com/ttobak/backend/internal/service"
 	"github.com/ttobak/backend/internal/telemetry"
 )
@@ -80,6 +81,11 @@ func init() {
 
 	// Initialize repository with S3 support for large transcript storage
 	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
+	// Account contacts are third-party personal data: envelope-encrypted with
+	// the KMS key, and unavailable (503) when it is not configured (ADR-063).
+	if sealer := sealing.NewEnvelope(kmsClient, os.Getenv("KMS_KEY_ID")); sealer != nil {
+		repo.SetRecordSealer(sealer)
+	}
 	connectorGrants := repo.ConnectorGrantResolver(os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"),
 		"https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)
 

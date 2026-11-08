@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/ttobak/backend/internal/handler"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/sealing"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -34,6 +36,7 @@ type contactWire struct {
 	writes                                        int
 	missingChecked                                bool
 	lose, revokeAfterWrite, revokeOnQuery, reject bool
+	noSealer                                      bool
 }
 
 func (w *contactWire) Do(req *http.Request) (*http.Response, error) {
@@ -129,6 +132,9 @@ func (w *contactWire) Do(req *http.Request) (*http.Response, error) {
 			}
 			w.writes++
 			w.contact = put["Item"].(map[string]any)
+			if _, plain := w.contact["name"]; plain || w.contact["sealed"] == nil {
+				w.t.Fatal("connector contact written in plaintext")
+			}
 			w.contactReceipt = items[5].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
 			if w.revokeAfterWrite {
 				w.approval["revoked"] = noteBool(true)
@@ -156,6 +162,9 @@ func contactBridge(t *testing.T, w *contactWire) (*connector.Bridge, func(string
 		return aws.Credentials{AccessKeyID: "test", SecretAccessKey: "test"}, nil
 	})})
 	repo := repository.NewDynamoDBRepository(client, "table")
+	if !w.noSealer {
+		repo.SetRecordSealer(bridgeTestSealer{})
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +287,9 @@ func TestConnectorContactRejectsInvalidBodiesAndBoundsRead(t *testing.T) {
 			t.Fatalf("invalid input produced %d, writes %d", out.StatusCode, w.writes)
 		}
 	}
-	w.contact = map[string]any{"name": noteString(strings.Repeat("x", 15000))}
+	const largeID = "01234567-89ab-4cde-8123-0123456789ab"
+	sealed, _ := bridgeTestSealer{}.Seal(context.Background(), []byte(`{"contactId":"`+largeID+`","name":"`+strings.Repeat("x", 15000)+`"}`), map[string]string{"purpose": "ttobak-account-contact", "accountId": "acct", "contactId": largeID})
+	w.contact = map[string]any{"PK": noteString("ACCOUNT#acct"), "SK": noteString("CONTACT#" + largeID), "contactId": noteString(largeID), "revision": noteString("r"), "sealed": noteString(sealed)}
 	out := bridge.Invoke(context.Background(), sign("GET", "/api/accounts/acct/contacts?limit=1", "null", "api.accountContacts.list"))
 	if out.StatusCode != 413 || strings.Contains(out.Body, strings.Repeat("x", 100)) {
 		t.Fatalf("large read leaked bytes: %d", out.StatusCode)
@@ -330,5 +341,32 @@ func TestConnectorContactExpiredApprovalFailsClosed(t *testing.T) {
 	out := bridge.Invoke(context.Background(), sign("POST", "/api/accounts/acct/contacts", body, "api.accountContacts.create"))
 	if out.StatusCode != 403 || w.writes != 0 {
 		t.Fatalf("expired approval: %+v", out)
+	}
+}
+
+// bridgeTestSealer is a reversible stand-in for KMS sealing that enforces the
+// record binding like the real envelope.
+type bridgeTestSealer struct{}
+
+func (bridgeTestSealer) id(b map[string]string) string {
+	return b["purpose"] + "/" + b["accountId"] + "/" + b["contactId"] + "|"
+}
+func (s bridgeTestSealer) Seal(_ context.Context, p []byte, b map[string]string) (string, error) {
+	return base64.StdEncoding.EncodeToString(append([]byte(s.id(b)), p...)), nil
+}
+func (s bridgeTestSealer) Open(_ context.Context, v string, b map[string]string) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(v)
+	if err != nil || !strings.HasPrefix(string(raw), s.id(b)) {
+		return nil, sealing.ErrInvalid
+	}
+	return raw[len(s.id(b)):], nil
+}
+
+func TestConnectorContactCreateFailsClosedWithoutEncryptionKey(t *testing.T) {
+	w := &contactWire{noteWire: newNoteWire(t), account: true, member: true, noSealer: true}
+	bridge, sign := contactBridge(t, w)
+	out := bridge.Invoke(context.Background(), sign("POST", "/api/accounts/acct/contacts", `{"contact":{"name":"A"},"idempotencyKey":"request"}`, "api.accountContacts.create"))
+	if out.StatusCode != 503 || !strings.Contains(out.Body, "CONTACTS_UNAVAILABLE") || w.writes != 0 {
+		t.Fatalf("unconfigured key: %d %s writes=%d", out.StatusCode, out.Body, w.writes)
 	}
 }

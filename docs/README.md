@@ -46,6 +46,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
 | [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
 | [Seekable audio playback copies](decisions/ADR-062-seekable-audio-playback-copies.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
+| [Account contact encryption and retention](decisions/ADR-063-account-contact-encryption-and-retention.md) | Contact fields KMS envelope-encrypted per row, bound to account/contact; kept until deleted, PITR window disclosed | `backend/internal/sealing`, contact repository, `KMS_KEY_ID` |
 
 ## Feature workflows
 

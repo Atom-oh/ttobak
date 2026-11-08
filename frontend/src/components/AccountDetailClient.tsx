@@ -12,6 +12,7 @@ import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { AccountParentEditor } from '@/components/AccountParentEditor';
 import { AccountBillingTab } from '@/components/AccountBillingTab';
+import { AccountContacts } from '@/components/AccountContacts';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { fetchBillingAccounts } from '@/lib/billingApi';
 import { billingEntryFor, type BillingAccountEntry } from '@/lib/billingSummary';
@@ -485,6 +486,10 @@ export default function AccountDetailClient() {
                       )}
                     </div>
                   </section>
+
+                  {account.accountId === accountId && user?.userId && account.members.some((member) => member.userId === user.userId) && (
+                    <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId} />
+                  )}
 
                   <FieldInsightsSection insights={insights} />
                 </>

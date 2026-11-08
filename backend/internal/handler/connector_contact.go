@@ -32,6 +32,10 @@ func (h *ConnectorContactHandler) Create(ctx context.Context, p connector.Princi
 		status, code = 404, "RECEIPT_NOT_FOUND"
 	case errors.Is(err, repository.ErrConditionFailed):
 		status, code = 409, "CONNECTOR_CONFLICT"
+	case errors.Is(err, service.ErrContactsUnavailable):
+		// Sealing fails before any write, so this outcome is definitive.
+		body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "CONTACTS_UNAVAILABLE", "message": "Contacts are temporarily unavailable"}})
+		return connector.InvokeResult{StatusCode: 503, Body: string(body)}
 	}
 	body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": "Contact creation could not be confirmed"}})
 	return connector.InvokeResult{StatusCode: status, Body: string(body)}
