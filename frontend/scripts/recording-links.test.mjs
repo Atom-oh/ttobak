@@ -542,3 +542,18 @@ test('project link deltas apply to current links', () => {
   assert.deepEqual(plain(links.projectLinkDeltas(['a', 'b'], ['b', 'c'], ['d'])), { projectAdditions: ['c'], projectRemovals: ['a', 'd'] });
   assert.deepEqual(plain(links.restoreProjectLinks(['b', 'x'], ['c'], ['a', 'd'])), { linked: ['b', 'x'], desired: ['b', 'x', 'c'], attempted: ['a', 'd'] });
 });
+
+test('keeping a recording locally while a project link is in flight saves the removal', async () => {
+  const pending = deferred();
+  const fixtureState = fixture({ projectGate: () => pending.promise, timeoutMs: 10 });
+  const backup = browserBackup();
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  const adding = fixtureState.hook.changeRecordingProjects(['project']);
+  await tick();
+  assert.equal(fixtureState.calls.filter(([kind]) => kind === 'linkProject').length, 1, 'the link request is in flight');
+  const removing = fixtureState.hook.changeRecordingProjects([]);
+  await fixtureState.hook.keepLocally('');
+  assert.deepEqual(plain(backup.metadata.projectRemovals), ['project'], 'an in-flight link is kept as a possible link to remove');
+  pending.resolve();
+  await Promise.allSettled([adding, removing]);
+});

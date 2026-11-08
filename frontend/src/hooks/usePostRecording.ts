@@ -299,15 +299,22 @@ export function usePostRecording({
     const isCurrent = () => mountedRef.current && flowGenerationRef.current === generation
       && persistedMeetingIdRef.current === meetingId && notesUserIdRef.current === principal;
     const options = { expectedUserId: principal };
+    const markAttempted = (projectId: string) => {
+      if (!attemptedProjectsRef.current.includes(projectId)) attemptedProjectsRef.current = [...attemptedProjectsRef.current, projectId];
+    };
     const run = projectSyncRef.current.then(async () => {
       while (isCurrent()) {
         const result = await syncProjectLinks(meetingId, linkedProjectsRef.current, desiredProjectsRef.current, {
+          // Record a dispatched project as possibly linked before awaiting, so
+          // keeping the recording locally mid-request still saves the change.
           link: async (projectId, id) => {
             if (!isCurrent()) throw new Error('Recording changed');
+            markAttempted(projectId);
             return projectApi.linkMeeting(projectId, id, options);
           },
           unlink: async (projectId, id) => {
             if (!isCurrent()) throw new Error('Recording changed');
+            markAttempted(projectId);
             return projectApi.unlinkMeeting(projectId, id, options);
           },
           isNotFound: (error) => error instanceof ApiError && error.status === 404 && error.code === 'NOT_FOUND',
