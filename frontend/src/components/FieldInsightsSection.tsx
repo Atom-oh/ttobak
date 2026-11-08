@@ -182,6 +182,7 @@ export function FieldInsightsSection({ insights, error, description, onAddToNote
             const meta = insightMeta[insight.type] || fallbackMeta;
             const marker = formatMarker(insight.tsMarker);
             const isMeetingSource = !insight.sourceType || insight.sourceType === 'meeting';
+            const occurredAt = insight.occurredAt && Number.isFinite(Date.parse(insight.occurredAt)) ? insight.occurredAt : null;
             return (
               <article
                 key={`${insight.sourceId}-${insight.occurredAt}-${insight.type}-${index}`}
@@ -196,11 +197,11 @@ export function FieldInsightsSection({ insights, error, description, onAddToNote
                       <span className={`rounded px-2 py-0.5 text-xs font-semibold ${meta.badgeStyle}`}>
                         {meta.label}
                       </span>
-                      <time className="text-xs text-slate-400 dark:text-text-muted" dateTime={insight.occurredAt}>
-                        {new Date(insight.occurredAt).toLocaleDateString('ko-KR')}
-                      </time>
+                      {occurredAt && <time className="text-xs text-slate-400 dark:text-text-muted" dateTime={occurredAt}>
+                        {new Date(occurredAt).toLocaleDateString('ko-KR')}
+                      </time>}
                     </div>
-                    <h4 className="mt-2 max-w-[76ch] text-[15px] font-semibold leading-6 text-slate-900 dark:text-text-main">
+                    <h4 className="mt-2 max-w-[76ch] break-words text-[15px] font-semibold leading-6 text-slate-900 dark:text-text-main">
                       {insight.text}
                     </h4>
                   </div>
@@ -214,7 +215,7 @@ export function FieldInsightsSection({ insights, error, description, onAddToNote
                           <span className="material-symbols-outlined text-base" aria-hidden="true">format_quote</span>
                           근거
                         </dt>
-                        <dd className="mt-1 text-sm leading-6 text-slate-700 dark:text-text-secondary">{insight.evidence}</dd>
+                        <dd className="mt-1 break-words text-sm leading-6 text-slate-700 dark:text-text-secondary">{insight.evidence}</dd>
                       </div>
                     )}
                     {insight.implication && (
@@ -223,7 +224,7 @@ export function FieldInsightsSection({ insights, error, description, onAddToNote
                           <span className="material-symbols-outlined text-base" aria-hidden="true">conversion_path</span>
                           의미
                         </dt>
-                        <dd className="mt-1 text-sm leading-6 text-slate-700 dark:text-text-secondary">{insight.implication}</dd>
+                        <dd className="mt-1 break-words text-sm leading-6 text-slate-700 dark:text-text-secondary">{insight.implication}</dd>
                       </div>
                     )}
                   </dl>
@@ -235,7 +236,7 @@ export function FieldInsightsSection({ insights, error, description, onAddToNote
                       <span className="material-symbols-outlined mt-0.5 text-base text-emerald-600 dark:text-emerald-400" aria-hidden="true">
                         arrow_forward
                       </span>
-                      <span>
+                      <span className="min-w-0 break-words">
                         <span className="mr-2 text-xs font-bold text-slate-500 dark:text-text-muted">다음 액션</span>
                         {insight.nextAction}
                       </span>

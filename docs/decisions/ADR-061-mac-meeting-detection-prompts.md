@@ -76,6 +76,33 @@ without a user confirmation.
 
 ## Consequences
 
+### Staged mute-follow library
+
+`zoom_mute` and `meet_mute` are compiled public library modules. Their preparation
+does not start a watcher, request Accessibility permission or change recording.
+The runtime successor must supply `ProcessSources` process/browser discovery,
+call `watch`, retain its returned handle and consume the microphone flag.
+`meeting_over` uses the same injected discovery. Native acceptance remains
+required before claiming that recording follows a meeting application's mute.
+
+When invoked, the watcher may request Accessibility access once per app launch.
+It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
+(`muted` or `meeting_ended`). Zoom labels come from its localization resources.
+Unreadable window identifiers are unknown, never a confirmed meeting end;
+the existing three-second unknown-state fallback can still silence a previously
+followed meeting during a long permission or inspection failure.
+
+Meet's English/Korean muted toggle labels and readable-page fallback prioritize
+not dropping voice in unsupported languages. Unknown pages retain the previous
+state; another readable unmuted page wins. A page read whose role, label, URL, window or
+children attribute fails (any Accessibility status other than success, no
+value or unsupported) or that reaches the node or depth bound is unknown, as is a search cut short before every
+window was read, and a lost Accessibility grant feeds unknown to the hold, so
+none of them clears a retained mute. A Zoom menu read that fails is unreadable,
+not an empty menu bar. Hidden-tab or departed-call holds are not proof of the
+user's current intent. These limitations need native verification
+and remain separate from the compiled library's availability.
+
 - No new network origin, IAM change or server route. The SPA owns titles,
   meeting creation and uploads as before.
 - Users see an Automation permission prompt the first time a browser meeting

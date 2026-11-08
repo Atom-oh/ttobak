@@ -6,6 +6,7 @@ import {
   getMeetingDetection,
   isTauri,
   onNativeMeetingDetected,
+  onNativeMeetingAnswered,
   onNativeMeetingEnded,
   onNativeMeetingResumed,
   respondMeetingDetection,
@@ -87,6 +88,12 @@ export function MeetingDetectionBanner() {
     const offResumed = onNativeMeetingResumed(() => {
       setPrompt((current) => (current?.phase === 'ended' ? null : current));
     });
+    // Started or dismissed from the app's floating prompt.
+    const offAnswered = onNativeMeetingAnswered((detection) => {
+      setPrompt((current) =>
+        current?.phase === 'detected' && current.detection.detectionId === detection.detectionId ? null : current,
+      );
+    });
     const offEnded = onNativeMeetingEnded((detection) => {
       setError(null);
       setPrompt((current) => {
@@ -108,6 +115,7 @@ export function MeetingDetectionBanner() {
       offDetected();
       offEnded();
       offResumed();
+      offAnswered();
     };
   }, [isAuthenticated]);
 
