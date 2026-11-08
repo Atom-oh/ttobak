@@ -64,6 +64,11 @@ func (c *discoveryReadCache) prime(ctx context.Context, user string, ids []strin
 	if c.batch == nil || !readingID.MatchString(user) {
 		return nil
 	}
+	c.mu.Lock()
+	if c.user == "" {
+		c.user = user
+	}
+	c.mu.Unlock()
 	ancestry = ancestry && descendantReadsEnabled()
 	type entry struct {
 		id      string
