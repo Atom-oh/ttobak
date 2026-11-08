@@ -57,8 +57,8 @@ native-pcm-chunk (16kHz mono PCM for captions); native-control-request
 ({requestId, action start|stop, params, origin mcp|detection}) goes to the main window only.
 native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser,
 recording}) also go to the main window only.
-native-mic-muted ({muted, app, reason muted|meeting_ended}) reports the Zoom mute
-gate; native-system-wake follows a system wake. Remote event capability grants must
+native-mic-muted ({muted, app Zoom|Google Meet, reason muted|meeting_ended}) reports
+the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the
 ACL for every command called from the remote SPA: each command must be listed in
 `build.rs` COMMANDS and its `allow-*` permission granted in
@@ -105,8 +105,9 @@ ACL for every command called from the remote SPA: each command must be listed in
   are fixed strings returning only meeting-URL prefixes, with the PID passed as an
   argument; never log tab URLs or widen the prefix list without updating
   `classify_meeting_url`.
-- The Zoom mute gate (`zoom_mute.rs`) reads Zoom through Accessibility off the
-  IOProc thread and only flips an atomic the IOProc reads; never call AX or
+- The Zoom/Meet mute gate (`zoom_mute.rs`, `meet_mute.rs`) reads the meeting
+  UI through Accessibility off the IOProc thread and only flips an atomic the
+  IOProc reads; Meet silences only on its muted label and never logs labels or URLs; never call AX or
   log from the IOProc. A microphone switch holds the backend's resource lock
   across its Core Audio calls, never the recorder lock.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)

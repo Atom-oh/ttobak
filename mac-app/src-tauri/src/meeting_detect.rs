@@ -310,6 +310,12 @@ pub async fn meeting_detection_respond(
     Ok(reply)
 }
 
+/// Main PIDs of Chromium browser instances capturing or playing audio; the
+/// Google Meet mute follower reads only these (Safari's shared WebKit process
+/// has no resolvable instance).
+#[cfg(target_os = "macos")]
+pub use mac::{capturing_browser_pids, other_output_running};
+
 #[cfg(target_os = "macos")]
 mod mac {
     use std::collections::{HashMap, HashSet};
@@ -572,6 +578,41 @@ mod mac {
             .filter(|l| !l.is_empty())
             .map(str::to_owned)
             .collect())
+    }
+
+    /// Whether a process other than this app is playing audio.
+    pub fn other_output_running() -> bool {
+        let own_pid = std::process::id() as i32;
+        process_objects().into_iter().any(|p| {
+            get_u32(p, kAudioProcessPropertyIsRunningOutput) == Some(1)
+                && get_i32(p, kAudioProcessPropertyPID) != Some(own_pid)
+        })
+    }
+
+    pub fn capturing_browser_pids() -> Vec<i32> {
+        let mut pids = Vec::new();
+        for process in process_objects() {
+            let input = get_u32(process, kAudioProcessPropertyIsRunningInput) == Some(1);
+            let output = get_u32(process, kAudioProcessPropertyIsRunningOutput) == Some(1);
+            if !input && !output {
+                continue;
+            }
+            let browser = bundle_id(process).and_then(|b| match classify_bundle(&b) {
+                Some(MicUser::Browser(b)) if b != Browser::Safari => Some(b),
+                _ => None,
+            });
+            if browser.is_none() {
+                continue;
+            }
+            if let Some(root) =
+                get_i32(process, kAudioProcessPropertyPID).and_then(browser_root_pid)
+            {
+                if !pids.contains(&root) {
+                    pids.push(root);
+                }
+            }
+        }
+        pids
     }
 
     extern "C" {

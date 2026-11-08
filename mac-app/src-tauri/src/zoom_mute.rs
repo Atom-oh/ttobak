@@ -133,6 +133,12 @@ impl Gate {
 #[cfg(target_os = "macos")]
 pub use mac::{meeting_over, watch, Watch};
 
+/// Accessibility helpers shared with `meet_mute`.
+#[cfg(target_os = "macos")]
+pub(crate) mod ax {
+    pub(crate) use super::mac::{as_array, children, copy_attr, create_app};
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use std::ffi::c_void;
@@ -191,7 +197,7 @@ mod mac {
         trusted
     }
 
-    fn copy_attr(element: &CFType, name: &str) -> Option<CFType> {
+    pub(crate) fn copy_attr(element: &CFType, name: &str) -> Option<CFType> {
         let name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
         let status = unsafe {
@@ -204,14 +210,14 @@ mod mac {
         (status == 0 && !value.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(value) })
     }
 
-    fn children(element: &CFType) -> Vec<CFType> {
+    pub(crate) fn children(element: &CFType) -> Vec<CFType> {
         match copy_attr(element, "AXChildren") {
             Some(value) => as_array(value),
             None => Vec::new(),
         }
     }
 
-    fn as_array(value: CFType) -> Vec<CFType> {
+    pub(crate) fn as_array(value: CFType) -> Vec<CFType> {
         if value.type_of() != CFArray::<CFType>::type_id() {
             return Vec::new();
         }
@@ -223,14 +229,20 @@ mod mac {
     /// Zoom's main meeting window identifier (the one Notion also keys on).
     const MEETING_WINDOW_ID: &str = "zm.meeting.window.main";
 
-    /// What Zoom's UI shows, or `None` when it cannot be read.
-    fn zoom_ui(pid: i32, labels: &Labels) -> Option<MicState> {
+    /// The application's Accessibility element, with a bounded call timeout.
+    pub(crate) fn create_app(pid: i32) -> Option<CFType> {
         let app = unsafe { AXUIElementCreateApplication(pid) };
         if app.is_null() {
             return None;
         }
         let app = unsafe { CFType::wrap_under_create_rule(app) };
         unsafe { AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), AX_TIMEOUT_SECONDS) };
+        Some(app)
+    }
+
+    /// What Zoom's UI shows, or `None` when it cannot be read.
+    fn zoom_ui(pid: i32, labels: &Labels) -> Option<MicState> {
+        let app = create_app(pid)?;
         let titles = menu_titles(&app)?;
         let mic = classify(titles.iter().map(String::as_str), labels);
         if mic != MicState::Unknown {
@@ -381,9 +393,11 @@ mod mac {
     pub fn watch(app: AppHandle, muted: Arc<AtomicBool>) -> (Watch, Option<String>) {
         let running = Arc::new(AtomicBool::new(true));
         let zoom_running = crate::audio::macos::process_pid(ZOOM_BUNDLE).is_some();
-        let warning = (zoom_running && !request_trust()).then(|| {
+        let browser_running = !crate::meeting_detect::capturing_browser_pids().is_empty();
+        let warning = ((zoom_running || browser_running) && !request_trust()).then(|| {
             "Allow TTOBAK in System Settings > Privacy & Security > Accessibility so the \
-             recording follows Zoom's mute; until then the microphone is always recorded."
+             recording follows Zoom's and Google Meet's mute; until then the microphone is \
+             always recorded."
                 .to_owned()
         });
         let flag = running.clone();
@@ -396,25 +410,48 @@ mod mac {
         (Watch { running }, warning)
     }
 
+    /// Browser instances are re-resolved this often.
+    const BROWSER_REFRESH: Duration = Duration::from_secs(2);
+
     fn run(app: AppHandle, muted: Arc<AtomicBool>, running: Arc<AtomicBool>) {
         let started = Instant::now();
-        if labels().is_empty() {
+        let zoom_labels = !labels().is_empty();
+        if !zoom_labels {
             log::warn!("Zoom mute labels unavailable; not following Zoom's mute");
-            return;
         }
         let mut gate = Gate::default();
+        let mut meet = crate::meet_mute::Hold::default();
         let mut pid: Option<i32> = None;
         let mut pid_checked: Option<Instant> = None;
-        let mut announced: Option<Silence> = None;
+        let mut browsers: Vec<i32> = Vec::new();
+        let mut browsers_checked: Option<Instant> = None;
+        let mut announced: Option<(Silence, &'static str)> = None;
         while running.load(Ordering::Relaxed) {
-            let state = current_state(&mut pid, &mut pid_checked);
-            let now = started.elapsed().as_millis() as u64;
-            let silence = gate.observe(now, state);
-            muted.store(silence != Silence::Open, Ordering::Relaxed);
-            if announced != Some(silence) {
-                if announced.is_some() || silence != Silence::Open {
-                    log::info!("Zoom microphone gate: {silence:?}");
-                    let reason = match silence {
+            let trusted = unsafe { AXIsProcessTrusted() };
+            let zoom = if zoom_labels {
+                let state = current_state(&mut pid, &mut pid_checked);
+                gate.observe(started.elapsed().as_millis() as u64, state)
+            } else {
+                Silence::Open
+            };
+            let meet_muted = trusted && {
+                if browsers_checked.map_or(true, |t| t.elapsed() >= BROWSER_REFRESH) {
+                    browsers = crate::meeting_detect::capturing_browser_pids();
+                    browsers_checked = Some(Instant::now());
+                }
+                meet.observe(crate::meet_mute::current_state(&browsers))
+            };
+            let current = match (zoom, meet_muted) {
+                (Silence::Open, true) => (Silence::Muted, "Google Meet"),
+                // Reopening reports the app that had silenced the microphone.
+                (Silence::Open, false) => (Silence::Open, announced.map_or("Zoom", |a| a.1)),
+                (s, _) => (s, "Zoom"),
+            };
+            muted.store(current.0 != Silence::Open, Ordering::Relaxed);
+            if announced.map(|a| a.0) != Some(current.0) {
+                if announced.is_some() || current.0 != Silence::Open {
+                    log::info!("{} microphone gate: {:?}", current.1, current.0);
+                    let reason = match current.0 {
                         Silence::Open => None,
                         Silence::Muted => Some("muted"),
                         Silence::MeetingEnded => Some("meeting_ended"),
@@ -422,13 +459,13 @@ mod mac {
                     let _ = app.emit(
                         "native-mic-muted",
                         MuteEvent {
-                            muted: silence != Silence::Open,
-                            app: "Zoom",
+                            muted: current.0 != Silence::Open,
+                            app: current.1,
                             reason,
                         },
                     );
                 }
-                announced = Some(silence);
+                announced = Some(current);
             }
             std::thread::sleep(POLL);
         }

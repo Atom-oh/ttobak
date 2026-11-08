@@ -253,6 +253,43 @@ pub(crate) fn recording_path(meeting_id: &str) -> Result<PathBuf, AppError> {
 // ---------------------------------------------------------------------------
 // macOS implementation
 // ---------------------------------------------------------------------------
+/// Seconds of other apps' playback with an all-zero tap before warning.
+pub const SILENCE_WARN_PLAYING_SECONDS: u32 = 10;
+
+/// Outcome of one early system-audio silence observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SilenceVerdict {
+    Wait,
+    /// System audio arrived; the check is done.
+    Fine,
+    /// Other apps played audio long enough while the tap stayed silent.
+    Warn,
+}
+
+/// Counts seconds in which other apps played audio before any system audio
+/// arrived. The tap of a denied System Audio Recording permission delivers
+/// exact zeros, while a silent room alone does not keep others' output on.
+#[derive(Debug, Default)]
+pub struct SilenceCheck {
+    playing_seconds: u32,
+}
+
+impl SilenceCheck {
+    pub fn observe(&mut self, others_playing: bool, system_heard: bool) -> SilenceVerdict {
+        if system_heard {
+            return SilenceVerdict::Fine;
+        }
+        if others_playing {
+            self.playing_seconds += 1;
+        }
+        if self.playing_seconds >= SILENCE_WARN_PLAYING_SECONDS {
+            SilenceVerdict::Warn
+        } else {
+            SilenceVerdict::Wait
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub mod macos {
     //! Core Audio process-tap capture (macOS 14.2+) mixed with the default
@@ -536,6 +573,57 @@ pub mod macos {
         mic_muted: Arc<AtomicBool>,
         /// Follows Zoom's mute for this recording; dropped with the backend.
         _zoom_mute: crate::zoom_mute::Watch,
+        /// Warns early when system audio stays silent; dropped with the backend.
+        _silence_watch: SilenceWatch,
+    }
+
+    /// Stops the early system-audio silence check when dropped.
+    struct SilenceWatch(Arc<AtomicBool>);
+
+    impl Drop for SilenceWatch {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// Posts a notification when other apps play audio but the tap delivers
+    /// only exact zeros: System Audio Recording is most likely denied, and
+    /// otherwise this is reported only at stop.
+    fn watch_system_silence(app: AppHandle, stats: Arc<Stats>) -> SilenceWatch {
+        use tauri_plugin_notification::NotificationExt;
+        let running = Arc::new(AtomicBool::new(true));
+        let flag = Arc::clone(&running);
+        let spawned = std::thread::Builder::new()
+            .name("system-silence".into())
+            .spawn(move || {
+                let mut check = super::SilenceCheck::default();
+                while flag.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let playing = crate::meeting_detect::other_output_running();
+                    match check.observe(playing, stats.system_peak() > 0.0) {
+                        super::SilenceVerdict::Wait => continue,
+                        super::SilenceVerdict::Fine => return,
+                        super::SilenceVerdict::Warn => {
+                            log::warn!("system audio silent while other apps play audio");
+                            let _ = app
+                                .notification()
+                                .builder()
+                                .title("참여자 소리가 녹음되지 않고 있어요")
+                                .body(
+                                    "시스템 오디오 녹음 권한이 없는 것 같아요. 시스템 설정 > \
+                                     개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 \
+                                     TTOBAK을 허용한 뒤 앱을 다시 실행하세요.",
+                                )
+                                .show();
+                            return;
+                        }
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("could not start the system audio silence check: {e}");
+        }
+        SilenceWatch(running)
     }
 
     /// The microphone a recording captures, reported in the start response.
@@ -674,6 +762,7 @@ pub mod macos {
             let switch_counter = Arc::clone(&generation_counter);
 
             let mic_muted = Arc::new(AtomicBool::new(false));
+            let silence_watch = watch_system_silence(app.clone(), Arc::clone(&stats));
             let (zoom_mute, zoom_warning) = crate::zoom_mute::watch(app, Arc::clone(&mic_muted));
             start_warnings.extend(zoom_warning);
             let ctx = Box::into_raw(Box::new(CallbackCtx {
@@ -734,6 +823,7 @@ pub mod macos {
                 generation_counter: switch_counter,
                 mic_muted,
                 _zoom_mute: zoom_mute,
+                _silence_watch: silence_watch,
             })
         }
 
@@ -1643,6 +1733,35 @@ pub mod macos {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod silence_check_tests {
+    use super::*;
+
+    #[test]
+    fn warns_after_others_play_while_the_tap_is_silent() {
+        let mut c = SilenceCheck::default();
+        for _ in 1..SILENCE_WARN_PLAYING_SECONDS {
+            assert_eq!(c.observe(true, false), SilenceVerdict::Wait);
+        }
+        assert_eq!(c.observe(true, false), SilenceVerdict::Warn);
+    }
+
+    #[test]
+    fn nothing_playing_never_warns() {
+        let mut c = SilenceCheck::default();
+        for _ in 0..100 {
+            assert_eq!(c.observe(false, false), SilenceVerdict::Wait);
+        }
+    }
+
+    #[test]
+    fn system_audio_ends_the_check() {
+        let mut c = SilenceCheck::default();
+        assert_eq!(c.observe(true, false), SilenceVerdict::Wait);
+        assert_eq!(c.observe(true, true), SilenceVerdict::Fine);
     }
 }
 

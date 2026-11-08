@@ -93,9 +93,21 @@ without a user confirmation.
   unreadable stretch over 3 s does too: Zoom no longer hears the user. A
   recording that never saw a Zoom state records the microphone as before.
   The same confirmed end lets detection end the Zoom meeting without the 20 s
-  audio grace. This needs Accessibility permission; without it the start
+  audio grace.
+- Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads
+  the Meet page of each Chromium browser instance playing or capturing audio
+  through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). Only
+  the toggle's muted label ("Turn on microphone" and its Korean form) silences the
+  microphone; any other readable page records it, so an unlisted language
+  never drops the user's voice. An unreadable page (another tab in front)
+  keeps the last state. Safari's shared WebKit process is not followed. This needs Accessibility permission; without it the start
   response warns and the microphone is always recorded. Ad-hoc re-signing
   invalidates the grant, as it does other TCC grants.
+- During a native recording, if other apps play audio for 10 s while the
+  system tap has delivered only exact zeros, the app posts a notification that
+  System Audio Recording is likely denied, instead of reporting it only at
+  stop. A process launched from a terminal is attributed to that terminal by
+  TCC; launch the app through Finder or `open` when testing permissions.
 - When the Mac is about to sleep during a recording (e.g. the lid closes
   without a stop), `sleep.rs` stops it through the control path with the
   upload requested and delays sleep until the stop is answered or 20 s pass.
@@ -115,6 +127,7 @@ without a user confirmation.
 - No CI covers this module; the Core Audio probe and AppleScript path need
   manual verification on macOS.
 - Push-to-talk (holding Space while muted) is not reflected in Zoom's menu, so
-  that speech is not recorded. Zoom's web client and other meeting apps keep
-  recording the microphone regardless of their mute.
+  that speech is not recorded. Zoom's web client, Teams and other meeting apps keep recording the
+  microphone regardless of their mute; Meet's mute is followed in Chromium
+  browsers only, in English and Korean.
 - An upload interrupted by sleep completes only after wake.

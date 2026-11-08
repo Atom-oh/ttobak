@@ -32,6 +32,7 @@ mod control_proto;
 mod error;
 mod input_select;
 mod leftover;
+mod meet_mute;
 mod meeting;
 mod meeting_detect;
 mod mix;
