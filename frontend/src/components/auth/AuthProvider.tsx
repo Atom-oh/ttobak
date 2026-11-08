@@ -6,6 +6,7 @@ import { AuthUser, getCurrentUser, signIn, signOut, completeNewPassword, isNewPa
 import { EmailVerificationPanel } from './EmailVerificationPanel';
 import { proactiveSearchStore, resetProactiveClaims, setProactiveSearchUser } from '@/lib/proactiveSearch';
 import { inviteStatusMessage } from '@/lib/inviteStatus';
+import { invalidateAccountList } from '@/lib/accountListCache';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -68,6 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // questions can't shadow the next user's.
       proactiveSearchStore.clear();
       resetProactiveClaims();
+      invalidateAccountList();
     });
     return () => setAuthFailureCallback(null);
   }, []);
@@ -138,6 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setBootstrappedUserId(expectedUserId);
           // Do not unmount recordings or active forms for subsequent grant work.
           // Membership-dependent views refetch on this revision instead.
+          invalidateAccountList();
           setMembershipRevision(revision => revision + 1);
           const more = result.legacyBootstrap || result.projectInvitationsEnabled === undefined ||
             (bootstrapEmailVerified && (result.retryPending || result.projectCursor));
@@ -188,7 +191,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const inviteStatus = inviteStatusMessage({ pendingGrants, retryPending, projectContinuation });
 
   const logout = useCallback(async () => {
-    await signOut();
+    try {
+      await signOut();
+    } finally {
+      invalidateAccountList();
+    }
     setUser(null);
   }, []);
 

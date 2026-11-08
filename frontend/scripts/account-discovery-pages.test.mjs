@@ -14,6 +14,8 @@ function fixture(pages, { unsupportedDirect = false, firstStatus, laterStatus } 
   const requests = [];
   const token = `synthetic.${Buffer.from(JSON.stringify({ sub: 'reader', exp: Date.now() / 1000 + 3600 })).toString('base64url')}.signature`;
   const dependencies = {
+    // Pass-through: these tests exercise transport, not the list cache.
+    './accountListCache': { cachedAccountList: (_key, load) => load(), invalidateAccountList() {}, peekAccountList() {} },
     './auth': { getIdToken: () => token, refreshSession: async () => token },
     './runtimeConfig': { getRuntimeConfig: async () => ({}) },
     '@/components/auth/AuthProvider': { triggerAuthFailure() {} },

@@ -729,7 +729,9 @@ private meeting links, mutations and Billing continue to require direct grants.
 `GET /api/accounts` retains `{accounts: [...]}` for callers without pagination.
 Optional `pageSize=1..100` and opaque `cursor` return `{accounts, nextCursor}`.
 Discovery validates canonical ancestry and membership, including empty advancing
-pages. Each paged request performs at most four discovery steps. With descendant
+pages. Each paged request stops after 256 discovery steps (one index or child
+query each) or two seconds of traversal, reads ancestry once per request, and
+rechecks every returned row against current grants before responding. With descendant
 reads enabled, responses declare `overlapPossible: true, unionKey: "accountId"`:
 independent direct roots can overlap descendant traversal. Clients combine those
 declared pages by Account ID, replacing a duplicate with its current response
