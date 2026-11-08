@@ -31,7 +31,7 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
   const hooks = {
     ...React,
     useState: initial => [stateIndex in states ? states[stateIndex++] : (stateIndex++, typeof initial === 'function' ? initial() : initial), () => {}],
-    useRef: initial => ({ current: initial }), useEffect() {},
+    useRef: initial => ({ current: initial }), useEffect() {}, useLayoutEffect() {},
     useCallback: callback => callback, useMemo: callback => callback(),
     useId: () => 'account-control',
   };
@@ -76,13 +76,13 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     return exports;
   }
   const loaded = load(`@/components/${component}`);
-  const Component = loaded.default || loaded[component.split('/').at(-1)];
-  const tree = Component(props);
+  const Component = component === 'AccountDetailClient' ? loaded.AccountDetailContent : loaded.default || loaded[component.split('/').at(-1)];
+  const tree = Component(component === 'AccountDetailClient' ? { accountId: pathname.split('/').at(-1) } : props);
   return { html: renderToStaticMarkup(tree), tree, editorInputs };
 }
 
 function accountStates(value, billing = null) {
-  return { 0: value, 1: billing, 2: [], 3: [], 4: [], 5: [], 6: [], 7: false, 8: false };
+  return { 0: value, 1: billing, 2: 0, 3: false };
 }
 function docStates(value) {
   return { 0: value, 1: [], 2: value.title, 3: false };
