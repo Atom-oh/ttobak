@@ -34,7 +34,7 @@ function fixture({ draftFails = false, preparationApplied = true, initialAccount
       serverAccount = preparationApplied ? payload.accountId : undefined;
       return { meetingId: 'm1', preparationApplied, supportsNotesComparison: true, notesRevision: 'r1' };
     },
-    get: async id => ({ accountId: id === 'restored' ? 'restored-account' : serverAccount, notes: '', notesRevision: 'r1', supportsPrivateAccountLink: true, supportsNotesComparison: true }),
+    get: async id => ({ accountId: id === 'restored' ? 'restored-account' : serverAccount, projectIds: [...serverProjects], notes: '', notesRevision: 'r1', supportsPrivateAccountLink: true, supportsNotesComparison: true }),
     update: async () => ({ notesRevision: 'r2' }),
   };
   const dependencies = {
@@ -491,4 +491,28 @@ test('a new recording does not inherit an earlier account skip decision', async 
     second.resolve();
     await tick();
   }
+});
+
+test('a removal requested before keeping a recording locally is applied after restore', async () => {
+  let failUnlink = true;
+  const fixtureState = fixture({ unlinkGate: async () => { if (failUnlink) throw new Error('Project unavailable'); } });
+  const backup = browserBackup();
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  await fixtureState.hook.changeRecordingProjects(['project']);
+  assert.equal(fixtureState.serverProjects.has('project'), true);
+  await fixtureState.hook.changeRecordingProjects([]);
+  assert.equal(fixtureState.serverProjects.has('project'), true, 'the removal attempt failed');
+  await fixtureState.hook.keepLocally('');
+  assert.deepEqual(plain(backup.metadata.projectIds), []);
+  assert.ok(backup.metadata.attemptedProjectIds.includes('project'), 'the unconfirmed removal is kept with the copy');
+  failUnlink = false;
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  const published = fixtureState.states.filter(value => value && typeof value === 'object' && 'projectIds' in value).at(-1);
+  assert.deepEqual(plain(published.projectIds), []);
+  assert.deepEqual(plain(published.linkedProjectIds), ['project']);
+  const before = fixtureState.calls.length;
+  await fixtureState.hook.handleNotesSubmit('');
+  const after = fixtureState.calls.slice(before).map(([kind]) => kind);
+  assert.ok(after.includes('unlinkProject') && after.indexOf('unlinkProject') < after.indexOf('presign'), `the removal runs before the upload: ${after}`);
+  assert.equal(fixtureState.serverProjects.has('project'), false);
 });

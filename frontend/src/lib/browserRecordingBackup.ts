@@ -11,9 +11,14 @@ export interface BrowserRecordingMetadata {
   chunkCount: number;
   byteSize: number;
   finalized: boolean;
+  // Recording project links kept with a local copy so a restore resumes the
+  // requested additions and removals instead of silently dropping them.
+  projectIds?: string[];
+  linkedProjectIds?: string[];
+  attemptedProjectIds?: string[];
 }
 
-type RecordingPatch = Partial<Pick<BrowserRecordingMetadata, 'title' | 'notes' | 'meetingId' | 'uploadKey' | 'finalized'>>;
+type RecordingPatch = Partial<Pick<BrowserRecordingMetadata, 'title' | 'notes' | 'meetingId' | 'uploadKey' | 'finalized' | 'projectIds' | 'linkedProjectIds' | 'attemptedProjectIds'>>;
 
 const DATABASE = 'ttobak-recording-backups';
 const RECORDINGS = 'recordings';

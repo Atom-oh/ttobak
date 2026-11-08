@@ -632,6 +632,12 @@ export function usePostRecording({
       setServerMeetingId(metadata.meetingId);
       boundAccountRef.current = meeting.accountId || undefined;
       preparationRef.current.accountId = boundAccountRef.current;
+      // The server's current links plus any the copy believed applied are
+      // linked; the copy's selection (when saved) is the target, so a requested
+      // removal is retried before upload rather than dropped.
+      linkedProjectsRef.current = normalizeProjectIds([...(meeting.projectIds || []), ...(metadata.linkedProjectIds || [])]);
+      desiredProjectsRef.current = normalizeProjectIds(metadata.projectIds ?? linkedProjectsRef.current);
+      attemptedProjectsRef.current = normalizeProjectIds(metadata.attemptedProjectIds || []);
       const currentNotes = meeting.notes || '';
       notesWriter.initialize(metadata.meetingId, currentNotes, meeting.supportsNotesComparison === true, meeting.notesRevision || '');
       setCreatedNotes({ meetingId: metadata.meetingId, notes: metadata.notes });
@@ -643,6 +649,8 @@ export function usePostRecording({
       setCreatedNotes(null);
       setNotesConflict(null);
       preparationRef.current = { notes: metadata.notes };
+      // No server meeting yet: the saved selection is applied once it is created.
+      desiredProjectsRef.current = normalizeProjectIds(metadata.projectIds || []);
     }
     publishLinks();
     // Uploaded bytes are already acknowledged; local note/title edits remain
@@ -674,6 +682,8 @@ export function usePostRecording({
     if (pending?.kind !== 'blob' || !pending.backup) throw new Error('기기 보관본을 확인할 수 없습니다.');
     if (codePointLength(notes) > MAX_MEETING_NOTES) throw new Error('메모는 32,000자까지 저장할 수 있습니다.');
     await pending.backup.update({ notes, title: meetingTitle, finalized: true,
+      projectIds: desiredProjectsRef.current, linkedProjectIds: linkedProjectsRef.current,
+      attemptedProjectIds: attemptedProjectsRef.current,
       ...(persistedMeetingIdRef.current ? { meetingId: persistedMeetingIdRef.current } : {}) });
     router.push('/');
   }, [meetingTitle, router]);
