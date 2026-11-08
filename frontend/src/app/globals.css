@@ -274,7 +274,10 @@ body {
    ═══════════════════════════════════════════════ */
 
 /* Focus styles */
-input:focus, button:focus, textarea:focus, select:focus {
+input:focus:not(:focus-visible),
+button:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+select:focus:not(:focus-visible) {
   outline: none;
 }
 
