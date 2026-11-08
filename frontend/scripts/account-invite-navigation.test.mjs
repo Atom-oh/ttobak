@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { accountComponentHarness } from './account-component-harness.mjs';
 
 const transpile = (source) => ts.transpileModule(source, {
   compilerOptions: {
@@ -12,40 +13,13 @@ const transpile = (source) => ts.transpileModule(source, {
 }).outputText;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvitationPending = true) {
-  const slots = [];
-  let cursor = 0;
-  let effects = [];
+function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvitationPending = true, options = {}) {
+  const harness = accountComponentHarness();
   let pathname = '/accounts/A';
-  const same = (a, b) => a?.length === b?.length && a.every((value, i) => Object.is(value, b[i]));
-  const react = {
-    useState(initial) {
-      const index = cursor++;
-      if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
-      return [slots[index], value => {
-        slots[index] = typeof value === 'function' ? value(slots[index]) : value;
-      }];
-    },
-    useRef(current) {
-      const index = cursor++;
-      if (!(index in slots)) slots[index] = { current };
-      return slots[index];
-    },
-    useCallback(callback, dependencies) {
-      const index = cursor++;
-      if (!same(slots[index]?.dependencies, dependencies)) slots[index] = { callback, dependencies };
-      return slots[index].callback;
-    },
-    useEffect(effect, dependencies) {
-      const index = cursor++;
-      if (!same(slots[index]?.dependencies, dependencies)) {
-        effects.push(() => {
-          slots[index]?.cleanup?.();
-          slots[index] = { dependencies, cleanup: effect() };
-        });
-      }
-    },
-  };
+  let membershipRevision = 0;
+  let userId = options.userId || 'member';
+  const navigation = [];
+  const react = harness.react;
   const helper = {};
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/lib/accountInvite.ts', import.meta.url), 'utf8')), { exports: helper, Error });
@@ -58,40 +32,47 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const MemberPicker = () => null;
   const emptyComponent = () => null;
   const emptyResult = async () => ({});
-  const jsx = (type, props) => ({ type, props });
+  const jsx = (type, props, key) => ({ type, props, key });
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
     'next/navigation': {
-      usePathname: () => pathname, useRouter: () => ({ push() {}, replace() {} }),
-      useSearchParams: () => new URLSearchParams(),
+      usePathname: () => pathname, useRouter: () => ({ push: href => navigation.push(href), replace() {} }),
+      useSearchParams: () => new URLSearchParams(options.tab ? `tab=${options.tab}` : ''),
     },
     '@/components/auth/AuthProvider': {
-      useAuth: () => ({ user: { userId: 'member' }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }),
+      useAuth: () => ({ user: { userId }, isLoading: false, isAuthenticated: true, membershipRevision }),
     },
     '@/components/layout/AppLayout': { AppLayout: emptyComponent },
     '@/lib/api': {
       accountApi: {
-        get: async accountId => ({
+        get: options.get || (async accountId => ({
           accountId, name: accountId, ownerUserId: 'owner', ownerInvitationPending,
           members: [
             { userId: 'owner', email: 'owner@example.invalid', role: 'owner' },
             { userId: 'member', email: 'member@example.invalid', role: 'SSA' },
           ],
-        }),
+        })),
         meetings: emptyResult, insights: emptyResult,
         listDocuments: emptyResult, research: emptyResult,
         addMember,
         resendOwnerInvitation,
+        removeMember: options.removeMember || emptyResult,
+        putDocument: options.putDocument || emptyResult,
       },
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
-    '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/dialog': { confirmDialog: async () => true, alertDialog: async () => {} }, '@/lib/upload': { uploadDocFile() {} },
+    '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/dialog': { confirmDialog: async () => true, alertDialog: async () => {} }, '@/lib/upload': { uploadDocFile: options.uploadDocFile || emptyResult },
     '@/lib/accountAccess': accountAccess,
     '@/components/MemberPicker': { MemberPicker },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
+    '@/components/workspace/UpcomingMeetings': { PrivateUpcomingMeetings: () => { throw new Error('Calendar must not mount on overview'); } },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
     '@/components/AccountBillingTab': { AccountBillingTab: emptyComponent },
     '@/components/AccountContacts': { AccountContacts: emptyComponent },
+    '@/components/workspace/AccountWorkspaceSelector': {
+      AccountWorkspaceSelector: emptyComponent,
+      useAccountWorkspaceAccounts: () => ({ accounts: [], loading: false, error: null }),
+    },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({}) },
     '@/lib/billingApi': { fetchBillingAccounts: async () => [] },
     '@/lib/billingSummary': { billingEntryFor: () => null },
@@ -100,27 +81,173 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const exports = {};
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/components/AccountDetailClient.tsx', import.meta.url), 'utf8')), {
-    exports, Error, console,
+    exports, Error, console, AbortController, URLSearchParams, confirm: () => true,
     require: name => { assert.ok(name in modules, name); return modules[name]; },
   });
-  const render = () => {
-    cursor = 0; effects = [];
-    const tree = exports.default();
-    effects.forEach(effect => effect());
-    return tree;
-  };
+  const render = () => harness.render(exports.default, new Set([MemberPicker, emptyComponent]));
   const nodes = node => {
     if (!node || typeof node !== 'object') return [];
     return [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
   };
   const find = predicate => nodes(render()).find(predicate);
   return {
+    find, navigation,
     async start() { render(); await tick(); render(); },
     async navigate(accountId) { pathname = `/accounts/${accountId}`; render(); await tick(); render(); },
+    async refreshMembership() { membershipRevision++; render(); await tick(); render(); },
+    async switchUser(next) { userId = next; render(); await tick(); render(); },
     pick: email => find(node => node.type === MemberPicker).props.onPick({ email }),
     resend: () => find(node => node.type === 'button' && node.props.children === '초대 메일 다시 보내기'),
     resendOwner: () => find(node => node.type === 'button' && node.props.children === 'Owner 초대 메일 다시 보내기'),
+    remove: () => find(node => node.type === 'button' && node.props.title === 'Remove member'),
+    get text() { return JSON.stringify(render()); },
   };
+}
+
+for (const kind of ['slide', 'note']) {
+  test(`${kind} completion survives a pending same-account metadata refresh`, async () => {
+    let finish, refresh;
+    let reads = 0, writes = 0;
+    const metadata = { accountId: 'A', ownerUserId: 'owner', members: [{ userId: 'member', role: 'SSA' }] };
+    const page = fixture(async () => ({}), undefined, false, {
+      tab: 'docs',
+      get: () => ++reads === 1 ? Promise.resolve(metadata) : new Promise(resolve => { refresh = resolve; }),
+      uploadDocFile: () => new Promise(resolve => { finish = () => resolve({ key: 'docs/synthetic' }); }),
+      putDocument: async () => {
+        writes++;
+        return kind === 'note' ? new Promise(resolve => { finish = () => resolve({ docId: 'created' }); }) : { docId: 'created' };
+      },
+    });
+    await page.start();
+    const operation = kind === 'slide'
+      ? page.find(node => node.type === 'input' && node.props.type === 'file').props.onChange({ target: { files: [{ name: 'synthetic.pdf', type: 'application/pdf', size: 1 }], value: '' } })
+      : page.find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('Note')).props.onClick();
+    await page.refreshMembership();
+    finish();
+    await operation;
+    refresh(metadata);
+    await tick();
+    assert.equal(writes, 1);
+    assert.deepEqual(page.navigation, ['/accounts/A/docs/created']);
+    assert.equal(page.find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('Slide'))?.props.disabled, false);
+  });
+}
+
+test('an upload denied during refresh cannot revive after access recovery or leave the control stuck', async () => {
+  let finish, deny = false, writes = 0;
+  const page = fixture(async () => ({}), undefined, false, {
+    tab: 'docs',
+    get: async () => {
+      if (deny) throw Object.assign(new Error('Denied'), { status: 403 });
+      return { accountId: 'A', ownerUserId: 'owner', members: [{ userId: 'member', role: 'SSA' }] };
+    },
+    uploadDocFile: () => new Promise(resolve => { finish = () => resolve({ key: 'docs/synthetic' }); }),
+    putDocument: async () => { writes++; return { docId: 'created' }; },
+  });
+  await page.start();
+  const pending = page.find(node => node.type === 'input' && node.props.type === 'file').props.onChange({ target: { files: [{ name: 'synthetic.pdf', type: 'application/pdf', size: 1 }], value: '' } });
+  deny = true;
+  await page.refreshMembership();
+  deny = false;
+  await page.refreshMembership();
+  finish();
+  await pending;
+  assert.equal(writes, 0);
+  assert.deepEqual(page.navigation, []);
+  assert.equal(page.find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('Slide'))?.props.disabled, false);
+});
+
+test('an invitation finishing after membership refresh reloads the current account scope', async () => {
+  let finish, reads = 0;
+  const page = fixture(() => new Promise(resolve => { finish = resolve; }), undefined, false, {
+    get: async () => {
+      reads++;
+      return { accountId: 'A', ownerUserId: 'owner', members: [{ userId: 'member', role: 'SSA' }] };
+    },
+  });
+  await page.start();
+  const pending = page.pick('recipient@example.invalid');
+  await page.refreshMembership();
+  assert.equal(reads, 2);
+  finish({});
+  await pending;
+  assert.equal(reads, 3);
+});
+
+test('membership refresh preserves a completed invitation but rejects captured old controls', async () => {
+  let calls = 0;
+  const page = fixture(async () => { calls++; return { pending: true, invited: true }; });
+  await page.start();
+  await page.pick('recipient@example.invalid');
+  const stale = page.resend();
+  await page.refreshMembership();
+  assert.ok(page.resend());
+  assert.match(page.text, /recipient@example.invalid/);
+  await stale.props.onClick();
+  assert.equal(calls, 1);
+  await page.resend().props.onClick();
+  assert.equal(calls, 2);
+});
+
+test('membership refresh preserves an in-flight invitation result for the same authorized account', async () => {
+  let finish;
+  const page = fixture(() => new Promise(resolve => { finish = resolve; }));
+  await page.start();
+  const pending = page.pick('recipient@example.invalid');
+  await page.refreshMembership();
+  finish({ pending: true, invited: true });
+  await pending;
+  assert.ok(page.resend());
+  assert.match(page.text, /recipient@example.invalid/);
+});
+
+for (const forced of [false, true]) {
+  test(`removal cleanup and ambiguous-share warnings survive refresh failure (forced=${forced})`, async () => {
+    let reads = 0;
+    const page = fixture(async () => ({}), undefined, false, {
+      userId: 'owner',
+      get: async accountId => {
+        if (++reads > 1) throw new Error('Refresh failed');
+        return { accountId, name: accountId, ownerUserId: 'owner', members: [
+          { userId: 'owner', role: 'owner' }, { userId: 'member', role: 'SSA' },
+        ] };
+      },
+      removeMember: async (_accountId, _userId, force) => {
+        if (forced && !force) throw new Error('Retry with force=true');
+        return { cleanupFailedForMeetings: ['failed'], ambiguousUntaggedMeetingIDs: ['ambiguous'] };
+      },
+    });
+    await page.start();
+    await page.remove().props.onClick();
+    assert.match(page.text, /Refresh failed/);
+    assert.match(page.text, /access cleanup failed/);
+    assert.match(page.text, forced ? /left untouched/ : /could not be safely revoked/);
+    assert.equal(page.remove(), undefined);
+  });
+}
+
+for (const cancelledBy of ['navigation', 'principal', 'denial']) {
+  test(`removal warning cannot return after ${cancelledBy}`, async () => {
+    let finish;
+    let reads = 0;
+    const page = fixture(async () => ({}), undefined, false, {
+      userId: 'owner',
+      get: async accountId => {
+        if (++reads > 1 && cancelledBy === 'denial') throw Object.assign(new Error('Access denied'), { status: 403 });
+        return { accountId, name: accountId, ownerUserId: 'owner', members: [
+          { userId: 'owner', role: 'owner' }, { userId: 'member', role: 'SSA' },
+        ] };
+      },
+      removeMember: () => new Promise(resolve => { finish = resolve; }),
+    });
+    await page.start();
+    const pending = page.remove().props.onClick();
+    if (cancelledBy === 'navigation') await page.navigate('B');
+    if (cancelledBy === 'principal') await page.switchUser('another');
+    finish({ cleanupFailedForMeetings: ['failed'], ambiguousUntaggedMeetingIDs: ['ambiguous'] });
+    await pending;
+    assert.doesNotMatch(page.text, /access cleanup failed|could not be safely revoked/);
+  });
 }
 
 test('a queued invitation cannot be resent into a different Account after navigation', async () => {

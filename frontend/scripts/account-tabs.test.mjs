@@ -22,8 +22,17 @@ test('unknown_tab_falls_back_to_overview', () => {
 test('billing_hidden_falls_back_to_overview', () => {
   assert.equal(tabs.parseAccountTab('billing', false), 'general');
   assert.equal(tabs.parseAccountTab('billing', true), 'billing');
-  assert.deepEqual([...tabs.visibleAccountTabs(false)], ['general', 'meetings', 'projects', 'docs']);
-  assert.deepEqual([...tabs.visibleAccountTabs(true)], ['general', 'meetings', 'projects', 'docs', 'billing']);
+  assert.deepEqual([...tabs.visibleAccountTabs(false)], ['general', 'meetings', 'insights', 'projects', 'docs']);
+  assert.deepEqual([...tabs.visibleAccountTabs(true)], ['general', 'meetings', 'insights', 'projects', 'docs', 'billing']);
+});
+
+test('insights_round_trips_without_losing_customer_or_other_query_parameters', () => {
+  const href = tabs.accountTabHref('?account=A&filter=owned', 'insights');
+  const params = new URLSearchParams(href);
+  assert.equal(tabs.parseAccountTab(params.get('tab'), false), 'insights');
+  assert.equal(params.get('account'), 'A');
+  assert.equal(params.get('filter'), 'owned');
+  assert.equal(tabs.ACCOUNT_TAB_LABELS.insights, '인사이트');
 });
 
 test('href_keeps_other_params', () => {
@@ -52,7 +61,8 @@ test('every_existing_control_still_rendered', () => {
   };
   const expected = {
     general: ['handleRoleChange', 'handleRemoveMember', 'handlePickMember', 'handleResendOwner',
-      'AccountParentEditor', 'MemberPicker', 'FieldInsightsSection'],
+      'AccountParentEditor', 'MemberPicker'],
+    insights: ['FieldInsightsSection'],
     meetings: [],
     projects: [],
     docs: ['handleSlideUpload', 'handleCreateNote'],

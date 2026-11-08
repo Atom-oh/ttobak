@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -26,7 +26,9 @@ export default function AccountsPage() {
   return (
     <AppLayout activePath="/accounts">
       <div className="p-4 lg:p-8">
-        <AccountsClient />
+        <Suspense fallback={<p role="status">불러오는 중…</p>}>
+          <AccountsClient />
+        </Suspense>
       </div>
     </AppLayout>
   );
