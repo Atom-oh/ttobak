@@ -15,6 +15,7 @@ import type { VaultReadingOptions } from './vault-reading.js';
 import { billingReadingOptions, type BillingReadingOptions } from './billing-reading.js';
 import { canonicalContact, type ContactInput, type ContactListOptions } from './account-contacts.js';
 import { MAX_CALENDAR_API_BYTES, type CalendarSyncRequest, type CalendarPageQuery, type CalendarEventQuery } from './calendar.js';
+import { canonicalEvent, type EventInput, type EventListOptions } from './account-events.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -316,6 +317,22 @@ export class TtobakApi {
     if (!this.options.privateTransport) return null;
     try { return await this.createAccountContact(accountId, contact, idempotencyKey, true); }
     catch (e) { if (e instanceof Error && /^HTTP 404(?:\s|:)/.test(e.message)) return null; throw e; }
+  }
+
+  async listAccountEvents(accountId: string, options: EventListOptions) {
+    const query = new URLSearchParams({ limit: String(options.limit) });
+    for (const key of ['from', 'to', 'order', 'cursor'] as const) if (options[key] !== undefined) query.set(key, options[key] as string);
+    return this.request('GET', `/api/accounts/${identifier(accountId, 'accountId')}/events?${query}`, undefined, MAX_READING_BYTES);
+  }
+
+  get requiresEventIdempotency() { return !!this.options.privateTransport; }
+
+  async createAccountEvent(accountId: string, event: EventInput, idempotencyKey?: string, replayOnly = false) {
+    if (!this.options.privateTransport && idempotencyKey !== undefined) throw new Error('idempotencyKey requires private connector transport');
+    if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error('INVALID_ARGUMENT: idempotencyKey required');
+    const ordered = canonicalEvent(event);
+    const body = this.options.privateTransport ? { event: ordered, idempotencyKey } : ordered;
+    return this.request('POST', `/api/accounts/${identifier(accountId, 'accountId')}/events${replayOnly ? '?replay=1' : ''}`, body, MAX_READING_BYTES);
   }
 
   async readBilling(options: BillingReadingOptions) {

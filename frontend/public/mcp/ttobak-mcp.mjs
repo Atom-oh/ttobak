@@ -23715,6 +23715,143 @@ async function callCalendarTool(name, args, api) {
   }
 }
 
+// src/account-events.ts
+var accountEventFields = ["title", "startAt", "endAt", "allDay", "location", "attendees", "notes"];
+var accountEventAttendeeFields = ["contactId", "name", "email"];
+function eventOrderedFields(source, keys2) {
+  const out = {};
+  for (const key of keys2) if (Object.hasOwn(source, key)) out[key] = source[key];
+  return out;
+}
+function canonicalEvent(event) {
+  const out = eventOrderedFields(event, accountEventFields);
+  if (Array.isArray(event.attendees)) out.attendees = event.attendees.map((a) => eventOrderedFields(a, accountEventAttendeeFields));
+  return out;
+}
+var EVENT_TIME = { type: "string", minLength: 20, maxLength: 40, description: "RFC 3339 with offset, e.g. 2026-11-10T14:00:00+09:00" };
+var EVENT_ATTENDEE = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name"],
+  properties: {
+    contactId: { type: "string", description: "Optional contact ID from ttobak_list_account_contacts in the same account" },
+    name: { type: "string", minLength: 1, maxLength: 256 },
+    email: { type: "string", maxLength: 256 }
+  }
+};
+var EVENT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "startAt"],
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: 256 },
+    startAt: EVENT_TIME,
+    endAt: EVENT_TIME,
+    allDay: { type: "boolean" },
+    location: { type: "string", maxLength: 512 },
+    attendees: { type: "array", maxItems: 50, items: EVENT_ATTENDEE },
+    notes: { type: "string", maxLength: 8192 }
+  }
+};
+var EVENT_ACCOUNT_ID = { type: "string", minLength: 1, maxLength: 128 };
+var EVENT_IDEMPOTENCY_KEY = { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$", description: "Stable retry key; required for private OAuth connector writes." };
+var ACCOUNT_EVENT_TOOLS = [
+  {
+    name: "ttobak_list_account_events",
+    description: "List one page of an authorized account's shared events (schedules). Without from, ascending order lists upcoming events. For past events use order desc with to set to now. Pass the returned nextCursor as cursor for more.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: "object", additionalProperties: false, required: ["accountId"], properties: {
+      accountId: EVENT_ACCOUNT_ID,
+      from: EVENT_TIME,
+      to: EVENT_TIME,
+      order: { type: "string", enum: ["asc", "desc"] },
+      limit: { type: "integer", minimum: 1, maximum: 25, default: 25 },
+      cursor: { type: "string", minLength: 1, maxLength: 1024 }
+    } }
+  },
+  {
+    name: "ttobak_create_account_event",
+    description: "Add one shared event (schedule) to an authorized account. Attendees may reference the account's contacts by contactId.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["accountId", "event"], properties: {
+      accountId: EVENT_ACCOUNT_ID,
+      event: EVENT_SCHEMA,
+      idempotencyKey: EVENT_IDEMPOTENCY_KEY
+    } }
+  }
+];
+function isEventRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function eventAccountId(args, keys2) {
+  if (Object.keys(args).some((key) => !keys2.includes(key)) || typeof args.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.accountId)) throw new Error("INVALID_ARGUMENT: invalid account or options");
+  return args.accountId;
+}
+var eventTextFits = (v, max) => typeof v === "string" && Buffer.byteLength(v) <= max;
+function eventToolInput(value) {
+  if (!isEventRecord(value) || Object.keys(value).some((k) => !accountEventFields.includes(k)) || typeof value.title !== "string" || !value.title.trim() || !eventTextFits(value.title, 256) || !eventTextFits(value.startAt, 40) || value.endAt !== void 0 && !eventTextFits(value.endAt, 40) || value.allDay !== void 0 && typeof value.allDay !== "boolean" || value.location !== void 0 && !eventTextFits(value.location, 512) || value.notes !== void 0 && !eventTextFits(value.notes, 8192) || value.attendees !== void 0 && (!Array.isArray(value.attendees) || value.attendees.length > 50 || value.attendees.some((a) => !isEventRecord(a) || Object.keys(a).some((k) => !accountEventAttendeeFields.includes(k)) || typeof a.name !== "string" || !a.name.trim() || !eventTextFits(a.name, 256) || a.email !== void 0 && !eventTextFits(a.email, 256) || a.contactId !== void 0 && (typeof a.contactId !== "string" || !/^[0-9a-f-]{36}$/.test(a.contactId)))) || Buffer.byteLength(JSON.stringify(value)) > 12e3) throw new Error("INVALID_EVENT");
+  return value;
+}
+function eventListOptions(args) {
+  const limit = args.limit ?? 25;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 25 || args.from !== void 0 && !eventTextFits(args.from, 40) || args.to !== void 0 && !eventTextFits(args.to, 40) || args.order !== void 0 && args.order !== "asc" && args.order !== "desc" || args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 1024)) {
+    throw new Error("INVALID_ARGUMENT: invalid event list options");
+  }
+  const out = { limit };
+  for (const key of ["from", "to", "order", "cursor"]) if (args[key] !== void 0) out[key] = args[key];
+  return out;
+}
+function boundedEventResult(value) {
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error("RESULT_TOO_LARGE: reduce the event page limit");
+  return result;
+}
+function eventPage(value, limit) {
+  if (!isEventRecord(value) || !Array.isArray(value.events) || value.events.length > limit || value.events.some((e) => !isEventRecord(e) || typeof e.eventId !== "string" || typeof e.title !== "string" || typeof e.startAt !== "string") || value.nextCursor !== void 0 && value.nextCursor !== null && (typeof value.nextCursor !== "string" || !value.nextCursor.length || value.nextCursor.length > 1024)) {
+    throw new Error("INVALID_RESPONSE: invalid event page");
+  }
+  return value;
+}
+function eventHttpStatus(error3) {
+  return error3 instanceof Error ? /^HTTP (\d{3})(?:\s|:)/.exec(error3.message)?.[1] : void 0;
+}
+async function callAccountEventTool(name, args, api) {
+  if (name === "ttobak_list_account_events") {
+    const accountId2 = eventAccountId(args, ["accountId", "from", "to", "order", "limit", "cursor"]);
+    const options = eventListOptions(args);
+    let limit = options.limit;
+    for (; ; ) {
+      try {
+        return boundedEventResult(eventPage(await api.listAccountEvents(accountId2, { ...options, limit }), limit));
+      } catch (e) {
+        if (e instanceof Error && /^(READING_LIMIT|RESULT_TOO_LARGE):/.test(e.message) && limit > 1) {
+          limit = Math.floor(limit / 2);
+          continue;
+        }
+        if (e instanceof Error && /^(READING_LIMIT|RESULT_TOO_LARGE|INVALID_RESPONSE):/.test(e.message)) throw e;
+        const code = eventHttpStatus(e);
+        throw new Error(code ? `EVENT_READ_FAILED: HTTP ${code}` : "EVENT_READ_FAILED: unable to read event page");
+      }
+    }
+  }
+  const accountId = eventAccountId(args, ["accountId", "event", "idempotencyKey"]);
+  const input = eventToolInput(args.event);
+  const key = args.idempotencyKey;
+  if (key !== void 0 && api.requiresEventIdempotency === false) throw new Error("INVALID_ARGUMENT: idempotencyKey requires private connector transport");
+  if ((key !== void 0 || api.requiresEventIdempotency) && (typeof key !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(key))) throw new Error("INVALID_ARGUMENT: idempotencyKey required");
+  let value;
+  try {
+    value = await api.createAccountEvent(accountId, input, key);
+  } catch (e) {
+    const code = eventHttpStatus(e);
+    if (code && code !== "408" && !(api.requiresEventIdempotency && code === "403") && Number(code) >= 400 && Number(code) < 500) throw new Error(`EVENT_WRITE_FAILED: HTTP_${code}`);
+    throw new Error(api.requiresEventIdempotency ? "EVENT_WRITE_FAILED: outcome unknown; retry the same idempotencyKey and event" : "EVENT_WRITE_FAILED: outcome unknown; list events before retrying");
+  }
+  if (!isEventRecord(value) || typeof value.eventId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.eventId)) {
+    throw new Error("EVENT_WRITE_FAILED: outcome unknown; list events before retrying");
+  }
+  return boundedEventResult({ eventId: value.eventId, ...value.replayed === true ? { replayed: true } : {} });
+}
+
 // src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
@@ -23944,6 +24081,21 @@ var TtobakApi = class {
       if (e instanceof Error && /^HTTP 404(?:\s|:)/.test(e.message)) return null;
       throw e;
     }
+  }
+  async listAccountEvents(accountId, options) {
+    const query = new URLSearchParams({ limit: String(options.limit) });
+    for (const key of ["from", "to", "order", "cursor"]) if (options[key] !== void 0) query.set(key, options[key]);
+    return this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/events?${query}`, void 0, MAX_READING_BYTES);
+  }
+  get requiresEventIdempotency() {
+    return !!this.options.privateTransport;
+  }
+  async createAccountEvent(accountId, event, idempotencyKey, replayOnly = false) {
+    if (!this.options.privateTransport && idempotencyKey !== void 0) throw new Error("idempotencyKey requires private connector transport");
+    if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error("INVALID_ARGUMENT: idempotencyKey required");
+    const ordered = canonicalEvent(event);
+    const body = this.options.privateTransport ? { event: ordered, idempotencyKey } : ordered;
+    return this.request("POST", `/api/accounts/${identifier(accountId, "accountId")}/events${replayOnly ? "?replay=1" : ""}`, body, MAX_READING_BYTES);
   }
   async readBilling(options) {
     const { section, ...args } = options;
@@ -25312,6 +25464,7 @@ var registry2 = {
   tools: [
     ...BILLING_TOOLS,
     ...ACCOUNT_CONTACT_TOOLS,
+    ...ACCOUNT_EVENT_TOOLS,
     {
       name: "ttobak_login",
       description: "Authenticate with TTOBAK. Opens browser for Cognito login. Call once per session.",
@@ -25860,6 +26013,9 @@ async function callTool(request2, options) {
       case "ttobak_create_account_contact":
       case "ttobak_import_account_contacts":
         return await callAccountContactTool(name, args, api);
+      case "ttobak_list_account_events":
+      case "ttobak_create_account_event":
+        return await callAccountEventTool(name, args, api);
       case "ttobak_get_billing_account":
       case "ttobak_get_billing_dataset":
       case "ttobak_get_billing_report": {

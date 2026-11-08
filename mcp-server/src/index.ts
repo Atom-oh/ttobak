@@ -27,6 +27,7 @@ import { BILLING_TOOLS, billingReadingOptions, billingReadingResult } from './bi
 import { CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, callCalendarTool } from './calendar.js';
 import { Recorder, MAX_MAX_MINUTES, type UploadProgress } from './recorder.js';
 import { AppControlError, defaultAppSocketPath, sendAppRequest, type AppAction } from './app-control.js';
+import { ACCOUNT_EVENT_TOOLS, callAccountEventTool } from './account-events.js';
 
 declare const TTOBAK_STANDALONE_STDIO: boolean;
 
@@ -53,6 +54,7 @@ const registry: { tools: Tool[] } = {
   tools: [
     ...BILLING_TOOLS,
     ...ACCOUNT_CONTACT_TOOLS,
+    ...ACCOUNT_EVENT_TOOLS,
     {
       name: 'ttobak_login',
       description:
@@ -648,6 +650,9 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       case 'ttobak_create_account_contact':
       case 'ttobak_import_account_contacts':
         return await callAccountContactTool(name, args, api);
+      case 'ttobak_list_account_events':
+      case 'ttobak_create_account_event':
+        return await callAccountEventTool(name, args, api);
       case 'ttobak_get_billing_account':
       case 'ttobak_get_billing_dataset':
       case 'ttobak_get_billing_report': {

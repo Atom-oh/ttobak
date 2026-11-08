@@ -100,8 +100,9 @@ The deployment artifact must contain the pinned ARM64 cryptography wheel before
 key configuration is enabled; source installation does not prove deployment.
 
 The MCP HTTP adapter now has an opt-in private transport for the bounded API
-reads (eleven since the account contact list was added on 2026-11-08),
-`qa.readonlyAsk`, personal note creation and account contact creation. Request-scoped verified identity/scopes, atomic
+reads (thirteen since the account contact list and account event list/get were
+added on 2026-11-08), `qa.readonlyAsk`, personal note creation and account
+contact and event creation. Request-scoped verified identity/scopes, atomic
 grant reads, exact-byte KMS signatures and service-IAM invocation replace bearer
 forwarding in this mode. It rechecks grants and expiry before returning bounded
 results, with one SDK attempt and bounded calls. The flag defaults off and a
