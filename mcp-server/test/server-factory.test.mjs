@@ -10,6 +10,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { meetingCatalogPage } from './fixtures/meeting-catalog-data.mjs';
+import { CALENDAR_NAMES } from './fixtures/calendar-data.mjs';
 
 test('server factory keeps each caller API and authentication context separate', async t => {
   const connect = async owner => {
@@ -31,7 +32,9 @@ test('server factory keeps each caller API and authentication context separate',
   const status = await alice.callTool({ name: 'ttobak_status', arguments: {} });
   assert.match(status.content[0].text, /alice\.example\.com/);
   assert.doesNotMatch(status.content[0].text, /bob/);
-  assert.equal((await bob.listTools()).tools.length, 35);
+  const tools = (await bob.listTools()).tools;
+  assert.equal(tools.length, 35 + CALENDAR_NAMES.length);
+  assert.deepEqual(tools.filter(tool => CALENDAR_NAMES.includes(tool.name)).map(tool => tool.name), CALENDAR_NAMES);
 });
 
 test('stdio startup works through file and directory symlinks for source and published bundle', async t => {
@@ -53,8 +56,9 @@ test('stdio startup works through file and directory symlinks for source and pub
         stderr: 'pipe',
       }));
       try {
-        // 35 shared tools, 5 stdio-only recording tools, 3 Mac app control tools.
-        assert.equal((await client.listTools()).tools.length, 43);
+        const tools = (await client.listTools()).tools;
+        assert.equal(tools.length, 43 + CALENDAR_NAMES.length);
+        assert.deepEqual(tools.filter(tool => CALENDAR_NAMES.includes(tool.name)).map(tool => tool.name), CALENDAR_NAMES);
       } finally {
         await client.close();
       }
