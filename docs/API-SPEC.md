@@ -664,8 +664,12 @@ cursor parameters and recheck the requester's access. Invalid input returns
 400, denied access 403, a missing contact on PUT/DELETE 404, a stale revision 409, and unexpected
 errors a generic 500. Responses are not cached and contact content is not logged.
 
-Contact rows have no TTL and remain until manually deleted. Point-in-time recovery
-on the table can retain deleted data within its recovery window.
+Contact fields are KMS envelope-encrypted per row before storage and bound to
+the account and contact (ADR-063); without a configured key, contact routes
+return 503 `CONTACTS_UNAVAILABLE`; delegated connector creates seal the row the
+same way and return that 503 before any write. Contact rows have no TTL and remain until a
+direct member deletes them. Point-in-time recovery can retain deleted, still
+encrypted data within the table's recovery window.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
@@ -729,7 +733,9 @@ private meeting links, mutations and Billing continue to require direct grants.
 `GET /api/accounts` retains `{accounts: [...]}` for callers without pagination.
 Optional `pageSize=1..100` and opaque `cursor` return `{accounts, nextCursor}`.
 Discovery validates canonical ancestry and membership, including empty advancing
-pages. Each paged request performs at most four discovery steps. With descendant
+pages. Each paged request stops after 256 discovery steps (one index or child
+query each) or two seconds of traversal, reads ancestry once per request, and
+rechecks every returned row against current grants before responding. With descendant
 reads enabled, responses declare `overlapPossible: true, unionKey: "accountId"`:
 independent direct roots can overlap descendant traversal. Clients combine those
 declared pages by Account ID, replacing a duplicate with its current response

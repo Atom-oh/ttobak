@@ -276,6 +276,13 @@ All current account members may add members/change assignable non-owner roles.
 Removal/pending-invite revocation stay owner-only (ADR-034). UI
 visibility is not the authorization boundary.
 
+`accountApi.list` keeps the signed-in user's Account list in memory for one
+minute per token subject and scope (`src/lib/accountListCache.ts`). Every page
+request asserts that subject, and a load is discarded if the subject changed.
+Concurrent callers share one load, and the Account list paints the last loaded
+list before an expired entry reloads. Account mutations, session grant bootstrap, sign-out and session
+expiry drop it. It is never persisted and does not authorize reads.
+
 Initial Account creation can select another Owner by colleague or email.
 Show an unchecked "Keep me as a regular member (AM)" checkbox for this choice.
 Checked retains AM membership; unchecked hides and clears extra member selections,

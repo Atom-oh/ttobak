@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -83,7 +84,7 @@ func TestContactHTTPErrorsAreGeneric(t *testing.T) {
 	for _, tc := range []struct {
 		err    error
 		status int
-	}{{service.ErrInvalidInput, 400}, {service.ErrForbidden, 403}, {service.ErrNotFound, 404}, {service.ErrContactConflict, 409}, {errors.New("private provider details"), 500}} {
+	}{{service.ErrInvalidInput, 400}, {service.ErrForbidden, 403}, {service.ErrNotFound, 404}, {service.ErrContactConflict, 409}, {fmt.Errorf("open contact: %w", service.ErrContactsUnavailable), 503}, {errors.New("private provider details"), 500}} {
 		s := &contactsAPIStub{err: tc.err}
 		w := contactRequest(contactRouter(s), "GET", "/accounts/a/contacts", "")
 		if w.Code != tc.status || strings.Contains(w.Body.String(), "private") {
