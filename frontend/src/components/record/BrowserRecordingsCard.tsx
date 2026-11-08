@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useCallback, useEffect, useState } from 'react';
 import { BrowserRecordingBackup, listBrowserRecordings, type BrowserRecordingMetadata } from '@/lib/browserRecordingBackup';
 import { formatFileSize } from '@/lib/upload';
@@ -19,7 +20,7 @@ export function BrowserRecordingsCard({ userId, busy, onRestore }: {
 
   const act = async (item: BrowserRecordingMetadata, action: 'resume-upload' | 'download' | 'delete') => {
     if (busy || working) return;
-    if (action === 'delete' && !window.confirm(`"${item.title || '미팅'}"의 기기 보관본을 삭제할까요? 삭제한 녹음은 복구할 수 없습니다.`)) return;
+    if (action === 'delete' && !await confirmDialog(`"${item.title || '미팅'}"의 기기 보관본을 삭제할까요? 삭제한 녹음은 복구할 수 없습니다.`)) return;
     setWorking(true);
     setError('');
     let backup: BrowserRecordingBackup | undefined;
