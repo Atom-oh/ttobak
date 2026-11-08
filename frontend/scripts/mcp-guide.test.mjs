@@ -204,6 +204,15 @@ test('Outlook Korean copyable prompt independently requires both default exclusi
   assert.match(prompt, /가이드·프로토콜 검증[^.]*리더[^.]*필터링[^.]*증명하지/);
 });
 
+test('Outlook English copied instructions retain durable exact-batch recovery', () => {
+  const prompt = outlookRunbook.match(/## Copyable host instruction\n\n```text\n([\s\S]*?)\n```/)?.[1].replace(/\s+/g, ' ');
+  assert.ok(prompt);
+  assert.match(prompt, /durably journal the full exact request[^.]*protected local storage[^.]*before sending/i);
+  assert.match(prompt, /atomically persist[^.]*receipt[^.]*revision[^.]*imported-ID ledger[^.]*before removing[^.]*pending journal/i);
+  assert.match(prompt, /crash[^.]*replay[^.]*identical[^.]*pending request/i);
+  assert.doesNotMatch(outlookRunbook, /Calendar\s+5/);
+});
+
 test('Outlook standalone prose prompt includes durable crash recovery before scheduling', async () => {
   const { outlookSyncGuide } = await load(privateMcp);
   const code = outlookSyncGuide().steps.flatMap(step => step.code ?? [])
@@ -240,12 +249,16 @@ test('settings Outlook anchor and copyable prerequisites survive collapsed, HTTP
           const html = renderToStaticMarkup(React.createElement(exports.McpGuide));
           const section = html.match(/<section\b[^>]*id="outlook-sync"[\s\S]*?<\/section>/)?.[0];
           assert.ok(section, `${expanded}/${client}/${transport}/${state.status}`);
+          assert.match(section, /\[overflow-wrap:anywhere\]/);
+          assert.equal((section.match(/flex-col sm:flex-row/g) ?? []).length, 2);
+          assert.equal((section.match(/text-slate-600 transition-colors/g) ?? []).length, 2);
           assert.match(section, /로컬.*stdio/);
           assert.match(section, /HTTP.*지원하지/);
           assert.match(section, /호스트.*요청/);
           assert.doesNotMatch(section, /disabled=""|hidden=""|display:none/);
           const blocks = [...section.matchAll(/<pre class="([^"]+)"[^>]*><code>([\s\S]*?)<\/code><\/pre>/g)];
           assert.equal(blocks.length, 2);
+          for (const block of blocks) assert.match(block[1], /w-full sm:w-auto/);
           assert.match(blocks[0][1], /overflow-x-auto/);
           assert.doesNotMatch(blocks[0][1], /whitespace-pre-wrap/);
           assert.match(blocks[1][1], /whitespace-pre-wrap/);

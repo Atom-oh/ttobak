@@ -278,9 +278,13 @@ confidential reclassification. Do not upload sensitivity fields or replacement
 titles for excluded events. Missing or failed pages are not deletions.
 Use ttobak_calendar_sync_status, ttobak_sync_calendar_events and
 ttobak_list_calendar_events with their actual schemas and opaque continuations.
-Journal each batch before sending. Acknowledge all pages and mutations before
-final completion and provider checkpoint commit. Retry identical uncertain
-batches; refetch status and reconcile definitive 409 conflicts.
+For each batch, durably journal the full exact request in protected local storage
+before sending. Atomically persist its receipt, resulting revision and imported-ID
+ledger before removing the pending journal. After a crash, replay the identical
+pending request until its receipt and ledger update are durably committed.
+Acknowledge all pages and mutations before final completion and provider
+checkpoint commit. Retry identical uncertain batches; refetch status and reconcile
+definitive 409 conflicts.
 After manual acceptance, show me a ten-minute user-local foreground task with
 a shared no-overlap lock, stale/offline reporting, pause and uninstall steps.
 Keep provider tokens, checkpoints and mailbox mappings local and out of logs.
@@ -333,6 +337,7 @@ exercises real stdio framing and API serialization against synthetic HTTPS
 responses, including lifecycle state in a fixture and public bundle calls.
 These guide and protocol checks do not verify the selected reader's private or
 confidential filtering.
-It does not run an Outlook reader, scheduler, Go service or DynamoDB. Calendar 5
-owns persisted integration acceptance; selected-reader authentication, actual
-calendar behavior and user-session scheduling require separate local acceptance.
+Neither check runs an Outlook reader, scheduler, Go service or DynamoDB.
+Persisted stdio-to-Go-to-DynamoDB integration requires its own acceptance checks;
+selected-reader authentication, actual calendar behavior and user-session
+scheduling require separate local acceptance.
