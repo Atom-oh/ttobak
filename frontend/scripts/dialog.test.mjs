@@ -123,3 +123,41 @@ test('components use the shared dialog instead of window.confirm/alert', () => {
     .filter((path) => /(^|[^\w.])(window\.)?(confirm|alert)\(\s*[^)\s]/m.test(readFileSync(path, 'utf8')));
   assert.deepEqual(offenders, []);
 });
+
+test('a navigation dismisses open and queued in-app dialogs as cancelled', async () => {
+  const appended = [];
+  const document = {
+    activeElement: null,
+    createElement: () => ({
+      children: [], listeners: {},
+      setAttribute() {}, appendChild(child) { this.children.push(child); },
+      addEventListener(type, fn) { this.listeners[type] = fn; },
+      querySelectorAll() { return this.children; }, focus() {}, remove() {},
+    }),
+    addEventListener() {}, removeEventListener() {},
+    body: { appendChild: (el) => appended.push(el) },
+  };
+  const dialog = loadDialog({ tauri: true, window: {}, document });
+  const first = dialog.confirmDialog('delete?');
+  const queued = dialog.confirmDialog('and this?');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(dialog.isDialogOpen(), true);
+  dialog.dismissDialogs();
+  assert.equal(await first, false);
+  assert.equal(await queued, false);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(appended.length, 1, 'a queued dialog must not open after dismissal');
+  assert.equal(dialog.isDialogOpen(), false);
+  const later = dialog.confirmDialog('new page');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(appended.length, 2, 'dialogs asked after the navigation still open');
+  appended[1].children[0].children[1].children.find((b) => b.textContent === '확인').listeners.click();
+  assert.equal(await later, true);
+});
+
+test('the native bridge refuses an MCP start while a dialog is open and dismisses on route change', () => {
+  const bridge = readFileSync(join(SRC, 'components/NativeControlBridge.tsx'), 'utf8');
+  const guard = bridge.indexOf("request.action === 'start' && isDialogOpen()");
+  assert.ok(guard >= 0 && guard < bridge.indexOf('dispatchNativeControl(request)'), 'start must be refused before dispatch');
+  assert.match(bridge, /useEffect\(\(\) => \{ dismissDialogs\(\); \}, \[pathname\]\)/);
+});
