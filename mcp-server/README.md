@@ -67,6 +67,37 @@ scan or filesystem failure returns an error instead of claiming completed remova
 Refresh is attempted before another login; its lifetime depends on pool policy
 and revocation. Do not copy token files into documentation or diagnostics.
 
+## Local Outlook calendar sync (stdio only)
+
+The local tools `ttobak_sync_calendar_events`, `ttobak_list_calendar_events` and
+`ttobak_calendar_sync_status` exchange caller-supplied private calendar data with
+the authenticated API. They do not fetch Outlook, install a reader, schedule
+tasks, create meetings or start recording. Generic/private HTTP clients cannot
+discover or invoke them, including with write approval.
+
+Follow the [local sync runbook](../docs/runbooks/local-outlook-calendar-sync.md)
+and `/settings#outlook-sync` for reader selection, dry run, explicit Account
+mapping, a past-seven/next-30-day window, manual acceptance and user-local
+ten-minute foreground scheduling with no overlap. No host is selected;
+executable/path templates require user testing. Provider tokens, checkpoints and
+mailbox mappings stay local. Never copy browser tokens or Outlook passwords.
+
+Sync accepts `sourceId`, `batchId`, `expectedRevision`, `windowStart`, `windowEnd`,
+`complete`, and at most 20 explicit `mutations`. Stable occurrence IDs preserve
+identity across reschedules; cancellations and newly private items require
+explicit `remove` mutations. Empty completion never infers deletions. Retry
+uncertain delivery with the identical request; a definitive 409 requires
+refetching status and reconciliation, not rebasing the old batch.
+Commit the provider checkpoint only after final completion acknowledgment.
+
+Read tools preserve opaque `nextCursor` pages, including empty pages. Check
+`revision` against optional `lastCompletedRevision` and the completed window;
+caller-reported completion does not prove provider freshness. Calendar API
+responses cap original encoded bytes at 14,000, and serialized MCP results at
+32,000. See the [API contract](../docs/API-SPEC.md#private-calendar).
+Synthetic protocol/public-artifact tests do not establish persisted stdio/Go/
+DynamoDB or user-local provider/scheduler acceptance.
+
 ## Billing meeting preparation
 
 Both stdio and HTTP expose three read-only tools:
@@ -610,6 +641,20 @@ work numbers. Concurrent writes may duplicate. Results are one-based `created`,
 Private OAuth writes require an `idempotencyKey`; retry identical input with the
 same key. Receipts never expire automatically or replay edited/deleted contacts.
 Bearer transport lacks retry keys. MCP clients and AI providers may see data.
+
+## Account events
+
+`ttobak_list_account_events` and `ttobak_create_account_event` manage an
+account's shared events (schedules) and require direct membership; private
+writes also require approval. List takes `from`, `to`, `order` (`asc` by default:
+upcoming events; for past events use `desc` with `to` set to now), `limit`
+1–25 and `cursor` (pass the returned `nextCursor`); oversized pages retry with a
+smaller limit. Create takes `accountId` and `event` (`title`, RFC 3339 `startAt`,
+optional `endAt`, `allDay`, `location`, `notes`, and up to 50 `attendees` that may
+reference the account's contacts by `contactId`), at most 12,000 bytes.
+Private OAuth writes require an `idempotencyKey`; retry identical input with the
+same key. These are separate from the private `ttobak_*_calendar_*` tools.
+See [event fields and limits](../docs/API-SPEC.md#accounts-and-projects).
 
 ## Public bundle provenance
 

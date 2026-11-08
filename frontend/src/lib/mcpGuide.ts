@@ -40,6 +40,51 @@ export interface ClientGuide {
   note?: string;
 }
 
+export function outlookSyncGuide(): ClientGuide {
+  return {
+    introduction: 'Outlook 일정을 개인 캘린더로 가져오려면 본인 컴퓨터의 로컬 stdio 연결, 읽기 전용 Outlook 리더, 실행 호스트가 필요합니다. HTTP 연결과 Amazon Quick에서는 캘린더 도구를 지원하지 않습니다. 이 안내는 설치나 동기화 설정이 완료되었다는 뜻이 아닙니다.',
+    steps: [{
+      title: '로컬 리더와 계정 준비',
+      description: 'OS와 실행 호스트를 먼저 선택하고 해당 공식 문서에서 실제 실행 명령·절대경로·일정 조회 기능을 확인하세요. Outlook 읽기 전용 동의와 TTOBAK 로그인을 본인이 완료해야 합니다. Outlook 비밀번호나 브라우저 토큰을 복사하지 마세요. 제공자 토큰·체크포인트·메일함별 sourceId 매핑은 로컬에만 보관하고 TTOBAK나 로그로 보내지 마세요.',
+    }, {
+      title: 'dry run으로 가져올 범위 확인',
+      description: '과거 7일·앞으로 30일 범위에서 모든 페이지와 반복 일정의 개별 회차를 확인하세요. 본문·참석자·접속 링크는 제외하고 private·confidential 일정은 기본적으로 로컬에서 제외합니다. 최소 필드는 externalId, title, startsAt, endsAt, timeZone입니다. accountId는 본인이 확인한 매핑만 사용하며 계정 연결이 일정을 공유하지 않습니다. 쓰기 전에 정규화 결과와 명시적 삭제 목록을 직접 확인하세요.',
+    }, {
+      title: '수동 실행 후 실제 결과 확인',
+      description: 'ttobak_calendar_sync_status로 sourceId의 revision을 확인하고 ttobak_sync_calendar_events로 최대 20개 변경을 전송하세요. 아래는 가상 데이터이며 실제 일정이나 바로 실행할 작업이 아닙니다. ttobak_list_calendar_events와 상태 조회의 nextCursor를 끝까지 따라가며 재시도·시간 변경·취소·private 재분류·confidential 재분류·반복 회차를 확인하세요. 두 재분류 모두 이전에 가져온 회차 externalId의 명시적 remove를 검증한 뒤 예약 실행을 설정하세요.',
+      code: [{
+        title: '가상 데이터 · ttobak_sync_calendar_events',
+        text: JSON.stringify({
+          sourceId: '12345678-1234-1234-abcd-123456789abc',
+          batchId: '87654321-4321-4321-abcd-cba987654321', expectedRevision: 0,
+          windowStart: '2026-10-31T00:00:00Z', windowEnd: '2026-12-07T00:00:00Z',
+          complete: false, mutations: [{ op: 'upsert', event: {
+            externalId: 'SyntheticOccurrence/AbC', title: 'Synthetic planning',
+            startsAt: '2026-11-09T09:00:00Z', endsAt: '2026-11-09T10:00:00Z', timeZone: 'UTC',
+          } }],
+        }, null, 2),
+      }],
+    }, {
+      title: '체크포인트와 삭제 규칙',
+      description: '메일함·TTOBAK 사용자·캘린더별 sourceId와 대소문자를 보존한 회차 externalId를 유지하세요. 시간 변경에도 같은 ID를 쓰며 취소·private·confidential 전환은 이전에 가져온 회차 externalId를 명시적으로 remove합니다. 민감도 필드나 제외된 일정의 대체 제목을 보내지 마세요. 누락·빈 페이지·조회 실패로 삭제를 추론하지 마세요. 모든 페이지와 변경의 서버 수신 확인 후에만 complete: true를 전송하고, 그 수신 확인 뒤 제공자 체크포인트를 확정하세요. 종일 일정은 현지 시작일·배타적 종료일과 일치하는 시각, IANA timeZone이 필요합니다.',
+    }, {
+      title: '로컬 호스트에서 10분마다 실행',
+      description: 'MCP 자체는 스케줄러가 아닙니다. 사용자가 테스트한 포그라운드 호스트 명령과 절대경로를 macOS launchd 사용자 에이전트 또는 Windows 작업 스케줄러에 등록하세요. 전체 실행 동안 중복 실행 잠금을 유지하고 이전 작업이 끝나기 전에 새 작업을 시작하지 마세요. 사용자 로그인 세션에서 동작하며 절전·오프라인 동안 갱신을 보장하지 않습니다. 호스트와 예약 작업 설치·활성화는 사용자 설정이 필요합니다.',
+      code: [{
+        title: '로컬 호스트에 요청 · 먼저 설정과 dry run 확인',
+        text: '내 OS, 로컬 Outlook 리더와 실행 호스트를 확인하고 공식 문서로 검증한 실행 파일 절대경로와 포그라운드 명령을 제시해줘. 모르는 Outlook MCP 실행 파일이나 플래그는 만들지 마. 본인 읽기 전용 인증과 TTOBAK stdio 로그인이 필요해. 먼저 과거 7일·앞으로 30일의 전체 페이지와 반복 회차를 dry run으로 확인해줘. 본문·참석자·접속 링크는 보내지 말고 private·confidential 일정은 기본적으로 로컬에서 제외해. accountId는 내가 확인한 매핑만 써. sourceId와 externalId를 유지하고 취소·private·confidential 전환은 이전에 가져온 회차 externalId의 명시적 remove로 처리해. 민감도 필드나 제외된 일정의 대체 제목을 보내지 마. ttobak_calendar_sync_status, ttobak_sync_calendar_events, ttobak_list_calendar_events의 실제 필드만 사용해. 수신 확인 전에 체크포인트를 확정하지 말고 실패한 페이지는 완료나 누락 삭제로 처리하지 마. 409는 상태를 다시 읽고 조정하고, 응답이 불확실하면 같은 batchId·expectedRevision·전체 요청을 재전송해. 수동 검증 후 사용자가 설정할 10분 간격 포그라운드 작업과 전체 실행 잠금, 중지·제거 방법을 보여줘. 제공자 토큰·체크포인트는 로컬에만 보관하고 로그에 남기지 마. 가이드·프로토콜 검증은 리더의 private·confidential 필터링을 증명하지 않으므로 실제 동작을 별도로 확인해.',
+      }],
+    }, {
+      title: '오래된 결과·충돌·인증 실패 처리',
+      description: 'lastCompletedAt과 완료 범위, revision 및 lastCompletedRevision을 함께 확인하세요. 완료 revision이 없으면 알 수 없음, 현재 revision보다 작으면 부분 진행입니다. complete는 호출자의 보고이며 Outlook 최신 상태를 증명하지 않습니다. 409 충돌은 상태를 다시 읽고 조정한 뒤 새 배치를 만드세요. 응답 불확실 시에는 같은 batchId·expectedRevision·전체 요청만 재전송합니다. 인증 실패는 로컬 재로그인, 제공자 체크포인트 만료는 전체 재조회가 필요하며 실패 중에는 기존 결과를 최신이라고 표시하지 마세요.',
+    }, {
+      title: '중지와 제거',
+      description: '예약 작업을 비활성화하고 진행 중인 실행을 확인한 뒤 제거하세요. 로컬 동기화를 멈춰도 이미 가져온 일정은 남습니다. 필요하면 로컬 ID 목록으로 명시적 remove를 수신 확인한 뒤 체크포인트를 지우세요. 로컬 리더의 동의를 철회하고 TTOBAK 로컬 로그아웃을 진행하세요. 설치·실제 Outlook·예약 작업·영구 저장 전체 검증은 별도 확인이 필요합니다.',
+    }],
+    note: '캘린더 동기화는 회의를 생성하거나 녹음하지 않습니다. HTTP 쓰기 클라이언트 승인으로도 캘린더 도구를 활성화할 수 없습니다. 가이드·프로토콜 검증은 리더의 private·confidential 필터링을 증명하지 않습니다. 선택한 로컬 호스트·리더의 기능 확인과 수동 검증이 먼저입니다.',
+  };
+}
+
 export function configuredMcpUrl(value: unknown, origin: string): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   try {
