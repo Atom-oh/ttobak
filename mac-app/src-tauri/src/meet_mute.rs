@@ -50,20 +50,33 @@ pub fn classify<'a>(labels: impl IntoIterator<Item = &'a str>) -> MicState {
     }
 }
 
+/// Classifies one Meet page read. An incomplete read (a failed call, or the
+/// node budget or depth bound reached) is unknown: a missing toggle is then
+/// neither unmuted nor a left call, so the last state is kept.
+pub fn classify_read<'a>(labels: impl IntoIterator<Item = &'a str>, complete: bool) -> MicState {
+    if complete {
+        classify(labels)
+    } else {
+        MicState::Unknown
+    }
+}
+
 /// Combines the states of every readable Meet page: an unmuted page wins,
 /// then a muted one; no page at all is unknown.
 pub fn combine(states: impl IntoIterator<Item = MicState>) -> MicState {
-    let (mut muted, mut unmuted, mut left) = (false, false, false);
+    let (mut muted, mut unmuted, mut left, mut unknown) = (false, false, false, false);
     for s in states {
         muted |= s == MicState::Muted;
         unmuted |= s == MicState::Unmuted;
         left |= s == MicState::NoMeeting;
+        unknown |= s == MicState::Unknown;
     }
     if unmuted {
         MicState::Unmuted
     } else if muted {
         MicState::Muted
-    } else if left {
+    } else if left && !unknown {
+        // A page that could not be read may still hold the call.
         MicState::NoMeeting
     } else {
         MicState::Unknown
@@ -104,8 +117,8 @@ mod mac {
     use core_foundation::string::CFString;
     use core_foundation::url::CFURL;
 
-    use super::{classify, combine};
-    use crate::zoom_mute::ax::{children, copy_attr, create_app};
+    use super::{classify_read, combine};
+    use crate::zoom_mute::ax::{children_checked, copy_attr, create_app};
     use crate::zoom_mute::MicState;
 
     const MEET_PREFIX: &str = "https://meet.google.com/";
@@ -125,41 +138,53 @@ mod mac {
             .is_some_and(|u| u.get_string().to_string().starts_with(MEET_PREFIX))
     }
 
-    /// Collects button labels under `e`; never logged.
-    fn button_labels(e: &CFType, depth: usize, budget: &mut usize, out: &mut Vec<String>) {
+    /// Collects button labels under `e`; never logged. Returns false when the
+    /// read was incomplete.
+    fn button_labels(e: &CFType, depth: usize, budget: &mut usize, out: &mut Vec<String>) -> bool {
         if *budget == 0 || depth > MAX_DEPTH {
-            return;
+            return false;
         }
         *budget -= 1;
         if string_attr(e, "AXRole").as_deref() == Some("AXButton") {
             if let Some(d) = string_attr(e, "AXDescription") {
                 out.push(d);
             }
-            return;
+            return true;
         }
-        for c in children(e) {
-            button_labels(&c, depth + 1, budget, out);
+        let Some(kids) = children_checked(e) else {
+            return false;
+        };
+        let mut complete = true;
+        for c in kids {
+            complete &= button_labels(&c, depth + 1, budget, out);
         }
+        complete
     }
 
-    /// Finds Meet web areas under `e` and classifies each.
-    fn meet_pages(e: &CFType, depth: usize, budget: &mut usize, out: &mut Vec<MicState>) {
+    /// Finds Meet web areas under `e` and classifies each. Returns false when
+    /// the search itself was cut short (a Meet page may have been missed).
+    fn meet_pages(e: &CFType, depth: usize, budget: &mut usize, out: &mut Vec<MicState>) -> bool {
         if *budget == 0 || depth > MAX_DEPTH {
-            return;
+            return false;
         }
         *budget -= 1;
         if string_attr(e, "AXRole").as_deref() == Some("AXWebArea") {
             if is_meet_page(e) {
                 let mut labels = Vec::new();
-                button_labels(e, depth, budget, &mut labels);
-                out.push(classify(labels.iter().map(String::as_str)));
+                let complete = button_labels(e, depth, budget, &mut labels);
+                out.push(classify_read(labels.iter().map(String::as_str), complete));
             }
             // Nested frames are not Meet's toolbar.
-            return;
+            return true;
         }
-        for c in children(e) {
-            meet_pages(&c, depth + 1, budget, out);
+        let Some(kids) = children_checked(e) else {
+            return false;
+        };
+        let mut complete = true;
+        for c in kids {
+            complete &= meet_pages(&c, depth + 1, budget, out);
         }
+        complete
     }
 
     /// Meet's state across the given browser instances.
@@ -174,7 +199,10 @@ mod mac {
             };
             let mut budget = MAX_NODES;
             for w in crate::zoom_mute::ax::as_array(windows) {
-                meet_pages(&w, 0, &mut budget, &mut states);
+                if !meet_pages(&w, 0, &mut budget, &mut states) {
+                    // A page may have been missed: neither unmuted nor left.
+                    states.push(MicState::Unknown);
+                }
             }
         }
         combine(states)
@@ -233,5 +261,27 @@ mod tests {
         let mut h = Hold::default();
         assert_eq!(h.observe(MicState::NoMeeting), Silence::Open);
         assert_eq!(h.observe(MicState::Unknown), Silence::Open);
+    }
+
+    #[test]
+    fn an_incomplete_read_is_neither_unmuted_nor_a_left_call() {
+        assert_eq!(classify_read(Vec::<&str>::new(), false), MicState::Unknown);
+        assert_eq!(classify_read(["Leave call"], false), MicState::Unknown);
+        assert_eq!(classify_read(Vec::<&str>::new(), true), MicState::NoMeeting);
+        assert_eq!(classify_read(["마이크 끄기"], true), MicState::Unmuted);
+        assert_eq!(
+            combine([MicState::NoMeeting, MicState::Unknown]),
+            MicState::Unknown
+        );
+    }
+
+    #[test]
+    fn an_unreadable_page_keeps_a_retained_mute() {
+        let mut h = Hold::default();
+        assert_eq!(h.observe(MicState::Muted), Silence::Muted);
+        assert_eq!(
+            h.observe(combine([classify_read(Vec::<&str>::new(), false)])),
+            Silence::Muted
+        );
     }
 }

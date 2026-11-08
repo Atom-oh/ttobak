@@ -168,7 +168,7 @@ pub use mac::{meeting_over, watch, Watch};
 /// Accessibility helpers shared with `meet_mute`.
 #[cfg(target_os = "macos")]
 pub(crate) mod ax {
-    pub(crate) use super::mac::{as_array, children, copy_attr, create_app};
+    pub(crate) use super::mac::{as_array, children_checked, copy_attr, create_app};
 }
 
 #[cfg(target_os = "macos")]
@@ -245,10 +245,29 @@ mod mac {
         (status == 0 && !value.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(value) })
     }
 
-    pub(crate) fn children(element: &CFType) -> Vec<CFType> {
-        match copy_attr(element, "AXChildren") {
-            Some(value) => as_array(value),
-            None => Vec::new(),
+    /// `kAXErrorAttributeUnsupported` / `kAXErrorNoValue`: a leaf, not a failure.
+    const AX_ATTRIBUTE_UNSUPPORTED: i32 = -25205;
+    const AX_NO_VALUE: i32 = -25212;
+
+    /// An element's children, or `None` when reading them failed (e.g. the
+    /// call timed out or the element went away), so callers can tell an
+    /// incomplete read from an element without children.
+    pub(crate) fn children_checked(element: &CFType) -> Option<Vec<CFType>> {
+        let name = CFString::new("AXChildren");
+        let mut value: CFTypeRef = std::ptr::null();
+        let status = unsafe {
+            AXUIElementCopyAttributeValue(
+                element.as_CFTypeRef(),
+                name.as_concrete_TypeRef(),
+                &mut value,
+            )
+        };
+        match status {
+            0 if !value.is_null() => {
+                Some(as_array(unsafe { CFType::wrap_under_create_rule(value) }))
+            }
+            0 | AX_ATTRIBUTE_UNSUPPORTED | AX_NO_VALUE => Some(Vec::new()),
+            _ => None,
         }
     }
 
@@ -301,9 +320,11 @@ mod mac {
     fn menu_titles(app: &CFType) -> Option<Vec<String>> {
         let bar = copy_attr(app, "AXMenuBar")?;
         let mut titles = Vec::new();
-        for top in children(&bar) {
-            for menu in children(&top) {
-                for item in children(&menu) {
+        // A failed read is unreadable, not an empty menu bar (which would
+        // confirm the meeting's end).
+        for top in children_checked(&bar)? {
+            for menu in children_checked(&top)? {
+                for item in children_checked(&menu)? {
                     if titles.len() >= MAX_ITEMS {
                         return Some(titles);
                     }
