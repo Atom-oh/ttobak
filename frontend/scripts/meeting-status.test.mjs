@@ -99,7 +99,7 @@ function homeFixture(initial, { search = '?uploaded=uploaded' } = {}) {
     '@/components/auth/AuthProvider': { useAuth: () => auth },
     '@/lib/meetingStatus': load(),
     '@/lib/api': {
-      accountApi: { list: async () => ({ accounts: [] }) },
+      accountApi: { list: async () => ({ accounts: [] }), peekList: () => undefined },
       meetingsApi: { list: (filter, options) => {
         requests.push({ filter, signal: options.signal });
         if (defer) {
@@ -110,25 +110,41 @@ function homeFixture(initial, { search = '?uploaded=uploaded' } = {}) {
       } },
     },
   };
-  const exports = {};
-  const source = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
-  vm.runInNewContext(ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
-  }).outputText, {
-    exports, AbortController, URLSearchParams, window: { location: { search } }, document,
+  // Renders the shipped /meetings workspace (components/workspace/MeetingsWorkspace)
+  // with the real refresh hooks; other components are inert placeholders.
+  const sandbox = {
+    AbortController, URLSearchParams, window: { location: { search } }, document, atob,
     Date: class extends Date { static now() { return now; } },
     console: { warn() {}, error() {} },
     setInterval(callback, delay) { assert.equal(delay, 15000); timers.set(++timerId, callback); return timerId; },
     clearInterval(id) { timers.delete(id); },
-    require(name) {
+  };
+  const modules = {};
+  function loadModule(path, jsxSource) {
+    const exports = {};
+    const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+    vm.runInNewContext(ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, ...(jsxSource ? { jsx: ts.JsxEmit.ReactJSX } : {}) },
+    }).outputText, { ...sandbox, exports, require(name) {
       if (name in dependencies) return dependencies[name];
-      if (name.startsWith('@/components/')) {
+      if (name in modules) return modules[name];
+      if (name.startsWith('@/components/') || name.startsWith('./')) {
         const component = name.split('/').at(-1);
-        return { [component]: component };
+        return new Proxy({}, { get: (_target, key) => (typeof key === 'string' ? key : undefined) ?? component });
       }
       throw new Error(`Unexpected dependency: ${name}`);
-    },
-  });
+    } });
+    return exports;
+  }
+  const token = sub => `x.${Buffer.from(JSON.stringify({ sub })).toString('base64url')}.y`;
+  dependencies['@/lib/auth'] = { getIdToken: () => token(auth.user?.userId) };
+  modules['@/lib/postUploadRefresh'] = loadModule('../src/lib/postUploadRefresh.ts');
+  const workspace = loadModule('../src/components/workspace/MeetingsWorkspace.tsx', true);
+  const exports = { default: () => {
+    let node = workspace.MeetingsWorkspace();
+    while (node && typeof node.type === 'function') node = node.type(node.props);
+    return node;
+  } };
   function render() {
     for (let pass = 0; dirty && pass < 20; pass++) {
       dirty = false;
@@ -223,4 +239,10 @@ test('ordinary home visits do not poll an empty list', async () => {
   await fixture.settle();
   assert.equal(fixture.timers.size, 0);
   fixture.unmount();
+});
+
+test('the home dashboard wires the same refresh hooks to its recent meetings', () => {
+  const source = readFileSync(new URL('../src/components/workspace/HomeDashboard.tsx', import.meta.url), 'utf8');
+  const recent = source.slice(source.indexOf('function RecentMeetings'), source.indexOf('function AccountInsights'));
+  for (const hook of ['useUploadSeed(', 'withUploadSeed(', 'useProcessingRefresh(']) assert.ok(recent.includes(hook), hook);
 });
