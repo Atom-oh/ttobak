@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { meetingsApi } from '@/lib/api';
+import { confirmDialog } from '@/lib/dialog';
 import { meetingStatusLabels } from '@/lib/meetingWorkspace';
 import type { Meeting } from '@/types/meeting';
 
@@ -28,7 +29,8 @@ export function MeetingRow({ meeting, accountName, preview, onDelete }: MeetingR
       : 'bg-primary/10 text-primary';
 
   const handleDelete = async () => {
-    if (meeting.isShared || isDeleting || !confirm('이 미팅을 삭제하시겠습니까?')) return;
+    // The shared dialog also works in the Mac app, where window.confirm returns false.
+    if (meeting.isShared || isDeleting || !(await confirmDialog('이 미팅을 삭제하시겠습니까?'))) return;
     setIsDeleting(true);
     setDeleteError(null);
     try {
