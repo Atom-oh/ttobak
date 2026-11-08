@@ -635,6 +635,41 @@ requires the 10-minute quiet checkpoint. Account-link condition failures return
 409 `CONFLICT`. A member's project link or unlink requires the project to be
 linked to that account. Shared list items include `ownerUserId` (the creator).
 
+`GET/POST /api/accounts/{accountId}/contacts`, `PUT/DELETE
+/api/accounts/{accountId}/contacts/{contactId}`, and `GET
+/api/accounts/{accountId}/speaker-team` require current **direct** membership;
+account ancestry, meeting links and shares grant no access. Account and member
+records are read strongly consistently before and after reads; every write
+transaction checks both records and conditionally creates or requires the contact.
+Account and membership deletion/revocation during a transaction prevents the write.
+
+The contact response contains exactly `contactId`, `revision`, `name`, `company`, `title`,
+`department`, `email`, `address`, `workPhone`, `fax`, `phone`,
+`cardRegisteredAt`, `cardBook`, `group`, and `notes`. POST creates a new UUID
+and returns 201 with the contact. PUT requires the observed `revision`, replaces
+the editable fields and returns 200 with a new revision; DELETE requires the
+observed `revision` query parameter and returns 204. A stale revision returns
+409 so concurrent changes are not overwritten. `name` must contain non-whitespace text. All fields are
+UTF-8 strings: `address` is at most 1,024 bytes, `notes` at most 8,192 bytes,
+and the other fields at most 256 bytes each. POST/PUT accept a single JSON object
+at most 64 KiB, with at most 12,000 bytes in the serialized contact; omitted optional fields become empty strings.
+
+Contacts listing accepts `limit=1..25` (default 25) and an opaque `cursor`, and
+returns `{contacts, nextCursor}` with `nextCursor` omitted at the end. A cursor
+is bound to its account; every page reauthorizes the caller. Pagination is not a
+snapshot: concurrent changes can affect subsequent pages. The team response is
+`{members:[{userId,name,email,role}],nextCursor}`; the name uses the profile name where
+available and otherwise the member's email. Team pages accept the same limit and
+cursor parameters and recheck the requester's access. Invalid input returns
+400, denied access 403, a missing contact on PUT/DELETE 404, a stale revision 409, and unexpected
+errors a generic 500. Responses are not cached and contact content is not logged.
+
+Contact fields are KMS envelope-encrypted per row before storage and bound to
+the account and contact (ADR-063); without a configured key, contact routes
+return 503 `CONTACTS_UNAVAILABLE`. Contact rows have no TTL and remain until a
+direct member deletes them. Point-in-time recovery can retain deleted, still
+encrypted data within the table's recovery window.
+
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
 update sets `accountId` and `sharedToAccount: false` together, including when
@@ -1307,6 +1342,11 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/owner-invitation` | `accountHandler.ResendOwnerInvitation` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
 | GET | `/api/accounts/{accountId}/reading` | `accountReadingHandler.Get` |
+| GET | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.List` |
+| POST | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.Create` |
+| PUT | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Update` |
+| DELETE | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Delete` |
+| GET | `/api/accounts/{accountId}/speaker-team` | `accountContactsHandler.SpeakerTeam` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
