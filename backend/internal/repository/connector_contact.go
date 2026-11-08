@@ -118,9 +118,8 @@ func (r *DynamoDBRepository) CreateConnectorContact(ctx context.Context, in Conn
 		}
 		return empty, ErrConnectorReceiptMissing
 	}
-	c.PK = accountPK
-	c.SK = "CONTACT#" + c.ContactID
-	item, err := attributevalue.MarshalMap(c)
+	// The row is sealed before any write; without a key nothing is written.
+	item, err := r.SealedContactItem(ctx, in.Account, &c)
 	if err != nil {
 		return empty, err
 	}
