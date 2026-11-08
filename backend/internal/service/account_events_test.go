@@ -195,3 +195,24 @@ func TestAccountEventListRangesAndCursorBinding(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountEventContactReferencesAreCheckedOnlyAfterAuthorization(t *testing.T) {
+	r := newEventRepo()
+	r.member = false
+	probes := 0
+	s := NewAccountEventsService(&countingContacts{eventTestRepo: r, probes: &probes})
+	_, err := s.Mutate(context.Background(), "acct", "outsider", "create", "", AccountEventInput{Title: "t", StartAt: "2026-11-10T14:00:00Z", Attendees: []model.EventAttendee{{ContactID: knownContact, Name: "x"}}})
+	if !errors.Is(err, ErrForbidden) || probes != 0 {
+		t.Fatalf("a non-member probed contact existence: %v probes=%d", err, probes)
+	}
+}
+
+type countingContacts struct {
+	*eventTestRepo
+	probes *int
+}
+
+func (c *countingContacts) ExistingAccountContactIDs(ctx context.Context, a string, ids []string) (map[string]bool, error) {
+	*c.probes++
+	return c.eventTestRepo.ExistingAccountContactIDs(ctx, a, ids)
+}
