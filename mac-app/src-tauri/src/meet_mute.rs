@@ -118,7 +118,7 @@ mod mac {
     use core_foundation::url::CFURL;
 
     use super::{classify_read, combine};
-    use crate::zoom_mute::ax::{children_checked, copy_attr, create_app};
+    use crate::zoom_mute::ax::{children_checked, copy_attr_checked, create_app};
     use crate::zoom_mute::MicState;
 
     const MEET_PREFIX: &str = "https://meet.google.com/";
@@ -126,16 +126,18 @@ mod mac {
     const MAX_NODES: usize = 6_000;
     const MAX_DEPTH: usize = 80;
 
-    fn string_attr(e: &CFType, name: &str) -> Option<String> {
-        copy_attr(e, name)
+    /// A string attribute, `Ok(None)` when absent, `Err` when the read failed.
+    fn string_attr(e: &CFType, name: &str) -> Result<Option<String>, ()> {
+        Ok(copy_attr_checked(e, name)?
             .and_then(|v| v.downcast::<CFString>())
-            .map(|s| s.to_string())
+            .map(|s| s.to_string()))
     }
 
-    fn is_meet_page(e: &CFType) -> bool {
-        copy_attr(e, "AXURL")
+    /// Whether `e` shows a Meet page, `Err` when its URL could not be read.
+    fn is_meet_page(e: &CFType) -> Result<bool, ()> {
+        Ok(copy_attr_checked(e, "AXURL")?
             .and_then(|v| v.downcast::<CFURL>())
-            .is_some_and(|u| u.get_string().to_string().starts_with(MEET_PREFIX))
+            .is_some_and(|u| u.get_string().to_string().starts_with(MEET_PREFIX)))
     }
 
     /// Collects button labels under `e`; never logged. Returns false when the
@@ -145,10 +147,14 @@ mod mac {
             return false;
         }
         *budget -= 1;
-        if string_attr(e, "AXRole").as_deref() == Some("AXButton") {
-            if let Some(d) = string_attr(e, "AXDescription") {
-                out.push(d);
-            }
+        let Ok(role) = string_attr(e, "AXRole") else {
+            return false;
+        };
+        if role.as_deref() == Some("AXButton") {
+            let Ok(description) = string_attr(e, "AXDescription") else {
+                return false;
+            };
+            out.extend(description);
             return true;
         }
         let Some(kids) = children_checked(e) else {
@@ -168,8 +174,14 @@ mod mac {
             return false;
         }
         *budget -= 1;
-        if string_attr(e, "AXRole").as_deref() == Some("AXWebArea") {
-            if is_meet_page(e) {
+        let Ok(role) = string_attr(e, "AXRole") else {
+            return false;
+        };
+        if role.as_deref() == Some("AXWebArea") {
+            let Ok(meet) = is_meet_page(e) else {
+                return false;
+            };
+            if meet {
                 let mut labels = Vec::new();
                 let complete = button_labels(e, depth, budget, &mut labels);
                 out.push(classify_read(labels.iter().map(String::as_str), complete));
@@ -194,7 +206,9 @@ mod mac {
             let Some(app) = create_app(pid) else {
                 continue;
             };
-            let Some(windows) = copy_attr(&app, "AXWindows") else {
+            let Ok(Some(windows)) = copy_attr_checked(&app, "AXWindows") else {
+                // An unreadable browser may hold the call: neither unmuted nor left.
+                states.push(MicState::Unknown);
                 continue;
             };
             let mut budget = MAX_NODES;

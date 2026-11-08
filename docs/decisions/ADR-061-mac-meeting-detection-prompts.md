@@ -152,8 +152,9 @@ inspection, so a slow Meet accessibility tree cannot delay that known decision.
 
 Meet's English/Korean muted toggle labels and readable-page fallback prioritize
 not dropping voice in unsupported languages. Unknown pages retain the previous
-state; another readable unmuted page wins. A page read that fails or reaches
-the node or depth bound is unknown, as is a search cut short before every
+state; another readable unmuted page wins. A page read whose role, label, URL, window or
+children attribute fails (any Accessibility status other than success, no
+value or unsupported) or that reaches the node or depth bound is unknown, as is a search cut short before every
 window was read, and a lost Accessibility grant feeds unknown to the hold, so
 none of them clears a retained mute. A Zoom menu read that fails is unreadable,
 not an empty menu bar. Hidden-tab or departed-call holds are not proof of the
