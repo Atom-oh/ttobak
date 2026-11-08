@@ -185,6 +185,7 @@ func init() {
 		member, err := repo.GetMember(ctx, accountID, userID)
 		return member != nil, err
 	})
+	dictService.SetMembershipBatchReader(service.BatchMembershipReader(repo))
 	// Account terms join the personal vocabulary in meeting-recency order.
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
 	dictHandler := handler.NewDictionaryHandler(dictService)
