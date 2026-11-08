@@ -557,3 +557,40 @@ test('keeping a recording locally while a project link is in flight saves the re
   pending.resolve();
   await Promise.allSettled([adding, removing]);
 });
+
+test('a reselection during an in-flight unlink is saved as an addition', async () => {
+  const pending = deferred();
+  let gateUnlink = false;
+  const fixtureState = fixture({ unlinkGate: () => gateUnlink ? pending.promise : undefined, timeoutMs: 10 });
+  const backup = browserBackup();
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  await fixtureState.hook.changeRecordingProjects(['project']);
+  assert.equal(fixtureState.serverProjects.has('project'), true);
+  gateUnlink = true;
+  const removing = fixtureState.hook.changeRecordingProjects([]);
+  await tick();
+  assert.equal(fixtureState.calls.filter(([kind]) => kind === 'unlinkProject').length, 1, 'the unlink request is in flight');
+  const reselecting = fixtureState.hook.changeRecordingProjects(['project']);
+  await fixtureState.hook.keepLocally('');
+  assert.deepEqual(plain(backup.metadata.projectAdditions), ['project'], 'the reselection survives a possibly committed unlink');
+  pending.resolve();
+  await Promise.allSettled([removing, reselecting]);
+});
+
+test('an applied restore retires its deltas so a second restore cannot replay them', async () => {
+  const fixtureState = fixture();
+  const backup = browserBackup();
+  backup.metadata.projectRemovals = ['old'];
+  fixtureState.serverProjects.add('old');
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  await fixtureState.hook.handleNotesSubmit('');
+  assert.equal(fixtureState.serverProjects.has('old'), false);
+  assert.deepEqual(plain(backup.metadata.projectRemovals), [], 'the applied removal is retired');
+  // Later the project is linked again elsewhere; restoring the same copy keeps it.
+  fixtureState.serverProjects.add('old');
+  const before = fixtureState.calls.length;
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  await fixtureState.hook.handleNotesSubmit('');
+  assert.equal(fixtureState.calls.slice(before).some(([kind]) => kind === 'unlinkProject'), false);
+  assert.equal(fixtureState.serverProjects.has('old'), true);
+});

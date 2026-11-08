@@ -128,6 +128,8 @@ export function usePostRecording({
   const desiredProjectsRef = useRef<string[]>([]);
   const linkedProjectsRef = useRef<string[]>([]);
   const attemptedProjectsRef = useRef<string[]>([]);
+  // Projects whose unlink request is in flight: possibly unlinked already.
+  const unlinkingProjectsRef = useRef<Set<string>>(new Set());
   const projectSyncRef = useRef<Promise<unknown>>(Promise.resolve());
   const [recordingLinks, setRecordingLinks] = useState<{ accountId?: string; boundAccountId?: string; projectIds: string[]; linkedProjectIds: string[] }>({ projectIds: [], linkedProjectIds: [] });
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -139,7 +141,7 @@ export function usePostRecording({
   }, []);
   const resetLinks = useCallback(() => {
     boundAccountRef.current = undefined; desiredProjectsRef.current = []; linkedProjectsRef.current = [];
-    accountUncertainRef.current = false; attemptedProjectsRef.current = [];
+    accountUncertainRef.current = false; attemptedProjectsRef.current = []; unlinkingProjectsRef.current = new Set();
     accountSyncRef.current = Promise.resolve(); projectSyncRef.current = Promise.resolve();
     skipAccountSyncRef.current = false;
     setLinkError(null);
@@ -315,7 +317,12 @@ export function usePostRecording({
           unlink: async (projectId, id) => {
             if (!isCurrent()) throw new Error('Recording changed');
             markAttempted(projectId);
-            return projectApi.unlinkMeeting(projectId, id, options);
+            unlinkingProjectsRef.current.add(projectId);
+            try {
+              return await projectApi.unlinkMeeting(projectId, id, options);
+            } finally {
+              unlinkingProjectsRef.current.delete(projectId);
+            }
           },
           isNotFound: (error) => error instanceof ApiError && error.status === 404 && error.code === 'NOT_FOUND',
         }, attemptedProjectsRef.current);
@@ -433,6 +440,14 @@ export function usePostRecording({
       const projectFailure = await syncProjects(meetingId);
       if (!isCurrent()) return;
       if (projectFailure) throw new Error(`${projectFailure} 다시 시도해 주세요. 연결 추가는 생략할 수 있지만, 연결 해제는 확인이 필요합니다.`);
+      // The local copy's pending project changes are now applied; retire them
+      // so a later restore of the same copy cannot replay a settled removal.
+      if (payload.kind === 'blob' && payload.backup) {
+        await payload.backup.update({ projectAdditions: [], projectRemovals: [] }).catch(() => {
+          setPreparationError('기기 보관본의 프로젝트 변경 기록을 정리하지 못했습니다. 업로드를 계속합니다.');
+        });
+        if (!isCurrent()) return;
+      }
       if (submittedNotesRef.current !== undefined) {
         await persistNotes(meetingId, submittedNotesRef.current);
         if (!isCurrent()) return;
@@ -690,7 +705,10 @@ export function usePostRecording({
     if (pending?.kind !== 'blob' || !pending.backup) throw new Error('기기 보관본을 확인할 수 없습니다.');
     if (codePointLength(notes) > MAX_MEETING_NOTES) throw new Error('메모는 32,000자까지 저장할 수 있습니다.');
     await pending.backup.update({ notes, title: meetingTitle, finalized: true,
-      ...projectLinkDeltas(linkedProjectsRef.current, desiredProjectsRef.current, attemptedProjectsRef.current),
+      // An in-flight unlink may already have committed, so a reselected
+      // project is saved as an addition rather than assumed still linked.
+      ...projectLinkDeltas(linkedProjectsRef.current.filter(id => !unlinkingProjectsRef.current.has(id)),
+        desiredProjectsRef.current, attemptedProjectsRef.current),
       ...(persistedMeetingIdRef.current ? { meetingId: persistedMeetingIdRef.current } : {}) });
     router.push('/');
   }, [meetingTitle, router]);
