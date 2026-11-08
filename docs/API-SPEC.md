@@ -664,8 +664,11 @@ cursor parameters and recheck the requester's access. Invalid input returns
 400, denied access 403, a missing contact on PUT/DELETE 404, a stale revision 409, and unexpected
 errors a generic 500. Responses are not cached and contact content is not logged.
 
-Contact rows have no TTL and remain until manually deleted. Point-in-time recovery
-on the table can retain deleted data within its recovery window.
+Contact fields are KMS envelope-encrypted per row before storage and bound to
+the account and contact (ADR-063); without a configured key, contact routes
+return 503 `CONTACTS_UNAVAILABLE`. Contact rows have no TTL and remain until a
+direct member deletes them. Point-in-time recovery can retain deleted, still
+encrypted data within the table's recovery window.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
