@@ -253,8 +253,10 @@ pub(crate) fn recording_path(meeting_id: &str) -> Result<PathBuf, AppError> {
 // ---------------------------------------------------------------------------
 // macOS implementation
 // ---------------------------------------------------------------------------
-/// Seconds of other apps' playback with an all-zero tap before warning.
-pub const SILENCE_WARN_PLAYING_SECONDS: u32 = 10;
+/// Seconds of other apps' playback with an all-zero tap before warning. A
+/// meeting where nobody speaks can play exact zeros for a while (observed
+/// with Meet for 10 s), so the window is long enough to make that unlikely.
+pub const SILENCE_WARN_PLAYING_SECONDS: u32 = 30;
 
 /// Outcome of one early system-audio silence observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -608,11 +610,11 @@ pub mod macos {
                             let _ = app
                                 .notification()
                                 .builder()
-                                .title("참여자 소리가 녹음되지 않고 있어요")
+                                .title("참여자 소리가 들리지 않아요")
                                 .body(
-                                    "시스템 오디오 녹음 권한이 없는 것 같아요. 시스템 설정 > \
-                                     개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 \
-                                     TTOBAK을 허용한 뒤 앱을 다시 실행하세요.",
+                                    "다른 앱에서 소리가 재생 중인데 30초째 녹음되지 않고 있어요. \
+                                     상대방 소리가 들렸다면 시스템 설정 > 개인정보 보호 및 \
+                                     보안 > 화면 및 시스템 오디오 녹음에서 TTOBAK을 확인하세요.",
                                 )
                                 .show();
                             return;

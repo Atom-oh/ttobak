@@ -112,7 +112,7 @@ without a user confirmation.
   as it does other TCC grants. The same left-call page, read for 3 s, ends a
   tracked Meet meeting without the 20 s audio grace, as Zoom's confirmed end
   does.
-- During a native recording, if other apps play audio for 10 s while the
+- During a native recording, if other apps play audio for 30 s while the
   system tap has delivered only exact zeros, the app posts a notification that
   System Audio Recording is likely denied, instead of reporting it only at
   stop. A process launched from a terminal is attributed to that terminal by
