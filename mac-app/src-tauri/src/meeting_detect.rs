@@ -127,7 +127,11 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
             browser: None,
         };
         let zoom_involved = sources.contains(&zoom) || state.detector.lock().tracks(&zoom);
-        let ended: Vec<String> = if zoom_involved && crate::zoom_mute::meeting_over() {
+        let ended: Vec<String> = if zoom_involved
+            && crate::zoom_mute::meeting_over(crate::zoom_mute::ProcessSources {
+                process_pid: crate::audio::macos::process_pid,
+                browser_pids: capturing_browser_pids,
+            }) {
             vec![zoom.key()]
         } else {
             Vec::new()

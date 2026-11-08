@@ -79,9 +79,10 @@ without a user confirmation.
   `Devices`, input scope), else the system default. This keeps multi-microphone
   and clamshell setups aligned with what Zoom hears. `switch_recording_input`
   changes the microphone during a recording: the tap, WAV and worker continue
-  while only the aggregate is rebuilt (a sub-second gap). A device that cannot
-  run at the recording's sample rate is refused, and a failed start restores
-  the previous device.
+  while only the aggregate is rebuilt; the capture gap needs native measurement.
+  A device that cannot run at the recording's sample rate is refused. A failed
+  start attempts to restore the previous device. If restoration also fails,
+  capture stops and the already-recorded data must be finalized.
 - The recording follows Zoom's own mute, as Notion's meeting notes do
   (observed in Notion's shipped `mac_utils.node`: an Accessibility observer of
   Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
@@ -90,20 +91,25 @@ without a user confirmation.
   at zero gain while Zoom shows the user muted. Once a recording has followed
   Zoom, a confirmed end (Zoom quit, or neither the `zm.meeting.window.main`
   window nor an audio item remains) silences the microphone at once, and an
-  unreadable stretch over 3 s does too: Zoom no longer hears the user. A
-  recording that never saw a Zoom state records the microphone as before.
+  unreadable stretch over 3 s does too. Unreadable inspection does not establish
+  whether the meeting ended or what Zoom itself captures; the UI preserves this
+  uncertainty. A recording that never saw a Zoom state records the microphone as before.
   The same confirmed end lets detection end the Zoom meeting without the 20 s
   audio grace.
 - Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads
   the Meet page of each Chromium browser instance playing or capturing audio
   through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). The
   toggle's label gives the state ("Turn on microphone" while muted, "Turn off
-  microphone" while unmuted, and their Korean forms). A Meet page without the
-  toggle has left the call: once a recording has followed Meet, that keeps the
-  microphone silent, as with Zoom; a recording that never saw the toggle (e.g.
-  an unlisted language) records the microphone. An unreadable page (another
-  tab in front) keeps the last state. Safari's shared WebKit process is not
-  followed.
+  microphone" while unmuted, and their Korean forms; both verified on a live
+  call). A Meet page without the toggle has left the call: once a recording
+  has followed Meet, that keeps the microphone silent, as with Zoom; a
+  recording that never saw the toggle (e.g. an unlisted language) records the
+  microphone. An unreadable page (another tab in front) keeps the last state,
+  including when Accessibility trust is lost after an observed state. Safari's
+  shared WebKit process is not followed. Without Accessibility permission at
+  startup, the response warns and the microphone records normally until a
+  meeting's mute has been observed. Ad-hoc re-signing invalidates the grant,
+  as it does other TCC grants.
 - During a native recording, if other apps play audio for 10 s while the
   system tap has delivered only exact zeros, the app posts a notification that
   System Audio Recording is likely denied, instead of reporting it only at
@@ -117,6 +123,31 @@ without a user confirmation.
   not sleep and keeps recording.
 
 ## Consequences
+
+### Staged mute-follow library
+
+`zoom_mute` and `meet_mute` were introduced as compiled public library modules
+without activating capture. This runtime supplies `ProcessSources` using the
+existing Core Audio process/browser discovery, calls `watch`, retains its handle
+and consumes the microphone flag. `meeting_over` uses the same injected discovery.
+Native acceptance remains required before claiming that recording follows a
+meeting application's mute.
+
+When invoked, the watcher may request Accessibility access once per app launch.
+It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
+(`muted` or `meeting_ended`). Zoom labels come from its localization resources.
+Unreadable window identifiers are unknown, never a confirmed meeting end;
+the existing three-second unknown-state fallback can still silence a previously
+followed meeting during a long permission or inspection failure.
+An observed Zoom silence reaches the microphone gate before synchronous browser
+inspection, so a slow Meet accessibility tree cannot delay that known decision.
+
+Meet's English/Korean muted toggle labels and readable-page fallback prioritize
+not dropping voice in unsupported languages. Unknown pages retain the previous
+state; another readable unmuted page wins. Partial Accessibility traversal can
+still clear that retained mute, and hidden-tab or departed-call holds are not
+proof of the user's current intent. These limitations need native verification
+and remain separate from the compiled library's availability.
 
 - No new network origin, IAM change or server route. The SPA owns titles,
   meeting creation and uploads as before.
