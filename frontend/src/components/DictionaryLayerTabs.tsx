@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { accountApi, ApiError, dictionaryApi } from '@/lib/api';
 import { isEditableAccount } from '@/lib/accountAccess';
@@ -91,8 +92,8 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
 
   const onUpdate = (item: DictTermItem, patch: TermPatch) =>
     mutate(item.termId, () => dictionaryApi.updateLayerTerm(layer, item.termId, patch, item.version), () => void load());
-  const onDelete = (item: DictTermItem) => {
-    if (layer === 'common' && !window.confirm(`공통 사전에서 '${item.displayAs}' 용어를 삭제할까요? 기록에서 복원할 수 있습니다.`)) return;
+  const onDelete = async (item: DictTermItem) => {
+    if (layer === 'common' && !await confirmDialog(`공통 사전에서 '${item.displayAs}' 용어를 삭제할까요? 기록에서 복원할 수 있습니다.`)) return;
     void mutate(item.termId, () => dictionaryApi.deleteLayerTerm(layer, item.termId, item.version), () => {
       setItems((prev) => prev?.filter((t) => t.termId !== item.termId) ?? prev);
       setHistory((h) => (h?.termId === item.termId ? null : h));
