@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	"github.com/ttobak/backend/internal/fanout"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/speaker"
@@ -140,6 +141,10 @@ type MeetingService struct {
 	listMetadata interface {
 		GetMeeting(context.Context, string, string) (*model.Meeting, error)
 	}
+	// listRows, when set, replaces the list paths' eventually consistent
+	// full-row BatchGetMeetings and per-row canonical GetItem re-reads with
+	// one strongly consistent batch read of the list fields only.
+	listRows meetingListRowReader
 
 	// cognito/cognitoPoolID back InviteUser/SearchUsers. When unset, both
 	// methods fall back to building a client inline via
@@ -153,7 +158,7 @@ type MeetingService struct {
 
 // NewMeetingService creates a new meeting service
 func NewMeetingService(repo *repository.DynamoDBRepository) *MeetingService {
-	return &MeetingService{repo: repo, listMetadata: repo.MetadataView()}
+	return &MeetingService{repo: repo, listMetadata: repo.MetadataView(), listRows: repo}
 }
 
 func (s *MeetingService) currentListMeeting(ctx context.Context, owner, id string) (*model.Meeting, error) {
@@ -485,14 +490,14 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 			}
 		}
 
-		meetings, err := s.repo.BatchGetMeetings(ctx, keys)
+		meetings, canonical, err := s.loadListMeetings(ctx, keys)
 		if err == nil {
 			// Build lookup map
 			meetingMap := make(map[string]*model.Meeting, len(meetings))
 			for _, m := range meetings {
 				meetingMap[m.MeetingID] = m
 			}
-			pre := s.prefetchAccountShareReads(ctx, result.Shares, meetingMap, userID, params.AccountIDs != nil)
+			pre := s.prefetchAccountShareReads(ctx, result.Shares, meetingMap, canonical, userID, params.AccountIDs != nil)
 			// memberCache avoids a duplicate GetMember call per meeting when
 			// the same account appears more than once in this page's shares.
 			memberCache := make(map[string]*accountReadGrant)
@@ -1354,12 +1359,34 @@ func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, 
 // surfaced -- called from handler/meeting.go's ListMeetings/CreateMeeting,
 // which this must never block. Returns newly joined account IDs so this
 // request can discover team meetings before the membership GSI catches up.
+//
+// For an existing profile the pending-share read does not depend on the
+// profile read, so both overlap. A profile this call created may race an
+// inviter that queued a grant while no profile existed, so that case lists
+// pending shares again after the create, exactly as before.
 func (s *MeetingService) EnsureProfileAndMaterializePendingShares(ctx context.Context, userID, email, name string, emailVerified bool) []string {
-	if _, _, err := s.repo.GetOrCreateUser(ctx, userID, email, name); err != nil {
-		log.Printf("EnsureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, err)
+	var (
+		created    bool
+		userErr    error
+		pending    []model.PendingShare
+		pendingErr error
+	)
+	fanout.Ordered(ctx, 2, 2, func(ctx context.Context, i int) error {
+		if i == 0 {
+			_, created, userErr = s.repo.GetOrCreateUser(ctx, userID, email, name)
+			return userErr
+		}
+		pending, pendingErr = s.repo.ListPendingShares(ctx, email)
+		return nil
+	})
+	if userErr != nil {
+		log.Printf("EnsureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, userErr)
 		return nil
 	}
-	return s.MaterializePendingShares(ctx, userID, email, emailVerified)
+	if created {
+		return s.MaterializePendingShares(ctx, userID, email, emailVerified)
+	}
+	return s.materializeListedPendingShares(ctx, userID, email, emailVerified, pending, pendingErr)
 }
 
 // MaterializePendingShares turns every PendingShare queued for email into a
@@ -1391,6 +1418,12 @@ func (s *MeetingService) EnsureProfileAndMaterializePendingShares(ctx context.Co
 // fatal"). It stays queued and is retried on the next call.
 func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, email string, emailVerified bool) []string {
 	pending, err := s.repo.ListPendingShares(ctx, email)
+	return s.materializeListedPendingShares(ctx, userID, email, emailVerified, pending, err)
+}
+
+// materializeListedPendingShares is MaterializePendingShares after its
+// ListPendingShares read, given that read's result.
+func (s *MeetingService) materializeListedPendingShares(ctx context.Context, userID, email string, emailVerified bool, pending []model.PendingShare, err error) []string {
 	if err != nil {
 		log.Printf("MaterializePendingShares: failed to list pending shares for %s: %v", email, err)
 		return nil
