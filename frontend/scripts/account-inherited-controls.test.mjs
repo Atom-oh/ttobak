@@ -62,6 +62,7 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     '@/components/FieldInsightsSection': { FieldInsightsSection: none },
     '@/components/AccountBillingTab': { AccountBillingTab: none },
     '@/components/AccountContacts': { AccountContacts: () => React.createElement('div', null, 'customer contacts panel') },
+    '@/components/AccountEvents': { AccountEvents: () => React.createElement('div', null, 'customer contacts panel') },
     '@/components/ShareButton': { DocumentShareButton: none },
     '@/components/IndexStatus': { IndexStatus: none },
   };

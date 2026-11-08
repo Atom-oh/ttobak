@@ -15,6 +15,7 @@ import { PrivateUpcomingMeetings } from '@/components/workspace/UpcomingMeetings
 import { AccountParentEditor } from '@/components/AccountParentEditor';
 import { AccountBillingTab } from '@/components/AccountBillingTab';
 import { AccountContacts } from '@/components/AccountContacts';
+import { AccountEvents } from '@/components/AccountEvents';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { fetchBillingAccounts } from '@/lib/billingApi';
@@ -150,8 +151,11 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   }, [isAuthenticated, accountId, account, readScope]);
   const billingEntry = account && billing?.scope === readScope ? billing.entry : null;
   const billingVisible = billingEntry !== null;
-  const tabs = visibleAccountTabs(billingVisible);
-  const tab = parseAccountTab(searchParams.get('tab'), billingVisible);
+  // Events, like contacts, are for direct members only (ADR-063).
+  const eventsVisible = !!account && account.accountId === accountId && !!user?.userId
+    && account.members.some((member) => member.userId === user.userId);
+  const tabs = visibleAccountTabs(billingVisible, eventsVisible);
+  const tab = parseAccountTab(searchParams.get('tab'), billingVisible, eventsVisible);
   const selectTab = (next: AccountTab) => {
     router.replace(`${pathname}${accountTabHref(searchParams.toString(), next)}`, { scroll: false });
   };
@@ -633,6 +637,9 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                     <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId} />
                   )}
                 </>
+              )}
+              {tab === 'events' && eventsVisible && user?.userId && (
+                <AccountEvents key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId} />
               )}
               {tab === 'insights' && (
                 <>
