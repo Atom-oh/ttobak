@@ -39,6 +39,59 @@ func (p *prefetched[T]) markReady(slots []int, stop int) {
 	}
 }
 
+type meetingListRowReader interface {
+	BatchGetMeetingListRows(context.Context, []repository.MeetingKey) (map[repository.MeetingKey]*model.Meeting, error)
+}
+
+// loadListMeetings reads a list page's shared or team meetings. With a
+// listRows reader it issues one strongly consistent batch read of the list
+// fields; its rows are returned as canonical and also serve as the per-row
+// canonical re-reads, which a consistent read makes redundant. Otherwise it
+// is the legacy BatchGetMeetings with canonical nil.
+func (s *MeetingService) loadListMeetings(ctx context.Context, keys []repository.MeetingKey) ([]*model.Meeting, map[repository.MeetingKey]*model.Meeting, error) {
+	if s.listRows == nil || len(keys) > repository.MeetingListRowsMaxKeys {
+		meetings, err := s.repo.BatchGetMeetings(ctx, keys)
+		return meetings, nil, err
+	}
+	rows, err := s.listRows.BatchGetMeetingListRows(ctx, keys)
+	if err != nil {
+		return nil, nil, err
+	}
+	meetings := make([]*model.Meeting, 0, len(rows))
+	seen := make(map[repository.MeetingKey]bool, len(rows))
+	for _, key := range keys {
+		if m := rows[key]; m != nil && !seen[key] {
+			seen[key] = true
+			meetings = append(meetings, m)
+		}
+	}
+	return meetings, rows, nil
+}
+
+// canonicalListReads produces the canonical re-read for n rows in order and
+// returns the first failing index (n when none failed), like fanout.Ordered.
+// Without canonical rows each is a live currentListMeeting read; with them
+// the batch row passes the same identity check as currentListMeeting.
+func (s *MeetingService) canonicalListReads(ctx context.Context, n int, canonical map[repository.MeetingKey]*model.Meeting, key func(int) repository.MeetingKey, store func(int, *model.Meeting, error)) int {
+	if canonical == nil {
+		return fanout.Ordered(ctx, n, listReadConcurrency, func(ctx context.Context, k int) error {
+			m, err := s.currentListMeeting(ctx, key(k).OwnerID, key(k).MeetingID)
+			store(k, m, err)
+			return err
+		})
+	}
+	for k := 0; k < n; k++ {
+		id := key(k)
+		m := canonical[id]
+		if m != nil && (m.UserID != id.OwnerID || m.MeetingID != id.MeetingID) {
+			store(k, nil, ErrReadingData)
+			return k
+		}
+		store(k, m, nil)
+	}
+	return n
+}
+
 // accountSharePrefetch issues, concurrently, the reads the shared-meeting
 // replay in listMeetingsFilteredPage would otherwise make one at a time: the
 // canonical re-read of every account-origin share and the first membership
@@ -53,7 +106,7 @@ type prefetchedGrant struct {
 	err   error
 }
 
-func (s *MeetingService) prefetchAccountShareReads(ctx context.Context, shares []model.Share, meetingMap map[string]*model.Meeting, userID string, membershipErrorsFatal bool) *accountSharePrefetch {
+func (s *MeetingService) prefetchAccountShareReads(ctx context.Context, shares []model.Share, meetingMap map[string]*model.Meeting, canonical map[repository.MeetingKey]*model.Meeting, userID string, membershipErrorsFatal bool) *accountSharePrefetch {
 	pre := &accountSharePrefetch{meetings: newPrefetched[*model.Meeting](len(shares)), grants: map[string]prefetchedGrant{}}
 	reread := make([]int, 0, len(shares))
 	for i, share := range shares {
@@ -61,11 +114,10 @@ func (s *MeetingService) prefetchAccountShareReads(ctx context.Context, shares [
 			reread = append(reread, i)
 		}
 	}
-	stop := fanout.Ordered(ctx, len(reread), listReadConcurrency, func(ctx context.Context, k int) error {
-		i := reread[k]
-		m, err := s.currentListMeeting(ctx, shares[i].OwnerID, shares[i].MeetingID)
-		pre.meetings.value[i], pre.meetings.err[i] = m, err
-		return err
+	stop := s.canonicalListReads(ctx, len(reread), canonical, func(k int) repository.MeetingKey {
+		return repository.MeetingKey{OwnerID: shares[reread[k]].OwnerID, MeetingID: shares[reread[k]].MeetingID}
+	}, func(k int, m *model.Meeting, err error) {
+		pre.meetings.value[reread[k]], pre.meetings.err[reread[k]] = m, err
 	})
 	pre.meetings.markReady(reread, stop)
 
@@ -155,7 +207,7 @@ type teamPagePrefetch struct {
 	shares   *prefetched[*model.Share]
 }
 
-func (s *MeetingService) prefetchTeamPageReads(ctx context.Context, keys []repository.MeetingKey, byID map[string]*model.Meeting, listed map[string]bool, userID, accountID string) *teamPagePrefetch {
+func (s *MeetingService) prefetchTeamPageReads(ctx context.Context, keys []repository.MeetingKey, byID map[string]*model.Meeting, canonical map[repository.MeetingKey]*model.Meeting, listed map[string]bool, userID, accountID string) *teamPagePrefetch {
 	pre := &teamPagePrefetch{meetings: newPrefetched[*model.Meeting](len(keys)), shares: newPrefetched[*model.Share](len(keys))}
 	reread := make([]int, 0, len(keys))
 	for k, key := range keys {
@@ -163,11 +215,10 @@ func (s *MeetingService) prefetchTeamPageReads(ctx context.Context, keys []repos
 			reread = append(reread, k)
 		}
 	}
-	stop := fanout.Ordered(ctx, len(reread), listReadConcurrency, func(ctx context.Context, j int) error {
-		k := reread[j]
-		m, err := s.currentListMeeting(ctx, keys[k].OwnerID, keys[k].MeetingID)
-		pre.meetings.value[k], pre.meetings.err[k] = m, err
-		return err
+	stop := s.canonicalListReads(ctx, len(reread), canonical, func(j int) repository.MeetingKey {
+		return keys[reread[j]]
+	}, func(j int, m *model.Meeting, err error) {
+		pre.meetings.value[reread[j]], pre.meetings.err[reread[j]] = m, err
 	})
 	pre.meetings.markReady(reread, stop)
 
