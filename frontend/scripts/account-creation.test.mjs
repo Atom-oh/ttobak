@@ -18,6 +18,7 @@ const loadHelper = name => {
 
 function fixture(overrides = {}) {
   let userId = 'creator', uuidCounter = 0;
+  let membershipRevision = 0;
   const harness = accountComponentHarness();
   const calls = { creates: [], creationUsers: [], members: [], resends: [], resendUsers: [], navigation: [] };
   const react = harness.react;
@@ -26,7 +27,7 @@ function fixture(overrides = {}) {
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
     'next/navigation': { useRouter: () => ({ push: path => calls.navigation.push(path) }), useSearchParams: () => new URLSearchParams() },
-    '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId, email: `${userId}@example.com` }, isAuthenticated: true, membershipRevision: 0 }) },
+    '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId, email: `${userId}@example.com` }, isAuthenticated: true, membershipRevision }) },
     '@/lib/api': { accountApi: {
       list: async () => ({ accounts: [] }),
       peekList: () => undefined,
@@ -85,8 +86,53 @@ function fixture(overrides = {}) {
     },
     submit() { return find(n => n.type === 'form').props.onSubmit({ preventDefault() {} }); },
     async switchUser(id) { userId = id; render(); await tick(); render(); },
+    async refreshMembership() { membershipRevision++; render(); await tick(); render(); },
   };
 }
+
+test('membership refresh preserves a pending creation and its disabled form', async () => {
+  let finish;
+  const page = fixture({ create: () => new Promise(resolve => { finish = resolve; }) });
+  await page.start();
+  const pending = page.submit();
+  await page.refreshMembership();
+  const name = page.find(node => node.props?.placeholder?.startsWith('Account name'));
+  assert.equal(name?.props.value, 'Customer');
+  assert.equal(page.find(node => node.type === 'fieldset')?.props.disabled, true);
+  await page.submit();
+  assert.equal(page.calls.creates.length, 1);
+  finish({ accountId: 'account', creatorMember: true });
+  await pending;
+  assert.deepEqual(page.calls.navigation, ['/accounts/account']);
+});
+
+test('ambiguous creation retry retains its request ID across membership refresh', async () => {
+  let attempts = 0;
+  const page = fixture({ create: async request => {
+    if (++attempts === 1) throw new Error('response lost');
+    return { accountId: 'account', name: request.name, creatorMember: false, ownerInvitationPending: true };
+  } });
+  await page.start();
+  page.otherOwner();
+  await page.submit();
+  await page.refreshMembership();
+  assert.ok(page.find(node => node.type === 'form'));
+  await page.submit();
+  assert.equal(page.calls.creates.length, 2);
+  assert.equal(page.calls.creates[0].requestId, page.calls.creates[1].requestId);
+});
+
+test('membership refresh retains the acknowledged Owner invitation receipt', async () => {
+  const page = fixture();
+  await page.start();
+  page.otherOwner();
+  await page.submit();
+  await page.refreshMembership();
+  const resend = page.button('Owner 초대 메일 다시 보내기');
+  assert.ok(resend);
+  await resend.props.onClick();
+  assert.deepEqual(page.calls.resends, ['account']);
+});
 
 test('another Owner defaults to invite only and stays on creation receipt', async () => {
   const page = fixture(); await page.start(); page.otherOwner();

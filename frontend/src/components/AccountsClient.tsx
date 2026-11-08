@@ -19,17 +19,20 @@ interface PendingMember extends User {
 }
 
 export default function AccountsClient() {
-  const { user, isAuthenticated, membershipRevision } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   if (!isAuthenticated || !user) return null;
-  return <AccountsContent key={`${user.userId}:${membershipRevision}`} />;
+  return <AccountsContent key={user.userId} />;
 }
 
 function AccountsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isAuthenticated, membershipRevision } = useAuth();
-  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedAccounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [loadedRevision, setLoadedRevision] = useState(membershipRevision);
+  const [listLoading, setLoading] = useState(true);
+  const loading = listLoading || loadedRevision !== membershipRevision;
+  const accounts = loadedRevision === membershipRevision ? loadedAccounts : [];
   const requestGeneration = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -40,7 +43,7 @@ function AccountsContent() {
     setObservedAccountId(queryAccountId);
     setSelectedAccountId(queryAccountId);
   }
-  const selectedId = selectedAccountId || accounts[0]?.accountId || '';
+  const selectedId = selectedAccountId || loadedAccounts[0]?.accountId || '';
   const selectAccount = (accountId: string) => {
     if (!accounts.some(account => account.accountId === accountId)) return;
     setSelectedAccountId(accountId);
@@ -82,7 +85,10 @@ function AccountsContent() {
     setError(null);
     try {
       const cached = accountApi.peekList({ expectedUserId: user?.userId });
-      if (cached) setAccounts(cached.accounts);
+      if (cached) {
+        setAccounts(cached.accounts);
+        setLoadedRevision(membershipRevision);
+      }
       setLoading(!cached);
       const res = await accountApi.list({ expectedUserId: user?.userId });
       if (generation === requestGeneration.current) setAccounts(res?.accounts ?? []);
@@ -92,9 +98,12 @@ function AccountsContent() {
         setError(err instanceof Error ? err.message : 'Failed to load accounts');
       }
     } finally {
-      if (generation === requestGeneration.current) setLoading(false);
+      if (generation === requestGeneration.current) {
+        setLoadedRevision(membershipRevision);
+        setLoading(false);
+      }
     }
-  }, [user?.userId]);
+  }, [user?.userId, membershipRevision]);
 
   useEffect(() => {
     if (isAuthenticated) void fetchAccounts();
@@ -346,35 +355,33 @@ function AccountsContent() {
         </form>
       )}
 
-      {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-        </div>
-      ) : accounts.length === 0 ? (
-        <div className="text-center py-16 text-slate-400 dark:text-text-muted">
-          <span className="material-symbols-outlined text-4xl mb-2 block">corporate_fare</span>
-          No accounts yet. Create one to start organizing customers.
-        </div>
-      ) : (
-        <>
-          <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <AccountWorkspaceSelector accounts={accounts} selectedId={selectedId} onSelect={selectAccount} />
-            <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
-              {accounts.some(account => account.accountId === selectedId) ? (
-                <AccountDetailContent key={`${user?.userId}:${membershipRevision}:${selectedId}`} accountId={selectedId}
-                  onParentUpdated={(accountId, parentAccountId) => {
-                    if (accountId !== selectedId) return;
-                    setAccounts(previous => previous.map(account => account.accountId === accountId
-                      ? { ...account, parentAccountId: parentAccountId || undefined } : account));
-                  }} />
-              ) : <p role="alert" className="text-sm text-text-secondary">이 어카운트에 접근할 수 없습니다. 다른 고객을 선택하세요.</p>}
-            </div>
+      <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
           </div>
-          <details className="mt-6 rounded-xl border border-border-subtle p-4">
-            <summary className="cursor-pointer text-sm font-semibold text-text-main">어카운트 계층 보기</summary>
-            <div className="mt-4"><AccountHierarchyList accounts={accounts} /></div>
-          </details>
-        </>
+        ) : accounts.length === 0 ? (
+          <div className="text-center py-16 text-slate-400 dark:text-text-muted">
+            <span className="material-symbols-outlined text-4xl mb-2 block">corporate_fare</span>
+            No accounts yet. Create one to start organizing customers.
+          </div>
+        ) : <AccountWorkspaceSelector accounts={accounts} selectedId={selectedId} onSelect={selectAccount} />}
+        <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
+          {selectedId && (loading || accounts.some(account => account.accountId === selectedId)) ? (
+            <AccountDetailContent key={`${user?.userId}:${selectedId}`} accountId={selectedId}
+              onParentUpdated={(accountId, parentAccountId) => {
+                if (accountId !== selectedId) return;
+                setAccounts(previous => previous.map(account => account.accountId === accountId
+                  ? { ...account, parentAccountId: parentAccountId || undefined } : account));
+              }} />
+          ) : <p role="alert" className="text-sm text-text-secondary">이 어카운트에 접근할 수 없습니다. 다른 고객을 선택하세요.</p>}
+        </div>
+      </div>
+      {!loading && accounts.length > 0 && (
+        <details className="mt-6 rounded-xl border border-border-subtle p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-text-main">어카운트 계층 보기</summary>
+          <div className="mt-4"><AccountHierarchyList accounts={accounts} /></div>
+        </details>
       )}
     </div>
   );

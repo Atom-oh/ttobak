@@ -24,7 +24,7 @@ import type { Account, User, AccountMember } from '@/types/meeting';
 export default function AccountDetailClient() {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
+  const { user, isLoading, isAuthenticated } = useAuth();
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace('/');
   }, [isLoading, isAuthenticated, router]);
@@ -35,7 +35,7 @@ export default function AccountDetailClient() {
   try { accountId = match ? decodeURIComponent(match[1]) : ''; } catch { accountId = ''; }
   return (
     <AppLayout activePath="/accounts">
-      <AccountDetailWorkspace key={`${user.userId}:${membershipRevision}:${accountId}`} accountId={accountId} userId={user.userId} />
+      <AccountDetailWorkspace key={`${user.userId}:${accountId}`} accountId={accountId} userId={user.userId} />
     </AppLayout>
   );
 }
@@ -43,7 +43,7 @@ export default function AccountDetailClient() {
 function AccountDetailWorkspace({ accountId, userId }: { accountId: string; userId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const list = useAccountWorkspaceAccounts(userId);
+  const { membershipRevision } = useAuth();
   const [selectedId, setSelectedId] = useState(accountId);
   const selectAccount = (next: string) => {
     setSelectedId(next);
@@ -58,17 +58,26 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
         <a href={`/accounts${searchParams.size ? `?${searchParams}` : ''}`} className="text-sm font-semibold text-primary hover:underline">고객 생성 · 계층 관리</a>
       </div>
       <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <div className="min-w-0">
-          {list.loading ? <p role="status" className="text-sm text-text-secondary">고객 목록을 불러오는 중…</p> : (
-            <AccountWorkspaceSelector accounts={list.accounts} selectedId={selectedId} onSelect={selectAccount} />
-          )}
-          {list.error && <div role="alert" className="mt-3 text-sm text-red-500">{list.error} <button type="button" className="underline" onClick={() => void list.refresh()}>다시 시도</button></div>}
-        </div>
+        <AccountWorkspaceSidebar key={membershipRevision} userId={userId} selectedId={selectedId} onSelect={selectAccount} />
         <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
           {selectedId && selectedId !== '_' ? <AccountDetailContent key={selectedId} accountId={selectedId} />
             : <p className="text-sm text-text-secondary">고객을 선택하세요.</p>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AccountWorkspaceSidebar({ userId, selectedId, onSelect }: {
+  userId: string; selectedId: string; onSelect: (accountId: string) => void;
+}) {
+  const list = useAccountWorkspaceAccounts(userId);
+  return (
+    <div className="min-w-0">
+      {list.loading ? <p role="status" className="text-sm text-text-secondary">고객 목록을 불러오는 중…</p> : (
+        <AccountWorkspaceSelector accounts={list.accounts} selectedId={selectedId} onSelect={onSelect} />
+      )}
+      {list.error && <div role="alert" className="mt-3 text-sm text-red-500">{list.error} <button type="button" className="underline" onClick={() => void list.refresh()}>다시 시도</button></div>}
     </div>
   );
 }
@@ -111,9 +120,13 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, membershipRevision } = useAuth();
+  const readScope = useMemo(() => ({ accountId, userId: user?.userId, membershipRevision }), [accountId, user?.userId, membershipRevision]);
+  const readScopeRef = useRef(readScope);
+  useLayoutEffect(() => { readScopeRef.current = readScope; }, [readScope]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [account, setAccount] = useState<Account | null>(null);
+  const [accountResult, setAccountResult] = useState<{ scope: typeof readScope; account: Account } | null>(null);
+  const account = accountResult?.scope === readScope ? accountResult.account : null;
   const { canEdit, isOwner } = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
   const parentUpdateScope = useMemo(() => ({ accountId, isOwner, active: true }), [accountId, isOwner]);
   useLayoutEffect(() => {
@@ -121,7 +134,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     return () => { parentUpdateScope.active = false; };
   }, [parentUpdateScope]);
   const searchParams = useSearchParams();
-  const [billing, setBilling] = useState<{ accountId: string; entry: BillingAccountEntry } | null>(null);
+  const [billing, setBilling] = useState<{ scope: typeof readScope; entry: BillingAccountEntry } | null>(null);
   useEffect(() => {
     if (!account || !isAuthenticated || !accountId || accountId === '_') return;
     const controller = new AbortController();
@@ -129,11 +142,11 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       const config = await getRuntimeConfig();
       if (controller.signal.aborted || config.billingService !== true) return;
       const entry = billingEntryFor(await fetchBillingAccounts(controller.signal), accountId);
-      if (!controller.signal.aborted && entry) setBilling({ accountId, entry });
+      if (!controller.signal.aborted && entry) setBilling({ scope: readScope, entry });
     })().catch(() => {});
     return () => controller.abort();
-  }, [isAuthenticated, accountId, account]);
-  const billingEntry = account && billing?.accountId === accountId ? billing.entry : null;
+  }, [isAuthenticated, accountId, account, readScope]);
+  const billingEntry = account && billing?.scope === readScope ? billing.entry : null;
   const billingVisible = billingEntry !== null;
   const tabs = visibleAccountTabs(billingVisible);
   const tab = parseAccountTab(searchParams.get('tab'), billingVisible);
@@ -175,8 +188,11 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const activeAccountIdRef = useRef(accountId);
   const mounted = useRef(true);
   const inviteGeneration = useRef(0);
+  const accessLossGeneration = useRef(0);
+  const canAct = () => readScopeRef.current === readScope && activeAccountIdRef.current === accountId;
   const invalidateInvitations = useCallback(() => {
     inviteGeneration.current++;
+    accessLossGeneration.current++;
     setInviting(false);
     setPendingNotice(null);
     setPendingNoticeEmail(null);
@@ -190,13 +206,14 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     return () => {
       mounted.current = false;
       activeAccountIdRef.current = '';
+      accessLossGeneration.current++;
     };
-  }, [accountId]);
+  }, [accountId, user?.userId]);
 
   const fetchGeneration = useRef(0);
   const accountRequest = useRef<AbortController | null>(null);
   const fetchAll = useCallback(async () => {
-    if (!mounted.current || !accountId || accountId === '_') return;
+    if (!mounted.current || readScopeRef.current !== readScope || !accountId || accountId === '_') return;
     const generation = ++fetchGeneration.current;
     accountRequest.current?.abort();
     const controller = new AbortController();
@@ -207,23 +224,23 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     activeAccountIdRef.current = '';
     try {
       const acc = await accountApi.get(accountId, { signal: controller.signal, expectedUserId: user?.userId });
-      if (controller.signal.aborted || generation !== fetchGeneration.current) return;
+      if (controller.signal.aborted || generation !== fetchGeneration.current || readScopeRef.current !== readScope) return;
       activeAccountIdRef.current = accountId;
-      setAccount(acc);
+      setAccountResult({ scope: readScope, account: acc });
     } catch (err) {
       if (!controller.signal.aborted && generation === fetchGeneration.current) {
         activeAccountIdRef.current = '';
         if (err && typeof err === 'object'
           && (('status' in err && [401, 403, 404].includes(Number(err.status)))
             || ('code' in err && err.code === 'AUTH_CHANGED'))) invalidateInvitations();
-        setAccount(null);
+        setAccountResult(null);
         setBilling(null);
         setError(err instanceof Error ? err.message : 'Failed to load account');
       }
     } finally {
       if (!controller.signal.aborted && generation === fetchGeneration.current) setLoading(false);
     }
-  }, [accountId, user?.userId, invalidateInvitations]);
+  }, [accountId, user?.userId, invalidateInvitations, readScope]);
 
   useEffect(() => {
     if (isAuthenticated) void fetchAll();
@@ -234,7 +251,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     accountRequest.current?.abort();
     activeAccountIdRef.current = '';
     invalidateInvitations();
-    setAccount(null);
+    setAccountResult(null);
     setBilling(null);
     setLoading(false);
     setError('어카운트 접근 권한을 확인할 수 없습니다. 다시 시도해 주세요.');
@@ -261,7 +278,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const currentMeetingPage = Math.min(meetingPage, Math.max(0, Math.ceil(meetings.length / 100) - 1));
 
   const handlePickMember = async (picked: Pick<User, 'email'>, role = inviteRole, resendInvitation = false) => {
-    if (!canEdit || activeAccountIdRef.current !== accountId
+    if (!canEdit || !canAct()
       || (resendInvitation && pendingNoticeAccountId !== accountId)) return;
     const myAccountId = accountId;
     const generation = ++inviteGeneration.current;
@@ -301,7 +318,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   };
 
   const handleResendOwner = async () => {
-    if (!canEdit || !user?.userId || activeAccountIdRef.current !== accountId || account?.accountId !== accountId || inviting
+    if (!canEdit || !user?.userId || !canAct() || account?.accountId !== accountId || inviting
       || !account.members.some((member) => member.userId === user.userId)) return;
     const myAccountId = accountId;
     const initiatingUserId = user.userId;
@@ -326,7 +343,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
 
   const handleRevokePendingMember = async () => {
     if (!isOwner || !pendingNoticeEmail || pendingNoticeAccountId !== accountId
-      || activeAccountIdRef.current !== accountId) return;
+      || !canAct()) return;
     const myAccountId = accountId;
     const generation = inviteGeneration.current;
     try {
@@ -344,7 +361,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   };
 
   const handleRoleChange = async (userId: string, role: string) => {
-    if (!canEdit || activeAccountIdRef.current !== accountId) return;
+    if (!canEdit || !canAct()) return;
     setError(null);
     try {
       await accountApi.updateMember(accountId, userId, { role });
@@ -356,22 +373,27 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   };
 
   const handleRemoveMember = async (userId: string) => {
-    if (!isOwner || activeAccountIdRef.current !== accountId) return;
+    if (!isOwner || !canAct()) return;
     if (!confirm('Remove this member?')) return;
+    const generation = accessLossGeneration.current;
+    const isCurrent = () => mounted.current && accessLossGeneration.current === generation;
+    const showWarnings = (result: Awaited<ReturnType<typeof accountApi.removeMember>>, forced = false) => {
+      if (!isCurrent()) return;
+      const warnings: string[] = [];
+      if (result?.cleanupFailedForMeetings?.length) warnings.push(`Member removed, but access cleanup failed for ${result.cleanupFailedForMeetings.length} meeting(s). Contact support if this persists.`);
+      if (result?.ambiguousUntaggedMeetingIDs?.length) warnings.push(forced
+        ? `Member removed. ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) were left untouched (may be a direct grant) -- review with backend/cmd/backfill-share-origin if needed.`
+        : `Member removed, but ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) could not be safely revoked (may be a direct grant). Review with backend/cmd/backfill-share-origin if needed.`);
+      if (warnings.length) setError(previous => [previous, ...warnings].filter(Boolean).join(' '));
+    };
     setError(null);
     try {
       const result = await accountApi.removeMember(accountId, userId);
-      if (activeAccountIdRef.current !== accountId) return;
+      if (!isCurrent()) return;
       await fetchAll();
-      if (activeAccountIdRef.current !== accountId) return;
-      if (result?.cleanupFailedForMeetings?.length) {
-        setError(`Member removed, but access cleanup failed for ${result.cleanupFailedForMeetings.length} meeting(s). Contact support if this persists.`);
-      }
-      if (result?.ambiguousUntaggedMeetingIDs?.length) {
-        setError(`Member removed, but ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) could not be safely revoked (may be a direct grant). Review with backend/cmd/backfill-share-origin if needed.`);
-      }
+      showWarnings(result);
     } catch (err) {
-      if (activeAccountIdRef.current !== accountId) return;
+      if (!isCurrent()) return;
       // The backend blocks removal by default (no force) when the member
       // holds a share that's ambiguous between a legacy account-share and a
       // real direct grant -- offer to retry with force instead of leaving
@@ -379,17 +401,14 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       // someone in that state (see API-SPEC.md's "Remove Member" note).
       const message = err instanceof Error ? err.message : 'Failed to remove member';
       if (message.includes('force=true')) {
-        if (confirm(`${message}\n\nRemove anyway? The share will be left untouched and reported.`)) {
+        if (canAct() && confirm(`${message}\n\nRemove anyway? The share will be left untouched and reported.`)) {
           try {
             const result = await accountApi.removeMember(accountId, userId, true);
-            if (activeAccountIdRef.current !== accountId) return;
+            if (!isCurrent()) return;
             await fetchAll();
-            if (activeAccountIdRef.current !== accountId) return;
-            if (result?.ambiguousUntaggedMeetingIDs?.length) {
-              setError(`Member removed. ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) were left untouched (may be a direct grant) -- review with backend/cmd/backfill-share-origin if needed.`);
-            }
+            showWarnings(result, true);
           } catch (retryErr) {
-            if (activeAccountIdRef.current === accountId) setError(retryErr instanceof Error ? retryErr.message : 'Failed to remove member');
+            if (isCurrent()) setError(retryErr instanceof Error ? retryErr.message : 'Failed to remove member');
           }
         }
         return;
@@ -399,7 +418,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   };
 
   const handleCreateNote = async () => {
-    if (!canEdit || activeAccountIdRef.current !== accountId) return;
+    if (!canEdit || !canAct()) return;
     try {
       const created = await accountApi.putDocument(accountId, {
         title: '새 노트', docType: 'note', markdown: '# 새 노트\n\n',
@@ -413,7 +432,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const handleSlideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !canEdit || activeAccountIdRef.current !== accountId) return;
+    if (!file || !canEdit || !canAct()) return;
     setUploadingSlide(true);
     setError(null);
     try {
@@ -517,7 +536,9 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                       onCommitted={parentAccountId => {
                         if (!parentUpdateScope.active || !parentUpdateScope.isOwner
                           || activeAccountIdRef.current !== parentUpdateScope.accountId) return;
-                        setAccount(prev => prev?.accountId === accountId ? { ...prev, parentAccountId: parentAccountId || undefined } : prev);
+                        setAccountResult(previous => previous?.scope === readScope
+                          ? { ...previous, account: { ...previous.account, parentAccountId: parentAccountId || undefined } }
+                          : previous);
                         onParentUpdated?.(accountId, parentAccountId);
                       }} />
                   )}

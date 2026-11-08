@@ -13,9 +13,11 @@ const transpile = (source) => ts.transpileModule(source, {
 }).outputText;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvitationPending = true) {
+function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvitationPending = true, options = {}) {
   const harness = accountComponentHarness();
   let pathname = '/accounts/A';
+  let membershipRevision = 0;
+  let userId = options.userId || 'member';
   const react = harness.react;
   const helper = {};
   vm.runInNewContext(transpile(readFileSync(
@@ -37,22 +39,23 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
       useSearchParams: () => new URLSearchParams(),
     },
     '@/components/auth/AuthProvider': {
-      useAuth: () => ({ user: { userId: 'member' }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }),
+      useAuth: () => ({ user: { userId }, isLoading: false, isAuthenticated: true, membershipRevision }),
     },
     '@/components/layout/AppLayout': { AppLayout: emptyComponent },
     '@/lib/api': {
       accountApi: {
-        get: async accountId => ({
+        get: options.get || (async accountId => ({
           accountId, name: accountId, ownerUserId: 'owner', ownerInvitationPending,
           members: [
             { userId: 'owner', email: 'owner@example.invalid', role: 'owner' },
             { userId: 'member', email: 'member@example.invalid', role: 'SSA' },
           ],
-        }),
+        })),
         meetings: emptyResult, insights: emptyResult,
         listDocuments: emptyResult, research: emptyResult,
         addMember,
         resendOwnerInvitation,
+        removeMember: options.removeMember || emptyResult,
       },
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
@@ -75,7 +78,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const exports = {};
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/components/AccountDetailClient.tsx', import.meta.url), 'utf8')), {
-    exports, Error, console, AbortController, URLSearchParams,
+    exports, Error, console, AbortController, URLSearchParams, confirm: () => true,
     require: name => { assert.ok(name in modules, name); return modules[name]; },
   });
   const render = () => harness.render(exports.default, new Set([MemberPicker, emptyComponent]));
@@ -85,12 +88,93 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   };
   const find = predicate => nodes(render()).find(predicate);
   return {
+    find,
     async start() { render(); await tick(); render(); },
     async navigate(accountId) { pathname = `/accounts/${accountId}`; render(); await tick(); render(); },
+    async refreshMembership() { membershipRevision++; render(); await tick(); render(); },
+    async switchUser(next) { userId = next; render(); await tick(); render(); },
     pick: email => find(node => node.type === MemberPicker).props.onPick({ email }),
     resend: () => find(node => node.type === 'button' && node.props.children === '초대 메일 다시 보내기'),
     resendOwner: () => find(node => node.type === 'button' && node.props.children === 'Owner 초대 메일 다시 보내기'),
+    remove: () => find(node => node.type === 'button' && node.props.title === 'Remove member'),
+    get text() { return JSON.stringify(render()); },
   };
+}
+
+test('membership refresh preserves a completed invitation but rejects captured old controls', async () => {
+  let calls = 0;
+  const page = fixture(async () => { calls++; return { pending: true, invited: true }; });
+  await page.start();
+  await page.pick('recipient@example.invalid');
+  const stale = page.resend();
+  await page.refreshMembership();
+  assert.ok(page.resend());
+  assert.match(page.text, /recipient@example.invalid/);
+  await stale.props.onClick();
+  assert.equal(calls, 1);
+  await page.resend().props.onClick();
+  assert.equal(calls, 2);
+});
+
+test('membership refresh preserves an in-flight invitation result for the same authorized account', async () => {
+  let finish;
+  const page = fixture(() => new Promise(resolve => { finish = resolve; }));
+  await page.start();
+  const pending = page.pick('recipient@example.invalid');
+  await page.refreshMembership();
+  finish({ pending: true, invited: true });
+  await pending;
+  assert.ok(page.resend());
+  assert.match(page.text, /recipient@example.invalid/);
+});
+
+for (const forced of [false, true]) {
+  test(`removal cleanup and ambiguous-share warnings survive refresh failure (forced=${forced})`, async () => {
+    let reads = 0;
+    const page = fixture(async () => ({}), undefined, false, {
+      userId: 'owner',
+      get: async accountId => {
+        if (++reads > 1) throw new Error('Refresh failed');
+        return { accountId, name: accountId, ownerUserId: 'owner', members: [
+          { userId: 'owner', role: 'owner' }, { userId: 'member', role: 'SSA' },
+        ] };
+      },
+      removeMember: async (_accountId, _userId, force) => {
+        if (forced && !force) throw new Error('Retry with force=true');
+        return { cleanupFailedForMeetings: ['failed'], ambiguousUntaggedMeetingIDs: ['ambiguous'] };
+      },
+    });
+    await page.start();
+    await page.remove().props.onClick();
+    assert.match(page.text, /Refresh failed/);
+    assert.match(page.text, /access cleanup failed/);
+    assert.match(page.text, forced ? /left untouched/ : /could not be safely revoked/);
+    assert.equal(page.remove(), undefined);
+  });
+}
+
+for (const cancelledBy of ['navigation', 'principal', 'denial']) {
+  test(`removal warning cannot return after ${cancelledBy}`, async () => {
+    let finish;
+    let reads = 0;
+    const page = fixture(async () => ({}), undefined, false, {
+      userId: 'owner',
+      get: async accountId => {
+        if (++reads > 1 && cancelledBy === 'denial') throw Object.assign(new Error('Access denied'), { status: 403 });
+        return { accountId, name: accountId, ownerUserId: 'owner', members: [
+          { userId: 'owner', role: 'owner' }, { userId: 'member', role: 'SSA' },
+        ] };
+      },
+      removeMember: () => new Promise(resolve => { finish = resolve; }),
+    });
+    await page.start();
+    const pending = page.remove().props.onClick();
+    if (cancelledBy === 'navigation') await page.navigate('B');
+    if (cancelledBy === 'principal') await page.switchUser('another');
+    finish({ cleanupFailedForMeetings: ['failed'], ambiguousUntaggedMeetingIDs: ['ambiguous'] });
+    await pending;
+    assert.doesNotMatch(page.text, /access cleanup failed|could not be safely revoked/);
+  });
 }
 
 test('a queued invitation cannot be resent into a different Account after navigation', async () => {

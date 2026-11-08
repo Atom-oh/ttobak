@@ -27,12 +27,22 @@ const document = {
 // editor/layout effects or network calls. Editor props are its input contract.
 function render(component, { states, pathname, userId = ancestorReader, tab = 'general', props = { accountScoped: true }, researchApi = {} }) {
   let stateIndex = 0;
+  let readScope;
   const editorInputs = [];
   const hooks = {
     ...React,
-    useState: initial => [stateIndex in states ? states[stateIndex++] : (stateIndex++, typeof initial === 'function' ? initial() : initial), () => {}],
+    useState: initial => {
+      const value = stateIndex in states ? states[stateIndex++] : (stateIndex++, initial);
+      return [typeof value === 'function' ? value(readScope) : value, () => {}];
+    },
     useRef: initial => ({ current: initial }), useEffect() {}, useLayoutEffect() {},
-    useCallback: callback => callback, useMemo: callback => callback(),
+    useCallback: callback => callback,
+    useMemo: callback => {
+      const value = callback();
+      if (component === 'AccountDetailClient' && value && typeof value === 'object'
+        && 'accountId' in value && 'membershipRevision' in value && 'userId' in value) readScope = value;
+      return value;
+    },
     useId: () => 'account-control',
   };
   const jsx = jsxRuntime;
@@ -81,8 +91,12 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
   return { html: renderToStaticMarkup(tree), tree, editorInputs };
 }
 
-function accountStates(value, billing = null) {
-  return { 0: value, 1: billing, 2: 0, 3: false };
+function accountStates(value, billing = null, stale = false) {
+  return {
+    0: scope => ({ scope: stale ? { ...scope, membershipRevision: -1 } : scope, account: value }),
+    1: scope => billing ? { scope, entry: billing.entry } : null,
+    2: 0, 3: false,
+  };
 }
 function docStates(value) {
   return { 0: value, 1: [], 2: value.title, 3: false };
@@ -93,6 +107,14 @@ test('inherited Account reader sees the grant and cannot create documents', () =
   assert.match(html, /상위 어카운트.*읽기 전용/);
   assert.doesNotMatch(html, /Uploading|>Slide<|>Note<|type="file"/);
   assert.match(html, /Documents/);
+});
+
+test('mismatched membership scope hides injected account and Billing data', () => {
+  const { html } = render('AccountDetailClient', {
+    states: accountStates(account, { entry: { accountId: 'child' } }, true),
+    pathname: '/accounts/child',
+  });
+  assert.doesNotMatch(html, /Child Account|member@example.invalid|account-tab-billing|<select/);
 });
 
 test('ancestor Owner keeps child management restrictions with authorized Billing access', () => {
