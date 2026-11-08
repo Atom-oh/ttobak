@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { accountComponentHarness } from './account-component-harness.mjs';
 
 const transpile = (source) => ts.transpileModule(source, {
   compilerOptions: {
@@ -13,39 +14,9 @@ const transpile = (source) => ts.transpileModule(source, {
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvitationPending = true) {
-  const slots = [];
-  let cursor = 0;
-  let effects = [];
+  const harness = accountComponentHarness();
   let pathname = '/accounts/A';
-  const same = (a, b) => a?.length === b?.length && a.every((value, i) => Object.is(value, b[i]));
-  const react = {
-    useState(initial) {
-      const index = cursor++;
-      if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
-      return [slots[index], value => {
-        slots[index] = typeof value === 'function' ? value(slots[index]) : value;
-      }];
-    },
-    useRef(current) {
-      const index = cursor++;
-      if (!(index in slots)) slots[index] = { current };
-      return slots[index];
-    },
-    useCallback(callback, dependencies) {
-      const index = cursor++;
-      if (!same(slots[index]?.dependencies, dependencies)) slots[index] = { callback, dependencies };
-      return slots[index].callback;
-    },
-    useEffect(effect, dependencies) {
-      const index = cursor++;
-      if (!same(slots[index]?.dependencies, dependencies)) {
-        effects.push(() => {
-          slots[index]?.cleanup?.();
-          slots[index] = { dependencies, cleanup: effect() };
-        });
-      }
-    },
-  };
+  const react = harness.react;
   const helper = {};
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/lib/accountInvite.ts', import.meta.url), 'utf8')), { exports: helper, Error });
@@ -58,7 +29,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const MemberPicker = () => null;
   const emptyComponent = () => null;
   const emptyResult = async () => ({});
-  const jsx = (type, props) => ({ type, props });
+  const jsx = (type, props, key) => ({ type, props, key });
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
     'next/navigation': {
@@ -89,8 +60,13 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
     '@/lib/accountAccess': accountAccess,
     '@/components/MemberPicker': { MemberPicker },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
+    '@/components/workspace/UpcomingMeetings': { PrivateUpcomingMeetings: () => { throw new Error('Calendar must not mount on overview'); } },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
     '@/components/AccountBillingTab': { AccountBillingTab: emptyComponent },
+    '@/components/workspace/AccountWorkspaceSelector': {
+      AccountWorkspaceSelector: emptyComponent,
+      useAccountWorkspaceAccounts: () => ({ accounts: [], loading: false, error: null }),
+    },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({}) },
     '@/lib/billingApi': { fetchBillingAccounts: async () => [] },
     '@/lib/billingSummary': { billingEntryFor: () => null },
@@ -99,15 +75,10 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const exports = {};
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/components/AccountDetailClient.tsx', import.meta.url), 'utf8')), {
-    exports, Error, console,
+    exports, Error, console, AbortController, URLSearchParams,
     require: name => { assert.ok(name in modules, name); return modules[name]; },
   });
-  const render = () => {
-    cursor = 0; effects = [];
-    const tree = exports.default();
-    effects.forEach(effect => effect());
-    return tree;
-  };
+  const render = () => harness.render(exports.default, new Set([MemberPicker, emptyComponent]));
   const nodes = node => {
     if (!node || typeof node !== 'object') return [];
     return [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];

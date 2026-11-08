@@ -169,7 +169,7 @@ function MobileMoreMenu({ meetingId }: { meetingId: string }) {
     setIsDeleting(true);
     try {
       await meetingsApi.delete(meetingId);
-      router.push('/');
+      router.push('/meetings');
     } catch (err) {
       console.error('Failed to delete meeting:', err);
       alert('미팅 삭제에 실패했습니다.');
@@ -573,7 +573,7 @@ function MeetingDetailContent() {
   const canUpload = canManageAssociations;
 
   return (
-    <AppLayout activePath="/">
+    <AppLayout activePath="/meetings">
       {/* Mobile Header */}
       <header className="lg:hidden sticky top-0 z-10 flex items-center bg-white/90 dark:bg-background-dark/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-white/10 justify-between">
         <button onClick={() => router.back()} className="text-slate-700 dark:text-text-main flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-white/5">

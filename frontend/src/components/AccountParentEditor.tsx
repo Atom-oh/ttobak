@@ -6,10 +6,11 @@ import { accountApi } from '@/lib/api';
 import type { Account, AccountSummary } from '@/types/meeting';
 import { AccountParentSelect } from '@/components/AccountParentSelect';
 
-export function AccountParentEditor({ account, canEdit, onUpdated }: {
+export function AccountParentEditor({ account, canEdit, onUpdated, onCommitted }: {
   account: Account;
   canEdit: boolean;
-  onUpdated: (parentAccountId: string) => void;
+  onUpdated?: (parentAccountId: string) => void;
+  onCommitted?: (parentAccountId: string) => void;
 }) {
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [parentId, setParentId] = useState(account.parentAccountId || '');
@@ -41,14 +42,15 @@ export function AccountParentEditor({ account, canEdit, onUpdated }: {
   }, [load]);
 
   const save = async () => {
-    if (!canEdit || saving || loading) return;
+    if (!active.current || !canEdit || saving || loading) return;
     setSaving(true);
     setError(null);
     setSaved(false);
     try {
       const result = await accountApi.updateParent(account.accountId, { parentAccountId: parentId });
+      onCommitted?.(result.parentAccountId || '');
       if (!active.current) return;
-      onUpdated(result.parentAccountId || '');
+      onUpdated?.(result.parentAccountId || '');
       setSaved(true);
       await load();
     } catch (err) {

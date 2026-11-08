@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -10,46 +10,130 @@ import { addMemberWithInvite, planMemberOutcome } from '@/lib/accountInvite';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
+import { PrivateUpcomingMeetings } from '@/components/workspace/UpcomingMeetings';
 import { AccountParentEditor } from '@/components/AccountParentEditor';
 import { AccountBillingTab } from '@/components/AccountBillingTab';
+import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { fetchBillingAccounts } from '@/lib/billingApi';
 import { billingEntryFor, type BillingAccountEntry } from '@/lib/billingSummary';
 import { ACCOUNT_TAB_LABELS, accountTabHref, parseAccountTab, visibleAccountTabs, type AccountTab } from '@/lib/accountTabs';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
-import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User, AccountMember } from '@/types/meeting';
+import type { Account, User, AccountMember } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
   const router = useRouter();
-  const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
   const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) router.replace('/');
+  }, [isLoading, isAuthenticated, router]);
+  if (isLoading) return <p role="status" className="p-6">불러오는 중…</p>;
+  if (!isAuthenticated || !user) return null;
+  const match = /^\/accounts\/([^/]+)\/?$/.exec(pathname);
+  let accountId = '';
+  try { accountId = match ? decodeURIComponent(match[1]) : ''; } catch { accountId = ''; }
+  return (
+    <AppLayout activePath="/accounts">
+      <AccountDetailWorkspace key={`${user.userId}:${membershipRevision}:${accountId}`} accountId={accountId} userId={user.userId} />
+    </AppLayout>
+  );
+}
+
+function AccountDetailWorkspace({ accountId, userId }: { accountId: string; userId: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const list = useAccountWorkspaceAccounts(userId);
+  const [selectedId, setSelectedId] = useState(accountId);
+  const selectAccount = (next: string) => {
+    setSelectedId(next);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('account');
+    router.push(`/accounts/${encodeURIComponent(next)}${params.size ? `?${params}` : ''}`, { scroll: false });
+  };
+  return (
+    <div className="mx-auto w-full max-w-7xl min-w-0 p-4 lg:p-8">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold tracking-tight text-text-main">고객 Accounts</h1>
+        <a href={`/accounts${searchParams.size ? `?${searchParams}` : ''}`} className="text-sm font-semibold text-primary hover:underline">고객 생성 · 계층 관리</a>
+      </div>
+      <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="min-w-0">
+          {list.loading ? <p role="status" className="text-sm text-text-secondary">고객 목록을 불러오는 중…</p> : (
+            <AccountWorkspaceSelector accounts={list.accounts} selectedId={selectedId} onSelect={selectAccount} />
+          )}
+          {list.error && <div role="alert" className="mt-3 text-sm text-red-500">{list.error} <button type="button" className="underline" onClick={() => void list.refresh()}>다시 시도</button></div>}
+        </div>
+        <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
+          {selectedId && selectedId !== '_' ? <AccountDetailContent key={selectedId} accountId={selectedId} />
+            : <p className="text-sm text-text-secondary">고객을 선택하세요.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function useAccountSection<T>(load: (signal: AbortSignal) => Promise<T>, enabled: boolean, onAccessLost: () => void) {
+  const [attempt, setAttempt] = useState(0);
+  const request = useMemo(() => ({ load, enabled, attempt }), [load, enabled, attempt]);
+  const [result, setResult] = useState<{ request: typeof request; data: T | null; error: string | null } | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    void load(controller.signal).then(result => {
+      if (!controller.signal.aborted) setResult({ request, data: result, error: null });
+    }).catch(failure => {
+      if (controller.signal.aborted) return;
+      if ([401, 403, 404].includes(failure?.status)) {
+        setResult(null);
+        onAccessLost();
+      } else {
+        setResult({ request, data: null, error: '불러오지 못했습니다. 다시 시도해 주세요.' });
+      }
+    });
+    return () => controller.abort();
+  }, [load, enabled, request, onAccessLost]);
+  const current = enabled && result?.request === request ? result : null;
+  return { data: current?.data ?? null, loading: enabled && !current, error: current?.error ?? null, retry: () => setAttempt(previous => previous + 1) };
+}
+
+function SectionStatus({ loading, error, retry }: { loading: boolean; error: string | null; retry: () => void }) {
+  if (loading) return <p role="status" className="py-4 text-sm text-text-secondary">불러오는 중…</p>;
+  if (!error) return null;
+  return <div role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
+    {error} <button type="button" onClick={retry} className="ml-2 underline focus-visible:outline-2 focus-visible:outline-primary">다시 시도</button>
+  </div>;
+}
+
+export function AccountDetailContent({ accountId, onParentUpdated }: {
+  accountId: string;
+  onParentUpdated?: (accountId: string, parentAccountId: string) => void;
+}) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { user, isAuthenticated } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [account, setAccount] = useState<Account | null>(null);
   const { canEdit, isOwner } = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
+  const parentUpdateScope = useMemo(() => ({ accountId, isOwner, active: true }), [accountId, isOwner]);
+  useLayoutEffect(() => {
+    parentUpdateScope.active = true;
+    return () => { parentUpdateScope.active = false; };
+  }, [parentUpdateScope]);
   const searchParams = useSearchParams();
-  // Billing tab: runtime config billingService and Billing membership of this Account.
-  // Read once per Account lookup; an entry for a previous Account never counts, and
-  // leaving an Account clears its entry so A -> B -> A waits for a fresh lookup of A.
   const [billing, setBilling] = useState<{ accountId: string; entry: BillingAccountEntry } | null>(null);
   useEffect(() => {
-    if (!isAuthenticated || !accountId || accountId === '_') return;
-    let active = true;
+    if (!account || !isAuthenticated || !accountId || accountId === '_') return;
+    const controller = new AbortController();
     (async () => {
       const config = await getRuntimeConfig();
-      if (!active || config.billingService !== true) return;
-      const entry = billingEntryFor(await fetchBillingAccounts(), accountId);
-      if (active && entry) setBilling({ accountId, entry });
-    })().catch(() => {
-      // Billing unavailable: the tab stays hidden.
-    });
-    return () => {
-      active = false;
-      setBilling(null);
-    };
-  }, [isAuthenticated, accountId]);
-  const billingEntry = billing?.accountId === accountId ? billing.entry : null;
-  // The BFF validates Billing-only direct/ancestor grants independently of Account edit rights.
+      if (controller.signal.aborted || config.billingService !== true) return;
+      const entry = billingEntryFor(await fetchBillingAccounts(controller.signal), accountId);
+      if (!controller.signal.aborted && entry) setBilling({ accountId, entry });
+    })().catch(() => {});
+    return () => controller.abort();
+  }, [isAuthenticated, accountId, account]);
+  const billingEntry = account && billing?.accountId === accountId ? billing.entry : null;
   const billingVisible = billingEntry !== null;
   const tabs = visibleAccountTabs(billingVisible);
   const tab = parseAccountTab(searchParams.get('tab'), billingVisible);
@@ -69,12 +153,7 @@ export default function AccountDetailClient() {
     selectTab(tabs[target]);
   };
 
-  const [meetings, setMeetings] = useState<AccountMeetingRef[]>([]);
-  const [insights, setInsights] = useState<AccountInsight[]>([]);
-  const [documents, setDocuments] = useState<AccountDocument[]>([]);
-  const [research, setResearch] = useState<AccountResearchRef[]>([]);
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [projectsError, setProjectsError] = useState(false);
+  const [meetingPage, setMeetingPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Separate from `error` (which renders as a red error banner) --
@@ -93,73 +172,100 @@ export default function AccountDetailClient() {
   const [inviteRole, setInviteRole] = useState('SSA');
   const [inviting, setInviting] = useState(false);
 
-  // Navigation owns this ref so an older fetch or invitation cannot restore
-  // its Account ID. The generation also rejects results after an A -> B -> A
-  // navigation or a newer invitation request.
   const activeAccountIdRef = useRef(accountId);
+  const mounted = useRef(true);
   const inviteGeneration = useRef(0);
-  useEffect(() => {
-    activeAccountIdRef.current = accountId;
+  const invalidateInvitations = useCallback(() => {
     inviteGeneration.current++;
+    setInviting(false);
     setPendingNotice(null);
     setPendingNoticeEmail(null);
     setPendingNoticeRole(null);
     setPendingNoticeAccountId(null);
-    setInviting(false);
-    // Reset so account A's linked projects (and its stale error flag)
-    // don't stay visible under account B's URL while B's fetch is in
-    // flight -- the guard in fetchAll only stops A's *response* from
-    // landing late, it doesn't clear what was already on screen.
-    setProjects([]);
-    setProjectsError(false);
+  }, []);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    activeAccountIdRef.current = accountId;
+    inviteGeneration.current++;
+    return () => {
+      mounted.current = false;
+      activeAccountIdRef.current = '';
+    };
   }, [accountId]);
 
   const fetchGeneration = useRef(0);
+  const accountRequest = useRef<AbortController | null>(null);
   const fetchAll = useCallback(async () => {
-    if (!accountId || accountId === '_' || activeAccountIdRef.current !== accountId) return;
-    const myAccountId = accountId;
+    if (!mounted.current || !accountId || accountId === '_') return;
     const generation = ++fetchGeneration.current;
+    accountRequest.current?.abort();
+    const controller = new AbortController();
+    accountRequest.current = controller;
     setLoading(true);
     setError(null);
+    setBilling(null);
+    activeAccountIdRef.current = '';
     try {
-      const [acc, mtg, ins, docs, res] = await Promise.all([
-        accountApi.get(accountId),
-        accountApi.meetings(accountId),
-        accountApi.insights(accountId),
-        accountApi.listDocuments(accountId),
-        accountApi.research(accountId),
-      ]);
-      if ((activeAccountIdRef.current !== myAccountId || generation !== fetchGeneration.current)) return;
+      const acc = await accountApi.get(accountId, { signal: controller.signal, expectedUserId: user?.userId });
+      if (controller.signal.aborted || generation !== fetchGeneration.current) return;
+      activeAccountIdRef.current = accountId;
       setAccount(acc);
-      setMeetings(mtg?.meetings ?? []);
-      setInsights(ins?.insights ?? []);
-      setDocuments(docs?.documents ?? []);
-      setResearch(res?.research ?? []);
-      // Degrade independently: a rejected fetch here must not be
-      // indistinguishable from "no linked projects," nor wipe a previously
-      // successful result on a later refetch -- and a response for an
-      // accountId superseded by a newer navigation must not land here at all.
-      const projectRes = await projectApi.accountProjects(myAccountId).catch(() => null);
-      if ((activeAccountIdRef.current !== myAccountId || generation !== fetchGeneration.current)) return;
-      setProjectsError(projectRes === null);
-      if (projectRes !== null) setProjects(projectRes.projects ?? []);
     } catch (err) {
-      if ((activeAccountIdRef.current === myAccountId && generation === fetchGeneration.current)) setError(err instanceof Error ? err.message : 'Failed to load account');
+      if (!controller.signal.aborted && generation === fetchGeneration.current) {
+        activeAccountIdRef.current = '';
+        if (err && typeof err === 'object'
+          && (('status' in err && [401, 403, 404].includes(Number(err.status)))
+            || ('code' in err && err.code === 'AUTH_CHANGED'))) invalidateInvitations();
+        setAccount(null);
+        setBilling(null);
+        setError(err instanceof Error ? err.message : 'Failed to load account');
+      }
     } finally {
-      if ((activeAccountIdRef.current === myAccountId && generation === fetchGeneration.current)) setLoading(false);
+      if (!controller.signal.aborted && generation === fetchGeneration.current) setLoading(false);
     }
-  }, [accountId]);
+  }, [accountId, user?.userId, invalidateInvitations]);
 
   useEffect(() => {
-    if (isAuthenticated) fetchAll();
-  }, [isAuthenticated, fetchAll, membershipRevision]);
+    if (isAuthenticated) void fetchAll();
+    return () => accountRequest.current?.abort();
+  }, [isAuthenticated, fetchAll]);
+
+  const onAccessLost = useCallback(() => {
+    accountRequest.current?.abort();
+    activeAccountIdRef.current = '';
+    invalidateInvitations();
+    setAccount(null);
+    setBilling(null);
+    setLoading(false);
+    setError('어카운트 접근 권한을 확인할 수 없습니다. 다시 시도해 주세요.');
+  }, [invalidateInvitations]);
+  const loadMeetings = useCallback((signal: AbortSignal) => accountApi.meetings(accountId, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const loadInsights = useCallback((signal: AbortSignal) => accountApi.insights(accountId, undefined, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const loadDocuments = useCallback((signal: AbortSignal) => accountApi.listDocuments(accountId, undefined, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const loadResearch = useCallback((signal: AbortSignal) => accountApi.research(accountId, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const loadProjects = useCallback((signal: AbortSignal) => projectApi.accountProjects(accountId, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const meetingsState = useAccountSection(loadMeetings, !!account && tab === 'meetings', onAccessLost);
+  const insightsState = useAccountSection(loadInsights, !!account && tab === 'insights', onAccessLost);
+  const documentsState = useAccountSection(loadDocuments, !!account && tab === 'docs', onAccessLost);
+  const researchState = useAccountSection(loadResearch, !!account && tab === 'projects', onAccessLost);
+  const projectsState = useAccountSection(loadProjects, !!account && tab === 'projects', onAccessLost);
+  const meetings = [...(meetingsState.data?.meetings ?? [])].sort((left, right) => {
+    const leftDate = Date.parse(left.date);
+    const rightDate = Date.parse(right.date);
+    return (Number.isFinite(rightDate) ? rightDate : -Infinity) - (Number.isFinite(leftDate) ? leftDate : -Infinity)
+      || left.meetingId.localeCompare(right.meetingId);
+  });
+  const documents = documentsState.data?.documents ?? [];
+  const research = researchState.data?.research ?? [];
+  const projects = projectsState.data?.projects ?? [];
+  const currentMeetingPage = Math.min(meetingPage, Math.max(0, Math.ceil(meetings.length / 100) - 1));
 
   const handlePickMember = async (picked: Pick<User, 'email'>, role = inviteRole, resendInvitation = false) => {
     if (!canEdit || activeAccountIdRef.current !== accountId
       || (resendInvitation && pendingNoticeAccountId !== accountId)) return;
     const myAccountId = accountId;
     const generation = ++inviteGeneration.current;
-    const isCurrent = () => activeAccountIdRef.current === myAccountId
+    const isCurrent = () => mounted.current
       && inviteGeneration.current === generation;
     setInviting(true);
     setError(null);
@@ -200,7 +306,7 @@ export default function AccountDetailClient() {
     const myAccountId = accountId;
     const initiatingUserId = user.userId;
     const generation = ++inviteGeneration.current;
-    const isCurrent = () => activeAccountIdRef.current === myAccountId && inviteGeneration.current === generation;
+    const isCurrent = () => mounted.current && inviteGeneration.current === generation;
     setInviting(true);
     setError(null);
     try {
@@ -238,23 +344,26 @@ export default function AccountDetailClient() {
   };
 
   const handleRoleChange = async (userId: string, role: string) => {
-    if (!canEdit) return;
+    if (!canEdit || activeAccountIdRef.current !== accountId) return;
     setError(null);
     try {
       await accountApi.updateMember(accountId, userId, { role });
+      if (activeAccountIdRef.current !== accountId) return;
       await fetchAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update role');
+      if (activeAccountIdRef.current === accountId) setError(err instanceof Error ? err.message : 'Failed to update role');
     }
   };
 
   const handleRemoveMember = async (userId: string) => {
-    if (!isOwner) return;
+    if (!isOwner || activeAccountIdRef.current !== accountId) return;
     if (!confirm('Remove this member?')) return;
     setError(null);
     try {
       const result = await accountApi.removeMember(accountId, userId);
+      if (activeAccountIdRef.current !== accountId) return;
       await fetchAll();
+      if (activeAccountIdRef.current !== accountId) return;
       if (result?.cleanupFailedForMeetings?.length) {
         setError(`Member removed, but access cleanup failed for ${result.cleanupFailedForMeetings.length} meeting(s). Contact support if this persists.`);
       }
@@ -262,6 +371,7 @@ export default function AccountDetailClient() {
         setError(`Member removed, but ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) could not be safely revoked (may be a direct grant). Review with backend/cmd/backfill-share-origin if needed.`);
       }
     } catch (err) {
+      if (activeAccountIdRef.current !== accountId) return;
       // The backend blocks removal by default (no force) when the member
       // holds a share that's ambiguous between a legacy account-share and a
       // real direct grant -- offer to retry with force instead of leaving
@@ -272,12 +382,14 @@ export default function AccountDetailClient() {
         if (confirm(`${message}\n\nRemove anyway? The share will be left untouched and reported.`)) {
           try {
             const result = await accountApi.removeMember(accountId, userId, true);
+            if (activeAccountIdRef.current !== accountId) return;
             await fetchAll();
+            if (activeAccountIdRef.current !== accountId) return;
             if (result?.ambiguousUntaggedMeetingIDs?.length) {
               setError(`Member removed. ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) were left untouched (may be a direct grant) -- review with backend/cmd/backfill-share-origin if needed.`);
             }
           } catch (retryErr) {
-            setError(retryErr instanceof Error ? retryErr.message : 'Failed to remove member');
+            if (activeAccountIdRef.current === accountId) setError(retryErr instanceof Error ? retryErr.message : 'Failed to remove member');
           }
         }
         return;
@@ -287,25 +399,26 @@ export default function AccountDetailClient() {
   };
 
   const handleCreateNote = async () => {
-    if (!canEdit) return;
+    if (!canEdit || activeAccountIdRef.current !== accountId) return;
     try {
       const created = await accountApi.putDocument(accountId, {
         title: '새 노트', docType: 'note', markdown: '# 새 노트\n\n',
       });
-      router.push(`/accounts/${accountId}/docs/${created.docId}`);
+      if (activeAccountIdRef.current === accountId) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create note');
+      if (activeAccountIdRef.current === accountId) setError(err instanceof Error ? err.message : 'Failed to create note');
     }
   };
 
   const handleSlideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !canEdit) return;
+    if (!file || !canEdit || activeAccountIdRef.current !== accountId) return;
     setUploadingSlide(true);
     setError(null);
     try {
       const { key } = await uploadDocFile(file);
+      if (activeAccountIdRef.current !== accountId) return;
       const created = await accountApi.putDocument(accountId, {
         title: file.name.replace(/\.[^.]+$/, ''),
         docType: 'slide',
@@ -314,35 +427,27 @@ export default function AccountDetailClient() {
         mimeType: file.type,
         fileSize: file.size,
       });
-      router.push(`/accounts/${accountId}/docs/${created.docId}`);
+      if (activeAccountIdRef.current === accountId) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to upload slide');
+      if (activeAccountIdRef.current === accountId) setError(err instanceof Error ? err.message : 'Failed to upload slide');
     } finally {
-      setUploadingSlide(false);
+      if (activeAccountIdRef.current === accountId) setUploadingSlide(false);
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-      </div>
-    );
-  }
   if (!isAuthenticated) {
-    if (typeof window !== 'undefined') window.location.href = '/';
     return null;
   }
 
   return (
-    <AppLayout activePath="/accounts">
-      <div className="mx-auto w-full max-w-7xl p-4 lg:p-8">
+      <div className="min-w-0">
         {error && (
-          <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
+          <div role="alert" className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}
+            {!account && <button type="button" onClick={() => void fetchAll()} className="ml-2 underline">다시 시도</button>}
           </div>
         )}
-        {canEdit && pendingNotice && pendingNoticeAccountId === accountId && (
+        {!loading && canEdit && pendingNotice && pendingNoticeAccountId === accountId && (
           <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p>{pendingNotice}</p>
@@ -362,16 +467,16 @@ export default function AccountDetailClient() {
             </button>}
           </div>
         )}
-        {loading || !account ? (
-          <div className="flex items-center justify-center py-16">
+        {loading ? (
+          <div role="status" aria-label="어카운트 불러오는 중" className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
           </div>
-        ) : (
+        ) : account && (
           <>
             <div className="flex items-center gap-3 mb-6">
               <span className="material-symbols-outlined text-primary text-3xl">corporate_fare</span>
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">{account.name}</h2>
+              <div className="min-w-0">
+                <h2 className="break-words text-xl font-bold text-slate-900 dark:text-text-main">{account.name}</h2>
                 {account.inheritedFromAccountId && account.accessPermission === 'read' && (
                   <p className="mt-1 text-xs text-slate-500 dark:text-text-muted">상위 어카운트에서 공유됨 · 읽기 전용</p>
                 )}
@@ -393,7 +498,7 @@ export default function AccountDetailClient() {
                   aria-controls={tab === t ? `account-panel-${t}` : undefined}
                   tabIndex={tab === t ? 0 : -1}
                   onClick={() => selectTab(t)}
-                  className={`min-h-11 px-4 shrink-0 whitespace-nowrap flex items-center text-sm -mb-px border-b-2 transition-colors ${
+                  className={`min-h-11 px-4 shrink-0 whitespace-nowrap flex items-center text-sm -mb-px border-b-2 transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
                     tab === t
                       ? 'border-primary text-primary font-bold'
                       : 'border-transparent text-slate-600 dark:text-text-muted hover:text-slate-900 dark:hover:text-text-main font-medium'
@@ -409,7 +514,12 @@ export default function AccountDetailClient() {
                 <>
                   {account.accountId === accountId && (
                     <AccountParentEditor key={accountId} account={account} canEdit={isOwner}
-                      onUpdated={parentAccountId => setAccount(prev => prev?.accountId === accountId ? { ...prev, parentAccountId: parentAccountId || undefined } : prev)} />
+                      onCommitted={parentAccountId => {
+                        if (!parentUpdateScope.active || !parentUpdateScope.isOwner
+                          || activeAccountIdRef.current !== parentUpdateScope.accountId) return;
+                        setAccount(prev => prev?.accountId === accountId ? { ...prev, parentAccountId: parentAccountId || undefined } : prev);
+                        onParentUpdated?.(accountId, parentAccountId);
+                      }} />
                   )}
 
                   {/* Members */}
@@ -486,26 +596,42 @@ export default function AccountDetailClient() {
                     </div>
                   </section>
 
-                  <FieldInsightsSection insights={insights} />
+                </>
+              )}
+              {tab === 'insights' && (
+                <>
+                  <SectionStatus {...insightsState} />
+                  {!insightsState.loading && !insightsState.error && <FieldInsightsSection
+                    insights={insightsState.data?.insights ?? []}
+                    description="공유된 회의에서 확인된 근거와 다음 액션을 함께 확인하세요."
+                  />}
                 </>
               )}
               {tab === 'meetings' && (
                 <>
+                  <div className="mb-8"><PrivateUpcomingMeetings accountId={accountId} onAccessLost={onAccessLost} /></div>
                   {/* Shared meetings */}
                   <section className="mb-8">
                     <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Shared Meetings</h3>
-                    {meetings.length === 0 ? (
+                    <p className="mb-3 text-xs text-text-secondary">어카운트에 공유된 미팅 기록입니다.</p>
+                    <SectionStatus {...meetingsState} />
+                    {!meetingsState.loading && !meetingsState.error && (meetings.length === 0 ? (
                       <p className="text-sm text-slate-400 dark:text-text-muted">No shared meetings.</p>
                     ) : (
                       <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
-                        {meetings.map((m) => (
-                          <a key={m.meetingId} href={`/meeting/${m.meetingId}`} className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5">
-                            <div className="text-sm font-medium text-slate-900 dark:text-text-main">{m.title || m.meetingId}</div>
-                            <div className="text-xs text-slate-400 dark:text-text-muted">{new Date(m.date).toLocaleDateString()}</div>
+                        {meetings.slice(currentMeetingPage * 100, (currentMeetingPage + 1) * 100).map((meeting) => (
+                          <a key={meeting.meetingId} href={`/meeting/${encodeURIComponent(meeting.meetingId)}`} className="flex min-w-0 flex-wrap items-center justify-between gap-2 p-3 hover:bg-slate-50 dark:hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-primary">
+                            <div className="min-w-0 break-words text-sm font-medium text-slate-900 dark:text-text-main">{meeting.title || meeting.meetingId}</div>
+                            <div className="shrink-0 text-xs text-slate-400 dark:text-text-muted">{Number.isFinite(Date.parse(meeting.date)) ? new Date(meeting.date).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '날짜 없음'}</div>
                           </a>
                         ))}
                       </div>
-                    )}
+                    ))}
+                    {!meetingsState.loading && meetings.length > 100 && <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+                      <button type="button" disabled={currentMeetingPage === 0} onClick={() => setMeetingPage(currentMeetingPage - 1)} className="min-h-11 rounded-lg border border-border-subtle px-3 disabled:opacity-40">이전</button>
+                      <span>{currentMeetingPage * 100 + 1}–{Math.min(meetings.length, (currentMeetingPage + 1) * 100)} / {meetings.length}</span>
+                      <button type="button" disabled={(currentMeetingPage + 1) * 100 >= meetings.length} onClick={() => setMeetingPage(currentMeetingPage + 1)} className="min-h-11 rounded-lg border border-border-subtle px-3 disabled:opacity-40">다음</button>
+                    </div>}
                   </section>
                 </>
               )}
@@ -514,9 +640,8 @@ export default function AccountDetailClient() {
                   {/* Linked projects */}
                   <section className="mb-8">
                     <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">연결된 프로젝트</h3>
-                    {projectsError ? (
-                      <p className="text-sm text-red-500">프로젝트를 불러오지 못했습니다.</p>
-                    ) : projects.length === 0 ? (
+                    <SectionStatus {...projectsState} />
+                    {!projectsState.loading && !projectsState.error && (projects.length === 0 ? (
                       <p className="text-sm text-slate-400 dark:text-text-muted">연결된 프로젝트가 없습니다.</p>
                     ) : (
                       <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
@@ -541,13 +666,14 @@ export default function AccountDetailClient() {
                           </a>
                         ))}
                       </div>
-                    )}
+                    ))}
                   </section>
 
                   {/* Linked research */}
                   <section className="mb-8">
                     <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">리서치</h3>
-                    {research.length === 0 ? (
+                    <SectionStatus {...researchState} />
+                    {!researchState.loading && !researchState.error && (research.length === 0 ? (
                       <p className="text-sm text-slate-400 dark:text-text-muted">연결된 리서치가 없습니다.</p>
                     ) : (
                       <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
@@ -570,7 +696,7 @@ export default function AccountDetailClient() {
                           </a>
                         ))}
                       </div>
-                    )}
+                    ))}
                   </section>
                 </>
               )}
@@ -598,7 +724,8 @@ export default function AccountDetailClient() {
                         </button>
                       </div>}
                     </div>
-                    {documents.length === 0 ? (
+                    <SectionStatus {...documentsState} />
+                    {!documentsState.loading && !documentsState.error && (documents.length === 0 ? (
                       <p className="text-sm text-slate-400 dark:text-text-muted">No documents.</p>
                     ) : (
                       <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
@@ -616,7 +743,7 @@ export default function AccountDetailClient() {
                           </a>
                         ))}
                       </div>
-                    )}
+                    ))}
                   </section>
                 </>
               )}
@@ -627,6 +754,5 @@ export default function AccountDetailClient() {
           </>
         )}
       </div>
-    </AppLayout>
   );
 }

@@ -13,6 +13,7 @@ import type { NavigationKind } from './navigation-catalog.js';
 import type { MeetingCatalogOptions } from './meeting-catalog.js';
 import type { VaultReadingOptions } from './vault-reading.js';
 import { billingReadingOptions, type BillingReadingOptions } from './billing-reading.js';
+import { MAX_CALENDAR_API_BYTES, type CalendarSyncRequest, type CalendarPageQuery, type CalendarEventQuery } from './calendar.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -173,6 +174,12 @@ export type DocumentInput = {
   path?: string;
 };
 
+export class ApiResponseError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+  }
+}
+
 // HTTP success is mandatory even when the gateway returns JSON without the
 // application's usual {error:{code,message}} envelope.
 export function parseApiResponse(status: number, body: string): unknown {
@@ -185,10 +192,12 @@ export function parseApiResponse(status: number, body: string): unknown {
   }
   if (status < 200 || status >= 300 || parsed?.error) {
     const detail = parsed?.error;
-    throw new Error(
+    throw new ApiResponseError(
       detail?.message
         ? `HTTP ${status} ${detail.code || 'API_ERROR'}: ${detail.message}`
         : `HTTP ${status}: TTOBAK request failed`,
+      status,
+      typeof detail?.code === 'string' ? detail.code : undefined,
     );
   }
   return parsed;
@@ -216,6 +225,22 @@ export class TtobakApi {
     private baseUrl: string,
     private options: ApiRequestOptions = {},
   ) {}
+
+  async syncCalendarEvents(sourceId: string, body: CalendarSyncRequest) {
+    return this.request('POST', `/api/calendar/sources/${identifier(sourceId, 'sourceId')}/sync`,
+      body, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  async listCalendarEvents(options: CalendarEventQuery) {
+    const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
+    return this.request('GET', `/api/calendar/events?${query}`, undefined, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  async calendarSyncStatus(options: CalendarPageQuery) {
+    const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
+    return this.request('GET', `/api/calendar/sources${query.size ? '?' + query : ''}`,
+      undefined, MAX_CALENDAR_API_BYTES, false, true);
+  }
 
   async listMeetings(opts?: { cursor?: string; limit?: number; tab?: string; accountIds?: string[] }) {
     const q = new URLSearchParams();
@@ -770,7 +795,7 @@ export class TtobakApi {
     });
   }
 
-  private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number, callerTokenTransport = false): Promise<unknown> {
+  private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number, callerTokenTransport = false, strictUtf8 = false): Promise<unknown> {
     this.options.signal?.throwIfAborted();
     if (this.options.privateTransport && !callerTokenTransport) {
       return this.options.privateTransport({
@@ -832,7 +857,9 @@ export class TtobakApi {
             if (finished) return;
             finished = true;
             try {
-              resolve(parseApiResponse(res.statusCode || 0, Buffer.concat(chunks, received).toString('utf8')));
+              const bytes = Buffer.concat(chunks, received);
+              const response = strictUtf8 ? new TextDecoder('utf-8', { fatal: true }).decode(bytes) : bytes.toString('utf8');
+              resolve(parseApiResponse(res.statusCode || 0, response));
             } catch (error) {
               reject(error);
             }
