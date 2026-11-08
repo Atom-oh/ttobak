@@ -67,8 +67,14 @@ without a user confirmation.
   stop prompt.
 - Automatic microphone choice prefers native meeting apps over browsers and
   ignores Safari's shared WebKit process.
-- Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window
-  and posts a local notification. The SPA banner's confirmation calls
+- Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window.
+  A detection also opens a small always-on-top prompt window at the top center
+  of the screen (`meeting_prompt.rs`, bundled `meeting-prompt.html`) with Record
+  and Ignore, as Notion does; the app's macOS notifications were not shown
+  reliably. Its only command, `meeting_prompt_choose`, goes through
+  `meeting_detection_respond`, and `native-meeting-answered` closes the banner.
+  It closes after 30 s unanswered, on an answer in the banner, or at the end.
+  An end still posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same
   `native-control-request` path as ADR-046, so busy and sign-in checks are
   unchanged. Detection starts do not post the MCP "started" notification.

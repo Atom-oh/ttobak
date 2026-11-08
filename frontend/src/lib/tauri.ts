@@ -593,6 +593,16 @@ export function onNativeMeetingResumed(handler: (d: NativeMeetingDetection) => v
   );
 }
 
+/** The detection was answered outside this page (the app's floating
+ * prompt): its banner prompt is no longer needed. */
+export function onNativeMeetingAnswered(handler: (d: NativeMeetingDetection) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
+    'native-meeting-answered',
+    decodeMeetingDetection,
+    (d) => { if (d) handler(d); },
+  );
+}
+
 /** The recording follows a meeting app's own mute (ADR-061): while `muted`,
  * the microphone is mixed silent. */
 export interface NativeMicMuted {

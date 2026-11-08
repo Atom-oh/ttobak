@@ -60,7 +60,9 @@ Events are native-audio-level (RMS), native-upload-progress (loaded/total), and
 native-pcm-chunk (16kHz mono PCM for captions); native-control-request
 ({requestId, action start|stop, params, origin mcp|detection}) goes to the main window only.
 native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser,
-recording}) also go to the main window only.
+recording}) also go to the main window only; native-meeting-answered (same shape)
+closes the banner after the floating prompt window (`meeting_prompt.rs`, local
+`meeting-prompt.html`, `meeting_prompt_choose` only) answered it.
 native-mic-muted ({muted, app Zoom|Google Meet, reason muted|meeting_ended}) reports
 the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the
