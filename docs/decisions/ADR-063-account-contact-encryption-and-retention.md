@@ -1,7 +1,7 @@
 # ADR-063: Account contact encryption and retention
 
-- Status: Accepted; contact rows implemented in the account contacts PR.
-  Account events (planned) follow the same rule for attendee data.
+- Status: Accepted; contact rows implemented in the account contacts PR;
+  account events follow the same rule.
 - Decision date: 2026-11-08.
 - Related: ADR-015 (Account entity; its member-email exception is not a waiver
   for new personal data), ADR-045 (connector writes).
@@ -32,6 +32,11 @@ DynamoDB data needs KMS encryption and a retention design.
 - Retention: a contact remains until a direct member deletes it. There is no
   TTL. Deleted data can persist in point-in-time recovery for the table's
   recovery window (35 days) and in KMS-protected form only.
+
+- Account events (`EVENT#{startAt}#{eventId}` with an `EVENTREF#{eventId}`
+  pointer) seal title, location, attendees, notes and end time with purpose
+  `ttobak-account-event`. The start time stays plaintext in the sort key so
+  events list in time order; a start time alone identifies no person.
 
 ## Consequences
 

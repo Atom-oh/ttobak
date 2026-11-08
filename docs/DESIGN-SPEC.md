@@ -283,6 +283,14 @@ Concurrent callers share one load, and the Account list paints the last loaded
 list before an expired entry reloads. Account mutations, session grant bootstrap, sign-out and session
 expiry drop it. It is never persisted and does not authorize reads.
 
+Direct members manage a shared customer contact list on the Account's general
+tab. CSV and XLSX imports parse locally, map Remember and common Korean/English
+headers, show unmapped columns and a selectable preview, and report each row.
+Existing and earlier imported rows are checked for matching email or phone;
+shared office numbers can cause skips, and concurrent imports can race. Import is
+scoped to the currently selected Account and authenticated user. Manual entry,
+editing and deletion remain available.
+
 Initial Account creation can select another Owner by colleague or email.
 Show an unchecked "Keep me as a regular member (AM)" checkbox for this choice.
 Checked retains AM membership; unchecked hides and clears extra member selections,
@@ -325,6 +333,11 @@ attribution and assignees while retaining custom names in ordinary prose and hid
 summaries. Previous mapping values keep the editor available for repeated
 corrections on legacy meetings without segments. Names are limited to 100 characters.
 Re-diarization remains owner-only and is hidden from shared recipients.
+When the meeting is linked to an Account, the speaker editor may offer team names
+and customer contacts to current direct members. Suggestions are loaded through
+separate Account-authorized requests, scoped to the current Account, user and
+membership revision; denied access leaves manual naming available. Selecting a
+suggestion writes the same plain-text speaker mapping as manual entry.
 Saved notes are reference input, not proof of spoken
 statements or agreed tasks; note-only evidence must not receive transcript links.
 
