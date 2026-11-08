@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -111,6 +112,23 @@ test('public artifact exposes and calls the same local calendar protocol', async
   assert.deepEqual(data(await status(client)), SOURCE_PAGE);
   await waitForTrace(observed => requests(observed).length === 3);
   assert.equal(requests(events).length, 3);
+});
+
+test('documented synthetic MCP and API batches validate against the actual adapter', async context => {
+  const { client, events, waitForTrace } = await protocol(context);
+  const runbook = readFileSync(new URL('../../docs/runbooks/local-outlook-calendar-sync.md', import.meta.url), 'utf8');
+  const examples = [...runbook.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
+  const input = examples.find(example => example.sourceId && example.mutations);
+  const apiBody = examples.find(example => example.batchId && example.mutations && !example.sourceId);
+  assert.ok(input, 'Runbook must contain a synthetic MCP batch');
+  assert.ok(apiBody, 'Runbook must show the API body without sourceId');
+  const { sourceId, ...body } = input;
+  assert.deepEqual(input, GUIDE_SYNC);
+  assert.deepEqual(apiBody, body);
+  assert.equal(data(await sync(client, input)).revision, input.expectedRevision + 1);
+  await waitForTrace(observed => requests(observed).length === 1);
+  assert.equal(requests(events)[0].path, `/api/calendar/sources/${sourceId}/sync`);
+  assert.deepEqual(JSON.parse(requests(events)[0].body), apiBody);
 });
 
 async function lifecycle(context) {

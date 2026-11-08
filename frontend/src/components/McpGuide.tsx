@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import {
-  MCP_CLIENTS, loadMcpGuideConfig, mcpClientGuide,
+  MCP_CLIENTS, loadMcpGuideConfig, mcpClientGuide, outlookSyncGuide,
   type GuideCode, type McpClient, type McpGuideConfig, type McpTransport,
 } from '@/lib/mcpGuide';
 
@@ -61,6 +61,7 @@ export function McpGuide() {
   const selected = MCP_CLIENTS.find(candidate => candidate.id === client)!;
   const config = load.status === 'ready' ? load.config : null;
   const guide = mcpClientGuide(client, transport, config);
+  const outlook = outlookSyncGuide();
 
   useEffect(() => {
     if (!expanded) return;
@@ -196,6 +197,23 @@ export function McpGuide() {
           </div>}
         </div>
       )}
+      <section id="outlook-sync" aria-labelledby={`${id}-outlook-title`} className="mt-6 min-w-0 scroll-mt-24 space-y-4 border-t border-slate-200 pt-5 dark:border-white/10">
+        <h4 id={`${id}-outlook-title`} className="text-base font-semibold text-slate-900 dark:text-text-main">Outlook 일정 동기화 · 로컬 stdio</h4>
+        <p className="text-sm leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.introduction}</p>
+        <ol className="min-w-0 space-y-5">
+          {outlook.steps.map((step, index) => (
+            <li key={step.title} className="flex min-w-0 items-start gap-3">
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">{index + 1}</span>
+              <div className="min-w-0 flex-1 space-y-2.5">
+                <h5 className="text-sm font-semibold text-slate-900 dark:text-text-main">{step.title}</h5>
+                <p className="text-xs leading-relaxed text-slate-500 dark:text-text-muted">{step.description}</p>
+                {step.code?.map(code => <CodeBlock key={code.title} code={code} configured={false} httpConfigured={false} />)}
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="rounded-lg bg-primary/5 px-3 py-2.5 text-xs leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.note}</p>
+      </section>
     </div>
   );
 }
