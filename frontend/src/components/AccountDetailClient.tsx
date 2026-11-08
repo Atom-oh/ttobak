@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -251,7 +252,7 @@ export default function AccountDetailClient() {
 
   const handleRemoveMember = async (userId: string) => {
     if (!isOwner) return;
-    if (!confirm('Remove this member?')) return;
+    if (!await confirmDialog('Remove this member?')) return;
     setError(null);
     try {
       const result = await accountApi.removeMember(accountId, userId);
@@ -270,7 +271,7 @@ export default function AccountDetailClient() {
       // someone in that state (see API-SPEC.md's "Remove Member" note).
       const message = err instanceof Error ? err.message : 'Failed to remove member';
       if (message.includes('force=true')) {
-        if (confirm(`${message}\n\nRemove anyway? The share will be left untouched and reported.`)) {
+        if (await confirmDialog(`${message}\n\nRemove anyway? The share will be left untouched and reported.`)) {
           try {
             const result = await accountApi.removeMember(accountId, userId, true);
             await fetchAll();
