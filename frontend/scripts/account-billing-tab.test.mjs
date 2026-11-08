@@ -184,6 +184,7 @@ function detailPage({ billingService = true, accounts = [], search = '', config,
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
     '@/components/AccountBillingTab': { AccountBillingTab },
+    '@/components/AccountContacts': { AccountContacts: emptyComponent },
     '@/lib/runtimeConfig': { getRuntimeConfig: config || (async () => ({ billingService })) },
     '@/lib/billingApi': {
       fetchBillingAccounts: loadAccounts || (async () => accounts),

@@ -91,6 +91,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
     '@/components/AccountBillingTab': { AccountBillingTab: emptyComponent },
+    '@/components/AccountContacts': { AccountContacts: emptyComponent },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({}) },
     '@/lib/billingApi': { fetchBillingAccounts: async () => [] },
     '@/lib/billingSummary': { billingEntryFor: () => null },
