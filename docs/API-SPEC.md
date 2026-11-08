@@ -50,7 +50,7 @@ then writes the sealed contact and a receipt
 `USER#{userId}/CONNECTOR_MUTATION#{clientId}#{requestId}` in one transaction
 with the policy, approval, account and member checks. The receipt holds only the
 operation, account, contact ID and revision, approval generation, creation time
-and a SHA-256 of the account and exact argument bytes; it has no expiry, so a
+and a SHA-256 of the account and exact request body bytes; it has no expiry, so a
 retry with the same key and bytes stays idempotent. Responses are
 `{contactId, replayed?}` (200); 400 `BAD_REQUEST`, 403 `CAPABILITY_DENIED`, 409
 `CONNECTOR_CONFLICT` (same key with different bytes, or a replayed contact that
