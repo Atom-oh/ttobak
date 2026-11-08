@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,4 +216,19 @@ type countingContacts struct {
 func (c *countingContacts) ExistingAccountContactIDs(ctx context.Context, a string, ids []string) (map[string]bool, error) {
 	*c.probes++
 	return c.eventTestRepo.ExistingAccountContactIDs(ctx, a, ids)
+}
+
+func TestAccountEventsFitOneBridgeRead(t *testing.T) {
+	attendees := make([]model.EventAttendee, 20)
+	for i := range attendees {
+		attendees[i].Name = strings.Repeat("n", 200)
+	}
+	in := AccountEventInput{Title: strings.Repeat("t", 250), StartAt: "2026-11-10T14:00:00Z", Notes: strings.Repeat("x", 8000), Attendees: attendees}
+	r := newEventRepo()
+	if _, err := eventService(r).Mutate(context.Background(), "acct", "user", "create", "", in); !errors.Is(err, ErrInvalidInput) || len(r.writes) != 0 {
+		t.Fatalf("an event too large for a bridge read was accepted: %v", err)
+	}
+	if maxEventJSONBytes > 14000-1000 {
+		t.Fatal("the event bound must leave room for the page envelope under the 14,000-byte bridge cap")
+	}
 }

@@ -24,6 +24,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Onboarding](onboarding.md) | Local setup | Dependency manifests and project guide |
 | [Connector inventory](../contracts/connector/v1/README.md) | Current operation classification; eligibility is not availability | API routes, assembled QA tool registry and coverage tests |
 | [MCP adapter](../mcp-server/README.md) | Stdio/HTTP transports, OAuth, local recording and Mac app control | `mcp-server/src/`, `mcp-server/test/` |
+| [Local Outlook sync](runbooks/local-outlook-calendar-sync.md) | Local reader prerequisites, explicit lifecycle/checkpoints, user-local scheduling and acceptance limits | Calendar handler/service/model, `mcp-server/src/calendar.ts`, guide and protocol tests |
 | [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts | `mac-app/src-tauri/`, ADR-046, ADR-061 |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |

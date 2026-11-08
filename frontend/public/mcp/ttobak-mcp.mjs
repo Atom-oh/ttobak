@@ -5050,8 +5050,8 @@ var require_multipleOf = __commonJS({
         const { gen, data, schemaCode, it } = cxt;
         const prec = it.opts.multipleOfPrecision;
         const res = gen.let("res");
-        const invalid = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
-        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid}))`);
+        const invalid2 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
+        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid2}))`);
       }
     };
     exports.default = def;
@@ -20815,11 +20815,11 @@ var Protocol = class {
    * @returns Promise that resolves when an update occurs or rejects if aborted
    */
   async _waitForTaskUpdate(taskId, signal, sessionId) {
-    let interval = this._options?.defaultTaskPollInterval ?? 1e3;
+    let interval2 = this._options?.defaultTaskPollInterval ?? 1e3;
     try {
       const task = await this._taskStore?.getTask(taskId, sessionId);
       if (task?.pollInterval) {
-        interval = task.pollInterval;
+        interval2 = task.pollInterval;
       }
     } catch {
     }
@@ -20828,7 +20828,7 @@ var Protocol = class {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve, interval2);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -23451,6 +23451,407 @@ var BILLING_TOOLS = ["account", "dataset", "report"].map((kind) => ({
   }
 }));
 
+// src/calendar.ts
+var MAX_CALENDAR_API_BYTES = 14e3;
+var MAX_RESULT_BYTES = 32e3;
+var MAX_REVISION = Number.MAX_SAFE_INTEGER - 1;
+var UUID_PATTERN = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
+var uuidSchema = { type: "string", pattern: UUID_PATTERN, description: "Nonzero UUID; either letter case is accepted." };
+var timestampSchema = { type: "string", format: "date-time", description: "RFC3339 instant, including offsets and fractional seconds." };
+var identifierSchema = { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" };
+var textSchema = (bytes, required2 = true) => ({
+  type: "string",
+  minLength: required2 ? 1 : 0,
+  maxLength: bytes,
+  description: `Preserved UTF-8 text, at most ${bytes} UTF-8 bytes.${required2 ? " Must not be blank." : ""}`
+});
+var eventFields = {
+  externalId: textSchema(512),
+  title: textSchema(512),
+  startsAt: timestampSchema,
+  endsAt: timestampSchema,
+  timeZone: { ...textSchema(128), description: "IANA time zone or UTC; Local is not accepted. Map provider zones locally." },
+  isAllDay: { type: "boolean", default: false },
+  startDate: { type: "string", format: "date", description: "All-day local start date at midnight." },
+  endDate: { type: "string", format: "date", description: "All-day exclusive local end date at midnight." },
+  location: textSchema(256, false),
+  accountId: identifierSchema
+};
+var requiredEventFields = ["externalId", "title", "startsAt", "endsAt", "timeZone"];
+var syncFields = {
+  sourceId: uuidSchema,
+  batchId: uuidSchema,
+  expectedRevision: {
+    type: "integer",
+    minimum: 0,
+    maximum: MAX_REVISION,
+    description: "Exact expected revision. The next receipt revision must also be a safe JavaScript integer."
+  },
+  windowStart: timestampSchema,
+  windowEnd: timestampSchema,
+  complete: { type: "boolean" },
+  mutations: {
+    type: "array",
+    maxItems: 20,
+    description: "At most 20 distinct occurrence IDs. Only explicit removals delete events.",
+    items: { oneOf: [
+      { type: "object", properties: { op: { const: "upsert" }, event: {
+        type: "object",
+        properties: eventFields,
+        required: requiredEventFields,
+        additionalProperties: false,
+        allOf: [
+          {
+            if: { properties: { isAllDay: { const: true } }, required: ["isAllDay"] },
+            then: { required: ["startDate", "endDate"] },
+            else: { not: { anyOf: [{ required: ["startDate"] }, { required: ["endDate"] }] } }
+          }
+        ]
+      } }, required: ["op", "event"], additionalProperties: false },
+      {
+        type: "object",
+        properties: { op: { const: "remove" }, externalId: textSchema(512) },
+        required: ["op", "externalId"],
+        additionalProperties: false
+      }
+    ] }
+  }
+};
+var pageFields = {
+  limit: {
+    type: "integer",
+    minimum: 1,
+    maximum: 50,
+    description: "Events default to 50; sources default to 20 and cap effective limits at 20. Retain when paging."
+  },
+  cursor: { ...textSchema(4096), description: "Opaque server nextCursor, at most 4096 UTF-8 bytes. Preserve the query scope." }
+};
+var CALENDAR_TOOLS = [
+  {
+    name: "ttobak_sync_calendar_events",
+    description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    inputSchema: { type: "object", properties: syncFields, required: Object.keys(syncFields), additionalProperties: false }
+  },
+  {
+    name: "ttobak_list_calendar_events",
+    description: "Read your private calendar in a positive window of at most 93 elapsed days. Follow actual nextCursor with unchanged query scope, including empty pages, until null.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: "object", properties: {
+      from: timestampSchema,
+      to: timestampSchema,
+      accountId: identifierSchema,
+      ...pageFields
+    }, required: ["from", "to"], additionalProperties: false }
+  },
+  {
+    name: "ttobak_calendar_sync_status",
+    description: "Read private calendar source progress. Follow nextCursor until null. Compare revision and optional lastCompletedRevision for partial progress; completion is caller-reported, not verified provider freshness.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: "object", properties: pageFields, additionalProperties: false }
+  }
+];
+var CALENDAR_TOOL_NAMES = CALENDAR_TOOLS.map((tool) => tool.name);
+function record8(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function invalid(field) {
+  throw new Error(`INVALID_ARGUMENT: invalid calendar ${field}`);
+}
+function exact(value, allowed, required2) {
+  if (!record8(value) || Object.keys(value).some((key) => !allowed.includes(key) || value[key] == null) || required2.some((key) => !Object.hasOwn(value, key))) invalid("fields");
+}
+function validText(value, bytes, nonblank = true) {
+  return typeof value === "string" && Buffer.byteLength(value, "utf8") <= bytes && Buffer.from(value, "utf8").toString("utf8") === value && (!nonblank || /[^\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/.test(value));
+}
+function validUUID(value) {
+  return typeof value === "string" && new RegExp(UUID_PATTERN).test(value) && value !== "00000000-0000-0000-0000-000000000000";
+}
+function instant(value) {
+  if (typeof value !== "string") invalid("timestamp");
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:[.,](\d+))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  if (!match) invalid("RFC3339 timestamp");
+  const [, day, hour, minute, second, fraction = "", zone, sign, offsetHour = "0", offsetMinute = "0"] = match;
+  const date4 = /* @__PURE__ */ new Date(`${day}T${hour}:${minute}:${second}Z`);
+  if (!Number.isFinite(date4.getTime()) || date4.toISOString().slice(0, 19) !== `${day}T${hour}:${minute}:${second}` || Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59 || Number(offsetHour) > 23 || Number(offsetMinute) > 59) invalid("timestamp");
+  const offset = zone === "Z" ? 0 : (Number(offsetHour) * 60 + Number(offsetMinute)) * (sign === "+" ? 1 : -1);
+  date4.setTime(date4.getTime() - offset * 6e4);
+  if (date4.getUTCFullYear() < 1 || date4.getUTCFullYear() > 9999) invalid("timestamp year");
+  const nanoFraction = fraction.slice(0, 9).padEnd(9, "0");
+  const nanos = BigInt(date4.getTime()) * 1000000n + BigInt(nanoFraction);
+  const trimmed = nanoFraction.replace(/0+$/, "");
+  return { nanos, date: date4, utc: date4.toISOString().slice(0, 19) + (trimmed ? "." + trimmed : "") + "Z" };
+}
+function interval(start, end) {
+  const first = instant(start), last = instant(end);
+  if (first.utc === "0001-01-01T00:00:00Z" || last.nanos <= first.nanos || last.nanos - first.nanos > 93n * 24n * 60n * 60n * 1000000000n) invalid("interval (maximum 93 days)");
+  return { first, last };
+}
+function eventInput(value) {
+  exact(value, Object.keys(eventFields), requiredEventFields);
+  for (const field of ["externalId", "title"]) if (!validText(value[field], 512)) invalid(field);
+  if ("location" in value && !validText(value.location, 256, false)) invalid("location");
+  if ("accountId" in value && (typeof value.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.accountId))) invalid("accountId");
+  if (!validText(value.timeZone, 128) || value.timeZone === "Local" || /^[+-]/.test(value.timeZone)) invalid("timeZone");
+  if ("isAllDay" in value && typeof value.isAllDay !== "boolean") invalid("isAllDay");
+  let formatter;
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: value.timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    });
+  } catch {
+    invalid("timeZone");
+  }
+  const { first, last } = interval(value.startsAt, value.endsAt);
+  if (value.isAllDay === true) {
+    for (const [field, timestamp] of [["startDate", first], ["endDate", last]]) {
+      const date4 = value[field];
+      if (typeof date4 !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date4) || timestamp.nanos % 1000000000n !== 0n) invalid("all-day date");
+      const parts = Object.fromEntries(formatter.formatToParts(timestamp.date).map((part) => [part.type, part.value]));
+      if (`${parts.year.padStart(4, "0")}-${parts.month}-${parts.day}` !== date4 || parts.hour !== "00" || parts.minute !== "00" || parts.second !== "00") invalid("all-day midnight");
+    }
+  } else if ("startDate" in value || "endDate" in value) invalid("timed event dates");
+  const payload = { ...value, startsAt: first.utc, endsAt: last.utc, isAllDay: value.isAllDay ?? false };
+  for (const field of ["location", "accountId", "startDate", "endDate"]) {
+    if (payload[field] === "") delete payload[field];
+  }
+  const encoded = JSON.stringify(payload) + "\n";
+  const separatorBytes = Array.from(encoded).filter((character) => [8232, 8233].includes(character.charCodeAt(0))).length * 3;
+  if (Buffer.byteLength(encoded) + separatorBytes > 4096) invalid("encrypted event payload byte limit");
+}
+function syncInput(args) {
+  exact(args, Object.keys(syncFields), Object.keys(syncFields));
+  if (!validUUID(args.sourceId) || !validUUID(args.batchId)) invalid("sourceId or batchId");
+  if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 0 || args.expectedRevision > MAX_REVISION) invalid("expectedRevision");
+  interval(args.windowStart, args.windowEnd);
+  if (typeof args.complete !== "boolean" || !Array.isArray(args.mutations) || args.mutations.length > 20) invalid("batch");
+  const seen = /* @__PURE__ */ new Set();
+  for (const mutation of args.mutations) {
+    if (!record8(mutation)) invalid("mutation");
+    let externalId;
+    if (mutation.op === "upsert") {
+      exact(mutation, ["op", "event"], ["op", "event"]);
+      eventInput(mutation.event);
+      externalId = mutation.event.externalId;
+    } else if (mutation.op === "remove") {
+      exact(mutation, ["op", "externalId"], ["op", "externalId"]);
+      if (!validText(mutation.externalId, 512)) invalid("externalId");
+      externalId = mutation.externalId;
+    } else invalid("mutation operation");
+    if (seen.has(externalId)) invalid("duplicate externalId");
+    seen.add(externalId);
+  }
+  const { sourceId, ...body } = args;
+  const serialized = JSON.stringify(body);
+  if (Buffer.byteLength(serialized) > 65536) invalid("sync request byte limit");
+  return { sourceId, body: JSON.parse(serialized) };
+}
+function queryInput(args, events) {
+  exact(args, events ? ["from", "to", "accountId", "limit", "cursor"] : ["limit", "cursor"], events ? ["from", "to"] : []);
+  if ("limit" in args && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 50)) invalid("limit");
+  if ("cursor" in args && !validText(args.cursor, 4096, false)) invalid("cursor");
+  if (args.cursor === "") invalid("cursor");
+  if (events) {
+    interval(args.from, args.to);
+    if ("accountId" in args && (typeof args.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.accountId))) invalid("accountId");
+  }
+  const query = new URLSearchParams(Object.entries(args).map(([key, value]) => [key, String(value)]));
+  if (Buffer.byteLength(query.toString()) > 8192) invalid("encoded query byte limit");
+  return { ...args };
+}
+function calendarResult(value, kind, input) {
+  const invalidResponse = () => {
+    throw new Error("INVALID_CALENDAR_RESPONSE: invalid receipt or page");
+  };
+  if (!record8(value) || value.error) invalidResponse();
+  const result = value;
+  if (kind === "sync") {
+    if (!input || result.batchId !== input.batchId.toLowerCase() || !Number.isSafeInteger(result.revision) || result.revision !== input.expectedRevision + 1 || result.completed !== input.complete || result.upserted !== input.mutations.filter((mutation) => mutation.op === "upsert").length || result.removed !== input.mutations.filter((mutation) => mutation.op === "remove").length) invalidResponse();
+  } else {
+    const entries = result[kind];
+    if (!Array.isArray(entries) || entries.length > (kind === "events" ? 50 : 20) || !(result.nextCursor === null || validText(result.nextCursor, 4096))) invalidResponse();
+    for (const entry of entries) {
+      if (!record8(entry) || !validUUID(entry.sourceId) || typeof entry.provider !== "string") invalidResponse();
+      const row = entry;
+      if (kind === "sources" && (!Number.isSafeInteger(row.revision) || row.revision < 0 || "lastCompletedRevision" in row && (!Number.isSafeInteger(row.lastCompletedRevision) || row.lastCompletedRevision < 0 || row.lastCompletedRevision > row.revision))) invalidResponse();
+    }
+  }
+  const output = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(output)) > MAX_RESULT_BYTES) {
+    throw new Error("CALENDAR_LIMIT: serialized tool result exceeds 32000 bytes");
+  }
+  return output;
+}
+async function callCalendarTool(name, args, api) {
+  let syncAttempted = false;
+  try {
+    switch (name) {
+      case "ttobak_sync_calendar_events": {
+        const { sourceId, body } = syncInput(args);
+        syncAttempted = true;
+        return calendarResult(await api.syncCalendarEvents(sourceId, body), "sync", body);
+      }
+      case "ttobak_list_calendar_events":
+        return calendarResult(await api.listCalendarEvents(queryInput(args, true)), "events");
+      case "ttobak_calendar_sync_status":
+        return calendarResult(await api.calendarSyncStatus(queryInput(args, false)), "sources");
+      default:
+        return readingError("Unknown calendar tool");
+    }
+  } catch (error3) {
+    const message = error3 instanceof Error ? error3.message : String(error3);
+    if (!syncAttempted) return readingError(message);
+    if (error3 instanceof ApiResponseError && error3.status >= 400 && error3.status < 500) {
+      return readingError((error3.status === 409 ? "Calendar sync was rejected. Refetch source status and reconcile before syncing again. " : "") + message);
+    }
+    return readingError("Calendar sync is unconfirmed. Retry the identical batch ID and expected revision with unchanged source and full payload. " + message);
+  }
+}
+
+// src/account-events.ts
+var accountEventFields = ["title", "startAt", "endAt", "allDay", "location", "attendees", "notes"];
+var accountEventAttendeeFields = ["contactId", "name", "email"];
+function eventOrderedFields(source, keys2) {
+  const out = {};
+  for (const key of keys2) if (Object.hasOwn(source, key)) out[key] = source[key];
+  return out;
+}
+function canonicalEvent(event) {
+  const out = eventOrderedFields(event, accountEventFields);
+  if (Array.isArray(event.attendees)) out.attendees = event.attendees.map((a) => eventOrderedFields(a, accountEventAttendeeFields));
+  return out;
+}
+var EVENT_TIME = { type: "string", minLength: 20, maxLength: 40, description: "RFC 3339 with offset, e.g. 2026-11-10T14:00:00+09:00" };
+var EVENT_ATTENDEE = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name"],
+  properties: {
+    contactId: { type: "string", description: "Optional contact ID from ttobak_list_account_contacts in the same account" },
+    name: { type: "string", minLength: 1, maxLength: 256 },
+    email: { type: "string", maxLength: 256 }
+  }
+};
+var EVENT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "startAt"],
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: 256 },
+    startAt: EVENT_TIME,
+    endAt: EVENT_TIME,
+    allDay: { type: "boolean" },
+    location: { type: "string", maxLength: 512 },
+    attendees: { type: "array", maxItems: 50, items: EVENT_ATTENDEE },
+    notes: { type: "string", maxLength: 8192 }
+  }
+};
+var EVENT_ACCOUNT_ID = { type: "string", minLength: 1, maxLength: 128 };
+var EVENT_IDEMPOTENCY_KEY = { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$", description: "Stable retry key; required for private OAuth connector writes." };
+var ACCOUNT_EVENT_TOOLS = [
+  {
+    name: "ttobak_list_account_events",
+    description: "List one page of an authorized account's shared events (schedules). Without from, ascending order lists upcoming events. For past events use order desc with to set to now. Pass the returned nextCursor as cursor for more.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: "object", additionalProperties: false, required: ["accountId"], properties: {
+      accountId: EVENT_ACCOUNT_ID,
+      from: EVENT_TIME,
+      to: EVENT_TIME,
+      order: { type: "string", enum: ["asc", "desc"] },
+      limit: { type: "integer", minimum: 1, maximum: 25, default: 25 },
+      cursor: { type: "string", minLength: 1, maxLength: 1024 }
+    } }
+  },
+  {
+    name: "ttobak_create_account_event",
+    description: "Add one shared event (schedule) to an authorized account. Attendees may reference the account's contacts by contactId.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["accountId", "event"], properties: {
+      accountId: EVENT_ACCOUNT_ID,
+      event: EVENT_SCHEMA,
+      idempotencyKey: EVENT_IDEMPOTENCY_KEY
+    } }
+  }
+];
+function isEventRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function eventAccountId(args, keys2) {
+  if (Object.keys(args).some((key) => !keys2.includes(key)) || typeof args.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.accountId)) throw new Error("INVALID_ARGUMENT: invalid account or options");
+  return args.accountId;
+}
+var eventTextFits = (v, max) => typeof v === "string" && Buffer.byteLength(v) <= max;
+function eventToolInput(value) {
+  if (!isEventRecord(value) || Object.keys(value).some((k) => !accountEventFields.includes(k)) || typeof value.title !== "string" || !value.title.trim() || !eventTextFits(value.title, 256) || !eventTextFits(value.startAt, 40) || value.endAt !== void 0 && !eventTextFits(value.endAt, 40) || value.allDay !== void 0 && typeof value.allDay !== "boolean" || value.location !== void 0 && !eventTextFits(value.location, 512) || value.notes !== void 0 && !eventTextFits(value.notes, 8192) || value.attendees !== void 0 && (!Array.isArray(value.attendees) || value.attendees.length > 50 || value.attendees.some((a) => !isEventRecord(a) || Object.keys(a).some((k) => !accountEventAttendeeFields.includes(k)) || typeof a.name !== "string" || !a.name.trim() || !eventTextFits(a.name, 256) || a.email !== void 0 && !eventTextFits(a.email, 256) || a.contactId !== void 0 && (typeof a.contactId !== "string" || !/^[0-9a-f-]{36}$/.test(a.contactId)))) || Buffer.byteLength(JSON.stringify(value)) > 12e3) throw new Error("INVALID_EVENT");
+  return value;
+}
+function eventListOptions(args) {
+  const limit = args.limit ?? 25;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 25 || args.from !== void 0 && !eventTextFits(args.from, 40) || args.to !== void 0 && !eventTextFits(args.to, 40) || args.order !== void 0 && args.order !== "asc" && args.order !== "desc" || args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 1024)) {
+    throw new Error("INVALID_ARGUMENT: invalid event list options");
+  }
+  const out = { limit };
+  for (const key of ["from", "to", "order", "cursor"]) if (args[key] !== void 0) out[key] = args[key];
+  return out;
+}
+function boundedEventResult(value) {
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error("RESULT_TOO_LARGE: reduce the event page limit");
+  return result;
+}
+function eventPage(value, limit) {
+  if (!isEventRecord(value) || !Array.isArray(value.events) || value.events.length > limit || value.events.some((e) => !isEventRecord(e) || typeof e.eventId !== "string" || typeof e.title !== "string" || typeof e.startAt !== "string") || value.nextCursor !== void 0 && value.nextCursor !== null && (typeof value.nextCursor !== "string" || !value.nextCursor.length || value.nextCursor.length > 1024)) {
+    throw new Error("INVALID_RESPONSE: invalid event page");
+  }
+  return value;
+}
+function eventHttpStatus(error3) {
+  return error3 instanceof Error ? /^HTTP (\d{3})(?:\s|:)/.exec(error3.message)?.[1] : void 0;
+}
+async function callAccountEventTool(name, args, api) {
+  if (name === "ttobak_list_account_events") {
+    const accountId2 = eventAccountId(args, ["accountId", "from", "to", "order", "limit", "cursor"]);
+    const options = eventListOptions(args);
+    let limit = options.limit;
+    for (; ; ) {
+      try {
+        return boundedEventResult(eventPage(await api.listAccountEvents(accountId2, { ...options, limit }), limit));
+      } catch (e) {
+        if (e instanceof Error && /^(READING_LIMIT|RESULT_TOO_LARGE):/.test(e.message) && limit > 1) {
+          limit = Math.floor(limit / 2);
+          continue;
+        }
+        if (e instanceof Error && /^(READING_LIMIT|RESULT_TOO_LARGE|INVALID_RESPONSE):/.test(e.message)) throw e;
+        const code = eventHttpStatus(e);
+        throw new Error(code ? `EVENT_READ_FAILED: HTTP ${code}` : "EVENT_READ_FAILED: unable to read event page");
+      }
+    }
+  }
+  const accountId = eventAccountId(args, ["accountId", "event", "idempotencyKey"]);
+  const input = eventToolInput(args.event);
+  const key = args.idempotencyKey;
+  if (key !== void 0 && api.requiresEventIdempotency === false) throw new Error("INVALID_ARGUMENT: idempotencyKey requires private connector transport");
+  if ((key !== void 0 || api.requiresEventIdempotency) && (typeof key !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(key))) throw new Error("INVALID_ARGUMENT: idempotencyKey required");
+  let value;
+  try {
+    value = await api.createAccountEvent(accountId, input, key);
+  } catch (e) {
+    const code = eventHttpStatus(e);
+    if (code && code !== "408" && !(api.requiresEventIdempotency && code === "403") && Number(code) >= 400 && Number(code) < 500) throw new Error(`EVENT_WRITE_FAILED: HTTP_${code}`);
+    throw new Error(api.requiresEventIdempotency ? "EVENT_WRITE_FAILED: outcome unknown; retry the same idempotencyKey and event" : "EVENT_WRITE_FAILED: outcome unknown; list events before retrying");
+  }
+  if (!isEventRecord(value) || typeof value.eventId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.eventId)) {
+    throw new Error("EVENT_WRITE_FAILED: outcome unknown; list events before retrying");
+  }
+  return boundedEventResult({ eventId: value.eventId, ...value.replayed === true ? { replayed: true } : {} });
+}
+
 // src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
@@ -23549,6 +23950,15 @@ function identifier(value, name) {
 function documentsPath(accountId) {
   return accountId === void 0 ? "/api/documents" : `/api/accounts/${identifier(accountId, "accountId")}/documents`;
 }
+var ApiResponseError = class extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+  status;
+  code;
+};
 function parseApiResponse(status, body) {
   if (status === 204) return {};
   let parsed;
@@ -23559,8 +23969,10 @@ function parseApiResponse(status, body) {
   }
   if (status < 200 || status >= 300 || parsed?.error) {
     const detail = parsed?.error;
-    throw new Error(
-      detail?.message ? `HTTP ${status} ${detail.code || "API_ERROR"}: ${detail.message}` : `HTTP ${status}: TTOBAK request failed`
+    throw new ApiResponseError(
+      detail?.message ? `HTTP ${status} ${detail.code || "API_ERROR"}: ${detail.message}` : `HTTP ${status}: TTOBAK request failed`,
+      status,
+      typeof detail?.code === "string" ? detail.code : void 0
     );
   }
   return parsed;
@@ -23574,6 +23986,31 @@ var TtobakApi = class {
   auth;
   baseUrl;
   options;
+  async syncCalendarEvents(sourceId, body) {
+    return this.request(
+      "POST",
+      `/api/calendar/sources/${identifier(sourceId, "sourceId")}/sync`,
+      body,
+      MAX_CALENDAR_API_BYTES,
+      false,
+      true
+    );
+  }
+  async listCalendarEvents(options) {
+    const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
+    return this.request("GET", `/api/calendar/events?${query}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+  }
+  async calendarSyncStatus(options) {
+    const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
+    return this.request(
+      "GET",
+      `/api/calendar/sources${query.size ? "?" + query : ""}`,
+      void 0,
+      MAX_CALENDAR_API_BYTES,
+      false,
+      true
+    );
+  }
   async listMeetings(opts) {
     const q = new URLSearchParams();
     if (opts?.cursor) q.set("cursor", opts.cursor);
@@ -23644,6 +24081,21 @@ var TtobakApi = class {
       if (e instanceof Error && /^HTTP 404(?:\s|:)/.test(e.message)) return null;
       throw e;
     }
+  }
+  async listAccountEvents(accountId, options) {
+    const query = new URLSearchParams({ limit: String(options.limit) });
+    for (const key of ["from", "to", "order", "cursor"]) if (options[key] !== void 0) query.set(key, options[key]);
+    return this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/events?${query}`, void 0, MAX_READING_BYTES);
+  }
+  get requiresEventIdempotency() {
+    return !!this.options.privateTransport;
+  }
+  async createAccountEvent(accountId, event, idempotencyKey, replayOnly = false) {
+    if (!this.options.privateTransport && idempotencyKey !== void 0) throw new Error("idempotencyKey requires private connector transport");
+    if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error("INVALID_ARGUMENT: idempotencyKey required");
+    const ordered = canonicalEvent(event);
+    const body = this.options.privateTransport ? { event: ordered, idempotencyKey } : ordered;
+    return this.request("POST", `/api/accounts/${identifier(accountId, "accountId")}/events${replayOnly ? "?replay=1" : ""}`, body, MAX_READING_BYTES);
   }
   async readBilling(options) {
     const { section, ...args } = options;
@@ -24075,7 +24527,7 @@ var TtobakApi = class {
       req.end();
     });
   }
-  async request(method, path2, body, maxResponseBytes, callerTokenTransport = false) {
+  async request(method, path2, body, maxResponseBytes, callerTokenTransport = false, strictUtf8 = false) {
     this.options.signal?.throwIfAborted();
     if (this.options.privateTransport && !callerTokenTransport) {
       return this.options.privateTransport({
@@ -24136,7 +24588,9 @@ var TtobakApi = class {
             if (finished) return;
             finished = true;
             try {
-              resolve(parseApiResponse(res.statusCode || 0, Buffer.concat(chunks, received).toString("utf8")));
+              const bytes = Buffer.concat(chunks, received);
+              const response = strictUtf8 ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : bytes.toString("utf8");
+              resolve(parseApiResponse(res.statusCode || 0, response));
             } catch (error3) {
               reject(error3);
             }
@@ -24178,6 +24632,7 @@ function mutationReceipt(name, value) {
   });
 }
 var LOCAL_ONLY_TOOLS = [
+  ...CALENDAR_TOOL_NAMES,
   "ttobak_login",
   "ttobak_logout",
   "ttobak_list_audio_devices",
@@ -24267,15 +24722,15 @@ function documentReadingOptions(args) {
     expectedRevision: args.expectedRevision
   };
 }
-function record8(value) {
+function record9(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function documentReadingResult(value, options) {
-  if (!record8(value) || value.docId !== options.docId || value.accountId !== (options.accountId ?? "") || value.section !== options.section || typeof value.content !== "string" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || options.expectedRevision !== void 0 && value.revision !== options.expectedRevision || !["owner", "edit", "read"].includes(value.permission) || !(options.accountId ? value.scope === "account" : ["personal", "shared"].includes(value.scope)) || !["text", "file"].includes(value.mode) || !["available", "empty", "not_available"].includes(value.textStatus) || "publicShareToken" in value || "fileKey" in value) {
+  if (!record9(value) || value.docId !== options.docId || value.accountId !== (options.accountId ?? "") || value.section !== options.section || typeof value.content !== "string" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || options.expectedRevision !== void 0 && value.revision !== options.expectedRevision || !["owner", "edit", "read"].includes(value.permission) || !(options.accountId ? value.scope === "account" : ["personal", "shared"].includes(value.scope)) || !["text", "file"].includes(value.mode) || !["available", "empty", "not_available"].includes(value.textStatus) || "publicShareToken" in value || "fileKey" in value) {
     throw new Error("INVALID_READING_RESPONSE: document identity or source metadata is invalid");
   }
   const page2 = value.page;
-  if (!record8(page2) || page2.unit !== "unicode_code_points" || typeof page2.complete !== "boolean" || ![page2.startOffset, page2.endOffset, page2.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || page2.endOffset < page2.startOffset || page2.endOffset > page2.totalCodePoints || Array.from(value.content).length !== page2.endOffset - page2.startOffset || (page2.complete ? page2.endOffset !== page2.totalCodePoints : page2.endOffset === page2.startOffset || page2.endOffset >= page2.totalCodePoints) || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
+  if (!record9(page2) || page2.unit !== "unicode_code_points" || typeof page2.complete !== "boolean" || ![page2.startOffset, page2.endOffset, page2.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || page2.endOffset < page2.startOffset || page2.endOffset > page2.totalCodePoints || Array.from(value.content).length !== page2.endOffset - page2.startOffset || (page2.complete ? page2.endOffset !== page2.totalCodePoints : page2.endOffset === page2.startOffset || page2.endOffset >= page2.totalCodePoints) || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: document page continuation is invalid");
   }
   if (value.mode === "file" && (value.content !== "" || value.textStatus !== "not_available")) {
@@ -24313,20 +24768,20 @@ function documentCatalogOptions(args) {
     cursor: args.cursor
   };
 }
-function record9(value) {
+function record10(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function documentCatalogResult(value, options) {
-  if (!record9(value) || value.accountId !== (options.accountId ?? "") || value.consistency !== "current_per_item" || !Array.isArray(value.documents) || value.documents.length > options.pageSize) {
+  if (!record10(value) || value.accountId !== (options.accountId ?? "") || value.consistency !== "current_per_item" || !Array.isArray(value.documents) || value.documents.length > options.pageSize) {
     throw new Error("INVALID_READING_RESPONSE: invalid document catalog identity");
   }
   for (const doc of value.documents) {
-    if (!record9(doc) || typeof doc.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.docId) || typeof doc.title !== "string" || typeof doc.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(doc.metadataRevision) || !["owner", "edit", "read"].includes(doc.permission) || !(options.accountId ? doc.scope === "account" : ["personal", "shared"].includes(doc.scope)) || "content" in doc || "publicShareToken" in doc || "fileKey" in doc) {
+    if (!record10(doc) || typeof doc.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.docId) || typeof doc.title !== "string" || typeof doc.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(doc.metadataRevision) || !["owner", "edit", "read"].includes(doc.permission) || !(options.accountId ? doc.scope === "account" : ["personal", "shared"].includes(doc.scope)) || "content" in doc || "publicShareToken" in doc || "fileKey" in doc) {
       throw new Error("INVALID_READING_RESPONSE: invalid document metadata");
     }
   }
   const page2 = value.page;
-  if (!record9(page2) || page2.unit !== "items" || page2.returned !== value.documents.length || typeof page2.complete !== "boolean" || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
+  if (!record10(page2) || page2.unit !== "items" || page2.returned !== value.documents.length || typeof page2.complete !== "boolean" || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid catalog continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -24350,18 +24805,18 @@ function kbReadingOptions(args) {
   }
   return { pageSize, cursor: args.cursor };
 }
-function record10(value) {
+function record11(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function kbReadingResult(value, options) {
-  if (!record10(value) || !Array.isArray(value.files) || value.files.length > options.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
+  if (!record11(value) || !Array.isArray(value.files) || value.files.length > options.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
   for (const file2 of value.files) {
-    if (!record10(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
+    if (!record11(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid KB file metadata");
     }
   }
   const page2 = value.page;
-  if (!record10(page2) || page2.unit !== "items" || page2.returned !== value.files.length || typeof page2.complete !== "boolean" || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
+  if (!record11(page2) || page2.unit !== "items" || page2.returned !== value.files.length || typeof page2.complete !== "boolean" || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid KB continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -24378,11 +24833,11 @@ function navigationOptions(args) {
   }
   return kbReadingOptions(args);
 }
-function record11(value) {
+function record12(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function navigationResult(value, options, kind) {
-  if (!record11(value) || value.consistency !== "current_per_item" || !Array.isArray(value[kind]) || value[kind].length > options.pageSize) {
+  if (!record12(value) || value.consistency !== "current_per_item" || !Array.isArray(value[kind]) || value[kind].length > options.pageSize) {
     throw new Error("INVALID_READING_RESPONSE: invalid navigation catalog");
   }
   const items = value[kind];
@@ -24390,12 +24845,12 @@ function navigationResult(value, options, kind) {
     throw new Error("INVALID_READING_RESPONSE: missing project union contract");
   }
   for (const item of items) {
-    if (!record11(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
+    if (!record12(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid navigation metadata");
     }
   }
   const page2 = value.page;
-  if (!record11(page2) || page2.unit !== "items" || page2.returned !== items.length || typeof page2.complete !== "boolean" || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
+  if (!record12(page2) || page2.unit !== "items" || page2.returned !== items.length || typeof page2.complete !== "boolean" || (page2.complete ? page2.nextCursor !== null : typeof page2.nextCursor !== "string" || !page2.nextCursor.length || page2.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid navigation continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -24420,17 +24875,17 @@ function meetingCatalogOptions(args) {
     accountIds: args.accountIds
   };
 }
-function record12(value) {
+function record13(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function meetingCatalogResult(value) {
-  if (!record12(value) || value.kind !== "meeting_catalog" || !record12(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog continuation");
+  if (!record13(value) || value.kind !== "meeting_catalog" || !record13(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog continuation");
   if (value.discoveryPending === true) {
     if (value.phase !== "discovery" || Object.keys(value).some((key) => !["kind", "phase", "discoveryPending", "page"].includes(key))) throw new Error("INVALID_READING_RESPONSE: discovery contains premature data");
   } else {
     if (!["owned", "direct", "team"].includes(value.phase) || value.consistency !== "current_group" || value.overlapPossible !== true || value.unionKey !== "meetingId" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || typeof value.dataJson !== "string") throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog source");
     const f = value.fragment;
-    if (!record12(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset <= f.startOffset || f.endOffset > f.totalCodePoints || Array.from(value.dataJson).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || value.page.complete && (!f.complete || value.phase !== "team")) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog fragment");
+    if (!record13(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset <= f.startOffset || f.endOffset > f.totalCodePoints || Array.from(value.dataJson).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || value.page.complete && (!f.complete || value.phase !== "team")) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog fragment");
     if (f.startOffset === 0 && f.complete) {
       try {
         if (!Array.isArray(JSON.parse(value.dataJson))) throw new Error("Expected array");
@@ -24452,7 +24907,7 @@ function vaultReadingOptions(args) {
   if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) throw new Error("INVALID_CURSOR: invalid vault continuation");
   return { section, fileId: args.fileId, pageSize, cursor: args.cursor };
 }
-function record13(value) {
+function record14(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function path(value) {
@@ -24462,20 +24917,20 @@ function hash2(value) {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 function vaultReadingResult(value, options) {
-  if (!record13(value) || value.kind !== `vault_${options.section}` || !record13(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid vault continuation");
+  if (!record14(value) || value.kind !== `vault_${options.section}` || !record14(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid vault continuation");
   if (value.discoveryPending === true) {
     if (options.section !== "manifest" || value.phase !== "discovery" || Object.keys(value).some((key) => !["kind", "phase", "discoveryPending", "page"].includes(key))) throw new Error("INVALID_READING_RESPONSE: discovery contains file data");
   } else if (value.mode === "non_text") {
-    if (options.section !== "file" || value.fileId !== options.fileId || !path(value.path) || value.textStatus !== "not_available" || !value.page.complete || !record13(value.documentRead) || typeof value.documentRead.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.documentRead.docId) || value.markdown !== void 0) throw new Error("INVALID_READING_RESPONSE: invalid non-text document");
+    if (options.section !== "file" || value.fileId !== options.fileId || !path(value.path) || value.textStatus !== "not_available" || !value.page.complete || !record14(value.documentRead) || typeof value.documentRead.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.documentRead.docId) || value.markdown !== void 0) throw new Error("INVALID_READING_RESPONSE: invalid non-text document");
   } else {
     const manifest = options.section === "manifest";
     if (!hash2(value.revision) || (manifest ? value.consistency !== "current_group" || value.unionKey !== "path" || !["meetings", "personal_docs", "account_docs"].includes(value.phase) : value.mode !== "text" || value.fileId !== options.fileId || !path(value.path) || !hash2(value.sourceRevision) || value.consistency !== "current_source_and_group" || !["meeting", "document"].includes(value.sourceKind) || !["body", "attachments"].includes(value.phase) || value.sourceKind === "document" && value.phase === "attachments" || value.sourceKind === "meeting" && value.phase === "body" && value.page.complete)) throw new Error("INVALID_READING_RESPONSE: invalid vault source");
     const text2 = manifest ? value.dataJson : value.markdown, f = value.fragment;
-    if (typeof text2 !== "string" || !record13(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text2).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
+    if (typeof text2 !== "string" || !record14(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text2).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
     if (manifest && f.startOffset === 0 && f.complete) {
       try {
         const files = JSON.parse(text2);
-        if (!Array.isArray(files) || files.some((file2) => !record13(file2) || typeof file2.fileId !== "string" || !file2.fileId.length || file2.fileId.length > 2048 || !path(file2.path) || !hash2(file2.sourceMetadataRevision) || !["text", "non_text"].includes(file2.mode))) throw new Error("bad manifest");
+        if (!Array.isArray(files) || files.some((file2) => !record14(file2) || typeof file2.fileId !== "string" || !file2.fileId.length || file2.fileId.length > 2048 || !path(file2.path) || !hash2(file2.sourceMetadataRevision) || !["text", "non_text"].includes(file2.mode))) throw new Error("bad manifest");
       } catch {
         throw new Error("INVALID_READING_RESPONSE: invalid completed vault manifest group");
       }
@@ -24499,7 +24954,7 @@ var BYTES_PER_SECOND = SAMPLE_RATE * 2;
 var WAV_HEADER_BYTES = 44;
 var SILENCE_THRESHOLD_DB = -60;
 var STDERR_TAIL_BYTES = 4096;
-var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+var UUID_PATTERN2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var MEETING_ID_PATTERN = /^[\w-]{1,128}$/;
 var UPLOAD_KEY_PATTERN = /^audio\/[\w-]{1,128}\/[\w-]{1,128}\/(?:\d{1,16}_)?mcp_upload_\d{1,16}\.[a-z0-9]{1,5}$/;
 function defaultRecordingsDir() {
@@ -24737,7 +25192,7 @@ ${err.message}`;
   /** Reports whether the file is effectively silent (e.g. host lacks mic permission). */
   async silenceCheck(file2) {
     const name = basename2(file2);
-    if (dirname2(file2) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN.test(name.slice(0, -".wav".length))) {
+    if (dirname2(file2) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN2.test(name.slice(0, -".wav".length))) {
       throw new Error("silenceCheck accepts only a recording in the recordings directory");
     }
     const { stderr } = await this.run(["-hide_banner", "-nostats", "-i", file2, "-af", "volumedetect", "-f", "null", "-"]);
@@ -24752,7 +25207,7 @@ ${err.message}`;
     for (const name of readdirSync(this.dir)) {
       if (!name.endsWith(".json")) continue;
       const id = name.slice(0, -".json".length);
-      if (!UUID_PATTERN.test(id) || id === this.active?.info.id) continue;
+      if (!UUID_PATTERN2.test(id) || id === this.active?.info.id) continue;
       const info = this.readSidecar(id);
       const bytes = info && fileSize(info.file);
       if (!info || bytes === null) continue;
@@ -24762,7 +25217,7 @@ ${err.message}`;
   }
   /** Resolves a kept recording by id without accepting a caller-supplied path. */
   getSaved(id) {
-    if (typeof id !== "string" || !UUID_PATTERN.test(id) || id === this.active?.info.id) {
+    if (typeof id !== "string" || !UUID_PATTERN2.test(id) || id === this.active?.info.id) {
       throw new Error(`No saved recording ${id}; see ttobak_recording_status`);
     }
     const info = this.readSidecar(id);
@@ -24777,7 +25232,7 @@ ${err.message}`;
    * observed, so two contenders cannot both remove each other's fresh lock.
    * Unreadable or empty lock content counts as live. Returns a release function. */
   acquire(id) {
-    if (!UUID_PATTERN.test(id)) throw new Error("Invalid recording id");
+    if (!UUID_PATTERN2.test(id)) throw new Error("Invalid recording id");
     const lock = join2(this.dir, `${id}.lock`);
     const token = `${process.pid}:${randomUUID()}`;
     const busy = () => new Error(`Recording ${id} is being uploaded by another request; check ttobak_recording_status`);
@@ -24804,7 +25259,7 @@ ${err.message}`;
   }
   /** Persists upload progress for a kept recording; the caller holds its lock. */
   saveProgress(id, progress) {
-    if (!UUID_PATTERN.test(id)) throw new Error("Invalid recording id");
+    if (!UUID_PATTERN2.test(id)) throw new Error("Invalid recording id");
     if (progress.meetingId !== void 0 && !MEETING_ID_PATTERN.test(progress.meetingId)) throw new Error("Invalid meeting id");
     if (progress.uploadKey !== void 0 && !UPLOAD_KEY_PATTERN.test(progress.uploadKey)) throw new Error("Invalid upload key");
     const info = this.readSidecar(id);
@@ -24813,7 +25268,7 @@ ${err.message}`;
   }
   /** Deletes a recording and its sidecar after a confirmed upload. */
   discard(id) {
-    if (!UUID_PATTERN.test(id)) throw new Error("Invalid recording id");
+    if (!UUID_PATTERN2.test(id)) throw new Error("Invalid recording id");
     rmSync(join2(this.dir, `${id}.wav`), { force: true });
     this.removeSidecar(id);
   }
@@ -25009,6 +25464,7 @@ var registry2 = {
   tools: [
     ...BILLING_TOOLS,
     ...ACCOUNT_CONTACT_TOOLS,
+    ...ACCOUNT_EVENT_TOOLS,
     {
       name: "ttobak_login",
       description: "Authenticate with TTOBAK. Opens browser for Cognito login. Call once per session.",
@@ -25551,11 +26007,15 @@ async function callTool(request2, options) {
   const API_URL = options.apiUrl, COGNITO_DOMAIN = options.cognitoDomain, CLIENT_ID = options.clientId;
   const { name, arguments: args = {} } = request2.params;
   try {
+    if (CALENDAR_TOOL_NAMES.includes(name)) return await callCalendarTool(name, args, api);
     switch (name) {
       case "ttobak_list_account_contacts":
       case "ttobak_create_account_contact":
       case "ttobak_import_account_contacts":
         return await callAccountContactTool(name, args, api);
+      case "ttobak_list_account_events":
+      case "ttobak_create_account_event":
+        return await callAccountEventTool(name, args, api);
       case "ttobak_get_billing_account":
       case "ttobak_get_billing_dataset":
       case "ttobak_get_billing_report": {
@@ -25992,6 +26452,7 @@ function createMcpServer(options) {
   });
   const stdioTools = [
     ...registry2.tools,
+    ...CALENDAR_TOOLS,
     ...options.recorder ? RECORDING_TOOLS : [],
     ...options.appControl ? APP_TOOLS : []
   ];
@@ -26006,7 +26467,8 @@ function createMcpServer(options) {
     }
     const result = await call;
     if (options.mode === "http" && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
-      const receipt = !("isError" in result && result.isError) && mutationReceipt(request2.params.name, result.content[0]?.text ?? "");
+      const content = result.content[0];
+      const receipt = !("isError" in result && result.isError) && mutationReceipt(request2.params.name, content?.type === "text" ? content.text : "");
       return receipt ? text(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
     }
     return result;

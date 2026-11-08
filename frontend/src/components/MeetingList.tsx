@@ -1,5 +1,6 @@
 'use client';
 
+import { processingBadge } from '@/lib/meetingStatus';
 import { confirmDialog, alertDialog } from '@/lib/dialog';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
@@ -105,6 +106,11 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
     }
   };
 
+  const badge = processingBadge(meeting.status);
+  const badgeClass = badge?.tone === 'error'
+    ? 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-100 dark:border-red-800'
+    : 'bg-primary/10 text-primary border border-primary/20';
+
   return (
     <Link href={`/meeting/${meeting.meetingId}`}>
       <div className={`glass-panel p-4 lg:p-6 rounded-xl hover:border-primary/30 lg:hover:border-slate-200 lg:dark:hover:border-primary/30 lg:hover:shadow-xl lg:hover:shadow-primary/5 transition-all cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -117,6 +123,11 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
             {meeting.status === 'recording' && (
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-100 dark:border-red-800">
                 중단됨
+              </span>
+            )}
+            {badge && (
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badgeClass}`}>
+                {badge.label}
               </span>
             )}
             {tag && (
@@ -143,6 +154,11 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
             {meeting.status === 'recording' && (
               <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-100 dark:border-red-800">
                 녹음 중단됨
+              </span>
+            )}
+            {badge && (
+              <span className={`text-[10px] font-bold tracking-widest px-2 py-0.5 rounded ${badgeClass}`}>
+                {badge.label}
               </span>
             )}
             {tag ? (
