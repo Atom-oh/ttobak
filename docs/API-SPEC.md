@@ -54,8 +54,9 @@ reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
 dependency before that activation.
 
-The MCP HTTP private transport signs ten bounded API reads,
-`qa.readonlyAsk` and personal note creation. It derives identity and scopes from the verified request,
+The MCP HTTP private transport signs eleven bounded API reads (including the
+account contact list), `qa.readonlyAsk`, personal note creation and account
+contact creation (with `?replay=1` probes for retry recovery). It derives identity and scopes from the verified request,
 checks atomic current grants before signing and before delivery, and invokes the
 configured API/QA Lambda through service IAM. It forwards no bearer token and
 never retries a rejected private request through the legacy HTTP transport.
