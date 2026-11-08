@@ -33,11 +33,31 @@ The connector API consumer (ADR-053) is a service-IAM Lambda invocation,
 not an additional HTTP route. Its top-level `ttobak.connector.invoke.v1` frame
 binds the operation, request ID and exact argument bytes to a signed delegation.
 When `CONNECTOR_SIGNING_KEY_ARN` is configured, the consumer loads that exact
-public key and reads current client/user grants before and after one of the eight
-bounded API read operations. Only the verified in-process principal reaches
+public key and reads current client/user grants before and after one of the
+bounded API read operations (the eight original read families plus the account
+contact list). Only the verified in-process principal reaches
 the existing router; caller headers and nested HTTP bodies cannot create it.
 Response bodies are capped at 14,000 bytes. Empty key configuration denies the
-private consumer. Its only mutation is personal note creation as described below.
+private consumer. Its mutations are personal note creation and account contact
+creation, each with its own atomic executor, as described below.
+
+Delegated contact creation signs `api.accountContacts.create` for `POST
+/api/accounts/{accountId}/contacts` with the body `{contact, idempotencyKey}`;
+`idempotencyKey` must equal the signed request ID and `contact` takes only the
+contact fields above, as strings, without nulls, duplicates or server-owned
+fields. The executor checks direct membership and a current read+write approval,
+then writes the sealed contact and a receipt
+`USER#{userId}/CONNECTOR_MUTATION#{clientId}#{requestId}` in one transaction
+with the policy, approval, account and member checks. The receipt holds only the
+operation, account, contact ID and revision, approval generation, creation time
+and a SHA-256 of the account and exact request body bytes; it has no expiry, so a
+retry with the same key and bytes stays idempotent. Responses are
+`{contactId, replayed?}` (200); 400 `BAD_REQUEST`, 403 `CAPABILITY_DENIED`, 409
+`CONNECTOR_CONFLICT` (same key with different bytes, or a replayed contact that
+changed or disappeared), 503 `CONTACTS_UNAVAILABLE` (no key; nothing written)
+and 503 `CONNECTOR_WRITE_UNCONFIRMED` (outcome unknown; retry the same key and
+bytes). `?replay=1` never creates: it returns an existing receipt or 404
+`RECEIPT_NOT_FOUND`.
 No OAuth issuance or IAM invocation permission is installed by the consumer code.
 
 The private QA companion accepts only the signed `qa.readonlyAsk` operation,
@@ -54,8 +74,9 @@ reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
 dependency before that activation.
 
-The MCP HTTP private transport signs ten bounded API reads,
-`qa.readonlyAsk` and personal note creation. It derives identity and scopes from the verified request,
+The MCP HTTP private transport signs eleven bounded API reads (including the
+account contact list), `qa.readonlyAsk`, personal note creation and account
+contact creation (with `?replay=1` probes for retry recovery). It derives identity and scopes from the verified request,
 checks atomic current grants before signing and before delivery, and invokes the
 configured API/QA Lambda through service IAM. It forwards no bearer token and
 never retries a rejected private request through the legacy HTTP transport.
@@ -634,6 +655,62 @@ account. `canRecoverRecording` is offered to managers; a member's recovery still
 requires the 10-minute quiet checkpoint. Account-link condition failures return
 409 `CONFLICT`. A member's project link or unlink requires the project to be
 linked to that account. Shared list items include `ownerUserId` (the creator).
+
+`GET/POST /api/accounts/{accountId}/contacts`, `PUT/DELETE
+/api/accounts/{accountId}/contacts/{contactId}`, and `GET
+/api/accounts/{accountId}/speaker-team` require current **direct** membership;
+account ancestry, meeting links and shares grant no access. Account and member
+records are read strongly consistently before and after reads; every write
+transaction checks both records and conditionally creates or requires the contact.
+Account and membership deletion/revocation during a transaction prevents the write.
+
+The contact response contains exactly `contactId`, `revision`, `name`, `company`, `title`,
+`department`, `email`, `address`, `workPhone`, `fax`, `phone`,
+`cardRegisteredAt`, `cardBook`, `group`, and `notes`. POST creates a new UUID
+and returns 201 with the contact. PUT requires the observed `revision`, replaces
+the editable fields and returns 200 with a new revision; DELETE requires the
+observed `revision` query parameter and returns 204. A stale revision returns
+409 so concurrent changes are not overwritten. `name` must contain non-whitespace text. All fields are
+UTF-8 strings: `address` is at most 1,024 bytes, `notes` at most 8,192 bytes,
+and the other fields at most 256 bytes each. POST/PUT accept a single JSON object
+at most 64 KiB, with at most 12,000 bytes in the serialized contact; omitted optional fields become empty strings.
+
+Contacts listing accepts `limit=1..25` (default 25) and an opaque `cursor`, and
+returns `{contacts, nextCursor}` with `nextCursor` omitted at the end. A cursor
+is bound to its account; every page reauthorizes the caller. Pagination is not a
+snapshot: concurrent changes can affect subsequent pages. The team response is
+`{members:[{userId,name,email,role}],nextCursor}`; the name uses the profile name where
+available and otherwise the member's email. Team pages accept the same limit and
+cursor parameters and recheck the requester's access. Invalid input returns
+400, denied access 403, a missing contact on PUT/DELETE 404, a stale revision 409, and unexpected
+errors a generic 500. Responses are not cached and contact content is not logged.
+
+Contact fields are KMS envelope-encrypted per row before storage and bound to
+the account and contact (ADR-063); without a configured key, contact routes
+return 503 `CONTACTS_UNAVAILABLE`; delegated connector creates seal the row the
+same way and return that 503 before any write. Contact rows have no TTL and remain until a
+direct member deletes them. Point-in-time recovery can retain deleted, still
+encrypted data within the table's recovery window.
+
+`GET/POST /api/accounts/{accountId}/events` and `GET/PUT/DELETE
+/api/accounts/{accountId}/events/{eventId}` manage account events (schedules)
+with the same **direct** membership rule and transactional access checks as
+contacts. An event has `eventId`, `revision`, `title` (1-256 bytes), `startAt`
+and optional `endAt` (RFC 3339, normalized to UTC seconds; at most 31 days
+apart), `allDay`, `location` (512 bytes), `attendees` (at most 50 of
+`{contactId?, name, email?}`; a `contactId` must name a contact in the same
+account), `notes` (8,192 bytes), `createdBy`, `createdAt` and `updatedAt`.
+POST returns 201; PUT requires the observed `revision` and DELETE its
+`revision` query parameter; a stale revision returns 409. Clients cannot set
+the author or timestamps.
+
+Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
+`order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
+order and resolved range. Without `from`, ascending lists start now (upcoming)
+and descending lists cover all past times. Responses are `{events,
+nextCursor}` and are not cached. Event fields except `startAt` are sealed like
+contacts (ADR-063); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
+Events have no TTL and remain until a direct member deletes them.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
@@ -1307,6 +1384,16 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/owner-invitation` | `accountHandler.ResendOwnerInvitation` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
 | GET | `/api/accounts/{accountId}/reading` | `accountReadingHandler.Get` |
+| GET | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.List` |
+| POST | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.Create` |
+| PUT | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Update` |
+| DELETE | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Delete` |
+| GET | `/api/accounts/{accountId}/speaker-team` | `accountContactsHandler.SpeakerTeam` |
+| GET | `/api/accounts/{accountId}/events` | `accountEventsHandler.List` |
+| POST | `/api/accounts/{accountId}/events` | `accountEventsHandler.Create` |
+| GET | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Get` |
+| PUT | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Update` |
+| DELETE | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Delete` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
