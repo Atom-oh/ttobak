@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as React from 'react';
+import * as jsxRuntime from 'react/jsx-runtime';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const source = readFileSync(new URL('../src/lib/mcpGuide.ts', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, {
@@ -101,5 +104,168 @@ test('missing mode, invalid dedicated binding and foreign URLs disable all HTTP 
       assert.equal(mcpClientGuide(client, 'http', null).steps.length, 0, client);
     }
     assert.match(codeText(mcpClientGuide('claude', 'stdio', config)), new RegExp(spa));
+  }
+});
+
+test('Outlook guide requires a user-configured local reader and host scheduler', async () => {
+  const library = await load(privateMcp);
+  assert.equal(typeof library.outlookSyncGuide, 'function');
+  const guide = library.outlookSyncGuide();
+  const text = JSON.stringify(guide);
+  for (const name of ['ttobak_sync_calendar_events', 'ttobak_list_calendar_events', 'ttobak_calendar_sync_status']) {
+    assert.ok(text.includes(name), name);
+  }
+  for (const requirement of [/stdio/, /HTTP.*지원하지/, /로컬.*호스트/, /10분/, /중복 실행/,
+    /읽기 전용/, /7일/, /30일/, /dry run/, /체크포인트/, /lastCompletedRevision/,
+    /409/, /private/, /반복 일정/, /절전/, /인증/, /중지/]) {
+    assert.match(text, requirement);
+  }
+  assert.match(text, /MCP.*스케줄러가 아닙니다/);
+  assert.match(text, /설정.*완료.*뜻이 아닙니다/);
+  assert.match(text, /비밀번호.*브라우저 토큰.*복사하지/);
+  assert.doesNotMatch(codeText(guide), /outlook-mcp|--password|--access-token|Calendar[s]?\.ReadWrite/);
+  assert.ok(guide.steps.flatMap(step => step.code ?? []).every(code => !code.needsConfig && !code.needsHttp));
+  for (const client of ['claude', 'codex', 'kirocrew', 'quick', 'kiro-cli']) {
+    assert.doesNotMatch(codeText(library.mcpClientGuide(client, 'http', library.config)), /ttobak_sync_calendar_events/);
+  }
+});
+
+test('Outlook synthetic batch uses the closed local MCP input contract', async () => {
+  const library = await load(privateMcp);
+  assert.equal(typeof library.outlookSyncGuide, 'function');
+  const code = library.outlookSyncGuide().steps.flatMap(step => step.code ?? [])
+    .find(code => code.title.includes('ttobak_sync_calendar_events'));
+  assert.ok(code);
+  const batch = JSON.parse(code.text);
+  assert.deepEqual(Object.keys(batch).sort(),
+    ['batchId', 'complete', 'expectedRevision', 'mutations', 'sourceId', 'windowEnd', 'windowStart']);
+  assert.equal(batch.expectedRevision, 0);
+  assert.equal(batch.complete, false);
+  assert.deepEqual(Object.keys(batch.mutations[0].event).sort(), ['endsAt', 'externalId', 'startsAt', 'timeZone', 'title']);
+  assert.equal(batch.mutations[0].op, 'upsert');
+  assert.equal(batch.mutations[0].event.externalId, 'SyntheticOccurrence/AbC');
+});
+
+const outlookRunbook = readFileSync(new URL('../../docs/runbooks/local-outlook-calendar-sync.md', import.meta.url), 'utf8');
+const runbookSection = title => outlookRunbook.split(`## ${title}\n`)[1]?.split('\n## ')[0].replace(/\s+/g, ' ') ?? '';
+
+test('Outlook runbook requires both local exclusions and tracked removals before reader acceptance', () => {
+  const contract = runbookSection('Local reader contract');
+  const acceptance = runbookSection('Dry run and manual acceptance');
+  for (const sensitivity of ['private', 'confidential']) {
+    assert.match(contract, new RegExp(`Exclude[^.]*\`${sensitivity}\`[^.]*by default`));
+    assert.match(contract, new RegExp(`newly[^.]*\`${sensitivity}\`[^.]*explicit removal[^.]*tracked occurrence ID`));
+    assert.match(acceptance, new RegExp(`Exclude[^.]*\`${sensitivity}\`[^.]*by default`));
+    assert.match(acceptance, new RegExp(`${sensitivity} reclassification`));
+  }
+  assert.match(contract, /Do not forward sensitivity flags or[^.]*replacement titles/);
+  assert.match(acceptance, /explicit removals[^.]*tracked occurrence ID/);
+  assert.match(outlookRunbook, /guide and protocol checks do not verify[^.]*reader[^.]*filtering/);
+});
+
+test('Outlook Korean guide requires both local exclusions and tracked removals before reader acceptance', async () => {
+  const { outlookSyncGuide } = await load(privateMcp);
+  const guide = outlookSyncGuide();
+  const dryRun = guide.steps.find(step => step.title.includes('dry run')).description;
+  const manual = guide.steps.find(step => step.title.includes('수동 실행')).description;
+  const removal = guide.steps.find(step => step.title.includes('삭제 규칙')).description;
+  for (const sensitivity of ['private', 'confidential']) {
+    assert.match(dryRun, new RegExp(`${sensitivity}[^.]*기본적으로 로컬에서 제외`));
+    assert.match(manual, new RegExp(`${sensitivity} 재분류`));
+    assert.match(removal, new RegExp(`${sensitivity}[^.]*이전에 가져온 회차 externalId[^.]*명시적[^.]*remove`));
+  }
+  assert.match(removal, /민감도 필드[^.]*대체 제목[^.]*보내지/);
+  assert.match(removal, /조회 실패로 삭제를 추론하지/);
+  assert.match(guide.note, /가이드·프로토콜 검증[^.]*리더[^.]*필터링[^.]*증명하지/);
+});
+
+test('Outlook English copyable prompt independently requires both default exclusions and tracked removals', () => {
+  const prompt = outlookRunbook.match(/## Copyable host instruction\n\n```text\n([\s\S]*?)\n```/)?.[1].replace(/\s+/g, ' ');
+  assert.ok(prompt);
+  for (const sensitivity of ['private', 'confidential']) {
+    assert.match(prompt, new RegExp(`Exclude[^.]*${sensitivity}[^.]*by default`));
+    assert.match(prompt, new RegExp(`explicitly remove[^.]*tracked occurrence externalId[^.]*${sensitivity} reclassification`));
+  }
+  assert.match(prompt, /Do not upload sensitivity fields or[^.]*replacement titles/);
+  assert.match(prompt, /Missing or failed pages are not deletions/);
+  assert.match(prompt, /guide or protocol checks[^.]*reader filtering/);
+});
+
+test('Outlook Korean copyable prompt independently requires both default exclusions and tracked removals', async () => {
+  const { outlookSyncGuide } = await load(privateMcp);
+  const prompt = outlookSyncGuide().steps.flatMap(step => step.code ?? [])
+    .find(code => code.title.includes('로컬 호스트에 요청')).text;
+  for (const sensitivity of ['private', 'confidential']) {
+    assert.match(prompt, new RegExp(`${sensitivity}[^.]*기본적으로 로컬에서 제외`));
+    assert.match(prompt, new RegExp(`${sensitivity}[^.]*이전에 가져온 회차 externalId[^.]*명시적 remove`));
+  }
+  assert.match(prompt, /민감도 필드[^.]*대체 제목[^.]*보내지/);
+  assert.match(prompt, /실패한 페이지는 완료나 누락 삭제로 처리하지/);
+  assert.match(prompt, /가이드·프로토콜 검증[^.]*리더[^.]*필터링[^.]*증명하지/);
+});
+
+test('Outlook English copied instructions retain durable exact-batch recovery', () => {
+  const prompt = outlookRunbook.match(/## Copyable host instruction\n\n```text\n([\s\S]*?)\n```/)?.[1].replace(/\s+/g, ' ');
+  assert.ok(prompt);
+  assert.match(prompt, /durably journal the full exact request[^.]*protected local storage[^.]*before sending/i);
+  assert.match(prompt, /atomically persist[^.]*receipt[^.]*revision[^.]*imported-ID ledger[^.]*before removing[^.]*pending journal/i);
+  assert.match(prompt, /crash[^.]*replay[^.]*identical[^.]*pending request/i);
+  assert.doesNotMatch(outlookRunbook, /Calendar\s+5/);
+});
+
+test('Outlook standalone prose prompt includes durable crash recovery before scheduling', async () => {
+  const { outlookSyncGuide } = await load(privateMcp);
+  const code = outlookSyncGuide().steps.flatMap(step => step.code ?? [])
+    .find(code => code.title.includes('로컬 호스트에 요청'));
+  assert.equal(code.prose, true);
+  assert.ok(code.text.split('\n\n').length >= 3);
+  assert.match(code.text, /전송 전에[^.]*전체 요청[^.]*영구 저장/);
+  assert.match(code.text, /수신 확인[^.]*revision[^.]*ID 목록[^.]*원자적으로 저장/);
+  assert.match(code.text, /중단[^.]*미확인 요청[^.]*그대로 재전송/);
+  assert.match(code.text, /보호된 로컬 저장소/);
+});
+
+test('settings Outlook anchor and copyable prerequisites survive collapsed, HTTP and config error states', async () => {
+  const library = await load(privateMcp);
+  const component = ts.transpileModule(readFileSync(new URL('../src/components/McpGuide.tsx', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+  for (const expanded of [false, true]) {
+    for (const client of ['claude', 'codex', 'kirocrew', 'quick', 'kiro-cli']) {
+      for (const transport of ['stdio', 'http']) {
+        for (const state of [{ status: 'loading' }, { status: 'error', message: '설정 실패' }, { status: 'ready', config: library.config }]) {
+          let slot = 0;
+          const initial = [expanded, client, transport, state, 0];
+          const exports = {};
+          vm.runInNewContext(component, { exports, require(name) {
+            if (name === 'react') return { ...React, useState(value) {
+              const current = slot++;
+              return [current < initial.length ? initial[current] : value, () => {}];
+            } };
+            if (name === 'react/jsx-runtime') return jsxRuntime;
+            if (name === '@/lib/mcpGuide') return library;
+            throw new Error(`Unexpected import: ${name}`);
+          } });
+          const html = renderToStaticMarkup(React.createElement(exports.McpGuide));
+          const section = html.match(/<section\b[^>]*id="outlook-sync"[\s\S]*?<\/section>/)?.[0];
+          assert.ok(section, `${expanded}/${client}/${transport}/${state.status}`);
+          assert.match(section, /\[overflow-wrap:anywhere\]/);
+          assert.equal((section.match(/flex-col sm:flex-row/g) ?? []).length, 2);
+          assert.equal((section.match(/text-slate-600 transition-colors/g) ?? []).length, 2);
+          assert.match(section, /로컬.*stdio/);
+          assert.match(section, /HTTP.*지원하지/);
+          assert.match(section, /호스트.*요청/);
+          assert.doesNotMatch(section, /disabled=""|hidden=""|display:none/);
+          const blocks = [...section.matchAll(/<pre class="([^"]+)"[^>]*><code>([\s\S]*?)<\/code><\/pre>/g)];
+          assert.equal(blocks.length, 2);
+          for (const block of blocks) assert.match(block[1], /w-full sm:w-auto/);
+          assert.match(blocks[0][1], /overflow-x-auto/);
+          assert.doesNotMatch(blocks[0][1], /whitespace-pre-wrap/);
+          assert.match(blocks[1][1], /whitespace-pre-wrap/);
+          assert.match(blocks[1][1], /break-words/);
+          assert.match(blocks[1][1], /text-base/);
+        }
+      }
+    }
   }
 });

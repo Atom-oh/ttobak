@@ -4,6 +4,87 @@ Current route/contract map, verified against `backend/cmd/api/main.go`, Go
 handlers/models/services, `backend/python/qa/handler.py`, and GatewayStack.
 This document describes repository code; it does not certify deployed behavior.
 
+## Private calendar
+
+The caller's private calendar is separate from meetings. These authenticated
+Go routes are implemented in `backend/internal/handler/calendar.go`, with
+validation/encryption in `backend/internal/service/calendar.go` and wire types
+in `backend/internal/model/calendar.go`. They use the existing CloudFront API
+and verified caller identity, never a payload `userId`. They are not delegated
+connector operations; generic and private HTTP MCP both exclude calendar tools.
+Local stdio exports exactly `ttobak_sync_calendar_events`,
+`ttobak_list_calendar_events`, and `ttobak_calendar_sync_status`.
+No endpoint fetches Outlook, schedules work, reconciles a provider or creates a
+meeting. See the [local reader runbook](runbooks/local-outlook-calendar-sync.md).
+
+| Route | Request | Success |
+|---|---|---|
+| `POST /api/calendar/sources/{sourceId}/sync` | Nonzero UUID path; JSON `batchId`, `expectedRevision`, `windowStart`, `windowEnd`, `complete`, `mutations` | `200` receipt: `batchId`, `revision`, `upserted`, `removed`, `completed` |
+| `GET /api/calendar/events` | Required `from`, `to`; optional `accountId`, `limit`, `cursor` | `{events:[...],nextCursor:string|null}` |
+| `GET /api/calendar/sources` | Optional `limit`, `cursor` | `{sources:[...],nextCursor:string|null}` |
+
+Sync JSON is limited to 64 KiB. Unknown, duplicate or incorrectly cased fields,
+null values, invalid types and unsupported query parameters are rejected.
+`batchId` is a nonzero UUID; `expectedRevision` is a nonnegative integer matching
+the source's current revision (zero for a new source). The local MCP adapter
+additionally requires safe JavaScript revisions, with input maximum
+`Number.MAX_SAFE_INTEGER - 1`. Window and event intervals use RFC3339 instants,
+have positive duration and are at most 93 elapsed days.
+
+Each batch has at most 20 distinct occurrence IDs, with only these mutations:
+
+- `{"op":"upsert","event":{...}}`: required `externalId`, `title`, `startsAt`,
+  `endsAt`, `timeZone`; optional `isAllDay`, `startDate`, `endDate`, `location`,
+  `accountId`. IDs/titles are nonblank and at most 512 UTF-8 bytes; location is
+  at most 256 and timeZone at most 128. Time zones must be IANA/UTC, not `Local`.
+  All-day events require date-only start and exclusive end matching local
+  midnight instants; timed events omit those dates. The encoded event payload
+  must fit 4096 bytes. Account IDs match `[A-Za-z0-9_-]{1,128}` and require current
+  caller access. Body, attendees, provider credentials and arbitrary metadata
+  are not accepted.
+- `{"op":"remove","externalId":"..."}`: explicit removal of that source's
+  occurrence. The same ID/text bounds apply. No absence-based deletion occurs,
+  including for empty `mutations` with `complete:true`.
+
+Source/event identity is stable across reschedules. The transaction changes
+events/time indexes, source revision and receipt together. Identical normalized
+batches replay their receipt within its seven-day horizon; a changed payload or
+stale source revision returns `409 CONFLICT`. Receipt counts are accepted
+mutation counts. On ambiguous delivery retry the identical request, not a new
+batch. On a definitive 409 refetch source status and reconcile before new work;
+never blindly rebase old mutations. Provider checkpoint ownership is local.
+
+Event responses contain `eventId`, `sourceId`, `provider:"outlook"`, `title`,
+`startsAt`, `endsAt`, `timeZone`, `isAllDay`, and optional date/location/account
+fields; they omit `externalId`. Instants are normalized to UTC. Event reads use
+overlap with the half-open requested window and default/cap at 50 rows.
+Source reads default/cap at 20 (query limits 1–50 are accepted, capped to 20).
+Sources contain `sourceId`, `provider`, `revision`, `lastAttemptAt`, and optional
+`lastCompletedAt`, `lastCompletedRevision`, `completedWindowStart`,
+`completedWindowEnd`. A partial accepted batch advances revision while preserving
+the last completion. A missing completion revision is unknown; a lower one
+means partial progress even if timestamps match. Completion is the caller's
+report, not verified provider freshness or evidence of a successful local poll.
+
+Follow actual opaque `nextCursor` values, including empty pages, with unchanged
+query scope/limit until null. Cursors cap at 4096 bytes; responses cap at
+14,000 encoded bytes and use `Cache-Control: private, no-store`. The MCP adapter
+also caps original calendar HTTP bytes at 14,000 and its serialized tool result
+at 32,000, returning errors rather than truncating receipts or continuations.
+An Account association classifies private data; it grants no sharing. Personal
+reads omit a revoked association; an inaccessible Account-filtered read is denied.
+
+Errors use `{error:{code,message}}`: `400 BAD_REQUEST` for invalid input/cursor,
+`401 UNAUTHORIZED` for missing authentication, `403 FORBIDDEN` for denied access,
+`404 NOT_FOUND` for missing resources, `409 CONFLICT` for revision/batch conflict,
+`413 BAD_REQUEST` for oversized sync bodies, and `503 INTERNAL_ERROR` when
+calendar encryption is unavailable. Other failures use `500 INTERNAL_ERROR`.
+Sensitive event payloads use context-bound encryption; event retention is
+scheduled at 90 days after event end and receipts at seven days. TTL is
+asynchronous, not a deletion SLA. No source-delete endpoint is implemented.
+Repository code and synthetic fixtures do not certify deployed/provider
+acceptance or persisted stdio → Go → DynamoDB integration acceptance.
+
 ## Transport and authentication
 
 Use the CloudFront application domain with `/api`. The Go entry point is Lambda,

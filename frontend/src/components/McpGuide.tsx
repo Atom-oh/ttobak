@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import {
-  MCP_CLIENTS, loadMcpGuideConfig, mcpClientGuide,
+  MCP_CLIENTS, loadMcpGuideConfig, mcpClientGuide, outlookSyncGuide,
   type GuideCode, type McpClient, type McpGuideConfig, type McpTransport,
 } from '@/lib/mcpGuide';
 
@@ -26,7 +26,7 @@ function CopyButton({ text, label, disabled = false }: { text: string; label: st
     <div className="flex shrink-0 flex-col items-end gap-1">
       <button type="button" onClick={copy} disabled={disabled}
         aria-label={`${label} 복사`} title={disabled ? '연결 설정을 확인한 뒤 복사할 수 있습니다' : `${label} 복사`}
-        className="rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-35 dark:text-text-muted dark:hover:bg-white/5 dark:hover:text-primary">
+        className="rounded-md p-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-35 dark:text-text-muted dark:hover:bg-white/5 dark:hover:text-primary">
         <span aria-hidden="true" className="material-symbols-outlined text-base">{current === 'copied' ? 'check' : 'content_copy'}</span>
       </button>
       <span role="status" className="max-w-32 text-right text-xs text-slate-500 dark:text-text-muted">
@@ -40,9 +40,9 @@ function CodeBlock({ code, configured, httpConfigured }: { code: GuideCode; conf
   const disabled = Boolean((code.needsConfig && !configured) || (code.needsHttp && !httpConfigured));
   return (
     <div className="min-w-0 space-y-1.5">
-      <p className="text-xs font-medium text-slate-500 dark:text-text-muted">{code.title}</p>
-      <div className="flex min-w-0 items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-white/10 dark:bg-surface-lowest">
-        <pre className="min-w-0 flex-1 overflow-x-auto py-1 font-mono text-xs leading-relaxed text-slate-700 dark:text-text-secondary"><code>{code.text}</code></pre>
+      <p className="text-sm font-medium text-slate-500 dark:text-text-muted">{code.title}</p>
+      <div className="flex min-w-0 flex-col sm:flex-row items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-white/10 dark:bg-surface-lowest">
+        <pre className={`min-w-0 w-full sm:w-auto flex-1 py-1 leading-relaxed text-slate-700 dark:text-text-secondary ${code.prose ? 'whitespace-pre-wrap break-words font-sans text-base' : 'overflow-x-auto font-mono text-xs'}`}><code>{code.text}</code></pre>
         <CopyButton text={code.text} label={code.title} disabled={disabled} />
       </div>
     </div>
@@ -61,6 +61,7 @@ export function McpGuide() {
   const selected = MCP_CLIENTS.find(candidate => candidate.id === client)!;
   const config = load.status === 'ready' ? load.config : null;
   const guide = mcpClientGuide(client, transport, config);
+  const outlook = outlookSyncGuide();
 
   useEffect(() => {
     if (!expanded) return;
@@ -196,6 +197,23 @@ export function McpGuide() {
           </div>}
         </div>
       )}
+      <section id="outlook-sync" aria-labelledby={`${id}-outlook-title`} className="mt-6 min-w-0 [overflow-wrap:anywhere] scroll-mt-24 space-y-4 border-t border-slate-200 pt-5 dark:border-white/10">
+        <h4 id={`${id}-outlook-title`} className="text-base font-semibold text-slate-900 dark:text-text-main">Outlook 일정 동기화 · 로컬 stdio</h4>
+        <p className="text-base leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.introduction}</p>
+        <ol className="min-w-0 space-y-5">
+          {outlook.steps.map((step, index) => (
+            <li key={step.title} className="flex min-w-0 items-start gap-3">
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">{index + 1}</span>
+              <div className="min-w-0 flex-1 space-y-2.5">
+                <h5 className="text-base font-semibold text-slate-900 dark:text-text-main">{step.title}</h5>
+                <p className="text-base leading-relaxed text-slate-600 dark:text-text-secondary">{step.description}</p>
+                {step.code?.map(code => <CodeBlock key={code.title} code={code} configured={false} httpConfigured={false} />)}
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="rounded-lg bg-primary/5 px-3 py-2.5 text-base leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.note}</p>
+      </section>
     </div>
   );
 }
