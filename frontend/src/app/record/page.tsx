@@ -1395,7 +1395,7 @@ function RecordPageInner() {
               {nativeInput && (
                 <span className="block text-xs opacity-80">
                   마이크: {nativeInput.name}
-                  {nativeInput.reason === 'meeting' && nativeInput.app ? ` (${nativeInput.app}와 같은 마이크)` : ''}
+                  {nativeInput.reason === 'meeting' && nativeInput.app ? ` (${nativeInput.app}에서 쓰는 마이크)` : ''}
                 </span>
               )}
               {nativeMicMuted && (
