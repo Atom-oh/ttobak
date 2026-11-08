@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi } from '@/lib/api';
@@ -104,6 +104,8 @@ function AccountsContent() {
       }
     }
   }, [user?.userId, membershipRevision]);
+  const currentFetchAccounts = useRef(fetchAccounts);
+  useLayoutEffect(() => { currentFetchAccounts.current = fetchAccounts; }, [fetchAccounts]);
 
   useEffect(() => {
     if (isAuthenticated) void fetchAccounts();
@@ -176,7 +178,7 @@ function AccountsContent() {
         // owner can open it and retry adding any failed members from its detail page.
         // fetchAccounts() must run BEFORE setError(): it calls setError(null) on entry,
         // which would otherwise wipe this message in the same tick it was set.
-        await fetchAccounts();
+        await currentFetchAccounts.current();
         if (!isCurrent()) return;
         setNotice(`${request.ownerEmail ? accountCreationNotice(created, request.ownerEmail, user.userId) : '계정을 만들었습니다.'}${summary.notice ? ` ${summary.notice}` : ''}`);
         if (summary.error) setError(`계정은 만들었지만 일부 멤버를 추가하지 못했습니다. ${summary.error}`);
@@ -374,7 +376,9 @@ function AccountsContent() {
                 setAccounts(previous => previous.map(account => account.accountId === accountId
                   ? { ...account, parentAccountId: parentAccountId || undefined } : account));
               }} />
-          ) : <p role="alert" className="text-sm text-text-secondary">이 어카운트에 접근할 수 없습니다. 다른 고객을 선택하세요.</p>}
+          ) : selectedId
+            ? <p role="alert" className="text-sm text-text-secondary">이 어카운트에 접근할 수 없습니다. 다른 고객을 선택하세요.</p>
+            : <p className="text-sm text-text-secondary">고객을 선택하거나 새 어카운트를 만드세요.</p>}
         </div>
       </div>
       {!loading && accounts.length > 0 && (

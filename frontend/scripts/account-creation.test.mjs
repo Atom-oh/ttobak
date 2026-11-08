@@ -134,6 +134,20 @@ test('membership refresh retains the acknowledged Owner invitation receipt', asy
   assert.deepEqual(page.calls.resends, ['account']);
 });
 
+test('invite-only creation finishing after membership refresh cannot restore an obsolete list revision', async () => {
+  let finish;
+  const page = fixture({ create: () => new Promise(resolve => { finish = resolve; }) });
+  await page.start();
+  page.otherOwner();
+  const pending = page.submit();
+  await page.refreshMembership();
+  finish({ accountId: 'account', creatorMember: false, ownerInvitationPending: true, ownerInvitationRequested: true });
+  await pending;
+  assert.ok(page.button('Owner 초대 메일 다시 보내기'));
+  assert.equal(page.find(node => node.props?.className?.includes('animate-spin')), undefined);
+  assert.equal(page.find(node => node.props?.role === 'alert' && JSON.stringify(node.props.children).includes('접근할 수 없습니다')), undefined);
+});
+
 test('another Owner defaults to invite only and stays on creation receipt', async () => {
   const page = fixture(); await page.start(); page.otherOwner();
   assert.equal(page.checkbox().props.checked, false);

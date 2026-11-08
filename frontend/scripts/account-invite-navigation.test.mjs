@@ -18,6 +18,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   let pathname = '/accounts/A';
   let membershipRevision = 0;
   let userId = options.userId || 'member';
+  const navigation = [];
   const react = harness.react;
   const helper = {};
   vm.runInNewContext(transpile(readFileSync(
@@ -35,8 +36,8 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
     'next/navigation': {
-      usePathname: () => pathname, useRouter: () => ({ push() {}, replace() {} }),
-      useSearchParams: () => new URLSearchParams(),
+      usePathname: () => pathname, useRouter: () => ({ push: href => navigation.push(href), replace() {} }),
+      useSearchParams: () => new URLSearchParams(options.tab ? `tab=${options.tab}` : ''),
     },
     '@/components/auth/AuthProvider': {
       useAuth: () => ({ user: { userId }, isLoading: false, isAuthenticated: true, membershipRevision }),
@@ -56,10 +57,11 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
         addMember,
         resendOwnerInvitation,
         removeMember: options.removeMember || emptyResult,
+        putDocument: options.putDocument || emptyResult,
       },
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
-    '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/upload': { uploadDocFile() {} },
+    '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/upload': { uploadDocFile: options.uploadDocFile || emptyResult },
     '@/lib/accountAccess': accountAccess,
     '@/components/MemberPicker': { MemberPicker },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
@@ -88,7 +90,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   };
   const find = predicate => nodes(render()).find(predicate);
   return {
-    find,
+    find, navigation,
     async start() { render(); await tick(); render(); },
     async navigate(accountId) { pathname = `/accounts/${accountId}`; render(); await tick(); render(); },
     async refreshMembership() { membershipRevision++; render(); await tick(); render(); },
@@ -100,6 +102,76 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
     get text() { return JSON.stringify(render()); },
   };
 }
+
+for (const kind of ['slide', 'note']) {
+  test(`${kind} completion survives a pending same-account metadata refresh`, async () => {
+    let finish, refresh;
+    let reads = 0, writes = 0;
+    const metadata = { accountId: 'A', ownerUserId: 'owner', members: [{ userId: 'member', role: 'SSA' }] };
+    const page = fixture(async () => ({}), undefined, false, {
+      tab: 'docs',
+      get: () => ++reads === 1 ? Promise.resolve(metadata) : new Promise(resolve => { refresh = resolve; }),
+      uploadDocFile: () => new Promise(resolve => { finish = () => resolve({ key: 'docs/synthetic' }); }),
+      putDocument: async () => {
+        writes++;
+        return kind === 'note' ? new Promise(resolve => { finish = () => resolve({ docId: 'created' }); }) : { docId: 'created' };
+      },
+    });
+    await page.start();
+    const operation = kind === 'slide'
+      ? page.find(node => node.type === 'input' && node.props.type === 'file').props.onChange({ target: { files: [{ name: 'synthetic.pdf', type: 'application/pdf', size: 1 }], value: '' } })
+      : page.find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('Note')).props.onClick();
+    await page.refreshMembership();
+    finish();
+    await operation;
+    refresh(metadata);
+    await tick();
+    assert.equal(writes, 1);
+    assert.deepEqual(page.navigation, ['/accounts/A/docs/created']);
+    assert.equal(page.find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('Slide'))?.props.disabled, false);
+  });
+}
+
+test('an upload denied during refresh cannot revive after access recovery or leave the control stuck', async () => {
+  let finish, deny = false, writes = 0;
+  const page = fixture(async () => ({}), undefined, false, {
+    tab: 'docs',
+    get: async () => {
+      if (deny) throw Object.assign(new Error('Denied'), { status: 403 });
+      return { accountId: 'A', ownerUserId: 'owner', members: [{ userId: 'member', role: 'SSA' }] };
+    },
+    uploadDocFile: () => new Promise(resolve => { finish = () => resolve({ key: 'docs/synthetic' }); }),
+    putDocument: async () => { writes++; return { docId: 'created' }; },
+  });
+  await page.start();
+  const pending = page.find(node => node.type === 'input' && node.props.type === 'file').props.onChange({ target: { files: [{ name: 'synthetic.pdf', type: 'application/pdf', size: 1 }], value: '' } });
+  deny = true;
+  await page.refreshMembership();
+  deny = false;
+  await page.refreshMembership();
+  finish();
+  await pending;
+  assert.equal(writes, 0);
+  assert.deepEqual(page.navigation, []);
+  assert.equal(page.find(node => node.type === 'button' && JSON.stringify(node.props.children).includes('Slide'))?.props.disabled, false);
+});
+
+test('an invitation finishing after membership refresh reloads the current account scope', async () => {
+  let finish, reads = 0;
+  const page = fixture(() => new Promise(resolve => { finish = resolve; }), undefined, false, {
+    get: async () => {
+      reads++;
+      return { accountId: 'A', ownerUserId: 'owner', members: [{ userId: 'member', role: 'SSA' }] };
+    },
+  });
+  await page.start();
+  const pending = page.pick('recipient@example.invalid');
+  await page.refreshMembership();
+  assert.equal(reads, 2);
+  finish({});
+  await pending;
+  assert.equal(reads, 3);
+});
 
 test('membership refresh preserves a completed invitation but rejects captured old controls', async () => {
   let calls = 0;

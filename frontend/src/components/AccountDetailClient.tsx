@@ -190,10 +190,15 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const inviteGeneration = useRef(0);
   const accessLossGeneration = useRef(0);
   const canAct = () => readScopeRef.current === readScope && activeAccountIdRef.current === accountId;
+  const currentOperation = () => {
+    const generation = accessLossGeneration.current;
+    return () => mounted.current && accessLossGeneration.current === generation;
+  };
   const invalidateInvitations = useCallback(() => {
     inviteGeneration.current++;
     accessLossGeneration.current++;
     setInviting(false);
+    setUploadingSlide(false);
     setPendingNotice(null);
     setPendingNoticeEmail(null);
     setPendingNoticeRole(null);
@@ -241,6 +246,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       if (!controller.signal.aborted && generation === fetchGeneration.current) setLoading(false);
     }
   }, [accountId, user?.userId, invalidateInvitations, readScope]);
+  const currentFetchAll = useRef(fetchAll);
+  useLayoutEffect(() => { currentFetchAll.current = fetchAll; }, [fetchAll]);
 
   useEffect(() => {
     if (isAuthenticated) void fetchAll();
@@ -300,7 +307,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       // the outcome afterwards -- even if the refresh itself fails, the
       // invite/add result is the more important message.
       try {
-        if (plan.refresh) await fetchAll();
+        if (plan.refresh) await currentFetchAll.current();
       } finally {
         if (isCurrent() && plan.notice) {
           setPendingNotice(plan.notice);
@@ -348,13 +355,13 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     const generation = inviteGeneration.current;
     try {
       await accountApi.revokePendingMember(myAccountId, pendingNoticeEmail);
-      if (activeAccountIdRef.current !== myAccountId || inviteGeneration.current !== generation) return;
+      if (!mounted.current || inviteGeneration.current !== generation) return;
       setPendingNotice(null);
       setPendingNoticeEmail(null);
       setPendingNoticeRole(null);
       setPendingNoticeAccountId(null);
     } catch (err) {
-      if (activeAccountIdRef.current === myAccountId && inviteGeneration.current === generation) {
+      if (mounted.current && inviteGeneration.current === generation) {
         setError(err instanceof Error ? err.message : 'Failed to revoke pending invite');
       }
     }
@@ -362,13 +369,14 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
 
   const handleRoleChange = async (userId: string, role: string) => {
     if (!canEdit || !canAct()) return;
+    const isCurrent = currentOperation();
     setError(null);
     try {
       await accountApi.updateMember(accountId, userId, { role });
-      if (activeAccountIdRef.current !== accountId) return;
-      await fetchAll();
+      if (!isCurrent()) return;
+      await currentFetchAll.current();
     } catch (err) {
-      if (activeAccountIdRef.current === accountId) setError(err instanceof Error ? err.message : 'Failed to update role');
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to update role');
     }
   };
 
@@ -390,7 +398,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     try {
       const result = await accountApi.removeMember(accountId, userId);
       if (!isCurrent()) return;
-      await fetchAll();
+      await currentFetchAll.current();
       showWarnings(result);
     } catch (err) {
       if (!isCurrent()) return;
@@ -405,7 +413,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
           try {
             const result = await accountApi.removeMember(accountId, userId, true);
             if (!isCurrent()) return;
-            await fetchAll();
+            await currentFetchAll.current();
             showWarnings(result, true);
           } catch (retryErr) {
             if (isCurrent()) setError(retryErr instanceof Error ? retryErr.message : 'Failed to remove member');
@@ -419,13 +427,14 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
 
   const handleCreateNote = async () => {
     if (!canEdit || !canAct()) return;
+    const isCurrent = currentOperation();
     try {
       const created = await accountApi.putDocument(accountId, {
         title: '새 노트', docType: 'note', markdown: '# 새 노트\n\n',
       });
-      if (activeAccountIdRef.current === accountId) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
+      if (isCurrent()) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
     } catch (err) {
-      if (activeAccountIdRef.current === accountId) setError(err instanceof Error ? err.message : 'Failed to create note');
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to create note');
     }
   };
 
@@ -433,11 +442,12 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file || !canEdit || !canAct()) return;
+    const isCurrent = currentOperation();
     setUploadingSlide(true);
     setError(null);
     try {
       const { key } = await uploadDocFile(file);
-      if (activeAccountIdRef.current !== accountId) return;
+      if (!isCurrent()) return;
       const created = await accountApi.putDocument(accountId, {
         title: file.name.replace(/\.[^.]+$/, ''),
         docType: 'slide',
@@ -446,11 +456,11 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
         mimeType: file.type,
         fileSize: file.size,
       });
-      if (activeAccountIdRef.current === accountId) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
+      if (isCurrent()) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
     } catch (err) {
-      if (activeAccountIdRef.current === accountId) setError(err instanceof Error ? err.message : 'Failed to upload slide');
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to upload slide');
     } finally {
-      if (activeAccountIdRef.current === accountId) setUploadingSlide(false);
+      if (isCurrent()) setUploadingSlide(false);
     }
   };
 
