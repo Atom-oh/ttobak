@@ -424,6 +424,10 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 	// Traversal reads go through a request-scoped cache; every returned row and
 	// the cursor anchor are rechecked below against the uncached repository.
 	reads := s.discoveryReads()
+	// Priming binds the view to this caller and reads the cursor's path ends.
+	if err := primeAccountReads(ctx, reads, user, []string{c.Discovery.Root, c.Discovery.Node}, true); err != nil {
+		return nil, err
+	}
 	started := time.Now()
 	// The step and time budgets are fixed, so per-page work stays independent of
 	// total tree width while one page covers a typical account tree.
