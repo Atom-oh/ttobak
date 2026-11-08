@@ -1,0 +1,23 @@
+{
+  "fields": [
+    ["name", "이름"], ["company", "회사"], ["department", "부서"], ["title", "직함"],
+    ["email", "전자 메일 주소"], ["address", "근무지 주소 번지"], ["workPhone", "근무처 전화"],
+    ["fax", "근무처 팩스"], ["phone", "휴대폰"], ["cardRegisteredAt", "명함 등록일"],
+    ["cardBook", "명함첩 이름"], ["group", "그룹"], ["notes", "메모"]
+  ],
+  "aliases": {
+    "name": ["이름", "성명", "name", "fullname", "contactname"],
+    "company": ["회사", "회사명", "기업", "company", "organization", "organisation"],
+    "department": ["부서", "부서명", "department"],
+    "title": ["직함", "직책", "직위", "title", "jobtitle", "position"],
+    "email": ["전자메일주소", "이메일주소", "이메일", "메일", "email", "emailaddress"],
+    "address": ["근무지주소번지", "근무지주소", "주소", "address", "workaddress"],
+    "workPhone": ["근무처전화", "회사전화", "직장전화", "workphone", "businessphone", "officetel"],
+    "fax": ["근무처팩스", "팩스", "fax", "workfax"],
+    "phone": ["휴대폰", "휴대전화", "핸드폰", "전화번호", "모바일", "phone", "mobile", "mobilephone"],
+    "cardRegisteredAt": ["명함등록일", "등록일", "cardregisteredat", "registeredat"],
+    "cardBook": ["명함첩이름", "명함첩", "addressbook", "cardbook"],
+    "group": ["그룹", "group"],
+    "notes": ["메모", "비고", "note", "notes", "memo"]
+  }
+}
