@@ -27,6 +27,11 @@ import (
 var ErrProjectHasLinks = errors.New("project still has linked accounts, meetings, research, or members")
 
 // projectRepo is the narrow persistence seam used by ProjectService.
+// projectBatchReader is the consistent batched form of GetProject.
+type projectBatchReader interface {
+	BatchGetProjects(context.Context, []string) (map[string]*model.Project, error)
+}
+
 type projectRepo interface {
 	CreateProject(context.Context, *model.Project) error
 	GetProject(context.Context, string) (*model.Project, error)
@@ -283,10 +288,22 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// Each slot keeps only the summary: the full record (Description included)
 	// is dropped as soon as its candidate is verified, so retained memory stays
 	// bounded by the in-flight limit as in the sequential loop.
+	// The canonical candidate rows are read in consistent batches when the
+	// repository supports it; a nil map keeps one GetProject per candidate.
+	var canonical map[string]*model.Project
+	if batch, ok := s.repo.(projectBatchReader); ok && len(candidateOrder) != 0 {
+		canonical, err = batch.BatchGetProjects(ctx, candidateOrder)
+		if err != nil {
+			return nil, err
+		}
+		if canonical == nil {
+			return nil, ErrReadingData
+		}
+	}
 	verified := make([]*model.ProjectSummary, len(candidateOrder))
 	candidateErrs := make([]error, len(candidateOrder))
 	stop = fanout.Ordered(ctx, len(candidateOrder), listReadConcurrency, func(ctx context.Context, k int) error {
-		project, err := s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]])
+		project, err := s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]], canonical)
 		if err != nil {
 			candidateErrs[k] = err
 			return err
@@ -314,10 +331,15 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 // reverse-index candidate is still linked to one of the accounts that surfaced
 // it and the caller passes requireProjectReadAccess; nil when it must be
 // skipped; an error for any other failure.
-func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, userID, projectID string, accountIDs []string) (*model.Project, error) {
-	project, err := s.repo.GetProject(ctx, projectID)
-	if err != nil {
-		return nil, err
+// canonical, when non-nil, holds the batch-read candidate rows (absent means
+// missing); requireProjectReadAccess still performs its own current reads.
+func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, userID, projectID string, accountIDs []string, canonical map[string]*model.Project) (*model.Project, error) {
+	project := canonical[projectID]
+	if canonical == nil {
+		var err error
+		if project, err = s.repo.GetProject(ctx, projectID); err != nil {
+			return nil, err
+		}
 	}
 	if project == nil {
 		return nil, nil
