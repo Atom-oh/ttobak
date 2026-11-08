@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi } from '@/lib/api';
 import { addMemberWithInvite, summarizeMemberOutcomes, type MemberAddOutcome } from '@/lib/accountInvite';
@@ -9,6 +9,8 @@ import { accountCreationAttempt, accountCreationNotice, type CreationAttempt } f
 import { MemberPicker } from '@/components/MemberPicker';
 import { AccountHierarchyList } from '@/components/AccountHierarchyList';
 import { AccountParentSelect } from '@/components/AccountParentSelect';
+import { AccountDetailContent } from '@/components/AccountDetailClient';
+import { AccountWorkspaceSelector } from '@/components/workspace/AccountWorkspaceSelector';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
 import type { AccountCreationResponse, AccountSummary, User } from '@/types/meeting';
 
@@ -17,13 +19,38 @@ interface PendingMember extends User {
 }
 
 export default function AccountsClient() {
+  const { user, isAuthenticated } = useAuth();
+  if (!isAuthenticated || !user) return null;
+  return <AccountsContent key={user.userId} />;
+}
+
+function AccountsContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAuthenticated, membershipRevision } = useAuth();
-  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedAccounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [loadedRevision, setLoadedRevision] = useState(membershipRevision);
+  const [listLoading, setLoading] = useState(true);
+  const loading = listLoading || loadedRevision !== membershipRevision;
+  const accounts = loadedRevision === membershipRevision ? loadedAccounts : [];
   const requestGeneration = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const queryAccountId = searchParams.get('account') || '';
+  const [observedAccountId, setObservedAccountId] = useState(queryAccountId);
+  const [selectedAccountId, setSelectedAccountId] = useState(queryAccountId);
+  if (observedAccountId !== queryAccountId) {
+    setObservedAccountId(queryAccountId);
+    setSelectedAccountId(queryAccountId);
+  }
+  const selectedId = selectedAccountId || loadedAccounts[0]?.accountId || '';
+  const selectAccount = (accountId: string) => {
+    if (!accounts.some(account => account.accountId === accountId)) return;
+    setSelectedAccountId(accountId);
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('account', accountId);
+    router.replace(`/accounts?${params}`, { scroll: false });
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -55,19 +82,30 @@ export default function AccountsClient() {
     const generation = ++requestGeneration.current;
     // Paint the last loaded list at once; list() reuses it within its TTL and
     // otherwise reloads it from the server.
-    const cached = accountApi.peekList();
-    if (cached) setAccounts(cached.accounts);
-    setLoading(!cached);
     setError(null);
     try {
-      const res = await accountApi.list();
+      const cached = accountApi.peekList({ expectedUserId: user?.userId });
+      if (cached) {
+        setAccounts(cached.accounts);
+        setLoadedRevision(membershipRevision);
+      }
+      setLoading(!cached);
+      const res = await accountApi.list({ expectedUserId: user?.userId });
       if (generation === requestGeneration.current) setAccounts(res?.accounts ?? []);
     } catch (err) {
-      if (generation === requestGeneration.current) setError(err instanceof Error ? err.message : 'Failed to load accounts');
+      if (generation === requestGeneration.current) {
+        setAccounts([]);
+        setError(err instanceof Error ? err.message : 'Failed to load accounts');
+      }
     } finally {
-      if (generation === requestGeneration.current) setLoading(false);
+      if (generation === requestGeneration.current) {
+        setLoadedRevision(membershipRevision);
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [user?.userId, membershipRevision]);
+  const currentFetchAccounts = useRef(fetchAccounts);
+  useLayoutEffect(() => { currentFetchAccounts.current = fetchAccounts; }, [fetchAccounts]);
 
   useEffect(() => {
     if (isAuthenticated) void fetchAccounts();
@@ -140,7 +178,7 @@ export default function AccountsClient() {
         // owner can open it and retry adding any failed members from its detail page.
         // fetchAccounts() must run BEFORE setError(): it calls setError(null) on entry,
         // which would otherwise wipe this message in the same tick it was set.
-        await fetchAccounts();
+        await currentFetchAccounts.current();
         if (!isCurrent()) return;
         setNotice(`${request.ownerEmail ? accountCreationNotice(created, request.ownerEmail, user.userId) : '계정을 만들었습니다.'}${summary.notice ? ` ${summary.notice}` : ''}`);
         if (summary.error) setError(`계정은 만들었지만 일부 멤버를 추가하지 못했습니다. ${summary.error}`);
@@ -171,9 +209,12 @@ export default function AccountsClient() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="mx-auto w-full max-w-7xl min-w-0">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">Accounts</h2>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-text-main">고객 Accounts</h1>
+          <p className="mt-2 text-sm text-text-secondary">고객의 공유 미팅과 인사이트를 한곳에서 확인하세요.</p>
+        </div>
         <button
           disabled={creating || resendingOwner}
           onClick={() => setShowForm((v) => !v)}
@@ -186,6 +227,7 @@ export default function AccountsClient() {
       {error && (
         <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
           {error}
+          <button type="button" onClick={() => void fetchAccounts()} className="ml-3 underline">다시 시도</button>
         </div>
       )}
       {notice && (
@@ -315,17 +357,35 @@ export default function AccountsClient() {
         </form>
       )}
 
-      {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+      <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+          </div>
+        ) : accounts.length === 0 ? (
+          <div className="text-center py-16 text-slate-400 dark:text-text-muted">
+            <span className="material-symbols-outlined text-4xl mb-2 block">corporate_fare</span>
+            No accounts yet. Create one to start organizing customers.
+          </div>
+        ) : <AccountWorkspaceSelector accounts={accounts} selectedId={selectedId} onSelect={selectAccount} />}
+        <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
+          {selectedId && (loading || accounts.some(account => account.accountId === selectedId)) ? (
+            <AccountDetailContent key={`${user?.userId}:${selectedId}`} accountId={selectedId}
+              onParentUpdated={(accountId, parentAccountId) => {
+                if (accountId !== selectedId) return;
+                setAccounts(previous => previous.map(account => account.accountId === accountId
+                  ? { ...account, parentAccountId: parentAccountId || undefined } : account));
+              }} />
+          ) : selectedId
+            ? <p role="alert" className="text-sm text-text-secondary">이 어카운트에 접근할 수 없습니다. 다른 고객을 선택하세요.</p>
+            : <p className="text-sm text-text-secondary">고객을 선택하거나 새 어카운트를 만드세요.</p>}
         </div>
-      ) : accounts.length === 0 ? (
-        <div className="text-center py-16 text-slate-400 dark:text-text-muted">
-          <span className="material-symbols-outlined text-4xl mb-2 block">corporate_fare</span>
-          No accounts yet. Create one to start organizing customers.
-        </div>
-      ) : (
-        <AccountHierarchyList accounts={accounts} />
+      </div>
+      {!loading && accounts.length > 0 && (
+        <details className="mt-6 rounded-xl border border-border-subtle p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-text-main">어카운트 계층 보기</summary>
+          <div className="mt-4"><AccountHierarchyList accounts={accounts} /></div>
+        </details>
       )}
     </div>
   );
