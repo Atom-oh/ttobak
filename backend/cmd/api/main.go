@@ -530,6 +530,8 @@ func init() {
 				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
 			ContactMutate: handler.NewConnectorContactHandler(service.NewConnectorContactService(repo,
 				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
+			EventMutate: handler.NewConnectorEventHandler(service.NewConnectorEventService(repo,
+				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
 		}
 	}
 }

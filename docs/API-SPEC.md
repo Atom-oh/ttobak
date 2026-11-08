@@ -689,6 +689,12 @@ order and resolved range. Without `from`, ascending lists start now (upcoming)
 and descending lists cover all past times. Responses are `{events,
 nextCursor}` and are not cached. Event fields except `startAt` are sealed like
 contacts (ADR-063); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
+Delegated MCP clients create events through the private bridge like contacts:
+`{event, idempotencyKey}` with strict decoding (no unknown, server-owned or
+null fields), direct membership and current read+write approval pinned in the
+same transaction as the event, its reference row and an arguments-bound receipt.
+`?replay=1` only replays an existing receipt. Event list and get are available
+bridge reads.
 Events have no TTL and remain until a direct member deletes them.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
