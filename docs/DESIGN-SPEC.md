@@ -283,7 +283,7 @@ Concurrent callers share one load, and the Account list paints the last loaded
 list before an expired entry reloads. Account mutations, session grant bootstrap, sign-out and session
 expiry drop it. It is never persisted and does not authorize reads.
 
-Direct members also get an Account **일정** (events) tab: upcoming events by
+Direct members also get an Account **Events** tab (labelled in Korean in the UI): upcoming events by
 default and past events (descending, bounded at the time the list opened so its
 cursor stays valid), with create, edit and delete. Attendees come from the
 account's contacts or free text; times are entered in the viewer's zone and sent
