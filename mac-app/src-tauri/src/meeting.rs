@@ -151,6 +151,18 @@ fn matches_id(bundle_id: &str, id: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('.'))
 }
 
+/// Whether `path` is an application's main executable
+/// (`<App>/Contents/MacOS/<exe>`), not a helper nested in its frameworks.
+/// A browser's audio runs in a helper; walking parent processes to the first
+/// main executable finds the browser instance that owns that audio.
+pub fn is_app_main_executable(path: &str) -> bool {
+    // Chrome may run from a code-sign clone (`…/Google Chrome.app.bundle/…`),
+    // so the bundle directory's extension is not checked.
+    path.contains("/Contents/MacOS/")
+        && !path.contains("/Contents/Frameworks/")
+        && !path.contains("/Contents/Helpers/")
+}
+
 /// Classifies a Core Audio process bundle ID; `None` is not a meeting app.
 pub fn classify_bundle(bundle_id: &str) -> Option<MicUser> {
     if bundle_id == WEBKIT_GPU {
@@ -404,6 +416,33 @@ impl Detector {
             counter: self.counter,
             ..Detector::default()
         };
+    }
+}
+
+#[cfg(test)]
+mod main_executable_tests {
+    use super::is_app_main_executable;
+
+    #[test]
+    fn only_an_app_main_executable_counts() {
+        assert!(is_app_main_executable(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        ));
+        assert!(is_app_main_executable(
+            "/Applications/Arc.app/Contents/MacOS/Arc"
+        ));
+        assert!(is_app_main_executable(
+            "/private/var/folders/x/X/com.google.Chrome.code_sign_clone/code_sign_clone.a/\
+             Google Chrome.app.bundle/Contents/MacOS/Google Chrome"
+        ));
+        assert!(!is_app_main_executable(
+            "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/\
+             Versions/1/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"
+        ));
+        assert!(!is_app_main_executable(
+            "/Applications/Microsoft Edge.app/Contents/Helpers/x.app/Contents/MacOS/x"
+        ));
+        assert!(!is_app_main_executable("/opt/homebrew/bin/node"));
     }
 }
 

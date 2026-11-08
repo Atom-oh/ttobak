@@ -36,9 +36,15 @@ without a user confirmation.
   FaceTime, Amazon Chime, Discord) are matched by bundle ID or helper ID.
 - A browser using the microphone counts only when one of its tabs is a meeting
   URL (`meet.google.com/<code>`, Teams web, Zoom web client). A fixed
-  AppleScript run through `osascript` receives the browser's tab URLs, discards
+  script run through `osascript` receives the browser's tab URLs, discards
   non-meeting ones inside that child process, and returns only meeting URLs to
-  the app, which classifies and never logs them. This needs the macOS
+  the app, which classifies and never logs them. The script addresses the
+  browser instance whose helper runs the audio: the app walks parent
+  processes to the nearest app main executable and reads that PID's tabs
+  through Scripting Bridge (PID passed as an argument). `tell application id`
+  reaches only one instance, and an automation-launched Chrome beside the
+  user's hid the Meet tab. If the instance cannot be addressed, or for Safari's
+  shared WebKit process, the bundle-ID AppleScript is used. This needs the macOS
   Automation permission per browser; a denial backs off for five minutes, and
   the script may wait up to 30 s for the first consent dialog. Safari's shared
   `com.apple.WebKit.GPU` process counts only with a Safari meeting tab, because

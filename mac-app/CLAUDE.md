@@ -101,8 +101,10 @@ ACL for every command called from the remote SPA: each command must be listed in
 - Meeting detection (`meeting.rs` rules, `meeting_detect.rs` probe) only offers a
   recording; confirmed starts use the control dispatch path, never
   `start_recording` directly. Core Audio polls run without recorder locks. The
-  browser AppleScript is a fixed string returning only meeting-URL prefixes; never
-  log tab URLs or widen the prefix list without updating `classify_meeting_url`.
+  browser tab scripts (per-PID Scripting Bridge, bundle-ID AppleScript fallback)
+  are fixed strings returning only meeting-URL prefixes, with the PID passed as an
+  argument; never log tab URLs or widen the prefix list without updating
+  `classify_meeting_url`.
 - The Zoom mute gate (`zoom_mute.rs`) reads Zoom through Accessibility off the
   IOProc thread and only flips an atomic the IOProc reads; never call AX or
   log from the IOProc. A microphone switch holds the backend's resource lock
