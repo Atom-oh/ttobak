@@ -1,9 +1,9 @@
 'use client';
 
-import { dismissDialogs } from '@/lib/dialog';
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { dismissDialogs, isDialogOpen } from '@/lib/dialog';
 import { clearQueuedNativeControl, dispatchNativeControl } from '@/lib/nativeControl';
 import { isTauri, markNativeControlReady, onNativeControlRequest, replyNativeControl } from '@/lib/tauri';
 
@@ -13,6 +13,9 @@ import { isTauri, markNativeControlReady, onNativeControlRequest, replyNativeCon
 export function NativeControlBridge() {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+  // In-app dialogs belong to the page that opened them (see lib/dialog).
+  useEffect(() => { dismissDialogs(); }, [pathname]);
   const authenticatedRef = useRef(isAuthenticated);
   // Readiness is published only after the request listener is registered,
   // so the app never emits a request nobody hears.
@@ -45,6 +48,15 @@ export function NativeControlBridge() {
         void replyNativeControl(request.requestId, {
           ok: false,
           error: { code: 'login_required', message: 'Sign in to TTOBAK in the Mac app first.' },
+        });
+        return;
+      }
+      // A start would navigate or act under a confirmation the user has not
+      // answered; refuse it instead of running a stale continuation later.
+      if (request.action === 'start' && isDialogOpen()) {
+        void replyNativeControl(request.requestId, {
+          ok: false,
+          error: { code: 'busy', message: 'A confirmation dialog is open in the TTOBAK app; answer it and retry.' },
         });
         return;
       }

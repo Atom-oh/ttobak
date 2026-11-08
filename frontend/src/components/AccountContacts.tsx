@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { accountApi } from '@/lib/api';
+import { confirmDialog } from '@/lib/dialog';
 import { CONTACT_FIELDS, isContactAccessDenied } from '@/lib/contactImport';
 import type { AccountContact, ContactInput } from '@/types/meeting';
 import { ContactImport } from '@/components/ContactImport';
@@ -17,6 +18,7 @@ export function AccountContacts({ accountId, userId }: { accountId: string; user
   const [accessDenied, setAccessDenied] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const generation = useRef(0);
+  const removing = useRef(false);
 
   const denyAccess = useCallback(() => {
     controller.current?.abort();
@@ -66,13 +68,15 @@ export function AccountContacts({ accountId, userId }: { accountId: string; user
 
   const remove = async (contact: AccountContact) => {
     const active = controller.current;
-    if (!active || saving || !window.confirm(`${contact.name} 연락처를 삭제할까요?`)) return;
+    if (!active || active.signal.aborted || saving || removing.current) return;
+    removing.current = true;
     setSaving(true); setError('');
     try {
+      if (!await confirmDialog(`${contact.name} 연락처를 삭제할까요?`) || active.signal.aborted) return;
       await accountApi.deleteContact(accountId, contact.contactId, contact.revision, userId, active.signal);
       if (!active.signal.aborted) await load();
     } catch (err) { if (!active.signal.aborted) { if (isContactAccessDenied(err)) denyAccess(); else setError('연락처를 삭제하지 못했습니다.'); } }
-    finally { if (!active.signal.aborted) setSaving(false); }
+    finally { removing.current = false; if (!active.signal.aborted) setSaving(false); }
   };
 
   if (accessDenied) return <section className="mb-8"><p role="alert" className="text-sm text-red-600">고객 연락처에 대한 접근 권한이 없습니다.</p></section>;

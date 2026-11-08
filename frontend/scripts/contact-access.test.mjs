@@ -6,7 +6,7 @@ import ts from 'typescript';
 
 const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve)); };
 const jsx = (type, props) => ({ type, props });
-function fixture() {
+function fixture(confirmDialog = async () => true) {
   const slots = []; let cursor = 0; let effects = [];
   const same = (a, b) => a?.length === b?.length && a.every((x, i) => Object.is(x, b[i]));
   const react = {
@@ -18,13 +18,14 @@ function fixture() {
   const source = readFileSync(new URL('../src/components/AccountContacts.tsx', import.meta.url), 'utf8');
   const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const denied = { status: 403 };
-  const api = { contacts: async () => ({ contacts: [{ contactId: 'id', revision: 'rev', name: 'Private Name', notes: 'Private Note' }] }), updateContact: async () => { throw denied; }, deleteContact: async () => { throw denied; } };
+  const deletions = [];
+  const api = { contacts: async () => ({ contacts: [{ contactId: 'id', revision: 'rev', name: 'Private Name', notes: 'Private Note' }] }), updateContact: async () => { throw denied; }, deleteContact: async (...args) => { deletions.push(args); throw denied; } };
   const ContactImport = () => null;
-  const modules = { react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '@/lib/api': { accountApi: api }, '@/lib/contactImport': { CONTACT_FIELDS: [['name', '이름']], isContactAccessDenied: (e) => e?.status === 403 || e?.status === 401 }, '@/components/ContactImport': { ContactImport } };
+  const modules = { react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '@/lib/api': { accountApi: api }, '@/lib/dialog': { confirmDialog }, '@/lib/contactImport': { CONTACT_FIELDS: [['name', '이름']], isContactAccessDenied: (e) => e?.status === 403 || e?.status === 401 }, '@/components/ContactImport': { ContactImport } };
   const exports = {};
   vm.runInNewContext(output, { exports, require: (name) => modules[name], AbortController, window: { confirm: () => true } });
   const draw = () => { cursor = 0; effects = []; const result = exports.AccountContacts({ accountId: 'a', userId: 'u' }); effects.forEach((fn) => fn()); return result; };
-  return { draw, ContactImport };
+  return { draw, ContactImport, deletions, unmount: () => slots.forEach((slot) => slot?.cleanup?.()) };
 }
 function nodes(value) {
   if (!value || typeof value !== 'object') return [];
@@ -46,4 +47,30 @@ test('a revoked member loses the visible list, edit form and import controls aft
   assert.match(text(tree), /접근 권한이 없습니다/);
   assert.doesNotMatch(text(tree), /Private Name|Private Note/);
   assert.equal(nodes(tree).some((n) => n.type === f.ContactImport || n.type === 'input'), false);
+});
+
+test('contact deletion waits for confirmation and cancellation preserves the contact', async () => {
+  let finish;
+  let confirmations = 0;
+  const screen = fixture(() => { confirmations++; return new Promise((resolve) => { finish = resolve; }); });
+  screen.draw(); await tick();
+  const remove = nodes(screen.draw()).find((node) => node.type === 'button' && text(node) === '삭제').props.onClick;
+  remove(); remove();
+  await tick();
+  assert.equal(screen.deletions.length, 0);
+  assert.equal(confirmations, 1);
+  finish(false); await tick();
+  assert.equal(screen.deletions.length, 0);
+  assert.match(text(screen.draw()), /Private Name/);
+});
+
+test('a late contact confirmation cannot delete after the component unmounts', async () => {
+  let finish;
+  const screen = fixture(() => new Promise((resolve) => { finish = resolve; }));
+  screen.draw(); await tick();
+  nodes(screen.draw()).find((node) => node.type === 'button' && text(node) === '삭제').props.onClick();
+  await tick();
+  assert.equal(screen.deletions.length, 0);
+  screen.unmount(); finish(true); await tick();
+  assert.equal(screen.deletions.length, 0);
 });
