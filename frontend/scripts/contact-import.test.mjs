@@ -122,3 +122,18 @@ test('an uncertain write prevents another row with the same identity from being 
   assert.equal(calls, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(result)), ['failed', 'duplicate']);
 });
+
+test('saxen provides the streaming Parser contract declared in src/types/saxen.d.ts', async () => {
+  const { createRequire } = await import('node:module');
+  const { Parser } = createRequire(import.meta.url)('saxen');
+  const parser = new Parser();
+  for (const method of ['on', 'write', 'end']) assert.equal(typeof parser[method], 'function', method);
+  const seen = [];
+  parser.on('openTag', (name, attributes) => seen.push(`${name}:${attributes().r || ''}`));
+  parser.on('error', (error) => { throw error; });
+  const xml = '<worksheet><sheetData><row r="1"><c r="B1"><v>1</v></c></row></sheetData></worksheet>';
+  // Tags split across chunk boundaries must still be reported whole.
+  for (let i = 0; i < xml.length; i += 7) parser.write(xml.slice(i, i + 7));
+  parser.end();
+  assert.deepEqual(seen, ['worksheet:', 'sheetData:', 'row:1', 'c:B1', 'v:']);
+});
