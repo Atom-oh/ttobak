@@ -242,6 +242,10 @@ for (const cancelledBy of ['navigation', 'principal', 'denial']) {
     });
     await page.start();
     const pending = page.remove().props.onClick();
+    // The shared confirmation dialog resolves asynchronously; wait until the
+    // removal request is actually in flight before cancelling around it.
+    for (let attempt = 0; !finish && attempt < 50; attempt++) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(typeof finish, 'function', 'removal request started');
     if (cancelledBy === 'navigation') await page.navigate('B');
     if (cancelledBy === 'principal') await page.switchUser('another');
     finish({ cleanupFailedForMeetings: ['failed'], ambiguousUntaggedMeetingIDs: ['ambiguous'] });
