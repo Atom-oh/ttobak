@@ -666,7 +666,8 @@ errors a generic 500. Responses are not cached and contact content is not logged
 
 Contact fields are KMS envelope-encrypted per row before storage and bound to
 the account and contact (ADR-063); without a configured key, contact routes
-return 503 `CONTACTS_UNAVAILABLE`. Contact rows have no TTL and remain until a
+return 503 `CONTACTS_UNAVAILABLE`; delegated connector creates seal the row the
+same way and return that 503 before any write. Contact rows have no TTL and remain until a
 direct member deletes them. Point-in-time recovery can retain deleted, still
 encrypted data within the table's recovery window.
 
