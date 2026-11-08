@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { accountComponentHarness } from './account-component-harness.mjs';
 
 const transpile = source => ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
@@ -16,35 +17,17 @@ const loadHelper = name => {
 };
 
 function fixture(overrides = {}) {
-  const slots = [];
-  let cursor = 0, effects = [], userId = 'creator', uuidCounter = 0;
+  let userId = 'creator', uuidCounter = 0;
+  let membershipRevision = 0;
+  const harness = accountComponentHarness();
   const calls = { creates: [], creationUsers: [], members: [], resends: [], resendUsers: [], navigation: [] };
-  const same = (a, b) => a?.length === b?.length && a.every((v, i) => Object.is(v, b[i]));
-  const react = {
-    useState(initial) {
-      const i = cursor++;
-      if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial;
-      return [slots[i], v => { slots[i] = typeof v === 'function' ? v(slots[i]) : v; }];
-    },
-    useRef(current) { const i = cursor++; if (!(i in slots)) slots[i] = { current }; return slots[i]; },
-    useCallback(callback, dependencies) {
-      const i = cursor++;
-      if (!same(slots[i]?.dependencies, dependencies)) slots[i] = { callback, dependencies };
-      return slots[i].callback;
-    },
-    useEffect(effect, dependencies) {
-      const i = cursor++;
-      if (!same(slots[i]?.dependencies, dependencies)) effects.push(() => {
-        slots[i]?.cleanup?.(); slots[i] = { dependencies, cleanup: effect() };
-      });
-    },
-  };
+  const react = harness.react;
   const MemberPicker = () => null, empty = () => null;
-  const jsx = (type, props) => ({ type, props });
+  const jsx = (type, props, key) => ({ type, props, key });
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
-    'next/navigation': { useRouter: () => ({ push: path => calls.navigation.push(path) }) },
-    '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId, email: `${userId}@example.com` }, isAuthenticated: true, membershipRevision: 0 }) },
+    'next/navigation': { useRouter: () => ({ push: path => calls.navigation.push(path) }), useSearchParams: () => new URLSearchParams() },
+    '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId, email: `${userId}@example.com` }, isAuthenticated: true, membershipRevision }) },
     '@/lib/api': { accountApi: {
       list: async () => ({ accounts: [] }),
       peekList: () => undefined,
@@ -71,14 +54,16 @@ function fixture(overrides = {}) {
     '@/components/MemberPicker': { MemberPicker },
     '@/components/AccountHierarchyList': { AccountHierarchyList: empty },
     '@/components/AccountParentSelect': { AccountParentSelect: empty },
+    '@/components/AccountDetailClient': { AccountDetailContent: empty },
+    '@/components/workspace/AccountWorkspaceSelector': { AccountWorkspaceSelector: empty },
     '@/types/meeting': { ASSIGNABLE_ACCOUNT_ROLES: ['AM', 'SSA'] },
   };
   const exports = {};
   vm.runInNewContext(transpile(readFileSync(new URL('../src/components/AccountsClient.tsx', import.meta.url), 'utf8')), {
-    exports, Error, console, crypto: { randomUUID: () => `683c4994-ea73-40b9-85d7-14ca659fbc${++uuidCounter + 20}` },
+    exports, Error, console, URLSearchParams, crypto: { randomUUID: () => `683c4994-ea73-40b9-85d7-14ca659fbc${++uuidCounter + 20}` },
     require: name => { assert.ok(name in modules, name); return modules[name]; },
   });
-  const render = () => { cursor = 0; effects = []; const tree = exports.default(); effects.forEach(fn => fn()); return tree; };
+  const render = () => harness.render(exports.default, new Set([MemberPicker, empty]));
   const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
   const find = predicate => nodes(render()).find(predicate);
   const button = text => find(n => n.type === 'button' && JSON.stringify(n.props.children).includes(text));
@@ -101,8 +86,67 @@ function fixture(overrides = {}) {
     },
     submit() { return find(n => n.type === 'form').props.onSubmit({ preventDefault() {} }); },
     async switchUser(id) { userId = id; render(); await tick(); render(); },
+    async refreshMembership() { membershipRevision++; render(); await tick(); render(); },
   };
 }
+
+test('membership refresh preserves a pending creation and its disabled form', async () => {
+  let finish;
+  const page = fixture({ create: () => new Promise(resolve => { finish = resolve; }) });
+  await page.start();
+  const pending = page.submit();
+  await page.refreshMembership();
+  const name = page.find(node => node.props?.placeholder?.startsWith('Account name'));
+  assert.equal(name?.props.value, 'Customer');
+  assert.equal(page.find(node => node.type === 'fieldset')?.props.disabled, true);
+  await page.submit();
+  assert.equal(page.calls.creates.length, 1);
+  finish({ accountId: 'account', creatorMember: true });
+  await pending;
+  assert.deepEqual(page.calls.navigation, ['/accounts/account']);
+});
+
+test('ambiguous creation retry retains its request ID across membership refresh', async () => {
+  let attempts = 0;
+  const page = fixture({ create: async request => {
+    if (++attempts === 1) throw new Error('response lost');
+    return { accountId: 'account', name: request.name, creatorMember: false, ownerInvitationPending: true };
+  } });
+  await page.start();
+  page.otherOwner();
+  await page.submit();
+  await page.refreshMembership();
+  assert.ok(page.find(node => node.type === 'form'));
+  await page.submit();
+  assert.equal(page.calls.creates.length, 2);
+  assert.equal(page.calls.creates[0].requestId, page.calls.creates[1].requestId);
+});
+
+test('membership refresh retains the acknowledged Owner invitation receipt', async () => {
+  const page = fixture();
+  await page.start();
+  page.otherOwner();
+  await page.submit();
+  await page.refreshMembership();
+  const resend = page.button('Owner 초대 메일 다시 보내기');
+  assert.ok(resend);
+  await resend.props.onClick();
+  assert.deepEqual(page.calls.resends, ['account']);
+});
+
+test('invite-only creation finishing after membership refresh cannot restore an obsolete list revision', async () => {
+  let finish;
+  const page = fixture({ create: () => new Promise(resolve => { finish = resolve; }) });
+  await page.start();
+  page.otherOwner();
+  const pending = page.submit();
+  await page.refreshMembership();
+  finish({ accountId: 'account', creatorMember: false, ownerInvitationPending: true, ownerInvitationRequested: true });
+  await pending;
+  assert.ok(page.button('Owner 초대 메일 다시 보내기'));
+  assert.equal(page.find(node => node.props?.className?.includes('animate-spin')), undefined);
+  assert.equal(page.find(node => node.props?.role === 'alert' && JSON.stringify(node.props.children).includes('접근할 수 없습니다')), undefined);
+});
 
 test('another Owner defaults to invite only and stays on creation receipt', async () => {
   const page = fixture(); await page.start(); page.otherOwner();
@@ -161,6 +205,8 @@ test('a late creation response cannot navigate a newly signed-in user', async ()
   await page.start(); const pending = page.submit(); await page.switchUser('another');
   finish({ accountId: 'account', creatorMember: true }); await pending;
   assert.deepEqual(page.calls.navigation, []);
+  page.button('New Account').props.onClick();
+  page.find(n => n.type === 'input' && n.props.placeholder?.startsWith('Account name')).props.onChange({ target: { value: 'Another customer' } });
   assert.equal(page.find(n => n.type === 'button' && n.props.type === 'submit').props.disabled, false,
     'another session must not remain stuck in the previous creation');
 });
@@ -212,7 +258,8 @@ test('successful additional-member outcomes stay visible after partial failure',
   await page.submit();
   assert.equal(page.calls.creates.length, 1); assert.equal(page.calls.members.length, 1);
   assert.deepEqual(page.calls.navigation, []);
-  assert.ok(page.find(n => n.props?.children?.includes?.('계정은 만들었지만 일부 멤버를 추가하지 못했습니다.')));
+  assert.ok(page.find(n => [n.props?.children].flat().some(child =>
+    typeof child === 'string' && child.includes('계정은 만들었지만 일부 멤버를 추가하지 못했습니다.'))));
 });
 
 test('a self-email Owner receipt uses the actual Owner role after a partial member failure', async () => {

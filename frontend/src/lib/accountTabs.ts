@@ -1,9 +1,10 @@
-export const ACCOUNT_TABS = ['general', 'meetings', 'projects', 'docs', 'billing'] as const;
+export const ACCOUNT_TABS = ['general', 'meetings', 'insights', 'projects', 'docs', 'billing'] as const;
 export type AccountTab = (typeof ACCOUNT_TABS)[number];
 
 export const ACCOUNT_TAB_LABELS: Record<AccountTab, string> = {
   general: '개요',
   meetings: '미팅',
+  insights: '인사이트',
   projects: '프로젝트',
   docs: '문서',
   billing: 'Billing',
