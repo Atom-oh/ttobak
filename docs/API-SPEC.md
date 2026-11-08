@@ -1301,6 +1301,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/public/docs/{token}` | `documentHandler.PublicGetDoc` |
 | POST | `/api/session/bootstrap` | `sessionHandler.Bootstrap` |
 | POST | `/api/billing-insight/handoff` | `billingInsightHandler.CreateHandoff` |
+| POST | `/api/calendar/sources/{sourceId}/sync` | `calendarHandler.Sync` |
+| GET | `/api/calendar/sources` | `calendarHandler.ListSources` |
+| GET | `/api/calendar/events` | `calendarHandler.ListEvents` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
