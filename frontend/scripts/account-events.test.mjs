@@ -135,3 +135,24 @@ test('creating sends only the validated input and reloads', async () => {
   assert.deepEqual(plain(created[0].attendees), [{ contactId: 'c1', name: '홍길동', email: 'h@example.com' }]);
   assert.equal('createdBy' in created[0] || 'eventId' in created[0], false);
 });
+
+test('the range buttons cannot abort a pending save or blank the active list', async () => {
+  let release;
+  const f = fixture({
+    events: async () => ({ events: [{ eventId: 'e1', revision: 'r', title: '유지되는 일정', startAt: '2026-11-10T05:00:00Z', attendees: [] }] }),
+    contacts: async () => ({ contacts: [] }),
+    deleteEvent: () => new Promise(resolve => { release = resolve; }),
+  });
+  f.draw(); await tick();
+  let tree = f.draw();
+  button(tree, '다가오는 일정').props.onClick();
+  tree = f.draw();
+  assert.match(text(tree), /유지되는 일정/, 're-selecting the active range keeps the list');
+  button(tree, '삭제').props.onClick();
+  await tick(); tree = f.draw();
+  assert.equal(button(tree, '지난 일정').props.disabled, true, 'range switching waits for the pending delete');
+  release();
+  await tick(); tree = f.draw();
+  assert.equal(button(tree, '지난 일정').props.disabled, false);
+  assert.equal(button(tree, '일정 추가').props.disabled, false, 'controls are usable again after the delete');
+});

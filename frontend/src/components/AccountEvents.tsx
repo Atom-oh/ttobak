@@ -84,6 +84,10 @@ export function AccountEvents({ accountId, userId }: { accountId: string; userId
     if (!active || !form || saving) return;
     const { input, error: invalid } = eventInputFromForm(form, editing?.revision);
     if (!input) { setError(invalid || '입력을 확인해 주세요.'); return; }
+    // Untouched times keep their stored instant; a datetime-local round trip
+    // can shift an ambiguous (repeated DST) local hour.
+    if (editing && form.start === toLocalInput(editing.startAt)) input.startAt = editing.startAt;
+    if (editing?.endAt && form.end === toLocalInput(editing.endAt)) input.endAt = editing.endAt;
     setSaving(true); setError('');
     try {
       if (editing) await accountApi.updateEvent(accountId, editing.eventId, { ...input, revision: editing.revision }, userId, active.signal);
@@ -123,7 +127,10 @@ export function AccountEvents({ accountId, userId }: { accountId: string; userId
       <p className="mb-3 text-xs text-slate-500">이 고객 계정의 팀원이 함께 보는 일정입니다. MCP로도 추가할 수 있습니다.</p>
       <div role="tablist" aria-label="일정 범위" className="mb-3 flex gap-2">
         {(['ahead', 'past'] as const).map(value => <button key={value} type="button" role="tab" aria-selected={scope === value}
-          onClick={() => { setScope(value); setEvents([]); setCursor(''); }}
+          // Switching would abort an in-flight save or delete with the listing,
+          // and re-selecting the active range must not blank a loaded list.
+          disabled={saving}
+          onClick={() => { if (value === scope || saving) return; setScope(value); setEvents([]); setCursor(''); }}
           className={`rounded-lg px-3 py-1.5 text-sm ${scope === value ? 'bg-primary text-white' : 'text-slate-600 dark:text-text-muted'}`}>
           {value === 'ahead' ? '다가오는 일정' : '지난 일정'}</button>)}
       </div>
