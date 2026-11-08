@@ -587,6 +587,16 @@ export function onNativeMeetingResumed(handler: (d: NativeMeetingDetection) => v
   );
 }
 
+/** The detection was answered outside this page (the app's floating
+ * prompt): its banner prompt is no longer needed. */
+export function onNativeMeetingAnswered(handler: (d: NativeMeetingDetection) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
+    'native-meeting-answered',
+    decodeMeetingDetection,
+    (d) => { if (d) handler(d); },
+  );
+}
+
 /** Detection preference and the meeting announced right now. `null` when
  * the installed app predates meeting detection. */
 export async function getMeetingDetection(): Promise<NativeMeetingDetectionState | null> {
