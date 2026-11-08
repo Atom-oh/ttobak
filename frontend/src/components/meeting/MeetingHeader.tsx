@@ -114,7 +114,7 @@ export function MeetingHeader({ meeting, isCreator = true, canManage = true, onS
     <>
       {/* Breadcrumbs - Desktop */}
       <div className="hidden lg:flex items-center gap-1.5 text-sm text-slate-400 dark:text-text-muted mb-8">
-        <Link href="/" className="hover:text-slate-900 dark:hover:text-text-main transition-colors">Meetings</Link>
+        <Link href="/meetings" className="hover:text-slate-900 dark:hover:text-text-main transition-colors">Meetings</Link>
         <span className="material-symbols-outlined text-base">chevron_right</span>
         <span className="text-slate-900 dark:text-text-main font-medium">{meeting.title}</span>
       </div>
