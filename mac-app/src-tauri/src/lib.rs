@@ -32,12 +32,14 @@ mod control_proto;
 mod error;
 mod input_select;
 mod leftover;
+pub mod meet_mute;
 mod meeting;
 mod meeting_detect;
 mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
 mod upload;
+pub mod zoom_mute;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
