@@ -28,7 +28,8 @@ export function contactFromRow(row: string[], mapping: ContactMapping): ContactI
 
 export function parseContactCsv(value: string): string[][] {
   const result = Papa.parse<string[]>(value, { skipEmptyLines: 'greedy' });
-  if (result.errors.length) throw new Error('CSV 형식을 확인해 주세요.');
+  // A single-column (names only) export has no delimiter to detect; that is not malformed.
+  if (result.errors.some((e) => e.code !== 'UndetectableDelimiter')) throw new Error('CSV 형식을 확인해 주세요.');
   return result.data;
 }
 

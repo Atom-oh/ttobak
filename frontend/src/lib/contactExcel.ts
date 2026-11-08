@@ -3,6 +3,9 @@ import { Parser } from 'saxen';
 
 // Inspect the ZIP incrementally before the spreadsheet parser expands sparse
 // coordinates into arrays. Do not trust advertised ZIP sizes or dimensions.
+// Image and embedded binary parts that never hold worksheet XML.
+const binaryPart = /(^|\/)media\/|\.(png|jpe?g|gif|bmp|tiff?|emf|wmf|svg|bin|vml|ico|webp)$/i;
+
 export function validateContactWorkbook(input: Uint8Array): void {
   const maxExpanded = 16 * 1024 * 1024;
   const maxRows = 2001; // header plus 2,000 contacts
@@ -12,18 +15,24 @@ export function validateContactWorkbook(input: Uint8Array): void {
   const reject = () => { throw new Error('Excel 파일은 최대 2,000행, 100열 및 압축 해제 후 16MB까지 지원합니다.'); };
   const zip = new Unzip((entry) => {
     if (++entries > 256 || (entry.originalSize !== undefined && entry.originalSize > maxExpanded)) reject();
-    // Relationships can point a sheet at any XML path within the workbook.
-    const xml = /\.xml$/i.test(entry.name);
+    // Relationships can point a sheet at any path, so every part except known
+    // binary media is parsed as XML; undecodable parts fail closed.
+    const xml = !binaryPart.test(entry.name);
     const decoder = xml ? new TextDecoder('utf-8', { fatal: true }) : null;
     const parser = xml ? new Parser() : null;
     let rowCount = 0;
-    let inSheetData = false;
+    // Only a sheetData element directly under the document root bounds the
+    // sheet; a same-named element nested elsewhere (e.g. in an extension list)
+    // can neither open nor close that scope.
+    let depth = 0;
+    let sheetDataDepth = -1;
     if (parser) {
       parser.on('error', reject);
       parser.on('openTag', (qualifiedName, getAttributes, decode) => {
         const name = qualifiedName.split(':').pop();
-        if (name === 'sheetData') { inSheetData = true; return; }
-        if (!inSheetData) return;
+        depth++;
+        if (name === 'sheetData' && depth === 2 && sheetDataDepth < 0) { sheetDataDepth = depth; return; }
+        if (sheetDataDepth < 0) return;
         if (name !== 'row' && name !== 'c') return;
         const raw = getAttributes().r;
         const ref = raw === undefined ? '' : decode(raw);
@@ -36,7 +45,10 @@ export function validateContactWorkbook(input: Uint8Array): void {
           if (column > maxColumns || Number(parts![2]) > maxRows) reject();
         }
       });
-      parser.on('closeTag', (name) => { if (name.split(':').pop() === 'sheetData') inSheetData = false; });
+      parser.on('closeTag', () => {
+        if (depth === sheetDataDepth) sheetDataDepth = -1;
+        depth--;
+      });
     }
     entry.ondata = (err, chunk, final) => {
       if (err) throw err;

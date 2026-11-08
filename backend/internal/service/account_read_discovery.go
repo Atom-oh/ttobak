@@ -8,12 +8,64 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
 const maxReadableAccounts = 1000
+
+// accountNavigationPageSize is the repository's navigation page maximum.
+const accountNavigationPageSize = 50
+
+// Account list pages stop after this many discovery steps or this much
+// traversal time, whichever comes first. Each step performs at most one
+// index/child query; one page still always advances by at least one step.
+const (
+	accountListDiscoveryStepBudget = 256
+	accountListDiscoveryTimeBudget = 2 * time.Second
+	accountRecheckConcurrency      = 8
+)
+
+// discoveryReads returns the request-scoped traversal reader for one page.
+func (s *AccountService) discoveryReads() interface {
+	accountReadMembershipRepo
+	accountReadHierarchyRepo
+} {
+	if cached, ok := newDiscoveryReadCache(s.repo).(*discoveryReadCache); ok {
+		return cached
+	}
+	return s.repo
+}
+
+// recheckAll runs independent fresh rechecks with bounded concurrency and
+// returns the error of the earliest failing receipt, matching sequential order.
+func recheckAll(ctx context.Context, concurrency int, receipts [][2]string, check func(id, revision string) error) error {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	errs := make([]error, len(receipts))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, receipt := range receipts {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, id, revision string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			errs[i] = check(id, revision)
+		}(i, receipt[0], receipt[1])
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
 
 type accountReadUserListRepo interface {
 	ListAccountsForUser(context.Context, string) ([]model.AccountMember, error)
@@ -32,28 +84,38 @@ type accountReadChildrenRepo interface {
 func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo, userID string, hints []string) ([]string, error) {
 	candidateIDs := append([]string{}, hints...)
 	if nav, ok := repo.(accountReadNavigationRepo); ok {
+		// Each page holds up to accountNavigationPageSize ascending IDs. The
+		// former one-ID-per-page walk failed on its 10,001st page: above
+		// 10,000 candidates (or at exactly 10,000 when the index returned a
+		// trailing cursor). This fails above 10,000 candidates.
 		after := ""
+		indexed := 0
 		for pages := 0; ; pages++ {
 			if pages >= 10000 {
 				return nil, ErrReadingData
 			}
-			page, err := nav.QueryNavigationCandidates(ctx, userID, "accounts", "", after, 1)
+			page, err := nav.QueryNavigationCandidates(ctx, userID, "accounts", "", after, accountNavigationPageSize)
 			if err != nil {
 				return nil, err
 			}
-			if page == nil || len(page.IDs) > 1 {
+			if page == nil || len(page.IDs) > accountNavigationPageSize {
 				return nil, ErrReadingData
 			}
+			previous := after
 			for _, id := range page.IDs {
-				if !readingID.MatchString(id) || id <= after {
+				if !readingID.MatchString(id) || id <= previous {
 					return nil, ErrReadingData
 				}
+				previous = id
 				candidateIDs = append(candidateIDs, id)
+			}
+			if indexed += len(page.IDs); indexed > 10000 {
+				return nil, ErrReadingData
 			}
 			if page.NextID == "" {
 				break
 			}
-			if !readingID.MatchString(page.NextID) || page.NextID <= after {
+			if !readingID.MatchString(page.NextID) || page.NextID <= after || page.NextID < previous {
 				return nil, ErrReadingData
 			}
 			after = page.NextID
@@ -69,7 +131,17 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 			}
 		}
 	}
-	candidates := prefetchReadableCandidates(ctx, repo, userID, candidateIDs)
+	// Discovery reads go through a request-scoped view primed by batch reads;
+	// every grant it yields is revalidated below against a fresh view. The
+	// capability checks keep using repo itself.
+	var reads accountReadMembershipRepo = repo
+	if view := batchedAccountReads(repo); view != nil {
+		if err := view.prime(ctx, userID, distinctCandidateIDs(candidateIDs), true); err != nil {
+			return nil, err
+		}
+		reads = view
+	}
+	candidates := prefetchReadableCandidates(ctx, reads, userID, candidateIDs)
 	seen := map[string]bool{}
 	grants := map[string]*accountReadGrant{}
 	queue := []string{}
@@ -114,6 +186,10 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 	children, canDiscover := repo.(accountReadChildrenRepo)
 	hierarchy, canValidate := repo.(accountReadHierarchyRepo)
 	if descendantReadsEnabled() && canDiscover && canValidate {
+		childReads := hierarchy
+		if view, ok := reads.(*discoveryReadCache); ok {
+			childReads = view
+		}
 		for pos := 0; pos < len(queue); pos++ {
 			parent := queue[pos]
 			cursor := ""
@@ -129,11 +205,14 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 				if len(ids) > 100 {
 					return nil, ErrReadingData
 				}
+				if err := primeAccountReads(ctx, reads, userID, distinctCandidateIDs(ids), true); err != nil {
+					return nil, err
+				}
 				for _, id := range ids {
 					if !readingID.MatchString(id) {
 						return nil, ErrReadingData
 					}
-					a, err := hierarchy.GetAccount(ctx, id)
+					a, err := childReads.GetAccount(ctx, id)
 					if err != nil {
 						return nil, err
 					}
@@ -155,7 +234,21 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 			}
 		}
 	}
-	if err := revalidateAccountReadGrants(ctx, repo, grants, userID, ErrStaleReadingCursor); err != nil {
+	recheck := repo
+	if view := batchedAccountReads(repo); view != nil {
+		ids := make([]string, 0, len(grants))
+		for id, grant := range grants {
+			if grant != nil {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		if err := view.prime(ctx, userID, ids, true); err != nil {
+			return nil, err
+		}
+		recheck = view
+	}
+	if err := revalidateAccountReadGrants(ctx, recheck, grants, userID, ErrStaleReadingCursor); err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(grants))
@@ -284,6 +377,9 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 			return nil, ErrStaleReadingCursor
 		}
 	}
+	// Rechecks read current rows through a fresh view primed with one batch
+	// read per phase, in place of the per-receipt GetMember/GetAccount reads.
+	var fresh accountReads = s.repo
 	recheckAccount := func(id, revision string) error {
 		if id == "" {
 			if revision != "" {
@@ -291,11 +387,11 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 			}
 			return nil
 		}
-		g, err := resolveAccountReadGrant(ctx, s.repo, id, user)
+		g, err := resolveAccountReadGrant(ctx, fresh, id, user)
 		if err != nil {
 			return err
 		}
-		a, err := s.repo.GetAccount(ctx, id)
+		a, err := fresh.GetAccount(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -305,26 +401,47 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 		}
 		return nil
 	}
+	freshView := func(receipts [][2]string) error {
+		ids := make([]string, 0, len(receipts))
+		for _, receipt := range receipts {
+			if receipt[0] != "" {
+				ids = append(ids, receipt[0])
+			}
+		}
+		view, err := primedAccountReads(ctx, s.repo, user, ids, true)
+		fresh = view
+		return err
+	}
+	if err := freshView([][2]string{{c.Anchor, c.Revision}}); err != nil {
+		return nil, err
+	}
 	if err := recheckAccount(c.Anchor, c.Revision); err != nil {
 		return nil, err
 	}
 	page := &AccountListPage{Accounts: []model.AccountSummary{}, OverlapPossible: true, UnionKey: "accountId"}
 	observed := [][2]string{}
 	done := false
-	// A fixed four-step budget is independent of total tree width. Batching
-	// empty ascent/index pages also preserves the frontend's page-count bound.
-	for steps := 0; steps < 4 && len(page.Accounts) < size && !done; steps++ {
-		ids, complete, err := nextReadableAccountCandidate(ctx, s.repo, user, c.Discovery)
+	// Traversal reads go through a request-scoped cache; every returned row and
+	// the cursor anchor are rechecked below against the uncached repository.
+	reads := s.discoveryReads()
+	started := time.Now()
+	// The step and time budgets are fixed, so per-page work stays independent of
+	// total tree width while one page covers a typical account tree.
+	for steps := 0; steps < accountListDiscoveryStepBudget && len(page.Accounts) < size && !done; steps++ {
+		if steps > 0 && time.Since(started) >= accountListDiscoveryTimeBudget {
+			break
+		}
+		ids, complete, err := nextReadableAccountCandidate(ctx, reads, user, c.Discovery)
 		if err != nil {
 			return nil, err
 		}
 		done = complete
 		for _, id := range ids {
-			g, err := s.requireReadGrant(ctx, user, id)
+			g, err := requireReadGrantVia(ctx, reads, user, id)
 			if err != nil {
 				return nil, err
 			}
-			a, err := s.repo.GetAccount(ctx, id)
+			a, err := reads.GetAccount(ctx, id)
 			if err != nil {
 				return nil, err
 			}
@@ -343,12 +460,14 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 			observed = append(observed, [2]string{c.Anchor, c.Revision})
 		}
 	}
-	for _, receipt := range observed {
-		if err := recheckAccount(receipt[0], receipt[1]); err != nil {
-			return nil, err
-		}
+	// The anchor is the last returned row unless this page returned none.
+	if anchor := [2]string{c.Anchor, c.Revision}; len(observed) == 0 || observed[len(observed)-1] != anchor {
+		observed = append(observed, anchor)
 	}
-	if err := recheckAccount(c.Anchor, c.Revision); err != nil {
+	if err := freshView(observed); err != nil {
+		return nil, err
+	}
+	if err := recheckAll(ctx, s.recheckConcurrency, observed, recheckAccount); err != nil {
 		return nil, err
 	}
 	if !done {
@@ -526,6 +645,10 @@ func nextReadableAccountCandidate(ctx context.Context, repo accountReadMembershi
 			return nil, false, ErrReadingData
 		}
 		c.DirectAfter = root
+		// One batch read primes the root's META and membership rows.
+		if err := primeAccountReads(ctx, repo, user, []string{root}, true); err != nil {
+			return nil, false, err
+		}
 		g, err := resolveAccountReadGrant(ctx, repo, root, user)
 		if err != nil {
 			return nil, false, err
@@ -567,6 +690,9 @@ func nextReadableAccountCandidate(ctx context.Context, repo accountReadMembershi
 		child := ids[0]
 		if !readingID.MatchString(child) {
 			return nil, false, ErrReadingData
+		}
+		if err := primeAccountReads(ctx, repo, user, []string{child}, true); err != nil {
+			return nil, false, err
 		}
 		a, err := hierarchy.GetAccount(ctx, child)
 		if err != nil {

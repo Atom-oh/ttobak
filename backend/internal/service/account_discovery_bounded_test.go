@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -482,7 +484,7 @@ func TestAccountAPIBoundedDiscoveryFitsExistingPageBudget(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r.queries+r.childQueries-beforeQueries > 4 {
+		if r.queries+r.childQueries-beforeQueries > accountListDiscoveryStepBudget {
 			t.Fatal("account API exceeded its fixed provider-step budget")
 		}
 		for _, a := range page.Accounts {
@@ -646,5 +648,77 @@ func TestAccountCatalogCursorCannotRestartAfterRolloutChange(t *testing.T) {
 	t.Setenv(accountDescendantReadsEnv, "1")
 	if _, err := s.Read(context.Background(), "reader", "accounts", url.Values{"pageSize": {"1"}, "cursor": {cursor}}); !errors.Is(err, ErrStaleReadingCursor) {
 		t.Fatalf("old index cursor restarted descendant traversal: %v", err)
+	}
+}
+
+// A production-sized tree (38 accounts) must load in one request instead of
+// one request per few accounts, and cached ancestry must keep reads linear.
+func TestAccountAPITypicalTreeLoadsInOnePage(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	r := boundedDiscoveryFixture(37)
+	s := newAccountServiceWithRepo(&boundedAccountListRepo{r.hierarchy.mockAccountRepo, r})
+	page, err := s.ListAccountsPage(context.Background(), "reader", url.Values{"pageSize": {"100"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.NextCursor != "" || len(page.Accounts) != 38 {
+		t.Fatalf("typical tree needed more pages: accounts=%d next=%q", len(page.Accounts), page.NextCursor)
+	}
+	// Each returned row costs one traversal read plus its fresh recheck walk.
+	if r.accountReads > 38*4 {
+		t.Fatalf("account reads grew beyond linear: %d", r.accountReads)
+	}
+}
+
+func TestDiscoveryReadCacheKeepsNilAndEmptyDistinct(t *testing.T) {
+	empty := &model.Account{AccountID: "a", Aliases: []string{}}
+	none := &model.Account{AccountID: "a"}
+	if readingHash([]interface{}{cloneAccount(empty)}) != readingHash([]interface{}{empty}) ||
+		readingHash([]interface{}{cloneAccount(none)}) != readingHash([]interface{}{none}) {
+		t.Fatal("cached copies changed account revisions")
+	}
+	cp := cloneAccount(&model.Account{Aliases: []string{"x"}})
+	cp.Aliases[0] = "y"
+	if cloneAccount(cp).Aliases[0] != "y" {
+		t.Fatal("clone lost data")
+	}
+}
+
+func TestRecheckAllReturnsEarliestErrorWithinConcurrencyBound(t *testing.T) {
+	receipts := make([][2]string, 40)
+	for i := range receipts {
+		receipts[i] = [2]string{fmt.Sprintf("a-%02d", i), "rev"}
+	}
+	var mu sync.Mutex
+	active, peak, calls := 0, 0, 0
+	check := func(id, _ string) error {
+		mu.Lock()
+		active++
+		calls++
+		if active > peak {
+			peak = active
+		}
+		mu.Unlock()
+		time.Sleep(time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+		switch id {
+		case "a-07":
+			return ErrStaleReadingCursor
+		case "a-30":
+			return ErrReadingData
+		}
+		return nil
+	}
+	if err := recheckAll(context.Background(), accountRecheckConcurrency, receipts, check); !errors.Is(err, ErrStaleReadingCursor) {
+		t.Fatalf("want earliest receipt error, got %v", err)
+	}
+	if peak > accountRecheckConcurrency || peak < 2 || calls != len(receipts) {
+		t.Fatalf("concurrency peak=%d calls=%d", peak, calls)
+	}
+	peak = 0
+	if err := recheckAll(context.Background(), 0, receipts[:5], check); err != nil || peak != 1 {
+		t.Fatalf("sequential recheck: err=%v peak=%d", err, peak)
 	}
 }
