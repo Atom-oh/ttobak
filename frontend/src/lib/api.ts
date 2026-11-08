@@ -8,6 +8,7 @@ import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, Re
 import type { CreateDictTermInput, DeletedCommonTerm, DictionaryLayer, DictionaryResponse, DictTermItem, DictTermMutationResponse, TermLogEntry, TermPatch } from '@/lib/dictionary';
 import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
 import type { AccountContact, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
+import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -170,6 +171,22 @@ export async function apiFetch<T>(
   return value;
 }
 
+export const calendarApi = {
+  events: (query: CalendarEventQuery, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const params = new URLSearchParams({ from: query.from, to: query.to });
+    if (query.accountId) params.set('accountId', query.accountId);
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.limit) params.set('limit', String(query.limit));
+    return apiFetch<CalendarEventPage>(`/api/calendar/events?${params}`, { ...options, cache: 'no-store' });
+  },
+  sources: (query: { cursor?: string; limit?: number } = {}, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const params = new URLSearchParams();
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.limit) params.set('limit', String(query.limit));
+    return apiFetch<CalendarSourcePage>(`/api/calendar/sources?${params}`, { ...options, cache: 'no-store' });
+  },
+};
+
 export const api = {
   get: <T>(endpoint: string, options?: FetchOptions) =>
     apiFetch<T>(endpoint, { ...options, method: 'GET' }),
@@ -201,7 +218,7 @@ export const api = {
 
 // Meeting API endpoints
 export const meetingsApi = {
-  list: (params?: { tab?: 'all' | 'shared'; accountId?: string; accountIds?: string[]; cursor?: string; limit?: number }, options?: { signal?: AbortSignal }) => {
+  list: (params?: { tab?: 'all' | 'shared'; accountId?: string; accountIds?: string[]; cursor?: string; limit?: number }, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
     const query = new URLSearchParams();
     if (params?.tab) query.set('tab', params.tab);
     if (!params?.cursor && bootstrapAccountHints && bootstrapAccountHints.userId === tokenUserId(getIdToken()) && bootstrapAccountHints.expires > Date.now() && bootstrapAccountHints.ids.length) query.set('joinedAccountIds', bootstrapAccountHints.ids.join(','));
@@ -818,7 +835,8 @@ const invalidatingAccountList = <T>(request: Promise<T>): Promise<T> =>
   request.finally(invalidateAccountList);
 
 export const accountApi = {
-  list: (options?: { scope?: 'direct' }) => {
+  list: (options?: { scope?: 'direct'; expectedUserId?: string }) => {
+    if (options?.expectedUserId) assertRequestUser(options.expectedUserId);
     const userId = tokenUserId(getIdToken());
     // Every page asserts the subject the cache key names, and the result is
     // checked again before it is stored or returned.
@@ -826,10 +844,14 @@ export const accountApi = {
       const list = await getAccounts(options, userId ?? undefined);
       if (userId) assertRequestUser(userId);
       return list;
-    }).then(copyAccountList);
+    }).then(list => {
+      if (options?.expectedUserId) assertRequestUser(options.expectedUserId);
+      return copyAccountList(list);
+    });
   },
   /** Last loaded list for the signed-in user, possibly stale, for instant paint. */
-  peekList: (options?: { scope?: 'direct' }) => {
+  peekList: (options?: { scope?: 'direct'; expectedUserId?: string }) => {
+    if (options?.expectedUserId) assertRequestUser(options.expectedUserId);
     const cached = peekAccountList<AccountList>(accountListKey(options));
     return cached ? copyAccountList(cached) : undefined;
   },
@@ -873,23 +895,23 @@ export const accountApi = {
   removeMember: (id: string, userId: string, force?: boolean) =>
     invalidatingAccountList(api.delete<{ removed: boolean; cleanupFailedForMeetings: string[]; ambiguousUntaggedMeetingIDs: string[] } | undefined>(
       `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}${force ? '?force=true' : ''}`)),
-  meetings: (id: string) =>
-    api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`),
-  insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {
+  meetings: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`, options),
+  insights: (id: string, params?: { from?: string; to?: string; types?: string[] }, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
     const q = new URLSearchParams();
     if (params?.from) q.set('from', params.from);
     if (params?.to) q.set('to', params.to);
     if (params?.types?.length) q.set('types', params.types.join(','));
     const qs = q.toString();
     return api.get<{ insights: AccountInsight[] }>(
-      `/api/accounts/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`);
+      `/api/accounts/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`, options);
   },
-  listDocuments: (id: string, docType?: string) => {
+  listDocuments: (id: string, docType?: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
     const q = new URLSearchParams();
     if (docType) q.set('docType', docType);
     const qs = q.toString();
     return api.get<{ documents: AccountDocument[] }>(
-      `/api/accounts/${encodeURIComponent(id)}/documents${qs ? `?${qs}` : ''}`);
+      `/api/accounts/${encodeURIComponent(id)}/documents${qs ? `?${qs}` : ''}`, options);
   },
   getDocument: (id: string, docId: string) =>
     api.get<AccountDocument>(
@@ -901,8 +923,8 @@ export const accountApi = {
       `/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, data),
   deleteDocument: (id: string, docId: string) =>
     api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
-  research: (id: string) =>
-    api.get<{ research: AccountResearchRef[] }>(`/api/accounts/${encodeURIComponent(id)}/research`),
+  research: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ research: AccountResearchRef[] }>(`/api/accounts/${encodeURIComponent(id)}/research`, options),
 };
 
 export const projectApi = {
@@ -950,8 +972,8 @@ export const projectApi = {
   },
   brief: (id: string) =>
     api.get<ProjectBrief>(`/api/projects/${encodeURIComponent(id)}/brief`),
-  accountProjects: (accountId: string) =>
-    api.get<{ projects: ProjectSummary[] }>(`/api/accounts/${encodeURIComponent(accountId)}/projects`),
+  accountProjects: (accountId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ projects: ProjectSummary[] }>(`/api/accounts/${encodeURIComponent(accountId)}/projects`, options),
 };
 
 // Personal (account-less) document API endpoints
