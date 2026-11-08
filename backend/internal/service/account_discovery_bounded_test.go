@@ -20,9 +20,11 @@ import (
 type boundedDiscoveryRepo struct {
 	*descendantNavigationRepo
 	accountReads, childQueries int
-	emptyDirect, emptyChild    bool
-	afterAccount               func(string)
-	nonadvancingProjects       bool
+	// childMu guards childQueries: discovery reads child pages concurrently.
+	childMu                 sync.Mutex
+	emptyDirect, emptyChild bool
+	afterAccount            func(string)
+	nonadvancingProjects    bool
 }
 
 func (r *boundedDiscoveryRepo) QueryNavigationCandidates(ctx context.Context, user, kind, account, after string, limit int) (*repository.NavigationCandidatePage, error) {
@@ -61,7 +63,9 @@ func TestDescendantRolloutPreservesProjectIndexProgressCheck(t *testing.T) {
 }
 
 func (r *boundedDiscoveryRepo) ListChildAccountIDsPage(_ context.Context, parent, cursor string, limit int32) ([]string, *string, error) {
+	r.childMu.Lock()
 	r.childQueries++
+	r.childMu.Unlock()
 	after := ""
 	if cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(cursor)
