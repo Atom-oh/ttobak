@@ -17,7 +17,7 @@ const transpile = source => ts.transpileModule(source, {
 
 // Runs the real usePostRecording hook with recorded transport calls, following
 // recording-account-binding.test.mjs's fixture.
-function fixture({ draftFails = false, initialAccount = 'initial', failProject, missingProject, accountGate, accountResponseLost, projectGate, projectResponseLost, unlinkResponseLost, timeoutMs } = {}) {
+function fixture({ draftFails = false, preparationApplied = true, initialAccount = 'initial', failProject, missingProject, accountGate, accountResponseLost, projectGate, projectResponseLost, unlinkGate, unlinkResponseLost, timeoutMs } = {}) {
   const calls = [];
   const navigations = [];
   const states = [];
@@ -31,10 +31,10 @@ function fixture({ draftFails = false, initialAccount = 'initial', failProject, 
     async create(payload) {
       calls.push(['create', payload.accountId]);
       if (draftFails && createAttempt++ === 0) throw new Error('Temporary creation failure');
-      serverAccount = payload.accountId;
-      return { meetingId: 'm1', preparationApplied: true, supportsNotesComparison: true, notesRevision: 'r1' };
+      serverAccount = preparationApplied ? payload.accountId : undefined;
+      return { meetingId: 'm1', preparationApplied, supportsNotesComparison: true, notesRevision: 'r1' };
     },
-    get: async () => ({ notes: '', notesRevision: 'r1', supportsPrivateAccountLink: true, supportsNotesComparison: true }),
+    get: async id => ({ accountId: id === 'restored' ? 'restored-account' : serverAccount, notes: '', notesRevision: 'r1', supportsPrivateAccountLink: true, supportsNotesComparison: true }),
     update: async () => ({ notesRevision: 'r2' }),
   };
   const dependencies = {
@@ -67,6 +67,7 @@ function fixture({ draftFails = false, initialAccount = 'initial', failProject, 
           calls.push(['unlinkProject', projectId, meetingId]);
           if (missingProject) throw new ApiError(404, 'NOT_FOUND', 'Project not found');
           if (projectGate) assert.equal(options?.expectedUserId, userId);
+          await unlinkGate?.(projectId);
           serverProjects.delete(projectId);
           if (unlinkResponseLost?.(projectId)) throw new Error('Unlink response lost after commit');
         },
@@ -356,4 +357,138 @@ for (const ambiguous of [false, true]) {
 test('the project skip action explicitly retries removals', () => {
   const banner = readFileSync(new URL('../src/components/record/PostRecordingBanner.tsx', import.meta.url), 'utf8');
   assert.equal(banner.includes('연결 추가 생략·해제 재시도'), true);
+});
+
+async function awaitNavigation(fixtureState) {
+  for (let attempt = 0; attempt < 30 && fixtureState.navigations.length === 0; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+function browserBackup() {
+  const metadata = { userId, id: 'backup', meetingId: 'restored', title: 'Restored', notes: '', mimeType: 'audio/webm' };
+  return {
+    metadata,
+    update: async patch => { Object.assign(metadata, patch); },
+    readBlob: async () => new Blob(['restored audio']),
+    remove: async () => {},
+    release() {},
+  };
+}
+
+test('skip preserves a removal whose transport is still pending', async () => {
+  const pending = deferred();
+  const fixtureState = fixture({ unlinkGate: () => pending.promise, timeoutMs: 10 });
+  await fixtureState.hook.createDraftMeeting();
+  await fixtureState.hook.changeRecordingProjects(['project']);
+  try {
+    await fixtureState.hook.changeRecordingProjects([]);
+    await fixtureState.stopAndSave();
+    assert.equal(fixtureState.calls.some(([kind]) => kind === 'presign'), false);
+    fixtureState.hook.skipProjectRetry();
+    await tick();
+    pending.resolve();
+    await awaitNavigation(fixtureState);
+    assert.deepEqual(fixtureState.navigations, ['/meeting/m1']);
+    assert.equal(fixtureState.serverProjects.has('project'), false);
+    assert.equal(fixtureState.calls.filter(([kind]) => kind === 'linkProject').length, 1);
+  } finally {
+    pending.resolve();
+    await tick();
+  }
+});
+
+test('explicit account skip uploads without waiting on an unsettled private link', async () => {
+  const pending = deferred();
+  const fixtureState = fixture({ accountGate: () => pending.promise, timeoutMs: 10 });
+  await fixtureState.hook.createDraftMeeting();
+  try {
+    await fixtureState.hook.changeRecordingAccount('other');
+    await fixtureState.stopAndSave();
+    assert.equal(fixtureState.calls.some(([kind]) => kind === 'presign'), false);
+    fixtureState.hook.skipAccountRetry();
+    await awaitNavigation(fixtureState);
+    assert.deepEqual(fixtureState.navigations, ['/meeting/m1']);
+    assert.equal(fixtureState.calls.filter(([kind]) => kind === 'linkAccount').length, 1);
+  } finally {
+    pending.resolve();
+    await tick();
+  }
+});
+
+test('browser restoration does not inherit a failed recording project selection', async () => {
+  let failing = true;
+  const fixtureState = fixture({ failProject: () => failing });
+  await fixtureState.hook.createDraftMeeting();
+  await fixtureState.hook.changeRecordingProjects(['previous-project']);
+  fixtureState.hook.failWithError('Native capture failed');
+  fixtureState.hook.handleRetry();
+  failing = false;
+  await fixtureState.hook.restoreBrowserRecording(browserBackup());
+  await fixtureState.hook.handleNotesSubmit('');
+  assert.deepEqual(fixtureState.navigations, ['/meeting/restored']);
+  assert.deepEqual(fixtureState.calls.filter(([kind]) => kind === 'linkProject'), [
+    ['linkProject', 'previous-project', 'm1'],
+  ]);
+  const published = fixtureState.states.filter(value => value && typeof value === 'object' && 'projectIds' in value);
+  assert.deepEqual(plain(published.at(-1)), {
+    accountId: 'restored-account', boundAccountId: 'restored-account', projectIds: [], linkedProjectIds: [],
+  });
+});
+
+test('browser restoration is isolated from an unsettled old project queue and its completion', async () => {
+  const pending = deferred();
+  const fixtureState = fixture({ projectGate: () => pending.promise, timeoutMs: 10 });
+  await fixtureState.hook.createDraftMeeting();
+  try {
+    await fixtureState.hook.changeRecordingProjects(['previous-project']);
+    fixtureState.hook.failWithError('Native capture failed');
+    fixtureState.hook.handleRetry();
+    await fixtureState.hook.restoreBrowserRecording(browserBackup());
+    await fixtureState.hook.handleNotesSubmit('');
+    assert.deepEqual(fixtureState.navigations, ['/meeting/restored']);
+    pending.resolve();
+    await tick();
+    assert.deepEqual(fixtureState.calls.filter(([kind]) => kind === 'linkProject'), [
+      ['linkProject', 'previous-project', 'm1'],
+    ]);
+    const published = fixtureState.states.filter(value => value && typeof value === 'object' && 'projectIds' in value);
+    assert.equal(published.at(-1).accountId, 'restored-account');
+    assert.deepEqual(plain(published.at(-1).projectIds), []);
+  } finally {
+    pending.resolve();
+    await tick();
+  }
+});
+
+test('a new recording does not inherit an earlier account skip decision', async () => {
+  const first = deferred();
+  const second = deferred();
+  let gate = first.promise;
+  const fixtureState = fixture({ preparationApplied: false, accountGate: () => gate, timeoutMs: 10 });
+  try {
+    await fixtureState.hook.createDraftMeeting();
+    await fixtureState.stopAndSave();
+    fixtureState.hook.skipAccountRetry();
+    await awaitNavigation(fixtureState);
+    assert.equal(fixtureState.navigations.length, 1);
+    first.resolve();
+    await tick();
+    gate = second.promise;
+    await fixtureState.hook.createDraftMeeting();
+    await fixtureState.stopAndSave();
+    assert.equal(fixtureState.calls.filter(([kind]) => kind === 'linkAccount').length, 2);
+    assert.equal(fixtureState.calls.filter(([kind]) => kind === 'presign').length, 1);
+    second.resolve();
+    await tick();
+    fixtureState.hook.handleRetry();
+    for (let attempt = 0; attempt < 30 && fixtureState.navigations.length < 2; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(fixtureState.navigations.length, 2);
+  } finally {
+    first.resolve();
+    second.resolve();
+    await tick();
+  }
 });

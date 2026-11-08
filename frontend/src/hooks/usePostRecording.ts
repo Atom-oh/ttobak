@@ -124,6 +124,7 @@ export function usePostRecording({
   const boundAccountRef = useRef<string | undefined>(undefined);
   const accountUncertainRef = useRef(false);
   const accountSyncRef = useRef<Promise<void>>(Promise.resolve());
+  const skipAccountSyncRef = useRef(false);
   const desiredProjectsRef = useRef<string[]>([]);
   const linkedProjectsRef = useRef<string[]>([]);
   const attemptedProjectsRef = useRef<string[]>([]);
@@ -139,6 +140,8 @@ export function usePostRecording({
   const resetLinks = useCallback(() => {
     boundAccountRef.current = undefined; desiredProjectsRef.current = []; linkedProjectsRef.current = [];
     accountUncertainRef.current = false; attemptedProjectsRef.current = [];
+    accountSyncRef.current = Promise.resolve(); projectSyncRef.current = Promise.resolve();
+    skipAccountSyncRef.current = false;
     setLinkError(null);
   }, []);
   const submittedNotesRef = useRef<string | undefined>(undefined);
@@ -337,6 +340,7 @@ export function usePostRecording({
     }
     setLinkError(null);
     preparationRef.current = { ...preparationRef.current, accountId: next };
+    skipAccountSyncRef.current = false;
     if (!meetingId || !next) {
       setPendingAccountValue(plan.kind === 'defer' ? next || null : null);
       publishLinks();
@@ -414,7 +418,7 @@ export function usePostRecording({
       }
       if (!isCurrent()) return;
       setStep('saving');
-      await linkPendingAccount(meetingId, identity.expectedUserId);
+      if (!skipAccountSyncRef.current) await linkPendingAccount(meetingId, identity.expectedUserId);
       if (!isCurrent()) return;
       // Projects chosen while recording, including those deferred because no
       // draft meeting existed. A failure stops before upload so the banner can
@@ -590,10 +594,14 @@ export function usePostRecording({
   const restoreBrowserRecording = useCallback(async (backup: BrowserRecordingBackup) => {
     const generation = ++flowGenerationRef.current;
     const isCurrent = () => mountedRef.current && generation === flowGenerationRef.current;
+    resetLinks();
+    persistedMeetingIdRef.current = null;
+    setServerMeetingId(null);
     let metadata = backup.metadata;
     notesUserIdRef.current = metadata.userId;
     setPendingAccountValue(null);
     preparationRef.current = { notes: metadata.notes };
+    publishLinks();
     let meeting: Awaited<ReturnType<typeof meetingsApi.get>> | undefined;
     let uploaded = false;
     if (metadata.meetingId) {
@@ -621,6 +629,8 @@ export function usePostRecording({
       if (uploaded) setPreparationError(`이미 업로드된 녹음입니다. 기기에 보관한 메모와 제목을 확인하고 저장해 주세요. 현재 서버 제목: ${meeting.title || ''}`);
       persistedMeetingIdRef.current = metadata.meetingId;
       setServerMeetingId(metadata.meetingId);
+      boundAccountRef.current = meeting.accountId || undefined;
+      preparationRef.current.accountId = boundAccountRef.current;
       const currentNotes = meeting.notes || '';
       notesWriter.initialize(metadata.meetingId, currentNotes, meeting.supportsNotesComparison === true, meeting.notesRevision || '');
       setCreatedNotes({ meetingId: metadata.meetingId, notes: metadata.notes });
@@ -633,6 +643,7 @@ export function usePostRecording({
       setNotesConflict(null);
       preparationRef.current = { notes: metadata.notes };
     }
+    publishLinks();
     // Uploaded bytes are already acknowledged; local note/title edits remain
     // recoverable even if the redundant audio chunks cannot be read.
     const blob = uploaded ? new Blob([], { type: metadata.mimeType }) : await backup.readBlob();
@@ -646,7 +657,7 @@ export function usePostRecording({
     setErrorMessage(null);
     setNotesEditorVersion((value) => value + 1);
     setStep('notes');
-  }, [notesWriter, router, setPendingAccountValue]);
+  }, [notesWriter, router, setPendingAccountValue, resetLinks, publishLinks]);
 
   useEffect(() => {
     const pending = pendingAudioRef.current;
@@ -753,6 +764,7 @@ export function usePostRecording({
   }, [notesWriter]);
   const skipAccountRetry = useCallback(() => {
     if (!pendingAudioRef.current || uploadInFlightRef.current) return;
+    skipAccountSyncRef.current = true;
     preparationRef.current.accountId = undefined;
     setPendingAccountValue(null);
     void runUploadFlow(pendingAudioRef.current);
@@ -760,7 +772,7 @@ export function usePostRecording({
 
   const skipProjectRetry = useCallback(() => {
     if (!pendingAudioRef.current || uploadInFlightRef.current) return;
-    desiredProjectsRef.current = linkedProjectsRef.current;
+    desiredProjectsRef.current = desiredProjectsRef.current.filter(id => linkedProjectsRef.current.includes(id));
     publishLinks();
     void runUploadFlow(pendingAudioRef.current);
   }, [runUploadFlow, publishLinks]);

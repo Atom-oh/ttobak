@@ -68,8 +68,12 @@ because selecting a recording customer creates a private account link.
 `RecordingLinkControls` in the recording header uses the same direct, editable
 customer catalog plus accessible projects. A customer already on the server
 meeting can be replaced but not removed (no unlink API). A failed immediate link
-is shown inline and retried at save; a failed project link at save stops before
-upload with retry or skip-project-retry actions.
+is shown inline and retried at save. Project skip drops pending additions but
+preserves requested removals; unconfirmed removals still stop upload, with local
+retention available. Account skip permits upload without waiting on an outstanding
+private-link request, but does not revoke that request. Restoring a browser
+recording resets prior association choices and queues; only the restored meeting's
+authorized account is shown, never another recording's projects.
 `PreparationReferences` mounts reference catalogs on the first expansion of
 its details section, then retains panel state on collapse so question drafts
 and answers survive reopening. The picker continues browsing inherited customers.
