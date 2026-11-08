@@ -9,6 +9,7 @@ import { ForgotPasswordForm } from '@/components/auth/ForgotPasswordForm';
 import { MeetingList } from '@/components/MeetingList';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, meetingsApi } from '@/lib/api';
+import { isProcessing, PROCESSING_REFRESH_LIMIT_MS, PROCESSING_REFRESH_MS, refreshListed } from '@/lib/meetingStatus';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 
 function mergeMeetings(existing: Meeting[], incoming: Meeting[]): Meeting[] {
@@ -147,6 +148,34 @@ export default function HomePage() {
     void fetchMeetings();
     return () => requestRef.current?.abort();
   }, [isAuthenticated, userId, fetchMeetings, membershipRevision]);
+
+  // After an upload the user lands here while transcription and notes run on
+  // the server: refresh listed meetings until none is processing, only while
+  // the page is visible, for at most PROCESSING_REFRESH_LIMIT_MS.
+  const hasProcessing = meetings.some(m => isProcessing(m.status));
+  const refreshStartedRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isAuthenticated || !hasProcessing) { refreshStartedRef.current = null; return; }
+    refreshStartedRef.current ??= Date.now();
+    let controller: AbortController | null = null;
+    const timer = setInterval(() => {
+      if (Date.now() - (refreshStartedRef.current ?? 0) > PROCESSING_REFRESH_LIMIT_MS) {
+        clearInterval(timer);
+        return;
+      }
+      if (document.visibilityState !== 'visible' || requestRef.current || controller) return;
+      const current = new AbortController();
+      controller = current;
+      meetingsApi.list({
+        tab: apiTab,
+        accountIds: selectedAccountIds.length ? selectedAccountIds : undefined,
+      }, { signal: current.signal })
+        .then(result => { if (!current.signal.aborted) setMeetings(prev => refreshListed(prev, result.meetings)); })
+        .catch(err => { if (!current.signal.aborted) console.warn('Meeting status refresh failed:', err); })
+        .finally(() => { if (controller === current) controller = null; });
+    }, PROCESSING_REFRESH_MS);
+    return () => { clearInterval(timer); controller?.abort(); };
+  }, [isAuthenticated, hasProcessing, apiTab, selectedAccountIds]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
