@@ -21,8 +21,13 @@ export const PROCESSING_REFRESH_MS = 15_000;
 /** Refreshing stops this long after it started; a reload resumes it. */
 export const PROCESSING_REFRESH_LIMIT_MS = 30 * 60_000;
 
-/** Replaces listed meetings with fresher copies; order and membership stay. */
-export function refreshListed<T extends { meetingId: string }>(listed: T[], fresh: T[]): T[] {
-  const byId = new Map(fresh.map((m) => [m.meetingId, m]));
-  return listed.map((m) => byId.get(m.meetingId) ?? m);
+export function refreshListed<T extends { meetingId: string; status?: string }>(
+  listed: T[], fresh: T[], uploadedId?: string,
+): T[] {
+  const byId = new Map(fresh.map(meeting => [meeting.meetingId, meeting]));
+  const result = listed.map(meeting => byId.get(meeting.meetingId) ?? meeting);
+  const uploaded = uploadedId ? byId.get(uploadedId) : undefined;
+  if (uploaded && !result.some(meeting => meeting.meetingId === uploadedId)) result.unshift(uploaded);
+  return result.map(meeting => meeting.meetingId === uploadedId && meeting.status === 'recording'
+    ? { ...meeting, status: 'transcribing' } : meeting);
 }

@@ -130,7 +130,7 @@ test('persistent Account rejection can be skipped while preserving pending audio
     assert.equal(f.creates[0].accountId, undefined);
     assert.match(f.creates[0].notes, /Prepared notes/);
     assert.deepEqual(f.links, []);
-    assert.deepEqual(f.navigations, ['/']);
+    assert.deepEqual(f.navigations, ['/?uploaded=draft']);
   }
 });
 test('an inherited reference selection cannot bind the recording draft', async () => {
@@ -156,7 +156,7 @@ test('upload-mode creation and legacy linking omit an inherited reference select
   assert.match(f.creates[0].notes, /Prepared notes/);
   assert.match(f.creates[0].notes, /준비 메모/);
   assert.equal(f.links.length, 0);
-  assert.deepEqual(f.navigations, ['/']);
+  assert.deepEqual(f.navigations, ['/?uploaded=draft']);
 });
 
 test('upload-mode direct preparation keeps its legacy private link fallback', async () => {
@@ -178,7 +178,7 @@ test('retry creation revalidates a previously direct Account before binding', as
   assert.equal(f.creates.length, 2);
   assert.equal(f.creates[0].accountId, 'parent');
   assert.equal(f.creates[1].accountId, undefined);
-  assert.deepEqual(f.navigations, ['/']);
+  assert.deepEqual(f.navigations, ['/?uploaded=draft']);
 });
 
 test('retry after initial Account lookup failure retains and validates the direct selection', async () => {
@@ -192,7 +192,7 @@ test('retry after initial Account lookup failure retains and validates the direc
   assert.equal(f.creates[0].accountId, 'parent');
   assert.match(f.creates[0].notes, /Prepared notes/);
   assert.equal(f.creates[0].sharedToAccount, undefined);
-  assert.deepEqual(f.navigations, ['/']);
+  assert.deepEqual(f.navigations, ['/?uploaded=draft']);
 });
 
 test('retry validates a retained candidate without binding an inherited Account', async () => {
@@ -205,7 +205,7 @@ test('retry validates a retained candidate without binding an inherited Account'
   assert.equal(f.creates.length, 1);
   assert.equal(f.creates[0].accountId, undefined);
   assert.deepEqual(f.links, []);
-  assert.deepEqual(f.navigations, ['/']);
+  assert.deepEqual(f.navigations, ['/?uploaded=draft']);
 });
 
 test('reset during Account validation cannot create a stale draft', async () => {

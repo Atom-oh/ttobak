@@ -398,7 +398,7 @@ export function usePostRecording({
       // server, so return home instead of waiting on the processing meeting.
       if (!isCurrent()) return;
       setStep(null);
-      router.push('/');
+      router.push(`/?uploaded=${encodeURIComponent(meetingId)}`);
     } catch (err) {
       if (!isCurrent()) return; // this flow was abandoned -- don't resurrect an error banner over whatever's current now
       setNotesConflict(notesWriter.conflict(persistedMeetingIdRef.current || '') ?? null);
