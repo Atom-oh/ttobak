@@ -23451,6 +23451,107 @@ var BILLING_TOOLS = ["account", "dataset", "report"].map((kind) => ({
   }
 }));
 
+// src/calendar.ts
+var MAX_CALENDAR_API_BYTES = 14e3;
+var MAX_REVISION = Number.MAX_SAFE_INTEGER - 1;
+var UUID_PATTERN = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
+var uuidSchema = { type: "string", pattern: UUID_PATTERN, description: "Nonzero UUID; either letter case is accepted." };
+var timestampSchema = { type: "string", format: "date-time", description: "RFC3339 instant, including offsets and fractional seconds." };
+var identifierSchema = { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" };
+var textSchema = (bytes, required2 = true) => ({
+  type: "string",
+  minLength: required2 ? 1 : 0,
+  maxLength: bytes,
+  description: `Preserved UTF-8 text, at most ${bytes} UTF-8 bytes.${required2 ? " Must not be blank." : ""}`
+});
+var eventFields = {
+  externalId: textSchema(512),
+  title: textSchema(512),
+  startsAt: timestampSchema,
+  endsAt: timestampSchema,
+  timeZone: { ...textSchema(128), description: "IANA time zone or UTC; Local is not accepted. Map provider zones locally." },
+  isAllDay: { type: "boolean", default: false },
+  startDate: { type: "string", format: "date", description: "All-day local start date at midnight." },
+  endDate: { type: "string", format: "date", description: "All-day exclusive local end date at midnight." },
+  location: textSchema(256, false),
+  accountId: identifierSchema
+};
+var requiredEventFields = ["externalId", "title", "startsAt", "endsAt", "timeZone"];
+var syncFields = {
+  sourceId: uuidSchema,
+  batchId: uuidSchema,
+  expectedRevision: {
+    type: "integer",
+    minimum: 0,
+    maximum: MAX_REVISION,
+    description: "Exact expected revision. The next receipt revision must also be a safe JavaScript integer."
+  },
+  windowStart: timestampSchema,
+  windowEnd: timestampSchema,
+  complete: { type: "boolean" },
+  mutations: {
+    type: "array",
+    maxItems: 20,
+    description: "At most 20 distinct occurrence IDs. Only explicit removals delete events.",
+    items: { oneOf: [
+      { type: "object", properties: { op: { const: "upsert" }, event: {
+        type: "object",
+        properties: eventFields,
+        required: requiredEventFields,
+        additionalProperties: false,
+        allOf: [
+          {
+            if: { properties: { isAllDay: { const: true } }, required: ["isAllDay"] },
+            then: { required: ["startDate", "endDate"] },
+            else: { not: { anyOf: [{ required: ["startDate"] }, { required: ["endDate"] }] } }
+          }
+        ]
+      } }, required: ["op", "event"], additionalProperties: false },
+      {
+        type: "object",
+        properties: { op: { const: "remove" }, externalId: textSchema(512) },
+        required: ["op", "externalId"],
+        additionalProperties: false
+      }
+    ] }
+  }
+};
+var pageFields = {
+  limit: {
+    type: "integer",
+    minimum: 1,
+    maximum: 50,
+    description: "Events default to 50; sources default to 20 and cap effective limits at 20. Retain when paging."
+  },
+  cursor: { ...textSchema(4096), description: "Opaque server nextCursor, at most 4096 UTF-8 bytes. Preserve the query scope." }
+};
+var CALENDAR_TOOLS = [
+  {
+    name: "ttobak_sync_calendar_events",
+    description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    inputSchema: { type: "object", properties: syncFields, required: Object.keys(syncFields), additionalProperties: false }
+  },
+  {
+    name: "ttobak_list_calendar_events",
+    description: "Read your private calendar in a positive window of at most 93 elapsed days. Follow actual nextCursor with unchanged query scope, including empty pages, until null.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: "object", properties: {
+      from: timestampSchema,
+      to: timestampSchema,
+      accountId: identifierSchema,
+      ...pageFields
+    }, required: ["from", "to"], additionalProperties: false }
+  },
+  {
+    name: "ttobak_calendar_sync_status",
+    description: "Read private calendar source progress. Follow nextCursor until null. Compare revision and optional lastCompletedRevision for partial progress; completion is caller-reported, not verified provider freshness.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: "object", properties: pageFields, additionalProperties: false }
+  }
+];
+var CALENDAR_TOOL_NAMES = CALENDAR_TOOLS.map((tool) => tool.name);
+
 // src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
@@ -23549,6 +23650,15 @@ function identifier(value, name) {
 function documentsPath(accountId) {
   return accountId === void 0 ? "/api/documents" : `/api/accounts/${identifier(accountId, "accountId")}/documents`;
 }
+var ApiResponseError = class extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+  status;
+  code;
+};
 function parseApiResponse(status, body) {
   if (status === 204) return {};
   let parsed;
@@ -23559,8 +23669,10 @@ function parseApiResponse(status, body) {
   }
   if (status < 200 || status >= 300 || parsed?.error) {
     const detail = parsed?.error;
-    throw new Error(
-      detail?.message ? `HTTP ${status} ${detail.code || "API_ERROR"}: ${detail.message}` : `HTTP ${status}: TTOBAK request failed`
+    throw new ApiResponseError(
+      detail?.message ? `HTTP ${status} ${detail.code || "API_ERROR"}: ${detail.message}` : `HTTP ${status}: TTOBAK request failed`,
+      status,
+      typeof detail?.code === "string" ? detail.code : void 0
     );
   }
   return parsed;
@@ -23574,6 +23686,31 @@ var TtobakApi = class {
   auth;
   baseUrl;
   options;
+  async syncCalendarEvents(sourceId, body) {
+    return this.request(
+      "POST",
+      `/api/calendar/sources/${identifier(sourceId, "sourceId")}/sync`,
+      body,
+      MAX_CALENDAR_API_BYTES,
+      false,
+      true
+    );
+  }
+  async listCalendarEvents(options) {
+    const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
+    return this.request("GET", `/api/calendar/events?${query}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+  }
+  async calendarSyncStatus(options) {
+    const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
+    return this.request(
+      "GET",
+      `/api/calendar/sources${query.size ? "?" + query : ""}`,
+      void 0,
+      MAX_CALENDAR_API_BYTES,
+      false,
+      true
+    );
+  }
   async listMeetings(opts) {
     const q = new URLSearchParams();
     if (opts?.cursor) q.set("cursor", opts.cursor);
@@ -24075,7 +24212,7 @@ var TtobakApi = class {
       req.end();
     });
   }
-  async request(method, path2, body, maxResponseBytes, callerTokenTransport = false) {
+  async request(method, path2, body, maxResponseBytes, callerTokenTransport = false, strictUtf8 = false) {
     this.options.signal?.throwIfAborted();
     if (this.options.privateTransport && !callerTokenTransport) {
       return this.options.privateTransport({
@@ -24136,7 +24273,9 @@ var TtobakApi = class {
             if (finished) return;
             finished = true;
             try {
-              resolve(parseApiResponse(res.statusCode || 0, Buffer.concat(chunks, received).toString("utf8")));
+              const bytes = Buffer.concat(chunks, received);
+              const response = strictUtf8 ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : bytes.toString("utf8");
+              resolve(parseApiResponse(res.statusCode || 0, response));
             } catch (error3) {
               reject(error3);
             }
@@ -24499,7 +24638,7 @@ var BYTES_PER_SECOND = SAMPLE_RATE * 2;
 var WAV_HEADER_BYTES = 44;
 var SILENCE_THRESHOLD_DB = -60;
 var STDERR_TAIL_BYTES = 4096;
-var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+var UUID_PATTERN2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var MEETING_ID_PATTERN = /^[\w-]{1,128}$/;
 var UPLOAD_KEY_PATTERN = /^audio\/[\w-]{1,128}\/[\w-]{1,128}\/(?:\d{1,16}_)?mcp_upload_\d{1,16}\.[a-z0-9]{1,5}$/;
 function defaultRecordingsDir() {
@@ -24737,7 +24876,7 @@ ${err.message}`;
   /** Reports whether the file is effectively silent (e.g. host lacks mic permission). */
   async silenceCheck(file2) {
     const name = basename2(file2);
-    if (dirname2(file2) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN.test(name.slice(0, -".wav".length))) {
+    if (dirname2(file2) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN2.test(name.slice(0, -".wav".length))) {
       throw new Error("silenceCheck accepts only a recording in the recordings directory");
     }
     const { stderr } = await this.run(["-hide_banner", "-nostats", "-i", file2, "-af", "volumedetect", "-f", "null", "-"]);
@@ -24752,7 +24891,7 @@ ${err.message}`;
     for (const name of readdirSync(this.dir)) {
       if (!name.endsWith(".json")) continue;
       const id = name.slice(0, -".json".length);
-      if (!UUID_PATTERN.test(id) || id === this.active?.info.id) continue;
+      if (!UUID_PATTERN2.test(id) || id === this.active?.info.id) continue;
       const info = this.readSidecar(id);
       const bytes = info && fileSize(info.file);
       if (!info || bytes === null) continue;
@@ -24762,7 +24901,7 @@ ${err.message}`;
   }
   /** Resolves a kept recording by id without accepting a caller-supplied path. */
   getSaved(id) {
-    if (typeof id !== "string" || !UUID_PATTERN.test(id) || id === this.active?.info.id) {
+    if (typeof id !== "string" || !UUID_PATTERN2.test(id) || id === this.active?.info.id) {
       throw new Error(`No saved recording ${id}; see ttobak_recording_status`);
     }
     const info = this.readSidecar(id);
@@ -24777,7 +24916,7 @@ ${err.message}`;
    * observed, so two contenders cannot both remove each other's fresh lock.
    * Unreadable or empty lock content counts as live. Returns a release function. */
   acquire(id) {
-    if (!UUID_PATTERN.test(id)) throw new Error("Invalid recording id");
+    if (!UUID_PATTERN2.test(id)) throw new Error("Invalid recording id");
     const lock = join2(this.dir, `${id}.lock`);
     const token = `${process.pid}:${randomUUID()}`;
     const busy = () => new Error(`Recording ${id} is being uploaded by another request; check ttobak_recording_status`);
@@ -24804,7 +24943,7 @@ ${err.message}`;
   }
   /** Persists upload progress for a kept recording; the caller holds its lock. */
   saveProgress(id, progress) {
-    if (!UUID_PATTERN.test(id)) throw new Error("Invalid recording id");
+    if (!UUID_PATTERN2.test(id)) throw new Error("Invalid recording id");
     if (progress.meetingId !== void 0 && !MEETING_ID_PATTERN.test(progress.meetingId)) throw new Error("Invalid meeting id");
     if (progress.uploadKey !== void 0 && !UPLOAD_KEY_PATTERN.test(progress.uploadKey)) throw new Error("Invalid upload key");
     const info = this.readSidecar(id);
@@ -24813,7 +24952,7 @@ ${err.message}`;
   }
   /** Deletes a recording and its sidecar after a confirmed upload. */
   discard(id) {
-    if (!UUID_PATTERN.test(id)) throw new Error("Invalid recording id");
+    if (!UUID_PATTERN2.test(id)) throw new Error("Invalid recording id");
     rmSync(join2(this.dir, `${id}.wav`), { force: true });
     this.removeSidecar(id);
   }
