@@ -8,6 +8,7 @@ import { MeetingList } from '@/components/MeetingList';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { accountApi, meetingsApi } from '@/lib/api';
 import { getIdToken } from '@/lib/auth';
+import { useProcessingRefresh, useUploadSeed, withUploadSeed } from '@/lib/postUploadRefresh';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 import { PrivateUpcomingMeetings } from './UpcomingMeetings';
 
@@ -79,6 +80,8 @@ function MeetingsContent({ userId }: { userId: string }) {
   const requestRef = useRef<AbortController | null>(null);
   const accountList = useWorkspaceAccounts(userId);
   const apiTab = activeTab === 'shared' ? 'shared' : 'all';
+  // Processing meetings (and an upload hint, if present) refresh in place.
+  const seed = useUploadSeed(userId, true);
 
   const fetchMeetings = useCallback(async (cursor?: string) => {
     requestRef.current?.abort();
@@ -98,9 +101,12 @@ function MeetingsContent({ userId }: { userId: string }) {
         cursor,
       }, { signal: controller.signal, expectedUserId: userId });
       if (controller.signal.aborted || requestRef.current !== controller) return;
-      setMeetings(previous => Array.from(new Map(
-        [...(cursor ? previous : []), ...result.meetings].map(meeting => [meeting.meetingId, meeting]),
-      ).values()));
+      setMeetings(previous => {
+        const merged = Array.from(new Map(
+          [...(cursor ? previous : []), ...result.meetings].map(meeting => [meeting.meetingId, meeting]),
+        ).values());
+        return cursor ? merged : withUploadSeed(merged, seed);
+      });
       setNextCursor(result.nextCursor);
     } catch {
       if (controller.signal.aborted || requestRef.current !== controller) return;
@@ -112,7 +118,19 @@ function MeetingsContent({ userId }: { userId: string }) {
         requestRef.current = null;
       }
     }
+    // seed is a stable ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiTab, selectedAccountIds, userId]);
+
+  useProcessingRefresh({
+    enabled: !isFetching && !error, meetings, seed,
+    scope: [userId, apiTab, selectedAccountIds.join(',')],
+    list: signal => meetingsApi.list({
+      tab: apiTab, accountIds: selectedAccountIds.length ? selectedAccountIds : undefined,
+    }, { signal, expectedUserId: userId }).then(result => result.meetings),
+    setMeetings,
+    busy: () => Boolean(requestRef.current),
+  });
 
   useEffect(() => {
     void fetchMeetings();
