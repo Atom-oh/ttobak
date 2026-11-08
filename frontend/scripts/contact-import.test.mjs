@@ -80,6 +80,14 @@ test('Excel preflight rejects sparse or expanded workbooks before materializing 
   assert.throws(() => check(zipSync({ 'xl/worksheets/sheet1.dat': strToU8('<worksheet><sheetData><row r="2000000"/></sheetData></worksheet>') })), limitError);
   // A nested sheetData can never open a scope by itself.
   assert.doesNotThrow(() => check(zipSync({ 'xl/worksheets/sheet1.xml': strToU8('<worksheet><extLst><x><sheetData><row r="5"/></sheetData></x></extLst><sheetData><row r="1"><c r="A1"/></row></sheetData></worksheet>') })));
+  // A worksheet the relationships place under media/ or with a binary suffix is still inspected.
+  for (const target of ['media/sheet1.xml', 'worksheets/sheet1.png', '/xl/media/../media/s%201.xml']) {
+    const name = target.startsWith('/') ? 'xl/media/s 1.xml' : `xl/${target}`;
+    const rels = `<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${target}"/></Relationships>`;
+    assert.throws(() => check(zipSync({ 'xl/_rels/workbook.xml.rels': strToU8(rels), [name]: strToU8('<worksheet><sheetData><row r="1"><c r="XFD1048576"/></row></sheetData></worksheet>') })), limitError, target);
+  }
+  // Self-closing siblings before sheetData keep the depth bookkeeping exact.
+  assert.throws(() => check(zipSync({ 'xl/worksheets/sheet1.xml': strToU8('<worksheet><dimension ref="A1"/><sheetViews><sheetView/></sheetViews><sheetData><row r="2000000"/></sheetData></worksheet>') })), limitError);
   // Image parts are not parsed as XML.
   assert.doesNotThrow(() => check(zipSync({ 'xl/media/image1.png': new Uint8Array([0x89, 0x50, 0xff, 0xfe]), 'xl/worksheets/sheet1.xml': strToU8('<worksheet><sheetData/></worksheet>') })));
   for (const xml of ['<worksheet><sheetData><row r="2000000"/></sheetData></worksheet>', '<worksheet><sheetData><row r="1"><c r="XFD1"><v>1</v></c></row></sheetData></worksheet>']) {
