@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog, alertDialog } from '@/lib/dialog';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -148,7 +149,7 @@ export default function ResearchDetailPage() {
       setSubpages((prev) => prev.map((p) => (p.researchId === targetId ? { ...p, title: trimmed } : p)));
       setEditingTitle(false);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '제목 수정에 실패했습니다');
+      void alertDialog(err instanceof Error ? err.message : '제목 수정에 실패했습니다');
     } finally {
       setSavingTitle(false);
     }
@@ -156,12 +157,12 @@ export default function ResearchDetailPage() {
 
   const handleTrash = async () => {
     if (!research) return;
-    if (!confirm('휴지통에 넣으시겠습니까? 나중에 복구할 수 있습니다.')) return;
+    if (!await confirmDialog('휴지통에 넣으시겠습니까? 나중에 복구할 수 있습니다.')) return;
     try {
       await researchApi.trash(research.researchId);
       router.push('/insights?tab=research');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to trash research');
+      void alertDialog(err instanceof Error ? err.message : 'Failed to trash research');
     }
   };
 
@@ -179,7 +180,7 @@ export default function ResearchDetailPage() {
       if (resp.notionUrl) window.open(resp.notionUrl, '_blank');
       setExportOpen(false);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Notion export failed');
+      void alertDialog(err instanceof Error ? err.message : 'Notion export failed');
     }
   };
 
@@ -290,7 +291,7 @@ export default function ResearchDetailPage() {
         if ((data.subpages || []).length > prev) break;
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create sub-page');
+      void alertDialog(err instanceof Error ? err.message : 'Failed to create sub-page');
     } finally {
       setAddingSubPage(false);
     }

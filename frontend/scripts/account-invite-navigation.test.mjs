@@ -85,7 +85,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
       },
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
-    '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/upload': { uploadDocFile() {} },
+    '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/dialog': { confirmDialog: async () => true, alertDialog: async () => {} }, '@/lib/upload': { uploadDocFile() {} },
     '@/lib/accountAccess': accountAccess,
     '@/components/MemberPicker': { MemberPicker },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
