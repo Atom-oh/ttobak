@@ -62,7 +62,7 @@ func AvailableReadOperation(operation string) bool {
 	case "api.reading.get", "api.documentReading.get", "api.navigationCatalog.accounts",
 		"api.navigationCatalog.projects", "api.documentCatalog.get", "api.kb.readFiles",
 		"api.accountReading.get", "api.projectReading.get", "api.meetingCatalog.get",
-		"api.vaultReading.get":
+		"api.vaultReading.get", "api.accountContacts.list":
 		return true
 	default:
 		return false
