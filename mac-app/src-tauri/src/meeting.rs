@@ -202,6 +202,12 @@ fn is_meet_code(path: &str) -> bool {
 /// Classifies a browser tab URL as an in-progress web meeting.
 pub fn classify_meeting_url(url: &str) -> Option<MeetingKind> {
     if let Some(path) = url.strip_prefix("https://meet.google.com/") {
+        // Some entry points (e.g. Calendar) open the room under a `meet/` or
+        // `_meet/` prefix: `meet.google.com/meet/abc-defg-hij`.
+        let path = ["meet/", "_meet/"]
+            .iter()
+            .find_map(|p| path.strip_prefix(p))
+            .unwrap_or(path);
         return is_meet_code(path).then_some(MeetingKind::GoogleMeet);
     }
     if url.starts_with("https://teams.microsoft.com/") || url.starts_with("https://teams.live.com/")
@@ -524,6 +530,18 @@ mod tests {
         assert_eq!(
             classify_meeting_url("https://meet.google.com/abc-defg-hij?authuser=1"),
             Some(MeetingKind::GoogleMeet)
+        );
+        assert_eq!(
+            classify_meeting_url("https://meet.google.com/meet/abc-defg-hij"),
+            Some(MeetingKind::GoogleMeet)
+        );
+        assert_eq!(
+            classify_meeting_url("https://meet.google.com/_meet/abc-defg-hij?authuser=0"),
+            Some(MeetingKind::GoogleMeet)
+        );
+        assert_eq!(
+            classify_meeting_url("https://meet.google.com/meet/landing"),
+            None
         );
         // The Meet landing page and other paths are not meetings.
         assert_eq!(classify_meeting_url("https://meet.google.com/"), None);
