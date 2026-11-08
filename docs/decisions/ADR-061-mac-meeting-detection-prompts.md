@@ -100,8 +100,10 @@ without a user confirmation.
   the toggle's muted label ("Turn on microphone" and its Korean form) silences the
   microphone; any other readable page records it, so an unlisted language
   never drops the user's voice. An unreadable page (another tab in front)
-  keeps the last state. Safari's shared WebKit process is not followed. This needs Accessibility permission; without it the start
-  response warns and the microphone is always recorded. Ad-hoc re-signing
+  keeps the last state, including when Accessibility trust is lost after an
+  observed mute. Safari's shared WebKit process is not followed. Without
+  Accessibility permission at startup, the response warns and the microphone
+  records normally until a meeting's mute has been observed. Ad-hoc re-signing
   invalidates the grant, as it does other TCC grants.
 - During a native recording, if other apps play audio for 10 s while the
   system tap has delivered only exact zeros, the app posts a notification that
@@ -116,6 +118,31 @@ without a user confirmation.
   not sleep and keeps recording.
 
 ## Consequences
+
+### Staged mute-follow library
+
+`zoom_mute` and `meet_mute` were introduced as compiled public library modules
+without activating capture. This runtime supplies `ProcessSources` using the
+existing Core Audio process/browser discovery, calls `watch`, retains its handle
+and consumes the microphone flag. `meeting_over` uses the same injected discovery.
+Native acceptance remains required before claiming that recording follows a
+meeting application's mute.
+
+When invoked, the watcher may request Accessibility access once per app launch.
+It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
+(`muted` or `meeting_ended`). Zoom labels come from its localization resources.
+Unreadable window identifiers are unknown, never a confirmed meeting end;
+the existing three-second unknown-state fallback can still silence a previously
+followed meeting during a long permission or inspection failure.
+An observed Zoom silence reaches the microphone gate before synchronous browser
+inspection, so a slow Meet accessibility tree cannot delay that known decision.
+
+Meet's English/Korean muted toggle labels and readable-page fallback prioritize
+not dropping voice in unsupported languages. Unknown pages retain the previous
+state; another readable unmuted page wins. Partial Accessibility traversal can
+still clear that retained mute, and hidden-tab or departed-call holds are not
+proof of the user's current intent. These limitations need native verification
+and remain separate from the compiled library's availability.
 
 - No new network origin, IAM change or server route. The SPA owns titles,
   meeting creation and uploads as before.

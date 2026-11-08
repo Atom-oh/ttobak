@@ -25,6 +25,21 @@ pub enum MicState {
     NoMeeting,
 }
 
+#[derive(Clone, Copy)]
+pub struct ProcessSources {
+    pub process_pid: fn(&str) -> Option<i32>,
+    pub browser_pids: fn() -> Vec<i32>,
+}
+
+pub fn classify_window_ids<'a>(identifiers: impl IntoIterator<Item = Option<&'a str>>) -> MicState {
+    for identifier in identifiers {
+        if identifier.is_none() || identifier == Some("zm.meeting.window.main") {
+            return MicState::Unknown;
+        }
+    }
+    MicState::NoMeeting
+}
+
 /// After this long without an explicit state the followed meeting is over.
 pub const UNKNOWN_RESET_MS: u64 = 3_000;
 
@@ -130,6 +145,23 @@ impl Gate {
     }
 }
 
+pub fn observe_meet(
+    zoom: Silence,
+    trusted: bool,
+    muted: &std::sync::atomic::AtomicBool,
+    hold: &mut crate::meet_mute::Hold,
+    inspect: impl FnOnce() -> MicState,
+) -> bool {
+    if zoom != Silence::Open {
+        muted.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    hold.observe(if trusted {
+        inspect()
+    } else {
+        MicState::Unknown
+    })
+}
+
 #[cfg(target_os = "macos")]
 pub use mac::{meeting_over, watch, Watch};
 
@@ -156,7 +188,10 @@ mod mac {
     use core_foundation::string::{CFString, CFStringRef};
     use tauri::{AppHandle, Emitter};
 
-    use super::{classify, Gate, Labels, MicState, Silence};
+    use super::{
+        classify, classify_window_ids, observe_meet, Gate, Labels, MicState, ProcessSources,
+        Silence,
+    };
 
     const ZOOM_BUNDLE: &str = "us.zoom.xos";
     const POLL: Duration = Duration::from_millis(300);
@@ -226,9 +261,6 @@ mod mac {
         array.iter().map(|c| c.clone()).collect()
     }
 
-    /// Zoom's main meeting window identifier (the one Notion also keys on).
-    const MEETING_WINDOW_ID: &str = "zm.meeting.window.main";
-
     /// The application's Accessibility element, with a bounded call timeout.
     pub(crate) fn create_app(pid: i32) -> Option<CFType> {
         let app = unsafe { AXUIElementCreateApplication(pid) };
@@ -248,19 +280,21 @@ mod mac {
         if mic != MicState::Unknown {
             return Some(mic);
         }
-        // No audio menu item: a meeting window means the meeting goes on
-        // (e.g. audio not joined); none means there is no meeting.
         let windows = copy_attr(&app, "AXWindows")?;
-        let has_meeting_window = as_array(windows).iter().any(|w| {
-            copy_attr(w, "AXIdentifier")
-                .and_then(|v| v.downcast::<CFString>())
-                .is_some_and(|id| id == MEETING_WINDOW_ID)
-        });
-        Some(if has_meeting_window {
-            MicState::Unknown
-        } else {
-            MicState::NoMeeting
-        })
+        if windows.type_of() != CFArray::<CFType>::type_id() {
+            return None;
+        }
+        let identifiers: Vec<Option<String>> = as_array(windows)
+            .iter()
+            .map(|window| {
+                copy_attr(window, "AXIdentifier")
+                    .and_then(|value| value.downcast::<CFString>())
+                    .map(|identifier| identifier.to_string())
+            })
+            .collect();
+        Some(classify_window_ids(
+            identifiers.iter().map(Option::as_deref),
+        ))
     }
 
     /// Titles of every item in Zoom's menus, or `None` when unreadable.
@@ -338,12 +372,16 @@ mod mac {
     }
 
     /// Zoom's state now, with `pid` refreshed when it is missing or stale.
-    fn current_state(pid: &mut Option<i32>, refreshed: &mut Option<Instant>) -> MicState {
+    fn current_state(
+        pid: &mut Option<i32>,
+        refreshed: &mut Option<Instant>,
+        sources: ProcessSources,
+    ) -> MicState {
         if !unsafe { AXIsProcessTrusted() } || labels().is_empty() {
             return MicState::Unknown;
         }
-        if refreshed.map_or(true, |t| t.elapsed() >= PID_REFRESH) {
-            *pid = crate::audio::macos::process_pid(ZOOM_BUNDLE);
+        if !refreshed.is_some_and(|checked| checked.elapsed() < PID_REFRESH) {
+            *pid = (sources.process_pid)(ZOOM_BUNDLE);
             *refreshed = Some(Instant::now());
         }
         let Some(p) = *pid else {
@@ -362,9 +400,9 @@ mod mac {
     /// True when Zoom confirms its meeting is over (Accessibility granted and
     /// Zoom quit, or no meeting window and no audio menu item). Used by
     /// meeting detection to end a Zoom meeting without the audio grace period.
-    pub fn meeting_over() -> bool {
+    pub fn meeting_over(sources: ProcessSources) -> bool {
         let (mut pid, mut refreshed) = (None, None);
-        current_state(&mut pid, &mut refreshed) == MicState::NoMeeting
+        current_state(&mut pid, &mut refreshed, sources) == MicState::NoMeeting
     }
 
     /// The running watcher; dropping it stops the thread.
@@ -390,10 +428,14 @@ mod mac {
 
     /// Starts following Zoom's mute into `muted` for one recording. Returns a
     /// warning when Zoom is running but Accessibility access is missing.
-    pub fn watch(app: AppHandle, muted: Arc<AtomicBool>) -> (Watch, Option<String>) {
+    pub fn watch(
+        app: AppHandle,
+        muted: Arc<AtomicBool>,
+        sources: ProcessSources,
+    ) -> (Watch, Option<String>) {
         let running = Arc::new(AtomicBool::new(true));
-        let zoom_running = crate::audio::macos::process_pid(ZOOM_BUNDLE).is_some();
-        let browser_running = !crate::meeting_detect::capturing_browser_pids().is_empty();
+        let zoom_running = (sources.process_pid)(ZOOM_BUNDLE).is_some();
+        let browser_running = !(sources.browser_pids)().is_empty();
         let warning = ((zoom_running || browser_running) && !request_trust()).then(|| {
             "Allow TTOBAK in System Settings > Privacy & Security > Accessibility so the \
              recording follows Zoom's and Google Meet's mute; until then the microphone is \
@@ -403,7 +445,7 @@ mod mac {
         let flag = running.clone();
         let spawned = std::thread::Builder::new()
             .name("zoom-mute".into())
-            .spawn(move || run(app, muted, flag));
+            .spawn(move || run(app, muted, flag, sources));
         if let Err(e) = spawned {
             log::warn!("could not start the Zoom mute watcher: {e}");
         }
@@ -413,7 +455,12 @@ mod mac {
     /// Browser instances are re-resolved this often.
     const BROWSER_REFRESH: Duration = Duration::from_secs(2);
 
-    fn run(app: AppHandle, muted: Arc<AtomicBool>, running: Arc<AtomicBool>) {
+    fn run(
+        app: AppHandle,
+        muted: Arc<AtomicBool>,
+        running: Arc<AtomicBool>,
+        sources: ProcessSources,
+    ) {
         let started = Instant::now();
         let zoom_labels = !labels().is_empty();
         if !zoom_labels {
@@ -429,18 +476,18 @@ mod mac {
         while running.load(Ordering::Relaxed) {
             let trusted = unsafe { AXIsProcessTrusted() };
             let zoom = if zoom_labels {
-                let state = current_state(&mut pid, &mut pid_checked);
+                let state = current_state(&mut pid, &mut pid_checked, sources);
                 gate.observe(started.elapsed().as_millis() as u64, state)
             } else {
                 Silence::Open
             };
-            let meet_muted = trusted && {
-                if browsers_checked.map_or(true, |t| t.elapsed() >= BROWSER_REFRESH) {
-                    browsers = crate::meeting_detect::capturing_browser_pids();
+            let meet_muted = observe_meet(zoom, trusted, &muted, &mut meet, || {
+                if !browsers_checked.is_some_and(|checked| checked.elapsed() < BROWSER_REFRESH) {
+                    browsers = (sources.browser_pids)();
                     browsers_checked = Some(Instant::now());
                 }
-                meet.observe(crate::meet_mute::current_state(&browsers))
-            };
+                crate::meet_mute::current_state(&browsers)
+            });
             let current = match (zoom, meet_muted) {
                 (Silence::Open, true) => (Silence::Muted, "Google Meet"),
                 // Reopening reports the app that had silenced the microphone.
@@ -583,5 +630,72 @@ mod tests {
         let mut g = Gate::default();
         assert_eq!(g.observe(0, MicState::Unknown), Silence::Open);
         assert_eq!(g.observe(60_000, MicState::Unknown), Silence::Open);
+    }
+
+    #[test]
+    fn incomplete_window_identifiers_do_not_confirm_meeting_end() {
+        for identifiers in [
+            vec![None],
+            vec![Some("settings"), None],
+            vec![Some("zm.meeting.window.main")],
+        ] {
+            let observed = classify_window_ids(identifiers);
+            assert_eq!(observed, MicState::Unknown);
+            let mut gate = Gate::default();
+            assert_eq!(gate.observe(0, MicState::Unmuted), Silence::Open);
+            assert_eq!(gate.observe(300, observed), Silence::Open);
+        }
+        assert_eq!(classify_window_ids([]), MicState::NoMeeting);
+        assert_eq!(
+            classify_window_ids([Some("settings"), Some("chat")]),
+            MicState::NoMeeting
+        );
+    }
+
+    #[test]
+    fn zoom_silence_is_applied_before_browser_inspection() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        for silence in [Silence::Muted, Silence::MeetingEnded] {
+            let muted = AtomicBool::new(false);
+            let mut hold = crate::meet_mute::Hold::default();
+            let meet_muted = observe_meet(silence, true, &muted, &mut hold, || {
+                assert!(muted.load(Ordering::Relaxed));
+                MicState::Unmuted
+            });
+            assert!(!meet_muted);
+            assert!(muted.load(Ordering::Relaxed));
+        }
+    }
+
+    #[test]
+    fn permission_loss_retains_a_previously_observed_meet_mute() {
+        use std::sync::atomic::AtomicBool;
+
+        let muted = AtomicBool::new(true);
+        let mut hold = crate::meet_mute::Hold::default();
+        hold.observe(MicState::Muted);
+        assert!(observe_meet(
+            Silence::Open,
+            false,
+            &muted,
+            &mut hold,
+            || { panic!("Untrusted Accessibility inspection must not run") }
+        ));
+        assert!(!observe_meet(
+            Silence::Open,
+            true,
+            &muted,
+            &mut hold,
+            || { MicState::Unmuted }
+        ));
+        let mut fresh = crate::meet_mute::Hold::default();
+        assert!(!observe_meet(
+            Silence::Open,
+            false,
+            &muted,
+            &mut fresh,
+            || { panic!("Untrusted Accessibility inspection must not run") }
+        ));
     }
 }

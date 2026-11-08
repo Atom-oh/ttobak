@@ -32,7 +32,7 @@ mod control_proto;
 mod error;
 mod input_select;
 mod leftover;
-mod meet_mute;
+pub mod meet_mute;
 mod meeting;
 mod meeting_detect;
 mod mix;
@@ -40,7 +40,7 @@ mod mix;
 mod power;
 mod sleep;
 mod upload;
-mod zoom_mute;
+pub mod zoom_mute;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

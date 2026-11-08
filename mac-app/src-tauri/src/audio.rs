@@ -763,7 +763,14 @@ pub mod macos {
 
             let mic_muted = Arc::new(AtomicBool::new(false));
             let silence_watch = watch_system_silence(app.clone(), Arc::clone(&stats));
-            let (zoom_mute, zoom_warning) = crate::zoom_mute::watch(app, Arc::clone(&mic_muted));
+            let (zoom_mute, zoom_warning) = crate::zoom_mute::watch(
+                app,
+                Arc::clone(&mic_muted),
+                crate::zoom_mute::ProcessSources {
+                    process_pid,
+                    browser_pids: crate::meeting_detect::capturing_browser_pids,
+                },
+            );
             start_warnings.extend(zoom_warning);
             let ctx = Box::into_raw(Box::new(CallbackCtx {
                 tx: Mutex::new(Some(tx)),
