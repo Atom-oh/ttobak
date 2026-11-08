@@ -62,6 +62,8 @@ export interface TauriStartResponse {
   warnings?: string[];
   /** The microphone being recorded; newer app builds only. */
   input?: NativeSelectedInput;
+  /** The build can switch the microphone mid-recording (`switch_recording_input`). */
+  can_switch_input?: boolean;
 }
 
 /** The microphone a native recording captures. */

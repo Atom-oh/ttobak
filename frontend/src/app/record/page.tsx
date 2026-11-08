@@ -79,6 +79,8 @@ function RecordPageInner() {
   // Mac app microphone: '' follows the meeting app's microphone (ADR-061).
   const [nativeInputUid, setNativeInputUid] = useState('');
   const [nativeInput, setNativeInput] = useState<NativeSelectedInput | null>(null);
+  // Only app builds with `switch_recording_input` offer the live picker.
+  const [nativeCanSwitch, setNativeCanSwitch] = useState(false);
   // The meeting app shows the user muted: the microphone is not recorded.
   const [nativeMicMuted, setNativeMicMuted] = useState<NativeMicMuted | null>(null);
   const [micSwitch, setMicSwitch] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
@@ -536,11 +538,21 @@ function RecordPageInner() {
   wakeRetryRef.current = { step: postRecording.step, hasPendingAudio: postRecording.hasPendingAudio, retry: postRecording.handleRetry };
   useEffect(() => {
     if (!isTauri()) return;
-    return onNativeSystemWake(() => {
-      const { step, hasPendingAudio, retry } = wakeRetryRef.current;
-      // Give the network a moment to return after wake.
-      if (step === 'error' && hasPendingAudio) setTimeout(() => retry(), 5_000);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = onNativeSystemWake(() => {
+      if (timer) clearTimeout(timer);
+      // Give the network a moment to return after wake, then retry only if
+      // this page is still showing the same failed upload.
+      timer = setTimeout(() => {
+        timer = null;
+        const { step, hasPendingAudio, retry } = wakeRetryRef.current;
+        if (step === 'error' && hasPendingAudio) retry();
+      }, 5_000);
     });
+    return () => {
+      off();
+      if (timer) clearTimeout(timer);
+    };
   }, []);
 
   // --- Mac app local control (MCP over the app's socket; ADR-046) ---------
@@ -1408,7 +1420,7 @@ function RecordPageInner() {
             </span>
           </div>
         )}
-        {audioSource === 'system' && isNativeRecording && (
+        {audioSource === 'system' && isNativeRecording && nativeCanSwitch && (
           <div className="mb-4 flex flex-col gap-1">
             <NativeMicSelector value={nativeInputUid} onChange={switchNativeMic} disabled={micSwitch.busy}
               errorId={micSwitch.error ? 'native-mic-switch-error' : undefined} />
@@ -1465,7 +1477,7 @@ function RecordPageInner() {
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
             nativeInputDeviceUid={nativeInputUid}
-            onNativeInput={setNativeInput}
+            onNativeInput={(input, canSwitch) => { setNativeInput(input); setNativeCanSwitch(canSwitch); }}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
               finishControlStart({ ok: false, error: { code: 'start_failed', message: error } });
@@ -1520,7 +1532,7 @@ function RecordPageInner() {
             onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); }}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); setNativeCanSwitch(false); }}
             onPermissionGranted={() => {
               refreshDevices();
               // Native capture is running: answer a pending MCP start.

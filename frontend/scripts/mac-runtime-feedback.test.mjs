@@ -144,3 +144,16 @@ test('selector exposes only a present error', () => {
   }));
   assert.doesNotMatch(ordinary, /aria-describedby|aria-invalid/);
 });
+
+test('the live microphone picker requires an app build that can switch', () => {
+  assert.match(page, /isNativeRecording && nativeCanSwitch && \(/);
+  const button = readFileSync(new URL('../src/components/RecordButton.tsx', import.meta.url), 'utf8');
+  assert.match(button, /onNativeInput\?\.\(resp\.input, resp\.can_switch_input === true\)/);
+});
+
+test('the wake retry timer is cleared with the page and rechecks the failed upload', () => {
+  const effect = page.slice(page.indexOf('onNativeSystemWake(() =>'), page.indexOf('// --- Mac app local control'));
+  assert.match(effect, /return \(\) => \{\s*off\(\);\s*if \(timer\) clearTimeout\(timer\);/);
+  // The state is read when the timer fires, not when the wake arrives.
+  assert.ok(effect.indexOf('setTimeout(') < effect.indexOf('wakeRetryRef.current'));
+});
