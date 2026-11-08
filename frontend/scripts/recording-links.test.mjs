@@ -142,7 +142,7 @@ test('links chosen during recording apply immediately to an existing draft', asy
   await f.stopAndSave();
   // Already applied: the save step neither relinks nor re-sends projects.
   assert.deepEqual(f.calls.filter(([kind]) => kind.startsWith('link')).length, 2);
-  assert.deepEqual(f.navigations, ['/meeting/m1']);
+  assert.deepEqual(f.navigations, ['/?uploaded=m1']);
 });
 
 test('an existing draft account cannot be cleared while recording', async () => {
@@ -164,7 +164,7 @@ test('links chosen while no draft exists apply when the meeting is created at sa
   assert.deepEqual(f.calls.slice(1), [
     ['create', 'later'], ['linkProject', 'p1', 'm1'], ['linkProject', 'p2', 'm1'], ['presign'],
   ]);
-  assert.deepEqual(f.navigations, ['/meeting/m1']);
+  assert.deepEqual(f.navigations, ['/?uploaded=m1']);
 });
 
 test('a failed deferred project link stops before upload and can be skipped', async () => {
@@ -183,7 +183,7 @@ test('a failed deferred project link stops before upload and can be skipped', as
   const cleanupIndex = f.calls.findIndex(([kind, id]) => kind === 'unlinkProject' && id === 'bad');
   assert.ok(cleanupIndex >= 0);
   assert.ok(cleanupIndex < f.calls.findIndex(([kind]) => kind === 'presign'));
-  assert.deepEqual(f.navigations, ['/meeting/m1']);
+  assert.deepEqual(f.navigations, ['/?uploaded=m1']);
 });
 
 function deferred() {
@@ -389,7 +389,7 @@ test('skip preserves a removal whose transport is still pending', async () => {
     await tick();
     pending.resolve();
     await awaitNavigation(fixtureState);
-    assert.deepEqual(fixtureState.navigations, ['/meeting/m1']);
+    assert.deepEqual(fixtureState.navigations, ['/?uploaded=m1']);
     assert.equal(fixtureState.serverProjects.has('project'), false);
     assert.equal(fixtureState.calls.filter(([kind]) => kind === 'linkProject').length, 1);
   } finally {
@@ -408,7 +408,7 @@ test('explicit account skip uploads without waiting on an unsettled private link
     assert.equal(fixtureState.calls.some(([kind]) => kind === 'presign'), false);
     fixtureState.hook.skipAccountRetry();
     await awaitNavigation(fixtureState);
-    assert.deepEqual(fixtureState.navigations, ['/meeting/m1']);
+    assert.deepEqual(fixtureState.navigations, ['/?uploaded=m1']);
     assert.equal(fixtureState.calls.filter(([kind]) => kind === 'linkAccount').length, 1);
   } finally {
     pending.resolve();
@@ -426,7 +426,7 @@ test('browser restoration does not inherit a failed recording project selection'
   failing = false;
   await fixtureState.hook.restoreBrowserRecording(browserBackup());
   await fixtureState.hook.handleNotesSubmit('');
-  assert.deepEqual(fixtureState.navigations, ['/meeting/restored']);
+  assert.deepEqual(fixtureState.navigations, ['/?uploaded=restored']);
   assert.deepEqual(fixtureState.calls.filter(([kind]) => kind === 'linkProject'), [
     ['linkProject', 'previous-project', 'm1'],
   ]);
@@ -446,7 +446,7 @@ test('browser restoration is isolated from an unsettled old project queue and it
     fixtureState.hook.handleRetry();
     await fixtureState.hook.restoreBrowserRecording(browserBackup());
     await fixtureState.hook.handleNotesSubmit('');
-    assert.deepEqual(fixtureState.navigations, ['/meeting/restored']);
+    assert.deepEqual(fixtureState.navigations, ['/?uploaded=restored']);
     pending.resolve();
     await tick();
     assert.deepEqual(fixtureState.calls.filter(([kind]) => kind === 'linkProject'), [
