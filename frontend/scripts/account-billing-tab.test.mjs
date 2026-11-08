@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { accountComponentHarness } from './account-component-harness.mjs';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const transpile = (source) => ts.transpileModule(source, {
@@ -105,7 +106,7 @@ function hooksRuntime() {
   };
   return { react, render, unmount, lateSets: () => lateSets };
 }
-const jsx = (type, props) => ({ type, props });
+const jsx = (type, props, key) => ({ type, props, key });
 const jsxRuntime = { jsx, jsxs: jsx, Fragment: 'fragment' };
 // Expands plain function components (hook-free helpers) so their output is searchable.
 const nodes = (node, stop = new Set()) => {
@@ -148,7 +149,7 @@ const resolving = (byAccount) => async (id, acct) => byAccount[acct][id];
 
 // ---------- AccountDetailClient fixture (visibility) ----------
 function detailPage({ billingService = true, accounts = [], search = '', config, loadAccounts, inherited = false } = {}) {
-  const { react, render, unmount, lateSets } = hooksRuntime();
+  const { react, render, unmount, lateSets } = accountComponentHarness();
   const AccountBillingTab = () => null;
   const emptyComponent = () => null;
   const emptyResult = async () => ({});
@@ -182,8 +183,13 @@ function detailPage({ billingService = true, accounts = [], search = '', config,
     '@/lib/upload': { uploadDocFile() {} },
     '@/components/MemberPicker': { MemberPicker: emptyComponent },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
+    '@/components/workspace/UpcomingMeetings': { PrivateUpcomingMeetings: () => { throw new Error('Calendar must not mount on billing or overview'); } },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
     '@/components/AccountBillingTab': { AccountBillingTab },
+    '@/components/workspace/AccountWorkspaceSelector': {
+      AccountWorkspaceSelector: emptyComponent,
+      useAccountWorkspaceAccounts: () => ({ accounts: [], loading: false, error: null }),
+    },
     '@/lib/runtimeConfig': { getRuntimeConfig: config || (async () => ({ billingService })) },
     '@/lib/billingApi': {
       fetchBillingAccounts: loadAccounts || (async () => accounts),
@@ -193,12 +199,16 @@ function detailPage({ billingService = true, accounts = [], search = '', config,
     '@/types/meeting': { ASSIGNABLE_ACCOUNT_ROLES: ['SSA', 'SA'] },
   };
   const mod = load('../src/components/AccountDetailClient.tsx', modules);
-  const draw = () => render(() => mod.default());
   const stop = new Set([AccountBillingTab, emptyComponent]);
+  const draw = () => render(mod.default, stop);
+  const settle = async () => {
+    for (let attempt = 0; attempt < 3; attempt++) { draw(); await tick(); }
+    return draw();
+  };
   return {
     datasetCalls,
-    async start() { draw(); await tick(); return draw(); },
-    async navigate(accountId) { pathname = `/accounts/${accountId}`; draw(); await tick(); return draw(); },
+    start: settle,
+    async navigate(accountId) { pathname = `/accounts/${accountId}`; return settle(); },
     unmount, lateSets,
     tabLabels: () => nodes(draw(), stop).filter((n) => n.props?.role === 'tab').map((n) => n.props.children),
     billingPanel: () => nodes(draw(), stop).find((n) => n.type === AccountBillingTab),
@@ -219,7 +229,7 @@ test('authorized inherited Billing entry opens the tab and upload link', async (
 test('hidden_without_flag', async () => {
   const page = detailPage({ billingService: false, accounts: [entryOf('acct-1')], search: 'tab=billing' });
   await page.start();
-  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서']);
   assert.equal(page.billingPanel(), undefined);
   assert.equal(summary.billingEntryFor([entryOf('acct-1')], 'acct-1')?.id, 'acct-1');
 });
@@ -228,7 +238,7 @@ test('hidden_for_non_member', async () => {
   for (const accounts of [[entryOf('acct-1', { member: false })], [entryOf('acct-2')], []]) {
     const page = detailPage({ accounts, search: 'tab=billing' });
     await page.start();
-    assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서'], JSON.stringify(accounts));
+    assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서'], JSON.stringify(accounts));
     assert.equal(page.billingPanel(), undefined);
   }
   assert.equal(summary.billingEntryFor([entryOf('acct-1', { member: false })], 'acct-1'), null);
@@ -472,11 +482,11 @@ test('account_switch_resets_billing_visibility', async () => {
   assert.equal(page.billingPanel()?.props.accountId, 'acct-1');
   // acct-2: its own read is still pending, and acct-1's entry must not carry over
   await page.navigate('acct-2');
-  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서']);
   assert.equal(page.billingPanel(), undefined);
   pending.shift()([entryOf('acct-1'), entryOf('acct-2', { member: false })]);
   await tick();
-  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서']);
 });
 
 test('config_or_accounts_failure_hides_tab', async () => {
@@ -486,7 +496,7 @@ test('config_or_accounts_failure_hides_tab', async () => {
   ];
   for (const page of pages) {
     await page.start();
-    assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+    assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서']);
     assert.equal(page.billingPanel(), undefined);
   }
 });
@@ -529,7 +539,7 @@ test('billing_401_does_not_sign_out', async () => {
   // the visibility probe hides the tab on a Billing 401
   const page = detailPage({ search: 'tab=billing', loadAccounts: async () => { throw new ApiError(401, 'BILLING', 'unauthorized'); } });
   await page.start();
-  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서']);
   // the open tab shows its error state on a Billing 401
   const tab = billingTab(async () => { throw new ApiError(401, 'BILLING', 'unauthorized'); });
   assert.ok(texts(await tab.show({ accountId: 'acct-1', entry: entryOf('acct-1') })).includes('Billing 데이터를 불러오지 못했습니다.'));
@@ -547,10 +557,10 @@ test('returning_to_account_waits_for_fresh_lookup', async () => {
   await tick();
   // back to acct-1: the earlier acct-1 entry must not show before the new lookup answers
   await page.navigate('acct-1');
-  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서']);
   assert.equal(page.billingPanel(), undefined);
   // the new lookup says the membership is gone: the tab stays hidden
   pending.shift()([entryOf('acct-1', { member: false })]);
   await tick();
-  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '인사이트', '프로젝트', '문서']);
 });
