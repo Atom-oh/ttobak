@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, dictionaryApi } from '@/lib/api';
 import { dictionaryErrorMessage, isRestorable, type DictionaryLayer, type DictTermItem, type TermLogEntry, type TermLogSnapshot } from '@/lib/dictionary';
@@ -42,7 +43,7 @@ export function TermHistory({ layer, term, onClose, onRestored }: Props) {
 
   const restore = async (entry: TermLogEntry) => {
     if (restoring) return;
-    if (!window.confirm(`'${term.displayAs}' 용어를 이 변경 이전 상태로 복원할까요?`)) return;
+    if (!await confirmDialog(`'${term.displayAs}' 용어를 이 변경 이전 상태로 복원할까요?`)) return;
     setRestoring(entry.logId);
     setError(null);
     try {

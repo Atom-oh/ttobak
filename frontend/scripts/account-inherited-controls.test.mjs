@@ -47,7 +47,7 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }) },
     '@/components/layout/AppLayout': { AppLayout: passthrough },
     '@/lib/api': { accountApi: {}, docApi: {}, projectApi: {}, settingsApi: {}, researchApi },
-    '@/lib/upload': { uploadDocFile() { throw new Error('Unexpected upload'); } },
+    '@/lib/dialog': { confirmDialog: async () => true, alertDialog: async () => {} }, '@/lib/upload': { uploadDocFile() { throw new Error('Unexpected upload'); } },
     '@/components/MemberPicker': { MemberPicker: none },
     '@/components/FieldInsightsSection': { FieldInsightsSection: none },
     '@/components/AccountBillingTab': { AccountBillingTab: none },
