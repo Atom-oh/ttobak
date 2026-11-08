@@ -96,6 +96,12 @@ func init() {
 	meetingService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	userAdminService := service.NewUserAdminService(cognitoClient, cognitoPoolID, repo)
 	accountService := service.NewAccountService(repo, s3Client, bucketName)
+	calendarService := service.NewCalendarService(
+		repository.NewCalendarRepository(dynamoClient, tableName),
+		service.NewCalendarCipher(kmsClient, os.Getenv("KMS_KEY_ID")),
+		accountService,
+	)
+	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Reuse the same cold-start Cognito client for AddMember's PendingShare
 	// invited-check (see AccountService.SetCognitoAdminAPI).
 	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
@@ -292,6 +298,9 @@ func init() {
 		r.Use(middleware.AuthWithConnectorGrants(middleware.ConnectorGrantResolver(connectorGrants)))
 		r.Post("/api/session/bootstrap", sessionHandler.Bootstrap)
 		r.Post("/api/billing-insight/handoff", billingInsightHandler.CreateHandoff)
+		r.Post("/api/calendar/sources/{sourceId}/sync", calendarHandler.Sync)
+		r.Get("/api/calendar/sources", calendarHandler.ListSources)
+		r.Get("/api/calendar/events", calendarHandler.ListEvents)
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)
