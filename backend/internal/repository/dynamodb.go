@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ttobak/backend/internal/sealing"
 	"io"
 	"log"
 	"regexp"
@@ -106,7 +107,13 @@ type DynamoDBRepository struct {
 	s3Client                *s3.Client
 	bucketName              string
 	skipTranscriptHydration bool
+	// sealer encrypts third-party personal data (account contacts). Nil means
+	// unconfigured: those writers and readers fail closed.
+	sealer sealing.Sealer
 }
+
+// SetRecordSealer configures envelope encryption for sensitive records.
+func (r *DynamoDBRepository) SetRecordSealer(s sealing.Sealer) { r.sealer = s }
 
 // NewDynamoDBRepository creates a new DynamoDB repository
 func NewDynamoDBRepository(client *dynamodb.Client, tableName string) *DynamoDBRepository {

@@ -539,6 +539,25 @@ export interface AccountMember {
   invited?: boolean;
 }
 
+export interface ContactInput {
+  name: string;
+  company?: string;
+  department?: string;
+  title?: string;
+  email?: string;
+  address?: string;
+  workPhone?: string;
+  fax?: string;
+  phone?: string;
+  cardRegisteredAt?: string;
+  cardBook?: string;
+  group?: string;
+  notes?: string;
+}
+
+export interface AccountContact extends ContactInput { contactId: string; revision: string }
+export interface AccountSpeakerTeamMember { userId: string; name: string; email: string; role: string }
+
 export interface Account {
   accountId: string;
   name: string;

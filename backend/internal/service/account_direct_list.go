@@ -14,8 +14,8 @@ const directAccountPageCandidates = 25
 // directAccountListRow deliberately uses exact membership rather than the
 // inherited read resolver: recording preparation requires direct edit access.
 // The navigation index is discovery only; current canonical rows grant access.
-func (s *AccountService) directAccountListRow(ctx context.Context, user, id string) (*model.AccountSummary, string, error) {
-	member, err := s.repo.GetMember(ctx, id, user)
+func directAccountListRow(ctx context.Context, reads accountReads, user, id string) (*model.AccountSummary, string, error) {
+	member, err := reads.GetMember(ctx, id, user)
 	if err != nil {
 		return nil, "", err
 	}
@@ -23,7 +23,7 @@ func (s *AccountService) directAccountListRow(ctx context.Context, user, id stri
 	if !validAccountReadIdentity(grant, id, user) {
 		return nil, "", nil
 	}
-	account, err := s.repo.GetAccount(ctx, id)
+	account, err := reads.GetAccount(ctx, id)
 	if err != nil {
 		return nil, "", err
 	}
@@ -58,11 +58,19 @@ func (s *AccountService) listDirectAccountsPage(ctx context.Context, user string
 			return nil, ErrStaleReadingCursor
 		}
 	}
+	// Each phase reads its rows through a fresh view primed by one batch read
+	// (exact memberships, no ancestry) instead of two GetItems per row.
+	var reads accountReads = s.repo
+	view := func(ids ...string) error {
+		var err error
+		reads, err = primedAccountReads(ctx, s.repo, user, ids, false)
+		return err
+	}
 	recheck := func(id, revision string) error {
 		if id == "" {
 			return nil
 		}
-		row, current, err := s.directAccountListRow(ctx, user, id)
+		row, current, err := directAccountListRow(ctx, reads, user, id)
 		if err != nil {
 			return err
 		}
@@ -70,6 +78,11 @@ func (s *AccountService) listDirectAccountsPage(ctx context.Context, user string
 			return ErrStaleReadingCursor
 		}
 		return nil
+	}
+	if c.Anchor != "" {
+		if err := view(c.Anchor); err != nil {
+			return nil, err
+		}
 	}
 	if err := recheck(c.Anchor, c.Revision); err != nil {
 		return nil, err
@@ -87,6 +100,18 @@ func (s *AccountService) listDirectAccountsPage(ctx context.Context, user string
 		return nil, ErrReadingData
 	}
 	previous := c.After
+	primed := []string{}
+	for _, id := range candidates.IDs {
+		if !readingID.MatchString(id) || id <= previous {
+			break
+		}
+		previous = id
+		primed = append(primed, id)
+	}
+	if err := view(primed...); err != nil {
+		return nil, err
+	}
+	previous = c.After
 	page := &AccountListPage{Accounts: []model.AccountSummary{}}
 	observed := [][2]string{}
 	for _, id := range candidates.IDs {
@@ -94,7 +119,7 @@ func (s *AccountService) listDirectAccountsPage(ctx context.Context, user string
 			return nil, ErrReadingData
 		}
 		previous = id
-		row, revision, err := s.directAccountListRow(ctx, user, id)
+		row, revision, err := directAccountListRow(ctx, reads, user, id)
 		if err != nil {
 			return nil, err
 		}
@@ -107,6 +132,18 @@ func (s *AccountService) listDirectAccountsPage(ctx context.Context, user string
 	if next := candidates.NextID; next != "" &&
 		(!readingID.MatchString(next) || next <= c.After || next < previous) {
 		return nil, ErrReadingData
+	}
+	rechecked := make([]string, 0, len(observed)+1)
+	for _, receipt := range observed {
+		rechecked = append(rechecked, receipt[0])
+	}
+	if len(observed) == 0 && c.Anchor != "" {
+		rechecked = append(rechecked, c.Anchor)
+	}
+	if len(rechecked) != 0 {
+		if err := view(rechecked...); err != nil {
+			return nil, err
+		}
 	}
 	for _, receipt := range observed {
 		if err := recheck(receipt[0], receipt[1]); err != nil {

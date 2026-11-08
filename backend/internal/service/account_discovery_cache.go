@@ -18,6 +18,9 @@ type discoveryReadCache struct {
 	members   accountReadMembershipRepo
 	children  accountReadChildrenRepo
 	nav       accountReadNavigationRepo
+	// batch is nil when the repository has no consistent batch primitive;
+	// priming is then a no-op and reads stay per item.
+	batch accountRowBatchReader
 
 	mu       sync.Mutex
 	accounts map[string]*model.Account
@@ -34,8 +37,9 @@ func newDiscoveryReadCache(repo accountReadMembershipRepo) accountReadMembership
 	if !ok1 || !ok2 || !ok3 {
 		return repo
 	}
+	batch, _ := repo.(accountRowBatchReader)
 	return &discoveryReadCache{
-		hierarchy: hierarchy, members: repo, children: children, nav: nav,
+		hierarchy: hierarchy, members: repo, children: children, nav: nav, batch: batch,
 		accounts: map[string]*model.Account{}, grants: map[[2]string]*model.AccountMember{},
 	}
 }
