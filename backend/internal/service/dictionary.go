@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	transcribeTypes "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
+	"github.com/ttobak/backend/internal/fanout"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -59,6 +60,9 @@ type DictionaryService struct {
 	now              func() time.Time
 	// isMember reports Account membership; nil refuses every Account layer.
 	isMember func(ctx context.Context, accountID, userID string) (bool, error)
+	// isMemberBatch is the batched membership read for the vocabulary plan;
+	// nil checks each Account with isMember.
+	isMemberBatch func(ctx context.Context, accountIDs []string, userID string) (map[string]bool, error)
 	// accountOrder lists the user's Account IDs in recency order for the
 	// vocabulary plan; nil plans no Account layer.
 	accountOrder func(ctx context.Context, userID string) ([]string, error)
@@ -86,31 +90,57 @@ func NewDictionaryServiceWithStore(store DictionaryStore, client TranscribeVocab
 // only. It never rewrites the blob; vocabulary status sync is a conditional
 // update of the VOCAB# row (or of the blob status field before migration).
 func (s *DictionaryService) GetDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, error) {
-	resp, _, _, err := s.readDictionary(ctx, userID)
+	resp, _, _, _, err := s.readDictionary(ctx, userID, false)
 	return resp, err
 }
 
-func (s *DictionaryService) readDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, *model.UserDictionary, []model.DictTerm, error) {
-	dict, err := s.repo.GetDictionary(ctx, userID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get dictionary: %w", err)
+// readDictionary reads the blob, the Personal rows and the ko-KR VOCAB# row
+// concurrently (with withEn, the en-US row too) and reports the blob error
+// before the rows error, as the sequential reads did. The returned states
+// let the caller build vocabulary views from the same reads.
+func (s *DictionaryService) readDictionary(ctx context.Context, userID string, withEn bool) (*model.DictionaryResponse, *model.UserDictionary, []model.DictTerm, [2]stateRead, error) {
+	var (
+		dict    *model.UserDictionary
+		dictErr error
+		rows    []model.DictTerm
+		rowsErr error
+		states  [2]stateRead
+	)
+	reads := 3
+	if withEn {
+		reads = 4
 	}
-	rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get dictionary terms: %w", err)
+	fanout.Ordered(ctx, reads, reads, func(ctx context.Context, k int) error {
+		switch k {
+		case 0:
+			dict, dictErr = s.repo.GetDictionary(ctx, userID)
+		case 1:
+			rows, rowsErr = s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
+		case 2:
+			states[0] = s.readVocabularyState(ctx, userID, model.VocabLangKo)
+		default:
+			states[1] = s.readVocabularyState(ctx, userID, model.VocabLangEn)
+		}
+		return nil
+	})
+	if dictErr != nil {
+		return nil, nil, nil, states, fmt.Errorf("failed to get dictionary: %w", dictErr)
+	}
+	if rowsErr != nil {
+		return nil, nil, nil, states, fmt.Errorf("failed to get dictionary terms: %w", rowsErr)
 	}
 	return &model.DictionaryResponse{
 		Terms:  unionLegacyTerms(dict, rows),
-		Status: s.personalVocabularyStatus(ctx, userID, dict),
-	}, dict, rows, nil
+		Status: s.personalVocabularyStatus(ctx, userID, dict, states[0]),
+	}, dict, rows, states, nil
 }
 
 // personalVocabularyStatus reports the legacy status string for the personal
-// ko-KR vocabulary, preferring the VOCAB# row over the blob. The response
-// carries no vocabulary name: the live client would send a ko-KR-only
-// vocabulary on its ko-KR/en-US stream (ADR-008 acceptance item 5).
-func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary) string {
-	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
+// ko-KR vocabulary, preferring the VOCAB# row (read by the caller) over the
+// blob. The response carries no vocabulary name: the live client would send a
+// ko-KR-only vocabulary on its ko-KR/en-US stream (ADR-008 acceptance item 5).
+func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary, ko stateRead) string {
+	state, err := ko.state, ko.err
 	if err != nil {
 		log.Printf("failed to read vocabulary state for user %s: %v", userID, err)
 	} else if state != nil {

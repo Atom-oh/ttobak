@@ -188,7 +188,7 @@ function recoveryHook(meeting, apiOverrides = {}) {
           assert.fail(dependency);
         } }),
         '@/lib/meetingNotes': {}, '@/lib/upload': {}, '@/lib/tauri': { isCommandNotFound: () => false },
-        '@/lib/browserRecordingBackup': {},
+        '@/lib/browserRecordingBackup': {}, '@/lib/recordingLinks': load('recordingLinks'),
       };
       assert.ok(name in modules, name);
       return modules[name];

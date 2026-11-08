@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ttobak/backend/internal/fanout"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -82,6 +83,12 @@ type accountReadChildrenRepo interface {
 // trees fail instead of presenting a silently incomplete collection. Hints are
 // additional candidate roots and never grant access.
 func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo, userID string, hints []string) ([]string, error) {
+	return listReadableAccountIDsWith(ctx, repo, userID, hints, listReadConcurrency)
+}
+
+// listReadableAccountIDsWith takes the child-page fan-out width; 0 keeps the
+// original one-parent-at-a-time child walk, which tests use as a reference.
+func listReadableAccountIDsWith(ctx context.Context, repo accountReadMembershipRepo, userID string, hints []string, childFanout int) ([]string, error) {
 	candidateIDs := append([]string{}, hints...)
 	if nav, ok := repo.(accountReadNavigationRepo); ok {
 		// Each page holds up to accountNavigationPageSize ascending IDs. The
@@ -190,7 +197,19 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 		if view, ok := reads.(*discoveryReadCache); ok {
 			childReads = view
 		}
+		// The walk is level-synchronous: on reaching the first parent of a BFS
+		// level, it reads the first child page of every parent in that level
+		// concurrently, then consumes the results in the original parent
+		// order. seen/grants/queue, every limit and the first error are
+		// exactly those of the sequential walk; continuation pages for one
+		// parent stay sequential.
+		var firstPages []childPageResult
+		levelStart, levelEnd := 0, 0
 		for pos := 0; pos < len(queue); pos++ {
+			if childFanout > 0 && pos == levelEnd {
+				levelStart, levelEnd = pos, len(queue)
+				firstPages = prefetchFirstChildPages(ctx, children, queue[levelStart:levelEnd], childFanout)
+			}
 			parent := queue[pos]
 			cursor := ""
 			cursors := map[string]bool{}
@@ -198,7 +217,14 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 				if pages >= 10000 {
 					return nil, ErrReadingData
 				}
-				ids, next, err := children.ListChildAccountIDsPage(ctx, parent, cursor, 100)
+				var ids []string
+				var next *string
+				var err error
+				if pre := takeFirstChildPage(firstPages, pos-levelStart, pages); pre != nil {
+					ids, next, err = pre.ids, pre.next, pre.err
+				} else {
+					ids, next, err = children.ListChildAccountIDsPage(ctx, parent, cursor, 100)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -257,6 +283,43 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+// childPageResult is one prefetched first child page (cursor "", limit 100).
+type childPageResult struct {
+	ready bool
+	ids   []string
+	next  *string
+	err   error
+}
+
+// prefetchFirstChildPages reads the first child page of every parent with at
+// most limit reads in flight. Only slots at or below fanout.Ordered's fatal
+// index are marked ready, since the sequential walk would have issued each of
+// them before stopping; a slot that was canceled or never started is read
+// live if reached. Results live only in the caller's frame: errors are never
+// cached and nothing is shared across requests.
+func prefetchFirstChildPages(ctx context.Context, children accountReadChildrenRepo, parents []string, limit int) []childPageResult {
+	out := make([]childPageResult, len(parents))
+	stop := fanout.Ordered(ctx, len(parents), limit, func(ctx context.Context, k int) error {
+		ids, next, err := children.ListChildAccountIDsPage(ctx, parents[k], "", 100)
+		out[k] = childPageResult{ids: ids, next: next, err: err}
+		return err
+	})
+	for k := 0; k < len(out) && k <= stop; k++ {
+		out[k].ready = true
+	}
+	return out
+}
+
+// takeFirstChildPage returns a ready prefetched first page once, releasing it.
+func takeFirstChildPage(pages []childPageResult, slot, page int) *childPageResult {
+	if page != 0 || slot < 0 || slot >= len(pages) || !pages[slot].ready {
+		return nil
+	}
+	r := pages[slot]
+	pages[slot] = childPageResult{}
+	return &r
 }
 
 type AccountListPage struct {

@@ -105,18 +105,19 @@ func termViews(dict *model.UserDictionary, rows []model.DictTerm) []model.DictTe
 // GetDictionaryWithTerms is the API GET: a best-effort migration first, so
 // terms have termIds, then EnsureVocabularies (poll, flip or start a build),
 // then legacy fields plus rows. Shared readers keep the never-writing
-// GetDictionary.
+// GetDictionary. The vocabulary views and the legacy fields come from one set
+// of concurrent reads made after EnsureVocabularies' writes.
 func (s *DictionaryService) GetDictionaryWithTerms(ctx context.Context, userID string) (*model.DictionaryResponse, error) {
 	if _, err := s.MigrateLegacyDictionary(ctx, userID); err != nil && !errors.Is(err, ErrLegacyDictionaryConflict) {
 		log.Printf("dictionary migration deferred for user %s: %v", userID, err)
 	}
-	views, warnings := s.EnsureVocabularies(ctx, userID, model.VocabContextPersonal, false)
-	resp, dict, rows, err := s.readDictionary(ctx, userID)
+	warnings := s.advanceVocabularies(ctx, userID, model.VocabContextPersonal, false)
+	resp, dict, rows, states, err := s.readDictionary(ctx, userID, true)
 	if err != nil {
 		return nil, err
 	}
 	resp.Items = termViews(dict, rows)
-	resp.Vocabularies, resp.Warnings = views, warnings
+	resp.Vocabularies, resp.Warnings = s.viewsFrom(userID, states[0], states[1]), warnings
 	resp.MigrationPending = dict != nil && dict.MigratedAt == "" && len(dict.Terms) > 0
 	return resp, nil
 }
@@ -531,7 +532,7 @@ func prepareLegacyTerm(t model.DictionaryTerm, unchanged, editsManual bool) (leg
 // suggested rows; ignored edits of them are reported as a warning. Auto rows
 // are kept out of the blob so derived terms never gain a second copy there.
 func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string, terms []model.DictionaryTerm) (*model.DictionaryResponse, error) {
-	_, dict, rows, err := s.readDictionary(ctx, userID)
+	_, dict, rows, _, err := s.readDictionary(ctx, userID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +568,7 @@ func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string,
 		return nil, err
 	}
 	views, warnings := s.EnsureVocabularies(ctx, userID, model.VocabContextPersonal, true)
-	resp, _, _, err := s.readDictionary(ctx, userID)
+	resp, _, _, _, err := s.readDictionary(ctx, userID, false)
 	if err != nil {
 		return nil, err
 	}

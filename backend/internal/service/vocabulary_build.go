@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	transcribeTypes "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
 
+	"github.com/ttobak/backend/internal/fanout"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -139,14 +140,38 @@ func vocabularyView(st *model.VocabularyState) model.VocabularyView {
 
 // vocabularyViews reads the personal states without writing.
 func (s *DictionaryService) vocabularyViews(ctx context.Context, userID string) *model.VocabularyViews {
-	view := func(lang string) model.VocabularyView {
-		st, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, lang)
-		if err != nil {
-			log.Printf("failed to read %s vocabulary state for user %s: %v", lang, userID, err)
+	var ko, en stateRead
+	fanout.Ordered(ctx, 2, 2, func(ctx context.Context, k int) error {
+		if k == 0 {
+			ko = s.readVocabularyState(ctx, userID, model.VocabLangKo)
+		} else {
+			en = s.readVocabularyState(ctx, userID, model.VocabLangEn)
 		}
-		return vocabularyView(st)
+		return nil
+	})
+	return s.viewsFrom(userID, ko, en)
+}
+
+// stateRead is one personal VOCAB# read result.
+type stateRead struct {
+	state *model.VocabularyState
+	err   error
+}
+
+func (s *DictionaryService) readVocabularyState(ctx context.Context, userID, lang string) stateRead {
+	st, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, lang)
+	return stateRead{state: st, err: err}
+}
+
+// viewsFrom builds the views from already-read states, logging read errors.
+func (s *DictionaryService) viewsFrom(userID string, ko, en stateRead) *model.VocabularyViews {
+	view := func(lang string, r stateRead) model.VocabularyView {
+		if r.err != nil {
+			log.Printf("failed to read %s vocabulary state for user %s: %v", lang, userID, r.err)
+		}
+		return vocabularyView(r.state)
 	}
-	return &model.VocabularyViews{Ko: view(model.VocabLangKo), En: view(model.VocabLangEn)}
+	return &model.VocabularyViews{Ko: view(model.VocabLangKo, ko), En: view(model.VocabLangEn, en)}
 }
 
 // EnsureVocabularies advances the personal builds (vocabBuildLanguages) by
@@ -155,14 +180,22 @@ func (s *DictionaryService) vocabularyViews(ctx context.Context, userID string) 
 // warnings. The dictionary GET runs it, including the one each recording start
 // makes, so a finished build flips without a settings-page visit.
 func (s *DictionaryService) EnsureVocabularies(ctx context.Context, userID, vocabContext string, manual bool) (*model.VocabularyViews, []string) {
+	warnings := s.advanceVocabularies(ctx, userID, vocabContext, manual)
+	return s.vocabularyViews(ctx, userID), warnings
+}
+
+// advanceVocabularies is EnsureVocabularies without the final view read. One
+// membership memo serves the whole call and is dropped with it.
+func (s *DictionaryService) advanceVocabularies(ctx context.Context, userID, vocabContext string, manual bool) []string {
 	if vocabContext != model.VocabContextPersonal || s.builder == nil || s.transcribeClient == nil {
-		return s.vocabularyViews(ctx, userID), nil
+		return nil
 	}
+	memo := s.newMembershipMemo(userID)
 	var warnings []string
 	for _, lang := range vocabBuildLanguages {
-		warnings = append(warnings, s.ensureVocabulary(ctx, userID, lang, manual)...)
+		warnings = append(warnings, s.ensureVocabulary(ctx, userID, lang, manual, memo)...)
 	}
-	return s.vocabularyViews(ctx, userID), dedupeWarnings(warnings)
+	return dedupeWarnings(warnings)
 }
 
 func dedupeWarnings(in []string) []string {
@@ -189,23 +222,41 @@ type vocabStep struct {
 // sees this step's write; every step that could reach the provider relists,
 // so a deleted term is never built back in from a stale snapshot. The terms
 // are every layer's rows (vocabularyLayers); only the Account order is read
-// once per call, while membership and rows are re-read on every step. An
-// order failure skips the whole call (no claim, no plan) with a warning.
-func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool) []string {
+// once per call and each Account's membership once per call (memo), while
+// rows are re-read on every step. The first state read runs alongside the
+// order read; the order error still wins. An order failure skips the whole
+// call (no claim, no plan) with a warning.
+func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool, memo *membershipMemo) []string {
 	bypass := manual
 	var warnings []string
-	accountIDs, err := s.vocabularyAccountOrder(ctx, userID)
-	if err != nil {
-		log.Printf("vocabulary build skipped for user %s: %v", userID, err)
+	var (
+		accountIDs []string
+		orderErr   error
+		first      *model.VocabularyState
+		firstErr   error
+	)
+	fanout.Ordered(ctx, 2, 2, func(ctx context.Context, k int) error {
+		if k == 0 {
+			accountIDs, orderErr = s.vocabularyAccountOrder(ctx, userID)
+			return orderErr
+		}
+		first, firstErr = s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, lang)
+		return nil
+	})
+	if orderErr != nil {
+		log.Printf("vocabulary build skipped for user %s: %v", userID, orderErr)
 		return append(warnings, vocabularyRebuildWarning)
 	}
 	for step := 0; step < vocabEnsureSteps; step++ {
-		st, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, lang)
+		st, err := first, firstErr
+		if step > 0 {
+			st, err = s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, lang)
+		}
 		if err != nil {
 			log.Printf("vocabulary state read failed for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)
 		}
-		layers, err := s.listVocabularyLayers(ctx, userID, accountIDs)
+		layers, err := s.listVocabularyLayers(ctx, userID, accountIDs, memo)
 		if err != nil {
 			log.Printf("vocabulary build skipped for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)

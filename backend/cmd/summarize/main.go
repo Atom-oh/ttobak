@@ -107,6 +107,7 @@ func init() {
 		member, err := repo.GetMember(ctx, accountID, userID)
 		return member != nil, err
 	})
+	dictService.SetMembershipBatchReader(service.BatchMembershipReader(repo))
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
 	// Silent transcript correction (TRANSCRIPT_CORRECTION_MODE): the meeting
 	// glossary for refinement, and heardAs feedback from repeated fixes.
