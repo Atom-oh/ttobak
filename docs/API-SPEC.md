@@ -692,6 +692,26 @@ same way and return that 503 before any write. Contact rows have no TTL and rema
 direct member deletes them. Point-in-time recovery can retain deleted, still
 encrypted data within the table's recovery window.
 
+`GET/POST /api/accounts/{accountId}/events` and `GET/PUT/DELETE
+/api/accounts/{accountId}/events/{eventId}` manage account events (schedules)
+with the same **direct** membership rule and transactional access checks as
+contacts. An event has `eventId`, `revision`, `title` (1-256 bytes), `startAt`
+and optional `endAt` (RFC 3339, normalized to UTC seconds; at most 31 days
+apart), `allDay`, `location` (512 bytes), `attendees` (at most 50 of
+`{contactId?, name, email?}`; a `contactId` must name a contact in the same
+account), `notes` (8,192 bytes), `createdBy`, `createdAt` and `updatedAt`.
+POST returns 201; PUT requires the observed `revision` and DELETE its
+`revision` query parameter; a stale revision returns 409. Clients cannot set
+the author or timestamps.
+
+Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
+`order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
+order and resolved range. Without `from`, ascending lists start now (upcoming)
+and descending lists cover all past times. Responses are `{events,
+nextCursor}` and are not cached. Event fields except `startAt` are sealed like
+contacts (ADR-063); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
+Events have no TTL and remain until a direct member deletes them.
+
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
 update sets `accountId` and `sharedToAccount: false` together, including when
@@ -1369,6 +1389,11 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Delete` |
 | GET | `/api/accounts/{accountId}/speaker-team` | `accountContactsHandler.SpeakerTeam` |
+| GET | `/api/accounts/{accountId}/events` | `accountEventsHandler.List` |
+| POST | `/api/accounts/{accountId}/events` | `accountEventsHandler.Create` |
+| GET | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Get` |
+| PUT | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Update` |
+| DELETE | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Delete` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
