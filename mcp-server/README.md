@@ -616,7 +616,8 @@ Bearer transport lacks retry keys. MCP clients and AI providers may see data.
 `ttobak_list_account_events` and `ttobak_create_account_event` manage an
 account's shared events (schedules) and require direct membership; private
 writes also require approval. List takes `from`, `to`, `order` (`asc` by default:
-upcoming events), `limit` 1–25 and `nextCursor`; oversized pages retry with a
+upcoming events; for past events use `desc` with `to` set to now), `limit`
+1–25 and `cursor` (pass the returned `nextCursor`); oversized pages retry with a
 smaller limit. Create takes `accountId` and `event` (`title`, RFC 3339 `startAt`,
 optional `endAt`, `allDay`, `location`, `notes`, and up to 50 `attendees` that may
 reference the account's contacts by `contactId`), at most 12,000 bytes.

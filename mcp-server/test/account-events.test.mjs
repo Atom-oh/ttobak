@@ -91,6 +91,9 @@ test('create failures distinguish definitive rejections from unknown outcomes', 
   assert.match(await text(), /EVENT_WRITE_FAILED: HTTP_409/);
   error = new Error('socket hang up');
   assert.match(await text(), /outcome unknown; list events before retrying/);
+  // A committed create whose body failed to parse must not look definitive.
+  error = new Error('HTTP 201: invalid JSON response');
+  assert.match(await text(), /outcome unknown; list events before retrying/);
 });
 
 test('oversized event pages retry at a smaller limit', async t => {

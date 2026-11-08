@@ -23758,7 +23758,7 @@ var EVENT_IDEMPOTENCY_KEY = { type: "string", minLength: 1, maxLength: 128, patt
 var ACCOUNT_EVENT_TOOLS = [
   {
     name: "ttobak_list_account_events",
-    description: "List one eventPage of an authorized account's shared events (schedules). Without from, ascending order lists upcoming events and descending order lists past ones. Follow nextCursor for more.",
+    description: "List one page of an authorized account's shared events (schedules). Without from, ascending order lists upcoming events. For past events use order desc with to set to now. Pass the returned nextCursor as cursor for more.",
     annotations: { readOnlyHint: true },
     inputSchema: { type: "object", additionalProperties: false, required: ["accountId"], properties: {
       accountId: EVENT_ACCOUNT_ID,
@@ -23802,7 +23802,7 @@ function eventListOptions(args) {
 }
 function boundedEventResult(value) {
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
-  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error("RESULT_TOO_LARGE: reduce the event eventPage limit");
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error("RESULT_TOO_LARGE: reduce the event page limit");
   return result;
 }
 function eventPage(value, limit) {
@@ -23843,7 +23843,7 @@ async function callAccountEventTool(name, args, api) {
     value = await api.createAccountEvent(accountId, input, key);
   } catch (e) {
     const code = eventHttpStatus(e);
-    if (code && code !== "408" && !(api.requiresEventIdempotency && code === "403") && Number(code) < 500) throw new Error(`EVENT_WRITE_FAILED: HTTP_${code}`);
+    if (code && code !== "408" && !(api.requiresEventIdempotency && code === "403") && Number(code) >= 400 && Number(code) < 500) throw new Error(`EVENT_WRITE_FAILED: HTTP_${code}`);
     throw new Error(api.requiresEventIdempotency ? "EVENT_WRITE_FAILED: outcome unknown; retry the same idempotencyKey and event" : "EVENT_WRITE_FAILED: outcome unknown; list events before retrying");
   }
   if (!isEventRecord(value) || typeof value.eventId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.eventId)) {

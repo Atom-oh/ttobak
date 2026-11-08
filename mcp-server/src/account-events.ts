@@ -23,7 +23,7 @@ function eventOrderedFields<T extends readonly string[]>(source: Record<string, 
   return out;
 }
 
-// The private bridge binds an idempotent write to the exact request eventTextFits, so
+// The private bridge binds an idempotent write to the exact request bytes, so
 // a retry must serialize the same event identically regardless of the
 // caller's property order: schema order at every level.
 export function canonicalEvent(event: EventInput): EventInput {
@@ -52,7 +52,7 @@ const EVENT_IDEMPOTENCY_KEY = { type: 'string', minLength: 1, maxLength: 128, pa
 export const ACCOUNT_EVENT_TOOLS: Tool[] = [
   {
     name: 'ttobak_list_account_events',
-    description: 'List one eventPage of an authorized account\'s shared events (schedules). Without from, ascending order lists upcoming events and descending order lists past ones. Follow nextCursor for more.',
+    description: 'List one page of an authorized account\'s shared events (schedules). Without from, ascending order lists upcoming events. For past events use order desc with to set to now. Pass the returned nextCursor as cursor for more.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', additionalProperties: false, required: ['accountId'], properties: {
       accountId: EVENT_ACCOUNT_ID, from: EVENT_TIME, to: EVENT_TIME, order: { type: 'string', enum: ['asc', 'desc'] },
@@ -101,7 +101,7 @@ function eventListOptions(args: Record<string, unknown>): EventListOptions {
 }
 function boundedEventResult(value: unknown) {
   const result = { content: [{ type: 'text' as const, text: JSON.stringify(value) }] };
-  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error('RESULT_TOO_LARGE: reduce the event eventPage limit');
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error('RESULT_TOO_LARGE: reduce the event page limit');
   return result;
 }
 function eventPage(value: unknown, limit: number) {
@@ -141,7 +141,7 @@ export async function callAccountEventTool(name: string, args: Record<string, un
   catch (e) {
     const code = eventHttpStatus(e);
     // A 4xx (other than a timeout or a pre-call private denial) is definitive.
-    if (code && code !== '408' && !(api.requiresEventIdempotency && code === '403') && Number(code) < 500) throw new Error(`EVENT_WRITE_FAILED: HTTP_${code}`);
+    if (code && code !== '408' && !(api.requiresEventIdempotency && code === '403') && Number(code) >= 400 && Number(code) < 500) throw new Error(`EVENT_WRITE_FAILED: HTTP_${code}`);
     throw new Error(api.requiresEventIdempotency ? 'EVENT_WRITE_FAILED: outcome unknown; retry the same idempotencyKey and event' : 'EVENT_WRITE_FAILED: outcome unknown; list events before retrying');
   }
   if (!isEventRecord(value) || typeof value.eventId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.eventId)) {
