@@ -96,13 +96,14 @@ without a user confirmation.
   audio grace.
 - Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads
   the Meet page of each Chromium browser instance playing or capturing audio
-  through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). Only
-  the toggle's muted label ("Turn on microphone" and its Korean form) silences the
-  microphone; any other readable page records it, so an unlisted language
-  never drops the user's voice. An unreadable page (another tab in front)
-  keeps the last state. Safari's shared WebKit process is not followed. This needs Accessibility permission; without it the start
-  response warns and the microphone is always recorded. Ad-hoc re-signing
-  invalidates the grant, as it does other TCC grants.
+  through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). The
+  toggle's label gives the state ("Turn on microphone" while muted, "Turn off
+  microphone" while unmuted, and their Korean forms). A Meet page without the
+  toggle has left the call: once a recording has followed Meet, that keeps the
+  microphone silent, as with Zoom; a recording that never saw the toggle (e.g.
+  an unlisted language) records the microphone. An unreadable page (another
+  tab in front) keeps the last state. Safari's shared WebKit process is not
+  followed.
 - During a native recording, if other apps play audio for 10 s while the
   system tap has delivered only exact zeros, the app posts a notification that
   System Audio Recording is likely denied, instead of reporting it only at

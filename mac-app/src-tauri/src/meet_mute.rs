@@ -2,16 +2,21 @@
 //!
 //! Meet keeps the microphone open while muted, so Core Audio cannot tell.
 //! The state comes from the page's own toggle through the Accessibility API:
-//! Meet labels it "Turn on microphone" ("마이크 켜기") while the user is muted;
-//! a readable page without that label counts as unmuted. Only the web area of a `meet.google.com` page in
-//! a browser instance that is capturing audio is read. Unlike Zoom, an
-//! unreadable page (e.g. another tab in front) keeps the last state: the
-//! user is still in the meeting. Rules are pure and unit tested.
+//! Meet labels it "Turn on microphone" while the user is muted and "Turn off
+//! microphone" while unmuted. A Meet page without either toggle has left the
+//! call (or is in a language not listed). Only the web area of a
+//! `meet.google.com` page in a browser instance using audio is read. An
+//! unreadable page (e.g. another tab in front) keeps the last state. Once a
+//! recording has followed Meet, leaving the call keeps the microphone silent,
+//! as with Zoom; a recording that never saw a toggle records it as before.
+//! Rules are pure and unit tested.
 
-use crate::zoom_mute::MicState;
+use crate::zoom_mute::{MicState, Silence};
 
 /// Labels shown while muted (the button turns the microphone on).
 const MUTED_LABELS: &[&str] = &["turn on microphone", "마이크 켜기"];
+/// Labels shown while unmuted (the button turns the microphone off).
+const UNMUTED_LABELS: &[&str] = &["turn off microphone", "마이크 끄기"];
 
 /// Lowercases, collapses spaces and drops a trailing shortcut hint such as
 /// "(⌘ + d)".
@@ -28,50 +33,65 @@ pub fn normalize(label: &str) -> String {
         .to_lowercase()
 }
 
-/// Classifies the button labels of one readable Meet page. Only the
-/// muted label silences: any other page (unmuted, or a language not listed)
-/// records the microphone as before, so an unrecognized label never drops
-/// the user's voice.
+/// Classifies the button labels of one readable Meet page.
 pub fn classify<'a>(labels: impl IntoIterator<Item = &'a str>) -> MicState {
-    let muted = labels
-        .into_iter()
-        .any(|l| MUTED_LABELS.contains(&normalize(l).as_str()));
-    if muted {
-        MicState::Muted
-    } else {
-        MicState::Unmuted
+    let (mut muted, mut unmuted) = (false, false);
+    for label in labels {
+        let l = normalize(label);
+        muted |= MUTED_LABELS.contains(&l.as_str());
+        unmuted |= UNMUTED_LABELS.contains(&l.as_str());
+    }
+    match (muted, unmuted) {
+        (true, false) => MicState::Muted,
+        (false, true) => MicState::Unmuted,
+        // Both at once is not a single toggle: record the microphone.
+        (true, true) => MicState::Unknown,
+        (false, false) => MicState::NoMeeting,
     }
 }
 
-/// Combines the states of every readable Meet page: any muted page with no
-/// unmuted one means muted.
+/// Combines the states of every readable Meet page: an unmuted page wins,
+/// then a muted one; no page at all is unknown.
 pub fn combine(states: impl IntoIterator<Item = MicState>) -> MicState {
-    let (mut muted, mut unmuted) = (false, false);
+    let (mut muted, mut unmuted, mut left) = (false, false, false);
     for s in states {
         muted |= s == MicState::Muted;
         unmuted |= s == MicState::Unmuted;
+        left |= s == MicState::NoMeeting;
     }
-    match (muted, unmuted) {
-        (_, true) => MicState::Unmuted,
-        (true, false) => MicState::Muted,
-        _ => MicState::Unknown,
+    if unmuted {
+        MicState::Unmuted
+    } else if muted {
+        MicState::Muted
+    } else if left {
+        MicState::NoMeeting
+    } else {
+        MicState::Unknown
     }
 }
 
-/// Holds Meet's last explicit state: muted until an unmuted page is read.
+/// Turns Meet states into the microphone gate.
 #[derive(Debug, Default)]
 pub struct Hold {
-    muted: bool,
+    silence: Silence,
+    followed: bool,
 }
 
 impl Hold {
-    pub fn observe(&mut self, state: MicState) -> bool {
+    pub fn observe(&mut self, state: MicState) -> Silence {
         match state {
-            MicState::Muted => self.muted = true,
-            MicState::Unmuted => self.muted = false,
-            MicState::Unknown | MicState::NoMeeting => {}
+            MicState::Muted => {
+                self.silence = Silence::Muted;
+                self.followed = true;
+            }
+            MicState::Unmuted => {
+                self.silence = Silence::Open;
+                self.followed = true;
+            }
+            MicState::NoMeeting if self.followed => self.silence = Silence::MeetingEnded,
+            MicState::NoMeeting | MicState::Unknown => {}
         }
-        self.muted
+        self.silence
     }
 }
 
@@ -166,24 +186,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_muted_label_silences() {
+    fn the_toggle_label_gives_the_state() {
         assert_eq!(
             classify(["마이크 켜기", "손들기(ctrl + ⌘ + h)"]),
             MicState::Muted
         );
-        assert_eq!(
-            classify(["  Turn ON   microphone (⌘ + d)"]),
-            MicState::Muted
-        );
+        assert_eq!(classify(["Turn off microphone (⌘ + d)"]), MicState::Unmuted);
+        assert_eq!(classify(["  Turn ON   microphone "]), MicState::Muted);
     }
 
     #[test]
-    fn any_other_readable_page_records_the_microphone() {
-        assert_eq!(classify(["Turn off microphone (⌘ + d)"]), MicState::Unmuted);
-        assert_eq!(classify(["Leave call"]), MicState::Unmuted);
-        assert_eq!(classify(Vec::<&str>::new()), MicState::Unmuted);
+    fn a_page_without_the_toggle_has_left_the_call() {
+        assert_eq!(classify(["", "Rejoin"]), MicState::NoMeeting);
         // A remote participant action is not the local toggle.
-        assert_eq!(classify(["Mute Alice's microphone"]), MicState::Unmuted);
+        assert_eq!(classify(["Mute Alice's microphone"]), MicState::NoMeeting);
+        assert_eq!(classify(["마이크 켜기", "마이크 끄기"]), MicState::Unknown);
     }
 
     #[test]
@@ -193,18 +210,28 @@ mod tests {
             MicState::Unmuted
         );
         assert_eq!(
-            combine([MicState::Muted, MicState::Unknown]),
+            combine([MicState::Muted, MicState::NoMeeting]),
             MicState::Muted
         );
+        assert_eq!(combine([MicState::NoMeeting]), MicState::NoMeeting);
         assert_eq!(combine([]), MicState::Unknown);
     }
 
     #[test]
-    fn hold_keeps_the_last_state_through_unreadable_polls() {
+    fn leaving_a_followed_call_keeps_the_microphone_silent() {
         let mut h = Hold::default();
-        assert!(!h.observe(MicState::Unknown));
-        assert!(h.observe(MicState::Muted));
-        assert!(h.observe(MicState::Unknown));
-        assert!(!h.observe(MicState::Unmuted));
+        assert_eq!(h.observe(MicState::Unmuted), Silence::Open);
+        assert_eq!(h.observe(MicState::Unknown), Silence::Open);
+        assert_eq!(h.observe(MicState::NoMeeting), Silence::MeetingEnded);
+        // Rejoining restores following.
+        assert_eq!(h.observe(MicState::Muted), Silence::Muted);
+        assert_eq!(h.observe(MicState::Unmuted), Silence::Open);
+    }
+
+    #[test]
+    fn a_recording_that_never_saw_the_toggle_keeps_the_microphone() {
+        let mut h = Hold::default();
+        assert_eq!(h.observe(MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(MicState::Unknown), Silence::Open);
     }
 }

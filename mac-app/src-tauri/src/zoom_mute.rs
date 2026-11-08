@@ -434,17 +434,21 @@ mod mac {
             } else {
                 Silence::Open
             };
-            let meet_muted = trusted && {
+            let meet_silence = if trusted {
                 if browsers_checked.map_or(true, |t| t.elapsed() >= BROWSER_REFRESH) {
                     browsers = crate::meeting_detect::capturing_browser_pids();
                     browsers_checked = Some(Instant::now());
                 }
                 meet.observe(crate::meet_mute::current_state(&browsers))
+            } else {
+                Silence::Open
             };
-            let current = match (zoom, meet_muted) {
-                (Silence::Open, true) => (Silence::Muted, "Google Meet"),
-                // Reopening reports the app that had silenced the microphone.
-                (Silence::Open, false) => (Silence::Open, announced.map_or("Zoom", |a| a.1)),
+            let current = match (zoom, meet_silence) {
+                (Silence::Open, Silence::Open) => {
+                    // Reopening reports the app that had silenced the microphone.
+                    (Silence::Open, announced.map_or("Zoom", |a| a.1))
+                }
+                (Silence::Open, s) => (s, "Google Meet"),
                 (s, _) => (s, "Zoom"),
             };
             muted.store(current.0 != Silence::Open, Ordering::Relaxed);
