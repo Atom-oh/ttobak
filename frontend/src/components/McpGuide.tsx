@@ -40,9 +40,9 @@ function CodeBlock({ code, configured, httpConfigured }: { code: GuideCode; conf
   const disabled = Boolean((code.needsConfig && !configured) || (code.needsHttp && !httpConfigured));
   return (
     <div className="min-w-0 space-y-1.5">
-      <p className="text-xs font-medium text-slate-500 dark:text-text-muted">{code.title}</p>
+      <p className="text-sm font-medium text-slate-500 dark:text-text-muted">{code.title}</p>
       <div className="flex min-w-0 items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-white/10 dark:bg-surface-lowest">
-        <pre className="min-w-0 flex-1 overflow-x-auto py-1 font-mono text-xs leading-relaxed text-slate-700 dark:text-text-secondary"><code>{code.text}</code></pre>
+        <pre className={`min-w-0 flex-1 py-1 leading-relaxed text-slate-700 dark:text-text-secondary ${code.prose ? 'whitespace-pre-wrap break-words font-sans text-base' : 'overflow-x-auto font-mono text-xs'}`}><code>{code.text}</code></pre>
         <CopyButton text={code.text} label={code.title} disabled={disabled} />
       </div>
     </div>
@@ -199,20 +199,20 @@ export function McpGuide() {
       )}
       <section id="outlook-sync" aria-labelledby={`${id}-outlook-title`} className="mt-6 min-w-0 scroll-mt-24 space-y-4 border-t border-slate-200 pt-5 dark:border-white/10">
         <h4 id={`${id}-outlook-title`} className="text-base font-semibold text-slate-900 dark:text-text-main">Outlook 일정 동기화 · 로컬 stdio</h4>
-        <p className="text-sm leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.introduction}</p>
+        <p className="text-base leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.introduction}</p>
         <ol className="min-w-0 space-y-5">
           {outlook.steps.map((step, index) => (
             <li key={step.title} className="flex min-w-0 items-start gap-3">
               <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">{index + 1}</span>
               <div className="min-w-0 flex-1 space-y-2.5">
-                <h5 className="text-sm font-semibold text-slate-900 dark:text-text-main">{step.title}</h5>
-                <p className="text-xs leading-relaxed text-slate-500 dark:text-text-muted">{step.description}</p>
+                <h5 className="text-base font-semibold text-slate-900 dark:text-text-main">{step.title}</h5>
+                <p className="text-base leading-relaxed text-slate-600 dark:text-text-secondary">{step.description}</p>
                 {step.code?.map(code => <CodeBlock key={code.title} code={code} configured={false} httpConfigured={false} />)}
               </div>
             </li>
           ))}
         </ol>
-        <p className="rounded-lg bg-primary/5 px-3 py-2.5 text-xs leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.note}</p>
+        <p className="rounded-lg bg-primary/5 px-3 py-2.5 text-base leading-relaxed text-slate-600 dark:text-text-secondary">{outlook.note}</p>
       </section>
     </div>
   );

@@ -83,7 +83,7 @@ Sensitive event payloads use context-bound encryption; event retention is
 scheduled at 90 days after event end and receipts at seven days. TTL is
 asynchronous, not a deletion SLA. No source-delete endpoint is implemented.
 Repository code and synthetic fixtures do not certify deployed/provider
-acceptance or the Calendar 5 persisted integration.
+acceptance or persisted stdio → Go → DynamoDB integration acceptance.
 
 ## Transport and authentication
 

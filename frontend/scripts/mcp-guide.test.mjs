@@ -204,6 +204,18 @@ test('Outlook Korean copyable prompt independently requires both default exclusi
   assert.match(prompt, /가이드·프로토콜 검증[^.]*리더[^.]*필터링[^.]*증명하지/);
 });
 
+test('Outlook standalone prose prompt includes durable crash recovery before scheduling', async () => {
+  const { outlookSyncGuide } = await load(privateMcp);
+  const code = outlookSyncGuide().steps.flatMap(step => step.code ?? [])
+    .find(code => code.title.includes('로컬 호스트에 요청'));
+  assert.equal(code.prose, true);
+  assert.ok(code.text.split('\n\n').length >= 3);
+  assert.match(code.text, /전송 전에[^.]*전체 요청[^.]*영구 저장/);
+  assert.match(code.text, /수신 확인[^.]*revision[^.]*ID 목록[^.]*원자적으로 저장/);
+  assert.match(code.text, /중단[^.]*미확인 요청[^.]*그대로 재전송/);
+  assert.match(code.text, /보호된 로컬 저장소/);
+});
+
 test('settings Outlook anchor and copyable prerequisites survive collapsed, HTTP and config error states', async () => {
   const library = await load(privateMcp);
   const component = ts.transpileModule(readFileSync(new URL('../src/components/McpGuide.tsx', import.meta.url), 'utf8'), {
@@ -232,6 +244,13 @@ test('settings Outlook anchor and copyable prerequisites survive collapsed, HTTP
           assert.match(section, /HTTP.*지원하지/);
           assert.match(section, /호스트.*요청/);
           assert.doesNotMatch(section, /disabled=""|hidden=""|display:none/);
+          const blocks = [...section.matchAll(/<pre class="([^"]+)"[^>]*><code>([\s\S]*?)<\/code><\/pre>/g)];
+          assert.equal(blocks.length, 2);
+          assert.match(blocks[0][1], /overflow-x-auto/);
+          assert.doesNotMatch(blocks[0][1], /whitespace-pre-wrap/);
+          assert.match(blocks[1][1], /whitespace-pre-wrap/);
+          assert.match(blocks[1][1], /break-words/);
+          assert.match(blocks[1][1], /text-base/);
         }
       }
     }

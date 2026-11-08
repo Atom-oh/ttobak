@@ -4,8 +4,8 @@ This guide describes the implemented calendar API and local MCP protocol.
 It does not install an Outlook reader, obtain consent, or activate a scheduler.
 No reader, host or OS has been selected or tested for this installation.
 The in-app prerequisites are always available at `/settings#outlook-sync`.
-Full persisted stdio → Go → DynamoDB acceptance belongs to Calendar 5;
-synthetic protocol fixtures do not establish provider or unattended acceptance.
+Verify persisted stdio → Go → DynamoDB behavior separately from synthetic
+protocol fixtures; neither establishes provider or unattended acceptance.
 
 ## Prerequisites and boundaries
 

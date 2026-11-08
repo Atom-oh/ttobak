@@ -24,6 +24,7 @@ export interface McpGuideConfig {
 export interface GuideCode {
   title: string;
   text: string;
+  prose?: boolean;
   needsConfig?: boolean;
   needsHttp?: boolean;
 }
@@ -66,13 +67,19 @@ export function outlookSyncGuide(): ClientGuide {
       }],
     }, {
       title: '체크포인트와 삭제 규칙',
-      description: '메일함·TTOBAK 사용자·캘린더별 sourceId와 대소문자를 보존한 회차 externalId를 유지하세요. 시간 변경에도 같은 ID를 쓰며 취소·private·confidential 전환은 이전에 가져온 회차 externalId를 명시적으로 remove합니다. 민감도 필드나 제외된 일정의 대체 제목을 보내지 마세요. 누락·빈 페이지·조회 실패로 삭제를 추론하지 마세요. 모든 페이지와 변경의 서버 수신 확인 후에만 complete: true를 전송하고, 그 수신 확인 뒤 제공자 체크포인트를 확정하세요. 종일 일정은 현지 시작일·배타적 종료일과 일치하는 시각, IANA timeZone이 필요합니다.',
+      description: '메일함·TTOBAK 사용자·캘린더별 sourceId와 대소문자를 보존한 회차 externalId를 유지하세요. 시간 변경에도 같은 ID를 쓰며 취소·private·confidential 전환은 이전에 가져온 회차 externalId를 명시적으로 remove합니다. 민감도 필드나 제외된 일정의 대체 제목을 보내지 마세요. 누락·빈 페이지·조회 실패로 삭제를 추론하지 마세요. 전송 전에 전체 요청을 보호된 로컬 저장소에 영구 저장하고, 수신 확인과 revision·가져온 ID 목록 변경을 원자적으로 저장한 뒤에만 미확인 요청을 지우세요. 중단 시 동일 요청을 복구합니다. 모든 페이지와 변경의 서버 수신 확인 후에만 complete: true를 전송하고, 그 수신 확인 뒤 제공자 체크포인트를 확정하세요. 종일 일정은 현지 시작일·배타적 종료일과 일치하는 시각, IANA timeZone이 필요합니다.',
     }, {
       title: '로컬 호스트에서 10분마다 실행',
       description: 'MCP 자체는 스케줄러가 아닙니다. 사용자가 테스트한 포그라운드 호스트 명령과 절대경로를 macOS launchd 사용자 에이전트 또는 Windows 작업 스케줄러에 등록하세요. 전체 실행 동안 중복 실행 잠금을 유지하고 이전 작업이 끝나기 전에 새 작업을 시작하지 마세요. 사용자 로그인 세션에서 동작하며 절전·오프라인 동안 갱신을 보장하지 않습니다. 호스트와 예약 작업 설치·활성화는 사용자 설정이 필요합니다.',
       code: [{
         title: '로컬 호스트에 요청 · 먼저 설정과 dry run 확인',
-        text: '내 OS, 로컬 Outlook 리더와 실행 호스트를 확인하고 공식 문서로 검증한 실행 파일 절대경로와 포그라운드 명령을 제시해줘. 모르는 Outlook MCP 실행 파일이나 플래그는 만들지 마. 본인 읽기 전용 인증과 TTOBAK stdio 로그인이 필요해. 먼저 과거 7일·앞으로 30일의 전체 페이지와 반복 회차를 dry run으로 확인해줘. 본문·참석자·접속 링크는 보내지 말고 private·confidential 일정은 기본적으로 로컬에서 제외해. accountId는 내가 확인한 매핑만 써. sourceId와 externalId를 유지하고 취소·private·confidential 전환은 이전에 가져온 회차 externalId의 명시적 remove로 처리해. 민감도 필드나 제외된 일정의 대체 제목을 보내지 마. ttobak_calendar_sync_status, ttobak_sync_calendar_events, ttobak_list_calendar_events의 실제 필드만 사용해. 수신 확인 전에 체크포인트를 확정하지 말고 실패한 페이지는 완료나 누락 삭제로 처리하지 마. 409는 상태를 다시 읽고 조정하고, 응답이 불확실하면 같은 batchId·expectedRevision·전체 요청을 재전송해. 수동 검증 후 사용자가 설정할 10분 간격 포그라운드 작업과 전체 실행 잠금, 중지·제거 방법을 보여줘. 제공자 토큰·체크포인트는 로컬에만 보관하고 로그에 남기지 마. 가이드·프로토콜 검증은 리더의 private·confidential 필터링을 증명하지 않으므로 실제 동작을 별도로 확인해.',
+        prose: true,
+        text: [
+          '내 OS, 로컬 Outlook 리더와 실행 호스트를 확인하고 공식 문서로 검증한 실행 파일 절대경로와 포그라운드 명령을 제시해줘. 모르는 Outlook MCP 실행 파일이나 플래그는 만들지 마. 본인 읽기 전용 인증과 TTOBAK stdio 로그인이 필요해.',
+          '먼저 과거 7일·앞으로 30일의 전체 페이지와 반복 회차를 dry run으로 확인해줘. 본문·참석자·접속 링크는 보내지 말고 private·confidential 일정은 기본적으로 로컬에서 제외해. accountId는 내가 확인한 매핑만 써. sourceId와 externalId를 유지하고 취소·private·confidential 전환은 이전에 가져온 회차 externalId의 명시적 remove로 처리해. 민감도 필드나 제외된 일정의 대체 제목을 보내지 마.',
+          'ttobak_calendar_sync_status, ttobak_sync_calendar_events, ttobak_list_calendar_events의 실제 필드만 사용해. 전송 전에 sourceId·batchId·expectedRevision·범위·complete·mutations를 포함한 전체 요청을 보호된 로컬 저장소에 영구 저장해. 수신 확인과 revision·가져온 ID 목록 변경을 원자적으로 저장한 뒤에만 미확인 요청을 지워. 중단 후에는 저장된 미확인 요청을 그대로 재전송해. 수신 확인 전에 체크포인트를 확정하지 말고 실패한 페이지는 완료나 누락 삭제로 처리하지 마. 409는 상태를 다시 읽고 조정하고, 응답이 불확실하면 같은 batchId·expectedRevision·전체 요청을 재전송해.',
+          '수동 검증 후 사용자가 설정할 10분 간격 포그라운드 작업과 전체 실행 잠금, 중지·제거 방법을 보여줘. 제공자 토큰·체크포인트는 로컬에만 보관하고 로그에 남기지 마. 가이드·프로토콜 검증은 리더의 private·confidential 필터링을 증명하지 않으므로 실제 동작을 별도로 확인해.',
+        ].join('\n\n'),
       }],
     }, {
       title: '오래된 결과·충돌·인증 실패 처리',
