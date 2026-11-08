@@ -106,6 +106,10 @@ pub fn start(app: AppHandle) {
 fn watch(app: AppHandle, state: Arc<MeetingState>) {
     let epoch = Instant::now();
     let mut probe = mac::Probe::default();
+    // Browser instances last seen using audio: a Meet page that has left the
+    // call is read there after the browser releases its audio.
+    let mut meet_pids: Vec<i32> = Vec::new();
+    let mut meet_left = crate::meeting::LeftCall::default();
     loop {
         if !state.enabled.load(Ordering::Relaxed) {
             std::thread::sleep(IDLE_POLL);
@@ -127,7 +131,7 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
             browser: None,
         };
         let zoom_involved = sources.contains(&zoom) || state.detector.lock().tracks(&zoom);
-        let ended: Vec<String> = if zoom_involved
+        let mut ended: Vec<String> = if zoom_involved
             && crate::zoom_mute::meeting_over(crate::zoom_mute::ProcessSources {
                 process_pid: crate::audio::macos::process_pid,
                 browser_pids: capturing_browser_pids,
@@ -136,6 +140,38 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
         } else {
             Vec::new()
         };
+        // Likewise a Meet page that shows it left the call (Accessibility),
+        // instead of waiting for the browser's audio grace period. Like the
+        // Zoom end, it keeps filtering the source while the page stays left,
+        // so audio the browser still holds does not resume the meeting.
+        let is_meet = |s: &crate::meeting::Source| {
+            s.kind == crate::meeting::MeetingKind::GoogleMeet && s.browser.is_some()
+        };
+        let mut meet_sources: Vec<crate::meeting::Source> =
+            sources.iter().copied().filter(|s| is_meet(s)).collect();
+        if let Some(t) = state
+            .detector
+            .lock()
+            .tracked_source()
+            .filter(|s| is_meet(s))
+        {
+            if !meet_sources.contains(&t) {
+                meet_sources.push(t);
+            }
+        }
+        if meet_sources.is_empty() {
+            meet_left = crate::meeting::LeftCall::default();
+        } else {
+            let capturing = capturing_browser_pids();
+            if !capturing.is_empty() {
+                meet_pids = capturing;
+            }
+            let left = crate::meet_mute::current_state(&meet_pids)
+                == crate::zoom_mute::MicState::NoMeeting;
+            if meet_left.observe(now_ms, left) {
+                ended.extend(meet_sources.iter().map(|s| s.key()));
+            }
+        }
         let events = state
             .detector
             .lock()

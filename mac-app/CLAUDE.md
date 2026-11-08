@@ -18,8 +18,12 @@ npm run build:signed
 
 No CI covers this module. Plain `npm run build` does not apply the required audio
 entitlements through the project's signing script; use build:signed, or sign after
-building. Re-grant TCC permissions if a rebuilt ad-hoc signature invalidates them,
-then test a short recording. Current codesign --deep is accepted for ad-hoc signing;
+building. `scripts/sign.sh` signs with `TTOBAK_SIGN_IDENTITY`, else a local
+self-signed "TTOBAK Dev" code-signing certificate when the keychain has one, else
+ad-hoc. A certificate keeps TCC grants across rebuilds; an ad-hoc signature changes
+per build and invalidates them, so re-grant and test a short recording. Launch the
+app through Finder or `open`: TCC attributes a binary started from a terminal to
+that terminal. Current codesign --deep is accepted for ad-hoc signing;
 real Developer ID notarization needs explicit nested signing.
 
 Core Audio capture is macOS-gated. Linux can build Tauri only with its native GUI

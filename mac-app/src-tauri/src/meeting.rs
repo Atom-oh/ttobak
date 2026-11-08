@@ -220,6 +220,30 @@ pub fn classify_meeting_url(url: &str) -> Option<MeetingKind> {
     None
 }
 
+/// A Meet page that has left the call must be read this long before the
+/// meeting ends without the audio grace (a reloading page briefly shows no
+/// toolbar).
+pub const MEET_LEFT_CONFIRM_MS: u64 = 3_000;
+
+/// Tracks how long a browser meeting's page has shown it left the call.
+#[derive(Debug, Default)]
+pub struct LeftCall {
+    since: Option<u64>,
+}
+
+impl LeftCall {
+    /// `left`: the page was read and shows no call. Returns true once that
+    /// has held for `MEET_LEFT_CONFIRM_MS`.
+    pub fn observe(&mut self, now_ms: u64, left: bool) -> bool {
+        if !left {
+            self.since = None;
+            return false;
+        }
+        let since = *self.since.get_or_insert(now_ms);
+        now_ms.saturating_sub(since) >= MEET_LEFT_CONFIRM_MS
+    }
+}
+
 /// One meeting source currently using the microphone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Source {
@@ -411,6 +435,11 @@ impl Detector {
         self.active.as_ref().is_some_and(|d| d.source == *source)
     }
 
+    /// The tracked meeting's source (announced or silent).
+    pub fn tracked_source(&self) -> Option<Source> {
+        self.active.as_ref().map(|d| d.source)
+    }
+
     /// The announced meeting, if any (a silently tracked one is not offered).
     pub fn announced(&self) -> Option<&Detection> {
         self.active.as_ref().filter(|_| !self.silent)
@@ -422,6 +451,29 @@ impl Detector {
             counter: self.counter,
             ..Detector::default()
         };
+    }
+}
+
+#[cfg(test)]
+mod left_call_tests {
+    use super::*;
+
+    #[test]
+    fn a_left_page_ends_the_meeting_after_the_confirm_window() {
+        let mut l = LeftCall::default();
+        assert!(!l.observe(0, true));
+        assert!(!l.observe(MEET_LEFT_CONFIRM_MS - 1, true));
+        assert!(l.observe(MEET_LEFT_CONFIRM_MS, true));
+    }
+
+    #[test]
+    fn a_call_page_in_between_restarts_the_window() {
+        let mut l = LeftCall::default();
+        assert!(!l.observe(0, true));
+        assert!(!l.observe(2_000, false));
+        assert!(!l.observe(2_500, true));
+        assert!(!l.observe(2_500 + MEET_LEFT_CONFIRM_MS - 1, true));
+        assert!(l.observe(2_500 + MEET_LEFT_CONFIRM_MS, true));
     }
 }
 
