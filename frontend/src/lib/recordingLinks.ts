@@ -93,3 +93,26 @@ export function projectLinkFailureMessage(failures: readonly ProjectLinkFailure[
   const what = linking && unlinking ? '프로젝트 연결·해제' : linking ? '프로젝트 연결' : '프로젝트 연결 해제';
   return `${what}에 실패했습니다 (${failures.length}건).`;
 }
+
+/** Pending project changes as deltas: additions not yet confirmed linked, and
+ * removals of projects that are or may be linked. */
+export function projectLinkDeltas(linked: readonly string[], desired: readonly string[], attempted: readonly string[] = []) {
+  const want = new Set(normalizeProjectIds(desired));
+  const have = new Set(normalizeProjectIds(linked));
+  return {
+    projectAdditions: [...want].filter(id => !have.has(id)).sort(),
+    projectRemovals: normalizeProjectIds([...linked, ...attempted]).filter(id => !want.has(id)),
+  };
+}
+
+/** Applies saved deltas to the meeting's current links. Removals are also
+ * marked possibly linked so an unconfirmed one is cleaned up. */
+export function restoreProjectLinks(current: readonly string[], additions: readonly string[], removals: readonly string[]) {
+  const removed = new Set(normalizeProjectIds(removals));
+  const linked = normalizeProjectIds(current);
+  return {
+    linked,
+    desired: normalizeProjectIds([...linked, ...additions]).filter(id => !removed.has(id)),
+    attempted: [...removed],
+  };
+}

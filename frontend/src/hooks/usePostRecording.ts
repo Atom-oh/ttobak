@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { ApiError, meetingAccountApi, meetingsApi, projectApi, uploadsApi } from '@/lib/api';
-import { hasPendingProjectLinks, normalizeProjectIds, planRecordingAccountChange,projectLinkFailureMessage, syncProjectLinks } from '@/lib/recordingLinks';
+import { hasPendingProjectLinks, normalizeProjectIds, planRecordingAccountChange,projectLinkDeltas, projectLinkFailureMessage, restoreProjectLinks, syncProjectLinks } from '@/lib/recordingLinks';
 import { preparationNotes, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { RecordingNotes } from '@/lib/recordingNotes';
 import { resolveRecordingAccountId } from '@/lib/recordingAccount';
@@ -632,12 +632,13 @@ export function usePostRecording({
       setServerMeetingId(metadata.meetingId);
       boundAccountRef.current = meeting.accountId || undefined;
       preparationRef.current.accountId = boundAccountRef.current;
-      // The server's current links plus any the copy believed applied are
-      // linked; the copy's selection (when saved) is the target, so a requested
-      // removal is retried before upload rather than dropped.
-      linkedProjectsRef.current = normalizeProjectIds([...(meeting.projectIds || []), ...(metadata.linkedProjectIds || [])]);
-      desiredProjectsRef.current = normalizeProjectIds(metadata.projectIds ?? linkedProjectsRef.current);
-      attemptedProjectsRef.current = normalizeProjectIds(metadata.attemptedProjectIds || []);
+      // Apply the copy's pending changes to the meeting's current links:
+      // links made elsewhere meanwhile stay, and an unconfirmed removal is
+      // retried (as possibly linked) before upload.
+      const restored = restoreProjectLinks(meeting.projectIds || [], metadata.projectAdditions || [], metadata.projectRemovals || []);
+      linkedProjectsRef.current = restored.linked;
+      desiredProjectsRef.current = restored.desired;
+      attemptedProjectsRef.current = restored.attempted;
       const currentNotes = meeting.notes || '';
       notesWriter.initialize(metadata.meetingId, currentNotes, meeting.supportsNotesComparison === true, meeting.notesRevision || '');
       setCreatedNotes({ meetingId: metadata.meetingId, notes: metadata.notes });
@@ -649,8 +650,8 @@ export function usePostRecording({
       setCreatedNotes(null);
       setNotesConflict(null);
       preparationRef.current = { notes: metadata.notes };
-      // No server meeting yet: the saved selection is applied once it is created.
-      desiredProjectsRef.current = normalizeProjectIds(metadata.projectIds || []);
+      // No server meeting yet: pending additions apply once it is created.
+      desiredProjectsRef.current = normalizeProjectIds(metadata.projectAdditions || []);
     }
     publishLinks();
     // Uploaded bytes are already acknowledged; local note/title edits remain
@@ -682,8 +683,7 @@ export function usePostRecording({
     if (pending?.kind !== 'blob' || !pending.backup) throw new Error('기기 보관본을 확인할 수 없습니다.');
     if (codePointLength(notes) > MAX_MEETING_NOTES) throw new Error('메모는 32,000자까지 저장할 수 있습니다.');
     await pending.backup.update({ notes, title: meetingTitle, finalized: true,
-      projectIds: desiredProjectsRef.current, linkedProjectIds: linkedProjectsRef.current,
-      attemptedProjectIds: attemptedProjectsRef.current,
+      ...projectLinkDeltas(linkedProjectsRef.current, desiredProjectsRef.current, attemptedProjectsRef.current),
       ...(persistedMeetingIdRef.current ? { meetingId: persistedMeetingIdRef.current } : {}) });
     router.push('/');
   }, [meetingTitle, router]);

@@ -503,8 +503,8 @@ test('a removal requested before keeping a recording locally is applied after re
   await fixtureState.hook.changeRecordingProjects([]);
   assert.equal(fixtureState.serverProjects.has('project'), true, 'the removal attempt failed');
   await fixtureState.hook.keepLocally('');
-  assert.deepEqual(plain(backup.metadata.projectIds), []);
-  assert.ok(backup.metadata.attemptedProjectIds.includes('project'), 'the unconfirmed removal is kept with the copy');
+  assert.deepEqual(plain(backup.metadata.projectAdditions), []);
+  assert.deepEqual(plain(backup.metadata.projectRemovals), ['project'], 'the unconfirmed removal is kept with the copy');
   failUnlink = false;
   await fixtureState.hook.restoreBrowserRecording(backup);
   const published = fixtureState.states.filter(value => value && typeof value === 'object' && 'projectIds' in value).at(-1);
@@ -515,4 +515,30 @@ test('a removal requested before keeping a recording locally is applied after re
   const after = fixtureState.calls.slice(before).map(([kind]) => kind);
   assert.ok(after.includes('unlinkProject') && after.indexOf('unlinkProject') < after.indexOf('presign'), `the removal runs before the upload: ${after}`);
   assert.equal(fixtureState.serverProjects.has('project'), false);
+});
+
+test('restore keeps projects linked elsewhere while the recording was kept locally', async () => {
+  let failUnlink = true;
+  const fixtureState = fixture({ unlinkGate: async () => { if (failUnlink) throw new Error('Project unavailable'); } });
+  const backup = browserBackup();
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  await fixtureState.hook.changeRecordingProjects(['old']);
+  await fixtureState.hook.changeRecordingProjects([]);
+  await fixtureState.hook.keepLocally('');
+  // Meanwhile another tab links project B to the meeting.
+  fixtureState.serverProjects.add('B');
+  failUnlink = false;
+  await fixtureState.hook.restoreBrowserRecording(backup);
+  const before = fixtureState.calls.length;
+  await fixtureState.hook.handleNotesSubmit('');
+  const unlinked = fixtureState.calls.slice(before).filter(([kind]) => kind === 'unlinkProject').map(([, id]) => id);
+  assert.deepEqual(unlinked, ['old'], 'only the requested removal runs');
+  assert.equal(fixtureState.serverProjects.has('B'), true);
+  assert.equal(fixtureState.serverProjects.has('old'), false);
+});
+
+test('project link deltas apply to current links', () => {
+  const { links } = fixture();
+  assert.deepEqual(plain(links.projectLinkDeltas(['a', 'b'], ['b', 'c'], ['d'])), { projectAdditions: ['c'], projectRemovals: ['a', 'd'] });
+  assert.deepEqual(plain(links.restoreProjectLinks(['b', 'x'], ['c'], ['a', 'd'])), { linked: ['b', 'x'], desired: ['b', 'x', 'c'], attempted: ['a', 'd'] });
 });
