@@ -38,7 +38,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 
 | Command | Contract |
 |---|---|
-| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
+| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?}, can_switch_input (switch_recording_input exists) |
 | list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
 | switch_recording_input | input_device_uid?; switches the running recording's microphone and returns the new input; refuses a device that cannot run at the WAV rate (ADR-061) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |

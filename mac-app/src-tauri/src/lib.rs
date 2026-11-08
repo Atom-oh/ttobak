@@ -134,6 +134,10 @@ pub struct StartResponse {
     #[cfg(target_os = "macos")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<audio::macos::SelectedInput>,
+    /// `switch_recording_input` exists in this build, so the SPA may offer a
+    /// live microphone picker (additive; older builds omit it).
+    #[cfg(target_os = "macos")]
+    pub can_switch_input: bool,
 }
 
 #[derive(Serialize)]
@@ -372,6 +376,7 @@ async fn start_recording(
             temp_path: canonical.to_string_lossy().into_owned(),
             warnings,
             input,
+            can_switch_input: true,
         });
     }
 
