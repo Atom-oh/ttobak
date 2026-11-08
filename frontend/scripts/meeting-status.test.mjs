@@ -110,10 +110,12 @@ function homeFixture(initial, { search = '?uploaded=uploaded' } = {}) {
       } },
     },
   };
+  // The home dashboard composes these hooks (components/workspace/HomeDashboard);
+  // this minimal home renders them the same way with one account filter.
   const exports = {};
-  const source = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../src/lib/postUploadRefresh.ts', import.meta.url), 'utf8');
   vm.runInNewContext(ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, {
     exports, AbortController, URLSearchParams, window: { location: { search } }, document,
     Date: class extends Date { static now() { return now; } },
@@ -122,13 +124,30 @@ function homeFixture(initial, { search = '?uploaded=uploaded' } = {}) {
     clearInterval(id) { timers.delete(id); },
     require(name) {
       if (name in dependencies) return dependencies[name];
-      if (name.startsWith('@/components/')) {
-        const component = name.split('/').at(-1);
-        return { [component]: component };
-      }
       throw new Error(`Unexpected dependency: ${name}`);
     },
   });
+  const { useUploadSeed, withUploadSeed, useProcessingRefresh } = exports;
+  const { meetingsApi } = dependencies['@/lib/api'];
+  exports.default = function Home() {
+    const userId = auth.user?.userId;
+    const [meetings, setMeetings] = react.useState([]);
+    const [accountIds, setAccountIds] = react.useState([]);
+    const seed = useUploadSeed(userId, auth.isAuthenticated);
+    const accountKey = accountIds.join(',');
+    react.useEffect(() => {
+      const controller = new AbortController();
+      meetingsApi.list({ tab: 'all', accountIds: accountIds.length ? accountIds : undefined }, { signal: controller.signal })
+        .then(result => { if (!controller.signal.aborted) setMeetings(withUploadSeed(result.meetings, seed)); });
+      return () => controller.abort();
+    }, [userId, accountKey]);
+    useProcessingRefresh({
+      enabled: auth.isAuthenticated, meetings, seed, scope: [userId, accountKey],
+      list: signal => meetingsApi.list({ tab: 'all', accountIds: accountIds.length ? accountIds : undefined }, { signal }).then(r => r.meetings),
+      setMeetings,
+    });
+    return { type: 'MeetingList', props: { meetings, onAccountChange: setAccountIds } };
+  };
   function render() {
     for (let pass = 0; dirty && pass < 20; pass++) {
       dirty = false;
