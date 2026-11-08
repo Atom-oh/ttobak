@@ -95,6 +95,8 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
     '@/components/layout/AppLayout': { AppLayout: ({ children }) => React.createElement('main', { 'data-shell': true }, children) },
     '@/components/MemberPicker': { MemberPicker: props => React.createElement('input', { ...props, 'aria-label': 'Add member' }) },
     '@/components/AccountBillingTab': { AccountBillingTab: () => React.createElement('p', {}, 'Authorized billing') },
+    // The contact list has its own suites; it is inert here.
+    '@/components/AccountContacts': { AccountContacts: () => null },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({ billingService: billing }) },
     '@/lib/billingApi': { fetchBillingAccounts: billingAccounts },
     '@/lib/upload': { uploadDocFile: upload },

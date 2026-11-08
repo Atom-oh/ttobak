@@ -182,6 +182,8 @@ function workspace(entry, options = {}) {
       confirm: options.confirm ?? (() => true),
       document: { addEventListener() {}, removeEventListener() {} },
       window: {
+        // lib/dialog uses the browser confirm outside the Mac app.
+        confirm: options.confirm ?? (() => true),
         get location() { return url; },
         history: { replaceState: (_state, _title, href) => { url = new URL(href, url); } },
       },
@@ -309,6 +311,8 @@ test('successful detail mobile-menu deletion returns to history only after the d
   await detail.settle();
   detail.click('more_horiz');
   detail.click('삭제');
+  // The shared confirmation resolves on a later tick.
+  await detail.settle();
   assert.deepEqual(detail.calls.deleted, [['delete-target']]);
   assert.deepEqual(detail.pushes, []);
   deletion.resolve();
