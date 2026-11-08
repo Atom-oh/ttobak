@@ -36,6 +36,8 @@ func contactError(w http.ResponseWriter, err error) {
 		writeError(w, 404, model.ErrCodeNotFound, "Contact not found")
 	case errors.Is(err, service.ErrContactConflict):
 		writeError(w, 409, model.ErrCodeConflict, "Contact changed; reload and retry")
+	case errors.Is(err, service.ErrContactsUnavailable):
+		writeError(w, 503, "CONTACTS_UNAVAILABLE", "Contacts are temporarily unavailable")
 	default:
 		writeError(w, 500, model.ErrCodeInternalError, "Internal server error")
 	}

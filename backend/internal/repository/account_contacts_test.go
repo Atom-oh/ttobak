@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,13 +12,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/sealing"
 )
 
 func TestContactMutationsAreAtomicAndConditional(t *testing.T) {
 	for _, op := range []string{"create", "update", "delete"} {
 		t.Run(op, func(t *testing.T) {
 			calls := 0
-			repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+			repo := contactWire(t, func(target string, body map[string]interface{}) string {
 				calls++
 				if target != "DynamoDB_20120810.TransactWriteItems" {
 					t.Fatalf("target %s", target)
@@ -75,7 +78,7 @@ func TestContactTransactionFailureClassification(t *testing.T) {
 
 func TestContactQueryUsesStrongBoundedAccountPages(t *testing.T) {
 	const id = "01234567-89ab-4cde-8123-0123456789ab"
-	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+	repo := contactWire(t, func(target string, body map[string]interface{}) string {
 		if target != "DynamoDB_20120810.Query" || body["ConsistentRead"] != true || body["Limit"] != float64(25) {
 			t.Fatalf("query must be strongly consistent and bounded: %#v", body)
 		}
@@ -83,16 +86,17 @@ func TestContactQueryUsesStrongBoundedAccountPages(t *testing.T) {
 		if start["PK"].(map[string]interface{})["S"] != "ACCOUNT#account" || start["SK"].(map[string]interface{})["S"] != "CONTACT#"+id {
 			t.Fatalf("unbound start key: %#v", start)
 		}
-		return `{"Items":[{"contactId":{"S":"01234567-89ab-4cde-8123-0123456789ab"},"name":{"S":"Alice"}}],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#01234567-89ab-4cde-8123-0123456789ab"}}}`
+		sealed, _ := testSealer{}.Seal(context.Background(), []byte(`{"contactId":"`+id+`","name":"Alice"}`), contactBinding("account", id))
+		return `{"Items":[{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#` + id + `"},"contactId":{"S":"` + id + `"},"revision":{"S":"r1"},"sealed":{"S":"` + sealed + `"}}],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#01234567-89ab-4cde-8123-0123456789ab"}}}`
 	})
 	got, next, err := repo.ListAccountContacts(context.Background(), "account", 25, id)
-	if err != nil || len(got) != 1 || got[0].Name != "Alice" || next != id {
+	if err != nil || len(got) != 1 || got[0].Name != "Alice" || got[0].Revision != "r1" || next != id {
 		t.Fatalf("page: %#v %q %v", got, next, err)
 	}
 }
 
 func TestSpeakerTeamQueryUsesStrongBoundedAccountPages(t *testing.T) {
-	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+	repo := contactWire(t, func(target string, body map[string]interface{}) string {
 		if target != "DynamoDB_20120810.Query" || body["ConsistentRead"] != true || body["Limit"] != float64(25) {
 			t.Fatalf("team query: %#v", body)
 		}
@@ -111,7 +115,7 @@ func TestSpeakerTeamQueryUsesStrongBoundedAccountPages(t *testing.T) {
 func TestContactMutationConditionsAndRetention(t *testing.T) {
 	for _, op := range []string{"create", "update", "delete"} {
 		t.Run(op, func(t *testing.T) {
-			repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
+			repo := contactWire(t, func(_ string, body map[string]interface{}) string {
 				items := body["TransactItems"].([]interface{})
 				kind := "Put"
 				if op == "update" {
@@ -130,10 +134,21 @@ func TestContactMutationConditionsAndRetention(t *testing.T) {
 					if _, ok := row["pendingShareExpiresAt"]; ok {
 						t.Fatal("contact must not expire")
 					}
-					for _, key := range []string{"company", "address", "workPhone", "fax", "phone", "cardRegisteredAt", "cardBook", "group", "notes"} {
-						if _, ok := row[key]; !ok {
-							t.Fatalf("missing field %s", key)
+					for _, key := range []string{"name", "company", "email", "address", "workPhone", "fax", "phone", "cardRegisteredAt", "cardBook", "group", "notes"} {
+						if _, ok := row[key]; ok {
+							t.Fatalf("contact field %s stored in plaintext", key)
 						}
+					}
+					sealed := row["sealed"].(map[string]interface{})["S"].(string)
+					plain, err := testSealer{}.Open(context.Background(), sealed, contactBinding("account", "01234567-89ab-4cde-8123-0123456789ab"))
+					if err != nil || !strings.Contains(string(plain), `"notes":""`) || !strings.Contains(string(plain), `"name":"A"`) {
+						t.Fatalf("sealed payload must carry every field: %s %v", plain, err)
+					}
+				}
+				if op == "update" {
+					names := fmt.Sprint(action["ExpressionAttributeNames"])
+					if !strings.Contains(names, "sealed") || strings.Contains(names, "phone") || strings.Contains(names, "name:") {
+						t.Fatalf("update must replace only the sealed payload: %s", names)
 					}
 				}
 				return `{}`
@@ -157,6 +172,7 @@ func TestContactTransactionSDKRejectionMapping(t *testing.T) {
 		repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
 			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reason+`}`, nil), nil
 		})
+		repo.SetRecordSealer(testSealer{})
 		err := repo.WriteAccountContact(context.Background(), "account", "user", &model.AccountContact{ContactID: "01234567-89ab-4cde-8123-0123456789ab", Name: "A"}, "update")
 		if !errors.Is(err, tc.want) {
 			t.Fatalf("cancellation mapping: %v", err)
@@ -165,7 +181,7 @@ func TestContactTransactionSDKRejectionMapping(t *testing.T) {
 }
 
 func TestContactUpdateRequiresObservedRevision(t *testing.T) {
-	repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
+	repo := contactWire(t, func(_ string, body map[string]interface{}) string {
 		items := body["TransactItems"].([]interface{})
 		update, ok := items[2].(map[string]interface{})["Update"].(map[string]interface{})
 		if !ok {
@@ -178,5 +194,67 @@ func TestContactUpdateRequiresObservedRevision(t *testing.T) {
 	})
 	if err := repo.WriteAccountContact(context.Background(), "account", "user", &model.AccountContact{ContactID: "01234567-89ab-4cde-8123-0123456789ab", Name: "A"}, "update"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// testSealer is a reversible stand-in for KMS envelope sealing that still
+// enforces the record binding.
+type testSealer struct{}
+
+func testBindingID(b map[string]string) string {
+	return b["purpose"] + "/" + b["accountId"] + "/" + b["contactId"]
+}
+
+func (testSealer) Seal(_ context.Context, p []byte, b map[string]string) (string, error) {
+	return base64.StdEncoding.EncodeToString([]byte(testBindingID(b) + "|" + string(p))), nil
+}
+
+func (testSealer) Open(_ context.Context, sealed string, b map[string]string) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(sealed)
+	prefix := testBindingID(b) + "|"
+	if err != nil || !strings.HasPrefix(string(raw), prefix) {
+		return nil, sealing.ErrInvalid
+	}
+	return raw[len(prefix):], nil
+}
+
+func contactWire(t *testing.T, call func(string, map[string]interface{}) string) *DynamoDBRepository {
+	t.Helper()
+	repo := indexingWire(t, call)
+	repo.SetRecordSealer(testSealer{})
+	return repo
+}
+
+func TestContactsFailClosedWithoutEncryptionKey(t *testing.T) {
+	calls := 0
+	repo := indexingWire(t, func(string, map[string]interface{}) string { calls++; return `{}` })
+	c := &model.AccountContact{ContactID: "01234567-89ab-4cde-8123-0123456789ab", Name: "A"}
+	for _, op := range []string{"create", "update"} {
+		if err := repo.WriteAccountContact(context.Background(), "account", "user", c, op); !errors.Is(err, ErrContactEncryptionUnavailable) {
+			t.Fatalf("%s without a key: %v", op, err)
+		}
+	}
+	if _, err := repo.SealedContactItem(context.Background(), "account", c); !errors.Is(err, ErrContactEncryptionUnavailable) {
+		t.Fatalf("item without a key: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("no plaintext write may reach DynamoDB: %d calls", calls)
+	}
+}
+
+func TestContactRowCannotBeOpenedUnderAnotherAccount(t *testing.T) {
+	const id = "01234567-89ab-4cde-8123-0123456789ab"
+	sealed, _ := testSealer{}.Seal(context.Background(), []byte(`{"contactId":"`+id+`","name":"Alice"}`), contactBinding("other", id))
+	repo := contactWire(t, func(string, map[string]interface{}) string {
+		return `{"Item":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#` + id + `"},"contactId":{"S":"` + id + `"},"revision":{"S":"r"},"sealed":{"S":"` + sealed + `"}}}`
+	})
+	if _, err := repo.GetAccountContact(context.Background(), "account", id); err == nil {
+		t.Fatal("a payload sealed for another account opened")
+	}
+	plain := contactWire(t, func(string, map[string]interface{}) string {
+		return `{"Item":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#` + id + `"},"contactId":{"S":"` + id + `"},"name":{"S":"Alice"}}}`
+	})
+	if _, err := plain.GetAccountContact(context.Background(), "account", id); err == nil {
+		t.Fatal("an unsealed row must not be served")
 	}
 }

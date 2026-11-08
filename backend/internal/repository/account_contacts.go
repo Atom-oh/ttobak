@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -13,11 +15,99 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/sealing"
 )
 
 const contactPrefix = "CONTACT#"
 
 var ErrContactAccess = errors.New("account contact access revoked")
+
+// ErrContactEncryptionUnavailable means no record key is configured. Contact
+// rows hold third-party personal data and are never stored or read in plaintext.
+var ErrContactEncryptionUnavailable = errors.New("account contact encryption unavailable")
+
+// storedContact is the at-rest form: identity and revision stay plaintext for
+// keys and conditions; every contact field is sealed together (ADR-063).
+type storedContact struct {
+	PK        string `dynamodbav:"PK"`
+	SK        string `dynamodbav:"SK"`
+	ContactID string `dynamodbav:"contactId"`
+	Revision  string `dynamodbav:"revision"`
+	Sealed    string `dynamodbav:"sealed"`
+}
+
+const contactReadConcurrency = 8
+
+func contactBinding(account, id string) map[string]string {
+	return map[string]string{"purpose": "ttobak-account-contact", "accountId": account, "contactId": id}
+}
+
+func (r *DynamoDBRepository) contactSealer() (sealing.Sealer, error) {
+	if r.sealer == nil {
+		return nil, ErrContactEncryptionUnavailable
+	}
+	return r.sealer, nil
+}
+
+func sealingError(err error) error {
+	if errors.Is(err, sealing.ErrUnavailable) {
+		return ErrContactEncryptionUnavailable
+	}
+	return err
+}
+
+// sealContact returns the sealed field payload for one contact row.
+func (r *DynamoDBRepository) sealContact(ctx context.Context, account string, c *model.AccountContact) (string, error) {
+	s, err := r.contactSealer()
+	if err != nil {
+		return "", err
+	}
+	fields := *c
+	fields.PK, fields.SK = "", ""
+	plain, err := json.Marshal(fields)
+	if err != nil {
+		return "", err
+	}
+	sealed, err := s.Seal(ctx, plain, contactBinding(account, c.ContactID))
+	return sealed, sealingError(err)
+}
+
+// SealedContactItem is the complete at-rest item for a new contact row.
+func (r *DynamoDBRepository) SealedContactItem(ctx context.Context, account string, c *model.AccountContact) (map[string]types.AttributeValue, error) {
+	sealed, err := r.sealContact(ctx, account, c)
+	if err != nil {
+		return nil, err
+	}
+	return attributevalue.MarshalMap(storedContact{
+		PK: model.PrefixAccount + account, SK: contactPrefix + c.ContactID,
+		ContactID: c.ContactID, Revision: c.Revision, Sealed: sealed,
+	})
+}
+
+func (r *DynamoDBRepository) openContact(ctx context.Context, account string, item map[string]types.AttributeValue) (model.AccountContact, error) {
+	var row storedContact
+	if err := attributevalue.UnmarshalMap(item, &row); err != nil {
+		return model.AccountContact{}, err
+	}
+	s, err := r.contactSealer()
+	if err != nil {
+		return model.AccountContact{}, err
+	}
+	if row.Sealed == "" || row.PK != model.PrefixAccount+account || row.SK != contactPrefix+row.ContactID {
+		return model.AccountContact{}, errors.New("contact row is not sealed for this account")
+	}
+	plain, err := s.Open(ctx, row.Sealed, contactBinding(account, row.ContactID))
+	if err != nil {
+		return model.AccountContact{}, fmt.Errorf("open contact: %w", sealingError(err))
+	}
+	var c model.AccountContact
+	if err := json.Unmarshal(plain, &c); err != nil || c.ContactID != row.ContactID {
+		return model.AccountContact{}, errors.New("sealed contact does not match its row")
+	}
+	// Revision changes on every update; the plaintext attribute is canonical.
+	c.Revision = row.Revision
+	return c, nil
+}
 
 func contactKey(account, sk string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + account}, "SK": &types.AttributeValueMemberS{Value: sk}}
@@ -31,8 +121,8 @@ func (r *DynamoDBRepository) GetAccountContact(ctx context.Context, account, id 
 	if len(out.Item) == 0 {
 		return nil, nil
 	}
-	var contact model.AccountContact
-	if err := attributevalue.UnmarshalMap(out.Item, &contact); err != nil {
+	contact, err := r.openContact(ctx, account, out.Item)
+	if err != nil {
 		return nil, err
 	}
 	return &contact, nil
@@ -52,9 +142,24 @@ func (r *DynamoDBRepository) ListAccountContacts(ctx context.Context, account st
 	if err != nil {
 		return nil, "", fmt.Errorf("query contacts: %w", err)
 	}
-	contacts := []model.AccountContact{}
-	if err = attributevalue.UnmarshalListOfMaps(out.Items, &contacts); err != nil {
-		return nil, "", fmt.Errorf("decode contacts: %w", err)
+	contacts := make([]model.AccountContact, len(out.Items))
+	errs := make([]error, len(out.Items))
+	sem := make(chan struct{}, contactReadConcurrency)
+	var wg sync.WaitGroup
+	for i, item := range out.Items {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, item map[string]types.AttributeValue) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			contacts[i], errs[i] = r.openContact(ctx, account, item)
+		}(i, item)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, "", fmt.Errorf("decode contacts: %w", err)
+		}
 	}
 	next := ""
 	if len(out.LastEvaluatedKey) > 0 {
@@ -149,19 +254,11 @@ func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, u
 		builder := expression.NewBuilder().WithCondition(condition)
 		if op == "update" {
 			nextRevision = uuid.NewString()
-			update := expression.Set(expression.Name("name"), expression.Value(c.Name)).
-				Set(expression.Name("company"), expression.Value(c.Company)).
-				Set(expression.Name("title"), expression.Value(c.Title)).
-				Set(expression.Name("department"), expression.Value(c.Department)).
-				Set(expression.Name("email"), expression.Value(c.Email)).
-				Set(expression.Name("address"), expression.Value(c.Address)).
-				Set(expression.Name("workPhone"), expression.Value(c.WorkPhone)).
-				Set(expression.Name("fax"), expression.Value(c.Fax)).
-				Set(expression.Name("phone"), expression.Value(c.Phone)).
-				Set(expression.Name("cardRegisteredAt"), expression.Value(c.CardRegisteredAt)).
-				Set(expression.Name("cardBook"), expression.Value(c.CardBook)).
-				Set(expression.Name("group"), expression.Value(c.Group)).
-				Set(expression.Name("notes"), expression.Value(c.Notes)).
+			sealed, err := r.sealContact(ctx, account, c)
+			if err != nil {
+				return err
+			}
+			update := expression.Set(expression.Name("sealed"), expression.Value(sealed)).
 				Set(expression.Name("revision"), expression.Value(nextRevision))
 			builder = builder.WithUpdate(update)
 		}
@@ -175,10 +272,7 @@ func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, u
 			items = append(items, types.TransactWriteItem{Update: &types.Update{TableName: aws.String(r.tableName), Key: contactKey(account, contactPrefix+c.ContactID), ConditionExpression: expr.Condition(), UpdateExpression: expr.Update(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}})
 		}
 	} else if op == "create" {
-		row := *c
-		row.PK = model.PrefixAccount + account
-		row.SK = contactPrefix + c.ContactID
-		item, err := attributevalue.MarshalMap(row)
+		item, err := r.SealedContactItem(ctx, account, c)
 		if err != nil {
 			return err
 		}
