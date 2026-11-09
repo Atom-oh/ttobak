@@ -803,7 +803,10 @@ points), optional `newsQueries` (at most 32) and `aliases` (at most 20), and
 optional `copyFromSourceId`, which copies queries, aliases and custom URLs from
 a per-user source the caller subscribes to and never changes that source;
 operator-curated, unknown or unsubscribed sources return 400. Default queries
-are the account name plus its aliases; at most 10 sources per account. GET
+are the account name plus its aliases; at most 10 sources per account, enforced
+atomically by an `ACCOUNT#{accountId}` / `NEWSSRC_COUNT` counter row (`sourceCount`,
+seeded from the existing refs when absent) that the create transaction increments
+only below the cap and the delete transaction decrements. GET
 returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
 account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 `disabled` (so scheduling stops) in one transaction; returns 204, or 404 for an
@@ -812,7 +815,11 @@ unsubscribe) refuse account-owned sources like operator-curated ones, in the
 service and in the `attribute_not_exists(accountId)` write condition.
 `DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
 document is allowed only for admins or a current direct member of that account
-(read per request); the stored source creator grants nothing.
+(read per request); the stored source creator grants nothing. A non-admin
+delete is fenced before any object is removed: versioned news in the unpublish
+transaction, legacy documents by a claim transaction that checks the CONFIG
+`accountId`, the account and the caller's direct `MEMBER#` row; a membership
+revoked in between returns 403.
 
 `GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
 for **direct** members. Allowed pairs are news→project, tech→project,

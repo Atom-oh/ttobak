@@ -20,7 +20,7 @@ import (
 type accountNewsRepo interface {
 	GetAccount(context.Context, string) (*model.Account, error)
 	GetMember(context.Context, string, string) (*model.AccountMember, error)
-	CreateAccountNewsSource(context.Context, *model.CrawlerSource, *model.AccountNewsSourceRef) error
+	CreateAccountNewsSource(ctx context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error
 	ListAccountNewsSources(context.Context, string) ([]model.AccountNewsSourceRef, error)
 	DeleteAccountNewsSource(context.Context, string, string, string) error
 }
@@ -31,7 +31,9 @@ type accountNewsCrawler interface {
 }
 
 const (
-	// maxAccountNewsSources bounds scheduled crawl cost per account.
+	// maxAccountNewsSources bounds scheduled crawl cost per account. The ref
+	// count below is a fast pre-check; the create transaction enforces the cap
+	// atomically through the account's source counter row.
 	maxAccountNewsSources = 10
 
 	// Limits match the crawler's source-revision bounds (newsSourceRevision).
@@ -215,12 +217,14 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 			src.CustomUrls = []string{}
 		}
 		ref := &model.AccountNewsSourceRef{AccountID: accountID, SourceID: sourceID, SourceName: names[0], CreatedBy: userID, CreatedAt: now}
-		err = s.repo.CreateAccountNewsSource(ctx, src, ref)
+		err = s.repo.CreateAccountNewsSource(ctx, src, ref, len(refs), maxAccountNewsSources)
 		switch {
 		case err == nil:
 			return src, nil
 		case errors.Is(err, repository.ErrAccountNewsAccess):
 			return nil, ErrForbidden
+		case errors.Is(err, repository.ErrAccountNewsSourceLimit):
+			return nil, ErrInvalidInput // a concurrent create reached the cap first
 		case errors.Is(err, repository.ErrConditionFailed):
 			continue // ID collision: retry once with a fresh suffix
 		default:

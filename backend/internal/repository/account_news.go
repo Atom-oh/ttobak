@@ -19,6 +19,18 @@ import (
 // absent when the create transaction ran.
 var ErrAccountNewsAccess = errors.New("account news source access denied")
 
+// ErrAccountNewsSourceLimit means the account's source counter was already at
+// the cap when the create transaction ran.
+var ErrAccountNewsSourceLimit = errors.New("account news source limit reached")
+
+// accountNewsCountAttr is the counter attribute on the
+// model.SKAccountNewsSourceCount row.
+const accountNewsCountAttr = "sourceCount"
+
+// accountNewsCounterAttempts bounds delete retries when the counter changed
+// between the read and the commit.
+const accountNewsCounterAttempts = 3
+
 // accountNewsSourceDisabled is the CONFIG status a deleted account source
 // keeps; the scheduler and current-news readers skip "disabled" sources.
 const accountNewsSourceDisabled = "disabled"
@@ -41,9 +53,17 @@ func accountNewsKey(pk, sk string) map[string]types.AttributeValue {
 // account ref, conditioned on the account META and the creator's direct
 // membership. Both CONFIG and ref are created only if absent. CrawlerRepository
 // and DynamoDBRepository share the same table, so the transaction lives here.
-func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef) error {
+//
+// The same transaction increments the account's source counter, conditioned on
+// it being below limit, so concurrent creates cannot exceed the cap. Accounts
+// whose sources predate the counter have no counter row: observedCount (the
+// caller's strongly consistent ref count) seeds it via if_not_exists. A seed can
+// only be stale high (a concurrent delete), which errs toward the cap; a
+// concurrent first create seeds the row first and this one then increments it.
+func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error {
 	if src == nil || ref == nil || src.SourceID == "" || src.AccountID == "" ||
-		ref.AccountID != src.AccountID || ref.SourceID != src.SourceID || ref.CreatedBy == "" {
+		ref.AccountID != src.AccountID || ref.SourceID != src.SourceID || ref.CreatedBy == "" ||
+		observedCount < 0 || limit <= 0 || observedCount >= limit {
 		return fmt.Errorf("invalid account news source")
 	}
 	config := crawlerItem{PK: model.PrefixCrawler + src.SourceID, SK: model.PrefixConfig, EntityType: "CRAWLER_SOURCE", CrawlerSource: *src}
@@ -80,8 +100,20 @@ func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *m
 		p.ConditionExpression, p.ExpressionAttributeNames = absent.Condition(), absent.Names()
 		return types.TransactWriteItem{Put: p}
 	}
+	count := expression.Name(accountNewsCountAttr)
+	counterExpr, err := expression.NewBuilder().
+		WithCondition(count.AttributeNotExists().Or(count.LessThan(expression.Value(limit)))).
+		WithUpdate(expression.Set(count, expression.Plus(expression.IfNotExists(count, expression.Value(observedCount)), expression.Value(1))).
+			Set(expression.Name("entityType"), expression.Value("ACCOUNT_NEWS_SOURCE_COUNT"))).
+		Build()
+	if err != nil {
+		return err
+	}
+	counter := &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(accountPK, model.SKAccountNewsSourceCount)}
+	counter.UpdateExpression, counter.ConditionExpression = counterExpr.Update(), counterExpr.Condition()
+	counter.ExpressionAttributeNames, counter.ExpressionAttributeValues = counterExpr.Names(), counterExpr.Values()
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
-		check(model.SKAccountMeta), check(model.PrefixMember + ref.CreatedBy), put(configAV), put(refAV),
+		check(model.SKAccountMeta), check(model.PrefixMember + ref.CreatedBy), put(configAV), put(refAV), {Update: counter},
 	}})
 	if err != nil {
 		return classifyAccountNewsCreate(err)
@@ -90,21 +122,25 @@ func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *m
 }
 
 // classifyAccountNewsCreate maps only pure condition failures: a missing
-// account/member is access, an existing CONFIG/ref is an ID collision.
+// account/member is access, an existing CONFIG/ref is an ID collision, and a
+// counter at the cap is ErrAccountNewsSourceLimit.
 func classifyAccountNewsCreate(err error) error {
 	var cancelled *types.TransactionCanceledException
-	if !errors.As(err, &cancelled) || len(cancelled.CancellationReasons) != 4 {
+	if !errors.As(err, &cancelled) || len(cancelled.CancellationReasons) != 5 {
 		return fmt.Errorf("create account news source: %w", err)
 	}
-	access, collision := false, false
+	access, collision, full := false, false, false
 	for i, reason := range cancelled.CancellationReasons {
 		switch aws.ToString(reason.Code) {
 		case "None":
 		case "ConditionalCheckFailed":
-			if i < 2 {
+			switch {
+			case i < 2:
 				access = true
-			} else {
+			case i < 4:
 				collision = true
+			default:
+				full = true
 			}
 		default:
 			return fmt.Errorf("create account news source: %w", err)
@@ -113,6 +149,8 @@ func classifyAccountNewsCreate(err error) error {
 	switch {
 	case access:
 		return ErrAccountNewsAccess
+	case full:
+		return ErrAccountNewsSourceLimit
 	case collision:
 		return fmt.Errorf("%w: account news source exists", ErrConditionFailed)
 	}
@@ -159,13 +197,80 @@ func (r *DynamoDBRepository) ListAccountNewsSources(ctx context.Context, account
 // DeleteAccountNewsSource atomically removes the account ref and disables the
 // crawler CONFIG, both conditioned on existing and the CONFIG still belonging
 // to accountID, with the account META row and the acting user's direct
-// MEMBER# row checked in the same transaction. ErrConditionFailed means the
-// ref or matching CONFIG is absent; ErrAccountNewsAccess means the account or
-// membership was gone at commit.
+// MEMBER# row checked in the same transaction. The same transaction decrements
+// the source counter by compare-and-set on the value read just before; an
+// absent (pre-counter) or non-positive counter is only pinned, never created,
+// so a later create still seeds it from the actual refs. A counter that changed
+// in between is retried. ErrConditionFailed means the ref or matching CONFIG
+// is absent; ErrAccountNewsAccess means the account or membership was gone at
+// commit.
 func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accountID, userID, sourceID string) error {
+	for attempt := 0; attempt < accountNewsCounterAttempts; attempt++ {
+		retry, err := r.deleteAccountNewsSourceOnce(ctx, accountID, userID, sourceID)
+		if !retry {
+			return err
+		}
+	}
+	return fmt.Errorf("delete account news source: source counter kept changing")
+}
+
+// readAccountNewsSourceCount returns the counter value and whether it exists.
+func (r *DynamoDBRepository) readAccountNewsSourceCount(ctx context.Context, accountID string) (int, bool, error) {
+	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, model.SKAccountNewsSourceCount),
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("read account news source count: %w", err)
+	}
+	value, ok := out.Item[accountNewsCountAttr]
+	if !ok {
+		return 0, false, nil
+	}
+	var count int
+	if err := attributevalue.Unmarshal(value, &count); err != nil {
+		return 0, false, fmt.Errorf("decode account news source count: %w", err)
+	}
+	return count, true, nil
+}
+
+// accountNewsCounterDelete builds the delete transaction's counter item: a
+// compare-and-set decrement of a positive observed count, otherwise a check
+// that the observed state (absent, or the same value) still holds.
+func (r *DynamoDBRepository) accountNewsCounterDelete(accountID string, count int, exists bool) (types.TransactWriteItem, error) {
+	key := accountNewsKey(model.PrefixAccount+accountID, model.SKAccountNewsSourceCount)
+	name := expression.Name(accountNewsCountAttr)
+	if exists && count > 0 {
+		expr, err := expression.NewBuilder().
+			WithCondition(name.Equal(expression.Value(count))).
+			WithUpdate(expression.Set(name, expression.Value(count-1))).Build()
+		if err != nil {
+			return types.TransactWriteItem{}, err
+		}
+		update := &types.Update{TableName: aws.String(r.tableName), Key: key}
+		update.UpdateExpression, update.ConditionExpression = expr.Update(), expr.Condition()
+		update.ExpressionAttributeNames, update.ExpressionAttributeValues = expr.Names(), expr.Values()
+		return types.TransactWriteItem{Update: update}, nil
+	}
+	cond := name.AttributeNotExists()
+	if exists {
+		cond = name.Equal(expression.Value(count))
+	}
+	expr, err := expression.NewBuilder().WithCondition(cond).Build()
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	check := &types.ConditionCheck{TableName: aws.String(r.tableName), Key: key}
+	check.ConditionExpression, check.ExpressionAttributeNames, check.ExpressionAttributeValues = expr.Condition(), expr.Names(), expr.Values()
+	return types.TransactWriteItem{ConditionCheck: check}, nil
+}
+
+// deleteAccountNewsSourceOnce runs one delete transaction; retry reports a
+// counter compare-and-set conflict with no other condition failure.
+func (r *DynamoDBRepository) deleteAccountNewsSourceOnce(ctx context.Context, accountID, userID, sourceID string) (bool, error) {
 	refCond, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
 	if err != nil {
-		return err
+		return false, err
 	}
 	configExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeExists(expression.Name("PK")).
@@ -173,7 +278,7 @@ func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accoun
 		WithUpdate(expression.Set(expression.Name("status"), expression.Value(accountNewsSourceDisabled))).
 		Build()
 	if err != nil {
-		return err
+		return false, err
 	}
 	del := &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, model.PrefixAccountNewsSource+sourceID)}
 	del.ConditionExpression, del.ExpressionAttributeNames = refCond.Condition(), refCond.Names()
@@ -182,32 +287,49 @@ func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accoun
 	update.ExpressionAttributeNames, update.ExpressionAttributeValues = configExpr.Names(), configExpr.Values()
 	access, err := accountAccessChecks(r.tableName, accountID, userID)
 	if err != nil {
-		return err
+		return false, err
+	}
+	count, exists, err := r.readAccountNewsSourceCount(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+	counter, err := r.accountNewsCounterDelete(accountID, count, exists)
+	if err != nil {
+		return false, err
 	}
 	items := append([]types.TransactWriteItem{{Delete: del}, {Update: update}}, access...)
+	items = append(items, counter)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
-		return nil
+		return false, nil
 	}
 	var cancelled *types.TransactionCanceledException
 	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == len(items) {
-		failed, revoked := false, false
+		failed, revoked, counterChanged := false, false, false
 		for i, reason := range cancelled.CancellationReasons {
 			switch aws.ToString(reason.Code) {
 			case "None":
 			case "ConditionalCheckFailed":
-				failed = true
-				revoked = revoked || i >= 2
+				switch {
+				case i < 2:
+					failed = true
+				case i < 4:
+					revoked = true
+				default:
+					counterChanged = true
+				}
 			default:
-				return fmt.Errorf("delete account news source: %w", err)
+				return false, fmt.Errorf("delete account news source: %w", err)
 			}
 		}
-		if revoked {
-			return ErrAccountNewsAccess
-		}
-		if failed {
-			return fmt.Errorf("%w: account news source %s", ErrConditionFailed, sourceID)
+		switch {
+		case revoked:
+			return false, ErrAccountNewsAccess
+		case failed:
+			return false, fmt.Errorf("%w: account news source %s", ErrConditionFailed, sourceID)
+		case counterChanged:
+			return true, nil
 		}
 	}
-	return fmt.Errorf("delete account news source: %w", err)
+	return false, fmt.Errorf("delete account news source: %w", err)
 }

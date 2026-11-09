@@ -25,6 +25,8 @@ type accountNewsTestRepo struct {
 	deleteActors []string
 	createErr    []error
 	deleteErr    error
+	// observed records the (observedCount, limit) pair of each create call.
+	observed [][2]int
 }
 
 func (r *accountNewsTestRepo) GetAccount(context.Context, string) (*model.Account, error) {
@@ -36,7 +38,8 @@ func (r *accountNewsTestRepo) GetMember(context.Context, string, string) (*model
 	}
 	return nil, nil
 }
-func (r *accountNewsTestRepo) CreateAccountNewsSource(_ context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef) error {
+func (r *accountNewsTestRepo) CreateAccountNewsSource(_ context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error {
+	r.observed = append(r.observed, [2]int{observedCount, limit})
 	if len(r.createErr) > 0 {
 		err := r.createErr[0]
 		r.createErr = r.createErr[1:]
@@ -192,6 +195,21 @@ func TestCreateAccountNewsSource_CapsSourcesPerAccount(t *testing.T) {
 	}
 	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) || len(repo.created) != 0 {
 		t.Fatalf("cap: %v", err)
+	}
+}
+
+// The create transaction carries the observed ref count and the cap; a
+// counter-at-cap rejection from a concurrent create is the same 400 as the
+// pre-check, and is not retried as an ID collision.
+func TestCreateAccountNewsSource_TransactionalCapRejection(t *testing.T) {
+	svc, repo, _ := newAccountNewsTest()
+	repo.refs = []model.AccountNewsSourceRef{{SourceID: "a"}, {SourceID: "b"}}
+	repo.createErr = []error{repository.ErrAccountNewsSourceLimit, nil}
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("limit: %v", err)
+	}
+	if len(repo.created) != 0 || !reflect.DeepEqual(repo.observed, [][2]int{{2, maxAccountNewsSources}}) {
+		t.Fatalf("limit must not retry or write: %+v %v", repo.created, repo.observed)
 	}
 }
 
