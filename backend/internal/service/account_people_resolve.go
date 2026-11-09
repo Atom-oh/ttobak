@@ -157,6 +157,12 @@ func ResolveMention(dir *PeopleDirectory, m PeopleMention) MentionResolution {
 		}
 	}
 
+	// An incomplete contact directory cannot prove a name is unique, so only
+	// the email rule may bind; a later rule never stands in for rule 2.
+	if dir.ContactsTruncated {
+		return res
+	}
+
 	// Rule 2: the name without the email and brackets, then once stripped.
 	name := peopleEmailPattern.ReplaceAllString(m.Text, " ")
 	name = NormalizePersonName(strings.NewReplacer("<", " ", ">", " ", "(", " ", ")", " ").Replace(name))
