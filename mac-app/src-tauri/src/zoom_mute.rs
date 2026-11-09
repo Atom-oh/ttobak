@@ -27,7 +27,7 @@ pub enum MicState {
 
 #[derive(Clone, Copy)]
 pub struct ProcessSources {
-    pub process_pid: fn(&str) -> Option<i32>,
+    pub process_pid: fn(&str) -> Result<Option<i32>, ()>,
     pub browser_pids: fn() -> Vec<i32>,
 }
 
@@ -147,6 +147,7 @@ impl Gate {
 
 pub fn observe_meet(
     zoom: Silence,
+    now_ms: u64,
     trusted: bool,
     muted: &std::sync::atomic::AtomicBool,
     hold: &mut crate::meet_mute::Hold,
@@ -155,11 +156,14 @@ pub fn observe_meet(
     if zoom != Silence::Open {
         muted.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    hold.observe(if trusted {
-        inspect()
-    } else {
-        MicState::Unknown
-    })
+    hold.observe(
+        now_ms,
+        if trusted {
+            inspect()
+        } else {
+            MicState::Unknown
+        },
+    )
 }
 
 /// Outcome of one Accessibility attribute read.
@@ -427,8 +431,17 @@ mod mac {
             return MicState::Unknown;
         }
         if !refreshed.is_some_and(|checked| checked.elapsed() < PID_REFRESH) {
-            *pid = (sources.process_pid)(ZOOM_BUNDLE);
-            *refreshed = Some(Instant::now());
+            match (sources.process_pid)(ZOOM_BUNDLE) {
+                Ok(p) => {
+                    *pid = p;
+                    *refreshed = Some(Instant::now());
+                }
+                Err(()) => {
+                    // A failed list read is not evidence Zoom quit.
+                    *refreshed = None;
+                    return MicState::Unknown;
+                }
+            }
         }
         let Some(p) = *pid else {
             return MicState::NoMeeting;
@@ -480,7 +493,7 @@ mod mac {
         sources: ProcessSources,
     ) -> (Watch, Option<String>) {
         let running = Arc::new(AtomicBool::new(true));
-        let zoom_running = (sources.process_pid)(ZOOM_BUNDLE).is_some();
+        let zoom_running = matches!((sources.process_pid)(ZOOM_BUNDLE), Ok(Some(_)));
         let browser_running = !(sources.browser_pids)().is_empty();
         let warning = ((zoom_running || browser_running) && !request_trust()).then(|| {
             "Allow TTOBAK in System Settings > Privacy & Security > Accessibility so the \
@@ -514,6 +527,7 @@ mod mac {
         }
         let mut gate = Gate::default();
         let mut meet = crate::meet_mute::Hold::default();
+        let mut meet_call = crate::meet_mute::Call::default();
         let mut pid: Option<i32> = None;
         let mut pid_checked: Option<Instant> = None;
         let mut browsers: Vec<i32> = Vec::new();
@@ -521,18 +535,24 @@ mod mac {
         let mut announced: Option<(Silence, &'static str)> = None;
         while running.load(Ordering::Relaxed) {
             let trusted = unsafe { AXIsProcessTrusted() };
+            let now_ms = started.elapsed().as_millis() as u64;
             let zoom = if zoom_labels {
                 let state = current_state(&mut pid, &mut pid_checked, sources);
-                gate.observe(started.elapsed().as_millis() as u64, state)
+                gate.observe(now_ms, state)
             } else {
                 Silence::Open
             };
-            let meet_silence = observe_meet(zoom, trusted, &muted, &mut meet, || {
+            let meet_silence = observe_meet(zoom, now_ms, trusted, &muted, &mut meet, || {
                 if !browsers_checked.is_some_and(|checked| checked.elapsed() < BROWSER_REFRESH) {
-                    browsers = (sources.browser_pids)();
+                    // Keep the last browsers using audio: a left Meet page is
+                    // still read after the browser releases its audio.
+                    let fresh = (sources.browser_pids)();
+                    if !fresh.is_empty() {
+                        browsers = fresh;
+                    }
                     browsers_checked = Some(Instant::now());
                 }
-                crate::meet_mute::current_state(&browsers)
+                crate::meet_mute::current_state(&browsers, &mut meet_call)
             });
             let current = match (zoom, meet_silence) {
                 (Silence::Open, Silence::Open) => {
@@ -707,7 +727,7 @@ mod tests {
         for silence in [Silence::Muted, Silence::MeetingEnded] {
             let muted = AtomicBool::new(false);
             let mut hold = crate::meet_mute::Hold::default();
-            let meet = observe_meet(silence, true, &muted, &mut hold, || {
+            let meet = observe_meet(silence, 0, true, &muted, &mut hold, || {
                 assert!(muted.load(Ordering::Relaxed));
                 MicState::Unmuted
             });
@@ -722,22 +742,22 @@ mod tests {
 
         let muted = AtomicBool::new(true);
         let mut hold = crate::meet_mute::Hold::default();
-        hold.observe(MicState::Muted);
+        hold.observe(0, MicState::Muted);
         assert_eq!(
-            observe_meet(Silence::Open, false, &muted, &mut hold, || {
+            observe_meet(Silence::Open, 300, false, &muted, &mut hold, || {
                 panic!("Untrusted Accessibility inspection must not run")
             }),
             Silence::Muted
         );
         assert_eq!(
-            observe_meet(Silence::Open, true, &muted, &mut hold, || {
+            observe_meet(Silence::Open, 600, true, &muted, &mut hold, || {
                 MicState::Unmuted
             }),
             Silence::Open
         );
         let mut fresh = crate::meet_mute::Hold::default();
         assert_eq!(
-            observe_meet(Silence::Open, false, &muted, &mut fresh, || {
+            observe_meet(Silence::Open, 0, false, &muted, &mut fresh, || {
                 panic!("Untrusted Accessibility inspection must not run")
             }),
             Silence::Open

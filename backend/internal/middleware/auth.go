@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net/http"
 	"os"
@@ -378,8 +379,35 @@ func validateClaimsLightweight(claims *ALBOIDCClaims) error {
 	return nil
 }
 
+// jwksFetchTimeout bounds the request-path JWKS fetch.
+const jwksFetchTimeout = 5 * time.Second
+
+// jwksURL is the Cognito JWKS document for the configured pool; a variable
+// only so tests can point it at a local server.
+var jwksURL = func() string {
+	return fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s/.well-known/jwks.json", cognitoRegion, cognitoUserPoolID)
+}
+
 // getJWKSKeys fetches and caches JWKS keys from Cognito
 func getJWKSKeys() (map[string]*rsa.PublicKey, error) {
+	return loadJWKSKeys(jwksFetchTimeout)
+}
+
+// PrefetchJWKS fills the JWKS cache once, bounded by timeout, so a cold
+// instance's first authenticated request does not pay the Cognito round
+// trip. It runs the same fetch and parsing as the request path. A request
+// that needs the keys during the prefetch waits for it (at most timeout);
+// on failure the cache stays empty and requests fetch on demand as before.
+func PrefetchJWKS(timeout time.Duration) {
+	if cognitoUserPoolID == "" {
+		return
+	}
+	if _, err := loadJWKSKeys(timeout); err != nil {
+		log.Printf("warn: JWKS prefetch failed, requests will fetch on demand: %v", err)
+	}
+}
+
+func loadJWKSKeys(timeout time.Duration) (map[string]*rsa.PublicKey, error) {
 	jwksCache.RLock()
 	if jwksCache.keys != nil && time.Since(jwksCache.fetchedAt) < time.Hour {
 		keys := jwksCache.keys
@@ -396,10 +424,8 @@ func getJWKSKeys() (map[string]*rsa.PublicKey, error) {
 		return jwksCache.keys, nil
 	}
 
-	jwksURL := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s/.well-known/jwks.json", cognitoRegion, cognitoUserPoolID)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(jwksURL)
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(jwksURL())
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}

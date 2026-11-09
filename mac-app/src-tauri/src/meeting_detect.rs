@@ -130,6 +130,7 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
     // call is read there after the browser releases its audio.
     let mut meet_pids: Vec<i32> = Vec::new();
     let mut meet_left = crate::meeting::LeftCall::default();
+    let mut meet_call = crate::meet_mute::Call::default();
     let mut last_meet_state: Option<crate::zoom_mute::MicState> = None;
     let mut ended_logged = false;
     loop {
@@ -183,13 +184,14 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
         }
         if meet_sources.is_empty() {
             meet_left = crate::meeting::LeftCall::default();
+            meet_call = crate::meet_mute::Call::default();
             last_meet_state = None;
         } else {
             let capturing = capturing_browser_pids();
             if !capturing.is_empty() {
                 meet_pids = capturing;
             }
-            let meet_state = crate::meet_mute::current_state(&meet_pids);
+            let meet_state = crate::meet_mute::current_state(&meet_pids, &mut meet_call);
             if last_meet_state != Some(meet_state) {
                 log::info!(
                     "Meet page state: {meet_state:?} ({} browser instance(s))",
@@ -203,7 +205,13 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
                     log::info!("Meet page left the call; ending without the audio grace");
                     ended_logged = true;
                 }
-                ended.extend(meet_sources.iter().map(|s| s.key()));
+                // The evidence is read from Chromium instances only.
+                ended.extend(
+                    meet_sources
+                        .iter()
+                        .filter(|s| s.browser != Some(crate::meeting::Browser::Safari))
+                        .map(|s| s.key()),
+                );
             } else {
                 ended_logged = false;
             }

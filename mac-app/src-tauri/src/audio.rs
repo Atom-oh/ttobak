@@ -565,6 +565,9 @@ pub mod macos {
         path: PathBuf,
         stats: Arc<Stats>,
         mic_active: AtomicBool,
+        /// A failed microphone switch ended capture; stop finalizes what was
+        /// recorded.
+        capture_lost: AtomicBool,
         start_warnings: Vec<String>,
         input: Mutex<Option<SelectedInput>>,
         /// What a microphone switch needs to rebuild the aggregate.
@@ -638,6 +641,15 @@ pub mod macos {
         /// The meeting app followed, for `meeting`.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub app: Option<String>,
+    }
+
+    /// A microphone switch failed and the previous microphone could not be
+    /// restored, so capture stopped.
+    fn capture_stopped(e: &AppError) -> AppError {
+        AppError::Backend(format!(
+            "{e}. The previous microphone could not be restored, so capture stopped; stop the \
+             recording to save what was recorded."
+        ))
     }
 
     impl Backend {
@@ -824,6 +836,7 @@ pub mod macos {
                 path: path.to_path_buf(),
                 stats,
                 mic_active: AtomicBool::new(mic_active),
+                capture_lost: AtomicBool::new(false),
                 start_warnings,
                 input: Mutex::new(selected),
                 tap_uid,
@@ -845,8 +858,10 @@ pub mod macos {
         /// audio tap, WAV and worker continue while only the aggregate is
         /// rebuilt, losing a fraction of a second. `None` chooses
         /// automatically (the meeting app's microphone). If the new device
-        /// cannot start, the previous one is restored. Blocking Core Audio
-        /// FFI: call off the recorder lock, like stop.
+        /// cannot start, the previous one is restored. If that also fails,
+        /// capture stops: the error says so, later switches are refused, and
+        /// stop finalizes what was recorded. Blocking Core Audio FFI: call
+        /// off the recorder lock, like stop.
         pub fn switch_input(&self, requested: Option<String>) -> Result<SelectedInput, AppError> {
             let mut warnings = Vec::new();
             let (input, selected) = choose_input(requested.as_deref(), &mut warnings);
@@ -857,13 +872,21 @@ pub mod macos {
             };
             let layout = mic_layout(id)
                 .ok_or_else(|| AppError::Backend("The selected device has no input.".into()))?;
+
+            // Overlapping switches see the input the previous one left.
+            let mut guard = self.resources.lock().expect("resources poisoned");
+            if self.capture_lost.load(Ordering::Relaxed) {
+                return Err(AppError::Backend(
+                    "Capture stopped after a failed microphone switch; stop the recording to \
+                     save what was recorded."
+                        .into(),
+                ));
+            }
             let previous = self.input();
             if previous.as_ref().is_some_and(|p| p.uid == uid) {
                 *self.input.lock().expect("input poisoned") = Some(selected.clone());
                 return Ok(selected);
             }
-
-            let mut guard = self.resources.lock().expect("resources poisoned");
             let res = guard
                 .as_mut()
                 .ok_or_else(|| AppError::Backend("The recording is not running.".into()))?;
@@ -875,7 +898,14 @@ pub mod macos {
                 rate?;
             }
 
-            let mut tx = res.detach_engine()?;
+            let mut tx = match res.detach_engine() {
+                Ok(tx) => tx,
+                Err(e) => {
+                    // The queue is closed: nothing captures any more.
+                    self.capture_lost.store(true, Ordering::Relaxed);
+                    return Err(capture_stopped(&e));
+                }
+            };
             match self.attach_engine(res, &uid, layout, &mut tx) {
                 Ok(()) => {
                     log::info!("switched recording microphone to {}", selected.name);
@@ -894,7 +924,9 @@ pub mod macos {
                         // Nothing captures any more: close the queue so stop
                         // finalizes what was recorded.
                         drop(tx);
+                        self.capture_lost.store(true, Ordering::Relaxed);
                         log::error!("could not restore the previous microphone");
+                        return Err(capture_stopped(&e));
                     }
                     Err(e)
                 }
@@ -909,6 +941,11 @@ pub mod macos {
             layout: ChannelLayout,
             tx: &mut Option<SyncSender<Vec<f32>>>,
         ) -> Result<(), AppError> {
+            if tx.is_none() {
+                return Err(AppError::Backend(
+                    "The recording's audio queue is closed.".into(),
+                ));
+            }
             let aggregate = create_aggregate(main_uid, &self.tap_uid)?;
             res.aggregate = aggregate;
             if let Err(e) = match_rate(aggregate, self.sample_rate) {
@@ -1009,6 +1046,12 @@ pub mod macos {
                 )));
             }
             let mut warnings = Vec::new();
+            if self.capture_lost.load(Ordering::Relaxed) {
+                warnings.push(
+                    "Capture stopped after a failed microphone switch; the recording ends there."
+                        .to_string(),
+                );
+            }
             if system_peak == 0.0 {
                 warnings.push(
                     "System audio was silent for the whole recording — System Audio Recording \
@@ -1492,6 +1535,15 @@ pub mod macos {
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope,
     ) -> Vec<AudioObjectID> {
+        try_get_ids(object, selector, scope).unwrap_or_default()
+    }
+
+    /// Like `get_ids`, but `None` when either HAL call fails.
+    fn try_get_ids(
+        object: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+    ) -> Option<Vec<AudioObjectID>> {
         let addr = address(selector, scope);
         let mut size = 0u32;
         let status = unsafe {
@@ -1503,9 +1555,12 @@ pub mod macos {
                 NonNull::from(&mut size),
             )
         };
+        if status != 0 {
+            return None;
+        }
         let count = size as usize / std::mem::size_of::<AudioObjectID>();
-        if status != 0 || count == 0 {
-            return Vec::new();
+        if count == 0 {
+            return Some(Vec::new());
         }
         let mut ids = vec![0 as AudioObjectID; count];
         let mut size = (count * std::mem::size_of::<AudioObjectID>()) as u32;
@@ -1520,11 +1575,11 @@ pub mod macos {
             )
         };
         if status != 0 {
-            return Vec::new();
+            return None;
         }
         // The list can shrink between the two calls.
         ids.truncate(size as usize / std::mem::size_of::<AudioObjectID>());
-        ids
+        Some(ids)
     }
 
     /// Reads a +1 retained CFString property.
@@ -1657,22 +1712,33 @@ pub mod macos {
     /// Input devices with the meeting apps using each (for the SPA picker).
     /// PID of a running process with this bundle ID, from Core Audio's
     /// process list (meeting apps register there once they load audio).
-    pub fn process_pid(bundle_id: &str) -> Option<i32> {
-        get_ids(
+    /// `Err` when the list could not be read; absence is only reported from a
+    /// successful read.
+    pub fn process_pid(bundle_id: &str) -> Result<Option<i32>, ()> {
+        let processes = try_get_ids(
             kAudioObjectSystemObject as AudioObjectID,
             kAudioHardwarePropertyProcessObjectList,
             kAudioObjectPropertyScopeGlobal,
         )
-        .into_iter()
-        .find(|&p| get_string(p, kAudioProcessPropertyBundleID).as_deref() == Some(bundle_id))
-        .and_then(|p| {
-            get_property::<i32>(
-                p,
-                kAudioProcessPropertyPID,
-                kAudioObjectPropertyScopeGlobal,
-                None,
-            )
-        })
+        .ok_or(())?;
+        // Our own process is always registered, so an empty list is unusable.
+        if processes.is_empty() {
+            return Err(());
+        }
+        let Some(process) = processes
+            .into_iter()
+            .find(|&p| get_string(p, kAudioProcessPropertyBundleID).as_deref() == Some(bundle_id))
+        else {
+            return Ok(None);
+        };
+        get_property::<i32>(
+            process,
+            kAudioProcessPropertyPID,
+            kAudioObjectPropertyScopeGlobal,
+            None,
+        )
+        .map(Some)
+        .ok_or(())
     }
 
     pub fn input_devices() -> Vec<InputDevice> {

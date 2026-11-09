@@ -3,13 +3,15 @@
 //! Meet keeps the microphone open while muted, so Core Audio cannot tell.
 //! The state comes from the page's own toggle through the Accessibility API:
 //! Meet labels it "Turn on microphone" while the user is muted and "Turn off
-//! microphone" while unmuted. A Meet page without either toggle has left the
-//! call (or is in a language not listed). Only the web area of a
-//! `meet.google.com` page in a browser instance using audio is read. An
-//! unreadable page (e.g. another tab in front) keeps the last state. Once a
+//! microphone" while unmuted. A toggle-less page counts as left only for the
+//! call last seen with a toggle; other toggle-less pages (an unlisted
+//! language, the landing page or an earlier call) are not evidence. Only the
+//! web area of a `meet.google.com` page in a browser instance using audio is
+//! read. An unreadable page (e.g. another tab in front) keeps the last state. Once a
 //! recording has followed Meet, leaving the call keeps the microphone silent,
 //! as with Zoom; a recording that never saw a toggle records it as before.
-//! Rules are pure and unit tested.
+//! Like detection, the left page must be read for 3 s before the microphone
+//! is silenced. Rules are pure and unit tested.
 
 use crate::zoom_mute::{MicState, Silence};
 
@@ -61,48 +63,97 @@ pub fn classify_read<'a>(labels: impl IntoIterator<Item = &'a str>, complete: bo
     }
 }
 
-/// Combines the states of every readable Meet page: an unmuted page wins,
-/// then a muted one; no page at all is unknown.
-pub fn combine(states: impl IntoIterator<Item = MicState>) -> MicState {
-    let (mut muted, mut unmuted, mut left, mut unknown) = (false, false, false, false);
-    for s in states {
-        muted |= s == MicState::Muted;
-        unmuted |= s == MicState::Unmuted;
-        left |= s == MicState::NoMeeting;
-        unknown |= s == MicState::Unknown;
-    }
-    if unmuted {
-        MicState::Unmuted
-    } else if muted {
-        MicState::Muted
-    } else if left && !unknown {
-        // A page that could not be read may still hold the call.
-        MicState::NoMeeting
-    } else {
-        MicState::Unknown
+/// A Meet page's identity: lowercased, without query, fragment or trailing
+/// slash. Kept in memory only; never logged.
+pub fn call_key(url: &str) -> String {
+    let end = url.find(['?', '#']).unwrap_or(url.len());
+    let s = &url[..end];
+    s.strip_suffix('/').unwrap_or(s).to_lowercase()
+}
+
+/// One Meet page read, or a browser or search that could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageRead {
+    Page { key: String, state: MicState },
+    Unread,
+}
+
+/// The Meet call this caller last saw with a toggle. Only that call's
+/// page, read again without a toggle, is evidence the user left.
+#[derive(Debug, Default)]
+pub struct Call {
+    last: Option<String>,
+}
+
+impl Call {
+    /// Combines every Meet page read: an unmuted page wins, then a muted one.
+    /// A page that could not be read may still hold the call. No page at all
+    /// is unknown.
+    pub fn judge(&mut self, pages: impl IntoIterator<Item = PageRead>) -> MicState {
+        let pages: Vec<PageRead> = pages.into_iter().collect();
+        for want in [MicState::Unmuted, MicState::Muted] {
+            let key = pages.iter().find_map(|p| match p {
+                PageRead::Page { key, state } if *state == want => Some(key.clone()),
+                _ => None,
+            });
+            if let Some(key) = key {
+                self.last = Some(key);
+                return want;
+            }
+        }
+        let unknown = pages.iter().any(|p| match p {
+            PageRead::Page { state, .. } => *state == MicState::Unknown,
+            PageRead::Unread => true,
+        });
+        if unknown {
+            return MicState::Unknown;
+        }
+        let left = pages.iter().any(|p| match p {
+            PageRead::Page { key, state } => {
+                *state == MicState::NoMeeting && self.last.as_ref() == Some(key)
+            }
+            PageRead::Unread => false,
+        });
+        if left {
+            MicState::NoMeeting
+        } else {
+            // Toggle-less pages of other calls are not evidence.
+            MicState::Unknown
+        }
     }
 }
 
-/// Turns Meet states into the microphone gate.
+/// Turns Meet states into the microphone gate. The followed call's left page
+/// must hold for `MEET_LEFT_CONFIRM_MS`, as detection does.
 #[derive(Debug, Default)]
 pub struct Hold {
     silence: Silence,
     followed: bool,
+    left: crate::meeting::LeftCall,
 }
 
 impl Hold {
-    pub fn observe(&mut self, state: MicState) -> Silence {
+    pub fn observe(&mut self, now_ms: u64, state: MicState) -> Silence {
         match state {
             MicState::Muted => {
                 self.silence = Silence::Muted;
                 self.followed = true;
+                self.left.observe(now_ms, false);
             }
             MicState::Unmuted => {
                 self.silence = Silence::Open;
                 self.followed = true;
+                self.left.observe(now_ms, false);
             }
-            MicState::NoMeeting if self.followed => self.silence = Silence::MeetingEnded,
-            MicState::NoMeeting | MicState::Unknown => {}
+            MicState::NoMeeting if self.followed => {
+                if self.left.observe(now_ms, true) {
+                    self.silence = Silence::MeetingEnded;
+                }
+            }
+            // An unreadable read between two left reads restarts the window.
+            MicState::NoMeeting | MicState::Unknown => {
+                self.left.observe(now_ms, false);
+            }
         }
         self.silence
     }
@@ -117,7 +168,7 @@ mod mac {
     use core_foundation::string::CFString;
     use core_foundation::url::CFURL;
 
-    use super::{classify_read, combine};
+    use super::{call_key, classify_read, Call, PageRead};
     use crate::zoom_mute::ax::{children_checked, copy_attr_checked, create_app};
     use crate::zoom_mute::MicState;
 
@@ -133,11 +184,13 @@ mod mac {
             .map(|s| s.to_string()))
     }
 
-    /// Whether `e` shows a Meet page, `Err` when its URL could not be read.
-    fn is_meet_page(e: &CFType) -> Result<bool, ()> {
+    /// The URL when `e` shows a Meet page, `Err` when its URL could not be
+    /// read. Never logged.
+    fn is_meet_page(e: &CFType) -> Result<Option<String>, ()> {
         Ok(copy_attr_checked(e, "AXURL")?
             .and_then(|v| v.downcast::<CFURL>())
-            .is_some_and(|u| u.get_string().to_string().starts_with(MEET_PREFIX)))
+            .map(|u| u.get_string().to_string())
+            .filter(|u| u.starts_with(MEET_PREFIX)))
     }
 
     /// Collects button labels under `e`; never logged. Returns false when the
@@ -169,7 +222,7 @@ mod mac {
 
     /// Finds Meet web areas under `e` and classifies each. Returns false when
     /// the search itself was cut short (a Meet page may have been missed).
-    fn meet_pages(e: &CFType, depth: usize, budget: &mut usize, out: &mut Vec<MicState>) -> bool {
+    fn meet_pages(e: &CFType, depth: usize, budget: &mut usize, out: &mut Vec<PageRead>) -> bool {
         if *budget == 0 || depth > MAX_DEPTH {
             return false;
         }
@@ -181,10 +234,13 @@ mod mac {
             let Ok(meet) = is_meet_page(e) else {
                 return false;
             };
-            if meet {
+            if let Some(url) = meet {
                 let mut labels = Vec::new();
                 let complete = button_labels(e, depth, budget, &mut labels);
-                out.push(classify_read(labels.iter().map(String::as_str), complete));
+                out.push(PageRead::Page {
+                    key: call_key(&url),
+                    state: classify_read(labels.iter().map(String::as_str), complete),
+                });
             }
             // Nested frames are not Meet's toolbar.
             return true;
@@ -199,27 +255,28 @@ mod mac {
         complete
     }
 
-    /// Meet's state across the given browser instances.
-    pub fn current_state(pids: &[i32]) -> MicState {
-        let mut states = Vec::new();
+    /// Meet's state across the given browser instances, judged against the
+    /// call `call` last saw with a toggle.
+    pub fn current_state(pids: &[i32], call: &mut Call) -> MicState {
+        let mut pages = Vec::new();
         for &pid in pids {
             let Some(app) = create_app(pid) else {
                 continue;
             };
             let Ok(Some(windows)) = copy_attr_checked(&app, "AXWindows") else {
                 // An unreadable browser may hold the call: neither unmuted nor left.
-                states.push(MicState::Unknown);
+                pages.push(PageRead::Unread);
                 continue;
             };
             let mut budget = MAX_NODES;
             for w in crate::zoom_mute::ax::as_array(windows) {
-                if !meet_pages(&w, 0, &mut budget, &mut states) {
+                if !meet_pages(&w, 0, &mut budget, &mut pages) {
                     // A page may have been missed: neither unmuted nor left.
-                    states.push(MicState::Unknown);
+                    pages.push(PageRead::Unread);
                 }
             }
         }
-        combine(states)
+        call.judge(pages)
     }
 }
 
@@ -245,36 +302,125 @@ mod tests {
         assert_eq!(classify(["마이크 켜기", "마이크 끄기"]), MicState::Unknown);
     }
 
+    fn page(key: &str, state: MicState) -> PageRead {
+        PageRead::Page {
+            key: key.to_owned(),
+            state,
+        }
+    }
+
     #[test]
     fn an_unmuted_page_wins_over_a_muted_one() {
+        let mut c = Call::default();
         assert_eq!(
-            combine([MicState::Muted, MicState::Unmuted]),
+            c.judge([page("a", MicState::Muted), page("b", MicState::Unmuted)]),
             MicState::Unmuted
         );
         assert_eq!(
-            combine([MicState::Muted, MicState::NoMeeting]),
+            c.judge([page("a", MicState::Muted), page("b", MicState::NoMeeting)]),
             MicState::Muted
         );
-        assert_eq!(combine([MicState::NoMeeting]), MicState::NoMeeting);
-        assert_eq!(combine([]), MicState::Unknown);
+        // "a" was last seen with a toggle, so its toggle-less page has left.
+        assert_eq!(
+            c.judge([page("a", MicState::NoMeeting)]),
+            MicState::NoMeeting
+        );
+        assert_eq!(c.judge([]), MicState::Unknown);
+    }
+
+    #[test]
+    fn a_page_that_never_showed_a_toggle_is_not_evidence() {
+        // An unlisted language or a companion page.
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+    }
+
+    #[test]
+    fn the_followed_call_without_a_toggle_has_left() {
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
+        assert_eq!(
+            c.judge([page("a", MicState::NoMeeting)]),
+            MicState::NoMeeting
+        );
+    }
+
+    #[test]
+    fn a_stale_page_of_an_earlier_call_does_not_end_the_current_one() {
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
+        assert_eq!(c.judge([page("b", MicState::Muted)]), MicState::Muted);
+        // B's tab is unreadable (pushes nothing); A's old page has no toggle.
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+    }
+
+    #[test]
+    fn an_unread_entry_keeps_the_followed_call_open() {
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Muted)]), MicState::Muted);
+        assert_eq!(
+            c.judge([page("a", MicState::NoMeeting), PageRead::Unread]),
+            MicState::Unknown
+        );
+    }
+
+    #[test]
+    fn the_call_key_drops_query_fragment_and_trailing_slash() {
+        assert_eq!(
+            call_key("https://meet.google.com/ABC-defg-HIJ/?authuser=0#x"),
+            "https://meet.google.com/abc-defg-hij"
+        );
+        assert_eq!(
+            call_key("https://meet.google.com/abc-defg-hij#frag"),
+            "https://meet.google.com/abc-defg-hij"
+        );
+        assert_eq!(
+            call_key("https://meet.google.com/abc-defg-hij"),
+            "https://meet.google.com/abc-defg-hij"
+        );
     }
 
     #[test]
     fn leaving_a_followed_call_keeps_the_microphone_silent() {
+        use crate::meeting::MEET_LEFT_CONFIRM_MS;
+
         let mut h = Hold::default();
-        assert_eq!(h.observe(MicState::Unmuted), Silence::Open);
-        assert_eq!(h.observe(MicState::Unknown), Silence::Open);
-        assert_eq!(h.observe(MicState::NoMeeting), Silence::MeetingEnded);
+        assert_eq!(h.observe(0, MicState::Unmuted), Silence::Open);
+        assert_eq!(h.observe(0, MicState::NoMeeting), Silence::Open);
+        assert_eq!(
+            h.observe(MEET_LEFT_CONFIRM_MS - 1, MicState::NoMeeting),
+            Silence::Open
+        );
+        assert_eq!(
+            h.observe(MEET_LEFT_CONFIRM_MS, MicState::NoMeeting),
+            Silence::MeetingEnded
+        );
         // Rejoining restores following.
-        assert_eq!(h.observe(MicState::Muted), Silence::Muted);
-        assert_eq!(h.observe(MicState::Unmuted), Silence::Open);
+        assert_eq!(
+            h.observe(MEET_LEFT_CONFIRM_MS + 300, MicState::Muted),
+            Silence::Muted
+        );
+        assert_eq!(
+            h.observe(MEET_LEFT_CONFIRM_MS + 600, MicState::Unmuted),
+            Silence::Open
+        );
+    }
+
+    #[test]
+    fn a_reloading_page_does_not_end_the_call() {
+        let mut h = Hold::default();
+        assert_eq!(h.observe(0, MicState::Unmuted), Silence::Open);
+        assert_eq!(h.observe(100, MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(1_000, MicState::Unknown), Silence::Open);
+        assert_eq!(h.observe(3_200, MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(3_500, MicState::Unmuted), Silence::Open);
     }
 
     #[test]
     fn a_recording_that_never_saw_the_toggle_keeps_the_microphone() {
         let mut h = Hold::default();
-        assert_eq!(h.observe(MicState::NoMeeting), Silence::Open);
-        assert_eq!(h.observe(MicState::Unknown), Silence::Open);
+        assert_eq!(h.observe(0, MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(300, MicState::Unknown), Silence::Open);
     }
 
     #[test]
@@ -283,8 +429,10 @@ mod tests {
         assert_eq!(classify_read(["Leave call"], false), MicState::Unknown);
         assert_eq!(classify_read(Vec::<&str>::new(), true), MicState::NoMeeting);
         assert_eq!(classify_read(["마이크 끄기"], true), MicState::Unmuted);
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
         assert_eq!(
-            combine([MicState::NoMeeting, MicState::Unknown]),
+            c.judge([page("a", MicState::NoMeeting), page("b", MicState::Unknown)]),
             MicState::Unknown
         );
     }
@@ -292,9 +440,16 @@ mod tests {
     #[test]
     fn an_unreadable_page_keeps_a_retained_mute() {
         let mut h = Hold::default();
-        assert_eq!(h.observe(MicState::Muted), Silence::Muted);
+        let mut c = Call::default();
         assert_eq!(
-            h.observe(combine([classify_read(Vec::<&str>::new(), false)])),
+            h.observe(0, c.judge([page("a", MicState::Muted)])),
+            Silence::Muted
+        );
+        assert_eq!(
+            h.observe(
+                300,
+                c.judge([page("a", classify_read(Vec::<&str>::new(), false))])
+            ),
             Silence::Muted
         );
     }
