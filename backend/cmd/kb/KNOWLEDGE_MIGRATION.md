@@ -33,8 +33,10 @@ tracks retries/backoff and per-document status. Partial full-sync success
 requires `INDEXED` for current snapshots and `NOT_FOUND` for removed
 snapshots/original vectors, followed by fresh source checks.
 
-PDF, DOC, DOCX, XLS and XLSX are copied as bytes. PPT/PPTX, empty and oversized
-sources have explicit failure states; the 50 MiB limit is not a filename fallback.
+PDF, DOC, DOCX, XLS and XLSX are copied as bytes. PPTX is converted in-process to
+a Markdown `document.md` projection (`PPTXToMarkdown`, see the index source
+contract). Legacy PPT, empty and oversized sources have explicit failure states;
+the 50 MiB limit is not a filename fallback.
 Content-Type is copied from the original when present and checked for read races.
 
 ## Rollout and operations

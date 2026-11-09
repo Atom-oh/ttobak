@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
@@ -102,6 +103,85 @@ func (r *CrawlerRepository) MarkNewsDeleted(ctx context.Context, key NewsReadKey
 		return fmt.Errorf("unpublish news document: %w", err)
 	}
 	return nil
+}
+
+// ClaimLegacyAccountDocumentDelete fences a non-admin delete of a legacy
+// (unversioned) document under an account-owned source before any object is
+// removed. One transaction requires the CONFIG row to still name accountID,
+// the account META row and the caller's direct MEMBER# row to exist, and the
+// document to still be a legacy row, and stamps the row with the claim. A
+// revoked member (or a source no longer owned by the account) fails with
+// ErrAccountNewsAccess; a missing or concurrently republished document fails
+// with ErrConditionFailed. The stamp is harmless on retry and DeleteDocument
+// still conditions the final removal on the legacy shape.
+func (r *CrawlerRepository) ClaimLegacyAccountDocumentDelete(ctx context.Context, sourceID, docHash, accountID, userID string) error {
+	if sourceID == "" || docHash == "" {
+		return fmt.Errorf("legacy document claim needs source and document")
+	}
+	access, err := accountAccessChecks(r.tableName, accountID, userID)
+	if err != nil {
+		return err
+	}
+	source, err := expression.NewBuilder().WithCondition(expression.Name("PK").AttributeExists().
+		And(expression.Name("accountId").Equal(expression.Value(accountID)))).Build()
+	if err != nil {
+		return err
+	}
+	document, err := expression.NewBuilder().WithCondition(expression.Name("PK").AttributeExists().
+		And(expression.Name("schemaVersion").AttributeNotExists()).
+		And(expression.Name("qualityStatus").AttributeNotExists()).
+		And(expression.Name("attemptToken").AttributeNotExists())).
+		WithUpdate(expression.Set(expression.Name("deleteClaimedBy"), expression.Value(userID)).
+			Set(expression.Name("deleteClaimedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339)))).
+		Build()
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{
+		{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+			},
+			ConditionExpression: source.Condition(), ExpressionAttributeNames: source.Names(),
+			ExpressionAttributeValues: source.Values(),
+		}},
+		{Update: &types.Update{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docHash},
+			},
+			ConditionExpression: document.Condition(), UpdateExpression: document.Update(),
+			ExpressionAttributeNames: document.Names(), ExpressionAttributeValues: document.Values(),
+		}},
+	}
+	items = append(items, access...)
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err == nil {
+		return nil
+	}
+	var canceled *types.TransactionCanceledException
+	if errors.As(err, &canceled) && len(canceled.CancellationReasons) == len(items) {
+		failed := false
+		for i, reason := range canceled.CancellationReasons {
+			switch aws.ToString(reason.Code) {
+			case "None":
+			case "ConditionalCheckFailed":
+				if i != 1 {
+					return ErrAccountNewsAccess
+				}
+				failed = true
+			default:
+				return fmt.Errorf("claim legacy document delete: %w", err)
+			}
+		}
+		if failed {
+			return fmt.Errorf("%w: document was removed or replaced", ErrConditionFailed)
+		}
+	}
+	return fmt.Errorf("claim legacy document delete: %w", err)
 }
 
 // accountAccessChecks returns ConditionChecks that the account META row and

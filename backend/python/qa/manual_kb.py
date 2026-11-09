@@ -13,8 +13,14 @@ SHARED_VISIBILITY = 'authenticated-shared'
 # Preserve the manual uploader's binary formats. Provider support/failure is a
 # migration-worker concern; none of these unbound old chunks becomes evidence.
 BINARY_EXTENSIONS = frozenset(('.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx'))
-SNAPSHOT_EXTENSIONS = frozenset(('.pdf', '.doc', '.docx', '.xls', '.xlsx'))
+SNAPSHOT_EXTENSIONS = frozenset(('.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx'))
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
+
+
+def snapshot_document_name(key):
+    """Immutable snapshot file name; PPTX is indexed as a Go-generated Markdown projection."""
+    suffix = PurePosixPath(key).suffix.lower()
+    return 'document.md' if suffix == '.pptx' else 'document' + suffix
 
 
 def owned_manual_key(key, user_id):
@@ -132,7 +138,7 @@ def snapshot_identity(uri, metadata, bucket, user_id):
             or not isinstance(run, str) or not RUN_ID.fullmatch(run)):
         return None
     prefix = f's3://{bucket}/shared-kb/v1/' if shared else f's3://{bucket}/manual-kb/v1/{user_id}/'
-    expected = prefix + f'{resource_id}/{revision}/{run}/document{PurePosixPath(key).suffix.lower()}'
+    expected = prefix + f'{resource_id}/{revision}/{run}/{snapshot_document_name(key)}'
     if uri != expected:
         return None
     return {'key': key, 'revision': revision, 'resourceId': resource_id, 'shared': shared}
@@ -152,7 +158,9 @@ def _result(reader, user_id, current, uri, score):
     key, size = current['key'], current['object']['size']
     status = 'pending'
     reason = 'VERIFIED_SNAPSHOT_UNAVAILABLE'
-    if PurePosixPath(key).suffix.lower() not in SNAPSHOT_EXTENSIONS:
+    if PurePosixPath(key).suffix.lower() == '.ppt':
+        status, reason = 'failed', 'LEGACY_PPT_UNSUPPORTED'
+    elif PurePosixPath(key).suffix.lower() not in SNAPSHOT_EXTENSIONS:
         status, reason = 'failed', 'UNSUPPORTED_FILE'
     elif size == 0:
         status, reason = 'empty', 'EMPTY_FILE'

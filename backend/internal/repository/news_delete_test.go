@@ -165,3 +165,76 @@ func TestNewsDeleteRevokedMemberIsAccessDenied(t *testing.T) {
 		}
 	}
 }
+
+// A non-admin legacy delete under an account source is one transaction that
+// pins the CONFIG account, the legacy document shape and the caller's direct
+// membership before any object is removed.
+func TestClaimLegacyAccountDocumentDeleteFencesMembership(t *testing.T) {
+	calls := 0
+	repo := &CrawlerRepository{client: indexingWire(t, func(target string, body map[string]interface{}) string {
+		calls++
+		if target != "DynamoDB_20120810.TransactWriteItems" {
+			t.Fatalf("target %s", target)
+		}
+		items := body["TransactItems"].([]interface{})
+		if len(items) != 4 {
+			t.Fatalf("items: %d", len(items))
+		}
+		source := items[0].(map[string]interface{})["ConditionCheck"].(map[string]interface{})
+		key := source["Key"].(map[string]interface{})
+		if key["PK"].(map[string]interface{})["S"] != "CRAWLER#acct_acct-1_0123abcd" || key["SK"].(map[string]interface{})["S"] != "CONFIG" {
+			t.Fatalf("source check: %#v", source)
+		}
+		requireAll(t, "source condition", resolved(source, "ConditionExpression"), "attribute_exists (PK)", `accountId = {"S":"acct-1"}`)
+		doc := items[1].(map[string]interface{})["Update"].(map[string]interface{})
+		if doc["Key"].(map[string]interface{})["SK"].(map[string]interface{})["S"] != "DOC#doc1" {
+			t.Fatalf("doc update: %#v", doc)
+		}
+		requireAll(t, "doc condition", resolved(doc, "ConditionExpression"), "attribute_exists (PK)",
+			"attribute_not_exists (schemaVersion)", "attribute_not_exists (qualityStatus)", "attribute_not_exists (attemptToken)")
+		requireAll(t, "doc update", resolved(doc, "UpdateExpression"), `deleteClaimedBy = {"S":"teammate"}`, "deleteClaimedAt")
+		for i, sk := range []string{"META", "MEMBER#teammate"} {
+			check := items[2+i].(map[string]interface{})["ConditionCheck"].(map[string]interface{})
+			k := check["Key"].(map[string]interface{})
+			if k["PK"].(map[string]interface{})["S"] != "ACCOUNT#acct-1" || k["SK"].(map[string]interface{})["S"] != sk ||
+				!strings.Contains(check["ConditionExpression"].(string), "attribute_exists") {
+				t.Fatalf("access check %d: %#v", i, check)
+			}
+		}
+		return `{}`
+	}).client, tableName: "news"}
+	if err := repo.ClaimLegacyAccountDocumentDelete(context.Background(), "acct_acct-1_0123abcd", "doc1", "acct-1", "teammate"); err != nil || calls != 1 {
+		t.Fatalf("claim: %v %d", err, calls)
+	}
+	if err := repo.ClaimLegacyAccountDocumentDelete(context.Background(), "acct_acct-1_0123abcd", "doc1", "acct-1", ""); err == nil || calls != 1 {
+		t.Fatal("an empty caller must be rejected before any write")
+	}
+}
+
+func TestClaimLegacyAccountDocumentDeleteFailureMapping(t *testing.T) {
+	for _, tc := range []struct {
+		reasons string
+		want    error
+	}{
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, ErrAccountNewsAccess},
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]`, ErrAccountNewsAccess},
+		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]`, ErrAccountNewsAccess},
+		{`[{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]`, ErrConditionFailed},
+		{`[{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, ErrAccountNewsAccess},
+		{`[{"Code":"None"},{"Code":"TransactionConflict"},{"Code":"None"},{"Code":"None"}]`, nil},
+	} {
+		repo := &CrawlerRepository{client: summarySDKRepo(func(*http.Request) (*http.Response, error) {
+			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reasons+`}`, nil), nil
+		}).client, tableName: "news"}
+		err := repo.ClaimLegacyAccountDocumentDelete(context.Background(), "src", "doc1", "acct-1", "member")
+		if tc.want == nil {
+			if err == nil || errors.Is(err, ErrAccountNewsAccess) || errors.Is(err, ErrConditionFailed) {
+				t.Fatalf("%s: conflict must stay internal: %v", tc.reasons, err)
+			}
+			continue
+		}
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%s: %v", tc.reasons, err)
+		}
+	}
+}

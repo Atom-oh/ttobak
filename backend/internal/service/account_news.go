@@ -20,9 +20,11 @@ import (
 type accountNewsRepo interface {
 	GetAccount(context.Context, string) (*model.Account, error)
 	GetMember(context.Context, string, string) (*model.AccountMember, error)
-	CreateAccountNewsSource(context.Context, *model.CrawlerSource, *model.AccountNewsSourceRef) error
+	CreateAccountNewsSource(ctx context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error
 	ListAccountNewsSources(context.Context, string) ([]model.AccountNewsSourceRef, error)
 	DeleteAccountNewsSource(context.Context, string, string, string) error
+	ReconcileAccountNewsSourceCount(ctx context.Context, accountID string) (int, error)
+	GetAccountNewsSourceCount(ctx context.Context, accountID string) (count int, exists bool, err error)
 }
 
 type accountNewsCrawler interface {
@@ -31,7 +33,9 @@ type accountNewsCrawler interface {
 }
 
 const (
-	// maxAccountNewsSources bounds scheduled crawl cost per account.
+	// maxAccountNewsSources bounds scheduled crawl cost per account. The ref
+	// count below is a fast pre-check; the create transaction enforces the cap
+	// atomically through the account's source counter row.
 	maxAccountNewsSources = 10
 
 	// Limits match the crawler's source-revision bounds (newsSourceRevision).
@@ -165,6 +169,10 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 	if len(refs) >= maxAccountNewsSources {
 		return nil, ErrInvalidInput
 	}
+	observed, err := s.repairLowCounter(ctx, accountID, len(refs))
+	if err != nil {
+		return nil, err
+	}
 
 	var customURLs []string
 	if req.CopyFromSourceID != "" {
@@ -199,7 +207,8 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 	}
 
 	now := s.now().UTC()
-	for attempt := 0; attempt < 2; attempt++ {
+	reconciled := false
+	for collisions := 0; collisions < 2; {
 		suffix, err := s.randHex()
 		if err != nil {
 			return nil, fmt.Errorf("generate source id: %w", err)
@@ -215,19 +224,59 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 			src.CustomUrls = []string{}
 		}
 		ref := &model.AccountNewsSourceRef{AccountID: accountID, SourceID: sourceID, SourceName: names[0], CreatedBy: userID, CreatedAt: now}
-		err = s.repo.CreateAccountNewsSource(ctx, src, ref)
+		err = s.repo.CreateAccountNewsSource(ctx, src, ref, observed, maxAccountNewsSources)
 		switch {
 		case err == nil:
 			return src, nil
 		case errors.Is(err, repository.ErrAccountNewsAccess):
 			return nil, ErrForbidden
+		case errors.Is(err, repository.ErrAccountNewsSourceLimit):
+			// The refs showed room but the counter is at the cap: either a
+			// concurrent create won, or the counter drifted from the refs
+			// (e.g. seeded while a pre-counter delete committed). Reconcile it
+			// to the canonical ref count once, then retry.
+			if reconciled {
+				return nil, ErrInvalidInput
+			}
+			reconciled = true
+			count, err := s.repo.ReconcileAccountNewsSourceCount(ctx, accountID)
+			if err != nil {
+				return nil, err
+			}
+			if count >= maxAccountNewsSources {
+				return nil, ErrInvalidInput
+			}
+			observed = count
 		case errors.Is(err, repository.ErrConditionFailed):
-			continue // ID collision: retry once with a fresh suffix
+			collisions++ // ID collision: retry once with a fresh suffix
 		default:
 			return nil, err
 		}
 	}
 	return nil, fmt.Errorf("account news source id collision")
+}
+
+// repairLowCounter reconciles a source counter that is below the observed
+// ref count (left low by a writer that predates the counter) before the
+// create, so the counter condition enforces the cap again. It returns the ref
+// count to use; a reconciled count at the cap is ErrInvalidInput. A high
+// counter is left to the limit-failure reconcile in Create.
+func (s *AccountNewsService) repairLowCounter(ctx context.Context, accountID string, refs int) (int, error) {
+	count, exists, err := s.repo.GetAccountNewsSourceCount(ctx, accountID)
+	if err != nil {
+		return 0, err
+	}
+	if !exists || count >= refs {
+		return refs, nil
+	}
+	reconciled, err := s.repo.ReconcileAccountNewsSourceCount(ctx, accountID)
+	if err != nil {
+		return 0, err
+	}
+	if reconciled >= maxAccountNewsSources {
+		return 0, ErrInvalidInput
+	}
+	return reconciled, nil
 }
 
 // accountSources returns the account's sources whose CONFIG still names the

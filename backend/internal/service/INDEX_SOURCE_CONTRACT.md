@@ -66,6 +66,24 @@ UTF-8 byte-length framing described above. Sidecars carry `sourceBucket`,
 `indexSchema=shared-kb-v1`, `resourceKind=sharedKbDocument` and
 `visibility=authenticated-shared`, with no ownerId. Neither grants authorization.
 
+PPTX originals publish `document.md` instead of a byte copy, with sidecar
+`sourceProjection=pptx-markdown-v1` and the same source revision, so a changed
+ETag/version/size yields a new immutable projection. `PPTXToMarkdown` (pure Go)
+runs only after the pinned read and freshness HEAD. It follows `sldIdLst` order
+and emits slide title headings, placeholder/text-box paragraphs, tables and
+notes-page body text; slide numbers, dates, footers, masters, charts, diagrams,
+media and external targets are not read. Limits: 4,096 entries, 16 MiB per XML
+part, 64 MiB decompressed total, 200:1 ratio above 1 MiB, actual stream length
+checked against the header, 500 slides, XML depth 128, 4 million tokens and
+4 MiB Markdown. Tables allow 64 columns and 2,000 rows, with 100,000 cells
+(empty cells included) per deck; the padded table size is computed against
+the remaining Markdown budget before rendering. DTDs are rejected. Failures are FAILED jobs with
+`PPTX_MALFORMED`, `PPTX_ENCRYPTED_OR_LEGACY`, `PPTX_TOO_MANY_ENTRIES`,
+`PPTX_EXPANSION_LIMIT`, `PPTX_TOO_MANY_SLIDES`, `PPTX_OUTPUT_TOO_LARGE` or
+`PPTX_NO_TEXT`; binary `.ppt` is `LEGACY_PPT_UNSUPPORTED`. Converter changes do
+not alter the QA-shared revision, so an existing projection is regenerated only
+when its source changes or its job is re-requested.
+
 `Documents` can read original binary identifiers solely to prove their former
 vectors are absent after owner deletion; Put/Delete still reject original keys.
 Existing QA validation is in [SOURCE_CONTRACT.md](../../python/qa/SOURCE_CONTRACT.md)

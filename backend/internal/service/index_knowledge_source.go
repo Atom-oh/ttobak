@@ -59,9 +59,14 @@ func (s *IndexingService) readKnowledgeSource(ctx context.Context, key model.Ind
 		".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 		".xls":  "application/vnd.ms-excel",
 		".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		// Projected to server-generated Markdown below; not copied as bytes.
+		".pptx": pptxMarkdownType,
 	}
 	contentType, supported := types[extension]
 	switch {
+	case extension == ".ppt":
+		// Binary OLE PowerPoint has no bounded in-process parser here.
+		snapshot.Outcome, snapshot.ErrorCode = model.IndexFailed, LegacyPPTUnsupported
 	case !supported:
 		snapshot.Outcome, snapshot.ErrorCode = model.IndexFailed, "UNSUPPORTED_FILE"
 	case object.Size == 0:
@@ -97,12 +102,45 @@ func (s *IndexingService) readKnowledgeSource(ctx context.Context, key model.Ind
 			snapshot.ErrorCode = "SOURCE_CHANGED"
 			return snapshot, ErrIndexChanged
 		}
-		snapshot.Parts = []IndexPart{{Name: "document" + extension, ContentType: contentType, Body: body}}
+		part := IndexPart{Name: "document" + extension, ContentType: contentType, Body: body}
+		if extension == ".pptx" {
+			// Convert only after the freshness check: the Markdown is derived
+			// from these exact pinned bytes and published under their revision.
+			markdown, err := PPTXToMarkdown(body, knowledgeTitle(key.SourceKey))
+			if code, failed := PPTXErrorCode(err); failed {
+				snapshot.Outcome, snapshot.ErrorCode = model.IndexFailed, code
+				return snapshot, nil
+			} else if err != nil {
+				return snapshot, err
+			}
+			part = IndexPart{Name: knowledgeProjectionName(key.SourceKey), ContentType: pptxMarkdownType, Body: markdown}
+		}
+		snapshot.Parts = []IndexPart{part}
 	}
 	if _, err := knowledgeMetadata(key, snapshot, "00000000-0000-0000-0000-000000000000"); err != nil {
 		return snapshot, err
 	}
 	return snapshot, nil
+}
+
+// knowledgeProjectionName is the immutable snapshot file name. QA derives the
+// same name from the original key (manual_kb.snapshot_document_name).
+func knowledgeProjectionName(sourceKey string) string {
+	extension := strings.ToLower(path.Ext(sourceKey))
+	if extension == ".pptx" {
+		return "document.md"
+	}
+	return "document" + extension
+}
+
+// knowledgeTitle drops the uploader's numeric timestamp prefix from a file name.
+func knowledgeTitle(sourceKey string) string {
+	name := path.Base(sourceKey)
+	if prefix, rest, found := strings.Cut(name, "_"); found && prefix != "" &&
+		strings.Trim(prefix, "0123456789") == "" && rest != "" {
+		name = rest
+	}
+	return strings.TrimSuffix(name, path.Ext(name))
 }
 
 func knowledgeMetadata(key model.IndexResource, source *IndexSnapshot, run string) ([]byte, error) {
@@ -115,6 +153,9 @@ func knowledgeMetadata(key model.IndexResource, source *IndexSnapshot, run strin
 		"sourceBucket": source.KnowledgeBucket, "sourceKey": key.SourceKey,
 		"sourceETag": object.ETag, "sourceVersionId": object.VersionID, "sourceSize": object.Size,
 		"sourceRevision": source.Revision, "indexRunId": run,
+	}
+	if strings.ToLower(path.Ext(key.SourceKey)) == ".pptx" {
+		attributes["sourceProjection"] = PPTXMarkdownProjection
 	}
 	if key.Kind == model.IndexManualKind {
 		attributes["ownerId"] = strings.TrimPrefix(key.PK, "USER#")
