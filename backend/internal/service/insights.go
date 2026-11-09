@@ -77,6 +77,16 @@ type InsightsService struct {
 	// members authorizes deletes of account-owned sources' documents. Nil
 	// fails closed: only admins may delete them.
 	members insightsMemberReader
+	// accountDeletes fences non-admin legacy deletes under account-owned
+	// sources at commit time. Nil fails closed for those deletes.
+	accountDeletes legacyAccountDeleteFencer
+}
+
+// legacyAccountDeleteFencer re-checks, in one write, that the caller is still
+// a direct member of the source's account before a legacy document's objects
+// and metadata are removed (see CrawlerRepository.ClaimLegacyAccountDocumentDelete).
+type legacyAccountDeleteFencer interface {
+	ClaimLegacyAccountDocumentDelete(ctx context.Context, sourceID, docHash, accountID, userID string) error
 }
 
 // insightsMemberReader reads a caller's current direct account membership.
@@ -119,7 +129,7 @@ func (s *InsightsService) authorizeSourceDelete(ctx context.Context, userID stri
 
 // NewInsightsService creates a new InsightsService.
 func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client, kbBucketName, artifactBucketName string) *InsightsService {
-	return &InsightsService{repo: repo, news: repo, s3: s3Client, kbBucketName: kbBucketName, artifactBucketName: artifactBucketName}
+	return &InsightsService{repo: repo, news: repo, s3: s3Client, kbBucketName: kbBucketName, artifactBucketName: artifactBucketName, accountDeletes: repo}
 }
 
 // GetDocumentDetail reads metadata from DynamoDB and full content from S3.
@@ -266,6 +276,21 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	if doc.Type == "news" || doc.QualityStatus != "" || strings.HasPrefix(doc.S3Key, "news/") {
 		if handled, err := s.deletePublishedNews(ctx, userID, isAdmin, source.AccountID, sourceID, docHash); handled {
 			return err
+		}
+	}
+
+	// A non-admin delete under an account-owned source is fenced on current
+	// direct membership before any object or metadata is removed, so a member
+	// revoked after authorizeSourceDelete cannot complete it.
+	if !isAdmin && source.AccountID != "" {
+		if s.accountDeletes == nil {
+			return fmt.Errorf("account document deletion is unavailable")
+		}
+		if err := s.accountDeletes.ClaimLegacyAccountDocumentDelete(ctx, sourceID, docHash, source.AccountID, userID); err != nil {
+			if errors.Is(err, repository.ErrAccountNewsAccess) {
+				return ErrForbidden
+			}
+			return fmt.Errorf("failed to delete document: %w", err)
 		}
 	}
 

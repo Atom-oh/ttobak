@@ -803,7 +803,16 @@ points), optional `newsQueries` (at most 32) and `aliases` (at most 20), and
 optional `copyFromSourceId`, which copies queries, aliases and custom URLs from
 a per-user source the caller subscribes to and never changes that source;
 operator-curated, unknown or unsubscribed sources return 400. Default queries
-are the account name plus its aliases; at most 10 sources per account. GET
+are the account name plus its aliases; at most 10 sources per account, enforced
+by an `ACCOUNT#{accountId}` / `NEWSSRC_COUNT` counter row (`sourceCount`, seeded
+from the existing refs when absent, plus a `sourceRev` revision that every counter
+write advances). The create transaction increments it only below the cap and the
+delete transaction decrements it, conditioned on the count and revision it read.
+When the refs show room but the counter is at the cap, the create reconciles the
+counter to the strongly consistent ref count, conditioned on the revision read
+before listing, and retries once. Writers deployed before the counter do not
+update it; reconcile repairs that drift. No account-delete path exists, so the
+row has no deletion counterpart. GET
 returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
 account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 `disabled` (so scheduling stops) in one transaction; returns 204, or 404 for an
@@ -812,7 +821,12 @@ unsubscribe) refuse account-owned sources like operator-curated ones, in the
 service and in the `attribute_not_exists(accountId)` write condition.
 `DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
 document is allowed only for admins or a current direct member of that account
-(read per request); the stored source creator grants nothing.
+(read per request); the stored source creator grants nothing. A non-admin
+delete is fenced before any object is removed: versioned news in the unpublish
+transaction, legacy documents by a claim transaction that checks the CONFIG
+`accountId`, the account and the caller's direct `MEMBER#` row. Membership is
+fenced at that claim (or unpublish) commit: a membership revoked before it
+returns 403; the object and metadata removal that follows is not re-fenced.
 
 `GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
 for **direct** members. Allowed pairs are news→project, tech→project,
