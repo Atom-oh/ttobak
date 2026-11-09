@@ -2,10 +2,13 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 )
@@ -311,5 +314,319 @@ func TestListPeopleLinksForMeetingAndTarget(t *testing.T) {
 	}
 	if _, _, err := repo.ListPeopleLinksForMeeting(context.Background(), "acc", "m1", 50); err == nil {
 		t.Fatal("meeting ID without owner accepted")
+	}
+}
+
+func testMentionHash(c byte) string { return strings.Repeat(string(c), 32) }
+
+func TestPutMentionIgnore_RequiresMember(t *testing.T) {
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	h := testMentionHash('a')
+	if err := repo.PutMentionIgnore(context.Background(), "acc", "actor", h); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Put ACCOUNT#acc LINKDENY#mention#" + h,
+		"ConditionCheck ACCOUNT#acc META",
+		"ConditionCheck ACCOUNT#acc MEMBER#actor",
+	}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	calls := 0
+	reject := indexingWire(t, func(string, map[string]interface{}) string { calls++; return `{}` })
+	for _, tc := range [][2]string{{"", h}, {"actor", "not-a-hash"}, {"actor", strings.Repeat("A", 32)}} {
+		if err := reject.PutMentionIgnore(context.Background(), "acc", tc[0], tc[1]); err == nil {
+			t.Fatalf("accepted %v", tc)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("invalid ignores must be rejected before any call")
+	}
+}
+
+func TestGetMentionIgnores_BatchReadsDenyRows(t *testing.T) {
+	a, b := testMentionHash('a'), testMentionHash('b')
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		if target != "DynamoDB_20120810.BatchGetItem" {
+			t.Fatalf("target %s", target)
+		}
+		keys := body["RequestItems"].(wireMap)["synthetic"].(wireMap)["Keys"].([]interface{})
+		if len(keys) != 2 {
+			t.Fatalf("keys %#v", keys)
+		}
+		return `{"Responses":{"synthetic":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKDENY#mention#` + b + `"}}]}}`
+	})
+	got, err := repo.GetMentionIgnores(context.Background(), "acc", []string{a, b, a})
+	if err != nil || len(got) != 1 || !got[b] || got[a] {
+		t.Fatalf("ignores %v %v", got, err)
+	}
+	if got, err := repo.GetMentionIgnores(context.Background(), "acc", nil); err != nil || len(got) != 0 {
+		t.Fatalf("empty %v %v", got, err)
+	}
+}
+
+func testUnresolved(hash, role string) model.UnresolvedMention {
+	return model.UnresolvedMention{AccountID: "acc", Hash: hash, MeetingID: "o:m1", Role: role,
+		SourceField: model.PeopleSourceParticipants, Mention: "Kim", CreatedAt: "2026-11-09T00:00:00Z"}
+}
+
+var testRunFence = &model.PeopleRun{AccountID: "acc", Scope: "o:m1", LeaseToken: "tok"}
+
+func TestReplaceUnresolvedMentions_DeletesOnlyStale(t *testing.T) {
+	a, b, c := testMentionHash('a'), testMentionHash('b'), testMentionHash('c')
+	skA := model.MentionSortKey(a, "o:m1", "participant")
+	skB := model.MentionSortKey(b, "o:m1", "participant")
+	skC := model.MentionSortKey(c, "o:m1", "participant")
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	rows := []model.UnresolvedMention{testUnresolved(b, "participant"), testUnresolved(c, "participant")}
+	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, []string{skA, skB}, testRunFence); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Put ACCOUNT#acc " + skB, "Put ACCOUNT#acc " + skC, "Delete ACCOUNT#acc " + skA, "ConditionCheck ACCOUNT#acc PEOPLERUN#o:m1"}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	if put := items[0].(wireMap)["Put"].(wireMap); wireS(put["Item"], "entityType") != "ACCOUNT_PEOPLE_MENTION" {
+		t.Fatalf("item %#v", put["Item"])
+	}
+	if !wireValues(items[3].(wireMap)["ConditionCheck"].(wireMap))["value:tok"] {
+		t.Fatal("lease check does not pin the token")
+	}
+	for _, prior := range [][]string{{model.MentionSortKey(a, "o:m2", "participant")}, {"LINK#meeting#o:m1#member#u#speaker"}} {
+		if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", nil, prior, testRunFence); err == nil {
+			t.Fatalf("foreign prior key accepted: %v", prior)
+		}
+	}
+	other := testUnresolved(a, "participant")
+	other.MeetingID = "o:m2"
+	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", []model.UnresolvedMention{other}, nil, testRunFence); err == nil {
+		t.Fatal("row of another meeting accepted")
+	}
+	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, nil, &model.PeopleRun{AccountID: "acc", Scope: "o:m2", LeaseToken: "tok"}); err == nil {
+		t.Fatal("lease of another meeting accepted")
+	}
+}
+
+func TestReplaceUnresolvedMentions_LostLeaseStopsChunks(t *testing.T) {
+	var rows []model.UnresolvedMention
+	for i := 0; i < 30; i++ {
+		rows = append(rows, testUnresolved(fmt.Sprintf("%032x", i), "participant"))
+	}
+	calls := 0
+	repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		calls++
+		reasons := strings.Repeat(`{"Code":"None"},`, 24) + `{"Code":"ConditionalCheckFailed"}`
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[`+reasons+`]}`, nil), nil
+	})
+	err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, nil, testRunFence)
+	if !errors.Is(err, ErrPeopleRunLeaseLost) || !errors.Is(err, ErrConditionFailed) || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestPeopleLinkWritesInRunAreLeaseFenced(t *testing.T) {
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	l := testPeopleLink(model.LinkOriginAuto, model.LinkKindContact, "c1")
+	run := &model.PeopleRun{AccountID: "acc", Scope: "owner:m1", LeaseToken: "tok"}
+	if err := repo.PutPeopleLinkInRun(context.Background(), l, run); err != nil {
+		t.Fatal(err)
+	}
+	keys := txOpKeys(t, items)
+	if keys[len(keys)-1] != "ConditionCheck ACCOUNT#acc PEOPLERUN#owner:m1" {
+		t.Fatalf("put items %v", keys)
+	}
+	if err := repo.DeletePeopleLinkInRun(context.Background(), "acc", l.Key(), run); err != nil {
+		t.Fatal(err)
+	}
+	keys = txOpKeys(t, items)
+	if keys[len(keys)-1] != "ConditionCheck ACCOUNT#acc PEOPLERUN#owner:m1" || len(keys) != 4 {
+		t.Fatalf("delete items %v", keys)
+	}
+	if err := repo.PutPeopleLinkInRun(context.Background(), testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1"), run); err == nil {
+		t.Fatal("manual edge accepted in a run")
+	}
+
+	lost := func(n int) *DynamoDBRepository {
+		return summarySDKRepo(func(*http.Request) (*http.Response, error) {
+			reasons := strings.Repeat(`{"Code":"None"},`, n-1) + `{"Code":"ConditionalCheckFailed"}`
+			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[`+reasons+`]}`, nil), nil
+		})
+	}
+	if err := lost(7).PutPeopleLinkInRun(context.Background(), l, run); !errors.Is(err, ErrPeopleRunLeaseLost) {
+		t.Fatalf("put: %v", err)
+	}
+	if err := lost(4).DeletePeopleLinkInRun(context.Background(), "acc", l.Key(), run); !errors.Is(err, ErrPeopleRunLeaseLost) || errors.Is(err, ErrAccountLinkAccess) {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestClaimPeopleRun_ClaimsFreeLease(t *testing.T) {
+	now := time.Unix(1000, 0)
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		if target != "DynamoDB_20120810.UpdateItem" || body["ReturnValues"] != "ALL_NEW" {
+			t.Fatalf("update %s %#v", target, body)
+		}
+		if pk, sk := wireS(body["Key"], "PK"), wireS(body["Key"], "SK"); pk != "ACCOUNT#acc" || sk != "PEOPLERUN#o:m1" {
+			t.Fatalf("key %s %s", pk, sk)
+		}
+		c := body["ConditionExpression"].(string)
+		if !strings.Contains(c, "attribute_not_exists") || strings.Count(c, "OR") != 2 || !wireValues(body)["value:tok"] {
+			t.Fatalf("condition %q", c)
+		}
+		return `{"Attributes":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"PEOPLERUN#o:m1"},"scope":{"S":"o:m1"},"leaseToken":{"S":"tok"},
+"leaseUntil":{"N":"1120"},"mentions":{"L":[{"S":"MENTION#x"}]}}}`
+	})
+	run, claimed, err := repo.ClaimPeopleRun(context.Background(), "acc", "o:m1", "tok", now, 2*time.Minute)
+	if err != nil || !claimed || run == nil || len(run.Mentions) != 1 || run.Mentions[0] != "MENTION#x" || run.LeaseToken != "tok" || run.AccountID != "acc" {
+		t.Fatalf("run %+v %v %v", run, claimed, err)
+	}
+	if _, _, err := repo.ClaimPeopleRun(context.Background(), "acc", "bad#scope", "tok", now, time.Minute); err == nil {
+		t.Fatal("invalid scope accepted")
+	}
+}
+
+func TestClaimPeopleRun_BusySetsRerun(t *testing.T) {
+	var calls []string
+	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		if len(calls) == 0 {
+			calls = append(calls, "claim")
+			return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`, nil), nil
+		}
+		calls = append(calls, "rerun")
+		c, _ := body["ConditionExpression"].(string)
+		if !strings.Contains(c, "attribute_exists") || !wireValues(body)["name:rerun"] || !wireValues(body)["name:leaseUntil"] || !wireValues(body)["value:true"] {
+			t.Fatalf("rerun update %#v", body)
+		}
+		return summaryHTTPResponse(200, `{}`, nil), nil
+	})
+	run, claimed, err := repo.ClaimPeopleRun(context.Background(), "acc", model.PeopleRunScopeAccount, "tok", time.Now(), time.Minute)
+	if err != nil || claimed || run != nil || strings.Join(calls, ",") != "claim,rerun" {
+		t.Fatalf("busy %+v %v %v %v", run, claimed, err, calls)
+	}
+}
+
+func TestClaimPeopleRun_RetriesWhenHolderFinished(t *testing.T) {
+	ccfe := `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`
+	calls := 0
+	repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls <= 2 {
+			// The claim fails on the active lease, then the holder finishes
+			// before the rerun marker lands.
+			return summaryHTTPResponse(400, ccfe, nil), nil
+		}
+		return summaryHTTPResponse(200, `{"Attributes":{"leaseToken":{"S":"tok"}}}`, nil), nil
+	})
+	run, claimed, err := repo.ClaimPeopleRun(context.Background(), "acc", "o:m1", "tok", time.Now(), time.Minute)
+	if err != nil || !claimed || run == nil || calls != 3 {
+		t.Fatalf("retry %+v %v %v calls=%d", run, claimed, err, calls)
+	}
+	calls = -10
+	if _, claimed, err := repo.ClaimPeopleRun(context.Background(), "acc", "o:m1", "tok", time.Now(), time.Minute); err != nil || claimed {
+		t.Fatalf("leases changing hands: %v %v", claimed, err)
+	}
+}
+
+func TestRecordPeopleRunMentions_RequiresLease(t *testing.T) {
+	key := model.MentionSortKey(testMentionHash('a'), "o:m1", "participant")
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		if target != "DynamoDB_20120810.UpdateItem" || !wireValues(body)["value:tok"] || !wireValues(body)["name:mentions"] {
+			t.Fatalf("record %#v", body)
+		}
+		return `{}`
+	})
+	run := &model.PeopleRun{AccountID: "acc", Scope: "o:m1", LeaseToken: "tok"}
+	if err := repo.RecordPeopleRunMentions(context.Background(), run, []string{key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordPeopleRunMentions(context.Background(), run, []string{model.MentionSortKey(testMentionHash('a'), "o:m2", "participant")}); err == nil {
+		t.Fatal("key of another meeting accepted")
+	}
+	repo = summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`, nil), nil
+	})
+	if err := repo.RecordPeopleRunMentions(context.Background(), run, nil); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("lost lease: %v", err)
+	}
+}
+
+func TestFinishPeopleRun_ReportsRerun(t *testing.T) {
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		u := body["UpdateExpression"].(string)
+		if body["ReturnValues"] != "ALL_OLD" || !strings.Contains(u, "REMOVE") || !wireValues(body)["value:tok"] {
+			t.Fatalf("finish %#v", body)
+		}
+		return `{"Attributes":{"rerun":{"BOOL":true}}}`
+	})
+	run := &model.PeopleRun{AccountID: "acc", Scope: "o:m1", LeaseToken: "tok", Mentions: []string{"MENTION#x"}, Resolved: 1, RunAt: "2026-11-09T00:00:00Z"}
+	if rerun, err := repo.FinishPeopleRun(context.Background(), run); err != nil || !rerun {
+		t.Fatalf("rerun=%v err=%v", rerun, err)
+	}
+	repo = summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`, nil), nil
+	})
+	if _, err := repo.FinishPeopleRun(context.Background(), run); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("token mismatch: %v", err)
+	}
+}
+
+func TestListUnresolvedMentions_GroupsContiguous(t *testing.T) {
+	a := testMentionHash('a')
+	after := model.MentionSortKey(a, "o:m1", "participant")
+	repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
+		values := wireValues(body)
+		start, _ := body["ExclusiveStartKey"].(wireMap)
+		if !strings.Contains(body["KeyConditionExpression"].(string), "begins_with") || !values["value:MENTION#"] ||
+			wireS(start, "SK") != after || body["Limit"].(float64) != 10 {
+			t.Fatalf("query %#v", body)
+		}
+		return `{"Items":[
+{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"MENTION#` + a + `#o:m2#speaker"},"hash":{"S":"spoof"},"meetingId":{"S":"x:y"},"mention":{"S":"Kim"},"sourceField":{"S":"speakerMap"}},
+{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"MENTION#bad"},"mention":{"S":"Lee"}}]}`
+	})
+	rows, last, err := repo.ListUnresolvedMentions(context.Background(), "acc", after, 10)
+	if err != nil || len(rows) != 1 || last != "" {
+		t.Fatalf("rows %+v %q %v", rows, last, err)
+	}
+	if r := rows[0]; r.Hash != a || r.MeetingID != "o:m2" || r.Role != "speaker" || r.AccountID != "acc" || r.Mention != "Kim" {
+		t.Fatalf("row must decode from the key: %+v", r)
+	}
+	if _, _, err := repo.ListUnresolvedMentions(context.Background(), "acc", "LINK#x", 10); err == nil {
+		t.Fatal("cursor outside the mention range accepted")
+	}
+
+	var prefix string
+	repo = indexingWire(t, func(_ string, body map[string]interface{}) string {
+		for v := range wireValues(body) {
+			if strings.HasPrefix(v, "value:MENTION#") {
+				prefix = strings.TrimPrefix(v, "value:")
+			}
+		}
+		return `{"Items":[],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"` + after + `"}}}`
+	})
+	if _, truncated, err := repo.ListUnresolvedMentionsByHash(context.Background(), "acc", a, 1); err != nil || !truncated || prefix != "MENTION#"+a+"#" {
+		t.Fatalf("by hash %v %v %q", truncated, err, prefix)
+	}
+}
+
+func TestListPeopleLinks_EmptyPagesWithContinuationAreBounded(t *testing.T) {
+	calls := 0
+	repo := indexingWire(t, func(string, map[string]interface{}) string {
+		calls++
+		return `{"Items":[],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#contact#c1#meeting#o:m1#speaker"}}}`
+	})
+	links, last, err := repo.ListPeopleLinksByTarget(context.Background(), "acc", model.LinkKindContact, "", 10)
+	if err != nil || len(links) != 0 || last != "LINKTO#contact#c1#meeting#o:m1#speaker" || calls != 4 {
+		t.Fatalf("links=%v last=%q err=%v calls=%d", links, last, err, calls)
+	}
+	calls = 0
+	if _, truncated, err := repo.ListPeopleLinksForMeeting(context.Background(), "acc", "o:m1", 1); err != nil || !truncated || calls != 4 {
+		t.Fatalf("meeting: truncated=%v err=%v calls=%d", truncated, err, calls)
 	}
 }
