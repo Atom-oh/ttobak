@@ -70,14 +70,14 @@ export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost
     }
   };
 
-  const morePeople = () => run('people', async signal => {
+  const morePeople = () => run('more-people', async signal => {
     const page = await accountApi.people.list(accountId, peopleCursor, { signal, expectedUserId: userId });
     if (signal.aborted) return;
     setPeople(previous => mergePeoplePages(previous, page.people ?? []));
     setPeopleCursor(page.nextCursor || '');
   });
 
-  const moreGroups = () => run('groups', async signal => {
+  const moreGroups = () => run('more-groups', async signal => {
     const page = await accountApi.people.mentions(accountId, groupCursor, { signal, expectedUserId: userId });
     if (signal.aborted) return;
     setGroups(previous => mergeMentionPages(previous, page.groups ?? []));
@@ -135,7 +135,7 @@ export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost
         {people.length === 0 && <p className="text-sm text-text-secondary">{PEOPLE_EMPTY_TEXT}</p>}
         <ul className="space-y-1">
           {people.map(person => <li key={`${person.kind}:${person.id}`} className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="material-symbols-outlined text-base text-text-secondary" aria-hidden="true">{person.kind === 'member' ? 'badge' : 'person'}</span>
+            <span className="material-symbols-outlined text-base text-text-secondary" aria-hidden="true">{person.kind === 'member' ? 'account_circle' : 'person'}</span>
             <span className="min-w-0 break-all text-text-main">{person.label}</span>
             <span className="text-xs text-text-secondary">{meetingCountText(person.meetings)}</span>
             {roleSummary(person.roles) && <span className="text-xs text-text-secondary">{roleSummary(person.roles)}</span>}
