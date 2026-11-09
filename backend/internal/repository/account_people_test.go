@@ -530,3 +530,19 @@ func TestListUnresolvedMentions_GroupsContiguous(t *testing.T) {
 		t.Fatalf("by hash %v %v %q", truncated, err, prefix)
 	}
 }
+
+func TestListPeopleLinks_EmptyPagesWithContinuationAreBounded(t *testing.T) {
+	calls := 0
+	repo := indexingWire(t, func(string, map[string]interface{}) string {
+		calls++
+		return `{"Items":[],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#contact#c1#meeting#o:m1#speaker"}}}`
+	})
+	links, last, err := repo.ListPeopleLinksByTarget(context.Background(), "acc", model.LinkKindContact, "", 10)
+	if err != nil || len(links) != 0 || last != "LINKTO#contact#c1#meeting#o:m1#speaker" || calls != 4 {
+		t.Fatalf("links=%v last=%q err=%v calls=%d", links, last, err, calls)
+	}
+	calls = 0
+	if _, truncated, err := repo.ListPeopleLinksForMeeting(context.Background(), "acc", "o:m1", 1); err != nil || !truncated || calls != 4 {
+		t.Fatalf("meeting: truncated=%v err=%v calls=%d", truncated, err, calls)
+	}
+}
