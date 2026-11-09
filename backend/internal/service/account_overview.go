@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -42,6 +43,9 @@ type accountOverviewRepo interface {
 	GetMeetingActionState(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error)
 	GetAccountEvent(ctx context.Context, account, id string) (*model.AccountEvent, string, error)
 	ListAccountLinksByPrefix(ctx context.Context, accountID, prefix string, maxRows int) ([]model.AccountLink, bool, error)
+	ListProjectStageHistory(ctx context.Context, projectID string, limit int) ([]model.ProjectStageChange, error)
+	ListAccountEvents(ctx context.Context, account, fromKey, toKey string, descending bool, limit int, afterSK string) ([]model.AccountEvent, string, error)
+	ListMeetingRefsForAccountPage(ctx context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error)
 }
 
 // accountOverviewNews is implemented by AccountNewsService.
@@ -92,14 +96,16 @@ func (s *AccountOverviewService) authorize(ctx context.Context, accountID, userI
 // overviewReads caches per-call reads and link revalidation; it never
 // outlives one request.
 type overviewReads struct {
-	meetings  map[string]*model.Meeting
-	events    map[string]*model.AccountEvent
-	projects  map[string]bool // project ID -> still lists the account
-	truncated bool            // a per-endpoint link read hit its bound
+	meetings      map[string]*model.Meeting
+	events        map[string]*model.AccountEvent
+	projects      map[string]bool                // project ID -> still lists the account
+	projectEvents map[string][]model.AccountLink // project ID -> event→project links
+	truncated     bool                           // a per-endpoint link read hit its bound
 }
 
 func newOverviewReads() *overviewReads {
-	return &overviewReads{meetings: map[string]*model.Meeting{}, events: map[string]*model.AccountEvent{}, projects: map[string]bool{}}
+	return &overviewReads{meetings: map[string]*model.Meeting{}, events: map[string]*model.AccountEvent{}, projects: map[string]bool{},
+		projectEvents: map[string][]model.AccountLink{}}
 }
 
 // projectInAccount reports whether the project still lists the account.
@@ -119,7 +125,11 @@ func (s *AccountOverviewService) projectInAccount(ctx context.Context, accountID
 // endpointLinks reads the link rows under one endpoint prefix, keeping only
 // well-formed rows. A hit bound is recorded on reads, never an error.
 func (s *AccountOverviewService) endpointLinks(ctx context.Context, accountID, prefix string, reads *overviewReads) ([]model.AccountLink, error) {
-	rows, truncated, err := s.repo.ListAccountLinksByPrefix(ctx, accountID, prefix, maxOverviewLinkRows)
+	return s.endpointLinksN(ctx, accountID, prefix, maxOverviewLinkRows, reads)
+}
+
+func (s *AccountOverviewService) endpointLinksN(ctx context.Context, accountID, prefix string, maxRows int, reads *overviewReads) ([]model.AccountLink, error) {
+	rows, truncated, err := s.repo.ListAccountLinksByPrefix(ctx, accountID, prefix, maxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -159,18 +169,37 @@ func (s *AccountOverviewService) newsProjects(ctx context.Context, accountID, ne
 	return out, nil
 }
 
-// projectEvents returns the event IDs linked to a project (event→project).
-// Events are revalidated when read in hasUpcomingEvent.
-func (s *AccountOverviewService) projectEvents(ctx context.Context, accountID, projectID string, reads *overviewReads) ([]string, error) {
+// projectEventLinks returns the distinct event→project links of a project,
+// read once per call. Events are revalidated by their readers.
+func (s *AccountOverviewService) projectEventLinks(ctx context.Context, accountID, projectID string, reads *overviewReads) ([]model.AccountLink, error) {
+	if links, ok := reads.projectEvents[projectID]; ok {
+		return links, nil
+	}
 	links, err := s.endpointLinks(ctx, accountID, model.PrefixAccountLinkTo+model.LinkKindProject+"#"+projectID+"#"+model.LinkKindEvent+"#", reads)
 	if err != nil {
 		return nil, err
 	}
-	out := []string{}
+	out := []model.AccountLink{}
+	seen := map[string]bool{}
 	for _, link := range links {
-		if link.FromKind == model.LinkKindEvent && link.ToKind == model.LinkKindProject && link.ToID == projectID && !contains(out, link.FromID) {
-			out = append(out, link.FromID)
+		if link.FromKind == model.LinkKindEvent && link.ToKind == model.LinkKindProject && link.ToID == projectID && !seen[link.FromID] {
+			seen[link.FromID] = true
+			out = append(out, link)
 		}
+	}
+	reads.projectEvents[projectID] = out
+	return out, nil
+}
+
+// projectEvents returns the event IDs linked to a project (event→project).
+func (s *AccountOverviewService) projectEvents(ctx context.Context, accountID, projectID string, reads *overviewReads) ([]string, error) {
+	links, err := s.projectEventLinks(ctx, accountID, projectID, reads)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(links))
+	for _, link := range links {
+		out = append(out, link.FromID)
 	}
 	return out, nil
 }
@@ -332,34 +361,45 @@ func (s *AccountOverviewService) signalOpportunities(ctx context.Context, userID
 		if project == nil || project.ProjectID != ref.ProjectID || !contains(project.AccountIDs, accountID) {
 			continue
 		}
-		stage, mapped := model.NormalizeProjectStage(project.Stage)
-		if !mapped {
-			stage = project.Stage
-		}
-		item := model.SignalOppty{ProjectID: project.ProjectID, Name: capRunes(project.Name, maxSignalsTextRunes),
-			Stage: capRunes(stage, maxSignalsTextRunes), StageMapped: mapped, Terminal: mapped && model.IsTerminalStage(stage), Stall: []model.StallReason{}}
-		if project.StageChangedAt != nil {
-			days := max(int(now.Sub(*project.StageChangedAt)/(24*time.Hour)), 0)
-			item.DaysInStage = &days
-		}
-		if !item.Terminal {
-			ages, err := s.openActionAges(ctx, userID, accountID, member, project.ProjectID, now, reads)
-			if err != nil {
-				return nil, err
-			}
-			events, err := s.projectEvents(ctx, accountID, project.ProjectID, reads)
-			if err != nil {
-				return nil, err
-			}
-			upcoming, err := s.hasUpcomingEvent(ctx, accountID, events, now, reads)
-			if err != nil {
-				return nil, err
-			}
-			item.Stall = StallReasons(*project, ages, upcoming, now)
+		item, err := s.opptyItem(ctx, userID, accountID, member, project, now, reads)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+// opptyItem builds a project's opportunity signal, including stall reasons
+// for nonterminal stages. The caller has checked the project lists the account.
+func (s *AccountOverviewService) opptyItem(ctx context.Context, userID, accountID string, member *model.AccountMember, project *model.Project, now time.Time, reads *overviewReads) (model.SignalOppty, error) {
+	stage, mapped := model.NormalizeProjectStage(project.Stage)
+	if !mapped {
+		stage = project.Stage
+	}
+	item := model.SignalOppty{ProjectID: project.ProjectID, Name: capRunes(project.Name, maxSignalsTextRunes),
+		Stage: capRunes(stage, maxSignalsTextRunes), StageMapped: mapped, Terminal: mapped && model.IsTerminalStage(stage), Stall: []model.StallReason{}}
+	if project.StageChangedAt != nil {
+		days := max(int(now.Sub(*project.StageChangedAt)/(24*time.Hour)), 0)
+		item.DaysInStage = &days
+	}
+	if item.Terminal {
+		return item, nil
+	}
+	ages, err := s.openActionAges(ctx, userID, accountID, member, project.ProjectID, now, reads)
+	if err != nil {
+		return item, err
+	}
+	events, err := s.projectEvents(ctx, accountID, project.ProjectID, reads)
+	if err != nil {
+		return item, err
+	}
+	upcoming, err := s.hasUpcomingEvent(ctx, accountID, events, now, reads)
+	if err != nil {
+		return item, err
+	}
+	item.Stall = StallReasons(*project, ages, upcoming, now)
+	return item, nil
 }
 
 // openActionAges returns the age of every open action item in meetings that
@@ -383,15 +423,9 @@ func (s *AccountOverviewService) openActionAges(ctx context.Context, userID, acc
 			continue
 		}
 		done[key] = true
-		meeting, cached := reads.meetings[key]
-		if !cached {
-			if meeting, err = s.repo.GetMeetingActionState(ctx, ref.OwnerUserID, ref.MeetingID); err != nil {
-				return nil, err
-			}
-			if !meetingPublishedToAccount(meeting, accountID, ref.OwnerUserID, ref.MeetingID) {
-				meeting = nil
-			}
-			reads.meetings[key] = meeting
+		meeting, err := s.publishedMeeting(ctx, accountID, ref.OwnerUserID, ref.MeetingID, reads)
+		if err != nil {
+			return nil, err
 		}
 		if meeting == nil || !contains(meeting.ProjectIDs, projectID) || meeting.Date.IsZero() {
 			continue
@@ -414,20 +448,48 @@ func (s *AccountOverviewService) openActionAges(ctx context.Context, userID, acc
 	return ages, nil
 }
 
+// publishedMeeting returns the meeting's metadata view when it is currently
+// published to the account, else nil. Reads are cached per call.
+func (s *AccountOverviewService) publishedMeeting(ctx context.Context, accountID, ownerID, meetingID string, reads *overviewReads) (*model.Meeting, error) {
+	key := ownerID + ":" + meetingID
+	if meeting, cached := reads.meetings[key]; cached {
+		return meeting, nil
+	}
+	meeting, err := s.repo.GetMeetingActionState(ctx, ownerID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if !meetingPublishedToAccount(meeting, accountID, ownerID, meetingID) {
+		meeting = nil
+	}
+	reads.meetings[key] = meeting
+	return meeting, nil
+}
+
+// accountEvent returns the account event by ID, or nil when it no longer
+// exists. Reads are cached per call.
+func (s *AccountOverviewService) accountEvent(ctx context.Context, accountID, id string, reads *overviewReads) (*model.AccountEvent, error) {
+	if event, cached := reads.events[id]; cached {
+		return event, nil
+	}
+	event, _, err := s.repo.GetAccountEvent(ctx, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	if event != nil && event.EventID != id {
+		event = nil
+	}
+	reads.events[id] = event
+	return event, nil
+}
+
 // hasUpcomingEvent reports whether any linked account event starts after now.
 // Per-user calendar entries are deliberately excluded (ADR-064).
 func (s *AccountOverviewService) hasUpcomingEvent(ctx context.Context, accountID string, eventIDs []string, now time.Time, reads *overviewReads) (bool, error) {
 	for _, id := range eventIDs {
-		event, cached := reads.events[id]
-		if !cached {
-			var err error
-			if event, _, err = s.repo.GetAccountEvent(ctx, accountID, id); err != nil {
-				return false, err
-			}
-			if event != nil && event.EventID != id {
-				event = nil
-			}
-			reads.events[id] = event
+		event, err := s.accountEvent(ctx, accountID, id, reads)
+		if err != nil {
+			return false, err
 		}
 		if event == nil {
 			continue
@@ -488,6 +550,386 @@ func fitSignals(sig *model.AccountSignals) error {
 			sig.Opportunities = sig.Opportunities[:o-1]
 		default:
 			sig.Insights = sig.Insights[:i-1]
+		}
+	}
+}
+
+const (
+	maxFlowRows        = 20
+	maxFlowColumnItems = 5
+	maxFlowHistory     = 10
+	// maxFlowProjectRefs bounds project reads; more refs set Truncated.
+	maxFlowProjectRefs = 100
+	// maxFlowEventsPerProject bounds event reads per project row.
+	maxFlowEventsPerProject = 20
+	// maxFlowUnassignedReads bounds the newest account events and meeting
+	// refs examined for the unassigned row.
+	maxFlowUnassignedReads = 50
+	// maxFlowEventLinkRows bounds each LINK#event#{id}#project# read.
+	maxFlowEventLinkRows = 20
+	// MaxAccountFlowBytes bounds the encoded flow response.
+	MaxAccountFlowBytes = 64 * 1024
+
+	flowEventKeyLow  = "0000-01-01T00:00:00Z"
+	flowEventKeyHigh = "9999-12-31T23:59:59Z"
+)
+
+// Flow returns the account's engagement flow: one row per project that still
+// lists the account, plus an unassigned row. Items are assigned only through
+// stored links (event→project links, meeting projectIds); nothing is guessed.
+func (s *AccountOverviewService) Flow(ctx context.Context, userID, accountID string, now time.Time) (*model.AccountFlow, error) {
+	member, err := s.authorize(ctx, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+	now = now.UTC()
+	reads := newOverviewReads()
+	out := &model.AccountFlow{Rows: []model.FlowRow{}}
+	projects, truncated, err := s.flowProjects(ctx, accountID, reads)
+	if err != nil {
+		return nil, err
+	}
+	needs, err := s.flowNeeds(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	for _, project := range projects {
+		row, err := s.flowRow(ctx, userID, accountID, member, project, needs, now, reads)
+		if err != nil {
+			return nil, err
+		}
+		out.Rows = append(out.Rows, row)
+	}
+	unassigned, unassignedTruncated, err := s.flowUnassigned(ctx, accountID, needs, reads)
+	if err != nil {
+		return nil, err
+	}
+	out.Unassigned = unassigned
+	out.Truncated = truncated || unassignedTruncated || reads.truncated
+	if err := fitFlow(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func flowTerminal(p *model.Project) bool {
+	stage, mapped := model.NormalizeProjectStage(p.Stage)
+	return mapped && model.IsTerminalStage(stage)
+}
+
+// flowProjects returns at most maxFlowRows projects that still list the
+// account: nonterminal first, then by stage change time, newest first.
+func (s *AccountOverviewService) flowProjects(ctx context.Context, accountID string, reads *overviewReads) ([]*model.Project, bool, error) {
+	refs, err := s.repo.ListProjectRefsForAccount(ctx, accountID)
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := false
+	seen := map[string]bool{}
+	projects := []*model.Project{}
+	for _, ref := range refs {
+		if seen[ref.ProjectID] || !validLinkPlainID(ref.ProjectID) {
+			continue
+		}
+		if len(seen) == maxFlowProjectRefs {
+			truncated = true
+			break
+		}
+		seen[ref.ProjectID] = true
+		project, err := s.repo.GetProject(ctx, ref.ProjectID)
+		if err != nil {
+			return nil, false, err
+		}
+		ok := project != nil && project.ProjectID == ref.ProjectID && contains(project.AccountIDs, accountID)
+		reads.projects[ref.ProjectID] = ok
+		if ok {
+			projects = append(projects, project)
+		}
+	}
+	sort.SliceStable(projects, func(i, j int) bool {
+		a, b := projects[i], projects[j]
+		if ta, tb := flowTerminal(a), flowTerminal(b); ta != tb {
+			return !ta
+		}
+		if (a.StageChangedAt == nil) != (b.StageChangedAt == nil) {
+			return a.StageChangedAt != nil
+		}
+		if a.StageChangedAt != nil && !a.StageChangedAt.Equal(*b.StageChangedAt) {
+			return a.StageChangedAt.After(*b.StageChangedAt)
+		}
+		return a.ProjectID < b.ProjectID
+	})
+	if len(projects) > maxFlowRows {
+		projects, truncated = projects[:maxFlowRows], true
+	}
+	return projects, truncated, nil
+}
+
+// flowNeeds maps meeting IDs to their newest readable need-type insight text.
+// The insights read applies the account publication and privacy guards.
+func (s *AccountOverviewService) flowNeeds(ctx context.Context, userID, accountID string) (map[string]string, error) {
+	page, err := s.insights.ListAccountInsightsPage(ctx, userID, accountID, time.Time{}, time.Time{}, []string{"need"})
+	if err != nil {
+		return nil, err
+	}
+	newest := map[string]time.Time{}
+	out := map[string]string{}
+	for _, ins := range page.Insights {
+		if ins.Type != "need" || ins.SourceType != "meeting" || ins.SourceID == "" || ins.Text == "" {
+			continue
+		}
+		if at, ok := newest[ins.SourceID]; ok && !ins.OccurredAt.After(at) {
+			continue
+		}
+		newest[ins.SourceID] = ins.OccurredAt
+		out[ins.SourceID] = capRunes(ins.Text, maxSignalsTextRunes)
+	}
+	return out, nil
+}
+
+func flowEventItem(e *model.AccountEvent, link *model.AccountLink) model.FlowItem {
+	item := model.FlowItem{Kind: model.FlowItemEvent, ID: e.EventID, Title: capRunes(e.Title, maxSignalsTextRunes), Date: capRunes(e.StartAt, maxSignalsTextRunes)}
+	if link != nil {
+		item.Origin = link.Origin
+		item.Evidence = capRunes(link.Evidence, maxSignalsTextRunes)
+	}
+	return item
+}
+
+func flowMeetingItem(m *model.Meeting, fallbackTitle string, needs map[string]string) model.FlowItem {
+	title := m.Title
+	if title == "" {
+		title = fallbackTitle
+	}
+	item := model.FlowItem{Kind: model.FlowItemMeeting, ID: m.UserID + ":" + m.MeetingID, Title: capRunes(title, maxSignalsTextRunes), Need: needs[m.MeetingID]}
+	if !m.Date.IsZero() {
+		item.Date = m.Date.UTC().Format(time.RFC3339)
+	}
+	return item
+}
+
+// newestEarliestFirst keeps the newest n items and returns them earliest first.
+func newestEarliestFirst(items []model.FlowItem, n int) []model.FlowItem {
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Date > items[j].Date })
+	if len(items) > n {
+		items = items[:n]
+	}
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
+	}
+	return items
+}
+
+func (s *AccountOverviewService) flowRow(ctx context.Context, userID, accountID string, member *model.AccountMember, project *model.Project, needs map[string]string, now time.Time, reads *overviewReads) (model.FlowRow, error) {
+	row := model.FlowRow{ProjectID: project.ProjectID, Activity: []model.FlowItem{}, Response: []model.FlowItem{}, History: []model.ProjectStageChange{}}
+	oppty, err := s.opptyItem(ctx, userID, accountID, member, project, now, reads)
+	if err != nil {
+		return row, err
+	}
+	row.Oppty = &oppty
+
+	links, err := s.projectEventLinks(ctx, accountID, project.ProjectID, reads)
+	if err != nil {
+		return row, err
+	}
+	if len(links) > maxFlowEventsPerProject {
+		links, reads.truncated = links[:maxFlowEventsPerProject], true
+	}
+	for i := range links {
+		event, err := s.accountEvent(ctx, accountID, links[i].FromID, reads)
+		if err != nil {
+			return row, err
+		}
+		if event != nil {
+			row.Activity = append(row.Activity, flowEventItem(event, &links[i]))
+		}
+	}
+	row.Activity = newestEarliestFirst(row.Activity, maxFlowColumnItems)
+
+	refs, err := s.repo.ListProjectMeetingRefsForProject(ctx, project.ProjectID)
+	if err != nil {
+		return row, err
+	}
+	done := map[string]bool{}
+	for _, ref := range refs {
+		if len(row.Response) == maxFlowColumnItems {
+			break
+		}
+		if len(done) == maxOverviewMeetingsPerProject {
+			reads.truncated = true
+			break
+		}
+		if !validLinkPlainID(ref.OwnerUserID) || !validLinkPlainID(ref.MeetingID) || done[ref.OwnerUserID+":"+ref.MeetingID] {
+			continue
+		}
+		done[ref.OwnerUserID+":"+ref.MeetingID] = true
+		meeting, err := s.publishedMeeting(ctx, accountID, ref.OwnerUserID, ref.MeetingID, reads)
+		if err != nil {
+			return row, err
+		}
+		if meeting != nil && contains(meeting.ProjectIDs, project.ProjectID) {
+			row.Response = append(row.Response, flowMeetingItem(meeting, ref.Title, needs))
+		}
+	}
+	row.Response = newestEarliestFirst(row.Response, maxFlowColumnItems)
+
+	history, err := s.repo.ListProjectStageHistory(ctx, project.ProjectID, maxFlowHistory)
+	if err != nil {
+		return row, err
+	}
+	for _, h := range history {
+		if len(row.History) == maxFlowHistory {
+			break
+		}
+		if h.PK != model.PrefixProject+project.ProjectID || !strings.HasPrefix(h.SK, model.PrefixProjectStageHistory) ||
+			h.ProjectID != project.ProjectID || h.EntityType != model.EntityTypeProjectStageChange {
+			continue
+		}
+		h.From, h.To, h.ChangedBy = capRunes(h.From, maxSignalsTextRunes), capRunes(h.To, maxSignalsTextRunes), capRunes(h.ChangedBy, maxSignalsTextRunes)
+		row.History = append(row.History, h)
+	}
+
+	row.Result = model.FlowResult{Stall: oppty.Stall}
+	switch {
+	case oppty.Terminal:
+		row.Result.State = model.FlowStateTerminal
+	case !oppty.StageMapped || (project.StageChangedAt == nil && len(row.History) == 0):
+		row.Result.State = model.FlowStateUnknown
+	case len(oppty.Stall) > 0:
+		row.Result.State = model.FlowStateStalled
+	default:
+		row.Result.State = model.FlowStateActive
+	}
+	return row, nil
+}
+
+// flowUnassigned holds the newest account events with no link to a project
+// still in the account, and the newest published meetings listing no such
+// project. Each column holds at most maxFlowColumnItems, newest first.
+func (s *AccountOverviewService) flowUnassigned(ctx context.Context, accountID string, needs map[string]string, reads *overviewReads) (model.FlowRow, bool, error) {
+	row := model.FlowRow{Activity: []model.FlowItem{}, Response: []model.FlowItem{}, History: []model.ProjectStageChange{},
+		Result: model.FlowResult{State: model.FlowStateUnknown, Stall: []model.StallReason{}}}
+	truncated := false
+
+	events, next, err := s.repo.ListAccountEvents(ctx, accountID, flowEventKeyLow, flowEventKeyHigh, true, maxFlowUnassignedReads, "")
+	if err != nil {
+		return row, false, err
+	}
+	for i := range events {
+		if len(row.Activity) == maxFlowColumnItems {
+			break
+		}
+		event := &events[i]
+		if !validContactID(event.EventID) {
+			continue
+		}
+		reads.events[event.EventID] = event
+		links, err := s.endpointLinksN(ctx, accountID, model.PrefixAccountLink+model.LinkKindEvent+"#"+event.EventID+"#"+model.LinkKindProject+"#", maxFlowEventLinkRows, reads)
+		if err != nil {
+			return row, false, err
+		}
+		linked := false
+		for _, link := range links {
+			if link.FromKind != model.LinkKindEvent || link.FromID != event.EventID || link.ToKind != model.LinkKindProject {
+				continue
+			}
+			if linked, err = s.projectInAccount(ctx, accountID, link.ToID, reads); err != nil {
+				return row, false, err
+			}
+			if linked {
+				break
+			}
+		}
+		if !linked {
+			row.Activity = append(row.Activity, flowEventItem(event, nil))
+		}
+	}
+	if len(row.Activity) < maxFlowColumnItems && next != "" {
+		truncated = true
+	}
+
+	refs, cursor, err := s.repo.ListMeetingRefsForAccountPage(ctx, accountID, "", maxFlowUnassignedReads)
+	if err != nil {
+		return row, false, err
+	}
+	for _, ref := range refs {
+		if len(row.Response) == maxFlowColumnItems {
+			break
+		}
+		if ref.AccountID != accountID || ref.PK != model.PrefixAccount+accountID || ref.EntityType != model.EntityTypeMeetingRef ||
+			ref.SK != model.PrefixMeetingRef+ref.Date.UTC().Format(time.RFC3339)+"#"+ref.MeetingID ||
+			!validLinkPlainID(ref.OwnerUserID) || !validLinkPlainID(ref.MeetingID) {
+			continue
+		}
+		meeting, err := s.publishedMeeting(ctx, accountID, ref.OwnerUserID, ref.MeetingID, reads)
+		if err != nil {
+			return row, false, err
+		}
+		if meeting == nil {
+			continue
+		}
+		assigned := false
+		for _, projectID := range meeting.ProjectIDs {
+			if !validLinkPlainID(projectID) {
+				continue
+			}
+			if assigned, err = s.projectInAccount(ctx, accountID, projectID, reads); err != nil {
+				return row, false, err
+			}
+			if assigned {
+				break
+			}
+		}
+		if !assigned {
+			row.Response = append(row.Response, flowMeetingItem(meeting, ref.Title, needs))
+		}
+	}
+	if len(row.Response) < maxFlowColumnItems && cursor != nil {
+		truncated = true
+	}
+	return row, truncated, nil
+}
+
+// fitFlow drops trailing items from the longest column until the encoded
+// response fits MaxAccountFlowBytes, then trailing rows; any trim sets
+// Truncated.
+func fitFlow(flow *model.AccountFlow) error {
+	for {
+		raw, err := json.Marshal(flow)
+		if err != nil {
+			return err
+		}
+		if len(raw) <= MaxAccountFlowBytes {
+			return nil
+		}
+		flow.Truncated = true
+		var longest *[]model.FlowItem
+		var history *[]model.ProjectStageChange
+		size := 0
+		rows := make([]*model.FlowRow, 0, len(flow.Rows)+1)
+		for i := range flow.Rows {
+			rows = append(rows, &flow.Rows[i])
+		}
+		rows = append(rows, &flow.Unassigned)
+		for _, row := range rows {
+			for _, col := range []*[]model.FlowItem{&row.Activity, &row.Response} {
+				if len(*col) > size {
+					longest, history, size = col, nil, len(*col)
+				}
+			}
+			if len(row.History) > size {
+				longest, history, size = nil, &row.History, len(row.History)
+			}
+		}
+		switch {
+		case history != nil:
+			*history = (*history)[:size-1]
+		case longest != nil:
+			*longest = (*longest)[:size-1]
+		case len(flow.Rows) > 0:
+			flow.Rows = flow.Rows[:len(flow.Rows)-1]
+		default:
+			return fmt.Errorf("account flow exceeds the response bound")
 		}
 	}
 }

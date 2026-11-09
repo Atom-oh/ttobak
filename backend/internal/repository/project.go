@@ -397,6 +397,37 @@ func (r *DynamoDBRepository) UpdateProjectWithStage(ctx context.Context, project
 	return nil
 }
 
+// ListProjectStageHistory returns at most limit stage-history rows of a
+// project, newest first (the sort key carries the change time).
+func (r *DynamoDBRepository) ListProjectStageHistory(ctx context.Context, projectID string, limit int) ([]model.ProjectStageChange, error) {
+	if projectID == "" || limit <= 0 || limit > 100 {
+		return nil, fmt.Errorf("invalid project stage history query")
+	}
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixProject + projectID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixProjectStageHistory))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build project stage history query: %w", err)
+	}
+	out, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+		Limit:                     aws.Int32(int32(limit)),
+		ConsistentRead:            aws.Bool(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query project stage history: %w", err)
+	}
+	rows := []model.ProjectStageChange{}
+	if err := attributevalue.UnmarshalListOfMaps(out.Items, &rows); err != nil {
+		return nil, fmt.Errorf("unmarshal project stage history: %w", err)
+	}
+	return rows, nil
+}
+
 // mapProjectTransactionCanceledError inspects a TransactWriteItems
 // cancellation and maps a ConditionalCheckFailed reason to ErrConditionFailed
 // (mirrors ResearchRepository's mapTransactionCanceledError, same package).
