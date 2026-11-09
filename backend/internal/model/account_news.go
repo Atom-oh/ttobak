@@ -30,3 +30,14 @@ type CreateAccountNewsSourceRequest struct {
 type AccountNewsSourcesResponse struct {
 	Sources []CrawlerSource `json:"sources"`
 }
+
+// NewOpportunityScoreMin is the minimum QualityScore for a news row to count
+// as a new-opportunity candidate.
+const NewOpportunityScoreMin = 0.75
+
+// IsNewOpportunityCandidate reports whether an article for an account's
+// unlinked news looks like a new opportunity: it names opportunities and its
+// quality score reaches the threshold. Linked news is never a candidate.
+func IsNewOpportunityCandidate(d CrawledDocument, linked bool) bool {
+	return !linked && d.OpportunityCount > 0 && d.QualityScore >= NewOpportunityScoreMin
+}
