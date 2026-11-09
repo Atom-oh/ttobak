@@ -17,13 +17,14 @@ import (
 const newsTestAccount = "0f8c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f"
 
 type accountNewsTestRepo struct {
-	account   *model.Account
-	member    bool
-	refs      []model.AccountNewsSourceRef
-	created   []*model.CrawlerSource
-	deleted   []string
-	createErr []error
-	deleteErr error
+	account      *model.Account
+	member       bool
+	refs         []model.AccountNewsSourceRef
+	created      []*model.CrawlerSource
+	deleted      []string
+	deleteActors []string
+	createErr    []error
+	deleteErr    error
 }
 
 func (r *accountNewsTestRepo) GetAccount(context.Context, string) (*model.Account, error) {
@@ -50,8 +51,9 @@ func (r *accountNewsTestRepo) CreateAccountNewsSource(_ context.Context, src *mo
 func (r *accountNewsTestRepo) ListAccountNewsSources(context.Context, string) ([]model.AccountNewsSourceRef, error) {
 	return r.refs, nil
 }
-func (r *accountNewsTestRepo) DeleteAccountNewsSource(_ context.Context, accountID, sourceID string) error {
+func (r *accountNewsTestRepo) DeleteAccountNewsSource(_ context.Context, accountID, userID, sourceID string) error {
 	r.deleted = append(r.deleted, accountID+"/"+sourceID)
+	r.deleteActors = append(r.deleteActors, userID)
 	return r.deleteErr
 }
 
@@ -166,7 +168,9 @@ func TestCreateAccountNewsSource_RejectsGlobalSource(t *testing.T) {
 	for name, src := range map[string]*model.CrawlerSource{
 		"global":       {SourceID: "global", Subscribers: []string{"user-1"}, GlobalNewsSource: true},
 		"unsubscribed": {SourceID: "unsubscribed", Subscribers: []string{"other"}},
-		"missing":      nil,
+		// A former member of another account still listed as creator.
+		"account": {SourceID: "account", Subscribers: []string{"user-1"}, AccountID: "other-account"},
+		"missing": nil,
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc, repo, crawler := newAccountNewsTest()
@@ -240,6 +244,16 @@ func TestDeleteAccountNewsSource(t *testing.T) {
 	}
 	if err := svc.Delete(context.Background(), "user-1", newsTestAccount, "../x"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid id: %v", err)
+	}
+	// Membership revoked between the service check and the commit.
+	repo.deleteErr = repository.ErrAccountNewsAccess
+	if err := svc.Delete(context.Background(), "user-1", newsTestAccount, "acct_a_00000001"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("revoked member: %v", err)
+	}
+	for _, actor := range repo.deleteActors {
+		if actor != "user-1" {
+			t.Fatalf("delete did not pass the acting user: %v", repo.deleteActors)
+		}
 	}
 }
 
