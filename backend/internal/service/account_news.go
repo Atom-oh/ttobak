@@ -22,7 +22,7 @@ type accountNewsRepo interface {
 	GetMember(context.Context, string, string) (*model.AccountMember, error)
 	CreateAccountNewsSource(context.Context, *model.CrawlerSource, *model.AccountNewsSourceRef) error
 	ListAccountNewsSources(context.Context, string) ([]model.AccountNewsSourceRef, error)
-	DeleteAccountNewsSource(context.Context, string, string) error
+	DeleteAccountNewsSource(context.Context, string, string, string) error
 }
 
 type accountNewsCrawler interface {
@@ -172,9 +172,10 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 		if err != nil {
 			return nil, err
 		}
-		// Missing, operator-curated and unsubscribed sources are all the same
-		// rejection, so the response reveals nothing about other users' sources.
-		if original == nil || original.GlobalNewsSource || !contains(original.Subscribers, userID) {
+		// Missing, operator-curated, account-owned and unsubscribed sources are
+		// all the same rejection, so the response reveals nothing about other
+		// users' or accounts' sources. Only per-user sources can be copied.
+		if original == nil || original.GlobalNewsSource || original.AccountID != "" || !contains(original.Subscribers, userID) {
 			return nil, ErrInvalidInput
 		}
 		if queries, err = cleanNewsTerms(append(append([]string{}, original.NewsQueries...), queries...), maxAccountNewsQueries, maxAccountNewsQueryRunes, true); err != nil {
@@ -270,7 +271,11 @@ func (s *AccountNewsService) Delete(ctx context.Context, userID, accountID, sour
 	if _, err := s.authorize(ctx, accountID, userID); err != nil {
 		return err
 	}
-	err := s.repo.DeleteAccountNewsSource(ctx, accountID, sourceID)
+	err := s.repo.DeleteAccountNewsSource(ctx, accountID, userID, sourceID)
+	if errors.Is(err, repository.ErrAccountNewsAccess) {
+		// Membership was revoked between the check and the commit.
+		return ErrForbidden
+	}
 	if errors.Is(err, repository.ErrConditionFailed) {
 		return ErrNotFound
 	}
