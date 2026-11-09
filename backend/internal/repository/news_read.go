@@ -62,6 +62,7 @@ func (r *CrawlerRepository) ReadNewsItems(ctx context.Context, keys []NewsReadKe
 		"accountId", "docHash", "schemaVersion", "qualityStatus", "type", "attemptToken", "sourceRevision",
 		"s3Key", "artifactKey", "markdownSha256", "artifactSha256", "title", "url", "source",
 		"summary", "awsServices", "tags", "crawledAt", "inKB", "pubDate",
+		"awsRelevance", "opportunityCount", "qualityScore",
 	} {
 		fields = append(fields, expression.Name(name))
 	}
