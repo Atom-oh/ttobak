@@ -36,15 +36,9 @@ without a user confirmation.
   FaceTime, Amazon Chime, Discord) are matched by bundle ID or helper ID.
 - A browser using the microphone counts only when one of its tabs is a meeting
   URL (`meet.google.com/<code>`, Teams web, Zoom web client). A fixed
-  script run through `osascript` receives the browser's tab URLs, discards
+  AppleScript run through `osascript` receives the browser's tab URLs, discards
   non-meeting ones inside that child process, and returns only meeting URLs to
-  the app, which classifies and never logs them. The script addresses the
-  browser instance whose helper runs the audio: the app walks parent
-  processes to the nearest app main executable and reads that PID's tabs
-  through Scripting Bridge (PID passed as an argument). `tell application id`
-  reaches only one instance, and an automation-launched Chrome beside the
-  user's hid the Meet tab. If the instance cannot be addressed, or for Safari's
-  shared WebKit process, the bundle-ID AppleScript is used. This needs the macOS
+  the app, which classifies and never logs them. This needs the macOS
   Automation permission per browser; a denial backs off for five minutes, and
   the script may wait up to 30 s for the first consent dialog. Safari's shared
   `com.apple.WebKit.GPU` process counts only with a Safari meeting tab, because
@@ -77,62 +71,19 @@ without a user confirmation.
 - A recording uses the microphone the user picks in System Audio mode, or by
   default the input device the meeting app is capturing from (process
   `Devices`, input scope), else the system default. This keeps multi-microphone
-  and clamshell setups aligned with what Zoom hears. `switch_recording_input`
-  changes the microphone during a recording: the tap, WAV and worker continue
-  while only the aggregate is rebuilt; the capture gap needs native measurement.
-  A device that cannot run at the recording's sample rate is refused. A failed
-  start attempts to restore the previous device. If restoration also fails,
-  capture stops: the switch returns an error saying so, later switches are
-  refused, and stop finalizes what was recorded with a warning.
-- The recording follows Zoom's own mute, as Notion's meeting notes do
-  (observed in Notion's shipped `mac_utils.node`: an Accessibility observer of
-  Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
-  bar every 300 ms for the "Mute Audio"/"Unmute Audio" item, using labels from
-  Zoom's own `Localizable.strings` in every language, and mixes the microphone
-  at zero gain while Zoom shows the user muted. Once a recording has followed
-  Zoom, a confirmed end (Zoom quit, or neither the `zm.meeting.window.main`
-  window nor an audio item remains) silences the microphone at once, and an
-  unreadable stretch over 3 s does too. A failed Core Audio process-list read
-  is not evidence Zoom quit; only a successful read without Zoom is. Unreadable inspection does not establish
-  whether the meeting ended or what Zoom itself captures; the UI preserves this
-  uncertainty. A recording that never saw a Zoom state records the microphone as before.
-  The same confirmed end lets detection end the Zoom meeting without the 20 s
-  audio grace.
-- Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads
-  the Meet page of each Chromium browser instance playing or capturing audio
-  through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). The
-  toggle's label gives the state ("Turn on microphone" while muted, "Turn off
-  microphone" while unmuted, and their Korean forms; both verified on a live
-  call). The call page that last showed the toggle, read again without it,
-  has left the call; a toggle-less page that never showed one (an unlisted
-  language, the landing page or an earlier call) is not evidence. Once a
-  recording has followed Meet, leaving keeps the microphone silent, as with
-  Zoom. The gate waits for the left page to hold for 3 s, as detection does.
-  A recording that never saw the toggle (e.g. an unlisted language) records the
-  microphone. An unreadable page (another tab in front) keeps the last state,
-  including when Accessibility trust is lost after an observed state. Safari's
-  shared WebKit process is not followed. Without Accessibility permission at
-  startup, the response warns and the microphone records normally until a
-  meeting's mute has been observed. Ad-hoc re-signing invalidates the grant,
-  as it does other TCC grants. The same left-call page, read for 3 s, ends a
-  tracked Meet meeting without the 20 s audio grace, as Zoom's confirmed end
-  does. Safari Meet meetings are not ended this way.
-- During a native recording, if other apps play audio for 30 s while the
-  system tap has delivered only exact zeros, the app posts a notification that
-  System Audio Recording is likely denied, instead of reporting it only at
-  stop. A process launched from a terminal is attributed to that terminal by
-  TCC; launch the app through Finder or `open` when testing permissions.
+  and clamshell setups aligned with what Zoom hears. Switching the microphone
+  during a recording is not yet supported.
 
 ## Consequences
 
 ### Staged mute-follow library
 
-`zoom_mute` and `meet_mute` were introduced as compiled public library modules
-without activating capture. This runtime supplies `ProcessSources` using the
-existing Core Audio process/browser discovery, calls `watch`, retains its handle
-and consumes the microphone flag. `meeting_over` uses the same injected discovery.
-Native acceptance remains required before claiming that recording follows a
-meeting application's mute.
+`zoom_mute` and `meet_mute` are compiled public library modules. Their preparation
+does not start a watcher, request Accessibility permission or change recording.
+The runtime successor must supply `ProcessSources` process/browser discovery,
+call `watch`, retain its returned handle and consume the microphone flag.
+`meeting_over` uses the same injected discovery. Native acceptance remains
+required before claiming that recording follows a meeting application's mute.
 
 When invoked, the watcher may request Accessibility access once per app launch.
 It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
@@ -140,8 +91,6 @@ It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
 Unreadable window identifiers are unknown, never a confirmed meeting end;
 the existing three-second unknown-state fallback can still silence a previously
 followed meeting during a long permission or inspection failure.
-An observed Zoom silence reaches the microphone gate before synchronous browser
-inspection, so a slow Meet accessibility tree cannot delay that known decision.
 
 Meet's English/Korean muted toggle labels and readable-page fallback prioritize
 not dropping voice in unsupported languages. Unknown pages retain the previous
@@ -163,7 +112,3 @@ and remain separate from the compiled library's availability.
   microphone; the prompt still requires confirmation.
 - No CI covers this module; the Core Audio probe and AppleScript path need
   manual verification on macOS.
-- Push-to-talk (holding Space while muted) is not reflected in Zoom's menu, so
-  that speech is not recorded. Zoom's web client, Teams and other meeting apps keep recording the
-  microphone regardless of their mute; Meet's mute is followed in Chromium
-  browsers only, in English and Korean.
