@@ -789,6 +789,22 @@ POST returns 201; PUT requires the observed `revision` and DELETE its
 `revision` query parameter; a stale revision returns 409. Clients cannot set
 the author or timestamps.
 
+`GET/POST /api/accounts/{accountId}/news-sources` and `DELETE
+/api/accounts/{accountId}/news-sources/{sourceId}` manage account-owned news
+sources for **direct** members. Each source is a new crawler CONFIG row
+`acct_{accountId}_{8 hex}` carrying `accountId`, plus an `ACCOUNT#{accountId}` /
+`NEWSSRC#{sourceId}` ref, written in one transaction that also checks the
+account and the caller's membership. POST takes `sourceName` (1-200 code
+points), optional `newsQueries` (at most 32) and `aliases` (at most 20), and
+optional `copyFromSourceId`, which copies queries, aliases and custom URLs from
+a per-user source the caller subscribes to and never changes that source;
+operator-curated, unknown or unsubscribed sources return 400. Default queries
+are the account name plus its aliases; at most 10 sources per account. GET
+returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
+account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
+`disabled` (so scheduling stops) in one transaction; returns 204, or 404 for an
+unknown source.
+
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
 order and resolved range. Without `from`, ascending lists start now (upcoming)
@@ -1499,6 +1515,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Get` |
 | PUT | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Delete` |
+| GET | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.List` |
+| POST | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.Create` |
+| DELETE | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Delete` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
