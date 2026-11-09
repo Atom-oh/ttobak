@@ -71,18 +71,21 @@ without a user confirmation.
 - A recording uses the microphone the user picks in System Audio mode, or by
   default the input device the meeting app is capturing from (process
   `Devices`, input scope), else the system default. This keeps multi-microphone
-  and clamshell setups aligned with what Zoom hears. Switching the microphone
-  during a recording is not yet supported.
+  and clamshell setups aligned with what Zoom hears. `switch_recording_input`
+  changes the microphone during a recording by rebuilding only the aggregate;
+  the tap, WAV and worker continue. A failed switch restores the previous input,
+  else keeps system audio alone on the output device, else capture stops and
+  `recording_status` reports `capture_lost`.
 
 ## Consequences
 
-### Staged mute-follow library
+### Mute-follow watcher
 
-`zoom_mute` and `meet_mute` are compiled public library modules. Their preparation
-does not start a watcher, request Accessibility permission or change recording.
-The runtime successor must supply `ProcessSources` process/browser discovery,
-call `watch`, retain its returned handle and consume the microphone flag.
-Native acceptance remains
+Every native recording start (`audio.rs`) starts the `zoom_mute` watcher with
+`ProcessSources` process/browser discovery, keeps its handle with the backend and
+mixes the microphone silent while the flag is set. The watcher, like the early
+system-audio silence notice, is bound to its recording's generation: once that
+recording stops or is superseded it emits nothing more. Native acceptance remains
 required before claiming that recording follows a meeting application's mute.
 
 When invoked, the watcher may request Accessibility access once per app launch.
@@ -104,7 +107,8 @@ not an empty menu bar. Zoom counts as quit only when neither Core Audio nor a
 successful running-process scan finds its main `us.zoom.xos` executable, since
 it may capture through `us.zoom.caphost`/`us.zoom.CptHost` alone. Every Meet
 call showing a toggle counts, including calls read together, so a departed page
-of one call never stops following another call that was seen. Hidden-tab or departed-call holds are not proof of the
+of one call never stops following another call that was seen. A call read on
+two pages at once (the same room in two windows) is ambiguous when one leaves. Hidden-tab or departed-call holds are not proof of the
 user's current intent. These limitations need native verification
 and remain separate from the compiled library's availability.
 

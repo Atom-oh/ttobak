@@ -23,6 +23,8 @@ pub struct RecordingSnapshot {
     pub recording: bool,
     pub path: Option<PathBuf>,
     pub elapsed_ms: u64,
+    /// A failed microphone switch stopped capture of the running recording.
+    pub capture_lost: bool,
 }
 
 pub struct AudioRecorder {
@@ -61,7 +63,7 @@ pub struct RecordingHandle {
     pub path: PathBuf,
     pub started_at: Instant,
     #[cfg(target_os = "macos")]
-    pub backend: macos::Backend,
+    pub backend: Arc<macos::Backend>,
 }
 
 impl AudioRecorder {
@@ -79,11 +81,16 @@ impl AudioRecorder {
                 recording: true,
                 path: Some(h.path.clone()),
                 elapsed_ms: h.started_at.elapsed().as_millis() as u64,
+                #[cfg(target_os = "macos")]
+                capture_lost: h.backend.capture_lost(),
+                #[cfg(not(target_os = "macos"))]
+                capture_lost: false,
             },
             None => RecordingSnapshot {
                 recording: false,
                 path: None,
                 elapsed_ms: 0,
+                capture_lost: false,
             },
         }
     }
@@ -130,9 +137,16 @@ impl AudioRecorder {
             path,
             started_at: Instant::now(),
             #[cfg(target_os = "macos")]
-            backend,
+            backend: Arc::new(backend),
         });
         self.starting = false;
+    }
+
+    /// The running recording's backend, for a microphone switch that runs
+    /// its blocking Core Audio calls after this lock is released.
+    #[cfg(target_os = "macos")]
+    pub fn backend(&self) -> Option<Arc<macos::Backend>> {
+        self.inner.as_ref().map(|h| Arc::clone(&h.backend))
     }
 
     /// Release a `begin_start()` reservation without installing a recording
@@ -335,7 +349,7 @@ pub mod macos {
         AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
         AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
         AudioObjectPropertyAddress, AudioObjectPropertyScope, AudioObjectPropertySelector,
-        CATapDescription, CATapMuteBehavior,
+        AudioObjectSetPropertyData, CATapDescription, CATapMuteBehavior,
     };
     use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
     use objc2_foundation::{NSArray, NSNumber, NSString};
@@ -483,6 +497,48 @@ pub mod macos {
             }
         }
 
+        /// Stops and destroys the aggregate and its IOProc but keeps the tap,
+        /// returning the queue sender so a new aggregate can continue the
+        /// same recording (microphone switch). On failure it behaves like
+        /// `teardown` (handles leaked, queue closed).
+        fn detach_engine(&mut self) -> Result<Option<SyncSender<Vec<f32>>>, AppError> {
+            let fail = |what: &str, status: i32| {
+                AppError::Backend(format!("{what} failed: OSStatus {status}"))
+            };
+            unsafe {
+                if self.started {
+                    let status = AudioDeviceStop(self.aggregate, self.proc_id);
+                    if status != 0 {
+                        self.abandon();
+                        return Err(fail("AudioDeviceStop", status));
+                    }
+                    self.started = false;
+                }
+                if self.proc_id.is_some() {
+                    let status = AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id);
+                    if status != 0 {
+                        self.abandon();
+                        return Err(fail("AudioDeviceDestroyIOProcID", status));
+                    }
+                    self.proc_id = None;
+                }
+                let mut tx = None;
+                if !self.ctx.is_null() {
+                    let ctx = Box::from_raw(self.ctx);
+                    self.ctx = std::ptr::null_mut();
+                    tx = ctx.tx.lock().ok().and_then(|mut t| t.take());
+                }
+                if self.aggregate != 0 {
+                    let status = AudioHardwareDestroyAggregateDevice(self.aggregate);
+                    if status != 0 {
+                        return Err(fail("AudioHardwareDestroyAggregateDevice", status));
+                    }
+                    self.aggregate = 0;
+                }
+                Ok(tx)
+            }
+        }
+
         /// Detachment failed: close the queue through the still-valid context
         /// and forget every handle, leaking the context and device objects so
         /// a late IOProc call never touches freed memory.
@@ -515,9 +571,18 @@ pub mod macos {
         writer: Arc<Mutex<Option<Wav>>>,
         path: PathBuf,
         stats: Arc<Stats>,
-        mic_active: bool,
+        mic_active: AtomicBool,
+        /// A failed microphone switch ended capture; stop finalizes what was
+        /// recorded.
+        capture_lost: AtomicBool,
         start_warnings: Vec<String>,
-        input: Option<SelectedInput>,
+        input: Mutex<Option<SelectedInput>>,
+        /// What a microphone switch needs to rebuild the aggregate.
+        tap_uid: String,
+        sample_rate: u32,
+        generation: u64,
+        generation_counter: Arc<AtomicU64>,
+        mic_muted: Arc<AtomicBool>,
         /// Follows Zoom's mute for this recording; dropped with the backend.
         _zoom_mute: crate::zoom_mute::Watch,
         /// Warns early when system audio stays silent; dropped with the backend.
@@ -536,7 +601,11 @@ pub mod macos {
     /// Posts a notification when other apps play audio but the tap delivers
     /// only exact zeros: System Audio Recording is most likely denied, and
     /// otherwise this is reported only at stop.
-    fn watch_system_silence(app: AppHandle, stats: Arc<Stats>) -> SilenceWatch {
+    fn watch_system_silence(
+        app: AppHandle,
+        stats: Arc<Stats>,
+        owner: crate::zoom_mute::Owner,
+    ) -> SilenceWatch {
         use tauri_plugin_notification::NotificationExt;
         let running = Arc::new(AtomicBool::new(true));
         let flag = Arc::clone(&running);
@@ -544,12 +613,18 @@ pub mod macos {
             .name("system-silence".into())
             .spawn(move || {
                 let mut check = super::SilenceCheck::default();
-                while flag.load(Ordering::Relaxed) {
+                while owner.may_emit(flag.load(Ordering::Relaxed)) {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     let playing = crate::meeting_detect::other_output_running();
                     match check.observe(playing, stats.system_peak() > 0.0) {
                         super::SilenceVerdict::Wait => continue,
                         super::SilenceVerdict::Fine => return,
+                        // Stopped or superseded meanwhile: not this recording's notice.
+                        super::SilenceVerdict::Warn
+                            if !owner.may_emit(flag.load(Ordering::Relaxed)) =>
+                        {
+                            return
+                        }
                         super::SilenceVerdict::Warn => {
                             log::warn!("system audio silent while other apps play audio");
                             let _ = app
@@ -585,7 +660,45 @@ pub mod macos {
         pub app: Option<String>,
     }
 
+    /// A microphone switch failed and the previous microphone could not be
+    /// restored, so capture stopped.
+    fn capture_stopped(e: &AppError) -> AppError {
+        AppError::Backend(format!(
+            "{e}. The previous microphone could not be restored, so capture stopped; stop the \
+             recording to save what was recorded."
+        ))
+    }
+
+    /// Neither the new nor the previous microphone could start, but the
+    /// system-audio-only aggregate did: the recording continues without one.
+    fn mic_dropped(e: &AppError) -> AppError {
+        AppError::Backend(format!(
+            "{e}. The previous microphone could not be restored; the recording continues with \
+             system audio only."
+        ))
+    }
+
+    /// Destroys a probe aggregate, retrying once; a private aggregate that
+    /// still cannot be destroyed is logged (it lives until the app quits).
+    fn destroy_probe(probe: AudioObjectID) {
+        for attempt in 0..2 {
+            let status = unsafe { AudioHardwareDestroyAggregateDevice(probe) };
+            if status == 0 {
+                return;
+            }
+            log::warn!(
+                "destroying the probe aggregate failed (attempt {attempt}): OSStatus {status}"
+            );
+        }
+        log::error!("leaking probe aggregate {probe} until the app quits");
+    }
+
     impl Backend {
+        /// Whether a failed microphone switch stopped capture.
+        pub fn capture_lost(&self) -> bool {
+            self.capture_lost.load(Ordering::Relaxed)
+        }
+
         /// `generation` / `generation_counter`: see `AudioRecorder`'s field
         /// doc comment in the parent module — lets the IOProc detect it has
         /// been superseded by a newer recording and stop acting.
@@ -665,67 +778,7 @@ pub mod macos {
                 }
             };
 
-            let aggregate_uid = format!(
-                "click.atomai.ttobak.mac.capture.{}.{}",
-                std::process::id(),
-                now_ms()
-            );
-            let sub_device = cf_dict(&[
-                (kAudioSubDeviceUIDKey, CFString::new(&main_uid).as_CFType()),
-                (
-                    kAudioSubDeviceDriftCompensationKey,
-                    CFBoolean::false_value().as_CFType(),
-                ),
-            ]);
-            let sub_tap = cf_dict(&[
-                (kAudioSubTapUIDKey, CFString::new(&tap_uid).as_CFType()),
-                (
-                    kAudioSubTapDriftCompensationKey,
-                    CFBoolean::true_value().as_CFType(),
-                ),
-            ]);
-            let description = cf_dict(&[
-                (
-                    kAudioAggregateDeviceUIDKey,
-                    CFString::new(&aggregate_uid).as_CFType(),
-                ),
-                (
-                    kAudioAggregateDeviceNameKey,
-                    CFString::new("TTOBAK Capture").as_CFType(),
-                ),
-                (
-                    kAudioAggregateDeviceIsPrivateKey,
-                    CFBoolean::true_value().as_CFType(),
-                ),
-                (
-                    kAudioAggregateDeviceIsStackedKey,
-                    CFBoolean::false_value().as_CFType(),
-                ),
-                (
-                    kAudioAggregateDeviceTapAutoStartKey,
-                    CFBoolean::true_value().as_CFType(),
-                ),
-                (
-                    kAudioAggregateDeviceMainSubDeviceKey,
-                    CFString::new(&main_uid).as_CFType(),
-                ),
-                (
-                    kAudioAggregateDeviceSubDeviceListKey,
-                    CFArray::from_CFTypes(&[sub_device]).as_CFType(),
-                ),
-                (
-                    kAudioAggregateDeviceTapListKey,
-                    CFArray::from_CFTypes(&[sub_tap]).as_CFType(),
-                ),
-            ]);
-            let mut aggregate: AudioObjectID = 0;
-            check("AudioHardwareCreateAggregateDevice", unsafe {
-                // core-foundation's CFDictionaryRef and objc2's CFDictionary
-                // are the same toll-free CF object.
-                let dict = &*(description.as_concrete_TypeRef()
-                    as *const objc2_core_foundation::CFDictionary);
-                AudioHardwareCreateAggregateDevice(dict, NonNull::from(&mut aggregate))
-            })?;
+            let aggregate = create_aggregate(&main_uid, &tap_uid)?;
             res.aggregate = aggregate;
             // Aggregates list sub-device input streams first and append tap
             // streams after them; `ChannelLayout` relies on that order.
@@ -737,14 +790,7 @@ pub mod macos {
                 );
             }
 
-            let sample_rate = get_f64(
-                aggregate,
-                kAudioDevicePropertyNominalSampleRate,
-                kAudioObjectPropertyScopeGlobal,
-            )
-            .filter(|r| r.is_finite() && *r >= 8_000.0 && *r <= 384_000.0)
-            .map(|r| r.round() as u32)
-            .unwrap_or_else(|| {
+            let sample_rate = nominal_rate(aggregate).unwrap_or_else(|| {
                 start_warnings.push(format!(
                     "Could not read the capture sample rate; assuming {FALLBACK_SAMPLE_RATE} Hz \
                      (playback speed may be wrong)."
@@ -773,9 +819,15 @@ pub mod macos {
                 generation,
                 Arc::clone(&generation_counter),
             )?;
+            let switch_counter = Arc::clone(&generation_counter);
 
             let mic_muted = Arc::new(AtomicBool::new(false));
-            let silence_watch = watch_system_silence(app.clone(), Arc::clone(&stats));
+            let owner = crate::zoom_mute::Owner {
+                generation,
+                current: Arc::clone(&generation_counter),
+            };
+            let silence_watch =
+                watch_system_silence(app.clone(), Arc::clone(&stats), owner.clone());
             let (zoom_mute, zoom_warning) = crate::zoom_mute::watch(
                 app,
                 Arc::clone(&mic_muted),
@@ -783,6 +835,7 @@ pub mod macos {
                     zoom_pid: crate::zoom_mute::zoom_pid,
                     browser_pids: crate::meeting_detect::capturing_browser_pids,
                 },
+                owner,
             );
             start_warnings.extend(zoom_warning);
             let ctx = Box::into_raw(Box::new(CallbackCtx {
@@ -834,9 +887,15 @@ pub mod macos {
                 writer,
                 path: path.to_path_buf(),
                 stats,
-                mic_active,
+                mic_active: AtomicBool::new(mic_active),
+                capture_lost: AtomicBool::new(false),
                 start_warnings,
-                input: selected,
+                input: Mutex::new(selected),
+                tap_uid,
+                sample_rate,
+                generation,
+                generation_counter: switch_counter,
+                mic_muted,
                 _zoom_mute: zoom_mute,
                 _silence_watch: silence_watch,
             })
@@ -844,7 +903,179 @@ pub mod macos {
 
         /// The microphone this recording captures, if any.
         pub fn input(&self) -> Option<SelectedInput> {
-            self.input.clone()
+            self.input.lock().expect("input poisoned").clone()
+        }
+
+        /// Switches the recording's microphone without ending it: the system
+        /// audio tap, WAV and worker continue while only the aggregate is
+        /// rebuilt, losing a fraction of a second. `None` chooses
+        /// automatically (the meeting app's microphone). If the new device
+        /// cannot start, the previous one is restored, else system audio
+        /// continues alone on the output device. If that also fails, capture
+        /// stops: the error says so, `capture_lost` reports it, later switches
+        /// are refused, and stop finalizes what was recorded. Blocking Core Audio FFI: call
+        /// off the recorder lock, like stop.
+        pub fn switch_input(&self, requested: Option<String>) -> Result<SelectedInput, AppError> {
+            let mut warnings = Vec::new();
+            let (input, selected) = choose_input(requested.as_deref(), &mut warnings);
+            let (Some((id, uid)), Some(selected)) = (input, selected) else {
+                return Err(AppError::Backend(
+                    "No microphone input device is available.".into(),
+                ));
+            };
+            if mic_layout(id).is_none() {
+                return Err(AppError::Backend(
+                    "The selected device has no input.".into(),
+                ));
+            }
+
+            // Overlapping switches see the input the previous one left.
+            let mut guard = self.resources.lock().expect("resources poisoned");
+            if self.capture_lost.load(Ordering::Relaxed) {
+                return Err(AppError::Backend(
+                    "Capture stopped after a failed microphone switch; stop the recording to \
+                     save what was recorded."
+                        .into(),
+                ));
+            }
+            let previous = self.input();
+            if previous.as_ref().is_some_and(|p| p.uid == uid) {
+                *self.input.lock().expect("input poisoned") = Some(selected.clone());
+                return Ok(selected);
+            }
+            let res = guard
+                .as_mut()
+                .ok_or_else(|| AppError::Backend("The recording is not running.".into()))?;
+            // Check the new microphone can run at the WAV's rate before
+            // touching the running capture.
+            // A microphone that cannot even form an aggregate is refused here.
+            let probe = create_aggregate(&uid, &self.tap_uid)?;
+            let rate = match_rate(probe, self.sample_rate);
+            destroy_probe(probe);
+            rate?;
+
+            let mut tx = match res.detach_engine() {
+                Ok(tx) => tx,
+                Err(e) => {
+                    // The queue is closed: nothing captures any more.
+                    self.capture_lost.store(true, Ordering::Relaxed);
+                    return Err(capture_stopped(&e));
+                }
+            };
+            match self.attach_engine(res, &uid, id, true, &mut tx) {
+                Ok(()) => {
+                    log::info!("switched recording microphone to {}", selected.name);
+                    self.mic_active.store(true, Ordering::Relaxed);
+                    *self.input.lock().expect("input poisoned") = Some(selected.clone());
+                    Ok(selected)
+                }
+                Err(e) => {
+                    log::error!("microphone switch failed: {e}; restoring the previous one");
+                    let restored = previous.as_ref().and_then(|p| {
+                        let d = input_device_list().into_iter().find(|d| d.uid == p.uid)?;
+                        self.attach_engine(res, &p.uid, d.id, true, &mut tx).ok()
+                    });
+                    if restored.is_some() {
+                        return Err(e);
+                    }
+                    // No microphone to return to (a mic-less start, or the
+                    // previous one failed too): keep the system audio with
+                    // the output-device aggregate a mic-less start uses.
+                    let system_only = default_device(kAudioHardwarePropertyDefaultOutputDevice)
+                        .and_then(|out| Some((out, device_uid(out)?)))
+                        .and_then(|(out, out_uid)| {
+                            self.attach_engine(res, &out_uid, out, false, &mut tx).ok()
+                        });
+                    if system_only.is_some() && previous.is_some() {
+                        log::error!(
+                            "previous microphone not restored; recording system audio only"
+                        );
+                        self.mic_active.store(false, Ordering::Relaxed);
+                        *self.input.lock().expect("input poisoned") = None;
+                        return Err(mic_dropped(&e));
+                    }
+                    if system_only.is_none() {
+                        // Nothing captures any more: close the queue so stop
+                        // finalizes what was recorded.
+                        drop(tx);
+                        self.capture_lost.store(true, Ordering::Relaxed);
+                        log::error!("could not restore the previous microphone");
+                        return Err(capture_stopped(&e));
+                    }
+                    Err(e)
+                }
+            }
+        }
+
+        /// Builds and starts an aggregate for `main_uid` (device `device`)
+        /// feeding `tx`. The layout is read after the rate is set: the
+        /// device's microphone channels when `mic`, else none (its own input
+        /// streams, if any, are skipped before the tap's).
+        fn attach_engine(
+            &self,
+            res: &mut Resources,
+            main_uid: &str,
+            device: AudioObjectID,
+            mic: bool,
+            tx: &mut Option<SyncSender<Vec<f32>>>,
+        ) -> Result<(), AppError> {
+            if tx.is_none() {
+                return Err(AppError::Backend(
+                    "The recording's audio queue is closed.".into(),
+                ));
+            }
+            let aggregate = create_aggregate(main_uid, &self.tap_uid)?;
+            res.aggregate = aggregate;
+            if let Err(e) = match_rate(aggregate, self.sample_rate) {
+                *tx = res.detach_engine()?.or(tx.take());
+                return Err(e);
+            }
+            // Read after the rate change: a device's channel count can depend on its rate.
+            let layout = if mic {
+                mic_layout(device)
+            } else {
+                Some(ChannelLayout {
+                    skip: input_channels(device),
+                    mic: 0,
+                })
+            };
+            let Some(layout) = layout else {
+                *tx = res.detach_engine()?.or(tx.take());
+                return Err(AppError::Backend(
+                    "The selected device has no input.".into(),
+                ));
+            };
+            let ctx = Box::into_raw(Box::new(CallbackCtx {
+                tx: Mutex::new(tx.take()),
+                layout,
+                stats: Arc::clone(&self.stats),
+                my_generation: self.generation,
+                current_generation: Arc::clone(&self.generation_counter),
+                mic_muted: Arc::clone(&self.mic_muted),
+            }));
+            res.ctx = ctx;
+            let mut proc_id: AudioDeviceIOProcID = None;
+            let started = (|| {
+                check("AudioDeviceCreateIOProcID", unsafe {
+                    AudioDeviceCreateIOProcID(
+                        aggregate,
+                        Some(io_proc),
+                        ctx.cast(),
+                        NonNull::from(&mut proc_id),
+                    )
+                })?;
+                res.proc_id = proc_id;
+                check("AudioDeviceStart", unsafe {
+                    AudioDeviceStart(aggregate, proc_id)
+                })?;
+                res.started = true;
+                Ok::<(), AppError>(())
+            })();
+            if let Err(e) = started {
+                *tx = res.detach_engine()?;
+                return Err(e);
+            }
+            Ok(())
         }
 
         /// Warnings to surface in the start response (e.g. no microphone).
@@ -908,6 +1139,12 @@ pub mod macos {
                 )));
             }
             let mut warnings = Vec::new();
+            if self.capture_lost.load(Ordering::Relaxed) {
+                warnings.push(
+                    "Capture stopped after a failed microphone switch; the recording ends there."
+                        .to_string(),
+                );
+            }
             if system_peak == 0.0 {
                 warnings.push(
                     "System audio was silent for the whole recording — System Audio Recording \
@@ -915,7 +1152,7 @@ pub mod macos {
                         .to_string(),
                 );
             }
-            if self.mic_active && mic_peak == 0.0 {
+            if self.mic_active.load(Ordering::Relaxed) && mic_peak == 0.0 {
                 warnings.push(
                     "The microphone was silent for the whole recording — Microphone permission \
                      may be denied or the input is muted."
@@ -964,6 +1201,123 @@ pub mod macos {
             let _ = self.stop_capture_blocking();
             let _ = self.finalize_writer();
         }
+    }
+
+    /// A private aggregate of `main_uid` (clock + microphone streams) and the
+    /// system-audio tap (streams after the microphone's).
+    fn create_aggregate(main_uid: &str, tap_uid: &str) -> Result<AudioObjectID, AppError> {
+        let aggregate_uid = format!(
+            "click.atomai.ttobak.mac.capture.{}.{}",
+            std::process::id(),
+            now_ms()
+        );
+        let sub_device = cf_dict(&[
+            (kAudioSubDeviceUIDKey, CFString::new(main_uid).as_CFType()),
+            (
+                kAudioSubDeviceDriftCompensationKey,
+                CFBoolean::false_value().as_CFType(),
+            ),
+        ]);
+        let sub_tap = cf_dict(&[
+            (kAudioSubTapUIDKey, CFString::new(tap_uid).as_CFType()),
+            (
+                kAudioSubTapDriftCompensationKey,
+                CFBoolean::true_value().as_CFType(),
+            ),
+        ]);
+        let description = cf_dict(&[
+            (
+                kAudioAggregateDeviceUIDKey,
+                CFString::new(&aggregate_uid).as_CFType(),
+            ),
+            (
+                kAudioAggregateDeviceNameKey,
+                CFString::new("TTOBAK Capture").as_CFType(),
+            ),
+            (
+                kAudioAggregateDeviceIsPrivateKey,
+                CFBoolean::true_value().as_CFType(),
+            ),
+            (
+                kAudioAggregateDeviceIsStackedKey,
+                CFBoolean::false_value().as_CFType(),
+            ),
+            (
+                kAudioAggregateDeviceTapAutoStartKey,
+                CFBoolean::true_value().as_CFType(),
+            ),
+            (
+                kAudioAggregateDeviceMainSubDeviceKey,
+                CFString::new(main_uid).as_CFType(),
+            ),
+            (
+                kAudioAggregateDeviceSubDeviceListKey,
+                CFArray::from_CFTypes(&[sub_device]).as_CFType(),
+            ),
+            (
+                kAudioAggregateDeviceTapListKey,
+                CFArray::from_CFTypes(&[sub_tap]).as_CFType(),
+            ),
+        ]);
+        let mut aggregate: AudioObjectID = 0;
+        check("AudioHardwareCreateAggregateDevice", unsafe {
+            // core-foundation's CFDictionaryRef and objc2's CFDictionary
+            // are the same toll-free CF object.
+            let dict =
+                &*(description.as_concrete_TypeRef() as *const objc2_core_foundation::CFDictionary);
+            AudioHardwareCreateAggregateDevice(dict, NonNull::from(&mut aggregate))
+        })?;
+        Ok(aggregate)
+    }
+
+    /// Reads the aggregate's nominal rate, or `None` when it is unusable.
+    fn nominal_rate(aggregate: AudioObjectID) -> Option<u32> {
+        get_f64(
+            aggregate,
+            kAudioDevicePropertyNominalSampleRate,
+            kAudioObjectPropertyScopeGlobal,
+        )
+        .filter(|r| r.is_finite() && *r >= 8_000.0 && *r <= 384_000.0)
+        .map(|r| r.round() as u32)
+    }
+
+    /// Runs the aggregate at `rate` (the recording's WAV rate), or fails.
+    fn match_rate(aggregate: AudioObjectID, rate: u32) -> Result<(), AppError> {
+        if nominal_rate(aggregate) == Some(rate) {
+            return Ok(());
+        }
+        let addr = address(
+            kAudioDevicePropertyNominalSampleRate,
+            kAudioObjectPropertyScopeGlobal,
+        );
+        let value = f64::from(rate);
+        let _ = unsafe {
+            AudioObjectSetPropertyData(
+                aggregate,
+                NonNull::from(&addr),
+                0,
+                std::ptr::null(),
+                std::mem::size_of::<f64>() as u32,
+                NonNull::from(&value).cast(),
+            )
+        };
+        // The rate change applies asynchronously.
+        for _ in 0..20 {
+            if nominal_rate(aggregate) == Some(rate) {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        Err(AppError::Backend(format!(
+            "The selected microphone cannot run at this recording's {rate} Hz; \
+             keeping the current microphone."
+        )))
+    }
+
+    /// The microphone layout for `input`, or `None` when it has no input.
+    fn mic_layout(input: AudioObjectID) -> Option<ChannelLayout> {
+        let mic = input_channels(input);
+        (mic > 0).then_some(ChannelLayout { skip: 0, mic })
     }
 
     /// Real-time IOProc: mix and enqueue only. Never blocks, never logs
