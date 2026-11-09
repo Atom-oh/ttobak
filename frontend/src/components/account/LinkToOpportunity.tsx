@@ -16,7 +16,7 @@ const selectClass = 'rounded border border-border-subtle bg-surface-lowest px-2 
 export function LinkToOpportunity({ accountId, userId, fromKind, fromId, excludeProjectIds = [], onLinked, onAccessLost }: {
   accountId?: string;
   userId: string;
-  fromKind: AccountLinkKind; // news | tech | event
+  fromKind: Extract<AccountLinkKind, 'news' | 'tech' | 'event'>;
   fromId: string;
   excludeProjectIds?: string[];
   onLinked?: () => void;

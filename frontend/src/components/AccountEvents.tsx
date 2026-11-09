@@ -6,14 +6,20 @@ import { confirmDialog } from '@/lib/dialog';
 import { isContactAccessDenied } from '@/lib/contactImport';
 import { addAttendee, EMPTY_EVENT_FORM, eventInputFromForm, formatEventTime, toLocalInput, type EventForm } from '@/lib/accountEvents';
 import type { AccountContact, AccountEvent } from '@/types/meeting';
-import { LinkToOpportunity } from '@/components/account/LinkToOpportunity';
-import { LINK_KIND_EVENT } from '@/lib/accountOverview';
+import { LinkToOpportunity, UnlinkButton } from '@/components/account/LinkToOpportunity';
+import { LINK_KIND_EVENT, LINK_KIND_PROJECT } from '@/lib/accountOverview';
 
 type Scope = 'ahead' | 'past';
 const inputClass = 'mt-1 w-full rounded border border-slate-200 bg-white p-2 text-sm dark:border-white/10 dark:bg-slate-900';
 
 /** Shared events (schedules) of one account, for its direct members. */
-export function AccountEvents({ accountId, userId }: { accountId: string; userId: string }) {
+export function AccountEvents({ accountId, userId, eventLinks, onLinksChanged }: {
+  accountId: string;
+  userId: string;
+  /** Existing event→project links by event ID (from one bounded links scan). */
+  eventLinks?: Record<string, { projectId: string; name: string }[]>;
+  onLinksChanged?: () => void;
+}) {
   const [scope, setScope] = useState<Scope>('ahead');
   const [events, setEvents] = useState<AccountEvent[]>([]);
   const [cursor, setCursor] = useState('');
@@ -171,7 +177,17 @@ export function AccountEvents({ accountId, userId }: { accountId: string; userId
           <div className="text-xs text-slate-500">{formatEventTime(event.startAt, event.endAt, event.allDay)}{event.location ? ` · ${event.location}` : ''}</div>
           {event.attendees?.length > 0 && <div className="mt-1 text-xs text-slate-500">참석자: {event.attendees.map(a => a.name).join(', ')}</div>}
           {event.notes && <details className="mt-1 text-xs text-slate-500"><summary className="cursor-pointer">메모</summary><div className="mt-1 whitespace-pre-wrap">{event.notes}</div></details>}
-          <div className="mt-1"><LinkToOpportunity accountId={accountId} userId={userId} fromKind={LINK_KIND_EVENT} fromId={event.eventId} onAccessLost={denyAccess} /></div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            {(eventLinks?.[event.eventId] ?? []).map(project => <span key={project.projectId} className="inline-flex items-center gap-1 rounded-full bg-surface-container px-2 py-0.5 text-xs text-text-main">
+              {project.name}
+              <UnlinkButton accountId={accountId} userId={userId} targetLabel={project.name}
+                input={{ fromKind: LINK_KIND_EVENT, fromId: event.eventId, toKind: LINK_KIND_PROJECT, toId: project.projectId }}
+                onUnlinked={() => onLinksChanged?.()} onAccessLost={denyAccess} />
+            </span>)}
+            <LinkToOpportunity accountId={accountId} userId={userId} fromKind={LINK_KIND_EVENT} fromId={event.eventId}
+              excludeProjectIds={(eventLinks?.[event.eventId] ?? []).map(project => project.projectId)}
+              onLinked={onLinksChanged} onAccessLost={denyAccess} />
+          </div>
         </div>
         <div className="flex gap-3">
           <button type="button" disabled={saving} onClick={() => startEdit(event)} className="text-xs text-primary">수정</button>

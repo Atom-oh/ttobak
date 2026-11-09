@@ -3,11 +3,9 @@
 // it in a bare vm context.
 import type { AccountLinkInput, AccountLinkKind, FlowItem } from '@/types/meeting';
 
-// Account link kinds (API wire values). scripts/update-icon-font.mjs treats
-// every string literal naming a Material Symbol as a used icon, and "event"
-// is one. Regenerating the subset currently pulls a drifted upstream catalog
-// that drops icons in use, so the event kind is built without that literal.
-export const LINK_KIND_EVENT = ['e', 'vent'].join('');
+// Account link kinds (API wire values). "event" is also a Material Symbol
+// name; scripts/update-icon-font.mjs lists it in NON_ICON_LITERALS.
+export const LINK_KIND_EVENT = 'event';
 export const LINK_KIND_NEWS = 'news';
 export const LINK_KIND_TECH = 'tech';
 export const LINK_KIND_PROJECT = 'project';
@@ -89,7 +87,7 @@ export function documentLinkId(sourceId: string, docHash: string): string {
   return `${sourceId}:${docHash}`;
 }
 
-export function documentLinkKind(type: string | undefined): AccountLinkKind {
+export function documentLinkKind(type: string | undefined): Extract<AccountLinkKind, 'news' | 'tech'> {
   return type === LINK_KIND_TECH ? LINK_KIND_TECH : LINK_KIND_NEWS;
 }
 
@@ -170,4 +168,56 @@ const SIGNAL_INSIGHT_LABELS: Record<string, string> = { need: '고객 니즈', o
 /** Label of a signals insight type, matching FieldInsightsSection. */
 export function insightTypeLabel(type: string): string {
   return Object.prototype.hasOwnProperty.call(SIGNAL_INSIGHT_LABELS, type) ? SIGNAL_INSIGHT_LABELS[type] : type;
+}
+
+export const MANAGE_LINKS_TITLE = '연결 관리';
+export const LOAD_MORE_LABEL = '더 보기';
+export const NO_LINKS_TEXT = '저장된 연결이 없습니다.';
+
+export const LINK_KIND_LABELS: Record<AccountLinkKind, string> = {
+  news: '뉴스',
+  tech: '기술 문서',
+  event: '일정',
+  meeting: '미팅',
+  project: '기회',
+};
+
+export function linkKindLabel(kind: string): string {
+  return Object.prototype.hasOwnProperty.call(LINK_KIND_LABELS, kind) ? LINK_KIND_LABELS[kind as AccountLinkKind] : kind;
+}
+
+/** One endpoint of a link as plain text: kind label plus project name or ID. */
+export function linkEndpointText(kind: string, id: string, projectNames: Record<string, string> = {}): string {
+  const name = kind === LINK_KIND_PROJECT && Object.prototype.hasOwnProperty.call(projectNames, id) ? projectNames[id] : '';
+  return `${linkKindLabel(kind)} · ${name || id}`;
+}
+
+export function linkRowText(link: AccountLinkInput, projectNames: Record<string, string> = {}): string {
+  return `${linkEndpointText(link.fromKind, link.fromId, projectNames)} → ${linkEndpointText(link.toKind, link.toId, projectNames)}`;
+}
+
+export function linkRowKey(link: AccountLinkInput): string {
+  return JSON.stringify([link.fromKind, link.fromId, link.toKind, link.toId]);
+}
+
+/** Appends a page of links, skipping rows already shown (same endpoints). */
+export function mergeLinkPages<T extends AccountLinkInput>(existing: T[], page: T[]): T[] {
+  const seen = new Set(existing.map(linkRowKey));
+  const merged = [...existing];
+  for (const link of page) {
+    const key = linkRowKey(link);
+    if (!seen.has(key)) { seen.add(key); merged.push(link); }
+  }
+  return merged;
+}
+
+/** event→project links grouped by event ID, in first-seen order. */
+export function eventProjectLinks(links: AccountLinkInput[]): Record<string, string[]> {
+  const byEvent: Record<string, string[]> = {};
+  for (const link of links) {
+    if (link.fromKind !== LINK_KIND_EVENT || link.toKind !== LINK_KIND_PROJECT) continue;
+    const list = Object.prototype.hasOwnProperty.call(byEvent, link.fromId) ? byEvent[link.fromId] : (byEvent[link.fromId] = []);
+    if (!list.includes(link.toId)) list.push(link.toId);
+  }
+  return byEvent;
 }
