@@ -23,6 +23,7 @@ type mockHandlerProjectRepo struct {
 	projectMembers map[string]*model.ProjectMember
 	accountMembers map[string]*model.AccountMember
 	projectRefs    map[string][]model.ProjectRef
+	stageConflict  bool
 }
 
 func newMockHandlerProjectRepo() *mockHandlerProjectRepo {

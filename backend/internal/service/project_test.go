@@ -26,6 +26,8 @@ type mockProjectRepo struct {
 	failPutRefFor       string
 	batchGetResearchErr error
 	getMemberErrFor     string
+	stageChanges        []model.ProjectStageChange
+	stageConflict       bool
 }
 
 func newMockProjectRepo() *mockProjectRepo {

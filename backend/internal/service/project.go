@@ -24,6 +24,10 @@ import (
 // afterward (requireProjectAccess would return ErrNotFound first). Rejecting
 // deletion while any relation exists avoids orphaning that data outright,
 // rather than accepting silent, permanently-unreachable garbage.
+// ErrConflict means a concurrent writer changed the state this write was
+// conditioned on; the caller should reload and retry.
+var ErrConflict = errors.New("conflict")
+
 var ErrProjectHasLinks = errors.New("project still has linked accounts, meetings, research, or members")
 
 // projectCandidateChunk is the number of inherited candidates whose canonical
@@ -47,6 +51,7 @@ type projectRepo interface {
 	ListProjectsForUser(context.Context, string) ([]model.Project, error)
 	ListAccountsForUser(context.Context, string) ([]model.AccountMember, error)
 	UpdateProjectFields(context.Context, string, map[string]interface{}) error
+	UpdateProjectWithStage(context.Context, string, map[string]interface{}, string, *model.ProjectStageChange) error
 	DeleteProject(context.Context, string, string) error
 	ProjectAccountLinkTransactional(context.Context, string, string, *model.ProjectRef) error
 	ProjectAccountUnlinkTransactional(context.Context, string, string) error
@@ -96,14 +101,21 @@ func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID string, 
 	if req == nil || strings.TrimSpace(req.Name) == "" {
 		return nil, ErrInvalidInput
 	}
+	stage, ok := model.NormalizeProjectStage(req.Stage)
+	if !ok {
+		return nil, ErrInvalidInput
+	}
 	now := time.Now().UTC()
 	projectID := uuid.NewString()
 	project := &model.Project{
 		PK: model.PrefixProject + projectID, SK: model.SKProjectConfig,
 		ProjectID: projectID, Name: strings.TrimSpace(req.Name),
 		Description: req.Description, SfdcOpptyID: req.SfdcOpptyID,
-		SfdcURL: req.SfdcURL, Stage: req.Stage, OwnerUserID: ownerUserID,
+		SfdcURL: req.SfdcURL, Stage: stage, OwnerUserID: ownerUserID,
 		CreatedAt: now, UpdatedAt: now, EntityType: model.EntityTypeProject,
+	}
+	if stage != "" {
+		project.StageChangedAt = &now
 	}
 	if err := s.repo.CreateProject(ctx, project); err != nil {
 		return nil, err
@@ -158,16 +170,32 @@ func (s *ProjectService) requireProjectAccess(ctx context.Context, userID, proje
 	return nil, ErrForbidden
 }
 
+// projectStageView returns the canonical stage for a stored value. An
+// unmapped legacy value is returned as-is with mapped=false.
+func projectStageView(stored string) (string, bool) {
+	if stage, ok := model.NormalizeProjectStage(stored); ok {
+		return stage, true
+	}
+	return stored, false
+}
+
+func projectSummary(project *model.Project) model.ProjectSummary {
+	stage, mapped := projectStageView(project.Stage)
+	return model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: stage, StageChangedAt: project.StageChangedAt, StageMapped: mapped, SfdcOpptyID: project.SfdcOpptyID}
+}
+
 func projectResponse(project *model.Project, members []model.ProjectMember) *model.ProjectResponse {
 	memberDTOs := make([]model.ProjectMemberDTO, 0, len(members))
 	for _, member := range members {
 		memberDTOs = append(memberDTOs, model.ProjectMemberDTO{UserID: member.UserID, Email: member.Email})
 	}
 	accountIDs := append([]string{}, project.AccountIDs...)
+	stage, mapped := projectStageView(project.Stage)
 	return &model.ProjectResponse{
 		AccessPermission: model.PermissionEdit,
 		ProjectID:        project.ProjectID, Name: project.Name, Description: project.Description,
-		SfdcOpptyID: project.SfdcOpptyID, SfdcURL: project.SfdcURL, Stage: project.Stage,
+		SfdcOpptyID: project.SfdcOpptyID, SfdcURL: project.SfdcURL, Stage: stage,
+		StageChangedAt: project.StageChangedAt, StageMapped: mapped,
 		OwnerUserID: project.OwnerUserID, AccountIDs: accountIDs, Members: memberDTOs,
 		CreatedAt: project.CreatedAt, UpdatedAt: project.UpdatedAt,
 	}
@@ -226,7 +254,7 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	out := make([]model.ProjectSummary, 0, len(projects))
 	for _, project := range projects {
 		seen[project.ProjectID] = true
-		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+		out = append(out, projectSummary(&project))
 	}
 
 	for _, id := range normalizedHints {
@@ -241,7 +269,7 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 			return nil, err
 		}
 		seen[id] = true
-		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+		out = append(out, projectSummary(project))
 	}
 	readableAccounts, err := listReadableAccountIDs(ctx, s.repo, userID, nil)
 	if err != nil {
@@ -332,7 +360,8 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 				return err
 			}
 			if project != nil {
-				verified[k] = &model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID}
+				summary := projectSummary(project)
+				verified[k] = &summary
 			}
 			return nil
 		})
@@ -412,13 +441,42 @@ func (s *ProjectService) UpdateProject(ctx context.Context, userID, projectID st
 	if project.OwnerUserID != userID {
 		return nil, ErrForbidden
 	}
+	// An unchanged stage (including an unmapped legacy value echoed back by a
+	// client that only edits other fields) is never validated or recorded.
+	newStage := project.Stage
+	stageChanged := false
+	if req.Stage != project.Stage {
+		normalized, ok := model.NormalizeProjectStage(req.Stage)
+		if !ok {
+			return nil, ErrInvalidInput
+		}
+		newStage = normalized
+		stageChanged = normalized != project.Stage
+	}
 	now := time.Now().UTC()
 	fields := map[string]interface{}{
 		"name": strings.TrimSpace(req.Name), "description": req.Description,
 		"sfdcOpptyId": req.SfdcOpptyID, "sfdcUrl": req.SfdcURL,
-		"stage": req.Stage, "updatedAt": now,
+		"stage": newStage, "updatedAt": now,
 	}
-	if err := s.repo.UpdateProjectFields(ctx, projectID, fields); err != nil {
+	if stageChanged {
+		change := &model.ProjectStageChange{ProjectID: projectID, From: project.Stage, To: newStage, ChangedBy: userID, ChangedAt: now}
+		if err := s.repo.UpdateProjectWithStage(ctx, projectID, fields, project.Stage, change); err != nil {
+			if errors.Is(err, repository.ErrConditionFailed) {
+				// Distinguish a deleted project from a concurrent stage change.
+				current, getErr := s.repo.GetProject(ctx, projectID)
+				if getErr != nil {
+					return nil, getErr
+				}
+				if current == nil {
+					return nil, ErrNotFound
+				}
+				return nil, ErrConflict
+			}
+			return nil, err
+		}
+		project.StageChangedAt = &now
+	} else if err := s.repo.UpdateProjectFields(ctx, projectID, fields); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrNotFound
 		}
@@ -428,7 +486,7 @@ func (s *ProjectService) UpdateProject(ctx context.Context, userID, projectID st
 	project.Description = req.Description
 	project.SfdcOpptyID = req.SfdcOpptyID
 	project.SfdcURL = req.SfdcURL
-	project.Stage = req.Stage
+	project.Stage = newStage
 	project.UpdatedAt = now
 	members, err := s.repo.ListProjectMembers(ctx, projectID)
 	if err != nil {
@@ -1159,7 +1217,7 @@ func (s *ProjectService) ListAccountProjects(ctx context.Context, userID, accoun
 		if project == nil || !contains(project.AccountIDs, accountID) {
 			continue
 		}
-		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+		out = append(out, projectSummary(project))
 	}
 	if valid, err := revalidateAccountReadGrant(ctx, s.repo, grant, userID); err != nil || !valid {
 		if err != nil {
