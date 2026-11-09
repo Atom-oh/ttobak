@@ -93,31 +93,25 @@ func (r *DynamoDBRepository) PutAccountLink(ctx context.Context, l *model.Accoun
 	roles := []string{"exists", "reverse"}
 
 	check := func(key map[string]types.AttributeValue, cond expression.ConditionBuilder) error {
-		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		item, err := r.linkConditionCheck(key, cond)
 		if err != nil {
 			return err
 		}
-		cc := &types.ConditionCheck{TableName: aws.String(r.tableName), Key: key, ConditionExpression: expr.Condition(),
-			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}
-		items = append(items, types.TransactWriteItem{ConditionCheck: cc})
+		items = append(items, item)
 		return nil
 	}
 	switch l.ToKind {
 	case model.LinkKindProject:
-		cond := expression.Contains(expression.Name("accountIds"), l.AccountID)
-		if err := check(accountNewsKey(model.PrefixProject+l.ToID, model.SKProjectConfig), cond); err != nil {
+		if err := check(projectInAccountCheck(l.AccountID, l.ToID)); err != nil {
 			return err
 		}
 		roles = append(roles, "target")
 	case model.LinkKindMeeting:
-		owner, meeting, ok := splitLinkMeetingID(l.ToID)
+		key, cond, ok := meetingPublishedCheck(l.AccountID, l.ToID)
 		if !ok {
 			return fmt.Errorf("invalid account link meeting id")
 		}
-		cond := expression.Name("accountId").Equal(expression.Value(l.AccountID)).
-			And(expression.Name("sharedToAccount").Equal(expression.Value(true))).
-			And(expression.Name("entityType").Equal(expression.Value("MEETING")))
-		if err := check(accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), cond); err != nil {
+		if err := check(key, cond); err != nil {
 			return err
 		}
 		roles = append(roles, "target")
@@ -141,6 +135,34 @@ func (r *DynamoDBRepository) PutAccountLink(ctx context.Context, l *model.Accoun
 		return classifyAccountLinkPut(err, roles)
 	}
 	return nil
+}
+
+// linkConditionCheck builds one ConditionCheck item for a link transaction.
+func (r *DynamoDBRepository) linkConditionCheck(key map[string]types.AttributeValue, cond expression.ConditionBuilder) (types.TransactWriteItem, error) {
+	expr, err := expression.NewBuilder().WithCondition(cond).Build()
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: key,
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}}, nil
+}
+
+// projectInAccountCheck requires the project to still list the account.
+func projectInAccountCheck(accountID, projectID string) (map[string]types.AttributeValue, expression.ConditionBuilder) {
+	return accountNewsKey(model.PrefixProject+projectID, model.SKProjectConfig), expression.Contains(expression.Name("accountIds"), accountID)
+}
+
+// meetingPublishedCheck requires the meeting {owner}:{meetingId} to still be
+// published to the account.
+func meetingPublishedCheck(accountID, meetingLinkID string) (map[string]types.AttributeValue, expression.ConditionBuilder, bool) {
+	owner, meeting, ok := splitLinkMeetingID(meetingLinkID)
+	if !ok {
+		return nil, expression.ConditionBuilder{}, false
+	}
+	cond := expression.Name("accountId").Equal(expression.Value(accountID)).
+		And(expression.Name("sharedToAccount").Equal(expression.Value(true))).
+		And(expression.Name("entityType").Equal(expression.Value("MEETING")))
+	return accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), cond, true
 }
 
 // accountLinkAccessChecks pins the account META row and, when actorID is set,
@@ -270,8 +292,15 @@ func (r *DynamoDBRepository) DeleteAccountLink(ctx context.Context, accountID, a
 	if err == nil {
 		return nil
 	}
+	return classifyAccountLinkDelete(err, len(items), firstAccess)
+}
+
+// classifyAccountLinkDelete maps a cancelled delete transaction: a failed
+// access check (index >= firstAccess) means revoked access, any other pure
+// condition failure means the row is gone or its origin changed.
+func classifyAccountLinkDelete(err error, n, firstAccess int) error {
 	var cancelled *types.TransactionCanceledException
-	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == len(items) {
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == n {
 		failed, revoked := false, false
 		for i, reason := range cancelled.CancellationReasons {
 			switch aws.ToString(reason.Code) {
@@ -318,47 +347,80 @@ func decodeAccountLinkCursor(cursor string) (string, error) {
 	return sk, nil
 }
 
-// ListAccountLinks returns one page of the account's forward LINK# rows in
-// sort-key order. It is a raw listing: callers must revalidate endpoints.
-// The cursor is the opaque last sort key; it only positions within the given
-// account's partition.
+// The project 1 link listing skips the people range LINK#meeting#...: it reads
+// [LINK#, LINK#meeting] and then [LINK#meeting$, LINK$]. No project 1 link has
+// fromKind meeting, so both ranges together hold every 4-segment forward row.
+const (
+	accountLinkRange1Low  = model.PrefixAccountLink
+	accountLinkRange1High = model.PrefixAccountLink + model.LinkKindMeeting
+	accountLinkRange2Low  = model.PrefixAccountLink + model.LinkKindMeeting + "$"
+	accountLinkRange2High = "LINK$"
+)
+
+// ListAccountLinks returns one page of the account's project 1 forward LINK#
+// rows in sort-key order, never returning or counting people rows. It is a
+// raw listing: callers must revalidate endpoints. The cursor is the opaque last
+// sort key; it only positions within the given account's partition.
 func (r *DynamoDBRepository) ListAccountLinks(ctx context.Context, accountID, cursor string, limit int32) ([]model.AccountLink, *string, error) {
 	if accountID == "" || limit <= 0 {
 		return nil, nil, fmt.Errorf("invalid account link listing")
 	}
-	key := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
-		And(expression.Key("SK").BeginsWith(model.PrefixAccountLink))
-	expr, err := expression.NewBuilder().WithKeyCondition(key).Build()
-	if err != nil {
-		return nil, nil, err
-	}
-	in := &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(),
-		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true), Limit: aws.Int32(limit)}
+	pk := model.PrefixAccount + accountID
+	var start map[string]types.AttributeValue
+	ranges := [][2]string{{accountLinkRange1Low, accountLinkRange1High}, {accountLinkRange2Low, accountLinkRange2High}}
 	if cursor != "" {
 		sk, err := decodeAccountLinkCursor(cursor)
 		if err != nil {
 			return nil, nil, err
 		}
-		in.ExclusiveStartKey = accountNewsKey(model.PrefixAccount+accountID, sk)
+		if sk > accountLinkRange1High {
+			ranges = ranges[1:]
+		}
+		start = accountNewsKey(pk, sk)
 	}
-	out, err := r.client.Query(ctx, in)
-	if err != nil {
-		return nil, nil, fmt.Errorf("list account links: %w", err)
-	}
-	links := make([]model.AccountLink, 0, len(out.Items))
-	for _, row := range out.Items {
-		if link, ok := decodeAccountLink(accountID, row); ok {
-			links = append(links, *link)
+	links := []model.AccountLink{}
+	read := int32(0)
+	lastSK := ""
+	for i, rg := range ranges {
+		key := expression.Key("PK").Equal(expression.Value(pk)).
+			And(expression.Key("SK").Between(expression.Value(rg[0]), expression.Value(rg[1])))
+		expr, err := expression.NewBuilder().WithKeyCondition(key).Build()
+		if err != nil {
+			return nil, nil, err
+		}
+		out, err := r.client.Query(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true),
+			Limit: aws.Int32(limit - read), ExclusiveStartKey: start})
+		if err != nil {
+			return nil, nil, fmt.Errorf("list account links: %w", err)
+		}
+		start = nil
+		read += int32(len(out.Items))
+		for _, row := range out.Items {
+			if sk, ok := row["SK"].(*types.AttributeValueMemberS); ok {
+				lastSK = sk.Value
+			}
+			if link, ok := decodeAccountLink(accountID, row); ok {
+				links = append(links, *link)
+			}
+		}
+		if len(out.LastEvaluatedKey) > 0 {
+			next, err := encodeAccountLinkCursor(out.LastEvaluatedKey, accountID)
+			if err != nil {
+				return nil, nil, err
+			}
+			return links, next, nil
+		}
+		if read >= limit && i < len(ranges)-1 {
+			// The page is full at the end of range 1; resume from its last row.
+			next, err := encodeAccountLinkCursor(accountNewsKey(pk, lastSK), accountID)
+			if err != nil {
+				return nil, nil, err
+			}
+			return links, next, nil
 		}
 	}
-	if len(out.LastEvaluatedKey) == 0 {
-		return links, nil, nil
-	}
-	next, err := encodeAccountLinkCursor(out.LastEvaluatedKey, accountID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return links, next, nil
+	return links, nil, nil
 }
 
 // ListAccountLinksByPrefix reads at most maxRows link rows of the account
