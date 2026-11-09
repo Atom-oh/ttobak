@@ -17,7 +17,7 @@ import (
 
 type accountContactsAPI interface {
 	List(context.Context, string, string, int, string) (*model.AccountContactsPage, error)
-	MutateWith(context.Context, string, string, string, string, model.AccountContact, service.ContactMutateOptions) (*model.AccountContact, error)
+	Mutate(context.Context, string, string, string, string, model.AccountContact) (*model.AccountContact, error)
 	SpeakerTeamPage(context.Context, string, string, int, string) (*model.SpeakerTeam, error)
 }
 type AccountContactsHandler struct{ service accountContactsAPI }
@@ -106,15 +106,7 @@ func (h *AccountContactsHandler) mutate(w http.ResponseWriter, r *http.Request, 
 		}
 		c.Revision = values.Get("revision")
 	}
-	var opt service.ContactMutateOptions
 	if op != "delete" {
-		// ?peopleResolve=defer lets a bulk import request one resolve at its end.
-		values, err := url.ParseQuery(r.URL.RawQuery)
-		if err != nil || len(values) > 1 || (len(values) == 1 && (len(values["peopleResolve"]) != 1 || values.Get("peopleResolve") != "defer")) {
-			contactError(w, service.ErrInvalidInput)
-			return
-		}
-		opt.DeferPeopleResolve = len(values) == 1
 		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
@@ -127,7 +119,7 @@ func (h *AccountContactsHandler) mutate(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 	}
-	out, err := h.service.MutateWith(r.Context(), chi.URLParam(r, "accountId"), middleware.GetUserID(r.Context()), op, chi.URLParam(r, "contactId"), c, opt)
+	out, err := h.service.Mutate(r.Context(), chi.URLParam(r, "accountId"), middleware.GetUserID(r.Context()), op, chi.URLParam(r, "contactId"), c)
 	if err != nil {
 		contactError(w, err)
 		return

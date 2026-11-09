@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { accountApi } from '@/lib/api';
-import { CONTACT_FIELDS, PEOPLE_RESOLVE_FAILED, PEOPLE_RESOLVE_RETRY, contactFromRow, importContacts, isContactAccessDenied, mapContactHeaders, requestPeopleResolve, type ContactField, type ContactMapping, type ImportStatus } from '@/lib/contactImport';
+import { CONTACT_FIELDS, contactFromRow, importContacts, isContactAccessDenied, mapContactHeaders, type ContactField, type ContactMapping, type ImportStatus } from '@/lib/contactImport';
 import { readContactFile } from '@/lib/contactFile';
 
 const statusLabel: Record<ImportStatus, string> = { created: '추가됨', duplicate: '중복으로 건너뜀', failed: '실패 또는 저장 여부 확인 필요', invalid: '이름 없음' };
@@ -14,7 +14,6 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
   const [statuses, setStatuses] = useState<Record<number, ImportStatus>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [resolveFailed, setResolveFailed] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const fileGeneration = useRef(0);
   useEffect(() => {
@@ -46,36 +45,20 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
     if (!active || active.signal.aborted || busy || mapping.name === undefined) return;
     const indexes = [...selected].filter((i) => statuses[i] !== 'created');
     if (!indexes.length) return;
-    setBusy(true); setError(''); setResolveFailed(false);
-    // Rows defer their people resolve requests; one request follows the run,
-    // also when every row was already saved (an earlier request may have failed).
-    let wrote = false;
-    let denied = false;
+    setBusy(true); setError('');
     try {
-      const done = await importContacts(indexes.map((i) => contactFromRow(table[i + 1], mapping)),
+      await importContacts(indexes.map((i) => contactFromRow(table[i + 1], mapping)),
         (cursor) => accountApi.contacts(accountId, userId, cursor, active.signal),
-        (contact) => { wrote = true; return accountApi.createContact(accountId, contact, userId, active.signal, true); },
+        (contact) => accountApi.createContact(accountId, contact, userId, active.signal),
         (index, status) => { if (!active.signal.aborted) setStatuses((old) => ({ ...old, [indexes[index]]: status })); });
-      wrote = wrote || done.some((status) => status === 'created' || status === 'duplicate');
       if (!active.signal.aborted) onImported();
     } catch (err) {
       if (!active.signal.aborted) {
-        if (isContactAccessDenied(err)) { denied = true; onDenied(); return; }
+        if (isContactAccessDenied(err)) { onDenied(); return; }
         setError('가져오기가 중단되었습니다. 표시된 결과를 확인하고 다시 시도해 주세요. 저장 여부가 불확실한 항목은 연락처 목록을 확인해 주세요.');
         onImported();
       }
-    } finally {
-      if (wrote && !denied && !(await requestPeopleResolve((s) => accountApi.requestPeopleResolve(accountId, userId, s), active.signal)) && !active.signal.aborted) setResolveFailed(true);
-      if (!active.signal.aborted) setBusy(false);
-    }
-  };
-
-  const retryResolve = async () => {
-    const active = controller.current;
-    if (!active || busy) return;
-    setBusy(true);
-    const ok = await requestPeopleResolve((s) => accountApi.requestPeopleResolve(accountId, userId, s), active.signal);
-    if (!active.signal.aborted) { setResolveFailed(!ok); setBusy(false); }
+    } finally { if (!active.signal.aborted) setBusy(false); }
   };
 
   const headers = table[0] || [];
@@ -85,8 +68,6 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
     <p className="mt-2 text-xs text-slate-500">현재 고객에게 추가합니다. CSV 또는 .xlsx 파일을 선택하고 대상 행과 열을 확인하세요. 파일은 5MB, Excel은 압축 해제 후 16MB까지 지원합니다. Excel에서 전화번호는 텍스트 형식이어야 앞자리 0이 보존됩니다.</p>
     <input type="file" accept=".csv,.xlsx" disabled={busy} className="mt-2 text-sm" onChange={(e) => { void chooseFile(e.target.files?.[0]); e.target.value = ''; }} />
     {error && <p role="alert" className="mt-2 text-sm text-red-600">{error}</p>}
-    {resolveFailed && <p role="alert" className="mt-2 text-sm text-amber-700">{PEOPLE_RESOLVE_FAILED}{' '}
-      <button type="button" disabled={busy} className="underline" onClick={() => { void retryResolve(); }}>{PEOPLE_RESOLVE_RETRY}</button></p>}
     {table.length > 0 && <>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {CONTACT_FIELDS.map(([field, label]) => <label key={field} className="text-xs text-slate-600 dark:text-slate-300">{label}{field === 'name' && ' *'}

@@ -30,12 +30,6 @@ type AccountContactsService struct {
 	peopleResolve func(context.Context, model.PeopleResolveRequested) error
 }
 
-// ContactMutateOptions tunes one contact write. DeferPeopleResolve skips the
-// people resolve request; a bulk import sends one request at its end instead.
-type ContactMutateOptions struct {
-	DeferPeopleResolve bool
-}
-
 // SetPeopleResolvePublisher wires the contact-change people resolve publisher.
 func (s *AccountContactsService) SetPeopleResolvePublisher(fn func(context.Context, model.PeopleResolveRequested) error) {
 	s.peopleResolve = fn
@@ -151,11 +145,6 @@ func validateContact(c model.AccountContact) error {
 }
 
 func (s *AccountContactsService) Mutate(ctx context.Context, account, user, op, id string, c model.AccountContact) (*model.AccountContact, error) {
-	return s.MutateWith(ctx, account, user, op, id, c, ContactMutateOptions{})
-}
-
-// MutateWith is Mutate with write options.
-func (s *AccountContactsService) MutateWith(ctx context.Context, account, user, op, id string, c model.AccountContact, opt ContactMutateOptions) (*model.AccountContact, error) {
 	if op != "create" && op != "update" && op != "delete" {
 		return nil, ErrInvalidInput
 	}
@@ -206,7 +195,7 @@ func (s *AccountContactsService) MutateWith(ctx context.Context, account, user, 
 	if err != nil {
 		return nil, err
 	}
-	if op != "delete" && !opt.DeferPeopleResolve {
+	if op != "delete" {
 		publishPeopleResolve(ctx, s.peopleResolve, model.PeopleResolveRequested{AccountID: account, Reason: model.PeopleResolveReasonContacts})
 	}
 	return &c, nil

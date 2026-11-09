@@ -884,14 +884,10 @@ export const accountApi = {
     if (cursor) query.set('cursor', cursor);
     return api.get<{ members: AccountSpeakerTeamMember[]; nextCursor?: string }>(`/api/accounts/${encodeURIComponent(id)}/speaker-team?${query}`, { expectedUserId, signal });
   },
-  // deferResolve skips the per-write people resolve request; an import sends
-  // one requestPeopleResolve at its end instead.
-  createContact: (id: string, data: ContactInput, expectedUserId: string, signal?: AbortSignal, deferResolve = false) =>
-    api.post<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts${deferResolve ? '?peopleResolve=defer' : ''}`, data, { expectedUserId, signal }),
-  updateContact: (id: string, contactId: string, data: ContactInput & { revision: string }, expectedUserId: string, signal?: AbortSignal, deferResolve = false) =>
-    api.put<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts/${encodeURIComponent(contactId)}${deferResolve ? '?peopleResolve=defer' : ''}`, data, { expectedUserId, signal }),
-  requestPeopleResolve: (id: string, expectedUserId: string, signal?: AbortSignal) =>
-    api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/resolve`, undefined, { expectedUserId, signal }),
+  createContact: (id: string, data: ContactInput, expectedUserId: string, signal?: AbortSignal) =>
+    api.post<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts`, data, { expectedUserId, signal }),
+  updateContact: (id: string, contactId: string, data: ContactInput & { revision: string }, expectedUserId: string, signal?: AbortSignal) =>
+    api.put<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts/${encodeURIComponent(contactId)}`, data, { expectedUserId, signal }),
   deleteContact: (id: string, contactId: string, revision: string, expectedUserId: string, signal?: AbortSignal) =>
     api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/contacts/${encodeURIComponent(contactId)}?revision=${encodeURIComponent(revision)}`, { expectedUserId, signal }),
   create: (data: AccountCreationRequest, expectedUserId: string) =>

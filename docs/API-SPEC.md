@@ -1736,7 +1736,6 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Edges` |
 | POST | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Bind` |
 | DELETE | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Unbind` |
-| POST | `/api/accounts/{accountId}/people/resolve` | `accountPeopleHandler.Resolve` |
 | GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
 | GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
 | GET | `/api/accounts/{accountId}/graph` | `accountOverviewHandler.Graph` |

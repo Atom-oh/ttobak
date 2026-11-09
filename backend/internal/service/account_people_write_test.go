@@ -225,20 +225,6 @@ func TestIgnoreMentionGroup_WritesIgnoreAndDeletesRows(t *testing.T) {
 	}
 }
 
-func TestRequestContactsResolve_PublishesOneAccountRequest(t *testing.T) {
-	f := peopleWriteRepo()
-	s := newPeopleTestService(f)
-	var got []model.PeopleResolveRequested
-	s.SetPeopleResolvePublisher(func(_ context.Context, e model.PeopleResolveRequested) error { got = append(got, e); return nil })
-	if err := s.RequestContactsResolve(context.Background(), "stranger", "acc"); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("stranger err=%v", err)
-	}
-	if err := s.RequestContactsResolve(context.Background(), "viewer", "acc"); err != nil || len(got) != 1 ||
-		got[0] != (model.PeopleResolveRequested{AccountID: "acc", Reason: model.PeopleResolveReasonContacts}) {
-		t.Fatalf("got=%+v err=%v", got, err)
-	}
-}
-
 // Two texts of one person in the same meeting and role, resolved to the
 // same contact, both stay resolved across resolver runs.
 func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
