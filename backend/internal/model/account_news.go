@@ -7,6 +7,12 @@ import "time"
 // (CRAWLER#{sourceId} / CONFIG) carries the same accountId; readers require both.
 const PrefixAccountNewsSource = "NEWSSRC#"
 
+// SKAccountNewsSourceCount keys the per-account source counter row
+// (PK ACCOUNT#{accountId}). Its attribute sourceCount is incremented in the
+// create transaction (conditioned on the cap) and decremented in the delete
+// transaction. It deliberately does not start with PrefixAccountNewsSource.
+const SKAccountNewsSourceCount = "NEWSSRC_COUNT"
+
 // AccountNewsSourceRef records that an account owns a crawler source.
 type AccountNewsSourceRef struct {
 	AccountID  string    `dynamodbav:"accountId" json:"accountId"`
