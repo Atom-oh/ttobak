@@ -24,6 +24,6 @@
   ],
   "prefixes": [],
   "path_regexes": [
-    "^frontend/public/mcp/ttobak-mcp\\.mjs$"
+    "\\Afrontend/public/mcp/ttobak-mcp\\.mjs\\Z"
   ]
 }

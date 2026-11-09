@@ -146,7 +146,8 @@ class PreparationTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "committed policy")
         paths = ["frontend/public/mcp/ttobak-mcp.mjs", "frontend/public/mcp/other.mjs",
-                 "x/frontend/public/mcp/ttobak-mcp.mjs", "mcp-server/src/index.ts"]
+                 "x/frontend/public/mcp/ttobak-mcp.mjs", "mcp-server/src/index.ts",
+                 "frontend/public/mcp/ttobak-mcp.mjs\n"]
         kept, excluded, _ = prepare.selected_paths(self.git("rev-parse", "HEAD").strip(), paths)
         self.assertEqual(["frontend/public/mcp/ttobak-mcp.mjs"], excluded)
         self.assertEqual(paths[1:], kept)
