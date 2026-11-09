@@ -77,6 +77,21 @@ func peopleTargetCheck(accountID string, k model.PeopleLinkKey) (map[string]type
 // edges require actorID == CreatedBy; the system writer of auto edges passes
 // "". Failures map like PutAccountLink.
 func (r *DynamoDBRepository) PutPeopleLink(ctx context.Context, l *model.PeopleLink, actorID string) error {
+	return r.putPeopleLink(ctx, l, actorID, nil)
+}
+
+// PutPeopleLinkInRun writes an auto edge for the resolver run that holds the
+// meeting's lease. The transaction also checks the run row's lease token, so
+// a run whose lease passed to another run writes nothing; that failure maps
+// to ErrPeopleRunLeaseLost.
+func (r *DynamoDBRepository) PutPeopleLinkInRun(ctx context.Context, l *model.PeopleLink, run *model.PeopleRun) error {
+	if !validPeopleRunFence(run) || l == nil || l.Origin != model.LinkOriginAuto || run.AccountID != l.AccountID || run.Scope != l.MeetingID {
+		return fmt.Errorf("invalid people link")
+	}
+	return r.putPeopleLink(ctx, l, "", run)
+}
+
+func (r *DynamoDBRepository) putPeopleLink(ctx context.Context, l *model.PeopleLink, actorID string, fence *model.PeopleRun) error {
 	if !validPeopleLinkRow(l) ||
 		(l.Origin == model.LinkOriginManual && (actorID == "" || l.CreatedBy != actorID)) ||
 		(l.Origin == model.LinkOriginAuto && actorID != "") {
@@ -147,6 +162,13 @@ func (r *DynamoDBRepository) PutPeopleLink(ctx context.Context, l *model.PeopleL
 		// Membership of the actor is still enforced, through the target check.
 		roles[3] = "access"
 	}
+	if fence != nil {
+		lease, err := r.peopleRunLeaseCheck(fence)
+		if err != nil {
+			return err
+		}
+		items, roles = append(items, lease), append(roles, "lease")
+	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		return classifyAccountLinkPut(err, roles)
 	}
@@ -200,6 +222,20 @@ func (r *DynamoDBRepository) GetPeopleLink(ctx context.Context, accountID string
 // deny row, which checks only the account META row. Errors map like
 // DeleteAccountLink.
 func (r *DynamoDBRepository) DeletePeopleLink(ctx context.Context, accountID, actorID string, k model.PeopleLinkKey, expectOrigin string, deny bool) error {
+	return r.deletePeopleLink(ctx, accountID, actorID, k, expectOrigin, deny, nil)
+}
+
+// DeletePeopleLinkInRun removes the run's own stale auto edge (no deny row)
+// while the run still holds the meeting's lease; a lost lease maps to
+// ErrPeopleRunLeaseLost and deletes nothing.
+func (r *DynamoDBRepository) DeletePeopleLinkInRun(ctx context.Context, accountID string, k model.PeopleLinkKey, run *model.PeopleRun) error {
+	if !validPeopleRunFence(run) || run.AccountID != accountID || run.Scope != k.MeetingID {
+		return fmt.Errorf("invalid people link")
+	}
+	return r.deletePeopleLink(ctx, accountID, "", k, model.LinkOriginAuto, false, run)
+}
+
+func (r *DynamoDBRepository) deletePeopleLink(ctx context.Context, accountID, actorID string, k model.PeopleLinkKey, expectOrigin string, deny bool, fence *model.PeopleRun) error {
 	if accountID == "" || model.ValidatePeopleLinkKey(k) != nil || !validPeopleOrigin(expectOrigin) ||
 		(actorID == "" && (expectOrigin != model.LinkOriginAuto || deny)) {
 		return fmt.Errorf("invalid people link")
@@ -229,10 +265,44 @@ func (r *DynamoDBRepository) DeletePeopleLink(ctx context.Context, accountID, ac
 	}
 	firstAccess := len(items)
 	items = append(items, access...)
+	if fence != nil {
+		lease, err := r.peopleRunLeaseCheck(fence)
+		if err != nil {
+			return err
+		}
+		items = append(items, lease)
+	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if fence != nil && leaseCheckFailed(err, len(items)-1) {
+			return fmt.Errorf("%w: %w", ErrConditionFailed, ErrPeopleRunLeaseLost)
+		}
 		return classifyAccountLinkDelete(err, len(items), firstAccess)
 	}
 	return nil
+}
+
+// ErrPeopleRunLeaseLost means a resolver run's write was refused because
+// another run now holds the lease. It always wraps ErrConditionFailed.
+var ErrPeopleRunLeaseLost = errors.New("people run lease lost")
+
+func validPeopleRunFence(run *model.PeopleRun) bool {
+	return run != nil && run.AccountID != "" && run.LeaseToken != "" && validPeopleRunScope(run.Scope)
+}
+
+// peopleRunLeaseCheck pins the run row to the run's lease token.
+func (r *DynamoDBRepository) peopleRunLeaseCheck(run *model.PeopleRun) (types.TransactWriteItem, error) {
+	if !validPeopleRunFence(run) {
+		return types.TransactWriteItem{}, fmt.Errorf("invalid people run")
+	}
+	return r.linkConditionCheck(peopleRunKey(run.AccountID, run.Scope), expression.Name("leaseToken").Equal(expression.Value(run.LeaseToken)))
+}
+
+// leaseCheckFailed reports whether the transaction item at index failed its
+// condition.
+func leaseCheckFailed(err error, index int) bool {
+	var cancelled *types.TransactionCanceledException
+	return errors.As(err, &cancelled) && index < len(cancelled.CancellationReasons) &&
+		aws.ToString(cancelled.CancellationReasons[index].Code) == "ConditionalCheckFailed"
 }
 
 // queryPeopleLinks reads at most maxRows rows matching key and decodes people
@@ -334,14 +404,9 @@ func (r *DynamoDBRepository) ListPeopleLinksToTarget(ctx context.Context, accoun
 	return links, truncated, err
 }
 
-// peopleMentionBatchAttempts bounds BatchWriteItem calls per chunk: the first
-// call plus three retries of unprocessed items.
-const (
-	peopleMentionBatchSize     = 25
-	peopleMentionBatchAttempts = 4
-)
-
-var peopleMentionBatchBackoff = 25 * time.Millisecond
+// peopleMentionTxWrites is the writes per lease-fenced transaction; the
+// 25th item is the lease check.
+const peopleMentionTxWrites = 24
 
 type mentionIgnoreItem struct {
 	PK         string `dynamodbav:"PK"`
@@ -467,16 +532,22 @@ func validUnresolvedMentionRow(accountID, meetingID string, m *model.UnresolvedM
 }
 
 // ReplaceUnresolvedMentions puts every row of one meeting and deletes each
-// prior sort key (from the run row) that is not among them. Writes go in
-// BatchWriteItem chunks of 25; unprocessed items are retried three times
-// before the call fails.
-func (r *DynamoDBRepository) ReplaceUnresolvedMentions(ctx context.Context, accountID, meetingID string, rows []model.UnresolvedMention, prior []string) error {
-	if _, _, ok := splitLinkMeetingID(meetingID); accountID == "" || !ok || !validPeopleListID(meetingID) {
+// prior sort key (from the run row) that is not among them, for the run that
+// holds the meeting's lease. Writes go in transactions of at most 24 rows plus
+// a check of the run's lease token; a lost lease maps to
+// ErrPeopleRunLeaseLost and stops before any later chunk.
+func (r *DynamoDBRepository) ReplaceUnresolvedMentions(ctx context.Context, accountID, meetingID string, rows []model.UnresolvedMention, prior []string, run *model.PeopleRun) error {
+	if _, _, ok := splitLinkMeetingID(meetingID); accountID == "" || !ok || !validPeopleListID(meetingID) ||
+		!validPeopleRunFence(run) || run.AccountID != accountID || run.Scope != meetingID {
 		return fmt.Errorf("invalid unresolved mentions")
+	}
+	lease, err := r.peopleRunLeaseCheck(run)
+	if err != nil {
+		return err
 	}
 	pk := model.PrefixAccount + accountID
 	keep := map[string]bool{}
-	var writes []types.WriteRequest
+	var writes []types.TransactWriteItem
 	for i := range rows {
 		if !validUnresolvedMentionRow(accountID, meetingID, &rows[i]) {
 			return fmt.Errorf("invalid unresolved mention")
@@ -490,7 +561,7 @@ func (r *DynamoDBRepository) ReplaceUnresolvedMentions(ctx context.Context, acco
 		if err != nil {
 			return fmt.Errorf("marshal unresolved mention: %w", err)
 		}
-		writes = append(writes, types.WriteRequest{PutRequest: &types.PutRequest{Item: item}})
+		writes = append(writes, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}})
 	}
 	deleted := map[string]bool{}
 	for _, sk := range prior {
@@ -501,37 +572,18 @@ func (r *DynamoDBRepository) ReplaceUnresolvedMentions(ctx context.Context, acco
 			continue
 		}
 		deleted[sk] = true
-		writes = append(writes, types.WriteRequest{DeleteRequest: &types.DeleteRequest{Key: accountNewsKey(pk, sk)}})
+		writes = append(writes, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, sk)}})
 	}
-	for start := 0; start < len(writes); start += peopleMentionBatchSize {
-		if err := r.batchWritePeople(ctx, writes[start:min(start+peopleMentionBatchSize, len(writes))]); err != nil {
-			return err
+	for start := 0; start < len(writes); start += peopleMentionTxWrites {
+		chunk := append(append([]types.TransactWriteItem(nil), writes[start:min(start+peopleMentionTxWrites, len(writes))]...), lease)
+		if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: chunk}); err != nil {
+			if leaseCheckFailed(err, len(chunk)-1) {
+				return fmt.Errorf("%w: %w", ErrConditionFailed, ErrPeopleRunLeaseLost)
+			}
+			return fmt.Errorf("write unresolved mentions: %w", err)
 		}
 	}
 	return nil
-}
-
-func (r *DynamoDBRepository) batchWritePeople(ctx context.Context, chunk []types.WriteRequest) error {
-	for attempt := 1; ; attempt++ {
-		out, err := r.client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{RequestItems: map[string][]types.WriteRequest{r.tableName: chunk}})
-		if err != nil {
-			return fmt.Errorf("write unresolved mentions: %w", err)
-		}
-		chunk = out.UnprocessedItems[r.tableName]
-		if len(chunk) == 0 {
-			return nil
-		}
-		if attempt >= peopleMentionBatchAttempts {
-			return fmt.Errorf("write unresolved mentions: %d unprocessed items remain", len(chunk))
-		}
-		timer := time.NewTimer(time.Duration(attempt) * peopleMentionBatchBackoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf("write unresolved mentions: %w", ctx.Err())
-		case <-timer.C:
-		}
-	}
 }
 
 func (r *DynamoDBRepository) queryUnresolvedMentions(ctx context.Context, accountID string, key expression.KeyConditionBuilder, afterSK string, maxRows int) ([]model.UnresolvedMention, string, bool, error) {

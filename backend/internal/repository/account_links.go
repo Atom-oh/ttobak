@@ -203,6 +203,8 @@ func classifyAccountLinkPut(err error, roles []string) error {
 		}
 	}
 	switch {
+	case failed["lease"]:
+		return fmt.Errorf("%w: %w", ErrConditionFailed, ErrPeopleRunLeaseLost)
 	case failed["access"]:
 		return fmt.Errorf("%w: %w", ErrConditionFailed, ErrAccountLinkAccess)
 	case failed["deny"]:
