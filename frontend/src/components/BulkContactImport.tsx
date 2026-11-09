@@ -19,13 +19,8 @@ async function loadMatchAccounts(userId: string, signal: AbortSignal): Promise<M
   const worker = async () => {
     while (next < direct.length && !signal.aborted) {
       const summary = direct[next++];
-      try {
-        const detail = await accountApi.get(summary.accountId, { signal, expectedUserId: userId });
-        out.push({ accountId: summary.accountId, name: detail.name || summary.name, aliases: detail.aliases || [], domains: detail.domains || [] });
-      } catch (error) {
-        if (signal.aborted) throw error;
-        out.push({ accountId: summary.accountId, name: summary.name, aliases: [], domains: [] });
-      }
+      const detail = await accountApi.get(summary.accountId, { signal, expectedUserId: userId });
+      out.push({ accountId: summary.accountId, name: detail.name || summary.name, aliases: detail.aliases || [], domains: detail.domains || [] });
     }
   };
   await Promise.all(Array.from({ length: 6 }, worker));
@@ -84,10 +79,12 @@ export function BulkContactImport({ userId }: { userId: string }) {
     if (!active || active.signal.aborted || busy || mapping.name === undefined) return;
     setBusy(true); setError('');
     const signal = active.signal;
+    const effectiveDecisions = Object.fromEntries(groups.map((group) => [group.key, decisionOf(group)]));
+    setDecisions(effectiveDecisions);
     // Rows already saved in this file are not sent again on a retry.
     const skipRows = new Set(Object.entries(results).filter(([, r]) => r.status === 'created' || r.status === 'filled' || r.status === 'unchanged').map(([row]) => Number(row)));
     try {
-      await runBulkImport(contacts, groups, decisions, {
+      await runBulkImport(contacts, groups, effectiveDecisions, {
         createAccount: async (name, domains) => {
           const key = `${name}\n${domains.join(',')}`;
           let requestId = requestIds.current.get(key);

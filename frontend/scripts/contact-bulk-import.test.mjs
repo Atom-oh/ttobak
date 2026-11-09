@@ -4,11 +4,12 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { accountComponentHarness } from './account-component-harness.mjs';
 
 const req = createRequire(import.meta.url);
 function compile(path, context) {
   const source = readFileSync(new URL(path, import.meta.url), 'utf8');
-  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } });
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true, jsx: ts.JsxEmit.ReactJSX } });
   const exports = {};
   vm.runInNewContext(outputText, { exports, ...context });
   return exports;
@@ -18,6 +19,115 @@ function load() {
   return compile('../src/lib/contactBulkImport.ts', { require: name => name === './contactImport' ? contactImport : req(name), DOMException });
 }
 const plain = (v) => JSON.parse(JSON.stringify(v));
+const settle = async () => {
+  for (let attempt = 0; attempt < 5; attempt++) await new Promise(resolve => setImmediate(resolve));
+};
+function nodes(value) {
+  if (Array.isArray(value)) return value.flatMap(nodes);
+  if (!value || typeof value !== 'object') return [];
+  return [value, ...nodes(value.props?.children)];
+}
+function componentFixture(api, table) {
+  const harness = accountComponentHarness();
+  const jsx = (type, props, key) => ({ type, props, key });
+  const contactImport = compile('../src/lib/contactImport.ts', {
+    require: name => name === './contactFields.json' ? req('../src/lib/contactFields.json') : req(name),
+    TextDecoder, Uint8Array, DOMException,
+  });
+  const modules = {
+    react: harness.react,
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    '@/lib/api': { accountApi: api },
+    '@/lib/contactImport': contactImport,
+    '@/lib/contactBulkImport': load(),
+    '@/lib/contactFile': { readContactFile: async () => table },
+  };
+  const { BulkContactImport } = compile('../src/components/BulkContactImport.tsx', {
+    require: name => {
+      assert.ok(name in modules, `unexpected component dependency: ${name}`);
+      return modules[name];
+    },
+    AbortController, DOMException, Error, crypto,
+  });
+  const draw = () => harness.render(BulkContactImport, new Set(), { userId: 'user-1' });
+  return {
+    draw,
+    unmount: harness.unmount,
+    async chooseFile() {
+      nodes(draw()).find(node => node.type === 'input' && node.props.type === 'file')
+        .props.onChange({ target: { files: [{}] } });
+      await settle();
+      return draw();
+    },
+    async submit() {
+      const button = nodes(draw()).find(node => node.type === 'button' && /명 가져오기$/.test(node.props.children));
+      assert.ok(button && !button.props.disabled, 'import is available');
+      button.props.onClick();
+      await settle();
+      return draw();
+    },
+  };
+}
+
+test('the component rejects incomplete account metadata and reloads it on retry', async () => {
+  let unavailable = true;
+  let detailReads = 0;
+  const api = {
+    list: async () => ({ accounts: [{ accountId: 'acme', name: 'Acme' }, { accountId: 'korea', name: 'Acme Korea' }] }),
+    get: async accountId => {
+      detailReads++;
+      if (accountId === 'korea' && unavailable) throw new Error('Account metadata unavailable');
+      return accountId === 'korea' ? { name: 'Acme Korea', aliases: ['Acme'] } : { name: 'Acme' };
+    },
+  };
+  const screen = componentFixture(api, [['회사', '이름'], ['Acme', 'Person']]);
+  try {
+    let tree = await screen.chooseFile();
+    assert.match(JSON.stringify(tree), /Account metadata unavailable/);
+    assert.equal(nodes(tree).some(node => node.type === 'button' && /명 가져오기$/.test(node.props.children)), false);
+    unavailable = false;
+    tree = await screen.chooseFile();
+    assert.equal(detailReads, 4, 'failed metadata must not be cached');
+    const choice = nodes(tree).find(node => node.props?.['aria-label'] === 'Acme 처리 방법');
+    assert.equal(choice.props.value, 'drop', 'ambiguous metadata requires an explicit destination');
+  } finally { screen.unmount(); }
+});
+
+test('the component preserves implicit drops when new account domains change retry matches', async () => {
+  const writes = [];
+  let createdAccounts = 0;
+  let failOther = true;
+  const api = {
+    list: async () => ({ accounts: [{ accountId: 'other', name: 'Other' }] }),
+    get: async () => ({ name: 'Other', aliases: [], domains: [] }),
+    create: async account => { createdAccounts++; return { ...account, accountId: 'new-account' }; },
+    contacts: async () => ({ contacts: [] }),
+    createContact: async (accountId, contact) => {
+      writes.push([accountId, contact.name]);
+      if (accountId === 'other' && failOther) throw { status: 503 };
+      return { ...contact, contactId: `contact-${writes.length}`, revision: 'r1' };
+    },
+  };
+  const screen = componentFixture(api, [
+    ['회사', '이름', '전자 메일 주소'],
+    ['Acme UK', 'Selected', 'selected@acme.test'],
+    ['Acme EU', 'Dropped', 'dropped@acme.test'],
+    ['Other', 'Retry', 'retry@other.test'],
+  ]);
+  try {
+    const tree = await screen.chooseFile();
+    nodes(tree).find(node => node.props?.['aria-label'] === 'Acme UK 처리 방법')
+      .props.onChange({ target: { value: 'new' } });
+    await screen.submit();
+    failOther = false;
+    await screen.submit();
+    assert.equal(createdAccounts, 1);
+    assert.deepEqual(writes, [['new-account', 'Selected'], ['other', 'Retry'], ['other', 'Retry']]);
+    const dropped = nodes(screen.draw()).find(node => node.props?.['aria-label'] === 'Acme EU 처리 방법');
+    assert.equal(dropped.props.value, 'drop');
+  } finally { screen.unmount(); }
+});
+
 const accounts = [
   { accountId: 'hana', name: '하나은행', aliases: ['Hana Bank'], domains: ['hanabank.com'] },
   { accountId: 'sk', name: 'SK텔레콤', aliases: [], domains: ['sktelecom.com'] },
