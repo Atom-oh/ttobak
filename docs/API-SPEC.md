@@ -808,10 +808,11 @@ by an `ACCOUNT#{accountId}` / `NEWSSRC_COUNT` counter row (`sourceCount`, seeded
 from the existing refs when absent, plus a `sourceRev` revision that every counter
 write advances). The create transaction increments it only below the cap and the
 delete transaction decrements it, conditioned on the count and revision it read.
-When the refs show room but the counter is at the cap, the create reconciles the
-counter to the strongly consistent ref count, conditioned on the revision read
-before listing, and retries once. Writers deployed before the counter do not
-update it; reconcile repairs that drift. No account-delete path exists, so the
+Reconcile sets the counter to the strongly consistent ref count, conditioned on
+the revision read before listing. A create runs it in both directions: before the
+create transaction when the counter is below the observed ref count (left low by
+a writer that predates the counter), and once more with a retry when the refs show
+room but the counter is at the cap. No account-delete path exists, so the
 row has no deletion counterpart. GET
 returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
 account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
