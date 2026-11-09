@@ -116,6 +116,18 @@ type FlowItem struct {
 	Origin   string `json:"origin,omitempty"`
 	Evidence string `json:"evidence,omitempty"`
 	Need     string `json:"need,omitempty"`
+	// People ran or attended the item: readable event attendee contacts, or
+	// a meeting's member and contact people edges. At most 5.
+	People []FlowPerson `json:"people,omitempty"`
+}
+
+// FlowPerson is one person of a flow item. Role is attendee, participant,
+// speaker or assignee.
+type FlowPerson struct {
+	Kind  string `json:"kind"` // member|contact
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Role  string `json:"role"`
 }
 
 // FlowResult is the opportunity's current state.

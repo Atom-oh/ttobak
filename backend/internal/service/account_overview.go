@@ -53,6 +53,8 @@ type accountOverviewRepo interface {
 	GetAccountContact(ctx context.Context, account, id string) (*model.AccountContact, error)
 	ListPeopleLinksByTarget(ctx context.Context, accountID, toKind, afterSK string, maxRows int) ([]model.PeopleLink, string, error)
 	ListPeopleLinksToTarget(ctx context.Context, accountID, toKind, toID string, maxRows int) ([]model.PeopleLink, bool, error)
+	ListPeopleLinksForMeeting(ctx context.Context, accountID, meetingID string, maxRows int) ([]model.PeopleLink, bool, error)
+	GetUserByID(ctx context.Context, userID string) (*model.User, error)
 }
 
 // accountOverviewNews is implemented by AccountNewsService.
@@ -618,6 +620,9 @@ func (s *AccountOverviewService) Flow(ctx context.Context, userID, accountID str
 		return nil, err
 	}
 	out.Unassigned = unassigned
+	if err := s.flowPeople(ctx, userID, accountID, member, out, reads); err != nil {
+		return nil, err
+	}
 	out.Truncated = truncated || unassignedTruncated || reads.truncated
 	if err := fitFlow(out); err != nil {
 		return nil, err
@@ -903,9 +908,9 @@ func (s *AccountOverviewService) flowUnassigned(ctx context.Context, accountID s
 	return row, truncated, nil
 }
 
-// fitFlow drops trailing items from the longest column until the encoded
-// response fits MaxAccountFlowBytes, then trailing rows; any trim sets
-// Truncated.
+// fitFlow drops item people first, then trailing items from the longest
+// column until the encoded response fits MaxAccountFlowBytes, then trailing
+// rows; any trim sets Truncated.
 func fitFlow(flow *model.AccountFlow) error {
 	for {
 		raw, err := json.Marshal(flow)
@@ -916,6 +921,9 @@ func fitFlow(flow *model.AccountFlow) error {
 			return nil
 		}
 		flow.Truncated = true
+		if trimFlowPeople(flow) {
+			continue
+		}
 		var longest *[]model.FlowItem
 		var history *[]model.ProjectStageChange
 		size := 0

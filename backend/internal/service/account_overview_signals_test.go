@@ -36,9 +36,11 @@ type overviewTestRepo struct {
 	meetingGets int
 	contactGets int
 	// People fixtures.
-	people       []model.PeopleLink
-	accountNames map[string]string
-	noMemberIn   map[string]bool
+	people        []model.PeopleLink
+	accountNames  map[string]string
+	noMemberIn    map[string]bool
+	users         map[string]*model.User
+	peopleQueries int
 }
 
 func newOverviewTestRepo() *overviewTestRepo {
