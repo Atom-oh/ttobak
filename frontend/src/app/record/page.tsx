@@ -535,7 +535,9 @@ function RecordPageInner() {
   // A recording stopped because the Mac slept: its upload was cut off by
   // sleep, so resume it on wake instead of waiting for the user.
   const wakeRetryRef = useRef({ step: postRecording.step, hasPendingAudio: postRecording.hasPendingAudio, retry: postRecording.handleRetry });
-  wakeRetryRef.current = { step: postRecording.step, hasPendingAudio: postRecording.hasPendingAudio, retry: postRecording.handleRetry };
+  useEffect(() => {
+    wakeRetryRef.current = { step: postRecording.step, hasPendingAudio: postRecording.hasPendingAudio, retry: postRecording.handleRetry };
+  }, [postRecording.step, postRecording.hasPendingAudio, postRecording.handleRetry]);
   useEffect(() => {
     if (!isTauri()) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
