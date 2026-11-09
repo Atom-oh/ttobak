@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -9,6 +10,9 @@ import (
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
+
+// testCutoff is after every fake object's modification time.
+var testCutoff = time.Unix(1800000000, 0)
 
 type fakeObjects struct {
 	pages [][]string
@@ -79,7 +83,7 @@ func fixture() (*fakeObjects, *fakeRepo) {
 
 func TestBackfill_DryRunWritesNothing(t *testing.T) {
 	objects, repo := fixture()
-	result, err := backfill(context.Background(), objects, repo, true, 0)
+	result, err := backfill(context.Background(), objects, repo, true, 0, testCutoff)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +98,7 @@ func TestBackfill_DryRunWritesNothing(t *testing.T) {
 
 func TestBackfill_Idempotent(t *testing.T) {
 	objects, repo := fixture()
-	first, err := backfill(context.Background(), objects, repo, false, 0)
+	first, err := backfill(context.Background(), objects, repo, false, 0, testCutoff)
 	if err != nil || first.Written != 2 || first.Existing != 0 {
 		t.Fatalf("first: %+v %v", first, err)
 	}
@@ -102,7 +106,7 @@ func TestBackfill_Idempotent(t *testing.T) {
 	if ref == nil || ref.UploadedBy != "u1" || ref.FileName != "a.pdf" || ref.S3Key != "kb/u1/1700000000000_a.pdf" || ref.CreatedAt.IsZero() {
 		t.Fatalf("ref: %+v", ref)
 	}
-	second, err := backfill(context.Background(), objects, repo, false, 0)
+	second, err := backfill(context.Background(), objects, repo, false, 0, testCutoff)
 	if err != nil || second.Written != 0 || second.Existing != 2 || len(repo.refs) != 2 {
 		t.Fatalf("second: %+v %v", second, err)
 	}
@@ -110,7 +114,7 @@ func TestBackfill_Idempotent(t *testing.T) {
 
 func TestBackfill_Limit(t *testing.T) {
 	objects, repo := fixture()
-	result, err := backfill(context.Background(), objects, repo, false, 2)
+	result, err := backfill(context.Background(), objects, repo, false, 2, testCutoff)
 	if err != nil || result.Scanned != 2 || result.Written != 1 {
 		t.Fatalf("limit: %+v %v", result, err)
 	}
@@ -119,14 +123,44 @@ func TestBackfill_Limit(t *testing.T) {
 // A rerun after a member untagged a file must not re-share it.
 func TestBackfill_RerunSkipsUntaggedRefs(t *testing.T) {
 	objects, repo := fixture()
-	if _, err := backfill(context.Background(), objects, repo, false, 0); err != nil {
+	if _, err := backfill(context.Background(), objects, repo, false, 0, testCutoff); err != nil {
 		t.Fatal(err)
 	}
 	key := "acc/" + model.AccountKBRefID("kb/u1/1700000000000_a.pdf")
 	delete(repo.refs, key)
 	repo.untagged[key] = true
-	result, err := backfill(context.Background(), objects, repo, false, 0)
+	result, err := backfill(context.Background(), objects, repo, false, 0, testCutoff)
 	if err != nil || result.Written != 0 || result.Untagged != 1 || result.Existing != 1 || repo.refs[key] != nil {
 		t.Fatalf("rerun recreated an untagged ref: %+v %v", result, err)
+	}
+}
+
+func TestBackfill_ApplyRequiresCutoff(t *testing.T) {
+	objects, repo := fixture()
+	if _, err := backfill(context.Background(), objects, repo, false, 0, time.Time{}); !errors.Is(err, errCutoffRequired) {
+		t.Fatalf("apply without -before: %v", err)
+	}
+	if repo.puts != 0 || objects.heads != 0 {
+		t.Fatalf("refused run touched storage: puts=%d heads=%d", repo.puts, objects.heads)
+	}
+	// A dry run without a cutoff still counts candidates.
+	result, err := backfill(context.Background(), objects, repo, true, 0, time.Time{})
+	if err != nil || result.Tagged != 2 || repo.puts != 0 {
+		t.Fatalf("dry run without cutoff: %+v %v", result, err)
+	}
+}
+
+// Objects modified at or after the ref rollout may be ref-era uploads whose
+// refs were untagged before tombstones existed; they are never backfilled.
+func TestBackfill_SkipsObjectsAtOrAfterCutoff(t *testing.T) {
+	modified := time.Unix(1700000000, 0)
+	for _, dryRun := range []bool{true, false} {
+		for _, cutoff := range []time.Time{modified, modified.Add(-time.Second)} {
+			objects, repo := fixture()
+			result, err := backfill(context.Background(), objects, repo, dryRun, 0, cutoff)
+			if err != nil || result.AfterCutoff != 2 || result.Tagged != 0 || result.Written != 0 || repo.puts != 0 {
+				t.Fatalf("dryRun=%v cutoff=%v: %+v %v", dryRun, cutoff, result, err)
+			}
+		}
 	}
 }

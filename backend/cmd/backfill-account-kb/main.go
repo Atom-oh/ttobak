@@ -3,11 +3,17 @@
 // upload whose S3 object carries x-amz-meta-account-id but predates refs.
 //
 // It lists kb/ objects, reads each object's metadata and, for a tagged
-// kb/{owner}/{file} object of an existing account, writes the ref only if
-// absent (attribute_not_exists) and never untagged: a member's untag leaves a
-// KBUNTAG# tombstone that every ref create checks, so a rerun neither
-// duplicates refs nor re-shares a file a member untagged. It never deletes or
-// rewrites objects, refs or tombstones.
+// kb/{owner}/{file} object of an existing account last modified before the
+// -before cutoff, writes the ref only if absent (attribute_not_exists) and
+// never untagged (no KBUNTAG# tombstone), so a rerun never duplicates refs.
+// It never deletes or rewrites objects, refs or tombstones.
+//
+// Refs untagged before tombstones existed left no tombstone and cannot be told
+// apart from pre-ref uploads. -before must therefore be the RFC 3339 time the
+// account KB ref feature was first deployed (presign has written refs since
+// then): only objects modified strictly before it are candidates, and later
+// objects are counted as skipped by the cutoff. Apply mode refuses to run
+// without -before; a dry run without it counts every candidate.
 //
 // -dry-run defaults to true. Output is counts only: no keys, file names,
 // user IDs or account IDs are printed.
@@ -17,7 +23,7 @@
 //
 // Usage:
 //
-//	TABLE_NAME=ttobak-main KB_BUCKET_NAME=... go run ./cmd/backfill-account-kb [-dry-run=false] [-limit N]
+//	TABLE_NAME=ttobak-main KB_BUCKET_NAME=... go run ./cmd/backfill-account-kb -before 2026-11-01T00:00:00Z [-dry-run=false] [-limit N]
 package main
 
 import (
@@ -55,14 +61,24 @@ type backfillResult struct {
 	Existing int `json:"existing"`
 	Untagged int `json:"untagged"`
 	Skipped  int `json:"skipped"`
+	// AfterCutoff counts tagged objects modified at or after -before.
+	AfterCutoff int `json:"afterCutoff"`
 }
+
+// errCutoffRequired means apply mode was requested without -before.
+var errCutoffRequired = errors.New("-before is required unless -dry-run")
 
 var uploadPrefix = regexp.MustCompile(`^[0-9]{1,20}_`)
 
 const maxListPages = 100000
 
-func backfill(ctx context.Context, objects backfillObjects, repo backfillRepository, dryRun bool, limit int) (backfillResult, error) {
+// backfill considers only objects modified strictly before cutoff; a zero
+// cutoff is allowed only for a dry run.
+func backfill(ctx context.Context, objects backfillObjects, repo backfillRepository, dryRun bool, limit int, cutoff time.Time) (backfillResult, error) {
 	result := backfillResult{}
+	if cutoff.IsZero() && !dryRun {
+		return result, errCutoffRequired
+	}
 	accounts := map[string]bool{}
 	cursor := ""
 	for pages := 0; ; pages++ {
@@ -107,6 +123,12 @@ func backfill(ctx context.Context, objects backfillObjects, repo backfillReposit
 				result.Skipped++
 				continue
 			}
+			if !cutoff.IsZero() && !modified.Before(cutoff) {
+				// Possibly a ref-era upload whose ref was untagged before
+				// tombstones existed; never re-share it.
+				result.AfterCutoff++
+				continue
+			}
 			result.Tagged++
 			if dryRun {
 				continue
@@ -137,9 +159,23 @@ func backfill(ctx context.Context, objects backfillObjects, repo backfillReposit
 func main() {
 	dryRun := flag.Bool("dry-run", true, "count candidates without writing refs (default true)")
 	limit := flag.Int("limit", 0, "maximum kb/ objects to scan (0 = all)")
+	before := flag.String("before", "", "RFC 3339 account KB ref rollout time; only objects modified before it are backfilled (required unless -dry-run)")
 	flag.Parse()
 	if *limit < 0 {
 		fmt.Fprintln(os.Stderr, "ERROR: -limit must be >= 0")
+		os.Exit(1)
+	}
+	var cutoff time.Time
+	if *before != "" {
+		parsed, err := time.Parse(time.RFC3339, *before)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ERROR: -before must be an RFC 3339 time")
+			os.Exit(1)
+		}
+		cutoff = parsed
+	}
+	if cutoff.IsZero() && !*dryRun {
+		fmt.Fprintln(os.Stderr, "ERROR: -before is required unless -dry-run")
 		os.Exit(1)
 	}
 	tableName, bucket := os.Getenv("TABLE_NAME"), os.Getenv("KB_BUCKET_NAME")
@@ -155,12 +191,12 @@ func main() {
 	}
 	repo := repository.NewDynamoDBRepository(dynamodb.NewFromConfig(cfg), tableName)
 	objects := service.NewKBObjectStore(s3.NewFromConfig(cfg), bucket)
-	result, err := backfill(ctx, objects, repo, *dryRun, *limit)
+	result, err := backfill(ctx, objects, repo, *dryRun, *limit, cutoff)
 	mode := "APPLY"
 	if *dryRun {
 		mode = "DRY RUN"
 	}
-	fmt.Printf("[%s] scanned=%d tagged=%d written=%d existing=%d untagged=%d skipped=%d\n", mode, result.Scanned, result.Tagged, result.Written, result.Existing, result.Untagged, result.Skipped)
+	fmt.Printf("[%s] scanned=%d tagged=%d written=%d existing=%d untagged=%d after_cutoff=%d skipped=%d\n", mode, result.Scanned, result.Tagged, result.Written, result.Existing, result.Untagged, result.AfterCutoff, result.Skipped)
 	if err != nil {
 		// Errors may embed object keys; print only that the run stopped.
 		fmt.Fprintln(os.Stderr, "ERROR: backfill stopped before completion; a rerun skips existing and untagged refs")

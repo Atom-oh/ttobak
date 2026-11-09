@@ -966,8 +966,13 @@ tombstone in one transaction; every ref create requires the tombstone to be
 absent. A new upload gets a new timestamped key and so a new ref ID. QA
 retrieval scope is unchanged by refs. Not connector-delegable.
 Existing tagged uploads are backfilled with `backend/cmd/backfill-account-kb`
-(`-dry-run` defaults to true; prints counts only). A rerun skips existing refs
-and never recreates a ref that was untagged (counted as `untagged`).
+(`-dry-run` defaults to true; prints counts only). Apply mode requires
+`-before`, an RFC 3339 time set to when account KB refs were first deployed;
+only objects modified strictly before it are backfilled and later ones are
+counted as `after_cutoff`. Refs untagged before tombstones existed left no
+`KBUNTAG#` row, so this cutoff is what keeps them from being re-shared. A rerun
+skips existing refs and never recreates a ref untagged since tombstones
+(counted as `untagged`).
 
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
