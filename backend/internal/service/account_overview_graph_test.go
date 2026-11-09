@@ -594,3 +594,21 @@ func TestGraph_PeopleHonorSummaryGuard(t *testing.T) {
 		t.Fatalf("edges %v", edges)
 	}
 }
+
+func TestGraph_AccountTargetReadsBounded(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	repo.accountNames = map[string]string{}
+	for i := 0; i < 3*maxGraphAccountTargets; i++ {
+		id := fmt.Sprint("sub", i)
+		repo.accountNames[id] = "Sub " + id
+		repo.people = append(repo.people, graphPersonEdge("o1:m1", "account", id, "mentions"))
+	}
+	before := repo.memberGets
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads := repo.memberGets - before; !g.Truncated || reads > maxGraphAccountTargets+1 || len(graphPersonEdges(g)) != maxGraphAccountTargets {
+		t.Fatalf("truncated=%v memberGets=%d edges=%d", g.Truncated, reads, len(graphPersonEdges(g)))
+	}
+}
