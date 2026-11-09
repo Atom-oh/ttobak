@@ -19,12 +19,15 @@ type newsDeleteFixture struct {
 	writes int
 }
 
-func (f *newsDeleteFixture) MarkNewsDeleted(_ context.Context, key repository.NewsReadKey, observed map[string]types.AttributeValue, userID string, isAdmin bool) error {
+func (f *newsDeleteFixture) MarkNewsDeleted(_ context.Context, key repository.NewsReadKey, observed map[string]types.AttributeValue, userID string, isAdmin bool, accountID string) error {
 	if f.before != nil {
 		f.before()
 	}
 	config := f.rows[repository.NewsReadKey{SourceID: key.SourceID, SortKey: "CONFIG"}]
-	if !reflect.DeepEqual(f.rows[key], observed) || !isAdmin && newsString(config, "ownerId") != userID {
+	authorized := isAdmin ||
+		accountID != "" && newsString(config, "accountId") == accountID ||
+		accountID == "" && newsString(config, "accountId") == "" && newsString(config, "ownerId") == userID
+	if !reflect.DeepEqual(f.rows[key], observed) || !authorized {
 		return repository.ErrConditionFailed
 	}
 	f.writes++
@@ -114,6 +117,39 @@ func TestNewsDeleteRejectsPublicationOrOwnerRacesBeforeCleanup(t *testing.T) {
 			err := svc.DeleteDocument(context.Background(), "owner", false, keys[0].SourceID, strings.Repeat("a", 16))
 			if !errors.Is(err, repository.ErrConditionFailed) || state.writes != 0 || storage.deletes != 0 {
 				t.Fatalf("racing delete was accepted: %v %d %d", err, state.writes, storage.deletes)
+			}
+		})
+	}
+}
+
+// The versioned-news path pins the account binding: a current member who did
+// not create the source can unpublish; the former creator cannot.
+func TestNewsDeleteAccountSourceUsesCurrentMembership(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		user    string
+		allowed bool
+	}{
+		{name: "current member", user: "teammate", allowed: true},
+		{name: "former creator", user: "owner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, rows, object, keys := newNewsReadFixture(t)
+			state := &newsDeleteFixture{newsReadFixture: rows}
+			storage := &newsDeleteS3Fixture{newsS3Fixture: object, t: t, state: state, key: keys[0]}
+			svc.news, svc.s3, svc.artifactBucketName = state, storage, "assets"
+			rows.rows[keys[1]]["accountId"] = &types.AttributeValueMemberS{Value: "acct-1"}
+			svc.repo.(*mockCrawlerRepo).sources[keys[0].SourceID] = &model.CrawlerSource{OwnerID: "owner", AccountID: "acct-1"}
+			svc.SetAccountMemberReader(&insightsMembers{members: map[string]bool{"acct-1/teammate": true}})
+			err := svc.DeleteDocument(context.Background(), tc.user, false, keys[0].SourceID, strings.Repeat("a", 16))
+			if tc.allowed {
+				if err != nil || state.writes != 1 || storage.deletes != 2 {
+					t.Fatalf("member delete failed: %v %d %d", err, state.writes, storage.deletes)
+				}
+				return
+			}
+			if !errors.Is(err, ErrForbidden) || state.writes != 0 || storage.deletes != 0 {
+				t.Fatalf("former creator delete was accepted: %v %d %d", err, state.writes, storage.deletes)
 			}
 		})
 	}

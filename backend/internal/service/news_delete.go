@@ -11,11 +11,13 @@ import (
 )
 
 type newsPublicationDeleter interface {
-	MarkNewsDeleted(context.Context, repository.NewsReadKey, map[string]types.AttributeValue, string, bool) error
+	MarkNewsDeleted(context.Context, repository.NewsReadKey, map[string]types.AttributeValue, string, bool, string) error
 }
 
 // deletePublishedNews returns handled=false only for a current legacy row.
-func (s *InsightsService) deletePublishedNews(ctx context.Context, userID string, isAdmin bool, sourceID, docHash string) (bool, error) {
+// accountID is the account whose current membership the caller already proved
+// (empty for a per-user source); the CONFIG row must still agree with it.
+func (s *InsightsService) deletePublishedNews(ctx context.Context, userID string, isAdmin bool, accountID, sourceID, docHash string) (bool, error) {
 	keys := newsKeys(sourceID, docHash)
 	rows, err := s.newsRows(ctx, keys)
 	if err != nil {
@@ -25,8 +27,12 @@ func (s *InsightsService) deletePublishedNews(ctx context.Context, userID string
 	if len(row) == 0 || len(config) == 0 {
 		return true, ErrNotFound
 	}
-	if !isAdmin && newsString(config, "ownerId") != userID {
-		return true, ErrForbidden
+	if !isAdmin {
+		configAccount := newsString(config, "accountId")
+		if accountID != "" && configAccount != accountID ||
+			accountID == "" && (configAccount != "" || newsString(config, "ownerId") != userID) {
+			return true, ErrForbidden
+		}
 	}
 	if !isVersionedNews(row) {
 		return false, nil
@@ -47,7 +53,7 @@ func (s *InsightsService) deletePublishedNews(ctx context.Context, userID string
 	if !ok || s.artifactBucketName == "" {
 		return true, fmt.Errorf("news publication deletion is unavailable")
 	}
-	if err := writer.MarkNewsDeleted(ctx, keys[0], row, userID, isAdmin); err != nil {
+	if err := writer.MarkNewsDeleted(ctx, keys[0], row, userID, isAdmin, accountID); err != nil {
 		return true, err
 	}
 	scanCache.clear()
