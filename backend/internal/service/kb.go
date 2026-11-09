@@ -40,6 +40,9 @@ type KBService struct {
 	dataSourceID       string // Bedrock Data Source ID
 	// isMember reports Account membership; nil refuses every Account upload.
 	isMember func(ctx context.Context, accountID, userID string) (bool, error)
+	// putAccountRef creates the canonical account KB ref (absent-only); nil
+	// refuses every Account upload.
+	putAccountRef func(ctx context.Context, ref *model.AccountKBRef) error
 }
 
 // NewKBService creates a new KB service
@@ -72,6 +75,11 @@ func (s *KBService) SetMembershipReader(fn func(ctx context.Context, accountID, 
 	s.isMember = fn
 }
 
+// SetAccountKBRefWriter sets the conditional writer of account KB refs.
+func (s *KBService) SetAccountKBRefWriter(fn func(ctx context.Context, ref *model.AccountKBRef) error) {
+	s.putAccountRef = fn
+}
+
 // GetPresignedURL generates a presigned URL for KB file upload. A non-empty
 // accountID (members only) is signed into the PUT as the account-id object
 // metadata; the client must send the returned headers.
@@ -80,7 +88,7 @@ func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileT
 		if strings.ContainsAny(accountID, "#/") {
 			return nil, ErrKBAccountInvalid
 		}
-		if s.isMember == nil || userID == "" {
+		if s.isMember == nil || s.putAccountRef == nil || userID == "" {
 			return nil, ErrForbidden
 		}
 		ok, err := s.isMember(ctx, accountID, userID)
@@ -114,6 +122,15 @@ func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileT
 	presignedURL, err := s.presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(expiresIn))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+	if accountID != "" {
+		// The ref is written before the URL is returned; listing omits refs
+		// whose object was never uploaded. A failed write fails the presign.
+		ref := &model.AccountKBRef{AccountID: accountID, RefID: model.AccountKBRefID(s3Key), S3Key: s3Key,
+			FileName: safeName, UploadedBy: userID, CreatedAt: time.UnixMilli(timestamp).UTC()}
+		if err := s.putAccountRef(ctx, ref); err != nil {
+			return nil, fmt.Errorf("record account KB ref: %w", err)
+		}
 	}
 
 	return &model.KBUploadResponse{
