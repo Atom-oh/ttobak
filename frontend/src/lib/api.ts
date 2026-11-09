@@ -7,6 +7,7 @@ import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 import type { CreateDictTermInput, DeletedCommonTerm, DictionaryLayer, DictionaryResponse, DictTermItem, DictTermMutationResponse, TermLogEntry, TermPatch } from '@/lib/dictionary';
 import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
+import type { MeetingCategory } from '@/types/meeting';
 import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
 import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
@@ -260,7 +261,7 @@ export const meetingsApi = {
   translate: (id: string, body: { part: 'notes' | 'transcript'; target: 'ko' | 'en'; cursor?: string }, options?: { signal?: AbortSignal }) =>
     api.post<import('@/types/meeting').MeetingTranslationPage>(`/api/meetings/${encodeURIComponent(id)}/translation`, body, options),
 
-  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string }, options?: FetchOptions) =>
+  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string; meetingCategory?: MeetingCategory }, options?: FetchOptions) =>
     api.post<import('@/types/meeting').Meeting & { preparationApplied?: boolean; supportsNotesComparison?: boolean; supportsPrivateAccountLink?: boolean; notesRevision?: string }>('/api/meetings', data, options),
 
   recover: (meetingId: string) =>
@@ -1065,6 +1066,10 @@ export const meetingAccountApi = {
   shareToAccount: (meetingId: string, accountId: string) =>
     api.post<{ accountId: string; sharedWith: number }>(
       `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
+  /** Owner-only; an empty category clears it. 409 when the meeting is account-linked. */
+  setCategory: (meetingId: string, category: MeetingCategory | '') =>
+    api.put<{ meetingCategory: MeetingCategory | '' }>(
+      `/api/meetings/${encodeURIComponent(meetingId)}/category`, { category }),
 };
 
 export interface SessionBootstrapResult {

@@ -14,6 +14,14 @@ type CreateMeetingRequest struct {
 	LinkedMeetingIDs []string `json:"linkedMeetingIds,omitempty"`
 	Notes            string   `json:"notes,omitempty"`
 	AccountID        string   `json:"accountId,omitempty"`
+	// MeetingCategory is an optional internal category; it excludes AccountID.
+	MeetingCategory string `json:"meetingCategory,omitempty"`
+}
+
+// SetMeetingCategoryRequest is the body of PUT /api/meetings/{id}/category.
+// An empty category clears the classification.
+type SetMeetingCategoryRequest struct {
+	Category string `json:"category"`
 }
 
 // MaxLiveSummaryRunes caps the client-settable liveSummary field, both at
@@ -125,6 +133,7 @@ type MeetingListItem struct {
 	SummaryReadRestriction string   `json:"summaryReadRestriction,omitempty"`
 	MeetingID              string   `json:"meetingId"`
 	AccountID              string   `json:"accountId,omitempty"`
+	MeetingCategory        string   `json:"meetingCategory,omitempty"`
 	Title                  string   `json:"title"`
 	Date                   string   `json:"date"`
 	Status                 string   `json:"status"`
@@ -161,6 +170,7 @@ type MeetingDetailResponse struct {
 	MeetingID                  string                `json:"meetingId"`
 	UserID                     string                `json:"userId"`
 	AccountID                  string                `json:"accountId,omitempty"`
+	MeetingCategory            string                `json:"meetingCategory,omitempty"`
 	SharedToAccount            bool                  `json:"sharedToAccount"`
 	ProjectIDs                 []string              `json:"projectIds,omitempty"` // Owner only.
 	Title                      string                `json:"title"`
@@ -603,6 +613,7 @@ func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *
 		SummaryReadRestriction: restriction,
 		MeetingID:              m.MeetingID,
 		AccountID:              m.AccountID,
+		MeetingCategory:        m.MeetingCategory,
 		Title:                  m.Title,
 		Date:                   m.Date.Format(time.RFC3339),
 		Status:                 m.Status,

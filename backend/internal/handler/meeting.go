@@ -91,6 +91,40 @@ func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"accountId": req.AccountID})
 }
 
+// SetCategory handles PUT /api/meetings/{meetingId}/category: the creator
+// sets or clears an internal category. Internal categories exclude an
+// account link, so an account-linked meeting returns 409.
+func (h *MeetingHandler) SetCategory(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+	var req model.SetMeetingCategoryRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil || !model.ValidMeetingCategory(req.Category) {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid meeting category")
+		return
+	}
+	if err := h.meetingService.SetMeetingCategory(ctx, userID, meetingID, req.Category); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid meeting category")
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the meeting creator can set its category")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case errors.Is(err, repository.ErrConditionFailed):
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "An account-linked meeting cannot be internal")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to set meeting category")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"meetingCategory": req.Category})
+}
+
 // ListMeetings handles GET /api/meetings?tab={all|shared}&accountIds={id1,id2}&cursor={lastKey}.
 // `tab` defaults to "all"; "shared" returns meetings shared with the caller.
 // `accountIds` is an OR selection; `accountId` remains a legacy alternative.
@@ -212,7 +246,7 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider,
-		model.MeetingPreparation{Notes: req.Notes, AccountID: req.AccountID})
+		model.MeetingPreparation{Notes: req.Notes, AccountID: req.AccountID, Category: req.MeetingCategory})
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidInput):
@@ -259,6 +293,9 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		"participants":               meeting.Participants,
 		"content":                    meeting.Content,
 		"createdAt":                  meeting.CreatedAt.Format(time.RFC3339),
+	}
+	if meeting.MeetingCategory != "" {
+		response["meetingCategory"] = meeting.MeetingCategory
 	}
 	if (req.Notes != "" || req.AccountID != "") && meeting.Notes == req.Notes && meeting.AccountID == req.AccountID {
 		response["preparationApplied"] = true

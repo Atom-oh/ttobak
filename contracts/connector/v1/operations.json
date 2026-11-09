@@ -75,6 +75,7 @@
     ["api.document.revokePublicShare", "ttobak-api-bridge", ["read", "share"], true, "DELETE", "/api/documents/{docId}/public-share"],
     ["api.vault.exportVault", "ttobak-api-bridge", ["read"], false, "GET", "/api/vault/export"],
     ["api.meeting.linkToAccount", "ttobak-api-bridge", ["read", "share", "write"], true, "POST", "/api/meetings/{meetingId}/account"],
+    ["api.meeting.setCategory", "ttobak-api-bridge", ["read", "write"], false, "PUT", "/api/meetings/{meetingId}/category"],
     ["api.share.shareToAccount", "ttobak-api-bridge", ["read", "share"], true, "POST", "/api/meetings/{meetingId}/share-account"],
     ["api.meeting.listMeetings", "ttobak-api-bridge", ["read", "write"], false, "GET", "/api/meetings"],
     ["api.meeting.createMeeting", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/meetings"],

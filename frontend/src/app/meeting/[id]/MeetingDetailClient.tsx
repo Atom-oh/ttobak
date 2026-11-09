@@ -34,7 +34,7 @@ import AccountSection from '@/components/meeting/AccountSection';
 import { SimCard } from '@/components/meeting/SimCard';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { meetingsApi } from '@/lib/api';
-import type { MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
+import type { MeetingDetail, MeetingCategory, ActionItem, SharedUser } from '@/types/meeting';
 
 /** Map backend attachment response to frontend Attachment type */
 function normalizeAttachments(raw: unknown): import('@/types/meeting').Attachment[] | undefined {
@@ -298,7 +298,7 @@ function MeetingDetailContent() {
   const notesDraftRevisionRef = useRef(0);
   const notesSaveRevisionRef = useRef(0);
   const relationRevisionRef = useRef(0);
-  const relationsRef = useRef<{ accountId?: string; sharedToAccount?: boolean; projectIds?: string[] }>({});
+  const relationsRef = useRef<{ accountId?: string; sharedToAccount?: boolean; projectIds?: string[]; meetingCategory?: MeetingCategory }>({});
   const [notesMessage, setNotesMessage] = useState('');
   const [referenceTab, setReferenceTab] = useState<'qa' | 'ref'>('ref');
   const [questionDraft, setQuestionDraft] = useState<QuestionDraft>();
@@ -382,7 +382,13 @@ function MeetingDetailContent() {
   }, []);
   const onAccountChanged = useCallback((accountId: string, sharedToAccount: boolean) => {
     relationRevisionRef.current++;
-    relationsRef.current = { ...relationsRef.current, accountId, sharedToAccount };
+    // An account link clears any internal category (server-side too).
+    relationsRef.current = { ...relationsRef.current, accountId, sharedToAccount, meetingCategory: undefined };
+    setMeeting((current) => current?.meetingId === meetingId ? { ...current, ...relationsRef.current } : current);
+  }, [meetingId]);
+  const onCategoryChanged = useCallback((meetingCategory: MeetingCategory | undefined) => {
+    relationRevisionRef.current++;
+    relationsRef.current = { ...relationsRef.current, meetingCategory };
     setMeeting((current) => current?.meetingId === meetingId ? { ...current, ...relationsRef.current } : current);
   }, [meetingId]);
   const onProjectsChanged = useCallback((projectIds: string[]) => {
@@ -440,7 +446,7 @@ function MeetingDetailContent() {
         // share list even though the share was persisted server-side.
         detail.sharedWith = detail.shares;
         applyNotesFromDetail(detail, notesEpoch, draftEpoch);
-        if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds };
+        if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds, meetingCategory: detail.meetingCategory };
         else Object.assign(detail, relationsRef.current);
         setMeeting(detail);
       } catch (err) {
@@ -466,7 +472,7 @@ function MeetingDetailContent() {
       detail.attachments = normalizeAttachments((data as any).attachments);
       detail.sharedWith = detail.shares;
       applyNotesFromDetail(detail, notesEpoch, draftEpoch);
-      if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds };
+      if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds, meetingCategory: detail.meetingCategory };
       else Object.assign(detail, relationsRef.current);
       setMeeting(detail);
     } catch (err) {
@@ -511,7 +517,7 @@ function MeetingDetailContent() {
         detail.attachments = normalizeAttachments((data as any).attachments);
         detail.sharedWith = detail.shares;
         applyNotesFromDetail(detail, notesEpoch, draftEpoch);
-        if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds };
+        if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds, meetingCategory: detail.meetingCategory };
         else Object.assign(detail, relationsRef.current);
         setMeeting(detail);
         if (data.status === 'done' || data.status === 'error') {
@@ -788,6 +794,9 @@ function MeetingDetailContent() {
               key={meeting.meetingId}
               canManage={canManageAssociations}
               onChanged={onAccountChanged}
+              isCreator={isCreator}
+              initialCategory={meeting.meetingCategory}
+              onCategoryChanged={onCategoryChanged}
               meetingId={meeting.meetingId}
               initialAccountId={meeting.accountId}
               initialShared={meeting.sharedToAccount}

@@ -1009,6 +1009,16 @@ approval checks and only for a fresh create, so a replay returns its receipt
 even if a referenced contact was deleted since. Event list and get are available bridge reads.
 Events have no TTL and remain until a direct member deletes them.
 
+`PUT /api/meetings/{meetingId}/category` sets the creator's internal meeting
+category: `{"category": "internal_team" | "internal_1on1" | "internal_training" | "internal_other" | ""}`
+(empty clears it). Only the creator may call it (403 for other readers, 404 when
+the meeting is not visible). It is a conditional update on the meeting having no
+`accountId`; an account-linked meeting returns 409 `CONFLICT`. Category and account
+link are mutually exclusive: every write that sets a non-empty `accountId`
+(link, share-account, member publication) also removes `meetingCategory`, and
+`POST /api/meetings` rejects `accountId` together with `meetingCategory` (400).
+List items, detail and create responses expose `meetingCategory` when set.
+
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
 update sets `accountId` and `sharedToAccount: false` together, including when
@@ -1740,6 +1750,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/vault/export` | `vaultHandler.ExportVault` |
 | GET | `/api/vault/reading` | `vaultReadingHandler.Get` |
 | POST | `/api/meetings/{meetingId}/account` | `meetingHandler.LinkToAccount` |
+| PUT | `/api/meetings/{meetingId}/category` | `meetingHandler.SetCategory` |
 | POST | `/api/meetings/{meetingId}/share-account` | `shareHandler.ShareToAccount` |
 | GET | `/api/meetings` | `meetingHandler.ListMeetings` |
 | GET | `/api/meeting-catalog` | `meetingCatalogHandler.Get` |
