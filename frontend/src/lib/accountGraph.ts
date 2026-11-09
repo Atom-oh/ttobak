@@ -6,7 +6,7 @@ const MAX_LABEL_CODE_POINTS = 60;
 export function escapeLabel(label: string): string {
   const cleaned = Array.from(String(label ?? '')
     .replace(/[\r\n]+/g, ' ')
-    .replace(/[<>]/g, '')
+    .replace(/[<>`%{}]/g, '')
     .replace(/"/g, '#quot;')
     .trim());
   // Count code points of the escaped text; never cut inside an entity.

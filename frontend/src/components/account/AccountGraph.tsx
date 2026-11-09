@@ -30,7 +30,9 @@ export function AccountGraph({ accountId, userId, refreshKey }: Props) {
         const graph = await accountApi.graph(accountId, { signal: controller.signal, expectedUserId: userId });
         const code = toMermaid(graph);
         const mermaid = (await import('mermaid')).default;
-        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: theme === 'dark' ? 'dark' : 'default', fontFamily: 'Inter, sans-serif' });
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict',
+          secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'theme', 'themeVariables', 'themeCSS', 'fontFamily'],
+          theme: theme === 'dark' ? 'dark' : 'default', fontFamily: 'Inter, sans-serif' });
         const { svg: rendered } = await mermaid.render(`account-graph-${uniqueId}-${run}`, code);
         if (controller.signal.aborted) return;
         setSource(code);
