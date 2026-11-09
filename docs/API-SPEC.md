@@ -836,7 +836,17 @@ while a cursor remains. Each link shows `origin` (`manual` or `auto`),
 `createdBy`, `createdAt` and, for auto links, `evidence`. DELETE takes the four
 endpoint fields as query parameters, is allowed for any direct member, returns
 204 or 404, and for an `auto` link also writes a `LINKDENY#` row so the
-automatic linker never re-creates that pair.
+automatic linker never re-creates that pair. None of the three routes is
+connector-delegable; the list carries meeting-derived evidence.
+
+Project stages are a fixed list (Prospect, Qualified, Technical Validation,
+Business Validation, Committed, Launched, Closed Lost; matched case-insensitively,
+empty means unset). Create and `PUT /api/projects/{projectId}` reject other values
+as invalid input. A stage change sets `stageChangedAt` and appends an immutable
+`STAGEHIST#` row with the update; legacy values outside the list read as unmapped
+and projects without a change time show an unknown stage age. Project list rows
+carry `stageChangedAt` (when recorded) and `stageMapped`, like the detail
+response. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
 
 `GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
 for **direct** members (membership is read on every call; no query parameters;

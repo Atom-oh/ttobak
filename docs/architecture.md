@@ -381,6 +381,15 @@ within a bounded budget, filters candidates and merges them into the owner's
 personal dictionary; non-owner source edits make a run suggest only. Meeting
 deletion sweeps the meeting's observations and run state.
 
+Account links (ADR-064) connect an account's news, tech documents, events and
+meetings to its projects through `LINK#`/`LINKTO#` rows written in one
+transaction. After an account-shared summary is published, a non-fatal hook asks
+the lightweight model to match the account's recent news to the meeting and stores
+an auto link only with a verbatim evidence quote. Signals, flow, graph and KB
+reads revalidate membership and every endpoint, apply fixed bounds and report
+truncation instead of guessing. Account KB uploads gain a `KBREF#` row at presign;
+QA retrieval scope is unchanged.
+
 The authenticated `/api/meetings/{id}/reading` route bounds JSON before Lambda
 serialization. Notes, summary and action sections use metadata views; transcript
 reads hydrate only the authorized chosen source and eligible segments. Every page

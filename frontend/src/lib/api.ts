@@ -8,6 +8,8 @@ import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, Re
 import type { CreateDictTermInput, DeletedCommonTerm, DictionaryLayer, DictionaryResponse, DictTermItem, DictTermMutationResponse, TermLogEntry, TermPatch } from '@/lib/dictionary';
 import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
 import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
+import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
+import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -940,6 +942,41 @@ export const accountApi = {
     api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
   research: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<{ research: AccountResearchRef[] }>(`/api/accounts/${encodeURIComponent(id)}/research`, options),
+  signals: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<AccountSignals>(`/api/accounts/${encodeURIComponent(id)}/signals`, { ...options, cache: 'no-store' }),
+  flow: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<AccountFlow>(`/api/accounts/${encodeURIComponent(id)}/flow`, { ...options, cache: 'no-store' }),
+  graph: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<AccountGraph>(`/api/accounts/${encodeURIComponent(id)}/graph`, { ...options, cache: 'no-store' }),
+  links: {
+    list: (id: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<{ links: AccountLink[]; nextCursor?: string }>(
+        `/api/accounts/${encodeURIComponent(id)}/links${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, options),
+    create: (id: string, input: AccountLinkInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<AccountLink>(`/api/accounts/${encodeURIComponent(id)}/links`, input, options),
+    remove: (id: string, input: AccountLinkInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/links?${new URLSearchParams({
+        fromKind: input.fromKind, fromId: input.fromId, toKind: input.toKind, toId: input.toId,
+      })}`, options),
+  },
+  kb: (id: string, kind: AccountKBKind, cursor?: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const query = new URLSearchParams({ kind });
+    if (cursor) query.set('cursor', cursor);
+    return api.get<AccountKBPage>(`/api/accounts/${encodeURIComponent(id)}/kb?${query}`, { ...options, cache: 'no-store' });
+  },
+  // The presigned URL is short-lived: never cache it.
+  kbDownload: (id: string, refId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ url: string }>(`/api/accounts/${encodeURIComponent(id)}/kb/${encodeURIComponent(refId)}/download`, { ...options, cache: 'no-store' }),
+  kbUntag: (id: string, refId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/kb/${encodeURIComponent(refId)}`, options),
+  newsSources: {
+    list: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<{ sources: CrawlerSource[] }>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, { ...options, cache: 'no-store' }),
+    create: (id: string, input: CreateAccountNewsSourceInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<CrawlerSource>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, input, options),
+    remove: (id: string, sourceId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, options),
+  },
 };
 
 export const projectApi = {
