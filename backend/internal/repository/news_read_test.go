@@ -178,11 +178,13 @@ func TestNewsReadRejectsOversizedOrForeignSelectionWithoutAWS(t *testing.T) {
 
 // The fake applies the request's own ProjectionExpression to full stored rows,
 // so a field missing from the canonical projection is missing from the result.
-func TestNewsReadProjectionCarriesAccountBinding(t *testing.T) {
+func TestNewsReadProjectionCarriesEnrichmentAndAccountBinding(t *testing.T) {
 	stored := map[string]map[string]any{
 		"DOC#article": {
 			"PK": map[string]string{"S": "CRAWLER#source"}, "SK": map[string]string{"S": "DOC#article"},
 			"type": map[string]string{"S": "news"}, "title": map[string]string{"S": "Title"},
+			"awsRelevance":     map[string]string{"S": "Amazon EKS · AWS Lambda"},
+			"opportunityCount": map[string]string{"N": "2"}, "qualityScore": map[string]string{"N": "0.8"},
 			"unprojected": map[string]string{"S": "hidden"},
 		},
 		"CONFIG": {
@@ -233,8 +235,10 @@ func TestNewsReadProjectionCarriesAccountBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows[doc]["title"] == nil {
-		t.Error("projection drops document fields")
+	for _, name := range []string{"awsRelevance", "opportunityCount", "qualityScore"} {
+		if rows[doc][name] == nil {
+			t.Errorf("projection drops %s", name)
+		}
 	}
 	if rows[config]["accountId"] == nil || rows[config]["ownerId"] == nil {
 		t.Error("projection drops the source's account binding")
