@@ -187,7 +187,7 @@ describe('GatewayStack API telemetry (O2)', () => {
     const [, before] = apiFunction(build(false));
     const { OTEL_EXPORTER_OTLP_ENDPOINT: _endpoint, OTEL_SERVICE_NAME: _name, ...rest } = variables;
     expect(rest).toEqual(before.Properties.Environment.Variables);
-    expect(fn.Properties.MemorySize).toBe(1024);
+    expect(fn.Properties.MemorySize).toBe(256);
   });
 
   test('on: region-scoped ENI grant on the api role precedes the function', () => {
