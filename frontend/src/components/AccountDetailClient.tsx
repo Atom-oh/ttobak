@@ -704,7 +704,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                               <span className="text-sm font-medium text-slate-900 dark:text-text-main">{project.name}</span>
                               {project.stage && (
                                 <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                                  {project.stage}
+                                  {project.stageMapped === false ? '단계 미설정' : project.stage}
                                 </span>
                               )}
                             </div>

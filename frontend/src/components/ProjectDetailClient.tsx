@@ -8,6 +8,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { accountApi, projectApi, settingsApi, ApiError } from '@/lib/api';
+import { PROJECT_STAGES, stageLabel } from '@/lib/projectStages';
 import { isEditableAccount } from '@/lib/accountAccess';
 import type {
   AccountSummary,
@@ -250,6 +251,29 @@ export default function ProjectDetailClient() {
     }
   };
 
+  const [stageSaving, setStageSaving] = useState(false);
+  const handleStageChange = async (nextStage: string) => {
+    if (!isOwner || !project || stageSaving || nextStage === (project.stage ?? '')) return;
+    setStageSaving(true);
+    setError(null);
+    try {
+      await projectApi.update(projectId, {
+        name: project.name,
+        description: project.description,
+        sfdcOpptyId: project.sfdcOpptyId,
+        sfdcUrl: project.sfdcUrl,
+        stage: nextStage,
+      });
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 409
+        ? '다른 곳에서 단계가 변경됐습니다. 최신 상태를 불러왔습니다.'
+        : err instanceof Error ? err.message : 'Failed to update stage');
+    } finally {
+      setStageSaving(false);
+    }
+    await fetchAll();
+  };
+
   const handleUnlinkAccount = async (linkedAccountId: string) => {
     if (!isOwner) return;
     if (!await confirmDialog('Unlink this account? Its members will lose inherited access to this project.')) return;
@@ -307,11 +331,24 @@ export default function ProjectDetailClient() {
                   {project.inheritedFromAccountId && project.accessPermission === 'read' && (
                     <span className="text-xs text-slate-500 dark:text-text-muted">상위 어카운트에서 공유됨 · 읽기 전용</span>
                   )}
-                  {project.stage && (
+                  {isOwner ? (
+                    <select
+                      value={project.stageMapped === false ? '' : project.stage ?? ''}
+                      onChange={(e) => void handleStageChange(e.target.value)}
+                      disabled={stageSaving}
+                      aria-label="단계"
+                      className="text-xs font-semibold px-2 py-1 rounded-full border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-primary disabled:opacity-50"
+                    >
+                      <option value="">{project.stageMapped === false ? stageLabel(project.stage, false) : '단계 미설정'}</option>
+                      {PROJECT_STAGES.map((value) => (
+                        <option key={value} value={value}>{value}</option>
+                      ))}
+                    </select>
+                  ) : project.stage ? (
                     <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">
-                      {project.stage}
+                      {stageLabel(project.stage, project.stageMapped)}
                     </span>
-                  )}
+                  ) : null}
                 </div>
                 {project.sfdcOpptyId && (
                   <p className="text-sm text-slate-500 dark:text-text-muted">{project.sfdcOpptyId}</p>
