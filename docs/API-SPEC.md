@@ -844,8 +844,9 @@ Business Validation, Committed, Launched, Closed Lost; matched case-insensitivel
 empty means unset). Create and `PUT /api/projects/{projectId}` reject other values
 as invalid input. A stage change sets `stageChangedAt` and appends an immutable
 `STAGEHIST#` row with the update; legacy values outside the list read as unmapped
-and projects without a change time show an unknown stage age. The list route does
-not return `stageChangedAt`. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
+and projects without a change time show an unknown stage age. Project list rows
+carry `stageChangedAt` (when recorded) and `stageMapped`, like the detail
+response. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
 
 `GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
 for **direct** members (membership is read on every call; no query parameters;

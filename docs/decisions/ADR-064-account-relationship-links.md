@@ -49,12 +49,16 @@ the relation model chosen here.
 
 ### Read-time revalidation
 
-Link rows are never trusted on their own. Every read re-checks direct membership
-and each endpoint: the project still lists the account, the news source still
-belongs to the account, the tech document is not deleted, the event exists, and
-the meeting is currently published to the account. Failing rows are omitted, so
-a page can be short while a cursor remains. A link never makes an unpublished
-meeting or its existence visible.
+Link rows are never trusted on their own. Every read re-checks direct
+membership, and every link read re-checks that the project still lists the
+account, the news source still belongs to the account and the meeting is
+currently published to the account. Document and event endpoints are re-read
+only where they are rendered: the graph drops deleted tech documents and
+removed events, the flow drops removed events and the KB tech list drops
+deleted documents. The link list (`GET /links`) does not re-read tech
+documents or events, so it can still show such a link until it is unlinked.
+Failing rows are omitted, so a page can be short while a cursor remains. A link
+never makes an unpublished meeting or its existence visible.
 
 ### Bounded reads
 
