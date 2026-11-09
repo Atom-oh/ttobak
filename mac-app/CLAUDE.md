@@ -18,12 +18,8 @@ npm run build:signed
 
 No CI covers this module. Plain `npm run build` does not apply the required audio
 entitlements through the project's signing script; use build:signed, or sign after
-building. `scripts/sign.sh` signs with `TTOBAK_SIGN_IDENTITY`, else a local
-self-signed "TTOBAK Dev" code-signing certificate when the keychain has one, else
-ad-hoc. A certificate keeps TCC grants across rebuilds; an ad-hoc signature changes
-per build and invalidates them, so re-grant and test a short recording. Launch the
-app through Finder or `open`: TCC attributes a binary started from a terminal to
-that terminal. Current codesign --deep is accepted for ad-hoc signing;
+building. Re-grant TCC permissions if a rebuilt ad-hoc signature invalidates them,
+then test a short recording. Current codesign --deep is accepted for ad-hoc signing;
 real Developer ID notarization needs explicit nested signing.
 
 Core Audio capture is macOS-gated. Linux can build Tauri only with its native GUI
@@ -38,9 +34,8 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 
 | Command | Contract |
 |---|---|
-| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?}, can_switch_input (switch_recording_input exists) |
+| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
 | list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
-| switch_recording_input | input_device_uid?; switches the running recording's microphone and returns the new input; refuses a device that cannot run at the WAV rate (ADR-061) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
@@ -60,11 +55,7 @@ Events are native-audio-level (RMS), native-upload-progress (loaded/total), and
 native-pcm-chunk (16kHz mono PCM for captions); native-control-request
 ({requestId, action start|stop, params, origin mcp|detection}) goes to the main window only.
 native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser,
-recording}) also go to the main window only; native-meeting-answered (same shape)
-closes the banner after the floating prompt window (`meeting_prompt.rs`, local
-`meeting-prompt.html`, `meeting_prompt_choose` only) answered it.
-native-mic-muted ({muted, app Zoom|Google Meet, reason muted|meeting_ended}) reports
-the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. Remote event capability grants must
+recording}) also go to the main window only. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the
 ACL for every command called from the remote SPA: each command must be listed in
 `build.rs` COMMANDS and its `allow-*` permission granted in
@@ -107,17 +98,8 @@ ACL for every command called from the remote SPA: each command must be listed in
 - Meeting detection (`meeting.rs` rules, `meeting_detect.rs` probe) only offers a
   recording; confirmed starts use the control dispatch path, never
   `start_recording` directly. Core Audio polls run without recorder locks. The
-  browser tab scripts (per-PID Scripting Bridge, bundle-ID AppleScript fallback)
-  are fixed strings returning only meeting-URL prefixes, with the PID passed as an
-  argument; never log tab URLs or widen the prefix list without updating
-  `classify_meeting_url`.
-- The Zoom/Meet mute gate (`zoom_mute.rs`, `meet_mute.rs`) reads the meeting
-  UI through Accessibility off the IOProc thread and only flips an atomic the
-  IOProc reads; Meet silences only on its muted label and never logs labels or URLs; never call AX or
-  log from the IOProc. A microphone switch holds the backend's resource lock
-  across its Core Audio calls, never the recorder lock.
-- `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
-  within its deadline, recording or not.
+  browser AppleScript is a fixed string returning only meeting-URL prefixes; never
+  log tab URLs or widen the prefix list without updating `classify_meeting_url`.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.
 

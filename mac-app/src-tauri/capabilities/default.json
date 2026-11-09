@@ -26,7 +26,6 @@
     "allow-control-report-state",
     "allow-meeting-detection-get",
     "allow-meeting-detection-set-enabled",
-    "allow-meeting-detection-respond",
-    "allow-meeting-prompt-choose"
+    "allow-meeting-detection-respond"
   ]
 }
