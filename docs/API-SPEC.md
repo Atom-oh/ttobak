@@ -1658,8 +1658,12 @@ The preceding manual-only stage bootstraps
 private `kb/{owner}/...` and authenticated-global `shared/**` originals into
 `manual-kb/v1/` and `shared-kb/v1/` snapshots without altering originals or
 canonical/legacy meeting exports. Private/shared visibility must remain distinct.
-PDF/DOC/DOCX/XLS/XLSX snapshot support differs from attachment extraction;
-PPT/PPTX, empty or over-50-MiB originals have explicit failure states.
+PDF/DOC/DOCX/XLS/XLSX snapshot support differs from attachment extraction.
+PPTX originals are indexed as a worker-generated `document.md` projection
+(slide titles, body text, tables and speaker notes) bound to the original's
+revision; malformed, encrypted or limit-exceeding decks fail with `PPTX_*`
+codes. Legacy `.ppt` fails `LEGACY_PPT_UNSUPPORTED` (convert to `.pptx`);
+empty or over-50-MiB originals have explicit failure states.
 
 Rollout: deploy the mode-aware worker with delivery off; verify restricted
 manual-only IAM/configuration, then enable its schedule; verify snapshots and

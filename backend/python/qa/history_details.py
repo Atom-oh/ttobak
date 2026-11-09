@@ -6,6 +6,7 @@ import re
 
 from source_revision import resource_identity, legacy_meeting_identity, RUN_ID, IDENTIFIER, FILE_EXTENSIONS
 from attachment_context import _location
+from manual_kb import snapshot_document_name
 
 MAX_SAVED_BYTES = 64 * 1024
 MAX_RESTORED_BYTES = 320 * 1024
@@ -85,10 +86,9 @@ def _matches(detail, dep, kb_bucket, assets_bucket):
         rid = hashlib.sha256(key.encode()).hexdigest()
         owner = key.split('/')[1] if not shared else None
         prefix = f's3://{kb_bucket}/shared-kb/v1/' if shared else f's3://{kb_bucket}/manual-kb/v1/{owner}/'
-        suffix = key.rsplit('.', 1)[-1].lower()
         snapshot = prefix + rid + '/' + dep['sourceRevision'] + '/'
         valid_uri = uri == f's3://{kb_bucket}/{key}' or bool(re.fullmatch(
-            re.escape(snapshot) + RUN_ID.pattern + re.escape('/document.' + suffix), uri))
+            re.escape(snapshot) + RUN_ID.pattern + re.escape('/' + snapshot_document_name(key)), uri))
         return (valid_uri and detail.get('resourceKind') == ('sharedKbDocument' if shared else 'manualKbDocument')
                 and detail.get('resourceId') == rid and detail.get('sourceKey') == key
                 and detail.get('sourceBucket') == kb_bucket
