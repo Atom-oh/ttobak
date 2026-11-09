@@ -12,6 +12,7 @@ import { InviteUser } from '@/components/InviteUser';
 import { UserManagement } from '@/components/UserManagement';
 import { ConnectorSettings } from '@/components/ConnectorSettings';
 import { MeetingDetectionSettings } from '@/components/MeetingDetectionSettings';
+import { BulkContactImport } from '@/components/BulkContactImport';
 
 export default function SettingsPage() {
   const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
@@ -78,6 +79,11 @@ export default function SettingsPage() {
               Integrations
             </h3>
             <IntegrationSettings />
+          </section>
+
+          <section id="contact-import" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+            <h3 className="section-header mb-4">연락처 가져오기</h3>
+            {user && <BulkContactImport userId={user.userId} />}
           </section>
 
           {/* User Invitation Section — admin only */}
