@@ -23,7 +23,7 @@ func ValidatePeopleResolveRequested(e model.PeopleResolveRequested) error {
 		return ErrInvalidInput
 	}
 	switch e.Reason {
-	case model.PeopleResolveReasonSpeakers, model.PeopleResolveReasonContacts:
+	case model.PeopleResolveReasonSpeakers, model.PeopleResolveReasonContacts, model.PeopleResolveReasonManual:
 		return nil
 	}
 	return ErrInvalidInput

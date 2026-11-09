@@ -64,7 +64,7 @@ func (f *fakePeopleRepo) ListUnresolvedMentionsByHash(_ context.Context, _, hash
 	}
 	return rows, false, nil
 }
-func (f *fakePeopleRepo) DeleteUnresolvedMention(_ context.Context, _, hash, meetingID, role string) error {
+func (f *fakePeopleRepo) DeleteUnresolvedMention(_ context.Context, _, hash, meetingID, role, _ string) error {
 	f.mentionDeletes = append(f.mentionDeletes, hash+"/"+meetingID+"/"+role)
 	return nil
 }
@@ -243,7 +243,9 @@ func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
 	f.contacts = []model.AccountContact{peopleContact(peopleTestContact, "Park Jiwon", "")}
 	f.meetings["owner:m1"].Participants = []string{"Jiwon", "Jiwon P."}
 	f.meetings["owner:m1"].SpeakerMap = nil
+	var events []model.PeopleResolveRequested
 	s := newPeopleTestService(f)
+	s.SetPeopleResolvePublisher(func(_ context.Context, e model.PeopleResolveRequested) error { events = append(events, e); return nil })
 	if _, err := s.ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{}); err != nil || len(f.replaced[0]) != 2 {
 		t.Fatalf("first run unresolved=%+v err=%v", f.replaced, err)
 	}
@@ -256,6 +258,9 @@ func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
 	}
 	if len(f.puts) != 1 || len(f.stored) != 1 || len(f.existing[0].MentionAliases) != 1 || len(f.mentionDeletes) != 2 {
 		t.Fatalf("puts=%+v existing=%+v deletes=%v", f.puts, f.existing, f.mentionDeletes)
+	}
+	if len(events) != 2 || events[0] != (model.PeopleResolveRequested{AccountID: "acc", OwnerID: "owner", MeetingID: "m1", Reason: model.PeopleResolveReasonManual}) {
+		t.Fatalf("refresh events %+v", events)
 	}
 	f.prior = nil
 	if _, err := s.ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{}); err != nil {

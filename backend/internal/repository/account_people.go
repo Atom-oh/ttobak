@@ -669,14 +669,27 @@ func (r *DynamoDBRepository) ListUnresolvedMentionsByHash(ctx context.Context, a
 	return rows, truncated, err
 }
 
-// DeleteUnresolvedMention removes one unresolved mention row.
-func (r *DynamoDBRepository) DeleteUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error {
+// DeleteUnresolvedMention removes one unresolved mention row. When
+// expectCreatedAt is set the row must still carry it; a rewritten or removed
+// row is ErrConditionFailed.
+func (r *DynamoDBRepository) DeleteUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role, expectCreatedAt string) error {
 	sk := model.MentionSortKey(hash, meetingID, role)
 	if _, m, _, ok := parseMentionSortKey(sk); accountID == "" || !ok || m != meetingID {
 		return fmt.Errorf("invalid unresolved mention")
 	}
-	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName),
-		Key: accountNewsKey(model.PrefixAccount+accountID, sk)}); err != nil {
+	in := &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, sk)}
+	if expectCreatedAt != "" {
+		cond, err := expression.NewBuilder().WithCondition(expression.Name("createdAt").Equal(expression.Value(expectCreatedAt))).Build()
+		if err != nil {
+			return err
+		}
+		in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues = cond.Condition(), cond.Names(), cond.Values()
+	}
+	if _, err := r.client.DeleteItem(ctx, in); err != nil {
+		var failed *types.ConditionalCheckFailedException
+		if errors.As(err, &failed) {
+			return fmt.Errorf("%w: unresolved mention changed", ErrConditionFailed)
+		}
 		return fmt.Errorf("delete unresolved mention: %w", err)
 	}
 	return nil
