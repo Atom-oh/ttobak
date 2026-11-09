@@ -118,9 +118,15 @@ func init() {
 	// registered so a warm instance also lazily retries -- a deploy that
 	// races ahead of FrontendStack publishing the key-pair-id SSM param would
 	// otherwise pin that instance to the S3 fallback until it's recycled.
+	// Provisioned-concurrency init runs before any request, so its warm-ups
+	// finish inside init; after init the environment is frozen until its
+	// first request, which would stall background goroutines past their
+	// deadlines and leave that request to do every lookup itself.
+	provisioned := provisionedInit(os.Getenv)
+	var signerLoaded <-chan struct{}
 	if mediaBaseURL := os.Getenv("MEDIA_BASE_URL"); mediaBaseURL != "" {
 		ssmClient := ssm.NewFromConfig(cfg, func(o *ssm.Options) { o.TracerProvider = awsTracing })
-		uploadService.StartCloudFrontSignerLoad(func(ctx context.Context) (*service.CloudFrontSigner, error) {
+		signerLoaded = uploadService.StartCloudFrontSignerLoad(func(ctx context.Context) (*service.CloudFrontSigner, error) {
 			return service.NewCloudFrontSigner(ctx, ssmClient, mediaBaseURL)
 		}, 3*time.Second)
 	}
@@ -272,7 +278,16 @@ func init() {
 	)
 	// Lambda only, so tests and local runs make no background network calls.
 	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
-		startColdStartWarmups(originVerifier, dynamoClient, cfg.Region)
+		if provisioned {
+			started := time.Now()
+			startColdStartWarmups(originVerifier, dynamoClient, cfg.Region, provisionedWarmupTimeout)()
+			if signerLoaded != nil {
+				<-signerLoaded
+			}
+			log.Printf("provisioned init warm-ups finished in %d ms", time.Since(started).Milliseconds())
+		} else {
+			startColdStartWarmups(originVerifier, dynamoClient, cfg.Region, coldStartPrefetchTimeout)
+		}
 	}
 	r.Use(originVerifier.Middleware) // Block direct API Gateway access (CloudFront-only)
 	r.Use(middleware.CORS)
