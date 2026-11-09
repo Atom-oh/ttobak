@@ -42,7 +42,7 @@ func validPeopleLinkRow(l *model.PeopleLink) bool {
 	return l != nil && l.AccountID != "" && model.ValidatePeopleLinkKey(l.Key()) == nil && validPeopleOrigin(l.Origin) &&
 		l.CreatedAt != "" && l.SourceField != "" && utf8.ValidString(l.Mention) && utf8.ValidString(l.Evidence) &&
 		utf8.RuneCountInString(l.Mention) <= model.MaxPeopleMentionRunes &&
-		utf8.RuneCountInString(l.Evidence) <= model.MaxPeopleEvidenceRunes &&
+		utf8.RuneCountInString(l.Evidence) <= model.MaxPeopleEvidenceRunes && len(l.MentionAliases) == 0 &&
 		len(l.SourceRef) <= model.MaxPeopleSourceRefBytes &&
 		// A self-mention would duplicate the META access check item.
 		!(l.ToKind == model.LinkKindAccount && l.ToID == l.AccountID)
@@ -669,15 +669,60 @@ func (r *DynamoDBRepository) ListUnresolvedMentionsByHash(ctx context.Context, a
 	return rows, truncated, err
 }
 
-// DeleteUnresolvedMention removes one unresolved mention row.
-func (r *DynamoDBRepository) DeleteUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error {
+// DeleteUnresolvedMention removes one unresolved mention row. When
+// expectCreatedAt is set the row must still carry it; a rewritten or removed
+// row is ErrConditionFailed.
+func (r *DynamoDBRepository) DeleteUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role, expectCreatedAt string) error {
 	sk := model.MentionSortKey(hash, meetingID, role)
 	if _, m, _, ok := parseMentionSortKey(sk); accountID == "" || !ok || m != meetingID {
 		return fmt.Errorf("invalid unresolved mention")
 	}
-	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName),
-		Key: accountNewsKey(model.PrefixAccount+accountID, sk)}); err != nil {
+	in := &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, sk)}
+	if expectCreatedAt != "" {
+		cond, err := expression.NewBuilder().WithCondition(expression.Name("createdAt").Equal(expression.Value(expectCreatedAt))).Build()
+		if err != nil {
+			return err
+		}
+		in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues = cond.Condition(), cond.Names(), cond.Values()
+	}
+	if _, err := r.client.DeleteItem(ctx, in); err != nil {
+		var failed *types.ConditionalCheckFailedException
+		if errors.As(err, &failed) {
+			return fmt.Errorf("%w: unresolved mention changed", ErrConditionFailed)
+		}
 		return fmt.Errorf("delete unresolved mention: %w", err)
+	}
+	return nil
+}
+
+// AddPeopleLinkAlias adds a mention hash to a manual edge's forward row (the
+// row the resolver reads). The row must still be manual with room for it and
+// the actor a direct member; failures are ErrConditionFailed
+// (ErrAccountLinkAccess for the member checks).
+func (r *DynamoDBRepository) AddPeopleLinkAlias(ctx context.Context, accountID, actorID string, k model.PeopleLinkKey, hash string) error {
+	if accountID == "" || actorID == "" || model.ValidatePeopleLinkKey(k) != nil || !validMentionHash(hash) {
+		return fmt.Errorf("invalid people link alias")
+	}
+	add := expression.Add(expression.Name("mentionAliases"), expression.Value(&types.AttributeValueMemberSS{Value: []string{hash}}))
+	room := expression.AttributeNotExists(expression.Name("mentionAliases")).
+		Or(expression.Size(expression.Name("mentionAliases")).LessThan(expression.Value(model.MaxPeopleMentionAliases)))
+	fwd, err := expression.NewBuilder().WithUpdate(add).WithCondition(expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("origin").Equal(expression.Value(model.LinkOriginManual))).And(room)).Build()
+	if err != nil {
+		return err
+	}
+	pk := model.PrefixAccount + accountID
+	items := []types.TransactWriteItem{
+		{Update: &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkSortKey(k)), UpdateExpression: fwd.Update(),
+			ConditionExpression: fwd.Condition(), ExpressionAttributeNames: fwd.Names(), ExpressionAttributeValues: fwd.Values()}},
+	}
+	access, err := r.accountLinkAccessChecks(accountID, actorID)
+	if err != nil {
+		return err
+	}
+	items = append(items, access...)
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return classifyAccountLinkDelete(err, len(items), 1)
 	}
 	return nil
 }
@@ -816,11 +861,53 @@ func (r *DynamoDBRepository) PrunePeopleLink(ctx context.Context, accountID stri
 		gone,
 	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
-		var cancelled *types.TransactionCanceledException
-		if errors.As(err, &cancelled) {
-			return fmt.Errorf("%w: prune people link", ErrConditionFailed)
+		return classifyPrune(err, len(items), "prune people link")
+	}
+	return nil
+}
+
+// classifyPrune maps a cancellation made only of condition failures to
+// ErrConditionFailed; conflicts, throttling and other reasons stay retryable
+// transport errors.
+func classifyPrune(err error, n int, op string) error {
+	var cancelled *types.TransactionCanceledException
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == n {
+		failed := false
+		for _, reason := range cancelled.CancellationReasons {
+			switch aws.ToString(reason.Code) {
+			case "None":
+			case "ConditionalCheckFailed":
+				failed = true
+			default:
+				return fmt.Errorf("%s: %w", op, err)
+			}
 		}
-		return fmt.Errorf("prune people link: %w", err)
+		if failed {
+			return fmt.Errorf("%w: %s", ErrConditionFailed, op)
+		}
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// PruneUnresolvedMention deletes one unresolved mention row of a meeting
+// whose row no longer exists, re-checking the absence in the same
+// transaction. A live meeting maps to ErrConditionFailed.
+func (r *DynamoDBRepository) PruneUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error {
+	sk := model.MentionSortKey(hash, meetingID, role)
+	owner, meeting, ok := splitLinkMeetingID(meetingID)
+	if _, m, _, valid := parseMentionSortKey(sk); accountID == "" || !ok || !valid || m != meetingID {
+		return fmt.Errorf("invalid unresolved mention")
+	}
+	gone, err := r.linkConditionCheck(accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), expression.AttributeNotExists(expression.Name("PK")))
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, sk)}},
+		gone,
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return classifyPrune(err, len(items), "prune unresolved mention")
 	}
 	return nil
 }

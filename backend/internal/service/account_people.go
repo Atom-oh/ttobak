@@ -59,7 +59,8 @@ type accountPeopleRepo interface {
 	DeletePeopleLink(context.Context, string, string, model.PeopleLinkKey, string, bool) error
 	GetPeopleLink(context.Context, string, model.PeopleLinkKey) (*model.PeopleLink, error)
 	ListUnresolvedMentionsByHash(context.Context, string, string, int) ([]model.UnresolvedMention, bool, error)
-	DeleteUnresolvedMention(context.Context, string, string, string, string) error
+	DeleteUnresolvedMention(context.Context, string, string, string, string, string) error
+	AddPeopleLinkAlias(context.Context, string, string, model.PeopleLinkKey, string) error
 	PutMentionIgnore(context.Context, string, string, string) error
 }
 
@@ -284,6 +285,10 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 		if l.Origin == model.LinkOriginManual {
 			if n := NormalizePersonName(l.Mention); n != "" {
 				manual[roleHash{l.Role, model.MentionHash(n)}] = true
+			}
+			// Further texts a member bound to the same edge.
+			for _, h := range l.MentionAliases {
+				manual[roleHash{l.Role, h}] = true
 			}
 		}
 	}

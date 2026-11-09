@@ -43,7 +43,7 @@ func txOpKeys(t *testing.T, items []interface{}) []string {
 	var out []string
 	for _, raw := range items {
 		item := raw.(wireMap)
-		for _, op := range []string{"Put", "Delete", "ConditionCheck"} {
+		for _, op := range []string{"Put", "Delete", "Update", "ConditionCheck"} {
 			if _, ok := item[op]; ok {
 				pk, sk := wireKey(item, op)
 				out = append(out, op+" "+pk+" "+sk)
@@ -654,5 +654,75 @@ func TestListPeopleLinks_EmptyPagesWithContinuationAreBounded(t *testing.T) {
 	calls = 0
 	if _, truncated, err := repo.ListPeopleLinksForMeeting(context.Background(), "acc", "o:m1", 1); err != nil || !truncated || calls != 4 {
 		t.Fatalf("meeting: truncated=%v err=%v calls=%d", truncated, err, calls)
+	}
+}
+
+func TestPrune_ClassifiesCancellationReasons(t *testing.T) {
+	k := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1").Key()
+	conflict := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"TransactionConflict"},{"Code":"None"}]}`, nil), nil
+	})
+	if err := conflict.PrunePeopleLink(context.Background(), "acc", k); err == nil || errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("conflict classified as condition: %v", err)
+	}
+
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	h := testMentionHash('a')
+	if err := repo.PruneUnresolvedMention(context.Background(), "acc", h, "owner:m1", "speaker"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Delete ACCOUNT#acc " + model.MentionSortKey(h, "owner:m1", "speaker"), "ConditionCheck USER#owner MEETING#m1"}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items %v", got)
+	}
+	live := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`, nil), nil
+	})
+	if err := live.PruneUnresolvedMention(context.Background(), "acc", h, "owner:m1", "speaker"); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("live meeting: %v", err)
+	}
+}
+
+func TestAddPeopleLinkAlias_UpdatesBothRowsForMember(t *testing.T) {
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	h := testMentionHash('c')
+	k := model.PeopleLinkKey{MeetingID: "o:m", ToKind: "contact", ToID: "c1", Role: "participant"}
+	if err := repo.AddPeopleLinkAlias(context.Background(), "acc", "actor", k, h); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Update ACCOUNT#acc LINK#meeting#o:m#contact#c1#participant",
+		"ConditionCheck ACCOUNT#acc META",
+		"ConditionCheck ACCOUNT#acc MEMBER#actor",
+	}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	fwd := items[0].(map[string]interface{})["Update"].(map[string]interface{})
+	if !strings.Contains(fwd["UpdateExpression"].(string), "ADD") || !strings.Contains(fwd["ConditionExpression"].(string), "size") {
+		t.Fatalf("forward update %#v", fwd)
+	}
+}
+
+func TestDeleteUnresolvedMention_ConditionalOnCreatedAt(t *testing.T) {
+	var cond interface{}
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		if target != "DynamoDB_20120810.DeleteItem" {
+			t.Fatalf("target %s", target)
+		}
+		cond = body["ConditionExpression"]
+		if c, _ := cond.(string); c != "" && !wireValues(body)["value:t1"] {
+			t.Fatalf("condition values %#v", body)
+		}
+		return `{}`
+	})
+	h := testMentionHash('d')
+	if err := repo.DeleteUnresolvedMention(context.Background(), "acc", h, "o:m", "speaker", "t1"); err != nil || cond == nil {
+		t.Fatalf("conditional delete err=%v cond=%v", err, cond)
+	}
+	if err := repo.DeleteUnresolvedMention(context.Background(), "acc", h, "o:m", "speaker", ""); err != nil || cond != nil {
+		t.Fatalf("unconditional delete err=%v cond=%v", err, cond)
 	}
 }

@@ -21,7 +21,28 @@ func (f *fakePeopleRepo) PutPeopleLink(_ context.Context, l *model.PeopleLink, a
 	if err := f.putErr[l.Key()]; err != nil {
 		return err
 	}
+	if prev := f.stored[l.Key()]; prev != nil && prev.Origin == model.LinkOriginManual {
+		return fmt.Errorf("put: %w", repository.ErrAccountLinkExists)
+	}
 	f.puts = append(f.puts, *l)
+	if f.stored != nil {
+		stored := *l
+		f.stored[l.Key()] = &stored
+		f.existing = append(f.existing, stored)
+	}
+	return nil
+}
+func (f *fakePeopleRepo) AddPeopleLinkAlias(_ context.Context, _, _ string, k model.PeopleLinkKey, hash string) error {
+	l := f.stored[k]
+	if l == nil || l.Origin != model.LinkOriginManual {
+		return fmt.Errorf("%w: alias", repository.ErrConditionFailed)
+	}
+	l.MentionAliases = append(l.MentionAliases, hash)
+	for i := range f.existing {
+		if f.existing[i].Key() == k {
+			f.existing[i].MentionAliases = l.MentionAliases
+		}
+	}
 	return nil
 }
 func (f *fakePeopleRepo) DeletePeopleLink(_ context.Context, _, actor string, k model.PeopleLinkKey, origin string, deny bool) error {
@@ -43,7 +64,7 @@ func (f *fakePeopleRepo) ListUnresolvedMentionsByHash(_ context.Context, _, hash
 	}
 	return rows, false, nil
 }
-func (f *fakePeopleRepo) DeleteUnresolvedMention(_ context.Context, _, hash, meetingID, role string) error {
+func (f *fakePeopleRepo) DeleteUnresolvedMention(_ context.Context, _, hash, meetingID, role, _ string) error {
 	f.mentionDeletes = append(f.mentionDeletes, hash+"/"+meetingID+"/"+role)
 	return nil
 }
@@ -78,7 +99,9 @@ func TestBindEdge_SpeakerRequiresKnownLabel(t *testing.T) {
 		t.Fatalf("link=%+v err=%v", link, err)
 	}
 	// An unmapped default label of the meeting is accepted with no mention.
-	if link, err := s.BindEdge(context.Background(), "viewer", "acc", speakerInput("spk_1")); err != nil || link.Mention != "" {
+	unmapped := speakerInput("spk_1")
+	unmapped.ToID = peopleTestContact2
+	if link, err := s.BindEdge(context.Background(), "viewer", "acc", unmapped); err != nil || link.Mention != "" {
 		t.Fatalf("default label link=%+v err=%v", link, err)
 	}
 	if len(f.puts) != 2 {
@@ -210,5 +233,40 @@ func TestRequestContactsResolve_PublishesOneAccountRequest(t *testing.T) {
 	if err := s.RequestContactsResolve(context.Background(), "viewer", "acc"); err != nil || len(got) != 1 ||
 		got[0] != (model.PeopleResolveRequested{AccountID: "acc", Reason: model.PeopleResolveReasonContacts}) {
 		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+// Two texts of one person in the same meeting and role, resolved to the
+// same contact, both stay resolved across resolver runs.
+func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
+	f := peopleWriteRepo()
+	f.contacts = []model.AccountContact{peopleContact(peopleTestContact, "Park Jiwon", "")}
+	f.meetings["owner:m1"].Participants = []string{"Jiwon", "Jiwon P."}
+	f.meetings["owner:m1"].SpeakerMap = nil
+	var events []model.PeopleResolveRequested
+	s := newPeopleTestService(f)
+	s.SetPeopleResolvePublisher(func(_ context.Context, e model.PeopleResolveRequested) error { events = append(events, e); return nil })
+	if _, err := s.ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{}); err != nil || len(f.replaced[0]) != 2 {
+		t.Fatalf("first run unresolved=%+v err=%v", f.replaced, err)
+	}
+	f.mentionRows = f.replaced[0]
+	target := model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact}
+	for _, row := range f.replaced[0] {
+		if res, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", row.Hash, target); err != nil || res.Written != 1 {
+			t.Fatalf("resolve %q: res=%+v err=%v", row.Mention, res, err)
+		}
+	}
+	if len(f.puts) != 1 || len(f.stored) != 1 || len(f.existing[0].MentionAliases) != 1 || len(f.mentionDeletes) != 2 {
+		t.Fatalf("puts=%+v existing=%+v deletes=%v", f.puts, f.existing, f.mentionDeletes)
+	}
+	if len(events) != 2 || events[0] != (model.PeopleResolveRequested{AccountID: "acc", OwnerID: "owner", MeetingID: "m1", Reason: model.PeopleResolveReasonManual}) {
+		t.Fatalf("refresh events %+v", events)
+	}
+	f.prior = nil
+	if _, err := s.ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if last := f.replaced[len(f.replaced)-1]; len(last) != 0 {
+		t.Fatalf("rerun recreated unresolved mentions %+v", last)
 	}
 }

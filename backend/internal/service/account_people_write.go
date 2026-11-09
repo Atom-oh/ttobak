@@ -29,6 +29,24 @@ func (s *AccountPeopleService) SetPeopleResolvePublisher(fn func(context.Context
 	s.publish = fn
 }
 
+// maxManualRefreshMeetings bounds the meeting-scoped refresh requests after
+// one manual write; more meetings get one account-wide request instead.
+const maxManualRefreshMeetings = 5
+
+// refreshAfterManual asks the resolver to rerun the meetings a manual write
+// changed, so auto edges it overrides are removed (best-effort).
+func (s *AccountPeopleService) refreshAfterManual(ctx context.Context, accountID string, meetingIDs []string) {
+	if len(meetingIDs) > maxManualRefreshMeetings {
+		publishPeopleResolve(ctx, s.publish, model.PeopleResolveRequested{AccountID: accountID, Reason: model.PeopleResolveReasonManual})
+		return
+	}
+	for _, id := range meetingIDs {
+		owner, meeting, _ := splitMeetingLinkID(id)
+		publishPeopleResolve(ctx, s.publish, model.PeopleResolveRequested{AccountID: accountID, OwnerID: owner, MeetingID: meeting,
+			Reason: model.PeopleResolveReasonManual})
+	}
+}
+
 // manualSourceField is the provenance field of a manual edge of each role.
 var manualSourceField = map[string]string{
 	model.PeopleRoleParticipant: model.PeopleSourceParticipants,
@@ -89,6 +107,7 @@ func (s *AccountPeopleService) BindEdge(ctx context.Context, userID, accountID s
 	for attempt := 0; attempt < peopleWriteAttempts; attempt++ {
 		err := s.repo.PutPeopleLink(ctx, link, userID)
 		if err == nil {
+			s.refreshAfterManual(ctx, accountID, []string{link.MeetingID})
 			return link, nil
 		}
 		if !errors.Is(err, repository.ErrAccountLinkExists) {
@@ -184,6 +203,7 @@ func (s *AccountPeopleService) ResolveMentionGroup(ctx context.Context, userID, 
 		return nil, err
 	}
 	out := &model.ResolveMentionResult{Remaining: more}
+	var written []string
 	createdAt := s.now().UTC().Format(time.RFC3339)
 	for _, r := range rows {
 		link := &model.PeopleLink{AccountID: accountID, MeetingID: r.MeetingID, ToKind: in.Kind, ToID: in.ID, Role: r.Role,
@@ -193,22 +213,40 @@ func (s *AccountPeopleService) ResolveMentionGroup(ctx context.Context, userID, 
 			continue
 		}
 		err := s.repo.PutPeopleLink(ctx, link, userID)
+		if errors.Is(err, repository.ErrAccountLinkExists) {
+			// Bound by hand already (another text?): alias this text to it.
+			err = s.repo.AddPeopleLinkAlias(ctx, accountID, userID, link.Key(), hash)
+			if errors.Is(err, repository.ErrConditionFailed) && !errors.Is(err, repository.ErrAccountLinkAccess) {
+				// Edge gone or full: keep the row listed.
+				continue
+			}
+		}
 		switch {
 		case err == nil:
 			out.Written++
-		case errors.Is(err, repository.ErrAccountLinkExists):
-			// Already bound by hand; the mention row is still stale.
+			written = append(written, r.MeetingID)
 		case errors.Is(err, repository.ErrAccountLinkTarget):
 			// The meeting was unpublished since the visibility read.
 			continue
 		default:
 			return nil, mapPeopleWriteError(err)
 		}
-		if err := s.repo.DeleteUnresolvedMention(ctx, accountID, hash, r.MeetingID, r.Role); err != nil {
+		if err := s.deleteMentionRow(ctx, accountID, r); err != nil {
 			return nil, err
 		}
 	}
+	s.refreshAfterManual(ctx, accountID, written)
 	return out, nil
+}
+
+// deleteMentionRow removes a mention row only if a resolver run has not
+// rewritten it since it was read.
+func (s *AccountPeopleService) deleteMentionRow(ctx context.Context, accountID string, r model.UnresolvedMention) error {
+	err := s.repo.DeleteUnresolvedMention(ctx, accountID, r.Hash, r.MeetingID, r.Role, r.CreatedAt)
+	if errors.Is(err, repository.ErrConditionFailed) {
+		return nil
+	}
+	return err
 }
 
 // IgnoreMentionGroup marks a mention as "not a person" account-wide and
@@ -229,7 +267,7 @@ func (s *AccountPeopleService) IgnoreMentionGroup(ctx context.Context, userID, a
 		return err
 	}
 	for _, r := range rows {
-		if err := s.repo.DeleteUnresolvedMention(ctx, accountID, hash, r.MeetingID, r.Role); err != nil {
+		if err := s.deleteMentionRow(ctx, accountID, r); err != nil {
 			return err
 		}
 	}

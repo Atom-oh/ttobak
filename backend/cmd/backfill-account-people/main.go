@@ -14,8 +14,9 @@
 // unpublished but existing meeting keeps all of its rows.
 //
 // -dry-run defaults to true and writes nothing, not even run leases. Apply
-// mode refuses to run without -before. Output is JSON counts only: no IDs,
-// names, mention text or contact fields.
+// mode refuses to run without -before. A failed meeting or row is counted in
+// errors and the run continues; the exit status is then non-zero. Output is
+// JSON counts only: no IDs, names, mention text or contact fields.
 //
 // Requires TABLE_NAME (no fallback), KMS_KEY_ID for the sealed contacts, and
 // standard AWS credentials/region.
@@ -46,7 +47,7 @@ import (
 )
 
 type peopleResolver interface {
-	ResolveMeeting(ctx context.Context, ownerID, meetingID string, opt service.PeopleRunOptions) (service.PeopleRunResult, error)
+	ResolveMeetingForAccount(ctx context.Context, accountID, ownerID, meetingID string, opt service.PeopleRunOptions) (service.PeopleRunResult, error)
 }
 
 type backfillRepository interface {
@@ -58,7 +59,7 @@ type backfillRepository interface {
 	ListPeopleLinksForMeeting(ctx context.Context, accountID, meetingID string, maxRows int) ([]model.PeopleLink, bool, error)
 	ListUnresolvedMentions(ctx context.Context, accountID, afterSK string, maxRows int) ([]model.UnresolvedMention, string, error)
 	PrunePeopleLink(ctx context.Context, accountID string, k model.PeopleLinkKey) error
-	DeleteUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error
+	PruneUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error
 }
 
 type backfillOptions struct {
@@ -79,6 +80,8 @@ type backfillResult struct {
 	Skipped    int `json:"skipped"`
 	Busy       int `json:"busy"`
 	Pruned     int `json:"pruned"`
+	// Errors counts meetings or rows whose write failed; the run continues.
+	Errors int `json:"errors"`
 }
 
 var (
@@ -162,13 +165,16 @@ func backfillAccount(ctx context.Context, repo backfillRepository, people people
 				continue
 			}
 			done++
-			res, err := people.ResolveMeeting(ctx, ref.OwnerUserID, ref.MeetingID, service.PeopleRunOptions{DryRun: o.DryRun})
+			// The selected account binds the run: a meeting moved elsewhere
+			// is skipped, never resolved for its new account.
+			res, err := people.ResolveMeetingForAccount(ctx, accountID, ref.OwnerUserID, ref.MeetingID, service.PeopleRunOptions{DryRun: o.DryRun})
 			if errors.Is(err, service.ErrInvalidInput) {
 				result.Skipped++
 				continue
 			}
 			if err != nil {
-				return err
+				result.Errors++
+				continue
 			}
 			result.Meetings += res.Meetings
 			result.Written += res.Written
@@ -240,32 +246,42 @@ func prune(ctx context.Context, repo backfillRepository, o backfillOptions, acco
 		}
 		meeting, err := repo.GetMeeting(ctx, owner, meetingID)
 		if err != nil {
-			return err
+			result.Errors++
+			continue
 		}
 		if meeting != nil {
 			continue
 		}
 		links, _, err := repo.ListPeopleLinksForMeeting(ctx, accountID, linkID, 300)
 		if err != nil {
-			return err
+			result.Errors++
+			continue
+		}
+		// A dry run counts candidates; apply mode counts only removed rows.
+		// A condition failure means the meeting row exists again: kept.
+		count := func(err error) {
+			switch {
+			case err == nil:
+				result.Pruned++
+			case errors.Is(err, repository.ErrConditionFailed):
+				result.Skipped++
+			default:
+				result.Errors++
+			}
 		}
 		for _, l := range links {
-			result.Pruned++
 			if o.DryRun {
+				result.Pruned++
 				continue
 			}
-			if err := repo.PrunePeopleLink(ctx, accountID, l.Key()); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
-				return err
-			}
+			count(repo.PrunePeopleLink(ctx, accountID, l.Key()))
 		}
 		for _, m := range mentions[linkID] {
-			result.Pruned++
 			if o.DryRun {
+				result.Pruned++
 				continue
 			}
-			if err := repo.DeleteUnresolvedMention(ctx, accountID, m.Hash, m.MeetingID, m.Role); err != nil {
-				return err
-			}
+			count(repo.PruneUnresolvedMention(ctx, accountID, m.Hash, m.MeetingID, m.Role))
 		}
 	}
 	return nil
@@ -300,9 +316,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		os.Exit(1)
 	}
-	tableName := os.Getenv("TABLE_NAME")
-	if tableName == "" {
-		fmt.Fprintln(os.Stderr, "ERROR: TABLE_NAME is required")
+	tableName, keyID := os.Getenv("TABLE_NAME"), os.Getenv("KMS_KEY_ID")
+	if tableName == "" || keyID == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: TABLE_NAME and KMS_KEY_ID are required")
 		os.Exit(1)
 	}
 	ctx := context.Background()
@@ -312,15 +328,21 @@ func main() {
 		os.Exit(1)
 	}
 	repo := repository.NewDynamoDBRepository(dynamodb.NewFromConfig(cfg), tableName).MetadataView()
-	if sealer := sealing.NewEnvelope(kms.NewFromConfig(cfg), os.Getenv("KMS_KEY_ID")); sealer != nil {
-		repo.SetRecordSealer(sealer)
+	sealer := sealing.NewEnvelope(kms.NewFromConfig(cfg), keyID)
+	if sealer == nil {
+		fmt.Fprintln(os.Stderr, "ERROR: contact sealer unavailable")
+		os.Exit(1)
 	}
+	repo.SetRecordSealer(sealer)
 	result, err := backfill(ctx, repo, service.NewAccountPeopleService(repo), o)
 	mode := "apply"
 	if o.DryRun {
 		mode = "dry-run"
 	}
 	writeResult(os.Stdout, mode, result)
+	if err == nil && result.Errors > 0 {
+		err = errors.New("some writes failed")
+	}
 	if err != nil {
 		// Error codes only: messages may carry IDs from wrapped SDK errors.
 		fmt.Fprintln(os.Stderr, "ERROR: backfill failed")
