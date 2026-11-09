@@ -10,11 +10,11 @@
 //! second call has shown a toggle (in the same read or later), no page is
 //! evidence the user left. Only the
 //! web area of a `meet.google.com` page in a browser instance using audio is
-//! read. An unreadable page (e.g. another tab in front) keeps the last state. Once a
-//! recording has followed Meet, leaving the call keeps the microphone silent,
-//! as with Zoom; a recording that never saw a toggle records it as before.
-//! Like detection, the left page must be read for 3 s before the microphone
-//! is silenced. Rules are pure and unit tested.
+//! read. An unreadable page (e.g. another tab in front) keeps the last state.
+//! Leaving the followed call, read for 3 s, reopens the microphone, as with
+//! Zoom; a wrong verdict then records the user rather than dropping their
+//! voice. A recording that never saw a toggle records the microphone. Rules
+//! are pure and unit tested.
 
 use crate::zoom_mute::{MicState, Silence};
 
@@ -172,7 +172,7 @@ impl Call {
 }
 
 /// Turns Meet states into the microphone gate. The followed call's left page
-/// must hold for `MEET_LEFT_CONFIRM_MS`, as detection does.
+/// must hold for `MEET_LEFT_CONFIRM_MS` before the microphone reopens.
 #[derive(Debug, Default)]
 pub struct Hold {
     silence: Silence,
@@ -195,7 +195,8 @@ impl Hold {
             }
             MicState::NoMeeting if self.followed => {
                 if self.left.observe(now_ms, true) {
-                    self.silence = Silence::MeetingEnded;
+                    self.silence = Silence::Open;
+                    self.followed = false;
                 }
             }
             // An unreadable read between two left reads restarts the window.
@@ -431,17 +432,18 @@ mod tests {
     }
 
     #[test]
-    fn two_calls_in_one_read_never_end_the_meeting() {
+    fn two_calls_in_one_read_keep_a_retained_mute() {
         use crate::meeting::MEET_LEFT_CONFIRM_MS;
 
+        // Muted in both calls; A's departure page must not stop following B.
         let mut h = Hold::default();
         let mut c = Call::default();
-        let both = [page("a", MicState::Unmuted), page("b", MicState::Unmuted)];
-        assert_eq!(h.observe(0, c.judge(both)), Silence::Open);
+        let both = [page("a", MicState::Muted), page("b", MicState::Muted)];
+        assert_eq!(h.observe(0, c.judge(both)), Silence::Muted);
         for t in [0, MEET_LEFT_CONFIRM_MS, 2 * MEET_LEFT_CONFIRM_MS] {
             assert_eq!(
                 h.observe(t + 300, c.judge([page("a", MicState::NoMeeting)])),
-                Silence::Open
+                Silence::Muted
             );
         }
     }
@@ -495,19 +497,19 @@ mod tests {
     }
 
     #[test]
-    fn leaving_a_followed_call_keeps_the_microphone_silent() {
+    fn leaving_a_followed_call_reopens_the_microphone() {
         use crate::meeting::MEET_LEFT_CONFIRM_MS;
 
         let mut h = Hold::default();
-        assert_eq!(h.observe(0, MicState::Unmuted), Silence::Open);
-        assert_eq!(h.observe(0, MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(0, MicState::Muted), Silence::Muted);
+        assert_eq!(h.observe(0, MicState::NoMeeting), Silence::Muted);
         assert_eq!(
             h.observe(MEET_LEFT_CONFIRM_MS - 1, MicState::NoMeeting),
-            Silence::Open
+            Silence::Muted
         );
         assert_eq!(
             h.observe(MEET_LEFT_CONFIRM_MS, MicState::NoMeeting),
-            Silence::MeetingEnded
+            Silence::Open
         );
         // Rejoining restores following.
         assert_eq!(
@@ -523,10 +525,10 @@ mod tests {
     #[test]
     fn a_reloading_page_does_not_end_the_call() {
         let mut h = Hold::default();
-        assert_eq!(h.observe(0, MicState::Unmuted), Silence::Open);
-        assert_eq!(h.observe(100, MicState::NoMeeting), Silence::Open);
-        assert_eq!(h.observe(1_000, MicState::Unknown), Silence::Open);
-        assert_eq!(h.observe(3_200, MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(0, MicState::Muted), Silence::Muted);
+        assert_eq!(h.observe(100, MicState::NoMeeting), Silence::Muted);
+        assert_eq!(h.observe(1_000, MicState::Unknown), Silence::Muted);
+        assert_eq!(h.observe(3_200, MicState::NoMeeting), Silence::Muted);
         assert_eq!(h.observe(3_500, MicState::Unmuted), Silence::Open);
     }
 
