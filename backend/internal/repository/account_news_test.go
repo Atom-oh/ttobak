@@ -282,3 +282,67 @@ func TestUserSourceWritesRefuseAccountOwnedSource(t *testing.T) {
 		}
 	}
 }
+
+// Reconcile reads the counter before the refs and writes the ref count by
+// compare-and-set on the value read; a counter changed in between is re-read.
+// An absent counter is never created.
+func TestReconcileAccountNewsSourceCount(t *testing.T) {
+	refPage := `{"Items":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"NEWSSRC#acct_acc_00000001"}},{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"NEWSSRC#acct_acc_00000002"}}]}`
+	for _, tc := range []struct {
+		name     string
+		counters []string // GetItem responses in order
+		failCAS  int      // number of leading UpdateItem calls that fail the condition
+		want     int
+		writes   int
+		wantErr  bool
+	}{
+		{name: "drifted", counters: []string{`{"Item":{"sourceCount":{"N":"3"}}}`}, want: 2, writes: 1},
+		{name: "in sync", counters: []string{`{"Item":{"sourceCount":{"N":"2"}}}`}, want: 2},
+		{name: "absent", counters: []string{`{}`}, want: 2},
+		{name: "changed then drifted", counters: []string{`{"Item":{"sourceCount":{"N":"3"}}}`, `{"Item":{"sourceCount":{"N":"4"}}}`}, failCAS: 1, want: 2, writes: 2},
+		{name: "keeps changing", counters: []string{`{"Item":{"sourceCount":{"N":"3"}}}`}, failCAS: 99, writes: 3, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reads, writes, lastOp := 0, 0, ""
+			repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+				target := req.Header.Get("X-Amz-Target")
+				var body map[string]interface{}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				switch {
+				case strings.HasSuffix(target, ".GetItem"):
+					if body["ConsistentRead"] != true {
+						t.Fatal("counter read must be strongly consistent")
+					}
+					lastOp = "read"
+					item := tc.counters[min(reads, len(tc.counters)-1)]
+					reads++
+					return summaryHTTPResponse(200, item, nil), nil
+				case strings.HasSuffix(target, ".Query"):
+					if lastOp != "read" {
+						t.Fatal("refs must be listed after the counter read")
+					}
+					lastOp = "list"
+					return summaryHTTPResponse(200, refPage, nil), nil
+				case strings.HasSuffix(target, ".UpdateItem"):
+					writes++
+					observed := tc.counters[min(reads-1, len(tc.counters)-1)]
+					value := observed[strings.Index(observed, `{"N"`) : strings.Index(observed, `}`)+1]
+					requireAll(t, "reconcile condition", resolved(body, "ConditionExpression"), "sourceCount = "+value)
+					requireAll(t, "reconcile update", resolved(body, "UpdateExpression"), `sourceCount = {"N":"2"}`)
+					if writes <= tc.failCAS {
+						return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"changed"}`, nil), nil
+					}
+					return summaryHTTPResponse(200, `{}`, nil), nil
+				}
+				t.Fatalf("unexpected %s", target)
+				return nil, nil
+			})
+			got, err := repo.ReconcileAccountNewsSourceCount(context.Background(), "acc")
+			if tc.wantErr != (err != nil) || (!tc.wantErr && got != tc.want) || writes != tc.writes {
+				t.Fatalf("got %d err=%v writes=%d", got, err, writes)
+			}
+		})
+	}
+}

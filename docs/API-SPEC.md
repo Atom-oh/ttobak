@@ -806,7 +806,9 @@ operator-curated, unknown or unsubscribed sources return 400. Default queries
 are the account name plus its aliases; at most 10 sources per account, enforced
 atomically by an `ACCOUNT#{accountId}` / `NEWSSRC_COUNT` counter row (`sourceCount`,
 seeded from the existing refs when absent) that the create transaction increments
-only below the cap and the delete transaction decrements. GET
+only below the cap and the delete transaction decrements. When the refs show room
+but the counter is at the cap, the create reconciles the counter to the strongly
+consistent ref count by compare-and-set and retries once. GET
 returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
 account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 `disabled` (so scheduling stops) in one transaction; returns 204, or 404 for an
@@ -818,8 +820,9 @@ document is allowed only for admins or a current direct member of that account
 (read per request); the stored source creator grants nothing. A non-admin
 delete is fenced before any object is removed: versioned news in the unpublish
 transaction, legacy documents by a claim transaction that checks the CONFIG
-`accountId`, the account and the caller's direct `MEMBER#` row; a membership
-revoked in between returns 403.
+`accountId`, the account and the caller's direct `MEMBER#` row. Membership is
+fenced at that claim (or unpublish) commit: a membership revoked before it
+returns 403; the object and metadata removal that follows is not re-fenced.
 
 `GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
 for **direct** members. Allowed pairs are news→project, tech→project,

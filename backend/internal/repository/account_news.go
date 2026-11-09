@@ -58,8 +58,10 @@ func accountNewsKey(pk, sk string) map[string]types.AttributeValue {
 // it being below limit, so concurrent creates cannot exceed the cap. Accounts
 // whose sources predate the counter have no counter row: observedCount (the
 // caller's strongly consistent ref count) seeds it via if_not_exists. A seed can
-// only be stale high (a concurrent delete), which errs toward the cap; a
-// concurrent first create seeds the row first and this one then increments it.
+// only be stale high (a concurrent delete); the service repairs such drift with
+// ReconcileAccountNewsSourceCount when the refs show room but this transaction
+// reports ErrAccountNewsSourceLimit. A concurrent first create seeds the row
+// first and this one then increments it.
 func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error {
 	if src == nil || ref == nil || src.SourceID == "" || src.AccountID == "" ||
 		ref.AccountID != src.AccountID || ref.SourceID != src.SourceID || ref.CreatedBy == "" ||
@@ -232,6 +234,48 @@ func (r *DynamoDBRepository) readAccountNewsSourceCount(ctx context.Context, acc
 		return 0, false, fmt.Errorf("decode account news source count: %w", err)
 	}
 	return count, true, nil
+}
+
+// ReconcileAccountNewsSourceCount sets an existing source counter to the
+// canonical NEWSSRC# ref count and returns that count. The counter is read
+// before the refs are listed and written by compare-and-set on the value read,
+// so any create or delete that commits in between (both change an existing
+// counter) makes the write fail and the reconcile retry. An absent counter is
+// left absent: the next create seeds it from the refs.
+func (r *DynamoDBRepository) ReconcileAccountNewsSourceCount(ctx context.Context, accountID string) (int, error) {
+	for attempt := 0; attempt < accountNewsCounterAttempts; attempt++ {
+		count, exists, err := r.readAccountNewsSourceCount(ctx, accountID)
+		if err != nil {
+			return 0, err
+		}
+		refs, err := r.ListAccountNewsSources(ctx, accountID)
+		if err != nil {
+			return 0, err
+		}
+		if !exists || count == len(refs) {
+			return len(refs), nil
+		}
+		name := expression.Name(accountNewsCountAttr)
+		expr, err := expression.NewBuilder().
+			WithCondition(name.Equal(expression.Value(count))).
+			WithUpdate(expression.Set(name, expression.Value(len(refs)))).Build()
+		if err != nil {
+			return 0, err
+		}
+		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, model.SKAccountNewsSourceCount),
+			UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+		})
+		if err == nil {
+			return len(refs), nil
+		}
+		var changed *types.ConditionalCheckFailedException
+		if !errors.As(err, &changed) {
+			return 0, fmt.Errorf("reconcile account news source count: %w", err)
+		}
+	}
+	return 0, fmt.Errorf("reconcile account news source count: counter kept changing")
 }
 
 // accountNewsCounterDelete builds the delete transaction's counter item: a
