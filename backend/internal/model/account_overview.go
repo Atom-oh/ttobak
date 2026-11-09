@@ -123,3 +123,51 @@ type FlowResult struct {
 	State string        `json:"state"` // FlowState*
 	Stall []StallReason `json:"stall"`
 }
+
+// Graph node kinds.
+const (
+	GraphNodeAccount = "account"
+	GraphNodeProject = "project"
+	GraphNodeMeeting = "meeting"
+	GraphNodeEvent   = "event"
+	GraphNodeNews    = "news"
+	GraphNodeTech    = "tech"
+	GraphNodeMember  = "member"
+	GraphNodeContact = "contact"
+)
+
+// Graph edge kinds.
+const (
+	GraphEdgeProjectAccount = "project_account"
+	GraphEdgeMeetingProject = "meeting_project"
+	GraphEdgeMeetingAccount = "meeting_account"
+	GraphEdgeLink           = "link"
+	GraphEdgeAttends        = "attends"
+	GraphEdgeMemberOf       = "member_of"
+)
+
+// AccountGraph is the account's relationship graph. Every node and edge comes
+// from a revalidated stored relation; nothing is inferred or written back.
+type AccountGraph struct {
+	Nodes []GraphNode `json:"nodes"` // at most 150
+	Edges []GraphEdge `json:"edges"` // at most 300
+	// Truncated reports that a node, edge, read or size bound was hit.
+	Truncated bool `json:"truncated"`
+}
+
+// GraphNode ID is {kind}:{id}, where id is the link-form ID of the item
+// (meetings {ownerUserId}:{meetingId}, news and tech {sourceId}:{docHash}).
+// Label is at most 60 code points.
+type GraphNode struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"` // GraphNode*
+	Label string `json:"label"`
+}
+
+// GraphEdge joins two node IDs. Origin is set only for link edges.
+type GraphEdge struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Kind   string `json:"kind"` // GraphEdge*
+	Origin string `json:"origin,omitempty"`
+}
