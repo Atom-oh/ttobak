@@ -367,9 +367,16 @@ func (s *InsightsService) currentNewsList(ctx context.Context, docs []model.Craw
 	if len(keys) == 0 {
 		return docs, nil
 	}
-	rows, err := s.newsRows(ctx, keys)
-	if err != nil {
-		return nil, err
+	rows := make(map[repository.NewsReadKey]map[string]types.AttributeValue)
+	const maxKeysPerRead = 1000
+	for start := 0; start < len(keys); start += maxKeysPerRead {
+		batch, err := s.newsRows(ctx, keys[start:min(start+maxKeysPerRead, len(keys))])
+		if err != nil {
+			return nil, err
+		}
+		for key, row := range batch {
+			rows[key] = row
+		}
 	}
 	result := make([]model.CrawledDocument, 0, len(docs))
 	for _, doc := range docs {

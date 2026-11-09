@@ -28,6 +28,9 @@ type newsReadFixture struct {
 
 func (f *newsReadFixture) ReadNewsItems(_ context.Context, keys []repository.NewsReadKey) (map[repository.NewsReadKey]map[string]types.AttributeValue, error) {
 	f.reads++
+	if len(keys) > 1000 {
+		return nil, errors.New("news read selection exceeds limit")
+	}
 	if f.fail != nil {
 		return nil, f.fail
 	}
@@ -216,6 +219,39 @@ func TestNewsListSkipsUnrenderableMetadataButPreservesReadFailures(t *testing.T)
 		if _, err := svc.currentNewsList(context.Background(), docs); !errors.Is(err, fixture.fail) {
 			t.Fatal("storage read failure was hidden")
 		}
+	}
+}
+
+func TestNewsListBatchesCanonicalReadsWithoutPartialResults(t *testing.T) {
+	for _, failLater := range []bool{false, true} {
+		name := "complete"
+		if failLater {
+			name = "later batch failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			docs := manyNewsDocs(1001, "source")
+			fixture := legacyNewsRows(t, "source", docs)
+			failure := errors.New("later canonical lookup failed")
+			if failLater {
+				fixture.after = func() { fixture.fail = failure }
+			}
+			svc := &InsightsService{news: fixture}
+			list, err := svc.currentNewsList(context.Background(), docs)
+			if failLater {
+				if !errors.Is(err, failure) || list != nil || fixture.reads != 2 {
+					t.Fatalf("partial results escaped a failed batch: count=%d reads=%d error=%v", len(list), fixture.reads, err)
+				}
+				return
+			}
+			if err != nil || len(list) != len(docs) || fixture.reads != 3 {
+				t.Fatalf("canonical batching lost documents: count=%d reads=%d error=%v", len(list), fixture.reads, err)
+			}
+			for index, doc := range list {
+				if doc.DocHash != docs[index].DocHash {
+					t.Fatalf("canonical batching changed order at %d", index)
+				}
+			}
+		})
 	}
 }
 
