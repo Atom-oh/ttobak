@@ -103,6 +103,9 @@ pub struct Call {
     /// Distinct calls seen with a toggle; past two the exact count is moot.
     calls: usize,
     seen: Vec<String>,
+    /// Calls read on more than one page at once (the same room in two
+    /// windows): leaving on one page does not show the call was left.
+    shared: Vec<String>,
 }
 
 /// Seen call keys kept per `Call`.
@@ -125,6 +128,17 @@ impl Call {
     /// is unknown.
     pub fn judge(&mut self, pages: impl IntoIterator<Item = PageRead>) -> MicState {
         let pages: Vec<PageRead> = pages.into_iter().collect();
+        for (i, p) in pages.iter().enumerate() {
+            let PageRead::Page { key, .. } = p else {
+                continue;
+            };
+            let again = pages[i + 1..]
+                .iter()
+                .any(|q| matches!(q, PageRead::Page { key: k, .. } if k == key));
+            if again && !self.shared.contains(key) && self.shared.len() < MAX_SEEN_CALLS {
+                self.shared.push(key.clone());
+            }
+        }
         // Every page showing a toggle is a call, even one that does not win:
         // two calls seen in one read disable left evidence like two in turn.
         for p in &pages {
@@ -158,7 +172,9 @@ impl Call {
         }
         let left = pages.iter().any(|p| match p {
             PageRead::Page { key, state } => {
-                *state == MicState::NoMeeting && self.last.as_ref() == Some(key)
+                *state == MicState::NoMeeting
+                    && self.last.as_ref() == Some(key)
+                    && !self.shared.contains(key)
             }
             PageRead::Unread => false,
         });
@@ -449,12 +465,38 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_call_is_counted_once() {
+    fn leaving_a_call_open_in_two_windows_is_ambiguous() {
+        // The same room in two windows; the user leaves in one while the other
+        // is a background tab that yields no read.
         let mut c = Call::default();
         assert_eq!(
-            c.judge([page("a", MicState::Unmuted), page("a", MicState::Muted)]),
+            c.judge([page("a", MicState::Muted), page("a", MicState::Muted)]),
+            MicState::Muted
+        );
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+
+        // Seen twice in one read even when only one page showed the toggle.
+        let mut c = Call::default();
+        assert_eq!(
+            c.judge([page("a", MicState::Unmuted), page("a", MicState::Unknown)]),
             MicState::Unmuted
         );
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+
+        // A call only ever read on one page still ends.
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Muted)]), MicState::Muted);
+        assert_eq!(
+            c.judge([page("a", MicState::NoMeeting)]),
+            MicState::NoMeeting
+        );
+    }
+
+    #[test]
+    fn a_repeated_call_is_counted_once() {
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
+        assert_eq!(c.judge([page("a", MicState::Muted)]), MicState::Muted);
         assert_eq!(
             c.judge([page("a", MicState::NoMeeting)]),
             MicState::NoMeeting

@@ -128,8 +128,11 @@ meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
 supports it (ADR-061, #621), the record page also reacts to native events: the
 picker stays available during a recording only when the start response reports
-`can_switch_input`; `native-mic-muted` shows that the meeting app's mute or a left
-call keeps the user's voice out of the recording; and `native-system-wake` retries
+`can_switch_input` (also for a start without a microphone); a failed switch shows
+Korean guidance with the app's reason, and says so when `recording_status`
+reports `capture_lost`; `native-mic-muted` shows that the meeting app's mute keeps
+the user's voice out of the recording (leaving the meeting reopens the
+microphone); and `native-system-wake` retries
 an upload that failed across sleep. Builds without these never show them.
 
 Capture/processing state and upload failures remain visible through the post-record
