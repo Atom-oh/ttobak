@@ -3,9 +3,10 @@
 //! Meet keeps the microphone open while muted, so Core Audio cannot tell.
 //! The state comes from the page's own toggle through the Accessibility API:
 //! Meet labels it "Turn on microphone" while the user is muted and "Turn off
-//! microphone" while unmuted. A toggle-less page counts as left only for the
-//! call last seen with a toggle; other toggle-less pages (an unlisted
-//! language, the landing page or an earlier call) are not evidence. Once a
+//! microphone" while unmuted. Only the followed call's page showing Meet's
+//! post-call screen ("Rejoin", "Return to home screen") counts as left; a page
+//! without the toggle is otherwise unknown and keeps the last state. Pages of
+//! other calls (the landing page or an earlier call) are not evidence. Once a
 //! second call has shown a toggle, no page is evidence the user left. Only the
 //! web area of a `meet.google.com` page in a browser instance using audio is
 //! read. An unreadable page (e.g. another tab in front) keeps the last state. Once a
@@ -20,6 +21,15 @@ use crate::zoom_mute::{MicState, Silence};
 const MUTED_LABELS: &[&str] = &["turn on microphone", "마이크 켜기"];
 /// Labels shown while unmuted (the button turns the microphone off).
 const UNMUTED_LABELS: &[&str] = &["turn off microphone", "마이크 끄기"];
+/// Labels on Meet's post-call screen: a positive sign the user left. The Korean forms are
+/// unverified; a missed label only falls back to the audio grace.
+const LEFT_LABELS: &[&str] = &[
+    "rejoin",
+    "return to home screen",
+    "다시 참여",
+    "다시 참여하기",
+    "홈 화면으로 돌아가기",
+];
 
 /// Lowercases, collapses spaces and drops a trailing shortcut hint such as
 /// "(⌘ + d)".
@@ -36,20 +46,24 @@ pub fn normalize(label: &str) -> String {
         .to_lowercase()
 }
 
-/// Classifies the button labels of one readable Meet page.
+/// Classifies the button labels of one readable Meet page. Without the toggle,
+/// only the post-call screen's labels count as leaving; anything else is unknown.
 pub fn classify<'a>(labels: impl IntoIterator<Item = &'a str>) -> MicState {
-    let (mut muted, mut unmuted) = (false, false);
+    let (mut muted, mut unmuted, mut left) = (false, false, false);
     for label in labels {
         let l = normalize(label);
         muted |= MUTED_LABELS.contains(&l.as_str());
         unmuted |= UNMUTED_LABELS.contains(&l.as_str());
+        left |= LEFT_LABELS.contains(&l.as_str());
     }
     match (muted, unmuted) {
         (true, false) => MicState::Muted,
         (false, true) => MicState::Unmuted,
         // Both at once is not a single toggle: record the microphone.
         (true, true) => MicState::Unknown,
-        (false, false) => MicState::NoMeeting,
+        (false, false) if left => MicState::NoMeeting,
+        // A toolbar hidden in the call (e.g. behind a dialog) is not a left call.
+        (false, false) => MicState::Unknown,
     }
 }
 
@@ -315,8 +329,18 @@ mod tests {
     fn a_page_without_the_toggle_has_left_the_call() {
         assert_eq!(classify(["", "Rejoin"]), MicState::NoMeeting);
         // A remote participant action is not the local toggle.
-        assert_eq!(classify(["Mute Alice's microphone"]), MicState::NoMeeting);
+        assert_eq!(classify(["Mute Alice's microphone"]), MicState::Unknown);
         assert_eq!(classify(["마이크 켜기", "마이크 끄기"]), MicState::Unknown);
+    }
+
+    #[test]
+    fn a_hidden_toolbar_is_not_a_left_call() {
+        assert_eq!(classify(["Chat with everyone", "Close"]), MicState::Unknown);
+        assert_eq!(classify(["Return to home screen"]), MicState::NoMeeting);
+        assert_eq!(
+            classify(["돌아가기", "홈 화면으로 돌아가기"]),
+            MicState::NoMeeting
+        );
     }
 
     fn page(key: &str, state: MicState) -> PageRead {
@@ -450,7 +474,7 @@ mod tests {
     fn an_incomplete_read_is_neither_unmuted_nor_a_left_call() {
         assert_eq!(classify_read(Vec::<&str>::new(), false), MicState::Unknown);
         assert_eq!(classify_read(["Leave call"], false), MicState::Unknown);
-        assert_eq!(classify_read(Vec::<&str>::new(), true), MicState::NoMeeting);
+        assert_eq!(classify_read(Vec::<&str>::new(), true), MicState::Unknown);
         assert_eq!(classify_read(["마이크 끄기"], true), MicState::Unmuted);
         let mut c = Call::default();
         assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
