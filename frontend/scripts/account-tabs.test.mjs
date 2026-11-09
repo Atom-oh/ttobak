@@ -108,3 +108,35 @@ test('kb_copy_and_untag_rules', () => {
   assert.equal(kb.kbItemHref({ ...up, kind: 'meeting', id: 'm 1' }), '/meeting/m%201');
   assert.equal(kb.kbItemHref(up), undefined);
 });
+
+test('kb_uploader_label_and_failure_rules', () => {
+  const kb = {};
+  vm.runInNewContext(ts.transpileModule(read('../src/lib/accountKB.ts'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: kb });
+  const members = [{ userId: 'u1', email: 'a@x.com' }, { userId: 'u2' }];
+  assert.equal(kb.kbUploaderLabel('u1', members), 'a@x.com');
+  assert.equal(kb.kbUploaderLabel('gone', members), '이전 멤버');
+  assert.equal(kb.kbUploaderLabel(undefined, members), '이전 멤버');
+  assert.equal(kb.kbUploaderLabel('u2', members), '이전 멤버');
+  assert.equal(kb.kbItemFailureAction('download', 404), 'removeRow');
+  assert.equal(kb.kbItemFailureAction('untag', 404), 'removeRow');
+  assert.equal(kb.kbItemFailureAction('untag', 403), 'forbidden');
+  assert.equal(kb.kbItemFailureAction('download', 403), 'accessLost');
+  assert.equal(kb.kbItemFailureAction('download', 500), 'error');
+  assert.equal(kb.ACCOUNT_KB_NOTICES.notFound, '자료를 찾을 수 없습니다');
+  assert.equal(kb.ACCOUNT_KB_NOTICES.forbidden, '권한이 없습니다');
+});
+
+test('kb_stale_page_after_chip_switch_is_ignored', () => {
+  const kb = {};
+  vm.runInNewContext(ts.transpileModule(read('../src/lib/accountKB.ts'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: kb });
+  assert.equal(kb.kbPageIsCurrent({ kind: 'upload', generation: 3 }, { kind: 'upload', generation: 3 }), true);
+  assert.equal(kb.kbPageIsCurrent({ kind: 'upload', generation: 3 }, { kind: 'news', generation: 4 }), false);
+  assert.equal(kb.kbPageIsCurrent({ kind: 'upload', generation: 3 }, { kind: 'upload', generation: 4 }), false);
+  const source = read('../src/components/account/AccountKB.tsx');
+  assert.match(source, /kbPageIsCurrent\(request, active\.current\)/);
+  assert.match(source, /moreAbort\.current\?\.abort\(\)/);
+});

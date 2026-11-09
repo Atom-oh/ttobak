@@ -712,7 +712,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
               )}
               {tab === 'kb' && eventsVisible && user?.userId && (
                 <AccountKB key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
-                  isOwner={isOwner} onAccessLost={onAccessLost} />
+                  isOwner={isOwner} members={account.members} onAccessLost={onAccessLost} />
               )}
               {tab === 'insights' && (
                 <>

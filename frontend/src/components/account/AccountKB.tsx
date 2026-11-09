@@ -5,7 +5,7 @@ import { accountApi } from '@/lib/api';
 import { confirmDialog } from '@/lib/dialog';
 import {
   ACCOUNT_KB_COPY, ACCOUNT_KB_KINDS, ACCOUNT_KB_KIND_LABELS, ACCOUNT_KB_STATE_LABELS,
-  canUntagKBItem, kbItemHref, type AccountKBItem, type AccountKBKind,
+  ACCOUNT_KB_NOTICES, canUntagKBItem, kbItemFailureAction, kbItemHref, kbPageIsCurrent, kbUploaderLabel, type AccountKBItem, type AccountKBKind,
 } from '@/lib/accountKB';
 
 const STATE_CLASS: Record<AccountKBItem['indexState'], string> = {
@@ -16,8 +16,9 @@ const STATE_CLASS: Record<AccountKBItem['indexState'], string> = {
 };
 
 /** Account-tagged KB materials (direct members), one kind at a time. */
-export function AccountKB({ accountId, userId, isOwner, onAccessLost }: {
+export function AccountKB({ accountId, userId, isOwner, members, onAccessLost }: {
   accountId: string;
+  members: { userId?: string; email?: string }[];
   userId: string;
   isOwner: boolean;
   onAccessLost: () => void;
@@ -30,16 +31,29 @@ export function AccountKB({ accountId, userId, isOwner, onAccessLost }: {
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
+  const active = useRef({ kind: 'upload' as AccountKBKind, generation: 0 });
+  const moreAbort = useRef<AbortController | null>(null);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const failed = useCallback((failure: unknown, text: string) => {
     if (!mounted.current) return;
-    if ([401, 403, 404].includes((failure as { status?: number })?.status ?? 0)) { onAccessLost(); return; }
+    if ([401, 403].includes((failure as { status?: number })?.status ?? 0)) { onAccessLost(); return; }
     setError(text);
   }, [onAccessLost]);
 
+  const itemFailed = (op: 'download' | 'untag', failure: unknown, item: AccountKBItem, text: string) => {
+    if (!mounted.current) return;
+    const action = kbItemFailureAction(op, (failure as { status?: number })?.status);
+    if (action === 'accessLost') { onAccessLost(); return; }
+    if (action === 'removeRow') { setItems(prev => prev.filter(i => i.id !== item.id)); setError(ACCOUNT_KB_NOTICES.notFound); return; }
+    setError(action === 'forbidden' ? ACCOUNT_KB_NOTICES.forbidden : text);
+  };
+
   useEffect(() => {
     const controller = new AbortController();
+    active.current = { kind, generation: active.current.generation + 1 };
+    moreAbort.current?.abort();
+    setBusy(false);
     setLoading(true); setError(''); setItems([]); setNext(undefined);
     accountApi.kb(accountId, kind, undefined, { signal: controller.signal, expectedUserId: userId })
       .then(page => {
@@ -55,13 +69,18 @@ export function AccountKB({ accountId, userId, isOwner, onAccessLost }: {
 
   const loadMore = async () => {
     if (!next || busy) return;
+    const request = { kind, generation: active.current.generation };
+    const controller = new AbortController();
+    moreAbort.current = controller;
     setBusy(true); setError('');
     try {
-      const page = await accountApi.kb(accountId, kind, next, { expectedUserId: userId });
-      if (!mounted.current) return;
+      const page = await accountApi.kb(accountId, kind, next, { signal: controller.signal, expectedUserId: userId });
+      if (!mounted.current || controller.signal.aborted || !kbPageIsCurrent(request, active.current)) return;
       setItems(prev => [...prev, ...(page.items ?? [])]); setNext(page.nextCursor);
-    } catch (failure) { failed(failure, '자료를 더 불러오지 못했습니다.'); }
-    finally { if (mounted.current) setBusy(false); }
+    } catch (failure) {
+      if (controller.signal.aborted || !kbPageIsCurrent(request, active.current)) return;
+      failed(failure, '자료를 더 불러오지 못했습니다.');
+    } finally { if (mounted.current && kbPageIsCurrent(request, active.current)) setBusy(false); }
   };
 
   const download = async (item: AccountKBItem) => {
@@ -71,7 +90,7 @@ export function AccountKB({ accountId, userId, isOwner, onAccessLost }: {
       const { url } = await accountApi.kbDownload(accountId, item.id, { expectedUserId: userId });
       // Short-lived presigned URL: open immediately, never store it.
       if (mounted.current) window.open(url, '_blank', 'noopener,noreferrer');
-    } catch (failure) { failed(failure, '다운로드할 수 없습니다.'); }
+    } catch (failure) { itemFailed('download', failure, item, '다운로드할 수 없습니다.'); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -83,7 +102,7 @@ export function AccountKB({ accountId, userId, isOwner, onAccessLost }: {
       await accountApi.kbUntag(accountId, item.id, { expectedUserId: userId });
       if (!mounted.current) return;
       setItems(prev => prev.filter(i => i.id !== item.id));
-    } catch (failure) { failed(failure, '태그를 해제하지 못했습니다.'); }
+    } catch (failure) { itemFailed('untag', failure, item, '태그를 해제하지 못했습니다.'); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -108,6 +127,7 @@ export function AccountKB({ accountId, userId, isOwner, onAccessLost }: {
               {href ? <a href={href} className="truncate font-medium text-primary hover:underline">{item.title}</a>
                 : <span className="truncate font-medium text-text-main">{item.title}</span>}
               {item.date && <span className="ml-2 text-xs text-text-secondary">{item.date}</span>}
+              {item.kind === 'upload' && <span className="ml-2 text-xs text-text-secondary">{kbUploaderLabel(item.uploadedBy, members)}</span>}
             </div>
             <div className="flex items-center gap-2">
               <span className={`rounded-full px-2 py-0.5 text-xs ${STATE_CLASS[item.indexState] ?? STATE_CLASS.UNTRACKED}`}>

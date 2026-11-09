@@ -48,3 +48,33 @@ export function canUntagKBItem(item: AccountKBItem, userId: string | undefined, 
 export function kbItemHref(item: AccountKBItem): string | undefined {
   return item.kind === 'meeting' ? `/meeting/${encodeURIComponent(item.id)}` : undefined;
 }
+
+export const ACCOUNT_KB_NOTICES = {
+  formerMember: '이전 멤버',
+  notFound: '자료를 찾을 수 없습니다',
+  forbidden: '권한이 없습니다',
+} as const;
+
+/** Uploader label from the loaded member list; never exposes a raw user ID. */
+export function kbUploaderLabel(
+  uploadedBy: string | undefined,
+  members: { userId?: string; email?: string; name?: string }[],
+): string {
+  const member = uploadedBy ? members.find(m => m.userId === uploadedBy) : undefined;
+  return member?.name || member?.email || ACCOUNT_KB_NOTICES.formerMember;
+}
+
+export type KBItemFailureAction = 'accessLost' | 'removeRow' | 'forbidden' | 'error';
+
+/** Per-item failures: only a download 401/403 means access was lost. */
+export function kbItemFailureAction(op: 'download' | 'untag', status: number | undefined): KBItemFailureAction {
+  if (status === 404) return 'removeRow';
+  if (status === 401) return 'accessLost';
+  if (status === 403) return op === 'download' ? 'accessLost' : 'forbidden';
+  return 'error';
+}
+
+/** Applies a page only while it still belongs to the active kind and request generation. */
+export function kbPageIsCurrent(request: { kind: string; generation: number }, active: { kind: string; generation: number }): boolean {
+  return request.kind === active.kind && request.generation === active.generation;
+}
