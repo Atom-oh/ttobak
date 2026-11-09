@@ -47,6 +47,8 @@ type fakePeopleRepo struct {
 	recorded   [][]string
 	ops        []string
 
+	leaseLostAfter, fencedWrites int
+
 	// People panel reads.
 	targetLinks []model.PeopleLink
 	mentionRows []model.UnresolvedMention
@@ -129,20 +131,35 @@ func (f *fakePeopleRepo) ListMeetingRefsForAccountPage(_ context.Context, _ stri
 	}
 	return f.refs[start:end], nil, nil
 }
-func (f *fakePeopleRepo) PutPeopleLink(_ context.Context, l *model.PeopleLink, actor string) error {
-	if (actor != "") != (l.Origin == model.LinkOriginManual) || (actor != "" && l.CreatedBy != actor) {
-		return fmt.Errorf("auto writes use the system actor; manual writes the member")
+
+// fenced counts lease-fenced writes and fails them once leaseLostAfter is
+// reached (0 means the lease is never lost).
+func (f *fakePeopleRepo) fenced(run *model.PeopleRun) error {
+	if run == nil || run.LeaseToken != "tok" {
+		return fmt.Errorf("unfenced write")
 	}
+	f.fencedWrites++
+	if f.leaseLostAfter > 0 && f.fencedWrites > f.leaseLostAfter {
+		return fmt.Errorf("%w: %w", repository.ErrConditionFailed, repository.ErrPeopleRunLeaseLost)
+	}
+	return nil
+}
+func (f *fakePeopleRepo) PutPeopleLinkInRun(_ context.Context, l *model.PeopleLink, run *model.PeopleRun) error {
 	f.ops = append(f.ops, "put")
-	f.putActors = append(f.putActors, actor)
+	if err := f.fenced(run); err != nil {
+		return err
+	}
 	if err := f.putErr[l.Key()]; err != nil {
 		return err
 	}
 	f.puts = append(f.puts, *l)
 	return nil
 }
-func (f *fakePeopleRepo) DeletePeopleLink(_ context.Context, _, actor string, k model.PeopleLinkKey, origin string, deny bool) error {
-	f.deletes = append(f.deletes, fmt.Sprintf("%s/%s/%s/actor=%q/%s/deny=%t", k.Role, k.ToKind, k.ToID, actor, origin, deny))
+func (f *fakePeopleRepo) DeletePeopleLinkInRun(_ context.Context, _ string, k model.PeopleLinkKey, run *model.PeopleRun) error {
+	if err := f.fenced(run); err != nil {
+		return err
+	}
+	f.deletes = append(f.deletes, fmt.Sprintf("%s/%s/%s/actor=%q/%s/deny=%t", k.Role, k.ToKind, k.ToID, "", model.LinkOriginAuto, false))
 	return nil
 }
 func (f *fakePeopleRepo) ListPeopleLinksForMeeting(context.Context, string, string, int) ([]model.PeopleLink, bool, error) {
@@ -157,10 +174,13 @@ func (f *fakePeopleRepo) GetMentionIgnores(_ context.Context, _ string, hashes [
 	}
 	return out, nil
 }
-func (f *fakePeopleRepo) ReplaceUnresolvedMentions(_ context.Context, _, _ string, rows []model.UnresolvedMention, prior []string) error {
+func (f *fakePeopleRepo) ReplaceUnresolvedMentions(_ context.Context, _, _ string, rows []model.UnresolvedMention, prior []string, run *model.PeopleRun) error {
 	f.ops = append(f.ops, "replace")
 	if f.replaceErr != nil {
 		return f.replaceErr
+	}
+	if err := f.fenced(run); err != nil {
+		return err
 	}
 	f.replaced = append(f.replaced, rows)
 	f.replacePrior = append(f.replacePrior, prior)
@@ -534,5 +554,57 @@ func TestResolveMeeting_RecordsMentionInventoryBeforeWrites(t *testing.T) {
 	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
 	if err != nil || !res.Busy || len(f.replaced) != 0 || len(f.puts) != 0 {
 		t.Fatalf("lost lease: res=%+v err=%v", res, err)
+	}
+}
+
+func TestResolveMeeting_LostLeaseStopsWrites(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.contacts = []model.AccountContact{peopleContact(peopleTestContact, "Kim Minsu", ""), peopleContact(peopleTestContact2, "Park Jisoo", "")}
+	f.meetings["owner:m1"].Participants = []string{"Kim Minsu", "Park Jisoo", "Lee"}
+	f.existing = []model.PeopleLink{{MeetingID: "owner:m1", ToKind: "contact", ToID: "stale", Role: "speaker", Origin: model.LinkOriginAuto}}
+	f.leaseLostAfter = 1
+	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || !res.Busy || len(f.puts) != 1 || len(f.deletes) != 0 || len(f.replaced) != 0 || f.finishes != 0 {
+		t.Fatalf("mid-edge loss: res=%+v err=%v puts=%d deletes=%v replaced=%d finishes=%d", res, err, len(f.puts), f.deletes, len(f.replaced), f.finishes)
+	}
+	if strings.Join(f.ops, ",") != "claim,record,put,put" {
+		t.Fatalf("ops %v", f.ops)
+	}
+
+	// Lost between the inventory record and the mention replace: no rows.
+	// No edges are planned, so the replace is the first fenced write.
+	lost := newFakePeopleRepo()
+	lost.meetings["owner:m1"].Participants = []string{"Lee"}
+	lost.leaseLostAfter, lost.fencedWrites = 1, 1
+	res, err = newPeopleTestService(lost).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || !res.Busy || len(lost.replaced) != 0 || lost.finishes != 0 {
+		t.Fatalf("record-replace loss: res=%+v err=%v replaced=%d finishes=%d", res, err, len(lost.replaced), lost.finishes)
+	}
+}
+
+func TestResolveMeeting_ReportsPendingRerun(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.reruns = []bool{true, true}
+	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || !res.RerunPending || !strings.Contains(res.String(), "rerun_pending=true") {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	f = newFakePeopleRepo()
+	f.reruns = []bool{true, false}
+	if res, _ := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{}); res.RerunPending {
+		t.Fatalf("served rerun reported pending: %+v", res)
+	}
+}
+
+func TestLoadDirectory_DescendantCapMarksEntitiesTruncated(t *testing.T) {
+	f := newFakePeopleRepo()
+	for i := 0; i < 201; i++ {
+		id := fmt.Sprint("d", i)
+		f.children["acc"] = append(f.children["acc"], id)
+		f.accounts[id] = &model.Account{PK: "ACCOUNT#" + id, SK: "META", AccountID: id, ParentAccountID: "acc", Name: id, EntityType: model.EntityTypeAccount}
+	}
+	dir, err := newPeopleTestService(f).loadDirectory(context.Background(), "acc")
+	if err != nil || len(dir.Entities) != 200 || !dir.EntitiesTruncated {
+		t.Fatalf("entities=%d truncated=%v err=%v", len(dir.Entities), dir.EntitiesTruncated, err)
 	}
 }
