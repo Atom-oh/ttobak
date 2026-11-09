@@ -82,7 +82,8 @@ without a user confirmation.
   while only the aggregate is rebuilt; the capture gap needs native measurement.
   A device that cannot run at the recording's sample rate is refused. A failed
   start attempts to restore the previous device. If restoration also fails,
-  capture stops and the already-recorded data must be finalized.
+  capture stops: the switch returns an error saying so, later switches are
+  refused, and stop finalizes what was recorded with a warning.
 - The recording follows Zoom's own mute, as Notion's meeting notes do
   (observed in Notion's shipped `mac_utils.node`: an Accessibility observer of
   Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
@@ -101,9 +102,11 @@ without a user confirmation.
   through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). The
   toggle's label gives the state ("Turn on microphone" while muted, "Turn off
   microphone" while unmuted, and their Korean forms; both verified on a live
-  call). A Meet page without the toggle has left the call: once a recording
-  has followed Meet, that keeps the microphone silent, as with Zoom; a
-  recording that never saw the toggle (e.g. an unlisted language) records the
+  call). The call page that last showed the toggle, read again without it,
+  has left the call; a toggle-less page that never showed one (an unlisted
+  language, the landing page or an earlier call) is not evidence. Once a
+  recording has followed Meet, leaving keeps the microphone silent, as with
+  Zoom; a recording that never saw the toggle (e.g. an unlisted language) records the
   microphone. An unreadable page (another tab in front) keeps the last state,
   including when Accessibility trust is lost after an observed state. Safari's
   shared WebKit process is not followed. Without Accessibility permission at
@@ -111,7 +114,7 @@ without a user confirmation.
   meeting's mute has been observed. Ad-hoc re-signing invalidates the grant,
   as it does other TCC grants. The same left-call page, read for 3 s, ends a
   tracked Meet meeting without the 20 s audio grace, as Zoom's confirmed end
-  does.
+  does. Safari Meet meetings are not ended this way.
 - During a native recording, if other apps play audio for 30 s while the
   system tap has delivered only exact zeros, the app posts a notification that
   System Audio Recording is likely denied, instead of reporting it only at

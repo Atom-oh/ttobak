@@ -514,6 +514,7 @@ mod mac {
         }
         let mut gate = Gate::default();
         let mut meet = crate::meet_mute::Hold::default();
+        let mut meet_call = crate::meet_mute::Call::default();
         let mut pid: Option<i32> = None;
         let mut pid_checked: Option<Instant> = None;
         let mut browsers: Vec<i32> = Vec::new();
@@ -529,10 +530,15 @@ mod mac {
             };
             let meet_silence = observe_meet(zoom, trusted, &muted, &mut meet, || {
                 if !browsers_checked.is_some_and(|checked| checked.elapsed() < BROWSER_REFRESH) {
-                    browsers = (sources.browser_pids)();
+                    // Keep the last browsers using audio: a left Meet page is
+                    // still read after the browser releases its audio.
+                    let fresh = (sources.browser_pids)();
+                    if !fresh.is_empty() {
+                        browsers = fresh;
+                    }
                     browsers_checked = Some(Instant::now());
                 }
-                crate::meet_mute::current_state(&browsers)
+                crate::meet_mute::current_state(&browsers, &mut meet_call)
             });
             let current = match (zoom, meet_silence) {
                 (Silence::Open, Silence::Open) => {
