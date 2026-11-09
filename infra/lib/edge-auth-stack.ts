@@ -2,6 +2,19 @@ import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+/** Public JWKS for one Cognito issuer, embedded to skip the cold-start fetch. */
+export interface SeedJwks {
+  issuer: string;
+  keys: Array<Record<string, string>>;
+}
+
+const defaultSeedJwks = (): SeedJwks => {
+  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '../assets/cognito-jwks.json'), 'utf8'));
+  return { issuer: raw.issuer, keys: raw.keys };
+};
 
 export interface EdgeAuthStackProps extends cdk.StackProps {
   userPoolId: string;
@@ -11,6 +24,12 @@ export interface EdgeAuthStackProps extends cdk.StackProps {
   writeConnectorClientId?: string;
   connectorAudience?: string;
   connectorPrivateBridgeEnabled?: boolean;
+  /**
+   * Public signing keys used before any network fetch. Applied at runtime only
+   * when its issuer equals the function's resolved Cognito issuer; an unknown
+   * kid still triggers the live JWKS fetch. Defaults to assets/cognito-jwks.json.
+   */
+  seedJwks?: SeedJwks;
 }
 
 export class EdgeAuthStack extends cdk.Stack {
@@ -33,6 +52,11 @@ export class EdgeAuthStack extends cdk.Stack {
 
     // Lambda@Edge function for JWT validation
     // Note: Lambda@Edge cannot use environment variables, so we embed the config in code
+    const seedJwks = props.seedJwks ?? defaultSeedJwks();
+    if (!/^https:\/\/cognito-idp\.[a-z0-9-]+\.amazonaws\.com\/[A-Za-z0-9_-]+$/.test(seedJwks.issuer) ||
+        !Array.isArray(seedJwks.keys) || seedJwks.keys.some(k => k.kty !== 'RSA' || !k.kid || !k.n || !k.e)) {
+      throw new Error('Seed JWKS must be RSA keys for an exact Cognito issuer');
+    }
     const edgeFunctionCode = `
 'use strict';
 
@@ -50,6 +74,11 @@ const CONNECTOR_WRITE_CLIENT_ID = '${props.writeConnectorClientId ?? ''}';
 const CONNECTOR_AUDIENCE = '${props.connectorAudience ?? ''}';
 const CONNECTOR_READ_SCOPE = CONNECTOR_AUDIENCE + '/read';
 const CONNECTOR_WRITE_SCOPE = CONNECTOR_AUDIENCE + '/write';
+
+// Public signing keys embedded at build time. Used only when they belong to
+// this function's issuer, so a cold environment verifies without a network
+// round trip; an unknown kid falls back to the live JWKS fetch below.
+const SEED_JWKS = ${JSON.stringify(seedJwks)};
 
 // Cache for JWKS
 let jwksCache = null;
@@ -180,9 +209,9 @@ async function validateToken(token, uri, method) {
       if (write && uri !== '/api/mcp' && !billingRead) return false;
     }
 
-    // Fetch JWKS and verify signature
-    const jwks = await fetchJwks();
-    const key = findKey(jwks, header.kid);
+    // Resolve the signing key: embedded keys first, then the live JWKS.
+    const seeded = SEED_JWKS.issuer === COGNITO_ISSUER ? findKey(SEED_JWKS, header.kid) : undefined;
+    const key = seeded || findKey(await fetchJwks(), header.kid);
     if (!key) return false;
 
     const pem = jwkToPem(key);
