@@ -27,7 +27,8 @@ import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { BrowserRecordingsCard } from '@/components/record/BrowserRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
-import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording, type NativeSelectedInput, type NativeMicMuted, onNativeMicMuted, onNativeSystemWake, switchNativeRecordingInput } from '@/lib/tauri';
+import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording, type NativeSelectedInput, type NativeMicMuted, onNativeMicMuted, onNativeSystemWake, switchNativeRecordingInput, getNativeCaptureLost } from '@/lib/tauri';
+import { nativeMicSwitchError } from '@/lib/nativeMicSwitch';
 import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
 import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
@@ -94,11 +95,10 @@ function RecordPageInner() {
         setNativeInput(input);
         setMicSwitch({ busy: false, error: null });
       })
-      .catch(() => {
-        setMicSwitch({
-          busy: false,
-          error: '마이크를 바꾸지 못했습니다. 장치 연결을 확인하고, 소리가 들어오지 않으면 녹음을 종료해 저장한 뒤 다시 시작해 주세요.',
-        });
+      .catch(async (err: unknown) => {
+        // The app says whether capture stopped; the reason is shown too.
+        const captureLost = await getNativeCaptureLost();
+        setMicSwitch({ busy: false, error: nativeMicSwitchError(err, captureLost) });
       });
   };
   useEffect(() => {
@@ -1431,9 +1431,7 @@ function RecordPageInner() {
               )}
               {nativeMicMuted && (
                 <span className="block text-xl leading-relaxed">
-                  {nativeMicMuted.reason === 'meeting_ended'
-                    ? `${nativeMicMuted.app} 상태를 확인할 수 없거나 회의가 끝나 내 목소리는 녹음하지 않습니다.`
-                    : `${nativeMicMuted.app}에서 음소거 중이라 내 목소리는 녹음하지 않습니다.`}
+                  {`${nativeMicMuted.app}에서 음소거 중이라 내 목소리는 녹음하지 않습니다.`}
                 </span>
               )}
             </span>

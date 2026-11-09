@@ -251,6 +251,10 @@ type indexSync struct {
 	conflict   bool
 	uncertain  bool
 	startCheck func()
+	// vectors, when non-nil, models provider document state: complete()
+	// replaces it with the data objects present in S3 at the end of a sync.
+	vectors      map[string]bool
+	documentsErr error
 }
 
 func (p *indexSync) Busy(context.Context) (bool, error) { return p.busy, nil }
@@ -282,9 +286,19 @@ func (p *indexSync) Get(_ context.Context, id string) (IndexProviderJob, error) 
 	return p.jobs[id], nil
 }
 func (p *indexSync) Documents(_ context.Context, keys []string) (map[string]string, error) {
+	if p.documentsErr != nil {
+		return nil, p.documentsErr
+	}
 	result := map[string]string{}
 	for _, key := range keys {
-		result[key] = "FAILED"
+		switch {
+		case p.vectors == nil:
+			result[key] = "FAILED"
+		case p.vectors[key]:
+			result[key] = "INDEXED"
+		default:
+			result[key] = "NOT_FOUND"
+		}
 	}
 	return result, nil
 }
@@ -292,6 +306,14 @@ func (p *indexSync) complete() {
 	for id, job := range p.jobs {
 		job.Status = "COMPLETE"
 		p.jobs[id] = job
+	}
+	if p.vectors != nil {
+		p.vectors = map[string]bool{}
+		for key := range p.store.kb {
+			if !strings.HasSuffix(key, ".metadata.json") {
+				p.vectors[key] = true
+			}
+		}
 	}
 }
 

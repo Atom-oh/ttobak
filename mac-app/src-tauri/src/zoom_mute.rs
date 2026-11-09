@@ -115,6 +115,22 @@ pub fn classify<'a>(titles: impl IntoIterator<Item = &'a str>, labels: &Labels) 
     }
 }
 
+/// The recording a watcher belongs to: its generation and the recorder's
+/// current one. A watcher of a stopped or superseded (wedged) recording must
+/// not emit into the next recording.
+#[derive(Clone, Debug)]
+pub struct Owner {
+    pub generation: u64,
+    pub current: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Owner {
+    /// Whether a watcher still `running` may act for its recording now.
+    pub fn may_emit(&self, running: bool) -> bool {
+        running && self.current.load(std::sync::atomic::Ordering::Relaxed) == self.generation
+    }
+}
+
 /// Whether, and why, the microphone is silenced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Silence {
@@ -237,7 +253,7 @@ mod mac {
     use tauri::{AppHandle, Emitter};
 
     use super::{
-        classify, classify_window_ids, observe_meet, Gate, Labels, MicState, ProcessSources,
+        classify, classify_window_ids, observe_meet, Gate, Labels, MicState, Owner, ProcessSources,
         Silence,
     };
 
@@ -512,6 +528,7 @@ mod mac {
         app: AppHandle,
         muted: Arc<AtomicBool>,
         sources: ProcessSources,
+        owner: Owner,
     ) -> (Watch, Option<String>) {
         let running = Arc::new(AtomicBool::new(true));
         let zoom_running = matches!((sources.zoom_pid)(), Ok(Some(_)));
@@ -525,7 +542,7 @@ mod mac {
         let flag = running.clone();
         let spawned = std::thread::Builder::new()
             .name("zoom-mute".into())
-            .spawn(move || run(app, muted, flag, sources));
+            .spawn(move || run(app, muted, flag, sources, owner));
         if let Err(e) = spawned {
             log::warn!("could not start the Zoom mute watcher: {e}");
         }
@@ -540,6 +557,7 @@ mod mac {
         muted: Arc<AtomicBool>,
         running: Arc<AtomicBool>,
         sources: ProcessSources,
+        owner: Owner,
     ) {
         let started = Instant::now();
         let zoom_labels = !labels().is_empty();
@@ -554,7 +572,7 @@ mod mac {
         let mut browsers: Vec<i32> = Vec::new();
         let mut browsers_checked: Option<Instant> = None;
         let mut announced: Option<(Silence, &'static str)> = None;
-        while running.load(Ordering::Relaxed) {
+        while owner.may_emit(running.load(Ordering::Relaxed)) {
             let trusted = unsafe { AXIsProcessTrusted() };
             let now_ms = started.elapsed().as_millis() as u64;
             let zoom = if zoom_labels {
@@ -583,6 +601,11 @@ mod mac {
                 (Silence::Open, s) => (s, "Google Meet"),
                 (s, _) => (s, "Zoom"),
             };
+            // Stopped or superseded while this poll ran: never emit into the
+            // next recording.
+            if !owner.may_emit(running.load(Ordering::Relaxed)) {
+                break;
+            }
             muted.store(current.0 != Silence::Open, Ordering::Relaxed);
             if announced.map(|a| a.0) != Some(current.0) {
                 if announced.is_some() || current.0 != Silence::Open {
@@ -632,6 +655,21 @@ mod mac_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stopped_or_superseded_watcher_may_not_emit() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let current = std::sync::Arc::new(AtomicU64::new(4));
+        let owner = Owner {
+            generation: 4,
+            current: current.clone(),
+        };
+        assert!(owner.may_emit(true));
+        assert!(!owner.may_emit(false));
+        // A later recording started: this watcher's recording is not current.
+        current.store(5, Ordering::Relaxed);
+        assert!(!owner.may_emit(true));
+    }
 
     #[test]
     fn zoom_presence_does_not_rest_on_its_core_audio_object() {

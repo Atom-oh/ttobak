@@ -48,7 +48,7 @@ interface RecordButtonProps {
    * app's microphone (ADR-061). */
   nativeInputDeviceUid?: string;
   /** The microphone the Mac app actually records (newer app builds). */
-  onNativeInput?: (input: NativeSelectedInput, canSwitch: boolean) => void;
+  onNativeInput?: (input: NativeSelectedInput | null, canSwitch: boolean) => void;
   /** Called for each 16kHz mono 16-bit PCM chunk emitted from Rust during a
    * System Audio recording — feeds `useRecordingSession`'s
    * `pushNativePcmChunk` for live captions via Amazon Transcribe
@@ -530,7 +530,8 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
 
         const resp = await startNativeRecording(meetingId, nativeInputDeviceUid);
         if (resp.warnings?.length) onNativeWarnings?.(resp.warnings);
-        if (resp.input) onNativeInput?.(resp.input, resp.can_switch_input === true);
+        // A mic-less start can still switch to a microphone.
+        onNativeInput?.(resp.input ?? null, resp.can_switch_input === true);
         nativeTempPathRef.current = resp.temp_path;
         isRecordingRef.current = true;
         setRecordingState('recording');
