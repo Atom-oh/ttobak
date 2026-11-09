@@ -763,8 +763,7 @@ export type NoteLanguage = '' | 'ko' | 'en';
 
 // ---- Account overview: links, signals, flow, graph (API-SPEC account routes) ----
 
-/** news | tech | event | meeting | project (see LINK_KIND_* in lib/accountOverview). */
-export type AccountLinkKind = string;
+export type AccountLinkKind = 'news' | 'tech' | 'event' | 'meeting' | 'project';
 
 /** News/tech IDs are {sourceId}:{docHash}; meeting IDs {ownerUserId}:{meetingId}. */
 export interface AccountLinkInput {
@@ -814,7 +813,7 @@ export interface AccountSignals {
 }
 
 export interface FlowItem {
-  kind: string; // event | meeting
+  kind: 'event' | 'meeting';
   id: string;
   title: string;
   date?: string;

@@ -238,3 +238,92 @@ test('flow_renders_auto_badge_evidence_unlink_and_unassigned_link', () => {
   assert.equal(html.split(`>${overview.UNLINK_ACTION_LABEL}<`).length - 1, 1);
   assert.equal(html.split(`>${overview.LINK_ACTION_LABEL}<`).length - 1, 1);
 });
+
+test('link_row_labels_and_paging_helpers', () => {
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  assert.equal(overview.MANAGE_LINKS_TITLE, '연결 관리');
+  assert.equal(overview.LOAD_MORE_LABEL, '더 보기');
+  assert.equal(overview.linkKindLabel('tech'), '기술 문서');
+  assert.equal(overview.linkKindLabel('event'), '일정');
+  assert.equal(overview.linkKindLabel('other'), 'other');
+  const names = { p1: 'Migration' };
+  assert.equal(overview.linkEndpointText('project', 'p1', names), '기회 · Migration');
+  assert.equal(overview.linkEndpointText('project', 'p9', names), '기회 · p9');
+  assert.equal(overview.linkEndpointText('meeting', 'u:m', names), '미팅 · u:m');
+  assert.equal(overview.linkRowText({ fromKind: 'news', fromId: 's:h', toKind: 'meeting', toId: 'u:m' }, names), '뉴스 · s:h → 미팅 · u:m');
+  // A news item named like a project ID still shows its own ID, not the name.
+  assert.equal(overview.linkEndpointText('news', 'p1', names), '뉴스 · p1');
+  const a = { fromKind: 'event', fromId: 'e1', toKind: 'project', toId: 'p1' };
+  const b = { fromKind: 'event', fromId: 'e1', toKind: 'project', toId: 'p2' };
+  const c = { fromKind: 'tech', fromId: '__tech__:x', toKind: 'project', toId: 'p1' };
+  assert.notEqual(overview.linkRowKey(a), overview.linkRowKey(b));
+  assert.deepEqual(plain(overview.mergeLinkPages([a], [a, b])), [a, b]);
+  assert.deepEqual(plain(overview.eventProjectLinks([a, b, c, a])), { e1: ['p1', 'p2'] });
+});
+
+test('icon_checker_allowlists_only_non_icon_wire_literals', () => {
+  const script = read('./update-icon-font.mjs');
+  const list = script.match(/NON_ICON_LITERALS = new Set\(\[([\s\S]*?)\]\)/);
+  assert.ok(list, 'allowlist defined');
+  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map(match => match[1]), ['event']);
+  assert.match(script, /catalog\.has\(value\) && !NON_ICON_LITERALS\.has\(value\)/);
+  assert.equal(overview.LINK_KIND_EVENT, 'event');
+  assert.match(read('../src/types/meeting.ts'), /AccountLinkKind = 'news' \| 'tech' \| 'event' \| 'meeting' \| 'project'/);
+});
+
+test('links_panel_pages_links_shows_auto_evidence_and_unlinks', async () => {
+  const { accountComponentHarness } = await import('./account-component-harness.mjs');
+  const harness = accountComponentHarness();
+  const calls = [];
+  const pages = {
+    '': { links: [
+      { fromKind: 'news', fromId: 's:h', toKind: 'meeting', toId: 'u:m', origin: 'auto', evidence: '<i>quote</i>', createdAt: '2026-11-08T00:00:00Z' },
+      { fromKind: 'tech', fromId: '__tech__:d', toKind: 'project', toId: 'p1', origin: 'manual', createdAt: '2026-11-07T00:00:00Z' },
+    ], nextCursor: 'c2' },
+    c2: { links: [{ fromKind: 'event', fromId: 'e1', toKind: 'project', toId: 'p1', origin: 'manual', createdAt: '2026-11-06T00:00:00Z' }] },
+  };
+  const api = { accountApi: { links: {
+    list: async (id, cursor) => { calls.push(['list', id, cursor]); return pages[cursor]; },
+    remove: async (id, input) => { calls.push(['remove', id, JSON.parse(JSON.stringify(input))]); },
+  } } };
+  const { AccountLinksPanel } = loadComponent('@/components/account/AccountLinksPanel', {
+    react: harness.react, '@/lib/api': api, '@/lib/dialog': { confirmDialog: async () => true },
+  });
+  let changed = 0;
+  const props = { accountId: 'A', userId: 'u', projectNames: { p1: 'Migration' }, revision: 0, onChanged: () => { changed++; }, onAccessLost: noop };
+  const all = (node) => (!node || typeof node !== 'object') ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(all)];
+  const text = (tree) => all(tree).flatMap(n => [n.props?.children].flat(Infinity)).filter(v => typeof v === 'string' || typeof v === 'number').join('|');
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  let tree = harness.render(AccountLinksPanel, new Set(), props);
+  assert.equal(calls.length, 0, 'collapsed panel loads nothing');
+  all(tree).find(n => n.props?.['aria-expanded'] === false).props.onClick();
+  harness.render(AccountLinksPanel, new Set(), props); await tick(); tree = harness.render(AccountLinksPanel, new Set(), props);
+  assert.ok(text(tree).includes('뉴스 · s:h → 미팅 · u:m'));
+  assert.ok(text(tree).includes('기술 문서 · __tech__:d → 기회 · Migration'));
+  const badge = all(tree).find(n => n.props?.children === overview.AUTO_LINK_BADGE);
+  assert.equal(badge.props.title, '<i>quote</i>', 'evidence is a plain title attribute');
+  const unlinks = all(tree).filter(n => n.type === 'button' && n.props?.children === overview.UNLINK_ACTION_LABEL);
+  assert.equal(unlinks.length, 2);
+  all(tree).find(n => n.type === 'button' && n.props?.children === overview.LOAD_MORE_LABEL).props.onClick();
+  await tick(); tree = harness.render(AccountLinksPanel, new Set(), props);
+  assert.deepEqual(calls.map(call => call[2]), ['', 'c2']);
+  assert.ok(text(tree).includes('일정 · e1 → 기회 · Migration'));
+  assert.ok(!all(tree).some(n => n.props?.children === overview.LOAD_MORE_LABEL), 'no more pages');
+  all(tree).filter(n => n.type === 'button' && n.props?.children === overview.UNLINK_ACTION_LABEL)[0].props.onClick();
+  await tick(); await tick();
+  assert.deepEqual(calls.at(-1), ['remove', 'A', { fromKind: 'news', fromId: 's:h', toKind: 'meeting', toId: 'u:m' }]);
+  assert.equal(changed, 1, 'unlink refreshes the overview');
+  harness.unmount();
+});
+
+test('event_rows_offer_unlink_for_existing_links_without_per_row_calls', () => {
+  const events = read('../src/components/AccountEvents.tsx');
+  assert.match(events, /eventLinks\?\.\[event\.eventId\]/);
+  assert.match(events, /<UnlinkButton/);
+  const detail = read('../src/components/AccountDetailClient.tsx');
+  assert.match(detail, /useAccountSection\(loadEventLinks, eventsVisible && tab === 'events', onAccessLost\)/);
+  assert.match(detail, /<AccountLinksPanel[^>]*revision=\{linksRevision\}/);
+  const jsx = detail.slice(detail.indexOf('<AppLayout'));
+  const general = jsx.slice(jsx.indexOf("tab === 'general' &&"));
+  assert.ok(general.indexOf('<AccountLinksPanel') > general.indexOf('<AccountFlow'), 'panel below the flow');
+});

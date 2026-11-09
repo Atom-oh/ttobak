@@ -32,7 +32,9 @@ After adding icons, run `npm run icons:update` in `frontend` to refresh the subs
 upstream text catalog, manifest and public Apache-2.0 license. Production
 builds run `icons:check` offline to check source coverage and asset integrity.
 The scanner includes known icon names in source literals, including helpers and
-lookup tables; constructed names need explicit literals. The license ships at
+lookup tables; constructed names need explicit literals. Non-icon wire values
+that equal an icon name (currently `event`) are listed in the scanner's
+`NON_ICON_LITERALS` allowlist. The license ships at
 `/licenses/material-symbols.txt`.
 
 `useTheme` owns interactive theme toggling and watches the root class. Its fixed
@@ -313,9 +315,13 @@ account news-source management, plus opportunity stage, days in stage
 insights. The flow shows activity → response → opportunity → result per
 opportunity, stalled results in the error tone, auto links with an "auto" badge
 whose hover title is the evidence, unlink on stored event links, and an
-unassigned row whose events offer "link to opportunity". The same action appears
-on Events tab rows and on News & Updates document cards (choosing a direct
-account first). Server truncation flags show a partial-links notice. Evidence,
+unassigned row whose events offer "link to opportunity". A collapsed
+**link management** panel below the flow pages every stored link (manual and
+auto, auto evidence as a plain-text title) with unlink; it is the one place to
+remove tech, event, older news and auto news→meeting links. The link action also
+appears on Events tab rows, which show their existing project links with unlink
+(from one bounded links scan, not per-row calls), and on News & Updates document
+cards (choosing a direct account first). Server truncation flags show a partial-links notice. Evidence,
 needs and stall details render as plain text. Every link or news-source mutation
 reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`.
 

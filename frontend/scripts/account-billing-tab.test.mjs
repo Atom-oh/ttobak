@@ -190,6 +190,8 @@ function detailPage({ billingService = true, accounts = [], search = '', config,
     '@/components/AccountEvents': { AccountEvents: emptyComponent },
     '@/components/account/AccountSignals': { AccountSignals: emptyComponent },
     '@/components/account/AccountFlow': { AccountFlow: emptyComponent },
+    '@/components/account/AccountLinksPanel': { AccountLinksPanel: emptyComponent },
+    '@/lib/accountOverview': { eventProjectLinks: () => ({}) },
     '@/components/workspace/AccountWorkspaceSelector': {
       AccountWorkspaceSelector: emptyComponent,
       useAccountWorkspaceAccounts: () => ({ accounts: [], loading: false, error: null }),
