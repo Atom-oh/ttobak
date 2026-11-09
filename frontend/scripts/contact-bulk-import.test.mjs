@@ -66,6 +66,11 @@ function componentFixture(api, table) {
       await settle();
       return draw();
     },
+    selectRetry(row, name) {
+      const checkbox = nodes(draw()).find(node => node.props?.['aria-label'] === `${row + 1}행 ${name} 재시도`);
+      assert.ok(checkbox && !checkbox.props.disabled, 'row-specific retry is available');
+      checkbox.props.onChange({ target: { checked: true } });
+    },
   };
 }
 
@@ -124,11 +129,63 @@ test('the component preserves implicit drops when new account domains change ret
     assert.match(messages, /고객사 연락처에서 저장 여부를 확인/);
     assert.doesNotMatch(messages, /아직 저장되지 않은 행만/);
     failOther = false;
+    screen.selectRetry(2, 'Retry');
     await screen.submit();
     assert.equal(createdAccounts, 1);
     assert.deepEqual(writes, [['new-account', 'Selected'], ['other', 'Retry'], ['other', 'Retry']]);
     const dropped = nodes(screen.draw()).find(node => node.props?.['aria-label'] === 'Acme EU 처리 방법');
     assert.equal(dropped.props.value, 'drop');
+  } finally { screen.unmount(); }
+});
+
+test('uncertain name-only rows require individual confirmation on every retry', async () => {
+  const saved = [];
+  const writes = [];
+  let unsavedAttempts = 0;
+  const api = {
+    list: async () => ({ accounts: [{ accountId: 'north', name: 'North' }, { accountId: 'south', name: 'South' }] }),
+    get: async accountId => ({ name: accountId === 'north' ? 'North' : 'South' }),
+    contacts: async () => ({ contacts: [...saved] }),
+    createContact: async (accountId, contact) => {
+      writes.push([accountId, contact.name]);
+      if (contact.name === 'Unsaved' && ++unsavedAttempts < 3) throw { status: 503 };
+      const created = { ...contact, contactId: `contact-${saved.length}`, revision: 'r1' };
+      saved.push(created);
+      if (contact.name === 'Unknown') throw { status: 504 };
+      return created;
+    },
+  };
+  const screen = componentFixture(api, [
+    ['회사', '이름'], ['North', 'Unknown'], ['North', 'Unsaved'], ['North', 'Confirmed'],
+  ]);
+  const importButton = tree => nodes(tree).find(node => node.type === 'button' && /명 가져오기$/.test(node.props.children));
+  const retryChoices = tree => nodes(tree).filter(node => node.type === 'input' && node.props.type === 'checkbox');
+  try {
+    await screen.chooseFile();
+    let tree = await screen.submit();
+    assert.equal(importButton(tree).props.disabled, true, 'failed rows must not automatically retry');
+    assert.equal(retryChoices(tree).length, 2);
+    assert.ok(retryChoices(tree).every(choice => choice.props.checked === false));
+    const destination = nodes(tree).find(node => node.props?.['aria-label'] === 'North 처리 방법');
+    assert.equal(destination.props.disabled, true, 'an attempted group must not split across accounts');
+    destination.props.onChange({ target: { value: 'a:south' } });
+    assert.equal(nodes(screen.draw()).find(node => node.props?.['aria-label'] === 'North 처리 방법').props.value, 'a:north');
+
+    screen.selectRetry(1, 'Unsaved');
+    tree = await screen.submit();
+    assert.equal(importButton(tree).props.disabled, true, 'a failed retry requires fresh confirmation');
+    assert.ok(retryChoices(tree).every(choice => choice.props.checked === false));
+    screen.selectRetry(1, 'Unsaved');
+    tree = await screen.submit();
+    assert.equal(importButton(tree).props.disabled, true);
+    assert.deepEqual(saved.map(contact => contact.name).sort(), ['Confirmed', 'Unknown', 'Unsaved']);
+    assert.deepEqual(writes, [
+      ['north', 'Unknown'], ['north', 'Unsaved'], ['north', 'Confirmed'],
+      ['north', 'Unsaved'], ['north', 'Unsaved'],
+    ]);
+    screen.selectRetry(0, 'Unknown');
+    tree = await screen.chooseFile();
+    assert.equal(retryChoices(tree).length, 0, 'a new file clears prior retry selections and outcomes');
   } finally { screen.unmount(); }
 });
 
@@ -301,4 +358,22 @@ test('retries skip saved rows, report created accounts and reserve ambiguous ide
   assert.equal(retry[0], undefined, 'a saved row is skipped');
   const controller = new AbortController(); controller.abort();
   await assert.rejects(runBulkImport(contacts, groups, {}, api, { signal: controller.signal }), { name: 'AbortError' });
+});
+
+test('an ambiguous update reserves newly filled identifiers before later rows', async () => {
+  const { groupByCompany, runBulkImport } = load();
+  const contacts = [
+    { name: 'Person', company: '하나은행', phone: '010-1234-5678', email: 'person@hanabank.com' },
+    { name: 'Person', company: '하나은행', email: 'person@hanabank.com' },
+  ];
+  let creates = 0;
+  let updates = 0;
+  const results = await runBulkImport(contacts, groupByCompany(contacts, accounts), {}, {
+    listContacts: async () => ({ contacts: [{ contactId: 'existing', revision: 'r1', name: 'Person', phone: '010-1234-5678' }] }),
+    updateContact: async () => { updates++; throw { status: 504 }; },
+    createContact: async (accountId, contact) => { creates++; return { ...contact, contactId: 'duplicate', revision: 'r1' }; },
+  });
+  assert.equal(updates, 1);
+  assert.equal(creates, 0, 'a later email-only row must not duplicate an ambiguously updated contact');
+  assert.deepEqual(plain(Object.values(results).map(result => result.status)), ['failed', 'failed']);
 });

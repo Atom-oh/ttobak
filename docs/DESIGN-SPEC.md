@@ -317,15 +317,22 @@ Settings also has a cross-account contact import (`BulkContactImport`,
 normalized company name (legal forms, case and spacing ignored), or by company
 mail domain when the company is blank. A group whose name or alias matches one
 directly joined Account imports there automatically; otherwise a matching
-company domain is used. Similar names (containment, shared head or bigram
+company domain is used. Matching requires complete account metadata and considers
+all nonpersonal domains in a company group; conflicting account matches require
+an explicit choice regardless of row order. Similar names (containment, shared head or bigram
 similarity) and unmatched groups ask the user to pick an Account, create a new
 one (with the mail domain), or drop the group; undecided groups drop. The same
 person is the same email, or the same name with a shared mobile or work phone
 when emails do not differ; a shared office line alone never matches. A match
 fills only empty fields; differing values are listed as change candidates and
 applied one at a time only while the stored value is still the one shown.
-Retries skip rows already saved, and a created account becomes the group's
-target. Account aliases are not edited, because no alias update route exists.
+Retries skip confirmed saved rows. Failed rows are excluded by default because
+an unsuccessful response may follow a committed write. The user checks the
+Account's contacts and explicitly selects only still-unsaved rows to retry;
+each failed attempt clears those retry selections. A created account becomes the
+group's target, and any account-bound write result locks that target so a partially
+processed group cannot split across Accounts. Implicit drop decisions also persist
+across retries. Account aliases are not edited, because no alias update route exists.
 
 Initial Account creation can select another Owner by colleague or email.
 Show an unchecked "Keep me as a regular member (AM)" checkbox for this choice.

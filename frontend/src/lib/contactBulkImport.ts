@@ -272,7 +272,10 @@ export async function runBulkImport(
         // A network or server failure can arrive after the write committed:
         // reserve the identity so a later row in this run is not added twice.
         const rejected = typeof error === 'object' && error !== null && 'status' in error && [400, 409, 413, 422].includes(Number(error.status));
-        if (!same && !rejected) existing.push({ ...contact, contactId: '', revision: '' });
+        if (!rejected) {
+          if (same) existing[existing.indexOf(same)] = { ...mergeContact(same, contact).merged, contactId: '', revision: '' };
+          else existing.push({ ...contact, contactId: '', revision: '' });
+        }
         report(row, { status: 'failed', accountId, contactId: same?.contactId });
       }
     }

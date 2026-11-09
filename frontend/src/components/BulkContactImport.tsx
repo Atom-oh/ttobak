@@ -36,6 +36,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
   const [mapping, setMapping] = useState<ContactMapping>({});
   const [decisions, setDecisions] = useState<Record<string, GroupDecision>>({});
   const [results, setResults] = useState<Record<number, BulkRowResult>>({});
+  const [retryRows, setRetryRows] = useState<Set<number>>(new Set());
   const [applied, setApplied] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -53,6 +54,13 @@ export function BulkContactImport({ userId }: { userId: string }) {
   const groups = useMemo<CompanyGroup[]>(() => accounts ? groupByCompany(contacts, accounts) : [], [contacts, accounts]);
   const accountName = (id: string) => accounts?.find((a) => a.accountId === id)?.name || id;
   const decisionOf = (group: CompanyGroup) => decisions[group.key] ?? defaultDecision(group);
+  const groupLocked = (group: CompanyGroup) => group.rows.some((row) => !!results[row]?.accountId);
+  const skipRow = (row: number) => {
+    const result = results[row];
+    if (!result) return false;
+    return ['created', 'filled', 'unchanged'].includes(result.status)
+      || (result.status === 'failed' && !retryRows.has(row));
+  };
 
   const chooseFile = async (file?: File) => {
     if (!file) return;
@@ -60,6 +68,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
     const generation = ++fileGeneration.current;
     const current = () => !!active && !active.signal.aborted && generation === fileGeneration.current;
     setError(''); setTable([]); setResults({}); setDecisions({}); setApplied(new Set());
+    setRetryRows(new Set());
     try {
       const [rows, loaded] = await Promise.all([readContactFile(file), accounts ? Promise.resolve(accounts) : loadMatchAccounts(userId, active!.signal)]);
       if (!current()) return;
@@ -82,7 +91,8 @@ export function BulkContactImport({ userId }: { userId: string }) {
     const effectiveDecisions = Object.fromEntries(groups.map((group) => [group.key, decisionOf(group)]));
     setDecisions(effectiveDecisions);
     // Rows already saved in this file are not sent again on a retry.
-    const skipRows = new Set(Object.entries(results).filter(([, r]) => r.status === 'created' || r.status === 'filled' || r.status === 'unchanged').map(([row]) => Number(row)));
+    const skipRows = new Set(Object.keys(results).map(Number).filter(skipRow));
+    setRetryRows(new Set());
     try {
       await runBulkImport(contacts, groups, effectiveDecisions, {
         createAccount: async (name, domains) => {
@@ -148,7 +158,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
   const counts = Object.values(results).reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
   const pending = groups.filter((g) => g.match.kind !== 'exact');
   const exact = groups.filter((g) => g.match.kind === 'exact');
-  const importing = groups.reduce((n, g) => n + (decisionOf(g).action === 'drop' ? 0 : g.rows.length), 0);
+  const importing = groups.reduce((n, g) => n + (decisionOf(g).action === 'drop' ? 0 : g.rows.filter((row) => !skipRow(row)).length), 0);
   const headers = table[0] || [];
   const nameless = contacts.filter((c) => !c.name.trim()).length;
   const done = Object.keys(results).length > 0 && !busy;
@@ -158,8 +168,10 @@ export function BulkContactImport({ userId }: { userId: string }) {
     const decision = decisionOf(g);
     const value = decision.action === 'account' ? `a:${decision.accountId}` : decision.action;
     const candidates = g.match.kind === 'similar' ? g.match.candidates : [];
+    const locked = groupLocked(g);
     return <div className="mt-2 flex flex-wrap items-center gap-2">
-      <select aria-label={`${groupTitle(g)} 처리 방법`} value={value} disabled={busy} onChange={(e) => {
+      <select aria-label={`${groupTitle(g)} 처리 방법`} value={value} disabled={busy || locked} onChange={(e) => {
+        if (locked) return;
         const v = e.target.value;
         if (v === 'drop') setDecision(g.key, { action: 'drop' });
         else if (v === 'new') setDecision(g.key, { action: 'new', name: g.company || g.domain.split('.')[0] || '' });
@@ -170,17 +182,30 @@ export function BulkContactImport({ userId }: { userId: string }) {
         {candidates.length > 0 && <optgroup label="비슷한 고객사">{candidates.map((id) => <option key={id} value={`a:${id}`}>{accountName(id)}</option>)}</optgroup>}
         <optgroup label="다른 고객사 선택">{(accounts || []).filter((a) => !candidates.includes(a.accountId)).map((a) => <option key={a.accountId} value={`a:${a.accountId}`}>{a.name}</option>)}</optgroup>
       </select>
-      {decision.action === 'new' && <input aria-label={`${groupTitle(g)} 새 고객사 이름`} value={decision.name} disabled={busy} maxLength={200}
-        onChange={(e) => setDecision(g.key, { action: 'new', name: e.target.value })}
+      {decision.action === 'new' && <input aria-label={`${groupTitle(g)} 새 고객사 이름`} value={decision.name} disabled={busy || locked} maxLength={200}
+        onChange={(e) => { if (!locked) setDecision(g.key, { action: 'new', name: e.target.value }); }}
         className="min-w-48 rounded border border-slate-200 bg-white p-1.5 text-sm dark:border-white/10 dark:bg-slate-900" placeholder="고객사 이름" />}
       {decision.action === 'new' && g.domain && <span className="text-xs text-slate-500">도메인 @{g.domain}도 등록합니다</span>}
+      {locked && <span className="text-xs text-slate-500">저장을 시도한 회사는 대상 고객사를 변경할 수 없습니다.</span>}
     </div>;
   };
 
-  const people = (g: CompanyGroup) => <details className="mt-1 text-xs text-slate-500">
+  const people = (g: CompanyGroup) => <details open={g.rows.some((row) => results[row]?.status === 'failed') || undefined} className="mt-1 text-xs text-slate-500">
     <summary className="cursor-pointer">{g.rows.length}명 보기</summary>
     <ul className="mt-1 space-y-0.5">{g.rows.map((row) => { const c = contacts[row]; const r = results[row]; return <li key={row}>
       {c.name}{c.title ? ` · ${c.title}` : ''}{c.email ? ` · ${c.email}` : ''}{r && <span className="ml-2 font-semibold">{statusLabel[r.status]}</span>}
+      {r?.status === 'failed' && <label className="ml-2 inline-flex items-center gap-1">
+        <input type="checkbox" aria-label={`${row + 1}행 ${c.name} 재시도`} checked={retryRows.has(row)} disabled={busy}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            setRetryRows((old) => {
+              const next = new Set(old);
+              if (checked) next.add(row); else next.delete(row);
+              return next;
+            });
+          }} />
+        미저장 확인 후 재시도
+      </label>}
     </li>; })}</ul>
   </details>;
 
@@ -216,7 +241,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
         </li>)}</ul>
       </section>}
 
-      {exact.length > 0 && <details className="rounded border border-slate-200 p-3 dark:border-white/10">
+      {exact.length > 0 && <details open={exact.some((group) => group.rows.some((row) => results[row]?.status === 'failed')) || undefined} className="rounded border border-slate-200 p-3 dark:border-white/10">
         <summary className="cursor-pointer text-sm font-semibold">자동으로 연결된 회사 {exact.length}곳 · {exact.reduce((n, g) => n + g.rows.length, 0)}명</summary>
         <ul className="mt-2 space-y-2">{exact.map((g) => <li key={g.key} className="text-sm">
           <span className="font-semibold">{groupTitle(g)}</span> → {g.match.kind === 'exact' && accountName(g.match.accountId)}
@@ -229,7 +254,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
         className="rounded bg-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-40">{busy ? '가져오는 중…' : `${importing}명 가져오기`}</button>
 
       {done && <p role="status" className="text-sm">결과: 추가 {counts.created || 0} · 빈 칸 보강 {counts.filled || 0} · 변경 없음 {counts.unchanged || 0} · 드랍 {counts.dropped || 0}{counts.failed ? ` · 실패 ${counts.failed}` : ''}{counts.invalid ? ` · 이름 없음 ${counts.invalid}` : ''}</p>}
-      {done && counts.failed > 0 && <p className="text-xs text-slate-500">응답이 실패했어도 저장되었을 수 있습니다. 고객사 연락처에서 저장 여부를 확인한 뒤 다시 시도해 주세요. 저장이 확인된 행만 재처리에서 제외합니다.</p>}
+      {done && counts.failed > 0 && <p className="text-xs text-slate-500">응답이 실패했어도 저장되었을 수 있습니다. 고객사 연락처에서 저장 여부를 확인한 뒤, 회사별 목록에서 미저장 행만 선택해 재시도해 주세요. 실패한 행은 기본적으로 재처리하지 않습니다.</p>}
 
       {conflicts.length > 0 && <section>
         <h4 className="text-sm font-semibold">변경 후보 {conflicts.length}건</h4>
