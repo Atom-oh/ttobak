@@ -673,3 +673,62 @@ func TestHiddenVetoesAutomaticAndVisibleAccount(test *testing.T) {
 		test.Fatalf("one account needs one veto: %+v", last)
 	}
 }
+
+func TestDecideCalendarSharePrivateBeatsAccountOverride(test *testing.T) {
+	account := &repository.CalendarOverrideRow{Mode: "account", AccountID: "acc_2"}
+	hidden := &repository.CalendarOverrideRow{Mode: "hidden"}
+	cases := []struct {
+		name     string
+		input    model.CalendarEventInput
+		override *repository.CalendarOverrideRow
+		recorded []string
+		want     calendarShareDecision
+	}{
+		{"private with account override vetoes recorded share", model.CalendarEventInput{Private: true, ShareAccountID: "acc_1"}, account, []string{"acc_2"},
+			calendarShareDecision{accountID: "acc_2", state: "veto"}},
+		{"private with account override vetoes recorded other account", model.CalendarEventInput{Private: true}, account, []string{"acc_3"},
+			calendarShareDecision{accountID: "acc_3", state: "veto"}},
+		{"private with account override and nothing recorded vetoes override account", model.CalendarEventInput{Private: true}, account, nil,
+			calendarShareDecision{accountID: "acc_2", state: "veto"}},
+		{"private alone vetoes recorded", model.CalendarEventInput{Private: true, ShareAccountID: "acc_1"}, nil, []string{"acc_1"},
+			calendarShareDecision{accountID: "acc_1", state: "veto"}},
+		{"private alone with nothing recorded writes nothing", model.CalendarEventInput{Private: true, ShareAccountID: "acc_1"}, nil, nil,
+			calendarShareDecision{}},
+		{"account override without private shares", model.CalendarEventInput{ShareAccountID: "acc_1"}, account, []string{"acc_1"},
+			calendarShareDecision{accountID: "acc_2", state: "shared"}},
+		{"hidden still beats private", model.CalendarEventInput{Private: true, ShareAccountID: "acc_1"}, hidden, nil,
+			calendarShareDecision{accountID: "acc_1", state: "veto", requested: true}},
+	}
+	for _, tc := range cases {
+		if got := decideCalendarShare(tc.input, tc.override, tc.recorded, true); got != tc.want {
+			test.Errorf("%s: got %+v want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestCalendarOwnerEventUsesStoredShareState(test *testing.T) {
+	input := model.CalendarEventInput{Title: "Review", ShareAccountID: "acc_1", ShareEvidence: []string{"domain"}, CandidateAccountIDs: []string{"acc_7"}}
+	hidden := &repository.CalendarOverrideRow{Mode: "hidden"}
+	account := &repository.CalendarOverrideRow{Mode: "account", AccountID: "acc_2"}
+	cases := []struct {
+		name         string
+		row          repository.CalendarEventRow
+		override     *repository.CalendarOverrideRow
+		wantAccount  string
+		wantEvidence []string
+		wantMode     string
+	}{
+		{"normal shared", repository.CalendarEventRow{ShareState: "shared", ShareAccountID: "acc_1", MeetingKey: "mk"}, nil, "acc_1", []string{"domain"}, "auto"},
+		{"hidden after auto match", repository.CalendarEventRow{ShareState: "veto", ShareAccountID: "acc_1", MeetingKey: "mk"}, hidden, "", nil, "hidden"},
+		{"share lost to key collision", repository.CalendarEventRow{}, nil, "", nil, "auto"},
+		{"manual account has no evidence", repository.CalendarEventRow{ShareState: "shared", ShareAccountID: "acc_2", MeetingKey: "mk"}, account, "acc_2", nil, "account"},
+		{"account override not yet applied", repository.CalendarEventRow{}, account, "", nil, "account"},
+	}
+	for _, tc := range cases {
+		event := calendarOwnerEvent(tc.row, input, tc.override)
+		if event.ShareAccountID != tc.wantAccount || !reflect.DeepEqual(event.ShareEvidence, tc.wantEvidence) || event.SharingMode != tc.wantMode ||
+			!reflect.DeepEqual(event.CandidateAccountIDs, []string{"acc_7"}) {
+			test.Errorf("%s: %+v", tc.name, event)
+		}
+	}
+}

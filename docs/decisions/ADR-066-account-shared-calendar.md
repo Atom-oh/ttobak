@@ -30,13 +30,26 @@ wider access. The Outlook source exposes no sensitivity flag (observed
   after the event end.
 - **One veto hides the meeting.** Veto rows hold the set of vetoing events
   (`vetoEventIds`, as `sourceId#eventId`). A veto beats a share, and a shared
-  claim never replaces a veto with members.
+  claim never replaces a veto with members. Veto rows are stored with the
+  meeting `startsAt`/`endsAt` in the Account partition but carry no payload and
+  are not readable through any API. A veto row without `vetoEventIds` is treated
+  as invalid on read; no writer produces one.
 - **Manual overrides.** Sharing mode (`auto`, `account`, `hidden`) is stored as a
   `CalendarOverrideRow` per series (`seriesKey`) or occurrence and beats
   automatic results. `hidden` vetoes both the automatic Account and the currently
   shared Account, so an event carries at most two vetoes (accepted limit).
   Override rows have no TTL and persist until cleared, because the choice must
   outlive the event rows it governs.
+- **Decision order.** `decideCalendarShare` applies: `hidden` override, then the
+  Outlook `Private` category, then an `account` override, then the automatic
+  match. `Private` beats an `account` override: it never writes a shared row and
+  vetoes the Account where the event is recorded, or the override Account when
+  nothing is recorded.
+- **Owner view.** `shareAccountId` (and `shareEvidence`) in the owner event view
+  come from the stored event row, set only when the repository recorded a granted
+  shared row. A vetoed, hidden or collision-dropped event reports no share.
+  `sharingMode` comes from the override and `candidateAccountIds` from the
+  payload.
 - **Concurrency.** A `shareVersion` fence plus the planned version guards each
   change. The service retries once on `ErrCalendarShareStateChanged`.
 - **Unshare latency.** Unsharing in TTOBAK is immediate for the clicked
@@ -52,7 +65,8 @@ wider access. The Outlook source exposes no sensitivity flag (observed
   (`MAX_BATCH` in `mcp-server/src/intake/calendar.ts`); the server rejects larger
   batches with 400.
 - **Mac runner.** A deterministic matcher (`mcp-server/src/intake/match.ts`)
-  matches titles and attendee domains to Accounts. Attendee domains come from
+  matches titles, locations and attendee domains to Accounts (evidence kinds
+  `title`, `location`, `domain`). Attendee domains come from
   `amazon-meetings-mcp` `get_meeting`, reduced to domains in memory; the cache
   stores domains only. `amazon.com` is excluded by default. A directory outage
   keeps previous shares. ADR-065's `SENSITIVITY_UNKNOWN` guard stays: real runs

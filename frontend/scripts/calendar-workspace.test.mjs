@@ -507,7 +507,7 @@ test('next and ongoing events overlap seven days; all-day separate, local times 
   assert.match(output, /원본 시간대: Asia\/Seoul/);
   assert.match(output, /&lt;script&gt;synthetic&lt;\/script&gt;/);
   assert.ok(output.indexOf('synthetic') < output.indexOf('Synthetic later'));
-  assert.match(output, /어카운트 연결로 공유되지 않습니다/);
+  assert.match(output, /어카운트 연결은 분류만 하며/);
 });
 
 test('never synced, unavailable, failed, partial and stale remain distinct', () => {

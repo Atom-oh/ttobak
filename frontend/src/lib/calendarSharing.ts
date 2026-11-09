@@ -20,6 +20,7 @@ export const SHARING_COPY = {
   pickerOthers: '내 어카운트',
   pickerEmpty: '선택할 수 있는 고객사가 없습니다.',
   cancel: '취소',
+  personalNote: '나에게 동기화된 개인 일정입니다. 어카운트 연결은 분류만 하며, "공유됨" 배지가 표시된 일정만 어카운트에 공유됩니다.',
   evidence: { title: '제목', location: '장소', domain: '참석자 도메인' } as Record<string, string>,
 } as const;
 
@@ -28,8 +29,10 @@ export interface SharingBadge { kind: 'shared' | 'candidate' | 'private' | 'none
 
 export function sharingBadge(event: CalendarEvent): SharingBadge {
   if (event.private) return { kind: 'private' };
+  // Hidden never reads as shared, even if a stale payload still names an account.
+  if (event.sharingMode === 'hidden') return { kind: 'none' };
   if (event.shareAccountId) return { kind: 'shared', accountId: event.shareAccountId, evidence: event.shareEvidence ?? [] };
-  if (event.sharingMode !== 'hidden' && event.candidateAccountIds?.length) return { kind: 'candidate' };
+  if (event.candidateAccountIds?.length) return { kind: 'candidate' };
   return { kind: 'none' };
 }
 

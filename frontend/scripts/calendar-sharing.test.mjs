@@ -23,6 +23,7 @@ test('badge classifies shared, candidate, private and none', () => {
   assert.deepEqual(plain(helpers.sharingBadge(event({ private: true, shareAccountId: 'a1' }))), { kind: 'private' });
   assert.deepEqual(plain(helpers.sharingBadge(event({}))), { kind: 'none' });
   assert.deepEqual(plain(helpers.sharingBadge(event({ sharingMode: 'hidden', candidateAccountIds: ['a2'] }))), { kind: 'none' });
+  assert.deepEqual(plain(helpers.sharingBadge(event({ sharingMode: 'hidden', shareAccountId: 'a1', shareEvidence: ['domain'] }))), { kind: 'none' });
 });
 
 test('actions follow badge kind and manual mode', () => {

@@ -208,7 +208,7 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
         <div className="p-5 sm:p-6">
           <p className="mb-4 text-xs font-semibold text-primary">내 Outlook 일정</p>
           <h2 className="text-xl font-bold text-text-main">다음 미팅</h2>
-          <p className="mt-2 text-sm text-text-secondary">나에게 동기화된 개인 일정입니다. 어카운트 연결로 공유되지 않습니다.</p>
+          <p className="mt-2 text-sm text-text-secondary">{SHARING_COPY.personalNote}</p>
           {state === 'setup' && <div className="py-6">
             <h3 className="text-lg font-semibold text-text-main">Outlook 일정을 연결해 보세요.</h3>
             <p className="mt-3 max-w-prose text-sm leading-6 text-text-secondary">
