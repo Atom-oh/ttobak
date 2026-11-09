@@ -30,6 +30,9 @@ type AccountSignals struct {
 	Opportunities   []SignalOppty       `json:"opportunities"` // at most 20
 	Insights        []AccountInsightDTO `json:"insights"`      // at most 10, need|opportunity|risk
 	RestrictedCount int                 `json:"restrictedCount"`
+	// LinksTruncated reports that a per-endpoint link read hit its bound, so
+	// linkedProjectIds, candidate and NO_UPCOMING may be incomplete.
+	LinksTruncated bool `json:"linksTruncated"`
 }
 
 // SignalNews is one recent news item of the account's own news sources. ID

@@ -23,9 +23,9 @@ const (
 	maxSignalsURLBytes      = 2048
 	// MaxAccountSignalsBytes bounds the encoded signals response.
 	MaxAccountSignalsBytes = 64 * 1024
-	// maxOverviewLinkPages bounds the link scan (100 rows per page). Beyond it
-	// the call fails instead of reporting linked news as unlinked candidates.
-	maxOverviewLinkPages = 20
+	// maxOverviewLinkRows bounds each per-endpoint link read. Hitting it keeps
+	// the rows read and sets AccountSignals.LinksTruncated.
+	maxOverviewLinkRows = 200
 	// maxOverviewMeetingsPerProject bounds meeting reads per project (newest first).
 	maxOverviewMeetingsPerProject = 100
 )
@@ -41,18 +41,13 @@ type accountOverviewRepo interface {
 	ListProjectMeetingRefsForProject(ctx context.Context, projectID string) ([]model.ProjectMeetingRef, error)
 	GetMeetingActionState(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error)
 	GetAccountEvent(ctx context.Context, account, id string) (*model.AccountEvent, string, error)
+	ListAccountLinksByPrefix(ctx context.Context, accountID, prefix string, maxRows int) ([]model.AccountLink, bool, error)
 }
 
 // accountOverviewNews is implemented by AccountNewsService.
 type accountOverviewNews interface {
 	accountSources(ctx context.Context, accountID string) ([]model.CrawlerSource, error)
 	CurrentNews(ctx context.Context, accountID string, from, to time.Time) ([]model.CrawledDocument, error)
-}
-
-// accountOverviewLinks is implemented by AccountLinksService; its List
-// revalidates every link endpoint.
-type accountOverviewLinks interface {
-	List(ctx context.Context, userID, accountID, cursor string) ([]model.AccountLink, *string, error)
 }
 
 // accountOverviewInsights is implemented by AccountService.
@@ -66,12 +61,11 @@ type accountOverviewInsights interface {
 type AccountOverviewService struct {
 	repo     accountOverviewRepo
 	news     accountOverviewNews
-	links    accountOverviewLinks
 	insights accountOverviewInsights
 }
 
-func NewAccountOverviewService(repo accountOverviewRepo, news *AccountNewsService, links *AccountLinksService, accounts *AccountService) *AccountOverviewService {
-	return &AccountOverviewService{repo: repo, news: news, links: links, insights: accounts}
+func NewAccountOverviewService(repo accountOverviewRepo, news *AccountNewsService, accounts *AccountService) *AccountOverviewService {
+	return &AccountOverviewService{repo: repo, news: news, insights: accounts}
 }
 
 func (s *AccountOverviewService) authorize(ctx context.Context, accountID, userID string) (*model.AccountMember, error) {
@@ -95,43 +89,90 @@ func (s *AccountOverviewService) authorize(ctx context.Context, accountID, userI
 	return member, nil
 }
 
-// overviewLinkIndex holds the account's revalidated links by endpoint.
-type overviewLinkIndex struct {
-	newsProjects  map[string][]string // news ID -> project IDs
-	projectEvents map[string][]string // project ID -> event IDs
+// overviewReads caches per-call reads and link revalidation; it never
+// outlives one request.
+type overviewReads struct {
+	meetings  map[string]*model.Meeting
+	events    map[string]*model.AccountEvent
+	projects  map[string]bool // project ID -> still lists the account
+	truncated bool            // a per-endpoint link read hit its bound
 }
 
-func (s *AccountOverviewService) linkIndex(ctx context.Context, userID, accountID string) (*overviewLinkIndex, error) {
-	idx := &overviewLinkIndex{newsProjects: map[string][]string{}, projectEvents: map[string][]string{}}
-	cursor := ""
-	for page := 0; ; page++ {
-		if page == maxOverviewLinkPages {
-			return nil, fmt.Errorf("account links exceed the overview bound")
+func newOverviewReads() *overviewReads {
+	return &overviewReads{meetings: map[string]*model.Meeting{}, events: map[string]*model.AccountEvent{}, projects: map[string]bool{}}
+}
+
+// projectInAccount reports whether the project still lists the account.
+func (s *AccountOverviewService) projectInAccount(ctx context.Context, accountID, projectID string, reads *overviewReads) (bool, error) {
+	if ok, seen := reads.projects[projectID]; seen {
+		return ok, nil
+	}
+	project, err := s.repo.GetProject(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	ok := project != nil && project.ProjectID == projectID && contains(project.AccountIDs, accountID)
+	reads.projects[projectID] = ok
+	return ok, nil
+}
+
+// endpointLinks reads the link rows under one endpoint prefix, keeping only
+// well-formed rows. A hit bound is recorded on reads, never an error.
+func (s *AccountOverviewService) endpointLinks(ctx context.Context, accountID, prefix string, reads *overviewReads) ([]model.AccountLink, error) {
+	rows, truncated, err := s.repo.ListAccountLinksByPrefix(ctx, accountID, prefix, maxOverviewLinkRows)
+	if err != nil {
+		return nil, err
+	}
+	if truncated {
+		reads.truncated = true
+	}
+	out := make([]model.AccountLink, 0, len(rows))
+	for _, link := range rows {
+		if validateLinkShape(link.Input()) == nil {
+			out = append(out, link)
 		}
-		links, next, err := s.links.List(ctx, userID, accountID, cursor)
+	}
+	return out, nil
+}
+
+// newsProjects returns the projects a news item is linked to, revalidating
+// that each project still lists the account. The news itself comes from the
+// account's current sources.
+func (s *AccountOverviewService) newsProjects(ctx context.Context, accountID, newsID string, reads *overviewReads) ([]string, error) {
+	links, err := s.endpointLinks(ctx, accountID, model.PrefixAccountLink+model.LinkKindNews+"#"+newsID+"#"+model.LinkKindProject+"#", reads)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, link := range links {
+		if link.FromKind != model.LinkKindNews || link.FromID != newsID || link.ToKind != model.LinkKindProject || contains(out, link.ToID) {
+			continue
+		}
+		ok, err := s.projectInAccount(ctx, accountID, link.ToID, reads)
 		if err != nil {
 			return nil, err
 		}
-		for _, link := range links {
-			if link.ToKind != model.LinkKindProject {
-				continue
-			}
-			switch link.FromKind {
-			case model.LinkKindNews:
-				if !contains(idx.newsProjects[link.FromID], link.ToID) {
-					idx.newsProjects[link.FromID] = append(idx.newsProjects[link.FromID], link.ToID)
-				}
-			case model.LinkKindEvent:
-				if !contains(idx.projectEvents[link.ToID], link.FromID) {
-					idx.projectEvents[link.ToID] = append(idx.projectEvents[link.ToID], link.FromID)
-				}
-			}
+		if ok {
+			out = append(out, link.ToID)
 		}
-		if next == nil || *next == "" {
-			return idx, nil
-		}
-		cursor = *next
 	}
+	return out, nil
+}
+
+// projectEvents returns the event IDs linked to a project (event→project).
+// Events are revalidated when read in hasUpcomingEvent.
+func (s *AccountOverviewService) projectEvents(ctx context.Context, accountID, projectID string, reads *overviewReads) ([]string, error) {
+	links, err := s.endpointLinks(ctx, accountID, model.PrefixAccountLinkTo+model.LinkKindProject+"#"+projectID+"#"+model.LinkKindEvent+"#", reads)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, link := range links {
+		if link.FromKind == model.LinkKindEvent && link.ToKind == model.LinkKindProject && link.ToID == projectID && !contains(out, link.FromID) {
+			out = append(out, link.FromID)
+		}
+	}
+	return out, nil
 }
 
 // capRunes truncates s to at most n Unicode code points.
@@ -196,15 +237,12 @@ func (s *AccountOverviewService) Signals(ctx context.Context, userID, accountID 
 		return nil, err
 	}
 	now = now.UTC()
-	links, err := s.linkIndex(ctx, userID, accountID)
-	if err != nil {
-		return nil, err
-	}
+	reads := newOverviewReads()
 	out := &model.AccountSignals{News: []model.SignalNews{}, Opportunities: []model.SignalOppty{}, Insights: []model.AccountInsightDTO{}}
-	if out.NewsState, out.News, err = s.signalNews(ctx, accountID, now, links); err != nil {
+	if out.NewsState, out.News, err = s.signalNews(ctx, accountID, now, reads); err != nil {
 		return nil, err
 	}
-	if out.Opportunities, err = s.signalOpportunities(ctx, userID, accountID, member, now, links); err != nil {
+	if out.Opportunities, err = s.signalOpportunities(ctx, userID, accountID, member, now, reads); err != nil {
 		return nil, err
 	}
 	page, err := s.insights.ListAccountInsightsPage(ctx, userID, accountID, time.Time{}, time.Time{}, signalInsightTypes)
@@ -212,13 +250,14 @@ func (s *AccountOverviewService) Signals(ctx context.Context, userID, accountID 
 		return nil, err
 	}
 	out.Insights, out.RestrictedCount = signalInsights(page.Insights), page.RestrictedCount
+	out.LinksTruncated = reads.truncated
 	if err := fitSignals(out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (s *AccountOverviewService) signalNews(ctx context.Context, accountID string, now time.Time, links *overviewLinkIndex) (string, []model.SignalNews, error) {
+func (s *AccountOverviewService) signalNews(ctx context.Context, accountID string, now time.Time, reads *overviewReads) (string, []model.SignalNews, error) {
 	sources, err := s.news.accountSources(ctx, accountID)
 	if err != nil {
 		return "", nil, err
@@ -249,7 +288,10 @@ func (s *AccountOverviewService) signalNews(ctx context.Context, accountID strin
 	news := make([]model.SignalNews, 0, len(kept))
 	for _, doc := range kept {
 		id := doc.SourceID + ":" + doc.DocHash
-		linked := append([]string{}, links.newsProjects[id]...)
+		linked, err := s.newsProjects(ctx, accountID, id, reads)
+		if err != nil {
+			return "", nil, err
+		}
 		sort.Strings(linked)
 		if len(linked) > maxSignalsLinkedIDs {
 			linked = linked[:maxSignalsLinkedIDs]
@@ -267,18 +309,11 @@ func (s *AccountOverviewService) signalNews(ctx context.Context, accountID strin
 	return model.NewsStateOK, news, nil
 }
 
-// overviewReads caches per-call reads; it never outlives one request.
-type overviewReads struct {
-	meetings map[string]*model.Meeting
-	events   map[string]*model.AccountEvent
-}
-
-func (s *AccountOverviewService) signalOpportunities(ctx context.Context, userID, accountID string, member *model.AccountMember, now time.Time, links *overviewLinkIndex) ([]model.SignalOppty, error) {
+func (s *AccountOverviewService) signalOpportunities(ctx context.Context, userID, accountID string, member *model.AccountMember, now time.Time, reads *overviewReads) ([]model.SignalOppty, error) {
 	refs, err := s.repo.ListProjectRefsForAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
-	reads := &overviewReads{meetings: map[string]*model.Meeting{}, events: map[string]*model.AccountEvent{}}
 	seen := map[string]bool{}
 	out := []model.SignalOppty{}
 	for _, ref := range refs {
@@ -312,7 +347,11 @@ func (s *AccountOverviewService) signalOpportunities(ctx context.Context, userID
 			if err != nil {
 				return nil, err
 			}
-			upcoming, err := s.hasUpcomingEvent(ctx, accountID, links.projectEvents[project.ProjectID], now, reads)
+			events, err := s.projectEvents(ctx, accountID, project.ProjectID, reads)
+			if err != nil {
+				return nil, err
+			}
+			upcoming, err := s.hasUpcomingEvent(ctx, accountID, events, now, reads)
 			if err != nil {
 				return nil, err
 			}

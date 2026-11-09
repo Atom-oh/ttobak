@@ -20,6 +20,7 @@ type overviewTestRepo struct {
 	meetingRef map[string][]model.ProjectMeetingRef
 	meetings   map[string]*model.Meeting
 	events     map[string]*model.AccountEvent
+	links      *overviewTestLinks
 }
 
 func newOverviewTestRepo() *overviewTestRepo {
@@ -70,14 +71,29 @@ func (n *overviewTestNews) CurrentNews(context.Context, string, time.Time, time.
 	return n.docs, nil
 }
 
+// overviewTestLinks stores forward links; prefix reads emulate both the
+// LINK# and LINKTO# key spaces.
 type overviewTestLinks struct {
-	links []model.AccountLink
-	calls int
+	links    []model.AccountLink
+	bound    int // 0 = maxRows
+	prefixes []string
 }
 
-func (l *overviewTestLinks) List(context.Context, string, string, string) ([]model.AccountLink, *string, error) {
-	l.calls++
-	return l.links, nil, nil
+func (r *overviewTestRepo) ListAccountLinksByPrefix(_ context.Context, _ string, prefix string, maxRows int) ([]model.AccountLink, bool, error) {
+	r.links.prefixes = append(r.links.prefixes, prefix)
+	if r.links.bound > 0 {
+		maxRows = r.links.bound
+	}
+	out := []model.AccountLink{}
+	for _, l := range r.links.links {
+		if strings.HasPrefix(model.AccountLinkSortKey(l.Input()), prefix) || strings.HasPrefix(model.AccountLinkToSortKey(l.Input()), prefix) {
+			if len(out) == maxRows {
+				return out, true, nil
+			}
+			out = append(out, l)
+		}
+	}
+	return out, false, nil
 }
 
 type overviewTestInsights struct{ page *model.AccountInsightsPage }
@@ -90,7 +106,8 @@ func newOverviewTest() (*AccountOverviewService, *overviewTestRepo, *overviewTes
 	repo := newOverviewTestRepo()
 	news := &overviewTestNews{sources: []model.CrawlerSource{{SourceID: linkSource, AccountID: linkAcct}}}
 	links := &overviewTestLinks{}
-	svc := &AccountOverviewService{repo: repo, news: news, links: links, insights: &overviewTestInsights{page: &model.AccountInsightsPage{}}}
+	repo.links = links
+	svc := &AccountOverviewService{repo: repo, news: news, insights: &overviewTestInsights{page: &model.AccountInsightsPage{}}}
 	return svc, repo, news, links
 }
 
@@ -342,5 +359,48 @@ func TestSignalURLAndFit(t *testing.T) {
 	}
 	if len(sig.News) == 0 || len(sig.News) == 200 {
 		t.Fatalf("len=%d", len(sig.News))
+	}
+}
+
+func TestSignals_LinkBoundDegradesNotFails(t *testing.T) {
+	svc, repo, news, links := newOverviewTest()
+	repo.addProject(&model.Project{ProjectID: "p1", Name: "P1", Stage: "Qualified", AccountIDs: []string{linkAcct}})
+	repo.addProject(&model.Project{ProjectID: "p2", Name: "P2", Stage: "Qualified", AccountIDs: []string{linkAcct}})
+	repo.addProject(&model.Project{ProjectID: "pX", Name: "left", AccountIDs: []string{"other"}})
+	newsID := linkSource + ":aaaa1111"
+	news.docs = []model.CrawledDocument{{SourceID: linkSource, DocHash: "aaaa1111", Title: "n", OpportunityCount: 1, QualityScore: 0.9}}
+	repo.events[linkEventID] = &model.AccountEvent{EventID: linkEventID, StartAt: signalsNow.Add(day).Format(time.RFC3339)}
+	links.links = []model.AccountLink{
+		{FromKind: "news", FromID: newsID, ToKind: "project", ToID: "pX"}, // project left the account
+		{FromKind: "news", FromID: newsID, ToKind: "project", ToID: "p1"},
+		{FromKind: "news", FromID: newsID, ToKind: "project", ToID: "p2"},
+		{FromKind: "event", FromID: linkEventID, ToKind: "project", ToID: "p1"},
+		{FromKind: "news", FromID: linkSource + ":other", ToKind: "project", ToID: "p2"}, // other news
+	}
+	sig, err := svc.Signals(context.Background(), linkUser, linkAcct, signalsNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sig.LinksTruncated || len(sig.News) != 1 || len(sig.News[0].LinkedProjectIDs) != 2 || sig.News[0].Candidate {
+		t.Fatalf("unbounded: %+v", sig)
+	}
+	if stallCodes(sig.Opportunities[0].Stall)[model.StallNoUpcoming] || !stallCodes(sig.Opportunities[1].Stall)[model.StallNoUpcoming] {
+		t.Fatalf("events: %+v", sig.Opportunities)
+	}
+	for _, p := range links.prefixes {
+		if p != "LINK#news#"+newsID+"#project#" && !strings.HasPrefix(p, "LINKTO#project#") {
+			t.Fatalf("unexpected link read %q", p)
+		}
+	}
+
+	// A hit bound keeps the rows read and flags the response instead of failing.
+	links.bound = 2
+	sig, err = svc.Signals(context.Background(), linkUser, linkAcct, signalsNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sig.LinksTruncated || len(sig.News) != 1 || len(sig.News[0].LinkedProjectIDs) != 1 || sig.News[0].LinkedProjectIDs[0] != "p1" ||
+		len(sig.Opportunities) != 2 || len(sig.Insights) != 0 || sig.Insights == nil {
+		t.Fatalf("bounded: %+v", sig)
 	}
 }

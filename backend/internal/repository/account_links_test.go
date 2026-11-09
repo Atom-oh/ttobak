@@ -296,3 +296,42 @@ func TestListAccountLinksDecodesKeysAndPaginates(t *testing.T) {
 		t.Fatalf("bad cursors must not query: %d", calls)
 	}
 }
+
+func TestListAccountLinksByPrefixKeyConditionAndBound(t *testing.T) {
+	calls := 0
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		calls++
+		values := wireValues(body)
+		if target != "DynamoDB_20120810.Query" || body["ConsistentRead"] != true ||
+			!strings.Contains(body["KeyConditionExpression"].(string), "begins_with") ||
+			!values["value:ACCOUNT#acc"] || !values["value:LINKTO#project#p1#"] {
+			t.Fatalf("query: %#v", body)
+		}
+		if calls == 1 {
+			if body["Limit"].(float64) != 2 || body["ExclusiveStartKey"] != nil {
+				t.Fatalf("first page: %#v", body)
+			}
+			return `{"Items":[
+{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#event#e1"},"fromKind":{"S":"news"},"fromId":{"S":"spoofed"},"origin":{"S":"manual"},"createdAt":{"S":"t"}},
+{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#news#s:h"},"origin":{"S":"auto"},"createdAt":{"S":"t"}}],
+"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#news#s:h"}}}`
+		}
+		t.Fatal("read past the bound")
+		return ""
+	})
+	links, truncated, err := repo.ListAccountLinksByPrefix(context.Background(), "acc", "LINKTO#project#p1#", 2)
+	if err != nil || !truncated || len(links) != 2 {
+		t.Fatalf("links=%#v truncated=%v err=%v", links, truncated, err)
+	}
+	if l := links[0]; l.FromKind != "event" || l.FromID != "e1" || l.ToKind != "project" || l.ToID != "p1" {
+		t.Fatalf("reverse key must be canonical: %#v", l)
+	}
+	for _, bad := range []string{"LINK#news", "MEMBER#", ""} {
+		if _, _, err := repo.ListAccountLinksByPrefix(context.Background(), "acc", bad, 2); err == nil {
+			t.Fatalf("prefix %q accepted", bad)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d", calls)
+	}
+}

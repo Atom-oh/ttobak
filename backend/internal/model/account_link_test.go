@@ -54,3 +54,16 @@ func TestAccountLinkSortKeysRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAccountLinkToSortKey(t *testing.T) {
+	in := AccountLinkInput{FromKind: LinkKindEvent, FromID: "e1", ToKind: LinkKindProject, ToID: "p1"}
+	got, ok := ParseAccountLinkToSortKey(AccountLinkToSortKey(in))
+	if !ok || got != in {
+		t.Fatalf("got %+v ok=%v", got, ok)
+	}
+	for _, bad := range []string{AccountLinkSortKey(in), "LINKTO#project#p1#event", "LINKTO#meeting#o:m#event#e1"} {
+		if _, ok := ParseAccountLinkToSortKey(bad); ok {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+}
