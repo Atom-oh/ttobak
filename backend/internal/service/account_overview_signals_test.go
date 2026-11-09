@@ -35,6 +35,10 @@ type overviewTestRepo struct {
 	eventGets   int
 	meetingGets int
 	contactGets int
+	// People fixtures.
+	people       []model.PeopleLink
+	accountNames map[string]string
+	noMemberIn   map[string]bool
 }
 
 func newOverviewTestRepo() *overviewTestRepo {
@@ -43,11 +47,11 @@ func newOverviewTestRepo() *overviewTestRepo {
 }
 
 func (r *overviewTestRepo) GetAccount(_ context.Context, id string) (*model.Account, error) {
-	return &model.Account{AccountID: id}, nil
+	return &model.Account{AccountID: id, Name: r.accountNames[id]}, nil
 }
-func (r *overviewTestRepo) GetMember(context.Context, string, string) (*model.AccountMember, error) {
+func (r *overviewTestRepo) GetMember(_ context.Context, account, _ string) (*model.AccountMember, error) {
 	r.memberGets++
-	if r.member {
+	if r.member && !r.noMemberIn[account] {
 		return &model.AccountMember{}, nil
 	}
 	return nil, nil
