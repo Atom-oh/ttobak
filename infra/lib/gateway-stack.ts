@@ -414,7 +414,11 @@ export class GatewayStack extends cdk.Stack {
         ...apiTelemetry?.environment,
       },
       timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
+      // Lambda CPU scales with memory. Handlers are DynamoDB-bound (self time
+      // ~1-5 ms), but cold starts (~260 ms init plus TLS/secret setup on the
+      // first request) hit every concurrency step-up from the browser's
+      // parallel page-load burst; 1024 MB shortens that CPU-bound phase.
+      memorySize: 1024,
       ...apiTelemetry?.network,
     });
     this.httpOrigin.addReader('Api', this.apiFunction, props.apiRole);
