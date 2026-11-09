@@ -304,6 +304,21 @@ account's contacts or free text; times are entered in the viewer's zone and sent
 as UTC RFC 3339; limits mirror the API (`src/lib/accountEvents.ts`), and deletes
 confirm with the shared dialog. Inherited readers do not see the tab.
 
+For direct members the general tab starts with **AWS signals** and then the
+**engagement flow**, above members and contacts (`components/account/`). Signals
+show the account's recent news (with a new-opportunity-candidate badge, linked
+opportunities and unlink) or an explicit no-source / no-recent-news state with
+account news-source management, plus opportunity stage, days in stage
+("unknown" when absent), stall reasons and recent need/opportunity/risk
+insights. The flow shows activity → response → opportunity → result per
+opportunity, stalled results in the error tone, auto links with an "auto" badge
+whose hover title is the evidence, unlink on stored event links, and an
+unassigned row whose events offer "link to opportunity". The same action appears
+on Events tab rows and on News & Updates document cards (choosing a direct
+account first). Server truncation flags show a partial-links notice. Evidence,
+needs and stall details render as plain text. Every link or news-source mutation
+reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`.
+
 Direct members manage a shared customer contact list on the Account's general
 tab. CSV and XLSX imports parse locally, map Remember and common Korean/English
 headers, show unmapped columns and a selectable preview, and report each row.
