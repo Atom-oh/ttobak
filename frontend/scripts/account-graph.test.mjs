@@ -44,3 +44,10 @@ test('auto_edges_are_dotted_and_shapes_follow_kind', () => {
 test('empty_graph_is_header_only', () => {
   assert.equal(mod.toMermaid({ nodes: [], edges: [], truncated: false }), 'flowchart LR');
 });
+
+test('directives_and_backticks_are_stripped_from_labels', () => {
+  const out = mod.toMermaid({ nodes: [node('a', 'project', "x %%{init:{'themeCSS':'*{}'}}%% `y`")], edges: [], truncated: false });
+  assert.ok(!out.includes('%'));
+  assert.ok(!out.includes('`'));
+  assert.ok(!out.includes('{init'));
+});
