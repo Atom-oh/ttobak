@@ -44,9 +44,18 @@ export function canUntagKBItem(item: AccountKBItem, userId: string | undefined, 
   return item.kind === 'upload' && !!userId && (item.uploadedBy === userId || isOwner);
 }
 
-/** Meeting items open the meeting page; other kinds have no detail route and render plain titles. */
+/**
+ * Meeting items open the meeting page with the bare meeting ID, the same route
+ * the account Meetings tab uses. The server item ID is `{ownerUserId}:{meetingId}`;
+ * a malformed ID renders a plain title. Other kinds have no detail route.
+ */
 export function kbItemHref(item: AccountKBItem): string | undefined {
-  return item.kind === 'meeting' ? `/meeting/${encodeURIComponent(item.id)}` : undefined;
+  if (item.kind !== 'meeting') return undefined;
+  const sep = item.id.indexOf(':');
+  if (sep <= 0) return undefined;
+  const meetingId = item.id.slice(sep + 1);
+  if (!meetingId) return undefined;
+  return `/meeting/${encodeURIComponent(meetingId)}`;
 }
 
 export const ACCOUNT_KB_NOTICES = {

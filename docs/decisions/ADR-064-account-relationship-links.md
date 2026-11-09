@@ -71,6 +71,9 @@ Validation, Business Validation, Committed, Launched, Closed Lost); Launched and
 Closed Lost are terminal and never stall. Each change records `stageChangedAt`
 and an immutable `STAGEHIST#` row written with the update (`UpdateProjectWithStage`).
 Projects without history show an unknown stage age instead of a guess.
+In the flow result, a terminal stage reports `TERMINAL` even without history,
+because the current state is known; `UNKNOWN` applies only to non-terminal
+projects with an unmapped stage or no recorded change.
 
 ### Stall signals
 
@@ -92,6 +95,9 @@ teammate's calendar-only follow-up can still raise the flag.
   scheduler skips only that status).
 - Per-user crawler write routes refuse account sources, both in the service and
   through an `attribute_not_exists(accountId)` write condition.
+- Deleting an account source's news document requires an admin or a current
+  direct member of the account (`GetMember` per request); the source's stored
+  creator (`ownerId`) grants nothing, so a removed creator loses delete rights.
 - Account news also appears in the global insights feed; crawled news was already
   global public web content, and only the account views add the account link.
 - The awsRelevance row text is the service names ordered by confidence. A "new
@@ -117,6 +123,9 @@ teammate's calendar-only follow-up can still raise the flag.
 - A connector-delegated account-tagged presign needs the `share` capability,
   matching attachment copy. Overview, graph, KB and untag/download routes are not
   connector-delegable because they carry meeting-derived or file content.
+- Link list, create and delete are all not connector-delegable: the list
+  returns auto-link evidence quoted from teammates' meeting summaries, and
+  link mutations change what the whole team sees.
 - QA and KB retrieval scope is unchanged: teammates' QA does not start
   retrieving each other's account uploads. Widening retrieval is a separate
   decision.

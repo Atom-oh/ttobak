@@ -15,7 +15,17 @@ import (
 )
 
 func TestNewsDeleteTransactionPinsPublicationAndCurrentOwner(t *testing.T) {
-	for _, admin := range []bool{false, true} {
+	for _, tc := range []struct {
+		name                   string
+		admin                  bool
+		accountID              string
+		wantOwner, wantAccount bool
+		wantValue              string
+	}{
+		{name: "personal owner", wantOwner: true, wantAccount: true, wantValue: "owner"},
+		{name: "admin", admin: true},
+		{name: "account member", accountID: "acct-1", wantAccount: true, wantValue: "acct-1"},
+	} {
 		seen := false
 		client := dynamodb.New(dynamodb.Options{
 			Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
@@ -46,8 +56,17 @@ func TestNewsDeleteTransactionPinsPublicationAndCurrentOwner(t *testing.T) {
 				for _, field := range source.ExpressionAttributeNames {
 					sourceFields[field] = true
 				}
-				if !sourceFields["sourceId"] || sourceFields["ownerId"] == admin {
-					t.Fatal("current ownership policy missing")
+				if !sourceFields["sourceId"] || sourceFields["ownerId"] != tc.wantOwner || sourceFields["accountId"] != tc.wantAccount {
+					t.Fatalf("%s: current ownership policy missing: %v", tc.name, sourceFields)
+				}
+				if tc.wantValue != "" {
+					found := false
+					for _, value := range source.ExpressionAttributeValues {
+						found = found || value["S"] == tc.wantValue
+					}
+					if !found {
+						t.Fatalf("%s: source condition does not pin %q", tc.name, tc.wantValue)
+					}
 				}
 				docFields := map[string]bool{}
 				for _, field := range doc.ExpressionAttributeNames {
@@ -77,7 +96,7 @@ func TestNewsDeleteTransactionPinsPublicationAndCurrentOwner(t *testing.T) {
 		for _, field := range []string{"schemaVersion", "qualityStatus", "sourceId", "docHash", "attemptToken", "sourceRevision", "s3Key", "artifactKey", "markdownSha256", "artifactSha256", "type"} {
 			observed[field] = &types.AttributeValueMemberS{Value: "observed-" + field}
 		}
-		err := NewCrawlerRepository(client, "news").MarkNewsDeleted(context.Background(), NewsReadKey{SourceID: "source", SortKey: "DOC#article"}, observed, "owner", admin)
+		err := NewCrawlerRepository(client, "news").MarkNewsDeleted(context.Background(), NewsReadKey{SourceID: "source", SortKey: "DOC#article"}, observed, "owner", tc.admin, tc.accountID)
 		if err != nil || !seen {
 			t.Fatalf("transaction failed: %v", err)
 		}

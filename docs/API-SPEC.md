@@ -810,6 +810,9 @@ account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 unknown source. Per-user crawler routes (subscribe/AddSource, update,
 unsubscribe) refuse account-owned sources like operator-curated ones, in the
 service and in the `attribute_not_exists(accountId)` write condition.
+`DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
+document is allowed only for admins or a current direct member of that account
+(read per request); the stored source creator grants nothing.
 
 `GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
 for **direct** members. Allowed pairs are news→project, tech→project,
@@ -830,7 +833,8 @@ while a cursor remains. Each link shows `origin` (`manual` or `auto`),
 `createdBy`, `createdAt` and, for auto links, `evidence`. DELETE takes the four
 endpoint fields as query parameters, is allowed for any direct member, returns
 204 or 404, and for an `auto` link also writes a `LINKDENY#` row so the
-automatic linker never re-creates that pair.
+automatic linker never re-creates that pair. None of the three routes is
+connector-delegable; the list carries meeting-derived evidence.
 
 Project stages are a fixed list (Prospect, Qualified, Technical Validation,
 Business Validation, Committed, Launched, Closed Lost; matched case-insensitively,

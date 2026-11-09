@@ -13,15 +13,23 @@ import (
 
 // MarkNewsDeleted revokes canonical publication before object cleanup. A retained
 // tombstone keeps immutable cleanup keys available for retries without deleting a
-// concurrently published replacement. Source ownership is checked in the write.
-func (r *CrawlerRepository) MarkNewsDeleted(ctx context.Context, key NewsReadKey, observed map[string]types.AttributeValue, userID string, isAdmin bool) error {
+// concurrently published replacement. Source authorization is pinned in the
+// write: an admin needs only the source; a non-empty accountID (the caller's
+// current direct membership was verified by the service) requires the source to
+// still belong to that account; otherwise the caller must own a per-user source.
+func (r *CrawlerRepository) MarkNewsDeleted(ctx context.Context, key NewsReadKey, observed map[string]types.AttributeValue, userID string, isAdmin bool, accountID string) error {
 	if userID == "" {
 		return ErrConditionFailed
 	}
 	owner := expression.Name("PK").AttributeExists().
 		And(expression.Name("sourceId").Equal(expression.Value(key.SourceID)))
-	if !isAdmin {
-		owner = owner.And(expression.Name("ownerId").Equal(expression.Value(userID)))
+	switch {
+	case isAdmin:
+	case accountID != "":
+		owner = owner.And(expression.Name("accountId").Equal(expression.Value(accountID)))
+	default:
+		owner = owner.And(expression.Name("ownerId").Equal(expression.Value(userID))).
+			And(expression.Name("accountId").AttributeNotExists())
 	}
 	source, err := expression.NewBuilder().WithCondition(owner).Build()
 	if err != nil {
