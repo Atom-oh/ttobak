@@ -457,9 +457,13 @@ func (s *ProjectService) UpdateProject(ctx context.Context, userID, projectID st
 	fields := map[string]interface{}{
 		"name": strings.TrimSpace(req.Name), "description": req.Description,
 		"sfdcOpptyId": req.SfdcOpptyID, "sfdcUrl": req.SfdcURL,
-		"stage": newStage, "updatedAt": now,
+		"updatedAt": now,
 	}
 	if stageChanged {
+		// Only a real stage change writes stage (guarded by the transaction's
+		// expected-stage condition); an unchanged stage must not be rewritten
+		// from this stale read.
+		fields["stage"] = newStage
 		change := &model.ProjectStageChange{ProjectID: projectID, From: project.Stage, To: newStage, ChangedBy: userID, ChangedAt: now}
 		if err := s.repo.UpdateProjectWithStage(ctx, projectID, fields, project.Stage, change); err != nil {
 			if errors.Is(err, repository.ErrConditionFailed) {
