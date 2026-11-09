@@ -236,6 +236,9 @@ reject oversized, partial, paywalled or script-only input instead of publishing
 snippet-based summaries. Scoped article/container text and nested trailing corrections
 are retained even without paragraph tags; the paywall scan is independent of body
 boilerplate exclusion. Nonrepresentable UTC dates remain unknown freshness.
+Search freshness accepts ISO-8601 and the web-search gateway's
+`hh:mmAM, Weekday, Month DD YYYY, TZ` form with a fixed-offset zone table;
+`unknown` and other zones stay unknown freshness.
 `news_enrichment.py` accepts only bounded schema-v1
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts
