@@ -33,6 +33,7 @@ type accountNewsTestRepo struct {
 	counter      *int
 	rev          int // advanced by every counter mutation, like sourceRev
 	reconciles   int
+	countReads   int
 	reconcileErr error
 	afterList    func()
 	// One-shot hooks between reconcile's counter read, ref list and write.
@@ -79,6 +80,13 @@ func (r *accountNewsTestRepo) ListAccountNewsSources(context.Context, string) ([
 		hook()
 	}
 	return refs, nil
+}
+func (r *accountNewsTestRepo) GetAccountNewsSourceCount(context.Context, string) (int, bool, error) {
+	r.countReads++
+	if r.counter == nil {
+		return 0, false, nil
+	}
+	return *r.counter, true, nil
 }
 func (r *accountNewsTestRepo) ReconcileAccountNewsSourceCount(context.Context, string) (int, error) {
 	r.reconciles++
@@ -366,6 +374,78 @@ func TestCreateAccountNewsSource_ReconcileDeleteThenCreateKeepsCap(t *testing.T)
 	}
 	if len(repo.refs) != maxAccountNewsSources || *repo.counter != maxAccountNewsSources {
 		t.Fatalf("cap exceeded or counter wrong: refs=%d counter=%d", len(repo.refs), *repo.counter)
+	}
+}
+
+// A counter left low by a writer that predates it (refs created without an
+// increment) is reconciled up to the refs before the create, so the counter
+// condition enforces the cap again; at the cap it is the pre-check's 400.
+func TestCreateAccountNewsSource_RepairsLowCounterBeforeCreate(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		refs, counter       int
+		wantErr             bool
+		wantRefs, wantCount int
+		wantObserved        [][2]int
+		wantReconciles      int
+	}{
+		{name: "low counter below the cap", refs: 7, counter: 5, wantRefs: 8, wantCount: 8,
+			wantObserved: [][2]int{{7, maxAccountNewsSources}}, wantReconciles: 1},
+		{name: "low counter with nine refs", refs: 9, counter: 7, wantRefs: 10, wantCount: 10,
+			wantObserved: [][2]int{{9, maxAccountNewsSources}}, wantReconciles: 1},
+		{name: "in sync", refs: 9, counter: 9, wantRefs: 10, wantCount: 10,
+			wantObserved: [][2]int{{9, maxAccountNewsSources}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, _ := newAccountNewsTest()
+			repo.counterModel = true
+			for i := 0; i < tc.refs; i++ {
+				repo.refs = append(repo.refs, model.AccountNewsSourceRef{SourceID: fmt.Sprintf("acct_a_%08d", i)})
+			}
+			counter := tc.counter
+			repo.counter = &counter
+			_, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"})
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("create: %v", err)
+			}
+			if len(repo.refs) != tc.wantRefs || *repo.counter != tc.wantCount || repo.reconciles != tc.wantReconciles ||
+				!reflect.DeepEqual(repo.observed, tc.wantObserved) {
+				t.Fatalf("refs=%d counter=%d reconciles=%d observed=%v", len(repo.refs), *repo.counter, repo.reconciles, repo.observed)
+			}
+		})
+	}
+
+	// The ref pre-check passes (nine refs observed) but a pre-counter writer
+	// adds the tenth ref before the counter is read: the low counter (8) is
+	// reconciled to ten and the create is rejected without an eleventh source.
+	svc, repo, _ := newAccountNewsTest()
+	repo.counterModel = true
+	for i := 0; i < maxAccountNewsSources-1; i++ {
+		repo.refs = append(repo.refs, model.AccountNewsSourceRef{SourceID: fmt.Sprintf("acct_a_%08d", i)})
+	}
+	eight := maxAccountNewsSources - 2
+	repo.counter = &eight
+	repo.afterList = func() { repo.refs = append(repo.refs, model.AccountNewsSourceRef{SourceID: "acct_a_legacy"}) }
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected the cap rejection, got %v", err)
+	}
+	if len(repo.refs) != maxAccountNewsSources || *repo.counter != maxAccountNewsSources || len(repo.observed) != 0 || repo.reconciles != 1 {
+		t.Fatalf("refs=%d counter=%d observed=%v reconciles=%d", len(repo.refs), *repo.counter, repo.observed, repo.reconciles)
+	}
+
+	// Ten refs with a low counter are rejected by the ref pre-check before any
+	// counter work.
+	svc, repo, _ = newAccountNewsTest()
+	repo.counterModel = true
+	for i := 0; i < maxAccountNewsSources; i++ {
+		repo.refs = append(repo.refs, model.AccountNewsSourceRef{SourceID: fmt.Sprintf("acct_a_%08d", i)})
+	}
+	repo.counter = &eight
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected the cap rejection, got %v", err)
+	}
+	if len(repo.refs) != maxAccountNewsSources || len(repo.observed) != 0 || repo.countReads != 0 {
+		t.Fatalf("refs=%d observed=%v countReads=%d", len(repo.refs), repo.observed, repo.countReads)
 	}
 }
 

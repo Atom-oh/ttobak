@@ -66,8 +66,9 @@ func accountNewsKey(pk, sk string) map[string]types.AttributeValue {
 // caller's strongly consistent ref count) seeds it via if_not_exists. A seed can
 // only be stale high (a concurrent delete); the service repairs such drift with
 // ReconcileAccountNewsSourceCount when the refs show room but this transaction
-// reports ErrAccountNewsSourceLimit. A concurrent first create seeds the row
-// first and this one then increments it.
+// reports ErrAccountNewsSourceLimit. A counter left low by a writer that
+// predates it is reconciled by the service before the create. A concurrent
+// first create seeds the row first and this one then increments it.
 func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error {
 	if src == nil || ref == nil || src.SourceID == "" || src.AccountID == "" ||
 		ref.AccountID != src.AccountID || ref.SourceID != src.SourceID || ref.CreatedBy == "" ||
@@ -265,6 +266,16 @@ func (r *DynamoDBRepository) readAccountNewsSourceCount(ctx context.Context, acc
 		state.hasRev = true
 	}
 	return state, nil
+}
+
+// GetAccountNewsSourceCount returns the source counter (strongly consistent)
+// and whether the counter row exists.
+func (r *DynamoDBRepository) GetAccountNewsSourceCount(ctx context.Context, accountID string) (int, bool, error) {
+	state, err := r.readAccountNewsSourceCount(ctx, accountID)
+	if err != nil {
+		return 0, false, err
+	}
+	return state.count, state.exists, nil
 }
 
 // ReconcileAccountNewsSourceCount sets an existing source counter to the
