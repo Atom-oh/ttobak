@@ -817,7 +817,10 @@ event→project and news→meeting. News and tech IDs are `{sourceId}:{docHash}`
 `{ownerUserId}:{meetingId}`. A link is an `ACCOUNT#{accountId}` /
 `LINK#{fromKind}#{fromId}#{toKind}#{toId}` row plus a `LINKTO#` reverse row,
 written in one transaction that also checks the project still lists the
-account (`accountIds`) or the meeting is still published to it. POST takes
+account (`accountIds`) or the meeting is still published to it, and that the
+account and the acting member's direct `MEMBER#` row still exist (the automatic
+linker has no member row and checks only the account). Delete transactions
+check the same account and member rows. POST takes
 `{fromKind, fromId, toKind, toId}`; the news must come from one of the
 account's current sources, tech docs must exist under `__tech__`, and events
 must exist in the account. It returns 201 with the new link, or with the
