@@ -16,6 +16,9 @@ import (
 // News and tech IDs are {sourceId}:{docHash} (tech uses sourceId __tech__).
 // Meeting IDs are {ownerUserId}:{meetingId}. Links are metadata only; readers
 // revalidate each endpoint and never grant access from a link row.
+//
+// People edges (account_people.go) share these prefixes with a 5-segment
+// LINK#meeting#{m}#{toKind}#{toId}#{role} key, which the parsers below reject.
 const (
 	PrefixAccountLink     = "LINK#"
 	PrefixAccountLinkTo   = "LINKTO#"
