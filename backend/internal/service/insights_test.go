@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 // mockS3GetDeleter is a minimal s3GetDeleter for DeleteDocument happy-path
@@ -698,6 +699,29 @@ func (m *insightsMembers) GetMember(_ context.Context, accountID, userID string)
 	return &model.AccountMember{UserID: userID}, nil
 }
 
+// legacyDeleteFence models ClaimLegacyAccountDocumentDelete: it re-reads the
+// membership map at commit time, so a test can revoke after the service check.
+type legacyDeleteFence struct {
+	members *insightsMembers
+	s3      *mockS3GetDeleter
+	calls   []string
+	err     error
+}
+
+func (f *legacyDeleteFence) ClaimLegacyAccountDocumentDelete(_ context.Context, sourceID, docHash, accountID, userID string) error {
+	f.calls = append(f.calls, sourceID+"/"+docHash+"/"+accountID+"/"+userID)
+	if f.s3 != nil && len(f.s3.deletedKeys) != 0 {
+		return errors.New("objects were deleted before the membership fence")
+	}
+	if f.err != nil {
+		return f.err
+	}
+	if f.members == nil || !f.members.members[accountID+"/"+userID] {
+		return repository.ErrAccountNewsAccess
+	}
+	return nil
+}
+
 func accountSourceDeleteFixture(members *insightsMembers) (*InsightsService, *mockCrawlerRepo, *mockS3GetDeleter) {
 	repo := newMockCrawlerRepo()
 	repo.sources["acct_acct-1_0123abcd"] = &model.CrawlerSource{
@@ -707,11 +731,87 @@ func accountSourceDeleteFixture(members *insightsMembers) (*InsightsService, *mo
 		{DocHash: "doc1", SourceID: "acct_acct-1_0123abcd", S3Key: "shared/news/acct_acct-1_0123abcd/doc1.md"},
 	}
 	mockS3 := &mockS3GetDeleter{}
-	svc := &InsightsService{repo: repo, s3: mockS3, kbBucketName: "kb-bucket"}
+	svc := &InsightsService{repo: repo, s3: mockS3, kbBucketName: "kb-bucket",
+		accountDeletes: &legacyDeleteFence{members: members, s3: mockS3}}
 	if members != nil {
 		svc.SetAccountMemberReader(members)
 	}
 	return svc, repo, mockS3
+}
+
+// A member revoked after the per-request membership read must not complete a
+// legacy delete: the commit-time fence fails before any object is removed.
+func TestDeleteDocument_AccountSourceLegacyDeleteIsRevocationSafe(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{"acct-1/teammate": true}}
+	svc, repo, mockS3 := accountSourceDeleteFixture(members)
+	fence := svc.accountDeletes.(*legacyDeleteFence)
+	revoking := &revokeAfterRead{insightsMembers: members}
+	svc.SetAccountMemberReader(revoking)
+	err := svc.DeleteDocument(context.Background(), "teammate", false, "acct_acct-1_0123abcd", "doc1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("revoked member: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 0 || len(fence.calls) != 1 || fence.calls[0] != "acct_acct-1_0123abcd/doc1/acct-1/teammate" {
+		t.Fatalf("fence/objects: %v %v", fence.calls, mockS3.deletedKeys)
+	}
+	if doc, _ := repo.GetDocument(context.Background(), "acct_acct-1_0123abcd", "doc1"); doc == nil {
+		t.Fatal("document metadata deleted for a revoked member")
+	}
+}
+
+func TestDeleteDocument_AccountSourceLegacyFenceFailuresHaveNoSideEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fence   bool
+		err     error
+		wantErr error
+	}{
+		{name: "no fence fails closed"},
+		{name: "document replaced", fence: true, err: repository.ErrConditionFailed, wantErr: repository.ErrConditionFailed},
+		{name: "store error", fence: true, err: errors.New("throttled")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			members := &insightsMembers{members: map[string]bool{"acct-1/teammate": true}}
+			svc, repo, mockS3 := accountSourceDeleteFixture(members)
+			if tc.fence {
+				svc.accountDeletes.(*legacyDeleteFence).err = tc.err
+			} else {
+				svc.accountDeletes = nil
+			}
+			err := svc.DeleteDocument(context.Background(), "teammate", false, "acct_acct-1_0123abcd", "doc1")
+			if err == nil || errors.Is(err, ErrForbidden) || tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected a non-forbidden failure, got %v", err)
+			}
+			if len(mockS3.deletedKeys) != 0 {
+				t.Fatalf("objects deleted: %v", mockS3.deletedKeys)
+			}
+			if doc, _ := repo.GetDocument(context.Background(), "acct_acct-1_0123abcd", "doc1"); doc == nil {
+				t.Fatal("metadata deleted")
+			}
+		})
+	}
+}
+
+// Admins and personal-source owners never use the account fence.
+func TestDeleteDocument_AdminAccountSourceSkipsFence(t *testing.T) {
+	svc, _, mockS3 := accountSourceDeleteFixture(nil)
+	fence := svc.accountDeletes.(*legacyDeleteFence)
+	if err := svc.DeleteDocument(context.Background(), "admin-1", true, "acct_acct-1_0123abcd", "doc1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fence.calls) != 0 || len(mockS3.deletedKeys) != 1 {
+		t.Fatalf("admin delete: %v %v", fence.calls, mockS3.deletedKeys)
+	}
+}
+
+// revokeAfterRead grants on the service's membership read and then removes the
+// membership, as a concurrent owner revocation would.
+type revokeAfterRead struct{ *insightsMembers }
+
+func (m *revokeAfterRead) GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error) {
+	member, err := m.insightsMembers.GetMember(ctx, accountID, userID)
+	delete(m.members, accountID+"/"+userID)
+	return member, err
 }
 
 // A source creator removed from the account keeps OwnerID on the CONFIG row;

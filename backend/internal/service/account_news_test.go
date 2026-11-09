@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -25,6 +26,17 @@ type accountNewsTestRepo struct {
 	deleteActors []string
 	createErr    []error
 	deleteErr    error
+	// observed records the (observedCount, limit) pair of each create call.
+	observed [][2]int
+	// counterModel emulates the NEWSSRC_COUNT row: nil counter is absent.
+	counterModel bool
+	counter      *int
+	rev          int // advanced by every counter mutation, like sourceRev
+	reconciles   int
+	reconcileErr error
+	afterList    func()
+	// One-shot hooks between reconcile's counter read, ref list and write.
+	afterReconcileRead, afterReconcileList func()
 }
 
 func (r *accountNewsTestRepo) GetAccount(context.Context, string) (*model.Account, error) {
@@ -36,7 +48,19 @@ func (r *accountNewsTestRepo) GetMember(context.Context, string, string) (*model
 	}
 	return nil, nil
 }
-func (r *accountNewsTestRepo) CreateAccountNewsSource(_ context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef) error {
+func (r *accountNewsTestRepo) CreateAccountNewsSource(_ context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error {
+	r.observed = append(r.observed, [2]int{observedCount, limit})
+	if r.counterModel && len(r.createErr) == 0 {
+		if r.counter == nil {
+			seed := observedCount
+			r.counter = &seed
+		}
+		if *r.counter >= limit {
+			return repository.ErrAccountNewsSourceLimit
+		}
+		*r.counter++
+		r.rev++
+	}
 	if len(r.createErr) > 0 {
 		err := r.createErr[0]
 		r.createErr = r.createErr[1:]
@@ -49,12 +73,63 @@ func (r *accountNewsTestRepo) CreateAccountNewsSource(_ context.Context, src *mo
 	return nil
 }
 func (r *accountNewsTestRepo) ListAccountNewsSources(context.Context, string) ([]model.AccountNewsSourceRef, error) {
-	return r.refs, nil
+	refs := append([]model.AccountNewsSourceRef{}, r.refs...)
+	if hook := r.afterList; hook != nil {
+		r.afterList = nil
+		hook()
+	}
+	return refs, nil
+}
+func (r *accountNewsTestRepo) ReconcileAccountNewsSourceCount(context.Context, string) (int, error) {
+	r.reconciles++
+	if r.reconcileErr != nil {
+		return 0, r.reconcileErr
+	}
+	// Mirrors the repository: read count and revision, list refs, then write
+	// only if the revision is unchanged.
+	for attempt := 0; attempt < 3; attempt++ {
+		if r.counter == nil {
+			return len(r.refs), nil
+		}
+		count, rev := *r.counter, r.rev
+		runOnce(&r.afterReconcileRead)
+		refs := len(r.refs)
+		runOnce(&r.afterReconcileList)
+		if refs == count {
+			return refs, nil
+		}
+		if r.counter == nil || *r.counter != count || r.rev != rev {
+			continue
+		}
+		*r.counter = refs
+		r.rev++
+		return refs, nil
+	}
+	return 0, errors.New("counter kept changing")
 }
 func (r *accountNewsTestRepo) DeleteAccountNewsSource(_ context.Context, accountID, userID, sourceID string) error {
 	r.deleted = append(r.deleted, accountID+"/"+sourceID)
 	r.deleteActors = append(r.deleteActors, userID)
+	if r.counterModel && r.deleteErr == nil {
+		for i, ref := range r.refs {
+			if ref.SourceID == sourceID {
+				r.refs = append(r.refs[:i:i], r.refs[i+1:]...)
+				if r.counter != nil && *r.counter > 0 {
+					*r.counter--
+					r.rev++
+				}
+				break
+			}
+		}
+	}
 	return r.deleteErr
+}
+
+func runOnce(hook *func()) {
+	if h := *hook; h != nil {
+		*hook = nil
+		h()
+	}
 }
 
 type accountNewsTestCrawler struct {
@@ -192,6 +267,105 @@ func TestCreateAccountNewsSource_CapsSourcesPerAccount(t *testing.T) {
 	}
 	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) || len(repo.created) != 0 {
 		t.Fatalf("cap: %v", err)
+	}
+}
+
+// A counter-at-cap rejection reconciles the counter to the refs once and
+// retries; if the reconciled count is at the cap it is the same 400 as the
+// pre-check, and reconcile errors surface.
+func TestCreateAccountNewsSource_TransactionalCapRejection(t *testing.T) {
+	svc, repo, _ := newAccountNewsTest()
+	repo.refs = []model.AccountNewsSourceRef{{SourceID: "a"}, {SourceID: "b"}}
+	repo.createErr = []error{repository.ErrAccountNewsSourceLimit, repository.ErrAccountNewsSourceLimit}
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("limit: %v", err)
+	}
+	if len(repo.created) != 0 || repo.reconciles != 1 || !reflect.DeepEqual(repo.observed, [][2]int{{2, maxAccountNewsSources}, {2, maxAccountNewsSources}}) {
+		t.Fatalf("limit must reconcile once and retry once: %+v %d %v", repo.created, repo.reconciles, repo.observed)
+	}
+
+	svc, repo, _ = newAccountNewsTest()
+	repo.reconcileErr = errors.New("throttled")
+	repo.createErr = []error{repository.ErrAccountNewsSourceLimit}
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); err == nil || errors.Is(err, ErrInvalidInput) || len(repo.created) != 0 {
+		t.Fatalf("reconcile error: %v", err)
+	}
+}
+
+// Regression: an account whose sources predate the counter seeds it while a
+// pre-counter delete commits between the ref read and the create, leaving the
+// counter one above the refs. The next create that the refs allow repairs the
+// counter and succeeds, and the cap still holds at exactly ten.
+func TestCreateAccountNewsSource_RepairsSeedDriftAndKeepsCap(t *testing.T) {
+	svc, repo, _ := newAccountNewsTest()
+	repo.counterModel = true
+	for i := 0; i < maxAccountNewsSources-1; i++ {
+		repo.refs = append(repo.refs, model.AccountNewsSourceRef{SourceID: "pre"})
+	}
+	// The delete commits after Create listed nine refs; the counter is absent,
+	// so the delete only pins it and does not change it.
+	repo.afterList = func() { repo.refs = repo.refs[1:] }
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); err != nil {
+		t.Fatal(err)
+	}
+	if *repo.counter != maxAccountNewsSources || len(repo.refs) != maxAccountNewsSources-1 {
+		t.Fatalf("drift setup: counter=%d refs=%d", *repo.counter, len(repo.refs))
+	}
+	// Nine refs leave room: the counter-at-cap rejection reconciles to nine and
+	// the retry creates the tenth source.
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); err != nil {
+		t.Fatalf("drifted counter blocked a create under the cap: %v", err)
+	}
+	if repo.reconciles != 1 || *repo.counter != maxAccountNewsSources || len(repo.refs) != maxAccountNewsSources {
+		t.Fatalf("repair: reconciles=%d counter=%d refs=%d", repo.reconciles, *repo.counter, len(repo.refs))
+	}
+	// At ten refs the cap holds.
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) || len(repo.refs) != maxAccountNewsSources {
+		t.Fatalf("cap: %v refs=%d", err, len(repo.refs))
+	}
+	// A counter that is genuinely at the cap (a concurrent create won) is not
+	// raised by reconcile: it stays the same 400.
+	repo.refs = repo.refs[:maxAccountNewsSources-1]
+	repo.afterList = func() { repo.refs = append(repo.refs, model.AccountNewsSourceRef{SourceID: "concurrent"}) }
+	if _, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"}); !errors.Is(err, ErrInvalidInput) || len(repo.refs) != maxAccountNewsSources {
+		t.Fatalf("concurrent winner: %v refs=%d", err, len(repo.refs))
+	}
+}
+
+// Regression for the reconcile ABA race: while reconcile runs, a delete
+// (10->9) and a create (9->10) commit, so the count round-trips. The revision
+// still changed, so reconcile does not write the stale nine refs, and the
+// create that triggered it is rejected instead of making an eleventh source.
+func TestCreateAccountNewsSource_ReconcileDeleteThenCreateKeepsCap(t *testing.T) {
+	svc, repo, _ := newAccountNewsTest()
+	repo.counterModel = true
+	for i := 0; i < maxAccountNewsSources-1; i++ {
+		repo.refs = append(repo.refs, model.AccountNewsSourceRef{SourceID: fmt.Sprintf("acct_a_%08d", i)})
+	}
+	nine := maxAccountNewsSources - 1
+	repo.counter = &nine
+	other := func(id string) {
+		src := &model.CrawlerSource{SourceID: id, AccountID: newsTestAccount}
+		ref := &model.AccountNewsSourceRef{AccountID: newsTestAccount, SourceID: id, CreatedBy: "user-2"}
+		if err := repo.CreateAccountNewsSource(context.Background(), src, ref, len(repo.refs), maxAccountNewsSources); err != nil {
+			t.Fatalf("concurrent create: %v", err)
+		}
+	}
+	// This request's pre-check sees nine refs; a concurrent create then takes
+	// the tenth slot, so this create's counter condition fails.
+	repo.afterList = func() { other("acct_a_concurrent1") }
+	repo.afterReconcileRead = func() {
+		if err := repo.DeleteAccountNewsSource(context.Background(), newsTestAccount, "user-2", "acct_a_00000000"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo.afterReconcileList = func() { other("acct_a_concurrent2") }
+	_, err := svc.Create(context.Background(), "user-1", newsTestAccount, &model.CreateAccountNewsSourceRequest{SourceName: "n"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected the cap rejection, got %v", err)
+	}
+	if len(repo.refs) != maxAccountNewsSources || *repo.counter != maxAccountNewsSources {
+		t.Fatalf("cap exceeded or counter wrong: refs=%d counter=%d", len(repo.refs), *repo.counter)
 	}
 }
 
