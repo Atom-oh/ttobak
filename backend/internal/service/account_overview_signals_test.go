@@ -27,6 +27,9 @@ type overviewTestRepo struct {
 	eventMore   bool
 	acctRefs    []model.MeetingRef // newest first
 	acctRefMore bool
+	// Graph fixtures.
+	members  []model.AccountMember
+	contacts map[string]*model.AccountContact
 }
 
 func newOverviewTestRepo() *overviewTestRepo {

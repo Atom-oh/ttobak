@@ -39,6 +39,15 @@ func (s *accountOverviewStub) Flow(_ context.Context, user, account string, now 
 	return &model.AccountFlow{Rows: []model.FlowRow{}, Unassigned: model.FlowRow{Activity: []model.FlowItem{}, Response: []model.FlowItem{}}}, nil
 }
 
+func (s *accountOverviewStub) Graph(_ context.Context, user, account string) (*model.AccountGraph, error) {
+	s.calls++
+	s.user, s.account = user, account
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &model.AccountGraph{Nodes: []model.GraphNode{{ID: "account:" + account, Kind: model.GraphNodeAccount, Label: "A"}}, Edges: []model.GraphEdge{}}, nil
+}
+
 func serveOverview(s *accountOverviewStub, target string) *httptest.ResponseRecorder {
 	h := NewAccountOverviewHandler(s)
 	fixed := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
@@ -46,6 +55,7 @@ func serveOverview(s *accountOverviewStub, target string) *httptest.ResponseReco
 	r := chi.NewRouter()
 	r.Get("/accounts/{accountId}/signals", h.Signals)
 	r.Get("/accounts/{accountId}/flow", h.Flow)
+	r.Get("/accounts/{accountId}/graph", h.Graph)
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, "u1"))
 	rec := httptest.NewRecorder()
@@ -114,6 +124,30 @@ func TestAccountFlowHandler(t *testing.T) {
 	}
 	q := &accountOverviewStub{}
 	if rec := serveOverview(q, "/accounts/acc1/flow?x=1"); rec.Code != http.StatusBadRequest || q.calls != 0 {
+		t.Fatalf("query accepted: code=%d calls=%d", rec.Code, q.calls)
+	}
+}
+
+func TestAccountGraphHandler(t *testing.T) {
+	s := &accountOverviewStub{}
+	rec := serveOverview(s, "/accounts/acc1/graph")
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || s.user != "u1" || s.account != "acc1" {
+		t.Fatalf("code=%d stub=%+v", rec.Code, s)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"nodes", "edges", "truncated"} {
+		if _, ok := body[key]; !ok {
+			t.Fatalf("missing %s in %s", key, rec.Body.String())
+		}
+	}
+	if rec := serveOverview(&accountOverviewStub{err: service.ErrForbidden}, "/accounts/acc1/graph"); rec.Code != http.StatusForbidden {
+		t.Fatalf("forbidden code=%d", rec.Code)
+	}
+	q := &accountOverviewStub{}
+	if rec := serveOverview(q, "/accounts/acc1/graph?x=1"); rec.Code != http.StatusBadRequest || q.calls != 0 {
 		t.Fatalf("query accepted: code=%d calls=%d", rec.Code, q.calls)
 	}
 }

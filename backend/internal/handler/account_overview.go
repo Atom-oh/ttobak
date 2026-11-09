@@ -15,6 +15,7 @@ import (
 type accountOverviewAPI interface {
 	Signals(ctx context.Context, userID, accountID string, now time.Time) (*model.AccountSignals, error)
 	Flow(ctx context.Context, userID, accountID string, now time.Time) (*model.AccountFlow, error)
+	Graph(ctx context.Context, userID, accountID string) (*model.AccountGraph, error)
 }
 
 // AccountOverviewHandler serves the account page's derived views (direct
@@ -69,4 +70,19 @@ func (h *AccountOverviewHandler) Flow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, flow)
+}
+
+// Graph handles GET /api/accounts/{accountId}/graph. It takes no query.
+func (h *AccountOverviewHandler) Graph(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.RawQuery != "" {
+		accountOverviewError(w, service.ErrInvalidInput)
+		return
+	}
+	graph, err := h.service.Graph(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "accountId"))
+	if err != nil {
+		accountOverviewError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, graph)
 }

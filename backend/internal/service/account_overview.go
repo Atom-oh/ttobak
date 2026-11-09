@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 const (
@@ -46,6 +48,9 @@ type accountOverviewRepo interface {
 	ListProjectStageHistory(ctx context.Context, projectID string, limit int) ([]model.ProjectStageChange, error)
 	ListAccountEvents(ctx context.Context, account, fromKey, toKey string, descending bool, limit int, afterSK string) ([]model.AccountEvent, string, error)
 	ListMeetingRefsForAccountPage(ctx context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error)
+	ListAccountLinks(ctx context.Context, accountID, cursor string, limit int32) ([]model.AccountLink, *string, error)
+	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
+	GetAccountContact(ctx context.Context, account, id string) (*model.AccountContact, error)
 }
 
 // accountOverviewNews is implemented by AccountNewsService.
@@ -64,33 +69,39 @@ type accountOverviewInsights interface {
 // across calls.
 type AccountOverviewService struct {
 	repo     accountOverviewRepo
+	docs     accountLinkDocuments
 	news     accountOverviewNews
 	insights accountOverviewInsights
 }
 
-func NewAccountOverviewService(repo accountOverviewRepo, news *AccountNewsService, accounts *AccountService) *AccountOverviewService {
-	return &AccountOverviewService{repo: repo, news: news, insights: accounts}
+func NewAccountOverviewService(repo accountOverviewRepo, docs accountLinkDocuments, news *AccountNewsService, accounts *AccountService) *AccountOverviewService {
+	return &AccountOverviewService{repo: repo, docs: docs, news: news, insights: accounts}
 }
 
 func (s *AccountOverviewService) authorize(ctx context.Context, accountID, userID string) (*model.AccountMember, error) {
+	_, member, err := s.authorizeAccount(ctx, accountID, userID)
+	return member, err
+}
+
+func (s *AccountOverviewService) authorizeAccount(ctx context.Context, accountID, userID string) (*model.Account, *model.AccountMember, error) {
 	if validateAccountHierarchyIDs(accountID, "") != nil || validateAccountHierarchyIDs(userID, "") != nil {
-		return nil, ErrInvalidInput
+		return nil, nil, ErrInvalidInput
 	}
 	account, err := s.repo.GetAccount(ctx, accountID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if account == nil {
-		return nil, ErrForbidden
+		return nil, nil, ErrForbidden
 	}
 	member, err := s.repo.GetMember(ctx, accountID, userID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if member == nil {
-		return nil, ErrForbidden
+		return nil, nil, ErrForbidden
 	}
-	return member, nil
+	return account, member, nil
 }
 
 // overviewReads caches per-call reads and link revalidation; it never
@@ -930,6 +941,457 @@ func fitFlow(flow *model.AccountFlow) error {
 			flow.Rows = flow.Rows[:len(flow.Rows)-1]
 		default:
 			return fmt.Errorf("account flow exceeds the response bound")
+		}
+	}
+}
+
+const (
+	maxGraphNodes      = 150
+	maxGraphEdges      = 300
+	maxGraphLabelRunes = 60
+	// maxGraphEvents bounds the newest account events read as nodes.
+	maxGraphEvents = 50
+	// maxGraphMeetingRefs bounds the newest account meeting refs read.
+	maxGraphMeetingRefs = 100
+	// maxGraphLinkRows bounds the LINK# rows read; more rows set Truncated.
+	maxGraphLinkRows  = 1000
+	graphLinkPageSize = 100
+	// MaxAccountGraphBytes bounds the encoded graph response.
+	MaxAccountGraphBytes = 64 * 1024
+)
+
+// graphBuilder accumulates nodes and edges in insertion order under the node
+// and edge caps. A rejected addition sets truncated.
+type graphBuilder struct {
+	g        *model.AccountGraph
+	nodes    map[string]bool
+	edges    map[string]bool
+	projects map[string]*model.Project // revalidated projects, nil when not in the account
+	contacts map[string]*model.AccountContact
+	docs     map[string]*model.CrawledDocument
+	sources  map[string]bool
+}
+
+func graphNodeID(kind, id string) string { return kind + ":" + id }
+
+// node adds a node; it reports whether the node is present afterwards.
+func (b *graphBuilder) node(kind, id, label string) bool {
+	nodeID := graphNodeID(kind, id)
+	if b.nodes[nodeID] {
+		return true
+	}
+	if len(b.g.Nodes) >= maxGraphNodes {
+		b.g.Truncated = true
+		return false
+	}
+	b.nodes[nodeID] = true
+	b.g.Nodes = append(b.g.Nodes, model.GraphNode{ID: nodeID, Kind: kind, Label: capRunes(label, maxGraphLabelRunes)})
+	return true
+}
+
+func (b *graphBuilder) hasNode(kind, id string) bool { return b.nodes[graphNodeID(kind, id)] }
+
+// edge adds an edge between two present nodes.
+func (b *graphBuilder) edge(from, to, kind, origin string) {
+	if !b.nodes[from] || !b.nodes[to] {
+		return
+	}
+	key := from + "\x00" + to + "\x00" + kind
+	if b.edges[key] {
+		return
+	}
+	if len(b.g.Edges) >= maxGraphEdges {
+		b.g.Truncated = true
+		return
+	}
+	b.edges[key] = true
+	b.g.Edges = append(b.g.Edges, model.GraphEdge{From: from, To: to, Kind: kind, Origin: origin})
+}
+
+// Graph returns the account's relationship graph: the account, projects that
+// still list it, meetings currently published to it, its newest events,
+// revalidated LINK# rows, direct members and event attendees that reference
+// an existing contact. Volume never fails the call; bounds set Truncated.
+func (s *AccountOverviewService) Graph(ctx context.Context, userID, accountID string) (*model.AccountGraph, error) {
+	account, _, err := s.authorizeAccount(ctx, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+	reads := newOverviewReads()
+	b := &graphBuilder{g: &model.AccountGraph{Nodes: []model.GraphNode{}, Edges: []model.GraphEdge{}}, nodes: map[string]bool{}, edges: map[string]bool{},
+		projects: map[string]*model.Project{}, contacts: map[string]*model.AccountContact{}, docs: map[string]*model.CrawledDocument{}}
+	accountNode := graphNodeID(model.GraphNodeAccount, accountID)
+	b.node(model.GraphNodeAccount, accountID, account.Name)
+
+	steps := []func(context.Context, string, *graphBuilder, *overviewReads) error{
+		s.graphProjects, s.graphMeetings, s.graphEvents, s.graphLinks, s.graphMembers,
+	}
+	for _, step := range steps {
+		if err := step(ctx, accountID, b, reads); err != nil {
+			return nil, err
+		}
+	}
+	if reads.truncated {
+		b.g.Truncated = true
+	}
+	if err := fitGraph(b.g, accountNode); err != nil {
+		return nil, err
+	}
+	return b.g, nil
+}
+
+// graphProject returns the project when it still lists the account, adding
+// its node and project_account edge. Reads are cached per call.
+func (s *AccountOverviewService) graphProject(ctx context.Context, accountID, projectID string, b *graphBuilder, reads *overviewReads) (*model.Project, error) {
+	project, seen := b.projects[projectID]
+	if !seen {
+		if !validLinkPlainID(projectID) {
+			return nil, nil
+		}
+		var err error
+		if project, err = s.repo.GetProject(ctx, projectID); err != nil {
+			return nil, err
+		}
+		if project == nil || project.ProjectID != projectID || !contains(project.AccountIDs, accountID) {
+			project = nil
+		}
+		b.projects[projectID], reads.projects[projectID] = project, project != nil
+	}
+	if project == nil || !b.node(model.GraphNodeProject, projectID, project.Name) {
+		return nil, nil
+	}
+	b.edge(graphNodeID(model.GraphNodeProject, projectID), graphNodeID(model.GraphNodeAccount, accountID), model.GraphEdgeProjectAccount, "")
+	return project, nil
+}
+
+func (s *AccountOverviewService) graphProjects(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
+	refs, err := s.repo.ListProjectRefsForAccount(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if seen[ref.ProjectID] || !validLinkPlainID(ref.ProjectID) {
+			continue
+		}
+		if len(seen) == maxFlowProjectRefs || len(b.g.Nodes) >= maxGraphNodes {
+			b.g.Truncated = true
+			break
+		}
+		seen[ref.ProjectID] = true
+		if _, err := s.graphProject(ctx, accountID, ref.ProjectID, b, reads); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// graphMeeting adds a meeting node only when the meeting is currently
+// published to the account, with its meeting_account and meeting_project
+// edges. It reports whether the node is present.
+func (s *AccountOverviewService) graphMeeting(ctx context.Context, accountID, ownerID, meetingID, fallbackTitle string, b *graphBuilder, reads *overviewReads) (bool, error) {
+	if b.hasNode(model.GraphNodeMeeting, ownerID+":"+meetingID) {
+		return true, nil
+	}
+	meeting, err := s.publishedMeeting(ctx, accountID, ownerID, meetingID, reads)
+	if err != nil || meeting == nil {
+		return false, err
+	}
+	title := meeting.Title
+	if title == "" {
+		title = fallbackTitle
+	}
+	id := ownerID + ":" + meetingID
+	if !b.node(model.GraphNodeMeeting, id, title) {
+		return false, nil
+	}
+	nodeID := graphNodeID(model.GraphNodeMeeting, id)
+	b.edge(nodeID, graphNodeID(model.GraphNodeAccount, accountID), model.GraphEdgeMeetingAccount, "")
+	for _, projectID := range meeting.ProjectIDs {
+		project, err := s.graphProject(ctx, accountID, projectID, b, reads)
+		if err != nil {
+			return false, err
+		}
+		if project != nil {
+			b.edge(nodeID, graphNodeID(model.GraphNodeProject, projectID), model.GraphEdgeMeetingProject, "")
+		}
+	}
+	return true, nil
+}
+
+func (s *AccountOverviewService) graphMeetings(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
+	refs, cursor, err := s.repo.ListMeetingRefsForAccountPage(ctx, accountID, "", maxGraphMeetingRefs)
+	if err != nil {
+		return err
+	}
+	if cursor != nil {
+		b.g.Truncated = true
+	}
+	for _, ref := range refs {
+		if len(b.g.Nodes) >= maxGraphNodes {
+			b.g.Truncated = true
+			break
+		}
+		if ref.AccountID != accountID || ref.PK != model.PrefixAccount+accountID || ref.EntityType != model.EntityTypeMeetingRef ||
+			ref.SK != model.PrefixMeetingRef+ref.Date.UTC().Format(time.RFC3339)+"#"+ref.MeetingID ||
+			!validLinkPlainID(ref.OwnerUserID) || !validLinkPlainID(ref.MeetingID) {
+			continue
+		}
+		if _, err := s.graphMeeting(ctx, accountID, ref.OwnerUserID, ref.MeetingID, ref.Title, b, reads); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// graphEvent adds an existing event's node plus attends edges from attendees
+// whose ContactID references a contact that still exists. It reports
+// whether the node is present.
+func (s *AccountOverviewService) graphEvent(ctx context.Context, accountID string, event *model.AccountEvent, b *graphBuilder) (bool, error) {
+	if b.hasNode(model.GraphNodeEvent, event.EventID) {
+		return true, nil
+	}
+	if !b.node(model.GraphNodeEvent, event.EventID, event.Title) {
+		return false, nil
+	}
+	eventNode := graphNodeID(model.GraphNodeEvent, event.EventID)
+	for _, attendee := range event.Attendees {
+		if !validContactID(attendee.ContactID) {
+			continue
+		}
+		contact, seen := b.contacts[attendee.ContactID]
+		if !seen {
+			var err error
+			if contact, err = s.repo.GetAccountContact(ctx, accountID, attendee.ContactID); err != nil {
+				return false, err
+			}
+			if contact != nil && contact.ContactID != attendee.ContactID {
+				contact = nil
+			}
+			b.contacts[attendee.ContactID] = contact
+		}
+		if contact == nil {
+			continue
+		}
+		if b.node(model.GraphNodeContact, contact.ContactID, contact.Name) {
+			b.edge(graphNodeID(model.GraphNodeContact, contact.ContactID), eventNode, model.GraphEdgeAttends, "")
+		}
+	}
+	return true, nil
+}
+
+func (s *AccountOverviewService) graphEvents(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
+	events, next, err := s.repo.ListAccountEvents(ctx, accountID, flowEventKeyLow, flowEventKeyHigh, true, maxGraphEvents, "")
+	if err != nil {
+		return err
+	}
+	if next != "" {
+		b.g.Truncated = true
+	}
+	for i := range events {
+		event := &events[i]
+		if !validContactID(event.EventID) {
+			continue
+		}
+		reads.events[event.EventID] = event
+		if _, err := s.graphEvent(ctx, accountID, event, b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// graphDocument returns the stored document of the given type when it exists
+// and is not deleted. Reads are cached per call.
+func (s *AccountOverviewService) graphDocument(ctx context.Context, sourceID, docHash, docType string, b *graphBuilder) (*model.CrawledDocument, error) {
+	key := sourceID + ":" + docHash
+	doc, seen := b.docs[key]
+	if !seen {
+		var err error
+		doc, err = s.docs.GetDocument(ctx, sourceID, docHash)
+		if errors.Is(err, repository.ErrInvalidDocument) {
+			doc, err = nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if doc != nil && (doc.QualityStatus == "DELETED" || doc.Type != docType) {
+			doc = nil
+		}
+		b.docs[key] = doc
+	}
+	return doc, nil
+}
+
+// graphLinkFrom revalidates a link's from endpoint and adds its node.
+func (s *AccountOverviewService) graphLinkFrom(ctx context.Context, accountID string, link model.AccountLink, b *graphBuilder, reads *overviewReads) (bool, error) {
+	switch link.FromKind {
+	case model.LinkKindNews, model.LinkKindTech:
+		source, hash, _ := splitLinkDocID(link.FromID)
+		docType := "tech"
+		if link.FromKind == model.LinkKindNews {
+			if b.sources == nil {
+				sources, err := s.news.accountSources(ctx, accountID)
+				if err != nil {
+					return false, err
+				}
+				b.sources = map[string]bool{}
+				for _, src := range sources {
+					b.sources[src.SourceID] = true
+				}
+			}
+			if !b.sources[source] {
+				return false, nil
+			}
+			docType = "news"
+		}
+		if b.hasNode(link.FromKind, link.FromID) {
+			return true, nil
+		}
+		doc, err := s.graphDocument(ctx, source, hash, docType, b)
+		if err != nil || doc == nil {
+			return false, err
+		}
+		return b.node(link.FromKind, link.FromID, doc.Title), nil
+	case model.LinkKindEvent:
+		event, err := s.accountEvent(ctx, accountID, link.FromID, reads)
+		if err != nil || event == nil {
+			return false, err
+		}
+		return s.graphEvent(ctx, accountID, event, b)
+	}
+	return false, nil
+}
+
+// graphLinkTo revalidates a link's to endpoint and adds its node.
+func (s *AccountOverviewService) graphLinkTo(ctx context.Context, accountID string, link model.AccountLink, b *graphBuilder, reads *overviewReads) (bool, error) {
+	switch link.ToKind {
+	case model.LinkKindProject:
+		project, err := s.graphProject(ctx, accountID, link.ToID, b, reads)
+		return project != nil, err
+	case model.LinkKindMeeting:
+		owner, meetingID, _ := splitMeetingLinkID(link.ToID)
+		return s.graphMeeting(ctx, accountID, owner, meetingID, "", b, reads)
+	}
+	return false, nil
+}
+
+// graphLinks pages through the account's LINK# rows (at most
+// maxGraphLinkRows). A row produces nodes and an edge only when both
+// endpoints revalidate; the to endpoint is checked first so a dropped row
+// never adds a dangling from node.
+func (s *AccountOverviewService) graphLinks(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
+	cursor := ""
+	for read := 0; ; {
+		if read >= maxGraphLinkRows {
+			b.g.Truncated = true
+			return nil
+		}
+		links, next, err := s.repo.ListAccountLinks(ctx, accountID, cursor, int32(min(graphLinkPageSize, maxGraphLinkRows-read)))
+		if err != nil {
+			return err
+		}
+		read += len(links)
+		for _, link := range links {
+			if validateLinkShape(link.Input()) != nil {
+				continue
+			}
+			if len(b.g.Edges) >= maxGraphEdges {
+				b.g.Truncated = true
+				return nil
+			}
+			if ok, err := s.graphLinkToCheck(ctx, accountID, link, b, reads); err != nil {
+				return err
+			} else if !ok {
+				continue
+			}
+			from, err := s.graphLinkFrom(ctx, accountID, link, b, reads)
+			if err != nil {
+				return err
+			}
+			if !from {
+				continue
+			}
+			if ok, err := s.graphLinkTo(ctx, accountID, link, b, reads); err != nil {
+				return err
+			} else if ok {
+				b.edge(graphNodeID(link.FromKind, link.FromID), graphNodeID(link.ToKind, link.ToID), model.GraphEdgeLink, link.Origin)
+			}
+		}
+		if next == nil || len(links) == 0 {
+			return nil
+		}
+		cursor = *next
+	}
+}
+
+// graphLinkToCheck revalidates a link's to endpoint without adding a node.
+func (s *AccountOverviewService) graphLinkToCheck(ctx context.Context, accountID string, link model.AccountLink, b *graphBuilder, reads *overviewReads) (bool, error) {
+	switch link.ToKind {
+	case model.LinkKindProject:
+		return s.projectInAccount(ctx, accountID, link.ToID, reads)
+	case model.LinkKindMeeting:
+		owner, meetingID, _ := splitMeetingLinkID(link.ToID)
+		meeting, err := s.publishedMeeting(ctx, accountID, owner, meetingID, reads)
+		return meeting != nil, err
+	}
+	return false, nil
+}
+
+// graphMembers adds the account's direct members, labelled by email (as the
+// account detail route shows) and role.
+func (s *AccountOverviewService) graphMembers(ctx context.Context, accountID string, b *graphBuilder, _ *overviewReads) error {
+	members, err := s.repo.ListAccountMembers(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	accountNode := graphNodeID(model.GraphNodeAccount, accountID)
+	for _, m := range members {
+		if m.AccountID != accountID || m.PK != model.PrefixAccount+accountID || m.SK != model.PrefixMember+m.UserID || !validLinkPlainID(m.UserID) {
+			continue
+		}
+		name := m.Email
+		if name == "" {
+			name = m.UserID
+		}
+		if m.Role != "" {
+			name += " (" + m.Role + ")"
+		}
+		if !b.node(model.GraphNodeMember, m.UserID, name) {
+			return nil
+		}
+		b.edge(graphNodeID(model.GraphNodeMember, m.UserID), accountNode, model.GraphEdgeMemberOf, "")
+	}
+	return nil
+}
+
+// fitGraph drops the newest nodes (never the account node) with their edges
+// until the encoded graph fits MaxAccountGraphBytes; any trim sets Truncated.
+func fitGraph(g *model.AccountGraph, accountNode string) error {
+	for {
+		raw, err := json.Marshal(g)
+		if err != nil {
+			return err
+		}
+		if len(raw) <= MaxAccountGraphBytes {
+			return nil
+		}
+		g.Truncated = true
+		switch {
+		case len(g.Nodes) > 1 && g.Nodes[len(g.Nodes)-1].ID != accountNode:
+			drop := g.Nodes[len(g.Nodes)-1].ID
+			g.Nodes = g.Nodes[:len(g.Nodes)-1]
+			kept := g.Edges[:0]
+			for _, e := range g.Edges {
+				if e.From != drop && e.To != drop {
+					kept = append(kept, e)
+				}
+			}
+			g.Edges = kept
+		case len(g.Edges) > 0:
+			g.Edges = g.Edges[:len(g.Edges)-1]
+		default:
+			return fmt.Errorf("account graph exceeds the response bound")
 		}
 	}
 }
