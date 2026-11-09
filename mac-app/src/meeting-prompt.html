@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>TTOBAK</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        --bg: #ffffff;
+        --fg: #0f172a;
+        --muted: #475569;
+        --border: rgba(15, 23, 42, 0.12);
+        --primary: #3211d4;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1930;
+          --fg: #f6f6f8;
+          --muted: #b4b0cc;
+          --border: rgba(255, 255, 255, 0.12);
+          --primary: #8b85f7;
+        }
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        overflow: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .card {
+        box-sizing: border-box;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #e11d48;
+        flex: none;
+      }
+      .text {
+        flex: 1;
+        min-width: 0;
+      }
+      .title {
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .body {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      button {
+        font: inherit;
+        font-size: 12px;
+        border-radius: 8px;
+        padding: 6px 10px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #ffffff;
+        font-weight: 700;
+      }
+      button:disabled {
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card" data-tauri-drag-region>
+      <span class="dot"></span>
+      <div class="text" data-tauri-drag-region>
+        <div class="title" id="title">회의가 감지됐어요</div>
+        <div class="body" id="body">녹음하면 시스템 소리와 내 마이크를 함께 녹음합니다.</div>
+      </div>
+      <button type="button" id="dismiss">무시</button>
+      <button type="button" class="primary" id="start">녹음 시작</button>
+    </div>
+    <script>
+      (function () {
+        var params = new URLSearchParams(location.search);
+        var id = params.get('id') || '';
+        var label = params.get('label') || '';
+        if (label) document.getElementById('title').textContent = label + ' 회의가 감지됐어요';
+        var invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+        var buttons = document.querySelectorAll('button');
+        function choose(action) {
+          if (!invoke) return;
+          buttons.forEach(function (b) { b.disabled = true; });
+          invoke('meeting_prompt_choose', { detectionId: id, action: action }).catch(function (e) {
+            document.getElementById('body').textContent = String(e);
+            buttons.forEach(function (b) { b.disabled = false; });
+          });
+        }
+        document.getElementById('start').addEventListener('click', function () { choose('start'); });
+        document.getElementById('dismiss').addEventListener('click', function () { choose('dismiss'); });
+        // Leaves the in-app banner in place when nobody answers.
+        setTimeout(function () { choose('close'); }, 30000);
+      })();
+    </script>
+  </body>
+</html>
