@@ -158,8 +158,11 @@ func (r *DynamoDBRepository) ListAccountNewsSources(ctx context.Context, account
 
 // DeleteAccountNewsSource atomically removes the account ref and disables the
 // crawler CONFIG, both conditioned on existing and the CONFIG still belonging
-// to accountID. ErrConditionFailed means the ref or matching CONFIG is absent.
-func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accountID, sourceID string) error {
+// to accountID, with the account META row and the acting user's direct
+// MEMBER# row checked in the same transaction. ErrConditionFailed means the
+// ref or matching CONFIG is absent; ErrAccountNewsAccess means the account or
+// membership was gone at commit.
+func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accountID, userID, sourceID string) error {
 	refCond, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
 	if err != nil {
 		return err
@@ -177,21 +180,30 @@ func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accoun
 	update := &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixCrawler+sourceID, model.PrefixConfig)}
 	update.UpdateExpression, update.ConditionExpression = configExpr.Update(), configExpr.Condition()
 	update.ExpressionAttributeNames, update.ExpressionAttributeValues = configExpr.Names(), configExpr.Values()
-	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{{Delete: del}, {Update: update}}})
+	access, err := accountAccessChecks(r.tableName, accountID, userID)
+	if err != nil {
+		return err
+	}
+	items := append([]types.TransactWriteItem{{Delete: del}, {Update: update}}, access...)
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
 	}
 	var cancelled *types.TransactionCanceledException
-	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == 2 {
-		failed := false
-		for _, reason := range cancelled.CancellationReasons {
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == len(items) {
+		failed, revoked := false, false
+		for i, reason := range cancelled.CancellationReasons {
 			switch aws.ToString(reason.Code) {
 			case "None":
 			case "ConditionalCheckFailed":
 				failed = true
+				revoked = revoked || i >= 2
 			default:
 				return fmt.Errorf("delete account news source: %w", err)
 			}
+		}
+		if revoked {
+			return ErrAccountNewsAccess
 		}
 		if failed {
 			return fmt.Errorf("%w: account news source %s", ErrConditionFailed, sourceID)
