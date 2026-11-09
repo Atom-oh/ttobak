@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -409,5 +410,44 @@ func TestAccountKB_PagingAndInputs(t *testing.T) {
 func TestRFC5987Escape(t *testing.T) {
 	if got := rfc5987Escape("a b'(x);\"한.pdf"); got != "a%20b%27%28x%29%3B%22%ED%95%9C.pdf" {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func connectorCapsFn(caps ...string) func(context.Context) ([]string, bool) {
+	return func(context.Context) ([]string, bool) { return caps, true }
+}
+
+func TestPresign_ConnectorAccountUploadRequiresShare(t *testing.T) {
+	svc := newKBUploadService(map[string]bool{"acct-a/owner": true})
+	writes := 0
+	svc.SetAccountKBRefWriter(func(context.Context, *model.AccountKBRef) error { writes++; return nil })
+	svc.connectorCaps = connectorCapsFn("read", "write")
+	out, err := svc.GetPresignedURL(context.Background(), "owner", "a.pdf", "application/pdf", "acct-a")
+	if !errors.Is(err, connector.ErrCapabilityDenied) || out != nil || writes != 0 {
+		t.Fatalf("connector without share: %v %v writes=%d", out, err, writes)
+	}
+	svc.connectorCaps = connectorCapsFn("read", "share", "write")
+	if _, err := svc.GetPresignedURL(context.Background(), "owner", "a.pdf", "application/pdf", "acct-a"); err != nil || writes != 1 {
+		t.Fatalf("connector with share: %v writes=%d", err, writes)
+	}
+	// Share does not bypass membership.
+	if _, err := svc.GetPresignedURL(context.Background(), "owner", "a.pdf", "application/pdf", "acct-b"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("non-member with share: %v", err)
+	}
+	// A direct user request (no verified principal) is unchanged.
+	svc.connectorCaps = verifiedConnectorCapabilities
+	if _, err := svc.GetPresignedURL(context.Background(), "owner", "a.pdf", "application/pdf", "acct-a"); err != nil || writes != 2 {
+		t.Fatalf("direct request: %v writes=%d", err, writes)
+	}
+}
+
+func TestPresign_ConnectorPersonalUploadUnchanged(t *testing.T) {
+	svc := newKBUploadService(map[string]bool{})
+	writes := 0
+	svc.SetAccountKBRefWriter(func(context.Context, *model.AccountKBRef) error { writes++; return nil })
+	svc.connectorCaps = connectorCapsFn("read", "write")
+	got, err := svc.GetPresignedURL(context.Background(), "owner", "a.pdf", "application/pdf", "")
+	if err != nil || got == nil || got.Headers != nil || writes != 0 {
+		t.Fatalf("personal connector upload: %+v %v writes=%d", got, err, writes)
 	}
 }

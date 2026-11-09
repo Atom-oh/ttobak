@@ -592,7 +592,9 @@ object metadata `account-id`, and `headers` is `{"x-amz-meta-account-id":
 "{accountId}"}`: the client must send exactly those headers (plus
 `Content-Type`) or S3 rejects the upload. Before returning the URL it creates
 the account relation row `ACCOUNT#{accountId}` / `KBREF#{sha256(key)}` (absent
-only); if that write fails the request fails with 500. The web upload dialog requires the
+only); if that write fails the request fails with 500. A verified connector
+delegation also needs the `share` capability for a non-empty `accountId` (else
+403 `CAPABILITY_DENIED`); personal and direct user uploads are unchanged. The web upload dialog requires the
 user to choose an Account or the personal (no Account) option, which the UI labels in Korean, before any file is sent.
 
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3

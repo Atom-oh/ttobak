@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -43,6 +45,19 @@ type KBService struct {
 	// putAccountRef creates the canonical account KB ref (absent-only); nil
 	// refuses every Account upload.
 	putAccountRef func(ctx context.Context, ref *model.AccountKBRef) error
+	// connectorCaps returns the capabilities of a verified connector
+	// delegation on ctx; delegated is false for a direct user request.
+	connectorCaps func(ctx context.Context) (caps []string, delegated bool)
+}
+
+// verifiedConnectorCapabilities reads the verifier-created principal that the
+// connector bridge places on delegated requests.
+func verifiedConnectorCapabilities(ctx context.Context) ([]string, bool) {
+	p, ok := connector.VerifiedPrincipal(ctx)
+	if !ok {
+		return nil, false
+	}
+	return p.Capabilities(), true
 }
 
 // NewKBService creates a new KB service
@@ -61,6 +76,7 @@ func NewKBService(
 		kbBucketName:       kbBucketName,
 		kbID:               kbID,
 		dataSourceID:       dataSourceID,
+		connectorCaps:      verifiedConnectorCapabilities,
 	}
 }
 
@@ -87,6 +103,15 @@ func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileT
 	if accountID != "" {
 		if strings.ContainsAny(accountID, "#/") {
 			return nil, ErrKBAccountInvalid
+		}
+		// An account-tagged upload is distributed to every account member, so
+		// a delegated connector needs the share capability, as for
+		// copy-attachment. Direct user requests are unchanged.
+		if s.connectorCaps == nil {
+			return nil, ErrForbidden
+		}
+		if caps, delegated := s.connectorCaps(ctx); delegated && !slices.Contains(caps, "share") {
+			return nil, fmt.Errorf("%w: account KB upload requires share", connector.ErrCapabilityDenied)
 		}
 		if s.isMember == nil || s.putAccountRef == nil || userID == "" {
 			return nil, ErrForbidden
