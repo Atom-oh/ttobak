@@ -137,6 +137,21 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(["scripts/build", "dist"], kept)
         self.assertEqual(["build/generated.js", "packages/dist/generated.js"], excluded)
 
+    def test_committed_policy_excludes_only_the_generated_mcp_bundle(self):
+        # The bundle is rebuilt from reviewed sources and compared byte for byte
+        # by test-mcp.yml; only that exact path is excluded.
+        policy = self.root / "scripts/pr-review/role-input-scope.json"
+        policy.parent.mkdir(parents=True)
+        policy.write_bytes(MODULE.with_name("role-input-scope.json").read_bytes())
+        self.git("add", ".")
+        self.git("commit", "-qm", "committed policy")
+        paths = ["frontend/public/mcp/ttobak-mcp.mjs", "frontend/public/mcp/other.mjs",
+                 "x/frontend/public/mcp/ttobak-mcp.mjs", "mcp-server/src/index.ts",
+                 "frontend/public/mcp/ttobak-mcp.mjs\n"]
+        kept, excluded, _ = prepare.selected_paths(self.git("rev-parse", "HEAD").strip(), paths)
+        self.assertEqual(["frontend/public/mcp/ttobak-mcp.mjs"], excluded)
+        self.assertEqual(paths[1:], kept)
+
     def test_git_context_hash_preserves_committed_crlf_bytes(self):
         self.git("config", "core.autocrlf", "false")
         source = b"Canonical instructions.\r\nPreserve original bytes.\r\n"

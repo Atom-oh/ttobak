@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"strings"
@@ -269,6 +270,13 @@ func TestListAccountLinksDecodesKeysAndPaginates(t *testing.T) {
 {"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINK#event#e2#project#p1"},"origin":{"S":"other"}}],
 "LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINK#event#e1#project#p1"}}}`
 		}
+		if calls == 3 {
+			// Range 1 is exhausted; range 2 starts without a start key.
+			if body["ExclusiveStartKey"] != nil || !wireValues(body)["value:LINK#meeting$"] {
+				t.Fatalf("range 2 query: %#v", body)
+			}
+			return `{"Items":[]}`
+		}
 		start := body["ExclusiveStartKey"].(wireMap)
 		if wireS(start, "PK") != "ACCOUNT#acc" || wireS(start, "SK") != "LINK#event#e1#project#p1" {
 			t.Fatalf("start key %#v", start)
@@ -292,8 +300,82 @@ func TestListAccountLinksDecodesKeysAndPaginates(t *testing.T) {
 			t.Fatalf("cursor %q: %v", bad, err)
 		}
 	}
-	if calls != 2 {
+	if calls != 3 {
 		t.Fatalf("bad cursors must not query: %d", calls)
+	}
+}
+
+func TestListAccountLinks_SkipsPeopleRange(t *testing.T) {
+	calls := 0
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		calls++
+		values := wireValues(body)
+		if target != "DynamoDB_20120810.Query" || !strings.Contains(body["KeyConditionExpression"].(string), "BETWEEN") {
+			t.Fatalf("query %#v", body)
+		}
+		switch calls {
+		case 1:
+			if !values["value:LINK#"] || !values["value:LINK#meeting"] || body["Limit"].(float64) != 3 {
+				t.Fatalf("range 1: %#v", body)
+			}
+			return `{"Items":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINK#event#e1#project#p1"},"origin":{"S":"manual"},"createdAt":{"S":"t"}}]}`
+		case 2:
+			if !values["value:LINK#meeting$"] || !values["value:LINK$"] || body["Limit"].(float64) != 2 || body["ExclusiveStartKey"] != nil {
+				t.Fatalf("range 2: %#v", body)
+			}
+			return `{"Items":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINK#news#s:h#meeting#o:m"},"origin":{"S":"auto"},"createdAt":{"S":"t"}}]}`
+		}
+		t.Fatal("extra query")
+		return ""
+	})
+	links, next, err := repo.ListAccountLinks(context.Background(), "acc", "", 3)
+	if err != nil || next != nil || len(links) != 2 || links[1].FromKind != "news" {
+		t.Fatalf("links=%+v next=%v err=%v", links, next, err)
+	}
+	if model.IsPeopleLinkSortKey(model.AccountLinkSortKey(links[0].Input())) || "LINK#meeting#o:m#member#u#speaker" < accountLinkRange1High ||
+		"LINK#meeting#o:m#member#u#speaker" > accountLinkRange2Low {
+		t.Fatal("people keys must sort between the two ranges")
+	}
+}
+
+func TestListAccountLinks_CursorAcrossPeopleRange(t *testing.T) {
+	for _, tc := range []struct {
+		sk      string
+		ranges  []string
+		startSK string
+	}{
+		{"LINK#event#e1#project#p1", []string{"LINK#meeting", "LINK$"}, "LINK#event#e1#project#p1"},
+		{"LINK#news#s:h#meeting#o:m", []string{"LINK$"}, "LINK#news#s:h#meeting#o:m"},
+	} {
+		var highs []string
+		repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
+			values := wireValues(body)
+			for _, high := range []string{"LINK#meeting", "LINK$"} {
+				if values["value:"+high] {
+					highs = append(highs, high)
+				}
+			}
+			if len(highs) == 1 {
+				if wireS(body["ExclusiveStartKey"], "SK") != tc.startSK {
+					t.Fatalf("%s: start key %#v", tc.sk, body["ExclusiveStartKey"])
+				}
+			} else if body["ExclusiveStartKey"] != nil {
+				t.Fatalf("%s: later range has a start key", tc.sk)
+			}
+			return `{"Items":[]}`
+		})
+		cursor := base64.RawURLEncoding.EncodeToString([]byte(tc.sk))
+		if _, next, err := repo.ListAccountLinks(context.Background(), "acc", cursor, 10); err != nil || next != nil {
+			t.Fatalf("%s: %v %v", tc.sk, next, err)
+		}
+		if strings.Join(highs, ",") != strings.Join(tc.ranges, ",") {
+			t.Fatalf("%s: ranges %v", tc.sk, highs)
+		}
+	}
+	people := base64.RawURLEncoding.EncodeToString([]byte("LINK#meeting#o:m#member#u#speaker"))
+	repo := indexingWire(t, func(string, map[string]interface{}) string { t.Fatal("queried"); return "" })
+	if _, _, err := repo.ListAccountLinks(context.Background(), "acc", people, 10); !errors.Is(err, ErrInvalidAccountLinkCursor) {
+		t.Fatalf("people cursor: %v", err)
 	}
 }
 
