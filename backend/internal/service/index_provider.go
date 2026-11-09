@@ -73,13 +73,16 @@ type IndexAWSProvider struct {
 	s3                                 *s3.Client
 	bedrock                            *bedrockagent.Client
 	assets, bucket, kbID, dataSourceID string
+	now                                func() time.Time
+	audit                              *indexJobAudit
 }
 
 func NewIndexAWSProvider(objects *s3.Client, ingestion *bedrockagent.Client, assets, bucket, kbID, dataSourceID string) (*IndexAWSProvider, error) {
 	if objects == nil || ingestion == nil || assets == "" || bucket == "" || assets == bucket || kbID == "" || dataSourceID == "" {
 		return nil, fmt.Errorf("%w: indexing configuration is incomplete", ErrIndexInvalid)
 	}
-	return &IndexAWSProvider{objects, ingestion, assets, bucket, kbID, dataSourceID}, nil
+	return &IndexAWSProvider{s3: objects, bedrock: ingestion, assets: assets, bucket: bucket, kbID: kbID,
+		dataSourceID: dataSourceID, now: time.Now, audit: &indexJobAudit{}}, nil
 }
 
 func indexObjectError(err error) error {
@@ -216,26 +219,6 @@ func (p *IndexAWSProvider) LegacyPage(ctx context.Context, cursor string) ([]str
 	return keys, aws.ToString(page.NextContinuationToken), nil
 }
 
-func (p *IndexAWSProvider) Busy(ctx context.Context) (bool, error) {
-	pages := bedrockagent.NewListIngestionJobsPaginator(p.bedrock, &bedrockagent.ListIngestionJobsInput{
-		KnowledgeBaseId: aws.String(p.kbID), DataSourceId: aws.String(p.dataSourceID)})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			return false, err
-		}
-		for _, job := range page.IngestionJobSummaries {
-			switch string(job.Status) {
-			case "STARTING", "IN_PROGRESS", "STOPPING":
-				return true, nil
-			case "COMPLETE", "FAILED", "STOPPED":
-			default:
-				return false, ErrIndexInvalid
-			}
-		}
-	}
-	return false, nil
-}
 func (p *IndexAWSProvider) Start(ctx context.Context, token string) (string, error) {
 	if len(token) < 33 {
 		return "", ErrIndexInvalid

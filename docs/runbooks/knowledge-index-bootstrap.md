@@ -114,7 +114,12 @@ Do not edit coordinator records or invoke ad-hoc global ticks to bypass guards.
 ## Bounded background reconciliation
 
 Reconciliation runs only when the coordinator is IDLE and no provider ingestion
-is busy. In all mode, each successful reconcile scans up to 100 evaluated table
+is busy. The busy check (`IndexAWSProvider.Busy`) reads the 100 newest ingestion
+jobs and one `STATUS` filter query per active status (STARTING, IN_PROGRESS,
+STOPPING). The filter matches only one value per request. The full job-history
+walk still runs on each worker instance's first check and then at most hourly.
+Unknown statuses, a filtered reply with another status, or provider errors stop
+the tick. In all mode, each successful reconcile scans up to 100 evaluated table
 items for canonical source keys. DynamoDB applies the filter after its read
 limit; the one-MiB scan-page read limit can end a page sooner. This is not a guarantee of
 100 discovered sources.
