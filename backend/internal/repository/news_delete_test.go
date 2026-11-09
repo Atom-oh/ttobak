@@ -21,10 +21,11 @@ func TestNewsDeleteTransactionPinsPublicationAndCurrentOwner(t *testing.T) {
 		accountID              string
 		wantOwner, wantAccount bool
 		wantValue              string
+		wantItems              int
 	}{
-		{name: "personal owner", wantOwner: true, wantAccount: true, wantValue: "owner"},
-		{name: "admin", admin: true},
-		{name: "account member", accountID: "acct-1", wantAccount: true, wantValue: "acct-1"},
+		{name: "personal owner", wantOwner: true, wantAccount: true, wantValue: "owner", wantItems: 2},
+		{name: "admin", admin: true, wantItems: 2},
+		{name: "account member", accountID: "acct-1", wantAccount: true, wantValue: "acct-1", wantItems: 4},
 	} {
 		seen := false
 		client := dynamodb.New(dynamodb.Options{
@@ -43,8 +44,19 @@ func TestNewsDeleteTransactionPinsPublicationAndCurrentOwner(t *testing.T) {
 				if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 					t.Fatal(err)
 				}
-				if len(input.TransactItems) != 2 {
-					t.Fatal("publication and owner were not in one transaction")
+				if len(input.TransactItems) != tc.wantItems {
+					t.Fatalf("%s: %d transaction items, want %d", tc.name, len(input.TransactItems), tc.wantItems)
+				}
+				if tc.wantItems == 4 {
+					// The account branch fences the account and the caller's
+					// direct membership in the same transaction.
+					for i, sk := range []string{"META", "MEMBER#owner"} {
+						check := input.TransactItems[2+i]["ConditionCheck"]
+						if check.Key["PK"]["S"] != "ACCOUNT#acct-1" || check.Key["SK"]["S"] != sk ||
+							!strings.Contains(check.ConditionExpression, "attribute_exists") {
+							t.Fatalf("%s: access check %d: %+v", tc.name, i, check)
+						}
+					}
 				}
 				source := input.TransactItems[0]["ConditionCheck"]
 				doc := input.TransactItems[1]["Update"]
@@ -129,5 +141,27 @@ func TestLegacyDocumentDeleteCannotEraseConcurrentPublication(t *testing.T) {
 	err := NewCrawlerRepository(client, "news").DeleteDocument(context.Background(), "source", "article")
 	if !errors.Is(err, ErrConditionFailed) {
 		t.Fatalf("lost publication race was not a conflict: %v", err)
+	}
+}
+
+func TestNewsDeleteRevokedMemberIsAccessDenied(t *testing.T) {
+	for _, tc := range []struct {
+		reasons string
+		access  bool
+	}{
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, true},
+		{`[{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]`, false},
+	} {
+		repo := &CrawlerRepository{client: summarySDKRepo(func(*http.Request) (*http.Response, error) {
+			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reasons+`}`, nil), nil
+		}).client, tableName: "news"}
+		observed := map[string]types.AttributeValue{}
+		for _, field := range []string{"schemaVersion", "qualityStatus", "sourceId", "docHash", "attemptToken", "sourceRevision", "s3Key", "artifactKey", "markdownSha256", "artifactSha256", "type"} {
+			observed[field] = &types.AttributeValueMemberS{Value: "observed-" + field}
+		}
+		err := repo.MarkNewsDeleted(context.Background(), NewsReadKey{SourceID: "source", SortKey: "DOC#article"}, observed, "member", false, "acct-1")
+		if errors.Is(err, ErrAccountNewsAccess) != tc.access || (!tc.access && !errors.Is(err, ErrConditionFailed)) {
+			t.Fatalf("%s: %v", tc.reasons, err)
+		}
 	}
 }
