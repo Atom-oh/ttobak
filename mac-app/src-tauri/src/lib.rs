@@ -38,6 +38,7 @@ mod meeting_detect;
 mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
+mod sleep;
 mod upload;
 pub mod zoom_mute;
 
@@ -743,6 +744,8 @@ pub fn run() {
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            sleep::start(app.handle().clone());
             // Adopt any leftover temp WAVs from a previous run (crash, force
             // quit, or a stop that never got a chance to finalize) into
             // `recorded_paths` AND `adopted_paths`, so `upload_recording`/

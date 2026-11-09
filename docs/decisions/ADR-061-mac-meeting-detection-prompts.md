@@ -117,6 +117,12 @@ without a user confirmation.
   System Audio Recording is likely denied, instead of reporting it only at
   stop. A process launched from a terminal is attributed to that terminal by
   TCC; launch the app through Finder or `open` when testing permissions.
+- When the Mac is about to sleep during a recording (e.g. the lid closes
+  without a stop), `sleep.rs` stops it through the control path with the
+  upload requested and delays sleep until the stop is answered or 20 s pass.
+  On wake the app emits `native-system-wake` and the record page retries an
+  upload left in the error state. Clamshell use on an external display does
+  not sleep and keeps recording.
 
 ## Consequences
 
@@ -162,3 +168,4 @@ and remain separate from the compiled library's availability.
   that speech is not recorded. Zoom's web client, Teams and other meeting apps keep recording the
   microphone regardless of their mute; Meet's mute is followed in Chromium
   browsers only, in English and Korean.
+- An upload interrupted by sleep completes only after wake.
