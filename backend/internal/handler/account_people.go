@@ -21,6 +21,7 @@ type accountPeopleAPI interface {
 	UnbindEdge(ctx context.Context, userID, accountID string, k model.PeopleLinkKey) error
 	ResolveMentionGroup(ctx context.Context, userID, accountID, hash string, in model.ResolveMentionInput) (*model.ResolveMentionResult, error)
 	IgnoreMentionGroup(ctx context.Context, userID, accountID, hash string) error
+	RequestContactsResolve(ctx context.Context, userID, accountID string) error
 }
 
 // AccountPeopleHandler serves the people panel, mention review and speaker
@@ -167,4 +168,20 @@ func (h *AccountPeopleHandler) Unbind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Resolve queues one account people resolve request (end of a bulk import).
+func (h *AccountPeopleHandler) Resolve(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.RawQuery != "" {
+		accountPeopleError(w, service.ErrInvalidInput)
+		return
+	}
+	user, account := peopleCaller(r)
+	if err := h.service.RequestContactsResolve(r.Context(), user, account); err != nil {
+		accountPeopleError(w, err)
+		return
+	}
+	// A JSON body: clients parse every non-204 response.
+	writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
 }

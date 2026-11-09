@@ -59,6 +59,10 @@ func (s *accountPeopleStub) IgnoreMentionGroup(_ context.Context, user, account,
 	s.hit(user, account, hash)
 	return s.err
 }
+func (s *accountPeopleStub) RequestContactsResolve(_ context.Context, user, account string) error {
+	s.hit(user, account, "")
+	return s.err
+}
 
 func accountPeopleRouter(s *accountPeopleStub) http.Handler {
 	h := NewAccountPeopleHandler(s)
@@ -70,6 +74,7 @@ func accountPeopleRouter(s *accountPeopleStub) http.Handler {
 	r.Get("/accounts/{accountId}/people/edges", h.Edges)
 	r.Post("/accounts/{accountId}/people/edges", h.Bind)
 	r.Delete("/accounts/{accountId}/people/edges", h.Unbind)
+	r.Post("/accounts/{accountId}/people/resolve", h.Resolve)
 	return r
 }
 
@@ -95,6 +100,7 @@ func TestAccountPeopleHandler_RoutesAndErrors(t *testing.T) {
 		{"GET", "/accounts/a1/people/edges?meetingId=o:m", "", 200},
 		{"POST", "/accounts/a1/people/edges", `{"meetingId":"o:m","toKind":"contact","toId":"c1","role":"speaker","sourceRef":"spk_0"}`, 201},
 		{"DELETE", "/accounts/a1/people/edges?meetingId=o:m&toKind=contact&toId=c1&role=speaker", "", 204},
+		{"POST", "/accounts/a1/people/resolve", "", 202},
 	} {
 		s := &accountPeopleStub{}
 		rec := servePeople(s, tc.method, tc.target, tc.body)
@@ -146,5 +152,13 @@ func TestAccountPeopleHandler_UnbindQueryValidation(t *testing.T) {
 	servePeople(s, "DELETE", "/accounts/a1/people/edges?meetingId=o:m&toKind=contact&toId=c1&role=speaker", "")
 	if s.key != (model.PeopleLinkKey{MeetingID: "o:m", ToKind: "contact", ToID: "c1", Role: "speaker"}) {
 		t.Fatalf("key %+v", s.key)
+	}
+}
+
+func TestAccountPeopleHandler_ResolveReturnsJSONBody(t *testing.T) {
+	rec := servePeople(&accountPeopleStub{}, "POST", "/accounts/a1/people/resolve", "")
+	var body struct{ Accepted bool }
+	if rec.Code != 202 || json.Unmarshal(rec.Body.Bytes(), &body) != nil || !body.Accepted {
+		t.Fatalf("%d %q", rec.Code, rec.Body)
 	}
 }

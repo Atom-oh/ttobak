@@ -757,7 +757,10 @@ The contact response contains exactly `contactId`, `revision`, `name`, `company`
 and returns 201 with the contact. PUT requires the observed `revision`, replaces
 the editable fields and returns 200 with a new revision; DELETE requires the
 observed `revision` query parameter and returns 204. A stale revision returns
-409 so concurrent changes are not overwritten. `name` must contain non-whitespace text. All fields are
+409 so concurrent changes are not overwritten. A successful POST or PUT queues
+one people resolve request for the account unless it carries
+`?peopleResolve=defer`, the only query parameter they accept (any other query
+is 400). `name` must contain non-whitespace text. All fields are
 UTF-8 strings: `address` is at most 1,024 bytes, `notes` at most 8,192 bytes,
 and the other fields at most 256 bytes each. POST/PUT accept a single JSON object
 at most 64 KiB, with at most 12,000 bytes in the serialized contact; omitted optional fields become empty strings.
@@ -876,6 +879,10 @@ and only meetings currently published to the account count:
   label or a default diarization label (`spk_N` or the Korean speaker letter form). `DELETE /people/edges` takes the four
   key fields as query parameters, returns 204, and for an auto edge writes a
   deny row.
+- `POST /people/resolve` (no body, no query) returns 202 `{accepted: true}` and queues one resolve
+  request for the account. Bulk and CSV contact imports write rows with
+  `?peopleResolve=defer` and call it once per account with saved rows; a failed
+  call is shown with a retry.
 - Under the summary guard, assignee and insight mention text and evidence are
   blank for teammates who do not own the meeting.
 
@@ -1769,6 +1776,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Edges` |
 | POST | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Bind` |
 | DELETE | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Unbind` |
+| POST | `/api/accounts/{accountId}/people/resolve` | `accountPeopleHandler.Resolve` |
 | GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
 | GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
 | GET | `/api/accounts/{accountId}/graph` | `accountOverviewHandler.Graph` |
