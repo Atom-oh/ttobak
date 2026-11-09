@@ -30,9 +30,9 @@ type accountLinksRepo interface {
 	GetProject(context.Context, string) (*model.Project, error)
 	GetMeetingPublication(context.Context, string, string) (*model.Meeting, error)
 	GetAccountEvent(context.Context, string, string) (*model.AccountEvent, string, error)
-	PutAccountLink(context.Context, *model.AccountLink) error
+	PutAccountLink(context.Context, *model.AccountLink, string) error
 	GetAccountLink(context.Context, string, model.AccountLinkInput) (*model.AccountLink, error)
-	DeleteAccountLink(context.Context, string, model.AccountLinkInput, bool) error
+	DeleteAccountLink(context.Context, string, string, model.AccountLinkInput, bool) error
 	ListAccountLinks(context.Context, string, string, int32) ([]model.AccountLink, *string, error)
 }
 
@@ -226,10 +226,12 @@ func (s *AccountLinksService) Link(ctx context.Context, userID, accountID string
 	link := &model.AccountLink{AccountID: accountID, FromKind: in.FromKind, FromID: in.FromID, ToKind: in.ToKind, ToID: in.ToID,
 		Origin: model.LinkOriginManual, CreatedBy: userID, CreatedAt: s.now().UTC().Format(time.RFC3339)}
 	for attempt := 0; attempt < accountLinkCreateAttempts; attempt++ {
-		err := s.repo.PutAccountLink(ctx, link)
+		err := s.repo.PutAccountLink(ctx, link, userID)
 		switch {
 		case err == nil:
 			return link, nil
+		case errors.Is(err, repository.ErrAccountLinkAccess):
+			return nil, ErrForbidden
 		case errors.Is(err, repository.ErrAccountLinkTarget):
 			return nil, ErrInvalidInput
 		case errors.Is(err, repository.ErrAccountLinkExists):
@@ -280,10 +282,14 @@ func (s *AccountLinksService) LinkAuto(ctx context.Context, accountID, newsID, m
 	}
 	link := &model.AccountLink{AccountID: accountID, FromKind: in.FromKind, FromID: in.FromID, ToKind: in.ToKind, ToID: in.ToID,
 		Origin: model.LinkOriginAuto, CreatedAt: s.now().UTC().Format(time.RFC3339), Evidence: evidence, ModelID: modelID}
-	err = s.repo.PutAccountLink(ctx, link)
+	// The system writer has no member row; the meeting-published and deny
+	// checks still bind the transaction.
+	err = s.repo.PutAccountLink(ctx, link, "")
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, repository.ErrAccountLinkAccess):
+		return ErrNotFound
 	case errors.Is(err, repository.ErrAccountLinkDenied):
 		return ErrLinkSuppressed
 	case errors.Is(err, repository.ErrAccountLinkTarget):
@@ -311,7 +317,10 @@ func (s *AccountLinksService) Unlink(ctx context.Context, userID, accountID stri
 		if existing == nil {
 			return ErrNotFound
 		}
-		err = s.repo.DeleteAccountLink(ctx, accountID, in, existing.Origin == model.LinkOriginAuto)
+		err = s.repo.DeleteAccountLink(ctx, accountID, userID, in, existing.Origin == model.LinkOriginAuto)
+		if errors.Is(err, repository.ErrAccountLinkAccess) {
+			return ErrForbidden
+		}
 		if !errors.Is(err, repository.ErrConditionFailed) {
 			return err
 		}

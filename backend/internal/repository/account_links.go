@@ -24,6 +24,9 @@ var (
 	ErrAccountLinkTarget = errors.New("account link target is not in the account")
 	// ErrAccountLinkDenied means a removed auto link blocks re-creation.
 	ErrAccountLinkDenied = errors.New("account link was removed")
+	// ErrAccountLinkAccess means the account or the acting user's direct
+	// membership was gone when the write committed.
+	ErrAccountLinkAccess = errors.New("account link access revoked")
 )
 
 type accountLinkItem struct {
@@ -57,12 +60,17 @@ func splitLinkMeetingID(id string) (string, string, bool) {
 //	  ConditionCheck PROJECT#{id}/CONFIG contains(accountIds, :a)   (toKind project)
 //	  ConditionCheck USER#{owner}/MEETING#{id} published to :a      (toKind meeting)
 //	  ConditionCheck LINKDENY# attribute_not_exists(PK)             (origin auto)
+//	  ConditionCheck ACCOUNT#{a}/META attribute_exists(PK)
+//	  ConditionCheck ACCOUNT#{a}/MEMBER#{actor} attribute_exists(PK) (actor set)
 //
-// Failures map to ErrAccountLinkDenied, ErrAccountLinkTarget or
+// actorID is the acting member and is required for manual links; the system
+// writer of auto links passes "" and gets no membership check. Failures map to
+// ErrAccountLinkAccess, ErrAccountLinkDenied, ErrAccountLinkTarget or
 // ErrAccountLinkExists (in that precedence), each wrapping ErrConditionFailed.
-func (r *DynamoDBRepository) PutAccountLink(ctx context.Context, l *model.AccountLink) error {
+func (r *DynamoDBRepository) PutAccountLink(ctx context.Context, l *model.AccountLink, actorID string) error {
 	if l == nil || l.AccountID == "" || model.ValidateAccountLink(l.Input()) != nil ||
-		(l.Origin != model.LinkOriginManual && l.Origin != model.LinkOriginAuto) || l.CreatedAt == "" {
+		(l.Origin != model.LinkOriginManual && l.Origin != model.LinkOriginAuto) || l.CreatedAt == "" ||
+		(l.Origin == model.LinkOriginManual && actorID == "") {
 		return fmt.Errorf("invalid account link")
 	}
 	in := l.Input()
@@ -120,11 +128,39 @@ func (r *DynamoDBRepository) PutAccountLink(ctx context.Context, l *model.Accoun
 		}
 		roles = append(roles, "deny")
 	}
+	access, err := r.accountLinkAccessChecks(l.AccountID, actorID)
+	if err != nil {
+		return err
+	}
+	items = append(items, access...)
+	for range access {
+		roles = append(roles, "access")
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		return classifyAccountLinkPut(err, roles)
 	}
 	return nil
+}
+
+// accountLinkAccessChecks pins the account META row and, when actorID is set,
+// the actor's direct MEMBER# row, like the other account-partition writers.
+func (r *DynamoDBRepository) accountLinkAccessChecks(accountID, actorID string) ([]types.TransactWriteItem, error) {
+	exists, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return nil, err
+	}
+	pk := model.PrefixAccount + accountID
+	sks := []string{model.SKAccountMeta}
+	if actorID != "" {
+		sks = append(sks, model.PrefixMember+actorID)
+	}
+	items := make([]types.TransactWriteItem, 0, len(sks))
+	for _, sk := range sks {
+		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName),
+			Key: accountNewsKey(pk, sk), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}})
+	}
+	return items, nil
 }
 
 // classifyAccountLinkPut maps only pure condition failures; any other reason
@@ -145,6 +181,8 @@ func classifyAccountLinkPut(err error, roles []string) error {
 		}
 	}
 	switch {
+	case failed["access"]:
+		return fmt.Errorf("%w: %w", ErrConditionFailed, ErrAccountLinkAccess)
 	case failed["deny"]:
 		return fmt.Errorf("%w: %w", ErrConditionFailed, ErrAccountLinkDenied)
 	case failed["target"]:
@@ -194,9 +232,11 @@ func (r *DynamoDBRepository) GetAccountLink(ctx context.Context, accountID strin
 // DeleteAccountLink deletes the forward and reverse rows in one transaction.
 // The forward delete requires the row to exist with the origin the caller
 // observed: auto when deny is true (which also Puts LINKDENY#), manual
-// otherwise. ErrConditionFailed means the row is gone or its origin changed.
-func (r *DynamoDBRepository) DeleteAccountLink(ctx context.Context, accountID string, in model.AccountLinkInput, deny bool) error {
-	if accountID == "" || model.ValidateAccountLink(in) != nil {
+// otherwise. The account META row and the acting member's direct MEMBER# row
+// must still exist. ErrConditionFailed means the row is gone or its origin
+// changed; it wraps ErrAccountLinkAccess when the account or membership is gone.
+func (r *DynamoDBRepository) DeleteAccountLink(ctx context.Context, accountID, actorID string, in model.AccountLinkInput, deny bool) error {
+	if accountID == "" || actorID == "" || model.ValidateAccountLink(in) != nil {
 		return fmt.Errorf("invalid account link")
 	}
 	origin := model.LinkOriginManual
@@ -220,21 +260,31 @@ func (r *DynamoDBRepository) DeleteAccountLink(ctx context.Context, accountID st
 		}
 		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(r.tableName), Item: row}})
 	}
+	access, err := r.accountLinkAccessChecks(accountID, actorID)
+	if err != nil {
+		return err
+	}
+	firstAccess := len(items)
+	items = append(items, access...)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
 	}
 	var cancelled *types.TransactionCanceledException
 	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == len(items) {
-		failed := false
-		for _, reason := range cancelled.CancellationReasons {
+		failed, revoked := false, false
+		for i, reason := range cancelled.CancellationReasons {
 			switch aws.ToString(reason.Code) {
 			case "None":
 			case "ConditionalCheckFailed":
 				failed = true
+				revoked = revoked || i >= firstAccess
 			default:
 				return fmt.Errorf("delete account link: %w", err)
 			}
+		}
+		if revoked {
+			return fmt.Errorf("%w: %w", ErrConditionFailed, ErrAccountLinkAccess)
 		}
 		if failed {
 			return fmt.Errorf("%w: account link", ErrConditionFailed)

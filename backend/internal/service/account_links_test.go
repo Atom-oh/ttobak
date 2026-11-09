@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,17 +22,19 @@ const (
 )
 
 type linkTestRepo struct {
-	member    bool
-	projects  map[string]*model.Project
-	meetings  map[string]*model.Meeting
-	events    map[string]*model.AccountEvent
-	links     map[string]*model.AccountLink
-	denied    map[string]bool
-	putErr    []error
-	puts      []*model.AccountLink
-	deletes   []string
-	deleteErr []error
-	listed    []model.AccountLink
+	member       bool
+	projects     map[string]*model.Project
+	meetings     map[string]*model.Meeting
+	events       map[string]*model.AccountEvent
+	links        map[string]*model.AccountLink
+	denied       map[string]bool
+	putErr       []error
+	puts         []*model.AccountLink
+	putActors    []string
+	deletes      []string
+	deleteActors []string
+	deleteErr    []error
+	listed       []model.AccountLink
 }
 
 func newLinkTestRepo() *linkTestRepo {
@@ -63,8 +66,9 @@ func (r *linkTestRepo) GetMeetingPublication(_ context.Context, owner, id string
 func (r *linkTestRepo) GetAccountEvent(_ context.Context, _ string, id string) (*model.AccountEvent, string, error) {
 	return r.events[id], "", nil
 }
-func (r *linkTestRepo) PutAccountLink(_ context.Context, l *model.AccountLink) error {
+func (r *linkTestRepo) PutAccountLink(_ context.Context, l *model.AccountLink, actor string) error {
 	r.puts = append(r.puts, l)
+	r.putActors = append(r.putActors, actor)
 	if len(r.putErr) > 0 {
 		err := r.putErr[0]
 		r.putErr = r.putErr[1:]
@@ -86,8 +90,9 @@ func (r *linkTestRepo) PutAccountLink(_ context.Context, l *model.AccountLink) e
 func (r *linkTestRepo) GetAccountLink(_ context.Context, _ string, in model.AccountLinkInput) (*model.AccountLink, error) {
 	return r.links[model.AccountLinkSortKey(in)], nil
 }
-func (r *linkTestRepo) DeleteAccountLink(_ context.Context, _ string, in model.AccountLinkInput, deny bool) error {
+func (r *linkTestRepo) DeleteAccountLink(_ context.Context, _, actor string, in model.AccountLinkInput, deny bool) error {
 	key := model.AccountLinkSortKey(in)
+	r.deleteActors = append(r.deleteActors, actor)
 	r.deletes = append(r.deletes, fmt.Sprintf("%s deny=%v", key, deny))
 	if len(r.deleteErr) > 0 {
 		err := r.deleteErr[0]
@@ -353,5 +358,65 @@ func TestListAccountLinks_RevalidatesEndpoints(t *testing.T) {
 	}
 	if links[1].ToID != "owner1:m1" || links[1].Evidence != "q" {
 		t.Fatalf("meeting link: %#v", links[1])
+	}
+}
+
+// An auto news→meeting link whose meeting is no longer published to the
+// account (or no longer exists) is omitted: neither its meeting ID nor its
+// evidence quote reaches the response.
+func TestListLinks_DropsUnpublishedMeetingEvidence(t *testing.T) {
+	svc, repo, _, _ := newLinkTest()
+	unpublished := publishedMeeting("owner1", "m2")
+	unpublished.SharedToAccount = false
+	repo.meetings["owner1:m2"] = unpublished
+	newsID := newsToProject.FromID
+	repo.listed = []model.AccountLink{
+		{FromKind: "news", FromID: newsID, ToKind: "meeting", ToID: "owner1:m2", Origin: "auto", Evidence: "secret quote m2", ModelID: "model"},
+		{FromKind: "news", FromID: newsID, ToKind: "meeting", ToID: "owner1:gone", Origin: "auto", Evidence: "secret quote gone", ModelID: "model"},
+	}
+	links, _, err := svc.List(context.Background(), linkUser, linkAcct, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(links)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 0 || strings.Contains(string(encoded), "m2") || strings.Contains(string(encoded), "gone") ||
+		strings.Contains(string(encoded), "secret quote") {
+		t.Fatalf("unpublished meeting link leaked: %s", encoded)
+	}
+}
+
+// Every member mutation passes the acting user so the repository can pin its
+// MEMBER# row; the system auto-link writer passes no actor. A membership lost
+// before commit surfaces as ErrForbidden.
+func TestAccountLinks_PassActorAndMapRevokedAccess(t *testing.T) {
+	svc, repo, _, _ := newLinkTest()
+	repo.meetings["owner1:m1"] = publishedMeeting("owner1", "m1")
+	if _, err := svc.Link(context.Background(), linkUser, linkAcct, newsToProject); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.LinkAuto(context.Background(), linkAcct, newsToProject.FromID, "owner1:m1", "q", "model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Unlink(context.Background(), linkUser, linkAcct, newsToProject); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.putActors) != 2 || repo.putActors[0] != linkUser || repo.putActors[1] != "" ||
+		len(repo.deleteActors) != 1 || repo.deleteActors[0] != linkUser {
+		t.Fatalf("actors: put %v delete %v", repo.putActors, repo.deleteActors)
+	}
+	revoked := fmt.Errorf("%w: %w", repository.ErrConditionFailed, repository.ErrAccountLinkAccess)
+	repo.putErr = []error{revoked}
+	if _, err := svc.Link(context.Background(), linkUser, linkAcct, newsToProject); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("link after membership loss: %v", err)
+	}
+	if _, err := svc.Link(context.Background(), linkUser, linkAcct, newsToProject); err != nil {
+		t.Fatal(err)
+	}
+	repo.deleteErr = []error{revoked}
+	if err := svc.Unlink(context.Background(), linkUser, linkAcct, newsToProject); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("unlink after membership loss: %v", err)
 	}
 }

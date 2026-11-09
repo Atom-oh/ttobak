@@ -56,10 +56,11 @@ func TestPutAccountLink_TransactionShape(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		link  *model.AccountLink
+		actor string
 		count int
 		check func(t *testing.T, items []interface{})
 	}{
-		{"project target", project, 3, func(t *testing.T, items []interface{}) {
+		{"project target", project, "u", 5, func(t *testing.T, items []interface{}) {
 			cc := items[2].(wireMap)["ConditionCheck"].(wireMap)
 			pk, sk := wireKey(items[2].(wireMap), "ConditionCheck")
 			seen := wireValues(cc)
@@ -68,7 +69,7 @@ func TestPutAccountLink_TransactionShape(t *testing.T) {
 				t.Fatalf("project check: %#v", cc)
 			}
 		}},
-		{"auto meeting link", auto, 4, func(t *testing.T, items []interface{}) {
+		{"auto meeting link", auto, "", 5, func(t *testing.T, items []interface{}) {
 			cc := items[2].(wireMap)["ConditionCheck"].(wireMap)
 			pk, sk := wireKey(items[2].(wireMap), "ConditionCheck")
 			seen := wireValues(cc)
@@ -83,7 +84,7 @@ func TestPutAccountLink_TransactionShape(t *testing.T) {
 				t.Fatalf("deny check: %#v", deny)
 			}
 		}},
-		{"manual meeting link has no deny check", &manualMeeting, 3, nil},
+		{"manual meeting link has no deny check", &manualMeeting, "u", 5, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -110,9 +111,10 @@ func TestPutAccountLink_TransactionShape(t *testing.T) {
 				if tc.check != nil {
 					tc.check(t, items)
 				}
+				assertAccountLinkAccessChecks(t, items, tc.actor)
 				return `{}`
 			})
-			if err := repo.PutAccountLink(context.Background(), tc.link); err != nil || calls != 1 {
+			if err := repo.PutAccountLink(context.Background(), tc.link, tc.actor); err != nil || calls != 1 {
 				t.Fatalf("put: %d %v", calls, err)
 			}
 		})
@@ -121,8 +123,41 @@ func TestPutAccountLink_TransactionShape(t *testing.T) {
 	repo := indexingWire(t, func(string, map[string]interface{}) string { calls++; return `{}` })
 	bad := *project
 	bad.FromKind = "meeting"
-	if err := repo.PutAccountLink(context.Background(), &bad); err == nil || calls != 0 {
+	if err := repo.PutAccountLink(context.Background(), &bad, "u"); err == nil || calls != 0 {
 		t.Fatal("invalid pair must be rejected before any write")
+	}
+	if err := repo.PutAccountLink(context.Background(), project, ""); err == nil || calls != 0 {
+		t.Fatal("a manual link without an acting member must be rejected before any write")
+	}
+}
+
+// assertAccountLinkAccessChecks verifies the trailing META and (for a member
+// actor) MEMBER# existence checks that pin the account and membership.
+func assertAccountLinkAccessChecks(t *testing.T, items []interface{}, actor string) {
+	t.Helper()
+	want := []string{"META"}
+	if actor != "" {
+		want = append(want, "MEMBER#"+actor)
+	}
+	tail := items[len(items)-len(want):]
+	for i, sk := range want {
+		cc, ok := tail[i].(wireMap)["ConditionCheck"].(wireMap)
+		if !ok {
+			t.Fatalf("access check %d missing: %#v", i, tail[i])
+		}
+		pk, got := wireKey(tail[i].(wireMap), "ConditionCheck")
+		if pk != "ACCOUNT#acc" || got != sk || !strings.Contains(cc["ConditionExpression"].(string), "attribute_exists") {
+			t.Fatalf("access check %d: %s %s %#v", i, pk, got, cc)
+		}
+	}
+	if actor == "" {
+		for _, item := range items {
+			if cc, ok := item.(wireMap)["ConditionCheck"].(wireMap); ok {
+				if _, sk := wireKey(item.(wireMap), "ConditionCheck"); strings.HasPrefix(sk, "MEMBER#") {
+					t.Fatalf("system link must not check a member row: %#v", cc)
+				}
+			}
+		}
 	}
 }
 
@@ -132,17 +167,18 @@ func TestPutAccountLinkCancellationMapping(t *testing.T) {
 		reasons string
 		want    error
 	}{
-		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]`, ErrAccountLinkExists},
-		{`[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]`, ErrAccountLinkTarget},
-		{`[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, ErrAccountLinkDenied},
-		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, ErrAccountLinkDenied},
-		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]`, ErrAccountLinkTarget},
-		{`[{"Code":"None"},{"Code":"TransactionConflict"},{"Code":"None"},{"Code":"None"}]`, nil},
+		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]`, ErrAccountLinkExists},
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]`, ErrAccountLinkTarget},
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]`, ErrAccountLinkDenied},
+		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]`, ErrAccountLinkDenied},
+		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]`, ErrAccountLinkTarget},
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, ErrAccountLinkAccess},
+		{`[{"Code":"None"},{"Code":"TransactionConflict"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]`, nil},
 	} {
 		repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
 			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reasons+`}`, nil), nil
 		})
-		err := repo.PutAccountLink(context.Background(), auto)
+		err := repo.PutAccountLink(context.Background(), auto, "")
 		if tc.want == nil {
 			if err == nil || errors.Is(err, ErrConditionFailed) {
 				t.Fatalf("conflict must stay a transport error: %v", err)
@@ -160,9 +196,9 @@ func TestDeleteAccountLinkShape(t *testing.T) {
 	for _, deny := range []bool{false, true} {
 		repo := indexingWire(t, func(target string, body map[string]interface{}) string {
 			items := body["TransactItems"].([]interface{})
-			want := 2
+			want := 4
 			if deny {
-				want = 3
+				want = 5
 			}
 			if target != "DynamoDB_20120810.TransactWriteItems" || len(items) != want {
 				t.Fatalf("deny=%v: %s %d", deny, target, len(items))
@@ -186,17 +222,32 @@ func TestDeleteAccountLinkShape(t *testing.T) {
 					t.Fatalf("deny put %s %s", pk, sk)
 				}
 			}
+			assertAccountLinkAccessChecks(t, items, "u")
 			return `{}`
 		})
-		if err := repo.DeleteAccountLink(context.Background(), "acc", in, deny); err != nil {
+		if err := repo.DeleteAccountLink(context.Background(), "acc", "u", in, deny); err != nil {
 			t.Fatal(err)
 		}
 	}
-	repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
-		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`, nil), nil
-	})
-	if err := repo.DeleteAccountLink(context.Background(), "acc", in, false); !errors.Is(err, ErrConditionFailed) {
-		t.Fatalf("missing link: %v", err)
+	for _, tc := range []struct {
+		reasons string
+		revoked bool
+	}{
+		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]`, false},
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, true},
+	} {
+		repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reasons+`}`, nil), nil
+		})
+		err := repo.DeleteAccountLink(context.Background(), "acc", "u", in, false)
+		if !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountLinkAccess) != tc.revoked {
+			t.Fatalf("%s: %v", tc.reasons, err)
+		}
+	}
+	calls := 0
+	repo := indexingWire(t, func(string, map[string]interface{}) string { calls++; return `{}` })
+	if err := repo.DeleteAccountLink(context.Background(), "acc", "", in, false); err == nil || calls != 0 {
+		t.Fatal("delete without an acting member must be rejected before any write")
 	}
 }
 
