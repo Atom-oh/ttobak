@@ -66,3 +66,60 @@ type StallReason struct {
 	Code   string `json:"code"`
 	Detail string `json:"detail"`
 }
+
+// Flow result states.
+const (
+	FlowStateTerminal = "TERMINAL"
+	FlowStateStalled  = "STALLED"
+	FlowStateActive   = "ACTIVE"
+	// FlowStateUnknown: the stage is unmapped, or its change time is unknown
+	// and no stage history exists.
+	FlowStateUnknown = "UNKNOWN"
+)
+
+// Flow item kinds.
+const (
+	FlowItemEvent   = "event"
+	FlowItemMeeting = "meeting"
+)
+
+// AccountFlow is the account page's per-opportunity engagement flow. Rows are
+// built only from stored links (event→project links and meeting projectIds);
+// nothing is inferred or written back.
+type AccountFlow struct {
+	Rows       []FlowRow `json:"rows"` // at most 20 projects, nonterminal first
+	Unassigned FlowRow   `json:"unassigned"`
+	// Truncated reports that a read or size bound was hit, so some rows or
+	// items may be missing and unassigned items may be linked.
+	Truncated bool `json:"truncated"`
+}
+
+// FlowRow is one opportunity's flow (ProjectID empty for the unassigned row).
+type FlowRow struct {
+	ProjectID string               `json:"projectId,omitempty"`
+	Activity  []FlowItem           `json:"activity"` // account events, at most 5, earliest first
+	Response  []FlowItem           `json:"response"` // published meetings, at most 5, earliest first
+	Oppty     *SignalOppty         `json:"oppty,omitempty"`
+	History   []ProjectStageChange `json:"history"` // at most 10, newest first
+	Result    FlowResult           `json:"result"`
+}
+
+// FlowItem is one activity or response. ID is the event ID, or
+// {ownerUserId}:{meetingId} for meetings. Origin and Evidence come from the
+// event→project link row (manual links have no evidence). Need is the newest
+// readable need-type insight of a meeting.
+type FlowItem struct {
+	Kind     string `json:"kind"` // FlowItem*
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Date     string `json:"date,omitempty"` // RFC 3339
+	Origin   string `json:"origin,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
+	Need     string `json:"need,omitempty"`
+}
+
+// FlowResult is the opportunity's current state.
+type FlowResult struct {
+	State string        `json:"state"` // FlowState*
+	Stall []StallReason `json:"stall"`
+}

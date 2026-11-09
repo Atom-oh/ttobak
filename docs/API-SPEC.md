@@ -855,6 +855,33 @@ Links are read per displayed endpoint (`LINK#news#{newsId}#project#` and
 - `insights` are the 10 newest `need`, `opportunity` and `risk` account
   insights, with `restrictedCount` as in the insights route.
 
+`GET /api/accounts/{accountId}/flow` returns the account's engagement flow for
+**direct** members (same access, query and caching rules as signals; not
+connector-delegable because it carries meeting-derived text). The response is
+`{ rows, unassigned, truncated }`, at most 64 KiB, with text capped at 280 code
+points. Items are placed only through stored links; nothing is inferred:
+- `rows` holds at most 20 projects that still list the account (up to 100
+  project refs are read), nonterminal first, then by `stageChangedAt`, newest
+  first. Each row has `projectId`, `activity` (account events linked by an
+  event→project link that still exist, at most 5 newest shown earliest first,
+  with the link's `origin` and, for auto links, `evidence`), `response`
+  (meetings currently published to the account whose `projectIds` list the
+  project, at most 5 newest shown earliest first, each with the newest readable
+  `need` insight text), `oppty` (the signals opportunity item), `history`
+  (at most 10 newest stage changes `{projectId, from, to, changedBy,
+  changedAt}`) and `result` `{state, stall}`. `state` is `TERMINAL`,
+  `UNKNOWN` (unmapped stage, or no stage change time and no history),
+  `STALLED` (any stall reason) or `ACTIVE`.
+- `unassigned` holds, newest first and at most 5 each, account events among the
+  50 newest with no link to a project still in the account (read per event
+  through `LINK#event#{eventId}#project#`, at most 20 rows) and published
+  meetings among the 50 newest account meeting refs that list no such project.
+- Items are `{kind: event|meeting, id, title, date, origin?, evidence?, need?}`;
+  meeting IDs are `{ownerUserId}:{meetingId}`.
+- `truncated` reports that a read bound or the size bound was hit; rows or
+  items may then be missing, and unassigned items may have links that were not
+  read.
+
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
 order and resolved range. Without `from`, ascending lists start now (upcoming)
@@ -1572,6 +1599,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
 | DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
 | GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
+| GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
