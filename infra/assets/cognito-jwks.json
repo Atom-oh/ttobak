@@ -1,0 +1,22 @@
+{
+  "_comment": "Public Cognito signing keys (JWKS) for the production user pool, embedded in the Lambda@Edge viewer check so a cold edge environment does not fetch them. Public data, not a secret. Regenerate from the issuer /.well-known/jwks.json if the pool or its keys change; unknown kids still fall back to a live fetch.",
+  "issuer": "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_u01c65YjO",
+  "keys": [
+    {
+      "alg": "RS256",
+      "e": "AQAB",
+      "kid": "T6H2ODmO/eM6w0slnCDGCBy2POUh7DQZHoS1EGIky3s=",
+      "kty": "RSA",
+      "n": "yiGsdRk_oqLA-Hrb-wZHwMRzNYzwmP0l4iM2tj1bLkrpCyymCz4-_dEb5Ezgkp084JMOQ8a4V0AUwQsVs0SG5JzO_DPzIepR1o0lWcOjzLwzdF5BlOqM5xKtvvc4HRmcVyhWxNoIzOSosAHz_LODqE3vISaFihF_U6k-nle-Sh5oaAwzXOhQn9iYemzo2BjY6bNktTANxq8UKNxV27hN6S8DVzgUORl5IcFhRzvvEiZpRH-xCxFG2kYJTaJ1SIOpcG7DLC6autY_-ixFBgTIOAX92rmnR_eY_obDVeqyD2WmbzViAmVy4H-dvtPUwn-DzQkuhW0juPCsM3YwOd3wnw",
+      "use": "sig"
+    },
+    {
+      "alg": "RS256",
+      "e": "AQAB",
+      "kid": "BmAvPymN86iW3+Y7w3HRDGGZAI5uyrPd+eVYkdzcIGY=",
+      "kty": "RSA",
+      "n": "2GrSj8XwMpxntyUvXObOxoG__-z7yf3kd2NB1C7elYLaFHjWKhmC9NurwICsmWol_wo-T8TrZ_mSlF7yMrHNFhTLeIK5urAisPOtT7mt7HIAPFOrMnUtUwMUihCNHYB3ei89yt1V68cPdi5uydISpYm6r337SZw1wOKEksa2txKpJK2KYQuFR0j4JVv72iFKX4xe4tU_mEd7hyR7mdsMYoAxDUzsWdWDd8_srbTYLoIx7Xkqor8cW6XOlzLGVNLY1mg3qAbRc5LH-5fLqerz7a5Y_2N3EeNh43KNXkCsil__mN0bmoii1y0bi0-kqdGwkTROXOuLRYGAnC8ZRhuxzw",
+      "use": "sig"
+    }
+  ]
+}

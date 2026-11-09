@@ -3,9 +3,12 @@
 import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { insightsApi, researchApi } from '@/lib/api';
+import { crawlerApi, insightsApi, researchApi } from '@/lib/api';
 import type { CrawledDocument, Research } from '@/types/meeting';
 import { InsightsTableView } from './InsightsTableView';
+import { useAuth } from '@/components/auth/AuthProvider';
+import { LinkToOpportunity } from '@/components/account/LinkToOpportunity';
+import { documentLinkId, documentLinkKind } from '@/lib/accountOverview';
 
 type TabType = 'news' | 'tech' | 'research';
 
@@ -24,6 +27,7 @@ function formatDate(value: string | number): string {
 
 export function InsightsList() {
   const router = useRouter();
+  const { user } = useAuth();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab') as TabType | null;
   const urlTab: TabType = rawTab && ['news', 'tech', 'research'].includes(rawTab) ? rawTab : 'news';
@@ -33,6 +37,10 @@ export function InsightsList() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  // Dropdown facets: customers load once; services come from the server over the full filtered set.
+  const [sourceFacet, setSourceFacet] = useState<string[]>([]);
+  const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
+  const [serviceOptions, setServiceOptions] = useState<string[]>([]);
   // Set, not a single key -- a single value would let two concurrent
   // deletes clear each other's pending state in `finally`.
   const [deletingKeys, setDeletingKeys] = useState<Set<string>>(new Set());
@@ -112,6 +120,8 @@ export function InsightsList() {
       if (generation === fetchGenerationRef.current) {
         setDocuments(docs);
         setTotalCount(response.totalCount || 0);
+        setServiceOptions(response.services || []);
+        setSourceFacet(response.sourceIds || []);
       }
       return docs;
     } catch (err) {
@@ -274,17 +284,31 @@ export function InsightsList() {
     setPage(1);
   };
 
-  // Collect unique crawler sources (customer names) from current results
-  const uniqueCrawlerSources = useMemo(() => {
-    const sources = new Set(documents.map((d) => d.sourceId).filter(Boolean));
-    return Array.from(sources).sort();
-  }, [documents]);
+  // Customer options come from the server facet over the full filtered set;
+  // subscribed sources only supply friendlier display names.
+  const uniqueCrawlerSources = sourceFacet;
+  // Service options are the server-computed facet over the full filtered set.
+  const uniqueServices = serviceOptions;
 
-  // Collect unique AWS services from current results
-  const uniqueServices = useMemo(() => {
-    const services = new Set(documents.flatMap((d) => d.awsServices || []));
-    return Array.from(services).sort();
-  }, [documents]);
+  useEffect(() => {
+    let cancelled = false;
+    crawlerApi
+      .listSources()
+      .then((res) => {
+        if (cancelled) return;
+        const names: Record<string, string> = {};
+        (res.sources || []).forEach((s) => {
+          if (s.source?.sourceId && s.source.sourceName) names[s.source.sourceId] = s.source.sourceName;
+        });
+        setSourceNames(names);
+      })
+      .catch(() => {
+        // Non-fatal: the customer dropdown simply stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Collect all unique tags from current results
   const availableTags = useMemo(() => {
@@ -612,7 +636,7 @@ export function InsightsList() {
                   <option value="">All Customers</option>
                   {uniqueCrawlerSources.map((src) => (
                     <option key={src} value={src}>
-                      {src}
+                      {sourceNames[src] || src}
                     </option>
                   ))}
                 </select>
@@ -741,7 +765,7 @@ export function InsightsList() {
                 {selectedTags.length > 0
                   ? 'No documents match the selected tags. Try removing some filters.'
                   : activeTab === 'news'
-                    ? 'Subscribe to news sources in Settings to see articles here.'
+                    ? '수집된 뉴스가 아직 없습니다.'
                     : 'Subscribe to AWS services in Settings to see updates here.'}
               </p>
             </div>
@@ -830,8 +854,8 @@ export function InsightsList() {
                   )}
 
                   {/* Footer: KB status + Read/Open buttons */}
-                  <div className="flex items-center justify-between mt-4">
-                    <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
+                    <div className="flex flex-wrap items-center gap-3">
                       {doc.inKB ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-0.5 rounded-full">
                           <span className="material-symbols-outlined text-sm">check_circle</span>
@@ -841,6 +865,10 @@ export function InsightsList() {
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
                           Not in KB
                         </span>
+                      )}
+                      {user?.userId && doc.sourceId && doc.docHash && (
+                        <LinkToOpportunity userId={user.userId} fromKind={documentLinkKind(doc.type)}
+                          fromId={documentLinkId(doc.sourceId, doc.docHash)} />
                       )}
                     </div>
                     <div className="flex items-center gap-2">

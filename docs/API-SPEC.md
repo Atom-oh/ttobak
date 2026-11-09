@@ -590,7 +590,11 @@ no `#` or `/` (else 400) and the caller must be a member of that Account (else
 403 `FORBIDDEN`; membership is read consistently). The presigned PUT then signs
 object metadata `account-id`, and `headers` is `{"x-amz-meta-account-id":
 "{accountId}"}`: the client must send exactly those headers (plus
-`Content-Type`) or S3 rejects the upload. The web upload dialog requires the
+`Content-Type`) or S3 rejects the upload. Before returning the URL it creates
+the account relation row `ACCOUNT#{accountId}` / `KBREF#{sha256(key)}` (absent
+only); if that write fails the request fails with 500. A verified connector
+delegation also needs the `share` capability for a non-empty `accountId` (else
+403 `CAPABILITY_DENIED`); personal and direct user uploads are unchanged. The web upload dialog requires the
 user to choose an Account or the personal (no Account) option, which the UI labels in Korean, before any file is sent.
 
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
@@ -789,6 +793,197 @@ POST returns 201; PUT requires the observed `revision` and DELETE its
 `revision` query parameter; a stale revision returns 409. Clients cannot set
 the author or timestamps.
 
+`GET/POST /api/accounts/{accountId}/news-sources` and `DELETE
+/api/accounts/{accountId}/news-sources/{sourceId}` manage account-owned news
+sources for **direct** members. Each source is a new crawler CONFIG row
+`acct_{accountId}_{8 hex}` carrying `accountId`, plus an `ACCOUNT#{accountId}` /
+`NEWSSRC#{sourceId}` ref, written in one transaction that also checks the
+account and the caller's membership. POST takes `sourceName` (1-200 code
+points), optional `newsQueries` (at most 32) and `aliases` (at most 20), and
+optional `copyFromSourceId`, which copies queries, aliases and custom URLs from
+a per-user source the caller subscribes to and never changes that source;
+operator-curated, unknown or unsubscribed sources return 400. Default queries
+are the account name plus its aliases; at most 10 sources per account. GET
+returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
+account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
+`disabled` (so scheduling stops) in one transaction; returns 204, or 404 for an
+unknown source. Per-user crawler routes (subscribe/AddSource, update,
+unsubscribe) refuse account-owned sources like operator-curated ones, in the
+service and in the `attribute_not_exists(accountId)` write condition.
+`DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
+document is allowed only for admins or a current direct member of that account
+(read per request); the stored source creator grants nothing.
+
+`GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
+for **direct** members. Allowed pairs are news→project, tech→project,
+event→project and news→meeting. News and tech IDs are `{sourceId}:{docHash}`
+(tech uses `__tech__`), event IDs are event UUIDs and meeting IDs are
+`{ownerUserId}:{meetingId}`. A link is an `ACCOUNT#{accountId}` /
+`LINK#{fromKind}#{fromId}#{toKind}#{toId}` row plus a `LINKTO#` reverse row,
+written in one transaction that also checks the project still lists the
+account (`accountIds`) or the meeting is still published to it, and that the
+account and the acting member's direct `MEMBER#` row still exist (the automatic
+linker has no member row and checks only the account). Delete transactions
+check the same account and member rows. POST takes
+`{fromKind, fromId, toKind, toId}`; the news must come from one of the
+account's current sources, tech docs must exist under `__tech__`, and events
+must exist in the account. It returns 201 with the new link, or with the
+existing link for the same pair; endpoint failures return 400. GET returns
+`{ "links": [...], "nextCursor"? }` (100 rows read per page, opaque `cursor`),
+omitting rows whose project left the account, whose news source is no longer
+the account's, or whose meeting is no longer published, so a page can be short
+while a cursor remains. Each link shows `origin` (`manual` or `auto`),
+`createdBy`, `createdAt` and, for auto links, `evidence`. DELETE takes the four
+endpoint fields as query parameters, is allowed for any direct member, returns
+204 or 404, and for an `auto` link also writes a `LINKDENY#` row so the
+automatic linker never re-creates that pair. None of the three routes is
+connector-delegable; the list carries meeting-derived evidence.
+
+Project stages are a fixed list (Prospect, Qualified, Technical Validation,
+Business Validation, Committed, Launched, Closed Lost; matched case-insensitively,
+empty means unset). Create and `PUT /api/projects/{projectId}` reject other values
+as invalid input. A stage change sets `stageChangedAt` and appends an immutable
+`STAGEHIST#` row with the update; legacy values outside the list read as unmapped
+and projects without a change time show an unknown stage age. Project list rows
+carry `stageChangedAt` (when recorded) and `stageMapped`, like the detail
+response. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
+
+`GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
+for **direct** members (membership is read on every call; no query parameters;
+`Cache-Control: no-store`; not connector-delegable, like the insights route).
+The response is `{ newsState, news, opportunities, insights, restrictedCount,
+linksTruncated }`, at most 64 KiB, with text fields capped at 280 code points.
+Links are read per displayed endpoint (`LINK#news#{newsId}#project#` and
+`LINKTO#project#{projectId}#event#`, at most 200 rows each) and revalidated;
+`linksTruncated` reports that a bound was hit, in which case linked projects,
+`candidate` and `NO_UPCOMING` may be incomplete:
+- `newsState` is `OK`, `NO_SOURCE` (the account has no current news source) or
+  `NO_RECENT_NEWS`. `news` holds at most 10 current items crawled in the last
+  30 days by the account's sources, ordered by `qualityScore` then crawl time.
+  Each item has `id` (`{sourceId}:{docHash}`), `linkedProjectIds` (projects
+  that still list the account) and `candidate` (unlinked, has opportunities and
+  `qualityScore >= 0.75`); the flag is display-only and never written.
+- `opportunities` lists at most 20 projects that still list the account, with
+  `stage`, `stageMapped`, `daysInStage` (absent when the change time is
+  unknown), `terminal` and `stall` reasons. Launched and Closed Lost never
+  stall. `STAGE_STALE`: stage unchanged for at least 21 days. `OPEN_ACTIONS`:
+  an open saved action item at least 14 days old, measured from its meeting's
+  date, counting only meetings that list the project and are currently
+  published to the account. `NO_UPCOMING`: no account event linked to the
+  project (event→project link) starts after now; per-user calendar entries
+  are not considered.
+- `insights` are the 10 newest `need`, `opportunity` and `risk` account
+  insights, with `restrictedCount` as in the insights route.
+
+`GET /api/accounts/{accountId}/flow` returns the account's engagement flow for
+**direct** members (same access, query and caching rules as signals; not
+connector-delegable because it carries meeting-derived text). The response is
+`{ rows, unassigned, truncated }`, at most 64 KiB, with text capped at 280 code
+points. Items are placed only through stored links; nothing is inferred:
+- `rows` holds at most 20 projects that still list the account (up to 100
+  project refs are read), nonterminal first, then by `stageChangedAt`, newest
+  first. Each row has `projectId`, `activity` (account events linked by an
+  event→project link that still exist, at most 5 newest shown earliest first,
+  with the link's `origin` and, for auto links, `evidence`), `response`
+  (meetings currently published to the account whose `projectIds` list the
+  project, at most 5 newest shown earliest first, each with the newest readable
+  `need` insight text), `oppty` (the signals opportunity item), `history`
+  (at most 10 newest stage changes `{projectId, from, to, changedBy,
+  changedAt}`) and `result` `{state, stall}`. `state` is `TERMINAL`,
+  `UNKNOWN` (unmapped stage, or no stage change time and no history),
+  `STALLED` (any stall reason) or `ACTIVE`.
+- `unassigned` holds, newest first and at most 5 each, account events among the
+  50 newest with no link to a project still in the account (read per event
+  through `LINK#event#{eventId}#project#`, at most 20 rows) and published
+  meetings among the 50 newest account meeting refs that list no such project.
+- Items are `{kind: event|meeting, id, title, date, origin?, evidence?, need?}`;
+  meeting IDs are `{ownerUserId}:{meetingId}`.
+- `truncated` reports that a read bound or the size bound was hit; rows or
+  items may then be missing, and unassigned items may have links that were not
+  read.
+
+`GET /api/accounts/{accountId}/graph` returns the account's relationship graph
+for **direct** members (same access, query and caching rules as signals; not
+connector-delegable). The response is `{ nodes, edges, truncated }`, at most
+64 KiB. Nodes are `{id, kind, label}` with `id` `{kind}:{id}` (meetings
+`{ownerUserId}:{meetingId}`, news/tech `{sourceId}:{docHash}`), `kind`
+`account|project|meeting|event|news|tech|member|contact` and `label` capped at
+60 code points. Edges are `{from, to, kind, origin?}` with `kind`
+`project_account|meeting_project|meeting_account|link|attends|member_of`;
+`origin` (`manual`/`auto`) is set only on `link` edges. Every node comes from a
+revalidated relation; nothing is inferred:
+- projects that still list the account (up to 100 project refs); meetings
+  currently published to the account among the 100 newest account meeting
+  refs, with `meeting_project` edges to listed projects still in the account;
+  the 50 newest account events.
+- `LINK#` rows (at most 1,000 read). A row yields nodes and an edge only when
+  both endpoints revalidate: project still lists the account, news from one of
+  the account's current sources and tech documents not `DELETED`, event still
+  exists, meeting currently published to the account. A link never makes an
+  unpublished meeting visible. Rows whose missing endpoint nodes would exceed
+  the node cap are skipped without endpoint reads, and link rows spend at most
+  200 distinct uncached endpoint lookups (project, meeting publication, event,
+  document); skipped rows set `truncated`. At the node cap boundary a
+  revalidated from node can appear without its link edge.
+- direct members labelled `{email} ({role})`, as the account detail shows;
+  event attendees whose `contactId` names an existing account contact, as
+  `attends` edges labelled with the contact name. At most 200 distinct contacts
+  are read, and none once the node cap is full; skipped attendees set
+  `truncated`. Meeting project expansion stops reading projects once the node
+  cap is full.
+- At most 150 nodes and 300 edges. `truncated` reports that a node, edge, read
+  or size bound was hit, or that a single contact or linked event could not be
+  opened and was skipped. A missing record key or a storage failure still
+  fails the call.
+
+`GET /api/accounts/{accountId}/kb?kind=upload|meeting|news|tech&cursor=` lists
+one kind of the account's KB material for **direct** members, checked on every
+call (not connector-delegable; `Cache-Control: no-store`). `kind` is required;
+other query keys are 400. The response is `{items, nextCursor?, truncated?}` with at most
+25 items; `cursor` is opaque and bound to the kind. Items are `{kind, id, title,
+date, uploadedBy?, indexState, canDownload}`; `title` is capped at 200 code
+points and no S3 key or bucket name is returned.
+- `upload`: `KBREF#` rows of the account. A ref is listed only when its
+  `kb/{owner}/{file}` object exists and its signed `account-id` metadata still
+  names the account, so abandoned presigns and deleted files never show.
+  Uploads stay listed after the uploader leaves. `id` is the ref ID (64
+  lowercase hex) and `canDownload` is true.
+- `meeting`: meetings currently published to the account, newest first; `id` is
+  `{ownerUserId}:{meetingId}`.
+- `news`: current news of the account's sources crawled in the last 90 days; `id`
+  is `{sourceId}:{docHash}`.
+- `tech`: tech documents linked (`LINK#tech#…#project#…`, at most 200 rows read)
+  to projects that still list the account, excluding `DELETED` documents; `id` is
+  `__tech__:{docHash}`. `truncated: true` reports that more link rows exist
+  than were read, so items may be missing.
+- `indexState` comes from the index job record only: `INDEXED`, `PENDING`
+  (`PENDING`, `PREPARING`, `WAITING_SYNC`, `WAITING_SOURCE`), `FAILED`, or
+  `UNTRACKED` when no job exists or the source has no index identity (for example
+  `news/v1/` keys). Items whose job is `DELETED` are omitted, so pages may be
+  short while `nextCursor` is set. The crawler `inKB` flag is never used.
+
+`GET /api/accounts/{accountId}/kb/{refId}/download` returns `{url}` (`Cache-Control:
+no-store`), a 5-minute presigned S3 GET that downloads as an attachment, for any
+direct member. `refId` must be 64 lowercase hex (else 400); the ref must belong to
+the account, name a `kb/` key whose hash is the ref ID, and its object must exist
+and still carry the account metadata (else 404). Not connector-delegable.
+
+`DELETE /api/accounts/{accountId}/kb/{refId}` removes the account ref (204). Only
+the uploader (while a direct member) or an account `owner` may untag (else 403);
+a missing ref is 404. The S3 object is never deleted; it stays in the uploader's
+personal KB. Untag deletes the ref and writes an `ACCOUNT#{accountId}/KBUNTAG#{refId}`
+tombstone in one transaction; every ref create requires the tombstone to be
+absent. A new upload gets a new timestamped key and so a new ref ID. QA
+retrieval scope is unchanged by refs. Not connector-delegable.
+Existing tagged uploads are backfilled with `backend/cmd/backfill-account-kb`
+(`-dry-run` defaults to true; prints counts only). Apply mode requires
+`-before`, an RFC 3339 time set to when account KB refs were first deployed;
+only objects modified strictly before it are backfilled and later ones are
+counted as `after_cutoff`. Refs untagged before tombstones existed left no
+`KBUNTAG#` row, so this cutoff is what keeps them from being re-shared. A rerun
+skips existing refs and never recreates a ref untagged since tombstones
+(counted as `untagged`).
+
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
 order and resolved range. Without `from`, ascending lists start now (upcoming)
@@ -813,6 +1008,16 @@ surfaces as 409. Attendee contact IDs are resolved only after membership and
 approval checks and only for a fresh create, so a replay returns its receipt
 even if a referenced contact was deleted since. Event list and get are available bridge reads.
 Events have no TTL and remain until a direct member deletes them.
+
+`PUT /api/meetings/{meetingId}/category` sets the creator's internal meeting
+category: `{"category": "internal_team" | "internal_1on1" | "internal_training" | "internal_other" | ""}`
+(empty clears it). Only the creator may call it (403 for other readers, 404 when
+the meeting is not visible). It is a conditional update on the meeting having no
+`accountId`; an account-linked meeting returns 409 `CONFLICT`. Category and account
+link are mutually exclusive: every write that sets a non-empty `accountId`
+(link, share-account, member publication) also removes `meetingCategory`, and
+`POST /api/meetings` rejects `accountId` together with `meetingCategory` (400).
+List items, detail and create responses expose `meetingCategory` when set.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
@@ -1499,6 +1704,18 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Get` |
 | PUT | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Delete` |
+| GET | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.List` |
+| POST | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.Create` |
+| DELETE | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Delete` |
+| GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
+| POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
+| DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
+| GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
+| GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
+| GET | `/api/accounts/{accountId}/graph` | `accountOverviewHandler.Graph` |
+| GET | `/api/accounts/{accountId}/kb` | `accountKBHandler.List` |
+| GET | `/api/accounts/{accountId}/kb/{refId}/download` | `accountKBHandler.Download` |
+| DELETE | `/api/accounts/{accountId}/kb/{refId}` | `accountKBHandler.Untag` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
@@ -1533,6 +1750,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/vault/export` | `vaultHandler.ExportVault` |
 | GET | `/api/vault/reading` | `vaultReadingHandler.Get` |
 | POST | `/api/meetings/{meetingId}/account` | `meetingHandler.LinkToAccount` |
+| PUT | `/api/meetings/{meetingId}/category` | `meetingHandler.SetCategory` |
 | POST | `/api/meetings/{meetingId}/share-account` | `shareHandler.ShareToAccount` |
 | GET | `/api/meetings` | `meetingHandler.ListMeetings` |
 | GET | `/api/meeting-catalog` | `meetingCatalogHandler.Get` |

@@ -1,9 +1,13 @@
+export type MeetingCategory = 'internal_team' | 'internal_1on1' | 'internal_training' | 'internal_other';
+
 export interface Meeting {
   PK: string;
   SK: string;
   meetingId: string;
   userId: string;
   accountId?: string;
+  /** Owner-set internal category; never present together with accountId. */
+  meetingCategory?: MeetingCategory;
   projectIds?: string[];
   title: string;
   description?: string;
@@ -646,6 +650,8 @@ export interface ProjectSummary {
   projectId: string;
   name: string;
   stage?: string;
+  stageChangedAt?: string;
+  stageMapped?: boolean;
   sfdcOpptyId?: string;
 }
 
@@ -656,6 +662,8 @@ export interface Project {
   sfdcOpptyId?: string;
   sfdcUrl?: string;
   stage?: string;
+  stageChangedAt?: string;
+  stageMapped?: boolean;
   ownerUserId: string;
   accessPermission?: 'read' | 'edit';
   inheritedFromAccountId?: string;
@@ -756,3 +764,98 @@ export interface MeetingTranslationPage {
 
 /** Allowlisted values of the meeting noteLanguage field. */
 export type NoteLanguage = '' | 'ko' | 'en';
+
+// ---- Account overview: links, signals, flow, graph (API-SPEC account routes) ----
+
+export type AccountLinkKind = 'news' | 'tech' | 'event' | 'meeting' | 'project';
+
+/** News/tech IDs are {sourceId}:{docHash}; meeting IDs {ownerUserId}:{meetingId}. */
+export interface AccountLinkInput {
+  fromKind: AccountLinkKind;
+  fromId: string;
+  toKind: AccountLinkKind;
+  toId: string;
+}
+
+export interface AccountLink extends AccountLinkInput {
+  origin: 'manual' | 'auto' | string;
+  createdBy?: string;
+  createdAt: string;
+  evidence?: string;
+}
+
+export interface StallReason { code: string; detail: string }
+
+export interface SignalNews {
+  id: string;
+  title: string;
+  url?: string;
+  pubDate?: string;
+  awsRelevance?: string;
+  qualityScore: number;
+  linkedProjectIds: string[];
+  candidate: boolean;
+}
+
+export interface SignalOppty {
+  projectId: string;
+  name: string;
+  stage: string;
+  stageMapped: boolean;
+  daysInStage?: number | null;
+  terminal: boolean;
+  stall: StallReason[];
+}
+
+export interface AccountSignals {
+  newsState: 'OK' | 'NO_SOURCE' | 'NO_RECENT_NEWS' | string;
+  news: SignalNews[];
+  opportunities: SignalOppty[];
+  insights: AccountInsight[];
+  restrictedCount: number;
+  linksTruncated: boolean;
+}
+
+export interface FlowItem {
+  kind: 'event' | 'meeting';
+  id: string;
+  title: string;
+  date?: string;
+  origin?: string;
+  evidence?: string;
+  need?: string;
+}
+
+export interface ProjectStageChange {
+  projectId: string;
+  from: string;
+  to: string;
+  changedBy: string;
+  changedAt: string;
+}
+
+export interface FlowRow {
+  projectId?: string;
+  activity: FlowItem[];
+  response: FlowItem[];
+  oppty?: SignalOppty;
+  history: ProjectStageChange[];
+  result: { state: string; stall: StallReason[] };
+}
+
+export interface AccountFlow {
+  rows: FlowRow[];
+  unassigned: FlowRow;
+  truncated: boolean;
+}
+
+export interface AccountGraphNode { id: string; kind: string; label: string }
+export interface AccountGraphEdge { from: string; to: string; kind: string; origin?: string }
+export interface AccountGraph { nodes: AccountGraphNode[]; edges: AccountGraphEdge[]; truncated: boolean }
+
+export interface CreateAccountNewsSourceInput {
+  sourceName: string;
+  newsQueries?: string[];
+  aliases?: string[];
+  copyFromSourceId?: string;
+}

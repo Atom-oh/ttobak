@@ -28,6 +28,13 @@ async function readSources(directory) {
   return sources;
 }
 
+// String literals that happen to equal a Material Symbol name but are never
+// rendered as icons (API wire values). Keep this list short and explicit; a
+// literal used as an icon must not be listed here.
+export const NON_ICON_LITERALS = new Set([
+  'event', // account link / flow item kind (lib/accountOverview.ts, types/meeting.ts)
+]);
+
 function collectIcons(sources, codepoints) {
   const catalog = new Map(codepoints.trim().split(/\r?\n|\t/).map(entry => entry.split(/\s+/)));
   const icons = new Set();
@@ -45,7 +52,7 @@ function collectIcons(sources, codepoints) {
       // and shared lookup tables are covered without evaluating application code.
       if (ts.isStringLiteralLike(node) || ts.isJsxText(node)) {
         const value = node.text.trim();
-        if (catalog.has(value)) icons.add(value);
+        if (catalog.has(value) && !NON_ICON_LITERALS.has(value)) icons.add(value);
       }
       ts.forEachChild(node, visit);
     }

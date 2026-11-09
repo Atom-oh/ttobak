@@ -232,6 +232,12 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string
 		if err := validateMeetingNotes(p.Notes); err != nil {
 			return nil, err
 		}
+		if !model.ValidMeetingCategory(p.Category) {
+			return nil, fmt.Errorf("%w: invalid meeting category", ErrInvalidInput)
+		}
+		if p.Category != model.MeetingCategoryNone && p.AccountID != "" {
+			return nil, fmt.Errorf("%w: an internal meeting cannot be linked to an account", ErrInvalidInput)
+		}
 		if p.AccountID != "" {
 			member, err := s.repo.GetMember(ctx, p.AccountID, userID)
 			if err != nil {
@@ -738,6 +744,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		MeetingID:                  meeting.MeetingID,
 		UserID:                     meeting.UserID,
 		AccountID:                  meeting.AccountID,
+		MeetingCategory:            meeting.MeetingCategory,
 		SharedToAccount:            meeting.SharedToAccount,
 		ProjectIDs:                 projectIDs,
 		Title:                      meeting.Title,
@@ -1734,6 +1741,36 @@ func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, actorID, meet
 		return ErrForbidden
 	}
 	return writer.LinkMeetingToAccountAs(ctx, meeting.UserID, actorID, meetingID, accountID)
+}
+
+// meetingCategoryWriter conditionally writes the owner's internal category.
+type meetingCategoryWriter interface {
+	SetMeetingCategory(ctx context.Context, userID, meetingID, category string) error
+}
+
+// SetMeetingCategory sets or clears the internal category of the caller's own
+// meeting. Only the creator classifies a meeting as internal (1:1 content is
+// private); an account-linked meeting is rejected with ErrConditionFailed,
+// both here and atomically in the repository write.
+func (s *MeetingService) SetMeetingCategory(ctx context.Context, userID, meetingID, category string) error {
+	if !model.ValidMeetingCategory(category) {
+		return fmt.Errorf("%w: invalid meeting category", ErrInvalidInput)
+	}
+	meeting, err := resolveMeetingManager(ctx, s.repo, userID, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting.UserID != userID {
+		return ErrForbidden
+	}
+	if category != model.MeetingCategoryNone && meeting.AccountID != "" {
+		return repository.ErrConditionFailed
+	}
+	writer, ok := s.repo.(meetingCategoryWriter)
+	if !ok {
+		return fmt.Errorf("meeting category writes are unavailable")
+	}
+	return writer.SetMeetingCategory(ctx, userID, meetingID, category)
 }
 
 // actorAccountWriter classifies/publishes the creator's meeting while pinning

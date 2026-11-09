@@ -98,6 +98,11 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
     // The contact list has its own suites; it is inert here.
     '@/components/AccountContacts': { AccountContacts: () => null },
     '@/components/AccountEvents': { AccountEvents: () => null },
+    // Signals and flow have their own suite (account-overview); inert here.
+    '@/components/account/AccountSignals': { AccountSignals: () => null },
+    '@/components/account/AccountFlow': { AccountFlow: () => null },
+    '@/components/account/AccountLinksPanel': { AccountLinksPanel: () => null },
+    '@/components/account/AccountKB': { AccountKB: () => null },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({ billingService: billing }) },
     '@/lib/billingApi': { fetchBillingAccounts: billingAccounts },
     '@/lib/upload': { uploadDocFile: upload },
@@ -110,6 +115,8 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
         insights: read('insights', () => ({ insights: [] })),
         listDocuments: read('listDocuments', () => ({ documents: [] })),
         research: read('research', () => ({ research: [{ researchId: 'research', topic: 'Research survives', createdAt: '2026-11-07' }] })),
+        signals: read('signals', () => ({ newsState: 'NO_SOURCE', news: [], opportunities: [], insights: [], restrictedCount: 0, linksTruncated: false })),
+        flow: read('flow', () => ({ rows: [], unassigned: { activity: [], response: [], history: [], result: { state: 'UNKNOWN', stall: [] } }, truncated: false })),
         putDocument: read('putDocument', () => ({ docId: 'new-note' })),
         addMember: read('addMember', () => ({ pending: true, invited: true })),
         resendOwnerInvitation: read('resendOwnerInvitation', () => ({})),
@@ -203,12 +210,14 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
   };
 }
 
-test('overview loads account management without secondary requests', async () => {
+test('overview loads account management with only the signals and flow sections', async () => {
   const page = fixture();
   await page.settle();
   assert.match(page.text, /Customer A/);
   assert.ok(nodes(page.render()).some(node => node.props?.['aria-label'] === 'Add member'));
-  assert.deepEqual(page.calls.filter(call => !['get', 'list'].includes(call.name)), []);
+  assert.deepEqual(page.calls.filter(call => !['get', 'list', 'signals', 'flow'].includes(call.name)), []);
+  assert.equal(page.calls.filter(call => call.name === 'signals').length, 1);
+  assert.equal(page.calls.filter(call => call.name === 'flow').length, 1);
 });
 
 test('insights failure has its own retry and cannot suppress shared history', async () => {

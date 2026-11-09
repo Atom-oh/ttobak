@@ -93,7 +93,7 @@ func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID
 		if source == nil {
 			return ErrNotFound
 		}
-		if source.GlobalNewsSource {
+		if userWriteRefused(source) {
 			return ErrSourceUnavailable
 		}
 		var requiredOwner *string
@@ -134,12 +134,20 @@ func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID
 }
 
 // ErrSourceUnavailable refuses a user write to an operator-curated global
-// news source: users cannot subscribe to it, change it or unsubscribe it.
+// news source or an account-owned source: users cannot subscribe to it,
+// change it or unsubscribe it through the per-user crawler paths.
 var ErrSourceUnavailable = errors.New("source not available")
+
+// userWriteRefused reports a source that per-user crawler paths must not
+// change: operator-curated global sources and account-owned sources (which are
+// managed only through AccountNewsService with account membership).
+func userWriteRefused(source *model.CrawlerSource) bool {
+	return source.GlobalNewsSource || source.AccountID != ""
+}
 
 // operatorSourceError maps the repository refusal to ErrSourceUnavailable.
 func operatorSourceError(err error) error {
-	if errors.Is(err, repository.ErrOperatorSource) {
+	if errors.Is(err, repository.ErrOperatorSource) || errors.Is(err, repository.ErrAccountSource) {
 		return ErrSourceUnavailable
 	}
 	return nil
@@ -233,7 +241,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 
 	// An operator-curated global news source takes no subscribers: a user's
 	// queries or URLs would shape what feeds the Common layer (R16).
-	if source.GlobalNewsSource {
+	if userWriteRefused(source) {
 		return nil, ErrSourceUnavailable
 	}
 
@@ -307,7 +315,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 			if source == nil {
 				return nil, fmt.Errorf("source %s vanished during merge retry", sourceID)
 			}
-			if source.GlobalNewsSource {
+			if userWriteRefused(source) {
 				return nil, ErrSourceUnavailable
 			}
 		}
@@ -377,6 +385,13 @@ func (s *CrawlerService) UpdateSource(ctx context.Context, userID, sourceID stri
 	if sub == nil {
 		return ErrNotFound
 	}
+	source, err := s.repo.GetSource(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("failed to get source: %w", err)
+	}
+	if source != nil && userWriteRefused(source) {
+		return ErrSourceUnavailable
+	}
 
 	// Check the combined source limit before changing subscription settings.
 	// Public aliases remain on the source after a contributor unsubscribes.
@@ -423,7 +438,7 @@ func (s *CrawlerService) Unsubscribe(ctx context.Context, userID, sourceID strin
 		if source == nil {
 			return nil // Source already gone
 		}
-		if source.GlobalNewsSource {
+		if userWriteRefused(source) {
 			return ErrSourceUnavailable // never wiped or disabled by a user
 		}
 
@@ -493,7 +508,7 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 		if source == nil {
 			return nil
 		}
-		if source.GlobalNewsSource {
+		if userWriteRefused(source) {
 			return ErrSourceUnavailable
 		}
 

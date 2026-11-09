@@ -30,6 +30,11 @@ var ErrEventAccess = errors.New("account event access revoked")
 // third-party personal data and fail closed without a key (ADR-063).
 var ErrEventEncryptionUnavailable = ErrContactEncryptionUnavailable
 
+// ErrEventUnreadable means one stored event (or its reference row) cannot be
+// opened; like ErrContactUnreadable it never covers a missing key or a
+// transport failure.
+var ErrEventUnreadable = errors.New("account event unreadable")
+
 type storedEvent struct {
 	PK       string `dynamodbav:"PK"`
 	SK       string `dynamodbav:"SK"`
@@ -72,21 +77,21 @@ func (r *DynamoDBRepository) sealedEventItem(ctx context.Context, account, sk st
 func (r *DynamoDBRepository) openEvent(ctx context.Context, account string, item map[string]types.AttributeValue) (model.AccountEvent, string, error) {
 	var row storedEvent
 	if err := attributevalue.UnmarshalMap(item, &row); err != nil {
-		return model.AccountEvent{}, "", err
+		return model.AccountEvent{}, "", fmt.Errorf("%w: %w", ErrEventUnreadable, err)
 	}
 	if r.sealer == nil {
 		return model.AccountEvent{}, "", ErrEventEncryptionUnavailable
 	}
 	if row.Sealed == "" || row.PK != model.PrefixAccount+account || !strings.HasPrefix(row.SK, eventPrefix) || !strings.HasSuffix(row.SK, "#"+row.EventID) {
-		return model.AccountEvent{}, "", errors.New("event row is not sealed for this account")
+		return model.AccountEvent{}, "", fmt.Errorf("%w: event row is not sealed for this account", ErrEventUnreadable)
 	}
 	plain, err := r.sealer.Open(ctx, row.Sealed, eventBinding(account, row.EventID))
 	if err != nil {
-		return model.AccountEvent{}, "", fmt.Errorf("open event: %w", sealingError(err))
+		return model.AccountEvent{}, "", fmt.Errorf("open event: %w", openingError(ErrEventUnreadable, err))
 	}
 	var e model.AccountEvent
 	if err := json.Unmarshal(plain, &e); err != nil || e.EventID != row.EventID {
-		return model.AccountEvent{}, "", errors.New("sealed event does not match its row")
+		return model.AccountEvent{}, "", fmt.Errorf("%w: sealed event does not match its row", ErrEventUnreadable)
 	}
 	e.Revision, e.StartAt = row.Revision, row.StartAt
 	return e, row.SK, nil
@@ -103,17 +108,17 @@ func (r *DynamoDBRepository) GetAccountEvent(ctx context.Context, account, id st
 	}
 	var pointer storedEventRef
 	if err := attributevalue.UnmarshalMap(ref.Item, &pointer); err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %w", ErrEventUnreadable, err)
 	}
 	if pointer.EventID != id || !strings.HasPrefix(pointer.EventSK, eventPrefix) || !strings.HasSuffix(pointer.EventSK, "#"+id) {
-		return nil, "", errors.New("invalid event reference")
+		return nil, "", fmt.Errorf("%w: invalid event reference", ErrEventUnreadable)
 	}
 	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: contactKey(account, pointer.EventSK), ConsistentRead: aws.Bool(true)})
 	if err != nil {
 		return nil, "", err
 	}
 	if len(out.Item) == 0 {
-		return nil, "", errors.New("event reference has no event")
+		return nil, "", fmt.Errorf("%w: event reference has no event", ErrEventUnreadable)
 	}
 	e, sk, err := r.openEvent(ctx, account, out.Item)
 	if err != nil {

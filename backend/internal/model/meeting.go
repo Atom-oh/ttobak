@@ -7,6 +7,28 @@ import "time"
 type MeetingPreparation struct {
 	Notes     string
 	AccountID string
+	// Category is an optional internal classification; it excludes AccountID.
+	Category string
+}
+
+// Internal meeting categories. Empty means unclassified: a customer meeting
+// when AccountID is set, otherwise unassigned. A category and an account link
+// are mutually exclusive, so internal meetings never reach account surfaces.
+const (
+	MeetingCategoryNone     = ""
+	MeetingCategoryTeam     = "internal_team"
+	MeetingCategoryOneOnOne = "internal_1on1"
+	MeetingCategoryTraining = "internal_training"
+	MeetingCategoryOther    = "internal_other"
+)
+
+// ValidMeetingCategory is the exact allowlist for Meeting.MeetingCategory writes.
+func ValidMeetingCategory(category string) bool {
+	switch category {
+	case MeetingCategoryNone, MeetingCategoryTeam, MeetingCategoryOneOnOne, MeetingCategoryTraining, MeetingCategoryOther:
+		return true
+	}
+	return false
 }
 
 // Final-note output languages. Auto ("") keeps the historical prompt rule.
@@ -83,6 +105,9 @@ type Meeting struct {
 	Insights               string   `dynamodbav:"insights,omitempty"`         // JSON []MeetingInsight
 	LinkedMeetingIDs       []string `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
 	AccountID              string   `dynamodbav:"accountId,omitempty"`        // linked Account
+	// MeetingCategory is an owner-set internal classification (see
+	// ValidMeetingCategory); it is never set together with AccountID.
+	MeetingCategory string `dynamodbav:"meetingCategory,omitempty" json:"meetingCategory,omitempty"`
 	// ProjectIDs links this meeting to zero or more projects (many-to-many).
 	// Stored as a DynamoDB String Set (stringset tag), not a List, so link
 	// mutations can use atomic ADD/DELETE without a read-modify-write race.
@@ -267,6 +292,9 @@ type CrawlerSource struct {
 	// merge, unsubscribe); no user path clears it. Both are internal.
 	GlobalNewsSource bool   `dynamodbav:"globalNewsSource,omitempty" json:"-"`
 	UserTiedAt       string `dynamodbav:"userTiedAt,omitempty" json:"-"`
+	// AccountID marks an account-owned source (ACCOUNT#{accountId} / NEWSSRC#
+	// ref). It is written only at creation; readers revalidate it against the ref.
+	AccountID string `dynamodbav:"accountId,omitempty" json:"accountId,omitempty"`
 }
 
 // CrawlerSubscription represents a user's subscription to a crawler source
@@ -300,6 +328,12 @@ type CrawledDocument struct {
 	// IngestSource is "search" or "custom" (a URL a user configured) on
 	// versioned news rows; legacy rows omit it. Internal, never in the API.
 	IngestSource string `dynamodbav:"ingestSource,omitempty" json:"-"`
+	// AWSRelevance lists the AWS services a news article relates to, joined
+	// with " · " (at most 280 code points). OpportunityCount and QualityScore
+	// come from enrichment; legacy rows omit all three.
+	AWSRelevance     string  `dynamodbav:"awsRelevance,omitempty" json:"awsRelevance,omitempty"`
+	OpportunityCount int     `dynamodbav:"opportunityCount,omitempty" json:"opportunityCount"`
+	QualityScore     float64 `dynamodbav:"qualityScore,omitempty" json:"qualityScore"`
 }
 
 // CrawlHistory represents a crawl execution history entry

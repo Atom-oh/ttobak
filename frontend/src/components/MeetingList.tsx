@@ -10,6 +10,10 @@ import {
   groupMeetingRows, meetingDateBoundary, meetingPreview, meetingStatusLabels, selectMeetingRows,
   type MeetingViewOptions,
 } from '@/lib/meetingWorkspace';
+import {
+  INTERNAL_CATEGORIES, INTERNAL_GROUP_LABEL, internalCategoryLabel, matchesCategoryFilter, meetingInternalCategory,
+  type MeetingCategoryFilter,
+} from '@/lib/meetingCategory';
 
 interface MeetingListProps {
   meetings: Meeting[];
@@ -51,6 +55,7 @@ export function MeetingList({
     if (searchQuery.trim() !== urlQuery) setSearchQuery(urlQuery);
   }
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<MeetingCategoryFilter>('');
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [sortBy, setSortBy] = useState<MeetingViewOptions['sort']>('newest');
   const [grouped, setGrouped] = useState(true);
@@ -67,7 +72,7 @@ export function MeetingList({
     loadedMeetings.forEach(meeting => meeting.tags?.forEach(tag => tagSet.add(tag)));
     return Array.from(tagSet).sort();
   }, [loadedMeetings, selectedTags]);
-  const hasLocalFilters = Boolean(selectedTags.length || searchQuery.trim() || status || fromDate || toDate);
+  const hasLocalFilters = Boolean(selectedTags.length || searchQuery.trim() || status || fromDate || toDate || categoryFilter);
   const hasActiveFilters = hasLocalFilters || selectedAccountIds.length > 0 || activeTab === 'recent';
 
   const filteredMeetings = useMemo(() => {
@@ -78,10 +83,11 @@ export function MeetingList({
     return selectMeetingRows(loadedMeetings, {
       sort: sortBy, query: searchQuery, statuses: status ? [status] : [],
       from, to: meetingDateBoundary(toDate, 'to'),
-    }).filter(meeting => !selectedTags.length || meeting.tags?.some(tag => selectedTags.includes(tag)));
-  }, [loadedMeetings, sortBy, searchQuery, status, fromDate, toDate, activeTab, filterTime, selectedTags]);
+    }).filter(meeting => !selectedTags.length || meeting.tags?.some(tag => selectedTags.includes(tag)))
+      .filter(meeting => matchesCategoryFilter(meeting, categoryFilter));
+  }, [loadedMeetings, sortBy, searchQuery, status, fromDate, toDate, activeTab, filterTime, selectedTags, categoryFilter]);
 
-  const viewKey = JSON.stringify([sortBy, grouped, searchQuery, status, fromDate, toDate, activeTab, selectedTags, selectedAccountIds]);
+  const viewKey = JSON.stringify([sortBy, grouped, searchQuery, status, fromDate, toDate, activeTab, selectedTags, selectedAccountIds, categoryFilter]);
   const lastPage = Math.max(0, Math.ceil(filteredMeetings.length / windowSize) - 1);
   const page = displayWindow.key === viewKey ? Math.min(displayWindow.page, lastPage) : 0;
   if (displayWindow.key !== viewKey || displayWindow.page !== page) {
@@ -90,9 +96,15 @@ export function MeetingList({
   const start = page * windowSize;
   const visibleMeetings = filteredMeetings.slice(start, start + windowSize);
   const groups = grouped ? groupMeetingRows(visibleMeetings)
-    : visibleMeetings.length ? [{ accountId: null, meetings: visibleMeetings }] : [];
+    : visibleMeetings.length ? [{ accountId: null, category: null, meetings: visibleMeetings }] : [];
+  const customerGroups = groups.filter(group => !group.category);
+  const internalGroups = groups.filter(group => group.category);
   const accountName = (accountId: string | null) => accountId
     ? accountNames.get(accountId) ?? '어카운트 정보 없음' : '고객 미지정';
+  const meetingContext = (meeting: Meeting) => {
+    const category = meetingInternalCategory(meeting);
+    return category ? `${INTERNAL_GROUP_LABEL} · ${internalCategoryLabel(category)}` : accountName(meeting.accountId || null);
+  };
   const updateSearchQuery = (next: string) => {
     setSearchQuery(next);
     const params = new URLSearchParams(window.location.search);
@@ -107,6 +119,7 @@ export function MeetingList({
     setStatus('');
     setFromDate('');
     setToDate('');
+    setCategoryFilter('');
   };
 
   return (
@@ -137,6 +150,14 @@ export function MeetingList({
           <select value={status} onChange={event => setStatus(event.target.value as Meeting['status'] | '')} aria-label="미팅 상태" className={controlClass}>
             <option value="">모든 상태</option>
             {Object.entries(meetingStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <select value={categoryFilter} onChange={event => setCategoryFilter(event.target.value as MeetingCategoryFilter)} aria-label="미팅 분류" className={controlClass}>
+            <option value="">모든 분류</option>
+            <option value="customer">고객 미팅</option>
+            <option value="internal">{INTERNAL_GROUP_LABEL} 전체</option>
+            {INTERNAL_CATEGORIES.map(category => (
+              <option key={category.value} value={category.value}>{INTERNAL_GROUP_LABEL} · {category.label}</option>
+            ))}
           </select>
           <select value={sortBy} onChange={event => setSortBy(event.target.value as MeetingViewOptions['sort'])} aria-label="미팅 정렬" className={controlClass}>
             <option value="newest">미팅 일시 · 최신순</option>
@@ -195,7 +216,7 @@ export function MeetingList({
       <div role="status" className="space-y-1 text-xs text-text-secondary">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p>불러온 {loadedMeetings.length}개 미팅 · 조건 일치 {filteredMeetings.length}개</p>
-          <p>{grouped ? '고객별 구분 · 각 고객 안에서 일시순' : '미팅 일시순'} · 브라우저 현지 시간</p>
+          <p>{grouped ? '고객·Internal 구분 · 각 그룹 안에서 일시순' : '미팅 일시순'} · 브라우저 현지 시간</p>
         </div>
         {hasMore && <p>검색·정렬·상태·기간 필터는 불러온 결과에만 적용됩니다. Load More로 다음 서버 결과를 불러오세요.</p>}
         {(fromDate || toDate) && <p>날짜 미정 미팅도 함께 표시합니다.</p>}
@@ -218,27 +239,27 @@ export function MeetingList({
       )}
 
       <div className="space-y-4">
-        {groups.map(group => (
-          <section key={group.accountId ?? 'unassigned'} aria-label={grouped ? accountName(group.accountId) : '전체 미팅'}
-            className="overflow-hidden rounded-xl border border-border-subtle bg-surface-lowest">
-            {grouped && (
-              <div className="flex min-w-0 items-center gap-2 border-b border-border-subtle bg-surface px-4 py-3 md:px-5">
-                <span aria-hidden="true" className="material-symbols-outlined !flex !size-7 items-center justify-center rounded-lg border border-border-subtle bg-surface-lowest !text-base text-primary">business</span>
-                <h3 className="min-w-0 truncate text-xs font-semibold text-text-main">{accountName(group.accountId)}</h3>
-                <span className="shrink-0 text-[10px] text-text-secondary">{group.meetings.length}개 표시</span>
-              </div>
-            )}
-            <div aria-hidden="true" className="hidden grid-cols-[minmax(0,1fr)_7.5rem_5.5rem_3.5rem_2rem] gap-x-3 border-b border-border-subtle px-5 py-2 text-[10px] text-text-secondary md:grid">
-              <span>미팅 · 핵심 내용</span><span>미팅 일시</span><span>상태</span><span>녹음 시간</span><span />
-            </div>
-            <ul>
-              {group.meetings.map(meeting => (
-                <MeetingRow key={meeting.meetingId} meeting={meeting} accountName={accountName(meeting.accountId || null)}
-                  preview={meetingPreview(meeting.summary ?? '')} onDelete={onDeleteMeeting} />
-              ))}
-            </ul>
-          </section>
+        {customerGroups.map(group => (
+          renderMeetingGroup({ key: group.accountId ?? 'unassigned', label: grouped ? accountName(group.accountId) : '전체 미팅',
+            icon: 'business', showHeader: grouped, meetings: group.meetings, meetingContext, onDeleteMeeting })
         ))}
+        {internalGroups.length > 0 && (
+          <section aria-label={INTERNAL_GROUP_LABEL} className="space-y-3 rounded-xl border border-border-subtle bg-surface p-3">
+            <div className="flex min-w-0 items-center gap-2 px-1">
+              <span aria-hidden="true" className="material-symbols-outlined !flex !size-7 items-center justify-center rounded-lg border border-border-subtle bg-surface-lowest !text-base text-primary">groups</span>
+              <h3 className="text-xs font-semibold text-text-main">{INTERNAL_GROUP_LABEL}</h3>
+              <span className="shrink-0 text-[10px] text-text-secondary">
+                {internalGroups.reduce((total, group) => total + group.meetings.length, 0)}개 표시
+              </span>
+            </div>
+            {internalGroups.map(group => (
+              renderMeetingGroup({ key: group.category!, label: internalCategoryLabel(group.category!),
+                ariaLabel: `${INTERNAL_GROUP_LABEL} ${internalCategoryLabel(group.category!)}`,
+                icon: group.category === 'internal_1on1' ? 'person' : 'groups', showHeader: true,
+                meetings: group.meetings, meetingContext, onDeleteMeeting })
+            ))}
+          </section>
+        )}
       </div>
 
       {!isLoading && filteredMeetings.length === 0 && !error && (
@@ -270,5 +291,38 @@ export function MeetingList({
         </nav>
       )}
     </div>
+  );
+}
+
+// A plain render helper (not a component) keeps rows in the list's element tree.
+function renderMeetingGroup({ key, label, ariaLabel, icon, showHeader, meetings, meetingContext, onDeleteMeeting }: {
+  key: string;
+  label: string;
+  ariaLabel?: string;
+  icon: string;
+  showHeader: boolean;
+  meetings: Meeting[];
+  meetingContext: (meeting: Meeting) => string;
+  onDeleteMeeting: MeetingListProps['onDeleteMeeting'];
+}) {
+  return (
+    <section key={key} aria-label={ariaLabel ?? label} className="overflow-hidden rounded-xl border border-border-subtle bg-surface-lowest">
+      {showHeader && (
+        <div className="flex min-w-0 items-center gap-2 border-b border-border-subtle bg-surface px-4 py-3 md:px-5">
+          <span aria-hidden="true" className="material-symbols-outlined !flex !size-7 items-center justify-center rounded-lg border border-border-subtle bg-surface-lowest !text-base text-primary">{icon}</span>
+          <h3 className="min-w-0 truncate text-xs font-semibold text-text-main">{label}</h3>
+          <span className="shrink-0 text-[10px] text-text-secondary">{meetings.length}개 표시</span>
+        </div>
+      )}
+      <div aria-hidden="true" className="hidden grid-cols-[minmax(0,1fr)_7.5rem_5.5rem_3.5rem_2rem] gap-x-3 border-b border-border-subtle px-5 py-2 text-[10px] text-text-secondary md:grid">
+        <span>미팅 · 핵심 내용</span><span>미팅 일시</span><span>상태</span><span>녹음 시간</span><span />
+      </div>
+      <ul>
+        {meetings.map(meeting => (
+          <MeetingRow key={meeting.meetingId} meeting={meeting} accountName={meetingContext(meeting)}
+            preview={meetingPreview(meeting.summary ?? '')} onDelete={onDeleteMeeting} />
+        ))}
+      </ul>
+    </section>
   );
 }

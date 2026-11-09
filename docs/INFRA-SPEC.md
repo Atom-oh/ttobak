@@ -14,6 +14,12 @@ rule. Noncurrent age starts at supersession, so versioned bodies can survive
 current expiration; physical cleanup is asynchronous. The declaration and synthesis
 do not establish that the rule is deployed.
 
+Account KB downloads (`GET /api/accounts/{accountId}/kb/{refId}/download`) are
+five-minute S3 presigned GETs on the existing private KB bucket, signed by the API
+role after a per-request membership and object-metadata check. They add no
+CloudFront behavior, origin or bucket policy; `/media/*` signing is not used.
+The account KB reference rows live in `ttobak-main` (ADR-064).
+
 | Stack | Role | Dependencies explicitly declared in the app |
 |---|---|---|
 | TtobakWebSearchGatewayStack | AgentCore Web Search Gateway, us-east-1 | None |
@@ -133,6 +139,19 @@ no authorizer; its handler verifies the bearer share token. The two MCP discover
 GETs above are the only other unauthenticated routes. The broader edge
 `/api/public/*` bypass is not permission to register more public routes.
 
+The edge function embeds the production pool's public signing keys from
+`infra/assets/cognito-jwks.json` so a cold viewer-request environment (128 MB)
+can verify without waiting on a JWKS fetch. The seed applies only when its issuer
+equals the function's resolved issuer. Seed trust is bounded per environment:
+module load starts a live JWKS refresh that replaces the seed when it lands, and
+the seed is never fresh for more than one minute (`SEED_TTL`). A key the issuer
+withdraws is therefore accepted by a new edge environment only until that refresh
+completes (at most one minute), on every cold start, until the asset is
+regenerated; the API Lambda still rejects it with its own live JWKS. A
+seed-decided miss or failed verification is retried once against the live JWKS.
+If the pool or its keys change, regenerate the asset from the issuer's
+`/.well-known/jwks.json` (keep only `alg, e, kid, kty, n, use`).
+
 WebSocket QA uses the site's CloudFront `/ws` behavior, rewritten to `/production`.
 Caching is disabled; AllViewerExceptHostHeader forwards negotiation headers and
 the query token while API Gateway receives its own origin Host. `$connect` uses
@@ -218,7 +237,7 @@ for a separate ttobak-connections table described an obsolete design.
 
 | Artifact | Packaging / runtime | Timeout | Memory |
 |---|---|---|---|
-| api | Go ARM64 zip, provided.al2023 | 30s | 1024MB |
+| api | Go ARM64 zip, provided.al2023 | 30s | 256MB, `live` alias provisioned concurrency 4 |
 | research-worker | Go ARM64 zip | 15m | 512MB |
 | transcribe | Go ARM64 zip | 5m | 512MB |
 | summarize | Go ARM64 zip | 15m | 512MB |

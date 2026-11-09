@@ -7,7 +7,10 @@ import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 import type { CreateDictTermInput, DeletedCommonTerm, DictionaryLayer, DictionaryResponse, DictTermItem, DictTermMutationResponse, TermLogEntry, TermPatch } from '@/lib/dictionary';
 import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
+import type { MeetingCategory } from '@/types/meeting';
 import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
+import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
+import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -258,7 +261,7 @@ export const meetingsApi = {
   translate: (id: string, body: { part: 'notes' | 'transcript'; target: 'ko' | 'en'; cursor?: string }, options?: { signal?: AbortSignal }) =>
     api.post<import('@/types/meeting').MeetingTranslationPage>(`/api/meetings/${encodeURIComponent(id)}/translation`, body, options),
 
-  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string }, options?: FetchOptions) =>
+  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string; meetingCategory?: MeetingCategory }, options?: FetchOptions) =>
     api.post<import('@/types/meeting').Meeting & { preparationApplied?: boolean; supportsNotesComparison?: boolean; supportsPrivateAccountLink?: boolean; notesRevision?: string }>('/api/meetings', data, options),
 
   recover: (meetingId: string) =>
@@ -692,6 +695,8 @@ export const insightsApi = {
       totalCount: number;
       page: number;
       limit: number;
+      services?: string[];
+      sourceIds?: string[];
     }>(`/api/insights?${q.toString()}`);
   },
   getDetail: (sourceId: string, docHash: string) =>
@@ -916,7 +921,7 @@ export const accountApi = {
     if (params?.to) q.set('to', params.to);
     if (params?.types?.length) q.set('types', params.types.join(','));
     const qs = q.toString();
-    return api.get<{ insights: AccountInsight[] }>(
+    return api.get<{ insights: AccountInsight[]; restrictedCount?: number }>(
       `/api/accounts/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`, options);
   },
   listDocuments: (id: string, docType?: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
@@ -938,6 +943,41 @@ export const accountApi = {
     api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
   research: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<{ research: AccountResearchRef[] }>(`/api/accounts/${encodeURIComponent(id)}/research`, options),
+  signals: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<AccountSignals>(`/api/accounts/${encodeURIComponent(id)}/signals`, { ...options, cache: 'no-store' }),
+  flow: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<AccountFlow>(`/api/accounts/${encodeURIComponent(id)}/flow`, { ...options, cache: 'no-store' }),
+  graph: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<AccountGraph>(`/api/accounts/${encodeURIComponent(id)}/graph`, { ...options, cache: 'no-store' }),
+  links: {
+    list: (id: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<{ links: AccountLink[]; nextCursor?: string }>(
+        `/api/accounts/${encodeURIComponent(id)}/links${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, options),
+    create: (id: string, input: AccountLinkInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<AccountLink>(`/api/accounts/${encodeURIComponent(id)}/links`, input, options),
+    remove: (id: string, input: AccountLinkInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/links?${new URLSearchParams({
+        fromKind: input.fromKind, fromId: input.fromId, toKind: input.toKind, toId: input.toId,
+      })}`, options),
+  },
+  kb: (id: string, kind: AccountKBKind, cursor?: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const query = new URLSearchParams({ kind });
+    if (cursor) query.set('cursor', cursor);
+    return api.get<AccountKBPage>(`/api/accounts/${encodeURIComponent(id)}/kb?${query}`, { ...options, cache: 'no-store' });
+  },
+  // The presigned URL is short-lived: never cache it.
+  kbDownload: (id: string, refId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ url: string }>(`/api/accounts/${encodeURIComponent(id)}/kb/${encodeURIComponent(refId)}/download`, { ...options, cache: 'no-store' }),
+  kbUntag: (id: string, refId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/kb/${encodeURIComponent(refId)}`, options),
+  newsSources: {
+    list: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<{ sources: CrawlerSource[] }>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, { ...options, cache: 'no-store' }),
+    create: (id: string, input: CreateAccountNewsSourceInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<CrawlerSource>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, input, options),
+    remove: (id: string, sourceId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, options),
+  },
 };
 
 export const projectApi = {
@@ -1026,6 +1066,10 @@ export const meetingAccountApi = {
   shareToAccount: (meetingId: string, accountId: string) =>
     api.post<{ accountId: string; sharedWith: number }>(
       `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
+  /** Owner-only; an empty category clears it. 409 when the meeting is account-linked. */
+  setCategory: (meetingId: string, category: MeetingCategory | '') =>
+    api.put<{ meetingCategory: MeetingCategory | '' }>(
+      `/api/meetings/${encodeURIComponent(meetingId)}/category`, { category }),
 };
 
 export interface SessionBootstrapResult {

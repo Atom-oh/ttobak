@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Key prefixes / constants for the Project partition.
 // Project CONFIG:       PK: PROJECT#{projectId}, SK: CONFIG
@@ -19,6 +22,8 @@ const (
 	PrefixProjectRef           = "PROJECTREF#"
 	PrefixProjectMeetingRef    = PrefixMeetingRef
 	PrefixProjectResearchRef   = PrefixResearchRef
+	// PrefixProjectStageHistory: PK PROJECT#{id}, SK STAGEHIST#{RFC3339Nano}.
+	PrefixProjectStageHistory = "STAGEHIST#"
 
 	EntityTypeProject            = "PROJECT"
 	EntityTypeProjectIndex       = "PROJECT_INDEX"
@@ -26,7 +31,45 @@ const (
 	EntityTypeProjectRef         = "PROJECT_REF"
 	EntityTypeProjectMeetingRef  = "PROJECT_MEETING_REF"
 	EntityTypeProjectResearchRef = "PROJECT_RESEARCH_REF"
+	EntityTypeProjectStageChange = "PROJECT_STAGE_CHANGE"
 )
+
+// ProjectStages is the fixed, SFDC-aligned project stage vocabulary, in
+// pipeline order. The empty stage means "unset".
+var ProjectStages = []string{"Prospect", "Qualified", "Technical Validation", "Business Validation", "Committed", "Launched", "Closed Lost"}
+
+// NormalizeProjectStage maps a case- and surrounding-space-insensitive exact
+// match to its canonical stage. "" is valid (unset) and returns ("", true).
+func NormalizeProjectStage(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", true
+	}
+	for _, stage := range ProjectStages {
+		if strings.EqualFold(s, stage) {
+			return stage, true
+		}
+	}
+	return "", false
+}
+
+// IsTerminalStage reports whether the stage ends the engagement.
+func IsTerminalStage(stage string) bool {
+	return stage == "Launched" || stage == "Closed Lost"
+}
+
+// ProjectStageChange is one immutable stage-history row.
+// Storage keys are not serialized to API responses.
+type ProjectStageChange struct {
+	PK         string    `dynamodbav:"PK" json:"-"` // PROJECT#{projectId}
+	SK         string    `dynamodbav:"SK" json:"-"` // STAGEHIST#{RFC3339Nano}
+	ProjectID  string    `dynamodbav:"projectId" json:"projectId"`
+	From       string    `dynamodbav:"from,omitempty" json:"from"`
+	To         string    `dynamodbav:"to,omitempty" json:"to"`
+	ChangedBy  string    `dynamodbav:"changedBy" json:"changedBy"`
+	ChangedAt  time.Time `dynamodbav:"changedAt" json:"changedAt"`
+	EntityType string    `dynamodbav:"entityType" json:"-"` // "PROJECT_STAGE_CHANGE"
+}
 
 // Project groups meetings, research, and accounts under a sales opportunity.
 type Project struct {
@@ -38,7 +81,9 @@ type Project struct {
 	SfdcOpptyID string `dynamodbav:"sfdcOpptyId,omitempty"`
 	SfdcURL     string `dynamodbav:"sfdcUrl,omitempty"`
 	Stage       string `dynamodbav:"stage,omitempty"`
-	OwnerUserID string `dynamodbav:"ownerUserId"`
+	// StageChangedAt is set whenever Stage changes; nil for legacy rows.
+	StageChangedAt *time.Time `dynamodbav:"stageChangedAt,omitempty"`
+	OwnerUserID    string     `dynamodbav:"ownerUserId"`
 	// AccountIDs links this project to zero or more accounts (many-to-many).
 	// ProjectRef provides the reverse-lookup item in each account partition.
 	//
@@ -128,6 +173,8 @@ type ProjectResponse struct {
 	SfdcOpptyID            string             `json:"sfdcOpptyId,omitempty"`
 	SfdcURL                string             `json:"sfdcUrl,omitempty"`
 	Stage                  string             `json:"stage,omitempty"`
+	StageChangedAt         *time.Time         `json:"stageChangedAt,omitempty"`
+	StageMapped            bool               `json:"stageMapped"`
 	OwnerUserID            string             `json:"ownerUserId"`
 	AccountIDs             []string           `json:"accountIds"`
 	Members                []ProjectMemberDTO `json:"members"`
@@ -136,10 +183,14 @@ type ProjectResponse struct {
 }
 
 type ProjectSummary struct {
-	ProjectID   string `json:"projectId"`
-	Name        string `json:"name"`
-	Stage       string `json:"stage,omitempty"`
-	SfdcOpptyID string `json:"sfdcOpptyId,omitempty"`
+	ProjectID string `json:"projectId"`
+	Name      string `json:"name"`
+	Stage     string `json:"stage,omitempty"`
+	// StageChangedAt/StageMapped mirror ProjectResponse; an unmapped legacy
+	// stage is returned as-is with StageMapped=false.
+	StageChangedAt *time.Time `json:"stageChangedAt,omitempty"`
+	StageMapped    bool       `json:"stageMapped"`
+	SfdcOpptyID    string     `json:"sfdcOpptyId,omitempty"`
 }
 
 type ProjectMemberDTO struct {

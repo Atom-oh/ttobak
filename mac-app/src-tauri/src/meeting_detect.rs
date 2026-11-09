@@ -295,6 +295,12 @@ pub async fn meeting_detection_respond(
     Ok(reply)
 }
 
+/// Main PIDs of Chromium browser instances capturing or playing audio; the
+/// Google Meet mute follower reads only these (Safari's shared WebKit process
+/// has no resolvable instance).
+#[cfg(target_os = "macos")]
+pub use mac::{capturing_browser_pids, other_output_running, running_app_pid};
+
 #[cfg(target_os = "macos")]
 mod mac {
     use std::collections::{HashMap, HashSet};
@@ -315,7 +321,8 @@ mod mac {
     };
 
     use crate::meeting::{
-        classify_bundle, classify_meeting_url, Browser, MicUser, Source, MEETING_URL_PREFIXES,
+        classify_bundle, classify_meeting_url, is_app_main_executable, Browser, MicUser, Source,
+        MEETING_URL_PREFIXES,
     };
 
     /// Tab lists are refreshed at most this often per browser.
@@ -330,7 +337,9 @@ mod mac {
 
     #[derive(Default)]
     pub struct Probe {
-        tabs: HashMap<Browser, (Instant, Vec<Source>)>,
+        /// Keyed by browser and, when known, the PID of the browser instance
+        /// whose audio is running (several instances may run at once).
+        tabs: HashMap<(Browser, Option<i32>), (Instant, Vec<Source>)>,
         /// Browsers whose tab script has succeeded in this run. Output-only
         /// audio (e.g. a video) checks tabs only for these, so it never
         /// raises the first Automation prompt; microphone use does.
@@ -364,6 +373,7 @@ mod mac {
                 if get_i32(process, kAudioProcessPropertyPID) == Some(own_pid) {
                     continue;
                 }
+                let pid = get_i32(process, kAudioProcessPropertyPID);
                 let Some(bundle) = bundle_id(process) else {
                     continue;
                 };
@@ -373,7 +383,12 @@ mod mac {
                         browser: None,
                     }),
                     Some(MicUser::Browser(browser)) if input || self.granted.contains(&browser) => {
-                        sources.extend(self.browser_meetings(browser))
+                        // Safari's shared WebKit process has no Safari ancestor.
+                        let root = match browser {
+                            Browser::Safari => None,
+                            _ => pid.and_then(browser_root_pid),
+                        };
+                        sources.extend(self.browser_meetings(browser, root))
                     }
                     Some(MicUser::Browser(_)) => {}
                     None => {}
@@ -384,13 +399,13 @@ mod mac {
             sources
         }
 
-        fn browser_meetings(&mut self, browser: Browser) -> Vec<Source> {
-            if let Some((at, cached)) = self.tabs.get(&browser) {
+        fn browser_meetings(&mut self, browser: Browser, pid: Option<i32>) -> Vec<Source> {
+            if let Some((at, cached)) = self.tabs.get(&(browser, pid)) {
                 if at.elapsed() < TAB_CACHE {
                     return cached.clone();
                 }
             }
-            let (found, backoff) = match meeting_tab_urls(browser) {
+            let (found, backoff) = match meeting_tab_urls(browser, pid) {
                 Ok(urls) => {
                     self.granted.insert(browser);
                     (
@@ -412,14 +427,72 @@ mod mac {
             } else {
                 Instant::now()
             };
-            self.tabs.insert(browser, (at, found.clone()));
+            self.tabs.insert((browser, pid), (at, found.clone()));
             found
         }
     }
 
-    /// Runs a fixed script that returns only meeting tab URLs. `Err(true)`
-    /// means Automation access was denied.
-    fn meeting_tab_urls(browser: Browser) -> Result<Vec<String>, bool> {
+    /// Tab URLs of the browser instance `pid`, filtered to meeting URLs, or
+    /// of the browser by bundle ID when the instance is unknown or cannot be
+    /// addressed. `Err(true)` means Automation access was denied.
+    fn meeting_tab_urls(browser: Browser, pid: Option<i32>) -> Result<Vec<String>, bool> {
+        if let Some(pid) = pid {
+            match instance_tab_urls(pid) {
+                Err(false) => {}
+                result => return result,
+            }
+        }
+        bundle_tab_urls(browser)
+    }
+
+    /// JavaScript string literal list of the meeting URL prefixes.
+    fn prefix_list() -> String {
+        MEETING_URL_PREFIXES
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Reads the tabs of exactly the instance `pid` through Scripting
+    /// Bridge. `tell application id` reaches only one instance when several
+    /// run (e.g. an automation-launched Chrome beside the user's), which can
+    /// hide the meeting tab. The PID is passed as an argument, never
+    /// interpolated, and only meeting URLs leave the child process.
+    fn instance_tab_urls(pid: i32) -> Result<Vec<String>, bool> {
+        let script = format!(
+            "ObjC.import('ScriptingBridge');\n\
+             var failure = 0;\n\
+             ObjC.registerSubclass({{ name: 'TtobakTabProbe', methods: {{\n\
+             'eventDidFail:withError:': {{ types: ['id', ['id', 'id']],\n\
+             implementation: function (e, error) {{ failure = error.code; return $(); }} }} }} }});\n\
+             function run(argv) {{\n\
+             var prefixes = [{prefixes}];\n\
+             var app = $.SBApplication.applicationWithProcessIdentifier(Number(argv[0]));\n\
+             if (!app || app.isNil()) return '{NOT_RUNNING}';\n\
+             app.delegate = $.TtobakTabProbe.alloc.init;\n\
+             var nested;\n\
+             try {{ nested = ObjC.deepUnwrap(app.valueForKey('windows').valueForKeyPath('tabs.URL')) || []; }}\n\
+             catch (x) {{ if (failure) throw new Error('automation ' + failure); throw x; }}\n\
+             if (failure) throw new Error('automation ' + failure);\n\
+             var out = '';\n\
+             nested.forEach(function (w) {{ [].concat(w).forEach(function (u) {{\n\
+             u = String(u);\n\
+             if (prefixes.some(function (p) {{ return u.indexOf(p) === 0; }})) out += u + '\\n';\n\
+             }}); }});\n\
+             return out;\n\
+             }}",
+            prefixes = prefix_list(),
+        );
+        let pid = pid.to_string();
+        run_tab_script(
+            &["-l", "JavaScript", "-e", &script, &pid],
+            &format!("pid {pid}"),
+        )
+    }
+
+    /// Reads the tabs of the browser by bundle ID.
+    fn bundle_tab_urls(browser: Browser) -> Result<Vec<String>, bool> {
         let id = browser.app_bundle_id();
         let filter = MEETING_URL_PREFIXES
             .iter()
@@ -438,8 +511,13 @@ mod mac {
              end repeat\n\
              return out"
         );
+        run_tab_script(&["-e", &script], id)
+    }
+
+    /// Runs `osascript` with `args`; `target` names the browser in logs.
+    fn run_tab_script(args: &[&str], target: &str) -> Result<Vec<String>, bool> {
         let mut child = Command::new("/usr/bin/osascript")
-            .args(["-e", &script])
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -475,7 +553,7 @@ mod mac {
             // -1743: the user has not allowed TTOBAK to control this browser.
             let denied = err.contains("-1743");
             if denied {
-                log::info!("automation access to {id} is not granted");
+                log::info!("automation access to {target} is not granted");
             }
             return Err(denied);
         }
@@ -485,6 +563,133 @@ mod mac {
             .filter(|l| !l.is_empty())
             .map(str::to_owned)
             .collect())
+    }
+
+    /// Whether a process other than this app is playing audio.
+    pub fn other_output_running() -> bool {
+        let own_pid = std::process::id() as i32;
+        process_objects().into_iter().any(|p| {
+            get_u32(p, kAudioProcessPropertyIsRunningOutput) == Some(1)
+                && get_i32(p, kAudioProcessPropertyPID) != Some(own_pid)
+        })
+    }
+
+    pub fn capturing_browser_pids() -> Vec<i32> {
+        let mut pids = Vec::new();
+        for process in process_objects() {
+            let input = get_u32(process, kAudioProcessPropertyIsRunningInput) == Some(1);
+            let output = get_u32(process, kAudioProcessPropertyIsRunningOutput) == Some(1);
+            if !input && !output {
+                continue;
+            }
+            let browser = bundle_id(process).and_then(|b| match classify_bundle(&b) {
+                Some(MicUser::Browser(b)) if b != Browser::Safari => Some(b),
+                _ => None,
+            });
+            if browser.is_none() {
+                continue;
+            }
+            if let Some(root) =
+                get_i32(process, kAudioProcessPropertyPID).and_then(browser_root_pid)
+            {
+                if !pids.contains(&root) {
+                    pids.push(root);
+                }
+            }
+        }
+        pids
+    }
+
+    extern "C" {
+        fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, size: i32) -> i32;
+        fn proc_pidpath(pid: i32, buffer: *mut c_void, size: u32) -> i32;
+        fn proc_listallpids(buffer: *mut c_void, buffersize: i32) -> i32;
+    }
+
+    /// PIDs of all running processes, `None` when the list could not be read.
+    fn all_pids() -> Option<Vec<i32>> {
+        let estimate = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+        if estimate <= 0 {
+            return None;
+        }
+        let mut capacity = estimate as usize + 64;
+        for _ in 0..4 {
+            let mut pids = vec![0i32; capacity];
+            let bytes = (capacity * std::mem::size_of::<i32>()) as i32;
+            let n = unsafe { proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+            if n <= 0 {
+                return None;
+            }
+            let n = n as usize;
+            if n < capacity {
+                pids.truncate(n);
+                return Some(pids);
+            }
+            // The list may have been cut short: retry with more room.
+            capacity *= 2;
+        }
+        None
+    }
+
+    /// PID of a running process (other than this app) whose executable path
+    /// satisfies `is_main`. `Err` when the process list could not be read;
+    /// absence is only reported from a successful read.
+    pub fn running_app_pid(is_main: fn(&str) -> bool) -> Result<Option<i32>, ()> {
+        let own_pid = std::process::id() as i32;
+        let pids = all_pids().ok_or(())?;
+        Ok(pids
+            .into_iter()
+            .filter(|&pid| pid > 0 && pid != own_pid)
+            .find(|&pid| executable_path(pid).is_some_and(|path| is_main(&path))))
+    }
+
+    /// `proc_bsdinfo`'s `pbi_ppid` follows four `u32` fields.
+    const PROC_PIDTBSDINFO: i32 = 3;
+    const PBI_PPID_OFFSET: usize = 16;
+
+    fn parent_pid(pid: i32) -> Option<i32> {
+        // Larger than `proc_bsdinfo` (136 bytes); 8-byte aligned.
+        let mut buf = [0u64; 32];
+        let size = std::mem::size_of_val(&buf) as i32;
+        let n = unsafe { proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, buf.as_mut_ptr().cast(), size) };
+        if (n as usize) < PBI_PPID_OFFSET + 4 {
+            return None;
+        }
+        let bytes = unsafe {
+            std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), std::mem::size_of_val(&buf))
+        };
+        let ppid = u32::from_ne_bytes(
+            bytes[PBI_PPID_OFFSET..PBI_PPID_OFFSET + 4]
+                .try_into()
+                .ok()?,
+        );
+        Some(ppid as i32)
+    }
+
+    fn executable_path(pid: i32) -> Option<String> {
+        let mut buf = vec![0u8; 4096];
+        let n = unsafe { proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        if n <= 0 {
+            return None;
+        }
+        buf.truncate(n as usize);
+        String::from_utf8(buf).ok()
+    }
+
+    /// The browser instance owning `pid`: the nearest process, starting at
+    /// `pid`, that is an application's main executable.
+    fn browser_root_pid(pid: i32) -> Option<i32> {
+        let mut current = pid;
+        for _ in 0..8 {
+            if is_app_main_executable(&executable_path(current)?) {
+                return Some(current);
+            }
+            current = parent_pid(current)?;
+            if current <= 1 {
+                return None;
+            }
+        }
+        None
     }
 
     fn address(selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
@@ -568,5 +773,17 @@ mod mac {
             CFString::wrap_under_create_rule(raw as core_foundation::string::CFStringRef)
         };
         Some(id.to_string()).filter(|s| !s.is_empty())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
+    /// The running-process scan reads other processes and never matches this one.
+    #[test]
+    fn running_app_pid_scans_running_processes() {
+        let own = std::process::id() as i32;
+        let any = super::running_app_pid(|path| path.starts_with('/'));
+        assert!(matches!(any, Ok(Some(pid)) if pid != own));
+        assert_eq!(super::running_app_pid(|_| false), Ok(None));
     }
 }

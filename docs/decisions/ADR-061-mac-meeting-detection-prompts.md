@@ -71,8 +71,10 @@ without a user confirmation.
 - A recording uses the microphone the user picks in System Audio mode, or by
   default the input device the meeting app is capturing from (process
   `Devices`, input scope), else the system default. This keeps multi-microphone
-  and clamshell setups aligned with what Zoom hears. Switching the microphone
-  during a recording is not yet supported.
+  and clamshell setups aligned with what Zoom hears. `switch_recording_input`
+  changes the microphone during a recording by rebuilding only the aggregate;
+  the tap, WAV and worker continue. A failed switch restores the previous input
+  (or the system-audio-only aggregate), else capture stops and says so.
 
 ## Consequences
 
@@ -82,15 +84,16 @@ without a user confirmation.
 does not start a watcher, request Accessibility permission or change recording.
 The runtime successor must supply `ProcessSources` process/browser discovery,
 call `watch`, retain its returned handle and consume the microphone flag.
-`meeting_over` uses the same injected discovery. Native acceptance remains
+Native acceptance remains
 required before claiming that recording follows a meeting application's mute.
 
 When invoked, the watcher may request Accessibility access once per app launch.
 It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
-(`muted` or `meeting_ended`). Zoom labels come from its localization resources.
+(`muted`). Zoom labels come from its localization resources.
 Unreadable window identifiers are unknown, never a confirmed meeting end;
-the existing three-second unknown-state fallback can still silence a previously
-followed meeting during a long permission or inspection failure.
+a followed meeting that ends, or stays unknown for three seconds (e.g. a long
+permission or inspection failure), reopens the microphone rather than keeping it
+silent. Detection ends meetings only after the 20 s audio grace.
 
 Meet's English/Korean muted toggle labels and readable-page fallback prioritize
 not dropping voice in unsupported languages. Unknown pages retain the previous
@@ -99,7 +102,11 @@ children attribute fails (any Accessibility status other than success, no
 value or unsupported) or that reaches the node or depth bound is unknown, as is a search cut short before every
 window was read, and a lost Accessibility grant feeds unknown to the hold, so
 none of them clears a retained mute. A Zoom menu read that fails is unreadable,
-not an empty menu bar. Hidden-tab or departed-call holds are not proof of the
+not an empty menu bar. Zoom counts as quit only when neither Core Audio nor a
+successful running-process scan finds its main `us.zoom.xos` executable, since
+it may capture through `us.zoom.caphost`/`us.zoom.CptHost` alone. Every Meet
+call showing a toggle counts, including calls read together, so a departed page
+of one call never stops following another call that was seen. Hidden-tab or departed-call holds are not proof of the
 user's current intent. These limitations need native verification
 and remain separate from the compiled library's availability.
 

@@ -17,7 +17,7 @@ import (
 // fields of the account summary guard. Transcripts, notes, live summaries and
 // other unbounded fields are never transferred.
 var MeetingListRowFields = []string{
-	"PK", "SK", "entityType", "meetingId", "userId", "accountId", "sharedToAccount",
+	"PK", "SK", "entityType", "meetingId", "userId", "accountId", "sharedToAccount", "meetingCategory",
 	"title", "date", "status", "content", "participants", "tags", "sentiment", "duration",
 	"createdAt", "updatedAt", "summaryPrivacy", "summaryAccountApproval",
 }

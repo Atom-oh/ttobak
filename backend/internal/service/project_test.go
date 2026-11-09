@@ -26,6 +26,9 @@ type mockProjectRepo struct {
 	failPutRefFor       string
 	batchGetResearchErr error
 	getMemberErrFor     string
+	stageChanges        []model.ProjectStageChange
+	stageConflict       bool
+	lastFields          map[string]interface{}
 }
 
 func newMockProjectRepo() *mockProjectRepo {
@@ -144,6 +147,7 @@ func (m *mockProjectRepo) UpdateProjectFields(_ context.Context, id string, fiel
 	if v, ok := fields["stage"]; ok {
 		p.Stage = v.(string)
 	}
+	m.lastFields = fields
 	if v, ok := fields["updatedAt"]; ok {
 		p.UpdatedAt = v.(time.Time)
 	}

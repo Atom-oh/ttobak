@@ -45,6 +45,8 @@ func writeProjectError(w http.ResponseWriter, err error, forbiddenMessage string
 		writeError(w, http.StatusConflict, "USER_DISABLED", "비활성 사용자입니다. 관리자에게 문의하세요")
 	case errors.Is(err, service.ErrSelfShare):
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "프로젝트 소유자는 이미 접근할 수 있습니다")
+	case errors.Is(err, service.ErrConflict):
+		writeError(w, http.StatusConflict, "CONFLICT", "프로젝트가 다른 곳에서 변경됐습니다. 새로고침 후 다시 시도하세요")
 	case errors.Is(err, service.ErrPendingAlreadyClaimed), errors.Is(err, repository.ErrConditionFailed):
 		writeError(w, http.StatusConflict, "CONFLICT", "멤버십이 변경됐습니다. 목록을 새로 확인하세요")
 	case errors.Is(err, repository.ErrInvalidCursor):
