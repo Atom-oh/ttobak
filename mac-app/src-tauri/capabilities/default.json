@@ -15,6 +15,7 @@
     "allow-start-recording",
     "allow-stop-recording",
     "allow-list-input-devices",
+    "allow-switch-recording-input",
     "allow-recording-status",
     "allow-upload-recording",
     "allow-cleanup-recording",
