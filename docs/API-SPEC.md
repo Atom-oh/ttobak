@@ -838,6 +838,14 @@ endpoint fields as query parameters, is allowed for any direct member, returns
 204 or 404, and for an `auto` link also writes a `LINKDENY#` row so the
 automatic linker never re-creates that pair.
 
+Project stages are a fixed list (Prospect, Qualified, Technical Validation,
+Business Validation, Committed, Launched, Closed Lost; matched case-insensitively,
+empty means unset). Create and `PUT /api/projects/{projectId}` reject other values
+as invalid input. A stage change sets `stageChangedAt` and appends an immutable
+`STAGEHIST#` row with the update; legacy values outside the list read as unmapped
+and projects without a change time show an unknown stage age. The list route does
+not return `stageChangedAt`. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
+
 `GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
 for **direct** members (membership is read on every call; no query parameters;
 `Cache-Control: no-store`; not connector-delegable, like the insights route).

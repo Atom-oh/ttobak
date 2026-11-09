@@ -14,6 +14,12 @@ rule. Noncurrent age starts at supersession, so versioned bodies can survive
 current expiration; physical cleanup is asynchronous. The declaration and synthesis
 do not establish that the rule is deployed.
 
+Account KB downloads (`GET /api/accounts/{accountId}/kb/{refId}/download`) are
+five-minute S3 presigned GETs on the existing private KB bucket, signed by the API
+role after a per-request membership and object-metadata check. They add no
+CloudFront behavior, origin or bucket policy; `/media/*` signing is not used.
+The account KB reference rows live in `ttobak-main` (ADR-064).
+
 | Stack | Role | Dependencies explicitly declared in the app |
 |---|---|---|
 | TtobakWebSearchGatewayStack | AgentCore Web Search Gateway, us-east-1 | None |
