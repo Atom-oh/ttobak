@@ -43,3 +43,12 @@ test('kbAccountListNotice: a failed Account list is reported, not hidden behind 
   assert.equal(kbAccountListNotice('failed'), KB_ACCOUNTS_LOAD_ERROR);
   assert.match(KB_ACCOUNTS_LOAD_ERROR, /Account 목록을 불러오지 못했습니다/);
 });
+
+test('kbLegacyPptNotice: only legacy .ppt uploads get the convert-to-.pptx notice', () => {
+  const { KB_LEGACY_PPT_NOTICE, kbLegacyPptNotice } = loadModule('lib/kbUpload.ts');
+  assert.equal(kbLegacyPptNotice(['deck.pptx', 'notes.pdf']), undefined);
+  assert.equal(kbLegacyPptNotice([]), undefined);
+  assert.equal(kbLegacyPptNotice(['a.pdf', 'OLD.PPT']), KB_LEGACY_PPT_NOTICE);
+  assert.equal(kbLegacyPptNotice(['deck.ppt.pdf']), undefined);
+  assert.match(KB_LEGACY_PPT_NOTICE, /\.pptx로 저장/);
+});

@@ -219,7 +219,7 @@ func TestKnowledgeCatalogPaginationAndFailureCooldownDoNotStarveLaterSources(t *
 	for i := 0; i < 9; i++ {
 		keys = append(keys, store.original(fmt.Sprintf("kb/owner/%02d.pdf", i+2), "PDF bytes", "v1"))
 	}
-	bad := store.original("shared/bad.pptx", "unsupported original retained", "v1")
+	bad := store.original("shared/bad.ppt", "unsupported original retained", "v1")
 	for i := 0; i < 45; i++ {
 		if _, err := service.Tick(context.Background()); err != nil {
 			t.Fatal(err)
@@ -233,7 +233,7 @@ func TestKnowledgeCatalogPaginationAndFailureCooldownDoNotStarveLaterSources(t *
 		}
 	}
 	job := repo.jobs[bad.Hash()]
-	if job == nil || job.State != model.IndexFailed || job.ErrorCode != "UNSUPPORTED_FILE" ||
+	if job == nil || job.State != model.IndexFailed || job.ErrorCode != LegacyPPTUnsupported ||
 		job.FailureCount < 2 || job.RetryAfter <= job.UpdatedAt {
 		t.Fatalf("unsupported source lacks durable backoff/failure: %+v", job)
 	}

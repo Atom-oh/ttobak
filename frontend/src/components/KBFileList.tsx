@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi, kbApi } from '@/lib/api';
 import { isEditableAccount } from '@/lib/accountAccess';
-import { KB_PERSONAL_CHOICE, kbAccountListNotice, kbUploadAccountId, kbUploadPutHeaders, kbUploadReady } from '@/lib/kbUpload';
+import { KB_PERSONAL_CHOICE, kbAccountListNotice, kbLegacyPptNotice, kbUploadAccountId, kbUploadPutHeaders, kbUploadReady } from '@/lib/kbUpload';
 import type { AccountSummary } from '@/types/meeting';
 import type { KBFile } from '@/types/meeting';
 
@@ -55,6 +55,7 @@ export function KBFileList() {
   const [accountsLoad, setAccountsLoad] = useState<'loading' | 'loaded' | 'failed'>('loading');
   // Required choice: an Account, or KB_PERSONAL_CHOICE; empty until picked.
   const [accountChoice, setAccountChoice] = useState('');
+  const [uploadNotice, setUploadNotice] = useState<string | undefined>();
   const uploadReady = kbUploadReady(accountChoice) && (accountChoice === KB_PERSONAL_CHOICE
     || accounts.some(account => account.accountId === accountChoice && isEditableAccount(account)));
 
@@ -94,6 +95,7 @@ export function KBFileList() {
 
     setUploading(true);
     setError(null);
+    setUploadNotice(kbLegacyPptNotice(Array.from(selectedFiles, (file) => file.name)));
 
     try {
       for (const file of Array.from(selectedFiles)) {
@@ -220,7 +222,9 @@ export function KBFileList() {
         <p className="text-slate-600 dark:text-text-secondary mb-2">
           {isDragging ? 'Drop files here' : 'Drag and drop files here'}
         </p>
-        <p className="text-xs text-slate-400 dark:text-text-muted mb-4">Supports: Markdown, PDF, Word, PowerPoint, Excel, TXT, JSON, CSV</p>
+        <p className="text-xs text-slate-400 dark:text-text-muted mb-4">
+          Supports: Markdown, PDF, Word, PowerPoint (.pptx), Excel, TXT, JSON, CSV · 구형 .ppt는 .pptx로 변환 후 업로드하세요
+        </p>
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading || !uploadReady}
@@ -236,6 +240,12 @@ export function KBFileList() {
           )}
         </button>
       </div>
+
+      {uploadNotice && (
+        <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+          {uploadNotice}
+        </p>
+      )}
 
       {/* Error Message */}
       {error && (
