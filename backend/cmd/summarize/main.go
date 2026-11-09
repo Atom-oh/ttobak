@@ -45,6 +45,10 @@ var (
 	processTermsRequested = func(context.Context, model.TermsRequested) error { return nil }
 	enqueueTerms          = func(context.Context, string, string, string) {}
 
+	// Automatic news→meeting links (design G8) for a meeting published to
+	// its account; best-effort, bounded by autoNewsLinkTimeout.
+	linkAccountNews = func(context.Context, *model.Meeting) {}
+
 	// KB/research term sources: Object Created on the KB bucket is mapped to
 	// TermsSourceRequested, which runs in its own invocation.
 	termsSourceBucket  string
@@ -153,6 +157,25 @@ func init() {
 	// take Common terms at their next scheduled ensure.
 	termsService.SetNewsReader(service.TermsNewsDeps{Documents: repository.NewCrawlerRepository(dynamoClient, tableName), Store: repo})
 	processNewsDaily = termsService.ProcessNewsDaily
+
+	// Automatic news links read the account's current news rows and write
+	// link rows in the same table (DynamoDB grant on the summarize role).
+	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
+	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo,
+		service.NewInsightsService(crawlerRepo, s3Client, kbBucketName, bucketName))
+	autoNewsLinker := service.NewAutoNewsLinker(accountNewsService, bedrockService,
+		service.NewAccountLinksService(repo, crawlerRepo, accountNewsService))
+	linkAccountNews = func(ctx context.Context, meeting *model.Meeting) {
+		ctx, cancel := context.WithTimeout(ctx, autoNewsLinkTimeout)
+		defer cancel()
+		result, err := autoNewsLinker.LinkMeeting(ctx, meeting)
+		// Meeting ID, counts and a code only: never quotes, titles or content.
+		if err != nil {
+			log.Printf("account news links failed (non-fatal): meeting=%s code=%s %s", meeting.MeetingID, service.AutoNewsLinkErrorCode(err), result)
+		} else if result.Candidates > 0 {
+			log.Printf("account news links: meeting=%s %s", meeting.MeetingID, result)
+		}
+	}
 
 	// KB export service — gracefully skips if not configured
 	kbID := os.Getenv("KB_ID")
@@ -667,6 +690,20 @@ func generateClaimedSummary(ctx context.Context, meeting *model.Meeting, priorCo
 	return errors.Join(err, repo.ReleaseSummaryRetryClaim(cleanup, meeting.UserID, meeting.MeetingID, meeting.SummarizeRetryClaimedAt))
 }
 
+const autoNewsLinkTimeout = 20 * time.Second
+
+// finishSummaryAnalysis ends the post-summary analysis sequence: it queues term
+// extraction and, for a meeting published to its account, adds automatic news
+// links. Both run before the privacy early return. It reports whether the
+// legacy KB export should run.
+func finishSummaryAnalysis(ctx context.Context, userID, meetingID string, current *model.Meeting) bool {
+	enqueueTerms(ctx, userID, meetingID, "summary")
+	if current != nil && current.SharedToAccount && current.AccountID != "" {
+		linkAccountNews(ctx, current)
+	}
+	return !repository.SummaryPrivacyWritesEnabled()
+}
+
 func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContext, claim string, resumed bool) error {
 	retry := meeting.SummaryRetryPending && meeting.Status == model.StatusSummarizing
 	meetingID := meeting.MeetingID
@@ -744,10 +781,10 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 			log.Printf("Failed to fan out current insights (non-fatal): %v", err)
 		}
 	}
-	// End of the post-summary analysis sequence: queue term extraction.
-	enqueueTerms(ctx, userID, meetingID, "summary")
-
-	if repository.SummaryPrivacyWritesEnabled() {
+	if err != nil {
+		current = nil
+	}
+	if !finishSummaryAnalysis(ctx, userID, meetingID, current) {
 		// Canonical stream/reconciliation owns immutable revision-checked exports.
 		// Drain legacy fixed objects; they can revive stale derivation after resets.
 		return nil
