@@ -830,14 +830,18 @@ automatic linker never re-creates that pair.
 
 `GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
 for **direct** members (membership is read on every call; no query parameters;
-`Cache-Control: no-store`). The response is `{ newsState, news, opportunities,
-insights, restrictedCount }`, at most 64 KiB, with text fields capped at 280
-code points:
+`Cache-Control: no-store`; not connector-delegable, like the insights route).
+The response is `{ newsState, news, opportunities, insights, restrictedCount,
+linksTruncated }`, at most 64 KiB, with text fields capped at 280 code points.
+Links are read per displayed endpoint (`LINK#news#{newsId}#project#` and
+`LINKTO#project#{projectId}#event#`, at most 200 rows each) and revalidated;
+`linksTruncated` reports that a bound was hit, in which case linked projects,
+`candidate` and `NO_UPCOMING` may be incomplete:
 - `newsState` is `OK`, `NO_SOURCE` (the account has no current news source) or
   `NO_RECENT_NEWS`. `news` holds at most 10 current items crawled in the last
   30 days by the account's sources, ordered by `qualityScore` then crawl time.
-  Each item has `id` (`{sourceId}:{docHash}`), `linkedProjectIds` from the
-  revalidated link listing and `candidate` (unlinked, has opportunities and
+  Each item has `id` (`{sourceId}:{docHash}`), `linkedProjectIds` (projects
+  that still list the account) and `candidate` (unlinked, has opportunities and
   `qualityScore >= 0.75`); the flag is display-only and never written.
 - `opportunities` lists at most 20 projects that still list the account, with
   `stage`, `stageMapped`, `daysInStage` (absent when the change time is

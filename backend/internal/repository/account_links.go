@@ -310,3 +310,71 @@ func (r *DynamoDBRepository) ListAccountLinks(ctx context.Context, accountID, cu
 	}
 	return links, next, nil
 }
+
+// ListAccountLinksByPrefix reads at most maxRows link rows of the account
+// whose sort key starts with prefix, a LINK# (forward) or LINKTO# (reverse)
+// key prefix such as LINK#news#{newsId}# or LINKTO#project#{projectId}#.
+// Endpoints come from the sort key. truncated reports that the bound was hit
+// while more rows may remain; the rows read so far are still returned.
+func (r *DynamoDBRepository) ListAccountLinksByPrefix(ctx context.Context, accountID, prefix string, maxRows int) ([]model.AccountLink, bool, error) {
+	reverse := strings.HasPrefix(prefix, model.PrefixAccountLinkTo)
+	if accountID == "" || maxRows <= 0 || (!reverse && !strings.HasPrefix(prefix, model.PrefixAccountLink)) || !strings.HasSuffix(prefix, "#") {
+		return nil, false, fmt.Errorf("invalid account link prefix query")
+	}
+	key := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(prefix))
+	expr, err := expression.NewBuilder().WithKeyCondition(key).Build()
+	if err != nil {
+		return nil, false, err
+	}
+	links := []model.AccountLink{}
+	var start map[string]types.AttributeValue
+	for read := 0; ; {
+		limit := int32(min(maxRows-read, 100))
+		out, err := r.client.Query(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true),
+			Limit: aws.Int32(limit), ExclusiveStartKey: start})
+		if err != nil {
+			return nil, false, fmt.Errorf("list account links by prefix: %w", err)
+		}
+		read += len(out.Items)
+		for _, row := range out.Items {
+			if link, ok := decodeAccountLinkRow(accountID, row, reverse); ok && strings.HasPrefix(linkRowSortKey(link, reverse), prefix) {
+				links = append(links, *link)
+			}
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			return links, false, nil
+		}
+		if read >= maxRows {
+			return links, true, nil
+		}
+		start = out.LastEvaluatedKey
+	}
+}
+
+func linkRowSortKey(l *model.AccountLink, reverse bool) string {
+	if reverse {
+		return model.AccountLinkToSortKey(l.Input())
+	}
+	return model.AccountLinkSortKey(l.Input())
+}
+
+// decodeAccountLinkRow decodes a forward or reverse row from its sort key.
+func decodeAccountLinkRow(accountID string, row map[string]types.AttributeValue, reverse bool) (*model.AccountLink, bool) {
+	if !reverse {
+		return decodeAccountLink(accountID, row)
+	}
+	var item accountLinkItem
+	if err := attributevalue.UnmarshalMap(row, &item); err != nil || item.PK != model.PrefixAccount+accountID {
+		return nil, false
+	}
+	in, ok := model.ParseAccountLinkToSortKey(item.SK)
+	if !ok || (item.Origin != model.LinkOriginManual && item.Origin != model.LinkOriginAuto) {
+		return nil, false
+	}
+	link := item.AccountLink
+	link.AccountID = accountID
+	link.FromKind, link.FromID, link.ToKind, link.ToID = in.FromKind, in.FromID, in.ToKind, in.ToID
+	return &link, true
+}
