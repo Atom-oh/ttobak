@@ -1038,7 +1038,7 @@ func (b *graphBuilder) roleEdge(from, to, kind, origin, role string) {
 // and people edges of present meetings. Volume never fails the call; bounds
 // set Truncated.
 func (s *AccountOverviewService) Graph(ctx context.Context, userID, accountID string) (*model.AccountGraph, error) {
-	account, _, err := s.authorizeAccount(ctx, accountID, userID)
+	account, member, err := s.authorizeAccount(ctx, accountID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -1050,8 +1050,8 @@ func (s *AccountOverviewService) Graph(ctx context.Context, userID, accountID st
 
 	steps := []func(context.Context, string, *graphBuilder, *overviewReads) error{
 		s.graphProjects, s.graphMeetings, s.graphEvents, s.graphLinks,
-		func(ctx context.Context, accountID string, b *graphBuilder, _ *overviewReads) error {
-			return s.graphPeople(ctx, userID, accountID, b)
+		func(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
+			return s.graphPeople(ctx, userID, accountID, member, b, reads)
 		},
 	}
 	for _, step := range steps {

@@ -65,6 +65,9 @@ func (f *fakePeopleRepo) ListUnresolvedMentionsByHash(_ context.Context, _, hash
 	return rows, false, nil
 }
 func (f *fakePeopleRepo) DeleteUnresolvedMention(_ context.Context, _, hash, meetingID, role, _ string) error {
+	if f.staleMentions[meetingID] {
+		return fmt.Errorf("%w: rewritten", repository.ErrConditionFailed)
+	}
 	f.mentionDeletes = append(f.mentionDeletes, hash+"/"+meetingID+"/"+role)
 	return nil
 }
@@ -222,20 +225,6 @@ func TestIgnoreMentionGroup_WritesIgnoreAndDeletesRows(t *testing.T) {
 	}
 }
 
-func TestRequestContactsResolve_PublishesOneAccountRequest(t *testing.T) {
-	f := peopleWriteRepo()
-	s := newPeopleTestService(f)
-	var got []model.PeopleResolveRequested
-	s.SetPeopleResolvePublisher(func(_ context.Context, e model.PeopleResolveRequested) error { got = append(got, e); return nil })
-	if err := s.RequestContactsResolve(context.Background(), "stranger", "acc"); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("stranger err=%v", err)
-	}
-	if err := s.RequestContactsResolve(context.Background(), "viewer", "acc"); err != nil || len(got) != 1 ||
-		got[0] != (model.PeopleResolveRequested{AccountID: "acc", Reason: model.PeopleResolveReasonContacts}) {
-		t.Fatalf("got=%+v err=%v", got, err)
-	}
-}
-
 // Two texts of one person in the same meeting and role, resolved to the
 // same contact, both stay resolved across resolver runs.
 func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
@@ -268,5 +257,27 @@ func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
 	}
 	if last := f.replaced[len(f.replaced)-1]; len(last) != 0 {
 		t.Fatalf("rerun recreated unresolved mentions %+v", last)
+	}
+}
+
+func TestResolveMentionGroup_RefreshesStaleMeetingsWhenCoalescing(t *testing.T) {
+	f := peopleWriteRepo()
+	f.staleMentions = map[string]bool{"owner:m4": true}
+	for i := 1; i <= 6; i++ {
+		id := fmt.Sprint("m", i)
+		f.meetings["owner:"+id] = peopleTestMeeting(id)
+		f.mentionRows = append(f.mentionRows, peopleMentionRow(peopleHashA, "owner:"+id, "participant", model.PeopleSourceParticipants, "Minsu"))
+	}
+	var events []model.PeopleResolveRequested
+	s := newPeopleTestService(f)
+	s.SetPeopleResolvePublisher(func(_ context.Context, e model.PeopleResolveRequested) error { events = append(events, e); return nil })
+	res, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA, model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact})
+	if err != nil || res.Written != 6 || len(f.mentionDeletes) != 5 {
+		t.Fatalf("res=%+v deletes=%v err=%v", res, f.mentionDeletes, err)
+	}
+	want := []model.PeopleResolveRequested{{AccountID: "acc", Reason: model.PeopleResolveReasonManual},
+		{AccountID: "acc", OwnerID: "owner", MeetingID: "m4", Reason: model.PeopleResolveReasonManual}}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("events %+v", events)
 	}
 }

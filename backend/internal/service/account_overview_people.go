@@ -77,8 +77,9 @@ func (s *AccountOverviewService) graphPeopleRows(ctx context.Context, accountID 
 // meeting node is already present (graphMeetings revalidated it), so it adds
 // no meeting reads. Members must still be direct members and get member_of
 // edges; contacts must be readable; an account target needs the viewer's
-// read grant; a project target must already be a node.
-func (s *AccountOverviewService) graphPeople(ctx context.Context, userID, accountID string, b *graphBuilder) error {
+// read grant; a project target must already be a node. Under the summary
+// guard, edges from action items and insights are left out, as in the flow.
+func (s *AccountOverviewService) graphPeople(ctx context.Context, userID, accountID string, member *model.AccountMember, b *graphBuilder, reads *overviewReads) error {
 	members, err := s.graphDirectMembers(ctx, accountID)
 	if err != nil {
 		return err
@@ -93,6 +94,10 @@ func (s *AccountOverviewService) graphPeople(ctx context.Context, userID, accoun
 	for _, l := range rows {
 		meetingNode := graphNodeID(model.GraphNodeMeeting, l.MeetingID)
 		if !b.nodes[meetingNode] || l.AccountID != accountID {
+			continue
+		}
+		if m := reads.meetings[l.MeetingID]; m == nil || (summaryDerivedPeopleSource(l.SourceField) &&
+			userID != m.UserID && accountMemberNeedsSummaryGuard(member) && !m.AccountSummaryMetadataShareable()) {
 			continue
 		}
 		var kind, label string

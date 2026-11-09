@@ -46,12 +46,10 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
     const indexes = [...selected].filter((i) => statuses[i] !== 'created');
     if (!indexes.length) return;
     setBusy(true); setError('');
-    // Rows defer their people resolve requests; one request follows the run.
-    let wrote = false;
     try {
       await importContacts(indexes.map((i) => contactFromRow(table[i + 1], mapping)),
         (cursor) => accountApi.contacts(accountId, userId, cursor, active.signal),
-        (contact) => { wrote = true; return accountApi.createContact(accountId, contact, userId, active.signal, true); },
+        (contact) => accountApi.createContact(accountId, contact, userId, active.signal),
         (index, status) => { if (!active.signal.aborted) setStatuses((old) => ({ ...old, [indexes[index]]: status })); });
       if (!active.signal.aborted) onImported();
     } catch (err) {
@@ -60,10 +58,7 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
         setError('가져오기가 중단되었습니다. 표시된 결과를 확인하고 다시 시도해 주세요. 저장 여부가 불확실한 항목은 연락처 목록을 확인해 주세요.');
         onImported();
       }
-    } finally {
-      if (wrote) void (async () => accountApi.requestPeopleResolve(accountId, userId))().catch(() => undefined);
-      if (!active.signal.aborted) setBusy(false);
-    }
+    } finally { if (!active.signal.aborted) setBusy(false); }
   };
 
   const headers = table[0] || [];

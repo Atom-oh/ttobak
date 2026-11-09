@@ -876,9 +876,6 @@ and only meetings currently published to the account count:
   label or a default diarization label (`spk_N` or the Korean speaker letter form). `DELETE /people/edges` takes the four
   key fields as query parameters, returns 204, and for an auto edge writes a
   deny row.
-- `POST /people/resolve` (no body) returns 202 and queues one resolve request
-  for the account; bulk contact imports call it once after writing contacts
-  with `?peopleResolve=defer` on each contact create or update.
 - Under the summary guard, assignee and insight mention text and evidence are
   blank for teammates who do not own the meeting.
 
@@ -1772,7 +1769,6 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Edges` |
 | POST | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Bind` |
 | DELETE | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Unbind` |
-| POST | `/api/accounts/{accountId}/people/resolve` | `accountPeopleHandler.Resolve` |
 | GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
 | GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
 | GET | `/api/accounts/{accountId}/graph` | `accountOverviewHandler.Graph` |

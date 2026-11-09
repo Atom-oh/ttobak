@@ -60,6 +60,7 @@ type fakePeopleRepo struct {
 	putActors      []string
 	mentionDeletes []string
 	ignorePuts     []string
+	staleMentions  map[string]bool
 }
 
 func newFakePeopleRepo() *fakePeopleRepo {

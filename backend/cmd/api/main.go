@@ -162,6 +162,7 @@ func init() {
 	accountContactsService := service.NewAccountContactsService(repo)
 	accountContactsService.SetPeopleResolvePublisher(peopleResolvePublisher)
 	accountContactsHandler := handler.NewAccountContactsHandler(accountContactsService)
+	// Manual people writes queue a resolver refresh of the changed meetings.
 	accountPeopleService := service.NewAccountPeopleService(repo.MetadataView())
 	accountPeopleService.SetPeopleResolvePublisher(peopleResolvePublisher)
 	accountPeopleHandler := handler.NewAccountPeopleHandler(accountPeopleService)
@@ -360,7 +361,6 @@ func init() {
 		r.Get("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Edges)
 		r.Post("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Bind)
 		r.Delete("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Unbind)
-		r.Post("/api/accounts/{accountId}/people/resolve", accountPeopleHandler.Resolve)
 		r.Get("/api/accounts/{accountId}/signals", accountOverviewHandler.Signals)
 		r.Get("/api/accounts/{accountId}/flow", accountOverviewHandler.Flow)
 		r.Get("/api/accounts/{accountId}/graph", accountOverviewHandler.Graph)

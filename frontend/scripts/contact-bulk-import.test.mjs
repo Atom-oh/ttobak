@@ -370,28 +370,6 @@ test('runBulkImport creates accounts, adds new people, fills same people, drops 
   assert.deepEqual([0, 1, 2, 3].map(i => results[i].status), ['filled', 'created', 'dropped', 'created']);
 });
 
-test('runBulkImport sends one people resolve request per account it wrote to', async () => {
-  const { groupByCompany, runBulkImport } = load();
-  const contacts = [
-    { name: '김하나', company: '하나은행', email: 'kim@hanabank.com' },
-    { name: '최하나', company: '하나은행', email: 'choi@hanabank.com' },
-    { name: '이신규', company: '신규상사', email: 'lee@new.co.kr' },
-  ];
-  const groups = groupByCompany(contacts, accounts);
-  const resolves = [];
-  const store = { hana: [], new1: [{ contactId: 'n1', revision: 'r', name: '이신규', company: '신규상사', email: 'lee@new.co.kr' }] };
-  const api = {
-    createAccount: async () => 'new1',
-    listContacts: async (id) => ({ contacts: store[id] || [] }),
-    createContact: async (id, c) => ({ ...c, contactId: `${id}-${c.name}`, revision: 'r' }),
-    updateContact: async () => assert.fail('unchanged rows are not written'),
-    requestPeopleResolve: async (id) => { resolves.push(id); throw new Error('best effort'); },
-  };
-  const results = plain(await runBulkImport(contacts, groups, { 'c:신규상사': { action: 'new', name: '신규상사' } }, api));
-  assert.deepEqual(resolves, ['hana'], 'only the account with writes is resolved, once');
-  assert.deepEqual([0, 1, 2].map(i => results[i].status), ['created', 'created', 'unchanged']);
-});
-
 test('runBulkImport stops on access denial and records other failures per row', async () => {
   const { groupByCompany, runBulkImport } = load();
   const contacts = [{ name: 'A', company: '하나은행' }, { name: 'B', company: '하나은행' }];

@@ -68,18 +68,17 @@ what. This is step 2 of the account roadmap; it must never guess.
   edge and mention writes are fenced on the lease token in the same
   transaction, so a run that lost its lease writes nothing.
 - The summarize Lambda runs the resolver inline after summary publication with
-  its own 30-second bound. Speaker map saves, contact writes and bulk contact
-  imports publish `PeopleResolveRequested` (IDs only) to the same Lambda; a bulk
-  import publishes one request per account at its end through
-  `POST /people/resolve`. Contact-triggered runs cover the last 90 days and at
-  most 200 meetings.
+  its own 30-second bound. Speaker map saves and contact writes publish
+  `PeopleResolveRequested` (IDs only) to the same Lambda, and manual binds and
+  resolutions publish a refresh of the meetings they changed. Contact-triggered
+  runs cover the last 90 days and at most 200 meetings.
 - `backend/cmd/backfill-account-people` replays old meetings (dry run by
   default; `-prune` removes rows of deleted meetings).
 
 ### Reads and API
 
-- Eight routes under `/api/accounts/{accountId}/people` serve the people panel,
-  mention review, speaker binding and the import resolve request. They are
+- Seven routes under `/api/accounts/{accountId}/people` serve the people panel,
+  mention review and speaker binding. They are
   authenticated, for direct members checked on every request, and not
   connector-delegable.
 - Every read revalidates: the meeting must be published to the account now,
