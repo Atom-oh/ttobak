@@ -76,18 +76,24 @@ const CONNECTOR_READ_SCOPE = CONNECTOR_AUDIENCE + '/read';
 const CONNECTOR_WRITE_SCOPE = CONNECTOR_AUDIENCE + '/write';
 
 // Public signing keys embedded at build time. When they belong to this
-// function's issuer they pre-populate the JWKS cache, so a cold environment
-// verifies without a network round trip. They then age out exactly like a
-// fetched JWKS (CACHE_TTL from module load), so a key the issuer withdraws
-// stops being accepted within the same bound as before. A seeded lookup that
-// misses the kid or fails verification is retried once against the live JWKS.
+// function's issuer they pre-populate the JWKS cache so a cold environment can
+// verify without waiting on the network. Seed trust is short-lived: module load
+// immediately starts a live JWKS refresh that replaces the seed when it lands,
+// and the seed is never considered fresh for more than SEED_TTL. So a key the
+// issuer withdraws is accepted by a new environment only until its first live
+// refresh completes (at most SEED_TTL), not for a cache hour per cold start.
+// A seed-decided miss or failed verification is retried once against the live
+// JWKS; a live result is final. The API Lambda verifies every token again with
+// its own live JWKS.
 const SEED_JWKS = ${JSON.stringify(seedJwks)};
 
 // Cache for JWKS
 const CACHE_TTL = 3600000; // 1 hour
+const SEED_TTL = 60000; // 1 minute
 const seedApplies = SEED_JWKS.issuer === COGNITO_ISSUER;
 let jwksCache = seedApplies ? { keys: SEED_JWKS.keys } : null;
-let jwksCacheTime = seedApplies ? Date.now() : 0;
+// Backdated so the seed counts as fresh for SEED_TTL only.
+let jwksCacheTime = seedApplies ? Date.now() - CACHE_TTL + SEED_TTL : 0;
 let jwksFromSeed = seedApplies;
 
 // Base64URL decode
@@ -100,12 +106,17 @@ function base64UrlDecode(str) {
 
 // Fetch JWKS
 function fetchJwks() {
+  const now = Date.now();
+  if (jwksCache && (now - jwksCacheTime) < CACHE_TTL) {
+    return Promise.resolve(jwksCache);
+  }
+  return fetchLiveJwks();
+}
+
+// Fetch the live JWKS, replacing the cache (including a seed) on success.
+function fetchLiveJwks() {
   return new Promise((resolve, reject) => {
     const now = Date.now();
-    if (jwksCache && (now - jwksCacheTime) < CACHE_TTL) {
-      return resolve(jwksCache);
-    }
-
     https.get(JWKS_URL, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -122,6 +133,10 @@ function fetchJwks() {
     }).on('error', reject);
   });
 }
+
+// Replace the seed with the live JWKS as soon as possible. Best effort: on
+// failure the seed stays usable until SEED_TTL, then requests fetch live.
+if (seedApplies) fetchLiveJwks().catch(() => {});
 
 // Find key by kid
 function findKey(jwks, kid) {

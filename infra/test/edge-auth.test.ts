@@ -9,6 +9,8 @@ import { EdgeAuthStack, SeedJwks } from '../lib/edge-auth-stack';
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { ...pair.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256', use: 'sig' };
 let jwksFetches = 0;
+// When set, the mocked JWKS request never answers (a slow or stalled fetch).
+let jwksHang = false;
 // Clock offset (ms) seen by the edge code, to age the JWKS cache in tests.
 let clockOffset = 0;
 const edgeDate = { now: () => Date.now() + clockOffset };
@@ -29,6 +31,7 @@ function edgeHandler(connectors = false, privateBridge = false, seedJwks?: SeedJ
     get: (_url: string, callback: (response: EventEmitter) => void) => {
       jwksFetches++;
       const response = new EventEmitter();
+      if (jwksHang) return new EventEmitter();
       callback(response);
       queueMicrotask(() => {
         response.emit('data', JSON.stringify({ keys: [jwk] }));
@@ -126,38 +129,37 @@ describe('Embedded JWKS seed', () => {
   const call = (handler: (e: unknown) => Promise<Record<string, any>>, kid: string, key = pair.privateKey) =>
     handler(event('/api/meetings', { host: 'ttobak.example.com', authorization: `Bearer ${signed(kid, key)}` }));
 
-  test('a seeded key for this issuer verifies without fetching JWKS', async () => {
-    const handler = edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
-    jwksFetches = 0;
-    expect((await call(handler, 'seeded')).uri).toBe('/api/meetings');
-    expect(jwksFetches).toBe(0);
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const seededHandler = () => edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
+
+  test('a seeded key verifies while the load-time live refresh is still pending', async () => {
+    jwksHang = true;
+    try {
+      jwksFetches = 0;
+      const handler = seededHandler();
+      expect((await call(handler, 'seeded')).uri).toBe('/api/meetings');
+      expect(jwksFetches).toBe(1); // the background refresh started at load
+    } finally {
+      jwksHang = false;
+    }
   });
-  test('an unknown kid falls back to the live JWKS', async () => {
-    const handler = edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
+  test('a new environment stops trusting a withdrawn seeded key once its live refresh lands', async () => {
     jwksFetches = 0;
-    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
+    const handler = seededHandler(); // live JWKS (mock) does not publish 'seeded'
+    await settle();
+    expect((await call(handler, 'seeded')).status).toBe('401');
     expect(jwksFetches).toBe(1);
+    // Every later cold start repeats the refresh instead of re-trusting the seed.
+    const next = seededHandler();
+    await settle();
+    expect((await call(next, 'seeded')).status).toBe('401');
   });
-  test('a seed for another issuer is ignored and a wrong signature still fails', async () => {
-    const other = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    const handler = edgeHandler(false, false, {
-      issuer: 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_other',
-      keys: [{ ...other.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256' } as Record<string, string>],
-    });
+  test('seed trust expires after SEED_TTL even if the load-time refresh failed', async () => {
+    jwksHang = true;
+    const handler = seededHandler();
+    jwksHang = false;
     jwksFetches = 0;
-    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
-    expect(jwksFetches).toBe(1);
-    const seeded = edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
-    expect((await call(seeded, 'seeded', other.privateKey)).status).toBe('401');
-  });
-  test('a seeded key withdrawn upstream stops verifying once the cache ages out', async () => {
-    clockOffset = 0;
-    const handler = edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
-    jwksFetches = 0;
-    expect((await call(handler, 'seeded')).uri).toBe('/api/meetings');
-    expect(jwksFetches).toBe(0);
-    // The live JWKS (mock) no longer publishes 'seeded'.
-    clockOffset = 3600001;
+    clockOffset = 60001;
     try {
       expect((await call(handler, 'seeded')).status).toBe('401');
       expect(jwksFetches).toBe(1);
@@ -165,12 +167,37 @@ describe('Embedded JWKS seed', () => {
       clockOffset = 0;
     }
   });
+  test('an unknown kid falls back to the live JWKS', async () => {
+    jwksHang = true;
+    const handler = seededHandler();
+    jwksHang = false;
+    jwksFetches = 0;
+    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
+    expect(jwksFetches).toBe(1);
+  });
+  test('a seed for another issuer is ignored and a wrong signature still fails', async () => {
+    const other = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    jwksFetches = 0;
+    const handler = edgeHandler(false, false, {
+      issuer: 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_other',
+      keys: [{ ...other.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256' } as Record<string, string>],
+    });
+    expect(jwksFetches).toBe(0); // no load-time refresh for a foreign seed
+    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
+    expect(jwksFetches).toBe(1);
+    jwksHang = true;
+    const seeded = seededHandler();
+    jwksHang = false;
+    expect((await call(seeded, 'seeded', other.privateKey)).status).toBe('401');
+  });
   test('a seeded key that fails verification is retried against the live JWKS', async () => {
     // Stale seed: same kid, wrong modulus. The live JWKS has the real key.
     const stale = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    jwksHang = true;
     const handler = edgeHandler(false, false, {
       issuer, keys: [{ ...stale.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256' } as Record<string, string>],
     });
+    jwksHang = false;
     jwksFetches = 0;
     expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
     expect(jwksFetches).toBe(1);
