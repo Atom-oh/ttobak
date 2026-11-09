@@ -358,6 +358,9 @@ func init() {
 		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
 		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
 		r.Post("/api/specreq-tasks/{eventId}/transitions", specReqTaskHandler.Transition)
+		r.Put("/api/calendar/sources/{sourceId}/events/{eventId}/sharing", calendarHandler.SetEventSharing)
+		r.Get("/api/calendar/share-directory", calendarHandler.ShareDirectory)
+		r.Get("/api/accounts/{accountId}/calendar", calendarHandler.ListAccountCalendar)
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)
