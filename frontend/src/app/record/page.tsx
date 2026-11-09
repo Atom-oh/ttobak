@@ -21,6 +21,7 @@ import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
 import { SAPreparation } from '@/components/record/SAPreparation';
+import { RecordingLinkControls } from '@/components/record/RecordingLinkControls';
 import { PreparationReferences } from '@/components/record/PreparationReferences';
 import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown, type MeetingReference, type QAReferenceEvidence, type QuestionDraft, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
@@ -1387,6 +1388,22 @@ function RecordPageInner() {
           </div>
         )}
 
+        {/* Customer/project links stay editable after recording starts
+            (browser and native modes). Separate from ReferencePanel's
+            account, which only browses references. */}
+        {(session.isRecording || isNativeRecording) && !postRecording.step && (
+          <RecordingLinkControls
+            accountId={postRecording.recordingLinks.accountId}
+            boundAccountId={postRecording.recordingLinks.boundAccountId}
+            projectIds={postRecording.recordingLinks.projectIds}
+            linkedProjectIds={postRecording.recordingLinks.linkedProjectIds}
+            meetingReady={!!postRecording.serverMeetingId}
+            error={postRecording.linkError}
+            onAccountChange={(id) => { void postRecording.changeRecordingAccount(id); }}
+            onProjectsChange={(ids) => { void postRecording.changeRecordingProjects(ids); }}
+          />
+        )}
+
         {/* Tab sharing status during recording */}
         {audioSource === 'tab' && session.isRecording && tabSharingLabel && (
           <div className="flex items-center gap-2 px-4 py-2 bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-500/20 rounded-lg text-sm text-green-700 dark:text-green-300 mb-4">
@@ -1809,6 +1826,7 @@ function RecordPageInner() {
           comparisonNotes={postRecording.notesConflict}
           onEditNotes={postRecording.hasPendingAudio ? () => { setFinalNotesError(''); postRecording.editNotes(); } : undefined}
           onSkipAccountRetry={postRecording.hasPendingAudio && postRecording.pendingAccount ? postRecording.skipAccountRetry : undefined}
+          onSkipProjectRetry={postRecording.hasPendingAudio && postRecording.hasPendingProjects ? postRecording.skipProjectRetry : undefined}
           step={postRecording.step}
           errorMessage={postRecording.errorMessage}
           uploadProgress={postRecording.uploadProgress}

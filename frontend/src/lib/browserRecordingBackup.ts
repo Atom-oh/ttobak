@@ -11,9 +11,14 @@ export interface BrowserRecordingMetadata {
   chunkCount: number;
   byteSize: number;
   finalized: boolean;
+  // Pending project changes kept with a local copy, as deltas: a restore
+  // applies them to the meeting's then-current links, so projects linked or
+  // unlinked elsewhere meanwhile are preserved.
+  projectAdditions?: string[];
+  projectRemovals?: string[];
 }
 
-type RecordingPatch = Partial<Pick<BrowserRecordingMetadata, 'title' | 'notes' | 'meetingId' | 'uploadKey' | 'finalized'>>;
+type RecordingPatch = Partial<Pick<BrowserRecordingMetadata, 'title' | 'notes' | 'meetingId' | 'uploadKey' | 'finalized' | 'projectAdditions' | 'projectRemovals'>>;
 
 const DATABASE = 'ttobak-recording-backups';
 const RECORDINGS = 'recordings';

@@ -32,6 +32,7 @@ interface PostRecordingBannerProps {
   comparisonNotes?: string | null;
   onEditNotes?: () => void;
   onSkipAccountRetry?: () => void;
+  onSkipProjectRetry?: () => void;
   onKeepLocally?: (notes: string) => Promise<void>;
 }
 
@@ -42,7 +43,7 @@ const STEP_LABELS: Record<string, string> = {
   redirecting: 'Opening meeting...',
 };
 
-export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes, notesError, submitting, comparisonNotes, onEditNotes, onSkipAccountRetry, onKeepLocally }: PostRecordingBannerProps) {
+export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes, notesError, submitting, comparisonNotes, onEditNotes, onSkipAccountRetry, onSkipProjectRetry, onKeepLocally }: PostRecordingBannerProps) {
   const [notes, setNotes] = useState(initialNotes || '');
   const [keeping, setKeeping] = useState(false);
   const [keepError, setKeepError] = useState('');
@@ -131,6 +132,9 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
             </button>}
             {onSkipAccountRetry && <button type="button" onClick={onSkipAccountRetry} className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
               고객 연결 재시도 생략
+            </button>}
+            {onSkipProjectRetry && <button type="button" onClick={onSkipProjectRetry} className="max-w-full rounded-lg border border-amber-300 px-3 py-1.5 text-base font-medium text-amber-800 dark:text-amber-300">
+              연결 추가 생략·해제 재시도
             </button>}
             <button
               onClick={onDismiss}
