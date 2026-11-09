@@ -1,9 +1,13 @@
+export type MeetingCategory = 'internal_team' | 'internal_1on1' | 'internal_training' | 'internal_other';
+
 export interface Meeting {
   PK: string;
   SK: string;
   meetingId: string;
   userId: string;
   accountId?: string;
+  /** Owner-set internal category; never present together with accountId. */
+  meetingCategory?: MeetingCategory;
   projectIds?: string[];
   title: string;
   description?: string;

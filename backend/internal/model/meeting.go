@@ -7,6 +7,28 @@ import "time"
 type MeetingPreparation struct {
 	Notes     string
 	AccountID string
+	// Category is an optional internal classification; it excludes AccountID.
+	Category string
+}
+
+// Internal meeting categories. Empty means unclassified: a customer meeting
+// when AccountID is set, otherwise unassigned. A category and an account link
+// are mutually exclusive, so internal meetings never reach account surfaces.
+const (
+	MeetingCategoryNone     = ""
+	MeetingCategoryTeam     = "internal_team"
+	MeetingCategoryOneOnOne = "internal_1on1"
+	MeetingCategoryTraining = "internal_training"
+	MeetingCategoryOther    = "internal_other"
+)
+
+// ValidMeetingCategory is the exact allowlist for Meeting.MeetingCategory writes.
+func ValidMeetingCategory(category string) bool {
+	switch category {
+	case MeetingCategoryNone, MeetingCategoryTeam, MeetingCategoryOneOnOne, MeetingCategoryTraining, MeetingCategoryOther:
+		return true
+	}
+	return false
 }
 
 // Final-note output languages. Auto ("") keeps the historical prompt rule.
@@ -83,6 +105,9 @@ type Meeting struct {
 	Insights               string   `dynamodbav:"insights,omitempty"`         // JSON []MeetingInsight
 	LinkedMeetingIDs       []string `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
 	AccountID              string   `dynamodbav:"accountId,omitempty"`        // linked Account
+	// MeetingCategory is an owner-set internal classification (see
+	// ValidMeetingCategory); it is never set together with AccountID.
+	MeetingCategory string `dynamodbav:"meetingCategory,omitempty" json:"meetingCategory,omitempty"`
 	// ProjectIDs links this meeting to zero or more projects (many-to-many).
 	// Stored as a DynamoDB String Set (stringset tag), not a List, so link
 	// mutations can use atomic ADD/DELETE without a read-modify-write race.

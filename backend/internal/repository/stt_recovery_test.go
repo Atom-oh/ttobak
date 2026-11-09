@@ -337,7 +337,7 @@ func TestDeleteSttFailedMeetingIsConditionalOnTheMark(t *testing.T) {
 	meeting := items[0].(map[string]any)["Delete"].(map[string]any)
 	names := wireNames(meeting)
 	for _, field := range []string{"status", "sttFailureCode", "sttFailedAt", "updatedAt", "audioKeys", "audioPartCount", "notes", "content", "transcriptA", "transcriptB",
-		"transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "projectIds", "linkedMeetingIds",
+		"transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "meetingCategory", "projectIds", "linkedMeetingIds",
 		"participants", "speakerMap", "sharedToAccount", "diarizationSpeakerHint", "audioCrop", "summarizeRetryClaimedAt"} {
 		if !names[field] {
 			t.Fatalf("meeting delete condition omits %s", field)

@@ -408,7 +408,7 @@ func fullListMeeting() model.Meeting {
 	content := strings.Repeat("요약 ", 120)
 	at := time.Date(2026, 10, 2, 3, 4, 5, 0, time.UTC)
 	return model.Meeting{PK: model.PrefixUser + "owner", SK: model.PrefixMeeting + "m-1", EntityType: "MEETING",
-		MeetingID: "m-1", UserID: "owner", AccountID: "acc-1", SharedToAccount: true, Title: "title", Date: at,
+		MeetingID: "m-1", UserID: "owner", AccountID: "acc-1", SharedToAccount: true, MeetingCategory: model.MeetingCategoryOneOnOne, Title: "title", Date: at,
 		Status: model.StatusDone, Content: content, Participants: []string{"a"}, Tags: []string{"t"}, Sentiment: "neutral",
 		Duration: 61, CreatedAt: at, UpdatedAt: at.Add(time.Hour),
 		SummaryPrivacy: &model.SummaryPrivacy{Version: model.SummaryPrivacyVersion, State: model.SummaryPrivacySafe, GenerationID: "gen",
@@ -455,7 +455,7 @@ func TestMeetingListRowFieldsCoverResponse(t *testing.T) {
 	raw, _ := json.Marshal(model.ToMeetingListItem(&full, true, new(string), new(string)))
 	var fields map[string]any
 	_ = json.Unmarshal(raw, &fields)
-	for _, name := range []string{"meetingId", "accountId", "title", "date", "status", "summary", "participants", "tags", "sentiment", "duration", "isShared", "ownerUserId", "sharedBy", "permission", "createdAt", "updatedAt"} {
+	for _, name := range []string{"meetingId", "accountId", "meetingCategory", "title", "date", "status", "summary", "participants", "tags", "sentiment", "duration", "isShared", "ownerUserId", "sharedBy", "permission", "createdAt", "updatedAt"} {
 		if _, ok := fields[name]; !ok {
 			t.Fatalf("fixture leaves list field %q empty", name)
 		}

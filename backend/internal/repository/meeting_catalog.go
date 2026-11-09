@@ -164,7 +164,7 @@ func (r *DynamoDBRepository) QueryMeetingCatalog(ctx context.Context, user, phas
 }
 
 func (r *DynamoDBRepository) GetMeetingCatalogMetadata(ctx context.Context, owner, id string) (*model.Meeting, error) {
-	names := []string{"PK", "SK", "entityType", "userId", "meetingId", "accountId", "sharedToAccount", "title", "date", "status", "content", "participants", "tags", "sentiment", "duration", "createdAt", "updatedAt", "summaryPrivacy", "summaryAccountApproval"}
+	names := []string{"PK", "SK", "entityType", "userId", "meetingId", "accountId", "sharedToAccount", "meetingCategory", "title", "date", "status", "content", "participants", "tags", "sentiment", "duration", "createdAt", "updatedAt", "summaryPrivacy", "summaryAccountApproval"}
 	projection := expression.NamesList(expression.Name(names[0]))
 	for _, name := range names[1:] {
 		projection = projection.AddNames(expression.Name(name))
