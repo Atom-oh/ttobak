@@ -123,11 +123,7 @@ start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
 (ADR-061). In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
-and the recording status names the microphone in use. During a native recording
-the same picker switches the microphone without stopping. While Zoom shows the
-user muted, or after the followed Zoom meeting ends, the status says the user's
-voice is not being recorded. If the Mac sleeps mid-recording, the recording stops
-and uploads; an upload cut off by sleep resumes on wake.
+and the recording status names the microphone in use.
 
 Capture/processing state and upload failures remain visible through the post-record
 banner; a failed upload must remain retryable. Progress timeouts measure 60 seconds

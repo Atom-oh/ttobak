@@ -44,26 +44,6 @@ pub struct MeetingState {
     settings_path: Mutex<Option<PathBuf>>,
 }
 
-impl MeetingState {
-    /// The event payload of `id` while it is the latest detection.
-    pub fn last_json(&self, id: &str) -> Option<Value> {
-        self.last
-            .lock()
-            .as_ref()
-            .filter(|d| d.id == id)
-            .map(detection_json)
-    }
-
-    /// The label of `id` while it is the latest detection.
-    pub fn last_label(&self, id: &str) -> Option<&'static str> {
-        self.last
-            .lock()
-            .as_ref()
-            .filter(|d| d.id == id)
-            .map(|d| d.source.kind.label())
-    }
-}
-
 impl Default for MeetingState {
     fn default() -> Self {
         MeetingState {
@@ -279,20 +259,8 @@ fn announce(app: &AppHandle, state: &MeetingState, event: &Event) {
     if let Err(e) = app.emit_to("main", name, payload) {
         log::warn!("could not deliver {name}: {e}");
     }
-    match event {
-        // The detected prompt carries a Record button (meeting_prompt.rs).
-        // The detected prompt is a floating window with a Record button
-        // (meeting_prompt.rs); macOS notifications were not shown reliably.
-        Event::Detected(d) => {
-            let _ = notice;
-            crate::meeting_prompt::offer(app, &d.id, d.source.kind.label());
-        }
-        _ => {
-            crate::meeting_prompt::close(app);
-            if let Some((title, body)) = notice {
-                let _ = app.notification().builder().title(title).body(body).show();
-            }
-        }
+    if let Some((title, body)) = notice {
+        let _ = app.notification().builder().title(title).body(body).show();
     }
 }
 
@@ -349,7 +317,6 @@ pub async fn meeting_detection_respond(
     action: String,
     title: Option<String>,
 ) -> Result<Value, String> {
-    log::info!("meeting_detection_respond: {action}");
     let state = app.state::<Arc<MeetingState>>().inner().clone();
     let known = state
         .last
@@ -362,7 +329,6 @@ pub async fn meeting_detection_respond(
     let action = match action.as_str() {
         "dismiss" => {
             state.detector.lock().dismiss(&detection_id);
-            crate::meeting_prompt::close(&app);
             return Ok(json!({ "ok": true }));
         }
         "start" => {
@@ -393,10 +359,6 @@ pub async fn meeting_detection_respond(
     };
     let is_start = matches!(action, Action::Start { .. });
     let reply = control::dispatch_local(&app, &detection_id, action).await;
-    if reply.get("ok").and_then(Value::as_bool) == Some(true) {
-        // Answered here or in the banner: the floating prompt is done.
-        crate::meeting_prompt::close(&app);
-    }
     if is_start && reply.get("ok").and_then(Value::as_bool) == Some(true) {
         let path = app.state::<RecorderState>().recorder.lock().snapshot().path;
         *state.started.lock() = path.map(|p| (detection_id.clone(), p));

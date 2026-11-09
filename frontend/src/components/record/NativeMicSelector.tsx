@@ -28,14 +28,13 @@ interface NativeMicSelectorProps {
   value: string;
   onChange: (uid: string) => void;
   disabled?: boolean;
-  errorId?: string;
 }
 
 /** Mac app System Audio mode: which microphone to mix with system audio
  * (ADR-061). "Automatic" follows the meeting app's microphone, so the
  * recording hears what Zoom/Teams/Meet hears. Hidden on app builds without
  * the device list. */
-export function NativeMicSelector({ value, onChange, disabled, errorId }: NativeMicSelectorProps) {
+export function NativeMicSelector({ value, onChange, disabled }: NativeMicSelectorProps) {
   const [devices, setDevices] = useState<NativeInputDevice[] | null>(null);
 
   useEffect(() => {
@@ -84,8 +83,6 @@ export function NativeMicSelector({ value, onChange, disabled, errorId }: Native
         value={selectedMissing ? '' : value}
         onChange={(e) => select(e.target.value)}
         disabled={disabled}
-        aria-describedby={errorId}
-        aria-invalid={errorId ? true : undefined}
         className="min-h-10 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface px-3 text-sm text-slate-900 dark:text-text-main disabled:opacity-60"
       >
         <option value="">자동 — 회의 앱 마이크 따라가기</option>

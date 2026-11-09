@@ -67,14 +67,8 @@ without a user confirmation.
   stop prompt.
 - Automatic microphone choice prefers native meeting apps over browsers and
   ignores Safari's shared WebKit process.
-- Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window.
-  A detection also opens a small always-on-top prompt window at the top center
-  of the screen (`meeting_prompt.rs`, bundled `meeting-prompt.html`) with Record
-  and Ignore, as Notion does; the app's macOS notifications were not shown
-  reliably. Its only command, `meeting_prompt_choose`, goes through
-  `meeting_detection_respond`, and `native-meeting-answered` closes the banner.
-  It closes after 30 s unanswered, on an answer in the banner, or at the end.
-  An end still posts a local notification. The SPA banner's confirmation calls
+- Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window
+  and posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same
   `native-control-request` path as ADR-046, so busy and sign-in checks are
   unchanged. Detection starts do not post the MCP "started" notification.
@@ -123,12 +117,6 @@ without a user confirmation.
   System Audio Recording is likely denied, instead of reporting it only at
   stop. A process launched from a terminal is attributed to that terminal by
   TCC; launch the app through Finder or `open` when testing permissions.
-- When the Mac is about to sleep during a recording (e.g. the lid closes
-  without a stop), `sleep.rs` stops it through the control path with the
-  upload requested and delays sleep until the stop is answered or 20 s pass.
-  On wake the app emits `native-system-wake` and the record page retries an
-  upload left in the error state. Clamshell use on an external display does
-  not sleep and keeps recording.
 
 ## Consequences
 
@@ -174,4 +162,3 @@ and remain separate from the compiled library's availability.
   that speech is not recorded. Zoom's web client, Teams and other meeting apps keep recording the
   microphone regardless of their mute; Meet's mute is followed in Chromium
   browsers only, in English and Korean.
-- An upload interrupted by sleep completes only after wake.

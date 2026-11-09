@@ -3,7 +3,6 @@ import './globals.css';
 import { AuthProvider } from '@/components/auth/AuthProvider';
 import { NativeControlBridge } from '@/components/NativeControlBridge';
 import { MeetingDetectionBanner } from '@/components/MeetingDetectionBanner';
-import { DialogRouteGuard } from '@/components/DialogRouteGuard';
 
 export const metadata: Metadata = {
   title: 'TTOBAK - AI Meeting Assistant',
@@ -53,7 +52,6 @@ export default function RootLayout({
         <AuthProvider>
           <NativeControlBridge />
           <MeetingDetectionBanner />
-          <DialogRouteGuard />
           {children}
         </AuthProvider>
       </body>

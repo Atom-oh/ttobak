@@ -82,8 +82,6 @@ export function NativeControlBridge() {
         });
         return;
       }
-      // A dialog opened on the current screen must not survive this move.
-      dismissDialogs();
       router.push('/record');
     }, () => setListening(true));
   }, [router]);

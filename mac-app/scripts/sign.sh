@@ -47,34 +47,16 @@ if [[ ${#APPS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# Signing identity: TTOBAK_SIGN_IDENTITY if set, else a local "TTOBAK Dev"
-# code-signing certificate when the keychain has one, else ad-hoc ("-").
-# A certificate keeps the designated requirement (bundle ID + certificate
-# leaf) stable across rebuilds, so macOS privacy grants (Microphone, System
-# Audio Recording, Accessibility) survive them; an ad-hoc signature changes
-# with every build and invalidates them.
-IDENTITY="${TTOBAK_SIGN_IDENTITY:-}"
-if [[ -z "$IDENTITY" ]]; then
-  IDENTITY="$(security find-identity -p codesigning 2>/dev/null \
-    | awk -F'"' '/"TTOBAK Dev"/ { print $2; exit }')"
-fi
-IDENTITY="${IDENTITY:--}"
-if [[ "$IDENTITY" == "-" ]]; then
-  echo "note: signing ad-hoc; privacy grants reset on every rebuild"
-else
-  echo "note: signing with \"$IDENTITY\""
-fi
-
 for APP in "${APPS[@]}"; do
   echo "==> re-signing $APP"
   # NOTE: --deep is deprecated by Apple (it signs nested code with the
   # OUTER bundle's identity/entitlements in one pass, rather than the
   # correct inside-out order: sign nested binaries first, then the bundle).
-  # This works today because signing is ad-hoc or a local self-signed
-  # certificate (no notarization involved), but --deep would need to be replaced
+  # This works today because signing is ad-hoc (`--sign -`, no real
+  # identity/notarization involved), but --deep would need to be replaced
   # with an explicit inside-out signing loop before this app is ever
   # notarized with a real Developer ID.
-  codesign --force --deep --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" "$APP"
+  codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP"
 
   echo "    verifying entitlements..."
   if codesign -d --entitlements - "$APP" 2>&1 | grep -q "com.apple.security.device.audio-input"; then

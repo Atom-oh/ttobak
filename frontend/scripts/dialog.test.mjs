@@ -106,31 +106,6 @@ test('in-app dialogs open one at a time', async () => {
   assert.equal(await second, true);
 });
 
-test('navigation dismisses open and queued dialogs as declined', async () => {
-  const appended = [];
-  const document = {
-    activeElement: null,
-    createElement: () => ({
-      children: [], listeners: {},
-      setAttribute() {}, appendChild(child) { this.children.push(child); },
-      addEventListener(type, fn) { this.listeners[type] = fn; },
-      querySelectorAll() { return this.children; }, focus() {}, remove() {},
-    }),
-    addEventListener() {}, removeEventListener() {},
-    body: { appendChild: (el) => appended.push(el) },
-  };
-  const dialog = loadDialog({ tauri: true, window: {}, document });
-  const open = dialog.confirmDialog('delete meeting?');
-  const queued = dialog.confirmDialog('second');
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(dialog.isDialogOpen(), true);
-  dialog.dismissDialogs();
-  assert.equal(await open, false);
-  assert.equal(await queued, false);
-  assert.equal(appended.length, 1, 'the queued dialog never opens');
-  assert.equal(dialog.isDialogOpen(), false);
-});
-
 test('leftover actions reserve the meeting flow before their confirmation', () => {
   const page = readFileSync(join(SRC, 'app/record/page.tsx'), 'utf8');
   for (const name of ['handleLeftoverUpload', 'handleLeftoverDelete']) {

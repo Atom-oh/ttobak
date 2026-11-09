@@ -192,14 +192,6 @@ async fn dispatch(app: &AppHandle, request: proto::Request, origin: Origin) -> S
         request.id,
         control.counter.fetch_add(1, Ordering::Relaxed)
     );
-    log::info!(
-        "control request {} from {}",
-        request.action.name(),
-        match origin {
-            Origin::Mcp => "mcp",
-            Origin::Detection => "detection",
-        }
-    );
     let (tx, rx) = oneshot::channel();
     control.pending.lock().insert(request_id.clone(), tx);
 
