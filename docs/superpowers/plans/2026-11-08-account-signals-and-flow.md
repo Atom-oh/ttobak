@@ -314,6 +314,7 @@ Covers spec bug 4.
   - `Unlink` of an auto link writes the deny row.
   - Routes:
     - `GET /api/accounts/{accountId}/links?cursor=`: 100 per page.
+      Every row is revalidated at read time before it is returned: the project is still in the account, the news source still belongs to the account, the event still exists, and a meeting endpoint is still published to the account. Rows failing any check are dropped, so evidence quotes from unpublished meetings are never returned.
     - `POST /api/accounts/{accountId}/links`: body is `AccountLinkInput`.
     - `DELETE /api/accounts/{accountId}/links?fromKind=&fromId=&toKind=&toId=`
 
@@ -322,6 +323,7 @@ Covers spec bug 4.
   - `TestLink_RejectsProjectOutsideAccount`: transaction cancellation gives `ErrInvalidInput`.
   - `TestLink_NewsFromOtherAccountSourceRejected`.
   - `TestLink_Idempotent`.
+  - `TestListLinks_DropsUnpublishedMeetingEvidence`: an auto `news→meeting` link whose meeting is no longer published is omitted from the list response (no meeting ID, no evidence).
   - `TestUnlink_AutoWritesDeny` / `TestUnlink_ManualNoDeny`.
   - `TestAccountLinks_NonMemberForbidden`.
   - Repo `TestPutAccountLink_TransactionShape`: asserts 3 items for a project target and 4 for an auto link, plus their condition expressions. Follow the fake-client pattern used in `repository/project_test.go`.
