@@ -960,6 +960,9 @@ const (
 	// meeting publication, event, document) that link rows may issue; rows
 	// past it are skipped and set Truncated.
 	maxGraphLinkLookups = 200
+	// maxGraphContactReads bounds the distinct attendee contacts read (each a
+	// GetItem plus a KMS decrypt); more attendees set Truncated.
+	maxGraphContactReads = 200
 	// MaxAccountGraphBytes bounds the encoded graph response.
 	MaxAccountGraphBytes = 64 * 1024
 )
@@ -967,14 +970,15 @@ const (
 // graphBuilder accumulates nodes and edges in insertion order under the node
 // and edge caps. A rejected addition sets truncated.
 type graphBuilder struct {
-	g        *model.AccountGraph
-	nodes    map[string]bool
-	edges    map[string]bool
-	projects map[string]*model.Project // revalidated projects, nil when not in the account
-	contacts map[string]*model.AccountContact
-	docs     map[string]*model.CrawledDocument
-	sources  map[string]bool
-	lookups  int // uncached endpoint reads spent by link rows
+	g            *model.AccountGraph
+	nodes        map[string]bool
+	edges        map[string]bool
+	projects     map[string]*model.Project // revalidated projects, nil when not in the account
+	contacts     map[string]*model.AccountContact
+	docs         map[string]*model.CrawledDocument
+	sources      map[string]bool
+	lookups      int // uncached endpoint reads spent by link rows
+	contactReads int // attendee contacts read
 }
 
 func graphNodeID(kind, id string) string { return kind + ":" + id }
@@ -1113,6 +1117,11 @@ func (s *AccountOverviewService) graphMeeting(ctx context.Context, accountID, ow
 	nodeID := graphNodeID(model.GraphNodeMeeting, id)
 	b.edge(nodeID, graphNodeID(model.GraphNodeAccount, accountID), model.GraphEdgeMeetingAccount, "")
 	for _, projectID := range meeting.ProjectIDs {
+		if len(b.g.Nodes) >= maxGraphNodes && !b.hasNode(model.GraphNodeProject, projectID) {
+			// A project that could not be added is not read.
+			b.g.Truncated = true
+			continue
+		}
 		project, err := s.graphProject(ctx, accountID, projectID, b, reads)
 		if err != nil {
 			return false, err
@@ -1166,6 +1175,13 @@ func (s *AccountOverviewService) graphEvent(ctx context.Context, accountID strin
 		}
 		contact, seen := b.contacts[attendee.ContactID]
 		if !seen {
+			// Never read a contact whose node could not be added, and bound
+			// the distinct contacts read per call.
+			if len(b.g.Nodes) >= maxGraphNodes || b.contactReads >= maxGraphContactReads {
+				b.g.Truncated = true
+				continue
+			}
+			b.contactReads++
 			var err error
 			contact, err = s.repo.GetAccountContact(ctx, accountID, attendee.ContactID)
 			if graphRowUnreadable(err, repository.ErrContactUnreadable) {
@@ -1297,9 +1313,11 @@ func (s *AccountOverviewService) graphLinkTo(ctx context.Context, accountID stri
 }
 
 // graphLinks pages through the account's LINK# rows (at most
-// maxGraphLinkRows). A row produces nodes and an edge only when both
-// endpoints revalidate; the to endpoint is checked first so a dropped row
-// never adds a dangling from node.
+// maxGraphLinkRows). A row produces an edge only when both endpoints
+// revalidate; the to endpoint is checked first and rows whose missing nodes
+// cannot all fit are skipped. At the node cap boundary (an event's attendee
+// contacts can take the last slots) a revalidated from node may still be
+// added without its edge.
 func (s *AccountOverviewService) graphLinks(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
 	cursor := ""
 	for read := 0; ; {
@@ -1320,9 +1338,15 @@ func (s *AccountOverviewService) graphLinks(ctx context.Context, accountID strin
 				b.g.Truncated = true
 				return nil
 			}
-			// With the node cap full, only rows between present nodes can
-			// add output; never hydrate endpoints that could not be added.
-			if len(b.g.Nodes) >= maxGraphNodes && (!b.hasNode(link.FromKind, link.FromID) || !b.hasNode(link.ToKind, link.ToID)) {
+			// Only rows whose new endpoint nodes all fit can add output; never
+			// hydrate endpoints that could not be added.
+			missing := 0
+			for _, present := range []bool{b.hasNode(link.FromKind, link.FromID), b.hasNode(link.ToKind, link.ToID)} {
+				if !present {
+					missing++
+				}
+			}
+			if len(b.g.Nodes)+missing > maxGraphNodes {
 				b.g.Truncated = true
 				continue
 			}

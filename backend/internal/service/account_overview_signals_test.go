@@ -34,6 +34,7 @@ type overviewTestRepo struct {
 	eventErrs   map[string]error
 	eventGets   int
 	meetingGets int
+	contactGets int
 }
 
 func newOverviewTestRepo() *overviewTestRepo {

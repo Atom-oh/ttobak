@@ -34,6 +34,7 @@ func (r *overviewTestRepo) ListAccountMembers(context.Context, string) ([]model.
 }
 
 func (r *overviewTestRepo) GetAccountContact(_ context.Context, _ string, id string) (*model.AccountContact, error) {
+	r.contactGets++
 	if err := r.contactErrs[id]; err != nil {
 		return nil, err
 	}
@@ -382,4 +383,46 @@ func TestGraph_LinkHydrationBounded(t *testing.T) {
 			t.Fatalf("lookups unbounded: events=%d meetings=%d truncated=%v", repo.eventGets, repo.meetingGets, g.Truncated)
 		}
 	})
+}
+
+// Attendee contacts are read under a budget and never once the node cap is
+// full, however many events and attendees the account has.
+func TestGraph_ContactReadsBounded(t *testing.T) {
+	contactID := func(i int) string { return fmt.Sprintf("1f8c1d2e-3a4b-4c5d-8e6f-%012x", i+1) }
+	fixture := func(fillCap bool) (*AccountOverviewService, *overviewTestRepo) {
+		svc, repo, _, links := newGraphTest()
+		repo.addProject(&model.Project{ProjectID: "p000", Name: "P", AccountIDs: []string{linkAcct}})
+		if fillCap {
+			for i := 1; i < 90; i++ {
+				repo.addProject(&model.Project{ProjectID: fmt.Sprintf("p%03d", i), Name: "P", AccountIDs: []string{linkAcct}})
+			}
+			for i := 0; i < 100; i++ {
+				id := fmt.Sprintf("m%03d", i)
+				repo.meetings["o1:"+id] = flowMeeting("o1", id, signalsNow.Add(-day), true)
+				repo.acctRefs = append(repo.acctRefs, acctMeetingRef("o1", id, signalsNow.Add(-day)))
+			}
+		}
+		for i := 0; i < 50; i++ {
+			e := flowEvent(i, signalsNow.Add(-day))
+			for j := 0; j < 50; j++ {
+				id := contactID(i*50 + j)
+				repo.contacts[id] = &model.AccountContact{ContactID: id, Name: "c"}
+				e.Attendees = append(e.Attendees, model.EventAttendee{ContactID: id, Name: "c"})
+			}
+			repo.addEvent(e)
+			links.links = append(links.links, model.AccountLink{FromKind: "event", FromID: e.EventID, ToKind: "project", ToID: "p000", Origin: "manual"})
+		}
+		return svc, repo
+	}
+	for _, fillCap := range []bool{false, true} {
+		svc, repo := fixture(fillCap)
+		g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkGraphConsistent(t, g)
+		if !g.Truncated || repo.contactGets > maxGraphContactReads || (fillCap && repo.contactGets != 0) {
+			t.Fatalf("fillCap=%v: contact reads %d truncated=%v", fillCap, repo.contactGets, g.Truncated)
+		}
+	}
 }

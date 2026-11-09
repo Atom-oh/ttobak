@@ -906,13 +906,17 @@ revalidated relation; nothing is inferred:
   both endpoints revalidate: project still lists the account, news from one of
   the account's current sources and tech documents not `DELETED`, event still
   exists, meeting currently published to the account. A link never makes an
-  unpublished meeting visible. Once the node cap is full, rows whose endpoints
-  are not already nodes are skipped without endpoint reads, and link rows spend
-  at most 200 distinct uncached endpoint lookups (project, meeting publication,
-  event, document); skipped rows set `truncated`.
+  unpublished meeting visible. Rows whose missing endpoint nodes would exceed
+  the node cap are skipped without endpoint reads, and link rows spend at most
+  200 distinct uncached endpoint lookups (project, meeting publication, event,
+  document); skipped rows set `truncated`. At the node cap boundary a
+  revalidated from node can appear without its link edge.
 - direct members labelled `{email} ({role})`, as the account detail shows;
   event attendees whose `contactId` names an existing account contact, as
-  `attends` edges labelled with the contact name.
+  `attends` edges labelled with the contact name. At most 200 distinct contacts
+  are read, and none once the node cap is full; skipped attendees set
+  `truncated`. Meeting project expansion stops reading projects once the node
+  cap is full.
 - At most 150 nodes and 300 edges. `truncated` reports that a node, edge, read
   or size bound was hit, or that a single contact or linked event could not be
   opened and was skipped. A missing record key or a storage failure still
