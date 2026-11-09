@@ -790,6 +790,83 @@ func (r *DynamoDBRepository) FinishPeopleRun(ctx context.Context, run *model.Peo
 	return old.Rerun, nil
 }
 
+// PrunePeopleLink deletes a people edge of either origin, with its reverse
+// row, for an operator prune of a meeting whose row no longer exists. The
+// transaction requires the meeting row to be absent, so a live meeting's
+// edges, including unpublished ones, are never removed. A failed condition
+// maps to ErrConditionFailed.
+func (r *DynamoDBRepository) PrunePeopleLink(ctx context.Context, accountID string, k model.PeopleLinkKey) error {
+	owner, meeting, ok := splitLinkMeetingID(k.MeetingID)
+	if accountID == "" || !ok || model.ValidatePeopleLinkKey(k) != nil {
+		return fmt.Errorf("invalid people link")
+	}
+	exists, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return err
+	}
+	pk := model.PrefixAccount + accountID
+	gone, err := r.linkConditionCheck(accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), expression.AttributeNotExists(expression.Name("PK")))
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkSortKey(k)),
+			ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}},
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkToSortKey(k))}},
+		gone,
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return classifyPrune(err, len(items), "prune people link")
+	}
+	return nil
+}
+
+// classifyPrune maps a cancellation made only of condition failures to
+// ErrConditionFailed; conflicts, throttling and other reasons stay retryable
+// transport errors.
+func classifyPrune(err error, n int, op string) error {
+	var cancelled *types.TransactionCanceledException
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == n {
+		failed := false
+		for _, reason := range cancelled.CancellationReasons {
+			switch aws.ToString(reason.Code) {
+			case "None":
+			case "ConditionalCheckFailed":
+				failed = true
+			default:
+				return fmt.Errorf("%s: %w", op, err)
+			}
+		}
+		if failed {
+			return fmt.Errorf("%w: %s", ErrConditionFailed, op)
+		}
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// PruneUnresolvedMention deletes one unresolved mention row of a meeting
+// whose row no longer exists, re-checking the absence in the same
+// transaction. A live meeting maps to ErrConditionFailed.
+func (r *DynamoDBRepository) PruneUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error {
+	sk := model.MentionSortKey(hash, meetingID, role)
+	owner, meeting, ok := splitLinkMeetingID(meetingID)
+	if _, m, _, valid := parseMentionSortKey(sk); accountID == "" || !ok || !valid || m != meetingID {
+		return fmt.Errorf("invalid unresolved mention")
+	}
+	gone, err := r.linkConditionCheck(accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), expression.AttributeNotExists(expression.Name("PK")))
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, sk)}},
+		gone,
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return classifyPrune(err, len(items), "prune unresolved mention")
+	}
+	return nil
+}
+
 // maxPeopleRunMentionKeys bounds the inventory a run row records.
 const maxPeopleRunMentionKeys = 400
 

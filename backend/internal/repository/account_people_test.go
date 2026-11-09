@@ -615,6 +615,32 @@ func TestListUnresolvedMentions_GroupsContiguous(t *testing.T) {
 	}
 }
 
+func TestPrunePeopleLink_RequiresMissingMeeting(t *testing.T) {
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	k := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1").Key()
+	if err := repo.PrunePeopleLink(context.Background(), "acc", k); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Delete ACCOUNT#acc " + model.PeopleLinkSortKey(k),
+		"Delete ACCOUNT#acc " + model.PeopleLinkToSortKey(k),
+		"ConditionCheck USER#owner MEETING#m1",
+	}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	if c := items[2].(wireMap)["ConditionCheck"].(wireMap)["ConditionExpression"].(string); !strings.Contains(c, "attribute_not_exists") {
+		t.Fatalf("meeting check %q", c)
+	}
+	repo = summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`, nil), nil
+	})
+	if err := repo.PrunePeopleLink(context.Background(), "acc", k); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("live meeting: %v", err)
+	}
+}
+
 func TestListPeopleLinks_EmptyPagesWithContinuationAreBounded(t *testing.T) {
 	calls := 0
 	repo := indexingWire(t, func(string, map[string]interface{}) string {
@@ -628,5 +654,32 @@ func TestListPeopleLinks_EmptyPagesWithContinuationAreBounded(t *testing.T) {
 	calls = 0
 	if _, truncated, err := repo.ListPeopleLinksForMeeting(context.Background(), "acc", "o:m1", 1); err != nil || !truncated || calls != 4 {
 		t.Fatalf("meeting: truncated=%v err=%v calls=%d", truncated, err, calls)
+	}
+}
+
+func TestPrune_ClassifiesCancellationReasons(t *testing.T) {
+	k := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1").Key()
+	conflict := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"TransactionConflict"},{"Code":"None"}]}`, nil), nil
+	})
+	if err := conflict.PrunePeopleLink(context.Background(), "acc", k); err == nil || errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("conflict classified as condition: %v", err)
+	}
+
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	h := testMentionHash('a')
+	if err := repo.PruneUnresolvedMention(context.Background(), "acc", h, "owner:m1", "speaker"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Delete ACCOUNT#acc " + model.MentionSortKey(h, "owner:m1", "speaker"), "ConditionCheck USER#owner MEETING#m1"}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items %v", got)
+	}
+	live := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`, nil), nil
+	})
+	if err := live.PruneUnresolvedMention(context.Background(), "acc", h, "owner:m1", "speaker"); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("live meeting: %v", err)
 	}
 }
