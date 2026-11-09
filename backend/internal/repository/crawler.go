@@ -501,6 +501,13 @@ func decodeCrawlerDocument(row map[string]types.AttributeValue) (model.CrawledDo
 	if doc.SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
 		doc.SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
 	}
+	// Tech crawler rows written before awsServices existed carry one singular
+	// "service" attribute; expose it as the services list.
+	if len(doc.AWSServices) == 0 {
+		if svc, ok := row["service"].(*types.AttributeValueMemberS); ok && strings.TrimSpace(svc.Value) != "" {
+			doc.AWSServices = []string{svc.Value}
+		}
+	}
 	return doc, nil
 }
 
@@ -568,16 +575,14 @@ func (r *CrawlerRepository) ListDocuments(ctx context.Context, sourceID, docType
 		return nil, nil, 0, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	if limit == 0 {
-		limit = 20
-	}
+	// limit <= 0 means "all pages": no Limit and no early stop.
+	all := limit <= 0
 
 	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-		Limit:                     aws.Int32(limit),
 		ScanIndexForward:          aws.Bool(false),
 	}
 
@@ -589,16 +594,18 @@ func (r *CrawlerRepository) ListDocuments(ctx context.Context, sourceID, docType
 		input.ExclusiveStartKey = lastKey
 	}
 
-	docs := make([]model.CrawledDocument, 0, limit)
+	docs := make([]model.CrawledDocument, 0, 20)
 	for {
-		input.Limit = aws.Int32(limit - int32(len(docs)))
+		if !all {
+			input.Limit = aws.Int32(limit - int32(len(docs)))
+		}
 		result, err := r.client.Query(ctx, input)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("failed to query documents: %w", err)
 		}
 		docs = append(docs, decodeCrawlerDocuments(result.Items)...)
 		lastKey = result.LastEvaluatedKey
-		if len(lastKey) == 0 || int32(len(docs)) >= limit {
+		if len(lastKey) == 0 || (!all && int32(len(docs)) >= limit) {
 			return docs, lastKey, len(docs), nil
 		}
 		// DynamoDB Limit counts evaluated rows, including deleted and invalid
@@ -701,11 +708,9 @@ func (r *CrawlerRepository) ListDocumentsCrawledBetween(ctx context.Context, fro
 }
 
 // ListAllDocumentsByType performs a table scan to find documents across all sources filtered by type.
-// This is used for cross-source queries. Uses pagination with limit and page offset.
+// This is used for cross-source queries. Uses pagination with limit and page offset;
+// limit <= 0 returns every matching document with no slicing.
 func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error) {
-	if limit == 0 {
-		limit = 20
-	}
 
 	filterEx := expression.Name("PK").BeginsWith(model.PrefixCrawler).
 		And(expression.Name("SK").BeginsWith(model.PrefixDoc))
@@ -748,6 +753,9 @@ func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType 
 	}
 
 	total := len(allDocs)
+	if limit <= 0 {
+		return allDocs, total, nil
+	}
 
 	// Apply pagination
 	start := skip

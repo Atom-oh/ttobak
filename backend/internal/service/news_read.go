@@ -348,35 +348,59 @@ func decodeNewsDocument(row map[string]types.AttributeValue, sourceID, docHash s
 	return document, nil
 }
 
+// newsReadBatchDocs bounds one ReadNewsItems call to 500 news documents, i.e.
+// at most 1,000 keys (each document's DOC# row plus its source CONFIG row),
+// which is the repository's selection limit.
+const newsReadBatchDocs = 500
+
 // Cached/GSI records only discover identities. Re-read current news rows before
 // filtering and pagination, including when an earlier legacy row was replaced.
+// News documents are re-read in bounded batches; each document is judged
+// against the CONFIG row read in the same batch, and input order is kept.
 func (s *InsightsService) currentNewsList(ctx context.Context, docs []model.CrawledDocument) ([]model.CrawledDocument, error) {
-	keys := []repository.NewsReadKey{}
-	readable := make([]model.CrawledDocument, 0, len(docs))
-	for _, doc := range docs {
-		if doc.Type == "news" || strings.HasPrefix(doc.S3Key, "news/") {
-			selection := newsKeys(doc.SourceID, doc.DocHash)
-			if !selection[0].Valid() || !selection[1].Valid() {
-				continue
-			}
-			keys = append(keys, selection...)
+	news := make([]int, 0, len(docs))
+	keep := make([]bool, len(docs))
+	for i, doc := range docs {
+		if doc.Type != "news" && !strings.HasPrefix(doc.S3Key, "news/") {
+			keep[i] = true
+			continue
 		}
-		readable = append(readable, doc)
+		selection := newsKeys(doc.SourceID, doc.DocHash)
+		if selection[0].Valid() && selection[1].Valid() {
+			news = append(news, i)
+		}
 	}
-	docs = readable
-	if len(keys) == 0 {
-		return docs, nil
+	current := make(map[int]model.CrawledDocument, len(news))
+	for start := 0; start < len(news); start += newsReadBatchDocs {
+		indexes := news[start:min(start+newsReadBatchDocs, len(news))]
+		if err := s.currentNewsBatch(ctx, docs, indexes, current); err != nil {
+			return nil, err
+		}
+	}
+	result := make([]model.CrawledDocument, 0, len(docs))
+	for i, doc := range docs {
+		if keep[i] {
+			result = append(result, doc)
+		} else if fresh, ok := current[i]; ok {
+			result = append(result, fresh)
+		}
+	}
+	return result, nil
+}
+
+// currentNewsBatch re-reads at most newsReadBatchDocs news documents (at most
+// 1,000 keys) in one selection and records the still-current ones by index.
+func (s *InsightsService) currentNewsBatch(ctx context.Context, docs []model.CrawledDocument, indexes []int, current map[int]model.CrawledDocument) error {
+	keys := make([]repository.NewsReadKey, 0, len(indexes)*2)
+	for _, i := range indexes {
+		keys = append(keys, newsKeys(docs[i].SourceID, docs[i].DocHash)...)
 	}
 	rows, err := s.newsRows(ctx, keys)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	result := make([]model.CrawledDocument, 0, len(docs))
-	for _, doc := range docs {
-		if doc.Type != "news" && !strings.HasPrefix(doc.S3Key, "news/") {
-			result = append(result, doc)
-			continue
-		}
+	for _, i := range indexes {
+		doc := docs[i]
 		selection := newsKeys(doc.SourceID, doc.DocHash)
 		row, config := rows[selection[0]], rows[selection[1]]
 		if len(row) == 0 {
@@ -385,14 +409,14 @@ func (s *InsightsService) currentNewsList(ctx context.Context, docs []model.Craw
 		if isVersionedNews(row) && !currentNewsPublication(row, config, doc.SourceID, doc.DocHash) {
 			continue
 		}
-		current, err := decodeNewsDocument(row, doc.SourceID, doc.DocHash)
+		fresh, err := decodeNewsDocument(row, doc.SourceID, doc.DocHash)
 		if errors.Is(err, ErrNotFound) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
-		result = append(result, current)
+		current[i] = fresh
 	}
-	return result, nil
+	return nil
 }

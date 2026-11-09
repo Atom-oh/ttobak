@@ -285,13 +285,18 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 	}
 
 	var docs []model.CrawledDocument
+	var services, sourceIDs []string
 	var totalCount int
 	var err error
 
 	if source != "" {
-		docs, totalCount, err = s.listBySource(ctx, source, docType, service, tags, sortBy, page, limit)
+		docs, services, totalCount, err = s.listBySource(ctx, source, docType, service, tags, sortBy, page, limit)
+		if err == nil {
+			// The source dropdown must keep listing every customer while one is selected.
+			sourceIDs, err = s.sourceFacet(ctx, docType, service, tags)
+		}
 	} else {
-		docs, totalCount, err = s.scanAll(ctx, docType, tags, sortBy, page, limit)
+		docs, services, sourceIDs, totalCount, err = s.scanAll(ctx, docType, service, tags, sortBy, page, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -302,7 +307,58 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 		TotalCount: totalCount,
 		Page:       page,
 		Limit:      limit,
+		Services:   services,
+		SourceIDs:  sourceIDs,
 	}, nil
+}
+
+// uniqueServices returns the case-insensitively sorted unique AWS services across docs, never nil.
+func uniqueServices(docs []model.CrawledDocument) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, doc := range docs {
+		for _, svc := range doc.AWSServices {
+			if svc == "" {
+				continue
+			}
+			if _, ok := seen[svc]; !ok {
+				seen[svc] = struct{}{}
+				out = append(out, svc)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := strings.ToLower(out[i]), strings.ToLower(out[j])
+		if a != b {
+			return a < b
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
+// uniqueSourceIDs returns the sorted unique SourceID values across docs, never nil.
+func uniqueSourceIDs(docs []model.CrawledDocument) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, doc := range docs {
+		if doc.SourceID == "" {
+			continue
+		}
+		if _, ok := seen[doc.SourceID]; !ok {
+			seen[doc.SourceID] = struct{}{}
+			out = append(out, doc.SourceID)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sourceFacet computes the source facet over the global (all-source) set after
+// type, tag and service filters, ignoring the source filter.
+func (s *InsightsService) sourceFacet(ctx context.Context, docType, service string, tags []string) ([]string, error) {
+	_, _, sourceIDs, _, err := s.scanAll(ctx, docType, service, tags, "", 1, 1)
+	return sourceIDs, err
 }
 
 // listBySource queries documents from a specific source with optional type/service/tags filters.
@@ -312,27 +368,29 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 // before sorting would return an arbitrary subset that "newest" sorting can
 // only reorder locally -- silently hiding genuinely new documents that
 // happened to land outside that arbitrary slice.
-func (s *InsightsService) listBySource(ctx context.Context, source, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, int, error) {
-	docs, _, count, err := s.repo.ListDocuments(ctx, source, docType, 500, nil)
+func (s *InsightsService) listBySource(ctx context.Context, source, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, int, error) {
+	docs, _, count, err := s.repo.ListDocuments(ctx, source, docType, 0, nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to list documents for source %s: %w", source, err)
+		return nil, nil, 0, fmt.Errorf("failed to list documents for source %s: %w", source, err)
 	}
 	for i := range docs {
 		docs[i].SourceID = source
 	}
 	docs, err = s.currentNewsList(ctx, docs)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	count = len(docs)
 
-	if service != "" {
-		docs = filterByService(docs, service)
+	if len(tags) > 0 {
+		docs = filterByTags(docs, tags)
 		count = len(docs)
 	}
 
-	if len(tags) > 0 {
-		docs = filterByTags(docs, tags)
+	services := uniqueServices(docs)
+
+	if service != "" {
+		docs = filterByService(docs, service)
 		count = len(docs)
 	}
 
@@ -340,18 +398,18 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 
 	start := (page - 1) * limit
 	if start >= len(docs) {
-		return []model.CrawledDocument{}, count, nil
+		return []model.CrawledDocument{}, services, count, nil
 	}
 	end := start + limit
 	if end > len(docs) {
 		end = len(docs)
 	}
-	return docs[start:end], count, nil
+	return docs[start:end], services, count, nil
 }
 
 // scanAll scans all documents filtered by type with pagination.
 // Results are cached for 30 seconds to avoid repeated full-table scans.
-func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, int, error) {
+func (s *InsightsService) scanAll(ctx context.Context, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, []string, int, error) {
 	if docType == "" {
 		docType = "blog"
 	}
@@ -360,22 +418,28 @@ func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []st
 	allDocs, total, hit := scanCache.get(cacheKey)
 	if !hit {
 		var err error
-		allDocs, total, err = s.repo.ListAllDocumentsByType(ctx, docType, 500, 0)
+		allDocs, total, err = s.repo.ListAllDocumentsByType(ctx, docType, 0, 0)
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to scan documents: %w", err)
+			return nil, nil, nil, 0, fmt.Errorf("failed to scan documents: %w", err)
 		}
 		scanCache.set(cacheKey, allDocs, total)
 	}
 
 	docs, err := s.currentNewsList(ctx, allDocs)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, nil, 0, err
 	}
 	total = len(docs)
 	if len(tags) > 0 {
 		docs = filterByTags(docs, tags)
 		total = len(docs)
 	}
+	services := uniqueServices(docs)
+	if service != "" {
+		docs = filterByService(docs, service)
+		total = len(docs)
+	}
+	sourceIDs := uniqueSourceIDs(docs)
 
 	// Copy before sorting: allDocs may be the cached slice shared across
 	// concurrent requests with different sortBy values -- sorting in place
@@ -395,13 +459,13 @@ func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []st
 
 	start := (page - 1) * limit
 	if start >= len(docs) {
-		return []model.CrawledDocument{}, total, nil
+		return []model.CrawledDocument{}, services, sourceIDs, total, nil
 	}
 	end := start + limit
 	if end > len(docs) {
 		end = len(docs)
 	}
-	return docs[start:end], total, nil
+	return docs[start:end], services, sourceIDs, total, nil
 }
 
 // filterByService filters documents that contain the specified AWS service.

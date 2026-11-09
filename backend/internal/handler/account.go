@@ -432,7 +432,7 @@ func (h *AccountHandler) ListAccountInsights(w http.ResponseWriter, r *http.Requ
 			types = append(types, t)
 		}
 	}
-	list, err := h.accountService.ListAccountInsights(ctx, userID, accountID, from, to, types)
+	page, err := h.accountService.ListAccountInsightsPage(ctx, userID, accountID, from, to, types)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrSummaryReadRestricted):
@@ -446,7 +446,7 @@ func (h *AccountHandler) ListAccountInsights(w http.ResponseWriter, r *http.Requ
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"insights": list})
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (h *AccountHandler) GetAccountBrief(w http.ResponseWriter, r *http.Request) {
