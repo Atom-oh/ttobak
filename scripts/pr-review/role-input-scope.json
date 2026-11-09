@@ -22,5 +22,8 @@
     "out",
     "build"
   ],
-  "prefixes": []
+  "prefixes": [],
+  "path_regexes": [
+    "^frontend/public/mcp/ttobak-mcp\\.mjs$"
+  ]
 }
