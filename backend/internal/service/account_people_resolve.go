@@ -80,6 +80,7 @@ type PeopleDirectory struct {
 	People            []PersonCandidate
 	Entities          []NamedCandidate
 	ContactsTruncated bool
+	EntitiesTruncated bool // more than maxPeopleDescendants descendant accounts
 }
 
 // PeopleMention is one free-text mention taken from a meeting field.
@@ -135,6 +136,11 @@ func ResolveMention(dir *PeopleDirectory, m PeopleMention) MentionResolution {
 	if dir == nil {
 		return res
 	}
+	// An incomplete contact directory proves no candidate unique, whatever
+	// the rule, so nothing binds.
+	if dir.ContactsTruncated {
+		return res
+	}
 	won := func(set candidateSet, rule string) MentionResolution {
 		res.Kind, res.ID, res.Rule, res.Resolved = set.first.kind, set.first.id, rule, true
 		return res
@@ -157,12 +163,6 @@ func ResolveMention(dir *PeopleDirectory, m PeopleMention) MentionResolution {
 		}
 	}
 
-	// An incomplete contact directory cannot prove a name is unique, so only
-	// the email rule may bind; a later rule never stands in for rule 2.
-	if dir.ContactsTruncated {
-		return res
-	}
-
 	// Rule 2: the name without the email and brackets, then once stripped.
 	name := peopleEmailPattern.ReplaceAllString(m.Text, " ")
 	name = NormalizePersonName(strings.NewReplacer("<", " ", ">", " ", "(", " ", ")", " ").Replace(name))
@@ -180,7 +180,8 @@ func ResolveMention(dir *PeopleDirectory, m PeopleMention) MentionResolution {
 	}
 
 	// Rule 3: insight entities only, account name/alias or project name.
-	if !m.AllowEntities || res.Normalized == "" {
+	// Likewise an incomplete entity list cannot prove an entity unique.
+	if !m.AllowEntities || res.Normalized == "" || dir.EntitiesTruncated {
 		return res
 	}
 	var ents candidateSet

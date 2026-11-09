@@ -11,6 +11,23 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// PutPeopleLink and DeletePeopleLink are the member-actor writes; runner
+// writes go through the fenced *InRun methods.
+func (f *fakePeopleRepo) PutPeopleLink(_ context.Context, l *model.PeopleLink, actor string) error {
+	if actor == "" || l.Origin != model.LinkOriginManual || l.CreatedBy != actor {
+		return fmt.Errorf("manual writes need the member actor")
+	}
+	f.putActors = append(f.putActors, actor)
+	if err := f.putErr[l.Key()]; err != nil {
+		return err
+	}
+	f.puts = append(f.puts, *l)
+	return nil
+}
+func (f *fakePeopleRepo) DeletePeopleLink(_ context.Context, _, actor string, k model.PeopleLinkKey, origin string, deny bool) error {
+	f.deletes = append(f.deletes, fmt.Sprintf("%s/%s/%s/actor=%q/%s/deny=%t", k.Role, k.ToKind, k.ToID, actor, origin, deny))
+	return nil
+}
 func (f *fakePeopleRepo) GetPeopleLink(_ context.Context, _ string, k model.PeopleLinkKey) (*model.PeopleLink, error) {
 	return f.stored[k], nil
 }

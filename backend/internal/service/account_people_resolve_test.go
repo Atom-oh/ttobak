@@ -252,14 +252,20 @@ func TestPlanMeetingPeople_DedupesAndCaps(t *testing.T) {
 	}
 }
 
-func TestResolveMention_TruncatedDirectoryBindsByEmailOnly(t *testing.T) {
-	dir := &PeopleDirectory{ContactsTruncated: true, People: []PersonCandidate{
-		{Kind: model.LinkKindContact, ID: "c1", Name: "Kim Minsu", Email: "kim@acme.example"},
-	}, Entities: []NamedCandidate{{Kind: model.LinkKindProject, ID: "p1", Name: "Kim Minsu"}}}
-	if res := ResolveMention(dir, PeopleMention{Text: "Kim Minsu", AllowEntities: true}); res.Resolved {
-		t.Fatalf("name resolved on a truncated directory: %+v", res)
+func TestResolveMention_TruncatedDirectoryBindsNothing(t *testing.T) {
+	people := []PersonCandidate{{Kind: model.LinkKindContact, ID: "c1", Name: "Kim Minsu", Email: "kim@acme.example"}}
+	entities := []NamedCandidate{{Kind: model.LinkKindProject, ID: "p1", Name: "Migration"}}
+	dir := &PeopleDirectory{ContactsTruncated: true, People: people, Entities: entities}
+	for _, text := range []string{"Kim Minsu", "kim@acme.example", "Migration"} {
+		if res := ResolveMention(dir, PeopleMention{Text: text, AllowEntities: true}); res.Resolved {
+			t.Fatalf("%s resolved on a truncated contact directory: %+v", text, res)
+		}
 	}
-	if res := ResolveMention(dir, PeopleMention{Text: "kim@acme.example"}); !res.Resolved || res.Rule != model.PeopleRuleEmail {
-		t.Fatalf("email: %+v", res)
+	dir = &PeopleDirectory{EntitiesTruncated: true, People: people, Entities: entities}
+	if res := ResolveMention(dir, PeopleMention{Text: "Migration", AllowEntities: true}); res.Resolved {
+		t.Fatalf("entity resolved on a truncated entity list: %+v", res)
+	}
+	if res := ResolveMention(dir, PeopleMention{Text: "Kim Minsu"}); !res.Resolved || res.Rule != model.PeopleRuleName {
+		t.Fatalf("person rules still apply: %+v", res)
 	}
 }

@@ -38,11 +38,11 @@ type accountPeopleRepo interface {
 	GetProject(context.Context, string) (*model.Project, error)
 	ListMeetingRefsForAccountPage(context.Context, string, string, int32) ([]model.MeetingRef, *string, error)
 
-	PutPeopleLink(context.Context, *model.PeopleLink, string) error
-	DeletePeopleLink(context.Context, string, string, model.PeopleLinkKey, string, bool) error
+	PutPeopleLinkInRun(context.Context, *model.PeopleLink, *model.PeopleRun) error
+	DeletePeopleLinkInRun(context.Context, string, model.PeopleLinkKey, *model.PeopleRun) error
 	ListPeopleLinksForMeeting(context.Context, string, string, int) ([]model.PeopleLink, bool, error)
 	GetMentionIgnores(context.Context, string, []string) (map[string]bool, error)
-	ReplaceUnresolvedMentions(context.Context, string, string, []model.UnresolvedMention, []string) error
+	ReplaceUnresolvedMentions(context.Context, string, string, []model.UnresolvedMention, []string, *model.PeopleRun) error
 	ClaimPeopleRun(context.Context, string, string, string, time.Time, time.Duration) (*model.PeopleRun, bool, error)
 	RecordPeopleRunMentions(context.Context, *model.PeopleRun, []string) error
 	FinishPeopleRun(context.Context, *model.PeopleRun) (bool, error)
@@ -55,6 +55,8 @@ type accountPeopleRepo interface {
 	ListUnresolvedMentions(context.Context, string, string, int) ([]model.UnresolvedMention, string, error)
 
 	// People panel writes (direct member actor).
+	PutPeopleLink(context.Context, *model.PeopleLink, string) error
+	DeletePeopleLink(context.Context, string, string, model.PeopleLinkKey, string, bool) error
 	GetPeopleLink(context.Context, string, model.PeopleLinkKey) (*model.PeopleLink, error)
 	ListUnresolvedMentionsByHash(context.Context, string, string, int) ([]model.UnresolvedMention, bool, error)
 	DeleteUnresolvedMention(context.Context, string, string, string, string) error
@@ -71,11 +73,14 @@ type PeopleRunOptions struct {
 type PeopleRunResult struct {
 	Meetings, Mentions, Resolved, Unresolved, Written, Removed, Skipped int
 	Busy, Truncated                                                     bool
+	// RerunPending: a rerun was still requested after the last allowed
+	// pass; the caller may request another run.
+	RerunPending bool
 }
 
 func (r PeopleRunResult) String() string {
-	return fmt.Sprintf("meetings=%d mentions=%d resolved=%d unresolved=%d written=%d removed=%d skipped=%d busy=%t truncated=%t",
-		r.Meetings, r.Mentions, r.Resolved, r.Unresolved, r.Written, r.Removed, r.Skipped, r.Busy, r.Truncated)
+	return fmt.Sprintf("meetings=%d mentions=%d resolved=%d unresolved=%d written=%d removed=%d skipped=%d busy=%t truncated=%t rerun_pending=%t",
+		r.Meetings, r.Mentions, r.Resolved, r.Unresolved, r.Written, r.Removed, r.Skipped, r.Busy, r.Truncated, r.RerunPending)
 }
 
 // pass replaces the plan counts with a newer pass of the same scope and adds
@@ -206,6 +211,7 @@ func (s *AccountPeopleService) resolveMeeting(ctx context.Context, ownerID, meet
 		if !rerun {
 			break
 		}
+		total.RerunPending = pass == maxPeopleRunPasses
 	}
 	return total, nil
 }
@@ -242,7 +248,7 @@ func unionKeys(a, b []string) []string {
 // It returns the sort keys of the planned unresolved mention rows.
 func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.Meeting, linkID string, dir *PeopleDirectory, run *model.PeopleRun, opt PeopleRunOptions) (PeopleRunResult, []string, error) {
 	accountID := meeting.AccountID
-	res := PeopleRunResult{Meetings: 1, Truncated: dir.ContactsTruncated}
+	res := PeopleRunResult{Meetings: 1, Truncated: dir.ContactsTruncated || dir.EntitiesTruncated}
 	collected, truncated := CollectMeetingMentions(meeting)
 	res.Truncated = res.Truncated || truncated
 
@@ -325,8 +331,10 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 		if _, ok := existingKeys[k]; ok {
 			continue
 		}
-		err := s.repo.PutPeopleLink(ctx, &edges[i], "")
+		err := s.repo.PutPeopleLinkInRun(ctx, &edges[i], run)
 		switch {
+		case errors.Is(err, repository.ErrPeopleRunLeaseLost):
+			return res, mentionSKs, errPeopleLeaseLost
 		case err == nil:
 			res.Written++
 		case errors.Is(err, repository.ErrAccountLinkExists), errors.Is(err, repository.ErrAccountLinkDenied),
@@ -340,8 +348,10 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 		if l.Origin != model.LinkOriginAuto || plannedKeys[k] {
 			continue
 		}
-		err := s.repo.DeletePeopleLink(ctx, accountID, "", k, model.LinkOriginAuto, false)
+		err := s.repo.DeletePeopleLinkInRun(ctx, accountID, k, run)
 		switch {
+		case errors.Is(err, repository.ErrPeopleRunLeaseLost):
+			return res, mentionSKs, errPeopleLeaseLost
 		case err == nil:
 			res.Removed++
 		case errors.Is(err, repository.ErrConditionFailed):
@@ -351,7 +361,10 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 			return res, mentionSKs, err
 		}
 	}
-	if err := s.repo.ReplaceUnresolvedMentions(ctx, accountID, linkID, unresolved, prior); err != nil {
+	if err := s.repo.ReplaceUnresolvedMentions(ctx, accountID, linkID, unresolved, prior, run); err != nil {
+		if errors.Is(err, repository.ErrPeopleRunLeaseLost) {
+			return res, mentionSKs, errPeopleLeaseLost
+		}
 		return res, mentionSKs, err
 	}
 	return res, mentionSKs, nil
@@ -409,8 +422,10 @@ func (s *AccountPeopleService) ResolveAccount(ctx context.Context, accountID str
 			return total, err
 		}
 		if !rerun || ctx.Err() != nil {
+			total.RerunPending = rerun
 			break
 		}
+		total.RerunPending = pass == maxPeopleRunPasses
 	}
 	return total, nil
 }
@@ -421,7 +436,7 @@ func (s *AccountPeopleService) resolveAccountPass(ctx context.Context, accountID
 	if err != nil {
 		return res, err
 	}
-	res.Truncated = dir.ContactsTruncated
+	res.Truncated = dir.ContactsTruncated || dir.EntitiesTruncated
 	done := 0
 	cursor := ""
 	for {
@@ -583,5 +598,8 @@ func (s *AccountPeopleService) loadDescendants(ctx context.Context, accountID st
 			cursor = *next
 		}
 	}
+	// At the cap more descendants may exist unread; treat the list as
+	// incomplete (an exact count of 200 is conservatively truncated too).
+	dir.EntitiesTruncated = found >= maxPeopleDescendants
 	return nil
 }
