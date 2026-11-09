@@ -60,6 +60,7 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     '@/lib/dialog': { confirmDialog: async () => true, alertDialog: async () => {} }, '@/lib/upload': { uploadDocFile() { throw new Error('Unexpected upload'); } },
     '@/components/MemberPicker': { MemberPicker: none },
     '@/components/FieldInsightsSection': { FieldInsightsSection: none },
+    '@/components/account/AccountSchedule': { AccountSchedule: () => null },
     '@/components/AccountBillingTab': { AccountBillingTab: none },
     '@/components/AccountContacts': { AccountContacts: () => React.createElement('div', null, 'customer contacts panel') },
     '@/components/AccountEvents': { AccountEvents: () => React.createElement('div', null, 'customer contacts panel') },

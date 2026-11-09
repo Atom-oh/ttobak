@@ -110,6 +110,7 @@ function workspace(entry, options = {}) {
     '@/lib/api': {
       specReqTaskApi: { list: async () => ({ tasks: [], nextCursor: null }), get: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); } },
       calendarApi: {
+        shareDirectory: () => Promise.resolve({ accounts: [] }),
         events: (...args) => {
           calls.calendarEvents.push(args);
           return options.calendarEvents?.(...args) ?? Promise.resolve({ events: [], nextCursor: null });

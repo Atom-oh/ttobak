@@ -14,6 +14,7 @@ import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { PrivateUpcomingMeetings } from '@/components/workspace/UpcomingMeetings';
 import { AccountParentEditor } from '@/components/AccountParentEditor';
 import { AccountMergeDialog, ACCOUNT_MERGE_COPY, accountWriteErrorMessage } from '@/components/AccountMergeDialog';
+import { AccountSchedule } from '@/components/account/AccountSchedule';
 import { AccountBillingTab } from '@/components/AccountBillingTab';
 import { AccountContacts } from '@/components/AccountContacts';
 import { AccountEvents } from '@/components/AccountEvents';
@@ -805,6 +806,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
               )}
               {tab === 'meetings' && (
                 <>
+                  <div className="mb-8"><AccountSchedule accountId={accountId} /></div>
                   <div className="mb-8"><PrivateUpcomingMeetings accountId={accountId} onAccessLost={onAccessLost} /></div>
                   {/* Shared meetings */}
                   <section className="mb-8">
