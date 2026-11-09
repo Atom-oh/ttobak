@@ -828,6 +828,29 @@ endpoint fields as query parameters, is allowed for any direct member, returns
 204 or 404, and for an `auto` link also writes a `LINKDENY#` row so the
 automatic linker never re-creates that pair.
 
+`GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
+for **direct** members (membership is read on every call; no query parameters;
+`Cache-Control: no-store`). The response is `{ newsState, news, opportunities,
+insights, restrictedCount }`, at most 64 KiB, with text fields capped at 280
+code points:
+- `newsState` is `OK`, `NO_SOURCE` (the account has no current news source) or
+  `NO_RECENT_NEWS`. `news` holds at most 10 current items crawled in the last
+  30 days by the account's sources, ordered by `qualityScore` then crawl time.
+  Each item has `id` (`{sourceId}:{docHash}`), `linkedProjectIds` from the
+  revalidated link listing and `candidate` (unlinked, has opportunities and
+  `qualityScore >= 0.75`); the flag is display-only and never written.
+- `opportunities` lists at most 20 projects that still list the account, with
+  `stage`, `stageMapped`, `daysInStage` (absent when the change time is
+  unknown), `terminal` and `stall` reasons. Launched and Closed Lost never
+  stall. `STAGE_STALE`: stage unchanged for at least 21 days. `OPEN_ACTIONS`:
+  an open saved action item at least 14 days old, measured from its meeting's
+  date, counting only meetings that list the project and are currently
+  published to the account. `NO_UPCOMING`: no account event linked to the
+  project (event→project link) starts after now; per-user calendar entries
+  are not considered.
+- `insights` are the 10 newest `need`, `opportunity` and `risk` account
+  insights, with `restrictedCount` as in the insights route.
+
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
 order and resolved range. Without `from`, ascending lists start now (upcoming)
@@ -1544,6 +1567,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
 | POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
 | DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
+| GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
