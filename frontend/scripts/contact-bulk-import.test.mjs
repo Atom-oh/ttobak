@@ -118,7 +118,11 @@ test('the component preserves implicit drops when new account domains change ret
     const tree = await screen.chooseFile();
     nodes(tree).find(node => node.props?.['aria-label'] === 'Acme UK 처리 방법')
       .props.onChange({ target: { value: 'new' } });
-    await screen.submit();
+    const firstResult = await screen.submit();
+    const messages = nodes(firstResult).map(node => node.props?.children).filter(child => typeof child === 'string').join(' ');
+    assert.match(messages, /실패 또는 저장 여부 확인 필요/);
+    assert.match(messages, /고객사 연락처에서 저장 여부를 확인/);
+    assert.doesNotMatch(messages, /아직 저장되지 않은 행만/);
     failOther = false;
     await screen.submit();
     assert.equal(createdAccounts, 1);
@@ -172,6 +176,51 @@ test('groups by company, sorts unresolved first and drops them by default', () =
   assert.deepEqual(groups.slice(0, 2).map(g => g.key).sort(), ['c:신규상사', 'd:lge.com']);
   assert.deepEqual(plain(defaultDecision(groups.find(g => g.key === 'c:하나은행'))), { action: 'account', accountId: 'hana' });
   assert.deepEqual(plain(defaultDecision(groups[0])), { action: 'drop' });
+});
+
+test('conflicting domains require a decision regardless of company row order', async () => {
+  const { groupByCompany, defaultDecision, runBulkImport } = load();
+  const destinations = [
+    { accountId: 'north', name: 'North', aliases: [], domains: ['north.test'] },
+    { accountId: 'south', name: 'South', aliases: [], domains: ['south.test'] },
+  ];
+  const rows = [
+    { name: 'Personal', company: 'Unlisted Company', email: 'personal@gmail.com' },
+    { name: 'North Person', company: 'Unlisted Company', email: 'north@north.test' },
+    { name: 'South Person', company: 'Unlisted Company', email: 'south@south.test' },
+  ];
+  for (const contacts of [rows, [...rows].reverse()]) {
+    const groups = groupByCompany(contacts, destinations);
+    assert.equal(groups.length, 1);
+    assert.deepEqual(plain(groups[0].match), { kind: 'similar', candidates: ['north', 'south'] });
+    assert.deepEqual(plain(defaultDecision(groups[0])), { action: 'drop' });
+    const results = await runBulkImport(contacts, groups, {}, {
+      listContacts: async () => assert.fail('ambiguous groups must not access a destination'),
+      createContact: async () => assert.fail('ambiguous groups must not write contacts'),
+      createAccount: async () => assert.fail('ambiguous groups must not create accounts'),
+    });
+    assert.deepEqual(plain(Object.values(results).map(result => result.status)), ['dropped', 'dropped', 'dropped']);
+  }
+});
+
+test('group matching keeps exact name precedence and unambiguous domain sets', () => {
+  const { groupByCompany } = load();
+  const destinations = [
+    { accountId: 'north', name: 'North', aliases: ['Known Company'], domains: ['north.test', 'north.example'] },
+    { accountId: 'south', name: 'South', aliases: [], domains: ['south.test'] },
+  ];
+  const companyMatch = groupByCompany([
+    { name: 'First', company: 'Known Company', email: 'first@north.test' },
+    { name: 'Second', company: 'Known Company', email: 'second@south.test' },
+  ], destinations);
+  assert.deepEqual(plain(companyMatch[0].match), { kind: 'exact', accountId: 'north' });
+  const domainMatch = groupByCompany([
+    { name: 'Personal', company: 'Unlisted Company', email: 'personal@gmail.com' },
+    { name: 'First', company: 'Unlisted Company', email: 'first@dev.north.test' },
+    { name: 'Second', company: 'Unlisted Company', email: 'second@north.example' },
+    { name: '', company: 'Unlisted Company', email: 'ignored@south.test' },
+  ], destinations);
+  assert.deepEqual(plain(domainMatch[0].match), { kind: 'exact', accountId: 'north' });
 });
 
 test('merge fills empty fields and reports differing ones', () => {

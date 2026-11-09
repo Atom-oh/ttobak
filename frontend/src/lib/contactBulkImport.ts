@@ -55,11 +55,18 @@ const SIMILAR_THRESHOLD = 0.5;
 
 /** Matches a company/email to an account: exact name, alias or domain; otherwise similar candidates. */
 export function matchAccount(company: string | undefined, email: string | undefined, accounts: MatchAccount[]): AccountMatch {
+  return matchAccountDomains(company, [companyDomain(email)].filter(Boolean), accounts);
+}
+
+function matchAccountDomains(company: string | undefined, domains: string[], accounts: MatchAccount[]): AccountMatch {
   const key = normalizeCompany(company);
-  const domain = companyDomain(email);
   // A company name or alias is stronger evidence than a mail domain.
   let exact = new Set(key ? accounts.filter((a) => [a.name, ...a.aliases].map(normalizeCompany).includes(key)).map((a) => a.accountId) : []);
-  if (!exact.size && domain) exact = new Set(accounts.filter((a) => a.domains.some((d) => domainMatches(domain, normalizeDomain(d)))).map((a) => a.accountId));
+  if (!exact.size && domains.length) {
+    exact = new Set(accounts.filter((account) =>
+      account.domains.some((accountDomain) => domains.some((domain) => domainMatches(domain, normalizeDomain(accountDomain)))))
+      .map((account) => account.accountId));
+  }
   if (exact.size === 1) return { kind: 'exact', accountId: [...exact][0] };
   if (exact.size > 1) return { kind: 'similar', candidates: [...exact] };
   if (!key) return { kind: 'none' };
@@ -101,8 +108,8 @@ export function groupByCompany(contacts: ContactInput[], accounts: MatchAccount[
     groups.set(key, { key, company: contact.company?.trim() || '', domain, rows: [row], match: { kind: 'none' } });
   });
   for (const group of groups.values()) {
-    const first = contacts[group.rows[0]];
-    group.match = group.key === 'none' ? { kind: 'none' } : matchAccount(group.company, group.domain ? `x@${group.domain}` : first.email, accounts);
+    const domains = [...new Set(group.rows.map((row) => companyDomain(contacts[row].email)).filter(Boolean))];
+    group.match = group.key === 'none' ? { kind: 'none' } : matchAccountDomains(group.company, domains, accounts);
   }
   const order = { similar: 0, none: 1, exact: 2 } as const;
   return [...groups.values()].sort((a, b) => order[a.match.kind] - order[b.match.kind] || b.rows.length - a.rows.length);

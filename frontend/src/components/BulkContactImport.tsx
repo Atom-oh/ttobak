@@ -8,7 +8,7 @@ import { defaultDecision, groupByCompany, runBulkImport, type BulkRowResult, typ
 import type { ContactInput } from '@/types/meeting';
 
 const fieldLabel = Object.fromEntries(CONTACT_FIELDS) as Record<ContactField, string>;
-const statusLabel: Record<BulkRowResult['status'], string> = { created: '추가', filled: '빈 칸 보강', unchanged: '변경 없음', dropped: '드랍', invalid: '이름 없음', failed: '실패' };
+const statusLabel: Record<BulkRowResult['status'], string> = { created: '추가', filled: '빈 칸 보강', unchanged: '변경 없음', dropped: '드랍', invalid: '이름 없음', failed: '실패 또는 저장 여부 확인 필요' };
 
 /** Loads the accounts the user directly belongs to, with names, aliases and domains for matching. */
 async function loadMatchAccounts(userId: string, signal: AbortSignal): Promise<MatchAccount[]> {
@@ -108,7 +108,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
       if (signal.aborted) return;
       setError(isContactAccessDenied(err)
         ? '일부 고객사에 연락처를 추가할 권한이 없습니다. 고객사 멤버인지 확인해 주세요.'
-        : '가져오기가 중단되었습니다. 표시된 결과를 확인하고 다시 시도해 주세요. 이미 저장된 행은 다시 보내지 않습니다.');
+        : '가져오기가 중단되었습니다. 고객사 연락처에서 저장 여부를 확인한 뒤 다시 시도해 주세요. 저장이 확인된 행만 다시 보내지 않습니다.');
     } finally { if (!signal.aborted) setBusy(false); }
   };
 
@@ -229,7 +229,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
         className="rounded bg-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-40">{busy ? '가져오는 중…' : `${importing}명 가져오기`}</button>
 
       {done && <p role="status" className="text-sm">결과: 추가 {counts.created || 0} · 빈 칸 보강 {counts.filled || 0} · 변경 없음 {counts.unchanged || 0} · 드랍 {counts.dropped || 0}{counts.failed ? ` · 실패 ${counts.failed}` : ''}{counts.invalid ? ` · 이름 없음 ${counts.invalid}` : ''}</p>}
-      {done && counts.failed > 0 && <p className="text-xs text-slate-500">다시 가져오기를 누르면 아직 저장되지 않은 행만 다시 처리합니다.</p>}
+      {done && counts.failed > 0 && <p className="text-xs text-slate-500">응답이 실패했어도 저장되었을 수 있습니다. 고객사 연락처에서 저장 여부를 확인한 뒤 다시 시도해 주세요. 저장이 확인된 행만 재처리에서 제외합니다.</p>}
 
       {conflicts.length > 0 && <section>
         <h4 className="text-sm font-semibold">변경 후보 {conflicts.length}건</h4>
