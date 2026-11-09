@@ -226,3 +226,37 @@ export function resolveServer(home: string, host: HostId, name: string, pathDirs
   if (!command) throw new IntakeError('SERVER_START_FAILED', `${name} command was not found on the approved PATH`);
   return { command, args: value.args!, env: value.env!, ...(value.cwd ? { cwd: value.cwd } : {}) };
 }
+
+export const TTOBAK_ENDPOINT_KEYS = ['TTOBAK_API_URL', 'TTOBAK_COGNITO_DOMAIN', 'TTOBAK_CLIENT_ID', 'TTOBAK_USER_POOL_ID'] as const;
+export type TtobakEndpoints = Partial<Record<typeof TTOBAK_ENDPOINT_KEYS[number], string>>;
+
+/**
+ * Reads the non-secret TTOBAK endpoint keys from a host's own TTOBAK server
+ * entry: the entry named `ttobak` first, else any stdio entry that sets
+ * TTOBAK_API_URL. The preferred host is tried first. Only the allowlisted
+ * keys are returned; other environment values stay unread by the caller.
+ * Unreadable or invalid host files are skipped.
+ */
+export function hostTtobakEndpoints(home: string, preferred: HostId): TtobakEndpoints {
+  const order = [preferred, ...HOSTS.filter(host => host !== preferred)];
+  for (const host of order) {
+    let servers: Map<string, Entry>;
+    try {
+      const text = readHostFile(home, host);
+      if (text === null) continue;
+      servers = entries(host, text);
+    } catch {
+      continue;
+    }
+    const candidates = [servers.get('ttobak'), ...servers.values()];
+    const found = candidates.find(value => value?.transport === 'stdio' && !value.disabled && value.env?.TTOBAK_API_URL);
+    if (!found) continue;
+    const result: TtobakEndpoints = {};
+    for (const key of TTOBAK_ENDPOINT_KEYS) {
+      const value = found.env![key];
+      if (value) result[key] = value;
+    }
+    return result;
+  }
+  return {};
+}

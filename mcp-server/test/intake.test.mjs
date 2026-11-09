@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from '../dist/intake/toml.js';
-import { listHosts, resolveServer, resolveCommand } from '../dist/intake/hosts.js';
+import { listHosts, resolveServer, resolveCommand, hostTtobakEndpoints } from '../dist/intake/hosts.js';
 import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent }
   from '../dist/intake/calendar.js';
 import { IntakeStore } from '../dist/intake/store.js';
@@ -295,6 +295,41 @@ test('CLI: select, dry run and status against a synthetic stdio server, with no 
   const outputs = lines.join('\n') + allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
   assert.ok(!outputs.includes(CANARY), 'no host env value reaches stdout or local state');
   assert.ok(!outputs.includes('pwd='));
+});
+
+test('select falls back to the host ttobak entry endpoints and copies only allowlisted keys', async t => {
+  const home = tempHome(t);
+  writeHosts(home);
+  const claude = JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8'));
+  claude.mcpServers.ttobak = { command: process.execPath, args: ['server.mjs'], env: {
+    TTOBAK_API_URL: 'https://api.host.invalid', TTOBAK_COGNITO_DOMAIN: 'https://auth.host.invalid',
+    TTOBAK_CLIENT_ID: 'host-client', TTOBAK_TOKEN: CANARY, OTHER: CANARY } };
+  writeFileSync(join(home, '.claude.json'), JSON.stringify(claude));
+  assert.deepEqual(hostTtobakEndpoints(home, 'kiro'), { TTOBAK_API_URL: 'https://api.host.invalid',
+    TTOBAK_COGNITO_DOMAIN: 'https://auth.host.invalid', TTOBAK_CLIENT_ID: 'host-client' });
+
+  const lines = [];
+  const bare = { home, now: () => NOW, zone: ZONE, stdout: line => lines.push(line), env: { PATH: '/usr/bin:/bin' } };
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], bare), 0);
+  const stored = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8'));
+  assert.equal(stored.ttobak.apiUrl, 'https://api.host.invalid');
+  assert.equal(stored.ttobak.clientId, 'host-client');
+
+  // Terminal env still wins over the host entry.
+  const override = cliEnvironment(home, lines);
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], override), 0);
+  assert.equal(JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8')).ttobak.apiUrl,
+    'https://api.example.invalid');
+
+  const outputs = lines.join('\n') + allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
+  assert.ok(!outputs.includes(CANARY));
+
+  // No env and no host ttobak entry: a clear argument error.
+  const empty = tempHome(t);
+  writeHosts(empty);
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'],
+    { ...bare, home: empty }), 2);
+  assert.equal(JSON.parse(lines.at(-1)).code, 'INVALID_ARGUMENT');
 });
 
 test('CLI: auth-expired and schema-changed servers fail with codes and no writes', async t => {

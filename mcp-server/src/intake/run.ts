@@ -8,7 +8,7 @@ import { TtobakApi } from '../api.js';
 import { CognitoAuth } from '../auth.js';
 import { CALENDAR_TOOL, runCalendar, type CalendarCounts } from './calendar.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
-import { HOSTS, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
+import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson } from './mcp-client.js';
 import { IntakeStore } from './store.js';
 
@@ -68,9 +68,13 @@ function ttobakConfig(selection: Selection | null, env: NodeJS.ProcessEnv) {
   const clientId = env.TTOBAK_CLIENT_ID || selection?.ttobak?.clientId || '';
   const userPoolId = env.TTOBAK_USER_POOL_ID || selection?.ttobak?.userPoolId;
   if (!apiUrl || !cognitoDomain || !clientId) {
-    throw new IntakeError('INVALID_ARGUMENT', 'TTOBAK_API_URL, TTOBAK_COGNITO_DOMAIN and TTOBAK_CLIENT_ID are required');
+    throw new IntakeError('INVALID_ARGUMENT', 'TTOBAK_API_URL, TTOBAK_COGNITO_DOMAIN and TTOBAK_CLIENT_ID are required (env or a host ttobak entry)');
   }
   return { apiUrl, cognitoDomain, clientId, ...(userPoolId ? { userPoolId } : {}) };
+}
+
+function definedTtobakEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith('TTOBAK_') && value));
 }
 
 async function openCalendarSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[]) {
@@ -104,7 +108,9 @@ async function select(args: string[], environment: IntakeEnvironment, store: Int
     version: 1,
     calendar: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString(),
       ...(options['--accept-unknown-sensitivity'] ? { acceptUnknownSensitivity: true } : {}) },
-    ttobak: ttobakConfig(previous, environment.env),
+    // Terminal env wins; otherwise the host's own TTOBAK server entry supplies
+    // the endpoints, then the previous selection.
+    ttobak: ttobakConfig(previous, { ...hostTtobakEndpoints(environment.home, host), ...definedTtobakEnv(environment.env) }),
   };
   store.write(selection, 'selection.json');
   return { ok: true, connector: 'calendar', host, server, sourceId, pathDirectories: pathDirs.length };
