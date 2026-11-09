@@ -223,10 +223,51 @@ func normalizeCalendarEvent(event model.CalendarEventInput) (model.CalendarEvent
 	} else if event.StartDate != "" || event.EndDate != "" {
 		return model.CalendarEventInput{}, ErrInvalidInput
 	}
+	if err := normalizeCalendarSharing(&event); err != nil {
+		return model.CalendarEventInput{}, err
+	}
 	if _, err := marshalCalendarPayload(event); err != nil {
 		return model.CalendarEventInput{}, err
 	}
 	return event, nil
+}
+
+var calendarSeriesKey = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func normalizeCalendarSharing(event *model.CalendarEventInput) error {
+	if event.ShareAccountID != "" && !calendarIdentifier.MatchString(event.ShareAccountID) ||
+		len(event.CandidateAccountIDs) > 5 || len(event.ShareEvidence) > 3 ||
+		event.SeriesKey != "" && !calendarSeriesKey.MatchString(event.SeriesKey) {
+		return ErrInvalidInput
+	}
+	evidence := make(map[string]bool)
+	for _, kind := range event.ShareEvidence {
+		if kind != "title" && kind != "location" && kind != "domain" || evidence[kind] {
+			return ErrInvalidInput
+		}
+		evidence[kind] = true
+	}
+	candidates := make(map[string]bool)
+	for _, id := range event.CandidateAccountIDs {
+		if !calendarIdentifier.MatchString(id) || candidates[id] || id == event.ShareAccountID {
+			return ErrInvalidInput
+		}
+		candidates[id] = true
+	}
+	if len(evidence) > 0 && event.ShareAccountID == "" ||
+		event.Private && (event.ShareAccountID != "" || len(candidates) > 0) {
+		return ErrInvalidInput
+	}
+	event.ShareEvidence, event.CandidateAccountIDs = nil, nil
+	for kind := range evidence {
+		event.ShareEvidence = append(event.ShareEvidence, kind)
+	}
+	for id := range candidates {
+		event.CandidateAccountIDs = append(event.CandidateAccountIDs, id)
+	}
+	sort.Strings(event.ShareEvidence)
+	sort.Strings(event.CandidateAccountIDs)
+	return nil
 }
 
 func validCalendarInterval(start, end time.Time) bool {
