@@ -870,8 +870,11 @@ pub mod macos {
                     "No microphone input device is available.".into(),
                 ));
             };
-            let layout = mic_layout(id)
-                .ok_or_else(|| AppError::Backend("The selected device has no input.".into()))?;
+            if mic_layout(id).is_none() {
+                return Err(AppError::Backend(
+                    "The selected device has no input.".into(),
+                ));
+            }
 
             // Overlapping switches see the input the previous one left.
             let mut guard = self.resources.lock().expect("resources poisoned");
@@ -906,7 +909,7 @@ pub mod macos {
                     return Err(capture_stopped(&e));
                 }
             };
-            match self.attach_engine(res, &uid, layout, &mut tx) {
+            match self.attach_engine(res, &uid, id, &mut tx) {
                 Ok(()) => {
                     log::info!("switched recording microphone to {}", selected.name);
                     self.mic_active.store(true, Ordering::Relaxed);
@@ -917,8 +920,7 @@ pub mod macos {
                     log::error!("microphone switch failed: {e}; restoring the previous one");
                     let restored = previous.as_ref().and_then(|p| {
                         let id = input_device_list().into_iter().find(|d| d.uid == p.uid)?.id;
-                        let layout = mic_layout(id)?;
-                        self.attach_engine(res, &p.uid, layout, &mut tx).ok()
+                        self.attach_engine(res, &p.uid, id, &mut tx).ok()
                     });
                     if restored.is_none() {
                         // Nothing captures any more: close the queue so stop
@@ -933,12 +935,13 @@ pub mod macos {
             }
         }
 
-        /// Builds and starts an aggregate for `main_uid` feeding `tx`.
+        /// Builds and starts an aggregate for `main_uid` feeding `tx`. The
+        /// layout of microphone `mic` is read after the rate is set.
         fn attach_engine(
             &self,
             res: &mut Resources,
             main_uid: &str,
-            layout: ChannelLayout,
+            mic: AudioObjectID,
             tx: &mut Option<SyncSender<Vec<f32>>>,
         ) -> Result<(), AppError> {
             if tx.is_none() {
@@ -952,6 +955,13 @@ pub mod macos {
                 *tx = res.detach_engine()?.or(tx.take());
                 return Err(e);
             }
+            // Read after the rate change: a device's channel count can depend on its rate.
+            let Some(layout) = mic_layout(mic) else {
+                *tx = res.detach_engine()?.or(tx.take());
+                return Err(AppError::Backend(
+                    "The selected device has no input.".into(),
+                ));
+            };
             let ctx = Box::into_raw(Box::new(CallbackCtx {
                 tx: Mutex::new(tx.take()),
                 layout,

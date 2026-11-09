@@ -5,7 +5,8 @@
 //! Meet labels it "Turn on microphone" while the user is muted and "Turn off
 //! microphone" while unmuted. A toggle-less page counts as left only for the
 //! call last seen with a toggle; other toggle-less pages (an unlisted
-//! language, the landing page or an earlier call) are not evidence. Only the
+//! language, the landing page or an earlier call) are not evidence. Once a
+//! second call has shown a toggle, no page is evidence the user left. Only the
 //! web area of a `meet.google.com` page in a browser instance using audio is
 //! read. An unreadable page (e.g. another tab in front) keeps the last state. Once a
 //! recording has followed Meet, leaving the call keeps the microphone silent,
@@ -79,11 +80,18 @@ pub enum PageRead {
 }
 
 /// The Meet call this caller last saw with a toggle. Only that call's
-/// page, read again without a toggle, is evidence the user left.
+/// page, read again without a toggle, is evidence the user left. Once a
+/// second call has shown a toggle, no page is evidence the user left.
 #[derive(Debug, Default)]
 pub struct Call {
     last: Option<String>,
+    /// Distinct calls seen with a toggle; past two the exact count is moot.
+    calls: usize,
+    seen: Vec<String>,
 }
+
+/// Seen call keys kept per `Call`.
+const MAX_SEEN_CALLS: usize = 8;
 
 impl Call {
     /// Combines every Meet page read: an unmuted page wins, then a muted one.
@@ -97,6 +105,10 @@ impl Call {
                 _ => None,
             });
             if let Some(key) = key {
+                if !self.seen.contains(&key) && self.seen.len() < MAX_SEEN_CALLS {
+                    self.seen.push(key.clone());
+                    self.calls += 1;
+                }
                 self.last = Some(key);
                 return want;
             }
@@ -106,6 +118,11 @@ impl Call {
             PageRead::Unread => true,
         });
         if unknown {
+            return MicState::Unknown;
+        }
+        if self.calls > 1 {
+            // With more than one call seen, a left page may not be the tracked call: fall back
+            // to the audio grace.
             return MicState::Unknown;
         }
         let left = pages.iter().any(|p| match p {
@@ -320,11 +337,8 @@ mod tests {
             c.judge([page("a", MicState::Muted), page("b", MicState::NoMeeting)]),
             MicState::Muted
         );
-        // "a" was last seen with a toggle, so its toggle-less page has left.
-        assert_eq!(
-            c.judge([page("a", MicState::NoMeeting)]),
-            MicState::NoMeeting
-        );
+        // Two calls have shown a toggle, so no page is evidence of leaving.
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
         assert_eq!(c.judge([]), MicState::Unknown);
     }
 
@@ -351,6 +365,15 @@ mod tests {
         assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
         assert_eq!(c.judge([page("b", MicState::Muted)]), MicState::Muted);
         // B's tab is unreadable (pushes nothing); A's old page has no toggle.
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+    }
+
+    #[test]
+    fn a_second_call_disables_left_evidence() {
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
+        assert_eq!(c.judge([page("b", MicState::Muted)]), MicState::Muted);
+        assert_eq!(c.judge([page("b", MicState::NoMeeting)]), MicState::Unknown);
         assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
     }
 
