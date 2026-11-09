@@ -247,7 +247,10 @@ func (r *DynamoDBRepository) queryPeopleLinks(ctx context.Context, accountID str
 	links := []model.PeopleLink{}
 	lastSK := ""
 	var start map[string]types.AttributeValue
-	for read := 0; ; {
+	// Empty pages with a continuation key count toward a page bound, so a
+	// sparse range cannot loop without reading rows.
+	maxPages := maxRows/100 + 4
+	for read, pages := 0, 0; ; pages++ {
 		out, err := r.client.Query(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(),
 			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true),
 			Limit: aws.Int32(int32(min(maxRows-read, 100))), ExclusiveStartKey: start})
@@ -267,7 +270,10 @@ func (r *DynamoDBRepository) queryPeopleLinks(ctx context.Context, accountID str
 		if len(out.LastEvaluatedKey) == 0 {
 			return links, lastSK, false, nil
 		}
-		if read >= maxRows {
+		if sk, ok := out.LastEvaluatedKey["SK"].(*types.AttributeValueMemberS); ok && len(out.Items) == 0 {
+			lastSK = sk.Value
+		}
+		if read >= maxRows || pages+1 >= maxPages {
 			return links, lastSK, true, nil
 		}
 		start = out.LastEvaluatedKey
