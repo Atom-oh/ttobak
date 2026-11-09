@@ -78,6 +78,33 @@ test('events_tab_is_only_for_direct_members', () => {
   assert.equal(tabs.parseAccountTab('events', false), 'general');
   assert.equal(tabs.parseAccountTab('events', false, true), 'events');
   assert.ok(!tabs.visibleAccountTabs(true).includes('events'));
-  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'projects', 'docs']);
+  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'projects', 'docs', 'kb']);
   assert.equal(tabs.ACCOUNT_TAB_LABELS.events, '일정');
+});
+
+test('kb_tab_is_only_for_direct_members', () => {
+  assert.ok(tabs.visibleAccountTabs(false, true).includes('kb'));
+  assert.ok(!tabs.visibleAccountTabs(false, false).includes('kb'));
+  assert.equal(tabs.parseAccountTab('kb', false, false), 'general');
+  assert.equal(tabs.parseAccountTab('kb', false, true), 'kb');
+  assert.equal(tabs.ACCOUNT_TAB_LABELS.kb, '자료(KB)');
+});
+
+test('kb_copy_and_untag_rules', () => {
+  const kb = {};
+  vm.runInNewContext(ts.transpileModule(read('../src/lib/accountKB.ts'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: kb });
+  assert.deepEqual({ ...kb.ACCOUNT_KB_KIND_LABELS }, { upload: '업로드', meeting: '미팅', news: '뉴스', tech: '기술' });
+  assert.deepEqual({ ...kb.ACCOUNT_KB_STATE_LABELS }, { INDEXED: '반영됨', PENDING: '대기', FAILED: '실패', UNTRACKED: '미추적' });
+  assert.equal(kb.ACCOUNT_KB_COPY.download, '다운로드');
+  assert.equal(kb.ACCOUNT_KB_COPY.untag, '태그 해제');
+  assert.equal(kb.ACCOUNT_KB_COPY.empty, '표시할 자료가 없습니다.');
+  const up = { kind: 'upload', id: 'r', title: 't', uploadedBy: 'u1', indexState: 'INDEXED', canDownload: true };
+  assert.equal(kb.canUntagKBItem(up, 'u1', false), true);
+  assert.equal(kb.canUntagKBItem(up, 'u2', false), false);
+  assert.equal(kb.canUntagKBItem(up, 'u2', true), true);
+  assert.equal(kb.canUntagKBItem({ ...up, kind: 'meeting' }, 'u1', true), false);
+  assert.equal(kb.kbItemHref({ ...up, kind: 'meeting', id: 'm 1' }), '/meeting/m%201');
+  assert.equal(kb.kbItemHref(up), undefined);
 });

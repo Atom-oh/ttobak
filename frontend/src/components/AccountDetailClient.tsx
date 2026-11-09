@@ -18,6 +18,7 @@ import { AccountContacts } from '@/components/AccountContacts';
 import { AccountEvents } from '@/components/AccountEvents';
 import { AccountSignals } from '@/components/account/AccountSignals';
 import { AccountFlow } from '@/components/account/AccountFlow';
+import { AccountKB } from '@/components/account/AccountKB';
 import { AccountLinksPanel } from '@/components/account/AccountLinksPanel';
 import { eventProjectLinks } from '@/lib/accountOverview';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
@@ -708,6 +709,10 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
               {tab === 'events' && eventsVisible && user?.userId && (
                 <AccountEvents key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
                   eventLinks={eventLinksState.data ?? undefined} onLinksChanged={refreshOverview} />
+              )}
+              {tab === 'kb' && eventsVisible && user?.userId && (
+                <AccountKB key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
+                  isOwner={isOwner} onAccessLost={onAccessLost} />
               )}
               {tab === 'insights' && (
                 <>
