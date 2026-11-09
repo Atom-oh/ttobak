@@ -71,8 +71,10 @@ without a user confirmation.
 - A recording uses the microphone the user picks in System Audio mode, or by
   default the input device the meeting app is capturing from (process
   `Devices`, input scope), else the system default. This keeps multi-microphone
-  and clamshell setups aligned with what Zoom hears. Switching the microphone
-  during a recording is not yet supported.
+  and clamshell setups aligned with what Zoom hears. `switch_recording_input`
+  changes the microphone during a recording by rebuilding only the aggregate;
+  the tap, WAV and worker continue. A failed switch restores the previous input
+  (or the system-audio-only aggregate), else capture stops and says so.
 
 ## Consequences
 
