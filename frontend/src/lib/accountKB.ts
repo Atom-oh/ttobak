@@ -46,7 +46,9 @@ export function canUntagKBItem(item: AccountKBItem, userId: string | undefined, 
 
 /** Meeting items open the meeting page; other kinds have no detail route and render plain titles. */
 export function kbItemHref(item: AccountKBItem): string | undefined {
-  return item.kind === 'meeting' ? `/meeting/${encodeURIComponent(item.id)}` : undefined;
+  if (item.kind !== 'meeting') return undefined;
+  const meetingId = item.id.slice(item.id.indexOf(':') + 1);
+  return meetingId ? `/meeting/${encodeURIComponent(meetingId)}` : undefined;
 }
 
 export const ACCOUNT_KB_NOTICES = {

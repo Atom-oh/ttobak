@@ -106,6 +106,10 @@ test('kb_copy_and_untag_rules', () => {
   assert.equal(kb.canUntagKBItem(up, 'u2', true), true);
   assert.equal(kb.canUntagKBItem({ ...up, kind: 'meeting' }, 'u1', true), false);
   assert.equal(kb.kbItemHref({ ...up, kind: 'meeting', id: 'm 1' }), '/meeting/m%201');
+  assert.equal(kb.kbItemHref({ ...up, kind: 'meeting', id: 'owner-1:meeting-1' }), '/meeting/meeting-1');
+  assert.equal(kb.kbItemHref({ ...up, kind: 'meeting', id: 'owner-1:m 1' }), '/meeting/m%201');
+  assert.equal(kb.kbItemHref({ ...up, kind: 'meeting', id: 'owner-1:' }), undefined);
+  assert.equal(kb.kbItemHref({ ...up, kind: 'meeting', id: '' }), undefined);
   assert.equal(kb.kbItemHref(up), undefined);
 });
 
