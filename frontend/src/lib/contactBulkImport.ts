@@ -121,12 +121,25 @@ export function defaultDecision(group: CompanyGroup): GroupDecision {
 const emailKey = (value?: string) => (value || '').trim().toLowerCase();
 const phoneKey = (value?: string) => (value || '').replace(/[^0-9]/g, '').replace(/^82(?=[1-9])/, '0');
 
-/** The existing contact with the same email, mobile or work phone. */
+const nameKey = (value?: string) => (value || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+
+/**
+ * The existing contact that is the same person: the same email, or, when the
+ * emails do not differ, the same name and a shared mobile or work phone. A
+ * shared office line alone never identifies a person.
+ */
 export function findSameContact(existing: AccountContact[], contact: ContactInput): AccountContact | undefined {
   const email = emailKey(contact.email);
+  if (email) {
+    const byEmail = existing.find((other) => emailKey(other.email) === email);
+    if (byEmail) return byEmail;
+  }
+  const name = nameKey(contact.name);
   const phones = [phoneKey(contact.phone), phoneKey(contact.workPhone)].filter(Boolean);
-  return existing.find((other) => (!!email && emailKey(other.email) === email)
-    || [phoneKey(other.phone), phoneKey(other.workPhone)].some((p) => !!p && phones.includes(p)));
+  if (!name || !phones.length) return undefined;
+  return existing.find((other) => nameKey(other.name) === name
+    && !(email && emailKey(other.email) && emailKey(other.email) !== email)
+    && [phoneKey(other.phone), phoneKey(other.workPhone)].some((p) => !!p && phones.includes(p)));
 }
 
 export interface FieldConflict { field: ContactField; current: string; incoming: string }
@@ -147,10 +160,12 @@ export function mergeContact(existing: AccountContact, incoming: ContactInput): 
   return { merged, filled, conflicts };
 }
 
+// Built from the field list (fields ending in "phone" plus fax) without naming them.
+const PHONE_FIELDS = new Set(CONTACT_FIELDS.map(([field]) => field).filter((field) => /phone$|^fax$/i.test(field)));
+
 function comparable(field: ContactField, value: string): string {
   if (field === 'email') return emailKey(value);
-  // Phone-like values compare by digits, so "+82 10" equals "010".
-  if (/^[\d\s+().-]+$/.test(value)) return phoneKey(value);
+  if (PHONE_FIELDS.has(field)) return phoneKey(value);
   return value.replace(/\s+/g, ' ').trim();
 }
 
@@ -190,26 +205,33 @@ export async function runBulkImport(
   groups: CompanyGroup[],
   decisions: Record<string, GroupDecision>,
   api: BulkApi,
-  onProgress?: (row: number, result: BulkRowResult) => void,
+  options: { onProgress?: (row: number, result: BulkRowResult) => void; onAccountCreated?: (groupKey: string, accountId: string) => void; skipRows?: Set<number>; signal?: AbortSignal } = {},
 ): Promise<Record<number, BulkRowResult>> {
+  const { onProgress, onAccountCreated, signal } = options;
+  const skip = options.skipRows || new Set<number>();
   const results: Record<number, BulkRowResult> = {};
   const report = (row: number, result: BulkRowResult) => { results[row] = result; onProgress?.(row, result); };
+  const checkAbort = () => { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); };
   const byAccount = new Map<string, number[]>();
   for (const group of groups) {
+    checkAbort();
+    const rows = group.rows.filter((row) => !skip.has(row));
+    if (!rows.length) continue;
     const decision = decisions[group.key] ?? defaultDecision(group);
-    if (decision.action === 'drop') { group.rows.forEach((row) => report(row, { status: 'dropped' })); continue; }
+    if (decision.action === 'drop') { rows.forEach((row) => report(row, { status: 'dropped' })); continue; }
     let accountId: string;
     if (decision.action === 'new') {
       const name = decision.name.trim();
-      if (!name) { group.rows.forEach((row) => report(row, { status: 'failed' })); continue; }
+      if (!name) { rows.forEach((row) => report(row, { status: 'failed' })); continue; }
       try { accountId = await api.createAccount(name, group.domain ? [group.domain] : []); }
       catch (error) {
         if (isAbort(error) || isContactAccessDenied(error)) throw error;
-        group.rows.forEach((row) => report(row, { status: 'failed' }));
+        rows.forEach((row) => report(row, { status: 'failed' }));
         continue;
       }
+      onAccountCreated?.(group.key, accountId);
     } else accountId = decision.accountId;
-    byAccount.set(accountId, [...(byAccount.get(accountId) || []), ...group.rows]);
+    byAccount.set(accountId, [...(byAccount.get(accountId) || []), ...rows]);
   }
   for (const [accountId, rows] of byAccount) {
     let existing: AccountContact[];
@@ -220,9 +242,12 @@ export async function runBulkImport(
       continue;
     }
     for (const row of rows) {
+      checkAbort();
       const contact = contacts[row];
       if (!contact.name.trim()) { report(row, { status: 'invalid' }); continue; }
       const same = findSameContact(existing, contact);
+      // A reserved identity from an ambiguous failure may already be saved.
+      if (same && !same.contactId) { report(row, { status: 'failed', accountId }); continue; }
       try {
         if (!same) {
           const created = await api.createContact(accountId, contact);
@@ -237,6 +262,10 @@ export async function runBulkImport(
         report(row, { status: 'filled', accountId, contactId: updated.contactId, conflicts });
       } catch (error) {
         if (isAbort(error) || isContactAccessDenied(error)) throw error;
+        // A network or server failure can arrive after the write committed:
+        // reserve the identity so a later row in this run is not added twice.
+        const rejected = typeof error === 'object' && error !== null && 'status' in error && [400, 409, 413, 422].includes(Number(error.status));
+        if (!same && !rejected) existing.push({ ...contact, contactId: '', revision: '' });
         report(row, { status: 'failed', accountId, contactId: same?.contactId });
       }
     }

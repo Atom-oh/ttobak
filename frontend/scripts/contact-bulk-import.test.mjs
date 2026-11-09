@@ -68,8 +68,12 @@ test('merge fills empty fields and reports differing ones', () => {
   const { mergeContact, findSameContact } = load();
   const existing = { contactId: 'c1', revision: 'r1', name: '김하나', email: 'Kim@Hana.com', title: '과장', phone: '' };
   assert.equal(findSameContact([existing], { name: 'x', email: 'kim@hana.com ' }), existing);
-  assert.equal(findSameContact([{ ...existing, phone: '010-1234-5678' }], { name: 'x', phone: '+82 10 1234 5678' })?.contactId, 'c1');
+  assert.equal(findSameContact([{ ...existing, phone: '010-1234-5678' }], { name: '김하나', phone: '+82 10 1234 5678' })?.contactId, 'c1');
   assert.equal(findSameContact([existing], { name: '김하나' }), undefined, 'a name alone is not identity');
+  const office = { contactId: 'c2', revision: 'r', name: '이대표', workPhone: '02-123-4567' };
+  assert.equal(findSameContact([office], { name: '박직원', workPhone: '02 123 4567' }), undefined, 'a shared office line is not identity');
+  assert.equal(findSameContact([office], { name: '이 대표', workPhone: '021234567' })?.contactId, 'c2');
+  assert.equal(findSameContact([{ ...office, email: 'lee@a.com' }], { name: '이대표', email: 'other@a.com', workPhone: '021234567' }), undefined, 'different emails are different people');
   const { merged, filled, conflicts } = plain(mergeContact(existing, { name: '김하나', email: 'kim@hana.com', title: '차장', phone: '010-1' }));
   assert.deepEqual(filled, ['phone']);
   assert.deepEqual(conflicts, [{ field: 'title', current: '과장', incoming: '차장' }]);
@@ -113,4 +117,29 @@ test('runBulkImport stops on access denial and records other failures per row', 
   assert.deepEqual([results[0].status, results[1].status], ['failed', 'created']);
   const denied = { ...api, createContact: async () => { throw Object.assign(new Error('no'), { status: 403 }); } };
   await assert.rejects(runBulkImport(contacts, groups, {}, denied));
+});
+
+test('retries skip saved rows, report created accounts and reserve ambiguous identities', async () => {
+  const { groupByCompany, runBulkImport } = load();
+  const contacts = [
+    { name: '김신규', company: '신규상사' },
+    { name: '이하나', company: '하나은행', email: 'lee@hanabank.com' },
+    { name: '이하나', company: '하나은행', email: 'LEE@hanabank.com' },
+  ];
+  const groups = groupByCompany(contacts, accounts);
+  const created = [];
+  let creates = 0;
+  const api = { createAccount: async () => 'new1', listContacts: async () => ({ contacts: [] }), updateContact: async () => ({}),
+    createContact: async (id, c) => { creates++; if (c.email) throw Object.assign(new Error('timeout'), { status: 504 }); return { ...c, contactId: 'k', revision: 'r' }; } };
+  const results = plain(await runBulkImport(contacts, groups, { 'c:신규상사': { action: 'new', name: '신규상사' } }, api, {
+    onAccountCreated: (key, id) => created.push([key, id]),
+  }));
+  assert.deepEqual(plain(created), [['c:신규상사', 'new1']]);
+  assert.deepEqual([results[0].status, results[1].status, results[2].status], ['created', 'failed', 'failed']);
+  assert.equal(creates, 2, 'the second row with the same email is not sent after an ambiguous failure');
+  creates = 0;
+  const retry = plain(await runBulkImport(contacts, groups, { 'c:신규상사': { action: 'account', accountId: 'new1' } }, { ...api, createAccount: async () => { throw new Error('must not create'); } }, { skipRows: new Set([0]) }));
+  assert.equal(retry[0], undefined, 'a saved row is skipped');
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(runBulkImport(contacts, groups, {}, api, { signal: controller.signal }), { name: 'AbortError' });
 });
