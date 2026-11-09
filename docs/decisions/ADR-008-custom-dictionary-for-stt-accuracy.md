@@ -452,10 +452,18 @@ are added next to the personal one, which stays the only layer a user owns.
 - **L4 (sources).** A KB upload asks for an Account (none means Personal); the
   choice is stored as S3 object metadata `account-id`. KB documents (plain text
   only: `.md`, `.markdown`, `.txt`) and research reports feed the owner's
-  Account or Personal layer. Daily news feeds Common only, and only from crawler
-  sources an operator marked global and that carry no sticky `userTiedAt`; the
-  repeat threshold counts distinct sources, and Common sources are public news
-  references, never meeting or KB references.
+  Account or Personal layer. Daily news feeds Common only. By default only crawler
+  sources an operator marked global and that carry no sticky `userTiedAt` are
+  read; the repeat threshold counts distinct sources, and Common sources are
+  public news references, never meeting or KB references.
+  **Amendment (owner, 2026-11-09):** no source was ever marked global, so news
+  never reached Common. The owner chose to share news terms with every user,
+  because the dictionary exists to improve STT recognition of public technical
+  terms and names. `ttobak:newsTermsSources` (`global` by default, or `all`)
+  makes every searched, non-synthetic source eligible when set to `all`.
+  Custom-URL documents stay excluded, and the two-distinct-source threshold
+  still applies. Accepted consequence: a term from a user's subscribed source is
+  visible to all users once a second source also names it.
 - **Flags.** `ttobak:accountTermsMode`, `ttobak:transcriptCorrection`,
   `ttobak:kbTermsMode`, `ttobak:researchTermsMode` and `ttobak:newsTermsMode`
   (`off|on`) all default off; a run skipped by a flag logs `outcome=DISABLED`.

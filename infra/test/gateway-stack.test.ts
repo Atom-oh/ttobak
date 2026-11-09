@@ -1010,6 +1010,11 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     expect(summarizeEnv(on).NEWS_TERMS_MODE).toBe('on');
     expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsMode': 'true' }))
       .toThrow(/ttobak:newsTermsMode/);
+    expect(summarizeEnv(template).NEWS_TERMS_SOURCES).toBe('global');
+    const all = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsSources': 'all' });
+    expect(summarizeEnv(all).NEWS_TERMS_SOURCES).toBe('all');
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsSources': 'on' }))
+      .toThrow(/ttobak:newsTermsSources/);
   });
 
   test('transcriptCorrection: silent glossary correction is off by default and validated', () => {

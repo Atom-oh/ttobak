@@ -177,8 +177,9 @@ export function transcriptCorrectionEnvironment(scope: Construct): Record<string
 /**
  * KB-document, research-report and daily news term extraction for the
  * summarize Lambda (layered dictionary 4.2). CDK context `ttobak:kbTermsMode`,
- * `ttobak:researchTermsMode` and `ttobak:newsTermsMode` (off|on, default off);
- * invalid values fail synth.
+ * `ttobak:researchTermsMode` and `ttobak:newsTermsMode` (off|on, default off),
+ * plus `ttobak:newsTermsSources` (global|all, default global); invalid values
+ * fail synth.
  */
 export function sourceTermsEnvironment(scope: Construct): Record<string, string> {
   const read = (key: string) => {
@@ -189,10 +190,18 @@ export function sourceTermsEnvironment(scope: Construct): Record<string, string>
     }
     return mode;
   };
+  // Which crawler sources' news may feed Common: operator-curated global
+  // sources only (default) or every searched source.
+  const rawSources = scope.node.tryGetContext('ttobak:newsTermsSources');
+  const newsSources = rawSources === undefined || rawSources === null ? 'global' : String(rawSources).trim() || 'global';
+  if (newsSources !== 'global' && newsSources !== 'all') {
+    throw new Error(`ttobak:newsTermsSources must be global or all, got ${JSON.stringify(newsSources)}`);
+  }
   return {
     KB_TERMS_MODE: read('ttobak:kbTermsMode'),
     RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode'),
     NEWS_TERMS_MODE: read('ttobak:newsTermsMode'),
+    NEWS_TERMS_SOURCES: newsSources,
   };
 }
 

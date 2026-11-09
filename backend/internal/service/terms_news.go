@@ -21,9 +21,13 @@ import (
 // least two distinct crawler sources that day, or on at least two distinct
 // days of the last seven with at least two distinct sources among them: one
 // source alone never qualifies a term. Common rows are visible to every user
-// (R6, R15), so only searched (not custom-URL) documents of operator-curated
-// global sources are read (repository.IsGlobalNewsSource; anything unknown is
-// excluded), the only evidence on a term is the public document hash, the
+// (R6, R15), so only searched (not custom-URL) documents are read, and by
+// default only those of operator-curated global sources
+// (repository.IsGlobalNewsSource; anything unknown is excluded). With
+// NEWS_TERMS_SOURCES=all every searched, non-synthetic source is eligible:
+// the owner's choice (2026-11-09) so public news terms reach every user's
+// recognition vocabulary; the two-source threshold still applies. The only
+// evidence on a term is the public document hash, the
 // writer is model.DictNewsActor, creations and evictions are audited (R14),
 // and user-edited Common terms are left alone by the merge rules. Logs carry
 // the day, codes and counts only.
@@ -145,17 +149,22 @@ func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 	return out
 }
 
-// globalNewsDocuments keeps the documents of global sources, looking each
-// distinct source up once, then keeps each article (hash) once. Filtering
-// first means a user source that crawled a shared URL earlier never hides
-// a global source's copy. A lookup failure is returned (retryable).
+// globalNewsDocuments keeps the documents of eligible sources (global ones,
+// looking each distinct source up once, or every source in all mode), then
+// keeps each article (hash) once. Filtering first means a user source that
+// crawled a shared URL earlier never hides a global source's copy. A lookup
+// failure is returned (retryable).
 func (s *TermsAnalysisService) globalNewsDocuments(ctx context.Context, docs []newsDocument) ([]newsDocument, int, error) {
+	allSources := s.cfg.NewsSources == NewsTermsSourcesAll
 	global := map[string]bool{}
 	seen := map[string]bool{}
 	var out []newsDocument
 	excluded := 0
 	for _, d := range docs {
 		ok, cached := global[d.source]
+		if allSources {
+			ok, cached = true, true
+		}
 		if !cached {
 			var err error
 			if ok, err = s.news.Documents.IsGlobalNewsSource(ctx, d.source); err != nil {
