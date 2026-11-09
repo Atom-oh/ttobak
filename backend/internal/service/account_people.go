@@ -46,6 +46,13 @@ type accountPeopleRepo interface {
 	ClaimPeopleRun(context.Context, string, string, string, time.Time, time.Duration) (*model.PeopleRun, bool, error)
 	RecordPeopleRunMentions(context.Context, *model.PeopleRun, []string) error
 	FinishPeopleRun(context.Context, *model.PeopleRun) (bool, error)
+
+	// People panel reads (viewer-scoped, revalidated per request).
+	GetMember(context.Context, string, string) (*model.AccountMember, error)
+	GetAccountContact(context.Context, string, string) (*model.AccountContact, error)
+	GetMeetingPublication(context.Context, string, string) (*model.Meeting, error)
+	ListPeopleLinksByTarget(context.Context, string, string, string, int) ([]model.PeopleLink, string, error)
+	ListUnresolvedMentions(context.Context, string, string, int) ([]model.UnresolvedMention, string, error)
 }
 
 // PeopleRunOptions controls one resolver run. DryRun plans without any write,

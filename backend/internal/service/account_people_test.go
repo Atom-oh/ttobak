@@ -46,6 +46,12 @@ type fakePeopleRepo struct {
 	replaceErr error
 	recorded   [][]string
 	ops        []string
+
+	// People panel reads.
+	targetLinks []model.PeopleLink
+	mentionRows []model.UnresolvedMention
+	contactErr  map[string]error
+	pubReads    int
 }
 
 func newFakePeopleRepo() *fakePeopleRepo {
@@ -57,6 +63,8 @@ func newFakePeopleRepo() *fakePeopleRepo {
 		projects: map[string]*model.Project{},
 		ignores:  map[string]bool{},
 		putErr:   map[model.PeopleLinkKey]error{},
+
+		contactErr: map[string]error{},
 	}
 }
 
