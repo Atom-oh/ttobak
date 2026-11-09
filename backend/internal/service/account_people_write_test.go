@@ -263,7 +263,7 @@ func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
 func TestResolveMentionGroup_RefreshesStaleMeetingsWhenCoalescing(t *testing.T) {
 	f := peopleWriteRepo()
 	f.staleMentions = map[string]bool{"owner:m4": true}
-	for i := 1; i <= 6; i++ {
+	for i := 1; i <= maxManualRefreshMeetings+1; i++ {
 		id := fmt.Sprint("m", i)
 		f.meetings["owner:"+id] = peopleTestMeeting(id)
 		f.mentionRows = append(f.mentionRows, peopleMentionRow(peopleHashA, "owner:"+id, "participant", model.PeopleSourceParticipants, "Minsu"))
@@ -272,7 +272,7 @@ func TestResolveMentionGroup_RefreshesStaleMeetingsWhenCoalescing(t *testing.T) 
 	s := newPeopleTestService(f)
 	s.SetPeopleResolvePublisher(func(_ context.Context, e model.PeopleResolveRequested) error { events = append(events, e); return nil })
 	res, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA, model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact})
-	if err != nil || res.Written != 6 || len(f.mentionDeletes) != 5 {
+	if err != nil || res.Written != maxManualRefreshMeetings+1 || len(f.mentionDeletes) != maxManualRefreshMeetings {
 		t.Fatalf("res=%+v deletes=%v err=%v", res, f.mentionDeletes, err)
 	}
 	want := []model.PeopleResolveRequested{{AccountID: "acc", Reason: model.PeopleResolveReasonManual},
