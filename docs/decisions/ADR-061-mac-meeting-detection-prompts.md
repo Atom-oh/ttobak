@@ -109,11 +109,16 @@ without a user confirmation.
   through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). The
   toggle's label gives the state ("Turn on microphone" while muted, "Turn off
   microphone" while unmuted, and their Korean forms; both verified on a live
-  call). The call page that last showed the toggle, read again without it,
-  has left the call; a toggle-less page that never showed one (an unlisted
-  language, the landing page or an earlier call) is not evidence. Once a
-  recording has followed Meet, leaving keeps the microphone silent, as with
-  Zoom. The gate waits for the left page to hold for 3 s, as detection does.
+  call). The call page that last showed the toggle has left the call only
+  when it shows Meet's post-call screen ("Rejoin", "Return to home screen";
+  the Korean forms are unverified). A page without the toggle is otherwise
+  unknown and keeps the last state, so a toolbar hidden in the call (for
+  example behind a dialog) never silences the user. Pages of other calls (the
+  landing page or an earlier call) are not evidence, and once a second call
+  has shown a toggle during the recording no page is: the audio grace
+  decides. Once a recording has followed Meet, leaving keeps the microphone
+  silent, as with Zoom. The gate waits for the left page to hold for 3 s, as
+  detection does.
   A recording that never saw the toggle (e.g. an unlisted language) records the
   microphone. An unreadable page (another tab in front) keeps the last state,
   including when Accessibility trust is lost after an observed state. Safari's

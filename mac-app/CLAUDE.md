@@ -113,7 +113,7 @@ ACL for every command called from the remote SPA: each command must be listed in
   `classify_meeting_url`.
 - The Zoom/Meet mute gate (`zoom_mute.rs`, `meet_mute.rs`) reads the meeting
   UI through Accessibility off the IOProc thread and only flips an atomic the
-  IOProc reads; Meet silences only on its muted label and never logs labels or URLs; never call AX or
+  IOProc reads; Meet silences while muted and, once followed, after the followed call's page has shown Meet's post-call screen for 3 s; it never logs labels or URLs; never call AX or
   log from the IOProc. A microphone switch holds the backend's resource lock
   across its Core Audio calls, never the recorder lock.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
