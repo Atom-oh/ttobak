@@ -309,7 +309,7 @@ func (r *batchProjectRepo) BatchGetProjectListRows(_ context.Context, ids []stri
 		}
 		if p := r.projects[id]; p != nil {
 			out[id] = &model.Project{PK: p.PK, SK: p.SK, EntityType: p.EntityType, ProjectID: p.ProjectID, Name: p.Name,
-				Stage: p.Stage, SfdcOpptyID: p.SfdcOpptyID, OwnerUserID: p.OwnerUserID, AccountIDs: append([]string{}, p.AccountIDs...)}
+				Stage: p.Stage, StageChangedAt: p.StageChangedAt, SfdcOpptyID: p.SfdcOpptyID, OwnerUserID: p.OwnerUserID, AccountIDs: append([]string{}, p.AccountIDs...)}
 		}
 	}
 	return out, nil

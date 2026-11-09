@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -556,5 +558,240 @@ func TestListInsights_SortsBeforePaginating_WithSource(t *testing.T) {
 	}
 	if resp.Documents[0].DocHash != "new1" {
 		t.Errorf("expected the newest document (new1) first on page 1, got %q -- pagination is truncating before sorting", resp.Documents[0].DocHash)
+	}
+}
+
+func manyNewsDocs(n int, sourceID string) []model.CrawledDocument {
+	docs := make([]model.CrawledDocument, n)
+	for i := range docs {
+		docs[i] = model.CrawledDocument{
+			DocHash: fmt.Sprintf("%016x", i), Type: "news", Title: fmt.Sprintf("Article %d", i),
+			Source: sourceID, SourceID: sourceID, CrawledAt: int64(1000 + i),
+		}
+	}
+	return docs
+}
+
+func TestListInsights_CrossSourceNewestBeyond500(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.allDocuments = manyNewsDocs(600, "hanabank")
+	svc := &InsightsService{repo: repo}
+	svc.news = legacyNewsRows(t, "hanabank", repo.allDocuments)
+
+	resp, err := svc.ListInsights(context.Background(), "news", "", "", nil, "date", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) == 0 || resp.Documents[0].DocHash != fmt.Sprintf("%016x", 599) {
+		t.Fatalf("newest document beyond index 500 not first: %+v", resp.Documents)
+	}
+	if len(repo.scanLimits) != 1 || repo.scanLimits[0] > 0 {
+		t.Fatalf("expected one all-pages scan (limit <= 0), got %v", repo.scanLimits)
+	}
+}
+
+func TestListInsights_WithSourceNewestBeyond500(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.documents["hanabank"] = manyNewsDocs(600, "hanabank")
+	svc := &InsightsService{repo: repo}
+	svc.news = legacyNewsRows(t, "hanabank", repo.documents["hanabank"])
+
+	resp, err := svc.ListInsights(context.Background(), "news", "hanabank", "", nil, "date", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) == 0 || resp.Documents[0].DocHash != fmt.Sprintf("%016x", 599) {
+		t.Fatalf("newest document beyond index 500 not first: %+v", resp.Documents)
+	}
+	if len(repo.listLimits) != 1 || repo.listLimits[0] > 0 {
+		t.Fatalf("expected one all-pages list (limit <= 0), got %v", repo.listLimits)
+	}
+}
+
+func techServiceDocs() []model.CrawledDocument {
+	return []model.CrawledDocument{
+		{DocHash: "t1", Type: "tech", Title: "EKS 1", SourceID: "s1", CrawledAt: 1, AWSServices: []string{"Amazon EKS"}},
+		{DocHash: "t2", Type: "tech", Title: "Lambda 1", SourceID: "s2", CrawledAt: 2, AWSServices: []string{"AWS Lambda"}},
+		{DocHash: "t3", Type: "tech", Title: "EKS 2", SourceID: "s3", CrawledAt: 3, AWSServices: []string{"Amazon EKS"}},
+	}
+}
+
+func TestListInsights_CrossSourceServiceFilter(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.allDocuments = techServiceDocs()
+	svc := &InsightsService{repo: repo}
+
+	resp, err := svc.ListInsights(context.Background(), "tech", "", "Amazon EKS", nil, "date", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) != 2 || resp.TotalCount != 2 {
+		t.Fatalf("expected 2 EKS docs, got %d (total %d)", len(resp.Documents), resp.TotalCount)
+	}
+	for _, d := range resp.Documents {
+		if d.DocHash == "t2" {
+			t.Fatalf("non-EKS doc leaked: %+v", d)
+		}
+	}
+	// The facet keeps showing alternatives while a service filter is active.
+	if len(resp.Services) != 2 {
+		t.Fatalf("services facet should ignore the service filter, got %v", resp.Services)
+	}
+}
+
+func TestListInsights_ReturnsServicesFacet(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.allDocuments = techServiceDocs()
+	svc := &InsightsService{repo: repo}
+
+	resp, err := svc.ListInsights(context.Background(), "tech", "", "", nil, "date", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) != 1 {
+		t.Fatalf("expected one doc on page 1, got %d", len(resp.Documents))
+	}
+	want := []string{"Amazon EKS", "AWS Lambda"}
+	if !reflect.DeepEqual(resp.Services, want) {
+		t.Fatalf("services = %v, want %v", resp.Services, want)
+	}
+}
+
+func TestListInsights_ReturnsSourceIDsFacet(t *testing.T) {
+	for _, source := range []string{"", "s1"} {
+		scanCache.clear()
+		repo := newMockCrawlerRepo()
+		repo.allDocuments = techServiceDocs()
+		repo.documents["s1"] = []model.CrawledDocument{repo.allDocuments[0]}
+		svc := &InsightsService{repo: repo}
+
+		resp, err := svc.ListInsights(context.Background(), "tech", source, "", nil, "date", 1, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"s1", "s2", "s3"}
+		if !reflect.DeepEqual(resp.SourceIDs, want) {
+			t.Fatalf("source=%q sourceIds = %v, want %v", source, resp.SourceIDs, want)
+		}
+	}
+}
+
+// insightsMembers is a direct-membership reader for account-source deletes.
+type insightsMembers struct {
+	members map[string]bool // accountID + "/" + userID
+	calls   int
+	err     error
+}
+
+func (m *insightsMembers) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	m.calls++
+	if m.err != nil {
+		return nil, m.err
+	}
+	if !m.members[accountID+"/"+userID] {
+		return nil, nil
+	}
+	return &model.AccountMember{UserID: userID}, nil
+}
+
+func accountSourceDeleteFixture(members *insightsMembers) (*InsightsService, *mockCrawlerRepo, *mockS3GetDeleter) {
+	repo := newMockCrawlerRepo()
+	repo.sources["acct_acct-1_0123abcd"] = &model.CrawlerSource{
+		SourceID: "acct_acct-1_0123abcd", OwnerID: "creator", AccountID: "acct-1",
+	}
+	repo.documents["acct_acct-1_0123abcd"] = []model.CrawledDocument{
+		{DocHash: "doc1", SourceID: "acct_acct-1_0123abcd", S3Key: "shared/news/acct_acct-1_0123abcd/doc1.md"},
+	}
+	mockS3 := &mockS3GetDeleter{}
+	svc := &InsightsService{repo: repo, s3: mockS3, kbBucketName: "kb-bucket"}
+	if members != nil {
+		svc.SetAccountMemberReader(members)
+	}
+	return svc, repo, mockS3
+}
+
+// A source creator removed from the account keeps OwnerID on the CONFIG row;
+// that must not let them delete the account's news.
+func TestDeleteDocument_AccountSourceFormerCreatorForbidden(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		members *insightsMembers
+	}{
+		{name: "not a current member", members: &insightsMembers{members: map[string]bool{}}},
+		{name: "no membership reader fails closed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, mockS3 := accountSourceDeleteFixture(tc.members)
+			err := svc.DeleteDocument(context.Background(), "creator", false, "acct_acct-1_0123abcd", "doc1")
+			if !errors.Is(err, ErrForbidden) {
+				t.Fatalf("expected ErrForbidden, got %v", err)
+			}
+			if len(mockS3.deletedKeys) != 0 {
+				t.Fatalf("S3 object deleted for a former creator: %v", mockS3.deletedKeys)
+			}
+			if doc, _ := repo.GetDocument(context.Background(), "acct_acct-1_0123abcd", "doc1"); doc == nil {
+				t.Fatal("document metadata deleted for a former creator")
+			}
+			if tc.members != nil && tc.members.calls != 1 {
+				t.Fatalf("membership must be read per request, got %d reads", tc.members.calls)
+			}
+		})
+	}
+}
+
+func TestDeleteDocument_AccountSourceCurrentMemberAllowed(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{"acct-1/teammate": true}}
+	svc, repo, mockS3 := accountSourceDeleteFixture(members)
+	if err := svc.DeleteDocument(context.Background(), "teammate", false, "acct_acct-1_0123abcd", "doc1"); err != nil {
+		t.Fatalf("current member delete failed: %v", err)
+	}
+	if members.calls != 1 {
+		t.Fatalf("expected one membership read, got %d", members.calls)
+	}
+	if len(mockS3.deletedKeys) != 1 || mockS3.deletedKeys[0] != "shared/news/acct_acct-1_0123abcd/doc1.md" {
+		t.Fatalf("unexpected S3 deletes: %v", mockS3.deletedKeys)
+	}
+	if doc, _ := repo.GetDocument(context.Background(), "acct_acct-1_0123abcd", "doc1"); doc != nil {
+		t.Fatal("document metadata was not removed")
+	}
+
+	// A membership read failure is surfaced, never treated as a grant.
+	members.err = errors.New("dynamodb unavailable")
+	svc2, _, s3b := accountSourceDeleteFixture(members)
+	if err := svc2.DeleteDocument(context.Background(), "teammate", false, "acct_acct-1_0123abcd", "doc1"); err == nil || errors.Is(err, ErrForbidden) || len(s3b.deletedKeys) != 0 {
+		t.Fatalf("membership read error must fail the delete without side effects: %v %v", err, s3b.deletedKeys)
+	}
+}
+
+func TestDeleteDocument_PersonalSourceOwnerUnchanged(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{}}
+	for _, tc := range []struct {
+		name    string
+		user    string
+		admin   bool
+		wantErr error
+	}{
+		{name: "owner deletes", user: "user-1"},
+		{name: "non-owner forbidden", user: "someone-else", wantErr: ErrForbidden},
+		{name: "admin deletes", user: "admin-1", admin: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockCrawlerRepo()
+			repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "user-1", Subscribers: []string{"user-1"}}
+			repo.documents["hanabank"] = []model.CrawledDocument{{DocHash: "doc1", SourceID: "hanabank", S3Key: "shared/news/hanabank/doc1.md"}}
+			svc := &InsightsService{repo: repo, s3: &mockS3GetDeleter{}, kbBucketName: "kb-bucket"}
+			svc.SetAccountMemberReader(members)
+			err := svc.DeleteDocument(context.Background(), tc.user, tc.admin, "hanabank", "doc1")
+			if tc.wantErr == nil && err != nil || tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+	if members.calls != 0 {
+		t.Fatalf("personal sources must not consult account membership, got %d reads", members.calls)
 	}
 }

@@ -17,7 +17,8 @@ from news_store import StateRejected
 from news_worker import (
     MAX_INPUT_TOKENS, MeteredModel, ModelPolicy, WorkerDeps, process_candidate,
 )
-from test_news_enrichment import bedrock_response, candidate_fixture, valid_body
+from test_news_enrichment import (
+    bedrock_response, candidate_fixture, valid_body, valid_enrichment_json)
 
 NOW = int(datetime(2026, 8, 9, tzinfo=timezone.utc).timestamp())
 POLICY = ModelPolicy(Decimal("5"), Decimal("25"))  # Synthetic rates, not current AWS prices.
@@ -142,6 +143,24 @@ class TestCandidateWorker(unittest.TestCase):
         for call in puts:
             self.assertEqual(call.kwargs["IfNoneMatch"], "*")
         self.fetch.assert_called_once_with("https://example.com/a", https_only=True)
+
+    def test_row_carries_aws_relevance_and_opportunity_count(self):
+        def item(service, confidence):
+            return {"service": service, "rationale": "r", "confidence": confidence}
+        relevance = [item("Amazon S3", 0.5), item("Amazon Bedrock", 0.9),
+                     item("Amazon S3", 0.95), item("AWS Lambda", 0.5)]
+        raw = valid_enrichment_json(opportunities=["a", "b"], awsRelevance=relevance)
+        self.client.converse.return_value = bedrock_response(raw)
+        process_candidate(self.candidate, self.deps)
+        row = self.store.finish.call_args.kwargs["document"]
+        self.assertEqual(row["opportunityCount"], 2)
+        self.assertEqual(row["awsRelevance"], "Amazon S3 \u00b7 Amazon Bedrock \u00b7 AWS Lambda")
+        long = [item(f"{i}" + "서" * 99, 0.9 - i / 100) for i in range(5)]
+        raw = valid_enrichment_json(awsRelevance=long)
+        self.client.converse.return_value = bedrock_response(raw)
+        process_candidate(self.candidate, self.deps)
+        row = self.store.finish.call_args.kwargs["document"]
+        self.assertEqual(len(row["awsRelevance"]), 280)
 
     def test_unicode_source_identity_survives_the_full_worker(self):
         for source_id in ("우리은행", "école-١", "news_source"):

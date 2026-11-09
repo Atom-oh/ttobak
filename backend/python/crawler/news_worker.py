@@ -234,6 +234,16 @@ def process_candidate(candidate, deps):
     return {**result, "sourceId": source_id, "runId": run_id}
 
 
+AWS_RELEVANCE_MAX = 280
+
+
+def _aws_relevance_text(items):
+    """Service names by confidence (stable on ties), de-duplicated, joined, capped."""
+    ordered = sorted(items, key=lambda item: -item["confidence"])
+    names = list(dict.fromkeys(item["service"] for item in ordered))
+    return " \u00b7 ".join(names)[:AWS_RELEVANCE_MAX]
+
+
 def _process_candidate(candidate, deps):
     source_id, run_id, revision, url, related, custom, warnings = _candidate(candidate)
     config = deps.store.current_config(source_id, revision)
@@ -351,6 +361,8 @@ def _process_candidate(candidate, deps):
         "pubDate": lead.published_at or (candidate.get("publishedAt", "") if not custom else ""),
         "publishedAtBasis": "article" if lead.published_at else ("unknown" if custom else "search"),
         "ingestSource": "custom" if custom else "search",
+        "awsRelevance": _aws_relevance_text(artifact["awsRelevance"]),
+        "opportunityCount": len(artifact["opportunities"]),
         "qualityScore": artifact["relevanceConfidence"], "qualityGateVersion": QUALITY_GATE_VERSION,
         "promptVersion": PROMPT_VERSION, "modelId": deps.policy.model_id,
         "corroboratingSourceCount": len(bodies) - 1,

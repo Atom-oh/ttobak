@@ -26,6 +26,22 @@ var ErrContactAccess = errors.New("account contact access revoked")
 // rows hold third-party personal data and are never stored or read in plaintext.
 var ErrContactEncryptionUnavailable = errors.New("account contact encryption unavailable")
 
+// ErrContactUnreadable means one stored contact row cannot be opened: it is
+// malformed, unsealed, bound to another record or fails authentication. It
+// is never returned for a missing key or a transport failure, so readers can
+// skip the single row.
+var ErrContactUnreadable = errors.New("account contact unreadable")
+
+// openingError classifies a sealing.Open failure for one row: a missing key
+// stays unavailable, an invalid sealed value is unreadable, anything else
+// (a KMS transport failure) is returned as is.
+func openingError(unreadable, err error) error {
+	if errors.Is(err, sealing.ErrInvalid) {
+		return fmt.Errorf("%w: %w", unreadable, err)
+	}
+	return sealingError(err)
+}
+
 // storedContact is the at-rest form: identity and revision stay plaintext for
 // keys and conditions; every contact field is sealed together (ADR-063).
 type storedContact struct {
@@ -87,22 +103,22 @@ func (r *DynamoDBRepository) SealedContactItem(ctx context.Context, account stri
 func (r *DynamoDBRepository) openContact(ctx context.Context, account string, item map[string]types.AttributeValue) (model.AccountContact, error) {
 	var row storedContact
 	if err := attributevalue.UnmarshalMap(item, &row); err != nil {
-		return model.AccountContact{}, err
+		return model.AccountContact{}, fmt.Errorf("%w: %w", ErrContactUnreadable, err)
 	}
 	s, err := r.contactSealer()
 	if err != nil {
 		return model.AccountContact{}, err
 	}
 	if row.Sealed == "" || row.PK != model.PrefixAccount+account || row.SK != contactPrefix+row.ContactID {
-		return model.AccountContact{}, errors.New("contact row is not sealed for this account")
+		return model.AccountContact{}, fmt.Errorf("%w: contact row is not sealed for this account", ErrContactUnreadable)
 	}
 	plain, err := s.Open(ctx, row.Sealed, contactBinding(account, row.ContactID))
 	if err != nil {
-		return model.AccountContact{}, fmt.Errorf("open contact: %w", sealingError(err))
+		return model.AccountContact{}, fmt.Errorf("open contact: %w", openingError(ErrContactUnreadable, err))
 	}
 	var c model.AccountContact
 	if err := json.Unmarshal(plain, &c); err != nil || c.ContactID != row.ContactID {
-		return model.AccountContact{}, errors.New("sealed contact does not match its row")
+		return model.AccountContact{}, fmt.Errorf("%w: sealed contact does not match its row", ErrContactUnreadable)
 	}
 	// Revision changes on every update; the plaintext attribute is canonical.
 	c.Revision = row.Revision

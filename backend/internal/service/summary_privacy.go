@@ -44,7 +44,10 @@ func bindLinkedSummarySources(ctx context.Context, repo interface {
 // derived content with every member who can read it (ADR-049 2026-11-06
 // amendment). Privacy provenance is still recorded for owner tooling, but it
 // no longer hides published content from members.
-func accountMemberNeedsSummaryGuard(_ *model.AccountMember) bool {
+//
+// It is a variable so tests can exercise the restricted-read path, which is
+// otherwise unreachable while the guard is disabled.
+var accountMemberNeedsSummaryGuard = func(_ *model.AccountMember) bool {
 	return false
 }
 

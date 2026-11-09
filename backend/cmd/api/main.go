@@ -118,9 +118,15 @@ func init() {
 	// registered so a warm instance also lazily retries -- a deploy that
 	// races ahead of FrontendStack publishing the key-pair-id SSM param would
 	// otherwise pin that instance to the S3 fallback until it's recycled.
+	// Provisioned-concurrency init runs before any request, so its warm-ups
+	// finish inside init; after init the environment is frozen until its
+	// first request, which would stall background goroutines past their
+	// deadlines and leave that request to do every lookup itself.
+	provisioned := provisionedInit(os.Getenv)
+	var signerLoaded <-chan struct{}
 	if mediaBaseURL := os.Getenv("MEDIA_BASE_URL"); mediaBaseURL != "" {
 		ssmClient := ssm.NewFromConfig(cfg, func(o *ssm.Options) { o.TracerProvider = awsTracing })
-		uploadService.StartCloudFrontSignerLoad(func(ctx context.Context) (*service.CloudFrontSigner, error) {
+		signerLoaded = uploadService.StartCloudFrontSignerLoad(func(ctx context.Context) (*service.CloudFrontSigner, error) {
 			return service.NewCloudFrontSigner(ctx, ssmClient, mediaBaseURL)
 		}, 3*time.Second)
 	}
@@ -194,7 +200,12 @@ func init() {
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
 	crawlerService := service.NewCrawlerService(crawlerRepo)
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName, bucketName)
+	insightsService.SetAccountMemberReader(repo)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
+	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo, insightsService)
+	accountNewsHandler := handler.NewAccountNewsHandler(accountNewsService)
+	accountLinksHandler := handler.NewAccountLinksHandler(service.NewAccountLinksService(repo, crawlerRepo, accountNewsService))
+	accountOverviewHandler := handler.NewAccountOverviewHandler(service.NewAccountOverviewService(repo, crawlerRepo, accountNewsService, accountService))
 	insightsHandler := handler.NewInsightsHandler(insightsService, kbService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
 	sfnClient := sfn.NewFromConfig(cfg, func(o *sfn.Options) { o.TracerProvider = awsTracing })
@@ -271,7 +282,16 @@ func init() {
 	)
 	// Lambda only, so tests and local runs make no background network calls.
 	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
-		startColdStartWarmups(originVerifier, dynamoClient, cfg.Region)
+		if provisioned {
+			started := time.Now()
+			startColdStartWarmups(originVerifier, dynamoClient, cfg.Region, provisionedWarmupTimeout)()
+			if signerLoaded != nil {
+				<-signerLoaded
+			}
+			log.Printf("provisioned init warm-ups finished in %d ms", time.Since(started).Milliseconds())
+		} else {
+			startColdStartWarmups(originVerifier, dynamoClient, cfg.Region, coldStartPrefetchTimeout)
+		}
 	}
 	r.Use(originVerifier.Middleware) // Block direct API Gateway access (CloudFront-only)
 	r.Use(middleware.CORS)
@@ -316,6 +336,15 @@ func init() {
 		r.Get("/api/accounts/{accountId}/events/{eventId}", accountEventsHandler.Get)
 		r.Put("/api/accounts/{accountId}/events/{eventId}", accountEventsHandler.Update)
 		r.Delete("/api/accounts/{accountId}/events/{eventId}", accountEventsHandler.Delete)
+		r.Get("/api/accounts/{accountId}/news-sources", accountNewsHandler.List)
+		r.Post("/api/accounts/{accountId}/news-sources", accountNewsHandler.Create)
+		r.Delete("/api/accounts/{accountId}/news-sources/{sourceId}", accountNewsHandler.Delete)
+		r.Get("/api/accounts/{accountId}/links", accountLinksHandler.List)
+		r.Post("/api/accounts/{accountId}/links", accountLinksHandler.Create)
+		r.Delete("/api/accounts/{accountId}/links", accountLinksHandler.Delete)
+		r.Get("/api/accounts/{accountId}/signals", accountOverviewHandler.Signals)
+		r.Get("/api/accounts/{accountId}/flow", accountOverviewHandler.Flow)
+		r.Get("/api/accounts/{accountId}/graph", accountOverviewHandler.Graph)
 		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
 		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)

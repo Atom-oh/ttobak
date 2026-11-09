@@ -20,14 +20,21 @@ import (
 )
 
 type newsReadFixture struct {
-	rows  map[repository.NewsReadKey]map[string]types.AttributeValue
-	reads int
-	fail  error
-	after func()
+	rows     map[repository.NewsReadKey]map[string]types.AttributeValue
+	reads    int
+	maxBatch int
+	fail     error
+	after    func()
 }
 
 func (f *newsReadFixture) ReadNewsItems(_ context.Context, keys []repository.NewsReadKey) (map[repository.NewsReadKey]map[string]types.AttributeValue, error) {
 	f.reads++
+	f.maxBatch = max(f.maxBatch, len(keys))
+	// Mirror the repository selection bound so callers cannot rely on an
+	// unbounded fixture.
+	if len(keys) > 1000 {
+		return nil, errors.New("news read selection exceeds limit")
+	}
 	if f.fail != nil {
 		return nil, f.fail
 	}
@@ -358,5 +365,29 @@ func TestMissingMetadataNeverReadsOrphanObject(t *testing.T) {
 	svc, _, object, _ := newNewsReadFixture(t)
 	if _, err := svc.GetDocumentDetail(context.Background(), "missing", "document"); !errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
 		t.Fatalf("orphan fallback: %v %v", err, object.gets)
+	}
+}
+
+func TestCurrentNewsListReadsLargeSelectionsInBoundedBatches(t *testing.T) {
+	docs := manyNewsDocs(1201, "hanabank")
+	docs = append(docs[:600:600], append([]model.CrawledDocument{{DocHash: "techdoc", Type: "tech", SourceID: "__tech__"}}, docs[600:]...)...)
+	fixture := legacyNewsRows(t, "hanabank", docs)
+	delete(fixture.rows, repository.NewsReadKey{SourceID: "hanabank", SortKey: "DOC#" + docs[1100].DocHash})
+	svc := &InsightsService{repo: newMockCrawlerRepo(), news: fixture}
+	list, err := svc.currentNewsList(context.Background(), docs)
+	if err != nil {
+		t.Fatalf("large news selection failed: %v", err)
+	}
+	if fixture.reads != 3 || fixture.maxBatch > 1000 {
+		t.Fatalf("reads %d max batch %d, want 3 bounded reads", fixture.reads, fixture.maxBatch)
+	}
+	if len(list) != len(docs)-1 || list[600].DocHash != "techdoc" || list[0].DocHash != docs[0].DocHash ||
+		list[len(list)-1].DocHash != docs[len(docs)-1].DocHash {
+		t.Fatalf("batched read changed membership or order: %d", len(list))
+	}
+	for _, doc := range list {
+		if doc.DocHash == docs[1100].DocHash {
+			t.Fatal("missing current row was listed")
+		}
 	}
 }

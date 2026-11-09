@@ -88,3 +88,4 @@ services/billing/worker/datasets/
 services/billing/worker/out/
 services/billing/worker/.agent_cache/
 services/billing/worker/dispatch/dist/
+.superpowers/

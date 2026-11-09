@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 func TestCrawlerDocumentCollectionIsolatesMalformedRows(t *testing.T) {
@@ -148,5 +149,54 @@ func TestCrawlerDeletedRowsDoNotConsumeVisiblePage(t *testing.T) {
 				t.Fatalf("tombstones exhausted visible page: %+v %v", docs, err)
 			}
 		})
+	}
+}
+
+func TestDecodeCrawlerDocument_SingularServiceFallback(t *testing.T) {
+	row := map[string]types.AttributeValue{
+		"PK":      &types.AttributeValueMemberS{Value: "CRAWLER#tech"},
+		"SK":      &types.AttributeValueMemberS{Value: "DOC#abc"},
+		"type":    &types.AttributeValueMemberS{Value: "tech"},
+		"service": &types.AttributeValueMemberS{Value: "Amazon EKS"},
+	}
+	doc, err := decodeCrawlerDocument(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.AWSServices) != 1 || doc.AWSServices[0] != "Amazon EKS" {
+		t.Fatalf("AWSServices = %v, want [Amazon EKS]", doc.AWSServices)
+	}
+	row["awsServices"] = &types.AttributeValueMemberL{Value: []types.AttributeValue{&types.AttributeValueMemberS{Value: "AWS Lambda"}}}
+	doc, _ = decodeCrawlerDocument(row)
+	if len(doc.AWSServices) != 1 || doc.AWSServices[0] != "AWS Lambda" {
+		t.Fatalf("explicit awsServices must win, got %v", doc.AWSServices)
+	}
+}
+
+func TestDecodeCrawlerDocument_RelevanceFields(t *testing.T) {
+	row := map[string]types.AttributeValue{
+		"PK":               &types.AttributeValueMemberS{Value: "CRAWLER#news"},
+		"SK":               &types.AttributeValueMemberS{Value: "DOC#abc"},
+		"type":             &types.AttributeValueMemberS{Value: "news"},
+		"awsRelevance":     &types.AttributeValueMemberS{Value: "Amazon Bedrock · Amazon S3"},
+		"opportunityCount": &types.AttributeValueMemberN{Value: "2"},
+		"qualityScore":     &types.AttributeValueMemberN{Value: "0.9"},
+	}
+	doc, err := decodeCrawlerDocument(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.AWSRelevance != "Amazon Bedrock · Amazon S3" || doc.OpportunityCount != 2 || doc.QualityScore != 0.9 {
+		t.Fatalf("relevance fields = %q %d %v", doc.AWSRelevance, doc.OpportunityCount, doc.QualityScore)
+	}
+	delete(row, "awsRelevance")
+	delete(row, "opportunityCount")
+	delete(row, "qualityScore")
+	doc, err = decodeCrawlerDocument(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.AWSRelevance != "" || doc.OpportunityCount != 0 || doc.QualityScore != 0 {
+		t.Fatalf("legacy row must decode to zero values, got %+v", doc)
 	}
 }

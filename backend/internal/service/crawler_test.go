@@ -18,6 +18,8 @@ type mockCrawlerRepo struct {
 	history       map[string][]model.CrawlHistory       // sourceID -> history entries
 	documents     map[string][]model.CrawledDocument    // sourceID -> documents
 	allDocuments  []model.CrawledDocument               // all documents for scan
+	listLimits    []int32                               // limits ListDocuments was called with
+	scanLimits    []int32                               // limits ListAllDocumentsByType was called with
 }
 
 func newMockCrawlerRepo() *mockCrawlerRepo {
@@ -77,6 +79,9 @@ func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string
 	}
 	if current.GlobalNewsSource {
 		return fmt.Errorf("%w: source %s", repository.ErrOperatorSource, sourceID)
+	}
+	if current.AccountID != "" {
+		return fmt.Errorf("%w: source %s", repository.ErrAccountSource, sourceID)
 	}
 	if fields.RequireOwnerID != nil && current.OwnerID != *fields.RequireOwnerID {
 		return repository.ErrConditionFailed
@@ -194,6 +199,7 @@ func (m *mockCrawlerRepo) ListHistory(_ context.Context, sourceID string, limit 
 }
 
 func (m *mockCrawlerRepo) ListDocuments(_ context.Context, sourceID, docType string, limit int32, _ map[string]types.AttributeValue) ([]model.CrawledDocument, map[string]types.AttributeValue, int, error) {
+	m.listLimits = append(m.listLimits, limit)
 	docs := m.documents[sourceID]
 	if docType != "" {
 		var filtered []model.CrawledDocument
@@ -211,6 +217,7 @@ func (m *mockCrawlerRepo) ListDocuments(_ context.Context, sourceID, docType str
 }
 
 func (m *mockCrawlerRepo) ListAllDocumentsByType(_ context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error) {
+	m.scanLimits = append(m.scanLimits, limit)
 	var docs []model.CrawledDocument
 	for _, d := range m.allDocuments {
 		if docType == "" || d.Type == docType {
@@ -218,6 +225,9 @@ func (m *mockCrawlerRepo) ListAllDocumentsByType(_ context.Context, docType stri
 		}
 	}
 	total := len(docs)
+	if limit <= 0 {
+		return docs, total, nil
+	}
 	start := int(limit) * page
 	if start > total {
 		return []model.CrawledDocument{}, total, nil
