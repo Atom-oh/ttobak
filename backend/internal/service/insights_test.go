@@ -660,3 +660,22 @@ func TestListInsights_ReturnsServicesFacet(t *testing.T) {
 		t.Fatalf("services = %v, want %v", resp.Services, want)
 	}
 }
+
+func TestListInsights_ReturnsSourceIDsFacet(t *testing.T) {
+	for _, source := range []string{"", "s1"} {
+		scanCache.clear()
+		repo := newMockCrawlerRepo()
+		repo.allDocuments = techServiceDocs()
+		repo.documents["s1"] = []model.CrawledDocument{repo.allDocuments[0]}
+		svc := &InsightsService{repo: repo}
+
+		resp, err := svc.ListInsights(context.Background(), "tech", source, "", nil, "date", 1, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"s1", "s2", "s3"}
+		if !reflect.DeepEqual(resp.SourceIDs, want) {
+			t.Fatalf("source=%q sourceIds = %v, want %v", source, resp.SourceIDs, want)
+		}
+	}
+}

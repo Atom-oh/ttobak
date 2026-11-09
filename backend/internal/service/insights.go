@@ -285,14 +285,18 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 	}
 
 	var docs []model.CrawledDocument
-	var services []string
+	var services, sourceIDs []string
 	var totalCount int
 	var err error
 
 	if source != "" {
 		docs, services, totalCount, err = s.listBySource(ctx, source, docType, service, tags, sortBy, page, limit)
+		if err == nil {
+			// The source dropdown must keep listing every customer while one is selected.
+			sourceIDs, err = s.sourceFacet(ctx, docType, service, tags)
+		}
 	} else {
-		docs, services, totalCount, err = s.scanAll(ctx, docType, service, tags, sortBy, page, limit)
+		docs, services, sourceIDs, totalCount, err = s.scanAll(ctx, docType, service, tags, sortBy, page, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -304,6 +308,7 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 		Page:       page,
 		Limit:      limit,
 		Services:   services,
+		SourceIDs:  sourceIDs,
 	}, nil
 }
 
@@ -330,6 +335,30 @@ func uniqueServices(docs []model.CrawledDocument) []string {
 		return out[i] < out[j]
 	})
 	return out
+}
+
+// uniqueSourceIDs returns the sorted unique SourceID values across docs, never nil.
+func uniqueSourceIDs(docs []model.CrawledDocument) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, doc := range docs {
+		if doc.SourceID == "" {
+			continue
+		}
+		if _, ok := seen[doc.SourceID]; !ok {
+			seen[doc.SourceID] = struct{}{}
+			out = append(out, doc.SourceID)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sourceFacet computes the source facet over the global (all-source) set after
+// type, tag and service filters, ignoring the source filter.
+func (s *InsightsService) sourceFacet(ctx context.Context, docType, service string, tags []string) ([]string, error) {
+	_, _, sourceIDs, _, err := s.scanAll(ctx, docType, service, tags, "", 1, 1)
+	return sourceIDs, err
 }
 
 // listBySource queries documents from a specific source with optional type/service/tags filters.
@@ -380,7 +409,7 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 
 // scanAll scans all documents filtered by type with pagination.
 // Results are cached for 30 seconds to avoid repeated full-table scans.
-func (s *InsightsService) scanAll(ctx context.Context, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, int, error) {
+func (s *InsightsService) scanAll(ctx context.Context, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, []string, int, error) {
 	if docType == "" {
 		docType = "blog"
 	}
@@ -391,14 +420,14 @@ func (s *InsightsService) scanAll(ctx context.Context, docType, service string, 
 		var err error
 		allDocs, total, err = s.repo.ListAllDocumentsByType(ctx, docType, 0, 0)
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("failed to scan documents: %w", err)
+			return nil, nil, nil, 0, fmt.Errorf("failed to scan documents: %w", err)
 		}
 		scanCache.set(cacheKey, allDocs, total)
 	}
 
 	docs, err := s.currentNewsList(ctx, allDocs)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, nil, 0, err
 	}
 	total = len(docs)
 	if len(tags) > 0 {
@@ -410,6 +439,7 @@ func (s *InsightsService) scanAll(ctx context.Context, docType, service string, 
 		docs = filterByService(docs, service)
 		total = len(docs)
 	}
+	sourceIDs := uniqueSourceIDs(docs)
 
 	// Copy before sorting: allDocs may be the cached slice shared across
 	// concurrent requests with different sortBy values -- sorting in place
@@ -429,13 +459,13 @@ func (s *InsightsService) scanAll(ctx context.Context, docType, service string, 
 
 	start := (page - 1) * limit
 	if start >= len(docs) {
-		return []model.CrawledDocument{}, services, total, nil
+		return []model.CrawledDocument{}, services, sourceIDs, total, nil
 	}
 	end := start + limit
 	if end > len(docs) {
 		end = len(docs)
 	}
-	return docs[start:end], services, total, nil
+	return docs[start:end], services, sourceIDs, total, nil
 }
 
 // filterByService filters documents that contain the specified AWS service.
