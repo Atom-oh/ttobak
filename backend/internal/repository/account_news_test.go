@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -55,7 +56,7 @@ func TestCreateAccountNewsSourceIsOneConditionalTransaction(t *testing.T) {
 			t.Fatalf("counter key: %#v", key)
 		}
 		requireAll(t, "counter condition", resolved(counter, "ConditionExpression"), "attribute_not_exists (sourceCount)", `sourceCount < {"N":"10"}`)
-		requireAll(t, "counter update", resolved(counter, "UpdateExpression"), "if_not_exists(sourceCount", `{"N":"3"}`, `{"N":"1"}`, "entityType")
+		requireAll(t, "counter update", resolved(counter, "UpdateExpression"), "if_not_exists(sourceCount", `{"N":"3"}`, `{"N":"1"}`, "entityType", `ADD sourceRev {"N":"1"}`)
 		return `{}`
 	})
 	src := &model.CrawlerSource{SourceID: "acct_acc_0000abcd", AccountID: "acc", SourceName: "n", GlobalNewsSource: true}
@@ -145,8 +146,10 @@ func TestDeleteAccountNewsSourceCounterItem(t *testing.T) {
 		update     bool
 		want       []string
 	}{
-		{name: "existing", item: `{"Item":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"NEWSSRC_COUNT"},"sourceCount":{"N":"4"}}}`, update: true,
-			want: []string{`sourceCount = {"N":"4"}`}},
+		{name: "existing", item: `{"Item":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"NEWSSRC_COUNT"},"sourceCount":{"N":"4"},"sourceRev":{"N":"12"}}}`, update: true,
+			want: []string{`sourceCount = {"N":"4"}`, `sourceRev = {"N":"12"}`}},
+		{name: "existing without revision", item: `{"Item":{"sourceCount":{"N":"4"}}}`, update: true,
+			want: []string{`sourceCount = {"N":"4"}`, "attribute_not_exists (sourceRev)"}},
 		{name: "absent", item: `{}`, want: []string{"attribute_not_exists (sourceCount)"}},
 		{name: "zero", item: `{"Item":{"sourceCount":{"N":"0"}}}`, want: []string{`sourceCount = {"N":"0"}`}},
 	} {
@@ -175,7 +178,7 @@ func TestDeleteAccountNewsSourceCounterItem(t *testing.T) {
 				}
 				requireAll(t, "counter condition", resolved(op, "ConditionExpression"), tc.want...)
 				if tc.update {
-					requireAll(t, "counter update", resolved(op, "UpdateExpression"), `sourceCount = {"N":"3"}`)
+					requireAll(t, "counter update", resolved(op, "UpdateExpression"), `sourceCount = {"N":"3"}`, `ADD sourceRev {"N":"1"}`)
 				}
 				return `{}`
 			})
@@ -283,27 +286,40 @@ func TestUserSourceWritesRefuseAccountOwnedSource(t *testing.T) {
 	}
 }
 
-// Reconcile reads the counter before the refs and writes the ref count by
-// compare-and-set on the value read; a counter changed in between is re-read.
-// An absent counter is never created.
+// Reconcile reads the counter before the refs and writes the ref count
+// conditioned on the count and revision read, advancing the revision; a counter
+// changed in between is re-read. An absent counter is never created.
 func TestReconcileAccountNewsSourceCount(t *testing.T) {
-	refPage := `{"Items":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"NEWSSRC#acct_acc_00000001"}},{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"NEWSSRC#acct_acc_00000002"}}]}`
+	type counter struct{ count, rev int } // rev < 0: no sourceRev attribute
+	page := func(n int) string {
+		items := []string{}
+		for i := 0; i < n; i++ {
+			items = append(items, fmt.Sprintf(`{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"NEWSSRC#acct_acc_%08d"}}`, i))
+		}
+		return `{"Items":[` + strings.Join(items, ",") + `]}`
+	}
 	for _, tc := range []struct {
 		name     string
-		counters []string // GetItem responses in order
-		failCAS  int      // number of leading UpdateItem calls that fail the condition
+		counters []*counter // GetItem results in order; nil is an absent row
+		refs     []int      // ref counts listed after each read
+		failCAS  int        // leading UpdateItem calls that fail the condition
 		want     int
 		writes   int
 		wantErr  bool
 	}{
-		{name: "drifted", counters: []string{`{"Item":{"sourceCount":{"N":"3"}}}`}, want: 2, writes: 1},
-		{name: "in sync", counters: []string{`{"Item":{"sourceCount":{"N":"2"}}}`}, want: 2},
-		{name: "absent", counters: []string{`{}`}, want: 2},
-		{name: "changed then drifted", counters: []string{`{"Item":{"sourceCount":{"N":"3"}}}`, `{"Item":{"sourceCount":{"N":"4"}}}`}, failCAS: 1, want: 2, writes: 2},
-		{name: "keeps changing", counters: []string{`{"Item":{"sourceCount":{"N":"3"}}}`}, failCAS: 99, writes: 3, wantErr: true},
+		{name: "drifted", counters: []*counter{{3, 5}}, refs: []int{2}, want: 2, writes: 1},
+		{name: "drifted without revision", counters: []*counter{{3, -1}}, refs: []int{2}, want: 2, writes: 1},
+		{name: "in sync", counters: []*counter{{2, 5}}, refs: []int{2}, want: 2},
+		{name: "absent", counters: []*counter{nil}, refs: []int{2}, want: 2},
+		// The ABA interleaving: reconcile reads count 10 (rev 7), a delete
+		// (10->9, rev 8) commits, reconcile lists 9 refs, a create (9->10,
+		// rev 9) commits. The count matches again but the revision does not, so
+		// the stale write of 9 is refused; the re-read sees 10 refs in sync.
+		{name: "delete then create", counters: []*counter{{10, 7}, {10, 9}}, refs: []int{9, 10}, failCAS: 1, want: 10, writes: 1},
+		{name: "keeps changing", counters: []*counter{{3, 5}}, refs: []int{2}, failCAS: 99, writes: 3, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reads, writes, lastOp := 0, 0, ""
+			reads, lists, writes, lastOp := 0, 0, 0, ""
 			repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
 				target := req.Header.Get("X-Amz-Target")
 				var body map[string]interface{}
@@ -316,21 +332,35 @@ func TestReconcileAccountNewsSourceCount(t *testing.T) {
 						t.Fatal("counter read must be strongly consistent")
 					}
 					lastOp = "read"
-					item := tc.counters[min(reads, len(tc.counters)-1)]
+					c := tc.counters[min(reads, len(tc.counters)-1)]
 					reads++
-					return summaryHTTPResponse(200, item, nil), nil
+					switch {
+					case c == nil:
+						return summaryHTTPResponse(200, `{}`, nil), nil
+					case c.rev < 0:
+						return summaryHTTPResponse(200, fmt.Sprintf(`{"Item":{"sourceCount":{"N":"%d"}}}`, c.count), nil), nil
+					}
+					return summaryHTTPResponse(200, fmt.Sprintf(`{"Item":{"sourceCount":{"N":"%d"},"sourceRev":{"N":"%d"}}}`, c.count, c.rev), nil), nil
 				case strings.HasSuffix(target, ".Query"):
 					if lastOp != "read" {
 						t.Fatal("refs must be listed after the counter read")
 					}
 					lastOp = "list"
-					return summaryHTTPResponse(200, refPage, nil), nil
+					n := tc.refs[min(lists, len(tc.refs)-1)]
+					lists++
+					return summaryHTTPResponse(200, page(n), nil), nil
 				case strings.HasSuffix(target, ".UpdateItem"):
 					writes++
-					observed := tc.counters[min(reads-1, len(tc.counters)-1)]
-					value := observed[strings.Index(observed, `{"N"`) : strings.Index(observed, `}`)+1]
-					requireAll(t, "reconcile condition", resolved(body, "ConditionExpression"), "sourceCount = "+value)
-					requireAll(t, "reconcile update", resolved(body, "UpdateExpression"), `sourceCount = {"N":"2"}`)
+					c := tc.counters[min(reads-1, len(tc.counters)-1)]
+					n := tc.refs[min(lists-1, len(tc.refs)-1)]
+					cond := resolved(body, "ConditionExpression")
+					requireAll(t, "reconcile condition", cond, fmt.Sprintf(`sourceCount = {"N":"%d"}`, c.count))
+					if c.rev < 0 {
+						requireAll(t, "reconcile condition", cond, "attribute_not_exists (sourceRev)")
+					} else {
+						requireAll(t, "reconcile condition", cond, fmt.Sprintf(`sourceRev = {"N":"%d"}`, c.rev))
+					}
+					requireAll(t, "reconcile update", resolved(body, "UpdateExpression"), fmt.Sprintf(`sourceCount = {"N":"%d"}`, n), `ADD sourceRev {"N":"1"}`)
 					if writes <= tc.failCAS {
 						return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"changed"}`, nil), nil
 					}

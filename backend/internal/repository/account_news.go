@@ -27,6 +27,11 @@ var ErrAccountNewsSourceLimit = errors.New("account news source limit reached")
 // model.SKAccountNewsSourceCount row.
 const accountNewsCountAttr = "sourceCount"
 
+// accountNewsRevAttr is the counter row's revision. Every counter mutation
+// (create, delete, reconcile) adds one, so a compare-and-set on it detects any
+// intervening mutation even when sourceCount round-trips to the same value.
+const accountNewsRevAttr = "sourceRev"
+
 // accountNewsCounterAttempts bounds delete retries when the counter changed
 // between the read and the commit.
 const accountNewsCounterAttempts = 3
@@ -54,8 +59,9 @@ func accountNewsKey(pk, sk string) map[string]types.AttributeValue {
 // membership. Both CONFIG and ref are created only if absent. CrawlerRepository
 // and DynamoDBRepository share the same table, so the transaction lives here.
 //
-// The same transaction increments the account's source counter, conditioned on
-// it being below limit, so concurrent creates cannot exceed the cap. Accounts
+// The same transaction increments the account's source counter (and advances
+// its sourceRev), conditioned on it being below limit, so concurrent creates
+// cannot exceed the cap. Accounts
 // whose sources predate the counter have no counter row: observedCount (the
 // caller's strongly consistent ref count) seeds it via if_not_exists. A seed can
 // only be stale high (a concurrent delete); the service repairs such drift with
@@ -106,7 +112,8 @@ func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *m
 	counterExpr, err := expression.NewBuilder().
 		WithCondition(count.AttributeNotExists().Or(count.LessThan(expression.Value(limit)))).
 		WithUpdate(expression.Set(count, expression.Plus(expression.IfNotExists(count, expression.Value(observedCount)), expression.Value(1))).
-			Set(expression.Name("entityType"), expression.Value("ACCOUNT_NEWS_SOURCE_COUNT"))).
+			Set(expression.Name("entityType"), expression.Value("ACCOUNT_NEWS_SOURCE_COUNT")).
+			Add(expression.Name(accountNewsRevAttr), expression.Value(1))).
 		Build()
 	if err != nil {
 		return err
@@ -200,10 +207,10 @@ func (r *DynamoDBRepository) ListAccountNewsSources(ctx context.Context, account
 // crawler CONFIG, both conditioned on existing and the CONFIG still belonging
 // to accountID, with the account META row and the acting user's direct
 // MEMBER# row checked in the same transaction. The same transaction decrements
-// the source counter by compare-and-set on the value read just before; an
-// absent (pre-counter) or non-positive counter is only pinned, never created,
-// so a later create still seeds it from the actual refs. A counter that changed
-// in between is retried. ErrConditionFailed means the ref or matching CONFIG
+// the source counter, conditioned on the count and revision read just before,
+// and advances the revision; an absent (pre-counter) or non-positive counter is
+// only pinned, never created, so a later create still seeds it from the actual
+// refs. A counter that changed in between is retried. ErrConditionFailed means the ref or matching CONFIG
 // is absent; ErrAccountNewsAccess means the account or membership was gone at
 // commit.
 func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accountID, userID, sourceID string) error {
@@ -216,35 +223,61 @@ func (r *DynamoDBRepository) DeleteAccountNewsSource(ctx context.Context, accoun
 	return fmt.Errorf("delete account news source: source counter kept changing")
 }
 
-// readAccountNewsSourceCount returns the counter value and whether it exists.
-func (r *DynamoDBRepository) readAccountNewsSourceCount(ctx context.Context, accountID string) (int, bool, error) {
+// accountNewsCounter is the observed state of the NEWSSRC_COUNT row.
+type accountNewsCounter struct {
+	count, rev     int
+	exists, hasRev bool
+}
+
+// unchanged is the condition that the row still has the observed count and
+// revision (a row written before revisions existed has no sourceRev).
+func (c accountNewsCounter) unchanged() expression.ConditionBuilder {
+	if !c.exists {
+		return expression.Name(accountNewsCountAttr).AttributeNotExists()
+	}
+	rev := expression.Name(accountNewsRevAttr).AttributeNotExists()
+	if c.hasRev {
+		rev = expression.Name(accountNewsRevAttr).Equal(expression.Value(c.rev))
+	}
+	return expression.Name(accountNewsCountAttr).Equal(expression.Value(c.count)).And(rev)
+}
+
+// readAccountNewsSourceCount returns the counter row's observed state.
+func (r *DynamoDBRepository) readAccountNewsSourceCount(ctx context.Context, accountID string) (accountNewsCounter, error) {
 	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, model.SKAccountNewsSourceCount),
 		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
-		return 0, false, fmt.Errorf("read account news source count: %w", err)
+		return accountNewsCounter{}, fmt.Errorf("read account news source count: %w", err)
 	}
-	value, ok := out.Item[accountNewsCountAttr]
-	if !ok {
-		return 0, false, nil
+	var state accountNewsCounter
+	if value, ok := out.Item[accountNewsCountAttr]; ok {
+		if err := attributevalue.Unmarshal(value, &state.count); err != nil {
+			return accountNewsCounter{}, fmt.Errorf("decode account news source count: %w", err)
+		}
+		state.exists = true
 	}
-	var count int
-	if err := attributevalue.Unmarshal(value, &count); err != nil {
-		return 0, false, fmt.Errorf("decode account news source count: %w", err)
+	if value, ok := out.Item[accountNewsRevAttr]; ok && state.exists {
+		if err := attributevalue.Unmarshal(value, &state.rev); err != nil {
+			return accountNewsCounter{}, fmt.Errorf("decode account news source revision: %w", err)
+		}
+		state.hasRev = true
 	}
-	return count, true, nil
+	return state, nil
 }
 
 // ReconcileAccountNewsSourceCount sets an existing source counter to the
 // canonical NEWSSRC# ref count and returns that count. The counter is read
-// before the refs are listed and written by compare-and-set on the value read,
-// so any create or delete that commits in between (both change an existing
-// counter) makes the write fail and the reconcile retry. An absent counter is
-// left absent: the next create seeds it from the refs.
+// before the refs are listed, and the write is conditioned on the count and
+// revision read, so any create, delete or reconcile that commits in between
+// (each advances the revision) makes the write fail and the reconcile retry.
+// An absent counter is left absent: the next create seeds it from the refs.
+// Writers deployed before this counter do not touch it; their effect is only
+// repaired by a later reconcile.
 func (r *DynamoDBRepository) ReconcileAccountNewsSourceCount(ctx context.Context, accountID string) (int, error) {
 	for attempt := 0; attempt < accountNewsCounterAttempts; attempt++ {
-		count, exists, err := r.readAccountNewsSourceCount(ctx, accountID)
+		state, err := r.readAccountNewsSourceCount(ctx, accountID)
 		if err != nil {
 			return 0, err
 		}
@@ -252,13 +285,13 @@ func (r *DynamoDBRepository) ReconcileAccountNewsSourceCount(ctx context.Context
 		if err != nil {
 			return 0, err
 		}
-		if !exists || count == len(refs) {
+		if !state.exists || state.count == len(refs) {
 			return len(refs), nil
 		}
-		name := expression.Name(accountNewsCountAttr)
 		expr, err := expression.NewBuilder().
-			WithCondition(name.Equal(expression.Value(count))).
-			WithUpdate(expression.Set(name, expression.Value(len(refs)))).Build()
+			WithCondition(state.unchanged()).
+			WithUpdate(expression.Set(expression.Name(accountNewsCountAttr), expression.Value(len(refs))).
+				Add(expression.Name(accountNewsRevAttr), expression.Value(1))).Build()
 		if err != nil {
 			return 0, err
 		}
@@ -279,15 +312,16 @@ func (r *DynamoDBRepository) ReconcileAccountNewsSourceCount(ctx context.Context
 }
 
 // accountNewsCounterDelete builds the delete transaction's counter item: a
-// compare-and-set decrement of a positive observed count, otherwise a check
-// that the observed state (absent, or the same value) still holds.
-func (r *DynamoDBRepository) accountNewsCounterDelete(accountID string, count int, exists bool) (types.TransactWriteItem, error) {
+// decrement of a positive observed count, conditioned on the observed count
+// and revision and advancing the revision; otherwise a check that the observed
+// state (absent, or the same count and revision) still holds.
+func (r *DynamoDBRepository) accountNewsCounterDelete(accountID string, state accountNewsCounter) (types.TransactWriteItem, error) {
 	key := accountNewsKey(model.PrefixAccount+accountID, model.SKAccountNewsSourceCount)
-	name := expression.Name(accountNewsCountAttr)
-	if exists && count > 0 {
+	if state.exists && state.count > 0 {
 		expr, err := expression.NewBuilder().
-			WithCondition(name.Equal(expression.Value(count))).
-			WithUpdate(expression.Set(name, expression.Value(count-1))).Build()
+			WithCondition(state.unchanged()).
+			WithUpdate(expression.Set(expression.Name(accountNewsCountAttr), expression.Value(state.count-1)).
+				Add(expression.Name(accountNewsRevAttr), expression.Value(1))).Build()
 		if err != nil {
 			return types.TransactWriteItem{}, err
 		}
@@ -296,11 +330,7 @@ func (r *DynamoDBRepository) accountNewsCounterDelete(accountID string, count in
 		update.ExpressionAttributeNames, update.ExpressionAttributeValues = expr.Names(), expr.Values()
 		return types.TransactWriteItem{Update: update}, nil
 	}
-	cond := name.AttributeNotExists()
-	if exists {
-		cond = name.Equal(expression.Value(count))
-	}
-	expr, err := expression.NewBuilder().WithCondition(cond).Build()
+	expr, err := expression.NewBuilder().WithCondition(state.unchanged()).Build()
 	if err != nil {
 		return types.TransactWriteItem{}, err
 	}
@@ -333,11 +363,11 @@ func (r *DynamoDBRepository) deleteAccountNewsSourceOnce(ctx context.Context, ac
 	if err != nil {
 		return false, err
 	}
-	count, exists, err := r.readAccountNewsSourceCount(ctx, accountID)
+	state, err := r.readAccountNewsSourceCount(ctx, accountID)
 	if err != nil {
 		return false, err
 	}
-	counter, err := r.accountNewsCounterDelete(accountID, count, exists)
+	counter, err := r.accountNewsCounterDelete(accountID, state)
 	if err != nil {
 		return false, err
 	}

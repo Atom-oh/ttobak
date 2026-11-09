@@ -804,11 +804,15 @@ optional `copyFromSourceId`, which copies queries, aliases and custom URLs from
 a per-user source the caller subscribes to and never changes that source;
 operator-curated, unknown or unsubscribed sources return 400. Default queries
 are the account name plus its aliases; at most 10 sources per account, enforced
-atomically by an `ACCOUNT#{accountId}` / `NEWSSRC_COUNT` counter row (`sourceCount`,
-seeded from the existing refs when absent) that the create transaction increments
-only below the cap and the delete transaction decrements. When the refs show room
-but the counter is at the cap, the create reconciles the counter to the strongly
-consistent ref count by compare-and-set and retries once. GET
+by an `ACCOUNT#{accountId}` / `NEWSSRC_COUNT` counter row (`sourceCount`, seeded
+from the existing refs when absent, plus a `sourceRev` revision that every counter
+write advances). The create transaction increments it only below the cap and the
+delete transaction decrements it, conditioned on the count and revision it read.
+When the refs show room but the counter is at the cap, the create reconciles the
+counter to the strongly consistent ref count, conditioned on the revision read
+before listing, and retries once. Writers deployed before the counter do not
+update it; reconcile repairs that drift. No account-delete path exists, so the
+row has no deletion counterpart. GET
 returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
 account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 `disabled` (so scheduling stops) in one transaction; returns 204, or 404 for an
