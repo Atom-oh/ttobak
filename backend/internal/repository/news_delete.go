@@ -9,19 +9,30 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/ttobak/backend/internal/model"
 )
 
 // MarkNewsDeleted revokes canonical publication before object cleanup. A retained
 // tombstone keeps immutable cleanup keys available for retries without deleting a
-// concurrently published replacement. Source ownership is checked in the write.
-func (r *CrawlerRepository) MarkNewsDeleted(ctx context.Context, key NewsReadKey, observed map[string]types.AttributeValue, userID string, isAdmin bool) error {
+// concurrently published replacement. Source authorization is pinned in the
+// write: an admin needs only the source; a non-empty accountID requires the
+// source to still belong to that account and, in the same transaction, the
+// account META row and the caller's direct MEMBER# row to exist (a revoked
+// member fails with ErrAccountNewsAccess); otherwise the caller must own a
+// per-user source.
+func (r *CrawlerRepository) MarkNewsDeleted(ctx context.Context, key NewsReadKey, observed map[string]types.AttributeValue, userID string, isAdmin bool, accountID string) error {
 	if userID == "" {
 		return ErrConditionFailed
 	}
 	owner := expression.Name("PK").AttributeExists().
 		And(expression.Name("sourceId").Equal(expression.Value(key.SourceID)))
-	if !isAdmin {
-		owner = owner.And(expression.Name("ownerId").Equal(expression.Value(userID)))
+	switch {
+	case isAdmin:
+	case accountID != "":
+		owner = owner.And(expression.Name("accountId").Equal(expression.Value(accountID)))
+	default:
+		owner = owner.And(expression.Name("ownerId").Equal(expression.Value(userID))).
+			And(expression.Name("accountId").AttributeNotExists())
 	}
 	source, err := expression.NewBuilder().WithCondition(owner).Build()
 	if err != nil {
@@ -43,38 +54,70 @@ func (r *CrawlerRepository) MarkNewsDeleted(ctx context.Context, key NewsReadKey
 	if err != nil {
 		return err
 	}
-	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{ConditionCheck: &types.ConditionCheck{
-				TableName: aws.String(r.tableName),
-				Key: map[string]types.AttributeValue{
-					"PK": &types.AttributeValueMemberS{Value: "CRAWLER#" + key.SourceID},
-					"SK": &types.AttributeValueMemberS{Value: "CONFIG"},
-				},
-				ConditionExpression: source.Condition(), ExpressionAttributeNames: source.Names(),
-				ExpressionAttributeValues: source.Values(),
-			}},
-			{Update: &types.Update{
-				TableName: aws.String(r.tableName),
-				Key: map[string]types.AttributeValue{
-					"PK": &types.AttributeValueMemberS{Value: "CRAWLER#" + key.SourceID},
-					"SK": &types.AttributeValueMemberS{Value: key.SortKey},
-				},
-				ConditionExpression: document.Condition(), UpdateExpression: document.Update(),
-				ExpressionAttributeNames: document.Names(), ExpressionAttributeValues: document.Values(),
-			}},
-		},
-	})
+	items := []types.TransactWriteItem{
+		{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "CRAWLER#" + key.SourceID},
+				"SK": &types.AttributeValueMemberS{Value: "CONFIG"},
+			},
+			ConditionExpression: source.Condition(), ExpressionAttributeNames: source.Names(),
+			ExpressionAttributeValues: source.Values(),
+		}},
+		{Update: &types.Update{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "CRAWLER#" + key.SourceID},
+				"SK": &types.AttributeValueMemberS{Value: key.SortKey},
+			},
+			ConditionExpression: document.Condition(), UpdateExpression: document.Update(),
+			ExpressionAttributeNames: document.Names(), ExpressionAttributeValues: document.Values(),
+		}},
+	}
+	const firstAccess = 2
+	if !isAdmin && accountID != "" {
+		access, err := accountAccessChecks(r.tableName, accountID, userID)
+		if err != nil {
+			return err
+		}
+		items = append(items, access...)
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		var canceled *types.TransactionCanceledException
 		if errors.As(err, &canceled) {
-			for _, reason := range canceled.CancellationReasons {
+			failed := false
+			for i, reason := range canceled.CancellationReasons {
 				if aws.ToString(reason.Code) == "ConditionalCheckFailed" {
-					return fmt.Errorf("%w: publication or source owner changed", ErrConditionFailed)
+					if i >= firstAccess {
+						return ErrAccountNewsAccess
+					}
+					failed = true
 				}
+			}
+			if failed {
+				return fmt.Errorf("%w: publication or source owner changed", ErrConditionFailed)
 			}
 		}
 		return fmt.Errorf("unpublish news document: %w", err)
 	}
 	return nil
+}
+
+// accountAccessChecks returns ConditionChecks that the account META row and
+// the user's direct MEMBER# row exist, like the other account writers.
+func accountAccessChecks(table, accountID, userID string) ([]types.TransactWriteItem, error) {
+	if accountID == "" || userID == "" {
+		return nil, fmt.Errorf("account access check needs account and user")
+	}
+	exists, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return nil, err
+	}
+	items := []types.TransactWriteItem{}
+	for _, sk := range []string{model.SKAccountMeta, model.PrefixMember + userID} {
+		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(table),
+			Key: accountNewsKey(model.PrefixAccount+accountID, sk), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}})
+	}
+	return items, nil
 }

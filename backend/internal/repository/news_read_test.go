@@ -175,3 +175,71 @@ func TestNewsReadRejectsOversizedOrForeignSelectionWithoutAWS(t *testing.T) {
 		}
 	}
 }
+
+// The fake applies the request's own ProjectionExpression to full stored rows,
+// so a field missing from the canonical projection is missing from the result.
+func TestNewsReadProjectionCarriesAccountBinding(t *testing.T) {
+	stored := map[string]map[string]any{
+		"DOC#article": {
+			"PK": map[string]string{"S": "CRAWLER#source"}, "SK": map[string]string{"S": "DOC#article"},
+			"type": map[string]string{"S": "news"}, "title": map[string]string{"S": "Title"},
+			"unprojected": map[string]string{"S": "hidden"},
+		},
+		"CONFIG": {
+			"PK": map[string]string{"S": "CRAWLER#source"}, "SK": map[string]string{"S": "CONFIG"},
+			"sourceId": map[string]string{"S": "source"}, "ownerId": map[string]string{"S": "creator"},
+			"accountId": map[string]string{"S": "acct-1"}, "subscribers": map[string]any{"SS": []string{"creator"}},
+		},
+	}
+	client := dynamodb.New(dynamodb.Options{
+		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+		HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			var input struct {
+				RequestItems map[string]struct {
+					Keys                     []map[string]map[string]string
+					ProjectionExpression     string
+					ExpressionAttributeNames map[string]string
+				}
+			}
+			if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+				t.Error(err)
+			}
+			request := input.RequestItems["news"]
+			projected := map[string]bool{}
+			for _, token := range strings.Split(request.ProjectionExpression, ",") {
+				token = strings.TrimSpace(token)
+				if name, ok := request.ExpressionAttributeNames[token]; ok {
+					token = name
+				}
+				projected[token] = true
+			}
+			rows := []map[string]any{}
+			for _, key := range request.Keys {
+				row := map[string]any{}
+				for name, value := range stored[key["SK"]["S"]] {
+					if projected[name] {
+						row[name] = value
+					}
+				}
+				rows = append(rows, row)
+			}
+			data, _ := json.Marshal(map[string]any{"Responses": map[string]any{"news": rows}})
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+				Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+		}),
+	})
+	doc, config := NewsReadKey{SourceID: "source", SortKey: "DOC#article"}, NewsReadKey{SourceID: "source", SortKey: "CONFIG"}
+	rows, err := NewCrawlerRepository(client, "news").ReadNewsItems(context.Background(), []NewsReadKey{doc, config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[doc]["title"] == nil {
+		t.Error("projection drops document fields")
+	}
+	if rows[config]["accountId"] == nil || rows[config]["ownerId"] == nil {
+		t.Error("projection drops the source's account binding")
+	}
+	if rows[doc]["unprojected"] != nil || rows[config]["subscribers"] != nil {
+		t.Error("fake did not apply the projection")
+	}
+}

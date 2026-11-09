@@ -200,6 +200,7 @@ func init() {
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
 	crawlerService := service.NewCrawlerService(crawlerRepo)
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName, bucketName)
+	insightsService.SetAccountMemberReader(repo)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	insightsHandler := handler.NewInsightsHandler(insightsService, kbService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)

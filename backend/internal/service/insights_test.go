@@ -679,3 +679,119 @@ func TestListInsights_ReturnsSourceIDsFacet(t *testing.T) {
 		}
 	}
 }
+
+// insightsMembers is a direct-membership reader for account-source deletes.
+type insightsMembers struct {
+	members map[string]bool // accountID + "/" + userID
+	calls   int
+	err     error
+}
+
+func (m *insightsMembers) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	m.calls++
+	if m.err != nil {
+		return nil, m.err
+	}
+	if !m.members[accountID+"/"+userID] {
+		return nil, nil
+	}
+	return &model.AccountMember{UserID: userID}, nil
+}
+
+func accountSourceDeleteFixture(members *insightsMembers) (*InsightsService, *mockCrawlerRepo, *mockS3GetDeleter) {
+	repo := newMockCrawlerRepo()
+	repo.sources["acct_acct-1_0123abcd"] = &model.CrawlerSource{
+		SourceID: "acct_acct-1_0123abcd", OwnerID: "creator", AccountID: "acct-1",
+	}
+	repo.documents["acct_acct-1_0123abcd"] = []model.CrawledDocument{
+		{DocHash: "doc1", SourceID: "acct_acct-1_0123abcd", S3Key: "shared/news/acct_acct-1_0123abcd/doc1.md"},
+	}
+	mockS3 := &mockS3GetDeleter{}
+	svc := &InsightsService{repo: repo, s3: mockS3, kbBucketName: "kb-bucket"}
+	if members != nil {
+		svc.SetAccountMemberReader(members)
+	}
+	return svc, repo, mockS3
+}
+
+// A source creator removed from the account keeps OwnerID on the CONFIG row;
+// that must not let them delete the account's news.
+func TestDeleteDocument_AccountSourceFormerCreatorForbidden(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		members *insightsMembers
+	}{
+		{name: "not a current member", members: &insightsMembers{members: map[string]bool{}}},
+		{name: "no membership reader fails closed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, mockS3 := accountSourceDeleteFixture(tc.members)
+			err := svc.DeleteDocument(context.Background(), "creator", false, "acct_acct-1_0123abcd", "doc1")
+			if !errors.Is(err, ErrForbidden) {
+				t.Fatalf("expected ErrForbidden, got %v", err)
+			}
+			if len(mockS3.deletedKeys) != 0 {
+				t.Fatalf("S3 object deleted for a former creator: %v", mockS3.deletedKeys)
+			}
+			if doc, _ := repo.GetDocument(context.Background(), "acct_acct-1_0123abcd", "doc1"); doc == nil {
+				t.Fatal("document metadata deleted for a former creator")
+			}
+			if tc.members != nil && tc.members.calls != 1 {
+				t.Fatalf("membership must be read per request, got %d reads", tc.members.calls)
+			}
+		})
+	}
+}
+
+func TestDeleteDocument_AccountSourceCurrentMemberAllowed(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{"acct-1/teammate": true}}
+	svc, repo, mockS3 := accountSourceDeleteFixture(members)
+	if err := svc.DeleteDocument(context.Background(), "teammate", false, "acct_acct-1_0123abcd", "doc1"); err != nil {
+		t.Fatalf("current member delete failed: %v", err)
+	}
+	if members.calls != 1 {
+		t.Fatalf("expected one membership read, got %d", members.calls)
+	}
+	if len(mockS3.deletedKeys) != 1 || mockS3.deletedKeys[0] != "shared/news/acct_acct-1_0123abcd/doc1.md" {
+		t.Fatalf("unexpected S3 deletes: %v", mockS3.deletedKeys)
+	}
+	if doc, _ := repo.GetDocument(context.Background(), "acct_acct-1_0123abcd", "doc1"); doc != nil {
+		t.Fatal("document metadata was not removed")
+	}
+
+	// A membership read failure is surfaced, never treated as a grant.
+	members.err = errors.New("dynamodb unavailable")
+	svc2, _, s3b := accountSourceDeleteFixture(members)
+	if err := svc2.DeleteDocument(context.Background(), "teammate", false, "acct_acct-1_0123abcd", "doc1"); err == nil || errors.Is(err, ErrForbidden) || len(s3b.deletedKeys) != 0 {
+		t.Fatalf("membership read error must fail the delete without side effects: %v %v", err, s3b.deletedKeys)
+	}
+}
+
+func TestDeleteDocument_PersonalSourceOwnerUnchanged(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{}}
+	for _, tc := range []struct {
+		name    string
+		user    string
+		admin   bool
+		wantErr error
+	}{
+		{name: "owner deletes", user: "user-1"},
+		{name: "non-owner forbidden", user: "someone-else", wantErr: ErrForbidden},
+		{name: "admin deletes", user: "admin-1", admin: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockCrawlerRepo()
+			repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "user-1", Subscribers: []string{"user-1"}}
+			repo.documents["hanabank"] = []model.CrawledDocument{{DocHash: "doc1", SourceID: "hanabank", S3Key: "shared/news/hanabank/doc1.md"}}
+			svc := &InsightsService{repo: repo, s3: &mockS3GetDeleter{}, kbBucketName: "kb-bucket"}
+			svc.SetAccountMemberReader(members)
+			err := svc.DeleteDocument(context.Background(), tc.user, tc.admin, "hanabank", "doc1")
+			if tc.wantErr == nil && err != nil || tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+	if members.calls != 0 {
+		t.Fatalf("personal sources must not consult account membership, got %d reads", members.calls)
+	}
+}

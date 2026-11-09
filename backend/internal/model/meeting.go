@@ -267,6 +267,9 @@ type CrawlerSource struct {
 	// merge, unsubscribe); no user path clears it. Both are internal.
 	GlobalNewsSource bool   `dynamodbav:"globalNewsSource,omitempty" json:"-"`
 	UserTiedAt       string `dynamodbav:"userTiedAt,omitempty" json:"-"`
+	// AccountID marks an account-owned source (ACCOUNT#{accountId} / NEWSSRC#
+	// ref). It is written only at creation; readers revalidate it against the ref.
+	AccountID string `dynamodbav:"accountId,omitempty" json:"accountId,omitempty"`
 }
 
 // CrawlerSubscription represents a user's subscription to a crawler source

@@ -32,6 +32,8 @@ const (
 var AssignableRoles = []string{RoleAM, RoleTAM, RoleSSA, RoleSA, RoleSAManager, RoleAMManager}
 
 // Account is a first-class customer/company entity shared across a team.
+// Its news sources are ACCOUNT#{accountId} / NEWSSRC#{sourceId} refs
+// (AccountNewsSourceRef), replacing the unused single crawlerSourceId field.
 type Account struct {
 	PK                            string    `dynamodbav:"PK"` // ACCOUNT#{accountId}
 	SK                            string    `dynamodbav:"SK"` // META
@@ -41,7 +43,6 @@ type Account struct {
 	Aliases                       []string  `dynamodbav:"aliases,omitempty"` // tag mapping e.g. ["하나은행","Hana Bank"]
 	Domains                       []string  `dynamodbav:"domains,omitempty"`
 	Industry                      string    `dynamodbav:"industry,omitempty"`
-	CrawlerSourceID               string    `dynamodbav:"crawlerSourceId,omitempty"` // links CRAWLER#{sourceId} (Plan 3)
 	OwnerUserID                   string    `dynamodbav:"ownerUserId"`
 	CreatedByUserID               string    `dynamodbav:"createdByUserId,omitempty"`
 	CreationRequestHash           string    `dynamodbav:"creationRequestHash,omitempty"`

@@ -74,6 +74,47 @@ type InsightsService struct {
 	s3                 s3GetDeleter
 	kbBucketName       string
 	artifactBucketName string
+	// members authorizes deletes of account-owned sources' documents. Nil
+	// fails closed: only admins may delete them.
+	members insightsMemberReader
+}
+
+// insightsMemberReader reads a caller's current direct account membership.
+type insightsMemberReader interface {
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+}
+
+// SetAccountMemberReader injects the membership reader used to authorize
+// deletes of account-owned sources' documents.
+func (s *InsightsService) SetAccountMemberReader(members insightsMemberReader) {
+	s.members = members
+}
+
+// authorizeSourceDelete lets admins delete any document. An account-owned
+// source requires the caller's current direct membership of that account, read
+// per request; its stored creator (OwnerID) grants nothing. A per-user source
+// requires OwnerID; a legacy source without one is admin-only.
+func (s *InsightsService) authorizeSourceDelete(ctx context.Context, userID string, isAdmin bool, source *model.CrawlerSource) error {
+	if isAdmin {
+		return nil
+	}
+	if source.AccountID != "" {
+		if s.members == nil || validateAccountHierarchyIDs(source.AccountID, "") != nil {
+			return ErrForbidden
+		}
+		member, err := s.members.GetMember(ctx, source.AccountID, userID)
+		if err != nil {
+			return fmt.Errorf("failed to check account membership: %w", err)
+		}
+		if member == nil {
+			return ErrForbidden
+		}
+		return nil
+	}
+	if source.OwnerID == "" || source.OwnerID != userID {
+		return ErrForbidden
+	}
+	return nil
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -209,9 +250,10 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	// than let it fall through to an OwnerID != userID comparison, so a
 	// legacy source is admin-only-deletable until backfilled (see
 	// scripts/insights-backfill-owner.py), not silently unowned-by-anyone
-	// or (worse) matchable by an empty caller ID.
-	if !isAdmin && (source.OwnerID == "" || source.OwnerID != userID) {
-		return ErrForbidden
+	// or (worse) matchable by an empty caller ID. Account-owned sources are
+	// authorized by current account membership instead (authorizeSourceDelete).
+	if err := s.authorizeSourceDelete(ctx, userID, isAdmin, source); err != nil {
+		return err
 	}
 
 	doc, err := s.repo.GetDocument(ctx, sourceID, docHash)
@@ -222,7 +264,7 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 		return ErrNotFound
 	}
 	if doc.Type == "news" || doc.QualityStatus != "" || strings.HasPrefix(doc.S3Key, "news/") {
-		if handled, err := s.deletePublishedNews(ctx, userID, isAdmin, sourceID, docHash); handled {
+		if handled, err := s.deletePublishedNews(ctx, userID, isAdmin, source.AccountID, sourceID, docHash); handled {
 			return err
 		}
 	}
