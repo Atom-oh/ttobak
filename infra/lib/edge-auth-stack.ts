@@ -2,6 +2,19 @@ import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+/** Public JWKS for one Cognito issuer, embedded to skip the cold-start fetch. */
+export interface SeedJwks {
+  issuer: string;
+  keys: Array<Record<string, string>>;
+}
+
+const defaultSeedJwks = (): SeedJwks => {
+  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '../assets/cognito-jwks.json'), 'utf8'));
+  return { issuer: raw.issuer, keys: raw.keys };
+};
 
 export interface EdgeAuthStackProps extends cdk.StackProps {
   userPoolId: string;
@@ -11,6 +24,12 @@ export interface EdgeAuthStackProps extends cdk.StackProps {
   writeConnectorClientId?: string;
   connectorAudience?: string;
   connectorPrivateBridgeEnabled?: boolean;
+  /**
+   * Public signing keys used before any network fetch. Applied at runtime only
+   * when its issuer equals the function's resolved Cognito issuer; an unknown
+   * kid still triggers the live JWKS fetch. Defaults to assets/cognito-jwks.json.
+   */
+  seedJwks?: SeedJwks;
 }
 
 export class EdgeAuthStack extends cdk.Stack {
@@ -33,6 +52,11 @@ export class EdgeAuthStack extends cdk.Stack {
 
     // Lambda@Edge function for JWT validation
     // Note: Lambda@Edge cannot use environment variables, so we embed the config in code
+    const seedJwks = props.seedJwks ?? defaultSeedJwks();
+    if (!/^https:\/\/cognito-idp\.[a-z0-9-]+\.amazonaws\.com\/[A-Za-z0-9_-]+$/.test(seedJwks.issuer) ||
+        !Array.isArray(seedJwks.keys) || seedJwks.keys.some(k => k.kty !== 'RSA' || !k.kid || !k.n || !k.e)) {
+      throw new Error('Seed JWKS must be RSA keys for an exact Cognito issuer');
+    }
     const edgeFunctionCode = `
 'use strict';
 
@@ -51,10 +75,26 @@ const CONNECTOR_AUDIENCE = '${props.connectorAudience ?? ''}';
 const CONNECTOR_READ_SCOPE = CONNECTOR_AUDIENCE + '/read';
 const CONNECTOR_WRITE_SCOPE = CONNECTOR_AUDIENCE + '/write';
 
+// Public signing keys embedded at build time. When they belong to this
+// function's issuer they pre-populate the JWKS cache so a cold environment can
+// verify without waiting on the network. Seed trust is short-lived: module load
+// immediately starts a live JWKS refresh that replaces the seed when it lands,
+// and the seed is never considered fresh for more than SEED_TTL. So a key the
+// issuer withdraws is accepted by a new environment only until its first live
+// refresh completes (at most SEED_TTL), not for a cache hour per cold start.
+// A seed-decided miss or failed verification is retried once against the live
+// JWKS; a live result is final. The API Lambda verifies every token again with
+// its own live JWKS.
+const SEED_JWKS = ${JSON.stringify(seedJwks)};
+
 // Cache for JWKS
-let jwksCache = null;
-let jwksCacheTime = 0;
 const CACHE_TTL = 3600000; // 1 hour
+const SEED_TTL = 60000; // 1 minute
+const seedApplies = SEED_JWKS.issuer === COGNITO_ISSUER;
+let jwksCache = seedApplies ? { keys: SEED_JWKS.keys } : null;
+// Backdated so the seed counts as fresh for SEED_TTL only.
+let jwksCacheTime = seedApplies ? Date.now() - CACHE_TTL + SEED_TTL : 0;
+let jwksFromSeed = seedApplies;
 
 // Base64URL decode
 function base64UrlDecode(str) {
@@ -66,12 +106,17 @@ function base64UrlDecode(str) {
 
 // Fetch JWKS
 function fetchJwks() {
+  const now = Date.now();
+  if (jwksCache && (now - jwksCacheTime) < CACHE_TTL) {
+    return Promise.resolve(jwksCache);
+  }
+  return fetchLiveJwks();
+}
+
+// Fetch the live JWKS, replacing the cache (including a seed) on success.
+function fetchLiveJwks() {
   return new Promise((resolve, reject) => {
     const now = Date.now();
-    if (jwksCache && (now - jwksCacheTime) < CACHE_TTL) {
-      return resolve(jwksCache);
-    }
-
     https.get(JWKS_URL, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -79,6 +124,7 @@ function fetchJwks() {
         try {
           jwksCache = JSON.parse(data);
           jwksCacheTime = now;
+          jwksFromSeed = false;
           resolve(jwksCache);
         } catch (e) {
           reject(e);
@@ -87,6 +133,10 @@ function fetchJwks() {
     }).on('error', reject);
   });
 }
+
+// Replace the seed with the live JWKS as soon as possible. Best effort: on
+// failure the seed stays usable until SEED_TTL, then requests fetch live.
+if (seedApplies) fetchLiveJwks().catch(() => {});
 
 // Find key by kid
 function findKey(jwks, kid) {
@@ -180,13 +230,17 @@ async function validateToken(token, uri, method) {
       if (write && uri !== '/api/mcp' && !billingRead) return false;
     }
 
-    // Fetch JWKS and verify signature
-    const jwks = await fetchJwks();
-    const key = findKey(jwks, header.kid);
+    // Fetch JWKS (possibly the embedded seed) and verify signature. A seed
+    // never has the last word: a miss or a failed verification against a
+    // seeded key is retried once with the live JWKS.
+    let key = findKey(await fetchJwks(), header.kid);
+    if (key && verifySignature(token, jwkToPem(key))) return true;
+    // Only a result decided by the seed is retried; a live JWKS is final.
+    if (!jwksFromSeed) return false;
+    jwksCacheTime = 0;
+    key = findKey(await fetchJwks(), header.kid);
     if (!key) return false;
-
-    const pem = jwkToPem(key);
-    return verifySignature(token, pem);
+    return verifySignature(token, jwkToPem(key));
   } catch (e) {
     console.error('Token validation error:', e);
     return false;

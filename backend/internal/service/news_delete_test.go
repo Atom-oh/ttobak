@@ -154,3 +154,25 @@ func TestNewsDeleteAccountSourceUsesCurrentMembership(t *testing.T) {
 		})
 	}
 }
+
+// revokedNewsDeleter models a membership removed after the service check: the
+// repository's MEMBER# condition fails at commit.
+type revokedNewsDeleter struct{ *newsDeleteFixture }
+
+func (revokedNewsDeleter) MarkNewsDeleted(context.Context, repository.NewsReadKey, map[string]types.AttributeValue, string, bool, string) error {
+	return repository.ErrAccountNewsAccess
+}
+
+func TestNewsDeleteRevokedMemberDuringCommitIsForbidden(t *testing.T) {
+	svc, rows, object, keys := newNewsReadFixture(t)
+	state := &newsDeleteFixture{newsReadFixture: rows}
+	storage := &newsDeleteS3Fixture{newsS3Fixture: object, t: t, state: state, key: keys[0]}
+	svc.news, svc.s3, svc.artifactBucketName = revokedNewsDeleter{state}, storage, "assets"
+	rows.rows[keys[1]]["accountId"] = &types.AttributeValueMemberS{Value: "acct-1"}
+	svc.repo.(*mockCrawlerRepo).sources[keys[0].SourceID] = &model.CrawlerSource{OwnerID: "owner", AccountID: "acct-1"}
+	svc.SetAccountMemberReader(&insightsMembers{members: map[string]bool{"acct-1/teammate": true}})
+	err := svc.DeleteDocument(context.Background(), "teammate", false, keys[0].SourceID, strings.Repeat("a", 16))
+	if !errors.Is(err, ErrForbidden) || storage.deletes != 0 {
+		t.Fatalf("revoked member delete: %v deletes=%d", err, storage.deletes)
+	}
+}

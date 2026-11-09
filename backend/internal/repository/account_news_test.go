@@ -90,16 +90,40 @@ func TestAccountNewsTransactionFailureMapping(t *testing.T) {
 	repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
 		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`, nil), nil
 	})
-	if err := repo.DeleteAccountNewsSource(context.Background(), "acc", "acct_acc_0000abcd"); !errors.Is(err, ErrConditionFailed) {
+	if err := repo.DeleteAccountNewsSource(context.Background(), "acc", "u1", "acct_acc_0000abcd"); err == nil {
 		t.Fatalf("delete mapping: %v", err)
+	}
+	for _, tc := range []struct {
+		reasons string
+		want    error
+	}{
+		{`[{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]`, ErrConditionFailed},
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, ErrAccountNewsAccess},
+	} {
+		repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reasons+`}`, nil), nil
+		})
+		if err := repo.DeleteAccountNewsSource(context.Background(), "acc", "u1", "acct_acc_0000abcd"); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: %v", tc.reasons, err)
+		}
 	}
 }
 
 func TestDeleteAccountNewsSourceDisablesOwnedConfigAtomically(t *testing.T) {
 	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
 		items := body["TransactItems"].([]interface{})
-		if target != "DynamoDB_20120810.TransactWriteItems" || len(items) != 2 {
+		if target != "DynamoDB_20120810.TransactWriteItems" || len(items) != 4 {
 			t.Fatalf("delete tx: %s %d", target, len(items))
+		}
+		for i, sk := range []string{"META", "MEMBER#u1"} {
+			cc := items[2+i].(map[string]interface{})["ConditionCheck"].(map[string]interface{})
+			key := cc["Key"].(map[string]interface{})
+			pk := key["PK"].(map[string]interface{})["S"]
+			got := key["SK"].(map[string]interface{})["S"]
+			if pk != "ACCOUNT#acc" || got != sk ||
+				!strings.Contains(cc["ConditionExpression"].(string), "attribute_exists") {
+				t.Fatalf("access check %d: %s %s %#v", i, pk, got, cc)
+			}
 		}
 		del := items[0].(map[string]interface{})["Delete"].(map[string]interface{})
 		if del["Key"].(map[string]interface{})["SK"].(map[string]interface{})["S"] != "NEWSSRC#acct_acc_0000abcd" ||
@@ -123,7 +147,7 @@ func TestDeleteAccountNewsSourceDisablesOwnedConfigAtomically(t *testing.T) {
 		}
 		return `{}`
 	})
-	if err := repo.DeleteAccountNewsSource(context.Background(), "acc", "acct_acc_0000abcd"); err != nil {
+	if err := repo.DeleteAccountNewsSource(context.Background(), "acc", "u1", "acct_acc_0000abcd"); err != nil {
 		t.Fatal(err)
 	}
 }
