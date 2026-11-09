@@ -52,6 +52,12 @@ type fakePeopleRepo struct {
 	mentionRows []model.UnresolvedMention
 	contactErr  map[string]error
 	pubReads    int
+
+	// People panel writes.
+	stored         map[model.PeopleLinkKey]*model.PeopleLink
+	putActors      []string
+	mentionDeletes []string
+	ignorePuts     []string
 }
 
 func newFakePeopleRepo() *fakePeopleRepo {
@@ -124,10 +130,11 @@ func (f *fakePeopleRepo) ListMeetingRefsForAccountPage(_ context.Context, _ stri
 	return f.refs[start:end], nil, nil
 }
 func (f *fakePeopleRepo) PutPeopleLink(_ context.Context, l *model.PeopleLink, actor string) error {
-	if actor != "" {
-		return fmt.Errorf("auto writes use the system actor")
+	if (actor != "") != (l.Origin == model.LinkOriginManual) || (actor != "" && l.CreatedBy != actor) {
+		return fmt.Errorf("auto writes use the system actor; manual writes the member")
 	}
 	f.ops = append(f.ops, "put")
+	f.putActors = append(f.putActors, actor)
 	if err := f.putErr[l.Key()]; err != nil {
 		return err
 	}

@@ -53,6 +53,12 @@ type accountPeopleRepo interface {
 	GetMeetingPublication(context.Context, string, string) (*model.Meeting, error)
 	ListPeopleLinksByTarget(context.Context, string, string, string, int) ([]model.PeopleLink, string, error)
 	ListUnresolvedMentions(context.Context, string, string, int) ([]model.UnresolvedMention, string, error)
+
+	// People panel writes (direct member actor).
+	GetPeopleLink(context.Context, string, model.PeopleLinkKey) (*model.PeopleLink, error)
+	ListUnresolvedMentionsByHash(context.Context, string, string, int) ([]model.UnresolvedMention, bool, error)
+	DeleteUnresolvedMention(context.Context, string, string, string, string) error
+	PutMentionIgnore(context.Context, string, string, string) error
 }
 
 // PeopleRunOptions controls one resolver run. DryRun plans without any write,
