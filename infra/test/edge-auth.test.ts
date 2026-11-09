@@ -3,15 +3,22 @@ import { Template } from 'aws-cdk-lib/assertions';
 import * as vm from 'node:vm';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { EdgeAuthStack } from '../lib/edge-auth-stack';
+import { EdgeAuthStack, SeedJwks } from '../lib/edge-auth-stack';
 
 // Runs the synthesized Lambda@Edge source with synthetic CloudFront events.
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { ...pair.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256', use: 'sig' };
-function edgeHandler(connectors = false, privateBridge = false): (event: unknown) => Promise<Record<string, any>> {
+let jwksFetches = 0;
+// When set, the mocked JWKS request never answers (a slow or stalled fetch).
+let jwksHang = false;
+// Clock offset (ms) seen by the edge code, to age the JWKS cache in tests.
+let clockOffset = 0;
+const edgeDate = { now: () => Date.now() + clockOffset };
+function edgeHandler(connectors = false, privateBridge = false, seedJwks?: SeedJwks): (event: unknown) => Promise<Record<string, any>> {
   const app = new cdk.App();
   const stack = new EdgeAuthStack(app, 'TestEdgeAuth', {
     env: { region: 'us-east-1' }, userPoolId: 'ap-northeast-2_test', userPoolClientId: 'client', cognitoRegion: 'ap-northeast-2',
+    ...(seedJwks ? { seedJwks } : {}),
     ...(connectors ? { readConnectorClientId: 'readclient', writeConnectorClientId: 'writeclient',
       connectorAudience: 'https://ttobak.example.com/api/mcp' } : {}),
     connectorPrivateBridgeEnabled: privateBridge,
@@ -22,7 +29,9 @@ function edgeHandler(connectors = false, privateBridge = false): (event: unknown
   const module = { exports: {} as Record<string, unknown> };
   const mockRequire = (name: string) => name === 'https' ? {
     get: (_url: string, callback: (response: EventEmitter) => void) => {
+      jwksFetches++;
       const response = new EventEmitter();
+      if (jwksHang) return new EventEmitter();
       callback(response);
       queueMicrotask(() => {
         response.emit('data', JSON.stringify({ keys: [jwk] }));
@@ -31,7 +40,7 @@ function edgeHandler(connectors = false, privateBridge = false): (event: unknown
       return new EventEmitter();
     },
   } : require(name);
-  vm.runInNewContext(source, { require: mockRequire, module, exports: module.exports, Buffer, console });
+  vm.runInNewContext(source, { require: mockRequire, module, exports: module.exports, Buffer, console, Date: edgeDate });
   return module.exports.handler as (event: unknown) => Promise<Record<string, any>>;
 }
 
@@ -104,6 +113,113 @@ describe('Dedicated connector edge boundary', () => {
       expect((await active(e)).status).toBe('401');
     }
     expect((await active(event('/api/billing/accounts/acct-a/reading', headers))).status).toBe('401');
+  });
+});
+
+describe('Embedded JWKS seed', () => {
+  const issuer = 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_test';
+  function signed(kid: string, privateKey = pair.privateKey) {
+    // Valid across the clock offsets used below.
+    const payload = { iss: issuer, sub: 'alice', username: 'alice', token_use: 'access', client_id: 'client',
+      exp: Math.floor(Date.now() / 1000) + 7200, scope: 'openid' };
+    const body = Buffer.from(JSON.stringify({ alg: 'RS256', kid })).toString('base64url') + '.' +
+      Buffer.from(JSON.stringify(payload)).toString('base64url');
+    return body + '.' + sign('RSA-SHA256', Buffer.from(body), privateKey).toString('base64url');
+  }
+  const call = (handler: (e: unknown) => Promise<Record<string, any>>, kid: string, key = pair.privateKey) =>
+    handler(event('/api/meetings', { host: 'ttobak.example.com', authorization: `Bearer ${signed(kid, key)}` }));
+
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const seededHandler = () => edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
+
+  test('a seeded key verifies while the load-time live refresh is still pending', async () => {
+    jwksHang = true;
+    try {
+      jwksFetches = 0;
+      const handler = seededHandler();
+      expect((await call(handler, 'seeded')).uri).toBe('/api/meetings');
+      expect(jwksFetches).toBe(1); // the background refresh started at load
+    } finally {
+      jwksHang = false;
+    }
+  });
+  test('a new environment stops trusting a withdrawn seeded key once its live refresh lands', async () => {
+    jwksFetches = 0;
+    const handler = seededHandler(); // live JWKS (mock) does not publish 'seeded'
+    await settle();
+    expect((await call(handler, 'seeded')).status).toBe('401');
+    expect(jwksFetches).toBe(1);
+    // Every later cold start repeats the refresh instead of re-trusting the seed.
+    const next = seededHandler();
+    await settle();
+    expect((await call(next, 'seeded')).status).toBe('401');
+  });
+  test('seed trust expires after SEED_TTL even if the load-time refresh failed', async () => {
+    jwksHang = true;
+    const handler = seededHandler();
+    jwksHang = false;
+    jwksFetches = 0;
+    clockOffset = 60001;
+    try {
+      expect((await call(handler, 'seeded')).status).toBe('401');
+      expect(jwksFetches).toBe(1);
+    } finally {
+      clockOffset = 0;
+    }
+  });
+  test('an unknown kid falls back to the live JWKS', async () => {
+    jwksHang = true;
+    const handler = seededHandler();
+    jwksHang = false;
+    jwksFetches = 0;
+    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
+    expect(jwksFetches).toBe(1);
+  });
+  test('a seed for another issuer is ignored and a wrong signature still fails', async () => {
+    const other = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    jwksFetches = 0;
+    const handler = edgeHandler(false, false, {
+      issuer: 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_other',
+      keys: [{ ...other.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256' } as Record<string, string>],
+    });
+    expect(jwksFetches).toBe(0); // no load-time refresh for a foreign seed
+    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
+    expect(jwksFetches).toBe(1);
+    jwksHang = true;
+    const seeded = seededHandler();
+    jwksHang = false;
+    expect((await call(seeded, 'seeded', other.privateKey)).status).toBe('401');
+  });
+  test('a seeded key that fails verification is retried against the live JWKS', async () => {
+    // Stale seed: same kid, wrong modulus. The live JWKS has the real key.
+    const stale = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    jwksHang = true;
+    const handler = edgeHandler(false, false, {
+      issuer, keys: [{ ...stale.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256' } as Record<string, string>],
+    });
+    jwksHang = false;
+    jwksFetches = 0;
+    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
+    expect(jwksFetches).toBe(1);
+    // Once the live JWKS replaced the seed, failures do not refetch.
+    expect((await call(handler, 'connector-test', stale.privateKey)).status).toBe('401');
+    expect(jwksFetches).toBe(1);
+  });
+  test('malformed seeds are rejected at synth', () => {
+    for (const seedJwks of [
+      { issuer: 'https://example.com/pool', keys: [] },
+      { issuer, keys: [{ kty: 'EC', kid: 'x', n: 'a', e: 'b' }] },
+    ]) {
+      expect(() => new EdgeAuthStack(new cdk.App(), 'Bad', {
+        env: { region: 'us-east-1' }, userPoolId: 'p', userPoolClientId: 'c', cognitoRegion: 'ap-northeast-2', seedJwks,
+      })).toThrow('Seed JWKS');
+    }
+  });
+  test('the committed seed matches the production issuer', () => {
+    const committed = require('../assets/cognito-jwks.json');
+    expect(committed.issuer).toBe('https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_u01c65YjO');
+    expect(committed.keys.length).toBeGreaterThan(0);
+    for (const key of committed.keys) expect(Object.keys(key).sort()).toEqual(['alg', 'e', 'kid', 'kty', 'n', 'use']);
   });
 });
 

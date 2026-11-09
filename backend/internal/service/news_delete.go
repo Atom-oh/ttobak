@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -54,6 +55,10 @@ func (s *InsightsService) deletePublishedNews(ctx context.Context, userID string
 		return true, fmt.Errorf("news publication deletion is unavailable")
 	}
 	if err := writer.MarkNewsDeleted(ctx, keys[0], row, userID, isAdmin, accountID); err != nil {
+		if errors.Is(err, repository.ErrAccountNewsAccess) {
+			// Membership was revoked between the check and the commit.
+			return true, ErrForbidden
+		}
 		return true, err
 	}
 	scanCache.clear()
