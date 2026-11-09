@@ -27,6 +27,14 @@ type overviewTestRepo struct {
 	eventMore   bool
 	acctRefs    []model.MeetingRef // newest first
 	acctRefMore bool
+	// Graph fixtures.
+	members     []model.AccountMember
+	contacts    map[string]*model.AccountContact
+	contactErrs map[string]error
+	eventErrs   map[string]error
+	eventGets   int
+	meetingGets int
+	contactGets int
 }
 
 func newOverviewTestRepo() *overviewTestRepo {
@@ -54,9 +62,14 @@ func (r *overviewTestRepo) ListProjectMeetingRefsForProject(_ context.Context, i
 	return r.meetingRef[id], nil
 }
 func (r *overviewTestRepo) GetMeetingActionState(_ context.Context, owner, id string) (*model.Meeting, error) {
+	r.meetingGets++
 	return r.meetings[owner+":"+id], nil
 }
 func (r *overviewTestRepo) GetAccountEvent(_ context.Context, _ string, id string) (*model.AccountEvent, string, error) {
+	r.eventGets++
+	if err := r.eventErrs[id]; err != nil {
+		return nil, "", err
+	}
 	return r.events[id], "", nil
 }
 

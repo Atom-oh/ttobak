@@ -888,6 +888,40 @@ points. Items are placed only through stored links; nothing is inferred:
   items may then be missing, and unassigned items may have links that were not
   read.
 
+`GET /api/accounts/{accountId}/graph` returns the account's relationship graph
+for **direct** members (same access, query and caching rules as signals; not
+connector-delegable). The response is `{ nodes, edges, truncated }`, at most
+64 KiB. Nodes are `{id, kind, label}` with `id` `{kind}:{id}` (meetings
+`{ownerUserId}:{meetingId}`, news/tech `{sourceId}:{docHash}`), `kind`
+`account|project|meeting|event|news|tech|member|contact` and `label` capped at
+60 code points. Edges are `{from, to, kind, origin?}` with `kind`
+`project_account|meeting_project|meeting_account|link|attends|member_of`;
+`origin` (`manual`/`auto`) is set only on `link` edges. Every node comes from a
+revalidated relation; nothing is inferred:
+- projects that still list the account (up to 100 project refs); meetings
+  currently published to the account among the 100 newest account meeting
+  refs, with `meeting_project` edges to listed projects still in the account;
+  the 50 newest account events.
+- `LINK#` rows (at most 1,000 read). A row yields nodes and an edge only when
+  both endpoints revalidate: project still lists the account, news from one of
+  the account's current sources and tech documents not `DELETED`, event still
+  exists, meeting currently published to the account. A link never makes an
+  unpublished meeting visible. Rows whose missing endpoint nodes would exceed
+  the node cap are skipped without endpoint reads, and link rows spend at most
+  200 distinct uncached endpoint lookups (project, meeting publication, event,
+  document); skipped rows set `truncated`. At the node cap boundary a
+  revalidated from node can appear without its link edge.
+- direct members labelled `{email} ({role})`, as the account detail shows;
+  event attendees whose `contactId` names an existing account contact, as
+  `attends` edges labelled with the contact name. At most 200 distinct contacts
+  are read, and none once the node cap is full; skipped attendees set
+  `truncated`. Meeting project expansion stops reading projects once the node
+  cap is full.
+- At most 150 nodes and 300 edges. `truncated` reports that a node, edge, read
+  or size bound was hit, or that a single contact or linked event could not be
+  opened and was skipped. A missing record key or a storage failure still
+  fails the call.
+
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
 order and resolved range. Without `from`, ascending lists start now (upcoming)
@@ -1606,6 +1640,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
 | GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
 | GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
+| GET | `/api/accounts/{accountId}/graph` | `accountOverviewHandler.Graph` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
