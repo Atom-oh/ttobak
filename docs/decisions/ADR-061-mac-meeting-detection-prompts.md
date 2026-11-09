@@ -99,7 +99,12 @@ children attribute fails (any Accessibility status other than success, no
 value or unsupported) or that reaches the node or depth bound is unknown, as is a search cut short before every
 window was read, and a lost Accessibility grant feeds unknown to the hold, so
 none of them clears a retained mute. A Zoom menu read that fails is unreadable,
-not an empty menu bar. Hidden-tab or departed-call holds are not proof of the
+not an empty menu bar. Zoom counts as quit only when neither Core Audio nor a
+successful running-process scan finds its main `us.zoom.xos` executable, since
+it may capture through `us.zoom.caphost`/`us.zoom.CptHost` alone; while such a
+capture host has audio, a UI-confirmed meeting end falls back to the audio grace.
+Every Meet call showing a toggle counts, including calls read together, so a
+departed page of one call never ends another call that was seen. Hidden-tab or departed-call holds are not proof of the
 user's current intent. These limitations need native verification
 and remain separate from the compiled library's availability.
 

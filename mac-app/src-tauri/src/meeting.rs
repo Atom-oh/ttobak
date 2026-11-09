@@ -163,6 +163,29 @@ pub fn is_app_main_executable(path: &str) -> bool {
         && !path.contains("/Contents/Helpers/")
 }
 
+/// Zoom's main executable (`…/zoom.us.app/Contents/MacOS/zoom.us`), used to
+/// find Zoom among running processes when its main process has no Core Audio
+/// object.
+pub fn is_zoom_main_executable(path: &str) -> bool {
+    is_app_main_executable(path) && path.ends_with("/zoom.us.app/Contents/MacOS/zoom.us")
+}
+
+/// Zoom's separate audio capture hosts (see `NATIVE_APPS`).
+const ZOOM_HELPERS: &[&str] = &["us.zoom.caphost", "us.zoom.CptHost"];
+
+/// Whether a Core Audio process bundle ID is one of Zoom's capture hosts.
+pub fn is_zoom_helper(bundle_id: &str) -> bool {
+    ZOOM_HELPERS.iter().any(|id| matches_id(bundle_id, id))
+}
+
+/// Whether Zoom's UI-confirmed "meeting over" may end the Zoom meeting now.
+/// Audio running in a Zoom capture host is a live meeting the UI read may
+/// have missed, so it falls back to the audio grace period instead.
+/// `meeting_over` is only consulted when no helper audio runs.
+pub fn zoom_ui_ends_meeting(helper_audio: bool, meeting_over: impl FnOnce() -> bool) -> bool {
+    !helper_audio && meeting_over()
+}
+
 /// Classifies a Core Audio process bundle ID; `None` is not a meeting app.
 pub fn classify_bundle(bundle_id: &str) -> Option<MicUser> {
     if bundle_id == WEBKIT_GPU {
@@ -501,6 +524,52 @@ mod main_executable_tests {
             "/Applications/Microsoft Edge.app/Contents/Helpers/x.app/Contents/MacOS/x"
         ));
         assert!(!is_app_main_executable("/opt/homebrew/bin/node"));
+    }
+}
+
+#[cfg(test)]
+mod zoom_presence_tests {
+    use super::*;
+
+    #[test]
+    fn zoom_main_executable_is_recognized_by_path() {
+        assert!(is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/MacOS/zoom.us"
+        ));
+        assert!(is_zoom_main_executable(
+            "/Users/me/Applications/zoom.us.app/Contents/MacOS/zoom.us"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/Frameworks/CptHost.app/Contents/MacOS/CptHost"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/MacOS/zoom.us.helper"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/Other.app/Contents/MacOS/zoom.us"
+        ));
+    }
+
+    #[test]
+    fn zoom_capture_hosts_are_helpers() {
+        assert!(is_zoom_helper("us.zoom.caphost"));
+        assert!(is_zoom_helper("us.zoom.CptHost"));
+        assert!(!is_zoom_helper("us.zoom.xos"));
+        assert!(!is_zoom_helper("us.zoom.caphostile"));
+        // Helpers still classify as Zoom for detection.
+        assert_eq!(
+            classify_bundle("us.zoom.caphost"),
+            Some(MicUser::Native(MeetingKind::Zoom))
+        );
+    }
+
+    #[test]
+    fn helper_audio_overrides_a_ui_meeting_over() {
+        assert!(zoom_ui_ends_meeting(false, || true));
+        assert!(!zoom_ui_ends_meeting(false, || false));
+        assert!(!zoom_ui_ends_meeting(true, || true));
+        // The UI is not read while helper audio runs.
+        assert!(!zoom_ui_ends_meeting(true, || unreachable!()));
     }
 }
 

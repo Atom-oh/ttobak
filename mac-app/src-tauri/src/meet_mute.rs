@@ -7,7 +7,8 @@
 //! post-call screen ("Rejoin", "Return to home screen") counts as left; a page
 //! without the toggle is otherwise unknown and keeps the last state. Pages of
 //! other calls (the landing page or an earlier call) are not evidence. Once a
-//! second call has shown a toggle, no page is evidence the user left. Only the
+//! second call has shown a toggle (in the same read or later), no page is
+//! evidence the user left. Only the
 //! web area of a `meet.google.com` page in a browser instance using audio is
 //! read. An unreadable page (e.g. another tab in front) keeps the last state. Once a
 //! recording has followed Meet, leaving the call keeps the microphone silent,
@@ -108,21 +109,37 @@ pub struct Call {
 const MAX_SEEN_CALLS: usize = 8;
 
 impl Call {
+    fn see(&mut self, key: &str) {
+        if self.seen.iter().any(|k| k == key) {
+            return;
+        }
+        if self.seen.len() < MAX_SEEN_CALLS {
+            self.seen.push(key.to_owned());
+        }
+        // Counted even past the cap: only "more than one" matters.
+        self.calls = self.calls.saturating_add(1);
+    }
+
     /// Combines every Meet page read: an unmuted page wins, then a muted one.
     /// A page that could not be read may still hold the call. No page at all
     /// is unknown.
     pub fn judge(&mut self, pages: impl IntoIterator<Item = PageRead>) -> MicState {
         let pages: Vec<PageRead> = pages.into_iter().collect();
+        // Every page showing a toggle is a call, even one that does not win:
+        // two calls seen in one read disable left evidence like two in turn.
+        for p in &pages {
+            if let PageRead::Page { key, state } = p {
+                if matches!(state, MicState::Muted | MicState::Unmuted) {
+                    self.see(key);
+                }
+            }
+        }
         for want in [MicState::Unmuted, MicState::Muted] {
             let key = pages.iter().find_map(|p| match p {
                 PageRead::Page { key, state } if *state == want => Some(key.clone()),
                 _ => None,
             });
             if let Some(key) = key {
-                if !self.seen.contains(&key) && self.seen.len() < MAX_SEEN_CALLS {
-                    self.seen.push(key.clone());
-                    self.calls += 1;
-                }
                 self.last = Some(key);
                 return want;
             }
@@ -390,6 +407,56 @@ mod tests {
         assert_eq!(c.judge([page("b", MicState::Muted)]), MicState::Muted);
         // B's tab is unreadable (pushes nothing); A's old page has no toggle.
         assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+    }
+
+    #[test]
+    fn two_calls_in_one_read_both_count() {
+        // A and B both unmuted in one read; B's tab then goes to the background
+        // (no read) while A shows its post-call screen. B may still be live.
+        let mut c = Call::default();
+        assert_eq!(
+            c.judge([page("a", MicState::Unmuted), page("b", MicState::Unmuted)]),
+            MicState::Unmuted
+        );
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+
+        // Likewise when the second call is muted and does not win.
+        let mut c = Call::default();
+        assert_eq!(
+            c.judge([page("a", MicState::Unmuted), page("b", MicState::Muted)]),
+            MicState::Unmuted
+        );
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+        assert_eq!(c.judge([page("b", MicState::NoMeeting)]), MicState::Unknown);
+    }
+
+    #[test]
+    fn two_calls_in_one_read_never_end_the_meeting() {
+        use crate::meeting::MEET_LEFT_CONFIRM_MS;
+
+        let mut h = Hold::default();
+        let mut c = Call::default();
+        let both = [page("a", MicState::Unmuted), page("b", MicState::Unmuted)];
+        assert_eq!(h.observe(0, c.judge(both)), Silence::Open);
+        for t in [0, MEET_LEFT_CONFIRM_MS, 2 * MEET_LEFT_CONFIRM_MS] {
+            assert_eq!(
+                h.observe(t + 300, c.judge([page("a", MicState::NoMeeting)])),
+                Silence::Open
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_call_is_counted_once() {
+        let mut c = Call::default();
+        assert_eq!(
+            c.judge([page("a", MicState::Unmuted), page("a", MicState::Muted)]),
+            MicState::Unmuted
+        );
+        assert_eq!(
+            c.judge([page("a", MicState::NoMeeting)]),
+            MicState::NoMeeting
+        );
     }
 
     #[test]

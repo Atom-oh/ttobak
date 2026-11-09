@@ -134,10 +134,14 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
             browser: None,
         };
         let zoom_involved = sources.contains(&zoom) || state.detector.lock().tracks(&zoom);
+        // Audio in a Zoom capture host keeps the meeting to the audio grace,
+        // whatever the UI read says.
         let mut ended: Vec<String> = if zoom_involved
-            && crate::zoom_mute::meeting_over(crate::zoom_mute::ProcessSources {
-                process_pid: crate::audio::macos::process_pid,
-                browser_pids: capturing_browser_pids,
+            && crate::meeting::zoom_ui_ends_meeting(probe.zoom_helper_audio(), || {
+                crate::zoom_mute::meeting_over(crate::zoom_mute::ProcessSources {
+                    zoom_pid: crate::zoom_mute::zoom_pid,
+                    browser_pids: capturing_browser_pids,
+                })
             }) {
             vec![zoom.key()]
         } else {
@@ -378,7 +382,7 @@ pub async fn meeting_detection_respond(
 /// Google Meet mute follower reads only these (Safari's shared WebKit process
 /// has no resolvable instance).
 #[cfg(target_os = "macos")]
-pub use mac::{capturing_browser_pids, other_output_running};
+pub use mac::{capturing_browser_pids, other_output_running, running_app_pid};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -400,8 +404,8 @@ mod mac {
     };
 
     use crate::meeting::{
-        classify_bundle, classify_meeting_url, is_app_main_executable, Browser, MicUser, Source,
-        MEETING_URL_PREFIXES,
+        classify_bundle, classify_meeting_url, is_app_main_executable, is_zoom_helper, Browser,
+        MicUser, Source, MEETING_URL_PREFIXES,
     };
 
     /// Tab lists are refreshed at most this often per browser.
@@ -424,11 +428,18 @@ mod mac {
         /// raises the first Automation prompt; microphone use does.
         granted: HashSet<Browser>,
         audio_active: bool,
+        /// A Zoom capture host is capturing or playing audio.
+        zoom_helper_audio: bool,
     }
 
     impl Probe {
         pub fn audio_active(&self) -> bool {
             self.audio_active
+        }
+
+        /// Whether the last `sources` saw audio in a Zoom capture host.
+        pub fn zoom_helper_audio(&self) -> bool {
+            self.zoom_helper_audio
         }
 
         /// Meeting sources currently capturing or playing audio.
@@ -442,6 +453,7 @@ mod mac {
             let own_pid = std::process::id() as i32;
             let mut sources = Vec::new();
             self.audio_active = false;
+            self.zoom_helper_audio = false;
             for process in process_objects() {
                 let input = get_u32(process, kAudioProcessPropertyIsRunningInput) == Some(1);
                 let output = get_u32(process, kAudioProcessPropertyIsRunningOutput) == Some(1);
@@ -456,6 +468,7 @@ mod mac {
                 let Some(bundle) = bundle_id(process) else {
                     continue;
                 };
+                self.zoom_helper_audio |= is_zoom_helper(&bundle);
                 match classify_bundle(&bundle) {
                     Some(MicUser::Native(kind)) => sources.push(Source {
                         kind,
@@ -682,6 +695,44 @@ mod mac {
     extern "C" {
         fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, size: i32) -> i32;
         fn proc_pidpath(pid: i32, buffer: *mut c_void, size: u32) -> i32;
+        fn proc_listallpids(buffer: *mut c_void, buffersize: i32) -> i32;
+    }
+
+    /// PIDs of all running processes, `None` when the list could not be read.
+    fn all_pids() -> Option<Vec<i32>> {
+        let estimate = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+        if estimate <= 0 {
+            return None;
+        }
+        let mut capacity = estimate as usize + 64;
+        for _ in 0..4 {
+            let mut pids = vec![0i32; capacity];
+            let bytes = (capacity * std::mem::size_of::<i32>()) as i32;
+            let n = unsafe { proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+            if n <= 0 {
+                return None;
+            }
+            let n = n as usize;
+            if n < capacity {
+                pids.truncate(n);
+                return Some(pids);
+            }
+            // The list may have been cut short: retry with more room.
+            capacity *= 2;
+        }
+        None
+    }
+
+    /// PID of a running process (other than this app) whose executable path
+    /// satisfies `is_main`. `Err` when the process list could not be read;
+    /// absence is only reported from a successful read.
+    pub fn running_app_pid(is_main: fn(&str) -> bool) -> Result<Option<i32>, ()> {
+        let own_pid = std::process::id() as i32;
+        let pids = all_pids().ok_or(())?;
+        Ok(pids
+            .into_iter()
+            .filter(|&pid| pid > 0 && pid != own_pid)
+            .find(|&pid| executable_path(pid).is_some_and(|path| is_main(&path))))
     }
 
     /// `proc_bsdinfo`'s `pbi_ppid` follows four `u32` fields.
@@ -814,5 +865,17 @@ mod mac {
             CFString::wrap_under_create_rule(raw as core_foundation::string::CFStringRef)
         };
         Some(id.to_string()).filter(|s| !s.is_empty())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
+    /// The running-process scan reads other processes and never matches this one.
+    #[test]
+    fn running_app_pid_scans_running_processes() {
+        let own = std::process::id() as i32;
+        let any = super::running_app_pid(|path| path.starts_with('/'));
+        assert!(matches!(any, Ok(Some(pid)) if pid != own));
+        assert_eq!(super::running_app_pid(|_| false), Ok(None));
     }
 }

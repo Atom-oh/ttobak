@@ -781,7 +781,7 @@ pub mod macos {
                 app,
                 Arc::clone(&mic_muted),
                 crate::zoom_mute::ProcessSources {
-                    process_pid,
+                    zoom_pid: crate::zoom_mute::zoom_pid,
                     browser_pids: crate::meeting_detect::capturing_browser_pids,
                 },
             );
@@ -895,11 +895,11 @@ pub mod macos {
                 .ok_or_else(|| AppError::Backend("The recording is not running.".into()))?;
             // Check the new microphone can run at the WAV's rate before
             // touching the running capture.
-            if let Ok(probe) = create_aggregate(&uid, &self.tap_uid) {
-                let rate = match_rate(probe, self.sample_rate);
-                unsafe { AudioHardwareDestroyAggregateDevice(probe) };
-                rate?;
-            }
+            // A microphone that cannot even form an aggregate is refused here.
+            let probe = create_aggregate(&uid, &self.tap_uid)?;
+            let rate = match_rate(probe, self.sample_rate);
+            unsafe { AudioHardwareDestroyAggregateDevice(probe) };
+            rate?;
 
             let mut tx = match res.detach_engine() {
                 Ok(tx) => tx,
@@ -909,7 +909,7 @@ pub mod macos {
                     return Err(capture_stopped(&e));
                 }
             };
-            match self.attach_engine(res, &uid, id, &mut tx) {
+            match self.attach_engine(res, &uid, id, true, &mut tx) {
                 Ok(()) => {
                     log::info!("switched recording microphone to {}", selected.name);
                     self.mic_active.store(true, Ordering::Relaxed);
@@ -918,10 +918,21 @@ pub mod macos {
                 }
                 Err(e) => {
                     log::error!("microphone switch failed: {e}; restoring the previous one");
-                    let restored = previous.as_ref().and_then(|p| {
-                        let id = input_device_list().into_iter().find(|d| d.uid == p.uid)?.id;
-                        self.attach_engine(res, &p.uid, id, &mut tx).ok()
-                    });
+                    let restored = match previous.as_ref() {
+                        Some(p) => input_device_list()
+                            .into_iter()
+                            .find(|d| d.uid == p.uid)
+                            .and_then(|d| {
+                                self.attach_engine(res, &p.uid, d.id, true, &mut tx).ok()
+                            }),
+                        // Started without a microphone: rebuild the
+                        // system-audio-only aggregate on the output device.
+                        None => default_device(kAudioHardwarePropertyDefaultOutputDevice)
+                            .and_then(|out| Some((out, device_uid(out)?)))
+                            .and_then(|(out, out_uid)| {
+                                self.attach_engine(res, &out_uid, out, false, &mut tx).ok()
+                            }),
+                    };
                     if restored.is_none() {
                         // Nothing captures any more: close the queue so stop
                         // finalizes what was recorded.
@@ -935,13 +946,16 @@ pub mod macos {
             }
         }
 
-        /// Builds and starts an aggregate for `main_uid` feeding `tx`. The
-        /// layout of microphone `mic` is read after the rate is set.
+        /// Builds and starts an aggregate for `main_uid` (device `device`)
+        /// feeding `tx`. The layout is read after the rate is set: the
+        /// device's microphone channels when `mic`, else none (its own input
+        /// streams, if any, are skipped before the tap's).
         fn attach_engine(
             &self,
             res: &mut Resources,
             main_uid: &str,
-            mic: AudioObjectID,
+            device: AudioObjectID,
+            mic: bool,
             tx: &mut Option<SyncSender<Vec<f32>>>,
         ) -> Result<(), AppError> {
             if tx.is_none() {
@@ -956,7 +970,15 @@ pub mod macos {
                 return Err(e);
             }
             // Read after the rate change: a device's channel count can depend on its rate.
-            let Some(layout) = mic_layout(mic) else {
+            let layout = if mic {
+                mic_layout(device)
+            } else {
+                Some(ChannelLayout {
+                    skip: input_channels(device),
+                    mic: 0,
+                })
+            };
+            let Some(layout) = layout else {
                 *tx = res.detach_engine()?.or(tx.take());
                 return Err(AppError::Backend(
                     "The selected device has no input.".into(),

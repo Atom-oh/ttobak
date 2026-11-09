@@ -27,8 +27,24 @@ pub enum MicState {
 
 #[derive(Clone, Copy)]
 pub struct ProcessSources {
-    pub process_pid: fn(&str) -> Result<Option<i32>, ()>,
+    /// Zoom's main application process (see `resolve_zoom_pid`).
+    pub zoom_pid: fn() -> Result<Option<i32>, ()>,
     pub browser_pids: fn() -> Vec<i32>,
+}
+
+/// Zoom's main PID from Core Audio's process list, else from the running
+/// processes. Zoom may capture through a helper host (`us.zoom.caphost`,
+/// `us.zoom.CptHost`) while its main process has no Core Audio object, so
+/// that absence alone never means Zoom quit: only a successful scan of the
+/// running processes can report Zoom absent.
+pub(crate) fn resolve_zoom_pid(
+    core_audio: Result<Option<i32>, ()>,
+    running: impl FnOnce() -> Result<Option<i32>, ()>,
+) -> Result<Option<i32>, ()> {
+    match core_audio {
+        Ok(Some(pid)) => Ok(Some(pid)),
+        Ok(None) | Err(()) => running(),
+    }
 }
 
 pub fn classify_window_ids<'a>(identifiers: impl IntoIterator<Item = Option<&'a str>>) -> MicState {
@@ -189,6 +205,8 @@ pub fn ax_read(status: i32, has_value: bool) -> AxRead {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) use mac::zoom_pid;
 #[cfg(target_os = "macos")]
 pub use mac::{meeting_over, watch, Watch};
 
@@ -431,7 +449,7 @@ mod mac {
             return MicState::Unknown;
         }
         if !refreshed.is_some_and(|checked| checked.elapsed() < PID_REFRESH) {
-            match (sources.process_pid)(ZOOM_BUNDLE) {
+            match (sources.zoom_pid)() {
                 Ok(p) => {
                     *pid = p;
                     *refreshed = Some(Instant::now());
@@ -464,6 +482,14 @@ mod mac {
         current_state(&mut pid, &mut refreshed, sources) == MicState::NoMeeting
     }
 
+    /// Zoom's main PID: Core Audio's object for `us.zoom.xos`, else the
+    /// running process whose executable is Zoom's main one.
+    pub(crate) fn zoom_pid() -> Result<Option<i32>, ()> {
+        super::resolve_zoom_pid(crate::audio::macos::process_pid(ZOOM_BUNDLE), || {
+            crate::meeting_detect::running_app_pid(crate::meeting::is_zoom_main_executable)
+        })
+    }
+
     /// The running watcher; dropping it stops the thread.
     pub struct Watch {
         running: Arc<AtomicBool>,
@@ -493,7 +519,7 @@ mod mac {
         sources: ProcessSources,
     ) -> (Watch, Option<String>) {
         let running = Arc::new(AtomicBool::new(true));
-        let zoom_running = matches!((sources.process_pid)(ZOOM_BUNDLE), Ok(Some(_)));
+        let zoom_running = matches!((sources.zoom_pid)(), Ok(Some(_)));
         let browser_running = !(sources.browser_pids)().is_empty();
         let warning = ((zoom_running || browser_running) && !request_trust()).then(|| {
             "Allow TTOBAK in System Settings > Privacy & Security > Accessibility so the \
@@ -612,6 +638,22 @@ mod mac_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_presence_does_not_rest_on_its_core_audio_object() {
+        // Core Audio finds the main process: no scan needed.
+        assert_eq!(
+            resolve_zoom_pid(Ok(Some(7)), || unreachable!()),
+            Ok(Some(7))
+        );
+        // Only a helper host has a Core Audio object: the running scan decides.
+        assert_eq!(resolve_zoom_pid(Ok(None), || Ok(Some(9))), Ok(Some(9)));
+        assert_eq!(resolve_zoom_pid(Ok(None), || Ok(None)), Ok(None));
+        assert_eq!(resolve_zoom_pid(Ok(None), || Err(())), Err(()));
+        // A failed Core Audio read is not absence either.
+        assert_eq!(resolve_zoom_pid(Err(()), || Ok(Some(9))), Ok(Some(9)));
+        assert_eq!(resolve_zoom_pid(Err(()), || Err(())), Err(()));
+    }
 
     fn labels() -> Labels {
         Labels::new(
