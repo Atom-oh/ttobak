@@ -59,12 +59,22 @@ function renderSection(classFragment, context) {
   return renderToStaticMarkup(render());
 }
 
-for (const rejection of ['The selected device has no input.', new Error('Device is unavailable.')]) {
-  test(`Korean recovery: ${String(rejection)}`, async () => {
+const { nativeMicSwitchError } = load(
+  readFileSync(new URL('../src/lib/nativeMicSwitch.ts', import.meta.url), 'utf8'),
+  { Error },
+);
+
+for (const [rejection, detail] of [
+  ['The selected device has no input.', /\(The selected device has no input\.\)/],
+  [new Error('Device is unavailable.'), /\(Device is unavailable\.\)/],
+]) {
+  test(`Korean recovery shows the app's reason: ${String(rejection)}`, async () => {
     const states = [];
     const change = switchHandler({
       setMicSwitch: (value) => states.push(value),
       switchNativeRecordingInput: () => Promise.reject(rejection),
+      getNativeCaptureLost: async () => false,
+      nativeMicSwitchError,
       setNativeInputUid: () => assert.fail('failed selection'),
       setNativeInput: () => assert.fail('failed input'),
       Error,
@@ -72,13 +82,39 @@ for (const rejection of ['The selected device has no input.', new Error('Device 
     change('replacement');
     assert.equal(states[0].busy, true);
     await new Promise(setImmediate);
+    await new Promise(setImmediate);
     assert.equal(states.at(-1).busy, false);
     assert.match(states.at(-1).error, /마이크를 바꾸지 못했습니다/);
     assert.match(states.at(-1).error, /연결/);
     assert.match(states.at(-1).error, /녹음을 종료해 저장/);
-    assert.doesNotMatch(states.at(-1).error, /selected device|Device is unavailable/);
+    assert.match(states.at(-1).error, detail);
   });
 }
+
+test('a switch that stopped capture says the recording stopped', async () => {
+  const states = [];
+  const change = switchHandler({
+    setMicSwitch: (value) => states.push(value),
+    switchNativeRecordingInput: () => Promise.reject('capture stopped'),
+    getNativeCaptureLost: async () => true,
+    nativeMicSwitchError,
+    setNativeInputUid: () => assert.fail('failed selection'),
+    setNativeInput: () => assert.fail('failed input'),
+    Error,
+  });
+  change('replacement');
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  assert.match(states.at(-1).error, /녹음이 중단됐습니다/);
+  assert.match(states.at(-1).error, /지금 녹음을 종료해 저장/);
+});
+
+test('the switch error bounds the detail and omits an empty one', () => {
+  assert.doesNotMatch(nativeMicSwitchError(undefined, false), /\(/);
+  assert.doesNotMatch(nativeMicSwitchError('   ', false), /\(/);
+  const long = nativeMicSwitchError('x'.repeat(1000), false);
+  assert.ok(long.length < 400);
+});
 
 function renderStatus(nativeMicMuted) {
   return renderSection('flex items-center gap-2 px-4 py-2 bg-purple-50', {
@@ -87,9 +123,9 @@ function renderStatus(nativeMicMuted) {
   });
 }
 
-test('end status preserves uncertainty and is announced', () => {
-  const markup = renderStatus({ muted: true, app: 'Zoom', reason: 'meeting_ended' });
-  assert.match(markup, /상태를 확인할 수 없거나 회의가 끝나/);
+test('mute status names the app and is announced', () => {
+  const markup = renderStatus({ muted: true, app: 'Zoom', reason: 'muted' });
+  assert.match(markup, /Zoom에서 음소거 중이라 내 목소리는 녹음하지 않습니다/);
   assert.match(markup, /role="status"/);
   assert.match(markup, /aria-live="polite"/);
   assert.match(markup, /aria-atomic="true"/);
@@ -148,7 +184,9 @@ test('selector exposes only a present error', () => {
 test('the live microphone picker requires an app build that can switch', () => {
   assert.match(page, /isNativeRecording && nativeCanSwitch && \(/);
   const button = readFileSync(new URL('../src/components/RecordButton.tsx', import.meta.url), 'utf8');
-  assert.match(button, /onNativeInput\?\.\(resp\.input, resp\.can_switch_input === true\)/);
+  // Forwarded even for a mic-less start (no `input`).
+  assert.match(button, /onNativeInput\?\.\(resp\.input \?\? null, resp\.can_switch_input === true\)/);
+  assert.doesNotMatch(button, /if \(resp\.input\) onNativeInput/);
 });
 
 test('the wake retry timer is cleared with the page and rechecks the failed upload', () => {
