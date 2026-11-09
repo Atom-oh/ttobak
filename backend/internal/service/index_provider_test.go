@@ -144,13 +144,17 @@ func TestIndexProviderPaginatesSyncDiscoveryAndProjectionCleanup(t *testing.T) {
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
+			// lists 1 is the newest-jobs page; 2-3 page the STARTING filter.
 			if lists == 1 {
+				return indexHTTPResponse(200, `{"ingestionJobSummaries":[]}`, map[string]string{"Content-Type": "application/json"}), nil
+			}
+			if lists == 2 {
 				return indexHTTPResponse(200, `{"ingestionJobSummaries":[],"nextToken":"next"}`, map[string]string{"Content-Type": "application/json"}), nil
 			}
-			if body["nextToken"] != "next" {
+			if body["nextToken"] != "next" || body["filters"] == nil {
 				t.Fatal("lost provider pagination")
 			}
-			return indexHTTPResponse(200, `{"ingestionJobSummaries":[{"status":"IN_PROGRESS"}]}`, map[string]string{"Content-Type": "application/json"}), nil
+			return indexHTTPResponse(200, `{"ingestionJobSummaries":[{"status":"STARTING"}]}`, map[string]string{"Content-Type": "application/json"}), nil
 		}
 		objects++
 		if req.URL.Query().Get("prefix") != "canonical/v1/meeting/hash/" {
@@ -165,7 +169,7 @@ func TestIndexProviderPaginatesSyncDiscoveryAndProjectionCleanup(t *testing.T) {
 		return indexHTTPResponse(200, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>canonical/v1/meeting/hash/two</Key></Contents></ListBucketResult>`, nil), nil
 	})
 	busy, err := p.Busy(context.Background())
-	if err != nil || !busy || lists != 2 {
+	if err != nil || !busy || lists != 3 {
 		t.Fatalf("active provider job missed: %v %v %d", busy, err, lists)
 	}
 	keys, err := p.List(context.Background(), "canonical/v1/meeting/hash/")
