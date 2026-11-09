@@ -50,17 +50,39 @@ func PeopleResolvePublisher(client actionEventClient) func(context.Context, mode
 	}
 }
 
+// ErrPeopleRerunPending means a run ended with a rerun still requested after
+// its last allowed pass. The event worker returns it so the bounded
+// EventBridge retry performs that rerun instead of acknowledging it away.
+var ErrPeopleRerunPending = errors.New("people rerun pending")
+
 // ProcessPeopleResolveRequested runs one resolve request. A meeting request
 // whose meeting is no longer in the account is skipped; a busy run returns
-// nil because the lease holder reruns. Errors are returned for retry.
+// nil because the lease holder reruns. Errors, including a pending rerun, are
+// returned for retry.
 func (s *AccountPeopleService) ProcessPeopleResolveRequested(ctx context.Context, e model.PeopleResolveRequested) (PeopleRunResult, error) {
 	if err := ValidatePeopleResolveRequested(e); err != nil {
 		return PeopleRunResult{}, err
 	}
+	var res PeopleRunResult
+	var err error
 	if e.MeetingID == "" {
-		return s.ResolveAccount(ctx, e.AccountID, s.now().Add(-peopleBackfillWindow), maxPeopleBackfillMeetings, PeopleRunOptions{})
+		res, err = s.ResolveAccount(ctx, e.AccountID, s.now().Add(-peopleBackfillWindow), maxPeopleBackfillMeetings, PeopleRunOptions{})
+	} else {
+		res, err = s.resolveMeeting(ctx, e.OwnerID, e.MeetingID, e.AccountID, nil, PeopleRunOptions{})
 	}
-	return s.resolveMeeting(ctx, e.OwnerID, e.MeetingID, e.AccountID, nil, PeopleRunOptions{})
+	if err == nil && res.RerunPending {
+		err = ErrPeopleRerunPending
+	}
+	return res, err
+}
+
+// ResolveMeetingForAccount resolves one meeting only while it is published to
+// accountID; a meeting moved to another account is skipped without writes.
+func (s *AccountPeopleService) ResolveMeetingForAccount(ctx context.Context, accountID, ownerID, meetingID string, opt PeopleRunOptions) (PeopleRunResult, error) {
+	if !validLinkPlainID(accountID) || !validLinkPlainID(ownerID) || !validLinkPlainID(meetingID) {
+		return PeopleRunResult{}, ErrInvalidInput
+	}
+	return s.resolveMeeting(ctx, ownerID, meetingID, accountID, nil, opt)
 }
 
 // PeopleRunErrorCode maps a resolver error to a log code; error text may
@@ -73,6 +95,8 @@ func PeopleRunErrorCode(err error) string {
 		return "timeout"
 	case errors.Is(err, ErrInvalidInput):
 		return "invalid"
+	case errors.Is(err, ErrPeopleRerunPending):
+		return "rerun_pending"
 	case errors.Is(err, ErrNotFound):
 		return "not_found"
 	case errors.Is(err, repository.ErrContactEncryptionUnavailable):

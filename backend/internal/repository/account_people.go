@@ -816,11 +816,53 @@ func (r *DynamoDBRepository) PrunePeopleLink(ctx context.Context, accountID stri
 		gone,
 	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
-		var cancelled *types.TransactionCanceledException
-		if errors.As(err, &cancelled) {
-			return fmt.Errorf("%w: prune people link", ErrConditionFailed)
+		return classifyPrune(err, len(items), "prune people link")
+	}
+	return nil
+}
+
+// classifyPrune maps a cancellation made only of condition failures to
+// ErrConditionFailed; conflicts, throttling and other reasons stay retryable
+// transport errors.
+func classifyPrune(err error, n int, op string) error {
+	var cancelled *types.TransactionCanceledException
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == n {
+		failed := false
+		for _, reason := range cancelled.CancellationReasons {
+			switch aws.ToString(reason.Code) {
+			case "None":
+			case "ConditionalCheckFailed":
+				failed = true
+			default:
+				return fmt.Errorf("%s: %w", op, err)
+			}
 		}
-		return fmt.Errorf("prune people link: %w", err)
+		if failed {
+			return fmt.Errorf("%w: %s", ErrConditionFailed, op)
+		}
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// PruneUnresolvedMention deletes one unresolved mention row of a meeting
+// whose row no longer exists, re-checking the absence in the same
+// transaction. A live meeting maps to ErrConditionFailed.
+func (r *DynamoDBRepository) PruneUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error {
+	sk := model.MentionSortKey(hash, meetingID, role)
+	owner, meeting, ok := splitLinkMeetingID(meetingID)
+	if _, m, _, valid := parseMentionSortKey(sk); accountID == "" || !ok || !valid || m != meetingID {
+		return fmt.Errorf("invalid unresolved mention")
+	}
+	gone, err := r.linkConditionCheck(accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), expression.AttributeNotExists(expression.Name("PK")))
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, sk)}},
+		gone,
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return classifyPrune(err, len(items), "prune unresolved mention")
 	}
 	return nil
 }
