@@ -397,6 +397,24 @@ test('runBulkImport requests people linking for every account with saved rows an
   assert.deepEqual([0, 1].map(i => results[i].status), ['created', 'unchanged']);
 });
 
+test('runBulkImport reports resolved accounts and neither outcome when an account listing fails', async () => {
+  const { groupByCompany, runBulkImport } = load();
+  const contacts = [{ name: '김하나', company: '하나은행', email: 'kim@hanabank.com' }, { name: '최에스', company: 'SK텔레콤', email: 'choi@sktelecom.com' }];
+  const groups = groupByCompany(contacts, accounts);
+  const resolved = [];
+  const failed = [];
+  const api = {
+    createAccount: async () => assert.fail('no new account'),
+    listContacts: async (id) => { if (id === 'sk') throw Object.assign(new Error('down'), { status: 503 }); return { contacts: [] }; },
+    createContact: async (id, c) => ({ ...c, contactId: `${id}-1`, revision: 'r' }),
+    updateContact: async () => assert.fail('no updates'),
+    requestPeopleResolve: async () => ({ accepted: true }),
+  };
+  await runBulkImport(contacts, groups, {}, api, { onPeopleResolved: (id) => resolved.push(id), onPeopleResolveFailed: (id) => failed.push(id) });
+  assert.deepEqual(resolved, ['hana']);
+  assert.deepEqual(failed, [], 'a failed listing is not a resolve outcome, so an earlier failure stays listed');
+});
+
 test('runBulkImport resolves accounts of rows saved by an earlier run and never after an abort', async () => {
   const { groupByCompany, runBulkImport } = load();
   const contacts = [{ name: '김하나', company: '하나은행', email: 'kim@hanabank.com' }];

@@ -214,7 +214,7 @@ export async function runBulkImport(
   groups: CompanyGroup[],
   decisions: Record<string, GroupDecision>,
   api: BulkApi,
-  options: { onProgress?: (row: number, result: BulkRowResult) => void; onAccountCreated?: (groupKey: string, accountId: string) => void; onPeopleResolveFailed?: (accountId: string) => void; skipRows?: Set<number>; signal?: AbortSignal } = {},
+  options: { onProgress?: (row: number, result: BulkRowResult) => void; onAccountCreated?: (groupKey: string, accountId: string) => void; onPeopleResolveFailed?: (accountId: string) => void; onPeopleResolved?: (accountId: string) => void; skipRows?: Set<number>; signal?: AbortSignal } = {},
 ): Promise<Record<number, BulkRowResult>> {
   const { onProgress, onAccountCreated, signal } = options;
   const skip = options.skipRows || new Set<number>();
@@ -254,7 +254,9 @@ export async function runBulkImport(
     // have failed or been interrupted before its request.
     saved = saved || rows.some((row) => ['created', 'filled', 'unchanged'].includes(results[row]?.status || ''));
     const request = api.requestPeopleResolve;
-    if (saved && request && !(await requestPeopleResolve((s) => request(accountId, s), signal))) options.onPeopleResolveFailed?.(accountId);
+    if (!saved || !request || signal?.aborted) continue;
+    if (await requestPeopleResolve((s) => request(accountId, s), signal)) options.onPeopleResolved?.(accountId);
+    else options.onPeopleResolveFailed?.(accountId);
   }
   return results;
 

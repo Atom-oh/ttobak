@@ -154,3 +154,11 @@ func TestAccountPeopleHandler_UnbindQueryValidation(t *testing.T) {
 		t.Fatalf("key %+v", s.key)
 	}
 }
+
+func TestAccountPeopleHandler_ResolveReturnsJSONBody(t *testing.T) {
+	rec := servePeople(&accountPeopleStub{}, "POST", "/accounts/a1/people/resolve", "")
+	var body struct{ Accepted bool }
+	if rec.Code != 202 || json.Unmarshal(rec.Body.Bytes(), &body) != nil || !body.Accepted {
+		t.Fatalf("%d %q", rec.Code, rec.Body)
+	}
+}

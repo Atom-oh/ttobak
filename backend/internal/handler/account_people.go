@@ -182,5 +182,6 @@ func (h *AccountPeopleHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 		accountPeopleError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	// A JSON body: clients parse every non-204 response.
+	writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
 }

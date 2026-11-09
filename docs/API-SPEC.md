@@ -879,7 +879,7 @@ and only meetings currently published to the account count:
   label or a default diarization label (`spk_N` or the Korean speaker letter form). `DELETE /people/edges` takes the four
   key fields as query parameters, returns 204, and for an auto edge writes a
   deny row.
-- `POST /people/resolve` (no body, no query) returns 202 and queues one resolve
+- `POST /people/resolve` (no body, no query) returns 202 `{accepted: true}` and queues one resolve
   request for the account. Bulk and CSV contact imports write rows with
   `?peopleResolve=defer` and call it once per account with saved rows; a failed
   call is shown with a retry.

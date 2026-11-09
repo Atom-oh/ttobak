@@ -87,7 +87,8 @@ export function BulkContactImport({ userId }: { userId: string }) {
   const submit = async () => {
     const active = controller.current;
     if (!active || active.signal.aborted || busy || mapping.name === undefined) return;
-    setBusy(true); setError(''); setResolveFailed([]);
+    // Failed accounts stay listed until a later request for them succeeds.
+    setBusy(true); setError('');
     const signal = active.signal;
     const effectiveDecisions = Object.fromEntries(groups.map((group) => [group.key, decisionOf(group)]));
     setDecisions(effectiveDecisions);
@@ -115,7 +116,8 @@ export function BulkContactImport({ userId }: { userId: string }) {
         // The group now targets the created account, so a retry never creates it twice.
         onAccountCreated: (groupKey, accountId) => { if (!signal.aborted) setDecision(groupKey, { action: 'account', accountId }); },
         onProgress: (row, result) => { if (!signal.aborted) setResults((old) => ({ ...old, [row]: result })); },
-        onPeopleResolveFailed: (accountId) => { if (!signal.aborted) setResolveFailed((old) => [...old, accountId]); },
+        onPeopleResolveFailed: (accountId) => { if (!signal.aborted) setResolveFailed((old) => (old.includes(accountId) ? old : [...old, accountId])); },
+        onPeopleResolved: (accountId) => { if (!signal.aborted) setResolveFailed((old) => old.filter((id) => id !== accountId)); },
       });
     } catch (err) {
       if (signal.aborted) return;
