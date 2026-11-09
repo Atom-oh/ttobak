@@ -906,7 +906,10 @@ revalidated relation; nothing is inferred:
   both endpoints revalidate: project still lists the account, news from one of
   the account's current sources and tech documents not `DELETED`, event still
   exists, meeting currently published to the account. A link never makes an
-  unpublished meeting visible.
+  unpublished meeting visible. Once the node cap is full, rows whose endpoints
+  are not already nodes are skipped without endpoint reads, and link rows spend
+  at most 200 distinct uncached endpoint lookups (project, meeting publication,
+  event, document); skipped rows set `truncated`.
 - direct members labelled `{email} ({role})`, as the account detail shows;
   event attendees whose `contactId` names an existing account contact, as
   `attends` edges labelled with the contact name.

@@ -332,3 +332,54 @@ func TestGraph_SkipsUnopenableLinkedEvent(t *testing.T) {
 		t.Fatalf("missing key must fail: %v", err)
 	}
 }
+
+// Link rows whose endpoints are not nodes are not hydrated once the node cap
+// is full, and distinct endpoint lookups stay bounded either way.
+func TestGraph_LinkHydrationBounded(t *testing.T) {
+	t.Run("node cap full", func(t *testing.T) {
+		svc, repo, _, links := newGraphTest()
+		for i := 0; i < 90; i++ {
+			repo.addProject(&model.Project{ProjectID: fmt.Sprintf("p%03d", i), Name: "P", AccountIDs: []string{linkAcct}})
+		}
+		for i := 0; i < 100; i++ {
+			id := fmt.Sprintf("m%03d", i)
+			repo.meetings["o1:"+id] = flowMeeting("o1", id, signalsNow.Add(-day), true)
+			repo.acctRefs = append(repo.acctRefs, acctMeetingRef("o1", id, signalsNow.Add(-day)))
+		}
+		// Events beyond the newest 50 are reachable only through links.
+		for i := 0; i < 600; i++ {
+			e := flowEvent(i, signalsNow.Add(-day))
+			repo.events[e.EventID] = &e
+			links.links = append(links.links, model.AccountLink{FromKind: "event", FromID: e.EventID, ToKind: "project", ToID: "p000", Origin: "manual"})
+		}
+		repo.meetingGets = 0
+		g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkGraphConsistent(t, g)
+		if len(g.Nodes) != maxGraphNodes || !g.Truncated {
+			t.Fatalf("nodes=%d truncated=%v", len(g.Nodes), g.Truncated)
+		}
+		if repo.eventGets != 0 {
+			t.Fatalf("events hydrated past the node cap: %d", repo.eventGets)
+		}
+	})
+	t.Run("lookup budget", func(t *testing.T) {
+		svc, repo, _, links := newGraphTest()
+		repo.addProject(&model.Project{ProjectID: "p1", Name: "P1", AccountIDs: []string{linkAcct}})
+		for i := 0; i < 600; i++ {
+			// Removed events: each row costs a lookup and adds nothing.
+			links.links = append(links.links, model.AccountLink{FromKind: "event", FromID: flowEventID(i), ToKind: "project", ToID: "p1", Origin: "manual"})
+			links.links = append(links.links, model.AccountLink{FromKind: "news", FromID: linkSource + ":" + graphDocHash, ToKind: "meeting", ToID: fmt.Sprintf("o1:gone%03d", i), Origin: "manual"})
+		}
+		g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkGraphConsistent(t, g)
+		if !g.Truncated || repo.eventGets+repo.meetingGets > maxGraphLinkLookups {
+			t.Fatalf("lookups unbounded: events=%d meetings=%d truncated=%v", repo.eventGets, repo.meetingGets, g.Truncated)
+		}
+	})
+}

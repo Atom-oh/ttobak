@@ -956,6 +956,10 @@ const (
 	// maxGraphLinkRows bounds the LINK# rows read; more rows set Truncated.
 	maxGraphLinkRows  = 1000
 	graphLinkPageSize = 100
+	// maxGraphLinkLookups bounds the distinct uncached endpoint reads (project,
+	// meeting publication, event, document) that link rows may issue; rows
+	// past it are skipped and set Truncated.
+	maxGraphLinkLookups = 200
 	// MaxAccountGraphBytes bounds the encoded graph response.
 	MaxAccountGraphBytes = 64 * 1024
 )
@@ -970,6 +974,7 @@ type graphBuilder struct {
 	contacts map[string]*model.AccountContact
 	docs     map[string]*model.CrawledDocument
 	sources  map[string]bool
+	lookups  int // uncached endpoint reads spent by link rows
 }
 
 func graphNodeID(kind, id string) string { return kind + ":" + id }
@@ -1315,6 +1320,19 @@ func (s *AccountOverviewService) graphLinks(ctx context.Context, accountID strin
 				b.g.Truncated = true
 				return nil
 			}
+			// With the node cap full, only rows between present nodes can
+			// add output; never hydrate endpoints that could not be added.
+			if len(b.g.Nodes) >= maxGraphNodes && (!b.hasNode(link.FromKind, link.FromID) || !b.hasNode(link.ToKind, link.ToID)) {
+				b.g.Truncated = true
+				continue
+			}
+			if need := graphLinkLookups(link, b, reads); need > 0 {
+				if b.lookups+need > maxGraphLinkLookups {
+					b.g.Truncated = true
+					continue
+				}
+				b.lookups += need
+			}
 			if ok, err := s.graphLinkToCheck(ctx, accountID, link, b, reads); err != nil {
 				return err
 			} else if !ok {
@@ -1338,6 +1356,35 @@ func (s *AccountOverviewService) graphLinks(ctx context.Context, accountID strin
 		}
 		cursor = *next
 	}
+}
+
+// graphLinkLookups counts the uncached endpoint reads a link row would issue
+// before its nodes are known to fit.
+func graphLinkLookups(link model.AccountLink, b *graphBuilder, reads *overviewReads) int {
+	n := 0
+	switch link.ToKind {
+	case model.LinkKindProject:
+		if _, seen := reads.projects[link.ToID]; !seen {
+			n++
+		}
+	case model.LinkKindMeeting:
+		owner, meetingID, _ := splitMeetingLinkID(link.ToID)
+		if _, seen := reads.meetings[owner+":"+meetingID]; !seen {
+			n++
+		}
+	}
+	switch link.FromKind {
+	case model.LinkKindNews, model.LinkKindTech:
+		source, hash, _ := splitLinkDocID(link.FromID)
+		if _, seen := b.docs[source+":"+hash]; !seen && !b.hasNode(link.FromKind, link.FromID) {
+			n++
+		}
+	case model.LinkKindEvent:
+		if _, seen := reads.events[link.FromID]; !seen {
+			n++
+		}
+	}
+	return n
 }
 
 // graphLinkToCheck revalidates a link's to endpoint without adding a node.
