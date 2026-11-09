@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 func TestCrawlerDocumentCollectionIsolatesMalformedRows(t *testing.T) {
@@ -148,5 +149,26 @@ func TestCrawlerDeletedRowsDoNotConsumeVisiblePage(t *testing.T) {
 				t.Fatalf("tombstones exhausted visible page: %+v %v", docs, err)
 			}
 		})
+	}
+}
+
+func TestDecodeCrawlerDocument_SingularServiceFallback(t *testing.T) {
+	row := map[string]types.AttributeValue{
+		"PK":      &types.AttributeValueMemberS{Value: "CRAWLER#tech"},
+		"SK":      &types.AttributeValueMemberS{Value: "DOC#abc"},
+		"type":    &types.AttributeValueMemberS{Value: "tech"},
+		"service": &types.AttributeValueMemberS{Value: "Amazon EKS"},
+	}
+	doc, err := decodeCrawlerDocument(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.AWSServices) != 1 || doc.AWSServices[0] != "Amazon EKS" {
+		t.Fatalf("AWSServices = %v, want [Amazon EKS]", doc.AWSServices)
+	}
+	row["awsServices"] = &types.AttributeValueMemberL{Value: []types.AttributeValue{&types.AttributeValueMemberS{Value: "AWS Lambda"}}}
+	doc, _ = decodeCrawlerDocument(row)
+	if len(doc.AWSServices) != 1 || doc.AWSServices[0] != "AWS Lambda" {
+		t.Fatalf("explicit awsServices must win, got %v", doc.AWSServices)
 	}
 }
