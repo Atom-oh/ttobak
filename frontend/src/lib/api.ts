@@ -918,7 +918,7 @@ export const accountApi = {
     if (params?.to) q.set('to', params.to);
     if (params?.types?.length) q.set('types', params.types.join(','));
     const qs = q.toString();
-    return api.get<{ insights: AccountInsight[] }>(
+    return api.get<{ insights: AccountInsight[]; restrictedCount?: number }>(
       `/api/accounts/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`, options);
   },
   listDocuments: (id: string, docType?: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {

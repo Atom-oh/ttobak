@@ -827,6 +827,18 @@ func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accoun
 // optional period [from,to] and optional types. Member-gated. (spec §6.3: filter
 // client-side for v1.)
 func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accountID string, from, to time.Time, types []string) ([]model.AccountInsightDTO, error) {
+	page, err := s.ListAccountInsightsPage(ctx, userID, accountID, from, to, types)
+	if err != nil {
+		return nil, err
+	}
+	return page.Insights, nil
+}
+
+// ListAccountInsightsPage is ListAccountInsights plus the number of rows
+// skipped because their meeting's derived content is restricted for this
+// reader. A restricted meeting is skipped and counted instead of failing the
+// whole call; every other error still fails it.
+func (s *AccountService) ListAccountInsightsPage(ctx context.Context, userID, accountID string, from, to time.Time, types []string) (*model.AccountInsightsPage, error) {
 	grant, err := s.requireReadGrant(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
@@ -841,6 +853,7 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 		typeSet[t] = true
 	}
 	out := make([]model.AccountInsightDTO, 0, len(insights))
+	restrictedMeetings := make(map[string]struct{})
 	consumed := make([]model.AccountInsight, 0, len(insights))
 	for _, ins := range insights {
 		if !from.IsZero() && ins.OccurredAt.Before(from) {
@@ -872,7 +885,8 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			}
 			if meetingPublishedToAccount(meeting, ins.AccountID, ins.SourceUserID, ins.SourceID) &&
 				userID != meeting.UserID && accountMemberNeedsSummaryGuard(member) && !meeting.AccountSummaryMetadataShareable() {
-				return nil, ErrSummaryReadRestricted
+				restrictedMeetings[ins.SourceUserID+"/"+ins.SourceID] = struct{}{}
+				continue
 			}
 			if !accountMeetingInsightAllowed(meeting, member, ins, userID) {
 				continue
@@ -921,7 +935,7 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return &model.AccountInsightsPage{Insights: out, RestrictedCount: len(restrictedMeetings)}, nil
 }
 
 // GetAccountBrief composes account meta + insights (grouped by type) + shared

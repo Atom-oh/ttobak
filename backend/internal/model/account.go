@@ -297,6 +297,14 @@ type AccountInsightDTO struct {
 	Entities    []string  `json:"entities,omitempty"`
 }
 
+// AccountInsightsPage is the insights read result. RestrictedCount is the
+// number of meetings whose insights were excluded because their derived
+// content is restricted for the reader.
+type AccountInsightsPage struct {
+	Insights        []AccountInsightDTO `json:"insights"`
+	RestrictedCount int                 `json:"restrictedCount"`
+}
+
 // AccountBrief bundles an account's raw material for one-shot consumption by
 // the personal-side agent (SFDC/SIFT/2by2/Player Card prep). Insights are
 // grouped by type for convenience.
