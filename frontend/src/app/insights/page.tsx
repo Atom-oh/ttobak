@@ -49,7 +49,7 @@ export default function InsightsPage() {
               Insights
             </h2>
             <p className="text-slate-600 dark:text-text-muted mt-2">
-              Curated news and technical updates from your subscribed sources.
+              수집된 뉴스와 기술 업데이트를 한곳에서 확인합니다.
             </p>
           </div>
           <div className="lg:hidden mb-8">
@@ -57,7 +57,7 @@ export default function InsightsPage() {
               Insights
             </h2>
             <p className="text-slate-500 dark:text-text-muted mt-1">
-              Curated news and technical updates from your subscribed sources.
+              수집된 뉴스와 기술 업데이트를 한곳에서 확인합니다.
             </p>
           </div>
 

@@ -34,7 +34,8 @@ export function InsightsList() {
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   // Dropdown facets: customers load once; services come from the server over the full filtered set.
-  const [crawlerSourceIds, setCrawlerSourceIds] = useState<string[]>([]);
+  const [sourceFacet, setSourceFacet] = useState<string[]>([]);
+  const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
   const [serviceOptions, setServiceOptions] = useState<string[]>([]);
   // Set, not a single key -- a single value would let two concurrent
   // deletes clear each other's pending state in `finally`.
@@ -116,6 +117,7 @@ export function InsightsList() {
         setDocuments(docs);
         setTotalCount(response.totalCount || 0);
         setServiceOptions(response.services || []);
+        setSourceFacet(response.sourceIds || []);
       }
       return docs;
     } catch (err) {
@@ -278,8 +280,9 @@ export function InsightsList() {
     setPage(1);
   };
 
-  // Customer options come from the full source list, not the current page.
-  const uniqueCrawlerSources = crawlerSourceIds;
+  // Customer options come from the server facet over the full filtered set;
+  // subscribed sources only supply friendlier display names.
+  const uniqueCrawlerSources = sourceFacet;
   // Service options are the server-computed facet over the full filtered set.
   const uniqueServices = serviceOptions;
 
@@ -289,8 +292,11 @@ export function InsightsList() {
       .listSources()
       .then((res) => {
         if (cancelled) return;
-        const ids = (res.sources || []).map((s) => s.source?.sourceId).filter((id): id is string => !!id);
-        setCrawlerSourceIds(Array.from(new Set(ids)).sort());
+        const names: Record<string, string> = {};
+        (res.sources || []).forEach((s) => {
+          if (s.source?.sourceId && s.source.sourceName) names[s.source.sourceId] = s.source.sourceName;
+        });
+        setSourceNames(names);
       })
       .catch(() => {
         // Non-fatal: the customer dropdown simply stays hidden.
@@ -626,7 +632,7 @@ export function InsightsList() {
                   <option value="">All Customers</option>
                   {uniqueCrawlerSources.map((src) => (
                     <option key={src} value={src}>
-                      {src}
+                      {sourceNames[src] || src}
                     </option>
                   ))}
                 </select>

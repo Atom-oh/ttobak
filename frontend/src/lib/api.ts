@@ -693,6 +693,7 @@ export const insightsApi = {
       page: number;
       limit: number;
       services?: string[];
+      sourceIds?: string[];
     }>(`/api/insights?${q.toString()}`);
   },
   getDetail: (sourceId: string, docHash: string) =>
