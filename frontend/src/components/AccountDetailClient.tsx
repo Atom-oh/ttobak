@@ -16,6 +16,8 @@ import { AccountParentEditor } from '@/components/AccountParentEditor';
 import { AccountBillingTab } from '@/components/AccountBillingTab';
 import { AccountContacts } from '@/components/AccountContacts';
 import { AccountEvents } from '@/components/AccountEvents';
+import { AccountSignals } from '@/components/account/AccountSignals';
+import { AccountFlow } from '@/components/account/AccountFlow';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { fetchBillingAccounts } from '@/lib/billingApi';
@@ -106,7 +108,8 @@ function useAccountSection<T>(load: (signal: AbortSignal) => Promise<T>, enabled
     return () => controller.abort();
   }, [load, enabled, request, onAccessLost]);
   const current = enabled && result?.request === request ? result : null;
-  return { data: current?.data ?? null, loading: enabled && !current, error: current?.error ?? null, retry: () => setAttempt(previous => previous + 1) };
+  const retry = useCallback(() => setAttempt(previous => previous + 1), []);
+  return { data: current?.data ?? null, loading: enabled && !current, error: current?.error ?? null, retry };
 }
 
 function SectionStatus({ loading, error, retry }: { loading: boolean; error: string | null; retry: () => void }) {
@@ -279,6 +282,16 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const documentsState = useAccountSection(loadDocuments, !!account && tab === 'docs', onAccessLost);
   const researchState = useAccountSection(loadResearch, !!account && tab === 'projects', onAccessLost);
   const projectsState = useAccountSection(loadProjects, !!account && tab === 'projects', onAccessLost);
+  // Signals and flow are direct-member routes, like events and contacts.
+  const overviewVisible = eventsVisible && tab === 'general';
+  const loadSignals = useCallback((signal: AbortSignal) => accountApi.signals(accountId, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const loadFlow = useCallback((signal: AbortSignal) => accountApi.flow(accountId, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const signalsState = useAccountSection(loadSignals, overviewVisible, onAccessLost);
+  const flowState = useAccountSection(loadFlow, overviewVisible, onAccessLost);
+  const retrySignals = signalsState.retry;
+  const retryFlow = flowState.retry;
+  // Every link or news-source mutation changes both views.
+  const refreshOverview = useCallback(() => { retrySignals(); retryFlow(); }, [retrySignals, retryFlow]);
   const meetings = [...(meetingsState.data?.meetings ?? [])].sort((left, right) => {
     const leftDate = Date.parse(left.date);
     const rightDate = Date.parse(right.date);
@@ -557,6 +570,17 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                           : previous);
                         onParentUpdated?.(accountId, parentAccountId);
                       }} />
+                  )}
+
+                  {overviewVisible && user?.userId && (
+                    <>
+                      <SectionStatus {...signalsState} />
+                      {signalsState.data && <AccountSignals accountId={accountId} userId={user.userId} accountName={account.name}
+                        signals={signalsState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
+                      <SectionStatus {...flowState} />
+                      {flowState.data && <AccountFlow accountId={accountId} userId={user.userId}
+                        flow={flowState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
+                    </>
                   )}
 
                   {/* Members */}

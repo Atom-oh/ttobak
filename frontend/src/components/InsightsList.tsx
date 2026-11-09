@@ -6,6 +6,9 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { crawlerApi, insightsApi, researchApi } from '@/lib/api';
 import type { CrawledDocument, Research } from '@/types/meeting';
 import { InsightsTableView } from './InsightsTableView';
+import { useAuth } from '@/components/auth/AuthProvider';
+import { LinkToOpportunity } from '@/components/account/LinkToOpportunity';
+import { documentLinkId, documentLinkKind } from '@/lib/accountOverview';
 
 type TabType = 'news' | 'tech' | 'research';
 
@@ -24,6 +27,7 @@ function formatDate(value: string | number): string {
 
 export function InsightsList() {
   const router = useRouter();
+  const { user } = useAuth();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab') as TabType | null;
   const urlTab: TabType = rawTab && ['news', 'tech', 'research'].includes(rawTab) ? rawTab : 'news';
@@ -850,8 +854,8 @@ export function InsightsList() {
                   )}
 
                   {/* Footer: KB status + Read/Open buttons */}
-                  <div className="flex items-center justify-between mt-4">
-                    <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
+                    <div className="flex flex-wrap items-center gap-3">
                       {doc.inKB ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-0.5 rounded-full">
                           <span className="material-symbols-outlined text-sm">check_circle</span>
@@ -861,6 +865,10 @@ export function InsightsList() {
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
                           Not in KB
                         </span>
+                      )}
+                      {user?.userId && doc.sourceId && doc.docHash && (
+                        <LinkToOpportunity userId={user.userId} fromKind={documentLinkKind(doc.type)}
+                          fromId={documentLinkId(doc.sourceId, doc.docHash)} />
                       )}
                     </div>
                     <div className="flex items-center gap-2">
