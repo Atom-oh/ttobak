@@ -95,15 +95,14 @@ without a user confirmation.
   Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
   bar every 300 ms for the "Mute Audio"/"Unmute Audio" item, using labels from
   Zoom's own `Localizable.strings` in every language, and mixes the microphone
-  at zero gain while Zoom shows the user muted. Once a recording has followed
-  Zoom, a confirmed end (Zoom quit, or neither the `zm.meeting.window.main`
-  window nor an audio item remains) silences the microphone at once, and an
-  unreadable stretch over 3 s does too. A failed Core Audio process-list read
-  is not evidence Zoom quit; only a successful read without Zoom is. Unreadable inspection does not establish
-  whether the meeting ended or what Zoom itself captures; the UI preserves this
-  uncertainty. A recording that never saw a Zoom state records the microphone as before.
-  The same confirmed end lets detection end the Zoom meeting without the 20 s
-  audio grace.
+  at zero gain while Zoom shows the user muted. When the followed meeting
+  ends (Zoom quit, or neither the `zm.meeting.window.main` window nor an audio
+  item remains) or stays unreadable for over 3 s, the microphone reopens: a
+  wrong end then records the user rather than dropping their voice. A failed
+  Core Audio process-list read is not evidence Zoom quit. A recording that
+  never saw a Zoom state records the microphone as before. Detection still
+  ends a Zoom meeting only after the 20 s audio grace; ending it earlier on
+  Zoom's own UI is deferred until it is verified on a Mac.
 - Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads
   the Meet page of each Chromium browser instance playing or capturing audio
   through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). The
@@ -113,21 +112,18 @@ without a user confirmation.
   when it shows Meet's post-call screen ("Rejoin", "Return to home screen";
   the Korean forms are unverified). A page without the toggle is otherwise
   unknown and keeps the last state, so a toolbar hidden in the call (for
-  example behind a dialog) never silences the user. Pages of other calls (the
+  example behind a dialog) is never read as leaving. Pages of other calls (the
   landing page or an earlier call) are not evidence, and once a second call
-  has shown a toggle during the recording no page is: the audio grace
-  decides. Once a recording has followed Meet, leaving keeps the microphone
-  silent, as with Zoom. The gate waits for the left page to hold for 3 s, as
-  detection does.
+  has shown a toggle during the recording no page is. Leaving the followed
+  call, read for 3 s, reopens the microphone, as with Zoom.
   A recording that never saw the toggle (e.g. an unlisted language) records the
   microphone. An unreadable page (another tab in front) keeps the last state,
   including when Accessibility trust is lost after an observed state. Safari's
   shared WebKit process is not followed. Without Accessibility permission at
   startup, the response warns and the microphone records normally until a
   meeting's mute has been observed. Ad-hoc re-signing invalidates the grant,
-  as it does other TCC grants. The same left-call page, read for 3 s, ends a
-  tracked Meet meeting without the 20 s audio grace, as Zoom's confirmed end
-  does. Safari Meet meetings are not ended this way.
+  as it does other TCC grants. Detection ends a Meet meeting only after the
+  20 s audio grace, as before.
 - During a native recording, if other apps play audio for 30 s while the
   system tap has delivered only exact zeros, the app posts a notification that
   System Audio Recording is likely denied, instead of reporting it only at
@@ -153,10 +149,10 @@ meeting application's mute.
 
 When invoked, the watcher may request Accessibility access once per app launch.
 It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
-(`muted` or `meeting_ended`). Zoom labels come from its localization resources.
+(`muted`; `meeting_ended` is reserved and not emitted). Zoom labels come from its localization resources.
 Unreadable window identifiers are unknown, never a confirmed meeting end;
-the existing three-second unknown-state fallback can still silence a previously
-followed meeting during a long permission or inspection failure.
+after three seconds of unknown state the gate stops following and reopens the
+microphone.
 An observed Zoom silence reaches the microphone gate before synchronous browser
 inspection, so a slow Meet accessibility tree cannot delay that known decision.
 
