@@ -49,9 +49,12 @@ configuration.
 - Local state lives in `~/.ttobak/intake/` (0700 directory, 0600 files): the
   selection, per-source ledger, pending batch, status and a run lock.
 - Midway expiry surfaces as `AUTH_EXPIRED_MIDWAY` and needs a human `mwinit`.
-- The calendar source exposes no sensitivity flag in the observed output.
-  Real runs fail closed with `SENSITIVITY_UNKNOWN` when any item lacks one. The
-  user opts in with `--accept-unknown-sensitivity` only after acceptance shows
-  that private items are hidden or flagged. Dry runs report the count.
+- The calendar source exposes no sensitivity flag. On 2026-11-09 a synthetic
+  event marked Private in Outlook arrived from `calendar_view` with the same
+  fields as a public one, and no `aws-outlook-mcp` calendar tool mentions
+  sensitivity. Private items are therefore neither hidden nor flagged. Real runs
+  fail closed with `SENSITIVITY_UNKNOWN`; `--accept-unknown-sensitivity` means
+  accepting that private items reach the user's private TTOBAK calendar. Dry
+  runs report the count.
 - Codex TOML is read by a bounded in-repo parser (`toml.ts`); no new dependency.
 - The Mac Settings UI and app-managed schedule are Phase 2.

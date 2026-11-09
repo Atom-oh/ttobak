@@ -56,8 +56,9 @@ read as 7-day `calendar_view` requests.
    `intake calendar --dry-run`. Check that the counts are plausible.
 3. Create synthetic test events and verify each case:
    - a **private** event: is it hidden by the server, or does it carry a
-     sensitivity flag? Only if one of these holds, re-run `select` with
-     `--accept-unknown-sensitivity`;
+     sensitivity flag? Observed 2026-11-09: neither; it arrives like a public
+     event. `--accept-unknown-sensitivity` therefore accepts that private
+     items reach the private TTOBAK calendar;
    - a **moved occurrence** of a recurring event keeps its `meetingId`;
    - a **cancelled occurrence** arrives with `isCanceled: true`, or disappears
      (then it stays `unresolved`);
