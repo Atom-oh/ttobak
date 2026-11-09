@@ -806,7 +806,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
               )}
               {tab === 'meetings' && (
                 <>
-                  <div className="mb-8"><AccountSchedule accountId={accountId} /></div>
+                  {eventsVisible && user?.userId && <div className="mb-8"><AccountSchedule key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} /></div>}
                   <div className="mb-8"><PrivateUpcomingMeetings accountId={accountId} onAccessLost={onAccessLost} /></div>
                   {/* Shared meetings */}
                   <section className="mb-8">

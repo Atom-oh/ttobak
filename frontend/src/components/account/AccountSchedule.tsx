@@ -22,6 +22,7 @@ export function AccountSchedule({ accountId }: { accountId: string }) {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [denied, setDenied] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const busy = useRef(false);
   const generation = useRef(0);
@@ -38,8 +39,9 @@ export function AccountSchedule({ accountId }: { accountId: string }) {
       if (cursor && page.nextCursor === cursor) throw new Error('Calendar continuation did not advance');
       setEvents(previous => cursor ? [...previous, ...page.events] : page.events);
       setNextCursor(page.nextCursor);
-    } catch {
-      if (mine === generation.current) setError(true);
+    } catch (caught) {
+      const status = caught && typeof caught === 'object' && 'status' in caught ? Number(caught.status) : 0;
+      if (mine === generation.current) { if (status === 403 || status === 404) setDenied(true); else setError(true); }
     } finally {
       if (mine === generation.current) { busy.current = false; setLoading(false); }
     }
@@ -50,10 +52,12 @@ export function AccountSchedule({ accountId }: { accountId: string }) {
     busy.current = false;
     setEvents([]);
     setNextCursor(null);
+    setDenied(false);
     void load();
     return () => { generation.current += 1; busy.current = false; };
   }, [load, attempt]);
 
+  if (denied) return null;
   return (
     <section aria-label={SHARING_COPY.scheduleTitle} className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-5 shadow-sm sm:p-6">
       <h2 className="text-lg font-bold text-text-main">{SHARING_COPY.scheduleTitle}</h2>

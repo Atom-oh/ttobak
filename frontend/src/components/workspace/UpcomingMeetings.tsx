@@ -265,7 +265,7 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
               <h3 className="pt-3 text-sm font-semibold text-text-main">종일 일정</h3>
               <AgendaEvents key={`all-day:${displayWindow}`} events={allDay} label="종일" renderEvent={renderEvent} />
             </div>}
-            {sharingError && <p role="alert" className="text-sm text-red-500">{sharingError}</p>}
+            {sharingError && <p role="alert" className="text-sm text-error">{sharingError}</p>}
             {eventsError && <p role="alert" className="text-sm text-text-secondary">추가 일정을 불러오지 못했습니다. 불러온 일정은 유지됩니다.</p>}
             {nextCursor && <div className="space-y-2 text-sm text-text-secondary">
               <p>추가 일정 페이지가 있습니다. 불러온 일정만 표시합니다.</p>
