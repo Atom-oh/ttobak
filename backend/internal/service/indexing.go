@@ -211,6 +211,17 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		if failures != nil {
 			return result, errors.Join(failures, save(next))
 		}
+		// Members detached in an earlier tick of this batch, or by a cooldown,
+		// keep their removal obligations on their own job records; the sync
+		// decision must see them too, not only members prepared this tick.
+		for _, member := range next.Batch {
+			if needsSync {
+				break
+			}
+			if member.Detached {
+				needsSync = s.removalsPending(ctx, member.Resource)
+			}
+		}
 		if !needsSync {
 			// No submission token was minted, so no provider job can exist for
 			// this batch. Durable job obligations stay on their own records.

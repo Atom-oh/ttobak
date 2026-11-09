@@ -175,3 +175,44 @@ func TestIndexDetachedConflictWithRemovalsStillSyncs(t *testing.T) {
 		t.Fatalf("conflict tick started %d syncs, want 1 to purge deleted projections", got)
 	}
 }
+
+// A member detached in an earlier tick of the same EXPORTING batch is skipped
+// by the prepare loop; its unconfirmed removals must still drive the sync.
+func TestIndexPreviouslyDetachedMemberRemovalsDriveSync(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		removed    []string
+		wantStarts int
+	}{
+		{name: "pending removal syncs", removed: []string{"canonical/v1/meeting/old/meeting.md"}, wantStarts: 1},
+		{name: "no removal stays idle", wantStarts: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, repo, _, p, now := newIndexTest()
+			key := addIndexMeeting(repo, "m", "notes")
+			if _, err := s.Tick(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			finishIndex(t, s, p)
+			*now = now.Add(time.Minute)
+			job := *repo.jobs[key.Hash()]
+			job.State, job.ErrorCode, job.RemovedKeys = model.IndexFailed, "SOURCE_CHANGING", tc.removed
+			job.RetryAfter = now.Add(30 * time.Minute).UnixMilli()
+			repo.jobs[key.Hash()] = &job
+			control := *repo.control
+			control.Phase, control.Batch = "EXPORTING", []model.IndexMember{{Resource: key, Detached: true}}
+			control.LeaseUntil = 0
+			repo.control = &control
+			before := len(p.tokens)
+			if _, err := s.Tick(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(p.tokens) - before; got != tc.wantStarts {
+				t.Fatalf("started %d syncs, want %d", got, tc.wantStarts)
+			}
+			if tc.wantStarts == 0 {
+				assertIndexControlIdle(t, repo)
+			}
+		})
+	}
+}
