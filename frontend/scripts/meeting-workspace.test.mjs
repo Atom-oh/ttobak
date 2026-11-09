@@ -433,6 +433,37 @@ test('account groups preserve selected order and keep unassigned meetings in the
   ]);
 });
 
+test('internal meetings group after accounts in fixed category order and never override an account link', () => {
+  const { groupMeetingRows } = loadWorkspace()('@/lib/meetingWorkspace');
+  const groups = groupMeetingRows([
+    meeting('other', undefined, { meetingCategory: 'internal_other' }),
+    meeting('customer', undefined, { accountId: 'alpha' }),
+    meeting('one-on-one', undefined, { meetingCategory: 'internal_1on1' }),
+    meeting('team', undefined, { meetingCategory: 'internal_team' }),
+    meeting('linked-wins', undefined, { accountId: 'alpha', meetingCategory: 'internal_team' }),
+    meeting('unknown', undefined, { meetingCategory: 'internal_bogus' }),
+  ]);
+  assert.deepEqual(Array.from(groups, group => [group.accountId, group.category, ids(group.meetings)]), [
+    ['alpha', null, ['customer', 'linked-wins']], [null, null, ['unknown']],
+    [null, 'internal_team', ['team']], [null, 'internal_1on1', ['one-on-one']], [null, 'internal_other', ['other']],
+  ]);
+});
+
+test('category filter separates customer, internal and each internal subtype', () => {
+  const { matchesCategoryFilter } = loadWorkspace()('@/lib/meetingCategory');
+  const rows = [
+    meeting('customer', undefined, { accountId: 'alpha' }),
+    meeting('unassigned'),
+    meeting('team', undefined, { meetingCategory: 'internal_team' }),
+    meeting('one-on-one', undefined, { meetingCategory: 'internal_1on1' }),
+  ];
+  const pick = filter => ids(rows.filter(row => matchesCategoryFilter(row, filter)));
+  assert.deepEqual(pick(''), ['customer', 'unassigned', 'team', 'one-on-one']);
+  assert.deepEqual(pick('customer'), ['customer']);
+  assert.deepEqual(pick('internal'), ['team', 'one-on-one']);
+  assert.deepEqual(pick('internal_1on1'), ['one-on-one']);
+});
+
 test('previews inspect at most 2048 code points and emit at most 180 without splitting Unicode', () => {
   const { meetingPreview } = loadWorkspace()('@/lib/meetingWorkspace');
   assert.equal(meetingPreview(' '.repeat(2048) + 'must not be examined'), '');

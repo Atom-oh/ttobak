@@ -386,6 +386,7 @@ func init() {
 		r.Get("/api/vault/export", vaultHandler.ExportVault)
 		r.Get("/api/vault/reading", vaultReadingHandler.Get)
 		r.Post("/api/meetings/{meetingId}/account", meetingHandler.LinkToAccount)
+		r.Put("/api/meetings/{meetingId}/category", meetingHandler.SetCategory)
 		r.Post("/api/meetings/{meetingId}/share-account", shareHandler.ShareToAccount)
 
 		// Meeting routes

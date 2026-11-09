@@ -1,4 +1,5 @@
-import type { Meeting } from '@/types/meeting';
+import type { Meeting, MeetingCategory } from '@/types/meeting';
+import { INTERNAL_CATEGORIES, meetingInternalCategory } from '@/lib/meetingCategory';
 
 export interface MeetingViewOptions {
   sort: 'newest' | 'oldest';
@@ -57,15 +58,41 @@ export function selectMeetingRows(meetings: Meeting[], options: MeetingViewOptio
   });
 }
 
-export function groupMeetingRows(meetings: Meeting[]): { accountId: string | null; meetings: Meeting[] }[] {
+export interface MeetingRowGroup {
+  /** Linked account, or null for internal and unassigned groups. */
+  accountId: string | null;
+  /** Internal category, or null for account and unassigned groups. */
+  category: MeetingCategory | null;
+  meetings: Meeting[];
+}
+
+/**
+ * Account and unassigned groups keep first-seen order; internal groups follow
+ * them in the fixed category order so they render under one Internal section.
+ */
+export function groupMeetingRows(meetings: Meeting[]): MeetingRowGroup[] {
   const groups = new Map<string | null, Meeting[]>();
+  const internal = new Map<MeetingCategory, Meeting[]>();
   for (const meeting of meetings) {
+    const category = meetingInternalCategory(meeting);
+    if (category) {
+      const group = internal.get(category);
+      if (group) group.push(meeting);
+      else internal.set(category, [meeting]);
+      continue;
+    }
     const accountId = meeting.accountId || null;
     const group = groups.get(accountId);
     if (group) group.push(meeting);
     else groups.set(accountId, [meeting]);
   }
-  return Array.from(groups, ([accountId, rows]) => ({ accountId, meetings: rows }));
+  return [
+    ...Array.from(groups, ([accountId, rows]) => ({ accountId, category: null, meetings: rows })),
+    ...INTERNAL_CATEGORIES.flatMap(({ value }) => {
+      const rows = internal.get(value);
+      return rows ? [{ accountId: null, category: value, meetings: rows }] : [];
+    }),
+  ];
 }
 
 export function meetingDateBoundary(value: string, edge: 'from' | 'to'): string | undefined {
