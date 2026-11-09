@@ -471,6 +471,7 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 	if len(preparation) > 0 {
 		meeting.Notes = preparation[0].Notes
 		meeting.AccountID = preparation[0].AccountID
+		meeting.MeetingCategory = preparation[0].Category
 	}
 
 	item, err := attributevalue.MarshalMap(meeting)
@@ -1263,6 +1264,10 @@ func (r *DynamoDBRepository) updateMeetingFieldsChecked(ctx context.Context, use
 			// Audience clearance cannot survive unpublication/classification,
 			// including while provenance writers are disabled.
 			update = update.Remove(expression.Name("summaryAccountApproval"))
+		}
+		if account, _ := fields["accountId"].(string); accountChanged && account != "" {
+			// An account link and an internal category are mutually exclusive.
+			update = update.Remove(expression.Name("meetingCategory"))
 		}
 
 		expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(writeCond).Build()

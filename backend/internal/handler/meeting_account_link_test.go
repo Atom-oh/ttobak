@@ -51,7 +51,7 @@ func TestPrivateAccountRelinkUsesSingleAtomicPartialWrite(t *testing.T) {
 				names := map[string]string{}
 				for alias, field := range input.ExpressionAttributeNames {
 					names[field] = alias
-					if field != "PK" && field != "accountId" && field != "sharedToAccount" && field != "updatedAt" && field != "summaryAccountApproval" {
+					if field != "PK" && field != "accountId" && field != "sharedToAccount" && field != "updatedAt" && field != "summaryAccountApproval" && field != "meetingCategory" {
 						t.Fatalf("private link modifies unrelated field %s", field)
 					}
 				}
