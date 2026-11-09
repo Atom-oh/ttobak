@@ -307,6 +307,18 @@ shared office numbers can cause skips, and concurrent imports can race. Import i
 scoped to the currently selected Account and authenticated user. Manual entry,
 editing and deletion remain available.
 
+Settings also has a cross-account contact import (`BulkContactImport`,
+`src/lib/contactBulkImport.ts`). One Remember CSV/XLSX file is grouped by
+normalized company name (legal forms, case and spacing ignored), or by company
+mail domain when the company is blank. A group whose name or alias matches one
+directly joined Account imports there automatically; otherwise a matching
+company domain is used. Similar names (containment, shared head or bigram
+similarity) and unmatched groups ask the user to pick an Account, create a new
+one (with the mail domain), or drop the group; undecided groups drop. A row with
+the same email or phone as an existing contact fills only empty fields; differing
+values are listed as change candidates and are applied one at a time on request.
+Account aliases are not edited, because no alias update route exists.
+
 Initial Account creation can select another Owner by colleague or email.
 Show an unchecked "Keep me as a regular member (AM)" checkbox for this choice.
 Checked retains AM membership; unchecked hides and clears extra member selections,
