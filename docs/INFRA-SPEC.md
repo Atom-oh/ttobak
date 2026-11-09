@@ -644,6 +644,12 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 `ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
 (`TRANSCRIPT_CORRECTION_MODE`).
 
+`infra/cdk.json` sets `ttobak:kbTermsMode`, `ttobak:researchTermsMode` and
+`ttobak:newsTermsMode` to `on`. Source triggers fire only on new `Object Created`
+events, so objects uploaded before activation need a backfill, and news terms
+stay at `NO_DOCUMENTS` until a crawler source qualifies as global
+(`IsGlobalNewsSource`).
+
 ### Dictionary layer metrics
 
 `PipelineFailures.watchTermsLogs` adds metric filters on the summarize log group
