@@ -5,7 +5,9 @@ import {
   LINK_KIND_EVENT, flowUnlinkInput, isAutoLink, shortDate, stallLabel,
 } from '@/lib/accountOverview';
 import { stageLabel, UNSET_STAGE_LABEL } from '@/lib/projectStages';
+import { useState } from 'react';
 import type { AccountFlow as Flow, FlowItem, FlowRow } from '@/types/meeting';
+import { AccountGraph } from './AccountGraph';
 import { LinkToOpportunity, UnlinkButton } from './LinkToOpportunity';
 
 const TONE_CLASS = {
@@ -88,6 +90,7 @@ export function AccountFlow({ flow, ...actions }: { flow: Flow } & Actions) {
   const rows = flow.rows ?? [];
   const unassignedEvents = flow.unassigned?.activity ?? [];
   const unassignedMeetings = flow.unassigned?.response ?? [];
+  const [showGraph, setShowGraph] = useState(false);
   return <section className="mb-8" aria-labelledby="account-flow-heading">
     <h3 id="account-flow-heading" className="mb-3 text-base font-bold text-text-main">기회별 흐름</h3>
     {flow.truncated && <p role="status" className="mb-2 text-xs text-text-secondary">{TRUNCATED_NOTICE}</p>}
@@ -102,5 +105,14 @@ export function AccountFlow({ flow, ...actions }: { flow: Flow } & Actions) {
         <Column title="대응" items={unassignedMeetings} actions={actions} />
       </div>
     </div>}
+    <div className="mt-4">
+      <button type="button" aria-expanded={showGraph} onClick={() => setShowGraph(v => !v)}
+        className="rounded-lg border border-border-light px-3 py-1.5 text-sm font-medium text-text-main hover:bg-surface-container">
+        {showGraph ? '관계 숨기기' : '전체 관계 보기'}
+      </button>
+      {showGraph && <div className="mt-3">
+        <AccountGraph accountId={actions.accountId} userId={actions.userId} refreshKey={flow} />
+      </div>}
+    </div>
   </section>;
 }

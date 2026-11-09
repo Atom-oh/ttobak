@@ -18,13 +18,16 @@ import { AccountContacts } from '@/components/AccountContacts';
 import { AccountEvents } from '@/components/AccountEvents';
 import { AccountSignals } from '@/components/account/AccountSignals';
 import { AccountFlow } from '@/components/account/AccountFlow';
+import { AccountKB } from '@/components/account/AccountKB';
+import { AccountLinksPanel } from '@/components/account/AccountLinksPanel';
+import { eventProjectLinks } from '@/lib/accountOverview';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { fetchBillingAccounts } from '@/lib/billingApi';
 import { billingEntryFor, type BillingAccountEntry } from '@/lib/billingSummary';
 import { ACCOUNT_TAB_LABELS, accountTabHref, parseAccountTab, visibleAccountTabs, type AccountTab } from '@/lib/accountTabs';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
-import type { Account, User, AccountMember } from '@/types/meeting';
+import type { Account, AccountLink, User, AccountMember } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
@@ -86,6 +89,9 @@ function AccountWorkspaceSidebar({ userId, selectedId, onSelect }: {
     </div>
   );
 }
+
+// Bounded link scan for event-row unlink (100 rows per page).
+const EVENT_LINK_SCAN_PAGES = 5;
 
 function useAccountSection<T>(load: (signal: AbortSignal) => Promise<T>, enabled: boolean, onAccessLost: () => void) {
   const [attempt, setAttempt] = useState(0);
@@ -290,8 +296,44 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const flowState = useAccountSection(loadFlow, overviewVisible, onAccessLost);
   const retrySignals = signalsState.retry;
   const retryFlow = flowState.retry;
-  // Every link or news-source mutation changes both views.
-  const refreshOverview = useCallback(() => { retrySignals(); retryFlow(); }, [retrySignals, retryFlow]);
+  const [linksRevision, setLinksRevision] = useState(0);
+  // Event rows show their existing project links. One bounded scan of the
+  // account's links (not one call per row); the links panel is the complete view.
+  const loadEventLinks = useCallback(async (signal: AbortSignal) => {
+    const options = { signal, expectedUserId: user?.userId };
+    const [projectPage, links] = await Promise.all([
+      projectApi.accountProjects(accountId, options),
+      (async () => {
+        const all: AccountLink[] = [];
+        let cursor = '';
+        for (let page = 0; page < EVENT_LINK_SCAN_PAGES; page++) {
+          const result = await accountApi.links.list(accountId, cursor, options);
+          all.push(...(result.links ?? []));
+          cursor = result.nextCursor || '';
+          if (!cursor) break;
+        }
+        return all;
+      })(),
+    ]);
+    const names = new Map((projectPage.projects ?? []).map(project => [project.projectId, project.name]));
+    const byEvent: Record<string, { projectId: string; name: string }[]> = {};
+    for (const [eventId, projectIds] of Object.entries(eventProjectLinks(links))) {
+      byEvent[eventId] = projectIds.map(projectId => ({ projectId, name: names.get(projectId) || projectId }));
+    }
+    return byEvent;
+  }, [accountId, user?.userId]);
+  const eventLinksState = useAccountSection(loadEventLinks, eventsVisible && tab === 'events', onAccessLost);
+  const retryEventLinks = eventLinksState.retry;
+  // Every link or news-source mutation changes all of these views.
+  const refreshOverview = useCallback(() => {
+    retrySignals(); retryFlow(); retryEventLinks(); setLinksRevision(revision => revision + 1);
+  }, [retrySignals, retryFlow, retryEventLinks]);
+  const projectNames = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const row of flowState.data?.rows ?? []) if (row.oppty) names[row.oppty.projectId] = row.oppty.name;
+    for (const oppty of signalsState.data?.opportunities ?? []) names[oppty.projectId] = oppty.name;
+    return names;
+  }, [flowState.data, signalsState.data]);
   const meetings = [...(meetingsState.data?.meetings ?? [])].sort((left, right) => {
     const leftDate = Date.parse(left.date);
     const rightDate = Date.parse(right.date);
@@ -580,6 +622,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                       <SectionStatus {...flowState} />
                       {flowState.data && <AccountFlow accountId={accountId} userId={user.userId}
                         flow={flowState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
+                      <AccountLinksPanel accountId={accountId} userId={user.userId} projectNames={projectNames}
+                        revision={linksRevision} onChanged={refreshOverview} onAccessLost={onAccessLost} />
                     </>
                   )}
 
@@ -663,7 +707,12 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                 </>
               )}
               {tab === 'events' && eventsVisible && user?.userId && (
-                <AccountEvents key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId} />
+                <AccountEvents key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
+                  eventLinks={eventLinksState.data ?? undefined} onLinksChanged={refreshOverview} />
+              )}
+              {tab === 'kb' && eventsVisible && user?.userId && (
+                <AccountKB key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
+                  isOwner={isOwner} members={account.members} onAccessLost={onAccessLost} />
               )}
               {tab === 'insights' && (
                 <>

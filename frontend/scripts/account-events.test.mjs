@@ -64,8 +64,8 @@ function fixture(api) {
     '@/lib/dialog': { confirmDialog: async () => true },
     '@/lib/contactImport': { isContactAccessDenied: e => e?.status === 403 || e?.status === 401 },
     '@/lib/accountEvents': helpers,
-    '@/lib/accountOverview': { LINK_KIND_EVENT: 'event' },
-    '@/components/account/LinkToOpportunity': { LinkToOpportunity: () => null },
+    '@/lib/accountOverview': { LINK_KIND_EVENT: 'event', LINK_KIND_PROJECT: 'project' },
+    '@/components/account/LinkToOpportunity': { LinkToOpportunity: () => null, UnlinkButton: () => null },
   };
   vm.runInNewContext(transpile('../src/components/AccountEvents.tsx'), { exports, require: name => modules[name], AbortController, Date, console });
   const draw = () => { cursor = 0; effects = []; const tree = exports.AccountEvents({ accountId: 'a', userId: 'u' }); effects.forEach(fn => fn()); return tree; };
