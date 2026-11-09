@@ -24,6 +24,7 @@ type accountNewsRepo interface {
 	ListAccountNewsSources(context.Context, string) ([]model.AccountNewsSourceRef, error)
 	DeleteAccountNewsSource(context.Context, string, string, string) error
 	ReconcileAccountNewsSourceCount(ctx context.Context, accountID string) (int, error)
+	GetAccountNewsSourceCount(ctx context.Context, accountID string) (count int, exists bool, err error)
 }
 
 type accountNewsCrawler interface {
@@ -168,6 +169,10 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 	if len(refs) >= maxAccountNewsSources {
 		return nil, ErrInvalidInput
 	}
+	observed, err := s.repairLowCounter(ctx, accountID, len(refs))
+	if err != nil {
+		return nil, err
+	}
 
 	var customURLs []string
 	if req.CopyFromSourceID != "" {
@@ -202,7 +207,7 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 	}
 
 	now := s.now().UTC()
-	observed, reconciled := len(refs), false
+	reconciled := false
 	for collisions := 0; collisions < 2; {
 		suffix, err := s.randHex()
 		if err != nil {
@@ -249,6 +254,29 @@ func (s *AccountNewsService) Create(ctx context.Context, userID, accountID strin
 		}
 	}
 	return nil, fmt.Errorf("account news source id collision")
+}
+
+// repairLowCounter reconciles a source counter that is below the observed
+// ref count (left low by a writer that predates the counter) before the
+// create, so the counter condition enforces the cap again. It returns the ref
+// count to use; a reconciled count at the cap is ErrInvalidInput. A high
+// counter is left to the limit-failure reconcile in Create.
+func (s *AccountNewsService) repairLowCounter(ctx context.Context, accountID string, refs int) (int, error) {
+	count, exists, err := s.repo.GetAccountNewsSourceCount(ctx, accountID)
+	if err != nil {
+		return 0, err
+	}
+	if !exists || count >= refs {
+		return refs, nil
+	}
+	reconciled, err := s.repo.ReconcileAccountNewsSourceCount(ctx, accountID)
+	if err != nil {
+		return 0, err
+	}
+	if reconciled >= maxAccountNewsSources {
+		return 0, ErrInvalidInput
+	}
+	return reconciled, nil
 }
 
 // accountSources returns the account's sources whose CONFIG still names the
