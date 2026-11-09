@@ -218,7 +218,7 @@ for a separate ttobak-connections table described an obsolete design.
 
 | Artifact | Packaging / runtime | Timeout | Memory |
 |---|---|---|---|
-| api | Go ARM64 zip, provided.al2023 | 30s | 256MB |
+| api | Go ARM64 zip, provided.al2023 | 30s | 1024MB |
 | research-worker | Go ARM64 zip | 15m | 512MB |
 | transcribe | Go ARM64 zip | 5m | 512MB |
 | summarize | Go ARM64 zip | 15m | 512MB |
