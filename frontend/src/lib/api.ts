@@ -9,6 +9,7 @@ import type { CreateDictTermInput, DeletedCommonTerm, DictionaryLayer, Dictionar
 import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
 import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
 import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
+import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -958,6 +959,16 @@ export const accountApi = {
         fromKind: input.fromKind, fromId: input.fromId, toKind: input.toKind, toId: input.toId,
       })}`, options),
   },
+  kb: (id: string, kind: AccountKBKind, cursor?: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const query = new URLSearchParams({ kind });
+    if (cursor) query.set('cursor', cursor);
+    return api.get<AccountKBPage>(`/api/accounts/${encodeURIComponent(id)}/kb?${query}`, { ...options, cache: 'no-store' });
+  },
+  // The presigned URL is short-lived: never cache it.
+  kbDownload: (id: string, refId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ url: string }>(`/api/accounts/${encodeURIComponent(id)}/kb/${encodeURIComponent(refId)}/download`, { ...options, cache: 'no-store' }),
+  kbUntag: (id: string, refId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/kb/${encodeURIComponent(refId)}`, options),
   newsSources: {
     list: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.get<{ sources: CrawlerSource[] }>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, { ...options, cache: 'no-store' }),

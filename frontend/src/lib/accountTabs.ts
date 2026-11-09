@@ -1,4 +1,4 @@
-export const ACCOUNT_TABS = ['general', 'meetings', 'events', 'insights', 'projects', 'docs', 'billing'] as const;
+export const ACCOUNT_TABS = ['general', 'meetings', 'events', 'insights', 'projects', 'docs', 'kb', 'billing'] as const;
 export type AccountTab = (typeof ACCOUNT_TABS)[number];
 
 export const ACCOUNT_TAB_LABELS: Record<AccountTab, string> = {
@@ -8,17 +8,18 @@ export const ACCOUNT_TAB_LABELS: Record<AccountTab, string> = {
   insights: '인사이트',
   projects: '프로젝트',
   docs: '문서',
+  kb: '자료(KB)',
   billing: 'Billing',
 };
 
-/** Events (shared schedules) are visible to direct members only, like contacts. */
+/** Events and KB are visible to direct members only, like contacts. */
 export function visibleAccountTabs(billingVisible: boolean, eventsVisible = false): AccountTab[] {
-  return ACCOUNT_TABS.filter((tab) => (tab !== 'billing' || billingVisible) && (tab !== 'events' || eventsVisible));
+  return ACCOUNT_TABS.filter((tab) => (tab !== 'billing' || billingVisible) && (tab !== 'events' || eventsVisible) && (tab !== 'kb' || eventsVisible));
 }
 
 export function parseAccountTab(value: string | null, billingVisible: boolean, eventsVisible = false): AccountTab {
   const tab = ACCOUNT_TABS.find((t) => t === value);
-  if (!tab || (tab === 'billing' && !billingVisible) || (tab === 'events' && !eventsVisible)) return 'general';
+  if (!tab || (tab === 'billing' && !billingVisible) || (tab === 'events' && !eventsVisible) || (tab === 'kb' && !eventsVisible)) return 'general';
   return tab;
 }
 
