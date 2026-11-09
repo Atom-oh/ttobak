@@ -2,11 +2,15 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -142,5 +146,35 @@ func TestListAccountNewsSourcesReadsAllPagesFromKeys(t *testing.T) {
 	refs, err := repo.ListAccountNewsSources(context.Background(), "acc")
 	if err != nil || calls != 2 || len(refs) != 2 || refs[0].SourceID != "acct_acc_00000001" || refs[0].AccountID != "acc" || refs[1].SourceID != "acct_acc_00000002" {
 		t.Fatalf("refs: %+v %v", refs, err)
+	}
+}
+
+// Per-user partial source writes refuse account-owned sources in the write
+// condition itself, and report the refusal as ErrAccountSource (not retryable).
+func TestUserSourceWritesRefuseAccountOwnedSource(t *testing.T) {
+	for _, owned := range []bool{false, true} {
+		var cond string
+		client := dynamodb.New(dynamodb.Options{
+			Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+			HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+				var body map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				cond = resolved(body, "ConditionExpression")
+				item := `{}`
+				if owned {
+					item = `{"accountId":{"S":"acc"}}`
+				}
+				return &http.Response{StatusCode: 400, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+					Body: io.NopCloser(strings.NewReader(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed","Item":` + item + `}`))}, nil
+			}),
+		})
+		queries := []string{"q"}
+		err := NewCrawlerRepository(client, "t").UpdateSourcePartial(context.Background(), "src", &model.CrawlerSource{}, SourcePartialFields{NewsQueries: &queries})
+		requireAll(t, "account guard", cond, "attribute_not_exists (accountId)")
+		if owned != errors.Is(err, ErrAccountSource) || owned == errors.Is(err, ErrConditionFailed) {
+			t.Fatalf("owned=%v err=%v", owned, err)
+		}
 	}
 }

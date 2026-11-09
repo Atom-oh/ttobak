@@ -803,7 +803,9 @@ are the account name plus its aliases; at most 10 sources per account. GET
 returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
 account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 `disabled` (so scheduling stops) in one transaction; returns 204, or 404 for an
-unknown source.
+unknown source. Per-user crawler routes (subscribe/AddSource, update,
+unsubscribe) refuse account-owned sources like operator-curated ones, in the
+service and in the `attribute_not_exists(accountId)` write condition.
 
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,

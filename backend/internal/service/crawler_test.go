@@ -80,6 +80,9 @@ func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string
 	if current.GlobalNewsSource {
 		return fmt.Errorf("%w: source %s", repository.ErrOperatorSource, sourceID)
 	}
+	if current.AccountID != "" {
+		return fmt.Errorf("%w: source %s", repository.ErrAccountSource, sourceID)
+	}
 	if fields.RequireOwnerID != nil && current.OwnerID != *fields.RequireOwnerID {
 		return repository.ErrConditionFailed
 	}

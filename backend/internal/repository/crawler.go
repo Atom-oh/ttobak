@@ -229,6 +229,10 @@ type SourcePartialFields struct {
 // source (globalNewsSource set on its CONFIG item).
 var ErrOperatorSource = errors.New("operator-curated crawler source")
 
+// ErrAccountSource refuses a per-user write to an account-owned source
+// (accountId set on its CONFIG item); only account news paths manage it.
+var ErrAccountSource = errors.New("account-owned crawler source")
+
 // UpdateSourcePartial performs a partial UpdateItem for the crawler source at
 // sourceID, SETting exactly the non-nil fields in `fields`. Every caller is a
 // user path, so the update also requires attribute_not_exists(globalNewsSource)
@@ -281,6 +285,8 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 	// Operator sources are never modified by user paths, even in a race with
 	// the operator marking them; every user write taints the source for good.
 	cond = cond.And(expression.AttributeNotExists(expression.Name("globalNewsSource")))
+	// Account-owned sources are changed only through account membership paths.
+	cond = cond.And(expression.AttributeNotExists(expression.Name("accountId")))
 	update = update.Set(expression.Name("userTiedAt"),
 		expression.IfNotExists(expression.Name("userTiedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339))))
 	if fields.RequireOwnerID != nil {
@@ -312,6 +318,9 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 		if errors.As(err, &ccfe) {
 			if _, marked := ccfe.Item["globalNewsSource"]; marked {
 				return fmt.Errorf("%w: source %s", ErrOperatorSource, sourceID)
+			}
+			if _, owned := ccfe.Item["accountId"]; owned {
+				return fmt.Errorf("%w: source %s", ErrAccountSource, sourceID)
 			}
 			return fmt.Errorf("%w: source %s fields changed concurrently", ErrConditionFailed, sourceID)
 		}
