@@ -212,6 +212,13 @@ Account classification and team publication remain separate. Account meeting and
 insight projections recheck current canonical publication with strong metadata
 reads before returning stored excerpts. See [workflow](features/sa-meeting-workflow.md).
 
+Calendar data flow: the local `ttobak-mcp intake` runner reads Outlook, matches
+events to Accounts and sends bounded batches to the authenticated calendar API
+(ADR-065). Owner events stay private; an event shared with an Account is written
+as an encrypted share row in that Account's partition and read only by direct
+members. One veto hides it, and QA, briefs, KB, vault export and MCP tools never
+read it (ADR-066).
+
 ## New processing and reading contracts
 
 The news enrichment replacement starts with staged, unused discovery, candidate,

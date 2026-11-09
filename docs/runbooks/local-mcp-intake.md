@@ -294,7 +294,7 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
    - an all-day event.
 4. Run `intake calendar` and compare with `ttobak_list_calendar_events`.
    Re-run and confirm that the mutations are empty.
-5. Record the date and results in ADR-065's status line.
+5. Record the date and results in ADR-066's status line.
 
 ### Task step acceptance
 
