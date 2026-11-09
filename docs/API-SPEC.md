@@ -1729,6 +1729,13 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
 | POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
 | DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
+| GET | `/api/accounts/{accountId}/people` | `accountPeopleHandler.List` |
+| GET | `/api/accounts/{accountId}/people/mentions` | `accountPeopleHandler.Mentions` |
+| POST | `/api/accounts/{accountId}/people/mentions/{mentionKey}/resolve` | `accountPeopleHandler.ResolveMention` |
+| POST | `/api/accounts/{accountId}/people/mentions/{mentionKey}/ignore` | `accountPeopleHandler.IgnoreMention` |
+| GET | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Edges` |
+| POST | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Bind` |
+| DELETE | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Unbind` |
 | GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
 | GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
 | GET | `/api/accounts/{accountId}/graph` | `accountOverviewHandler.Graph` |
