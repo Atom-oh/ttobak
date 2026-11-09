@@ -151,6 +151,25 @@ fn matches_id(bundle_id: &str, id: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('.'))
 }
 
+/// Whether `path` is an application's main executable
+/// (`<App>/Contents/MacOS/<exe>`), not a helper nested in its frameworks.
+/// A browser's audio runs in a helper; walking parent processes to the first
+/// main executable finds the browser instance that owns that audio.
+pub fn is_app_main_executable(path: &str) -> bool {
+    // Chrome may run from a code-sign clone (`…/Google Chrome.app.bundle/…`),
+    // so the bundle directory's extension is not checked.
+    path.contains("/Contents/MacOS/")
+        && !path.contains("/Contents/Frameworks/")
+        && !path.contains("/Contents/Helpers/")
+}
+
+/// Zoom's main executable (`…/zoom.us.app/Contents/MacOS/zoom.us`), used to
+/// find Zoom among running processes when its main process has no Core Audio
+/// object.
+pub fn is_zoom_main_executable(path: &str) -> bool {
+    is_app_main_executable(path) && path.ends_with("/zoom.us.app/Contents/MacOS/zoom.us")
+}
+
 /// Classifies a Core Audio process bundle ID; `None` is not a meeting app.
 pub fn classify_bundle(bundle_id: &str) -> Option<MicUser> {
     if bundle_id == WEBKIT_GPU {
@@ -190,6 +209,12 @@ fn is_meet_code(path: &str) -> bool {
 /// Classifies a browser tab URL as an in-progress web meeting.
 pub fn classify_meeting_url(url: &str) -> Option<MeetingKind> {
     if let Some(path) = url.strip_prefix("https://meet.google.com/") {
+        // Some entry points (e.g. Calendar) open the room under a `meet/` or
+        // `_meet/` prefix: `meet.google.com/meet/abc-defg-hij`.
+        let path = ["meet/", "_meet/"]
+            .iter()
+            .find_map(|p| path.strip_prefix(p))
+            .unwrap_or(path);
         return is_meet_code(path).then_some(MeetingKind::GoogleMeet);
     }
     if url.starts_with("https://teams.microsoft.com/") || url.starts_with("https://teams.live.com/")
@@ -200,6 +225,30 @@ pub fn classify_meeting_url(url: &str) -> Option<MeetingKind> {
         return Some(MeetingKind::Zoom);
     }
     None
+}
+
+/// A Meet page that has left the call must be read this long before the
+/// microphone gate stops following it (a reloading page briefly shows no
+/// toolbar).
+pub const MEET_LEFT_CONFIRM_MS: u64 = 3_000;
+
+/// Tracks how long a browser meeting's page has shown it left the call.
+#[derive(Debug, Default)]
+pub struct LeftCall {
+    since: Option<u64>,
+}
+
+impl LeftCall {
+    /// `left`: the page was read and shows no call. Returns true once that
+    /// has held for `MEET_LEFT_CONFIRM_MS`.
+    pub fn observe(&mut self, now_ms: u64, left: bool) -> bool {
+        if !left {
+            self.since = None;
+            return false;
+        }
+        let since = *self.since.get_or_insert(now_ms);
+        now_ms.saturating_sub(since) >= MEET_LEFT_CONFIRM_MS
+    }
 }
 
 /// One meeting source currently using the microphone.
@@ -382,6 +431,80 @@ impl Detector {
 }
 
 #[cfg(test)]
+mod left_call_tests {
+    use super::*;
+
+    #[test]
+    fn a_left_page_holds_for_the_confirm_window() {
+        let mut l = LeftCall::default();
+        assert!(!l.observe(0, true));
+        assert!(!l.observe(MEET_LEFT_CONFIRM_MS - 1, true));
+        assert!(l.observe(MEET_LEFT_CONFIRM_MS, true));
+    }
+
+    #[test]
+    fn a_call_page_in_between_restarts_the_window() {
+        let mut l = LeftCall::default();
+        assert!(!l.observe(0, true));
+        assert!(!l.observe(2_000, false));
+        assert!(!l.observe(2_500, true));
+        assert!(!l.observe(2_500 + MEET_LEFT_CONFIRM_MS - 1, true));
+        assert!(l.observe(2_500 + MEET_LEFT_CONFIRM_MS, true));
+    }
+}
+
+#[cfg(test)]
+mod main_executable_tests {
+    use super::is_app_main_executable;
+
+    #[test]
+    fn only_an_app_main_executable_counts() {
+        assert!(is_app_main_executable(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        ));
+        assert!(is_app_main_executable(
+            "/Applications/Arc.app/Contents/MacOS/Arc"
+        ));
+        assert!(is_app_main_executable(
+            "/private/var/folders/x/X/com.google.Chrome.code_sign_clone/code_sign_clone.a/\
+             Google Chrome.app.bundle/Contents/MacOS/Google Chrome"
+        ));
+        assert!(!is_app_main_executable(
+            "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/\
+             Versions/1/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"
+        ));
+        assert!(!is_app_main_executable(
+            "/Applications/Microsoft Edge.app/Contents/Helpers/x.app/Contents/MacOS/x"
+        ));
+        assert!(!is_app_main_executable("/opt/homebrew/bin/node"));
+    }
+}
+
+#[cfg(test)]
+mod zoom_presence_tests {
+    use super::*;
+
+    #[test]
+    fn zoom_main_executable_is_recognized_by_path() {
+        assert!(is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/MacOS/zoom.us"
+        ));
+        assert!(is_zoom_main_executable(
+            "/Users/me/Applications/zoom.us.app/Contents/MacOS/zoom.us"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/Frameworks/CptHost.app/Contents/MacOS/CptHost"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/MacOS/zoom.us.helper"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/Other.app/Contents/MacOS/zoom.us"
+        ));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -439,6 +562,18 @@ mod tests {
         assert_eq!(
             classify_meeting_url("https://meet.google.com/abc-defg-hij?authuser=1"),
             Some(MeetingKind::GoogleMeet)
+        );
+        assert_eq!(
+            classify_meeting_url("https://meet.google.com/meet/abc-defg-hij"),
+            Some(MeetingKind::GoogleMeet)
+        );
+        assert_eq!(
+            classify_meeting_url("https://meet.google.com/_meet/abc-defg-hij?authuser=0"),
+            Some(MeetingKind::GoogleMeet)
+        );
+        assert_eq!(
+            classify_meeting_url("https://meet.google.com/meet/landing"),
+            None
         );
         // The Meet landing page and other paths are not meetings.
         assert_eq!(classify_meeting_url("https://meet.google.com/"), None);

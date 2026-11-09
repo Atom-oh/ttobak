@@ -246,6 +246,45 @@ pub(crate) fn recording_path(meeting_id: &str) -> Result<PathBuf, AppError> {
 // ---------------------------------------------------------------------------
 // macOS implementation
 // ---------------------------------------------------------------------------
+/// Seconds of other apps' playback with an all-zero tap before warning. A
+/// meeting where nobody speaks can play exact zeros for a while (observed
+/// with Meet for 10 s), so the window is long enough to make that unlikely.
+pub const SILENCE_WARN_PLAYING_SECONDS: u32 = 30;
+
+/// Outcome of one early system-audio silence observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SilenceVerdict {
+    Wait,
+    /// System audio arrived; the check is done.
+    Fine,
+    /// Other apps played audio long enough while the tap stayed silent.
+    Warn,
+}
+
+/// Counts seconds in which other apps played audio before any system audio
+/// arrived. The tap of a denied System Audio Recording permission delivers
+/// exact zeros, while a silent room alone does not keep others' output on.
+#[derive(Debug, Default)]
+pub struct SilenceCheck {
+    playing_seconds: u32,
+}
+
+impl SilenceCheck {
+    pub fn observe(&mut self, others_playing: bool, system_heard: bool) -> SilenceVerdict {
+        if system_heard {
+            return SilenceVerdict::Fine;
+        }
+        if others_playing {
+            self.playing_seconds += 1;
+        }
+        if self.playing_seconds >= SILENCE_WARN_PLAYING_SECONDS {
+            SilenceVerdict::Warn
+        } else {
+            SilenceVerdict::Wait
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub mod macos {
     //! Core Audio process-tap capture (macOS 14.2+) mixed with the default
@@ -261,7 +300,7 @@ pub mod macos {
     use std::io::BufWriter;
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
@@ -335,6 +374,9 @@ pub mod macos {
         stats: Arc<Stats>,
         my_generation: u64,
         current_generation: Arc<AtomicU64>,
+        /// Set while the meeting app (Zoom) shows the user as muted: the
+        /// microphone is mixed silent (`zoom_mute.rs`).
+        mic_muted: Arc<AtomicBool>,
     }
 
     #[derive(Default)]
@@ -476,6 +518,59 @@ pub mod macos {
         mic_active: bool,
         start_warnings: Vec<String>,
         input: Option<SelectedInput>,
+        /// Follows Zoom's mute for this recording; dropped with the backend.
+        _zoom_mute: crate::zoom_mute::Watch,
+        /// Warns early when system audio stays silent; dropped with the backend.
+        _silence_watch: SilenceWatch,
+    }
+
+    /// Stops the early system-audio silence check when dropped.
+    struct SilenceWatch(Arc<AtomicBool>);
+
+    impl Drop for SilenceWatch {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// Posts a notification when other apps play audio but the tap delivers
+    /// only exact zeros: System Audio Recording is most likely denied, and
+    /// otherwise this is reported only at stop.
+    fn watch_system_silence(app: AppHandle, stats: Arc<Stats>) -> SilenceWatch {
+        use tauri_plugin_notification::NotificationExt;
+        let running = Arc::new(AtomicBool::new(true));
+        let flag = Arc::clone(&running);
+        let spawned = std::thread::Builder::new()
+            .name("system-silence".into())
+            .spawn(move || {
+                let mut check = super::SilenceCheck::default();
+                while flag.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let playing = crate::meeting_detect::other_output_running();
+                    match check.observe(playing, stats.system_peak() > 0.0) {
+                        super::SilenceVerdict::Wait => continue,
+                        super::SilenceVerdict::Fine => return,
+                        super::SilenceVerdict::Warn => {
+                            log::warn!("system audio silent while other apps play audio");
+                            let _ = app
+                                .notification()
+                                .builder()
+                                .title("참여자 소리가 들리지 않아요")
+                                .body(
+                                    "다른 앱에서 소리가 재생 중인데 30초째 녹음되지 않고 있어요. \
+                                     상대방 소리가 들렸다면 시스템 설정 > 개인정보 보호 및 \
+                                     보안 > 화면 및 시스템 오디오 녹음에서 TTOBAK을 확인하세요.",
+                                )
+                                .show();
+                            return;
+                        }
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("could not start the system audio silence check: {e}");
+        }
+        SilenceWatch(running)
     }
 
     /// The microphone a recording captures, reported in the start response.
@@ -673,18 +768,30 @@ pub mod macos {
                 rx,
                 Arc::clone(&writer),
                 Arc::clone(&stats),
-                app,
+                app.clone(),
                 sample_rate,
                 generation,
                 Arc::clone(&generation_counter),
             )?;
 
+            let mic_muted = Arc::new(AtomicBool::new(false));
+            let silence_watch = watch_system_silence(app.clone(), Arc::clone(&stats));
+            let (zoom_mute, zoom_warning) = crate::zoom_mute::watch(
+                app,
+                Arc::clone(&mic_muted),
+                crate::zoom_mute::ProcessSources {
+                    zoom_pid: crate::zoom_mute::zoom_pid,
+                    browser_pids: crate::meeting_detect::capturing_browser_pids,
+                },
+            );
+            start_warnings.extend(zoom_warning);
             let ctx = Box::into_raw(Box::new(CallbackCtx {
                 tx: Mutex::new(Some(tx)),
                 layout,
                 stats: Arc::clone(&stats),
                 my_generation: generation,
                 current_generation: generation_counter,
+                mic_muted: Arc::clone(&mic_muted),
             }));
             res.ctx = ctx;
 
@@ -730,6 +837,8 @@ pub mod macos {
                 mic_active,
                 start_warnings,
                 input: selected,
+                _zoom_mute: zoom_mute,
+                _silence_watch: silence_watch,
             })
         }
 
@@ -911,7 +1020,12 @@ pub mod macos {
                 );
             }
 
-            let mixed = mix::mix(&views, ctx.layout, mix::MIC_GAIN);
+            let gain = if ctx.mic_muted.load(Ordering::Relaxed) {
+                0.0
+            } else {
+                mix::MIC_GAIN
+            };
+            let mixed = mix::mix(&views, ctx.layout, gain);
             ctx.stats
                 .system_peak_bits
                 .fetch_max(mixed.system_peak.to_bits(), Ordering::Relaxed);
@@ -1160,6 +1274,15 @@ pub mod macos {
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope,
     ) -> Vec<AudioObjectID> {
+        try_get_ids(object, selector, scope).unwrap_or_default()
+    }
+
+    /// Like `get_ids`, but `None` when either HAL call fails.
+    fn try_get_ids(
+        object: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+    ) -> Option<Vec<AudioObjectID>> {
         let addr = address(selector, scope);
         let mut size = 0u32;
         let status = unsafe {
@@ -1171,9 +1294,12 @@ pub mod macos {
                 NonNull::from(&mut size),
             )
         };
+        if status != 0 {
+            return None;
+        }
         let count = size as usize / std::mem::size_of::<AudioObjectID>();
-        if status != 0 || count == 0 {
-            return Vec::new();
+        if count == 0 {
+            return Some(Vec::new());
         }
         let mut ids = vec![0 as AudioObjectID; count];
         let mut size = (count * std::mem::size_of::<AudioObjectID>()) as u32;
@@ -1188,11 +1314,11 @@ pub mod macos {
             )
         };
         if status != 0 {
-            return Vec::new();
+            return None;
         }
         // The list can shrink between the two calls.
         ids.truncate(size as usize / std::mem::size_of::<AudioObjectID>());
-        ids
+        Some(ids)
     }
 
     /// Reads a +1 retained CFString property.
@@ -1323,6 +1449,37 @@ pub mod macos {
     }
 
     /// Input devices with the meeting apps using each (for the SPA picker).
+    /// PID of a running process with this bundle ID, from Core Audio's
+    /// process list (meeting apps register there once they load audio).
+    /// `Err` when the list could not be read; absence is only reported from a
+    /// successful read.
+    pub fn process_pid(bundle_id: &str) -> Result<Option<i32>, ()> {
+        let processes = try_get_ids(
+            kAudioObjectSystemObject as AudioObjectID,
+            kAudioHardwarePropertyProcessObjectList,
+            kAudioObjectPropertyScopeGlobal,
+        )
+        .ok_or(())?;
+        // Our own process is always registered, so an empty list is unusable.
+        if processes.is_empty() {
+            return Err(());
+        }
+        let Some(process) = processes
+            .into_iter()
+            .find(|&p| get_string(p, kAudioProcessPropertyBundleID).as_deref() == Some(bundle_id))
+        else {
+            return Ok(None);
+        };
+        get_property::<i32>(
+            process,
+            kAudioProcessPropertyPID,
+            kAudioObjectPropertyScopeGlobal,
+            None,
+        )
+        .map(Some)
+        .ok_or(())
+    }
+
     pub fn input_devices() -> Vec<InputDevice> {
         let mut devices = input_device_list();
         for (label, id) in meeting_inputs() {
@@ -1390,6 +1547,35 @@ pub mod macos {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod silence_check_tests {
+    use super::*;
+
+    #[test]
+    fn warns_after_others_play_while_the_tap_is_silent() {
+        let mut c = SilenceCheck::default();
+        for _ in 1..SILENCE_WARN_PLAYING_SECONDS {
+            assert_eq!(c.observe(true, false), SilenceVerdict::Wait);
+        }
+        assert_eq!(c.observe(true, false), SilenceVerdict::Warn);
+    }
+
+    #[test]
+    fn nothing_playing_never_warns() {
+        let mut c = SilenceCheck::default();
+        for _ in 0..100 {
+            assert_eq!(c.observe(false, false), SilenceVerdict::Wait);
+        }
+    }
+
+    #[test]
+    fn system_audio_ends_the_check() {
+        let mut c = SilenceCheck::default();
+        assert_eq!(c.observe(true, false), SilenceVerdict::Wait);
+        assert_eq!(c.observe(true, true), SilenceVerdict::Fine);
     }
 }
 
