@@ -70,15 +70,17 @@ what. This is step 2 of the account roadmap; it must never guess.
 - The summarize Lambda runs the resolver inline after summary publication with
   its own 30-second bound. Speaker map saves and contact writes publish
   `PeopleResolveRequested` (IDs only) to the same Lambda, and manual binds and
-  resolutions publish a refresh of the meetings they changed. Contact-triggered
+  resolutions publish a refresh of the meetings they changed. A bulk or CSV
+  import defers each row's request and sends one per account at its end through
+  `POST /people/resolve`; a failure is shown with a retry. Contact-triggered
   runs cover the last 90 days and at most 200 meetings.
 - `backend/cmd/backfill-account-people` replays old meetings (dry run by
   default; `-prune` removes rows of deleted meetings).
 
 ### Reads and API
 
-- Seven routes under `/api/accounts/{accountId}/people` serve the people panel,
-  mention review and speaker binding. They are
+- Eight routes under `/api/accounts/{accountId}/people` serve the people panel,
+  mention review, speaker binding and the import resolve request. They are
   authenticated, for direct members checked on every request, and not
   connector-delegable.
 - Every read revalidates: the meeting must be published to the account now,

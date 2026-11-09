@@ -23,8 +23,8 @@ var peopleMentionKey = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // ValidMentionKey reports whether key is a 32-character lowercase hex hash.
 func ValidMentionKey(key string) bool { return peopleMentionKey.MatchString(key) }
 
-// SetPeopleResolvePublisher wires the PeopleResolveRequested publisher used
-// after manual writes.
+// SetPeopleResolvePublisher wires the PeopleResolveRequested publisher used by
+// RequestContactsResolve.
 func (s *AccountPeopleService) SetPeopleResolvePublisher(fn func(context.Context, model.PeopleResolveRequested) error) {
 	s.publish = fn
 }
@@ -278,6 +278,18 @@ func (s *AccountPeopleService) IgnoreMentionGroup(ctx context.Context, userID, a
 		}
 	}
 	return nil
+}
+
+// RequestContactsResolve publishes one account contacts resolve request for
+// a direct member, e.g. once after a bulk import whose rows deferred theirs.
+func (s *AccountPeopleService) RequestContactsResolve(ctx context.Context, userID, accountID string) error {
+	if _, err := s.viewer(ctx, accountID, userID); err != nil {
+		return err
+	}
+	if s.publish == nil {
+		return errors.New("people resolve publisher is not configured")
+	}
+	return s.publish(ctx, model.PeopleResolveRequested{AccountID: accountID, Reason: model.PeopleResolveReasonContacts})
 }
 
 // publishPeopleResolve sends a best-effort resolve request: a failure is

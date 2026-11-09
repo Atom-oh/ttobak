@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { accountApi } from '@/lib/api';
-import { CONTACT_FIELDS, contactFromRow, isContactAccessDenied, mapContactHeaders, type ContactField, type ContactMapping } from '@/lib/contactImport';
+import { CONTACT_FIELDS, PEOPLE_RESOLVE_FAILED, PEOPLE_RESOLVE_RETRY, contactFromRow, isContactAccessDenied, mapContactHeaders, requestPeopleResolve, type ContactField, type ContactMapping } from '@/lib/contactImport';
 import { readContactFile } from '@/lib/contactFile';
 import { defaultDecision, groupByCompany, runBulkImport, type BulkRowResult, type CompanyGroup, type FieldConflict, type GroupDecision, type MatchAccount } from '@/lib/contactBulkImport';
 import type { ContactInput } from '@/types/meeting';
@@ -39,6 +39,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
   const [retryRows, setRetryRows] = useState<Set<number>>(new Set());
   const [applied, setApplied] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [resolveFailed, setResolveFailed] = useState<string[]>([]);
   const [error, setError] = useState('');
   const controller = useRef<AbortController | null>(null);
   const requestIds = useRef(new Map<string, string>());
@@ -86,7 +87,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
   const submit = async () => {
     const active = controller.current;
     if (!active || active.signal.aborted || busy || mapping.name === undefined) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setResolveFailed([]);
     const signal = active.signal;
     const effectiveDecisions = Object.fromEntries(groups.map((group) => [group.key, decisionOf(group)]));
     setDecisions(effectiveDecisions);
@@ -105,14 +106,16 @@ export function BulkContactImport({ userId }: { userId: string }) {
           return account.accountId;
         },
         listContacts: (accountId, cursor) => accountApi.contacts(accountId, userId, cursor, signal),
-        createContact: (accountId, contact) => accountApi.createContact(accountId, contact, userId, signal),
-        updateContact: (accountId, contactId, contact) => accountApi.updateContact(accountId, contactId, contact, userId, signal),
+        createContact: (accountId, contact) => accountApi.createContact(accountId, contact, userId, signal, true),
+        updateContact: (accountId, contactId, contact) => accountApi.updateContact(accountId, contactId, contact, userId, signal, true),
+        requestPeopleResolve: async (accountId, s) => accountApi.requestPeopleResolve(accountId, userId, s),
       }, {
         signal,
         skipRows,
         // The group now targets the created account, so a retry never creates it twice.
         onAccountCreated: (groupKey, accountId) => { if (!signal.aborted) setDecision(groupKey, { action: 'account', accountId }); },
         onProgress: (row, result) => { if (!signal.aborted) setResults((old) => ({ ...old, [row]: result })); },
+        onPeopleResolveFailed: (accountId) => { if (!signal.aborted) setResolveFailed((old) => [...old, accountId]); },
       });
     } catch (err) {
       if (signal.aborted) return;
@@ -120,6 +123,18 @@ export function BulkContactImport({ userId }: { userId: string }) {
         ? '일부 고객사에 연락처를 추가할 권한이 없습니다. 고객사 멤버인지 확인해 주세요.'
         : '가져오기가 중단되었습니다. 고객사 연락처에서 저장 여부를 확인한 뒤 다시 시도해 주세요. 저장이 확인된 행만 다시 보내지 않습니다.');
     } finally { if (!signal.aborted) setBusy(false); }
+  };
+
+  // Retries the people linking requests that failed after the last run.
+  const retryResolve = async () => {
+    const active = controller.current;
+    if (!active || busy || !resolveFailed.length) return;
+    setBusy(true);
+    const failed: string[] = [];
+    for (const accountId of resolveFailed) {
+      if (!(await requestPeopleResolve((s) => accountApi.requestPeopleResolve(accountId, userId, s), active.signal))) failed.push(accountId);
+    }
+    if (!active.signal.aborted) { setResolveFailed(failed); setBusy(false); }
   };
 
   const conflicts: ConflictRow[] = Object.entries(results).flatMap(([row, result]) =>
@@ -215,6 +230,8 @@ export function BulkContactImport({ userId }: { userId: string }) {
       <input type="file" accept=".csv,.xlsx" disabled={busy} className="mt-1 block text-sm" onChange={(e) => { void chooseFile(e.target.files?.[0]); e.target.value = ''; }} />
     </label>
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+    {resolveFailed.length > 0 && <p role="alert" className="text-sm text-amber-700">{PEOPLE_RESOLVE_FAILED}{' '}
+      <button type="button" disabled={busy} className="underline" onClick={() => { void retryResolve(); }}>{PEOPLE_RESOLVE_RETRY}</button></p>}
     {table.length > 0 && accounts && <>
       <details className="rounded border border-slate-200 p-3 dark:border-white/10">
         <summary className="cursor-pointer text-sm font-semibold">열 연결 확인</summary>

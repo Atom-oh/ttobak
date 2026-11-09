@@ -1,5 +1,5 @@
 import type { AccountContact, ContactInput } from '@/types/meeting';
-import { CONTACT_FIELDS, isContactAccessDenied, type ContactField } from './contactImport';
+import { CONTACT_FIELDS, isContactAccessDenied, requestPeopleResolve, type ContactField } from './contactImport';
 
 /** An account the user can add contacts to, with its matching names. */
 export interface MatchAccount { accountId: string; name: string; aliases: string[]; domains: string[] }
@@ -184,6 +184,8 @@ export interface BulkApi {
   listContacts: (accountId: string, cursor: string) => Promise<{ contacts: AccountContact[]; nextCursor?: string }>;
   createContact: (accountId: string, contact: ContactInput) => Promise<AccountContact>;
   updateContact: (accountId: string, contactId: string, contact: ContactInput & { revision: string }) => Promise<AccountContact>;
+  /** One people resolve request per account with saved rows (written, filled or already present). */
+  requestPeopleResolve?: (accountId: string, signal?: AbortSignal) => Promise<unknown>;
 }
 
 async function listAll(api: BulkApi, accountId: string): Promise<AccountContact[]> {
@@ -212,7 +214,7 @@ export async function runBulkImport(
   groups: CompanyGroup[],
   decisions: Record<string, GroupDecision>,
   api: BulkApi,
-  options: { onProgress?: (row: number, result: BulkRowResult) => void; onAccountCreated?: (groupKey: string, accountId: string) => void; skipRows?: Set<number>; signal?: AbortSignal } = {},
+  options: { onProgress?: (row: number, result: BulkRowResult) => void; onAccountCreated?: (groupKey: string, accountId: string) => void; onPeopleResolveFailed?: (accountId: string) => void; skipRows?: Set<number>; signal?: AbortSignal } = {},
 ): Promise<Record<number, BulkRowResult>> {
   const { onProgress, onAccountCreated, signal } = options;
   const skip = options.skipRows || new Set<number>();
@@ -220,11 +222,16 @@ export async function runBulkImport(
   const report = (row: number, result: BulkRowResult) => { results[row] = result; onProgress?.(row, result); };
   const checkAbort = () => { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); };
   const byAccount = new Map<string, number[]>();
+  // Accounts whose rows were all saved by an earlier run of this file.
+  const savedBefore = new Set<string>();
   for (const group of groups) {
     checkAbort();
     const rows = group.rows.filter((row) => !skip.has(row));
-    if (!rows.length) continue;
     const decision = decisions[group.key] ?? defaultDecision(group);
+    if (!rows.length) {
+      if (group.rows.length && decision.action === 'account') { savedBefore.add(decision.accountId); byAccount.set(decision.accountId, byAccount.get(decision.accountId) || []); }
+      continue;
+    }
     if (decision.action === 'drop') { rows.forEach((row) => report(row, { status: 'dropped' })); continue; }
     let accountId: string;
     if (decision.action === 'new') {
@@ -241,12 +248,23 @@ export async function runBulkImport(
     byAccount.set(accountId, [...(byAccount.get(accountId) || []), ...rows]);
   }
   for (const [accountId, rows] of byAccount) {
+    let saved = savedBefore.has(accountId);
+    if (rows.length) await importAccountRows(accountId, rows, () => { saved = true; });
+    // Also after a re-import that only finds saved rows: an earlier run may
+    // have failed or been interrupted before its request.
+    saved = saved || rows.some((row) => ['created', 'filled', 'unchanged'].includes(results[row]?.status || ''));
+    const request = api.requestPeopleResolve;
+    if (saved && request && !(await requestPeopleResolve((s) => request(accountId, s), signal))) options.onPeopleResolveFailed?.(accountId);
+  }
+  return results;
+
+  async function importAccountRows(accountId: string, rows: number[], onWrite: () => void) {
     let existing: AccountContact[];
     try { existing = await listAll(api, accountId); }
     catch (error) {
       if (isAbort(error) || isContactAccessDenied(error)) throw error;
       rows.forEach((row) => report(row, { status: 'failed', accountId }));
-      continue;
+      return;
     }
     for (const row of rows) {
       checkAbort();
@@ -257,6 +275,7 @@ export async function runBulkImport(
       if (same && !same.contactId) { report(row, { status: 'failed', accountId }); continue; }
       try {
         if (!same) {
+          onWrite();
           const created = await api.createContact(accountId, contact);
           existing.push(created);
           report(row, { status: 'created', accountId, contactId: created.contactId });
@@ -264,6 +283,7 @@ export async function runBulkImport(
         }
         const { merged, filled, conflicts } = mergeContact(same, contact);
         if (!filled.length) { report(row, { status: 'unchanged', accountId, contactId: same.contactId, conflicts }); continue; }
+        onWrite();
         const updated = await api.updateContact(accountId, same.contactId, { ...merged, revision: same.revision });
         existing[existing.indexOf(same)] = updated;
         report(row, { status: 'filled', accountId, contactId: updated.contactId, conflicts });
@@ -280,5 +300,4 @@ export async function runBulkImport(
       }
     }
   }
-  return results;
 }
