@@ -343,6 +343,7 @@ func init() {
 		r.Post("/api/accounts/{accountId}/links", accountLinksHandler.Create)
 		r.Delete("/api/accounts/{accountId}/links", accountLinksHandler.Delete)
 		r.Get("/api/accounts/{accountId}/signals", accountOverviewHandler.Signals)
+		r.Get("/api/accounts/{accountId}/flow", accountOverviewHandler.Flow)
 		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
 		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)

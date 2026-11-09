@@ -38,6 +38,7 @@
     ["api.accountLinks.create", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/links"],
     ["api.accountLinks.delete", "ttobak-api-bridge", ["delete", "read"], false, "DELETE", "/api/accounts/{accountId}/links"],
     ["api.accountOverview.signals", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/signals"],
+    ["api.accountOverview.flow", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/flow"],
     ["api.account.updateAccountParent", "ttobak-api-bridge", ["read", "write"], true, "PUT", "/api/accounts/{accountId}/parent"],
     ["api.account.addMember", "ttobak-api-bridge", ["read", "share"], true, "POST", "/api/accounts/{accountId}/members"],
     ["api.account.revokePendingMember", "ttobak-api-bridge", ["read", "share"], true, "DELETE", "/api/accounts/{accountId}/members/pending"],

@@ -21,11 +21,17 @@ type overviewTestRepo struct {
 	meetings   map[string]*model.Meeting
 	events     map[string]*model.AccountEvent
 	links      *overviewTestLinks
+	// Flow fixtures.
+	stageHist   map[string][]model.ProjectStageChange
+	eventList   []model.AccountEvent // newest first
+	eventMore   bool
+	acctRefs    []model.MeetingRef // newest first
+	acctRefMore bool
 }
 
 func newOverviewTestRepo() *overviewTestRepo {
 	return &overviewTestRepo{member: true, projects: map[string]*model.Project{}, meetingRef: map[string][]model.ProjectMeetingRef{},
-		meetings: map[string]*model.Meeting{}, events: map[string]*model.AccountEvent{}}
+		meetings: map[string]*model.Meeting{}, events: map[string]*model.AccountEvent{}, stageHist: map[string][]model.ProjectStageChange{}}
 }
 
 func (r *overviewTestRepo) GetAccount(_ context.Context, id string) (*model.Account, error) {

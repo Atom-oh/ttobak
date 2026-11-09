@@ -59,15 +59,16 @@ func IsTerminalStage(stage string) bool {
 }
 
 // ProjectStageChange is one immutable stage-history row.
+// Storage keys are not serialized to API responses.
 type ProjectStageChange struct {
-	PK         string    `dynamodbav:"PK"` // PROJECT#{projectId}
-	SK         string    `dynamodbav:"SK"` // STAGEHIST#{RFC3339Nano}
-	ProjectID  string    `dynamodbav:"projectId"`
-	From       string    `dynamodbav:"from,omitempty"`
-	To         string    `dynamodbav:"to,omitempty"`
-	ChangedBy  string    `dynamodbav:"changedBy"`
-	ChangedAt  time.Time `dynamodbav:"changedAt"`
-	EntityType string    `dynamodbav:"entityType"` // "PROJECT_STAGE_CHANGE"
+	PK         string    `dynamodbav:"PK" json:"-"` // PROJECT#{projectId}
+	SK         string    `dynamodbav:"SK" json:"-"` // STAGEHIST#{RFC3339Nano}
+	ProjectID  string    `dynamodbav:"projectId" json:"projectId"`
+	From       string    `dynamodbav:"from,omitempty" json:"from"`
+	To         string    `dynamodbav:"to,omitempty" json:"to"`
+	ChangedBy  string    `dynamodbav:"changedBy" json:"changedBy"`
+	ChangedAt  time.Time `dynamodbav:"changedAt" json:"changedAt"`
+	EntityType string    `dynamodbav:"entityType" json:"-"` // "PROJECT_STAGE_CHANGE"
 }
 
 // Project groups meetings, research, and accounts under a sales opportunity.

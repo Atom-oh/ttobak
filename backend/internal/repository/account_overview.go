@@ -13,14 +13,14 @@ import (
 )
 
 // GetMeetingActionState is a strong read of a meeting's identity, publication
-// and privacy fields plus projectIds, date and saved action items. It never
+// and privacy fields plus title, projectIds, date and saved action items. It never
 // loads transcripts, notes or summary content.
 func (r *DynamoDBRepository) GetMeetingActionState(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error) {
 	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"),
 		expression.Name("meetingId"), expression.Name("userId"), expression.Name("entityType"),
 		expression.Name("accountId"), expression.Name("sharedToAccount"),
 		expression.Name("summaryPrivacy"), expression.Name("summaryAccountApproval"), expression.Name("insightsRevision"),
-		expression.Name("projectIds"), expression.Name("date"), expression.Name("actionItems"))
+		expression.Name("projectIds"), expression.Name("date"), expression.Name("actionItems"), expression.Name("title"))
 	expr, err := expression.NewBuilder().WithProjection(projection).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build meeting action projection: %w", err)
