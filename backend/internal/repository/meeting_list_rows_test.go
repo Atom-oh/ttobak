@@ -24,7 +24,9 @@ func TestBatchGetMeetingListRows(t *testing.T) {
 		{name: "empty", requests: 0},
 		{name: "rows keyed by request, missing rows absent", keys: []MeetingKey{{"o1", "m1"}, {"o2", "m2"}, {"o1", "missing"}, {"o1", "m1"}},
 			want: []string{"o1/m1", "o2/m2"}, requests: 1},
-		{name: "invalid key", keys: []MeetingKey{{"", "m1"}}, wantErr: "invalid meeting row key"},
+		{name: "key without owner is missing", keys: []MeetingKey{{"", "m1"}}, requests: 0},
+		{name: "legacy ownerless share key does not fail other rows", keys: []MeetingKey{{"", "m1"}, {"o2", "m2"}, {"o1", ""}},
+			want: []string{"o2/m2"}, requests: 1},
 		{name: "unrequested row fails closed", keys: []MeetingKey{{"o1", "m1"}}, extra: batchMeetingRow("o9", "m9"),
 			wantErr: "unexpected batch read response", requests: 1},
 	} {

@@ -498,6 +498,12 @@ func TestMeetingListSharedInclusion(t *testing.T) {
 			m.SharedToAccount = false
 			w.put(t, m)
 		}, []string{"sh-direct-edit", "sh-direct-read", "sh-team-2"}},
+		// Production had a legacy share row without ownerId; the batch read
+		// must treat it as missing, as BatchGetMeetings did, not fail the list.
+		{"legacy share without owner is skipped", func(t *testing.T, w *listWire) {
+			w.shares = append(w.shares, w.put(t, model.Share{PK: model.PrefixUser + "member", SK: model.PrefixShare + "sh-direct-edit-legacy",
+				MeetingID: "sh-direct-edit", SharedToID: "member", Email: "member@example.com", Permission: model.PermissionRead}))
+		}, []string{"sh-direct-edit", "sh-team-1", "sh-direct-read", "sh-team-2"}},
 		{"deleted meeting is skipped", func(_ *testing.T, w *listWire) {
 			delete(w.rows, meetingRow("sh-direct-read"))
 		}, []string{"sh-direct-edit", "sh-team-1", "sh-team-2"}},

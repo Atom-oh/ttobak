@@ -42,7 +42,11 @@ func (r *DynamoDBRepository) BatchGetMeetingListRows(ctx context.Context, keys [
 	rowKeys := make([]batchRowKey, 0, len(keys))
 	for _, key := range keys {
 		if key.OwnerID == "" || key.MeetingID == "" {
-			return nil, fmt.Errorf("invalid meeting row key")
+			// Legacy share rows can lack ownerId. BatchGetMeetings looked
+			// such a key up as "USER#"/"MEETING#..." and found nothing, so
+			// the row is reported missing here as well; failing the whole
+			// list would hide every other meeting.
+			continue
 		}
 		rowKeys = append(rowKeys, batchRowKey{PK: model.PrefixUser + key.OwnerID, SK: model.PrefixMeeting + key.MeetingID})
 	}
