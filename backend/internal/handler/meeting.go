@@ -294,6 +294,9 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		"content":                    meeting.Content,
 		"createdAt":                  meeting.CreatedAt.Format(time.RFC3339),
 	}
+	if meeting.MeetingCategory != "" {
+		response["meetingCategory"] = meeting.MeetingCategory
+	}
 	if (req.Notes != "" || req.AccountID != "") && meeting.Notes == req.Notes && meeting.AccountID == req.AccountID {
 		response["preparationApplied"] = true
 	}

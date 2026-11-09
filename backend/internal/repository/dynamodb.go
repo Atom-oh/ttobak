@@ -1923,7 +1923,7 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			expression.Name("GSI1SK"), expression.Name("audioKey"),
 			expression.Name("selectedTranscript"), expression.Name("duration"),
 			expression.Name("sentiment"),
-			expression.Name("accountId"),
+			expression.Name("accountId"), expression.Name("meetingCategory"),
 		)
 		expr, err := expression.NewBuilder().
 			WithKeyCondition(keyEx).
