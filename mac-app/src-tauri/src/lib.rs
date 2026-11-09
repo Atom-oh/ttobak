@@ -35,6 +35,7 @@ mod leftover;
 pub mod meet_mute;
 mod meeting;
 mod meeting_detect;
+mod meeting_prompt;
 mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
@@ -437,6 +438,7 @@ async fn switch_recording_input(
 
 #[tauri::command]
 async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse, AppError> {
+    log::info!("stop_recording invoked by the page");
     // Take the handle out AND mark its path `finalizing`, in the SAME
     // critical section — then let the `state.recorder` lock go BEFORE the
     // blocking, no-timeout-of-its-own `stop_capture()` FFI call. Holding
@@ -738,6 +740,7 @@ pub fn run() {
             meeting_detect::meeting_detection_get,
             meeting_detect::meeting_detection_set_enabled,
             meeting_detect::meeting_detection_respond,
+            meeting_prompt::meeting_prompt_choose,
         ])
         .setup(|app| {
             // MCP control channel (ADR-046); failure only disables it.
