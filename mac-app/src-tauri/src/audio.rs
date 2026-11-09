@@ -23,6 +23,8 @@ pub struct RecordingSnapshot {
     pub recording: bool,
     pub path: Option<PathBuf>,
     pub elapsed_ms: u64,
+    /// A failed microphone switch stopped capture of the running recording.
+    pub capture_lost: bool,
 }
 
 pub struct AudioRecorder {
@@ -79,11 +81,16 @@ impl AudioRecorder {
                 recording: true,
                 path: Some(h.path.clone()),
                 elapsed_ms: h.started_at.elapsed().as_millis() as u64,
+                #[cfg(target_os = "macos")]
+                capture_lost: h.backend.capture_lost(),
+                #[cfg(not(target_os = "macos"))]
+                capture_lost: false,
             },
             None => RecordingSnapshot {
                 recording: false,
                 path: None,
                 elapsed_ms: 0,
+                capture_lost: false,
             },
         }
     }
@@ -594,7 +601,11 @@ pub mod macos {
     /// Posts a notification when other apps play audio but the tap delivers
     /// only exact zeros: System Audio Recording is most likely denied, and
     /// otherwise this is reported only at stop.
-    fn watch_system_silence(app: AppHandle, stats: Arc<Stats>) -> SilenceWatch {
+    fn watch_system_silence(
+        app: AppHandle,
+        stats: Arc<Stats>,
+        owner: crate::zoom_mute::Owner,
+    ) -> SilenceWatch {
         use tauri_plugin_notification::NotificationExt;
         let running = Arc::new(AtomicBool::new(true));
         let flag = Arc::clone(&running);
@@ -602,12 +613,18 @@ pub mod macos {
             .name("system-silence".into())
             .spawn(move || {
                 let mut check = super::SilenceCheck::default();
-                while flag.load(Ordering::Relaxed) {
+                while owner.may_emit(flag.load(Ordering::Relaxed)) {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     let playing = crate::meeting_detect::other_output_running();
                     match check.observe(playing, stats.system_peak() > 0.0) {
                         super::SilenceVerdict::Wait => continue,
                         super::SilenceVerdict::Fine => return,
+                        // Stopped or superseded meanwhile: not this recording's notice.
+                        super::SilenceVerdict::Warn
+                            if !owner.may_emit(flag.load(Ordering::Relaxed)) =>
+                        {
+                            return
+                        }
                         super::SilenceVerdict::Warn => {
                             log::warn!("system audio silent while other apps play audio");
                             let _ = app
@@ -652,7 +669,36 @@ pub mod macos {
         ))
     }
 
+    /// Neither the new nor the previous microphone could start, but the
+    /// system-audio-only aggregate did: the recording continues without one.
+    fn mic_dropped(e: &AppError) -> AppError {
+        AppError::Backend(format!(
+            "{e}. The previous microphone could not be restored; the recording continues with \
+             system audio only."
+        ))
+    }
+
+    /// Destroys a probe aggregate, retrying once; a private aggregate that
+    /// still cannot be destroyed is logged (it lives until the app quits).
+    fn destroy_probe(probe: AudioObjectID) {
+        for attempt in 0..2 {
+            let status = unsafe { AudioHardwareDestroyAggregateDevice(probe) };
+            if status == 0 {
+                return;
+            }
+            log::warn!(
+                "destroying the probe aggregate failed (attempt {attempt}): OSStatus {status}"
+            );
+        }
+        log::error!("leaking probe aggregate {probe} until the app quits");
+    }
+
     impl Backend {
+        /// Whether a failed microphone switch stopped capture.
+        pub fn capture_lost(&self) -> bool {
+            self.capture_lost.load(Ordering::Relaxed)
+        }
+
         /// `generation` / `generation_counter`: see `AudioRecorder`'s field
         /// doc comment in the parent module — lets the IOProc detect it has
         /// been superseded by a newer recording and stop acting.
@@ -776,7 +822,12 @@ pub mod macos {
             let switch_counter = Arc::clone(&generation_counter);
 
             let mic_muted = Arc::new(AtomicBool::new(false));
-            let silence_watch = watch_system_silence(app.clone(), Arc::clone(&stats));
+            let owner = crate::zoom_mute::Owner {
+                generation,
+                current: Arc::clone(&generation_counter),
+            };
+            let silence_watch =
+                watch_system_silence(app.clone(), Arc::clone(&stats), owner.clone());
             let (zoom_mute, zoom_warning) = crate::zoom_mute::watch(
                 app,
                 Arc::clone(&mic_muted),
@@ -784,6 +835,7 @@ pub mod macos {
                     zoom_pid: crate::zoom_mute::zoom_pid,
                     browser_pids: crate::meeting_detect::capturing_browser_pids,
                 },
+                owner,
             );
             start_warnings.extend(zoom_warning);
             let ctx = Box::into_raw(Box::new(CallbackCtx {
@@ -858,9 +910,10 @@ pub mod macos {
         /// audio tap, WAV and worker continue while only the aggregate is
         /// rebuilt, losing a fraction of a second. `None` chooses
         /// automatically (the meeting app's microphone). If the new device
-        /// cannot start, the previous one is restored. If that also fails,
-        /// capture stops: the error says so, later switches are refused, and
-        /// stop finalizes what was recorded. Blocking Core Audio FFI: call
+        /// cannot start, the previous one is restored, else system audio
+        /// continues alone on the output device. If that also fails, capture
+        /// stops: the error says so, `capture_lost` reports it, later switches
+        /// are refused, and stop finalizes what was recorded. Blocking Core Audio FFI: call
         /// off the recorder lock, like stop.
         pub fn switch_input(&self, requested: Option<String>) -> Result<SelectedInput, AppError> {
             let mut warnings = Vec::new();
@@ -898,7 +951,7 @@ pub mod macos {
             // A microphone that cannot even form an aggregate is refused here.
             let probe = create_aggregate(&uid, &self.tap_uid)?;
             let rate = match_rate(probe, self.sample_rate);
-            unsafe { AudioHardwareDestroyAggregateDevice(probe) };
+            destroy_probe(probe);
             rate?;
 
             let mut tx = match res.detach_engine() {
@@ -918,22 +971,30 @@ pub mod macos {
                 }
                 Err(e) => {
                     log::error!("microphone switch failed: {e}; restoring the previous one");
-                    let restored = match previous.as_ref() {
-                        Some(p) => input_device_list()
-                            .into_iter()
-                            .find(|d| d.uid == p.uid)
-                            .and_then(|d| {
-                                self.attach_engine(res, &p.uid, d.id, true, &mut tx).ok()
-                            }),
-                        // Started without a microphone: rebuild the
-                        // system-audio-only aggregate on the output device.
-                        None => default_device(kAudioHardwarePropertyDefaultOutputDevice)
-                            .and_then(|out| Some((out, device_uid(out)?)))
-                            .and_then(|(out, out_uid)| {
-                                self.attach_engine(res, &out_uid, out, false, &mut tx).ok()
-                            }),
-                    };
-                    if restored.is_none() {
+                    let restored = previous.as_ref().and_then(|p| {
+                        let d = input_device_list().into_iter().find(|d| d.uid == p.uid)?;
+                        self.attach_engine(res, &p.uid, d.id, true, &mut tx).ok()
+                    });
+                    if restored.is_some() {
+                        return Err(e);
+                    }
+                    // No microphone to return to (a mic-less start, or the
+                    // previous one failed too): keep the system audio with
+                    // the output-device aggregate a mic-less start uses.
+                    let system_only = default_device(kAudioHardwarePropertyDefaultOutputDevice)
+                        .and_then(|out| Some((out, device_uid(out)?)))
+                        .and_then(|(out, out_uid)| {
+                            self.attach_engine(res, &out_uid, out, false, &mut tx).ok()
+                        });
+                    if system_only.is_some() && previous.is_some() {
+                        log::error!(
+                            "previous microphone not restored; recording system audio only"
+                        );
+                        self.mic_active.store(false, Ordering::Relaxed);
+                        *self.input.lock().expect("input poisoned") = None;
+                        return Err(mic_dropped(&e));
+                    }
+                    if system_only.is_none() {
                         // Nothing captures any more: close the queue so stop
                         // finalizes what was recorded.
                         drop(tx);
