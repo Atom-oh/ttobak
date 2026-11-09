@@ -136,6 +136,7 @@ func init() {
 		member, err := repo.GetMember(ctx, accountID, userID)
 		return member != nil, err
 	})
+	kbService.SetAccountKBRefWriter(repo.PutAccountKBRef)
 	var indexStatusEngine *service.IndexingService
 	if provider, err := service.NewIndexAWSProvider(s3Client, bedrockAgentClient, bucketName, kbBucketName, kbID, kbDataSourceID); err == nil {
 		indexStatusEngine = service.NewIndexingService(repo.MetadataView(), provider, provider, bucketName)
@@ -206,6 +207,7 @@ func init() {
 	accountNewsHandler := handler.NewAccountNewsHandler(accountNewsService)
 	accountLinksHandler := handler.NewAccountLinksHandler(service.NewAccountLinksService(repo, crawlerRepo, accountNewsService))
 	accountOverviewHandler := handler.NewAccountOverviewHandler(service.NewAccountOverviewService(repo, crawlerRepo, accountNewsService, accountService))
+	accountKBHandler := handler.NewAccountKBHandler(service.NewAccountKBService(repo, service.NewKBObjectStore(s3Client, kbBucketName), accountService, accountNewsService, crawlerRepo))
 	insightsHandler := handler.NewInsightsHandler(insightsService, kbService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
 	sfnClient := sfn.NewFromConfig(cfg, func(o *sfn.Options) { o.TracerProvider = awsTracing })
@@ -345,6 +347,9 @@ func init() {
 		r.Get("/api/accounts/{accountId}/signals", accountOverviewHandler.Signals)
 		r.Get("/api/accounts/{accountId}/flow", accountOverviewHandler.Flow)
 		r.Get("/api/accounts/{accountId}/graph", accountOverviewHandler.Graph)
+		r.Get("/api/accounts/{accountId}/kb", accountKBHandler.List)
+		r.Get("/api/accounts/{accountId}/kb/{refId}/download", accountKBHandler.Download)
+		r.Delete("/api/accounts/{accountId}/kb/{refId}", accountKBHandler.Untag)
 		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
 		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)

@@ -590,7 +590,11 @@ no `#` or `/` (else 400) and the caller must be a member of that Account (else
 403 `FORBIDDEN`; membership is read consistently). The presigned PUT then signs
 object metadata `account-id`, and `headers` is `{"x-amz-meta-account-id":
 "{accountId}"}`: the client must send exactly those headers (plus
-`Content-Type`) or S3 rejects the upload. The web upload dialog requires the
+`Content-Type`) or S3 rejects the upload. Before returning the URL it creates
+the account relation row `ACCOUNT#{accountId}` / `KBREF#{sha256(key)}` (absent
+only); if that write fails the request fails with 500. A verified connector
+delegation also needs the `share` capability for a non-empty `accountId` (else
+403 `CAPABILITY_DENIED`); personal and direct user uploads are unchanged. The web upload dialog requires the
 user to choose an Account or the personal (no Account) option, which the UI labels in Korean, before any file is sent.
 
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
@@ -921,6 +925,43 @@ revalidated relation; nothing is inferred:
   or size bound was hit, or that a single contact or linked event could not be
   opened and was skipped. A missing record key or a storage failure still
   fails the call.
+
+`GET /api/accounts/{accountId}/kb?kind=upload|meeting|news|tech&cursor=` lists
+one kind of the account's KB material for **direct** members, checked on every
+call (not connector-delegable; `Cache-Control: no-store`). `kind` is required;
+other query keys are 400. The response is `{items, nextCursor?, truncated?}` with at most
+25 items; `cursor` is opaque and bound to the kind. Items are `{kind, id, title,
+date, uploadedBy?, indexState, canDownload}`; `title` is capped at 200 code
+points and no S3 key or bucket name is returned.
+- `upload`: `KBREF#` rows of the account. A ref is listed only when its
+  `kb/{owner}/{file}` object exists and its signed `account-id` metadata still
+  names the account, so abandoned presigns and deleted files never show.
+  Uploads stay listed after the uploader leaves. `id` is the ref ID (64
+  lowercase hex) and `canDownload` is true.
+- `meeting`: meetings currently published to the account, newest first; `id` is
+  `{ownerUserId}:{meetingId}`.
+- `news`: current news of the account's sources crawled in the last 90 days; `id`
+  is `{sourceId}:{docHash}`.
+- `tech`: tech documents linked (`LINK#tech#…#project#…`, at most 200 rows read)
+  to projects that still list the account, excluding `DELETED` documents; `id` is
+  `__tech__:{docHash}`. `truncated: true` reports that more link rows exist
+  than were read, so items may be missing.
+- `indexState` comes from the index job record only: `INDEXED`, `PENDING`
+  (`PENDING`, `PREPARING`, `WAITING_SYNC`, `WAITING_SOURCE`), `FAILED`, or
+  `UNTRACKED` when no job exists or the source has no index identity (for example
+  `news/v1/` keys). Items whose job is `DELETED` are omitted, so pages may be
+  short while `nextCursor` is set. The crawler `inKB` flag is never used.
+
+`GET /api/accounts/{accountId}/kb/{refId}/download` returns `{url}` (`Cache-Control:
+no-store`), a 5-minute presigned S3 GET that downloads as an attachment, for any
+direct member. `refId` must be 64 lowercase hex (else 400); the ref must belong to
+the account, name a `kb/` key whose hash is the ref ID, and its object must exist
+and still carry the account metadata (else 404). Not connector-delegable.
+
+`DELETE /api/accounts/{accountId}/kb/{refId}` removes the account ref (204). Only
+the uploader (while a direct member) or an account `owner` may untag (else 403);
+a missing ref is 404. The S3 object is never deleted; it stays in the uploader's
+personal KB. QA retrieval scope is unchanged by refs. Not connector-delegable.
 
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
@@ -1641,6 +1682,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/signals` | `accountOverviewHandler.Signals` |
 | GET | `/api/accounts/{accountId}/flow` | `accountOverviewHandler.Flow` |
 | GET | `/api/accounts/{accountId}/graph` | `accountOverviewHandler.Graph` |
+| GET | `/api/accounts/{accountId}/kb` | `accountKBHandler.List` |
+| GET | `/api/accounts/{accountId}/kb/{refId}/download` | `accountKBHandler.Download` |
+| DELETE | `/api/accounts/{accountId}/kb/{refId}` | `accountKBHandler.Untag` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |

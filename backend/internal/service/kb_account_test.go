@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/model"
 )
 
 func newKBUploadService(members map[string]bool) *KBService {
@@ -20,6 +21,7 @@ func newKBUploadService(members map[string]bool) *KBService {
 	svc.SetMembershipReader(func(_ context.Context, accountID, userID string) (bool, error) {
 		return members[accountID+"/"+userID], nil
 	})
+	svc.SetAccountKBRefWriter(func(context.Context, *model.AccountKBRef) error { return nil })
 	return svc
 }
 

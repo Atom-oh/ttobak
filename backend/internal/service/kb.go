@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -40,6 +42,22 @@ type KBService struct {
 	dataSourceID       string // Bedrock Data Source ID
 	// isMember reports Account membership; nil refuses every Account upload.
 	isMember func(ctx context.Context, accountID, userID string) (bool, error)
+	// putAccountRef creates the canonical account KB ref (absent-only); nil
+	// refuses every Account upload.
+	putAccountRef func(ctx context.Context, ref *model.AccountKBRef) error
+	// connectorCaps returns the capabilities of a verified connector
+	// delegation on ctx; delegated is false for a direct user request.
+	connectorCaps func(ctx context.Context) (caps []string, delegated bool)
+}
+
+// verifiedConnectorCapabilities reads the verifier-created principal that the
+// connector bridge places on delegated requests.
+func verifiedConnectorCapabilities(ctx context.Context) ([]string, bool) {
+	p, ok := connector.VerifiedPrincipal(ctx)
+	if !ok {
+		return nil, false
+	}
+	return p.Capabilities(), true
 }
 
 // NewKBService creates a new KB service
@@ -58,6 +76,7 @@ func NewKBService(
 		kbBucketName:       kbBucketName,
 		kbID:               kbID,
 		dataSourceID:       dataSourceID,
+		connectorCaps:      verifiedConnectorCapabilities,
 	}
 }
 
@@ -72,6 +91,11 @@ func (s *KBService) SetMembershipReader(fn func(ctx context.Context, accountID, 
 	s.isMember = fn
 }
 
+// SetAccountKBRefWriter sets the conditional writer of account KB refs.
+func (s *KBService) SetAccountKBRefWriter(fn func(ctx context.Context, ref *model.AccountKBRef) error) {
+	s.putAccountRef = fn
+}
+
 // GetPresignedURL generates a presigned URL for KB file upload. A non-empty
 // accountID (members only) is signed into the PUT as the account-id object
 // metadata; the client must send the returned headers.
@@ -80,7 +104,16 @@ func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileT
 		if strings.ContainsAny(accountID, "#/") {
 			return nil, ErrKBAccountInvalid
 		}
-		if s.isMember == nil || userID == "" {
+		// An account-tagged upload is distributed to every account member, so
+		// a delegated connector needs the share capability, as for
+		// copy-attachment. Direct user requests are unchanged.
+		if s.connectorCaps == nil {
+			return nil, ErrForbidden
+		}
+		if caps, delegated := s.connectorCaps(ctx); delegated && !slices.Contains(caps, "share") {
+			return nil, fmt.Errorf("%w: account KB upload requires share", connector.ErrCapabilityDenied)
+		}
+		if s.isMember == nil || s.putAccountRef == nil || userID == "" {
 			return nil, ErrForbidden
 		}
 		ok, err := s.isMember(ctx, accountID, userID)
@@ -114,6 +147,15 @@ func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileT
 	presignedURL, err := s.presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(expiresIn))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+	if accountID != "" {
+		// The ref is written before the URL is returned; listing omits refs
+		// whose object was never uploaded. A failed write fails the presign.
+		ref := &model.AccountKBRef{AccountID: accountID, RefID: model.AccountKBRefID(s3Key), S3Key: s3Key,
+			FileName: safeName, UploadedBy: userID, CreatedAt: time.UnixMilli(timestamp).UTC()}
+		if err := s.putAccountRef(ctx, ref); err != nil {
+			return nil, fmt.Errorf("record account KB ref: %w", err)
+		}
 	}
 
 	return &model.KBUploadResponse{
