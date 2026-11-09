@@ -1,7 +1,7 @@
 # Local MCP intake — implementation plan
 
 Status: historical implementation plan (2026-11-09). Phase 1 is implemented
-(ADR-065, [runbook](../../runbooks/local-mcp-intake.md)); later phases are not.
+(ADR-065, runbook `docs/runbooks/local-mcp-intake.md`); later phases are not.
 Design: [local MCP intake](../specs/2026-11-09-local-mcp-intake-design.md).
 Each phase ships independently and leaves the system consistent.
 
