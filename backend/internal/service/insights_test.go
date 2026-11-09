@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -556,5 +558,105 @@ func TestListInsights_SortsBeforePaginating_WithSource(t *testing.T) {
 	}
 	if resp.Documents[0].DocHash != "new1" {
 		t.Errorf("expected the newest document (new1) first on page 1, got %q -- pagination is truncating before sorting", resp.Documents[0].DocHash)
+	}
+}
+
+func manyNewsDocs(n int, sourceID string) []model.CrawledDocument {
+	docs := make([]model.CrawledDocument, n)
+	for i := range docs {
+		docs[i] = model.CrawledDocument{
+			DocHash: fmt.Sprintf("%016x", i), Type: "news", Title: fmt.Sprintf("Article %d", i),
+			Source: sourceID, SourceID: sourceID, CrawledAt: int64(1000 + i),
+		}
+	}
+	return docs
+}
+
+func TestListInsights_CrossSourceNewestBeyond500(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.allDocuments = manyNewsDocs(600, "hanabank")
+	svc := &InsightsService{repo: repo}
+	svc.news = legacyNewsRows(t, "hanabank", repo.allDocuments)
+
+	resp, err := svc.ListInsights(context.Background(), "news", "", "", nil, "date", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) == 0 || resp.Documents[0].DocHash != fmt.Sprintf("%016x", 599) {
+		t.Fatalf("newest document beyond index 500 not first: %+v", resp.Documents)
+	}
+	if len(repo.scanLimits) != 1 || repo.scanLimits[0] > 0 {
+		t.Fatalf("expected one all-pages scan (limit <= 0), got %v", repo.scanLimits)
+	}
+}
+
+func TestListInsights_WithSourceNewestBeyond500(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.documents["hanabank"] = manyNewsDocs(600, "hanabank")
+	svc := &InsightsService{repo: repo}
+	svc.news = legacyNewsRows(t, "hanabank", repo.documents["hanabank"])
+
+	resp, err := svc.ListInsights(context.Background(), "news", "hanabank", "", nil, "date", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) == 0 || resp.Documents[0].DocHash != fmt.Sprintf("%016x", 599) {
+		t.Fatalf("newest document beyond index 500 not first: %+v", resp.Documents)
+	}
+	if len(repo.listLimits) != 1 || repo.listLimits[0] > 0 {
+		t.Fatalf("expected one all-pages list (limit <= 0), got %v", repo.listLimits)
+	}
+}
+
+func techServiceDocs() []model.CrawledDocument {
+	return []model.CrawledDocument{
+		{DocHash: "t1", Type: "tech", Title: "EKS 1", SourceID: "s1", CrawledAt: 1, AWSServices: []string{"Amazon EKS"}},
+		{DocHash: "t2", Type: "tech", Title: "Lambda 1", SourceID: "s2", CrawledAt: 2, AWSServices: []string{"AWS Lambda"}},
+		{DocHash: "t3", Type: "tech", Title: "EKS 2", SourceID: "s3", CrawledAt: 3, AWSServices: []string{"Amazon EKS"}},
+	}
+}
+
+func TestListInsights_CrossSourceServiceFilter(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.allDocuments = techServiceDocs()
+	svc := &InsightsService{repo: repo}
+
+	resp, err := svc.ListInsights(context.Background(), "tech", "", "Amazon EKS", nil, "date", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) != 2 || resp.TotalCount != 2 {
+		t.Fatalf("expected 2 EKS docs, got %d (total %d)", len(resp.Documents), resp.TotalCount)
+	}
+	for _, d := range resp.Documents {
+		if d.DocHash == "t2" {
+			t.Fatalf("non-EKS doc leaked: %+v", d)
+		}
+	}
+	// The facet keeps showing alternatives while a service filter is active.
+	if len(resp.Services) != 2 {
+		t.Fatalf("services facet should ignore the service filter, got %v", resp.Services)
+	}
+}
+
+func TestListInsights_ReturnsServicesFacet(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.allDocuments = techServiceDocs()
+	svc := &InsightsService{repo: repo}
+
+	resp, err := svc.ListInsights(context.Background(), "tech", "", "", nil, "date", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Documents) != 1 {
+		t.Fatalf("expected one doc on page 1, got %d", len(resp.Documents))
+	}
+	want := []string{"Amazon EKS", "AWS Lambda"}
+	if !reflect.DeepEqual(resp.Services, want) {
+		t.Fatalf("services = %v, want %v", resp.Services, want)
 	}
 }

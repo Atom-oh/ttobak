@@ -3,7 +3,7 @@
 import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { insightsApi, researchApi } from '@/lib/api';
+import { crawlerApi, insightsApi, researchApi } from '@/lib/api';
 import type { CrawledDocument, Research } from '@/types/meeting';
 import { InsightsTableView } from './InsightsTableView';
 
@@ -33,6 +33,9 @@ export function InsightsList() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  // Dropdown facets: customers load once; services come from the server over the full filtered set.
+  const [crawlerSourceIds, setCrawlerSourceIds] = useState<string[]>([]);
+  const [serviceOptions, setServiceOptions] = useState<string[]>([]);
   // Set, not a single key -- a single value would let two concurrent
   // deletes clear each other's pending state in `finally`.
   const [deletingKeys, setDeletingKeys] = useState<Set<string>>(new Set());
@@ -112,6 +115,7 @@ export function InsightsList() {
       if (generation === fetchGenerationRef.current) {
         setDocuments(docs);
         setTotalCount(response.totalCount || 0);
+        setServiceOptions(response.services || []);
       }
       return docs;
     } catch (err) {
@@ -274,17 +278,27 @@ export function InsightsList() {
     setPage(1);
   };
 
-  // Collect unique crawler sources (customer names) from current results
-  const uniqueCrawlerSources = useMemo(() => {
-    const sources = new Set(documents.map((d) => d.sourceId).filter(Boolean));
-    return Array.from(sources).sort();
-  }, [documents]);
+  // Customer options come from the full source list, not the current page.
+  const uniqueCrawlerSources = crawlerSourceIds;
+  // Service options are the server-computed facet over the full filtered set.
+  const uniqueServices = serviceOptions;
 
-  // Collect unique AWS services from current results
-  const uniqueServices = useMemo(() => {
-    const services = new Set(documents.flatMap((d) => d.awsServices || []));
-    return Array.from(services).sort();
-  }, [documents]);
+  useEffect(() => {
+    let cancelled = false;
+    crawlerApi
+      .listSources()
+      .then((res) => {
+        if (cancelled) return;
+        const ids = (res.sources || []).map((s) => s.source?.sourceId).filter((id): id is string => !!id);
+        setCrawlerSourceIds(Array.from(new Set(ids)).sort());
+      })
+      .catch(() => {
+        // Non-fatal: the customer dropdown simply stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Collect all unique tags from current results
   const availableTags = useMemo(() => {
@@ -741,7 +755,7 @@ export function InsightsList() {
                 {selectedTags.length > 0
                   ? 'No documents match the selected tags. Try removing some filters.'
                   : activeTab === 'news'
-                    ? 'Subscribe to news sources in Settings to see articles here.'
+                    ? '수집된 뉴스가 아직 없습니다.'
                     : 'Subscribe to AWS services in Settings to see updates here.'}
               </p>
             </div>
