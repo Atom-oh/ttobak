@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -98,4 +99,63 @@ func TestUpdateProject_NonOwnerForbidden(t *testing.T) {
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected ErrForbidden, got %v", err)
 	}
+}
+
+func TestUpdateProject_UnchangedStageNotWritten(t *testing.T) {
+	svc, repo := newUpdateFixture("Qualified")
+	if _, err := svc.UpdateProject(context.Background(), "owner", "p1", &model.UpdateProjectRequest{Name: "Renamed", Stage: "Qualified"}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.lastFields == nil {
+		t.Fatal("expected a field update")
+	}
+	for _, key := range []string{"stage", "stageChangedAt"} {
+		if _, ok := repo.lastFields[key]; ok {
+			t.Fatalf("unchanged stage must not write %q: %v", key, repo.lastFields)
+		}
+	}
+}
+
+// listRowRepo serves the batch list-row projection like the DynamoDB repository.
+type listRowRepo struct{ *mockProjectRepo }
+
+func (r listRowRepo) BatchGetProjectListRows(_ context.Context, ids []string) (map[string]*model.Project, error) {
+	out := map[string]*model.Project{}
+	for _, id := range ids {
+		if p := r.projects[id]; p != nil {
+			out[id] = &model.Project{PK: p.PK, SK: p.SK, EntityType: p.EntityType, ProjectID: p.ProjectID, Name: p.Name,
+				Stage: p.Stage, StageChangedAt: p.StageChangedAt, SfdcOpptyID: p.SfdcOpptyID, OwnerUserID: p.OwnerUserID,
+				AccountIDs: append([]string{}, p.AccountIDs...)}
+		}
+	}
+	return out, nil
+}
+
+func TestListMyProjects_InheritedSummaryCarriesStageChangedAt(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{"acc1"}
+	project.Stage = "Committed"
+	changed := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	project.StageChangedAt = &changed
+	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+	repo.accounts["acc1"] = &model.Account{AccountID: "acc1"}
+	repo.projectRefs["acc1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "acc1"}}
+
+	projects, err := newProjectServiceWithRepo(listRowRepo{repo}).ListMyProjects(context.Background(), "carol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].StageChangedAt == nil || !projects[0].StageChangedAt.Equal(changed) || !projects[0].StageMapped {
+		t.Fatalf("inherited summary lost stageChangedAt: %+v", projects)
+	}
+}
+
+func TestProjectListRowFieldsIncludeStageChangedAt(t *testing.T) {
+	for _, name := range repository.ProjectListRowFields {
+		if name == "stageChangedAt" {
+			return
+		}
+	}
+	t.Fatal("ProjectListRowFields must project stageChangedAt")
 }
