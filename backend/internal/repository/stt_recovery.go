@@ -359,7 +359,7 @@ func sttFailedMeetingDeleteCondition(mark model.SttFailureMark) expression.Condi
 		And(expression.AttributeNotExists(expression.Name("diarizationSpeakerHint")).Or(expression.Name("diarizationSpeakerHint").Equal(expression.Value(0)))).
 		And(expression.AttributeNotExists(expression.Name("audioCrop"))).
 		And(expression.AttributeNotExists(expression.Name("summarizeRetryClaimedAt")))
-	for _, field := range []string{"notes", "content", "transcriptA", "transcriptB", "transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId"} {
+	for _, field := range []string{"notes", "content", "transcriptA", "transcriptB", "transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "meetingCategory"} {
 		condition = condition.And(emptyOrAbsent(field))
 	}
 	for _, field := range []string{"audioKeys", "linkedMeetingIds", "participants", "speakerMap"} {
