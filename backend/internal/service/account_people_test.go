@@ -40,6 +40,12 @@ type fakePeopleRepo struct {
 	finished               []model.PeopleRun
 	resolvedMeetings       []string
 	contactCalls           int
+
+	onClaim    func()
+	recordErr  error
+	replaceErr error
+	recorded   [][]string
+	ops        []string
 }
 
 func newFakePeopleRepo() *fakePeopleRepo {
@@ -63,7 +69,10 @@ func (f *fakePeopleRepo) GetAccount(_ context.Context, id string) (*model.Accoun
 }
 func (f *fakePeopleRepo) GetMeeting(_ context.Context, owner, id string) (*model.Meeting, error) {
 	f.gets++
-	f.resolvedMeetings = append(f.resolvedMeetings, id)
+	// The pre-claim and leased reads of one meeting count once.
+	if n := len(f.resolvedMeetings); n == 0 || f.resolvedMeetings[n-1] != id {
+		f.resolvedMeetings = append(f.resolvedMeetings, id)
+	}
 	return f.meetings[owner+":"+id], nil
 }
 func (f *fakePeopleRepo) GetUserByID(_ context.Context, id string) (*model.User, error) {
@@ -110,6 +119,7 @@ func (f *fakePeopleRepo) PutPeopleLink(_ context.Context, l *model.PeopleLink, a
 	if actor != "" {
 		return fmt.Errorf("auto writes use the system actor")
 	}
+	f.ops = append(f.ops, "put")
 	if err := f.putErr[l.Key()]; err != nil {
 		return err
 	}
@@ -133,12 +143,28 @@ func (f *fakePeopleRepo) GetMentionIgnores(_ context.Context, _ string, hashes [
 	return out, nil
 }
 func (f *fakePeopleRepo) ReplaceUnresolvedMentions(_ context.Context, _, _ string, rows []model.UnresolvedMention, prior []string) error {
+	f.ops = append(f.ops, "replace")
+	if f.replaceErr != nil {
+		return f.replaceErr
+	}
 	f.replaced = append(f.replaced, rows)
 	f.replacePrior = append(f.replacePrior, prior)
 	return nil
 }
+func (f *fakePeopleRepo) RecordPeopleRunMentions(_ context.Context, _ *model.PeopleRun, keys []string) error {
+	f.ops = append(f.ops, "record")
+	if f.recordErr != nil {
+		return f.recordErr
+	}
+	f.recorded = append(f.recorded, keys)
+	return nil
+}
 func (f *fakePeopleRepo) ClaimPeopleRun(_ context.Context, account, scope, token string, _ time.Time, _ time.Duration) (*model.PeopleRun, bool, error) {
 	f.claims++
+	f.ops = append(f.ops, "claim")
+	if f.onClaim != nil {
+		f.onClaim()
+	}
 	if f.claimBusy {
 		return nil, false, nil
 	}
@@ -146,6 +172,7 @@ func (f *fakePeopleRepo) ClaimPeopleRun(_ context.Context, account, scope, token
 }
 func (f *fakePeopleRepo) FinishPeopleRun(_ context.Context, run *model.PeopleRun) (bool, error) {
 	f.finishes++
+	f.ops = append(f.ops, "finish")
 	f.finished = append(f.finished, *run)
 	if len(f.reruns) > 0 {
 		r := f.reruns[0]
@@ -285,7 +312,7 @@ func TestResolveMeeting_RerunsWhenRequested(t *testing.T) {
 	f.meetings["owner:m1"].Participants = []string{"Lee"}
 	f.reruns = []bool{true, true, true}
 	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
-	if err != nil || f.claims != 2 || f.finishes != 2 || f.gets != 2 || res.Meetings != 1 || res.Unresolved != 1 {
+	if err != nil || f.claims != 2 || f.finishes != 2 || f.gets != 4 || res.Meetings != 1 || res.Unresolved != 1 {
 		t.Fatalf("res=%+v err=%v claims=%d finishes=%d gets=%d", res, err, f.claims, f.finishes, f.gets)
 	}
 }
@@ -418,5 +445,79 @@ func TestResolveAccount_BusyAndDeadline(t *testing.T) {
 
 	if _, err := newPeopleTestService(f).ResolveAccount(context.Background(), "missing", time.Time{}, 10, PeopleRunOptions{}); err != ErrNotFound {
 		t.Fatalf("missing account: %v", err)
+	}
+}
+
+func TestResolveMeeting_PlansFromSnapshotTakenUnderLease(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.contacts = []model.AccountContact{peopleContact(peopleTestContact, "Kim Minsu", "")}
+	f.meetings["owner:m1"].Participants = []string{"Old Name"}
+	// While this run stalls before its claim, another run applies newer
+	// fields and finishes; the claim then succeeds on the free lease.
+	f.onClaim = func() {
+		f.meetings["owner:m1"] = peopleTestMeeting("m1")
+		f.meetings["owner:m1"].Participants = []string{"Kim Minsu"}
+	}
+	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || res.Written != 1 || res.Unresolved != 0 || f.gets != 2 {
+		t.Fatalf("res=%+v err=%v gets=%d", res, err, f.gets)
+	}
+	if f.puts[0].Mention != "Kim Minsu" || len(f.replaced[0]) != 0 {
+		t.Fatalf("stale snapshot applied: puts=%+v rows=%+v", f.puts, f.replaced)
+	}
+
+	// A meeting unpublished meanwhile is skipped and the lease released.
+	f = newFakePeopleRepo()
+	f.onClaim = func() { f.meetings["owner:m1"].SharedToAccount = false }
+	res, err = newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || res.Skipped != 1 || len(f.puts)+len(f.replaced) != 0 || f.finishes != 1 {
+		t.Fatalf("unpublished under lease: res=%+v err=%v finishes=%d", res, err, f.finishes)
+	}
+}
+
+func TestResolveMeeting_ManualBindingSuppressesOtherAutoTarget(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.contacts = []model.AccountContact{peopleContact(peopleTestContact2, "Kim", "")}
+	f.meetings["owner:m1"].Participants = []string{"Kim"}
+	f.existing = []model.PeopleLink{
+		{MeetingID: "owner:m1", ToKind: "contact", ToID: peopleTestContact, Role: "participant", Origin: model.LinkOriginManual, Mention: "kim"},
+		{MeetingID: "owner:m1", ToKind: "contact", ToID: peopleTestContact2, Role: "participant", Origin: model.LinkOriginAuto, Mention: "Kim"},
+	}
+	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || len(f.puts) != 0 || res.Resolved != 0 || res.Unresolved != 0 {
+		t.Fatalf("res=%+v err=%v puts=%+v", res, err, f.puts)
+	}
+	if len(f.deletes) != 1 || f.deletes[0] != `participant/contact/`+peopleTestContact2+`/actor=""/auto/deny=false` {
+		t.Fatalf("contradicting auto edge kept: %v", f.deletes)
+	}
+}
+
+func TestResolveMeeting_RecordsMentionInventoryBeforeWrites(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.contacts = []model.AccountContact{peopleContact(peopleTestContact, "Kim Minsu", "")}
+	f.meetings["owner:m1"].Participants = []string{"Kim Minsu", "Lee"}
+	f.prior = []string{model.MentionSortKey(strings.Repeat("a", 32), "owner:m1", "participant")}
+	f.replaceErr = fmt.Errorf("timeout")
+	if _, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{}); err == nil {
+		t.Fatal("replace failure not returned")
+	}
+	if strings.Join(f.ops, ",") != "claim,record,put,replace,finish" {
+		t.Fatalf("ops %v", f.ops)
+	}
+	lee := model.MentionSortKey(model.MentionHash("lee"), "owner:m1", "participant")
+	if len(f.recorded) != 1 || strings.Join(f.recorded[0], ",") != f.prior[0]+","+lee {
+		t.Fatalf("recorded %v", f.recorded)
+	}
+	// The release keeps the union, so the next run deletes both.
+	if got := f.finished[0].Mentions; strings.Join(got, ",") != f.prior[0]+","+lee {
+		t.Fatalf("released inventory %v", got)
+	}
+
+	f = newFakePeopleRepo()
+	f.meetings["owner:m1"].Participants = []string{"Lee"}
+	f.recordErr = fmt.Errorf("%w: lease", repository.ErrConditionFailed)
+	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || !res.Busy || len(f.replaced) != 0 || len(f.puts) != 0 {
+		t.Fatalf("lost lease: res=%+v err=%v", res, err)
 	}
 }

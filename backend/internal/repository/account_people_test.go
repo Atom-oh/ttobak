@@ -462,7 +462,8 @@ func TestClaimPeopleRun_BusySetsRerun(t *testing.T) {
 			return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`, nil), nil
 		}
 		calls = append(calls, "rerun")
-		if _, ok := body["ConditionExpression"]; ok || !wireValues(body)["name:rerun"] || !wireValues(body)["value:true"] {
+		c, _ := body["ConditionExpression"].(string)
+		if !strings.Contains(c, "attribute_exists") || !wireValues(body)["name:rerun"] || !wireValues(body)["name:leaseUntil"] || !wireValues(body)["value:true"] {
 			t.Fatalf("rerun update %#v", body)
 		}
 		return summaryHTTPResponse(200, `{}`, nil), nil
@@ -470,6 +471,51 @@ func TestClaimPeopleRun_BusySetsRerun(t *testing.T) {
 	run, claimed, err := repo.ClaimPeopleRun(context.Background(), "acc", model.PeopleRunScopeAccount, "tok", time.Now(), time.Minute)
 	if err != nil || claimed || run != nil || strings.Join(calls, ",") != "claim,rerun" {
 		t.Fatalf("busy %+v %v %v %v", run, claimed, err, calls)
+	}
+}
+
+func TestClaimPeopleRun_RetriesWhenHolderFinished(t *testing.T) {
+	ccfe := `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`
+	calls := 0
+	repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls <= 2 {
+			// The claim fails on the active lease, then the holder finishes
+			// before the rerun marker lands.
+			return summaryHTTPResponse(400, ccfe, nil), nil
+		}
+		return summaryHTTPResponse(200, `{"Attributes":{"leaseToken":{"S":"tok"}}}`, nil), nil
+	})
+	run, claimed, err := repo.ClaimPeopleRun(context.Background(), "acc", "o:m1", "tok", time.Now(), time.Minute)
+	if err != nil || !claimed || run == nil || calls != 3 {
+		t.Fatalf("retry %+v %v %v calls=%d", run, claimed, err, calls)
+	}
+	calls = -10
+	if _, claimed, err := repo.ClaimPeopleRun(context.Background(), "acc", "o:m1", "tok", time.Now(), time.Minute); err != nil || claimed {
+		t.Fatalf("leases changing hands: %v %v", claimed, err)
+	}
+}
+
+func TestRecordPeopleRunMentions_RequiresLease(t *testing.T) {
+	key := model.MentionSortKey(testMentionHash('a'), "o:m1", "participant")
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		if target != "DynamoDB_20120810.UpdateItem" || !wireValues(body)["value:tok"] || !wireValues(body)["name:mentions"] {
+			t.Fatalf("record %#v", body)
+		}
+		return `{}`
+	})
+	run := &model.PeopleRun{AccountID: "acc", Scope: "o:m1", LeaseToken: "tok"}
+	if err := repo.RecordPeopleRunMentions(context.Background(), run, []string{key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordPeopleRunMentions(context.Background(), run, []string{model.MentionSortKey(testMentionHash('a'), "o:m2", "participant")}); err == nil {
+		t.Fatal("key of another meeting accepted")
+	}
+	repo = summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`, nil), nil
+	})
+	if err := repo.RecordPeopleRunMentions(context.Background(), run, nil); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("lost lease: %v", err)
 	}
 }
 
@@ -498,11 +544,12 @@ func TestListUnresolvedMentions_GroupsContiguous(t *testing.T) {
 	after := model.MentionSortKey(a, "o:m1", "participant")
 	repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
 		values := wireValues(body)
-		if !strings.Contains(body["KeyConditionExpression"].(string), "BETWEEN") || !values["value:"+after] || !values["value:MENTION$"] {
+		start, _ := body["ExclusiveStartKey"].(wireMap)
+		if !strings.Contains(body["KeyConditionExpression"].(string), "begins_with") || !values["value:MENTION#"] ||
+			wireS(start, "SK") != after || body["Limit"].(float64) != 10 {
 			t.Fatalf("query %#v", body)
 		}
 		return `{"Items":[
-{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"` + after + `"},"mention":{"S":"Kim"}},
 {"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"MENTION#` + a + `#o:m2#speaker"},"hash":{"S":"spoof"},"meetingId":{"S":"x:y"},"mention":{"S":"Kim"},"sourceField":{"S":"speakerMap"}},
 {"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"MENTION#bad"},"mention":{"S":"Lee"}}]}`
 	})

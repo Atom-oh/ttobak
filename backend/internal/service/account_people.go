@@ -44,6 +44,7 @@ type accountPeopleRepo interface {
 	GetMentionIgnores(context.Context, string, []string) (map[string]bool, error)
 	ReplaceUnresolvedMentions(context.Context, string, string, []model.UnresolvedMention, []string) error
 	ClaimPeopleRun(context.Context, string, string, string, time.Time, time.Duration) (*model.PeopleRun, bool, error)
+	RecordPeopleRunMentions(context.Context, *model.PeopleRun, []string) error
 	FinishPeopleRun(context.Context, *model.PeopleRun) (bool, error)
 }
 
@@ -117,13 +118,16 @@ func (s *AccountPeopleService) ResolveMeeting(ctx context.Context, ownerID, meet
 func (s *AccountPeopleService) resolveMeeting(ctx context.Context, ownerID, meetingID, accountID string, dir *PeopleDirectory, opt PeopleRunOptions) (PeopleRunResult, error) {
 	var total PeopleRunResult
 	linkID := ownerID + ":" + meetingID
+	eligible := func(m *model.Meeting) bool {
+		return meetingPublishedTo(m) && (accountID == "" || m.AccountID == accountID) &&
+			m.UserID == ownerID && m.MeetingID == meetingID
+	}
 	for pass := 1; pass <= maxPeopleRunPasses; pass++ {
 		meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 		if err != nil {
 			return total, err
 		}
-		if !meetingPublishedTo(meeting) || (accountID != "" && meeting.AccountID != accountID) ||
-			meeting.UserID != ownerID || meeting.MeetingID != meetingID {
+		if !eligible(meeting) {
 			total.Skipped++
 			return total, nil
 		}
@@ -138,6 +142,20 @@ func (s *AccountPeopleService) resolveMeeting(ctx context.Context, ownerID, meet
 				return total, nil
 			}
 			run = claimed
+			// The pre-claim read only locates the account lease. Plan from a
+			// snapshot taken under the lease, so a stalled run never applies
+			// fields older than those of the run that finished before it.
+			leased, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+			if err != nil {
+				s.release(ctx, run, nil, opt)
+				return total, err
+			}
+			if !eligible(leased) || leased.AccountID != meeting.AccountID {
+				s.release(ctx, run, nil, opt)
+				total.Skipped++
+				return total, nil
+			}
+			meeting = leased
 		}
 		passDir := dir
 		if passDir == nil {
@@ -148,6 +166,10 @@ func (s *AccountPeopleService) resolveMeeting(ctx context.Context, ownerID, meet
 		}
 		res, mentionSKs, err := s.applyMeeting(ctx, meeting, linkID, passDir, run, opt)
 		total.pass(res)
+		if errors.Is(err, errPeopleLeaseLost) {
+			total.Busy = true
+			return total, nil
+		}
 		if err != nil {
 			s.release(ctx, run, mentionSKs, opt)
 			return total, err
@@ -181,17 +203,25 @@ func (s *AccountPeopleService) release(ctx context.Context, run *model.PeopleRun
 	if opt.DryRun || run == nil || run.LeaseToken == "" {
 		return
 	}
-	keys := append([]string(nil), run.Mentions...)
-	for _, sk := range planned {
-		if !slices.Contains(keys, sk) {
-			keys = append(keys, sk)
-		}
-	}
+	keys := unionKeys(run.Mentions, planned)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), peopleReleaseTimeout)
 	defer cancel()
 	release := *run
 	release.Mentions = keys
 	_, _ = s.repo.FinishPeopleRun(ctx, &release)
+}
+
+// errPeopleLeaseLost means another run took the lease before this pass wrote.
+var errPeopleLeaseLost = errors.New("people run lease lost")
+
+func unionKeys(a, b []string) []string {
+	keys := append([]string(nil), a...)
+	for _, sk := range b {
+		if !slices.Contains(keys, sk) {
+			keys = append(keys, sk)
+		}
+	}
+	return keys
 }
 
 // applyMeeting plans one claimed meeting and, unless DryRun, applies the plan.
@@ -238,8 +268,15 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 		}
 	}
 
-	edges, planned, truncated := PlanMeetingPeople(accountID, linkID, dir, mentions, s.now())
+	planEdges, planned, truncated := PlanMeetingPeople(accountID, linkID, dir, mentions, s.now())
 	res.Truncated = res.Truncated || truncated
+	// A user's binding of a text for a role wins over any auto target.
+	edges := planEdges[:0]
+	for _, e := range planEdges {
+		if n := NormalizePersonName(e.Mention); n == "" || !manual[roleHash{e.Role, model.MentionHash(n)}] {
+			edges = append(edges, e)
+		}
+	}
 	unresolved := planned[:0]
 	for _, m := range planned {
 		// A user already bound this text for this role.
@@ -255,6 +292,17 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 	if opt.DryRun {
 		return res, mentionSKs, nil
 	}
+
+	// Record every key this pass may write before writing any, so an
+	// interrupted pass leaves the next run an inventory covering its rows.
+	if err := s.repo.RecordPeopleRunMentions(ctx, run, unionKeys(run.Mentions, mentionSKs)); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return res, nil, errPeopleLeaseLost
+		}
+		return res, nil, err
+	}
+	prior := run.Mentions
+	run.Mentions = unionKeys(run.Mentions, mentionSKs)
 
 	plannedKeys := map[model.PeopleLinkKey]bool{}
 	for i := range edges {
@@ -289,7 +337,7 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 			return res, mentionSKs, err
 		}
 	}
-	if err := s.repo.ReplaceUnresolvedMentions(ctx, accountID, linkID, unresolved, run.Mentions); err != nil {
+	if err := s.repo.ReplaceUnresolvedMentions(ctx, accountID, linkID, unresolved, prior); err != nil {
 		return res, mentionSKs, err
 	}
 	return res, mentionSKs, nil

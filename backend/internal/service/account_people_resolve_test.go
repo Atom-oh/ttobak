@@ -251,3 +251,15 @@ func TestPlanMeetingPeople_DedupesAndCaps(t *testing.T) {
 		t.Fatalf("cap: len=%d truncated=%v", len(edges), truncated)
 	}
 }
+
+func TestResolveMention_TruncatedDirectoryBindsByEmailOnly(t *testing.T) {
+	dir := &PeopleDirectory{ContactsTruncated: true, People: []PersonCandidate{
+		{Kind: model.LinkKindContact, ID: "c1", Name: "Kim Minsu", Email: "kim@acme.example"},
+	}, Entities: []NamedCandidate{{Kind: model.LinkKindProject, ID: "p1", Name: "Kim Minsu"}}}
+	if res := ResolveMention(dir, PeopleMention{Text: "Kim Minsu", AllowEntities: true}); res.Resolved {
+		t.Fatalf("name resolved on a truncated directory: %+v", res)
+	}
+	if res := ResolveMention(dir, PeopleMention{Text: "kim@acme.example"}); !res.Resolved || res.Rule != model.PeopleRuleEmail {
+		t.Fatalf("email: %+v", res)
+	}
+}
