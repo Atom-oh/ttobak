@@ -138,25 +138,61 @@ func (v *OriginVerifier) secret(ctx context.Context) (originProofSet, bool) {
 	if value, ok := v.cached(); ok {
 		return value, true
 	}
-	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(v.arn), VersionId: aws.String(v.version)}
-	out, err := v.client.GetSecretValue(bounded, input, func(options *secretsmanager.Options) { options.Retryer = aws.NopRetryer{} })
-	if err != nil {
-		log.Print("http_origin_rejected category=secret_unavailable")
+	value, category, ok := v.fetch(bounded)
+	if !ok {
+		log.Print("http_origin_rejected category=" + category)
 		return originProofSet{}, false
 	}
+	return value, true
+}
+
+// fetch reads and validates the pinned secret version and caches the proofs.
+// Callers hold the lookup slot. On failure it returns a fixed category name.
+func (v *OriginVerifier) fetch(ctx context.Context) (originProofSet, string, bool) {
+	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(v.arn), VersionId: aws.String(v.version)}
+	out, err := v.client.GetSecretValue(ctx, input, func(options *secretsmanager.Options) { options.Retryer = aws.NopRetryer{} })
+	if err != nil {
+		return originProofSet{}, "secret_unavailable", false
+	}
 	if out == nil || out.SecretString == nil {
-		log.Print("http_origin_rejected category=secret_invalid")
-		return originProofSet{}, false
+		return originProofSet{}, "secret_invalid", false
 	}
 	value, ok := parseOriginProofSet(*out.SecretString)
 	if !ok {
-		log.Print("http_origin_rejected category=secret_invalid")
-		return originProofSet{}, false
+		return originProofSet{}, "secret_invalid", false
 	}
 	v.mu.Lock()
 	v.proofs, v.expires = value, v.now().Add(originCacheTTL)
 	v.mu.Unlock()
-	return value, true
+	return value, "", true
+}
+
+// Prefetch fills the proof cache once, bounded by timeout, so a cold
+// instance's first request does not pay the Secrets Manager round trip. It
+// only stores proofs that the request path would have read and validated
+// itself; it caches no decision. It skips when a lookup is already running
+// or the cache is fresh. A failure is logged and leaves the cache empty, so
+// requests fetch on demand exactly as without a prefetch. A request that
+// arrives during the prefetch waits at most timeout for the lookup slot, so
+// keep timeout well below the request path's 3-second bound.
+func (v *OriginVerifier) Prefetch(ctx context.Context, timeout time.Duration) {
+	if v == nil || v.arn == "" || v.client == nil || !originVersion.MatchString(v.version) {
+		return
+	}
+	select {
+	case v.lookup <- struct{}{}:
+		defer func() { <-v.lookup }()
+	default:
+		return
+	}
+	if _, ok := v.cached(); ok {
+		return
+	}
+	bounded, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if _, category, ok := v.fetch(bounded); !ok {
+		log.Print("http_origin_prefetch_failed category=" + category)
+	}
 }
 
 func (v *OriginVerifier) allows(ctx context.Context, headers http.Header) bool {
