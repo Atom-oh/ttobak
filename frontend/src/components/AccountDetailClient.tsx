@@ -20,6 +20,7 @@ import { AccountSignals } from '@/components/account/AccountSignals';
 import { AccountFlow } from '@/components/account/AccountFlow';
 import { AccountKB } from '@/components/account/AccountKB';
 import { AccountLinksPanel } from '@/components/account/AccountLinksPanel';
+import { AccountPeople } from '@/components/account/AccountPeople';
 import { eventProjectLinks } from '@/lib/accountOverview';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
@@ -294,8 +295,16 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const loadFlow = useCallback((signal: AbortSignal) => accountApi.flow(accountId, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
   const signalsState = useAccountSection(loadSignals, overviewVisible, onAccessLost);
   const flowState = useAccountSection(loadFlow, overviewVisible, onAccessLost);
+  // The people panel's first pages (resolved people and unresolved mentions).
+  const loadPeople = useCallback(async (signal: AbortSignal) => {
+    const options = { signal, expectedUserId: user?.userId };
+    const [people, mentions] = await Promise.all([accountApi.people.list(accountId, '', options), accountApi.people.mentions(accountId, '', options)]);
+    return { people, mentions };
+  }, [accountId, user?.userId]);
+  const peopleState = useAccountSection(loadPeople, overviewVisible, onAccessLost);
   const retrySignals = signalsState.retry;
   const retryFlow = flowState.retry;
+  const retryPeople = peopleState.retry;
   const [linksRevision, setLinksRevision] = useState(0);
   // Event rows show their existing project links. One bounded scan of the
   // account's links (not one call per row); the links panel is the complete view.
@@ -326,8 +335,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const retryEventLinks = eventLinksState.retry;
   // Every link or news-source mutation changes all of these views.
   const refreshOverview = useCallback(() => {
-    retrySignals(); retryFlow(); retryEventLinks(); setLinksRevision(revision => revision + 1);
-  }, [retrySignals, retryFlow, retryEventLinks]);
+    retrySignals(); retryFlow(); retryEventLinks(); retryPeople(); setLinksRevision(revision => revision + 1);
+  }, [retrySignals, retryFlow, retryEventLinks, retryPeople]);
   const projectNames = useMemo(() => {
     const names: Record<string, string> = {};
     for (const row of flowState.data?.rows ?? []) if (row.oppty) names[row.oppty.projectId] = row.oppty.name;
@@ -622,6 +631,9 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                       <SectionStatus {...flowState} />
                       {flowState.data && <AccountFlow accountId={accountId} userId={user.userId}
                         flow={flowState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
+                      <SectionStatus {...peopleState} />
+                      {peopleState.data && <AccountPeople accountId={accountId} userId={user.userId}
+                        data={peopleState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
                       <AccountLinksPanel accountId={accountId} userId={user.userId} projectNames={projectNames}
                         revision={linksRevision} onChanged={refreshOverview} onAccessLost={onAccessLost} />
                     </>

@@ -10,6 +10,7 @@ import type { AccountCreationRequest, AccountCreationResponse } from '@/types/me
 import type { MeetingCategory } from '@/types/meeting';
 import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
 import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
+import type { AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 
@@ -958,6 +959,29 @@ export const accountApi = {
     remove: (id: string, input: AccountLinkInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/links?${new URLSearchParams({
         fromKind: input.fromKind, fromId: input.fromId, toKind: input.toKind, toId: input.toId,
+      })}`, options),
+  },
+  // People panel, mention review and speaker binding (direct members only).
+  people: {
+    list: (id: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<AccountPeoplePage>(`/api/accounts/${encodeURIComponent(id)}/people${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+        { ...options, cache: 'no-store' }),
+    mentions: (id: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<MentionGroupsPage>(`/api/accounts/${encodeURIComponent(id)}/people/mentions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+        { ...options, cache: 'no-store' }),
+    resolveMention: (id: string, key: string, target: { kind: 'member' | 'contact'; id: string }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<ResolveMentionResult>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/resolve`,
+        { kind: target.kind, id: target.id }, options),
+    ignoreMention: (id: string, key: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/ignore`, undefined, options),
+    edges: (id: string, meetingId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<MeetingPeopleEdges>(`/api/accounts/${encodeURIComponent(id)}/people/edges?${new URLSearchParams({ meetingId })}`,
+        { ...options, cache: 'no-store' }),
+    bind: (id: string, input: PeopleEdgeInput, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<PeopleLink>(`/api/accounts/${encodeURIComponent(id)}/people/edges`, input, options),
+    unbind: (id: string, key: PeopleEdgeKey, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/people/edges?${new URLSearchParams({
+        meetingId: key.meetingId, toKind: key.toKind, toId: key.toId, role: key.role,
       })}`, options),
   },
   kb: (id: string, kind: AccountKBKind, cursor?: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {

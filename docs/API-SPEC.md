@@ -852,7 +852,32 @@ while a cursor remains. Each link shows `origin` (`manual` or `auto`),
 endpoint fields as query parameters, is allowed for any direct member, returns
 204 or 404, and for an `auto` link also writes a `LINKDENY#` row so the
 automatic linker never re-creates that pair. None of the three routes is
-connector-delegable; the list carries meeting-derived evidence.
+connector-delegable; the list carries meeting-derived evidence. People edges
+(below) live in the `LINK#meeting#` range and never appear on these routes.
+
+The `/api/accounts/{accountId}/people` routes serve ADR-065 people edges for
+**direct** members, checked on every request (not connector-delegable;
+`Cache-Control: no-store`; 400 uses `BAD_REQUEST`, an unreadable contact
+directory 503 `CONTACTS_UNAVAILABLE`). Meeting IDs are `{ownerUserId}:{meetingId}`,
+and only meetings currently published to the account count:
+- `GET /people?cursor=` returns `{people, nextCursor?, truncated}`: at most 200
+  members then contacts, `{kind, id, label, meetings, roles}` with role counts
+  over visible meetings. `GET /people/mentions?cursor=` returns `{groups,
+  nextCursor?, truncated}`: at most 100 unresolved groups `{key, text, meetings,
+  roles}` where `key` is 32 lowercase hex. Cursors are opaque base64url.
+- `POST /people/mentions/{mentionKey}/resolve` takes `{kind: member|contact,
+  id}`, writes manual edges for the visible rows and returns `{written,
+  remaining}`; `remaining` means more rows are left for another call.
+  `POST .../ignore` returns 204 and hides the text account-wide (no undo route).
+- `GET /people/edges?meetingId=` returns `{edges, labels}` for one meeting;
+  `labels` is keyed `{kind}:{id}` and holds only readable targets. `POST
+  /people/edges` takes `{meetingId, toKind, toId, role, sourceRef?}` and returns
+  201 with a manual edge; a `speaker` edge needs `sourceRef` to be a speaker-map
+  label or a default diarization label (`spk_N` or the Korean speaker letter form). `DELETE /people/edges` takes the four
+  key fields as query parameters, returns 204, and for an auto edge writes a
+  deny row.
+- Under the summary guard, assignee and insight mention text and evidence are
+  blank for teammates who do not own the meeting.
 
 Project stages are a fixed list (Prospect, Qualified, Technical Validation,
 Business Validation, Committed, Launched, Closed Lost; matched case-insensitively,
@@ -911,21 +936,25 @@ points. Items are placed only through stored links; nothing is inferred:
   50 newest with no link to a project still in the account (read per event
   through `LINK#event#{eventId}#project#`, at most 20 rows) and published
   meetings among the 50 newest account meeting refs that list no such project.
-- Items are `{kind: event|meeting, id, title, date, origin?, evidence?, need?}`;
-  meeting IDs are `{ownerUserId}:{meetingId}`.
+- Items are `{kind: event|meeting, id, title, date, origin?, evidence?, need?,
+  people?}`; meeting IDs are `{ownerUserId}:{meetingId}`. `people` holds at most
+  5 `{kind: member|contact, id, label, role}`: readable attendee contacts for
+  events, member and contact people edges for meetings (assignees left out under
+  the summary guard).
 - `truncated` reports that a read bound or the size bound was hit; rows or
   items may then be missing, and unassigned items may have links that were not
   read.
 
 `GET /api/accounts/{accountId}/graph` returns the account's relationship graph
 for **direct** members (same access, query and caching rules as signals; not
-connector-delegable). The response is `{ nodes, edges, truncated }`, at most
-64 KiB. Nodes are `{id, kind, label}` with `id` `{kind}:{id}` (meetings
+connector-delegable). The response is `{ nodes, edges, truncated, memberCount }`,
+at most 64 KiB. Nodes are `{id, kind, label}` with `id` `{kind}:{id}` (meetings
 `{ownerUserId}:{meetingId}`, news/tech `{sourceId}:{docHash}`), `kind`
 `account|project|meeting|event|news|tech|member|contact` and `label` capped at
-60 code points. Edges are `{from, to, kind, origin?}` with `kind`
-`project_account|meeting_project|meeting_account|link|attends|member_of`;
-`origin` (`manual`/`auto`) is set only on `link` edges. Every node comes from a
+60 code points. Edges are `{from, to, kind, origin?, role?}` with `kind`
+`project_account|meeting_project|meeting_account|link|attends|member_of|person`;
+`origin` (`manual`/`auto`) is set only on `link` and `person` edges and `role`
+only on `person` edges (meeting to member, contact, account or project). Every node comes from a
 revalidated relation; nothing is inferred:
 - projects that still list the account (up to 100 project refs); meetings
   currently published to the account among the 100 newest account meeting
@@ -940,12 +969,16 @@ revalidated relation; nothing is inferred:
   200 distinct uncached endpoint lookups (project, meeting publication, event,
   document); skipped rows set `truncated`. At the node cap boundary a
   revalidated from node can appear without its link edge.
-- direct members labelled `{email} ({role})`, as the account detail shows;
-  event attendees whose `contactId` names an existing account contact, as
+- direct members labelled `{email} ({role})`, as the account detail shows, now
+  only when a people edge connects them; `memberCount` counts all direct
+  members; event attendees whose `contactId` names an existing account contact, as
   `attends` edges labelled with the contact name. At most 200 distinct contacts
   are read, and none once the node cap is full; skipped attendees set
   `truncated`. Meeting project expansion stops reading projects once the node
   cap is full.
+- people edges of meeting nodes already present (no extra meeting reads):
+  members must still be direct members, contacts must open, account targets
+  need the viewer's read grant and project targets must already be nodes.
 - At most 150 nodes and 300 edges. `truncated` reports that a node, edge, read
   or size bound was hit, or that a single contact or linked event could not be
   opened and was skipped. A missing record key or a storage failure still

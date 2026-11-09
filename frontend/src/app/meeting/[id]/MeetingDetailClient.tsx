@@ -646,6 +646,9 @@ function MeetingDetailContent() {
               accountId={meeting.accountId}
               userId={user?.userId}
               membershipRevision={membershipRevision}
+              meetingOwnerId={meeting.userId}
+              meetingId={meeting.meetingId}
+              sharedToAccount={meeting.sharedToAccount}
               transcription={displayedSegments}
               content={meeting.content}
               speakerMap={meeting.speakerMap}
