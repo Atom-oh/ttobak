@@ -905,7 +905,9 @@ revalidated relation; nothing is inferred:
   event attendees whose `contactId` names an existing account contact, as
   `attends` edges labelled with the contact name.
 - At most 150 nodes and 300 edges. `truncated` reports that a node, edge, read
-  or size bound was hit.
+  or size bound was hit, or that a single contact or linked event could not be
+  opened and was skipped. A missing record key or a storage failure still
+  fails the call.
 
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,

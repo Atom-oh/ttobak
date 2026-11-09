@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 const graphDocHash = "0123456789abcdef0123456789abcdef"
@@ -32,6 +34,9 @@ func (r *overviewTestRepo) ListAccountMembers(context.Context, string) ([]model.
 }
 
 func (r *overviewTestRepo) GetAccountContact(_ context.Context, _ string, id string) (*model.AccountContact, error) {
+	if err := r.contactErrs[id]; err != nil {
+		return nil, err
+	}
 	return r.contacts[id], nil
 }
 
@@ -264,5 +269,66 @@ func TestGraph_LabelsTruncated(t *testing.T) {
 		if utf8.RuneCountInString(label) != maxGraphLabelRunes || !strings.HasPrefix(long, label) {
 			t.Fatalf("%s label %q", id, label)
 		}
+	}
+}
+
+func graphContactFixture(repo *overviewTestRepo) (good, bad string, event model.AccountEvent) {
+	good, bad = flowEventID(80), flowEventID(81)
+	repo.contacts[good] = &model.AccountContact{ContactID: good, Name: "good"}
+	event = flowEvent(0, signalsNow.Add(-day))
+	event.Attendees = []model.EventAttendee{{ContactID: bad, Name: "bad"}, {ContactID: good, Name: "good"}}
+	repo.addEvent(event)
+	return good, bad, event
+}
+
+func TestGraph_SkipsUnopenableContact(t *testing.T) {
+	svc, repo, _, _ := newGraphTest()
+	good, bad, event := graphContactFixture(repo)
+	repo.contactErrs = map[string]error{bad: fmt.Errorf("open contact: %w", fmt.Errorf("%w: tampered", repository.ErrContactUnreadable))}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatalf("one unopenable contact failed the graph: %v", err)
+	}
+	checkGraphConsistent(t, g)
+	nodes, edges := graphIndex(g)
+	if _, ok := nodes["contact:"+bad]; ok {
+		t.Fatal("unopenable contact produced a node")
+	}
+	if !edges["contact:"+good+">event:"+event.EventID+">attends"] || !g.Truncated {
+		t.Fatalf("good contact missing or not truncated: %+v truncated=%v", g.Edges, g.Truncated)
+	}
+}
+
+func TestGraph_FailsWhenSealingUnavailable(t *testing.T) {
+	for name, err := range map[string]error{
+		"key":       fmt.Errorf("open contact: %w", repository.ErrContactEncryptionUnavailable),
+		"transport": errors.New("dynamodb: request timeout"),
+	} {
+		svc, repo, _, _ := newGraphTest()
+		_, bad, _ := graphContactFixture(repo)
+		repo.contactErrs = map[string]error{bad: err}
+		if _, got := svc.Graph(context.Background(), linkUser, linkAcct); !errors.Is(got, err) {
+			t.Fatalf("%s: got %v", name, got)
+		}
+	}
+}
+
+func TestGraph_SkipsUnopenableLinkedEvent(t *testing.T) {
+	svc, repo, _, links := newGraphTest()
+	repo.addProject(&model.Project{ProjectID: "p1", Name: "P1", AccountIDs: []string{linkAcct}})
+	bad := flowEventID(7)
+	repo.eventErrs = map[string]error{bad: fmt.Errorf("%w: tampered", repository.ErrEventUnreadable)}
+	links.links = []model.AccountLink{{FromKind: "event", FromID: bad, ToKind: "project", ToID: "p1", Origin: "manual"}}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatalf("one unopenable event failed the graph: %v", err)
+	}
+	nodes, _ := graphIndex(g)
+	if _, ok := nodes["event:"+bad]; ok || !g.Truncated {
+		t.Fatalf("event node=%v truncated=%v", ok, g.Truncated)
+	}
+	repo.eventErrs[bad] = fmt.Errorf("open event: %w", repository.ErrEventEncryptionUnavailable)
+	if _, err := svc.Graph(context.Background(), linkUser, linkAcct); !errors.Is(err, repository.ErrEventEncryptionUnavailable) {
+		t.Fatalf("missing key must fail: %v", err)
 	}
 }

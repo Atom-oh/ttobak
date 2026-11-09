@@ -1162,7 +1162,12 @@ func (s *AccountOverviewService) graphEvent(ctx context.Context, accountID strin
 		contact, seen := b.contacts[attendee.ContactID]
 		if !seen {
 			var err error
-			if contact, err = s.repo.GetAccountContact(ctx, accountID, attendee.ContactID); err != nil {
+			contact, err = s.repo.GetAccountContact(ctx, accountID, attendee.ContactID)
+			if graphRowUnreadable(err, repository.ErrContactUnreadable) {
+				// One unopenable contact is skipped, not fatal.
+				contact, err, b.g.Truncated = nil, nil, true
+			}
+			if err != nil {
 				return false, err
 			}
 			if contact != nil && contact.ContactID != attendee.ContactID {
@@ -1223,6 +1228,12 @@ func (s *AccountOverviewService) graphDocument(ctx context.Context, sourceID, do
 	return doc, nil
 }
 
+// graphRowUnreadable reports a single-row open failure that the graph skips.
+// A missing sealing key or a transport failure is never skipped.
+func graphRowUnreadable(err, unreadable error) bool {
+	return err != nil && errors.Is(err, unreadable) && !errors.Is(err, repository.ErrContactEncryptionUnavailable)
+}
+
 // graphLinkFrom revalidates a link's from endpoint and adds its node.
 func (s *AccountOverviewService) graphLinkFrom(ctx context.Context, accountID string, link model.AccountLink, b *graphBuilder, reads *overviewReads) (bool, error) {
 	switch link.FromKind {
@@ -1255,6 +1266,10 @@ func (s *AccountOverviewService) graphLinkFrom(ctx context.Context, accountID st
 		return b.node(link.FromKind, link.FromID, doc.Title), nil
 	case model.LinkKindEvent:
 		event, err := s.accountEvent(ctx, accountID, link.FromID, reads)
+		if graphRowUnreadable(err, repository.ErrEventUnreadable) {
+			// One unopenable event drops its link row, not the graph.
+			reads.events[link.FromID], event, err, b.g.Truncated = nil, nil, nil, true
+		}
 		if err != nil || event == nil {
 			return false, err
 		}

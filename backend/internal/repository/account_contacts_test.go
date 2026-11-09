@@ -248,13 +248,19 @@ func TestContactRowCannotBeOpenedUnderAnotherAccount(t *testing.T) {
 	repo := contactWire(t, func(string, map[string]interface{}) string {
 		return `{"Item":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#` + id + `"},"contactId":{"S":"` + id + `"},"revision":{"S":"r"},"sealed":{"S":"` + sealed + `"}}}`
 	})
-	if _, err := repo.GetAccountContact(context.Background(), "account", id); err == nil {
-		t.Fatal("a payload sealed for another account opened")
+	if _, err := repo.GetAccountContact(context.Background(), "account", id); !errors.Is(err, ErrContactUnreadable) || errors.Is(err, ErrContactEncryptionUnavailable) {
+		t.Fatalf("a payload sealed for another account must be unreadable: %v", err)
 	}
 	plain := contactWire(t, func(string, map[string]interface{}) string {
 		return `{"Item":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#` + id + `"},"contactId":{"S":"` + id + `"},"name":{"S":"Alice"}}}`
 	})
-	if _, err := plain.GetAccountContact(context.Background(), "account", id); err == nil {
-		t.Fatal("an unsealed row must not be served")
+	if _, err := plain.GetAccountContact(context.Background(), "account", id); !errors.Is(err, ErrContactUnreadable) {
+		t.Fatalf("an unsealed row must not be served: %v", err)
+	}
+	keyless := indexingWire(t, func(string, map[string]interface{}) string {
+		return `{"Item":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"CONTACT#` + id + `"},"contactId":{"S":"` + id + `"},"revision":{"S":"r"},"sealed":{"S":"` + sealed + `"}}}`
+	})
+	if _, err := keyless.GetAccountContact(context.Background(), "account", id); !errors.Is(err, ErrContactEncryptionUnavailable) || errors.Is(err, ErrContactUnreadable) {
+		t.Fatalf("a missing key must stay unavailable: %v", err)
 	}
 }
