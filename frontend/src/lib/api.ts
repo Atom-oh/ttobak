@@ -692,6 +692,7 @@ export const insightsApi = {
       totalCount: number;
       page: number;
       limit: number;
+      services?: string[];
     }>(`/api/insights?${q.toString()}`);
   },
   getDetail: (sourceId: string, docHash: string) =>

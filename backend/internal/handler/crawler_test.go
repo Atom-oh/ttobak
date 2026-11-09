@@ -217,6 +217,9 @@ func (m *mockCrawlerRepo) ListAllDocumentsByType(_ context.Context, docType stri
 		}
 	}
 	total := len(docs)
+	if limit <= 0 {
+		return docs, total, nil
+	}
 	start := int(limit) * page
 	if start > total {
 		return []model.CrawledDocument{}, total, nil
