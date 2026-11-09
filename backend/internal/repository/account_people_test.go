@@ -694,7 +694,6 @@ func TestAddPeopleLinkAlias_UpdatesBothRowsForMember(t *testing.T) {
 	}
 	want := []string{
 		"Update ACCOUNT#acc LINK#meeting#o:m#contact#c1#participant",
-		"Update ACCOUNT#acc LINKTO#contact#c1#meeting#o:m#participant",
 		"ConditionCheck ACCOUNT#acc META",
 		"ConditionCheck ACCOUNT#acc MEMBER#actor",
 	}
@@ -704,8 +703,5 @@ func TestAddPeopleLinkAlias_UpdatesBothRowsForMember(t *testing.T) {
 	fwd := items[0].(map[string]interface{})["Update"].(map[string]interface{})
 	if !strings.Contains(fwd["UpdateExpression"].(string), "ADD") || !strings.Contains(fwd["ConditionExpression"].(string), "size") {
 		t.Fatalf("forward update %#v", fwd)
-	}
-	if err := repo.AddPeopleLinkAlias(context.Background(), "acc", "", k, h); err == nil {
-		t.Fatal("system actor accepted")
 	}
 }

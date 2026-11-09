@@ -84,9 +84,7 @@ type PeopleLink struct {
 	Evidence    string `dynamodbav:"evidence,omitempty" json:"evidence,omitempty"`
 	CreatedBy   string `dynamodbav:"createdBy,omitempty" json:"createdBy,omitempty"`
 	CreatedAt   string `dynamodbav:"createdAt" json:"createdAt"`
-	// MentionAliases holds the hashes of further mention texts a member bound
-	// to this manual edge (same meeting and role), so the resolver suppresses
-	// them too. At most MaxPeopleMentionAliases.
+	// MentionAliases: hashes of more texts a member bound to this manual edge.
 	MentionAliases []string `dynamodbav:"mentionAliases,stringset,omitempty" json:"-"`
 }
 

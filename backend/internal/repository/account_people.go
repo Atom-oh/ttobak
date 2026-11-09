@@ -669,37 +669,23 @@ func (r *DynamoDBRepository) ListUnresolvedMentionsByHash(ctx context.Context, a
 	return rows, truncated, err
 }
 
-// DeleteUnresolvedMention removes one unresolved mention row. When
-// expectCreatedAt is set the row must still carry it; a rewritten or removed
-// row is ErrConditionFailed.
-func (r *DynamoDBRepository) DeleteUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role, expectCreatedAt string) error {
+// DeleteUnresolvedMention removes one unresolved mention row.
+func (r *DynamoDBRepository) DeleteUnresolvedMention(ctx context.Context, accountID, hash, meetingID, role string) error {
 	sk := model.MentionSortKey(hash, meetingID, role)
 	if _, m, _, ok := parseMentionSortKey(sk); accountID == "" || !ok || m != meetingID {
 		return fmt.Errorf("invalid unresolved mention")
 	}
-	in := &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, sk)}
-	if expectCreatedAt != "" {
-		cond, err := expression.NewBuilder().WithCondition(expression.Name("createdAt").Equal(expression.Value(expectCreatedAt))).Build()
-		if err != nil {
-			return err
-		}
-		in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues = cond.Condition(), cond.Names(), cond.Values()
-	}
-	if _, err := r.client.DeleteItem(ctx, in); err != nil {
-		var failed *types.ConditionalCheckFailedException
-		if errors.As(err, &failed) {
-			return fmt.Errorf("%w: unresolved mention changed", ErrConditionFailed)
-		}
+	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName),
+		Key: accountNewsKey(model.PrefixAccount+accountID, sk)}); err != nil {
 		return fmt.Errorf("delete unresolved mention: %w", err)
 	}
 	return nil
 }
 
-// AddPeopleLinkAlias adds a mention hash to an existing manual edge's
-// aliases, on the forward and reverse rows in one transaction. The forward
-// row must still be manual with fewer than MaxPeopleMentionAliases aliases,
-// and the actor must still be a direct member; failures are
-// ErrConditionFailed (ErrAccountLinkAccess for the member checks).
+// AddPeopleLinkAlias adds a mention hash to a manual edge's forward row (the
+// row the resolver reads). The row must still be manual with room for it and
+// the actor a direct member; failures are ErrConditionFailed
+// (ErrAccountLinkAccess for the member checks).
 func (r *DynamoDBRepository) AddPeopleLinkAlias(ctx context.Context, accountID, actorID string, k model.PeopleLinkKey, hash string) error {
 	if accountID == "" || actorID == "" || model.ValidatePeopleLinkKey(k) != nil || !validMentionHash(hash) {
 		return fmt.Errorf("invalid people link alias")
@@ -712,16 +698,10 @@ func (r *DynamoDBRepository) AddPeopleLinkAlias(ctx context.Context, accountID, 
 	if err != nil {
 		return err
 	}
-	rev, err := expression.NewBuilder().WithUpdate(add).WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
-	if err != nil {
-		return err
-	}
 	pk := model.PrefixAccount + accountID
 	items := []types.TransactWriteItem{
 		{Update: &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkSortKey(k)), UpdateExpression: fwd.Update(),
 			ConditionExpression: fwd.Condition(), ExpressionAttributeNames: fwd.Names(), ExpressionAttributeValues: fwd.Values()}},
-		{Update: &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkToSortKey(k)), UpdateExpression: rev.Update(),
-			ConditionExpression: rev.Condition(), ExpressionAttributeNames: rev.Names(), ExpressionAttributeValues: rev.Values()}},
 	}
 	access, err := r.accountLinkAccessChecks(accountID, actorID)
 	if err != nil {
@@ -729,7 +709,7 @@ func (r *DynamoDBRepository) AddPeopleLinkAlias(ctx context.Context, accountID, 
 	}
 	items = append(items, access...)
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
-		return classifyAccountLinkDelete(err, len(items), 2)
+		return classifyAccountLinkDelete(err, len(items), 1)
 	}
 	return nil
 }
