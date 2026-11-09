@@ -162,7 +162,10 @@ func init() {
 	accountContactsService := service.NewAccountContactsService(repo)
 	accountContactsService.SetPeopleResolvePublisher(peopleResolvePublisher)
 	accountContactsHandler := handler.NewAccountContactsHandler(accountContactsService)
-	accountPeopleHandler := handler.NewAccountPeopleHandler(service.NewAccountPeopleService(repo.MetadataView()))
+	// Manual people writes queue a resolver refresh of the changed meetings.
+	accountPeopleService := service.NewAccountPeopleService(repo.MetadataView())
+	accountPeopleService.SetPeopleResolvePublisher(peopleResolvePublisher)
+	accountPeopleHandler := handler.NewAccountPeopleHandler(accountPeopleService)
 	accountEventsHandler := handler.NewAccountEventsHandler(service.NewAccountEventsService(repo))
 	accountReadingHandler := handler.NewAccountReadingHandler(service.NewAccountReadingService(repo.MetadataView()))
 	meetingCatalogHandler := handler.NewMeetingCatalogHandler(service.NewMeetingCatalogService(repo.MetadataView()))

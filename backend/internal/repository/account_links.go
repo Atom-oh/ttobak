@@ -435,36 +435,49 @@ func (r *DynamoDBRepository) ListAccountLinksByPrefix(ctx context.Context, accou
 	if accountID == "" || maxRows <= 0 || (!reverse && !strings.HasPrefix(prefix, model.PrefixAccountLink)) || !strings.HasSuffix(prefix, "#") {
 		return nil, false, fmt.Errorf("invalid account link prefix query")
 	}
-	key := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
-		And(expression.Key("SK").BeginsWith(prefix))
-	expr, err := expression.NewBuilder().WithKeyCondition(key).Build()
-	if err != nil {
-		return nil, false, err
+	pk := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID))
+	keys := []expression.KeyConditionBuilder{pk.And(expression.Key("SK").BeginsWith(prefix))}
+	if parts := strings.Split(strings.TrimPrefix(prefix, model.PrefixAccountLinkTo), "#"); reverse && len(parts) == 3 {
+		// A to-endpoint prefix (LINKTO#{kind}#{id}#) also holds the people
+		// rows LINKTO#{kind}#{id}#meeting#...; read around them so they never
+		// spend this bound. Project 1 from-kinds are never "meeting".
+		people := prefix + model.LinkKindMeeting
+		keys = []expression.KeyConditionBuilder{
+			pk.And(expression.Key("SK").Between(expression.Value(prefix), expression.Value(people+"\""))),
+			pk.And(expression.Key("SK").Between(expression.Value(people+"$"), expression.Value(strings.TrimSuffix(prefix, "#")+"$"))),
+		}
 	}
 	links := []model.AccountLink{}
-	var start map[string]types.AttributeValue
-	for read := 0; ; {
-		limit := int32(min(maxRows-read, 100))
-		out, err := r.client.Query(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(),
-			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true),
-			Limit: aws.Int32(limit), ExclusiveStartKey: start})
+	read := 0
+	for _, key := range keys {
+		expr, err := expression.NewBuilder().WithKeyCondition(key).Build()
 		if err != nil {
-			return nil, false, fmt.Errorf("list account links by prefix: %w", err)
+			return nil, false, err
 		}
-		read += len(out.Items)
-		for _, row := range out.Items {
-			if link, ok := decodeAccountLinkRow(accountID, row, reverse); ok && strings.HasPrefix(linkRowSortKey(link, reverse), prefix) {
-				links = append(links, *link)
+		var start map[string]types.AttributeValue
+		for {
+			if read >= maxRows {
+				return links, true, nil
 			}
+			out, err := r.client.Query(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true),
+				Limit: aws.Int32(int32(min(maxRows-read, 100))), ExclusiveStartKey: start})
+			if err != nil {
+				return nil, false, fmt.Errorf("list account links by prefix: %w", err)
+			}
+			read += len(out.Items)
+			for _, row := range out.Items {
+				if link, ok := decodeAccountLinkRow(accountID, row, reverse); ok && strings.HasPrefix(linkRowSortKey(link, reverse), prefix) {
+					links = append(links, *link)
+				}
+			}
+			if len(out.LastEvaluatedKey) == 0 {
+				break
+			}
+			start = out.LastEvaluatedKey
 		}
-		if len(out.LastEvaluatedKey) == 0 {
-			return links, false, nil
-		}
-		if read >= maxRows {
-			return links, true, nil
-		}
-		start = out.LastEvaluatedKey
 	}
+	return links, false, nil
 }
 
 func linkRowSortKey(l *model.AccountLink, reverse bool) string {

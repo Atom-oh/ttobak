@@ -705,3 +705,24 @@ func TestAddPeopleLinkAlias_UpdatesBothRowsForMember(t *testing.T) {
 		t.Fatalf("forward update %#v", fwd)
 	}
 }
+
+func TestDeleteUnresolvedMention_ConditionalOnCreatedAt(t *testing.T) {
+	var cond interface{}
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		if target != "DynamoDB_20120810.DeleteItem" {
+			t.Fatalf("target %s", target)
+		}
+		cond = body["ConditionExpression"]
+		if c, _ := cond.(string); c != "" && !wireValues(body)["value:t1"] {
+			t.Fatalf("condition values %#v", body)
+		}
+		return `{}`
+	})
+	h := testMentionHash('d')
+	if err := repo.DeleteUnresolvedMention(context.Background(), "acc", h, "o:m", "speaker", "t1"); err != nil || cond == nil {
+		t.Fatalf("conditional delete err=%v cond=%v", err, cond)
+	}
+	if err := repo.DeleteUnresolvedMention(context.Background(), "acc", h, "o:m", "speaker", ""); err != nil || cond != nil {
+		t.Fatalf("unconditional delete err=%v cond=%v", err, cond)
+	}
+}

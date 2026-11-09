@@ -23,6 +23,34 @@ var peopleMentionKey = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // ValidMentionKey reports whether key is a 32-character lowercase hex hash.
 func ValidMentionKey(key string) bool { return peopleMentionKey.MatchString(key) }
 
+// SetPeopleResolvePublisher wires the PeopleResolveRequested publisher used
+// after manual writes.
+func (s *AccountPeopleService) SetPeopleResolvePublisher(fn func(context.Context, model.PeopleResolveRequested) error) {
+	s.publish = fn
+}
+
+// maxManualRefreshMeetings bounds the meeting-scoped refresh requests after
+// one manual write; more meetings get one account-wide request instead.
+// Per-meeting requests also reach meetings outside the account request's
+// 90-day window.
+const maxManualRefreshMeetings = 20
+
+// refreshAfterManual asks the resolver to rerun the meetings a manual write
+// changed, so auto edges it overrides are removed (best-effort). Meetings
+// whose mention row could not be deleted always get their own request, since
+// the account request covers only recent meetings.
+func (s *AccountPeopleService) refreshAfterManual(ctx context.Context, accountID string, meetingIDs, stale []string) {
+	if len(meetingIDs) > maxManualRefreshMeetings {
+		publishPeopleResolve(ctx, s.publish, model.PeopleResolveRequested{AccountID: accountID, Reason: model.PeopleResolveReasonManual})
+		meetingIDs = stale[:min(len(stale), maxManualRefreshMeetings)]
+	}
+	for _, id := range meetingIDs {
+		owner, meeting, _ := splitMeetingLinkID(id)
+		publishPeopleResolve(ctx, s.publish, model.PeopleResolveRequested{AccountID: accountID, OwnerID: owner, MeetingID: meeting,
+			Reason: model.PeopleResolveReasonManual})
+	}
+}
+
 // manualSourceField is the provenance field of a manual edge of each role.
 var manualSourceField = map[string]string{
 	model.PeopleRoleParticipant: model.PeopleSourceParticipants,
@@ -83,6 +111,7 @@ func (s *AccountPeopleService) BindEdge(ctx context.Context, userID, accountID s
 	for attempt := 0; attempt < peopleWriteAttempts; attempt++ {
 		err := s.repo.PutPeopleLink(ctx, link, userID)
 		if err == nil {
+			s.refreshAfterManual(ctx, accountID, []string{link.MeetingID}, nil)
 			return link, nil
 		}
 		if !errors.Is(err, repository.ErrAccountLinkExists) {
@@ -178,6 +207,7 @@ func (s *AccountPeopleService) ResolveMentionGroup(ctx context.Context, userID, 
 		return nil, err
 	}
 	out := &model.ResolveMentionResult{Remaining: more}
+	var written, stale []string
 	createdAt := s.now().UTC().Format(time.RFC3339)
 	for _, r := range rows {
 		link := &model.PeopleLink{AccountID: accountID, MeetingID: r.MeetingID, ToKind: in.Kind, ToID: in.ID, Role: r.Role,
@@ -198,17 +228,33 @@ func (s *AccountPeopleService) ResolveMentionGroup(ctx context.Context, userID, 
 		switch {
 		case err == nil:
 			out.Written++
+			written = append(written, r.MeetingID)
 		case errors.Is(err, repository.ErrAccountLinkTarget):
 			// The meeting was unpublished since the visibility read.
 			continue
 		default:
 			return nil, mapPeopleWriteError(err)
 		}
-		if err := s.repo.DeleteUnresolvedMention(ctx, accountID, hash, r.MeetingID, r.Role); err != nil {
+		deleted, err := s.deleteMentionRow(ctx, accountID, r)
+		if err != nil {
 			return nil, err
 		}
+		if !deleted {
+			stale = append(stale, r.MeetingID)
+		}
 	}
+	s.refreshAfterManual(ctx, accountID, written, stale)
 	return out, nil
+}
+
+// deleteMentionRow removes a mention row only if a resolver run has not
+// rewritten it since it was read; deleted is false when it was rewritten.
+func (s *AccountPeopleService) deleteMentionRow(ctx context.Context, accountID string, r model.UnresolvedMention) (bool, error) {
+	err := s.repo.DeleteUnresolvedMention(ctx, accountID, r.Hash, r.MeetingID, r.Role, r.CreatedAt)
+	if errors.Is(err, repository.ErrConditionFailed) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // IgnoreMentionGroup marks a mention as "not a person" account-wide and
@@ -229,7 +275,8 @@ func (s *AccountPeopleService) IgnoreMentionGroup(ctx context.Context, userID, a
 		return err
 	}
 	for _, r := range rows {
-		if err := s.repo.DeleteUnresolvedMention(ctx, accountID, hash, r.MeetingID, r.Role); err != nil {
+		// The hash is ignored account-wide, so a rewritten row goes too.
+		if err := s.repo.DeleteUnresolvedMention(ctx, accountID, hash, r.MeetingID, r.Role, ""); err != nil {
 			return err
 		}
 	}
