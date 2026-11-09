@@ -183,6 +183,20 @@ do not force ticks or reset control rows to accelerate acceptance.
    Require exact current provider INDEXED/NOT_FOUND observations; provider
    failure must not appear as empty successful search.
 
+### Raw originals in the shared data source
+
+The out-of-band S3 data source covers the whole KB bucket, including raw
+`kb/**` and `shared/**` originals. Bedrock cannot parse PPT/PPTX, so each full
+sync reports `Ignored N files as their file format was not supported` for those
+originals and `ProviderSucceeded` stays false. This does not block publication:
+`finish` then requires per-document `INDEXED` status for each member's own
+snapshot keys (`documentsSucceeded`), and PPTX snapshots are Markdown. Removing
+the noise is not a single-setting change: `inclusionPrefixes` accepts exactly
+one prefix, while the source must keep `canonical/`, `manual-kb/`, `shared-kb/`,
+`news/` and legacy `kb/` text. Moving snapshots to a dedicated data source (or
+per-prefix sources) is a separate reviewed change to `DATA_SOURCE_ID` consumers;
+do not edit the live data source or apply KnowledgeStack for this.
+
 Full mode permits `canonical/v1/*` writes/deletes and retirement of legacy
 `meetings/*` exports. Its existing-table stream mapping starts at LATEST,
 filters USER meeting/document and ACCOUNT document keys, and uses batch size

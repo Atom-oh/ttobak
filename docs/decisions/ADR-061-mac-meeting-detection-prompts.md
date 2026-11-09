@@ -36,9 +36,15 @@ without a user confirmation.
   FaceTime, Amazon Chime, Discord) are matched by bundle ID or helper ID.
 - A browser using the microphone counts only when one of its tabs is a meeting
   URL (`meet.google.com/<code>`, Teams web, Zoom web client). A fixed
-  AppleScript run through `osascript` receives the browser's tab URLs, discards
+  script run through `osascript` receives the browser's tab URLs, discards
   non-meeting ones inside that child process, and returns only meeting URLs to
-  the app, which classifies and never logs them. This needs the macOS
+  the app, which classifies and never logs them. The script addresses the
+  browser instance whose helper runs the audio: the app walks parent
+  processes to the nearest app main executable and reads that PID's tabs
+  through Scripting Bridge (PID passed as an argument). `tell application id`
+  reaches only one instance, and an automation-launched Chrome beside the
+  user's hid the Meet tab. If the instance cannot be addressed, or for Safari's
+  shared WebKit process, the bundle-ID AppleScript is used. This needs the macOS
   Automation permission per browser; a denial backs off for five minutes, and
   the script may wait up to 30 s for the first consent dialog. Safari's shared
   `com.apple.WebKit.GPU` process counts only with a Safari meeting tab, because
@@ -61,8 +67,14 @@ without a user confirmation.
   stop prompt.
 - Automatic microphone choice prefers native meeting apps over browsers and
   ignores Safari's shared WebKit process.
-- Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window
-  and posts a local notification. The SPA banner's confirmation calls
+- Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window.
+  A detection also opens a small always-on-top prompt window at the top center
+  of the screen (`meeting_prompt.rs`, bundled `meeting-prompt.html`) with Record
+  and Ignore, as Notion does; the app's macOS notifications were not shown
+  reliably. Its only command, `meeting_prompt_choose`, goes through
+  `meeting_detection_respond`, and `native-meeting-answered` closes the banner.
+  It closes after 30 s unanswered, on an answer in the banner, or at the end.
+  An end still posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same
   `native-control-request` path as ADR-046, so busy and sign-in checks are
   unchanged. Detection starts do not post the MCP "started" notification.
@@ -76,6 +88,51 @@ without a user confirmation.
   the tap, WAV and worker continue. A failed switch restores the previous input,
   else keeps system audio alone on the output device, else capture stops and
   `recording_status` reports `capture_lost`.
+- The recording follows Zoom's own mute, as Notion's meeting notes do
+  (observed in Notion's shipped `mac_utils.node`: an Accessibility observer of
+  Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
+  bar every 300 ms for the "Mute Audio"/"Unmute Audio" item, using labels from
+  Zoom's own `Localizable.strings` in every language, and mixes the microphone
+  at zero gain while Zoom shows the user muted. When the followed meeting
+  ends (Zoom quit, or neither the `zm.meeting.window.main` window nor an audio
+  item remains) or stays unreadable for over 3 s, the microphone reopens: a
+  wrong end then records the user rather than dropping their voice. Zoom
+  counts as quit only as described under Consequences. A recording that never
+  saw a Zoom state records the microphone as before. Detection still
+  ends a Zoom meeting only after the 20 s audio grace; ending it earlier on
+  Zoom's own UI is deferred until it is verified on a Mac.
+- Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads
+  the Meet page of each Chromium browser instance playing or capturing audio
+  through Accessibility (the `AXWebArea` whose URL is `meet.google.com`). The
+  toggle's label gives the state ("Turn on microphone" while muted, "Turn off
+  microphone" while unmuted, and their Korean forms; both verified on a live
+  call). The call page that last showed the toggle has left the call only
+  when it shows Meet's post-call screen ("Rejoin", "Return to home screen";
+  the Korean forms are unverified). A page without the toggle is otherwise
+  unknown and keeps the last state, so a toolbar hidden in the call (for
+  example behind a dialog) is never read as leaving. Pages of other calls (the
+  landing page or an earlier call) are not evidence, and once a second call
+  has shown a toggle during the recording no page is. Leaving the followed
+  call, read for 3 s, reopens the microphone, as with Zoom.
+  A recording that never saw the toggle (e.g. an unlisted language) records the
+  microphone. An unreadable page (another tab in front) keeps the last state,
+  including when Accessibility trust is lost after an observed state. Safari's
+  shared WebKit process is not followed. Without Accessibility permission at
+  startup, the response warns and the microphone records normally until a
+  meeting's mute has been observed. Ad-hoc re-signing invalidates the grant,
+  as it does other TCC grants. Detection ends a Meet meeting only after the
+  20 s audio grace, as before.
+- During a native recording, if other apps play audio for 30 s while the
+  system tap has delivered only exact zeros, the app posts a notification that
+  System Audio Recording is likely denied, instead of reporting it only at
+  stop. A process launched from a terminal is attributed to that terminal by
+  TCC; launch the app through Finder or `open` when testing permissions.
+- When the Mac is about to sleep during a recording (e.g. the lid closes
+  without a stop), `sleep.rs` stops it through the control path with the
+  upload requested and delays sleep until the stop is answered or 20 s pass.
+  On wake the app emits `native-system-wake` and the record page retries an
+  upload left in the error state. Clamshell use on an external display does
+  not sleep and keeps recording.
 
 ## Consequences
 
@@ -95,6 +152,8 @@ Unreadable window identifiers are unknown, never a confirmed meeting end;
 a followed meeting that ends, or stays unknown for three seconds (e.g. a long
 permission or inspection failure), reopens the microphone rather than keeping it
 silent. Detection ends meetings only after the 20 s audio grace.
+An observed Zoom silence reaches the microphone gate before synchronous browser
+inspection, so a slow Meet accessibility tree cannot delay that known decision.
 
 Meet's English/Korean muted toggle labels and readable-page fallback prioritize
 not dropping voice in unsupported languages. Unknown pages retain the previous
@@ -121,3 +180,8 @@ and remain separate from the compiled library's availability.
   microphone; the prompt still requires confirmation.
 - No CI covers this module; the Core Audio probe and AppleScript path need
   manual verification on macOS.
+- Push-to-talk (holding Space while muted) is not reflected in Zoom's menu, so
+  that speech is not recorded. Zoom's web client, Teams and other meeting apps keep recording the
+  microphone regardless of their mute; Meet's mute is followed in Chromium
+  browsers only, in English and Korean.
+- An upload interrupted by sleep completes only after wake.

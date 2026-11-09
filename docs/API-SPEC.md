@@ -808,10 +808,11 @@ by an `ACCOUNT#{accountId}` / `NEWSSRC_COUNT` counter row (`sourceCount`, seeded
 from the existing refs when absent, plus a `sourceRev` revision that every counter
 write advances). The create transaction increments it only below the cap and the
 delete transaction decrements it, conditioned on the count and revision it read.
-When the refs show room but the counter is at the cap, the create reconciles the
-counter to the strongly consistent ref count, conditioned on the revision read
-before listing, and retries once. Writers deployed before the counter do not
-update it; reconcile repairs that drift. No account-delete path exists, so the
+Reconcile sets the counter to the strongly consistent ref count, conditioned on
+the revision read before listing. A create runs it in both directions: before the
+create transaction when the counter is below the observed ref count (left low by
+a writer that predates the counter), and once more with a retry when the refs show
+room but the counter is at the cap. No account-delete path exists, so the
 row has no deletion counterpart. GET
 returns `{ "sources": [...] }`, omitting refs whose CONFIG no longer names the
 account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
@@ -1672,8 +1673,12 @@ The preceding manual-only stage bootstraps
 private `kb/{owner}/...` and authenticated-global `shared/**` originals into
 `manual-kb/v1/` and `shared-kb/v1/` snapshots without altering originals or
 canonical/legacy meeting exports. Private/shared visibility must remain distinct.
-PDF/DOC/DOCX/XLS/XLSX snapshot support differs from attachment extraction;
-PPT/PPTX, empty or over-50-MiB originals have explicit failure states.
+PDF/DOC/DOCX/XLS/XLSX snapshot support differs from attachment extraction.
+PPTX originals are indexed as a worker-generated `document.md` projection
+(slide titles, body text, tables and speaker notes) bound to the original's
+revision; malformed, encrypted or limit-exceeding decks fail with `PPTX_*`
+codes. Legacy `.ppt` fails `LEGACY_PPT_UNSUPPORTED` (convert to `.pptx`);
+empty or over-50-MiB originals have explicit failure states.
 
 Rollout: deploy the mode-aware worker with delivery off; verify restricted
 manual-only IAM/configuration, then enable its schedule; verify snapshots and
