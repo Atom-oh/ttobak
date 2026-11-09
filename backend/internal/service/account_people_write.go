@@ -31,7 +31,9 @@ func (s *AccountPeopleService) SetPeopleResolvePublisher(fn func(context.Context
 
 // maxManualRefreshMeetings bounds the meeting-scoped refresh requests after
 // one manual write; more meetings get one account-wide request instead.
-const maxManualRefreshMeetings = 5
+// Per-meeting requests also reach meetings outside the account request's
+// 90-day window.
+const maxManualRefreshMeetings = 20
 
 // refreshAfterManual asks the resolver to rerun the meetings a manual write
 // changed, so auto edges it overrides are removed (best-effort). Meetings
@@ -40,7 +42,7 @@ const maxManualRefreshMeetings = 5
 func (s *AccountPeopleService) refreshAfterManual(ctx context.Context, accountID string, meetingIDs, stale []string) {
 	if len(meetingIDs) > maxManualRefreshMeetings {
 		publishPeopleResolve(ctx, s.publish, model.PeopleResolveRequested{AccountID: accountID, Reason: model.PeopleResolveReasonManual})
-		meetingIDs = stale
+		meetingIDs = stale[:min(len(stale), maxManualRefreshMeetings)]
 	}
 	for _, id := range meetingIDs {
 		owner, meeting, _ := splitMeetingLinkID(id)
@@ -273,7 +275,8 @@ func (s *AccountPeopleService) IgnoreMentionGroup(ctx context.Context, userID, a
 		return err
 	}
 	for _, r := range rows {
-		if _, err := s.deleteMentionRow(ctx, accountID, r); err != nil {
+		// The hash is ignored account-wide, so a rewritten row goes too.
+		if err := s.repo.DeleteUnresolvedMention(ctx, accountID, hash, r.MeetingID, r.Role, ""); err != nil {
 			return err
 		}
 	}

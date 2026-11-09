@@ -117,6 +117,12 @@ func (s *AccountOverviewService) graphPeople(ctx context.Context, userID, accoun
 		case model.LinkKindAccount:
 			name, seen := accounts[l.ToID]
 			if !seen {
+				// A read grant can walk the ancestry: bound the distinct
+				// account targets read, and read none once the node cap is full.
+				if len(b.g.Nodes) >= maxGraphNodes || len(accounts) >= maxGraphAccountTargets {
+					b.g.Truncated = true
+					continue
+				}
 				if name, err = s.graphAccountLabel(ctx, userID, l.ToID); err != nil {
 					return err
 				}
@@ -159,6 +165,10 @@ func (s *AccountOverviewService) graphAccountLabel(ctx context.Context, userID, 
 	return account.Name, nil
 }
 
+// maxGraphAccountTargets bounds the distinct mentioned accounts whose read
+// grant and name the graph reads.
+const maxGraphAccountTargets = 20
+
 const (
 	maxFlowPeoplePerItem = 5
 	// maxFlowPeopleQueries bounds the meeting people edge queries per flow;
@@ -179,6 +189,7 @@ type flowPeopleReads struct {
 	contactReads int
 	meetings     map[string][]model.FlowPerson
 	queries      int
+	truncated    bool // a query or contact-read bound left people out
 }
 
 func (s *AccountOverviewService) flowContact(ctx context.Context, accountID, id string, p *flowPeopleReads) (*model.AccountContact, error) {
@@ -186,6 +197,7 @@ func (s *AccountOverviewService) flowContact(ctx context.Context, accountID, id 
 		return c, nil
 	}
 	if p.contactReads >= maxFlowPeopleContactReads {
+		p.truncated = true
 		return nil, nil
 	}
 	p.contactReads++
@@ -240,7 +252,11 @@ func (s *AccountOverviewService) meetingPeople(ctx context.Context, userID, acco
 		return people, nil
 	}
 	meeting := reads.meetings[linkID]
-	if meeting == nil || p.queries >= maxFlowPeopleQueries {
+	if meeting == nil {
+		return nil, nil
+	}
+	if p.queries >= maxFlowPeopleQueries {
+		reads.truncated = true
 		return nil, nil
 	}
 	p.queries++
@@ -324,6 +340,7 @@ func (s *AccountOverviewService) flowPeople(ctx context.Context, userID, account
 			}
 		}
 	}
+	reads.truncated = reads.truncated || p.truncated
 	return nil
 }
 

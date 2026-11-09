@@ -417,8 +417,8 @@ func TestFlow_PeopleQueryBound(t *testing.T) {
 	p := &flowPeopleReads{labels: map[string]string{}, contacts: map[string]*model.AccountContact{}, meetings: map[string][]model.FlowPerson{},
 		queries: maxFlowPeopleQueries}
 	people, err := svc.meetingPeople(context.Background(), linkUser, linkAcct, &model.AccountMember{}, "o1:m1", p, reads)
-	if err != nil || people != nil || repo.peopleQueries != 0 {
-		t.Fatalf("people=%+v queries=%d err=%v", people, repo.peopleQueries, err)
+	if err != nil || people != nil || repo.peopleQueries != 0 || !reads.truncated {
+		t.Fatalf("people=%+v queries=%d truncated=%v err=%v", people, repo.peopleQueries, reads.truncated, err)
 	}
 	p.queries = maxFlowPeopleQueries - 1
 	if people, err := svc.meetingPeople(context.Background(), linkUser, linkAcct, &model.AccountMember{}, "o1:m1", p, reads); err != nil || len(people) != 1 {
