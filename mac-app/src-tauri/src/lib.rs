@@ -180,6 +180,9 @@ pub struct StatusResponse {
     /// stop that timed out). Additive; older SPAs ignore it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// A failed microphone switch stopped the running recording's capture;
+    /// stop it to save what was recorded. Additive.
+    pub capture_lost: bool,
 }
 
 /// One startup-adopted leftover recording, as reported by
@@ -603,6 +606,7 @@ fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResp
         elapsed_ms: snapshot.elapsed_ms,
         finalizing_for_path: finalizing,
         warnings,
+        capture_lost: snapshot.capture_lost,
     }
 }
 

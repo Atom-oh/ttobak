@@ -89,6 +89,8 @@ export interface TauriStopResponse {
 
 export interface TauriStatusResponse {
   recording: boolean;
+  /** A failed microphone switch stopped capture; newer app builds only. */
+  capture_lost?: boolean;
   temp_path: string | null;
   elapsed_ms: number;
   /** True while the SPECIFIC path passed to `getNativeRecordingStatus`
@@ -178,6 +180,17 @@ export async function listNativeInputDevices(): Promise<NativeInputDevice[] | nu
  * The recording continues. Rejects on app builds without the command. */
 export function switchNativeRecordingInput(inputDeviceUid: string): Promise<NativeSelectedInput> {
   return invoke<NativeSelectedInput>('switch_recording_input', { inputDeviceUid: inputDeviceUid || null });
+}
+
+/** Whether a failed microphone switch stopped the running recording's
+ * capture (`recording_status.capture_lost`); false when unknown. */
+export async function getNativeCaptureLost(): Promise<boolean> {
+  try {
+    const status = await invoke<TauriStatusResponse>('recording_status', { path: '' });
+    return status.capture_lost === true;
+  } catch {
+    return false;
+  }
 }
 
 export function stopNativeRecording(): Promise<TauriStopResponse> {
@@ -610,8 +623,8 @@ export function onNativeMeetingAnswered(handler: (d: NativeMeetingDetection) => 
 export interface NativeMicMuted {
   muted: boolean;
   app: string;
-  /** Why, while muted: the app's own mute or its meeting ended. */
-  reason?: 'muted' | 'meeting_ended';
+  /** Why, while muted: the app's own mute. */
+  reason?: 'muted';
 }
 
 export function onNativeMicMuted(handler: (m: NativeMicMuted) => void): () => void {
@@ -620,7 +633,7 @@ export function onNativeMicMuted(handler: (m: NativeMicMuted) => void): () => vo
     (raw) => {
       const r = raw as Partial<NativeMicMuted> | null;
       if (!r || typeof r.muted !== 'boolean' || typeof r.app !== 'string') return null;
-      const reason = r.reason === 'muted' || r.reason === 'meeting_ended' ? r.reason : undefined;
+      const reason = r.reason === 'muted' ? r.reason : undefined;
       return { muted: r.muted, app: r.app, reason };
     },
     (m) => { if (m) handler(m); },
