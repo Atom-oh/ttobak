@@ -121,30 +121,20 @@ func TestListPeople_RemovedMemberForbidden(t *testing.T) {
 	}
 }
 
-func TestListPeople_SkipsDeletedContact(t *testing.T) {
+func TestListPeople_SkipsDeletedContactAndFormerMember(t *testing.T) {
 	f := newPeopleReadRepo()
+	f.users["owner"] = &model.User{UserID: "owner", Name: "Owner Kim"}
 	f.contacts = []model.AccountContact{peopleContact(peopleTestContact, "Kim", "")}
 	f.contactErr["c-sealed"] = fmt.Errorf("open: %w", repository.ErrContactUnreadable)
 	f.targetLinks = []model.PeopleLink{
 		peopleEdge("owner:m1", "contact", peopleTestContact, "speaker", model.PeopleSourceSpeakerMap),
 		peopleEdge("owner:m1", "contact", peopleTestContact2, "speaker", model.PeopleSourceSpeakerMap),
 		peopleEdge("owner:m1", "contact", "c-sealed", "speaker", model.PeopleSourceSpeakerMap),
-	}
-	page, err := newPeopleTestService(f).ListPeople(context.Background(), "viewer", "acc", "")
-	if err != nil || len(page.People) != 1 || page.People[0].ID != peopleTestContact {
-		t.Fatalf("page=%+v err=%v", page, err)
-	}
-}
-
-func TestListPeople_SkipsFormerMember(t *testing.T) {
-	f := newPeopleReadRepo()
-	f.users["owner"] = &model.User{UserID: "owner", Name: "Owner Kim"}
-	f.targetLinks = []model.PeopleLink{
 		peopleEdge("owner:m1", "member", "owner", "speaker", model.PeopleSourceSpeakerMap),
 		peopleEdge("owner:m1", "member", "gone", "speaker", model.PeopleSourceSpeakerMap),
 	}
 	page, err := newPeopleTestService(f).ListPeople(context.Background(), "viewer", "acc", "")
-	if err != nil || len(page.People) != 1 || page.People[0].ID != "owner" || page.People[0].Label != "Owner Kim" {
+	if err != nil || len(page.People) != 2 || page.People[0].Label != "Owner Kim" || page.People[1].ID != peopleTestContact {
 		t.Fatalf("page=%+v err=%v", page, err)
 	}
 }

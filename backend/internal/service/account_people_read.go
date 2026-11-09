@@ -77,7 +77,6 @@ type peopleViewer struct {
 
 	members map[string]*model.AccountMember
 	labels  map[string]string
-	skipped map[string]bool
 }
 
 // viewer requires a direct member of an existing account, on every request.
@@ -100,7 +99,7 @@ func (s *AccountPeopleService) viewer(ctx context.Context, accountID, userID str
 		return nil, ErrForbidden
 	}
 	return &peopleViewer{s: s, accountID: accountID, userID: userID, member: member,
-		meetings: map[string]*model.Meeting{}, labels: map[string]string{}, skipped: map[string]bool{}}, nil
+		meetings: map[string]*model.Meeting{}, labels: map[string]string{}}, nil
 }
 
 // meeting returns the meeting when it is still published to the account, or
@@ -143,23 +142,16 @@ func summaryDerivedPeopleSource(field string) bool {
 // false for former members, unreadable contacts, accounts without a read
 // grant and projects that no longer list the account.
 func (v *peopleViewer) label(ctx context.Context, kind, id string) (string, bool, error) {
-	key := kind + ":" + id
-	if l, ok := v.labels[key]; ok {
-		return l, true, nil
+	key := kind + ":" + id // "" caches an unreadable target
+	label, ok := v.labels[key]
+	if !ok {
+		var err error
+		if label, err = v.loadLabel(ctx, kind, id); err != nil {
+			return "", false, err
+		}
+		v.labels[key] = label
 	}
-	if v.skipped[key] {
-		return "", false, nil
-	}
-	label, err := v.loadLabel(ctx, kind, id)
-	if err != nil {
-		return "", false, err
-	}
-	if label == "" {
-		v.skipped[key] = true
-		return "", false, nil
-	}
-	v.labels[key] = label
-	return label, true, nil
+	return label, label != "", nil
 }
 
 func (v *peopleViewer) loadLabel(ctx context.Context, kind, id string) (string, error) {

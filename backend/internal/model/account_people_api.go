@@ -30,8 +30,7 @@ type MentionGroupsPage struct {
 	Truncated  bool           `json:"truncated"`
 }
 
-// MeetingPeopleEdges lists the people edges of one meeting. Labels are keyed
-// "{kind}:{id}" and only hold targets the viewer can still read.
+// MeetingPeopleEdges: one meeting's readable people edges; Labels by "{kind}:{id}".
 type MeetingPeopleEdges struct {
 	Edges  []PeopleLink      `json:"edges"`
 	Labels map[string]string `json:"labels"`

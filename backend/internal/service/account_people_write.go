@@ -193,11 +193,17 @@ func (s *AccountPeopleService) ResolveMentionGroup(ctx context.Context, userID, 
 			continue
 		}
 		err := s.repo.PutPeopleLink(ctx, link, userID)
+		if errors.Is(err, repository.ErrAccountLinkExists) {
+			// Bound by hand already (another text?): alias this text to it.
+			err = s.repo.AddPeopleLinkAlias(ctx, accountID, userID, link.Key(), hash)
+			if errors.Is(err, repository.ErrConditionFailed) && !errors.Is(err, repository.ErrAccountLinkAccess) {
+				// Edge gone or full: keep the row listed.
+				continue
+			}
+		}
 		switch {
 		case err == nil:
 			out.Written++
-		case errors.Is(err, repository.ErrAccountLinkExists):
-			// Already bound by hand; the mention row is still stale.
 		case errors.Is(err, repository.ErrAccountLinkTarget):
 			// The meeting was unpublished since the visibility read.
 			continue
