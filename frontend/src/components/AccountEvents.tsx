@@ -6,6 +6,8 @@ import { confirmDialog } from '@/lib/dialog';
 import { isContactAccessDenied } from '@/lib/contactImport';
 import { addAttendee, EMPTY_EVENT_FORM, eventInputFromForm, formatEventTime, toLocalInput, type EventForm } from '@/lib/accountEvents';
 import type { AccountContact, AccountEvent } from '@/types/meeting';
+import { LinkToOpportunity } from '@/components/account/LinkToOpportunity';
+import { LINK_KIND_EVENT } from '@/lib/accountOverview';
 
 type Scope = 'ahead' | 'past';
 const inputClass = 'mt-1 w-full rounded border border-slate-200 bg-white p-2 text-sm dark:border-white/10 dark:bg-slate-900';
@@ -169,6 +171,7 @@ export function AccountEvents({ accountId, userId }: { accountId: string; userId
           <div className="text-xs text-slate-500">{formatEventTime(event.startAt, event.endAt, event.allDay)}{event.location ? ` · ${event.location}` : ''}</div>
           {event.attendees?.length > 0 && <div className="mt-1 text-xs text-slate-500">참석자: {event.attendees.map(a => a.name).join(', ')}</div>}
           {event.notes && <details className="mt-1 text-xs text-slate-500"><summary className="cursor-pointer">메모</summary><div className="mt-1 whitespace-pre-wrap">{event.notes}</div></details>}
+          <div className="mt-1"><LinkToOpportunity accountId={accountId} userId={userId} fromKind={LINK_KIND_EVENT} fromId={event.eventId} onAccessLost={denyAccess} /></div>
         </div>
         <div className="flex gap-3">
           <button type="button" disabled={saving} onClick={() => startEdit(event)} className="text-xs text-primary">수정</button>
