@@ -376,3 +376,27 @@ func TestReconcileAccountNewsSourceCount(t *testing.T) {
 		})
 	}
 }
+
+func TestGetAccountNewsSourceCountReadsCounterRow(t *testing.T) {
+	for _, tc := range []struct {
+		item   string
+		count  int
+		exists bool
+	}{
+		{`{"Item":{"sourceCount":{"N":"7"},"sourceRev":{"N":"3"}}}`, 7, true},
+		{`{}`, 0, false},
+	} {
+		repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+			key := body["Key"].(map[string]interface{})
+			if !strings.HasSuffix(target, ".GetItem") || body["ConsistentRead"] != true ||
+				key["PK"].(map[string]interface{})["S"] != "ACCOUNT#acc" || key["SK"].(map[string]interface{})["S"] != "NEWSSRC_COUNT" {
+				t.Fatalf("counter read: %s %#v", target, body)
+			}
+			return tc.item
+		})
+		count, exists, err := repo.GetAccountNewsSourceCount(context.Background(), "acc")
+		if err != nil || count != tc.count || exists != tc.exists {
+			t.Fatalf("%s: %d %v %v", tc.item, count, exists, err)
+		}
+	}
+}
