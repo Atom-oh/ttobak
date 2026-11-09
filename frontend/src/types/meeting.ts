@@ -646,6 +646,8 @@ export interface ProjectSummary {
   projectId: string;
   name: string;
   stage?: string;
+  stageChangedAt?: string;
+  stageMapped?: boolean;
   sfdcOpptyId?: string;
 }
 
@@ -656,6 +658,8 @@ export interface Project {
   sfdcOpptyId?: string;
   sfdcUrl?: string;
   stage?: string;
+  stageChangedAt?: string;
+  stageMapped?: boolean;
   ownerUserId: string;
   accessPermission?: 'read' | 'edit';
   inheritedFromAccountId?: string;

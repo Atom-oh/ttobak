@@ -5,6 +5,7 @@ import type { FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { projectApi } from '@/lib/api';
+import { PROJECT_STAGES, stageLabel } from '@/lib/projectStages';
 import type { ProjectSummary } from '@/types/meeting';
 
 export default function ProjectsClient() {
@@ -108,12 +109,17 @@ export default function ProjectsClient() {
             placeholder="SFDC URL (선택)"
             className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
           />
-          <input
+          <select
             value={stage}
             onChange={(e) => setStage(e.target.value)}
-            placeholder="Stage (선택)"
+            aria-label="단계"
             className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
-          />
+          >
+            <option value="">단계 (선택)</option>
+            {PROJECT_STAGES.map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
           <button
             type="submit"
             disabled={creating || !name.trim()}
@@ -158,7 +164,7 @@ export default function ProjectsClient() {
                 </div>
                 {project.stage && (
                   <span className="shrink-0 text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">
-                    {project.stage}
+                    {stageLabel(project.stage, project.stageMapped)}
                   </span>
                 )}
               </div>
