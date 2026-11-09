@@ -890,8 +890,8 @@ export const accountApi = {
     api.post<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts${deferResolve ? '?peopleResolve=defer' : ''}`, data, { expectedUserId, signal }),
   updateContact: (id: string, contactId: string, data: ContactInput & { revision: string }, expectedUserId: string, signal?: AbortSignal, deferResolve = false) =>
     api.put<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts/${encodeURIComponent(contactId)}${deferResolve ? '?peopleResolve=defer' : ''}`, data, { expectedUserId, signal }),
-  requestPeopleResolve: (id: string, expectedUserId: string) =>
-    api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/resolve`, undefined, { expectedUserId }),
+  requestPeopleResolve: (id: string, expectedUserId: string, signal?: AbortSignal) =>
+    api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/resolve`, undefined, { expectedUserId, signal }),
   deleteContact: (id: string, contactId: string, revision: string, expectedUserId: string, signal?: AbortSignal) =>
     api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/contacts/${encodeURIComponent(contactId)}?revision=${encodeURIComponent(revision)}`, { expectedUserId, signal }),
   create: (data: AccountCreationRequest, expectedUserId: string) =>

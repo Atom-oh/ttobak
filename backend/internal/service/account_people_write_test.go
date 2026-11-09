@@ -65,6 +65,9 @@ func (f *fakePeopleRepo) ListUnresolvedMentionsByHash(_ context.Context, _, hash
 	return rows, false, nil
 }
 func (f *fakePeopleRepo) DeleteUnresolvedMention(_ context.Context, _, hash, meetingID, role, _ string) error {
+	if f.staleMentions[meetingID] {
+		return fmt.Errorf("%w: rewritten", repository.ErrConditionFailed)
+	}
 	f.mentionDeletes = append(f.mentionDeletes, hash+"/"+meetingID+"/"+role)
 	return nil
 }
@@ -268,5 +271,27 @@ func TestResolveMentionGroup_SecondVariantSurvivesRerun(t *testing.T) {
 	}
 	if last := f.replaced[len(f.replaced)-1]; len(last) != 0 {
 		t.Fatalf("rerun recreated unresolved mentions %+v", last)
+	}
+}
+
+func TestResolveMentionGroup_RefreshesStaleMeetingsWhenCoalescing(t *testing.T) {
+	f := peopleWriteRepo()
+	f.staleMentions = map[string]bool{"owner:m4": true}
+	for i := 1; i <= 6; i++ {
+		id := fmt.Sprint("m", i)
+		f.meetings["owner:"+id] = peopleTestMeeting(id)
+		f.mentionRows = append(f.mentionRows, peopleMentionRow(peopleHashA, "owner:"+id, "participant", model.PeopleSourceParticipants, "Minsu"))
+	}
+	var events []model.PeopleResolveRequested
+	s := newPeopleTestService(f)
+	s.SetPeopleResolvePublisher(func(_ context.Context, e model.PeopleResolveRequested) error { events = append(events, e); return nil })
+	res, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA, model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact})
+	if err != nil || res.Written != 6 || len(f.mentionDeletes) != 5 {
+		t.Fatalf("res=%+v deletes=%v err=%v", res, f.mentionDeletes, err)
+	}
+	want := []model.PeopleResolveRequested{{AccountID: "acc", Reason: model.PeopleResolveReasonManual},
+		{AccountID: "acc", OwnerID: "owner", MeetingID: "m4", Reason: model.PeopleResolveReasonManual}}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("events %+v", events)
 	}
 }

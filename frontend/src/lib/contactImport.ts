@@ -58,6 +58,21 @@ export function isContactAccessDenied(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'status' in error && (error.status === 401 || error.status === 403);
 }
 
+/** Shown when the request that links imported contacts to meeting people failed. */
+export const PEOPLE_RESOLVE_FAILED = '연락처는 저장했지만 회의 인물 연결 요청에 실패했습니다. 인물 연결을 다시 요청해 주세요.';
+export const PEOPLE_RESOLVE_RETRY = '인물 연결 다시 요청';
+
+/**
+ * Sends the one people resolve request that follows an import whose rows
+ * deferred theirs. It is never sent after an abort. Returns false when the
+ * request failed, so the caller can show PEOPLE_RESOLVE_FAILED with a retry.
+ */
+export async function requestPeopleResolve(request: (signal?: AbortSignal) => Promise<unknown>, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return true;
+  try { await request(signal); return true; }
+  catch (error) { return error instanceof DOMException && error.name === 'AbortError'; }
+}
+
 export async function importContacts(
   rows: ContactInput[],
   list: (cursor: string) => Promise<{ contacts: ContactInput[]; nextCursor?: string }>,

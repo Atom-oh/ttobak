@@ -575,3 +575,22 @@ func TestGraph_PeopleRowBoundSetsTruncated(t *testing.T) {
 		t.Fatalf("truncated=%v err=%v", g.Truncated, err)
 	}
 }
+
+func TestGraph_PeopleHonorSummaryGuard(t *testing.T) {
+	withPeopleSummaryGuard(t)
+	svc, repo := graphPeopleFixture()
+	c := flowEventID(84)
+	repo.contacts[c] = &model.AccountContact{ContactID: c, Name: "Kim"}
+	insight := graphPersonEdge("o1:m1", "contact", c, "mentions")
+	insight.SourceField = model.PeopleSourceInsights
+	spoken := graphPersonEdge("o1:m1", "contact", c, "speaker")
+	spoken.SourceField = model.PeopleSourceSpeakerMap
+	repo.people = []model.PeopleLink{insight, spoken}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edges := graphPersonEdges(g); len(edges) != 1 || edges["meeting:o1:m1>contact:"+c+">speaker"] == "" {
+		t.Fatalf("edges %v", edges)
+	}
+}

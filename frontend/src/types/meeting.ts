@@ -850,8 +850,10 @@ export interface AccountFlow {
 }
 
 export interface AccountGraphNode { id: string; kind: string; label: string }
-export interface AccountGraphEdge { from: string; to: string; kind: string; origin?: string }
-export interface AccountGraph { nodes: AccountGraphNode[]; edges: AccountGraphEdge[]; truncated: boolean }
+/** `role` is set only on `person` edges. */
+export interface AccountGraphEdge { from: string; to: string; kind: string; origin?: string; role?: string }
+/** `memberCount` counts direct members; only members with a people edge are nodes. */
+export interface AccountGraph { nodes: AccountGraphNode[]; edges: AccountGraphEdge[]; truncated: boolean; memberCount?: number }
 
 export interface CreateAccountNewsSourceInput {
   sourceName: string;
