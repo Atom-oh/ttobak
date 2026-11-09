@@ -130,3 +130,21 @@ func ParseAccountLinkSortKey(sk string) (AccountLinkInput, bool) {
 	}
 	return in, true
 }
+
+// ParseAccountLinkToSortKey decodes a reverse row sort key
+// LINKTO#{toKind}#{toId}#{fromKind}#{fromId}; ok is false for any key that is
+// not a valid link.
+func ParseAccountLinkToSortKey(sk string) (AccountLinkInput, bool) {
+	if !strings.HasPrefix(sk, PrefixAccountLinkTo) {
+		return AccountLinkInput{}, false
+	}
+	parts := strings.Split(strings.TrimPrefix(sk, PrefixAccountLinkTo), "#")
+	if len(parts) != 4 {
+		return AccountLinkInput{}, false
+	}
+	in := AccountLinkInput{ToKind: parts[0], ToID: parts[1], FromKind: parts[2], FromID: parts[3]}
+	if ValidateAccountLink(in) != nil {
+		return AccountLinkInput{}, false
+	}
+	return in, true
+}
