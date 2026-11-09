@@ -1061,6 +1061,13 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       MemorySize: 256,
     });
   });
+
+  test('API live alias keeps four provisioned environments for the page-load burst', () => {
+    template.hasResourceProperties('AWS::Lambda::Alias', {
+      Name: 'live',
+      ProvisionedConcurrencyConfig: { ProvisionedConcurrentExecutions: 4 },
+    });
+  });
   test('STT recovery tick reuses the transcribe worker with a fixed, unretried input (ADR-031 amendment)', () => {
     template.hasResourceProperties('AWS::Events::Rule', {
       Name: 'ttobak-stt-recovery',

@@ -111,26 +111,18 @@ func init() {
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
 	uploadService.SetAudioCropEnabled(os.Getenv("AUDIO_CROP_ENABLED") == "1")
-	// Same-domain CloudFront-signed download URLs (ADR-027). Tried once at
-	// cold start; any failure falls back to raw S3 presigns. The reload
-	// callback is registered unconditionally (not just on failure) so a warm
-	// instance also lazily retries -- a deploy that races ahead of
-	// FrontendStack publishing the key-pair-id SSM param would otherwise pin
-	// that instance to the S3 fallback until it's recycled.
+	// Same-domain CloudFront-signed download URLs (ADR-027). Loaded once at
+	// cold start in the background (two SSM reads, no longer on the init
+	// path); a download request that arrives first waits for that load, and
+	// any failure falls back to raw S3 presigns. The reload callback stays
+	// registered so a warm instance also lazily retries -- a deploy that
+	// races ahead of FrontendStack publishing the key-pair-id SSM param would
+	// otherwise pin that instance to the S3 fallback until it's recycled.
 	if mediaBaseURL := os.Getenv("MEDIA_BASE_URL"); mediaBaseURL != "" {
 		ssmClient := ssm.NewFromConfig(cfg, func(o *ssm.Options) { o.TracerProvider = awsTracing })
-		reload := func(ctx context.Context) (*service.CloudFrontSigner, error) {
+		uploadService.StartCloudFrontSignerLoad(func(ctx context.Context) (*service.CloudFrontSigner, error) {
 			return service.NewCloudFrontSigner(ctx, ssmClient, mediaBaseURL)
-		}
-		coldStartCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		cfSigner, err := reload(coldStartCtx)
-		cancel()
-		if err != nil {
-			log.Printf("warn: CloudFront signing unavailable, falling back to S3 presign (will retry lazily): %v", err)
-		} else {
-			uploadService.SetCloudFrontSigner(cfSigner)
-		}
-		uploadService.SetCloudFrontSignerReload(reload)
+		}, 3*time.Second)
 	}
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
@@ -185,6 +177,7 @@ func init() {
 		member, err := repo.GetMember(ctx, accountID, userID)
 		return member != nil, err
 	})
+	dictService.SetMembershipBatchReader(service.BatchMembershipReader(repo))
 	// Account terms join the personal vocabulary in meeting-recency order.
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
 	dictHandler := handler.NewDictionaryHandler(dictService)
@@ -276,6 +269,10 @@ func init() {
 		os.Getenv("TTOBAK_ORIGIN_LOCAL_DEV") == "1" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "",
 		os.Getenv("ORIGIN_VERIFY_SECRET_VERSION_ID"),
 	)
+	// Lambda only, so tests and local runs make no background network calls.
+	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
+		startColdStartWarmups(originVerifier, dynamoClient, cfg.Region)
+	}
 	r.Use(originVerifier.Middleware) // Block direct API Gateway access (CloudFront-only)
 	r.Use(middleware.CORS)
 	r.Use(middleware.JSON)

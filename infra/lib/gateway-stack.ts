@@ -414,6 +414,10 @@ export class GatewayStack extends cdk.Stack {
         ...apiTelemetry?.environment,
       },
       timeout: cdk.Duration.seconds(30),
+      // Handlers are DynamoDB-bound (self time ~1-5 ms). 1024 MB only cut the
+      // cold first request from ~279 to ~201 ms while quadrupling the
+      // always-on provisioned-concurrency cost, so warm capacity is bought
+      // with provisioned environments on the live alias instead.
       memorySize: 256,
       ...apiTelemetry?.network,
     });
@@ -424,12 +428,15 @@ export class GatewayStack extends cdk.Stack {
         .addDependency(apiNetworkPolicy.node.defaultChild as iam.CfnPolicy);
     }
 
-    // API Lambda alias with provisioned concurrency for zero cold-start after deploy
+    // API Lambda alias with provisioned concurrency. A page load fires about
+    // four API calls in parallel after session bootstrap; with one
+    // provisioned environment 23% of invocations spilled over to on-demand
+    // environments (7 days to 2026-11-09), so four cover that burst.
     const apiVersion = this.apiFunction.currentVersion;
     const apiAlias = new lambda.Alias(this, 'ApiLiveAlias', {
       aliasName: 'live',
       version: apiVersion,
-      provisionedConcurrentExecutions: 1,
+      provisionedConcurrentExecutions: 4,
     });
 
     // Research worker Lambda — invoked by Step Functions, calls AgentCore
