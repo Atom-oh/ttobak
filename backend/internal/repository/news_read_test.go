@@ -33,14 +33,25 @@ func TestNewsReadBatchesStrongKeysAndRetriesOnlyUnprocessed(t *testing.T) {
 			}
 			var input struct {
 				RequestItems map[string]struct {
-					ConsistentRead bool
-					Keys           []map[string]map[string]string
+					ConsistentRead           bool
+					Keys                     []map[string]map[string]string
+					ProjectionExpression     string
+					ExpressionAttributeNames map[string]string
 				}
 			}
 			if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 				t.Error(err)
 			}
 			request := input.RequestItems["news"]
+			projected := map[string]bool{}
+			for _, alias := range strings.Split(request.ProjectionExpression, ",") {
+				projected[request.ExpressionAttributeNames[strings.TrimSpace(alias)]] = true
+			}
+			for _, field := range []string{"accountId", "awsRelevance", "opportunityCount", "qualityScore"} {
+				if !projected[field] {
+					t.Errorf("projection omitted %s", field)
+				}
+			}
 			if !request.ConsistentRead || (len(request.Keys) != 100 && len(request.Keys) != 1) {
 				t.Errorf("call %d: unbounded/eventual batch: %d keys, consistent=%v", calls, len(request.Keys), request.ConsistentRead)
 			}

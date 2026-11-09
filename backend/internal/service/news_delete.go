@@ -25,7 +25,7 @@ func (s *InsightsService) deletePublishedNews(ctx context.Context, userID string
 	if len(row) == 0 || len(config) == 0 {
 		return true, ErrNotFound
 	}
-	if !isAdmin && newsString(config, "ownerId") != userID {
+	if !isAdmin && (newsString(config, "accountId") != "" || newsString(config, "ownerId") != userID) {
 		return true, ErrForbidden
 	}
 	if !isVersionedNews(row) {

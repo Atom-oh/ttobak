@@ -210,7 +210,7 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	// legacy source is admin-only-deletable until backfilled (see
 	// scripts/insights-backfill-owner.py), not silently unowned-by-anyone
 	// or (worse) matchable by an empty caller ID.
-	if !isAdmin && (source.OwnerID == "" || source.OwnerID != userID) {
+	if !isAdmin && (source.AccountID != "" || source.OwnerID == "" || source.OwnerID != userID) {
 		return ErrForbidden
 	}
 

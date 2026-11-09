@@ -96,6 +96,37 @@ func TestNewsDeleteAcceptsProducerValidPaddedMultilineTitle(t *testing.T) {
 	}
 }
 
+func TestNewsDeleteRejectsAccountCreatorRights(t *testing.T) {
+	for _, scenario := range []struct {
+		name            string
+		sourceAccountID string
+		admin           bool
+	}{
+		{name: "account source creator", sourceAccountID: "account-1"},
+		{name: "canonical account binding"},
+		{name: "admin retains access", sourceAccountID: "account-1", admin: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			svc, rows, object, keys := newNewsReadFixture(t)
+			state := &newsDeleteFixture{newsReadFixture: rows}
+			storage := &newsDeleteS3Fixture{newsS3Fixture: object, t: t, state: state, key: keys[0]}
+			svc.news, svc.s3, svc.artifactBucketName = state, storage, "assets"
+			svc.repo.(*mockCrawlerRepo).sources[keys[0].SourceID] = &model.CrawlerSource{
+				OwnerID: "owner", AccountID: scenario.sourceAccountID,
+			}
+			rows.rows[keys[1]]["accountId"] = &types.AttributeValueMemberS{Value: "account-1"}
+			err := svc.DeleteDocument(context.Background(), "owner", scenario.admin, keys[0].SourceID, strings.Repeat("a", 16))
+			if scenario.admin {
+				if err != nil || state.writes != 1 || storage.deletes != 2 {
+					t.Fatalf("admin deletion failed: %v, writes=%d deletes=%d", err, state.writes, storage.deletes)
+				}
+			} else if !errors.Is(err, ErrForbidden) || state.writes != 0 || storage.deletes != 0 {
+				t.Fatalf("obsolete creator grant authorized deletion: %v, writes=%d deletes=%d", err, state.writes, storage.deletes)
+			}
+		})
+	}
+}
+
 func TestNewsDeleteRejectsPublicationOrOwnerRacesBeforeCleanup(t *testing.T) {
 	for _, race := range []string{"owner", "publication"} {
 		t.Run(race, func(t *testing.T) {

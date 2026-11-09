@@ -58,10 +58,10 @@ func (r *CrawlerRepository) ReadNewsItems(ctx context.Context, keys []NewsReadKe
 	rows := make(map[NewsReadKey]map[string]types.AttributeValue, len(selection))
 	fields := []expression.NameBuilder{}
 	for _, name := range []string{
-		"PK", "SK", "sourceId", "sourceName", "aliases", "newsQueries", "customUrls", "status", "ownerId",
+		"PK", "SK", "sourceId", "sourceName", "aliases", "newsQueries", "customUrls", "status", "ownerId", "accountId",
 		"docHash", "schemaVersion", "qualityStatus", "type", "attemptToken", "sourceRevision",
 		"s3Key", "artifactKey", "markdownSha256", "artifactSha256", "title", "url", "source",
-		"summary", "awsServices", "tags", "crawledAt", "inKB", "pubDate",
+		"summary", "awsServices", "tags", "crawledAt", "inKB", "pubDate", "awsRelevance", "opportunityCount", "qualityScore",
 	} {
 		fields = append(fields, expression.Name(name))
 	}
