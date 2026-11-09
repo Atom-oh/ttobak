@@ -961,7 +961,13 @@ and still carry the account metadata (else 404). Not connector-delegable.
 `DELETE /api/accounts/{accountId}/kb/{refId}` removes the account ref (204). Only
 the uploader (while a direct member) or an account `owner` may untag (else 403);
 a missing ref is 404. The S3 object is never deleted; it stays in the uploader's
-personal KB. QA retrieval scope is unchanged by refs. Not connector-delegable.
+personal KB. Untag deletes the ref and writes an `ACCOUNT#{accountId}/KBUNTAG#{refId}`
+tombstone in one transaction; every ref create requires the tombstone to be
+absent. A new upload gets a new timestamped key and so a new ref ID. QA
+retrieval scope is unchanged by refs. Not connector-delegable.
+Existing tagged uploads are backfilled with `backend/cmd/backfill-account-kb`
+(`-dry-run` defaults to true; prints counts only). A rerun skips existing refs
+and never recreates a ref that was untagged (counted as `untagged`).
 
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,

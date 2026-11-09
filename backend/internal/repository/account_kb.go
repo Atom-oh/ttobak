@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -18,6 +19,10 @@ import (
 // ErrInvalidAccountKBCursor reports a cursor that is not a KBREF# sort key.
 var ErrInvalidAccountKBCursor = errors.New("invalid account KB cursor")
 
+// ErrAccountKBRefUntagged means a member untagged this ref (a KBUNTAG#
+// tombstone exists), so it must not be recreated.
+var ErrAccountKBRefUntagged = errors.New("account KB ref was untagged")
+
 type accountKBRefItem struct {
 	PK         string `dynamodbav:"PK"`
 	SK         string `dynamodbav:"SK"`
@@ -25,7 +30,39 @@ type accountKBRefItem struct {
 	model.AccountKBRef
 }
 
-const entityTypeAccountKBRef = "ACCOUNT_KB_REF"
+const (
+	entityTypeAccountKBRef   = "ACCOUNT_KB_REF"
+	entityTypeAccountKBUntag = "ACCOUNT_KB_UNTAG"
+)
+
+type accountKBUntagItem struct {
+	PK         string    `dynamodbav:"PK"`
+	SK         string    `dynamodbav:"SK"`
+	EntityType string    `dynamodbav:"entityType"`
+	AccountID  string    `dynamodbav:"accountId"`
+	RefID      string    `dynamodbav:"refId"`
+	UntaggedAt time.Time `dynamodbav:"untaggedAt"`
+}
+
+// accountKBCancelled reports which transaction items failed their condition;
+// ok is false for any other cancellation reason.
+func accountKBCancelled(err error, items int) (failed []bool, ok bool) {
+	var cancelled *types.TransactionCanceledException
+	if !errors.As(err, &cancelled) || len(cancelled.CancellationReasons) != items {
+		return nil, false
+	}
+	failed = make([]bool, items)
+	for i, reason := range cancelled.CancellationReasons {
+		switch aws.ToString(reason.Code) {
+		case "None", "":
+		case "ConditionalCheckFailed":
+			failed[i] = true
+		default:
+			return nil, false
+		}
+	}
+	return failed, true
+}
 
 func validAccountKBRef(ref *model.AccountKBRef) bool {
 	return ref != nil && ref.AccountID != "" && !strings.ContainsAny(ref.AccountID, "#/") &&
@@ -33,32 +70,43 @@ func validAccountKBRef(ref *model.AccountKBRef) bool {
 		ref.RefID == model.AccountKBRefID(ref.S3Key)
 }
 
-// PutAccountKBRef creates the ref only if absent. An existing ref is
-// ErrConditionFailed.
+// PutAccountKBRef creates the ref only if absent and never untagged, in one
+// transaction with a KBUNTAG# absence check. An existing ref is
+// ErrConditionFailed; an untagged one also wraps ErrAccountKBRefUntagged.
 func (r *DynamoDBRepository) PutAccountKBRef(ctx context.Context, ref *model.AccountKBRef) error {
 	if !validAccountKBRef(ref) {
 		return fmt.Errorf("invalid account KB ref")
 	}
-	item := accountKBRefItem{PK: model.PrefixAccount + ref.AccountID, SK: model.PrefixAccountKBRef + ref.RefID,
+	pk := model.PrefixAccount + ref.AccountID
+	item := accountKBRefItem{PK: pk, SK: model.PrefixAccountKBRef + ref.RefID,
 		EntityType: entityTypeAccountKBRef, AccountKBRef: *ref}
 	av, err := attributevalue.MarshalMap(item)
 	if err != nil {
 		return fmt.Errorf("marshal account KB ref: %w", err)
 	}
-	expr, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
+	absent, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
 	if err != nil {
 		return err
 	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(r.tableName), Item: av,
-		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names()})
-	var ccf *types.ConditionalCheckFailedException
-	if errors.As(err, &ccf) {
-		return fmt.Errorf("%w: account KB ref exists", ErrConditionFailed)
+	items := []types.TransactWriteItem{
+		{Put: &types.Put{TableName: aws.String(r.tableName), Item: av,
+			ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PrefixAccountKBUntag+ref.RefID),
+			ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 	}
-	if err != nil {
-		return fmt.Errorf("put account KB ref: %w", err)
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err == nil {
+		return nil
 	}
-	return nil
+	if failed, ok := accountKBCancelled(err, len(items)); ok {
+		switch {
+		case failed[1]:
+			return fmt.Errorf("%w: %w", ErrConditionFailed, ErrAccountKBRefUntagged)
+		case failed[0]:
+			return fmt.Errorf("%w: account KB ref exists", ErrConditionFailed)
+		}
+	}
+	return fmt.Errorf("put account KB ref: %w", err)
 }
 
 // decodeAccountKBRef accepts only a well-formed ref row of the account.
@@ -96,9 +144,10 @@ func (r *DynamoDBRepository) GetAccountKBRef(ctx context.Context, accountID, ref
 	return ref, nil
 }
 
-// DeleteAccountKBRef removes the ref row only (never the S3 object). A
-// non-empty uploadedBy additionally requires the row's uploader to match. A
-// missing row or a failed match is ErrConditionFailed.
+// DeleteAccountKBRef removes the ref row only (never the S3 object) and, in
+// the same transaction, writes the KBUNTAG# tombstone that keeps the ref from
+// being recreated. A non-empty uploadedBy additionally requires the row's
+// uploader to match. A missing row or a failed match is ErrConditionFailed.
 func (r *DynamoDBRepository) DeleteAccountKBRef(ctx context.Context, accountID, refID, uploadedBy string) error {
 	if accountID == "" || !model.ValidAccountKBRefID(refID) {
 		return fmt.Errorf("invalid account KB ref key")
@@ -111,17 +160,25 @@ func (r *DynamoDBRepository) DeleteAccountKBRef(ctx context.Context, accountID, 
 	if err != nil {
 		return err
 	}
-	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName),
-		Key:                 accountNewsKey(model.PrefixAccount+accountID, model.PrefixAccountKBRef+refID),
-		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()})
-	var ccf *types.ConditionalCheckFailedException
-	if errors.As(err, &ccf) {
+	pk := model.PrefixAccount + accountID
+	tombstone, err := attributevalue.MarshalMap(accountKBUntagItem{PK: pk, SK: model.PrefixAccountKBUntag + refID,
+		EntityType: entityTypeAccountKBUntag, AccountID: accountID, RefID: refID, UntaggedAt: time.Now().UTC()})
+	if err != nil {
+		return fmt.Errorf("marshal account KB untag row: %w", err)
+	}
+	items := []types.TransactWriteItem{
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PrefixAccountKBRef+refID),
+			ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}},
+		{Put: &types.Put{TableName: aws.String(r.tableName), Item: tombstone}},
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err == nil {
+		return nil
+	}
+	if failed, ok := accountKBCancelled(err, len(items)); ok && failed[0] {
 		return fmt.Errorf("%w: account KB ref", ErrConditionFailed)
 	}
-	if err != nil {
-		return fmt.Errorf("delete account KB ref: %w", err)
-	}
-	return nil
+	return fmt.Errorf("delete account KB ref: %w", err)
 }
 
 // ListAccountKBRefs returns one page of the account's KBREF# rows in sort-key

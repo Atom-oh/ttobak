@@ -445,7 +445,7 @@ func (s *AccountKBService) Untag(ctx context.Context, userID, accountID, refID s
 	return err
 }
 
-// KBObjectStore reads the KB bucket for account KB refs.
+// KBObjectStore reads the KB bucket for account KB refs and the backfill.
 type KBObjectStore struct {
 	client  *s3.Client
 	presign *s3.PresignClient
@@ -485,6 +485,18 @@ func (o *KBObjectStore) Head(ctx context.Context, key string) (string, bool, err
 	return out.Metadata["account-id"], true, nil
 }
 
+// HeadDetail also returns the object's last-modified time (backfill).
+func (o *KBObjectStore) HeadDetail(ctx context.Context, key string) (string, time.Time, bool, error) {
+	out, err := o.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(o.bucket), Key: aws.String(key)})
+	if s3Missing(err) {
+		return "", time.Time{}, false, nil
+	}
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("head KB object: %w", err)
+	}
+	return out.Metadata["account-id"], aws.ToTime(out.LastModified), true, nil
+}
+
 // rfc5987Escape percent-encodes every byte outside RFC 5987 attr-char.
 func rfc5987Escape(v string) string {
 	const hex = "0123456789ABCDEF"
@@ -515,4 +527,27 @@ func (o *KBObjectStore) PresignGet(ctx context.Context, key, fileName string, tt
 		return "", fmt.Errorf("presign KB download: %w", err)
 	}
 	return out.URL, nil
+}
+
+// ListKBKeys returns one page of kb/ object keys.
+func (o *KBObjectStore) ListKBKeys(ctx context.Context, cursor string) ([]string, string, error) {
+	in := &s3.ListObjectsV2Input{Bucket: aws.String(o.bucket), Prefix: aws.String("kb/")}
+	if cursor != "" {
+		in.ContinuationToken = aws.String(cursor)
+	}
+	out, err := o.client.ListObjectsV2(ctx, in)
+	if err != nil {
+		return nil, "", fmt.Errorf("list KB objects: %w", err)
+	}
+	keys := make([]string, 0, len(out.Contents))
+	for _, obj := range out.Contents {
+		if obj.Key != nil {
+			keys = append(keys, *obj.Key)
+		}
+	}
+	next := ""
+	if aws.ToBool(out.IsTruncated) {
+		next = aws.ToString(out.NextContinuationToken)
+	}
+	return keys, next, nil
 }

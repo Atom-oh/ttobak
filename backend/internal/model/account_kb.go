@@ -17,6 +17,16 @@ import (
 // the object before listing it. Removing a ref never deletes the object.
 const PrefixAccountKBRef = "KBREF#"
 
+// PrefixAccountKBUntag marks a ref a member untagged:
+//
+//	ACCOUNT#{accountId} / KBUNTAG#{refId}
+//
+// It is written in the same transaction that deletes the KBREF# row, and every
+// ref create requires it to be absent, so a backfill rerun never re-shares an
+// untagged file. Upload keys are timestamped, so a new upload of the same file
+// gets a new refId and is unaffected.
+const PrefixAccountKBUntag = "KBUNTAG#"
+
 // Account KB list kinds.
 const (
 	AccountKBKindUpload  = "upload"
