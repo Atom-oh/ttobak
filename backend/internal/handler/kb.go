@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/service"
@@ -48,6 +49,10 @@ func (h *KBHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, service.ErrKBAccountInvalid) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid accountId")
+			return
+		}
+		if errors.Is(err, connector.ErrCapabilityDenied) {
+			writeError(w, http.StatusForbidden, "CAPABILITY_DENIED", "Connector request rejected")
 			return
 		}
 		if errors.Is(err, service.ErrForbidden) {
