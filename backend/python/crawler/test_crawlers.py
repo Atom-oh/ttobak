@@ -275,6 +275,14 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
         self.assertEqual(mock_meta.call_args.args[5], 'Test preview')
         self.assertEqual(result['docsAdded'], 1)
 
+    def test_new_doc_writes_aws_services_list(self):
+        """The put item carries awsServices alongside the singular service."""
+        with mock.patch.object(tech_crawler, 'table') as table:
+            tech_crawler._write_metadata('aws-docs', 'abc123', 'T', 'https://x', 'Amazon EKS')
+        item = table.put_item.call_args.kwargs['Item']
+        self.assertEqual(item['awsServices'], ['Amazon EKS'])
+        self.assertEqual(item['service'], 'Amazon EKS')
+
     @mock.patch.object(tech_crawler, '_write_metadata')
     @mock.patch.object(tech_crawler, '_write_to_s3')
     @mock.patch.object(tech_crawler, '_summarize_and_tag')

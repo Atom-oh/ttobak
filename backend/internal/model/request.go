@@ -550,6 +550,12 @@ type InsightsResponse struct {
 	TotalCount int               `json:"totalCount"`
 	Page       int               `json:"page"`
 	Limit      int               `json:"limit"`
+	// Services is the sorted unique AWS service set over the full filtered
+	// result (source/type/tag filters applied, service filter not), before paging.
+	Services []string `json:"services"`
+	// SourceIDs is the sorted unique source set over the full filtered result
+	// (type/tag/service filters applied, source filter not), before paging.
+	SourceIDs []string `json:"sourceIds"`
 }
 
 // InsightDetailResponse represents the full content of a crawled document

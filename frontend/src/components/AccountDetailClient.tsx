@@ -644,6 +644,11 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
               {tab === 'insights' && (
                 <>
                   <SectionStatus {...insightsState} />
+                  {!insightsState.loading && !insightsState.error && (insightsState.data?.restrictedCount ?? 0) > 0 && (
+                    <p className="mb-3 text-xs text-text-secondary">
+                      접근이 제한된 회의 {insightsState.data?.restrictedCount}건은 제외되었습니다.
+                    </p>
+                  )}
                   {!insightsState.loading && !insightsState.error && <FieldInsightsSection
                     insights={insightsState.data?.insights ?? []}
                     description="공유된 회의에서 확인된 근거와 다음 액션을 함께 확인하세요."
