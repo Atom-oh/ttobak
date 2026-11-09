@@ -7,7 +7,7 @@ import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 import type { CreateDictTermInput, DeletedCommonTerm, DictionaryLayer, DictionaryResponse, DictTermItem, DictTermMutationResponse, TermLogEntry, TermPatch } from '@/lib/dictionary';
 import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
-import type { AccountContact, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
+import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -856,6 +856,19 @@ export const accountApi = {
     return cached ? copyAccountList(cached) : undefined;
   },
   get: (id: string, options?: FetchOptions) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`, options),
+  events: (id: string, expectedUserId: string, options: { order?: 'asc' | 'desc'; to?: string; cursor?: string } = {}, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ limit: '25' });
+    if (options.order) query.set('order', options.order);
+    if (options.to) query.set('to', options.to);
+    if (options.cursor) query.set('cursor', options.cursor);
+    return api.get<{ events: AccountEvent[]; nextCursor?: string }>(`/api/accounts/${encodeURIComponent(id)}/events?${query}`, { expectedUserId, signal });
+  },
+  createEvent: (id: string, data: AccountEventInput, expectedUserId: string, signal?: AbortSignal) =>
+    api.post<AccountEvent>(`/api/accounts/${encodeURIComponent(id)}/events`, data, { expectedUserId, signal }),
+  updateEvent: (id: string, eventId: string, data: AccountEventInput & { revision: string }, expectedUserId: string, signal?: AbortSignal) =>
+    api.put<AccountEvent>(`/api/accounts/${encodeURIComponent(id)}/events/${encodeURIComponent(eventId)}`, data, { expectedUserId, signal }),
+  deleteEvent: (id: string, eventId: string, revision: string, expectedUserId: string, signal?: AbortSignal) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/events/${encodeURIComponent(eventId)}?revision=${encodeURIComponent(revision)}`, { expectedUserId, signal }),
   contacts: (id: string, expectedUserId: string, cursor = '', signal?: AbortSignal) => {
     const query = new URLSearchParams({ limit: '25' });
     if (cursor) query.set('cursor', cursor);
@@ -949,10 +962,10 @@ export const projectApi = {
     api.post<{ accountIds: string[] }>(`/api/projects/${encodeURIComponent(id)}/accounts`, { accountId }),
   unlinkAccount: (id: string, accountId: string) =>
     api.delete<void>(`/api/projects/${encodeURIComponent(id)}/accounts/${encodeURIComponent(accountId)}`),
-  linkMeeting: (id: string, meetingId: string) =>
-    api.post<void>(`/api/projects/${encodeURIComponent(id)}/meetings`, { meetingId }),
-  unlinkMeeting: (id: string, meetingId: string) =>
-    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/meetings/${encodeURIComponent(meetingId)}`),
+  linkMeeting: (id: string, meetingId: string, options?: FetchOptions) =>
+    api.post<void>(`/api/projects/${encodeURIComponent(id)}/meetings`, { meetingId }, options),
+  unlinkMeeting: (id: string, meetingId: string, options?: FetchOptions) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/meetings/${encodeURIComponent(meetingId)}`, options),
   linkResearch: (id: string, researchId: string) =>
     api.post<void>(`/api/projects/${encodeURIComponent(id)}/research`, { researchId }),
   unlinkResearch: (id: string, researchId: string) =>

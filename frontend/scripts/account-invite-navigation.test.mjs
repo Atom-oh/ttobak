@@ -69,6 +69,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
     '@/components/AccountBillingTab': { AccountBillingTab: emptyComponent },
     '@/components/AccountContacts': { AccountContacts: emptyComponent },
+    '@/components/AccountEvents': { AccountEvents: emptyComponent },
     '@/components/workspace/AccountWorkspaceSelector': {
       AccountWorkspaceSelector: emptyComponent,
       useAccountWorkspaceAccounts: () => ({ accounts: [], loading: false, error: null }),
