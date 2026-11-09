@@ -75,7 +75,9 @@ notes-page body text; slide numbers, dates, footers, masters, charts, diagrams,
 media and external targets are not read. Limits: 4,096 entries, 16 MiB per XML
 part, 64 MiB decompressed total, 200:1 ratio above 1 MiB, actual stream length
 checked against the header, 500 slides, XML depth 128, 4 million tokens and
-4 MiB Markdown. DTDs are rejected. Failures are FAILED jobs with
+4 MiB Markdown. Tables allow 64 columns and 2,000 rows, with 100,000 cells
+(empty cells included) per deck; the padded table size is computed against
+the remaining Markdown budget before rendering. DTDs are rejected. Failures are FAILED jobs with
 `PPTX_MALFORMED`, `PPTX_ENCRYPTED_OR_LEGACY`, `PPTX_TOO_MANY_ENTRIES`,
 `PPTX_EXPANSION_LIMIT`, `PPTX_TOO_MANY_SLIDES`, `PPTX_OUTPUT_TOO_LARGE` or
 `PPTX_NO_TEXT`; binary `.ppt` is `LEGACY_PPT_UNSUPPORTED`. Converter changes do

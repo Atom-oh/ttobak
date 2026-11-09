@@ -84,8 +84,9 @@ foreign-private files.
 
 ## Immutable binary snapshots
 
-Supported original formats are PDF, DOC, DOCX, XLS and XLSX. PPT/PPTX have an
-explicit unsupported state until a suitable conversion path exists. Private
+Supported original formats are PDF, DOC, DOCX, XLS, XLSX and PPTX; PPTX
+snapshots are the worker's Markdown projection. Legacy PPT has the explicit
+`LEGACY_PPT_UNSUPPORTED` state. Private
 original keys are flat `kb/{owner}/{filename}`; shared keys may nest beneath
 `shared/`. Snapshots use lowercase extensions:
 

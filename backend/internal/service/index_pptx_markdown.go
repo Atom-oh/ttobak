@@ -31,6 +31,9 @@ const (
 	pptxMaxXMLTokens     = 4_000_000 // across every part read
 	pptxMaxMarkdownBytes = 4 << 20
 	pptxMaxRelationships = 8192
+	pptxMaxTableColumns  = 64
+	pptxMaxTableRows     = 2000
+	pptxMaxTableCells    = 100_000 // across the deck, empty cells included
 )
 
 // Fail-closed codes surfaced through FAILED index jobs and the status API.
@@ -64,6 +67,17 @@ type pptxPackage struct {
 	files    map[string]*zip.File
 	expanded int64
 	tokens   int
+	cells    int
+	// emitted is a conservative running estimate of Markdown bytes, charged
+	// while collecting so no block is materialized past the output budget.
+	emitted int
+}
+
+func (p *pptxPackage) charge(n int) error {
+	if p.emitted += n; n < 0 || p.emitted > pptxMaxMarkdownBytes {
+		return pptxFail(PPTXErrOutputLimit)
+	}
+	return nil
 }
 
 // PPTXToMarkdown converts slide titles, body text, tables and speaker notes to
@@ -445,20 +459,26 @@ func (p *pptxPackage) readSlide(name string, notes bool) (pptxContent, error) {
 		inCell    bool
 		inText    bool
 		shapeText []string
+		cellBytes int // collected cell text charged before the table renders
 	)
-	flushParagraph := func() {
+	flushParagraph := func() error {
 		text := pptxInline(paragraph.String())
 		paragraph.Reset()
 		if text == "" {
-			return
+			return nil
 		}
 		switch {
 		case inCell:
 			cell = append(cell, text)
+			cellBytes += len(text) + 1
+			return p.charge(len(text) + 1) // refunded when the table renders
 		case shapeKind == "title":
 			content.titles = append(content.titles, text)
+			return p.charge(len(text) + 3)
 		default:
-			shapeText = append(shapeText, strings.Repeat("  ", level)+"- "+text)
+			line := strings.Repeat("  ", level) + "- " + text
+			shapeText = append(shapeText, line)
+			return p.charge(len(line) + 1)
 		}
 	}
 	err := p.walk(name, func(token xml.Token, stack []string) error {
@@ -482,6 +502,11 @@ func (p *pptxPackage) readSlide(name string, notes bool) (pptxContent, error) {
 				row = nil
 			case "tc":
 				inCell, cell = inTable > 0, nil
+				if inCell {
+					if p.cells++; len(row) >= pptxMaxTableColumns || p.cells > pptxMaxTableCells {
+						return pptxFail(PPTXErrOutputLimit)
+					}
+				}
 			case "p":
 				paragraph.Reset()
 				level = 0
@@ -510,7 +535,9 @@ func (p *pptxPackage) readSlide(name string, notes bool) (pptxContent, error) {
 			case "p":
 				// a:p only; p:sp shapes never use a local "p" end at shape depth.
 				if inShape > 0 || inCell {
-					flushParagraph()
+					if err := flushParagraph(); err != nil {
+						return err
+					}
 				}
 			case "tc":
 				if inCell {
@@ -519,14 +546,25 @@ func (p *pptxPackage) readSlide(name string, notes bool) (pptxContent, error) {
 				inCell = false
 			case "tr":
 				if inTable > 0 && len(row) > 0 {
+					if len(table) >= pptxMaxTableRows {
+						return pptxFail(PPTXErrOutputLimit)
+					}
 					table = append(table, row)
 				}
 			case "tbl":
 				if inTable == depth {
-					if rendered := pptxTable(table); rendered != "" && (!notes || shapeKind == "body") {
+					p.emitted, cellBytes = p.emitted-cellBytes, 0
+					rendered, err := pptxTable(table, pptxMaxMarkdownBytes-p.emitted)
+					if err != nil {
+						return err
+					}
+					if err := p.charge(len(rendered)); err != nil {
+						return err
+					}
+					if rendered != "" && (!notes || shapeKind == "body") {
 						content.blocks = append(content.blocks, rendered)
 					}
-					inTable = 0
+					inTable, table = 0, nil
 				}
 			case "sp":
 				if inShape == depth {
@@ -556,15 +594,31 @@ func pptxPlaceholderKind(kind string, notes bool) string {
 	return "body"
 }
 
-func pptxTable(rows [][]string) string {
+// pptxTable renders padded rows only after computing the exact output size
+// against the remaining budget, so padding cannot amplify past the limit.
+func pptxTable(rows [][]string, budget int) (string, error) {
 	width := 0
 	for _, row := range rows {
 		width = max(width, len(row))
 	}
 	if width == 0 {
-		return ""
+		return "", nil
+	}
+	if width > pptxMaxTableColumns || len(rows) > pptxMaxTableRows {
+		return "", pptxFail(PPTXErrOutputLimit)
+	}
+	size := 2 + 2 + 6*width // leading/trailing newline, separator row
+	for _, row := range rows {
+		size += 2 + 3*width
+		for _, value := range row {
+			size += len(value) + strings.Count(value, "|")
+		}
+		if size > budget {
+			return "", pptxFail(PPTXErrOutputLimit)
+		}
 	}
 	var builder strings.Builder
+	builder.Grow(size)
 	builder.WriteByte('\n') // a table needs a blank line after list items
 	for i, row := range rows {
 		builder.WriteByte('|')
@@ -584,7 +638,7 @@ func pptxTable(rows [][]string) string {
 		}
 	}
 	builder.WriteByte('\n')
-	return builder.String()
+	return builder.String(), nil
 }
 
 // pptxInline normalizes untrusted slide text to one line of printable text.

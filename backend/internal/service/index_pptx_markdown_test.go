@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math/rand"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 )
@@ -241,6 +243,60 @@ func TestPPTXToMarkdown(t *testing.T) {
 			}
 			if string(got) != tc.want {
 				t.Fatalf("markdown mismatch:\n%s\nwant:\n%s", got, tc.want)
+			}
+		})
+	}
+}
+
+// Empty cells must count: padding a wide row across many rows would otherwise
+// amplify a sub-MiB slide into gigabytes of Markdown.
+func TestPPTXTableAmplificationFailsFast(t *testing.T) {
+	table := func(rows ...string) string {
+		return `<p:graphicFrame><a:graphic><a:graphicData><a:tbl>` + strings.Join(rows, "") +
+			`</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`
+	}
+	row := func(cells int) string { return "<a:tr>" + strings.Repeat("<a:tc/>", cells) + "</a:tr>" }
+	deck := func(shapes ...string) []byte {
+		return buildPPTX(t, pptxDeck([]string{"ppt/slides/slide1.xml"},
+			map[string]string{"ppt/slides/slide1.xml": pptxSlideXML(append([]string{pptxShape("title", "t")}, shapes...)...)}, nil))
+	}
+	manyTables := make([]string, pptxMaxTableCells/pptxMaxTableColumns+1)
+	for i := range manyTables {
+		manyTables[i] = table(row(pptxMaxTableColumns))
+	}
+	padded := []string{row(pptxMaxTableColumns)}
+	for i := 1; i < pptxMaxTableRows; i++ {
+		padded = append(padded, row(1))
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+		code string
+	}{
+		{"wide row then many one-cell rows", deck(table(append([]string{row(30_000)}, strings.Split(strings.Repeat(row(1)+"\x00", 30_000), "\x00")...)...)), PPTXErrOutputLimit},
+		{"too many rows", deck(table(strings.Split(strings.Repeat(row(1)+"\x00", pptxMaxTableRows+1), "\x00")...)), PPTXErrOutputLimit},
+		{"deck-wide cell budget", deck(manyTables...), PPTXErrOutputLimit},
+		{"maximum padded table stays bounded", deck(table(padded...)), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if len(tc.data) > 1<<20 {
+				t.Fatalf("fixture is %d bytes; the attack must fit under 1 MiB", len(tc.data))
+			}
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			start := time.Now()
+			got, err := PPTXToMarkdown(tc.data, "")
+			elapsed := time.Since(start)
+			runtime.ReadMemStats(&after)
+			if code, _ := PPTXErrorCode(err); code != tc.code {
+				t.Fatalf("code = %q (%v), want %q", code, err, tc.code)
+			}
+			if tc.code == "" && (len(got) > pptxMaxMarkdownBytes || !strings.Contains(string(got), "| --- |")) {
+				t.Fatalf("bounded table not rendered: %d bytes", len(got))
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 256<<20 || elapsed > 5*time.Second {
+				t.Fatalf("unbounded work: %d bytes allocated in %s", allocated, elapsed)
 			}
 		})
 	}
