@@ -43,7 +43,7 @@ func txOpKeys(t *testing.T, items []interface{}) []string {
 	var out []string
 	for _, raw := range items {
 		item := raw.(wireMap)
-		for _, op := range []string{"Put", "Delete", "ConditionCheck"} {
+		for _, op := range []string{"Put", "Delete", "Update", "ConditionCheck"} {
 			if _, ok := item[op]; ok {
 				pk, sk := wireKey(item, op)
 				out = append(out, op+" "+pk+" "+sk)
@@ -681,5 +681,31 @@ func TestPrune_ClassifiesCancellationReasons(t *testing.T) {
 	})
 	if err := live.PruneUnresolvedMention(context.Background(), "acc", h, "owner:m1", "speaker"); !errors.Is(err, ErrConditionFailed) {
 		t.Fatalf("live meeting: %v", err)
+	}
+}
+
+func TestAddPeopleLinkAlias_UpdatesBothRowsForMember(t *testing.T) {
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	h := testMentionHash('c')
+	k := model.PeopleLinkKey{MeetingID: "o:m", ToKind: "contact", ToID: "c1", Role: "participant"}
+	if err := repo.AddPeopleLinkAlias(context.Background(), "acc", "actor", k, h); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Update ACCOUNT#acc LINK#meeting#o:m#contact#c1#participant",
+		"Update ACCOUNT#acc LINKTO#contact#c1#meeting#o:m#participant",
+		"ConditionCheck ACCOUNT#acc META",
+		"ConditionCheck ACCOUNT#acc MEMBER#actor",
+	}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	fwd := items[0].(map[string]interface{})["Update"].(map[string]interface{})
+	if !strings.Contains(fwd["UpdateExpression"].(string), "ADD") || !strings.Contains(fwd["ConditionExpression"].(string), "size") {
+		t.Fatalf("forward update %#v", fwd)
+	}
+	if err := repo.AddPeopleLinkAlias(context.Background(), "acc", "", k, h); err == nil {
+		t.Fatal("system actor accepted")
 	}
 }
