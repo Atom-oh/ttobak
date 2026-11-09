@@ -92,7 +92,8 @@ without a user confirmation.
   at zero gain while Zoom shows the user muted. Once a recording has followed
   Zoom, a confirmed end (Zoom quit, or neither the `zm.meeting.window.main`
   window nor an audio item remains) silences the microphone at once, and an
-  unreadable stretch over 3 s does too. Unreadable inspection does not establish
+  unreadable stretch over 3 s does too. A failed Core Audio process-list read
+  is not evidence Zoom quit; only a successful read without Zoom is. Unreadable inspection does not establish
   whether the meeting ended or what Zoom itself captures; the UI preserves this
   uncertainty. A recording that never saw a Zoom state records the microphone as before.
   The same confirmed end lets detection end the Zoom meeting without the 20 s
@@ -106,7 +107,8 @@ without a user confirmation.
   has left the call; a toggle-less page that never showed one (an unlisted
   language, the landing page or an earlier call) is not evidence. Once a
   recording has followed Meet, leaving keeps the microphone silent, as with
-  Zoom; a recording that never saw the toggle (e.g. an unlisted language) records the
+  Zoom. The gate waits for the left page to hold for 3 s, as detection does.
+  A recording that never saw the toggle (e.g. an unlisted language) records the
   microphone. An unreadable page (another tab in front) keeps the last state,
   including when Accessibility trust is lost after an observed state. Safari's
   shared WebKit process is not followed. Without Accessibility permission at

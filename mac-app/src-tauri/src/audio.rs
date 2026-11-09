@@ -1535,6 +1535,15 @@ pub mod macos {
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope,
     ) -> Vec<AudioObjectID> {
+        try_get_ids(object, selector, scope).unwrap_or_default()
+    }
+
+    /// Like `get_ids`, but `None` when either HAL call fails.
+    fn try_get_ids(
+        object: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+    ) -> Option<Vec<AudioObjectID>> {
         let addr = address(selector, scope);
         let mut size = 0u32;
         let status = unsafe {
@@ -1546,9 +1555,12 @@ pub mod macos {
                 NonNull::from(&mut size),
             )
         };
+        if status != 0 {
+            return None;
+        }
         let count = size as usize / std::mem::size_of::<AudioObjectID>();
-        if status != 0 || count == 0 {
-            return Vec::new();
+        if count == 0 {
+            return Some(Vec::new());
         }
         let mut ids = vec![0 as AudioObjectID; count];
         let mut size = (count * std::mem::size_of::<AudioObjectID>()) as u32;
@@ -1563,11 +1575,11 @@ pub mod macos {
             )
         };
         if status != 0 {
-            return Vec::new();
+            return None;
         }
         // The list can shrink between the two calls.
         ids.truncate(size as usize / std::mem::size_of::<AudioObjectID>());
-        ids
+        Some(ids)
     }
 
     /// Reads a +1 retained CFString property.
@@ -1700,22 +1712,33 @@ pub mod macos {
     /// Input devices with the meeting apps using each (for the SPA picker).
     /// PID of a running process with this bundle ID, from Core Audio's
     /// process list (meeting apps register there once they load audio).
-    pub fn process_pid(bundle_id: &str) -> Option<i32> {
-        get_ids(
+    /// `Err` when the list could not be read; absence is only reported from a
+    /// successful read.
+    pub fn process_pid(bundle_id: &str) -> Result<Option<i32>, ()> {
+        let processes = try_get_ids(
             kAudioObjectSystemObject as AudioObjectID,
             kAudioHardwarePropertyProcessObjectList,
             kAudioObjectPropertyScopeGlobal,
         )
-        .into_iter()
-        .find(|&p| get_string(p, kAudioProcessPropertyBundleID).as_deref() == Some(bundle_id))
-        .and_then(|p| {
-            get_property::<i32>(
-                p,
-                kAudioProcessPropertyPID,
-                kAudioObjectPropertyScopeGlobal,
-                None,
-            )
-        })
+        .ok_or(())?;
+        // Our own process is always registered, so an empty list is unusable.
+        if processes.is_empty() {
+            return Err(());
+        }
+        let Some(process) = processes
+            .into_iter()
+            .find(|&p| get_string(p, kAudioProcessPropertyBundleID).as_deref() == Some(bundle_id))
+        else {
+            return Ok(None);
+        };
+        get_property::<i32>(
+            process,
+            kAudioProcessPropertyPID,
+            kAudioObjectPropertyScopeGlobal,
+            None,
+        )
+        .map(Some)
+        .ok_or(())
     }
 
     pub fn input_devices() -> Vec<InputDevice> {
