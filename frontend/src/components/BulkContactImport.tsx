@@ -105,8 +105,9 @@ export function BulkContactImport({ userId }: { userId: string }) {
           return account.accountId;
         },
         listContacts: (accountId, cursor) => accountApi.contacts(accountId, userId, cursor, signal),
-        createContact: (accountId, contact) => accountApi.createContact(accountId, contact, userId, signal),
-        updateContact: (accountId, contactId, contact) => accountApi.updateContact(accountId, contactId, contact, userId, signal),
+        createContact: (accountId, contact) => accountApi.createContact(accountId, contact, userId, signal, true),
+        updateContact: (accountId, contactId, contact) => accountApi.updateContact(accountId, contactId, contact, userId, signal, true),
+        requestPeopleResolve: async (accountId) => accountApi.requestPeopleResolve(accountId, userId),
       }, {
         signal,
         skipRows,

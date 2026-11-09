@@ -105,6 +105,7 @@ type AccountPeopleService struct {
 	repo     accountPeopleRepo
 	now      func() time.Time
 	newToken func() string
+	publish  func(context.Context, model.PeopleResolveRequested) error
 }
 
 func NewAccountPeopleService(repo accountPeopleRepo) *AccountPeopleService {

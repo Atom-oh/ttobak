@@ -44,6 +44,7 @@
     ["api.accountPeople.edges", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/people/edges"],
     ["api.accountPeople.bind", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/people/edges"],
     ["api.accountPeople.unbind", "ttobak-api-bridge", ["delete", "read"], false, "DELETE", "/api/accounts/{accountId}/people/edges"],
+    ["api.accountPeople.resolve", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/people/resolve"],
     ["api.accountOverview.signals", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/signals"],
     ["api.accountOverview.flow", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/flow"],
     ["api.accountOverview.graph", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/graph"],

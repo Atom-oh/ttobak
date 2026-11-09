@@ -184,6 +184,8 @@ export interface BulkApi {
   listContacts: (accountId: string, cursor: string) => Promise<{ contacts: AccountContact[]; nextCursor?: string }>;
   createContact: (accountId: string, contact: ContactInput) => Promise<AccountContact>;
   updateContact: (accountId: string, contactId: string, contact: ContactInput & { revision: string }) => Promise<AccountContact>;
+  /** One people resolve request per account written to (best-effort). */
+  requestPeopleResolve?: (accountId: string) => Promise<unknown>;
 }
 
 async function listAll(api: BulkApi, accountId: string): Promise<AccountContact[]> {
@@ -241,12 +243,19 @@ export async function runBulkImport(
     byAccount.set(accountId, [...(byAccount.get(accountId) || []), ...rows]);
   }
   for (const [accountId, rows] of byAccount) {
+    let wrote = false;
+    try { await importAccountRows(accountId, rows, () => { wrote = true; }); }
+    finally { if (wrote && api.requestPeopleResolve) await Promise.resolve().then(() => api.requestPeopleResolve?.(accountId)).catch(() => undefined); }
+  }
+  return results;
+
+  async function importAccountRows(accountId: string, rows: number[], onWrite: () => void) {
     let existing: AccountContact[];
     try { existing = await listAll(api, accountId); }
     catch (error) {
       if (isAbort(error) || isContactAccessDenied(error)) throw error;
       rows.forEach((row) => report(row, { status: 'failed', accountId }));
-      continue;
+      return;
     }
     for (const row of rows) {
       checkAbort();
@@ -257,6 +266,7 @@ export async function runBulkImport(
       if (same && !same.contactId) { report(row, { status: 'failed', accountId }); continue; }
       try {
         if (!same) {
+          onWrite();
           const created = await api.createContact(accountId, contact);
           existing.push(created);
           report(row, { status: 'created', accountId, contactId: created.contactId });
@@ -264,6 +274,7 @@ export async function runBulkImport(
         }
         const { merged, filled, conflicts } = mergeContact(same, contact);
         if (!filled.length) { report(row, { status: 'unchanged', accountId, contactId: same.contactId, conflicts }); continue; }
+        onWrite();
         const updated = await api.updateContact(accountId, same.contactId, { ...merged, revision: same.revision });
         existing[existing.indexOf(same)] = updated;
         report(row, { status: 'filled', accountId, contactId: updated.contactId, conflicts });
@@ -280,5 +291,4 @@ export async function runBulkImport(
       }
     }
   }
-  return results;
 }
