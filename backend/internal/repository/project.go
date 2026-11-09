@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -336,6 +337,62 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 		},
 	}); err != nil {
 		return mapProjectTransactionCanceledError(err, projectID, "project", "delete project")
+	}
+	return nil
+}
+
+// UpdateProjectWithStage updates the project CONFIG fields and writes the
+// stage-history row in one transaction. The update is conditional on the
+// project existing and (when expectedStage is non-empty) its stage still
+// equalling expectedStage, so a concurrent stage change cannot be silently
+// overwritten or double-recorded. stageChangedAt is set from change.ChangedAt.
+func (r *DynamoDBRepository) UpdateProjectWithStage(ctx context.Context, projectID string, fields map[string]interface{}, expectedStage string, change *model.ProjectStageChange) error {
+	if change == nil {
+		return fmt.Errorf("stage change is required")
+	}
+	update := expression.Set(expression.Name("stageChangedAt"), expression.Value(change.ChangedAt))
+	for name, value := range fields {
+		update = update.Set(expression.Name(name), expression.Value(value))
+	}
+	cond := expression.AttributeExists(expression.Name("PK"))
+	if expectedStage == "" {
+		// UpdateProjectFields historically wrote stage "" explicitly, so an
+		// unset stage is either absent or the empty string.
+		cond = cond.And(expression.AttributeNotExists(expression.Name("stage")).Or(expression.Name("stage").Equal(expression.Value(""))))
+	} else {
+		cond = cond.And(expression.Name("stage").Equal(expression.Value(expectedStage)))
+	}
+	expr, err := expression.NewBuilder().WithCondition(cond).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build project stage update expression: %w", err)
+	}
+	row := *change
+	row.PK = model.PrefixProject + projectID
+	row.SK = model.PrefixProjectStageHistory + change.ChangedAt.UTC().Format(time.RFC3339Nano)
+	row.ProjectID = projectID
+	row.EntityType = model.EntityTypeProjectStageChange
+	rowItem, err := attributevalue.MarshalMap(row)
+	if err != nil {
+		return fmt.Errorf("marshal stage change: %w", err)
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Update: &types.Update{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+				},
+				ConditionExpression:       expr.Condition(),
+				UpdateExpression:          expr.Update(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+			}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: rowItem}},
+		},
+	})
+	if err != nil {
+		return mapProjectTransactionCanceledError(err, projectID, "project", "update project stage")
 	}
 	return nil
 }

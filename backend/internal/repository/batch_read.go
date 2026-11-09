@@ -190,7 +190,7 @@ func (r *DynamoDBRepository) BatchGetAccountRows(ctx context.Context, keys []Acc
 // ProjectListRowFields are the only attributes BatchGetProjectListRows reads:
 // row identity, the ProjectSummary fields and the canonical account links.
 // Description and other unbounded fields are never transferred.
-var ProjectListRowFields = []string{"PK", "SK", "entityType", "projectId", "name", "stage", "sfdcOpptyId", "ownerUserId", "accountIds"}
+var ProjectListRowFields = []string{"PK", "SK", "entityType", "projectId", "name", "stage", "stageChangedAt", "sfdcOpptyId", "ownerUserId", "accountIds"}
 
 // BatchGetProjects is the batched equivalent of GetProject for canonical
 // PROJECT#/CONFIG rows. Missing projects are absent from the result.
