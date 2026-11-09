@@ -38,9 +38,8 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 
 | Command | Contract |
 |---|---|
-| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?}, can_switch_input (switch_recording_input exists) |
+| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
 | list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
-| switch_recording_input | input_device_uid?; switches the running recording's microphone and returns the new input; refuses a device that cannot run at the WAV rate (ADR-061) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
@@ -114,8 +113,7 @@ ACL for every command called from the remote SPA: each command must be listed in
 - The Zoom/Meet mute gate (`zoom_mute.rs`, `meet_mute.rs`) reads the meeting
   UI through Accessibility off the IOProc thread and only flips an atomic the
   IOProc reads; the gate silences only while the followed meeting shows the user muted and reopens when that meeting ends; Meet never logs labels or URLs; never call AX or
-  log from the IOProc. A microphone switch holds the backend's resource lock
-  across its Core Audio calls, never the recorder lock.
+  log from the IOProc.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
   within its deadline, recording or not.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;

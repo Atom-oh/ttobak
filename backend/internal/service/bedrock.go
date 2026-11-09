@@ -2361,6 +2361,36 @@ Rules:
 	return validated, nil
 }
 
+// MatchNewsToMeeting asks Haiku which candidate news articles the meeting
+// summary discusses. Summary and news go in as bounded, JSON-quoted data
+// blocks that the system prompt marks untrusted. The result is a proposal
+// only; callers must filter it through AcceptNewsMatches.
+func (s *BedrockService) MatchNewsToMeeting(ctx context.Context, summary string, candidates []model.CrawledDocument) ([]NewsMeetingMatch, error) {
+	if strings.TrimSpace(summary) == "" || len(candidates) == 0 {
+		return []NewsMeetingMatch{}, nil
+	}
+	if len(candidates) > maxNewsMatchCandidates {
+		candidates = candidates[:maxNewsMatchCandidates]
+	}
+	userPrompt, err := buildNewsMatchPrompt(summary, candidates)
+	if err != nil {
+		return nil, err
+	}
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        512,
+		System:           newsMatchSystemPrompt,
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: userPrompt}}},
+		},
+	}
+	response, err := s.invokeClaudeModelWithID(ctx, request, ClaudeHaikuModelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to match news: %w", err)
+	}
+	return parseNewsMatchResponse(response)
+}
+
 // ExtractSentiment classifies overall meeting tone using Claude Haiku.
 // Returns positive, neutral or negative, or an analysis error.
 // Missing source and invalid output return their sentinels.

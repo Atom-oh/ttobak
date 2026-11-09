@@ -3,15 +3,18 @@
 //! Meet keeps the microphone open while muted, so Core Audio cannot tell.
 //! The state comes from the page's own toggle through the Accessibility API:
 //! Meet labels it "Turn on microphone" while the user is muted and "Turn off
-//! microphone" while unmuted. A toggle-less page counts as left only for the
-//! call last seen with a toggle; other toggle-less pages (an unlisted
-//! language, the landing page or an earlier call) are not evidence. Only the
+//! microphone" while unmuted. Only the followed call's page showing Meet's
+//! post-call screen ("Rejoin", "Return to home screen") counts as left; a page
+//! without the toggle is otherwise unknown and keeps the last state. Pages of
+//! other calls (the landing page or an earlier call) are not evidence. Once a
+//! second call has shown a toggle (in the same read or later), no page is
+//! evidence the user left. Only the
 //! web area of a `meet.google.com` page in a browser instance using audio is
-//! read. An unreadable page (e.g. another tab in front) keeps the last state. Once a
-//! recording has followed Meet, leaving the call keeps the microphone silent,
-//! as with Zoom; a recording that never saw a toggle records it as before.
-//! Like detection, the left page must be read for 3 s before the microphone
-//! is silenced. Rules are pure and unit tested.
+//! read. An unreadable page (e.g. another tab in front) keeps the last state.
+//! Leaving the followed call, read for 3 s, reopens the microphone, as with
+//! Zoom; a wrong verdict then records the user rather than dropping their
+//! voice. A recording that never saw a toggle records the microphone. Rules
+//! are pure and unit tested.
 
 use crate::zoom_mute::{MicState, Silence};
 
@@ -19,6 +22,15 @@ use crate::zoom_mute::{MicState, Silence};
 const MUTED_LABELS: &[&str] = &["turn on microphone", "마이크 켜기"];
 /// Labels shown while unmuted (the button turns the microphone off).
 const UNMUTED_LABELS: &[&str] = &["turn off microphone", "마이크 끄기"];
+/// Labels on Meet's post-call screen: a positive sign the user left. The Korean forms are
+/// unverified; a missed label only falls back to the audio grace.
+const LEFT_LABELS: &[&str] = &[
+    "rejoin",
+    "return to home screen",
+    "다시 참여",
+    "다시 참여하기",
+    "홈 화면으로 돌아가기",
+];
 
 /// Lowercases, collapses spaces and drops a trailing shortcut hint such as
 /// "(⌘ + d)".
@@ -35,20 +47,24 @@ pub fn normalize(label: &str) -> String {
         .to_lowercase()
 }
 
-/// Classifies the button labels of one readable Meet page.
+/// Classifies the button labels of one readable Meet page. Without the toggle,
+/// only the post-call screen's labels count as leaving; anything else is unknown.
 pub fn classify<'a>(labels: impl IntoIterator<Item = &'a str>) -> MicState {
-    let (mut muted, mut unmuted) = (false, false);
+    let (mut muted, mut unmuted, mut left) = (false, false, false);
     for label in labels {
         let l = normalize(label);
         muted |= MUTED_LABELS.contains(&l.as_str());
         unmuted |= UNMUTED_LABELS.contains(&l.as_str());
+        left |= LEFT_LABELS.contains(&l.as_str());
     }
     match (muted, unmuted) {
         (true, false) => MicState::Muted,
         (false, true) => MicState::Unmuted,
         // Both at once is not a single toggle: record the microphone.
         (true, true) => MicState::Unknown,
-        (false, false) => MicState::NoMeeting,
+        (false, false) if left => MicState::NoMeeting,
+        // A toolbar hidden in the call (e.g. behind a dialog) is not a left call.
+        (false, false) => MicState::Unknown,
     }
 }
 
@@ -79,18 +95,45 @@ pub enum PageRead {
 }
 
 /// The Meet call this caller last saw with a toggle. Only that call's
-/// page, read again without a toggle, is evidence the user left.
+/// page, read again without a toggle, is evidence the user left. Once a
+/// second call has shown a toggle, no page is evidence the user left.
 #[derive(Debug, Default)]
 pub struct Call {
     last: Option<String>,
+    /// Distinct calls seen with a toggle; past two the exact count is moot.
+    calls: usize,
+    seen: Vec<String>,
 }
 
+/// Seen call keys kept per `Call`.
+const MAX_SEEN_CALLS: usize = 8;
+
 impl Call {
+    fn see(&mut self, key: &str) {
+        if self.seen.iter().any(|k| k == key) {
+            return;
+        }
+        if self.seen.len() < MAX_SEEN_CALLS {
+            self.seen.push(key.to_owned());
+        }
+        // Counted even past the cap: only "more than one" matters.
+        self.calls = self.calls.saturating_add(1);
+    }
+
     /// Combines every Meet page read: an unmuted page wins, then a muted one.
     /// A page that could not be read may still hold the call. No page at all
     /// is unknown.
     pub fn judge(&mut self, pages: impl IntoIterator<Item = PageRead>) -> MicState {
         let pages: Vec<PageRead> = pages.into_iter().collect();
+        // Every page showing a toggle is a call, even one that does not win:
+        // two calls seen in one read disable left evidence like two in turn.
+        for p in &pages {
+            if let PageRead::Page { key, state } = p {
+                if matches!(state, MicState::Muted | MicState::Unmuted) {
+                    self.see(key);
+                }
+            }
+        }
         for want in [MicState::Unmuted, MicState::Muted] {
             let key = pages.iter().find_map(|p| match p {
                 PageRead::Page { key, state } if *state == want => Some(key.clone()),
@@ -106,6 +149,11 @@ impl Call {
             PageRead::Unread => true,
         });
         if unknown {
+            return MicState::Unknown;
+        }
+        if self.calls > 1 {
+            // With more than one call seen, a left page may not be the tracked call: fall back
+            // to the audio grace.
             return MicState::Unknown;
         }
         let left = pages.iter().any(|p| match p {
@@ -124,7 +172,7 @@ impl Call {
 }
 
 /// Turns Meet states into the microphone gate. The followed call's left page
-/// must hold for `MEET_LEFT_CONFIRM_MS`, as detection does.
+/// must hold for `MEET_LEFT_CONFIRM_MS` before the microphone reopens.
 #[derive(Debug, Default)]
 pub struct Hold {
     silence: Silence,
@@ -147,7 +195,8 @@ impl Hold {
             }
             MicState::NoMeeting if self.followed => {
                 if self.left.observe(now_ms, true) {
-                    self.silence = Silence::MeetingEnded;
+                    self.silence = Silence::Open;
+                    self.followed = false;
                 }
             }
             // An unreadable read between two left reads restarts the window.
@@ -298,8 +347,18 @@ mod tests {
     fn a_page_without_the_toggle_has_left_the_call() {
         assert_eq!(classify(["", "Rejoin"]), MicState::NoMeeting);
         // A remote participant action is not the local toggle.
-        assert_eq!(classify(["Mute Alice's microphone"]), MicState::NoMeeting);
+        assert_eq!(classify(["Mute Alice's microphone"]), MicState::Unknown);
         assert_eq!(classify(["마이크 켜기", "마이크 끄기"]), MicState::Unknown);
+    }
+
+    #[test]
+    fn a_hidden_toolbar_is_not_a_left_call() {
+        assert_eq!(classify(["Chat with everyone", "Close"]), MicState::Unknown);
+        assert_eq!(classify(["Return to home screen"]), MicState::NoMeeting);
+        assert_eq!(
+            classify(["돌아가기", "홈 화면으로 돌아가기"]),
+            MicState::NoMeeting
+        );
     }
 
     fn page(key: &str, state: MicState) -> PageRead {
@@ -320,11 +379,8 @@ mod tests {
             c.judge([page("a", MicState::Muted), page("b", MicState::NoMeeting)]),
             MicState::Muted
         );
-        // "a" was last seen with a toggle, so its toggle-less page has left.
-        assert_eq!(
-            c.judge([page("a", MicState::NoMeeting)]),
-            MicState::NoMeeting
-        );
+        // Two calls have shown a toggle, so no page is evidence of leaving.
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
         assert_eq!(c.judge([]), MicState::Unknown);
     }
 
@@ -355,6 +411,66 @@ mod tests {
     }
 
     #[test]
+    fn two_calls_in_one_read_both_count() {
+        // A and B both unmuted in one read; B's tab then goes to the background
+        // (no read) while A shows its post-call screen. B may still be live.
+        let mut c = Call::default();
+        assert_eq!(
+            c.judge([page("a", MicState::Unmuted), page("b", MicState::Unmuted)]),
+            MicState::Unmuted
+        );
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+
+        // Likewise when the second call is muted and does not win.
+        let mut c = Call::default();
+        assert_eq!(
+            c.judge([page("a", MicState::Unmuted), page("b", MicState::Muted)]),
+            MicState::Unmuted
+        );
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+        assert_eq!(c.judge([page("b", MicState::NoMeeting)]), MicState::Unknown);
+    }
+
+    #[test]
+    fn two_calls_in_one_read_keep_a_retained_mute() {
+        use crate::meeting::MEET_LEFT_CONFIRM_MS;
+
+        // Muted in both calls; A's departure page must not stop following B.
+        let mut h = Hold::default();
+        let mut c = Call::default();
+        let both = [page("a", MicState::Muted), page("b", MicState::Muted)];
+        assert_eq!(h.observe(0, c.judge(both)), Silence::Muted);
+        for t in [0, MEET_LEFT_CONFIRM_MS, 2 * MEET_LEFT_CONFIRM_MS] {
+            assert_eq!(
+                h.observe(t + 300, c.judge([page("a", MicState::NoMeeting)])),
+                Silence::Muted
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_call_is_counted_once() {
+        let mut c = Call::default();
+        assert_eq!(
+            c.judge([page("a", MicState::Unmuted), page("a", MicState::Muted)]),
+            MicState::Unmuted
+        );
+        assert_eq!(
+            c.judge([page("a", MicState::NoMeeting)]),
+            MicState::NoMeeting
+        );
+    }
+
+    #[test]
+    fn a_second_call_disables_left_evidence() {
+        let mut c = Call::default();
+        assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);
+        assert_eq!(c.judge([page("b", MicState::Muted)]), MicState::Muted);
+        assert_eq!(c.judge([page("b", MicState::NoMeeting)]), MicState::Unknown);
+        assert_eq!(c.judge([page("a", MicState::NoMeeting)]), MicState::Unknown);
+    }
+
+    #[test]
     fn an_unread_entry_keeps_the_followed_call_open() {
         let mut c = Call::default();
         assert_eq!(c.judge([page("a", MicState::Muted)]), MicState::Muted);
@@ -381,19 +497,19 @@ mod tests {
     }
 
     #[test]
-    fn leaving_a_followed_call_keeps_the_microphone_silent() {
+    fn leaving_a_followed_call_reopens_the_microphone() {
         use crate::meeting::MEET_LEFT_CONFIRM_MS;
 
         let mut h = Hold::default();
-        assert_eq!(h.observe(0, MicState::Unmuted), Silence::Open);
-        assert_eq!(h.observe(0, MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(0, MicState::Muted), Silence::Muted);
+        assert_eq!(h.observe(0, MicState::NoMeeting), Silence::Muted);
         assert_eq!(
             h.observe(MEET_LEFT_CONFIRM_MS - 1, MicState::NoMeeting),
-            Silence::Open
+            Silence::Muted
         );
         assert_eq!(
             h.observe(MEET_LEFT_CONFIRM_MS, MicState::NoMeeting),
-            Silence::MeetingEnded
+            Silence::Open
         );
         // Rejoining restores following.
         assert_eq!(
@@ -409,10 +525,10 @@ mod tests {
     #[test]
     fn a_reloading_page_does_not_end_the_call() {
         let mut h = Hold::default();
-        assert_eq!(h.observe(0, MicState::Unmuted), Silence::Open);
-        assert_eq!(h.observe(100, MicState::NoMeeting), Silence::Open);
-        assert_eq!(h.observe(1_000, MicState::Unknown), Silence::Open);
-        assert_eq!(h.observe(3_200, MicState::NoMeeting), Silence::Open);
+        assert_eq!(h.observe(0, MicState::Muted), Silence::Muted);
+        assert_eq!(h.observe(100, MicState::NoMeeting), Silence::Muted);
+        assert_eq!(h.observe(1_000, MicState::Unknown), Silence::Muted);
+        assert_eq!(h.observe(3_200, MicState::NoMeeting), Silence::Muted);
         assert_eq!(h.observe(3_500, MicState::Unmuted), Silence::Open);
     }
 
@@ -427,7 +543,7 @@ mod tests {
     fn an_incomplete_read_is_neither_unmuted_nor_a_left_call() {
         assert_eq!(classify_read(Vec::<&str>::new(), false), MicState::Unknown);
         assert_eq!(classify_read(["Leave call"], false), MicState::Unknown);
-        assert_eq!(classify_read(Vec::<&str>::new(), true), MicState::NoMeeting);
+        assert_eq!(classify_read(Vec::<&str>::new(), true), MicState::Unknown);
         assert_eq!(classify_read(["마이크 끄기"], true), MicState::Unmuted);
         let mut c = Call::default();
         assert_eq!(c.judge([page("a", MicState::Unmuted)]), MicState::Unmuted);

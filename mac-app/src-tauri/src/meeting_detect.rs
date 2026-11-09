@@ -126,13 +126,6 @@ pub fn start(app: AppHandle) {
 fn watch(app: AppHandle, state: Arc<MeetingState>) {
     let epoch = Instant::now();
     let mut probe = mac::Probe::default();
-    // Browser instances last seen using audio: a Meet page that has left the
-    // call is read there after the browser releases its audio.
-    let mut meet_pids: Vec<i32> = Vec::new();
-    let mut meet_left = crate::meeting::LeftCall::default();
-    let mut meet_call = crate::meet_mute::Call::default();
-    let mut last_meet_state: Option<crate::zoom_mute::MicState> = None;
-    let mut ended_logged = false;
     loop {
         if !state.enabled.load(Ordering::Relaxed) {
             std::thread::sleep(IDLE_POLL);
@@ -147,79 +140,7 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
             .snapshot()
             .recording;
         let now_ms = epoch.elapsed().as_millis() as u64;
-        // Zoom's own UI ends its meeting at once (window closed or Zoom quit)
-        // instead of waiting for its audio to stay silent for the grace period.
-        let zoom = crate::meeting::Source {
-            kind: crate::meeting::MeetingKind::Zoom,
-            browser: None,
-        };
-        let zoom_involved = sources.contains(&zoom) || state.detector.lock().tracks(&zoom);
-        let mut ended: Vec<String> = if zoom_involved
-            && crate::zoom_mute::meeting_over(crate::zoom_mute::ProcessSources {
-                process_pid: crate::audio::macos::process_pid,
-                browser_pids: capturing_browser_pids,
-            }) {
-            vec![zoom.key()]
-        } else {
-            Vec::new()
-        };
-        // Likewise a Meet page that shows it left the call (Accessibility),
-        // instead of waiting for the browser's audio grace period. Like the
-        // Zoom end, it keeps filtering the source while the page stays left,
-        // so audio the browser still holds does not resume the meeting.
-        let is_meet = |s: &crate::meeting::Source| {
-            s.kind == crate::meeting::MeetingKind::GoogleMeet && s.browser.is_some()
-        };
-        let mut meet_sources: Vec<crate::meeting::Source> =
-            sources.iter().copied().filter(|s| is_meet(s)).collect();
-        if let Some(t) = state
-            .detector
-            .lock()
-            .tracked_source()
-            .filter(|s| is_meet(s))
-        {
-            if !meet_sources.contains(&t) {
-                meet_sources.push(t);
-            }
-        }
-        if meet_sources.is_empty() {
-            meet_left = crate::meeting::LeftCall::default();
-            meet_call = crate::meet_mute::Call::default();
-            last_meet_state = None;
-        } else {
-            let capturing = capturing_browser_pids();
-            if !capturing.is_empty() {
-                meet_pids = capturing;
-            }
-            let meet_state = crate::meet_mute::current_state(&meet_pids, &mut meet_call);
-            if last_meet_state != Some(meet_state) {
-                log::info!(
-                    "Meet page state: {meet_state:?} ({} browser instance(s))",
-                    meet_pids.len()
-                );
-                last_meet_state = Some(meet_state);
-            }
-            let left = meet_state == crate::zoom_mute::MicState::NoMeeting;
-            if meet_left.observe(now_ms, left) {
-                if !ended_logged {
-                    log::info!("Meet page left the call; ending without the audio grace");
-                    ended_logged = true;
-                }
-                // The evidence is read from Chromium instances only.
-                ended.extend(
-                    meet_sources
-                        .iter()
-                        .filter(|s| s.browser != Some(crate::meeting::Browser::Safari))
-                        .map(|s| s.key()),
-                );
-            } else {
-                ended_logged = false;
-            }
-        }
-        let events = state
-            .detector
-            .lock()
-            .observe_with_ended(now_ms, &sources, recording, &ended);
+        let events = state.detector.lock().observe(now_ms, &sources, recording);
         for event in events {
             announce(&app, &state, &event);
         }
@@ -416,7 +337,7 @@ pub async fn meeting_detection_respond(
 /// Google Meet mute follower reads only these (Safari's shared WebKit process
 /// has no resolvable instance).
 #[cfg(target_os = "macos")]
-pub use mac::{capturing_browser_pids, other_output_running};
+pub use mac::{capturing_browser_pids, other_output_running, running_app_pid};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -720,6 +641,44 @@ mod mac {
     extern "C" {
         fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, size: i32) -> i32;
         fn proc_pidpath(pid: i32, buffer: *mut c_void, size: u32) -> i32;
+        fn proc_listallpids(buffer: *mut c_void, buffersize: i32) -> i32;
+    }
+
+    /// PIDs of all running processes, `None` when the list could not be read.
+    fn all_pids() -> Option<Vec<i32>> {
+        let estimate = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+        if estimate <= 0 {
+            return None;
+        }
+        let mut capacity = estimate as usize + 64;
+        for _ in 0..4 {
+            let mut pids = vec![0i32; capacity];
+            let bytes = (capacity * std::mem::size_of::<i32>()) as i32;
+            let n = unsafe { proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+            if n <= 0 {
+                return None;
+            }
+            let n = n as usize;
+            if n < capacity {
+                pids.truncate(n);
+                return Some(pids);
+            }
+            // The list may have been cut short: retry with more room.
+            capacity *= 2;
+        }
+        None
+    }
+
+    /// PID of a running process (other than this app) whose executable path
+    /// satisfies `is_main`. `Err` when the process list could not be read;
+    /// absence is only reported from a successful read.
+    pub fn running_app_pid(is_main: fn(&str) -> bool) -> Result<Option<i32>, ()> {
+        let own_pid = std::process::id() as i32;
+        let pids = all_pids().ok_or(())?;
+        Ok(pids
+            .into_iter()
+            .filter(|&pid| pid > 0 && pid != own_pid)
+            .find(|&pid| executable_path(pid).is_some_and(|path| is_main(&path))))
     }
 
     /// `proc_bsdinfo`'s `pbi_ppid` follows four `u32` fields.
@@ -852,5 +811,17 @@ mod mac {
             CFString::wrap_under_create_rule(raw as core_foundation::string::CFStringRef)
         };
         Some(id.to_string()).filter(|s| !s.is_empty())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
+    /// The running-process scan reads other processes and never matches this one.
+    #[test]
+    fn running_app_pid_scans_running_processes() {
+        let own = std::process::id() as i32;
+        let any = super::running_app_pid(|path| path.starts_with('/'));
+        assert!(matches!(any, Ok(Some(pid)) if pid != own));
+        assert_eq!(super::running_app_pid(|_| false), Ok(None));
     }
 }

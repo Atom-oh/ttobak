@@ -163,6 +163,13 @@ pub fn is_app_main_executable(path: &str) -> bool {
         && !path.contains("/Contents/Helpers/")
 }
 
+/// Zoom's main executable (`…/zoom.us.app/Contents/MacOS/zoom.us`), used to
+/// find Zoom among running processes when its main process has no Core Audio
+/// object.
+pub fn is_zoom_main_executable(path: &str) -> bool {
+    is_app_main_executable(path) && path.ends_with("/zoom.us.app/Contents/MacOS/zoom.us")
+}
+
 /// Classifies a Core Audio process bundle ID; `None` is not a meeting app.
 pub fn classify_bundle(bundle_id: &str) -> Option<MicUser> {
     if bundle_id == WEBKIT_GPU {
@@ -221,7 +228,7 @@ pub fn classify_meeting_url(url: &str) -> Option<MeetingKind> {
 }
 
 /// A Meet page that has left the call must be read this long before the
-/// meeting ends without the audio grace (a reloading page briefly shows no
+/// microphone gate stops following it (a reloading page briefly shows no
 /// toolbar).
 pub const MEET_LEFT_CONFIRM_MS: u64 = 3_000;
 
@@ -305,28 +312,8 @@ impl Detector {
         self.active.as_ref()
     }
 
-    #[cfg(test)]
     pub fn observe(&mut self, now_ms: u64, sources: &[Source], recording: bool) -> Vec<Event> {
-        self.observe_with_ended(now_ms, sources, recording, &[])
-    }
-
-    /// Like `observe`; `ended` lists source keys whose meeting the app itself
-    /// confirms is over (e.g. Zoom's meeting window closed). Those end at
-    /// once, without waiting out `END_GRACE_MS`.
-    pub fn observe_with_ended(
-        &mut self,
-        now_ms: u64,
-        sources: &[Source],
-        recording: bool,
-        ended: &[String],
-    ) -> Vec<Event> {
         let mut events = Vec::new();
-        let sources: Vec<Source> = sources
-            .iter()
-            .copied()
-            .filter(|s| !ended.contains(&s.key()))
-            .collect();
-        let sources = &sources[..];
         let present: HashSet<String> = sources.iter().map(|s| s.key()).collect();
         for key in &present {
             self.first_seen.entry(key.clone()).or_insert(now_ms);
@@ -337,8 +324,7 @@ impl Detector {
             .last_seen
             .iter()
             .filter(|(k, last)| {
-                !present.contains(*k)
-                    && (ended.contains(*k) || now_ms.saturating_sub(**last) >= END_GRACE_MS)
+                !present.contains(*k) && now_ms.saturating_sub(**last) >= END_GRACE_MS
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -430,16 +416,6 @@ impl Detector {
         self.present.contains(&source.key())
     }
 
-    /// Whether this source is the tracked meeting (announced or silent).
-    pub fn tracks(&self, source: &Source) -> bool {
-        self.active.as_ref().is_some_and(|d| d.source == *source)
-    }
-
-    /// The tracked meeting's source (announced or silent).
-    pub fn tracked_source(&self) -> Option<Source> {
-        self.active.as_ref().map(|d| d.source)
-    }
-
     /// The announced meeting, if any (a silently tracked one is not offered).
     pub fn announced(&self) -> Option<&Detection> {
         self.active.as_ref().filter(|_| !self.silent)
@@ -459,7 +435,7 @@ mod left_call_tests {
     use super::*;
 
     #[test]
-    fn a_left_page_ends_the_meeting_after_the_confirm_window() {
+    fn a_left_page_holds_for_the_confirm_window() {
         let mut l = LeftCall::default();
         assert!(!l.observe(0, true));
         assert!(!l.observe(MEET_LEFT_CONFIRM_MS - 1, true));
@@ -505,22 +481,26 @@ mod main_executable_tests {
 }
 
 #[cfg(test)]
-mod confirmed_end_tests {
+mod zoom_presence_tests {
     use super::*;
 
     #[test]
-    fn a_confirmed_end_skips_the_grace_period() {
-        let zoom = Source {
-            kind: MeetingKind::Zoom,
-            browser: None,
-        };
-        let mut d = Detector::default();
-        d.observe(0, &[zoom], true);
-        d.observe(SUSTAIN_MS, &[zoom], true);
-        assert!(d.active().is_some());
-        // Zoom's audio still runs, but its meeting window is gone.
-        let events = d.observe_with_ended(SUSTAIN_MS + 1_000, &[zoom], true, &[zoom.key()]);
-        assert!(matches!(&events[..], [Event::Ended(det)] if det.source == zoom));
+    fn zoom_main_executable_is_recognized_by_path() {
+        assert!(is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/MacOS/zoom.us"
+        ));
+        assert!(is_zoom_main_executable(
+            "/Users/me/Applications/zoom.us.app/Contents/MacOS/zoom.us"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/Frameworks/CptHost.app/Contents/MacOS/CptHost"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/zoom.us.app/Contents/MacOS/zoom.us.helper"
+        ));
+        assert!(!is_zoom_main_executable(
+            "/Applications/Other.app/Contents/MacOS/zoom.us"
+        ));
     }
 }
 

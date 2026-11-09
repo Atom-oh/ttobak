@@ -41,11 +41,17 @@ func TestListMeetings_AccountQueryKeepsPaginationAndCallerScope(t *testing.T) {
 					body := `{"Items":[]}`
 					if query.IndexName == "GSI1" {
 						queryCount++
-						var accountName, accountValue, callerValue string
+						var accountName, categoryName, accountValue, callerValue string
 						for alias, name := range query.ExpressionAttributeNames {
 							if name == "accountId" {
 								accountName = alias
 							}
+							if name == "meetingCategory" {
+								categoryName = alias
+							}
+						}
+						if categoryName == "" || !strings.Contains(query.ProjectionExpression, categoryName) {
+							t.Error("list projection must carry meetingCategory")
 						}
 						for alias, value := range query.ExpressionAttributeValues {
 							if value["S"] == "acc-a" {

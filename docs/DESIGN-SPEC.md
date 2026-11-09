@@ -32,7 +32,9 @@ After adding icons, run `npm run icons:update` in `frontend` to refresh the subs
 upstream text catalog, manifest and public Apache-2.0 license. Production
 builds run `icons:check` offline to check source coverage and asset integrity.
 The scanner includes known icon names in source literals, including helpers and
-lookup tables; constructed names need explicit literals. The license ships at
+lookup tables; constructed names need explicit literals. Non-icon wire values
+that equal an icon name (currently `event`) are listed in the scanner's
+`NON_ICON_LITERALS` allowlist. The license ships at
 `/licenses/material-symbols.txt`.
 
 `useTheme` owns interactive theme toggling and watches the root class. Its fixed
@@ -48,9 +50,9 @@ use CSS variants.
 |---|---|
 | Authentication | auth/LoginForm, ForgotPasswordForm, AuthProvider: login, NEW_PASSWORD_REQUIRED, reset; no self-signup |
 | App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route. Menu groups come from `lib/navigation.ts`: Assistant on top; Work (Meetings, Accounts, Projects, Docs); Knowledge (Library `/kb`, Deep Research `/insights?tab=research`, News & Updates `/insights`, Custom Dictionary `/dictionary`); Customer Analytics (Billing); Settings. Mobile keeps five bottom tabs; the Knowledge tab opens the grouped menu sheet. `/files` redirects to `/kb?source=meeting` (Library's meeting-attachment source). layout/BillingInsightButton is the Customer Analytics › Billing item (sidebar, menu sheet and profile menu, only with runtime `billingInsight: true`): it opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure. With runtime `billingService: true` the same entry is a plain link to `/billing`, which hosts the Billing dashboard in a same-origin iframe (`/billing-app/index.html`, `upload.html` for `?view=upload`) and gives it tokens through `window.ttobakBilling` (`lib/billingBridge.ts`) |
-| Meeting list | MeetingList: owned/shared/team streams, search, account selection and opaque pagination |
+| Meeting list | MeetingList: owned/shared/team streams, search, account selection, category filter and opaque pagination. The grouped view shows account and unassigned groups in first-seen order, then one Internal section with Team / 1:1 / Training / Other subgroups (`lib/meetingCategory.ts`) |
 | Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner, record/RecordingLinkControls: customer and project links stay editable during browser and native recording; they apply to an existing draft immediately, otherwise when the meeting is created at save (`lib/recordingLinks.ts`). Keeping a recording on the device stores its pending project additions and removals as deltas; a restore applies them to the meeting's current `projectIds` (links made elsewhere meanwhile stay), runs them before upload and then clears them from the copy. A project whose link or unlink request is still in flight is saved as possibly changed. After an audio upload completes (recording or file), the page returns home with an uploaded-meeting reconciliation hint; transcription and notes continue on the server. Meeting cards badge `transcribing`/`summarizing` and `error`. The home list refreshes the current filtered first page every 15 s while a listed meeting is processing or the uploaded meeting has not appeared with a post-recording status, only while visible and for at most 30 minutes (`lib/meetingStatus.ts`). An initially missing uploaded meeting is admitted when it appears; a stale recording status is shown as transcribing while reconciling. Processing meetings on later loaded pages still need manual reload. |
-| Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links |
+| Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links. AccountSection gives the creator a meeting-category control; an internal meeting hides account linking, and Internal is disabled while an account is linked |
 | Markdown | MarkdownRenderer, MermaidBlock, CodeBlock, DataTable, DiagramLightbox |
 | Documents | Personal document hub, editor/preview, share dialogs and public document viewer |
 | Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents |
@@ -303,6 +305,30 @@ cursor stays valid), with create, edit and delete. Attendees come from the
 account's contacts or free text; times are entered in the viewer's zone and sent
 as UTC RFC 3339; limits mirror the API (`src/lib/accountEvents.ts`), and deletes
 confirm with the shared dialog. Inherited readers do not see the tab.
+
+For direct members the general tab starts with **AWS signals** and then the
+**engagement flow**, above members and contacts (`components/account/`). Signals
+show the account's recent news (with a new-opportunity-candidate badge, linked
+opportunities and unlink) or an explicit no-source / no-recent-news state with
+account news-source management, plus opportunity stage, days in stage
+("unknown" when absent), stall reasons and recent need/opportunity/risk
+insights. The flow shows activity → response → opportunity → result per
+opportunity, stalled results in the error tone, auto links with an "auto" badge
+whose hover title is the evidence, unlink on stored event links, and an
+unassigned row whose events offer "link to opportunity". A collapsed
+**link management** panel below the flow pages every stored link (manual and
+auto, auto evidence as a plain-text title) with unlink; it is the one place to
+remove tech, event, older news and auto news→meeting links. The link action also
+appears on Events tab rows, which show their existing project links with unlink
+(from one bounded links scan, not per-row calls), and on News & Updates document
+cards (choosing a direct account first). Server truncation flags show a partial-links notice. Evidence,
+needs and stall details render as plain text. Every link or news-source mutation
+reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A collapsed
+**relationship graph** renders the graph route client-side with Mermaid under
+`securityLevel: 'strict'`; labels are stripped of directives and backticks. The
+**KB** tab pages each kind (upload, meeting, news, tech) with the real index state,
+the uploader (a departed member shows as a former member), download for direct
+members and untag for the uploader or an owner.
 
 Direct members manage a shared customer contact list on the Account's general
 tab. CSV and XLSX imports parse locally, map Remember and common Korean/English

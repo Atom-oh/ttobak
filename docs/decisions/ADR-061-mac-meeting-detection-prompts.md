@@ -83,13 +83,8 @@ without a user confirmation.
 - A recording uses the microphone the user picks in System Audio mode, or by
   default the input device the meeting app is capturing from (process
   `Devices`, input scope), else the system default. This keeps multi-microphone
-  and clamshell setups aligned with what Zoom hears. `switch_recording_input`
-  changes the microphone during a recording: the tap, WAV and worker continue
-  while only the aggregate is rebuilt; the capture gap needs native measurement.
-  A device that cannot run at the recording's sample rate is refused. A failed
-  start attempts to restore the previous device. If restoration also fails,
-  capture stops: the switch returns an error saying so, later switches are
-  refused, and stop finalizes what was recorded with a warning.
+  and clamshell setups aligned with what Zoom hears. Switching the microphone
+  during a recording is not yet supported.
 - The recording follows Zoom's own mute, as Notion's meeting notes do
   (observed in Notion's shipped `mac_utils.node`: an Accessibility observer of
   Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
@@ -98,9 +93,9 @@ without a user confirmation.
   at zero gain while Zoom shows the user muted. When the followed meeting
   ends (Zoom quit, or neither the `zm.meeting.window.main` window nor an audio
   item remains) or stays unreadable for over 3 s, the microphone reopens: a
-  wrong end then records the user rather than dropping their voice. A failed
-  Core Audio process-list read is not evidence Zoom quit. A recording that
-  never saw a Zoom state records the microphone as before. Detection still
+  wrong end then records the user rather than dropping their voice. Zoom
+  counts as quit only as described under Consequences. A recording that never
+  saw a Zoom state records the microphone as before. Detection still
   ends a Zoom meeting only after the 20 s audio grace; ending it earlier on
   Zoom's own UI is deferred until it is verified on a Mac.
 - Google Meet keeps the microphone open while muted, so `meet_mute.rs` reads
@@ -143,16 +138,17 @@ without a user confirmation.
 `zoom_mute` and `meet_mute` were introduced as compiled public library modules
 without activating capture. This runtime supplies `ProcessSources` using the
 existing Core Audio process/browser discovery, calls `watch`, retains its handle
-and consumes the microphone flag. `meeting_over` uses the same injected discovery.
+and consumes the microphone flag.
 Native acceptance remains required before claiming that recording follows a
 meeting application's mute.
 
 When invoked, the watcher may request Accessibility access once per app launch.
 It emits `native-mic-muted` with `muted`, `app` and an optional `reason`
-(`muted`; `meeting_ended` is reserved and not emitted). Zoom labels come from its localization resources.
+(`muted`). Zoom labels come from its localization resources.
 Unreadable window identifiers are unknown, never a confirmed meeting end;
-after three seconds of unknown state the gate stops following and reopens the
-microphone.
+a followed meeting that ends, or stays unknown for three seconds (e.g. a long
+permission or inspection failure), reopens the microphone rather than keeping it
+silent. Detection ends meetings only after the 20 s audio grace.
 An observed Zoom silence reaches the microphone gate before synchronous browser
 inspection, so a slow Meet accessibility tree cannot delay that known decision.
 
@@ -163,7 +159,11 @@ children attribute fails (any Accessibility status other than success, no
 value or unsupported) or that reaches the node or depth bound is unknown, as is a search cut short before every
 window was read, and a lost Accessibility grant feeds unknown to the hold, so
 none of them clears a retained mute. A Zoom menu read that fails is unreadable,
-not an empty menu bar. Hidden-tab or departed-call holds are not proof of the
+not an empty menu bar. Zoom counts as quit only when neither Core Audio nor a
+successful running-process scan finds its main `us.zoom.xos` executable, since
+it may capture through `us.zoom.caphost`/`us.zoom.CptHost` alone. Every Meet
+call showing a toggle counts, including calls read together, so a departed page
+of one call never stops following another call that was seen. Hidden-tab or departed-call holds are not proof of the
 user's current intent. These limitations need native verification
 and remain separate from the compiled library's availability.
 

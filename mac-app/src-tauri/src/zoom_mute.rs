@@ -27,8 +27,24 @@ pub enum MicState {
 
 #[derive(Clone, Copy)]
 pub struct ProcessSources {
-    pub process_pid: fn(&str) -> Result<Option<i32>, ()>,
+    /// Zoom's main application process (see `resolve_zoom_pid`).
+    pub zoom_pid: fn() -> Result<Option<i32>, ()>,
     pub browser_pids: fn() -> Vec<i32>,
+}
+
+/// Zoom's main PID from Core Audio's process list, else from the running
+/// processes. Zoom may capture through a helper host (`us.zoom.caphost`,
+/// `us.zoom.CptHost`) while its main process has no Core Audio object, so
+/// that absence alone never means Zoom quit: only a successful scan of the
+/// running processes can report Zoom absent.
+pub(crate) fn resolve_zoom_pid(
+    core_audio: Result<Option<i32>, ()>,
+    running: impl FnOnce() -> Result<Option<i32>, ()>,
+) -> Result<Option<i32>, ()> {
+    match core_audio {
+        Ok(Some(pid)) => Ok(Some(pid)),
+        Ok(None) | Err(()) => running(),
+    }
 }
 
 pub fn classify_window_ids<'a>(identifiers: impl IntoIterator<Item = Option<&'a str>>) -> MicState {
@@ -40,7 +56,8 @@ pub fn classify_window_ids<'a>(identifiers: impl IntoIterator<Item = Option<&'a 
     MicState::NoMeeting
 }
 
-/// After this long without an explicit state the followed meeting is over.
+/// After this long without an explicit state the followed meeting is no longer
+/// followed and the microphone reopens.
 pub const UNKNOWN_RESET_MS: u64 = 3_000;
 
 /// Normalized menu titles: "Mute Audio" (shown while unmuted) and
@@ -103,10 +120,8 @@ pub fn classify<'a>(titles: impl IntoIterator<Item = &'a str>, labels: &Labels) 
 pub enum Silence {
     #[default]
     Open,
-    /// Zoom shows the user muted.
+    /// The followed meeting shows the user muted.
     Muted,
-    /// The followed Zoom meeting is gone.
-    MeetingEnded,
 }
 
 /// Turns observed states into the microphone gate.
@@ -129,19 +144,23 @@ impl Gate {
                 self.followed = true;
                 self.unknown_since = None;
             }
-            MicState::NoMeeting => {
-                if self.followed {
-                    self.silence = Silence::MeetingEnded;
-                }
-            }
+            // An ended meeting reopens the microphone: a wrong end then
+            // records the user rather than dropping their voice.
+            MicState::NoMeeting => self.reopen(),
             MicState::Unknown => {
                 let since = *self.unknown_since.get_or_insert(now_ms);
                 if self.followed && now_ms.saturating_sub(since) >= UNKNOWN_RESET_MS {
-                    self.silence = Silence::MeetingEnded;
+                    self.reopen();
                 }
             }
         }
         self.silence
+    }
+
+    fn reopen(&mut self) {
+        self.silence = Silence::Open;
+        self.followed = false;
+        self.unknown_since = None;
     }
 }
 
@@ -190,7 +209,9 @@ pub fn ax_read(status: i32, has_value: bool) -> AxRead {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{meeting_over, watch, Watch};
+pub(crate) use mac::zoom_pid;
+#[cfg(target_os = "macos")]
+pub use mac::{watch, Watch};
 
 /// Accessibility helpers shared with `meet_mute`.
 #[cfg(target_os = "macos")]
@@ -431,7 +452,7 @@ mod mac {
             return MicState::Unknown;
         }
         if !refreshed.is_some_and(|checked| checked.elapsed() < PID_REFRESH) {
-            match (sources.process_pid)(ZOOM_BUNDLE) {
+            match (sources.zoom_pid)() {
                 Ok(p) => {
                     *pid = p;
                     *refreshed = Some(Instant::now());
@@ -456,12 +477,12 @@ mod mac {
         }
     }
 
-    /// True when Zoom confirms its meeting is over (Accessibility granted and
-    /// Zoom quit, or no meeting window and no audio menu item). Used by
-    /// meeting detection to end a Zoom meeting without the audio grace period.
-    pub fn meeting_over(sources: ProcessSources) -> bool {
-        let (mut pid, mut refreshed) = (None, None);
-        current_state(&mut pid, &mut refreshed, sources) == MicState::NoMeeting
+    /// Zoom's main PID: Core Audio's object for `us.zoom.xos`, else the
+    /// running process whose executable is Zoom's main one.
+    pub(crate) fn zoom_pid() -> Result<Option<i32>, ()> {
+        super::resolve_zoom_pid(crate::audio::macos::process_pid(ZOOM_BUNDLE), || {
+            crate::meeting_detect::running_app_pid(crate::meeting::is_zoom_main_executable)
+        })
     }
 
     /// The running watcher; dropping it stops the thread.
@@ -480,7 +501,7 @@ mod mac {
     struct MuteEvent {
         muted: bool,
         app: &'static str,
-        /// `muted` or `meeting_ended` while muted.
+        /// `muted` while muted.
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<&'static str>,
     }
@@ -493,7 +514,7 @@ mod mac {
         sources: ProcessSources,
     ) -> (Watch, Option<String>) {
         let running = Arc::new(AtomicBool::new(true));
-        let zoom_running = matches!((sources.process_pid)(ZOOM_BUNDLE), Ok(Some(_)));
+        let zoom_running = matches!((sources.zoom_pid)(), Ok(Some(_)));
         let browser_running = !(sources.browser_pids)().is_empty();
         let warning = ((zoom_running || browser_running) && !request_trust()).then(|| {
             "Allow TTOBAK in System Settings > Privacy & Security > Accessibility so the \
@@ -569,7 +590,6 @@ mod mac {
                     let reason = match current.0 {
                         Silence::Open => None,
                         Silence::Muted => Some("muted"),
-                        Silence::MeetingEnded => Some("meeting_ended"),
                     };
                     let _ = app.emit(
                         "native-mic-muted",
@@ -612,6 +632,22 @@ mod mac_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_presence_does_not_rest_on_its_core_audio_object() {
+        // Core Audio finds the main process: no scan needed.
+        assert_eq!(
+            resolve_zoom_pid(Ok(Some(7)), || unreachable!()),
+            Ok(Some(7))
+        );
+        // Only a helper host has a Core Audio object: the running scan decides.
+        assert_eq!(resolve_zoom_pid(Ok(None), || Ok(Some(9))), Ok(Some(9)));
+        assert_eq!(resolve_zoom_pid(Ok(None), || Ok(None)), Ok(None));
+        assert_eq!(resolve_zoom_pid(Ok(None), || Err(())), Err(()));
+        // A failed Core Audio read is not absence either.
+        assert_eq!(resolve_zoom_pid(Err(()), || Ok(Some(9))), Ok(Some(9)));
+        assert_eq!(resolve_zoom_pid(Err(()), || Err(())), Err(()));
+    }
 
     fn labels() -> Labels {
         Labels::new(
@@ -671,24 +707,24 @@ mod tests {
     }
 
     #[test]
-    fn a_followed_meeting_that_ends_keeps_the_microphone_silent() {
+    fn a_followed_meeting_that_goes_unreadable_reopens_the_microphone() {
         let mut g = Gate::default();
-        assert_eq!(g.observe(0, MicState::Unmuted), Silence::Open);
-        assert_eq!(g.observe(300, MicState::Unknown), Silence::Open);
+        assert_eq!(g.observe(0, MicState::Muted), Silence::Muted);
+        assert_eq!(g.observe(300, MicState::Unknown), Silence::Muted);
         assert_eq!(
             g.observe(300 + UNKNOWN_RESET_MS, MicState::Unknown),
-            Silence::MeetingEnded
+            Silence::Open
         );
         // Rejoining restores following.
-        assert_eq!(g.observe(10_000, MicState::Unmuted), Silence::Open);
+        assert_eq!(g.observe(10_000, MicState::Muted), Silence::Muted);
     }
 
     #[test]
-    fn a_confirmed_meeting_end_silences_at_once() {
+    fn a_confirmed_meeting_end_reopens_the_microphone() {
         let mut g = Gate::default();
-        assert_eq!(g.observe(0, MicState::Unmuted), Silence::Open);
-        assert_eq!(g.observe(300, MicState::NoMeeting), Silence::MeetingEnded);
-        // Without a followed meeting, no meeting means nothing to follow.
+        assert_eq!(g.observe(0, MicState::Muted), Silence::Muted);
+        assert_eq!(g.observe(300, MicState::NoMeeting), Silence::Open);
+        assert_eq!(g.observe(600, MicState::Unknown), Silence::Open);
         let mut fresh = Gate::default();
         assert_eq!(fresh.observe(0, MicState::NoMeeting), Silence::Open);
     }
@@ -724,16 +760,14 @@ mod tests {
     fn zoom_silence_is_applied_before_browser_inspection() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        for silence in [Silence::Muted, Silence::MeetingEnded] {
-            let muted = AtomicBool::new(false);
-            let mut hold = crate::meet_mute::Hold::default();
-            let meet = observe_meet(silence, 0, true, &muted, &mut hold, || {
-                assert!(muted.load(Ordering::Relaxed));
-                MicState::Unmuted
-            });
-            assert_eq!(meet, Silence::Open);
+        let muted = AtomicBool::new(false);
+        let mut hold = crate::meet_mute::Hold::default();
+        let meet = observe_meet(Silence::Muted, 0, true, &muted, &mut hold, || {
             assert!(muted.load(Ordering::Relaxed));
-        }
+            MicState::Unmuted
+        });
+        assert_eq!(meet, Silence::Open);
+        assert!(muted.load(Ordering::Relaxed));
     }
 
     #[test]
