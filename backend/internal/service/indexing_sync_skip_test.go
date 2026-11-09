@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 // breakIndexMeeting makes the selected transcript a missing spill object:
@@ -132,5 +134,44 @@ func TestIndexSyncOnlyForStagedKeysOrUnconfirmedRemovals(t *testing.T) {
 				t.Fatal("unconfirmed removal never synced again")
 			}
 		})
+	}
+}
+
+// A detached member whose deferral deleted published projections in the same
+// tick must still get that tick's sync, or the provider keeps their vectors.
+func TestIndexDetachedConflictWithRemovalsStillSyncs(t *testing.T) {
+	s, repo, _, p, now := newIndexTest()
+	p.vectors = map[string]bool{}
+	key := addIndexMeeting(repo, "m", "notes")
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	finishIndex(t, s, p)
+	if repo.jobs[key.Hash()].State != model.IndexIndexed || len(p.vectors) == 0 {
+		t.Fatal("fixture did not index the first revision")
+	}
+	*now = now.Add(time.Minute)
+	repo.sources[key.Hash()].Fields["notes"] = "edited"
+	changes := 0
+	repo.beforeSave = func(job *model.IndexJob) {
+		if job.Resource == key && job.State == model.IndexPreparing {
+			changes++
+			repo.sources[key.Hash()].Fields["notes"] = fmt.Sprintf("edited again %d", changes)
+		}
+	}
+	before := len(p.tokens)
+	if _, err := s.Tick(context.Background()); err != nil && !errors.Is(err, ErrIndexChanged) && !errors.Is(err, repository.ErrConditionFailed) {
+		t.Fatal(err)
+	}
+	repo.beforeSave = nil
+	job := repo.jobs[key.Hash()]
+	if changes == 0 || job.State != model.IndexFailed || job.ErrorCode != "SOURCE_CHANGING" {
+		t.Fatalf("fixture did not defer a changing source: changes=%d job=%+v", changes, job)
+	}
+	if len(job.RemovedKeys) == 0 {
+		t.Fatal("deferral recorded no removal obligation")
+	}
+	if got := len(p.tokens) - before; got != 1 {
+		t.Fatalf("conflict tick started %d syncs, want 1 to purge deleted projections", got)
 	}
 }

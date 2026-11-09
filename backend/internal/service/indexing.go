@@ -160,8 +160,9 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		next.Batch = append([]model.IndexMember(nil), control.Batch...)
 		var failures error
 		// A full data-source sync is useful only when a member staged keys or
-		// still has a removal the provider must confirm. finish ignores every
-		// other member, so syncing an all-failed batch only rescans unchanged S3.
+		// still has a removal the provider must confirm, including removals a
+		// detached member's cleanup made in this same tick. Otherwise a sync
+		// only rescans unchanged S3.
 		needsSync := false
 		for i, member := range next.Batch {
 			if member.Detached {
@@ -177,6 +178,9 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 						return result, e
 					}
 					next.Batch[i] = model.IndexMember{Resource: member.Resource, Detached: true}
+					// Deferral deleted this job's published projections in this
+					// tick; its own sync must purge their provider vectors.
+					needsSync = needsSync || s.removalsPending(ctx, member.Resource)
 					result.Failed++
 					continue
 				}
@@ -191,6 +195,7 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 				}
 				if next.Batch[i].Detached {
 					result.Failed++
+					needsSync = needsSync || s.removalsPending(ctx, member.Resource)
 				} else {
 					failures = errors.Join(failures, e)
 				}
@@ -327,6 +332,17 @@ func (s *IndexingService) memberFailure(ctx context.Context, member *model.Index
 
 func permanentIndexSourceError(err error) bool {
 	return errors.Is(err, ErrIndexInvalid) || errors.Is(err, ErrIndexMissing)
+}
+
+// removalsPending reports whether the job still carries removal obligations
+// the provider has not confirmed. A read error or missing record counts as
+// pending so the batch syncs rather than leaving deleted projections indexed.
+func (s *IndexingService) removalsPending(ctx context.Context, key model.IndexResource) bool {
+	job, err := s.repo.GetIndexJob(ctx, key)
+	if err != nil || job == nil {
+		return true
+	}
+	return len(job.RemovedKeys) > 0
 }
 
 func (s *IndexingService) deferChangingSource(ctx context.Context, key model.IndexResource) error {
