@@ -133,6 +133,15 @@ no authorizer; its handler verifies the bearer share token. The two MCP discover
 GETs above are the only other unauthenticated routes. The broader edge
 `/api/public/*` bypass is not permission to register more public routes.
 
+The edge function embeds the production pool's public signing keys from
+`infra/assets/cognito-jwks.json` so a cold viewer-request environment (128 MB)
+verifies without a JWKS fetch. The seed applies only when its issuer equals the
+function's resolved issuer, ages out after the same one-hour cache TTL as a
+fetched JWKS, and a seed-decided miss or failed verification is retried once
+against the live JWKS. If the pool or its keys change, regenerate the asset from
+the issuer's `/.well-known/jwks.json` (keep only `alg, e, kid, kty, n, use`);
+until then the live fallback keeps tokens working at the cold-start cost.
+
 WebSocket QA uses the site's CloudFront `/ws` behavior, rewritten to `/production`.
 Caching is disabled; AllViewerExceptHostHeader forwards negotiation headers and
 the query token while API Gateway receives its own origin Host. `$connect` uses

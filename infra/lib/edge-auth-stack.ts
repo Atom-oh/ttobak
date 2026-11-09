@@ -75,15 +75,20 @@ const CONNECTOR_AUDIENCE = '${props.connectorAudience ?? ''}';
 const CONNECTOR_READ_SCOPE = CONNECTOR_AUDIENCE + '/read';
 const CONNECTOR_WRITE_SCOPE = CONNECTOR_AUDIENCE + '/write';
 
-// Public signing keys embedded at build time. Used only when they belong to
-// this function's issuer, so a cold environment verifies without a network
-// round trip; an unknown kid falls back to the live JWKS fetch below.
+// Public signing keys embedded at build time. When they belong to this
+// function's issuer they pre-populate the JWKS cache, so a cold environment
+// verifies without a network round trip. They then age out exactly like a
+// fetched JWKS (CACHE_TTL from module load), so a key the issuer withdraws
+// stops being accepted within the same bound as before. A seeded lookup that
+// misses the kid or fails verification is retried once against the live JWKS.
 const SEED_JWKS = ${JSON.stringify(seedJwks)};
 
 // Cache for JWKS
-let jwksCache = null;
-let jwksCacheTime = 0;
 const CACHE_TTL = 3600000; // 1 hour
+const seedApplies = SEED_JWKS.issuer === COGNITO_ISSUER;
+let jwksCache = seedApplies ? { keys: SEED_JWKS.keys } : null;
+let jwksCacheTime = seedApplies ? Date.now() : 0;
+let jwksFromSeed = seedApplies;
 
 // Base64URL decode
 function base64UrlDecode(str) {
@@ -108,6 +113,7 @@ function fetchJwks() {
         try {
           jwksCache = JSON.parse(data);
           jwksCacheTime = now;
+          jwksFromSeed = false;
           resolve(jwksCache);
         } catch (e) {
           reject(e);
@@ -209,13 +215,17 @@ async function validateToken(token, uri, method) {
       if (write && uri !== '/api/mcp' && !billingRead) return false;
     }
 
-    // Resolve the signing key: embedded keys first, then the live JWKS.
-    const seeded = SEED_JWKS.issuer === COGNITO_ISSUER ? findKey(SEED_JWKS, header.kid) : undefined;
-    const key = seeded || findKey(await fetchJwks(), header.kid);
+    // Fetch JWKS (possibly the embedded seed) and verify signature. A seed
+    // never has the last word: a miss or a failed verification against a
+    // seeded key is retried once with the live JWKS.
+    let key = findKey(await fetchJwks(), header.kid);
+    if (key && verifySignature(token, jwkToPem(key))) return true;
+    // Only a result decided by the seed is retried; a live JWKS is final.
+    if (!jwksFromSeed) return false;
+    jwksCacheTime = 0;
+    key = findKey(await fetchJwks(), header.kid);
     if (!key) return false;
-
-    const pem = jwkToPem(key);
-    return verifySignature(token, pem);
+    return verifySignature(token, jwkToPem(key));
   } catch (e) {
     console.error('Token validation error:', e);
     return false;

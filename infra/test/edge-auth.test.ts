@@ -9,6 +9,9 @@ import { EdgeAuthStack, SeedJwks } from '../lib/edge-auth-stack';
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { ...pair.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256', use: 'sig' };
 let jwksFetches = 0;
+// Clock offset (ms) seen by the edge code, to age the JWKS cache in tests.
+let clockOffset = 0;
+const edgeDate = { now: () => Date.now() + clockOffset };
 function edgeHandler(connectors = false, privateBridge = false, seedJwks?: SeedJwks): (event: unknown) => Promise<Record<string, any>> {
   const app = new cdk.App();
   const stack = new EdgeAuthStack(app, 'TestEdgeAuth', {
@@ -34,7 +37,7 @@ function edgeHandler(connectors = false, privateBridge = false, seedJwks?: SeedJ
       return new EventEmitter();
     },
   } : require(name);
-  vm.runInNewContext(source, { require: mockRequire, module, exports: module.exports, Buffer, console });
+  vm.runInNewContext(source, { require: mockRequire, module, exports: module.exports, Buffer, console, Date: edgeDate });
   return module.exports.handler as (event: unknown) => Promise<Record<string, any>>;
 }
 
@@ -113,8 +116,9 @@ describe('Dedicated connector edge boundary', () => {
 describe('Embedded JWKS seed', () => {
   const issuer = 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_test';
   function signed(kid: string, privateKey = pair.privateKey) {
+    // Valid across the clock offsets used below.
     const payload = { iss: issuer, sub: 'alice', username: 'alice', token_use: 'access', client_id: 'client',
-      exp: Math.floor(Date.now() / 1000) + 120, scope: 'openid' };
+      exp: Math.floor(Date.now() / 1000) + 7200, scope: 'openid' };
     const body = Buffer.from(JSON.stringify({ alg: 'RS256', kid })).toString('base64url') + '.' +
       Buffer.from(JSON.stringify(payload)).toString('base64url');
     return body + '.' + sign('RSA-SHA256', Buffer.from(body), privateKey).toString('base64url');
@@ -145,6 +149,34 @@ describe('Embedded JWKS seed', () => {
     expect(jwksFetches).toBe(1);
     const seeded = edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
     expect((await call(seeded, 'seeded', other.privateKey)).status).toBe('401');
+  });
+  test('a seeded key withdrawn upstream stops verifying once the cache ages out', async () => {
+    clockOffset = 0;
+    const handler = edgeHandler(false, false, { issuer, keys: [{ ...jwk, kid: 'seeded' } as Record<string, string>] });
+    jwksFetches = 0;
+    expect((await call(handler, 'seeded')).uri).toBe('/api/meetings');
+    expect(jwksFetches).toBe(0);
+    // The live JWKS (mock) no longer publishes 'seeded'.
+    clockOffset = 3600001;
+    try {
+      expect((await call(handler, 'seeded')).status).toBe('401');
+      expect(jwksFetches).toBe(1);
+    } finally {
+      clockOffset = 0;
+    }
+  });
+  test('a seeded key that fails verification is retried against the live JWKS', async () => {
+    // Stale seed: same kid, wrong modulus. The live JWKS has the real key.
+    const stale = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const handler = edgeHandler(false, false, {
+      issuer, keys: [{ ...stale.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256' } as Record<string, string>],
+    });
+    jwksFetches = 0;
+    expect((await call(handler, 'connector-test')).uri).toBe('/api/meetings');
+    expect(jwksFetches).toBe(1);
+    // Once the live JWKS replaced the seed, failures do not refetch.
+    expect((await call(handler, 'connector-test', stale.privateKey)).status).toBe('401');
+    expect(jwksFetches).toBe(1);
   });
   test('malformed seeds are rejected at synth', () => {
     for (const seedJwks of [
