@@ -36,6 +36,14 @@ These read prerequisites alone do not establish worker activation or deployment.
 Lifecycle callers must still check immutable projection inventory and fresh source
 revision/CAS after observing provider status.
 
+`IndexingService.Tick` starts a full sync only when a prepared, non-detached batch
+member staged keys or failed with a removal the provider has not confirmed. After
+cleanup proves projection-prefix and legacy-export objects absent from S3, a
+failed job drops removals already reported `NOT_FOUND`; status errors keep them.
+Finalization clears a failed job's remaining removals only on provider success or
+exact `NOT_FOUND`; its failure state and cooldown are unchanged. A batch without
+such work returns to IDLE without minting a submission token.
+
 ## Private/shared original migration
 
 `IndexingService` also reads S3-only job identities, without inventing canonical

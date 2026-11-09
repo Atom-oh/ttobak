@@ -159,11 +159,15 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		next := *control
 		next.Batch = append([]model.IndexMember(nil), control.Batch...)
 		var failures error
+		// A full data-source sync is useful only when a member staged keys or
+		// still has a removal the provider must confirm. finish ignores every
+		// other member, so syncing an all-failed batch only rescans unchanged S3.
+		needsSync := false
 		for i, member := range next.Batch {
 			if member.Detached {
 				continue
 			}
-			current, e := s.prepare(ctx, member.Resource)
+			current, sync, e := s.prepareMember(ctx, member.Resource)
 			if e != nil {
 				if errors.Is(e, ErrIndexWriteUncertain) {
 					return result, e
@@ -193,6 +197,7 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 				continue
 			}
 			next.Batch[i] = current
+			needsSync = needsSync || sync
 			result.Resources++
 			if current.Revision == "" {
 				result.Failed++
@@ -200,6 +205,13 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		}
 		if failures != nil {
 			return result, errors.Join(failures, save(next))
+		}
+		if !needsSync {
+			// No submission token was minted, so no provider job can exist for
+			// this batch. Durable job obligations stay on their own records.
+			next.Phase, next.Batch, next.ClientToken, next.ProviderJobID, next.ErrorCode = "IDLE", nil, "", "", ""
+			next.ProviderSucceeded = false
+			return result, save(next)
 		}
 		next.Phase, next.ClientToken, next.ErrorCode = "PREPARED", s.newID(), ""
 		if e := save(next); e != nil {
@@ -477,49 +489,57 @@ func (s *IndexingService) queueUnreadable(ctx context.Context, key model.IndexRe
 }
 
 func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) (model.IndexMember, error) {
+	member, _, err := s.prepareMember(ctx, key)
+	return member, err
+}
+
+// prepareMember also reports whether the member needs a provider sync: it
+// staged keys (WAITING_SYNC), or it failed with a removal the provider has not
+// yet confirmed. Detached members never need one; finish skips them.
+func (s *IndexingService) prepareMember(ctx context.Context, key model.IndexResource) (model.IndexMember, bool, error) {
 	prior, err := s.repo.GetIndexJob(ctx, key)
 	if err != nil {
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
 	if prior == nil {
-		return model.IndexMember{}, ErrIndexInvalid
+		return model.IndexMember{}, false, ErrIndexInvalid
 	}
 	if prior.State == model.IndexFailed && prior.RetryAfter > s.now().UnixMilli() {
-		return model.IndexMember{Resource: key, Detached: true}, nil
+		return model.IndexMember{Resource: key, Detached: true}, false, nil
 	}
 	if prior.State == model.IndexWaitingSync {
 		current, e := s.ReadSource(ctx, key, false)
 		if e != nil && !permanentIndexSourceError(e) {
-			return model.IndexMember{}, e
+			return model.IndexMember{}, false, e
 		}
 		if e == nil && current.Revision == prior.Revision {
 			complete, e := s.inventoryMatches(ctx, key, prior.Keys)
 			if e != nil {
-				return model.IndexMember{}, e
+				return model.IndexMember{}, false, e
 			}
 			if complete {
-				return indexMember(prior), nil
+				return indexMember(prior), true, nil
 			}
 		}
 	}
 	if prior.State == model.IndexPreparing && prior.LeaseUntil > s.now().UnixMilli() {
-		return model.IndexMember{}, ErrIndexLeaseBusy
+		return model.IndexMember{}, false, ErrIndexLeaseBusy
 	}
 	job := *prior
 	job.RunID, job.State, job.LeaseUntil = s.newID(), model.IndexPreparing, s.now().Add(indexLease).UnixMilli()
 	if err := s.repo.SaveIndexJob(ctx, prior, &job, nil, false, s.now().UnixMilli()); err != nil {
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
 	source, err := s.ReadSource(ctx, key, true)
 	if err != nil && !permanentIndexSourceError(err) {
 		// Unavailability supplies no proof that published bytes are obsolete.
 		// The caller resets preparation for retry while keeping tracked keys.
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
 	if err != nil || source.Outcome == model.IndexFailed {
 		// A confirmed missing or invalid source cannot retain stale projections.
 		if cleanupErr := s.cleanupTracked(ctx, &job, nil); cleanupErr != nil {
-			return model.IndexMember{}, errors.Join(err, cleanupErr)
+			return model.IndexMember{}, false, errors.Join(err, cleanupErr)
 		}
 		failed := job
 		code := "SOURCE_UNAVAILABLE"
@@ -531,10 +551,13 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 		}
 		s.failJob(&failed, code)
 		failed.Keys, failed.PendingKeys = nil, nil
+		failed.RemovedKeys = s.unconfirmedRemovals(ctx, &job)
 		if e := s.repo.SaveIndexJob(ctx, &job, &failed, nil, false, s.now().UnixMilli()); e != nil {
-			return model.IndexMember{}, e
+			return model.IndexMember{}, false, e
 		}
-		return model.IndexMember{Resource: key, Version: failed.Version, RunID: failed.RunID}, nil
+		// Without a staged revision, only an unconfirmed removal justifies a
+		// sync; finish then confirms and clears it (confirmFailedRemovals).
+		return model.IndexMember{Resource: key, Version: failed.Version, RunID: failed.RunID}, len(failed.RemovedKeys) > 0, nil
 	}
 	keys := []string{}
 	prefix := indexRunPrefix(key, source.Revision, job.RunID)
@@ -545,41 +568,76 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 	planned.PendingKeys, planned.Revision, planned.Outcome = keys, source.Revision, source.Outcome
 	planned.DesiredRevision, planned.ErrorCode = source.Revision, source.ErrorCode
 	if err := s.repo.SaveIndexJob(ctx, &job, &planned, source.Record, !key.IsKnowledgeSource(), s.now().UnixMilli()); err != nil {
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
 	job = planned
 	metadata, err := indexMetadata(key, source, job.RunID)
 	if err != nil {
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
 	for _, part := range source.Parts {
 		object := prefix + part.Name
 		// Metadata first: a concurrently running external sync must not see a
 		// data object before its canonical identity/provenance sidecar exists.
 		if err := s.objects.Put(ctx, object+".metadata.json", "application/json", metadata); err != nil {
-			return model.IndexMember{}, err
+			return model.IndexMember{}, false, err
 		}
 		if err := s.objects.Put(ctx, object, part.ContentType, part.Body); err != nil {
-			return model.IndexMember{}, err
+			return model.IndexMember{}, false, err
 		}
 	}
 	current, err := s.ReadSource(ctx, key, false)
 	if err != nil {
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
 	if current.Revision != source.Revision {
-		return model.IndexMember{}, ErrIndexChanged
+		return model.IndexMember{}, false, ErrIndexChanged
 	}
 	if err := s.cleanupTracked(ctx, &job, keys); err != nil {
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
 	ready := job
 	ready.Keys, ready.PendingKeys, ready.State, ready.LeaseUntil = keys, nil, model.IndexWaitingSync, 0
 	ready.UpdatedAt = s.now().UnixMilli()
 	if err := s.repo.SaveIndexJob(ctx, &job, &ready, current.Record, !key.IsKnowledgeSource(), s.now().UnixMilli()); err != nil {
-		return model.IndexMember{}, err
+		return model.IndexMember{}, false, err
 	}
-	return indexMember(&ready), nil
+	return indexMember(&ready), true, nil
+}
+
+// unconfirmedRemovals drops removal obligations that the provider already
+// reports as NOT_FOUND, which ADR-038 accepts as proof that an explicitly
+// requested former projection is gone. It runs only after cleanupTracked has
+// deleted and re-listed the job's projection prefix and legacy exports, so
+// only those keys are known to be absent from S3 and cannot be re-ingested by
+// a later sync. Other keys (a deleted knowledge original) and every key after a
+// provider error stay pending: the batch then syncs and finish confirms.
+func (s *IndexingService) unconfirmedRemovals(ctx context.Context, job *model.IndexJob) []string {
+	legacy := legacyIndexKeys(job.Resource)
+	absent := []string{}
+	for _, key := range job.RemovedKeys {
+		if strings.HasPrefix(key, job.Resource.Prefix()) || slices.Contains(legacy, key) {
+			absent = append(absent, key)
+		}
+	}
+	if len(absent) == 0 {
+		return job.RemovedKeys
+	}
+	statuses, err := s.ingestion.Documents(ctx, absent)
+	if err != nil {
+		return job.RemovedKeys
+	}
+	remaining := []string{}
+	for _, key := range job.RemovedKeys {
+		if statuses[key] == "NOT_FOUND" && slices.Contains(absent, key) {
+			continue
+		}
+		remaining = append(remaining, key)
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	return remaining
 }
 
 func (s *IndexingService) retryPreparation(ctx context.Context, key model.IndexResource) error {
@@ -743,6 +801,10 @@ func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, 
 	if err != nil {
 		return err
 	}
+	if job != nil && job.Version == member.Version && job.RunID == member.RunID &&
+		job.State == model.IndexFailed && len(job.RemovedKeys) > 0 {
+		return s.confirmFailedRemovals(ctx, job, syncID, success)
+	}
 	// Already finalized, superseded by a stream event, or failed before staging.
 	if job == nil || job.Version != member.Version || job.RunID != member.RunID || job.State != model.IndexWaitingSync {
 		return nil
@@ -785,6 +847,30 @@ func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, 
 	err = s.repo.SaveIndexJob(ctx, job, &next, current.Record, !member.Resource.IsKnowledgeSource(), s.now().UnixMilli())
 	if errors.Is(err, repository.ErrConditionFailed) {
 		return s.repo.RequestIndexResource(ctx, member.Resource, "", s.now().UnixMilli())
+	}
+	return err
+}
+
+// confirmFailedRemovals settles the removal obligation that made a failed
+// member join this sync. The job stays FAILED with its cooldown; only proven
+// removals are cleared, so a later retry does not start another sync for them.
+func (s *IndexingService) confirmFailedRemovals(ctx context.Context, job *model.IndexJob, syncID string, success bool) error {
+	removed := success
+	if !removed {
+		var err error
+		if _, removed, err = s.documentsSucceeded(ctx, nil, job.RemovedKeys); err != nil {
+			return err
+		}
+	}
+	if !removed {
+		return nil // Unproven: the next retry re-checks, or syncs again.
+	}
+	next := *job
+	next.RemovedKeys, next.SyncID, next.UpdatedAt = nil, syncID, s.now().UnixMilli()
+	err := s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli())
+	// A newer run owns the record and carries RemovedKeys into its own cleanup.
+	if errors.Is(err, repository.ErrConditionFailed) {
+		return nil
 	}
 	return err
 }
