@@ -309,7 +309,12 @@ appears on Events tab rows, which show their existing project links with unlink
 (from one bounded links scan, not per-row calls), and on News & Updates document
 cards (choosing a direct account first). Server truncation flags show a partial-links notice. Evidence,
 needs and stall details render as plain text. Every link or news-source mutation
-reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`.
+reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A collapsed
+**relationship graph** renders the graph route client-side with Mermaid under
+`securityLevel: 'strict'`; labels are stripped of directives and backticks. The
+**KB** tab pages each kind (upload, meeting, news, tech) with the real index state,
+the uploader (a departed member shows as a former member), download for direct
+members and untag for the uploader or an owner.
 
 Direct members manage a shared customer contact list on the Account's general
 tab. CSV and XLSX imports parse locally, map Remember and common Korean/English
