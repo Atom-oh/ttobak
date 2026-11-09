@@ -74,6 +74,52 @@ function componentFixture(api, table) {
   };
 }
 
+test('the component explains identity matching and labels contact file selection', () => {
+  const screen = componentFixture({}, []);
+  try {
+    const tree = screen.draw();
+    const messages = nodes(tree).map(node => node.props?.children).filter(child => typeof child === 'string').join(' ');
+    assert.match(messages, /이메일이 같거나/);
+    assert.match(messages, /이름과 전화번호.*함께 일치/);
+    assert.match(messages, /이메일이 있고 서로 다르면.*합치지 않습니다/);
+    const picker = nodes(tree).find(node => node.type === 'input' && node.props.type === 'file');
+    const label = nodes(tree).find(node => node.type === 'label' && nodes(node.props.children).includes(picker));
+    assert.ok(label, 'file input has a visible associated label');
+    assert.match(JSON.stringify(label.props.children), /연락처 파일 선택.*CSV.*xlsx/);
+  } finally { screen.unmount(); }
+});
+
+test('an unconfirmed candidate update directs verification without repeating a committed write', async () => {
+  let updates = 0;
+  let stored = { contactId: 'person', revision: 'r1', name: 'Person', company: 'North', email: 'person@north.test', title: 'Before' };
+  const screen = componentFixture({
+    list: async () => ({ accounts: [{ accountId: 'north', name: 'North' }] }),
+    get: async () => ({ name: 'North' }),
+    contacts: async () => ({ contacts: [stored] }),
+    updateContact: async (accountId, contactId, contact) => {
+      updates++;
+      stored = { ...contact, contactId, revision: 'r2' };
+      throw { status: 504 };
+    },
+  }, [['회사', '이름', '전자 메일 주소', '직함'], ['North', 'Person', 'person@north.test', 'After']]);
+  try {
+    await screen.chooseFile();
+    await screen.submit();
+    const apply = () => nodes(screen.draw()).find(node => node.type === 'button' && node.props.children === '적용');
+    assert.ok(apply(), 'a changed nonempty field needs explicit application');
+    apply().props.onClick();
+    await settle();
+    const error = nodes(screen.draw()).find(node => node.props?.role === 'alert');
+    assert.match(error.props.children, /적용 여부를 확인하지 못했습니다/);
+    assert.match(error.props.children, /다른 탭.*저장된 값을 확인/);
+    assert.doesNotMatch(error.props.children, /적용하지 못했습니다/);
+    assert.equal(stored.title, 'After');
+    apply().props.onClick();
+    await settle();
+    assert.equal(updates, 1, 'a committed update is not repeated after the lost response');
+  } finally { screen.unmount(); }
+});
+
 test('the component rejects incomplete account metadata and reloads it on retry', async () => {
   let unavailable = true;
   let detailReads = 0;
@@ -127,6 +173,8 @@ test('the component preserves implicit drops when new account domains change ret
     const messages = nodes(firstResult).map(node => node.props?.children).filter(child => typeof child === 'string').join(' ');
     assert.match(messages, /실패 또는 저장 여부 확인 필요/);
     assert.match(messages, /고객사 연락처에서 저장 여부를 확인/);
+    assert.match(messages, /이 페이지를 열어 둔 채 다른 탭/);
+    assert.match(messages, /새로고침.*페이지 이동.*파일.*다시 선택.*초기화/);
     assert.doesNotMatch(messages, /아직 저장되지 않은 행만/);
     failOther = false;
     screen.selectRetry(2, 'Retry');

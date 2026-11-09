@@ -326,10 +326,15 @@ person is the same email, or the same name with a shared mobile or work phone
 when emails do not differ; a shared office line alone never matches. A match
 fills only empty fields; differing values are listed as change candidates and
 applied one at a time only while the stored value is still the one shown.
-Retries skip confirmed saved rows. Failed rows are excluded by default because
+A failed change-candidate response is an unconfirmed outcome, not proof of rejection;
+the user verifies the stored value before retrying.
+Retries within the current import page skip confirmed saved rows. Failed rows are excluded by default because
 an unsuccessful response may follow a committed write. The user checks the
-Account's contacts and explicitly selects only still-unsaved rows to retry;
-each failed attempt clears those retry selections. A created account becomes the
+Account's contacts in another tab, keeps the import page open, and explicitly
+selects only still-unsaved rows to retry. Each failed attempt clears those retry
+selections. Tracking is component-local: reload, navigation or file reselection
+resets it, so reimporting a name-only saved contact can create a duplicate.
+A created account becomes the
 group's target, and any account-bound write result locks that target so a partially
 processed group cannot split across Accounts. Implicit drop decisions also persist
 across retries. Account aliases are not edited, because no alias update route exists.

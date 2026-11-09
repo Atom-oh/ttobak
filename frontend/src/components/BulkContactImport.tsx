@@ -151,7 +151,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
       await accountApi.updateContact(item.accountId, item.contactId, next, userId, active.signal);
       if (!active.signal.aborted) setApplied((old) => new Set(old).add(conflictKey(item)));
     } catch (err) {
-      if (!active.signal.aborted) setError(isContactAccessDenied(err) ? '이 고객사의 연락처를 수정할 권한이 없습니다.' : '변경을 적용하지 못했습니다. 다시 시도해 주세요.');
+      if (!active.signal.aborted) setError(isContactAccessDenied(err) ? '이 고객사의 연락처를 수정할 권한이 없습니다.' : '변경 적용 여부를 확인하지 못했습니다. 이 페이지를 열어 둔 채 다른 탭의 고객사 연락처에서 저장된 값을 확인한 뒤 다시 시도해 주세요.');
     } finally { if (!active.signal.aborted) setBusy(false); }
   };
 
@@ -210,8 +210,10 @@ export function BulkContactImport({ userId }: { userId: string }) {
   </details>;
 
   return <div className="space-y-4">
-    <p className="text-sm text-slate-600 dark:text-text-muted">Remember에서 내보낸 CSV 또는 .xlsx 파일을 올리면 회사명과 이메일 도메인으로 고객사를 찾아 연락처를 넣습니다. 같은 사람(이메일·휴대폰·근무처 전화 일치)은 비어 있는 칸만 채우고, 다른 값은 덮어쓰지 않고 변경 후보로 보여 드립니다. 내가 직접 멤버인 고객사에만 넣을 수 있습니다.</p>
-    <input type="file" accept=".csv,.xlsx" disabled={busy} className="text-sm" onChange={(e) => { void chooseFile(e.target.files?.[0]); e.target.value = ''; }} />
+    <p className="text-sm text-slate-600 dark:text-text-muted">Remember에서 내보낸 CSV 또는 .xlsx 파일을 올리면 회사명과 이메일 도메인으로 고객사를 찾아 연락처를 넣습니다. 이메일이 같거나, 이름과 전화번호(휴대폰 또는 근무처 전화)가 함께 일치하면 같은 사람으로 봅니다. 단, 양쪽에 이메일이 있고 서로 다르면 전화번호가 같아도 합치지 않습니다. 같은 사람은 비어 있는 칸만 채우고, 다른 값은 덮어쓰지 않고 변경 후보로 보여 드립니다. 내가 직접 멤버인 고객사에만 넣을 수 있습니다.</p>
+    <label className="block text-sm">연락처 파일 선택 (CSV 또는 .xlsx)
+      <input type="file" accept=".csv,.xlsx" disabled={busy} className="mt-1 block text-sm" onChange={(e) => { void chooseFile(e.target.files?.[0]); e.target.value = ''; }} />
+    </label>
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
     {table.length > 0 && accounts && <>
       <details className="rounded border border-slate-200 p-3 dark:border-white/10">
@@ -254,7 +256,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
         className="rounded bg-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-40">{busy ? '가져오는 중…' : `${importing}명 가져오기`}</button>
 
       {done && <p role="status" className="text-sm">결과: 추가 {counts.created || 0} · 빈 칸 보강 {counts.filled || 0} · 변경 없음 {counts.unchanged || 0} · 드랍 {counts.dropped || 0}{counts.failed ? ` · 실패 ${counts.failed}` : ''}{counts.invalid ? ` · 이름 없음 ${counts.invalid}` : ''}</p>}
-      {done && counts.failed > 0 && <p className="text-xs text-slate-500">응답이 실패했어도 저장되었을 수 있습니다. 고객사 연락처에서 저장 여부를 확인한 뒤, 회사별 목록에서 미저장 행만 선택해 재시도해 주세요. 실패한 행은 기본적으로 재처리하지 않습니다.</p>}
+      {done && counts.failed > 0 && <p className="text-xs text-slate-500">응답이 실패했어도 저장되었을 수 있습니다. 이 페이지를 열어 둔 채 다른 탭의 고객사 연락처에서 저장 여부를 확인한 뒤, 회사별 목록에서 미저장 행만 선택해 재시도해 주세요. 실패한 행은 기본적으로 재처리하지 않습니다. 새로고침, 페이지 이동 또는 파일을 다시 선택하면 처리 기록이 초기화됩니다. 이름만 있는 연락처를 다시 가져오면 중복 저장될 수 있습니다.</p>}
 
       {conflicts.length > 0 && <section>
         <h4 className="text-sm font-semibold">변경 후보 {conflicts.length}건</h4>
