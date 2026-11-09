@@ -327,6 +327,33 @@ shared office numbers can cause skips, and concurrent imports can race. Import i
 scoped to the currently selected Account and authenticated user. Manual entry,
 editing and deletion remain available.
 
+Settings also has a cross-account contact import (`BulkContactImport`,
+`src/lib/contactBulkImport.ts`). One Remember CSV/XLSX file is grouped by
+normalized company name (legal forms, case and spacing ignored), or by company
+mail domain when the company is blank. A group whose name or alias matches one
+directly joined Account imports there automatically; otherwise a matching
+company domain is used. Matching requires complete account metadata and considers
+all nonpersonal domains in a company group; conflicting account matches require
+an explicit choice regardless of row order. Similar names (containment, shared head or bigram
+similarity) and unmatched groups ask the user to pick an Account, create a new
+one (with the mail domain), or drop the group; undecided groups drop. The same
+person is the same email, or the same name with a shared mobile or work phone
+when emails do not differ; a shared office line alone never matches. A match
+fills only empty fields; differing values are listed as change candidates and
+applied one at a time only while the stored value is still the one shown.
+A failed change-candidate response is an unconfirmed outcome, not proof of rejection;
+the user verifies the stored value before retrying.
+Retries within the current import page skip confirmed saved rows. Failed rows are excluded by default because
+an unsuccessful response may follow a committed write. The user checks the
+Account's contacts in another tab, keeps the import page open, and explicitly
+selects only still-unsaved rows to retry. Each failed attempt clears those retry
+selections. Tracking is component-local: reload, navigation or file reselection
+resets it, so reimporting a name-only saved contact can create a duplicate.
+A created account becomes the
+group's target, and any account-bound write result locks that target so a partially
+processed group cannot split across Accounts. Implicit drop decisions also persist
+across retries. Account aliases are not edited, because no alias update route exists.
+
 Initial Account creation can select another Owner by colleague or email.
 Show an unchecked "Keep me as a regular member (AM)" checkbox for this choice.
 Checked retains AM membership; unchecked hides and clears extra member selections,
