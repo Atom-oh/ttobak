@@ -14,4 +14,10 @@ assert.deepEqual(readFileSync(new URL('../dist/ttobak-mcp.mjs', import.meta.url)
 execFileSync(process.execPath, ['--test', 'test/reading.test.mjs', 'test/calendar.test.mjs', 'test/http-artifact.test.mjs'], {
   cwd, stdio: 'inherit', env: { ...process.env, TTOBAK_TEST_BUNDLE: '1' },
 });
-console.log('Bundle reproducibility, stdio reading/calendar and HTTP artifact tests passed.');
+// The published artifact must run `intake`: its stdio client pulls CommonJS
+// dependencies that call require().
+const help = execFileSync(process.execPath, [fileURLToPath(new URL('../dist/ttobak-mcp.mjs', import.meta.url)), 'intake', '--help'], {
+  cwd, encoding: 'utf8', env: { PATH: process.env.PATH ?? '' },
+});
+assert.match(help, /ttobak-mcp intake hosts/, 'The bundled intake command must start');
+console.log('Bundle reproducibility, stdio reading/calendar, intake start and HTTP artifact tests passed.');

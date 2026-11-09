@@ -3,10 +3,10 @@
 // configuration values; only `--preview` prints titles, and only locally.
 
 import { homedir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { TtobakApi } from '../api.js';
 import { CognitoAuth } from '../auth.js';
-import { CALENDAR_TOOL, runCalendar, type CalendarCounts } from './calendar.js';
+import { CALENDAR_TOOL, SCOPE_PATTERN, runCalendar, type CalendarCounts } from './calendar.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson } from './mcp-client.js';
@@ -27,6 +27,8 @@ export interface RunStatus {
     dryRun: boolean;
     counts?: CalendarCounts;
     revision?: number | null;
+    /** Scope of the last sync; a dry run plans against that ledger. */
+    scope?: string;
   };
 }
 
@@ -38,6 +40,22 @@ export interface IntakeEnvironment {
   stdout: (line: string) => void;
   /** Test seam: replaces the TTOBAK API built from the selection. */
   api?: TtobakApi;
+  /** Test seam: the account scope that goes with `api`. */
+  scope?: string;
+}
+
+/** Deployment and signed-in user, as a fixed-length key (never logged). */
+export function accountScope(apiUrl: string, subject: string): string {
+  return createHash('sha256').update(`${apiUrl.replace(/\/+$/, '')}\n${subject}`).digest('hex').slice(0, 32);
+}
+
+/** The `sub` claim of an ID token the auth client already verified. */
+function tokenSubject(idToken: string): string {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as { sub?: unknown };
+    if (typeof payload.sub === 'string' && payload.sub) return payload.sub;
+  } catch { /* falls through */ }
+  throw new IntakeError('TTOBAK_LOGIN_REQUIRED', 'the signed-in identity could not be read');
 }
 
 const USAGE = `Usage:
@@ -124,25 +142,40 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
   const selected = selection?.calendar;
   if (!selected) throw new IntakeError('NOT_SELECTED', 'run "intake select calendar" first');
   const release = store.lock('calendar');
-  const status = store.read<RunStatus>('status.json') ?? {};
   const startedAt = environment.now();
   let session: McpSession | undefined;
+  let status: RunStatus = {};
   try {
+    // Inside the try: an unreadable status file must still release the lock.
+    status = store.read<RunStatus>('status.json') ?? {};
     let api = environment.api;
+    let scope = environment.scope;
     if (!dryRun && !api) {
       const config = ttobakConfig(selection, environment.env);
       const auth = new CognitoAuth(config, { interactive: options['--noninteractive'] !== true });
       api = new TtobakApi(auth, config.apiUrl);
+      let idToken: string;
+      try { idToken = await auth.getIdToken(); } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (message.startsWith('TTOBAK_LOGIN_REQUIRED')) throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
+        throw error;
+      }
+      // The ledger and any pending batch belong to this deployment and user.
+      scope = accountScope(config.apiUrl, tokenSubject(idToken));
+    }
+    if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
+      scope = status.calendar.scope;
     }
     session = await openCalendarSession(environment, selected.host, selected.server, selected.pathDirs);
     const active = session;
     const result = await runCalendar({
-      store, api, sourceId: selected.sourceId, zone: environment.zone, now: startedAt, dryRun,
+      store, api, sourceId: selected.sourceId, scope, zone: environment.zone, now: startedAt, dryRun,
       reconcile: options['--reconcile'] === true, acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
       source: { view: async request => resultJson(await active.call(CALENDAR_TOOL.name, request), CALENDAR_TOOL.name) },
     });
     status.calendar = {
       lastRunAt: startedAt.toISOString(), result: 'ok', dryRun, counts: result.counts, revision: result.revision,
+      ...(scope ? { scope } : {}),
       ...(dryRun ? (status.calendar?.lastSuccessAt ? { lastSuccessAt: status.calendar.lastSuccessAt } : {})
         : { lastSuccessAt: startedAt.toISOString() }),
     };

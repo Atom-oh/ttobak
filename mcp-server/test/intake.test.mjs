@@ -198,6 +198,8 @@ function source(itemsFor) {
 }
 
 const SOURCE_ID = '3f2c8a8e-6a0b-4d1e-9f57-0d7c2b4e1a11';
+const SCOPE_A = 'a'.repeat(32);
+const SCOPE_B = 'b'.repeat(32);
 const twoEvents = request => {
   const [month, day, year] = request.start_date.split('-');
   return [item(`occ-${year}${month}${day}`, `${year}-${month}-${day}T10:00:00+09:00`, `${year}-${month}-${day}T11:00:00+09:00`)];
@@ -206,7 +208,7 @@ const twoEvents = request => {
 test('sync loop: journal, completion, identical retry after ambiguous delivery, conflict reconciliation', async t => {
   const home = tempHome(t);
   const store = new IntakeStore(home);
-  const base = { store, sourceId: SOURCE_ID, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const base = { store, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
 
   // Without a sensitivity flag on the items, real runs refuse before any write.
   const guarded = fakeApi();
@@ -224,7 +226,7 @@ test('sync loop: journal, completion, identical retry after ambiguous delivery, 
   assert.equal(api.calls.length, 1);
   assert.equal(api.calls[0].complete, true);
   assert.equal(first.revision, 1);
-  const stateFile = join(home, '.ttobak', 'intake', 'calendar', SOURCE_ID, 'state.json');
+  const stateFile = join(home, '.ttobak', 'intake', 'calendar', SOURCE_ID, SCOPE_A, 'state.json');
   assert.equal(statSync(stateFile).mode & 0o777, 0o600);
   assert.equal(statSync(join(home, '.ttobak', 'intake')).mode & 0o777, 0o700);
 
@@ -266,11 +268,69 @@ test('sync loop: journal, completion, identical retry after ambiguous delivery, 
   assert.equal(quiet.calls.length, 0);
 });
 
+test('a pending batch of one account is never sent to another account', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const base = { store, sourceId: SOURCE_ID, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const changed = request => twoEvents(request).map(entry => ({ ...entry, subject: 'account A' }));
+  const failing = fakeApi({ fail: [new Error('socket hang up')] });
+  await assert.rejects(runCalendar({ ...base, scope: SCOPE_A, api: failing, source: source(changed) }),
+    error => error.code === 'TTOBAK_UNAVAILABLE');
+  const pendingA = failing.calls[0];
+
+  // Signed in as B: B starts from its own empty state; A's batch stays unsent.
+  const other = fakeApi();
+  const result = await runCalendar({ ...base, scope: SCOPE_B, api: other, source: source(twoEvents) });
+  assert.equal(result.counts.upserts, 6);
+  assert.ok(other.calls.every(call => call.batchId !== pendingA.batchId));
+  assert.ok(!JSON.stringify(other.calls).includes('account A'));
+
+  // Back on A, its own pending batch is retried first, unchanged.
+  const back = fakeApi();
+  await runCalendar({ ...base, scope: SCOPE_A, api: back, source: source(changed) });
+  assert.deepEqual(back.calls[0], pendingA);
+
+  await assert.rejects(runCalendar({ ...base, scope: undefined, api: back, source: source(changed) }),
+    error => error.code === 'INVALID_ARGUMENT');
+});
+
+test('run lock: one owner, owner-only release, serialized stale recovery', t => {
+  const home = tempHome(t);
+  const store = new IntakeStore(home);
+  const lockFile = join(home, '.ttobak', 'intake', 'calendar.lock');
+  const release = store.lock('calendar');
+  assert.throws(() => store.lock('calendar'), error => error.code === 'LOCKED');
+  release();
+  release();
+
+  // A lock left by a dead process is replaced once, by exactly one run.
+  const dead = 2 ** 22 + 12345;
+  writeFileSync(lockFile, `${dead} stale`);
+  const first = store.lock('calendar');
+  assert.throws(() => store.lock('calendar'), error => error.code === 'LOCKED');
+  // Releasing never removes a lock this run does not own.
+  writeFileSync(lockFile, `${process.pid} someone-else`);
+  first();
+  assert.equal(readFileSync(lockFile, 'utf8'), `${process.pid} someone-else`);
+  rmSync(lockFile);
+
+  // A recovery already in progress makes a second recoverer back off.
+  writeFileSync(lockFile, `${dead} stale`);
+  writeFileSync(`${lockFile}.break`, String(process.pid));
+  assert.throws(() => store.lock('calendar'), error => error.code === 'LOCKED');
+  rmSync(`${lockFile}.break`);
+  store.lock('calendar')();
+
+  // A fresh empty lock (crash before the PID was written) is still held.
+  writeFileSync(lockFile, '');
+  assert.throws(() => store.lock('calendar'), error => error.code === 'LOCKED');
+});
+
 function cliEnvironment(home, lines, extraEnv = {}) {
   return {
     home, now: () => NOW, zone: ZONE, stdout: line => lines.push(line),
     env: { PATH: '/usr/bin:/bin', TTOBAK_API_URL: 'https://api.example.invalid', TTOBAK_COGNITO_DOMAIN: 'https://auth.example.invalid',
       TTOBAK_CLIENT_ID: 'fixture', ...extraEnv },
+    scope: 'c'.repeat(32),
   };
 }
 

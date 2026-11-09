@@ -66,6 +66,8 @@ export interface Window { start: Date; end: Date }
 export interface CalendarState {
   version: 1;
   sourceId: string;
+  /** Deployment and signed-in user this ledger and pending batch belong to. */
+  scope: string;
   revision: number | null;
   ledger: Ledger;
   reconcileRequired: boolean;
@@ -347,14 +349,28 @@ export interface CalendarRunResult {
   preview?: Plan['preview'];
 }
 
-function emptyState(sourceId: string): CalendarState {
-  return { version: 1, sourceId, revision: null, ledger: {}, reconcileRequired: false, pending: null };
+function emptyState(sourceId: string, scope: string): CalendarState {
+  return { version: 1, sourceId, scope, revision: null, ledger: {}, reconcileRequired: false, pending: null };
 }
 
-export function loadState(store: IntakeStore, sourceId: string): CalendarState {
-  const state = store.read<CalendarState>('calendar', sourceId, 'state.json');
-  if (state === null) return emptyState(sourceId);
-  if (state.version !== 1 || state.sourceId !== sourceId || typeof state.ledger !== 'object' || state.ledger === null) {
+/** Scope key: a hex digest of the TTOBAK deployment and the signed-in user. */
+export const SCOPE_PATTERN = /^[0-9a-f]{32}$/;
+
+function statePath(state: { sourceId: string; scope: string }): string[] {
+  return ['calendar', state.sourceId, state.scope, 'state.json'];
+}
+
+/**
+ * The ledger and pending batch of one source for one deployment and user.
+ * Another account or deployment reads its own state, so a batch built for one
+ * account is never sent to another.
+ */
+export function loadState(store: IntakeStore, sourceId: string, scope: string): CalendarState {
+  if (!SCOPE_PATTERN.test(scope)) throw new IntakeError('INVALID_ARGUMENT', 'calendar state scope is invalid');
+  const state = store.read<CalendarState>(...statePath({ sourceId, scope }));
+  if (state === null) return emptyState(sourceId, scope);
+  if (state.version !== 1 || state.sourceId !== sourceId || state.scope !== scope ||
+      typeof state.ledger !== 'object' || state.ledger === null) {
     throw new IntakeError('STORE_INVALID', 'calendar state does not match its source');
   }
   return state;
@@ -392,7 +408,7 @@ async function send(api: TtobakApi, store: IntakeStore, state: CalendarState): P
       // A definitive rejection: drop the batch and require reconciliation on a 409.
       state.pending = null;
       if (error.status === 409) state.reconcileRequired = true;
-      store.write(state, 'calendar', state.sourceId, 'state.json');
+      store.write(state, ...statePath(state));
       throw new IntakeError(error.status === 409 ? 'TTOBAK_CONFLICT' : 'TTOBAK_REJECTED', `HTTP ${error.status}`);
     }
     // Ambiguous delivery: keep the identical pending batch for the next run.
@@ -406,7 +422,7 @@ async function send(api: TtobakApi, store: IntakeStore, state: CalendarState): P
   Object.assign(state.ledger, pending.set);
   state.revision = revision;
   state.pending = null;
-  store.write(state, 'calendar', state.sourceId, 'state.json');
+  store.write(state, ...statePath(state));
 }
 
 export interface CalendarRunOptions {
@@ -414,6 +430,11 @@ export interface CalendarRunOptions {
   api?: TtobakApi;
   source: CalendarSource;
   sourceId: string;
+  /**
+   * `SCOPE_PATTERN` key of the deployment and signed-in user. Required to
+   * sync; a dry run without one plans against an empty ledger.
+   */
+  scope?: string;
   zone: string;
   now: Date;
   dryRun: boolean;
@@ -424,7 +445,8 @@ export interface CalendarRunOptions {
 
 export async function runCalendar(options: CalendarRunOptions): Promise<CalendarRunResult> {
   const { store, source, sourceId, zone, now, dryRun } = options;
-  const state = loadState(store, sourceId);
+  if (!dryRun && !options.scope) throw new IntakeError('INVALID_ARGUMENT', 'TTOBAK account scope is required');
+  const state = options.scope ? loadState(store, sourceId, options.scope) : emptyState(sourceId, '0'.repeat(32));
   if (!dryRun) {
     if (!options.api) throw new IntakeError('INVALID_ARGUMENT', 'TTOBAK API is required');
     if (state.reconcileRequired && !options.reconcile) {
@@ -434,7 +456,7 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
     if (options.reconcile || state.revision === null) {
       state.revision = await serverRevision(options.api, sourceId);
       state.reconcileRequired = false;
-      store.write(state, 'calendar', sourceId, 'state.json');
+      store.write(state, ...statePath(state));
     }
   }
 
@@ -464,10 +486,10 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
       remove: plan.remove.filter(id => ids.has(id)),
     };
     validateCalendarSync(state.pending.request);
-    store.write(state, 'calendar', sourceId, 'state.json');
+    store.write(state, ...statePath(state));
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
-  store.write(state, 'calendar', sourceId, 'state.json');
+  store.write(state, ...statePath(state));
   return { counts: plan.counts, revision: state.revision };
 }

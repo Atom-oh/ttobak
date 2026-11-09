@@ -73,34 +73,95 @@ export class IntakeStore {
     }
   }
 
-  /** Exclusive run lock. A lock left by a dead process is replaced once. */
+  /**
+   * Exclusive run lock. The lock file holds this run's PID and a random token,
+   * and only that token's owner removes it. A lock whose owner is dead (or an
+   * empty lock older than a few seconds, from a crash before its PID was
+   * written) is replaced under a second exclusive `.break` lock, which
+   * serializes recovery: a run that read the stale owner earlier re-reads it
+   * there and backs off once another run holds a live lock.
+   */
   lock(name: string): () => void {
     this.ensureDirectory(this.directory);
     const path = this.path([`${name}.lock`]);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const descriptor = openSync(path, 'wx', 0o600);
-        writeSync(descriptor, String(process.pid));
-        closeSync(descriptor);
-        let released = false;
-        return () => {
-          if (released) return;
-          released = true;
-          try { unlinkSync(path); } catch { /* already gone */ }
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new IntakeError('STORE_INVALID', 'lock unavailable');
-        let owner = 0;
-        try { owner = Number.parseInt(readFileSync(path, 'utf8'), 10); } catch { /* unreadable */ }
-        if (attempt === 0 && Number.isSafeInteger(owner) && owner > 0 && !alive(owner)) {
-          try { unlinkSync(path); } catch { /* raced */ }
-          continue;
-        }
+    const token = `${process.pid} ${randomBytes(16).toString('hex')}`;
+    if (!createExclusive(path, token)) {
+      const breaker = this.path([`${name}.lock.break`]);
+      clearAbandoned(breaker);
+      if (!createExclusive(breaker, String(process.pid))) {
         throw new IntakeError('LOCKED', 'another intake run is in progress');
       }
+      try {
+        if (!stale(path) || !removeIfUnchanged(path) || !createExclusive(path, token)) {
+          throw new IntakeError('LOCKED', 'another intake run is in progress');
+        }
+      } finally {
+        try { unlinkSync(breaker); } catch { /* already gone */ }
+      }
     }
-    throw new IntakeError('LOCKED', 'another intake run is in progress');
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      removeIfOwned(path, token);
+    };
   }
+}
+
+/** Creates `path` with `content` only if it does not exist. */
+function createExclusive(path: string, content: string): boolean {
+  let descriptor: number;
+  try { descriptor = openSync(path, 'wx', 0o600); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw new IntakeError('STORE_INVALID', 'lock unavailable');
+  }
+  try {
+    writeSync(descriptor, content);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  return true;
+}
+
+const EMPTY_LOCK_GRACE_MS = 5_000;
+const ABANDONED_BREAK_MS = 30_000;
+
+function lockContent(path: string): string | null {
+  try { return readFileSync(path, 'utf8'); } catch { return null; }
+}
+
+/** The lock's owner is dead, or it is an empty lock past its grace period. */
+function stale(path: string): boolean {
+  const content = lockContent(path);
+  if (content === null) return true;
+  const owner = Number.parseInt(content.split(' ')[0] ?? '', 10);
+  if (Number.isSafeInteger(owner) && owner > 0) return !alive(owner);
+  try { return Date.now() - lstatSync(path).mtimeMs > EMPTY_LOCK_GRACE_MS; } catch { return true; }
+}
+
+/** Removes the lock only if it still holds what `stale` just read. */
+function removeIfUnchanged(path: string): boolean {
+  const before = lockContent(path);
+  if (before === null) return true;
+  if (!stale(path) || lockContent(path) !== before) return false;
+  try { unlinkSync(path); } catch { /* gone */ }
+  return true;
+}
+
+function removeIfOwned(path: string, token: string): void {
+  if (lockContent(path) !== token) return;
+  try { unlinkSync(path); } catch { /* already gone */ }
+}
+
+/** A `.break` lock left by a run that crashed mid-recovery. */
+function clearAbandoned(breaker: string): void {
+  try {
+    const stat = lstatSync(breaker);
+    const owner = Number.parseInt(lockContent(breaker) ?? '', 10);
+    const dead = Number.isSafeInteger(owner) && owner > 0 ? !alive(owner) : true;
+    if (dead && Date.now() - stat.mtimeMs > ABANDONED_BREAK_MS) unlinkSync(breaker);
+  } catch { /* absent or raced */ }
 }
 
 function alive(pid: number): boolean {

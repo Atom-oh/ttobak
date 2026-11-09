@@ -39,14 +39,20 @@ read as 7-day `calendar_view` requests.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
   - Each batch (at most 20 mutations, about 60 KB or less) is journaled in
-    `~/.ttobak/intake/calendar/<sourceId>/state.json` before sending.
+    `~/.ttobak/intake/calendar/<sourceId>/<scope>/state.json` before sending.
+    `<scope>` is a digest of the TTOBAK deployment and the signed-in user, so
+    a batch built for one account is never sent after signing in to another;
+    each account keeps its own ledger and pending batch. A dry run plans
+    against the ledger of the last synced account.
   - An ambiguous failure keeps it for an identical retry on the next run.
   - A 4xx drops it. A 409 also blocks later runs until `--reconcile`.
   - The last batch of a run is `complete:true`.
 - **Errors.**
   - `AUTH_EXPIRED_MIDWAY`: run `mwinit -o`.
   - Also `SERVER_START_FAILED`, `SCHEMA_CHANGED`, `PARSE_FAILED`, `LOCKED`
-    (another run holds `calendar.lock`) and `TTOBAK_*`.
+    (another run holds `calendar.lock`) and `TTOBAK_*`. A lock whose process
+    is gone is replaced by one run at a time; if the PID was reused by an
+    unrelated process, delete `~/.ttobak/intake/calendar.lock` by hand.
 
 ## Acceptance on the Mac (required before scheduling)
 

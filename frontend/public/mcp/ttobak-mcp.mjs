@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire as __ttobakCreateRequire } from 'node:module'; const require = __ttobakCreateRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -25311,13 +25312,17 @@ function pruneLedger(ledger, now) {
   const cutoff = now.getTime() - LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
   return Object.fromEntries(Object.entries(ledger).filter(([, entry2]) => new Date(entry2.endsAt).getTime() >= cutoff));
 }
-function emptyState(sourceId) {
-  return { version: 1, sourceId, revision: null, ledger: {}, reconcileRequired: false, pending: null };
+function emptyState(sourceId, scope) {
+  return { version: 1, sourceId, scope, revision: null, ledger: {}, reconcileRequired: false, pending: null };
 }
-function loadState(store, sourceId) {
-  const state = store.read("calendar", sourceId, "state.json");
-  if (state === null) return emptyState(sourceId);
-  if (state.version !== 1 || state.sourceId !== sourceId || typeof state.ledger !== "object" || state.ledger === null) {
+function statePath(state) {
+  return ["calendar", state.sourceId, state.scope, "state.json"];
+}
+function loadState(store, sourceId, scope) {
+  if (!SCOPE_PATTERN.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "calendar state scope is invalid");
+  const state = store.read(...statePath({ sourceId, scope }));
+  if (state === null) return emptyState(sourceId, scope);
+  if (state.version !== 1 || state.sourceId !== sourceId || state.scope !== scope || typeof state.ledger !== "object" || state.ledger === null) {
     throw new IntakeError("STORE_INVALID", "calendar state does not match its source");
   }
   return state;
@@ -25352,7 +25357,7 @@ async function send(api, store, state) {
     if (error3 instanceof ApiResponseError && error3.status >= 400 && error3.status < 500) {
       state.pending = null;
       if (error3.status === 409) state.reconcileRequired = true;
-      store.write(state, "calendar", state.sourceId, "state.json");
+      store.write(state, ...statePath(state));
       throw new IntakeError(error3.status === 409 ? "TTOBAK_CONFLICT" : "TTOBAK_REJECTED", `HTTP ${error3.status}`);
     }
     throw new IntakeError("TTOBAK_UNAVAILABLE", "calendar sync unconfirmed; the identical batch will be retried");
@@ -25367,11 +25372,12 @@ async function send(api, store, state) {
   Object.assign(state.ledger, pending.set);
   state.revision = revision;
   state.pending = null;
-  store.write(state, "calendar", state.sourceId, "state.json");
+  store.write(state, ...statePath(state));
 }
 async function runCalendar(options) {
   const { store, source, sourceId, zone, now, dryRun } = options;
-  const state = loadState(store, sourceId);
+  if (!dryRun && !options.scope) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK account scope is required");
+  const state = options.scope ? loadState(store, sourceId, options.scope) : emptyState(sourceId, "0".repeat(32));
   if (!dryRun) {
     if (!options.api) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK API is required");
     if (state.reconcileRequired && !options.reconcile) {
@@ -25381,7 +25387,7 @@ async function runCalendar(options) {
     if (options.reconcile || state.revision === null) {
       state.revision = await serverRevision(options.api, sourceId);
       state.reconcileRequired = false;
-      store.write(state, "calendar", sourceId, "state.json");
+      store.write(state, ...statePath(state));
     }
   }
   const window = syncWindow(now, zone);
@@ -25415,14 +25421,14 @@ async function runCalendar(options) {
       remove: plan.remove.filter((id) => ids.has(id))
     };
     validateCalendarSync(state.pending.request);
-    store.write(state, "calendar", sourceId, "state.json");
+    store.write(state, ...statePath(state));
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
-  store.write(state, "calendar", sourceId, "state.json");
+  store.write(state, ...statePath(state));
   return { counts: plan.counts, revision: state.revision };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, MAX_BATCH, MAX_BATCH_BYTES, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, MAX_BATCH, MAX_BATCH_BYTES, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
@@ -25438,6 +25444,7 @@ var init_calendar2 = __esm({
     LEDGER_RETENTION_DAYS = 120;
     UNTITLED = "(\uC81C\uBAA9 \uC5C6\uC74C)";
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
+    SCOPE_PATTERN = /^[0-9a-f]{32}$/;
   }
 });
 
@@ -27413,6 +27420,66 @@ import {
 } from "node:fs";
 import { join as join6 } from "node:path";
 import { randomBytes as randomBytes3 } from "node:crypto";
+function createExclusive(path2, content) {
+  let descriptor;
+  try {
+    descriptor = openSync2(path2, "wx", 384);
+  } catch (error3) {
+    if (error3.code === "EEXIST") return false;
+    throw new IntakeError("STORE_INVALID", "lock unavailable");
+  }
+  try {
+    writeSync(descriptor, content);
+    fsyncSync2(descriptor);
+  } finally {
+    closeSync2(descriptor);
+  }
+  return true;
+}
+function lockContent(path2) {
+  try {
+    return readFileSync6(path2, "utf8");
+  } catch {
+    return null;
+  }
+}
+function stale(path2) {
+  const content = lockContent(path2);
+  if (content === null) return true;
+  const owner = Number.parseInt(content.split(" ")[0] ?? "", 10);
+  if (Number.isSafeInteger(owner) && owner > 0) return !alive(owner);
+  try {
+    return Date.now() - lstatSync3(path2).mtimeMs > EMPTY_LOCK_GRACE_MS;
+  } catch {
+    return true;
+  }
+}
+function removeIfUnchanged(path2) {
+  const before = lockContent(path2);
+  if (before === null) return true;
+  if (!stale(path2) || lockContent(path2) !== before) return false;
+  try {
+    unlinkSync3(path2);
+  } catch {
+  }
+  return true;
+}
+function removeIfOwned(path2, token) {
+  if (lockContent(path2) !== token) return;
+  try {
+    unlinkSync3(path2);
+  } catch {
+  }
+}
+function clearAbandoned(breaker) {
+  try {
+    const stat = lstatSync3(breaker);
+    const owner = Number.parseInt(lockContent(breaker) ?? "", 10);
+    const dead = Number.isSafeInteger(owner) && owner > 0 ? !alive(owner) : true;
+    if (dead && Date.now() - stat.mtimeMs > ABANDONED_BREAK_MS) unlinkSync3(breaker);
+  } catch {
+  }
+}
 function alive(pid) {
   try {
     process.kill(pid, 0);
@@ -27421,7 +27488,7 @@ function alive(pid) {
     return error3.code === "EPERM";
   }
 }
-var MAX_STATE_BYTES, IntakeStore;
+var MAX_STATE_BYTES, IntakeStore, EMPTY_LOCK_GRACE_MS, ABANDONED_BREAK_MS;
 var init_store = __esm({
   "src/intake/store.ts"() {
     "use strict";
@@ -27494,55 +27561,69 @@ var init_store = __esm({
           throw error3;
         }
       }
-      /** Exclusive run lock. A lock left by a dead process is replaced once. */
+      /**
+       * Exclusive run lock. The lock file holds this run's PID and a random token,
+       * and only that token's owner removes it. A lock whose owner is dead (or an
+       * empty lock older than a few seconds, from a crash before its PID was
+       * written) is replaced under a second exclusive `.break` lock, which
+       * serializes recovery: a run that read the stale owner earlier re-reads it
+       * there and backs off once another run holds a live lock.
+       */
       lock(name) {
         this.ensureDirectory(this.directory);
         const path2 = this.path([`${name}.lock`]);
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const descriptor = openSync2(path2, "wx", 384);
-            writeSync(descriptor, String(process.pid));
-            closeSync2(descriptor);
-            let released = false;
-            return () => {
-              if (released) return;
-              released = true;
-              try {
-                unlinkSync3(path2);
-              } catch {
-              }
-            };
-          } catch (error3) {
-            if (error3.code !== "EEXIST") throw new IntakeError("STORE_INVALID", "lock unavailable");
-            let owner = 0;
-            try {
-              owner = Number.parseInt(readFileSync6(path2, "utf8"), 10);
-            } catch {
-            }
-            if (attempt === 0 && Number.isSafeInteger(owner) && owner > 0 && !alive(owner)) {
-              try {
-                unlinkSync3(path2);
-              } catch {
-              }
-              continue;
-            }
+        const token = `${process.pid} ${randomBytes3(16).toString("hex")}`;
+        if (!createExclusive(path2, token)) {
+          const breaker = this.path([`${name}.lock.break`]);
+          clearAbandoned(breaker);
+          if (!createExclusive(breaker, String(process.pid))) {
             throw new IntakeError("LOCKED", "another intake run is in progress");
           }
+          try {
+            if (!stale(path2) || !removeIfUnchanged(path2) || !createExclusive(path2, token)) {
+              throw new IntakeError("LOCKED", "another intake run is in progress");
+            }
+          } finally {
+            try {
+              unlinkSync3(breaker);
+            } catch {
+            }
+          }
         }
-        throw new IntakeError("LOCKED", "another intake run is in progress");
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          removeIfOwned(path2, token);
+        };
       }
     };
+    EMPTY_LOCK_GRACE_MS = 5e3;
+    ABANDONED_BREAK_MS = 3e4;
   }
 });
 
 // src/intake/run.ts
 var run_exports = {};
 __export(run_exports, {
+  accountScope: () => accountScope,
   defaultEnvironment: () => defaultEnvironment,
   runIntake: () => runIntake
 });
 import { homedir as homedir6 } from "node:os";
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
+function accountScope(apiUrl, subject) {
+  return createHash5("sha256").update(`${apiUrl.replace(/\/+$/, "")}
+${subject}`).digest("hex").slice(0, 32);
+}
+function tokenSubject(idToken) {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8"));
+    if (typeof payload.sub === "string" && payload.sub) return payload.sub;
+  } catch {
+  }
+  throw new IntakeError("TTOBAK_LOGIN_REQUIRED", "the signed-in identity could not be read");
+}
 function flags(args, allowed) {
   const result = {};
   for (let index = 0; index < args.length; index++) {
@@ -27618,15 +27699,29 @@ async function calendar(args, environment, store) {
   const selected = selection?.calendar;
   if (!selected) throw new IntakeError("NOT_SELECTED", 'run "intake select calendar" first');
   const release = store.lock("calendar");
-  const status = store.read("status.json") ?? {};
   const startedAt = environment.now();
   let session;
+  let status = {};
   try {
+    status = store.read("status.json") ?? {};
     let api = environment.api;
+    let scope = environment.scope;
     if (!dryRun && !api) {
       const config2 = ttobakConfig(selection, environment.env);
       const auth = new CognitoAuth2(config2, { interactive: options["--noninteractive"] !== true });
       api = new TtobakApi(auth, config2.apiUrl);
+      let idToken;
+      try {
+        idToken = await auth.getIdToken();
+      } catch (error3) {
+        const message = error3 instanceof Error ? error3.message : "";
+        if (message.startsWith("TTOBAK_LOGIN_REQUIRED")) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+        throw error3;
+      }
+      scope = accountScope(config2.apiUrl, tokenSubject(idToken));
+    }
+    if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
+      scope = status.calendar.scope;
     }
     session = await openCalendarSession(environment, selected.host, selected.server, selected.pathDirs);
     const active = session;
@@ -27634,6 +27729,7 @@ async function calendar(args, environment, store) {
       store,
       api,
       sourceId: selected.sourceId,
+      scope,
       zone: environment.zone,
       now: startedAt,
       dryRun,
@@ -27647,6 +27743,7 @@ async function calendar(args, environment, store) {
       dryRun,
       counts: result.counts,
       revision: result.revision,
+      ...scope ? { scope } : {},
       ...dryRun ? status.calendar?.lastSuccessAt ? { lastSuccessAt: status.calendar.lastSuccessAt } : {} : { lastSuccessAt: startedAt.toISOString() }
     };
     store.write(status, "status.json");
