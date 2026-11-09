@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,5 +57,58 @@ func TestWarmHTTPConnectionIsBestEffortAndBounded(t *testing.T) {
 	warmHTTPConnection(http.DefaultClient, "://bad-url", 50*time.Millisecond)
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("warm-up ran %v past its timeout", elapsed)
+	}
+}
+
+func TestProvisionedInit(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"provisioned-concurrency", true},
+		{"on-demand", false},
+		{"snap-start", false},
+		{"", false},
+	} {
+		got := provisionedInit(func(key string) string {
+			if key == "AWS_LAMBDA_INITIALIZATION_TYPE" {
+				return tc.value
+			}
+			return ""
+		})
+		if got != tc.want {
+			t.Errorf("provisionedInit(%q) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestRunWarmupsWaitsForEveryWarmup(t *testing.T) {
+	var mu sync.Mutex
+	done := 0
+	release := make(chan struct{})
+	warm := func() {
+		<-release
+		mu.Lock()
+		done++
+		mu.Unlock()
+	}
+	wait := runWarmups(warm, warm, warm)
+	finished := make(chan struct{})
+	go func() { wait(); close(finished) }()
+	select {
+	case <-finished:
+		t.Fatal("wait returned before the warm-ups finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("wait did not return after the warm-ups finished")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if done != 3 {
+		t.Fatalf("finished warm-ups = %d, want 3", done)
 	}
 }
