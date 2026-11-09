@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -371,59 +372,95 @@ func testUnresolved(hash, role string) model.UnresolvedMention {
 		SourceField: model.PeopleSourceParticipants, Mention: "Kim", CreatedAt: "2026-11-09T00:00:00Z"}
 }
 
+var testRunFence = &model.PeopleRun{AccountID: "acc", Scope: "o:m1", LeaseToken: "tok"}
+
 func TestReplaceUnresolvedMentions_DeletesOnlyStale(t *testing.T) {
 	a, b, c := testMentionHash('a'), testMentionHash('b'), testMentionHash('c')
 	skA := model.MentionSortKey(a, "o:m1", "participant")
 	skB := model.MentionSortKey(b, "o:m1", "participant")
 	skC := model.MentionSortKey(c, "o:m1", "participant")
-	var ops []string
-	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
-		if target != "DynamoDB_20120810.BatchWriteItem" {
-			t.Fatalf("target %s", target)
-		}
-		for _, raw := range body["RequestItems"].(wireMap)["synthetic"].([]interface{}) {
-			req := raw.(wireMap)
-			if put, ok := req["PutRequest"].(wireMap); ok {
-				ops = append(ops, "put "+wireS(put["Item"], "SK"))
-				if wireS(put["Item"], "entityType") != "ACCOUNT_PEOPLE_MENTION" || wireS(put["Item"], "PK") != "ACCOUNT#acc" {
-					t.Fatalf("item %#v", put["Item"])
-				}
-			}
-			if del, ok := req["DeleteRequest"].(wireMap); ok {
-				ops = append(ops, "delete "+wireS(del["Key"], "SK"))
-			}
-		}
-		return `{}`
-	})
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
 	rows := []model.UnresolvedMention{testUnresolved(b, "participant"), testUnresolved(c, "participant")}
-	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, []string{skA, skB}); err != nil {
+	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, []string{skA, skB}, testRunFence); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(ops, ",") != "put "+skB+",put "+skC+",delete "+skA {
-		t.Fatalf("ops %v", ops)
+	want := []string{"Put ACCOUNT#acc " + skB, "Put ACCOUNT#acc " + skC, "Delete ACCOUNT#acc " + skA, "ConditionCheck ACCOUNT#acc PEOPLERUN#o:m1"}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	if put := items[0].(wireMap)["Put"].(wireMap); wireS(put["Item"], "entityType") != "ACCOUNT_PEOPLE_MENTION" {
+		t.Fatalf("item %#v", put["Item"])
+	}
+	if !wireValues(items[3].(wireMap)["ConditionCheck"].(wireMap))["value:tok"] {
+		t.Fatal("lease check does not pin the token")
 	}
 	for _, prior := range [][]string{{model.MentionSortKey(a, "o:m2", "participant")}, {"LINK#meeting#o:m1#member#u#speaker"}} {
-		if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", nil, prior); err == nil {
+		if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", nil, prior, testRunFence); err == nil {
 			t.Fatalf("foreign prior key accepted: %v", prior)
 		}
 	}
 	other := testUnresolved(a, "participant")
 	other.MeetingID = "o:m2"
-	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", []model.UnresolvedMention{other}, nil); err == nil {
+	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", []model.UnresolvedMention{other}, nil, testRunFence); err == nil {
 		t.Fatal("row of another meeting accepted")
+	}
+	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, nil, &model.PeopleRun{AccountID: "acc", Scope: "o:m2", LeaseToken: "tok"}); err == nil {
+		t.Fatal("lease of another meeting accepted")
 	}
 }
 
-func TestReplaceUnresolvedMentions_RetriesThenFails(t *testing.T) {
+func TestReplaceUnresolvedMentions_LostLeaseStopsChunks(t *testing.T) {
+	var rows []model.UnresolvedMention
+	for i := 0; i < 30; i++ {
+		rows = append(rows, testUnresolved(fmt.Sprintf("%032x", i), "participant"))
+	}
 	calls := 0
-	repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
+	repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
 		calls++
-		raw, _ := json.Marshal(body["RequestItems"])
-		return `{"UnprocessedItems":` + string(raw) + `}`
+		reasons := strings.Repeat(`{"Code":"None"},`, 24) + `{"Code":"ConditionalCheckFailed"}`
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[`+reasons+`]}`, nil), nil
 	})
-	rows := []model.UnresolvedMention{testUnresolved(testMentionHash('a'), "participant")}
-	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, nil); err == nil || calls != 4 {
+	err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, nil, testRunFence)
+	if !errors.Is(err, ErrPeopleRunLeaseLost) || !errors.Is(err, ErrConditionFailed) || calls != 1 {
 		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestPeopleLinkWritesInRunAreLeaseFenced(t *testing.T) {
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	l := testPeopleLink(model.LinkOriginAuto, model.LinkKindContact, "c1")
+	run := &model.PeopleRun{AccountID: "acc", Scope: "owner:m1", LeaseToken: "tok"}
+	if err := repo.PutPeopleLinkInRun(context.Background(), l, run); err != nil {
+		t.Fatal(err)
+	}
+	keys := txOpKeys(t, items)
+	if keys[len(keys)-1] != "ConditionCheck ACCOUNT#acc PEOPLERUN#owner:m1" {
+		t.Fatalf("put items %v", keys)
+	}
+	if err := repo.DeletePeopleLinkInRun(context.Background(), "acc", l.Key(), run); err != nil {
+		t.Fatal(err)
+	}
+	keys = txOpKeys(t, items)
+	if keys[len(keys)-1] != "ConditionCheck ACCOUNT#acc PEOPLERUN#owner:m1" || len(keys) != 4 {
+		t.Fatalf("delete items %v", keys)
+	}
+	if err := repo.PutPeopleLinkInRun(context.Background(), testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1"), run); err == nil {
+		t.Fatal("manual edge accepted in a run")
+	}
+
+	lost := func(n int) *DynamoDBRepository {
+		return summarySDKRepo(func(*http.Request) (*http.Response, error) {
+			reasons := strings.Repeat(`{"Code":"None"},`, n-1) + `{"Code":"ConditionalCheckFailed"}`
+			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[`+reasons+`]}`, nil), nil
+		})
+	}
+	if err := lost(7).PutPeopleLinkInRun(context.Background(), l, run); !errors.Is(err, ErrPeopleRunLeaseLost) {
+		t.Fatalf("put: %v", err)
+	}
+	if err := lost(4).DeletePeopleLinkInRun(context.Background(), "acc", l.Key(), run); !errors.Is(err, ErrPeopleRunLeaseLost) || errors.Is(err, ErrAccountLinkAccess) {
+		t.Fatalf("delete: %v", err)
 	}
 }
 
