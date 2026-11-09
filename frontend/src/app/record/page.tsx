@@ -1,6 +1,6 @@
 'use client';
 
-import { confirmDialog } from '@/lib/dialog';
+import { confirmDialog, isDialogOpen } from '@/lib/dialog';
 import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -27,7 +27,7 @@ import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { BrowserRecordingsCard } from '@/components/record/BrowserRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
-import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording, type NativeSelectedInput } from '@/lib/tauri';
+import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording, type NativeSelectedInput, type NativeMicMuted, onNativeMicMuted, onNativeSystemWake, switchNativeRecordingInput } from '@/lib/tauri';
 import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
 import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
@@ -80,6 +80,27 @@ function RecordPageInner() {
   // Mac app microphone: '' follows the meeting app's microphone (ADR-061).
   const [nativeInputUid, setNativeInputUid] = useState('');
   const [nativeInput, setNativeInput] = useState<NativeSelectedInput | null>(null);
+  // Only app builds with `switch_recording_input` offer the live picker.
+  const [nativeCanSwitch, setNativeCanSwitch] = useState(false);
+  // The meeting app shows the user muted: the microphone is not recorded.
+  const [nativeMicMuted, setNativeMicMuted] = useState<NativeMicMuted | null>(null);
+  const [micSwitch, setMicSwitch] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  // Mid-recording microphone change: the recording continues on the new one.
+  const switchNativeMic = (uid: string) => {
+    setMicSwitch({ busy: true, error: null });
+    switchNativeRecordingInput(uid)
+      .then((input) => {
+        setNativeInputUid(uid);
+        setNativeInput(input);
+        setMicSwitch({ busy: false, error: null });
+      })
+      .catch(() => {
+        setMicSwitch({
+          busy: false,
+          error: '마이크를 바꾸지 못했습니다. 장치 연결을 확인하고, 소리가 들어오지 않으면 녹음을 종료해 저장한 뒤 다시 시작해 주세요.',
+        });
+      });
+  };
   useEffect(() => {
     setNativeInputUid(readNativeInputPreference());
   }, []);
@@ -90,6 +111,13 @@ function RecordPageInner() {
   // during-recording banner/title/nav-lock never rendered and the screen
   // looked blank/broken even though capture was working fine.
   const [isNativeRecording, _setIsNativeRecording] = useState(false);
+  useEffect(() => {
+    if (!isNativeRecording) {
+      setNativeMicMuted(null);
+      return;
+    }
+    return onNativeMicMuted((m) => setNativeMicMuted(m.muted ? m : null));
+  }, [isNativeRecording]);
   // Ref mirror for callbacks whose closure predates the state flip:
   // RecordButton's onError is created in the render where the user CLICKED
   // (isNativeRecording still false), but fires after handleRecordingStart
@@ -505,6 +533,31 @@ function RecordPageInner() {
     }
   }, [flushNotesQueue, postRecording, notes]);
 
+  // A recording stopped because the Mac slept: its upload was cut off by
+  // sleep, so resume it on wake instead of waiting for the user.
+  const wakeRetryRef = useRef({ step: postRecording.step, hasPendingAudio: postRecording.hasPendingAudio, retry: postRecording.handleRetry });
+  useEffect(() => {
+    wakeRetryRef.current = { step: postRecording.step, hasPendingAudio: postRecording.hasPendingAudio, retry: postRecording.handleRetry };
+  }, [postRecording.step, postRecording.hasPendingAudio, postRecording.handleRetry]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = onNativeSystemWake(() => {
+      if (timer) clearTimeout(timer);
+      // Give the network a moment to return after wake, then retry only if
+      // this page is still showing the same failed upload.
+      timer = setTimeout(() => {
+        timer = null;
+        const { step, hasPendingAudio, retry } = wakeRetryRef.current;
+        if (step === 'error' && hasPendingAudio) retry();
+      }, 5_000);
+    });
+    return () => {
+      off();
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
   // --- Mac app local control (MCP over the app's socket; ADR-046) ---------
   // A start sets title/source/account first, then fires once that state has
   // rendered into RecordButton (controlTick); success is the native capture
@@ -543,7 +596,8 @@ function RecordPageInner() {
           fail('busy', 'The TTOBAK app is on the file upload screen; open the recording screen first.');
           return;
         }
-        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null || latest.importing) {
+        // An open confirmation belongs to an action the user has not finished.
+        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null || latest.importing || isDialogOpen()) {
           fail('busy', 'A recording or its upload is already in progress in the TTOBAK app.');
           return;
         }
@@ -1367,15 +1421,36 @@ function RecordPageInner() {
         {audioSource === 'system' && isNativeRecording && (
           <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300 mb-4">
             <span className="material-symbols-outlined text-base animate-pulse">speaker</span>
-            <span>
+            <span role="status" aria-live="polite" aria-atomic="true" className="min-w-0 break-words">
               시스템 오디오 캡처 중 — 실시간 자막은 연결되면 표시됩니다. 녹음 종료 후 자동으로 전사·요약됩니다.
               {nativeInput && (
                 <span className="block text-xs opacity-80">
                   마이크: {nativeInput.name}
-                  {nativeInput.reason === 'meeting' && nativeInput.app ? ` (${nativeInput.app}와 같은 마이크)` : ''}
+                  {nativeInput.reason === 'meeting' && nativeInput.app ? ` (${nativeInput.app}에서 쓰는 마이크)` : ''}
+                </span>
+              )}
+              {nativeMicMuted && (
+                <span className="block text-xl leading-relaxed">
+                  {nativeMicMuted.reason === 'meeting_ended'
+                    ? `${nativeMicMuted.app} 상태를 확인할 수 없거나 회의가 끝나 내 목소리는 녹음하지 않습니다.`
+                    : `${nativeMicMuted.app}에서 음소거 중이라 내 목소리는 녹음하지 않습니다.`}
                 </span>
               )}
             </span>
+          </div>
+        )}
+        {audioSource === 'system' && isNativeRecording && nativeCanSwitch && (
+          <div className="mb-4 flex flex-col gap-1">
+            <NativeMicSelector value={nativeInputUid} onChange={switchNativeMic} disabled={micSwitch.busy}
+              errorId={micSwitch.error ? 'native-mic-switch-error' : undefined} />
+            <p role="status" aria-live="polite" className="text-xl leading-relaxed">
+              {micSwitch.busy ? '마이크를 바꾸는 중입니다.' : ''}
+            </p>
+            {micSwitch.error && (
+              <p id="native-mic-switch-error" role="alert" className="text-xl leading-relaxed text-red-700 dark:text-red-400">
+                {micSwitch.error}
+              </p>
+            )}
           </div>
         )}
 
@@ -1421,7 +1496,7 @@ function RecordPageInner() {
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
             nativeInputDeviceUid={nativeInputUid}
-            onNativeInput={setNativeInput}
+            onNativeInput={(input, canSwitch) => { setNativeInput(input); setNativeCanSwitch(canSwitch); }}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
               finishControlStart({ ok: false, error: { code: 'start_failed', message: error } });
@@ -1476,7 +1551,7 @@ function RecordPageInner() {
             onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); }}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); setNativeCanSwitch(false); }}
             onPermissionGranted={() => {
               refreshDevices();
               // Native capture is running: answer a pending MCP start.
