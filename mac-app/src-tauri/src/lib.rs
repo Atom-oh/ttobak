@@ -132,6 +132,10 @@ pub struct StartResponse {
     #[cfg(target_os = "macos")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<audio::macos::SelectedInput>,
+    /// `switch_recording_input` exists in this build, so the SPA may offer a
+    /// live microphone picker (additive; older builds omit it).
+    #[cfg(target_os = "macos")]
+    pub can_switch_input: bool,
 }
 
 #[derive(Serialize)]
@@ -370,6 +374,7 @@ async fn start_recording(
             temp_path: canonical.to_string_lossy().into_owned(),
             warnings,
             input,
+            can_switch_input: true,
         });
     }
 
@@ -399,6 +404,34 @@ async fn list_input_devices() -> Result<serde_json::Value, AppError> {
     }
     #[cfg(not(target_os = "macos"))]
     Ok(serde_json::Value::Array(Vec::new()))
+}
+
+/// Switches the running recording's microphone (ADR-061); `None` follows the
+/// meeting app. The recording continues; returns the new input.
+#[tauri::command]
+async fn switch_recording_input(
+    state: State<'_, RecorderState>,
+    input_device_uid: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let backend = state
+            .recorder
+            .lock()
+            .backend()
+            .ok_or(AppError::NotRunning)?;
+        // Core Audio FFI runs off the recorder lock.
+        let selected =
+            tauri::async_runtime::spawn_blocking(move || backend.switch_input(input_device_uid))
+                .await
+                .map_err(|e| AppError::Backend(format!("microphone switch panicked: {e}")))??;
+        Ok(serde_json::to_value(selected).unwrap_or_default())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (state, input_device_uid);
+        Err(AppError::Unsupported)
+    }
 }
 
 #[tauri::command]
@@ -692,6 +725,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             list_input_devices,
+            switch_recording_input,
             recording_status,
             upload::upload_recording,
             cleanup_recording,
