@@ -810,6 +810,30 @@ service and in the `attribute_not_exists(accountId)` write condition.
 document is allowed only for admins or a current direct member of that account
 (read per request); the stored source creator grants nothing.
 
+`GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
+for **direct** members. Allowed pairs are news→project, tech→project,
+event→project and news→meeting. News and tech IDs are `{sourceId}:{docHash}`
+(tech uses `__tech__`), event IDs are event UUIDs and meeting IDs are
+`{ownerUserId}:{meetingId}`. A link is an `ACCOUNT#{accountId}` /
+`LINK#{fromKind}#{fromId}#{toKind}#{toId}` row plus a `LINKTO#` reverse row,
+written in one transaction that also checks the project still lists the
+account (`accountIds`) or the meeting is still published to it, and that the
+account and the acting member's direct `MEMBER#` row still exist (the automatic
+linker has no member row and checks only the account). Delete transactions
+check the same account and member rows. POST takes
+`{fromKind, fromId, toKind, toId}`; the news must come from one of the
+account's current sources, tech docs must exist under `__tech__`, and events
+must exist in the account. It returns 201 with the new link, or with the
+existing link for the same pair; endpoint failures return 400. GET returns
+`{ "links": [...], "nextCursor"? }` (100 rows read per page, opaque `cursor`),
+omitting rows whose project left the account, whose news source is no longer
+the account's, or whose meeting is no longer published, so a page can be short
+while a cursor remains. Each link shows `origin` (`manual` or `auto`),
+`createdBy`, `createdAt` and, for auto links, `evidence`. DELETE takes the four
+endpoint fields as query parameters, is allowed for any direct member, returns
+204 or 404, and for an `auto` link also writes a `LINKDENY#` row so the
+automatic linker never re-creates that pair.
+
 Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 `order=asc|desc`, `limit=1..25` and an opaque `cursor` that binds the account,
 order and resolved range. Without `from`, ascending lists start now (upcoming)
@@ -1523,6 +1547,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.List` |
 | POST | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.Create` |
 | DELETE | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Delete` |
+| GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
+| POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
+| DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
