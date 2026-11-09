@@ -98,8 +98,11 @@ func TestEventsFailClosedWithoutKeyAndRoundTripSealed(t *testing.T) {
 	if err != nil || got.Title != "아키텍처 리뷰" || got.Attendees[0].Name != "홍길동" || got.Revision != "r2" || !strings.HasSuffix(sk, testEventID) {
 		t.Fatalf("round trip: %#v %v", got, err)
 	}
-	if _, _, err := sealedRepo.openEvent(context.Background(), "other", item); err == nil {
-		t.Fatal("an event row opened under another account")
+	if _, _, err := sealedRepo.openEvent(context.Background(), "other", item); !errors.Is(err, ErrEventUnreadable) {
+		t.Fatalf("an event row opened under another account: %v", err)
+	}
+	if _, _, err := repo.openEvent(context.Background(), "account", item); !errors.Is(err, ErrEventEncryptionUnavailable) || errors.Is(err, ErrEventUnreadable) {
+		t.Fatalf("a missing key must stay unavailable: %v", err)
 	}
 }
 
