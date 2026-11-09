@@ -46,6 +46,22 @@ type accountPeopleRepo interface {
 	ClaimPeopleRun(context.Context, string, string, string, time.Time, time.Duration) (*model.PeopleRun, bool, error)
 	RecordPeopleRunMentions(context.Context, *model.PeopleRun, []string) error
 	FinishPeopleRun(context.Context, *model.PeopleRun) (bool, error)
+
+	// People panel reads (viewer-scoped, revalidated per request).
+	GetMember(context.Context, string, string) (*model.AccountMember, error)
+	GetAccountContact(context.Context, string, string) (*model.AccountContact, error)
+	GetMeetingPublication(context.Context, string, string) (*model.Meeting, error)
+	ListPeopleLinksByTarget(context.Context, string, string, string, int) ([]model.PeopleLink, string, error)
+	ListUnresolvedMentions(context.Context, string, string, int) ([]model.UnresolvedMention, string, error)
+
+	// People panel writes (direct member actor).
+	PutPeopleLink(context.Context, *model.PeopleLink, string) error
+	DeletePeopleLink(context.Context, string, string, model.PeopleLinkKey, string, bool) error
+	GetPeopleLink(context.Context, string, model.PeopleLinkKey) (*model.PeopleLink, error)
+	ListUnresolvedMentionsByHash(context.Context, string, string, int) ([]model.UnresolvedMention, bool, error)
+	DeleteUnresolvedMention(context.Context, string, string, string, string) error
+	AddPeopleLinkAlias(context.Context, string, string, model.PeopleLinkKey, string) error
+	PutMentionIgnore(context.Context, string, string, string) error
 }
 
 // PeopleRunOptions controls one resolver run. DryRun plans without any write,
@@ -268,6 +284,10 @@ func (s *AccountPeopleService) applyMeeting(ctx context.Context, meeting *model.
 		if l.Origin == model.LinkOriginManual {
 			if n := NormalizePersonName(l.Mention); n != "" {
 				manual[roleHash{l.Role, model.MentionHash(n)}] = true
+			}
+			// Further texts a member bound to the same edge.
+			for _, h := range l.MentionAliases {
+				manual[roleHash{l.Role, h}] = true
 			}
 		}
 	}

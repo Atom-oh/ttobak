@@ -23,7 +23,17 @@ type accountContactsRepo interface {
 	GetUserByID(context.Context, string) (*model.User, error)
 }
 
-type AccountContactsService struct{ repo accountContactsRepo }
+type AccountContactsService struct {
+	repo accountContactsRepo
+	// peopleResolve publishes one account PeopleResolveRequested after a
+	// contact create or update (best-effort).
+	peopleResolve func(context.Context, model.PeopleResolveRequested) error
+}
+
+// SetPeopleResolvePublisher wires the contact-change people resolve publisher.
+func (s *AccountContactsService) SetPeopleResolvePublisher(fn func(context.Context, model.PeopleResolveRequested) error) {
+	s.peopleResolve = fn
+}
 
 var ErrContactConflict = errors.New("contact changed concurrently")
 
@@ -184,6 +194,9 @@ func (s *AccountContactsService) Mutate(ctx context.Context, account, user, op, 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if op != "delete" {
+		publishPeopleResolve(ctx, s.peopleResolve, model.PeopleResolveRequested{AccountID: account, Reason: model.PeopleResolveReasonContacts})
 	}
 	return &c, nil
 }

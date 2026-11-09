@@ -48,6 +48,18 @@ type fakePeopleRepo struct {
 	ops        []string
 
 	leaseLostAfter, fencedWrites int
+
+	// People panel reads.
+	targetLinks []model.PeopleLink
+	mentionRows []model.UnresolvedMention
+	contactErr  map[string]error
+	pubReads    int
+
+	// People panel writes.
+	stored         map[model.PeopleLinkKey]*model.PeopleLink
+	putActors      []string
+	mentionDeletes []string
+	ignorePuts     []string
 }
 
 func newFakePeopleRepo() *fakePeopleRepo {
@@ -59,6 +71,8 @@ func newFakePeopleRepo() *fakePeopleRepo {
 		projects: map[string]*model.Project{},
 		ignores:  map[string]bool{},
 		putErr:   map[model.PeopleLinkKey]error{},
+
+		contactErr: map[string]error{},
 	}
 }
 

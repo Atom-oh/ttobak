@@ -42,7 +42,7 @@ func validPeopleLinkRow(l *model.PeopleLink) bool {
 	return l != nil && l.AccountID != "" && model.ValidatePeopleLinkKey(l.Key()) == nil && validPeopleOrigin(l.Origin) &&
 		l.CreatedAt != "" && l.SourceField != "" && utf8.ValidString(l.Mention) && utf8.ValidString(l.Evidence) &&
 		utf8.RuneCountInString(l.Mention) <= model.MaxPeopleMentionRunes &&
-		utf8.RuneCountInString(l.Evidence) <= model.MaxPeopleEvidenceRunes &&
+		utf8.RuneCountInString(l.Evidence) <= model.MaxPeopleEvidenceRunes && len(l.MentionAliases) == 0 &&
 		len(l.SourceRef) <= model.MaxPeopleSourceRefBytes &&
 		// A self-mention would duplicate the META access check item.
 		!(l.ToKind == model.LinkKindAccount && l.ToID == l.AccountID)
@@ -678,6 +678,38 @@ func (r *DynamoDBRepository) DeleteUnresolvedMention(ctx context.Context, accoun
 	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName),
 		Key: accountNewsKey(model.PrefixAccount+accountID, sk)}); err != nil {
 		return fmt.Errorf("delete unresolved mention: %w", err)
+	}
+	return nil
+}
+
+// AddPeopleLinkAlias adds a mention hash to a manual edge's forward row (the
+// row the resolver reads). The row must still be manual with room for it and
+// the actor a direct member; failures are ErrConditionFailed
+// (ErrAccountLinkAccess for the member checks).
+func (r *DynamoDBRepository) AddPeopleLinkAlias(ctx context.Context, accountID, actorID string, k model.PeopleLinkKey, hash string) error {
+	if accountID == "" || actorID == "" || model.ValidatePeopleLinkKey(k) != nil || !validMentionHash(hash) {
+		return fmt.Errorf("invalid people link alias")
+	}
+	add := expression.Add(expression.Name("mentionAliases"), expression.Value(&types.AttributeValueMemberSS{Value: []string{hash}}))
+	room := expression.AttributeNotExists(expression.Name("mentionAliases")).
+		Or(expression.Size(expression.Name("mentionAliases")).LessThan(expression.Value(model.MaxPeopleMentionAliases)))
+	fwd, err := expression.NewBuilder().WithUpdate(add).WithCondition(expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("origin").Equal(expression.Value(model.LinkOriginManual))).And(room)).Build()
+	if err != nil {
+		return err
+	}
+	pk := model.PrefixAccount + accountID
+	items := []types.TransactWriteItem{
+		{Update: &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkSortKey(k)), UpdateExpression: fwd.Update(),
+			ConditionExpression: fwd.Condition(), ExpressionAttributeNames: fwd.Names(), ExpressionAttributeValues: fwd.Values()}},
+	}
+	access, err := r.accountLinkAccessChecks(accountID, actorID)
+	if err != nil {
+		return err
+	}
+	items = append(items, access...)
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return classifyAccountLinkDelete(err, len(items), 1)
 	}
 	return nil
 }
