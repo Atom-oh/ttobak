@@ -530,3 +530,29 @@ func TestListUnresolvedMentions_GroupsContiguous(t *testing.T) {
 		t.Fatalf("by hash %v %v %q", truncated, err, prefix)
 	}
 }
+
+func TestPrunePeopleLink_RequiresMissingMeeting(t *testing.T) {
+	var items []interface{}
+	repo := capturePeopleTx(t, &items)
+	k := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1").Key()
+	if err := repo.PrunePeopleLink(context.Background(), "acc", k); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Delete ACCOUNT#acc " + model.PeopleLinkSortKey(k),
+		"Delete ACCOUNT#acc " + model.PeopleLinkToSortKey(k),
+		"ConditionCheck USER#owner MEETING#m1",
+	}
+	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	if c := items[2].(wireMap)["ConditionCheck"].(wireMap)["ConditionExpression"].(string); !strings.Contains(c, "attribute_not_exists") {
+		t.Fatalf("meeting check %q", c)
+	}
+	repo = summarySDKRepo(func(*http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`, nil), nil
+	})
+	if err := repo.PrunePeopleLink(context.Background(), "acc", k); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("live meeting: %v", err)
+	}
+}

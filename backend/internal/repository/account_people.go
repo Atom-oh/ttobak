@@ -714,3 +714,38 @@ func (r *DynamoDBRepository) FinishPeopleRun(ctx context.Context, run *model.Peo
 	}
 	return old.Rerun, nil
 }
+
+// PrunePeopleLink deletes a people edge of either origin, with its reverse
+// row, for an operator prune of a meeting whose row no longer exists. The
+// transaction requires the meeting row to be absent, so a live meeting's
+// edges, including unpublished ones, are never removed. A failed condition
+// maps to ErrConditionFailed.
+func (r *DynamoDBRepository) PrunePeopleLink(ctx context.Context, accountID string, k model.PeopleLinkKey) error {
+	owner, meeting, ok := splitLinkMeetingID(k.MeetingID)
+	if accountID == "" || !ok || model.ValidatePeopleLinkKey(k) != nil {
+		return fmt.Errorf("invalid people link")
+	}
+	exists, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return err
+	}
+	pk := model.PrefixAccount + accountID
+	gone, err := r.linkConditionCheck(accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), expression.AttributeNotExists(expression.Name("PK")))
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkSortKey(k)),
+			ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}},
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PeopleLinkToSortKey(k))}},
+		gone,
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		var cancelled *types.TransactionCanceledException
+		if errors.As(err, &cancelled) {
+			return fmt.Errorf("%w: prune people link", ErrConditionFailed)
+		}
+		return fmt.Errorf("prune people link: %w", err)
+	}
+	return nil
+}
