@@ -66,19 +66,25 @@ func (f *fakeRepo) PrunePeopleLink(_ context.Context, _ string, k model.PeopleLi
 	f.pruned = append(f.pruned, k.MeetingID+"/"+k.ToID)
 	return nil
 }
-func (f *fakeRepo) DeleteUnresolvedMention(_ context.Context, _, _, meetingID, _ string) error {
+func (f *fakeRepo) PruneUnresolvedMention(_ context.Context, _, _, meetingID, _ string) error {
 	f.deletedMs = append(f.deletedMs, meetingID)
 	return nil
 }
 
 type fakeResolver struct {
-	calls []string
-	dry   []bool
+	calls    []string
+	accounts []string
+	dry      []bool
+	fail     map[string]error
 }
 
-func (r *fakeResolver) ResolveMeeting(_ context.Context, owner, id string, opt service.PeopleRunOptions) (service.PeopleRunResult, error) {
+func (r *fakeResolver) ResolveMeetingForAccount(_ context.Context, account, owner, id string, opt service.PeopleRunOptions) (service.PeopleRunResult, error) {
 	r.calls = append(r.calls, owner+":"+id)
+	r.accounts = append(r.accounts, account)
 	r.dry = append(r.dry, opt.DryRun)
+	if err := r.fail[id]; err != nil {
+		return service.PeopleRunResult{}, err
+	}
 	res := service.PeopleRunResult{Meetings: 1, Resolved: 2, Unresolved: 1}
 	if !opt.DryRun {
 		res.Written = 2
@@ -185,5 +191,26 @@ func TestBackfill_OutputHasNoIDs(t *testing.T) {
 		if !strings.Contains(out.String(), key) {
 			t.Fatalf("output %s lacks %s", out.String(), key)
 		}
+	}
+}
+
+func TestBackfill_ResolvesOnlyForSelectedAccount(t *testing.T) {
+	f, r := newFake(), &fakeResolver{}
+	if _, err := backfill(context.Background(), f, r, backfillOptions{AccountID: "acct-secret", DryRun: true, Limit: 200}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range r.accounts {
+		if a != "acct-secret" {
+			t.Fatalf("resolved for %q", a)
+		}
+	}
+}
+
+func TestBackfill_ContinuesPastMeetingErrors(t *testing.T) {
+	f := newFake()
+	r := &fakeResolver{fail: map[string]error{"new-meeting": errors.New("throttled")}}
+	res, err := backfill(context.Background(), f, r, backfillOptions{AccountID: "acct-secret", DryRun: true, Limit: 200})
+	if err != nil || res.Errors != 1 || res.Meetings != 2 || len(r.calls) != 3 {
+		t.Fatalf("res=%+v err=%v calls=%v", res, err, r.calls)
 	}
 }

@@ -93,3 +93,31 @@ func TestPeopleRunErrorCode(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessPeopleResolveRequested_PendingRerunIsRetried(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.reruns = []bool{true, true}
+	res, err := newPeopleTestService(f).ProcessPeopleResolveRequested(context.Background(),
+		model.PeopleResolveRequested{AccountID: "acc", OwnerID: "owner", MeetingID: "m1", Reason: "speakers"})
+	if !errors.Is(err, ErrPeopleRerunPending) || !res.RerunPending || PeopleRunErrorCode(err) != "rerun_pending" {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	f = newFakePeopleRepo()
+	f.reruns = []bool{true, false}
+	if _, err := newPeopleTestService(f).ProcessPeopleResolveRequested(context.Background(),
+		model.PeopleResolveRequested{AccountID: "acc", OwnerID: "owner", MeetingID: "m1", Reason: "speakers"}); err != nil {
+		t.Fatalf("served rerun: %v", err)
+	}
+}
+
+func TestResolveMeetingForAccount_SkipsMeetingOfAnotherAccount(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.meetings["owner:m1"].Participants = []string{"Lee"}
+	res, err := newPeopleTestService(f).ResolveMeetingForAccount(context.Background(), "old-account", "owner", "m1", PeopleRunOptions{})
+	if err != nil || res.Skipped != 1 || f.claims != 0 || len(f.replaced) != 0 || len(f.puts) != 0 {
+		t.Fatalf("res=%+v err=%v claims=%d", res, err, f.claims)
+	}
+	if res, err := newPeopleTestService(f).ResolveMeetingForAccount(context.Background(), "acc", "owner", "m1", PeopleRunOptions{}); err != nil || res.Meetings != 1 {
+		t.Fatalf("own account: %+v %v", res, err)
+	}
+}
