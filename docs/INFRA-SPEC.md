@@ -634,6 +634,11 @@ delivered and retries once with its `url.QueryUnescape` form only when the key
 contains `%` or `+` and the object is missing; an object still missing (404, or
 403 because the role has no `s3:ListBucket`) logs `outcome=NOT_FOUND` and is not
 retried.
+Objects created before a source flag was `on` never received a trigger; the
+operator CLI `backend/cmd/backfill-terms-sources` (dry run by default) passes
+every `kb/` and `shared/research/` key to the same mapper and spaces the
+published requests (`-interval`, default 5s). The worker's run row makes a rerun
+a no-op for unchanged content.
 
 Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
 (`cron(0 21 * * ? *)`, after the 19:00 crawl) invokes summarize with
