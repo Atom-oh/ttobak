@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { accountApi } from '@/lib/api';
-import { CONTACT_FIELDS, contactFromRow, importContacts, isContactAccessDenied, mapContactHeaders, parseContactCsv, type ContactField, type ContactMapping, type ImportStatus } from '@/lib/contactImport';
+import { CONTACT_FIELDS, contactFromRow, importContacts, isContactAccessDenied, mapContactHeaders, type ContactField, type ContactMapping, type ImportStatus } from '@/lib/contactImport';
+import { readContactFile } from '@/lib/contactFile';
 
-const MAX_FILE = 5 * 1024 * 1024;
-const MAX_ROWS = 2000;
 const statusLabel: Record<ImportStatus, string> = { created: '추가됨', duplicate: '중복으로 건너뜀', failed: '실패 또는 저장 여부 확인 필요', invalid: '이름 없음' };
 
 export function ContactImport({ accountId, userId, onImported, onDenied }: { accountId: string; userId: string; onImported: () => void; onDenied: () => void }) {
@@ -30,25 +29,9 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
     const current = () => !!active && !active.signal.aborted && generation === fileGeneration.current;
     setError(''); setTable([]); setStatuses({});
     try {
-      if (file.size > MAX_FILE) throw new Error('파일은 5MB 이하여야 합니다.');
-      let rows: string[][];
-      if (/\.xlsx$/i.test(file.name)) {
-        const [{ readSheet }, { validateContactWorkbook }] = await Promise.all([import('read-excel-file/browser'), import('@/lib/contactExcel')]);
-        const bytes = await file.arrayBuffer();
-        validateContactWorkbook(new Uint8Array(bytes));
-        const sheet = await readSheet(bytes);
-        rows = sheet.map((row) => row.map((cell) => cell instanceof Date ? cell.toISOString().slice(0, 10) : cell == null ? '' : String(cell)));
-      } else if (/\.csv$/i.test(file.name)) {
-        const bytes = await file.arrayBuffer();
-        let text: string;
-        try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-        catch { text = new TextDecoder('euc-kr').decode(bytes); }
-        rows = parseContactCsv(text);
-      } else throw new Error('CSV 또는 .xlsx 파일을 선택해 주세요.');
+      const rows = await readContactFile(file);
       if (!current()) return;
-      if (rows.length < 2) throw new Error('제목 행과 연락처 행이 필요합니다.');
-      if (rows.length - 1 > MAX_ROWS || rows.some((row) => row.length > 100)) throw new Error('한 번에 최대 2,000행, 100열까지 가져올 수 있습니다.');
-      const headers = rows[0].map((header, i) => header.trim() || `열 ${i + 1}`);
+      const headers = rows[0];
       setTable([headers, ...rows.slice(1)]);
       setMapping(mapContactHeaders(headers));
       setSelected(new Set(rows.slice(1).map((_, i) => i)));
