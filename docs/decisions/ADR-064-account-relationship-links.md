@@ -1,7 +1,8 @@
 # ADR-064: Account relationship links, signals and KB references
 
 - Status: Accepted; implemented on the account signals and flow branch. Nothing
-  in it is deployed yet.
+  in it is deployed yet; see the
+  [readiness record](../research/2026-11-08-account-signals-readiness.md).
 - Decision date: 2026-11-09.
 - Related: ADR-015 (Account entity), ADR-016 (meeting publication), ADR-022
   (document previews), ADR-045 (connector delegation), ADR-063 (account contact
