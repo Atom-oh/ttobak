@@ -386,7 +386,7 @@ func TestListAccountLinksByPrefixKeyConditionAndBound(t *testing.T) {
 		values := wireValues(body)
 		if target != "DynamoDB_20120810.Query" || body["ConsistentRead"] != true ||
 			!strings.Contains(body["KeyConditionExpression"].(string), "begins_with") ||
-			!values["value:ACCOUNT#acc"] || !values["value:LINKTO#project#p1#"] {
+			!values["value:ACCOUNT#acc"] || !values["value:LINKTO#project#p1#event#"] {
 			t.Fatalf("query: %#v", body)
 		}
 		if calls == 1 {
@@ -395,13 +395,13 @@ func TestListAccountLinksByPrefixKeyConditionAndBound(t *testing.T) {
 			}
 			return `{"Items":[
 {"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#event#e1"},"fromKind":{"S":"news"},"fromId":{"S":"spoofed"},"origin":{"S":"manual"},"createdAt":{"S":"t"}},
-{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#news#s:h"},"origin":{"S":"auto"},"createdAt":{"S":"t"}}],
-"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#news#s:h"}}}`
+{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#event#e2"},"origin":{"S":"auto"},"createdAt":{"S":"t"}}],
+"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#event#e2"}}}`
 		}
 		t.Fatal("read past the bound")
 		return ""
 	})
-	links, truncated, err := repo.ListAccountLinksByPrefix(context.Background(), "acc", "LINKTO#project#p1#", 2)
+	links, truncated, err := repo.ListAccountLinksByPrefix(context.Background(), "acc", "LINKTO#project#p1#event#", 2)
 	if err != nil || !truncated || len(links) != 2 {
 		t.Fatalf("links=%#v truncated=%v err=%v", links, truncated, err)
 	}
@@ -415,5 +415,36 @@ func TestListAccountLinksByPrefixKeyConditionAndBound(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("calls=%d", calls)
+	}
+}
+
+// People rows (LINKTO#project#{id}#meeting#...) sit inside a to-endpoint
+// prefix; the listing reads the ranges around them so they spend no budget.
+func TestListAccountLinksByPrefix_SkipsPeopleRows(t *testing.T) {
+	calls := 0
+	repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
+		calls++
+		values := wireValues(body)
+		if !strings.Contains(body["KeyConditionExpression"].(string), "BETWEEN") {
+			t.Fatalf("query: %#v", body)
+		}
+		switch calls {
+		case 1:
+			if !values["value:LINKTO#project#p1#"] || !values[`value:LINKTO#project#p1#meeting"`] || body["Limit"].(float64) != 2 {
+				t.Fatalf("first range: %#v", body)
+			}
+			return `{"Items":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#event#e1"},"origin":{"S":"manual"},"createdAt":{"S":"t"}}]}`
+		case 2:
+			if !values["value:LINKTO#project#p1#meeting$"] || !values["value:LINKTO#project#p1$"] || body["Limit"].(float64) != 1 {
+				t.Fatalf("second range: %#v", body)
+			}
+			return `{"Items":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"LINKTO#project#p1#news#s:h"},"origin":{"S":"auto"},"createdAt":{"S":"t"}}]}`
+		}
+		t.Fatal("extra query")
+		return ""
+	})
+	links, truncated, err := repo.ListAccountLinksByPrefix(context.Background(), "acc", "LINKTO#project#p1#", 2)
+	if err != nil || truncated || len(links) != 2 || links[1].FromKind != "news" || calls != 2 {
+		t.Fatalf("links=%#v truncated=%v err=%v calls=%d", links, truncated, err, calls)
 	}
 }
