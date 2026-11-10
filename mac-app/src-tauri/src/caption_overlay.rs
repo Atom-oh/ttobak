@@ -6,6 +6,10 @@
 //! Each window loads the bundled `src/caption-overlay.html` (a local origin),
 //! holds no token, makes no network request and may call no app command
 //! (`capabilities/caption-overlay.json`). Caption text is never logged.
+//!
+//! Each page listens with a target scoped to its own window, so an event sent
+//! with `emit_to` reaches only that window; every payload also names its
+//! language and the page drops any other language's payload.
 
 use crate::caption_model::{self, CaptionSettings, CaptionStyle, WindowLayout};
 use crate::caption_translate::{CaptionError, CaptionState};
@@ -133,14 +137,60 @@ pub struct OverlayState {
     throttle: Mutex<SaveThrottle>,
 }
 
+/// `caption-update` payload.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CaptionUpdate {
+    lang: String,
     kind: String,
     id: String,
     order: u32,
     text: String,
     is_final: bool,
+}
+
+impl CaptionUpdate {
+    fn new(lang: &str, kind: &str, id: &str, order: u32, text: &str, is_final: bool) -> Self {
+        Self {
+            lang: lang.to_string(),
+            kind: kind.to_string(),
+            id: id.to_string(),
+            order,
+            text: text.to_string(),
+            is_final,
+        }
+    }
+}
+
+/// `caption-style` payload: the style fields plus the window's language.
+#[derive(Clone, Serialize)]
+struct StyleUpdate<'a> {
+    lang: &'a str,
+    #[serde(flatten)]
+    style: &'a CaptionStyle,
+}
+
+/// Whether this window event must close every overlay: the overlays have no
+/// close control and float above everything, so they must not outlive the
+/// main window.
+pub fn closes_overlays(label: &str, event: &WindowEvent) -> bool {
+    label == "main" && matches!(event, WindowEvent::Destroyed)
+}
+
+/// Destroys every open overlay without emitting `CloseRequested`, so their
+/// saved `open` flags survive and they reopen next session. Runs on the main
+/// thread from the run-loop callback.
+pub fn destroy_all(app: &AppHandle) {
+    for lang in caption_model::LANGS {
+        let Some(label) = caption_model::window_label(lang) else {
+            continue;
+        };
+        if let Some(window) = app.get_webview_window(label) {
+            if let Err(e) = window.destroy() {
+                log::warn!("caption overlay destroy failed: {e}");
+            }
+        }
+    }
 }
 
 fn window_error(what: &str, e: tauri::Error) -> CaptionError {
@@ -374,13 +424,18 @@ pub async fn caption_overlay_set_style(
     })?;
     gated?;
     if app.get_webview_window(label).is_some() {
-        app.emit_to(EventTarget::webview_window(label), "caption-style", &style)
+        let payload = StyleUpdate {
+            lang: &lang,
+            style: &style,
+        };
+        app.emit_to(EventTarget::webview_window(label), "caption-style", payload)
             .map_err(|e| window_error("style", e))?;
     }
     Ok(())
 }
 
 /// Sends caption text to the window for `lang`; a closed window ignores it.
+/// An `entry` with empty text removes that line.
 // The arguments are the command's wire contract (one per payload field).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -399,13 +454,7 @@ pub async fn caption_overlay_push(
     if app.get_webview_window(label).is_none() {
         return Ok(());
     }
-    let update = CaptionUpdate {
-        kind,
-        id,
-        order,
-        text,
-        is_final,
-    };
+    let update = CaptionUpdate::new(&lang, &kind, &id, order, &text, is_final);
     app.emit_to(EventTarget::webview_window(label), "caption-update", update)
         .map_err(|e| window_error("push", e))
 }
@@ -418,6 +467,8 @@ mod tests {
     fn push_rejects_bad_kind_and_oversized_fields() {
         assert!(check_push("entry", "a1", "hello").is_ok());
         assert!(check_push("clear", "", "").is_ok());
+        // Empty entry text removes that line from the window.
+        assert!(check_push("entry", "a1", "").is_ok());
         assert!(check_push("preview", "", "").is_ok());
         assert_eq!(
             check_push("bogus", "a1", "x").unwrap_err().code,
@@ -435,6 +486,35 @@ mod tests {
             check_push("entry", &"i".repeat(65), "x").unwrap_err().code,
             "invalid-input"
         );
+    }
+
+    #[test]
+    fn payloads_carry_the_window_language() {
+        let update = serde_json::to_value(CaptionUpdate::new("en", "entry", "a1", 3, "hi", true))
+            .expect("json");
+        assert_eq!(update["lang"], "en");
+        assert_eq!(update["kind"], "entry");
+        assert_eq!(update["id"], "a1");
+        assert_eq!(update["order"], 3);
+        assert_eq!(update["text"], "hi");
+        assert_eq!(update["isFinal"], true);
+        let style = CaptionStyle::default();
+        let value = serde_json::to_value(StyleUpdate {
+            lang: "zh",
+            style: &style,
+        })
+        .expect("json");
+        assert_eq!(value["lang"], "zh");
+        assert_eq!(value["fontSize"], style.font_size);
+        assert_eq!(value["fontColor"], style.font_color.as_str());
+    }
+
+    #[test]
+    fn overlays_close_only_when_the_main_window_is_destroyed() {
+        assert!(closes_overlays("main", &WindowEvent::Destroyed));
+        assert!(!closes_overlays("caption-ko", &WindowEvent::Destroyed));
+        assert!(!closes_overlays("meeting-prompt", &WindowEvent::Destroyed));
+        assert!(!closes_overlays("main", &WindowEvent::Focused(false)));
     }
 
     #[test]

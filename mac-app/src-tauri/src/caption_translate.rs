@@ -14,10 +14,14 @@ use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 /// Requests allowed per sliding minute, across all callers.
 const RATE_PER_MINUTE: u32 = 600;
+/// Input bytes (text plus context) allowed per sliding minute, across all
+/// callers. Bounds what a script in the remote page can send to the user's
+/// AWS account.
+const BYTES_PER_MINUTE: usize = 600_000;
 const LLM_TIMEOUT: Duration = Duration::from_secs(6);
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -98,6 +102,62 @@ impl RateCeiling {
         }
         self.seen.push_back(now);
         true
+    }
+}
+
+/// Sliding 60 s window input-byte budget. A rejected request is not counted.
+pub struct ByteBudget {
+    per_minute: usize,
+    used: usize,
+    seen: VecDeque<(Instant, usize)>,
+}
+
+impl ByteBudget {
+    pub fn new(per_minute: usize) -> Self {
+        Self {
+            per_minute,
+            used: 0,
+            seen: VecDeque::new(),
+        }
+    }
+
+    pub fn allow(&mut self, now: Instant, bytes: usize) -> bool {
+        while let Some(&(at, n)) = self.seen.front() {
+            if now.saturating_duration_since(at) >= Duration::from_secs(60) {
+                self.seen.pop_front();
+                self.used -= n;
+            } else {
+                break;
+            }
+        }
+        if self.used.saturating_add(bytes) > self.per_minute {
+            return false;
+        }
+        self.used += bytes;
+        self.seen.push_back((now, bytes));
+        true
+    }
+}
+
+/// Input bytes a request sends: the text plus every context entry.
+pub fn request_bytes(text: &str, context: &[String]) -> usize {
+    text.len() + context.iter().map(String::len).sum::<usize>()
+}
+
+/// Rejects a translation into `target` unless its overlay window is open
+/// (`is_open` is asked about the window label).
+pub fn require_open_window(
+    target: &str,
+    is_open: impl Fn(&str) -> bool,
+) -> Result<(), CaptionError> {
+    let label = caption_model::window_label(target)
+        .ok_or_else(|| CaptionError::invalid("Unsupported language."))?;
+    if is_open(label) {
+        Ok(())
+    } else {
+        Err(CaptionError::invalid(
+            "Open the caption window for this language first.",
+        ))
     }
 }
 
@@ -192,12 +252,13 @@ struct Clients {
 }
 
 /// Managed state: current settings, the settings file, cached AWS clients
-/// keyed by `(profile, region)` and the request limiter.
+/// keyed by `(profile, region)` and the request and byte limiters.
 pub struct CaptionState {
     settings: Mutex<CaptionSettings>,
     path: PathBuf,
     clients: Mutex<HashMap<(String, String), Clients>>,
     rate: Mutex<RateCeiling>,
+    budget: Mutex<ByteBudget>,
 }
 
 impl CaptionState {
@@ -215,6 +276,7 @@ impl CaptionState {
             path,
             clients: Mutex::new(HashMap::new()),
             rate: Mutex::new(RateCeiling::new(RATE_PER_MINUTE)),
+            budget: Mutex::new(ByteBudget::new(BYTES_PER_MINUTE)),
         }
     }
 
@@ -312,6 +374,25 @@ pub async fn caption_settings_get(
     })
 }
 
+/// Validates, saves and commits the profile, region and extra language, then
+/// drops the cached AWS clients.
+fn apply_settings(
+    state: &CaptionState,
+    profile: Option<String>,
+    region: String,
+    extra_language: Option<String>,
+) -> Result<CaptionSettings, CaptionError> {
+    // `update` holds the lock across validation and the file write so
+    // concurrent saves never share the fixed temp-file name.
+    let next = state.update(true, |s| {
+        s.profile = profile;
+        s.region = region;
+        s.extra_language = extra_language;
+    })?;
+    state.clients.lock().clear();
+    Ok(next)
+}
+
 #[tauri::command]
 pub async fn caption_settings_set(
     state: State<'_, CaptionState>,
@@ -324,25 +405,7 @@ pub async fn caption_settings_set(
             return Err(CaptionError::from_code("profile-missing"));
         }
     }
-    // The lock is held across validation and the file write so concurrent
-    // saves never share the fixed temp-file name; there is no await inside.
-    let mut guard = state.settings.lock();
-    let mut next = guard.clone();
-    next.profile = profile;
-    next.region = region;
-    next.extra_language = extra_language;
-    caption_model::validate_settings(&next).map_err(|e| CaptionError::invalid(&e))?;
-    if let Some(dir) = state.path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    caption_model::save(&state.path, &next).map_err(|e| {
-        log::warn!("caption settings save failed: {:?}", e.kind());
-        CaptionError::from_code("aws-error")
-    })?;
-    *guard = next.clone();
-    drop(guard);
-    state.clients.lock().clear();
-    Ok(next)
+    apply_settings(&state, profile, region, extra_language)
 }
 
 fn sdk_code<E, R>(err: &aws_sdk_bedrockruntime::error::SdkError<E, R>) -> &'static str
@@ -407,6 +470,7 @@ async fn run_translate(
 
 #[tauri::command]
 pub async fn caption_translate(
+    app: AppHandle,
     state: State<'_, CaptionState>,
     text: String,
     source_lang: String,
@@ -417,7 +481,17 @@ pub async fn caption_translate(
     if !state.rate.lock().allow(Instant::now()) {
         return Err(CaptionError::from_code("rate-limited"));
     }
+    require_open_window(&target_lang, |label| {
+        app.get_webview_window(label).is_some()
+    })?;
     let context = check_input(&text, &source_lang, &target_lang, &context)?;
+    if !state
+        .budget
+        .lock()
+        .allow(Instant::now(), request_bytes(&text, &context))
+    {
+        return Err(CaptionError::from_code("rate-limited"));
+    }
     let (profile, region) = {
         let s = state.settings.lock();
         (s.profile.clone(), s.region.clone())
@@ -495,6 +569,59 @@ mod tests {
         assert!(r.allow(t0));
         assert!(!r.allow(t0 + Duration::from_secs(59)));
         assert!(r.allow(t0 + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn byte_budget_limits_input_per_minute() {
+        let mut b = ByteBudget::new(600_000);
+        let t0 = Instant::now();
+        assert!(b.allow(t0, 400_000));
+        assert!(b.allow(t0, 200_000));
+        assert!(!b.allow(t0, 1), "budget spent");
+        assert!(!b.allow(t0 + Duration::from_secs(59), 1));
+        // A rejected request does not count against the budget.
+        assert!(b.allow(t0 + Duration::from_secs(60), 600_000));
+        let mut fresh = ByteBudget::new(600_000);
+        assert!(!fresh.allow(t0, 600_001));
+        assert!(fresh.allow(t0, 600_000));
+    }
+
+    #[test]
+    fn request_bytes_count_text_and_context() {
+        assert_eq!(
+            request_bytes("가나", &["ab".to_string(), "c".to_string()]),
+            9
+        );
+        assert_eq!(request_bytes("x", &[]), 1);
+    }
+
+    #[test]
+    fn translation_needs_the_target_window_open() {
+        let open = |label: &str| label == "caption-en";
+        assert!(require_open_window("en", open).is_ok());
+        let err = require_open_window("ko", open).unwrap_err();
+        assert_eq!(err.code, "invalid-input");
+        let m = err.message.to_lowercase();
+        for bad in ["not found", "not allowed", "unknown command"] {
+            assert!(!m.contains(bad), "{m}");
+        }
+        assert_eq!(
+            require_open_window("fr", |_| true).unwrap_err().code,
+            "invalid-input"
+        );
+    }
+
+    #[test]
+    fn failed_settings_save_reports_save_failed() {
+        let dir = std::env::temp_dir().join(format!("caption_save_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        // The parent is a regular file, so the save cannot succeed.
+        let state = CaptionState::new(blocker.join("caption-overlay.json"));
+        let err = apply_settings(&state, None, "us-east-1".into(), None).unwrap_err();
+        assert_eq!(err.code, "save-failed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

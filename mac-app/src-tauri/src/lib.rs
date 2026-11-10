@@ -874,6 +874,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // Caption overlays float above everything with no close control,
+            // so they close with the main window (their saved `open` flags
+            // are kept for the next launch).
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = &event {
+                if caption_overlay::closes_overlays(label, event) {
+                    caption_overlay::destroy_all(app_handle);
+                }
+            }
             // Best-effort finalize on a GRACEFUL quit (window closed, Cmd+Q,
             // app.exit()). This only helps that path — a SIGKILL (Activity
             // Monitor "Force Quit", `kill -9`) tears the process down

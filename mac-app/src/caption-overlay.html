@@ -56,6 +56,8 @@
     <script>
       (function () {
         var MAX_LINES = 3;
+        // Ids already shown as final; bounded, reset by clear and preview.
+        var MAX_FINAL_IDS = 200;
         var SAMPLES = {
           ko: '실시간 자막이 여기에 표시됩니다.',
           en: 'Live captions will appear here.',
@@ -71,6 +73,7 @@
         var box = document.getElementById('captions');
         // id -> { order, text, el }
         var entries = new Map();
+        var finals = new Set();
 
         function applyStyle(s) {
           if (!s || typeof s !== 'object') return;
@@ -98,6 +101,19 @@
         function clearAll() {
           entries.forEach(function (e) { e.el.remove(); });
           entries.clear();
+          finals.clear();
+        }
+
+        function remove(id) {
+          var e = entries.get(id);
+          if (!e) return;
+          e.el.remove();
+          entries.delete(id);
+        }
+
+        function markFinal(id) {
+          finals.add(id);
+          if (finals.size > MAX_FINAL_IDS) finals.delete(finals.values().next().value);
         }
 
         // Shows the newest MAX_LINES entries by order. When a line is added,
@@ -157,19 +173,33 @@
           upsert('preview', 0, SAMPLES[lang]);
         }
 
-        // Interim and final text share one style.
+        // Only this window's language; Rust also targets the window.
+        function ours(p) {
+          return !!p && typeof p === 'object' && p.lang === lang;
+        }
+
+        // Interim and final text share one style. Empty text removes the
+        // line (a failed translation); once an id is final, later drafts for
+        // it are dropped (commands may emit out of order).
         function onUpdate(p) {
-          if (!p || typeof p !== 'object') return;
+          if (!ours(p)) return;
           if (p.kind === 'clear') {
             previewing = false;
             clearAll();
           } else if (p.kind === 'preview') {
             preview();
           } else if (p.kind === 'entry' && typeof p.id === 'string' && typeof p.text === 'string') {
+            if (finals.has(p.id) && p.isFinal !== true) return;
+            if (!p.text) {
+              if (p.isFinal === true) markFinal(p.id);
+              remove(p.id);
+              return;
+            }
             if (previewing) {
               previewing = false;
               clearAll();
             }
+            if (p.isFinal === true) markFinal(p.id);
             upsert(p.id, typeof p.order === 'number' ? p.order : 0, p.text);
           }
         }
@@ -179,8 +209,13 @@
 
         var events = window.__TAURI__ && window.__TAURI__.event;
         if (events) {
-          events.listen('caption-update', function (e) { onUpdate(e.payload); });
-          events.listen('caption-style', function (e) { applyStyle(e.payload); });
+          // Scoped to this window: an unscoped listener receives every
+          // window's events.
+          var scope = { target: { kind: 'WebviewWindow', label: 'caption-' + lang } };
+          events.listen('caption-update', function (e) { onUpdate(e.payload); }, scope);
+          events.listen('caption-style', function (e) {
+            if (ours(e.payload)) applyStyle(e.payload);
+          }, scope);
         }
       })();
     </script>
