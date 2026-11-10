@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-10 |
-| Iteration | 1: navigation and publication foundation |
-| Scope | Existing 16 workflows, new responsive guide UI, eight fictional menu illustrations, explicit public asset boundary |
+| Iteration | 2: meeting workflows |
+| Scope | First ten chapters: chat/models, recording, upload, review, calendar, follow-up and simulation |
 | Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
 | Scale | 90 points: Playwright MCP unavailable, so the rubric's 10-point MCP visual category is exempt |
@@ -70,14 +70,14 @@ count as defects.
 ## Critical and warning issues
 
 Warning: retained chapter 11 says Files; the product menu is Library. Corrected
-in the dependent operations PR. Reader revisions guard IME Enter, offset search
-results and preserve readable printing for no-JavaScript dark-preference readers.
+in the dependent operations PR. Upload instructions now match the file picker and existing-meeting queue.
+Conflict detection is scoped to notes-only updates. Simulation limits follow in PR C.
 
 ## Source-omission cross-check
 
 | Source section | Status | Note |
 |---|---|---|
-| Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
+| Existing workflows | PARTIAL | First ten expanded; dependent PRs complete the rest |
 | Source inventory / current menus | PARTIAL | Full 28-chapter expansion is delivered by dependent content PRs |
 | Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
 | Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
@@ -87,7 +87,7 @@ results and preserve readable printing for no-JavaScript dark-preference readers
 
 1. Public illustrations contain generic menu labels. Public assets never contain
    the internal fictional walkthrough evidence archive.
-2. This first delivery establishes the guide UI. It does not claim that the final
+2. This delivery expands the meeting and chat workflows. It does not claim that the final
    enterprise content expansion is complete. The subsequent content PRs preserve
    the existing 95,000-byte AI review limit and are checked independently.
 
