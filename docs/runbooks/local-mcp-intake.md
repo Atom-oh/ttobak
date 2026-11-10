@@ -62,15 +62,16 @@ read as 7-day `calendar_view` requests.
 ## Deploy order and rollback
 
 - Deploy the API before any runner that sends `organizerDomain`. The calendar
-  request decoder is strict, so an older API rejects such batches with 400 and
-  every calendar run fails until the API is updated.
-- Rolling the API back below this release after a calendar sync breaks reading
-  the newly sealed events: older readers decode the sealed plaintext strictly
-  and report `organizerDomain` as corrupt data, so `GET /api/calendar/events`
-  returns 500 for pages holding those events. Reading recovers only after a
-  re-sync rewrites them without the field (an older runner, and only within
-  the intake window), after they expire, or after the API is redeployed at or
-  above this release, whose sealed decoder tolerates unknown fields.
+  request decoder is strict, so an API that predates `organizerDomain` rejects
+  such batches with 400 and every calendar run fails until the API is updated.
+- Rolling the API back to a release that predates `organizerDomain` after a
+  calendar sync breaks reading the newly sealed events: those readers decode the
+  sealed plaintext strictly without that field and report it as corrupt data, so
+  `GET /api/calendar/events` returns 500 for pages holding those events. Reading
+  recovers only after a re-sync rewrites them without the field (an older runner,
+  and only within the intake window), after they expire, or after the API is
+  redeployed with `organizerDomain` support. A rollback to a strict reader that
+  already declares `organizerDomain` still reads them.
 - Re-running `intake calendar` backfills `organizerDomain` only for events in
   the intake window (past 7 days through the next 30), not the full year.
 
