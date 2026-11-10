@@ -21,6 +21,7 @@ type contactFake struct {
 	contacts   map[string]map[string]model.AccountContact
 	unreadable map[string]map[string]bool
 	maps       map[string]string
+	mapReads   int
 	writes     []string
 	revs       int
 	// sourceName is the source account's name.
@@ -110,6 +111,7 @@ func (f *contactFake) GetAccountContact(_ context.Context, account, id string) (
 }
 
 func (f *contactFake) GetMergeContactMap(_ context.Context, _ string, ids []string) (map[string]string, error) {
+	f.mapReads++
 	out := map[string]string{}
 	for _, id := range ids {
 		if t, ok := f.maps[id]; ok {

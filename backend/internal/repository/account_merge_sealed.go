@@ -193,7 +193,7 @@ func (r *DynamoDBRepository) commitContactMerge(ctx context.Context, job *model.
 			return fenceErr
 		}
 		var cancelled *types.TransactionCanceledException
-		if moverFailed || errors.As(err, &cancelled) && contactTailFailed(cancelled.CancellationReasons) {
+		if moverFailed || errors.As(err, &cancelled) && mergeTailFailed(cancelled.CancellationReasons) {
 			return fmt.Errorf("merge contact: %w: %w", ErrConditionFailed, err)
 		}
 		return fmt.Errorf("merge contact: %w", err)
@@ -201,9 +201,9 @@ func (r *DynamoDBRepository) commitContactMerge(ctx context.Context, job *model.
 	return nil
 }
 
-// contactTailFailed reports a condition failure on the source delete or map
-// put, which follow the mover item and the fence.
-func contactTailFailed(reasons []types.CancellationReason) bool {
+// mergeTailFailed reports a condition failure on any item after the mover
+// item and the fence (source deletes, map rows, reference rows).
+func mergeTailFailed(reasons []types.CancellationReason) bool {
 	for i := 1 + mergeFenceCheckCount; i < len(reasons); i++ {
 		if aws.ToString(reasons[i].Code) == "ConditionalCheckFailed" {
 			return true
