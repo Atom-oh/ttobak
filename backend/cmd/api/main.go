@@ -102,6 +102,9 @@ func init() {
 		accountService,
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
+	// Owner-private SA performance data: every route reads only the JWT user's
+	// own USER# partition (ADR-068).
+	performanceHandler := handler.NewPerformanceHandler(service.NewPerformanceService(repo, accountService))
 	calendarRepo := repository.NewCalendarRepository(dynamoClient, tableName)
 	specReqTaskHandler := handler.NewSpecReqTaskHandler(service.NewSpecReqTaskService(
 		repository.NewSpecReqTaskRepository(dynamoClient, tableName),
@@ -336,6 +339,13 @@ func init() {
 		r.Post("/api/calendar/sources/{sourceId}/sync", calendarHandler.Sync)
 		r.Get("/api/calendar/sources", calendarHandler.ListSources)
 		r.Get("/api/calendar/events", calendarHandler.ListEvents)
+		r.Post("/api/performance/sources/{source}/sync", performanceHandler.Sync)
+		r.Get("/api/performance/sources", performanceHandler.ListSources)
+		r.Get("/api/performance/goals", performanceHandler.GetGoals)
+		r.Put("/api/performance/goals", performanceHandler.PutGoals)
+		r.Get("/api/performance/mappings", performanceHandler.ListMappings)
+		r.Put("/api/performance/mappings/{sfdcAccountId}", performanceHandler.PutMapping)
+		r.Get("/api/performance/missed", performanceHandler.ListMissed)
 		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
 		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
 		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
