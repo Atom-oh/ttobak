@@ -179,17 +179,19 @@ const members = [
 ];
 
 const GUEST = 'guest@customer.example';
+/** "Me" as the classifier sees it: my TTOBAK user ID (from the fixture members) and my addresses. */
+const who = (email, userId = members.find(m => m.email === email.toLowerCase())?.userId ?? 'u-none') => ({ userId, emails: [email] });
 
 test('classify ignores me in organizer and attendees', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
-  const out = classifyOccurrence({ me: 'ME@amazon.com', accountId: 'a', attendees: ['me@amazon.com'],
+  const out = classifyOccurrence({ me: who('ME@amazon.com', 'u-me'), accountId: 'a', attendees: ['me@amazon.com'],
     members, anyAccountSaEmails: new Set(), isPrivate: false });
   assert.deepEqual(out, { kind: 'skip' });
 });
 
 test('classify matches case-insensitively and rejects non-amazon counterpart', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
-  const base = { me: 'zed@amazon.com', accountId: 'a', members, anyAccountSaEmails: new Set(), isPrivate: false };
+  const base = { me: who('zed@amazon.com'), accountId: 'a', members, anyAccountSaEmails: new Set(), isPrivate: false };
   assert.deepEqual(classifyOccurrence({ ...base, attendees: ['ALICE@Amazon.com', GUEST] }),
     { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
   assert.deepEqual(classifyOccurrence({ ...base, attendees: ['dan@example.com'] }), { kind: 'skip' });
@@ -199,7 +201,7 @@ test('classify matches case-insensitively and rejects non-amazon counterpart', a
 test('classify table', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const c = (me, accountId, attendees, sa = []) =>
-    classifyOccurrence({ me, accountId, attendees: [...attendees, GUEST], members, anyAccountSaEmails: new Set(sa), isPrivate: false });
+    classifyOccurrence({ me: who(me), accountId, attendees: [...attendees, GUEST], members, anyAccountSaEmails: new Set(sa), isPrivate: false });
   assert.deepEqual(c('me@amazon.com', 'a', ['alice@amazon.com']), { kind: 'task', state: 'issue_needed', path: 'mine' });
   assert.deepEqual(c('carol@amazon.com', 'a', ['alice@amazon.com']),
     { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
@@ -213,7 +215,7 @@ test('classify table', async () => {
 
 test('an internal-only meeting is not a customer meeting', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
-  const c = (attendees, accountId = 'a', sa = []) => classifyOccurrence({ me: 'carol@amazon.com', accountId, attendees, members,
+  const c = (attendees, accountId = 'a', sa = []) => classifyOccurrence({ me: who('carol@amazon.com'), accountId, attendees, members,
     anyAccountSaEmails: new Set(sa), isPrivate: false });
   // An SA meeting with only @amazon.com addresses: no task, not even needs_account.
   assert.deepEqual(c(['alice@amazon.com', 'Bob@Amazon.com']), { kind: 'skip' });
@@ -230,7 +232,7 @@ test('private meeting is skipped', async () => {
   const parsed = parseAttendees({ requiredAttendees: [' Alice@Amazon.com ', 'alice@amazon.com'],
     optionalAttendees: ['bob@amazon.com'], organizer: 'ME@amazon.com', isPrivate: true });
   assert.deepEqual(parsed, { addresses: ['alice@amazon.com', 'bob@amazon.com', 'me@amazon.com'], isPrivate: true });
-  assert.deepEqual(classifyOccurrence({ me: 'me@amazon.com', accountId: 'a', attendees: parsed.addresses,
+  assert.deepEqual(classifyOccurrence({ me: who('me@amazon.com'), accountId: 'a', attendees: parsed.addresses,
     members, anyAccountSaEmails: new Set(), isPrivate: parsed.isPrivate }), { kind: 'skip' });
   assert.equal(parseAttendees('x'), null);
 });
@@ -247,9 +249,29 @@ test('attendee overflow and missing isPrivate are unknown', async () => {
 test('classify normalizes member emails and handles organizer-me', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const ms = [{ userId: 'u-me', email: ' ME@Amazon.com ', role: 'AM' }, { userId: 'u-a', email: 'Alice@Amazon.com', role: 'SA' }];
-  assert.deepEqual(classifyOccurrence({ me: 'me@amazon.com', accountId: 'a', attendees: ['me@amazon.com', 'alice@amazon.com', GUEST],
+  assert.deepEqual(classifyOccurrence({ me: who('me@amazon.com', 'u-me'), accountId: 'a', attendees: ['me@amazon.com', 'alice@amazon.com', GUEST],
     members: ms, anyAccountSaEmails: new Set(), isPrivate: false }),
   { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
+});
+
+test('classify identifies my membership by user ID and excludes every address of mine', async () => {
+  const { classifyOccurrence } = await import('../dist/intake/classify.js');
+  // My TTOBAK email is a personal address; my member row and attendance use the SpecReq alias.
+  const me = { userId: 'u-me', emails: ['me.personal@example.net', 'me@amazon.com'] };
+  const c = (attendees, ms = members) => classifyOccurrence({ me, accountId: 'a', attendees: [...attendees, GUEST], members: ms,
+    anyAccountSaEmails: new Set(), isPrivate: false });
+  assert.deepEqual(c(['me@amazon.com', 'alice@amazon.com']), { kind: 'task', state: 'issue_needed', path: 'mine' });
+  // My member row is matched by user ID even when its email is neither of mine.
+  const renamed = members.map(m => m.userId === 'u-me' ? { ...m, email: 'other@amazon.com', role: 'AM' } : m);
+  assert.deepEqual(c(['me@amazon.com', 'alice@amazon.com'], renamed),
+    { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
+  // I am never my own counterpart: attending as the alias with another SA leaves one candidate.
+  const amSa = members.map(m => m.userId === 'u-me' ? { ...m, role: 'SSA' } : m);
+  assert.deepEqual(c(['me@amazon.com', 'alice@amazon.com'], amSa),
+    { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
+  // Only my own addresses: no customer counterpart, no task; the personal address is not a customer.
+  assert.deepEqual(classifyOccurrence({ me, accountId: 'a', attendees: ['me.personal@example.net', 'me@amazon.com', 'alice@amazon.com'],
+    members, anyAccountSaEmails: new Set(), isPrivate: false }), { kind: 'skip' });
 });
 
 // SpecReq linking and the single acknowledge. Every call the fixture receives is
@@ -510,19 +532,14 @@ test('link requires oppty account, date range and requester', async () => {
   for (const [name, requests, tasks, rule, expected] of cases) assert.deepEqual(link(requests, tasks, rule), expected, name);
 });
 
-test('identity mismatch stops SpecReq step', async t => {
+test('resolveMe returns the SpecReq login and rejects a missing one', async t => {
   const { resolveMe } = await import('../dist/intake/specreq.js');
   const home = tempHome(t);
-  const mismatch = await specreqSession(t, home, { FAKE_WORK_TAM: 'someone' });
-  await assert.rejects(resolveMe(mismatch.session, 'me@amazon.com'), error => error.code === 'IDENTITY_MISMATCH');
-  assert.deepEqual(mismatch.calls(), ['check_user_is_tam']);
   const missing = await specreqSession(t, home);
-  await assert.rejects(resolveMe(missing.session, 'me@amazon.com'), error => error.code === 'IDENTITY_MISMATCH');
-  const external = await specreqSession(t, home, { FAKE_WORK_TAM: 'me' });
-  await assert.rejects(resolveMe(external.session, 'me@example.com'), error => error.code === 'IDENTITY_MISMATCH');
-  assert.deepEqual(external.calls(), []);
+  await assert.rejects(resolveMe(missing.session), error => error.code === 'IDENTITY_MISMATCH');
+  assert.deepEqual(missing.calls(), ['check_user_is_tam']);
   const ok = await specreqSession(t, home, { FAKE_WORK_TAM: 'Me' });
-  assert.equal(await resolveMe(ok.session, 'ME@amazon.com'), 'me');
+  assert.equal(await resolveMe(ok.session), 'me');
 });
 
 // ---- Slack draft and notification queue ----
@@ -908,7 +925,7 @@ test('theirs path: task, draft, ack, notices in order', async t => {
   const first = await run(api, [occurrence()], attendees);
   assert.equal(first.code, 0);
   assert.equal(first.output.tasks.result, 'ok');
-  assert.deepEqual(first.calls, ['list_meetings', 'get_meeting', 'check_user_is_tam', 'search_requests_advanced',
+  assert.deepEqual(first.calls, ['check_user_is_tam', 'list_meetings', 'get_meeting', 'search_requests_advanced',
     'lookup_user', 'open_dm_channel', 'list_drafts', 'post_draft']);
   const [task] = api.tasks.values();
   assert.equal(task.state, 'request_needed');
@@ -959,6 +976,60 @@ test('mine path links the created SpecReq and marks issued', async t => {
   assert.ok(!result.calls.includes('acknowledge_request'));
   assert.equal(result.output.tasks.counts.linked, 1);
   assert.equal(queue().length, 0);
+});
+
+// A TTOBAK sign-in with a non-Amazon email; the SpecReq login is the Amazon alias.
+const ME_PERSONAL = { email: 'me.personal@example.net', userId: 'u-me' };
+const argLog = file => existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+
+test('a personal TTOBAK email with a SpecReq alias: mine path by user ID, provider calls use the alias', async t => {
+  const { home, run, lines } = await taskHome(t);
+  // The selection prints the detected login (a name only).
+  const selected = lines.map(line => JSON.parse(line)).find(line => line.connector === 'specreq');
+  assert.equal(selected.login, 'me');
+  assert.ok(!JSON.stringify(selected).includes('@'));
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' },
+    accounts: { 'acct-1': account('SA', [{ ...ALICE, role: 'SSA' }]) }, projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const args = join(tempHome(t), 'args.log');
+  const mine = theirsRequest({ requesterLogin: 'me', resolverLogin: 'alice', stateId: 'PENDING', title: 'Mine review' });
+  const result = await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['me@amazon.com', 'alice@amazon.com'])),
+    FAKE_WORK_SEARCH_MINE: JSON.stringify([mine]), FAKE_WORK_ARGS: args }, { me: ME_PERSONAL });
+  assert.equal(result.output.tasks.result, 'ok');
+  assert.equal(result.output.tasks.counts.created, 1);
+  const [task] = api.tasks.values();
+  assert.deepEqual([task.path, task.state, task.specReqId], ['mine', 'issued', RID]);
+  for (const call of argLog(args).filter(call => call.name === 'list_meetings' || call.name === 'get_meeting')) {
+    assert.equal(call.args.userEmail, 'me@amazon.com');
+  }
+  const identity = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'tasks', SCOPE, 'identity.json'), 'utf8'));
+  assert.equal(identity.login, 'me');
+});
+
+test('a personal TTOBAK email: attending as the alias, I am not a counterpart', async t => {
+  const { run } = await taskHome(t);
+  // My member row says SSA; without excluding me, two SA candidates would make it needs_owner.
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('SSA', [ALICE]) } });
+  const result = await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['me@amazon.com', 'alice@amazon.com'])) },
+    { me: ME_PERSONAL });
+  assert.equal(result.output.tasks.counts.created, 1);
+  const [task] = api.tasks.values();
+  assert.deepEqual([task.state, task.path, task.counterpartUserId], ['request_needed', 'theirs', 'u-alice']);
+});
+
+test('a SpecReq login that changes across runs is an identity mismatch', async t => {
+  const { home, run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const first = await run(api, [occurrence()], work, { me: ME_PERSONAL });
+  assert.equal(first.output.tasks.result, 'ok');
+  const switched = await run(api, [occurrence()], { ...work, FAKE_WORK_TAM: 'other' }, { me: ME_PERSONAL });
+  assert.equal(switched.output.tasks.result, 'TASKS_PARTIAL');
+  assert.deepEqual(switched.output.tasks.failures, { specreq: 'IDENTITY_MISMATCH' });
+  assert.ok(!switched.calls.includes('search_requests_advanced'));
+  const identity = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'tasks', SCOPE, 'identity.json'), 'utf8'));
+  assert.equal(identity.login, 'me', 'the recorded login is kept');
+  const back = await run(api, [occurrence()], work, { me: ME_PERSONAL });
+  assert.equal(back.output.tasks.result, 'ok');
 });
 
 test('runner re-reads once on 409 and skips a web-picked task', async t => {
@@ -1189,7 +1260,8 @@ test('past the task list cap, classification and notices run but linking and ack
   assert.equal(over.output.tasks.counts.skipped, 3);
   assert.equal(over.output.tasks.counts.created, 1, 'a new occurrence is still classified');
   assert.equal(api.calls.filter(call => call[0] === 'listTasks').length, 50);
-  assert.ok(!over.calls.includes('check_user_is_tam') && !over.calls.includes('search_requests_advanced')
+  // The read-only identity check still runs (classification needs my addresses); linking and ack do not.
+  assert.ok(!over.calls.includes('search_requests_advanced')
     && !over.calls.includes('get_request') && !over.calls.includes('acknowledge_request'));
   assert.equal(transitions(api).length, 0);
   assert.deepEqual(queue().map(line => line.state), ['request_needed'], 'notices still run');

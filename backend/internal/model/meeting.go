@@ -148,6 +148,13 @@ type Meeting struct {
 	// applied silently during refinement (L3, at most MaxTranscriptCorrections).
 	// Never part of an API response.
 	TranscriptCorrections []TranscriptCorrection `dynamodbav:"transcriptCorrections,omitempty" json:"-"`
+
+	// The English note is generated from the meeting's sources, never from
+	// Content. Its run state is EnglishSummarySK; it has no derivatives.
+	// Responses expose it only through an explicit reader projection.
+	ContentEn            string `dynamodbav:"contentEn,omitempty" json:"-"`
+	ContentEnSourceHash  string `dynamodbav:"contentEnSourceHash,omitempty" json:"-"`
+	ContentEnGeneratedAt string `dynamodbav:"contentEnGeneratedAt,omitempty" json:"-"`
 }
 
 // MaxTranscriptCorrections caps the correction records kept per meeting.

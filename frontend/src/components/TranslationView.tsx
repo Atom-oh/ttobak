@@ -12,6 +12,8 @@ interface TranslationViewProps {
   isActive: boolean;
   /** ?debugCaptions=1: show the short-final (fragment) counter. */
   debugCaptions?: boolean;
+  /** Fill the parent's height instead of capping the body at 48vh. */
+  fill?: boolean;
 }
 
 const ENGINE_BADGES: Record<TranslationEngineBadge, { label: string; title: string }> = {
@@ -46,7 +48,7 @@ function CaptionText({ text, language, isOriginal, status }: {
   );
 }
 
-export function TranslationView({ translations, targetLang, onTargetLangChange, isActive, debugCaptions = false }: TranslationViewProps) {
+export function TranslationView({ translations, targetLang, onTargetLangChange, isActive, debugCaptions = false, fill = false }: TranslationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
   const bilingual = targetLang === BILINGUAL_TARGET;
@@ -59,8 +61,8 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
   }, [translations, isActive]);
 
   return (
-    <section aria-label="실시간 통역" className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-white/10 dark:bg-surface-lowest">
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-4 dark:border-white/10">
+    <section aria-label="실시간 통역" className={`${fill ? 'flex h-full min-h-0 flex-col ' : ''}overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-white/10 dark:bg-surface-lowest`}>
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-100 p-4 dark:border-white/10">
         <span className="material-symbols-outlined text-primary" aria-hidden="true">translate</span>
         <h3 className="text-sm font-semibold text-slate-900 dark:text-text-main">실시간 통역</h3>
         <select
@@ -93,7 +95,7 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
           const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
           followTailRef.current = scrollHeight - scrollTop - clientHeight <= 48;
         }}
-        className="max-h-[48vh] overflow-y-auto p-4"
+        className={`${fill ? 'min-h-0 flex-1' : 'max-h-[48vh]'} overflow-y-auto p-4`}
       >
         {translations.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-500 dark:text-text-muted">
@@ -102,7 +104,8 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
         ) : (
           <ol aria-label="통역 자막" className="space-y-4">
             {translations.map((entry) => {
-              const languages = bilingual ? ['ko', 'en']
+              const fixedColumns = bilingual && (entry.sourceLang === 'ko' || entry.sourceLang === 'en');
+              const languages = fixedColumns ? ['ko', 'en']
                 : entry.sourceLang === entry.targetLang ? [entry.sourceLang]
                 : [entry.sourceLang, entry.targetLang];
               return (
@@ -128,7 +131,7 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
                   </div>
                   <div className={`grid ${languages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} gap-2 sm:gap-3`}>
                     {languages.map((language, index) => {
-                      const isOriginal = bilingual ? language === entry.sourceLang : index === 0;
+                      const isOriginal = fixedColumns ? language === entry.sourceLang : index === 0;
                       return (
                         <CaptionText
                           key={`${language}-${index}`}

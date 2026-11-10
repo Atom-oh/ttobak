@@ -213,6 +213,7 @@ export type DocumentInput = {
 export const PERFORMANCE_SOURCES = ['sfdc-assignments', 'sfdc-tasks'] as const;
 export type PerformanceSource = typeof PERFORMANCE_SOURCES[number];
 const MAX_PERFORMANCE_API_BYTES = 14_000;
+const MAX_PERFORMANCE_MAPPINGS_BYTES = 2_000_000;
 
 /** `POST /api/performance/sources/{source}/sync` body; the server rejects unknown fields. */
 export interface PerformanceSyncBody {
@@ -293,6 +294,11 @@ export class TtobakApi {
   /** The owner's per-source performance sync revisions. */
   async performanceSources() {
     return this.request('GET', '/api/performance/sources', undefined, MAX_PERFORMANCE_API_BYTES, false, true);
+  }
+
+  /** The owner's SFDC assignments; local intake reads only the IDs. */
+  async performanceMappings() {
+    return this.request('GET', '/api/performance/mappings', undefined, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
   }
 
   async listCalendarEvents(options: CalendarEventQuery) {

@@ -663,10 +663,22 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
     """A title or snippet containing the literal "</article>" fence must not
     be able to close the data block early in the prompt sent to Bedrock."""
 
+    def test_news_summary_uses_luna_without_reasoning(self):
+        body = '{"preview":"뉴스 요약","briefingMarkdown":"## 핵심 요약\\n기사의 확인된 사실","tags":["AI"],"relevant":true,"relevanceConfidence":0.9}'
+        with mock.patch.object(news_crawler.bedrock, 'converse', return_value={
+            'stopReason': 'end_turn', 'output': {'message': {'role': 'assistant', 'content': [{'text': body}]}},
+            'usage': {'inputTokens': 100, 'outputTokens': 50, 'totalTokens': 150},
+        }) as converse:
+            result = news_crawler._summarize_and_tag('Title', 'Article body with sufficient text for the source.')
+        self.assertEqual(result[0], '뉴스 요약')
+        self.assertTrue(result[3])
+        self.assertEqual(converse.call_args.kwargs['modelId'], 'global.openai.gpt-6-luna')
+        self.assertEqual(converse.call_args.kwargs['additionalModelRequestFields'], {'reasoning': {'effort': 'none'}})
+
     def test_malicious_title_cannot_escape_article_block(self):
         captured = {}
 
-        def fake_converse(modelId, messages, inferenceConfig):
+        def fake_converse(modelId, messages, inferenceConfig, additionalModelRequestFields=None):
             captured['prompt'] = messages[0]['content'][0]['text']
             return {'output': {'message': {'content': [{'text': '{"summary": "s", "tags": []}'}]}}}
 
@@ -687,7 +699,7 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
     def test_malicious_snippet_cannot_escape_article_block(self):
         captured = {}
 
-        def fake_converse(modelId, messages, inferenceConfig):
+        def fake_converse(modelId, messages, inferenceConfig, additionalModelRequestFields=None):
             captured['prompt'] = messages[0]['content'][0]['text']
             return {'output': {'message': {'content': [{'text': '{"summary": "s", "tags": []}'}]}}}
 
@@ -705,7 +717,7 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
         # Bedrock returns valid JSON but "summary" isn't guaranteed to be a
         # string (e.g. a nested object/list) -- _sanitize_snippet's re.sub
         # calls downstream require a str, so this must not raise.
-        def fake_converse(modelId, messages, inferenceConfig):
+        def fake_converse(modelId, messages, inferenceConfig, additionalModelRequestFields=None):
             return {'output': {'message': {'content': [
                 {'text': '{"summary": {"unexpected": "object"}, "tags": []}'}
             ]}}}
@@ -722,7 +734,7 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
         # Bedrock is instructed to return a JSON boolean, but a stringified
         # "false" is truthy under bool(...) in Python -- must not silently
         # pass the relevance gate.
-        def fake_converse(modelId, messages, inferenceConfig):
+        def fake_converse(modelId, messages, inferenceConfig, additionalModelRequestFields=None):
             return {'output': {'message': {'content': [
                 {'text': '{"relevant": "false", "relevanceConfidence": 0.9, "summary": "s", "tags": []}'}
             ]}}}
@@ -739,7 +751,7 @@ class TestStructuredBriefingPrompts(unittest.TestCase):
     def test_news_prompt_requires_readable_markdown_sections(self):
         captured = {}
 
-        def fake_converse(modelId, messages, inferenceConfig):
+        def fake_converse(modelId, messages, inferenceConfig, additionalModelRequestFields=None):
             captured['prompt'] = messages[0]['content'][0]['text']
             return {'output': {'message': {'content': [{
                 'text': '{"relevant": true, "relevanceConfidence": 1, "summary": "s", "tags": []}'
@@ -759,7 +771,7 @@ class TestStructuredBriefingPrompts(unittest.TestCase):
     def test_tech_prompt_requires_readable_markdown_sections(self):
         captured = {}
 
-        def fake_converse(modelId, messages, inferenceConfig):
+        def fake_converse(modelId, messages, inferenceConfig, additionalModelRequestFields=None):
             captured['prompt'] = messages[0]['content'][0]['text']
             return {'output': {'message': {'content': [{
                 'text': '{"summary": "s", "tags": []}'

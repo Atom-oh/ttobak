@@ -86,6 +86,20 @@ func TestUpdateMeetingNoteLanguage(t *testing.T) {
 	}
 }
 
+// assertKoreanOnlyDirective checks that the final (Korean) note prompt always
+// carries the Korean directive, whatever noteLanguage is stored on the meeting.
+func assertKoreanOnlyDirective(t *testing.T, system, path, stored string) {
+	t.Helper()
+	if !strings.Contains(system, noteLanguageDirective(model.NoteLanguageKorean)) {
+		t.Fatalf("%s prompt for stored %q missing the Korean directive", path, stored)
+	}
+	for _, other := range []string{model.NoteLanguageEnglish, ""} {
+		if strings.Contains(system, noteLanguageDirective(other)) {
+			t.Fatalf("%s prompt for stored %q contains the %q directive", path, stored, other)
+		}
+	}
+}
+
 func TestSummaryPromptsUseNoteLanguageDirective(t *testing.T) {
 	for _, language := range []string{"", "ko", "en"} {
 		t.Run("resummary/"+language, func(t *testing.T) {
@@ -95,9 +109,7 @@ func TestSummaryPromptsUseNoteLanguageDirective(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(request.System, noteLanguageDirective(language)) {
-				t.Fatalf("resummary prompt missing %q directive", language)
-			}
+			assertKoreanOnlyDirective(t, request.System, "resummary", language)
 		})
 		t.Run("batch/"+language, func(t *testing.T) {
 			m := &model.Meeting{MeetingID: "m", UserID: "owner", Status: model.StatusSummarizing, TranscriptA: "[Speaker 0 1.0sec~2.0sec] synthetic line", NoteLanguage: language}
@@ -108,12 +120,7 @@ func TestSummaryPromptsUseNoteLanguageDirective(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(request.System, noteLanguageDirective(language)) {
-				t.Fatalf("batch prompt missing %q directive", language)
-			}
-			if language != "" && strings.Contains(request.System, noteLanguageDirective("")) {
-				t.Fatal("explicit language kept the automatic directive")
-			}
+			assertKoreanOnlyDirective(t, request.System, "batch", language)
 		})
 	}
 }

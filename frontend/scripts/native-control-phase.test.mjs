@@ -14,7 +14,7 @@ function load() {
   return exports;
 }
 
-const idle = { recording: false, step: null, startInFlight: false, importing: false, finalizing: false, flowBusy: false };
+const idle = { recording: false, step: null, startInFlight: false, importing: false, finalizing: false, flowBusy: false, pendingAudio: false };
 
 test('an audio file import reports a busy uploading phase', () => {
   const { nativeControlPhase } = load();
@@ -43,12 +43,12 @@ test('the page flow reservation (draft creation, leftover upload) reports a busy
   assert.equal(phase, 'creating');
   assert.ok(BUSY.includes(phase));
   const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /nativeControlPhase\(\{[^}]*flowBusy \}\)/);
+  assert.match(page, /nativeControlPhase\(\{[^}]*flowBusy, pendingAudio: postRecording\.hasPendingAudio \}\)/);
 });
 
 test('any busy input yields a busy phase', () => {
   const { nativeControlPhase } = load();
-  for (const key of ['recording', 'startInFlight', 'importing', 'finalizing', 'flowBusy']) {
+  for (const key of ['recording', 'startInFlight', 'importing', 'finalizing', 'flowBusy', 'pendingAudio']) {
     assert.ok(BUSY.includes(nativeControlPhase({ ...idle, [key]: true })), key);
   }
 });
@@ -60,4 +60,14 @@ test('recording and post-recording steps take precedence; otherwise starting or 
   assert.equal(nativeControlPhase({ ...idle, step: 'notes', importing: true }), 'notes');
   assert.equal(nativeControlPhase({ ...idle, recording: true, step: 'notes', importing: true }), 'recording');
   assert.equal(nativeControlPhase({ ...idle, importing: true, startInFlight: true }), 'uploading');
+});
+
+test('unsaved browser audio held for retry keeps the app busy', () => {
+  const { nativeControlPhase } = load();
+  // usePostRecording keeps the Blob at step error so handleRetry can resume.
+  assert.equal(nativeControlPhase({ ...idle, step: 'error', pendingAudio: true }), 'saving');
+  assert.equal(nativeControlPhase({ ...idle, step: 'error' }), 'error');
+  assert.equal(nativeControlPhase({ ...idle, step: 'notes', pendingAudio: true }), 'notes');
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /nativeControlPhase\(\{[^}]*pendingAudio: postRecording\.hasPendingAudio/);
 });

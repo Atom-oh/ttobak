@@ -263,20 +263,16 @@ export function linkRequests(requests: SpecReqSummary[], tasks: LinkTask[], oppt
 }
 
 /**
- * My SpecReq login. `check_user_is_tam` must name the local part of the signed-in
- * `@amazon.com` email; anything else stops the SpecReq step.
+ * My SpecReq login from `check_user_is_tam`. It is the authoritative Amazon
+ * identity; the TTOBAK sign-in email may be any address. A missing or malformed
+ * login stops the SpecReq step.
  */
-export async function resolveMe(session: McpSession, email: string): Promise<string> {
-  const normalized = typeof email === 'string' ? email.trim().toLowerCase() : '';
-  const match = /^([^@\s]+)@amazon\.com$/.exec(normalized);
-  if (!match) throw new IntakeError('IDENTITY_MISMATCH', 'the signed-in email is not an @amazon.com address');
+export async function resolveMe(session: McpSession): Promise<string> {
   const payload = resultJson(await session.call('check_user_is_tam', {}), 'check_user_is_tam');
   const data = payload && typeof payload === 'object' && (payload as Record<string, unknown>).success !== false
     ? (payload as Record<string, unknown>).data : null;
   const employee = data && typeof data === 'object' ? login((data as Record<string, unknown>).employee_login) : '';
-  if (!LOGIN_PATTERN.test(employee) || employee !== match[1]) {
-    throw new IntakeError('IDENTITY_MISMATCH', 'the SpecReq login differs from the signed-in identity');
-  }
+  if (!LOGIN_PATTERN.test(employee)) throw new IntakeError('IDENTITY_MISMATCH', 'SpecReq returned no valid login');
   return employee;
 }
 

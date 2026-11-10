@@ -103,6 +103,8 @@
     ["api.actionItems.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/meetings/{meetingId}/action-items"],
     ["api.resummary.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/meetings/{meetingId}/resummary"],
     ["api.resummary.request", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/meetings/{meetingId}/resummary"],
+    ["api.resummary.getEnglish", "ttobak-api-bridge", ["read"], true, "GET", "/api/meetings/{meetingId}/notes/en"],
+    ["api.resummary.requestEnglish", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/meetings/{meetingId}/notes/en"],
     ["api.attachmentText.status", "ttobak-api-bridge", ["read"], true, "GET", "/api/meetings/{meetingId}/attachments/{attachmentId}/text/status"],
     ["api.attachmentText.retry", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry"],
     ["api.attachmentText.read", "ttobak-api-bridge", ["read"], true, "GET", "/api/meetings/{meetingId}/attachments/{attachmentId}/text"],

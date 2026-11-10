@@ -27,10 +27,16 @@
 //! `docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md`.
 
 mod audio;
+mod aws_profiles;
+mod caption_model;
+mod caption_overlay;
+mod caption_translate;
 mod control;
 mod control_proto;
 mod error;
 mod input_select;
+mod intake_notify;
+mod interpreter;
 mod leftover;
 pub mod meet_mute;
 mod meeting;
@@ -264,8 +270,9 @@ mod command_acl_tests {
             .iter()
             .filter_map(|p| p.as_str())
             .collect();
-        // Granted to the local update-prompt window only, never to the remote SPA.
-        const LOCAL_ONLY: &[&str] = &["update_prompt_choose"];
+        // Granted to a local window only (the update prompt, the caption
+        // overlays), never to the remote SPA.
+        const LOCAL_ONLY: &[&str] = &["update_prompt_choose", "caption_overlay_idle"];
         for command in &declared {
             let permission = format!("allow-{}", command.replace('_', "-"));
             if LOCAL_ONLY.contains(&command.as_str()) {
@@ -283,7 +290,8 @@ mod command_acl_tests {
     }
 
     /// Updates run through the plugin's Rust API only (update.rs); no window,
-    /// least of all the remote SPA, may call the plugin's commands.
+    /// least of all the remote SPA, may call the plugin's commands. Nor may any
+    /// window open dialogs: the caption profile confirmation is raised from Rust.
     #[test]
     fn no_capability_grants_updater_permissions() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
@@ -301,7 +309,7 @@ mod command_acl_tests {
                     .or_else(|| permission["identifier"].as_str())
                     .unwrap_or_default();
                 assert!(
-                    !id.starts_with("updater:"),
+                    !id.starts_with("updater:") && !id.starts_with("dialog:"),
                     "{} grants {id}",
                     path.display()
                 );
@@ -773,6 +781,7 @@ pub fn run() {
         .on_menu_event(|app, event| update::on_menu_event(app, &event.id().0))
         .manage(control::ControlState::default())
         .manage(Arc::new(meeting_detect::MeetingState::default()))
+        .manage(caption_overlay::OverlayState::default())
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
@@ -801,12 +810,24 @@ pub fn run() {
             meeting_detect::meeting_detection_respond,
             meeting_prompt::meeting_prompt_choose,
             update_prompt::update_prompt_choose,
+            caption_translate::caption_settings_get,
+            caption_translate::caption_settings_set,
+            caption_translate::caption_translate,
+            caption_overlay::caption_overlay_open,
+            caption_overlay::caption_overlay_close,
+            caption_overlay::caption_overlay_set_style,
+            caption_overlay::caption_overlay_push,
+            caption_overlay::caption_overlay_idle,
         ])
         .setup(|app| {
+            // Caption translation; failure only disables it.
+            caption_translate::manage(app);
             // MCP control channel (ADR-046); failure only disables it.
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());
+            // SpecReq task notices from the local intake runner (ADR-065).
+            intake_notify::start(app.handle().clone());
             // App menu with the update item; failure keeps Tauri's default menu.
             if let Err(e) = update::install_menu(app.handle()) {
                 log::warn!("update menu unavailable: {e}");
@@ -860,6 +881,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // Caption overlays float above everything with no close control,
+            // so they close with the main window (their saved `open` flags
+            // are kept for the next launch).
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = &event {
+                if caption_overlay::closes_overlays(label, event) {
+                    caption_overlay::destroy_all(app_handle);
+                }
+            }
             // Best-effort finalize on a GRACEFUL quit (window closed, Cmd+Q,
             // app.exit()). This only helps that path — a SIGKILL (Activity
             // Monitor "Force Quit", `kill -9`) tears the process down
