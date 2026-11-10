@@ -58,7 +58,6 @@ pub enum Reaction {
     Offer,
 }
 
-#[allow(dead_code)] // called by the update popup (update_prompt.rs, next task)
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
     #[error("the app is busy recording, finalizing or uploading")]
@@ -274,7 +273,6 @@ impl Drop for FlagGuard<'_> {
 /// Downloads, verifies and installs the known update, then restarts. Refuses
 /// while busy before the download and again before installing; a refusal
 /// keeps the update available.
-#[allow(dead_code)] // called by the update popup (update_prompt.rs, next task)
 pub async fn install(app: &AppHandle) -> Result<(), InstallError> {
     let state = app.state::<UpdateState>();
     let update = state
@@ -315,7 +313,6 @@ pub async fn install(app: &AppHandle) -> Result<(), InstallError> {
 }
 
 /// Stores the available version as declined (persisted in `update.json`).
-#[allow(dead_code)] // called by the update popup (update_prompt.rs, next task)
 pub fn decline(app: &AppHandle) {
     let state = app.state::<UpdateState>();
     let Some((version, _)) = state.pending() else {

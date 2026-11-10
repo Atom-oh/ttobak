@@ -264,8 +264,17 @@ mod command_acl_tests {
             .iter()
             .filter_map(|p| p.as_str())
             .collect();
+        // Granted to the local update-prompt window only, never to the remote SPA.
+        const LOCAL_ONLY: &[&str] = &["update_prompt_choose"];
         for command in &declared {
             let permission = format!("allow-{}", command.replace('_', "-"));
+            if LOCAL_ONLY.contains(&command.as_str()) {
+                assert!(
+                    !granted.contains(&permission.as_str()),
+                    "{permission} must not be granted to the remote SPA"
+                );
+                continue;
+            }
             assert!(
                 granted.contains(&permission.as_str()),
                 "{permission} not granted"
@@ -300,8 +309,8 @@ mod command_acl_tests {
             checked += 1;
         }
         assert!(
-            checked >= 2,
-            "expected default.json and meeting-prompt.json"
+            checked >= 3,
+            "expected default.json, meeting-prompt.json and update-prompt.json"
         );
         let default = include_str!("../capabilities/default.json");
         assert!(!default.contains("updater:"));
@@ -791,6 +800,7 @@ pub fn run() {
             meeting_detect::meeting_detection_set_enabled,
             meeting_detect::meeting_detection_respond,
             meeting_prompt::meeting_prompt_choose,
+            update_prompt::update_prompt_choose,
         ])
         .setup(|app| {
             // MCP control channel (ADR-046); failure only disables it.
