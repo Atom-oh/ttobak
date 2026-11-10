@@ -368,3 +368,36 @@ func TestLateEnglishWorkerWriteRequiresLiveState(t *testing.T) {
 		t.Fatalf("late write could recreate rows:\nmeeting=%s\nrun=%s", meeting, run)
 	}
 }
+
+// A DynamoDB item-size rejection is a clean output-too-large failure, not an
+// unclassified persistence error; conditional cancellation stays retryable.
+func TestCompleteEnglishSummaryClassifiesItemSizeRejection(t *testing.T) {
+	cases := []struct {
+		name, body string
+		want       error
+	}{
+		{"transaction validation", `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","message":"Transaction cancelled","CancellationReasons":[{"Code":"ValidationError","Message":"Item size to update has exceeded the maximum allowed size"},{"Code":"None"}]}`, ErrSummaryLimit},
+		{"direct validation", `{"__type":"com.amazon.coral.validate#ValidationException","message":"Item size has exceeded the maximum allowed size"}`, ErrSummaryLimit},
+		{"conditional", `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","message":"Transaction cancelled","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`, ErrConditionFailed},
+		{"other validation", `{"__type":"com.amazon.coral.validate#ValidationException","message":"Invalid UpdateExpression"}`, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := actionAnalysisWire(t, nil, 400, c.body)
+			now := time.Now().UTC()
+			err := repo.CompleteEnglishSummary(context.Background(), englishTestSnapshot("ko"), englishTestState(now), "English", "source-hash", now)
+			if err == nil {
+				t.Fatal("rejected write succeeded")
+			}
+			if c.want == nil {
+				if errors.Is(err, ErrSummaryLimit) || errors.Is(err, ErrConditionFailed) {
+					t.Fatalf("unrelated validation misclassified: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, c.want) {
+				t.Fatalf("want %v, got %v", c.want, err)
+			}
+		})
+	}
+}
