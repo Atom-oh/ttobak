@@ -22,6 +22,13 @@ type CalendarEvent struct {
 	EndDate   string    `json:"endDate,omitempty"`
 	Location  string    `json:"location,omitempty"`
 	AccountID string    `json:"accountId,omitempty"`
+
+	ShareAccountID      string   `json:"shareAccountId,omitempty"`
+	ShareEvidence       []string `json:"shareEvidence,omitempty"`
+	CandidateAccountIDs []string `json:"candidateAccountIds,omitempty"`
+	Private             bool     `json:"private,omitempty"`
+	// SharingMode is auto, account or hidden.
+	SharingMode string `json:"sharingMode,omitempty"`
 }
 
 type CalendarEventInput struct {
@@ -35,6 +42,12 @@ type CalendarEventInput struct {
 	EndDate    string    `json:"endDate,omitempty"`
 	Location   string    `json:"location,omitempty"`
 	AccountID  string    `json:"accountId,omitempty"`
+
+	ShareAccountID      string   `json:"shareAccountId,omitempty"`
+	ShareEvidence       []string `json:"shareEvidence,omitempty"`
+	CandidateAccountIDs []string `json:"candidateAccountIds,omitempty"`
+	Private             bool     `json:"private,omitempty"`
+	SeriesKey           string   `json:"seriesKey,omitempty"`
 }
 
 type CalendarMutation struct {

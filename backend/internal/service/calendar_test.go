@@ -421,6 +421,41 @@ func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) 
 	}
 }
 
+func TestCalendarEventReadsReturnStoredSharingFields(test *testing.T) {
+	svc, store, _, _ := calendarFixture()
+	request := calendarRequest()
+	first := request.Mutations[0].Event
+	first.CandidateAccountIDs = []string{"account-3", "account-2"}
+	shared, private := *first, *first
+	shared.ExternalID, shared.CandidateAccountIDs = "series/occurrence-2", nil
+	shared.ShareAccountID, shared.ShareEvidence = "account-2", []string{"title"}
+	private.ExternalID, private.CandidateAccountIDs, private.Private = "series/occurrence-3", nil, true
+	request.Mutations = append(request.Mutations,
+		model.CalendarMutation{Op: "upsert", Event: &shared}, model.CalendarMutation{Op: "upsert", Event: &private})
+	calendarStoredEvents(test, svc, store, request)
+	page, err := svc.ListEvents(context.Background(), "owner", model.CalendarQuery{From: calendarNow, To: calendarNow.Add(24 * time.Hour)})
+	if err != nil || len(page.Events) != 3 {
+		test.Fatalf("read stored events: %+v, %v", page, err)
+	}
+	seen := 0
+	for _, event := range page.Events {
+		if event.SharingMode != "auto" || event.ShareAccountID != "" || event.ShareEvidence != nil {
+			test.Fatalf("an unstored share was reported: %+v", event)
+		}
+		switch {
+		case reflect.DeepEqual(event.CandidateAccountIDs, []string{"account-2", "account-3"}) && !event.Private:
+			seen++
+		case event.Private && event.CandidateAccountIDs == nil:
+			seen++
+		case !event.Private && event.CandidateAccountIDs == nil:
+			seen++
+		}
+	}
+	if seen != 3 {
+		test.Fatalf("candidates or private marker lost: %+v", page.Events)
+	}
+}
+
 func TestCalendarReadQueryValidationBeforeIO(test *testing.T) {
 	for _, scenario := range []string{"93 days", "93 days plus", "reversed", "limit 51", "negative limit", "account path", "cursor length"} {
 		test.Run(scenario, func(test *testing.T) {
