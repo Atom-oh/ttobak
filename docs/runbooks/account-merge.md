@@ -54,8 +54,9 @@ scan. A changed row counts as `Skipped` and the scan repeats, up to three passes
 other failures count in `errors` (by reason: `errors.decrypt`, `errors.payload`,
 `errors.encrypt`, `errors.write`). If any row stays skipped or failed, the CLI marks
 the job `failed` with `SCAN_INCOMPLETE` instead of releasing its lease, so no worker
-delivery finishes the job over rows left behind; rerun step 2 to restart it from its
-saved step. The scan is eventually consistent, so a row committed just before the
+delivery finishes the job over rows left behind (a lost fence fails it too); rerun
+step 2 to restart it from its saved step. A row that fails on every run (decrypt or
+payload) blocks the merge until fixed; v1 has no per-row skip. The scan is eventually consistent, so a row committed just before the
 start can be missed; `-verify` reports it.
 
 A calendar move bumps the row's `shareVersion`, so a sync that read the row before
