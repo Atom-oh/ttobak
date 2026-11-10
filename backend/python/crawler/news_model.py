@@ -7,7 +7,7 @@ remains the authoritative charge and the post-call cap still applies.
 Deployment supplies a bounded, no-retry runtime client; no other endpoint is used.
 """
 
-from news_enrichment import FINAL_MODEL_ID, MAX_REQUEST_BYTES, MAX_TOKENS, QualityRejected
+from news_enrichment import FINAL_MODEL_ID, MAX_REQUEST_BYTES, MAX_TOKENS, MODEL_REQUEST_FIELDS, QualityRejected
 
 # Role, system and message delimiters added by the service-side prompt format.
 FRAMING_TOKENS = 512
@@ -36,7 +36,7 @@ def input_token_bound(request):
     value = request["input"]["converse"]
     if (not isinstance(value, dict)
             or set(value) - {"messages", "system", "additionalModelRequestFields"}
-            or value.get("additionalModelRequestFields") != {"thinking": {"type": "disabled"}}
+            or value.get("additionalModelRequestFields") != MODEL_REQUEST_FIELDS
             or not isinstance(value.get("messages"), list) or not 1 <= len(value["messages"]) <= 3):
         raise QualityRejected("INVALID_COUNT_REQUEST")
     total = FRAMING_TOKENS
