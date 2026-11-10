@@ -275,9 +275,9 @@ class TestSynthesis(unittest.TestCase):
         args = client.converse.call_args.kwargs
         self.assertEqual(args["inferenceConfig"]["maxTokens"], 6000)
         self.assertNotIn("temperature", args["inferenceConfig"])
-        # Opus 5.5 rejects disabled thinking (Bedrock ValidationException).
+        self.assertEqual(args["modelId"], "global.openai.gpt-6-luna")
         self.assertEqual(args["additionalModelRequestFields"],
-                         {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}})
+                         {"reasoning": {"effort": "none"}})
         value = json.loads(args["messages"][0]["content"][0]["text"])
         self.assertEqual(value["sources"][0]["url"], valid_body().final_url)
         self.assertEqual(value["sources"][0]["body"], valid_body().body)
