@@ -122,7 +122,7 @@ runner collects and syncs.
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
 | `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}]}` sorted by SFDC ID |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
-| `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}]},calendarCoverageStart}` |
+| `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
 
 Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
 trailing data and unsupported query parameters are rejected. A sync batch has at
