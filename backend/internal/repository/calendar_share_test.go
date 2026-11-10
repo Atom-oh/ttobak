@@ -321,6 +321,116 @@ func TestApplyBatchRejectsMalformedShare(test *testing.T) {
 	}
 }
 
+func TestCalendarOverrideRoundTripStaysInCallerScope(test *testing.T) {
+	var stored map[string]types.AttributeValue
+	wantedSK := "CALOVERRIDE#" + calendarTestSource + "#series-1"
+	mock := &calendarSDKMock{
+		get: func(input *dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) {
+			if calendarTestString(test, input.Key, "PK") != "USER#owner" || calendarTestString(test, input.Key, "SK") != wantedSK {
+				test.Fatalf("override read escaped scope: %v", input.Key)
+			}
+			return &dynamodb.GetItemOutput{Item: stored}, nil
+		},
+		transact: func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+			if len(input.TransactItems) != 1 {
+				test.Fatalf("override writes are single-item: %d", len(input.TransactItems))
+			}
+			operation := input.TransactItems[0]
+			switch {
+			case operation.Put != nil:
+				condition := calendarTestExpression(operation.Put.ConditionExpression, operation.Put.ExpressionAttributeNames, operation.Put.ExpressionAttributeValues)
+				if !strings.Contains(condition, "userId = owner") || calendarTestString(test, operation.Put.Item, "PK") != "USER#owner" ||
+					calendarTestString(test, operation.Put.Item, "SK") != wantedSK {
+					test.Fatalf("override write escaped caller scope: %s", condition)
+				}
+				stored = operation.Put.Item
+			case operation.Delete != nil:
+				if calendarTestString(test, operation.Delete.Key, "PK") != "USER#owner" || calendarTestString(test, operation.Delete.Key, "SK") != wantedSK {
+					test.Fatal("override delete escaped caller scope")
+				}
+				stored = nil
+			default:
+				test.Fatalf("unexpected override operation: %+v", operation)
+			}
+			return &dynamodb.TransactWriteItemsOutput{}, nil
+		},
+	}
+	repo := calendarTestRepo(test, mock)
+	if got, err := repo.GetCalendarOverride(context.Background(), "owner", calendarTestSource, "series-1"); err != nil || got != nil {
+		test.Fatalf("absent override: %+v %v", got, err)
+	}
+	if err := repo.PutCalendarOverride(context.Background(), "owner", calendarTestSource, "series-1", CalendarOverrideRow{Mode: "account", AccountID: "acc_1"}); err != nil {
+		test.Fatal(err)
+	}
+	got, err := repo.GetCalendarOverride(context.Background(), "owner", calendarTestSource, "series-1")
+	if err != nil || got == nil || got.Mode != "account" || got.AccountID != "acc_1" {
+		test.Fatalf("override round trip: %+v %v", got, err)
+	}
+	for _, invalid := range []CalendarOverrideRow{{Mode: "auto"}, {Mode: "hidden", AccountID: "acc_1"}, {Mode: "account"}} {
+		if err := repo.PutCalendarOverride(context.Background(), "owner", calendarTestSource, "series-1", invalid); !errors.Is(err, ErrInvalidCalendarBatch) {
+			test.Fatalf("invalid override accepted: %+v %v", invalid, err)
+		}
+	}
+	if err := repo.DeleteCalendarOverride(context.Background(), "owner", calendarTestSource, "series-1"); err != nil || stored != nil {
+		test.Fatalf("override delete: %v", err)
+	}
+	if _, err := repo.GetCalendarOverride(context.Background(), "owner", calendarTestSource, "series#1"); !errors.Is(err, ErrInvalidCalendarQuery) {
+		test.Fatalf("unsafe scope key accepted: %v", err)
+	}
+}
+
+func TestSetCalendarShareStateIsOneRevisionFencedTransaction(test *testing.T) {
+	stored := calendarTestRow()
+	stored.Revision = 3
+	stored.ShareAccountID, stored.MeetingKey, stored.ShareState = "acc_1", "mk", "shared"
+	veto := calendarTestShare(stored, "acc_1", "mk", "veto")
+	calls := 0
+	mock := &calendarSDKMock{
+		get: func(input *dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) {
+			if strings.HasPrefix(calendarTestString(test, input.Key, "PK"), "ACCOUNT#") {
+				owned := calendarTestShare(stored, "acc_1", "mk", "shared")
+				owned.PK, owned.SK = "ACCOUNT#acc_1", calendarTestString(test, input.Key, "SK")
+				return &dynamodb.GetItemOutput{Item: calendarTestItem(test, owned)}, nil
+			}
+			return &dynamodb.GetItemOutput{Item: calendarTestItem(test, stored)}, nil
+		},
+		transact: func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+			calls++
+			if len(input.TransactItems) != 2 || input.TransactItems[0].Update == nil {
+				test.Fatalf("event update plus veto put expected: %+v", input.TransactItems)
+			}
+			update := input.TransactItems[0].Update
+			condition := calendarTestExpression(update.ConditionExpression, update.ExpressionAttributeNames, update.ExpressionAttributeValues)
+			fields := calendarTestExpression(update.UpdateExpression, update.ExpressionAttributeNames, update.ExpressionAttributeValues)
+			if !strings.Contains(condition, "revision = 3") || !strings.Contains(condition, "attribute_exists (PK)") || !strings.Contains(fields, "shareState = veto") ||
+				!strings.Contains(fields, "shareVersion = 1") || !strings.Contains(condition, "attribute_not_exists (shareVersion)") {
+				test.Fatalf("event update must be revision fenced: %s / %s", condition, fields)
+			}
+			put := input.TransactItems[1].Put
+			if put == nil || calendarTestString(test, put.Item, "state") != "veto" || put.Item["ciphertext"] != nil &&
+				calendarTestString(test, put.Item, "ciphertext") != "" {
+				test.Fatal("veto row must replace the shared row in place without content")
+			}
+			return &dynamodb.TransactWriteItemsOutput{}, nil
+		},
+	}
+	repo := calendarTestRepo(test, mock)
+	if err := repo.SetCalendarShareState(context.Background(), "owner", calendarTestSource, "event-1",
+		CalendarShareChange{Expected: CalendarRowVersionOf(&stored), Share: &veto, Previous: calendarTestShareKey(stored, "acc_1", "mk")}); err != nil || calls != 1 {
+		test.Fatalf("share state change failed: %v calls=%d", err, calls)
+	}
+	mock.transact = func(*dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+		return nil, &types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}
+	}
+	if err := repo.SetCalendarShareState(context.Background(), "owner", calendarTestSource, "event-1", CalendarShareChange{Expected: CalendarRowVersionOf(&stored)}); !errors.Is(err, ErrConditionFailed) {
+		test.Fatalf("stale state change must conflict: %v", err)
+	}
+	mock.get = func(*dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) { return &dynamodb.GetItemOutput{}, nil }
+	if err := repo.SetCalendarShareState(context.Background(), "owner", calendarTestSource, "event-1", CalendarShareChange{Expected: CalendarRowVersionOf(&stored)}); !errors.Is(err, ErrCalendarEventNotFound) {
+		test.Fatalf("missing event must be reported: %v", err)
+	}
+}
+
 // calendarTestStore serves GetItem from PK|SK items; unknown keys are absent.
 func calendarTestStore(test *testing.T, items map[string]map[string]types.AttributeValue) func(*dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) {
 	return func(input *dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) {
@@ -352,12 +462,19 @@ func TestApplyBatchFencedAgainstConcurrentShareStateChange(test *testing.T) {
 	batchCalls, vetoCalls := 0, 0
 	mock := &calendarSDKMock{get: calendarTestStore(test, items)}
 	mock.transact = func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+		if input.TransactItems[0].Update != nil && strings.HasPrefix(calendarTestString(test, input.TransactItems[0].Update.Key, "SK"), "CALEVENT#") {
+			// The user's veto commits between the batch's reads and its transaction.
+			vetoCalls++
+			stored := old
+			stored.ShareVersion, stored.ShareState = 1, "veto"
+			items["USER#owner|"+old.SK] = calendarTestItem(test, stored)
+			return &dynamodb.TransactWriteItemsOutput{}, nil
+		}
 		batchCalls++
-		// The user's veto commits between the batch's reads and its transaction.
-		vetoCalls++
-		stored := old
-		stored.ShareVersion, stored.ShareState = 1, "veto"
-		items["USER#owner|"+old.SK] = calendarTestItem(test, stored)
+		veto := calendarTestShare(old, "acc_1", "mk", "veto")
+		if err := repo.SetCalendarShareState(context.Background(), "owner", calendarTestSource, "event-1", CalendarShareChange{Expected: CalendarRowVersionOf(&old), Share: &veto}); err != nil {
+			test.Fatal(err)
+		}
 		eventIndex := -1
 		for index, operation := range input.TransactItems {
 			if operation.Put != nil && calendarTestString(test, operation.Put.Item, "SK") == old.SK {
@@ -695,6 +812,77 @@ func TestApplyBatchDisplacedOwnerLeavesWithoutFailing(test *testing.T) {
 	}
 }
 
+func TestSetCalendarShareStateVetoOverForeignOwnerIsNeverSilent(test *testing.T) {
+	stored := calendarTestRow()
+	stored.Revision = 3
+	veto := calendarTestShare(stored, "acc_1", "mk", "veto")
+	for _, scenario := range []string{"convert shared", "join veto", "condition fails", "invalid owner"} {
+		test.Run(scenario, func(test *testing.T) {
+			state := "shared"
+			if scenario == "join veto" {
+				state = "veto"
+			}
+			_, items := calendarTestForeignOwner(test, state)
+			if scenario == "invalid owner" {
+				for id := range items {
+					items[id]["userId"] = &types.AttributeValueMemberS{Value: "someone-else"}
+				}
+			}
+			items["USER#owner|"+stored.SK] = calendarTestItem(test, stored)
+			calls := 0
+			mock := &calendarSDKMock{
+				get: calendarTestStore(test, items),
+				transact: func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+					calls++
+					if len(input.TransactItems) != 2 {
+						test.Fatalf("event update plus one share operation expected: %d", len(input.TransactItems))
+					}
+					operation := input.TransactItems[1]
+					if state == "veto" {
+						update := operation.Update
+						if update == nil || calendarTestString(test, update.Key, "PK") != "ACCOUNT#acc_1" {
+							test.Fatal("joining a veto must update its set, never overwrite it")
+						}
+						fields := calendarTestExpression(update.UpdateExpression, update.ExpressionAttributeNames, update.ExpressionAttributeValues)
+						if !strings.Contains(fields, "ADD vetoEventIds ["+calendarTestSource+"#event-1]") {
+							test.Fatalf("veto must ADD its event: %s", fields)
+						}
+						return &dynamodb.TransactWriteItemsOutput{}, nil
+					}
+					put := operation.Put
+					condition := calendarTestExpression(put.ConditionExpression, put.ExpressionAttributeNames, put.ExpressionAttributeValues)
+					if !strings.Contains(condition, "eventId = event-9") || !strings.Contains(condition, "state = shared") ||
+						calendarTestString(test, put.Item, "state") != "veto" {
+						test.Fatalf("veto must convert the observed shared owner: %s", condition)
+					}
+					if members, ok := put.Item["vetoEventIds"].(*types.AttributeValueMemberSS); !ok || len(members.Value) != 1 || members.Value[0] != calendarTestSource+"#event-1" {
+						test.Fatalf("converted veto must hold the claimant: %v", put.Item["vetoEventIds"])
+					}
+					if scenario == "condition fails" {
+						return nil, calendarTestCancel(2, 1)
+					}
+					return &dynamodb.TransactWriteItemsOutput{}, nil
+				},
+			}
+			err := calendarTestRepo(test, mock).SetCalendarShareState(context.Background(), "owner", calendarTestSource, "event-1", CalendarShareChange{Expected: CalendarRowVersionOf(&stored), Share: &veto})
+			switch scenario {
+			case "condition fails":
+				if !errors.Is(err, ErrCalendarShareStateChanged) || calls != 1 {
+					test.Fatalf("a failed veto must be reported: %v", err)
+				}
+			case "invalid owner":
+				if !errors.Is(err, ErrCalendarCorruptData) || calls != 0 {
+					test.Fatalf("an unwritable veto must never return nil: %v calls=%d", err, calls)
+				}
+			default:
+				if err != nil || calls != 1 {
+					test.Fatalf("veto must be held: %v calls=%d", err, calls)
+				}
+			}
+		})
+	}
+}
+
 // calendarTestVetoRow is a veto row for mk held by the given events of calendarTestSource.
 func calendarTestVetoRow(test *testing.T, events ...string) (string, map[string]types.AttributeValue) {
 	row := calendarTestRow()
@@ -960,6 +1148,139 @@ func TestApplyBatchExpectedVersionMismatchFailsBeforeWrite(test *testing.T) {
 	}
 }
 
+func TestSetCalendarShareStateExpectedVersionMismatch(test *testing.T) {
+	stored := calendarTestRow()
+	stored.ShareVersion = 1
+	items := map[string]map[string]types.AttributeValue{"USER#owner|" + stored.SK: calendarTestItem(test, stored)}
+	calls := 0
+	mock := &calendarSDKMock{get: calendarTestStore(test, items), transact: func(*dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+		calls++
+		return &dynamodb.TransactWriteItemsOutput{}, nil
+	}}
+	veto := calendarTestShare(stored, "acc_1", "mk", "veto")
+	stale := CalendarRowVersionOf(&stored)
+	stale.ShareVersion = 0
+	err := calendarTestRepo(test, mock).SetCalendarShareState(context.Background(), "owner", calendarTestSource, "event-1", CalendarShareChange{Expected: stale, Share: &veto})
+	if !errors.Is(err, ErrCalendarShareStateChanged) || calls != 0 {
+		test.Fatalf("stale plan must fail before the transaction: %v calls=%d", err, calls)
+	}
+}
+
+func TestApplyBatchExtraVetoHidesWhereVisible(test *testing.T) {
+	old := calendarTestRow()
+	old.ShareAccountID, old.MeetingKey, old.ShareState = "acc_2", "mk2", "shared"
+	sharedID, sharedItem := calendarTestOwnedShare(test, old, "acc_2", "mk2", "shared")
+	items := map[string]map[string]types.AttributeValue{"USER#owner|" + old.SK: calendarTestItem(test, old), sharedID: sharedItem}
+	batch := calendarTestWrite()
+	row := batch.Mutations[0].Event
+	primary := calendarTestShare(*row, "acc_1", "mk1", "veto")
+	extra := calendarTestShare(*row, "acc_2", "mk2", "veto")
+	batch.Mutations[0].Share, batch.Mutations[0].ExtraVeto = &primary, &extra
+	row.ShareAccountID, row.MeetingKey, row.ShareState = "acc_1", "mk1", "veto"
+	row.ExtraVetoAccountID, row.ExtraVetoMeetingKey = "acc_2", "mk2"
+	var ops calendarTestOps
+	var raw *dynamodb.TransactWriteItemsInput
+	mock := &calendarSDKMock{get: calendarTestStore(test, items), transact: func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+		ops, raw = calendarTestCollect(test, input), input
+		return &dynamodb.TransactWriteItemsOutput{}, nil
+	}}
+	if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch)); err != nil {
+		test.Fatal(err)
+	}
+	first, second := ops.puts["ACCOUNT#acc_1|"+model.CalendarShareSortKey(row.StartsAt, "mk1", "owner")], ops.puts[sharedID]
+	if first == nil || calendarTestString(test, first, "state") != "veto" || second == nil || calendarTestString(test, second, "state") != "veto" {
+		test.Fatalf("both accounts must get a veto: %v", ops.puts)
+	}
+	for _, operation := range raw.TransactItems {
+		if operation.Put != nil && calendarTestString(test, operation.Put.Item, "PK")+"|"+calendarTestString(test, operation.Put.Item, "SK") == sharedID {
+			condition := calendarTestExpression(operation.Put.ConditionExpression, operation.Put.ExpressionAttributeNames, operation.Put.ExpressionAttributeValues)
+			if !strings.Contains(condition, "state = shared") || !strings.Contains(condition, "eventId = event-1") {
+				test.Fatalf("the visible copy must be converted under its owner condition: %s", condition)
+			}
+		}
+	}
+	canonical := ops.puts["USER#owner|"+old.SK]
+	if calendarTestString(test, canonical, "extraVetoAccountId") != "acc_2" || calendarTestString(test, canonical, "extraVetoMeetingKey") != "mk2" ||
+		calendarTestString(test, canonical, "shareAccountId") != "acc_1" {
+		test.Fatalf("event row must record both vetoes: %v", canonical)
+	}
+	// Returning to no share vacates both veto rows.
+	stored := *row
+	stored.PK, stored.SK = "USER#owner", old.SK
+	_, firstVeto := calendarTestOwnedShare(test, stored, "acc_1", "mk1", "veto")
+	secondID, secondVeto := calendarTestOwnedShare(test, stored, "acc_2", "mk2", "veto")
+	items["USER#owner|"+old.SK] = calendarTestItem(test, stored)
+	items["ACCOUNT#acc_1|"+model.CalendarShareSortKey(row.StartsAt, "mk1", "owner")] = firstVeto
+	items[secondID] = secondVeto
+	clear := calendarTestWrite()
+	if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, clear)); err != nil {
+		test.Fatal(err)
+	}
+	if !ops.deletes["ACCOUNT#acc_1|"+model.CalendarShareSortKey(row.StartsAt, "mk1", "owner")] || !ops.deletes[secondID] {
+		test.Fatalf("both veto rows must be vacated: %v", ops.deletes)
+	}
+}
+
+func TestApplyBatchRejectsMalformedExtraVeto(test *testing.T) {
+	for name, mutate := range map[string]func(*CalendarWriteMutation){
+		"extra next to shared": func(mutation *CalendarWriteMutation) {
+			shared := calendarTestShare(*mutation.Event, "acc_1", "mk1", "shared")
+			mutation.Share = &shared
+			mutation.Event.ShareAccountID, mutation.Event.MeetingKey, mutation.Event.ShareState = "acc_1", "mk1", "shared"
+		},
+		"same account": func(mutation *CalendarWriteMutation) {
+			veto := calendarTestShare(*mutation.Event, "acc_2", "mk1", "veto")
+			mutation.Share = &veto
+			mutation.Event.ShareAccountID, mutation.Event.MeetingKey, mutation.Event.ShareState = "acc_2", "mk1", "veto"
+		},
+		"row not mirrored": func(mutation *CalendarWriteMutation) {
+			veto := calendarTestShare(*mutation.Event, "acc_1", "mk1", "veto")
+			mutation.Share = &veto
+			mutation.Event.ShareAccountID, mutation.Event.MeetingKey, mutation.Event.ShareState = "acc_1", "mk1", "veto"
+			mutation.Event.ExtraVetoMeetingKey = "other"
+		},
+	} {
+		test.Run(name, func(test *testing.T) {
+			batch := calendarTestWrite()
+			mutation := &batch.Mutations[0]
+			mutate(mutation)
+			extra := calendarTestShare(*mutation.Event, "acc_2", "mk2", "veto")
+			mutation.ExtraVeto = &extra
+			if mutation.Event.ExtraVetoMeetingKey == "" {
+				mutation.Event.ExtraVetoAccountID, mutation.Event.ExtraVetoMeetingKey = "acc_2", "mk2"
+			}
+			mock := &calendarSDKMock{}
+			if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch)); !errors.Is(err, ErrInvalidCalendarBatch) {
+				test.Fatalf("malformed extra veto accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestSetCalendarShareStateRecordsExtraVeto(test *testing.T) {
+	stored := calendarTestRow()
+	stored.ShareAccountID, stored.MeetingKey, stored.ShareState = "acc_2", "mk2", "shared"
+	sharedID, sharedItem := calendarTestOwnedShare(test, stored, "acc_2", "mk2", "shared")
+	items := map[string]map[string]types.AttributeValue{"USER#owner|" + stored.SK: calendarTestItem(test, stored), sharedID: sharedItem}
+	var fields string
+	mock := &calendarSDKMock{get: calendarTestStore(test, items), transact: func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+		update := input.TransactItems[0].Update
+		fields = calendarTestExpression(update.UpdateExpression, update.ExpressionAttributeNames, update.ExpressionAttributeValues)
+		if len(input.TransactItems) != 3 {
+			test.Fatalf("event update plus two vetoes expected: %d", len(input.TransactItems))
+		}
+		return &dynamodb.TransactWriteItemsOutput{}, nil
+	}}
+	primary := calendarTestShare(stored, "acc_1", "mk1", "veto")
+	extra := calendarTestShare(stored, "acc_2", "mk2", "veto")
+	err := calendarTestRepo(test, mock).SetCalendarShareState(context.Background(), "owner", calendarTestSource, "event-1",
+		CalendarShareChange{Expected: CalendarRowVersionOf(&stored), Share: &primary, ExtraVeto: &extra, Previous: calendarTestShareKey(stored, "acc_2", "mk2")})
+	if err != nil || !strings.Contains(fields, "extraVetoAccountId = acc_2") || !strings.Contains(fields, "extraVetoMeetingKey = mk2") ||
+		!strings.Contains(fields, "shareAccountId = acc_1") {
+		test.Fatalf("extra veto must be recorded: %v %s", err, fields)
+	}
+}
+
 // TestApplyBatchStalePlanCannotReplaceVeto is the review scenario: the event vetoes mk, and a
 // sync planned before that veto asks for shared on mk. The stale plan must never replace the veto.
 func TestApplyBatchStalePlanCannotReplaceVeto(test *testing.T) {
@@ -993,6 +1314,8 @@ func TestApplyBatchNilExpectedNeverChangesShareState(test *testing.T) {
 	shared.ShareAccountID, shared.MeetingKey, shared.ShareState = "acc_1", "mk", "shared"
 	vetoed := shared
 	vetoed.ShareState = "veto"
+	hidden := plain
+	hidden.ExtraVetoAccountID, hidden.ExtraVetoMeetingKey = "acc_2", "mk2"
 	shareID, shareItem := calendarTestOwnedShare(test, shared, "acc_1", "mk", "shared")
 	for _, scenario := range []struct {
 		name    string
@@ -1006,6 +1329,7 @@ func TestApplyBatchNilExpectedNeverChangesShareState(test *testing.T) {
 		}, ErrInvalidCalendarBatch},
 		{"plain upsert of a shared event", &shared, nil, ErrCalendarShareStateChanged},
 		{"plain upsert of a vetoed event", &vetoed, nil, ErrCalendarShareStateChanged},
+		{"plain upsert of an event with an extra veto", &hidden, nil, ErrCalendarShareStateChanged},
 		{"plain upsert of a new event", nil, nil, nil},
 		{"plain upsert of a never-shared event", &plain, nil, nil},
 		{"remove of a shared event", &shared, func(batch *CalendarWriteBatch) {
@@ -1180,4 +1504,27 @@ func TestApplyBatchVetoWindowCoversLatestMember(test *testing.T) {
 			test.Fatal(err)
 		}
 	})
+}
+
+func TestApplyBatchVetoSetIsBounded(test *testing.T) {
+	members := make([]string, calendarMaxVetoMembers)
+	for index := range members {
+		members[index] = fmt.Sprintf("event-m%d", index)
+	}
+	shareID, shareItem := calendarTestVetoRow(test, members...)
+	batch := calendarTestWrite()
+	calendarTestShareMutation(&batch, 0, "acc_1", "mk")
+	batch.Mutations[0].Share.State, batch.Mutations[0].Share.Ciphertext, batch.Mutations[0].Event.ShareState = "veto", "", "veto"
+	calls := 0
+	mock := &calendarSDKMock{get: calendarTestStore(test, map[string]map[string]types.AttributeValue{shareID: shareItem}),
+		transact: func(*dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+			calls++
+			return &dynamodb.TransactWriteItemsOutput{}, nil
+		}}
+	if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch)); !errors.Is(err, ErrInvalidCalendarBatch) || calls != 0 {
+		test.Fatalf("a veto set beyond the bound must be refused: %v calls=%d", err, calls)
+	}
+	if validCalendarVetoSet(append(slices.Clone(members), calendarTestSource+"#event-x")) {
+		test.Fatal("an oversized stored veto set must be invalid")
+	}
 }
