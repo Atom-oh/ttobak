@@ -7,6 +7,9 @@ const (
 	PrefixCalendarTime   = "CALTIME#"
 	PrefixCalendarSource = "CALSOURCE#"
 	PrefixCalendarBatch  = "CALBATCH#"
+
+	// Account partition share rows: PK ACCOUNT#{accountId}.
+	PrefixCalendarShare = "CALSHARE#"
 )
 
 type CalendarEvent struct {
@@ -116,4 +119,9 @@ func CalendarSourceSortKey(sourceID string) string {
 
 func CalendarBatchSortKey(sourceID, batchID string) string {
 	return PrefixCalendarBatch + sourceID + "#" + batchID
+}
+
+// CalendarShareSortKey orders share rows by start time; rows of one meetingKey are contiguous.
+func CalendarShareSortKey(startsAt time.Time, meetingKey, userID string) string {
+	return PrefixCalendarShare + startsAt.UTC().Format("2006-01-02T15:04:05.000000000Z") + "#" + meetingKey + "#" + userID
 }
