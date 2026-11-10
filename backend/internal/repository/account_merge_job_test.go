@@ -373,3 +373,91 @@ func TestGetAccountMergeJob(t *testing.T) {
 		t.Fatalf("absent job: %+v %v", job, err)
 	}
 }
+
+func TestReleaseMergeLease(t *testing.T) {
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 200, `{}` })
+	job := leasedJob()
+	step, cursor := job.Step, job.Cursor
+	if err := r.ReleaseMergeLease(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].target != "UpdateItem" || mergeJobOpKey(calls[0].body) != "ACCOUNT#src|MERGE#job" {
+		t.Fatalf("release must touch only the job row: %+v", calls)
+	}
+	update, _ := calls[0].body["UpdateExpression"].(string)
+	names := ""
+	for _, n := range calls[0].body["ExpressionAttributeNames"].(map[string]any) {
+		names += n.(string) + ","
+	}
+	if !strings.Contains(update, "REMOVE") || strings.Contains(names, "step,") || strings.Contains(names, "cursor,") {
+		t.Errorf("release must remove the lease and keep progress: %s", update)
+	}
+	if !strings.Contains(resolvedCondition(calls[0].body), "leaseOwner") {
+		t.Error("release must be lease-conditioned")
+	}
+	if job.LeaseOwner != "" || job.LeaseUntil != 0 || job.Step != step || job.Cursor != cursor || job.State != model.MergeStateRunning {
+		t.Fatalf("job = %+v", job)
+	}
+	lost := fenceRepo(t, &calls, func(fenceRequest) (int, string) {
+		return 400, `{"__type":"ConditionalCheckFailedException"}`
+	})
+	if err := lost.ReleaseMergeLease(context.Background(), leasedJob()); !errors.Is(err, ErrMergeFenceLost) {
+		t.Fatalf("lost lease err = %v", err)
+	}
+}
+
+// transactionConflictAt cancels a transaction of n items with a concurrent
+// transaction on item idx.
+func transactionConflictAt(n, idx int) string {
+	reasons := make([]string, n)
+	for i := range reasons {
+		reasons[i] = `{"Code":"None"}`
+	}
+	reasons[idx] = `{"Code":"TransactionConflict"}`
+	return `{"__type":"TransactionCanceledException","CancellationReasons":[` + strings.Join(reasons, ",") + `]}`
+}
+
+func TestMergeStartAndFinishMapTransactionConflict(t *testing.T) {
+	var calls []fenceRequest
+	start := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 400, transactionConflictAt(6, 1) })
+	if err := start.StartAccountMerge(context.Background(), startJob(), startAncestors()); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("start conflict err = %v", err)
+	}
+	finish := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 400, transactionConflictAt(5, 0) })
+	job := leasedJob()
+	job.Step = "finish"
+	if err := finish.FinishAccountMerge(context.Background(), job); !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrMergeFenceLost) {
+		t.Fatalf("finish conflict err = %v", err)
+	}
+}
+
+func TestRedispatchMergeJob(t *testing.T) {
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) {
+		return 200, `{"Attributes":{"PK":{"S":"ACCOUNT#src"},"SK":{"S":"MERGE#job"},"state":{"S":"running"},"step":{"S":"events"},"sourceAccountId":{"S":"src"}}}`
+	})
+	now := time.Unix(1_800_000_000, 0)
+	job, err := r.RedispatchMergeJob(context.Background(), "src", now)
+	if err != nil || job.Step != "events" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	if len(calls) != 1 || calls[0].target != "UpdateItem" || mergeJobOpKey(calls[0].body) != "ACCOUNT#src|MERGE#job" {
+		t.Fatalf("calls = %+v", calls)
+	}
+	cond := resolvedCondition(calls[0].body)
+	for _, want := range []string{"state", "attribute_not_exists (leaseUntil)", "leaseUntil <"} {
+		if !strings.Contains(cond, want) {
+			t.Errorf("condition %q missing %q", cond, want)
+		}
+	}
+	if update, _ := calls[0].body["UpdateExpression"].(string); strings.Contains(update, "REMOVE") {
+		t.Errorf("redispatch must not change the lease: %s", update)
+	}
+	held := fenceRepo(t, &calls, func(fenceRequest) (int, string) {
+		return 400, `{"__type":"ConditionalCheckFailedException"}`
+	})
+	if _, err := held.RedispatchMergeJob(context.Background(), "src", now); !errors.Is(err, ErrMergeLeaseHeld) {
+		t.Fatalf("held err = %v", err)
+	}
+}

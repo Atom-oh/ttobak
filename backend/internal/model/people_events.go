@@ -18,3 +18,10 @@ type PeopleResolveRequested struct {
 	MeetingID string `json:"meetingId,omitempty"`
 	Reason    string `json:"reason"`
 }
+
+// AccountMergeRequested asks the summarize worker to continue the source
+// account's merge job from its saved step. It carries the source ID only; the
+// worker rereads the job and claims its lease.
+type AccountMergeRequested struct {
+	SourceAccountID string `json:"sourceAccountId"`
+}

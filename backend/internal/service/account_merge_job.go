@@ -29,6 +29,8 @@ type accountMergeJobRepo interface {
 	StartAccountMerge(ctx context.Context, job *model.AccountMergeJob, intoAncestors []repository.AccountParentLink) error
 	ResumeAccountMerge(ctx context.Context, job *model.AccountMergeJob, intoAncestors []repository.AccountParentLink) error
 	FailMergeJob(ctx context.Context, job *model.AccountMergeJob, code string) error
+	ClaimMergeLease(ctx context.Context, sourceID, owner string, now time.Time, ttl time.Duration) (*model.AccountMergeJob, error)
+	RedispatchMergeJob(ctx context.Context, sourceID string, now time.Time) (*model.AccountMergeJob, error)
 }
 
 // SetJobRepo wires the merge job store.
@@ -39,9 +41,11 @@ func (s *AccountMergeService) SetJobRepo(jobs accountMergeJobRepo) { s.jobs = jo
 // checked here and again inside the start transaction. A source with unmoved
 // categories requires AcceptUnmoved. Before the contacts step has run, the
 // source and target contacts together must fit the dedupe index. The job is
-// created unleased; the worker claims it.
+// created unleased and an AccountMergeRequested event hands it to the worker.
+// A running job for the same target whose lease is absent or expired is
+// handed to a fresh worker event instead; a live lease is a 409.
 func (s *AccountMergeService) Start(ctx context.Context, requesterID, fromID string, req *model.StartAccountMergeRequest) (*model.AccountMergeJobDTO, error) {
-	if s.jobs == nil {
+	if s.jobs == nil || s.publishMerge == nil {
 		return nil, fmt.Errorf("account merge job store is not configured")
 	}
 	if req == nil || requesterID == "" || req.IntoAccountID == "" {
@@ -64,7 +68,10 @@ func (s *AccountMergeService) Start(ctx context.Context, requesterID, fromID str
 		return nil, err
 	}
 	if existing != nil && existing.State == model.MergeStateRunning {
-		return nil, ErrMergeJobRunning
+		if existing.TargetAccountID != intoID {
+			return nil, ErrMergeJobRunning
+		}
+		return s.redispatchMerge(ctx, fromID)
 	}
 	resume := existing != nil && existing.State == model.MergeStateFailed && existing.TargetAccountID == intoID
 	unmoved, err := s.unmovedCategories(ctx, fromID)
@@ -100,6 +107,26 @@ func (s *AccountMergeService) Start(ctx context.Context, requesterID, fromID str
 		case errors.Is(err, repository.ErrConditionFailed):
 			return nil, ErrAccountMergeConflict
 		}
+		return nil, err
+	}
+	if err := s.dispatchMerge(ctx, job); err != nil {
+		return nil, err
+	}
+	return job.DTO(), nil
+}
+
+// redispatchMerge hands a running job nobody works on (its worker crashed
+// or timed out without releasing, so its lease is absent or expired) to a
+// fresh worker event. A live lease means a worker is on it: ErrMergeJobRunning.
+func (s *AccountMergeService) redispatchMerge(ctx context.Context, fromID string) (*model.AccountMergeJobDTO, error) {
+	job, err := s.jobs.RedispatchMergeJob(ctx, fromID, s.clock())
+	if errors.Is(err, repository.ErrMergeLeaseHeld) {
+		return nil, ErrMergeJobRunning
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.dispatchMerge(ctx, job); err != nil {
 		return nil, err
 	}
 	return job.DTO(), nil

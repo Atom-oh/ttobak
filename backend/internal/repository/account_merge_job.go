@@ -162,8 +162,10 @@ func (r *DynamoDBRepository) startAccountMerge(ctx context.Context, job *model.A
 			if len(reasons) > 0 && aws.ToString(reasons[0].Code) == "ConditionalCheckFailed" {
 				return fmt.Errorf("start account merge: %w: %w", ErrMergeJobExists, err)
 			}
+			// A concurrent transaction on an item is a conflict like a
+			// failed condition: the caller re-reads and retries.
 			for _, reason := range reasons {
-				if aws.ToString(reason.Code) == "ConditionalCheckFailed" {
+				if code := aws.ToString(reason.Code); code == "ConditionalCheckFailed" || code == "TransactionConflict" {
 					return fmt.Errorf("start account merge: %w: %w", ErrConditionFailed, err)
 				}
 			}
@@ -253,6 +255,58 @@ func (r *DynamoDBRepository) updateLeasedJob(ctx context.Context, job *model.Acc
 		}
 		return fmt.Errorf("%s: %w", what, err)
 	}
+	return nil
+}
+
+// RedispatchMergeJob marks a running job for a fresh worker event when no
+// worker holds it: the lease is absent or expired at now. It writes only
+// updatedAt. A live lease (or a job that is not running) returns
+// ErrMergeLeaseHeld, so a crashed or timed-out worker's job can be resumed
+// but a working one is never doubled.
+func (r *DynamoDBRepository) RedispatchMergeJob(ctx context.Context, sourceID string, now time.Time) (*model.AccountMergeJob, error) {
+	if !validMergeAccountID(sourceID) {
+		return nil, fmt.Errorf("invalid merge redispatch")
+	}
+	lease := expression.Name("leaseUntil")
+	cond := expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("state").Equal(expression.Value(model.MergeStateRunning))).
+		And(lease.AttributeNotExists().Or(lease.LessThan(expression.Value(now.Unix()))))
+	expr, err := expression.NewBuilder().WithUpdate(expression.Set(expression.Name("updatedAt"), expression.Value(now.UTC()))).
+		WithCondition(cond).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build merge redispatch: %w", err)
+	}
+	out, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{TableName: aws.String(r.tableName), Key: mergeJobKey(sourceID),
+		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ReturnValues: types.ReturnValueAllNew})
+	if err != nil {
+		var ccf *types.ConditionalCheckFailedException
+		if errors.As(err, &ccf) {
+			return nil, fmt.Errorf("%w: %w", ErrMergeLeaseHeld, err)
+		}
+		return nil, fmt.Errorf("redispatch merge job: %w", err)
+	}
+	var job model.AccountMergeJob
+	if err := attributevalue.UnmarshalMap(out.Attributes, &job); err != nil {
+		return nil, fmt.Errorf("unmarshal merge job: %w", err)
+	}
+	return &job, nil
+}
+
+// ReleaseMergeLease gives up job's lease without changing its progress, so
+// the next AccountMergeRequested delivery can claim it at once. A lease that
+// already moved returns ErrMergeFenceLost.
+func (r *DynamoDBRepository) ReleaseMergeLease(ctx context.Context, job *model.AccountMergeJob) error {
+	if !validLeasedJob(job) {
+		return fmt.Errorf("invalid merge lease release")
+	}
+	now := time.Now().UTC()
+	update := expression.Set(expression.Name("updatedAt"), expression.Value(now)).
+		Remove(expression.Name("leaseOwner")).Remove(expression.Name("leaseUntil"))
+	if err := r.updateLeasedJob(ctx, job, update, leasedJobCondition(job), "release merge lease"); err != nil {
+		return err
+	}
+	job.LeaseOwner, job.LeaseUntil, job.UpdatedAt = "", 0, now
 	return nil
 }
 
@@ -386,6 +440,11 @@ func (r *DynamoDBRepository) FinishAccountMerge(ctx context.Context, job *model.
 					return fmt.Errorf("finish account merge: %w: %w", ErrConditionFailed, err)
 				}
 				return fmt.Errorf("finish account merge: %w: %w", ErrMergeFenceLost, err)
+			}
+			for _, reason := range cancelled.CancellationReasons {
+				if aws.ToString(reason.Code) == "TransactionConflict" {
+					return fmt.Errorf("finish account merge: %w: %w", ErrConditionFailed, err)
+				}
 			}
 		}
 		return fmt.Errorf("finish account merge: %w", err)

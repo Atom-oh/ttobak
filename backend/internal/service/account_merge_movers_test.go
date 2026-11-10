@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -143,4 +144,22 @@ func TestMergeFenceLostStopsMover(t *testing.T) {
 			t.Fatalf("err=%v cursor=%q fence=%v", err, res.Cursor, fence.Err())
 		}
 	})
+}
+
+func TestMoveMembersBoundedPerCall(t *testing.T) {
+	mover := newFakeMoverRepo()
+	for i := 0; i < mergeMembersPerRun+5; i++ {
+		mover.add("a", fmt.Sprintf("u%03d", i), model.RoleSA)
+	}
+	s := &AccountMergeService{mover: mover}
+	job := &model.AccountMergeJob{SourceAccountID: "a", TargetAccountID: "b", RequesterUserID: "owner", LeaseOwner: "w1"}
+	first, err := s.moveMembers(newMergeFence(context.Background()), job)
+	if err != nil || first.Done || first.Moved != mergeMembersPerRun || first.Cursor != fmt.Sprintf("u%03d", mergeMembersPerRun-1) {
+		t.Fatalf("first = %+v err=%v", first, err)
+	}
+	job.Cursor = first.Cursor
+	second, err := s.moveMembers(newMergeFence(context.Background()), job)
+	if err != nil || !second.Done || second.Moved != 5 {
+		t.Fatalf("second = %+v err=%v", second, err)
+	}
 }

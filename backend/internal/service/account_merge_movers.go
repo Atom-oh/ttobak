@@ -107,10 +107,14 @@ func mergedMemberRole(role string) string {
 	return role
 }
 
-// moveMembers copies the source's members into the target. Existing target
-// members keep their role and are not counted. Pending invites live outside
-// the member rows and are not touched. The cursor is the last member user ID
-// copied, so a resumed run continues after it; a repeat run moves nothing.
+// mergeMembersPerRun is how many source members one moveMembers call checks.
+const mergeMembersPerRun = 200
+
+// moveMembers copies up to mergeMembersPerRun of the source's members into
+// the target. Existing target members keep their role and are not counted.
+// Pending invites live outside the member rows and are not touched. The
+// cursor is the last member user ID handled, so a resumed run continues
+// after it; a repeat run moves nothing.
 func (s *AccountMergeService) moveMembers(fence *mergeFence, job *model.AccountMergeJob) (mergeMoveResult, error) {
 	result := mergeMoveResult{Cursor: job.Cursor}
 	ctx := fence.Context()
@@ -123,11 +127,15 @@ func (s *AccountMergeService) moveMembers(fence *mergeFence, job *model.AccountM
 	}
 	sort.Slice(members, func(i, j int) bool { return members[i].UserID < members[j].UserID })
 	cursor := job.Cursor
-	moved := 0
+	moved, handled := 0, 0
 	for _, member := range members {
 		if member.UserID == "" || member.UserID <= job.Cursor {
 			continue
 		}
+		if handled == mergeMembersPerRun {
+			return mergeMoveResult{Moved: moved, Cursor: cursor}, nil
+		}
+		handled++
 		if err := fence.Err(); err != nil {
 			return result, err
 		}
