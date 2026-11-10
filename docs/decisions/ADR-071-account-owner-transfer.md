@@ -40,7 +40,7 @@ UpdateMemberRole and pending-share materialization stay owner-free.
 ## Consequences
 
 Removal, revocation and reparenting remain Owner-only and now follow the new
-Owner. Access tokens issued before transfer remain valid until expiry (ADR-032),
+Owner. Access tokens issued before transfer remain valid until expiry (ADR-007),
 but authorization reads current membership, so the previous Owner loses Owner powers
 immediately. There is no transfer to a non-member and no multi-owner state.
 
