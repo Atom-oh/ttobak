@@ -177,7 +177,7 @@ test('poll delay doubles per failure up to 30 s', () => {
 
 function detailFixture({ viewer, account = {}, transferOwner = async () => ({}) }) {
   const harness = accountComponentHarness();
-  const calls = { replace: [], gets: 0 };
+  const calls = { replace: [], push: [], gets: 0 };
   const accountInvite = {}; load('../src/lib/accountInvite.ts', { exports: accountInvite, Error });
   const accountTabs = {}; load('../src/lib/accountTabs.ts', { exports: accountTabs, URLSearchParams });
   const accountAccess = {}; load('../src/lib/accountAccess.ts', { exports: accountAccess });
@@ -187,11 +187,11 @@ function detailFixture({ viewer, account = {}, transferOwner = async () => ({}) 
   const Dialog = () => null;
   const modules = {
     react: harness.react, 'react/jsx-runtime': { jsx, jsxs: jsx },
-    'next/navigation': { usePathname: () => '/accounts/A', useRouter: () => ({ push() {}, replace: url => calls.replace.push(url) }), useSearchParams: () => new URLSearchParams('') },
+    'next/navigation': { usePathname: () => '/accounts/A', useRouter: () => ({ push: url => calls.push.push(url), replace: url => calls.replace.push(url) }), useSearchParams: () => new URLSearchParams('') },
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId: viewer }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }) },
     '@/components/layout/AppLayout': { AppLayout: empty },
     '@/components/AccountMergeDialog': { AccountMergeDialog: Dialog,
-      ACCOUNT_MERGE_COPY: { action: 'MERGE', mergingBanner: 'BANNER', viewProgress: 'PROGRESS', redirecting: 'REDIRECT', merging: 'MERGING' },
+      ACCOUNT_MERGE_COPY: { action: 'MERGE', mergingBanner: 'BANNER', viewProgress: 'PROGRESS', mergedBanner: 'MERGED', openTarget: 'OPEN_TARGET', merging: 'MERGING' },
       accountWriteErrorMessage: (err, fallback) => err?.code === 'ACCOUNT_MERGING' ? 'MERGING' : err instanceof Error ? err.message : fallback },
     '@/lib/api': {
       accountApi: {
@@ -258,11 +258,15 @@ test('a merging account shows the banner, hides write controls, keeps progress f
   assert.equal(member.find('PROGRESS').length, 0);
 });
 
-test('a tombstoned account redirects to the merge target', async () => {
+test('a tombstoned account stays readable, read-only, with a link to the target', async () => {
   const page = detailFixture({ viewer: 'owner', account: { mergedInto: 'B/x' } });
   await page.start();
-  assert.deepEqual(plain(page.calls.replace), ['/accounts/B%2Fx']);
-  assert.ok(page.text().includes('REDIRECT'));
+  assert.deepEqual(plain(page.calls.replace), [], 'no automatic redirect');
+  assert.ok(page.text().includes('MERGED'));
+  assert.equal(page.find('MERGE').length, 0, 'no merge action on a tombstone');
+  assert.equal(page.find('소유권 이전').length, 0, 'write controls hidden');
+  await page.find('OPEN_TARGET')[0].props.onClick();
+  assert.deepEqual(plain(page.calls.push), ['/accounts/B%2Fx']);
 });
 
 test('a write rejected with ACCOUNT_MERGING shows the merge message', async () => {

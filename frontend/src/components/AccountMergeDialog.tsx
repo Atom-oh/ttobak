@@ -49,7 +49,7 @@ export const ACCOUNT_MERGE_COPY = {
   merging: '이 어카운트는 다른 어카운트로 병합 중이라 변경할 수 없습니다.',
   mergingBanner: '이 어카운트는 다른 어카운트로 병합 중입니다. 병합이 끝날 때까지 읽기 전용입니다.',
   viewProgress: '진행 상황 보기',
-  redirecting: '병합된 어카운트로 이동하는 중…',
+  mergedBanner: '이 어카운트는 다른 어카운트로 병합되었습니다. 옮겨지지 않은 항목은 여기서 읽기 전용으로 볼 수 있습니다.',
 } as const;
 
 export const ACCOUNT_MERGE_COUNT_LABELS: Record<string, string> = {
