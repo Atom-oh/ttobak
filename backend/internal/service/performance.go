@@ -37,6 +37,10 @@ var (
 
 type PerformanceStore interface {
 	ApplyPerformanceBatch(ctx context.Context, userID, source string, req model.PerformanceSyncRequest, digest string) (*model.PerformanceSyncReceipt, error)
+	// ReplayPerformanceBatch returns the stored receipt for an identical,
+	// already-applied batch, nil when none exists, or ErrConditionFailed when
+	// the batch ID was reused with a different digest.
+	ReplayPerformanceBatch(ctx context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error)
 	ListPerformanceSources(ctx context.Context, userID string) ([]model.PerformanceSourceStatus, error)
 	ListPerformanceAssignments(ctx context.Context, userID string) ([]model.SFDCAssignment, error)
 	ListAccountMappings(ctx context.Context, userID string) ([]model.AccountMapping, error)
@@ -84,7 +88,20 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 		return nil, ErrInvalidInput
 	}
 	sum := sha256.Sum256(encoded)
-	return svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, hex.EncodeToString(sum[:]))
+	digest := hex.EncodeToString(sum[:])
+	// Replay first: the activity window depends on the clock, and an identical
+	// retry of an applied batch must return its receipt after a year boundary.
+	replayed, err := svc.store.ReplayPerformanceBatch(ctx, userID, source, normalized.BatchID, digest)
+	if err != nil {
+		return nil, err
+	}
+	if replayed != nil {
+		return replayed, nil
+	}
+	if err := svc.checkPerformanceActivityWindow(normalized); err != nil {
+		return nil, err
+	}
+	return svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, digest)
 }
 
 func (svc *PerformanceService) normalizePerformanceRequest(source string, request model.PerformanceSyncRequest) (model.PerformanceSyncRequest, error) {
@@ -100,7 +117,6 @@ func (svc *PerformanceService) normalizePerformanceRequest(source string, reques
 		BatchID: batchID, ExpectedRevision: request.ExpectedRevision, Complete: request.Complete,
 		Mutations: make([]model.PerformanceMutation, 0, len(request.Mutations)),
 	}
-	earliest, latest := svc.performanceActivityWindow()
 	for _, mutation := range request.Mutations {
 		switch mutation.Op {
 		case "remove":
@@ -112,7 +128,7 @@ func (svc *PerformanceService) normalizePerformanceRequest(source string, reques
 			if mutation.ExternalID != "" {
 				return model.PerformanceSyncRequest{}, ErrInvalidInput
 			}
-			next, err := normalizePerformanceUpsert(source, mutation, earliest, latest)
+			next, err := normalizePerformanceUpsert(source, mutation)
 			if err != nil {
 				return model.PerformanceSyncRequest{}, err
 			}
@@ -132,7 +148,19 @@ func (svc *PerformanceService) performanceActivityWindow() (string, string) {
 	return earliest.Format(performanceDateLayout), now.AddDate(1, 0, 0).Format(performanceDateLayout)
 }
 
-func normalizePerformanceUpsert(source string, mutation model.PerformanceMutation, earliest, latest string) (model.PerformanceMutation, error) {
+// checkPerformanceActivityWindow applies the clock-dependent activity-date
+// window to a normalized batch. It runs only for batches not yet applied.
+func (svc *PerformanceService) checkPerformanceActivityWindow(req model.PerformanceSyncRequest) error {
+	earliest, latest := svc.performanceActivityWindow()
+	for _, mutation := range req.Mutations {
+		if mutation.Task != nil && (mutation.Task.ActivityDate < earliest || mutation.Task.ActivityDate > latest) {
+			return ErrInvalidInput
+		}
+	}
+	return nil
+}
+
+func normalizePerformanceUpsert(source string, mutation model.PerformanceMutation) (model.PerformanceMutation, error) {
 	switch source {
 	case model.PerformanceSourceSFDCAssignments:
 		assignment := mutation.Assignment
@@ -152,8 +180,7 @@ func normalizePerformanceUpsert(source string, mutation model.PerformanceMutatio
 			return model.PerformanceMutation{}, ErrInvalidInput
 		}
 		date, err := time.Parse(performanceDateLayout, task.ActivityDate)
-		if err != nil || date.Format(performanceDateLayout) != task.ActivityDate ||
-			task.ActivityDate < earliest || task.ActivityDate > latest {
+		if err != nil || date.Format(performanceDateLayout) != task.ActivityDate {
 			return model.PerformanceMutation{}, ErrInvalidInput
 		}
 		copied := *task

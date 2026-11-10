@@ -41,6 +41,18 @@ func newPerformanceMemoryStore() *performanceMemoryStore {
 	}
 }
 
+func (store *performanceMemoryStore) ReplayPerformanceBatch(_ context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error) {
+	saved, found := store.batches[userID+"|"+source+"|"+batchID]
+	if !found {
+		return nil, nil
+	}
+	if saved.digest != digest {
+		return nil, repository.ErrConditionFailed
+	}
+	receipt := saved.receipt
+	return &receipt, nil
+}
+
 func (store *performanceMemoryStore) ApplyPerformanceBatch(_ context.Context, userID, source string, req model.PerformanceSyncRequest, digest string) (*model.PerformanceSyncReceipt, error) {
 	key := userID + "|" + source + "|" + req.BatchID
 	if saved, found := store.batches[key]; found {

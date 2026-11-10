@@ -182,6 +182,21 @@ func (r *DynamoDBRepository) ApplyPerformanceBatch(ctx context.Context, userID, 
 	return receipt, nil
 }
 
+// ReplayPerformanceBatch returns the stored receipt of an identical applied
+// batch, nil when no live receipt exists, or ErrConditionFailed when the batch
+// ID was reused with a different digest.
+func (r *DynamoDBRepository) ReplayPerformanceBatch(ctx context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error) {
+	if !performanceUserID.MatchString(userID) || !validPerformanceSource(source) || uuid.Validate(batchID) != nil ||
+		!performanceDigest.MatchString(digest) {
+		return nil, ErrInvalidPerformanceBatch
+	}
+	saved, err := r.getPerformanceReceipt(ctx, userID, source, batchID)
+	if err != nil || saved == nil {
+		return nil, err
+	}
+	return performanceRetryReceipt(saved, digest)
+}
+
 type performanceRow struct {
 	sortKey string
 	remove  bool
