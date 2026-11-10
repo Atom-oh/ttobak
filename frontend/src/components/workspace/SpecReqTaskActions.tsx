@@ -170,7 +170,7 @@ export function SpecReqTaskActions({ task, transition }: SpecReqTaskActionsProps
   const { user } = useAuth();
   const userId = user?.userId ?? '';
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [members, setMembers] = useState<AccountMember[] | null>(null);
+  const [loadedMembers, setLoadedMembers] = useState<{ key: string; members: AccountMember[] } | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string>();
   const [slackText, setSlackText] = useState<string>();
@@ -178,6 +178,9 @@ export function SpecReqTaskActions({ task, transition }: SpecReqTaskActionsProps
   const needsAccounts = task.state === 'needs_account' || task.state === 'request_needed';
   // needs_account with an account: members tell whether anyone can own the task.
   const needsMembers = (task.state === 'needs_owner' || task.state === 'needs_account') && !!task.accountId;
+  // Members belong to one state and account: a row the runner moves (needs_account -> needs_owner) reloads them.
+  const membersKey = `${task.state}:${task.accountId ?? ''}`;
+  const members = loadedMembers?.key === membersKey ? loadedMembers.members : null;
 
   useEffect(() => {
     if (!needsAccounts || !userId) return;
@@ -191,11 +194,14 @@ export function SpecReqTaskActions({ task, transition }: SpecReqTaskActionsProps
   useEffect(() => {
     if (!needsMembers || !userId || !task.accountId) return;
     const controller = new AbortController();
+    const key = `${task.state}:${task.accountId}`;
     accountApi.get(task.accountId, { signal: controller.signal, expectedUserId: userId })
-      .then(account => { if (!controller.signal.aborted) setMembers(account.members ?? []); })
-      .catch(() => { if (!controller.signal.aborted) { setMembers([]); setMessage(SPECREQ_ACTION_COPY.loadFailed); } });
+      .then(account => { if (!controller.signal.aborted) setLoadedMembers({ key, members: account.members ?? [] }); })
+      .catch(() => {
+        if (!controller.signal.aborted) { setLoadedMembers({ key, members: [] }); setMessage(SPECREQ_ACTION_COPY.loadFailed); }
+      });
     return () => { controller.abort(); };
-  }, [needsMembers, userId, task.accountId]);
+  }, [needsMembers, userId, task.accountId, task.state]);
 
   const accountName = accounts.find(item => item.accountId === task.accountId)?.name;
   const text = task.state === 'request_needed' && accountName
