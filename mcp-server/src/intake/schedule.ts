@@ -5,7 +5,7 @@
 
 import { execFile } from 'node:child_process';
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { IntakeError } from './errors.js';
 
 export const LAUNCH_AGENT_LABEL = 'click.atomai.ttobak.intake';
@@ -99,18 +99,32 @@ export async function applySchedule(schedule: Schedule, target: ScheduleTarget):
     return;
   }
   const plist = buildLaunchAgentPlist(schedule, target.nodePath, target.cliPath, target.home);
+  const temporary = `${path}.${process.pid}.tmp`;
   try {
     mkdirSync(join(target.home, 'Library', 'LaunchAgents'), { recursive: true });
     mkdirSync(join(target.home, 'Library', 'Logs', 'ttobak'), { recursive: true, mode: 0o700 });
-    const temporary = `${path}.${process.pid}.tmp`;
     writeFileSync(temporary, plist, { mode: 0o644 });
     chmodSync(temporary, 0o644);
     renameSync(temporary, path);
   } catch {
+    rmSync(temporary, { force: true });
     throw new IntakeError('SCHEDULE_FAILED', 'the LaunchAgent plist could not be written');
   }
   await target.launchctl(['bootout', service]);
   if (await target.launchctl(['bootstrap', `gui/${target.uid}`, path]) !== 0) {
     throw new IntakeError('SCHEDULE_FAILED', 'launchctl bootstrap failed');
   }
+}
+
+/** The schedule seams of an intake environment; defaults are the real process values. */
+export interface ScheduleEnvironment { home: string; uid?: number; nodePath?: string; cliPath?: string; launchctl?: LaunchctlRunner }
+
+/** `intake schedule <value>` and the last step of `intake setup`: plist and launchctl only. */
+export async function installSchedule(schedule: Schedule, environment: ScheduleEnvironment): Promise<string> {
+  const uid = environment.uid ?? process.getuid?.();
+  if (uid === undefined) throw new IntakeError('SCHEDULE_FAILED', 'no user ID for launchctl');
+  await applySchedule(schedule, { home: environment.home, uid, nodePath: environment.nodePath ?? process.execPath,
+    cliPath: environment.cliPath ?? (process.argv[1] ? resolve(process.argv[1]) : ''),
+    launchctl: environment.launchctl ?? defaultLaunchctl });
+  return scheduleLabel(schedule);
 }

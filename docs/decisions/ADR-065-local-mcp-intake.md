@@ -70,7 +70,8 @@ configuration.
   login.
 - **Setup (amendment, 2026-11-10).** `intake setup` may install that
   LaunchAgent itself, now running `intake run --noninteractive`, only with an
-  explicit `--schedule` or an interactive yes. It probes only the known server
+  explicit `--schedule` or an interactive yes; `intake schedule <value|off>`
+  changes it alone. A connector setup skips is disabled, keeping its source ID. It probes only the known server
   names above and still needs explicit calendar sensitivity consent.
 
 ## Consequences

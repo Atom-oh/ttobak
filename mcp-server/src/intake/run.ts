@@ -13,14 +13,18 @@ import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type ConnectorId, t
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
-import { defaultLaunchctl, type LaunchctlRunner } from './schedule.js';
+import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
 import { SFDC_TOOLS, runSfdc, type SfdcCounts } from './sfdc.js';
 import { resolveMe } from './specreq.js';
 import { IntakeStore } from './store.js';
 import { runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
 
-/** A task-runner provider connector: where it runs, never how it is launched. */
-export interface ConnectorSelection { host: HostId; server: string; pathDirs: string[]; selectedAt: string }
+/**
+ * A task-runner provider connector: where it runs, never how it is launched.
+ * `disabled` (set by `intake setup` when it skips a connector) keeps the entry,
+ * and with it the source ID and ledger, while every run treats it as unselected.
+ */
+export interface ConnectorSelection { host: HostId; server: string; pathDirs: string[]; selectedAt: string; disabled?: boolean }
 
 export interface Selection {
   version: 1;
@@ -28,7 +32,7 @@ export interface Selection {
   specreq?: ConnectorSelection & { autoAck: boolean };
   slack?: ConnectorSelection;
   calendar?: { host: HostId; server: string; sourceId: string; pathDirs: string[]; selectedAt: string;
-    acceptUnknownSensitivity?: boolean };
+    acceptUnknownSensitivity?: boolean; disabled?: boolean };
   /** The SA performance connector keeps its own source and ledger, like calendar. */
   sfdc?: ConnectorSelection & { sourceId: string };
   ttobak?: { apiUrl: string; cognitoDomain: string; clientId: string; userPoolId?: string };
@@ -83,6 +87,11 @@ export interface IntakeEnvironment {
   cliPath?: string;
 }
 
+/** A stored selection that is not disabled. */
+export function enabled<T extends { disabled?: boolean }>(entry: T | undefined): T | undefined {
+  return entry && !entry.disabled ? entry : undefined;
+}
+
 /** Deployment and signed-in user, as a fixed-length key (never logged). */
 export function accountScope(apiUrl: string, subject: string): string {
   return createHash('sha256').update(`${apiUrl.replace(/\/+$/, '')}\n${subject}`).digest('hex').slice(0, 32);
@@ -117,6 +126,7 @@ const USAGE = `Usage:
   ttobak-mcp intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+  ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake status`;
 
 function flags(args: string[], allowed: Record<string, 'value' | 'flag'>): Record<string, string | true> {
@@ -289,7 +299,7 @@ async function openTaskSessions(environment: IntakeEnvironment, selection: Selec
   const sessions: Partial<Record<TaskConnectorId, McpSession>> = {};
   const unavailable: Partial<Record<TaskConnectorId, IntakeCode>> = {};
   for (const connector of ['meetings', 'specreq', 'slack'] as const) {
-    const selected = selection[connector];
+    const selected = enabled(selection[connector]);
     if (!selected) continue;
     let session: McpSession | undefined;
     try {
@@ -324,8 +334,8 @@ export async function calendarRun(options: ConnectorRunOptions, environment: Int
   signedIn?: SignInOnce) {
   const { dryRun } = options;
   const selection = store.read<Selection>('selection.json');
-  const selected = selection?.calendar;
-  if (!selected) throw new IntakeError('NOT_SELECTED', 'run "intake select calendar" first');
+  const selected = enabled(selection?.calendar);
+  if (!selection || !selected) throw new IntakeError('NOT_SELECTED', 'run "intake select calendar" first');
   const release = store.lock('calendar');
   const startedAt = environment.now();
   let session: McpSession | undefined;
@@ -354,14 +364,15 @@ export async function calendarRun(options: ConnectorRunOptions, environment: Int
     // The task step reuses this run's TTOBAK API (calendar selection or TTOBAK_* env)
     // and lock. Its failures never change the calendar result or exit code.
     let tasks: { result: 'ok' | IntakeCode; counts?: TaskCounts; failures?: TaskRunResult['failures'] } | undefined;
-    if (!dryRun && selection.meetings && selection.specreq && api && scope) {
+    const specreq = enabled(selection.specreq);
+    if (!dryRun && enabled(selection.meetings) && specreq && api && scope) {
       const ranAt = environment.now();
       if (!me) tasks = { result: 'TTOBAK_LOGIN_REQUIRED' };
       else {
         const opened = await openTaskSessions(environment, selection);
         try {
           const run = await runTasks({ store, api, scope, zone: environment.zone, now: ranAt, sourceId: selected.sourceId,
-            selection: { autoAck: selection.specreq.autoAck !== false }, sessions: opened.sessions,
+            selection: { autoAck: specreq.autoAck !== false }, sessions: opened.sessions,
             unavailable: opened.unavailable, me,
             calendar: { upserted: result.upserted ?? [] } });
           tasks = { result: run.result, counts: run.counts,
@@ -402,7 +413,7 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
   signedIn?: SignInOnce) {
   const { dryRun } = options;
   const selection = store.read<Selection>('selection.json');
-  const selected = selection?.sfdc;
+  const selected = enabled(selection?.sfdc);
   if (!selected) throw new IntakeError('NOT_SELECTED', 'run "intake select sfdc" first');
   const release = store.lock('sfdc');
   const startedAt = environment.now();
@@ -456,8 +467,8 @@ export interface RunOutput {
 export async function runConnectors(options: { dryRun: boolean; noninteractive: boolean; only?: readonly SyncConnectorId[] },
   environment: IntakeEnvironment, store: IntakeStore): Promise<RunOutput> {
   const selection = store.read<Selection>('selection.json');
-  const wanted = options.only ?? SYNC_CONNECTORS.filter(id => selection?.[id]);
-  const missing = wanted.find(id => !selection?.[id]);
+  const wanted = options.only ?? SYNC_CONNECTORS.filter(id => enabled(selection?.[id]));
+  const missing = wanted.find(id => !enabled(selection?.[id]));
   if (!wanted.length || missing) throw new IntakeError('NOT_SELECTED', `run "intake select ${missing ?? 'calendar'}" or "intake setup" first`);
   let pending: Promise<SignedIn> | undefined;
   const signedIn = () => (pending ??= signIn(selection, environment, options.dryRun, options.noninteractive));
@@ -468,6 +479,12 @@ export async function runConnectors(options: { dryRun: boolean; noninteractive: 
       const run = id === 'calendar' ? calendarRun(options, environment, store, signedIn) : sfdcRun(options, environment, store, signedIn);
       const { ok: _ok, connector: _connector, dryRun: _dryRun, ...rest } = await run;
       results[id] = { result: 'ok', ...rest };
+      // The task step shares Midway: its expiry stops the run although the calendar itself succeeded.
+      const tasks = 'tasks' in rest ? rest.tasks : undefined;
+      if (tasks && (tasks.result === 'AUTH_EXPIRED_MIDWAY' || Object.values(tasks.failures ?? {}).includes('AUTH_EXPIRED_MIDWAY'))) {
+        code = 'AUTH_EXPIRED_MIDWAY';
+        break;
+      }
     } catch (error) {
       const failure = intakeCode(error);
       results[id] = { result: failure };
@@ -500,7 +517,9 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     } else if (command === 'select') output = await select(rest, environment, store);
     else if (command === 'calendar') output = await calendar(rest, environment, store);
     else if (command === 'sfdc') output = await sfdc(rest, environment, store);
-    else if (command === 'run' || command === 'setup') {
+    else if (command === 'schedule' && rest.length === 1) {
+      output = { ok: true, schedule: await installSchedule(parseSchedule(rest[0]), environment) };
+    } else if (command === 'run' || command === 'setup') {
       const result = command === 'run' ? await run(rest, environment, store)
         : await (await import('./setup.js')).setup(rest, environment, store);
       environment.stdout(JSON.stringify(result));
@@ -508,10 +527,10 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     }
     else if (command === 'status' && rest.length === 0) {
       const selection = store.read<Selection>('selection.json');
-      const listed: Record<string, { host: HostId; server: string }> = {};
+      const listed: Record<string, { host: HostId; server: string; disabled?: true }> = {};
       for (const id of ['calendar', 'sfdc', 'meetings', 'specreq', 'slack'] as const) {
         const entry = selection?.[id];
-        if (entry) listed[id] = { host: entry.host, server: entry.server };
+        if (entry) listed[id] = { host: entry.host, server: entry.server, ...(entry.disabled ? { disabled: true } : {}) };
       }
       output = { ok: true, selection: listed,
         status: store.read<RunStatus>('status.json') ?? {} };

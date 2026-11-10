@@ -20,6 +20,7 @@ Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
 intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
 intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
 ```
 
 `intake setup`:
@@ -33,13 +34,17 @@ intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
    candidate, `--skip` or a failed check marks the connector `skipped` with a
    code (`SERVER_NOT_CONFIGURED`, `SKIPPED_BY_USER`, `SCHEMA_CHANGED`, ...),
    and setup continues. Setup is the source of truth: a skipped connector is
-   removed from the saved selection (`removedPrevious: true`), so `intake run`
-   matches the report.
+   disabled in the saved selection (`disabled: true`), so `intake run`
+   matches the report. The entry keeps its `sourceId` and ledger, so selecting
+   the same server again (setup or `intake select`) re-enables it without
+   duplicate TTOBAK copies; a different server gets a new source.
    SpecReq is always selected with auto-ack off (`autoAck: false`); turn it
    on deliberately with `intake select specreq ... --auto-ack on`.
 3. Calendar needs consent that private items reach the private TTOBAK
    calendar (see [Behavior](#behavior)): a yes/no question, or
-   `--accept-unknown-sensitivity` with `--yes`. Otherwise it is skipped with
+   `--accept-unknown-sensitivity` with `--yes`. Consent stored by an earlier
+   selection of the same server is reused (`consentReused: true`), also with
+   `--yes` alone. Otherwise it is skipped with
    `SENSITIVITY_UNKNOWN`.
 4. `AUTH_EXPIRED_MIDWAY` during a check, dry run or sync stops setup: run
    `mwinit -o` and rerun. A stop during the checks leaves the saved selection
@@ -60,8 +65,10 @@ selections stay saved and no schedule is installed.
 step) then SFDC, with one shared TTOBAK sign-in. The JSON line is
 `{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts}}}`.
 It exits 0 only when every attempted connector succeeded. Otherwise it exits 2
-with `PARTIAL_FAILURE`; `AUTH_EXPIRED_MIDWAY` stops the run, because the
-connectors share Midway, and is the code. `--noninteractive` never prompts and
+with `PARTIAL_FAILURE`; `AUTH_EXPIRED_MIDWAY` anywhere, including the
+calendar's task step (`tasks.failures`), stops the run before later
+connectors, because they share Midway, and is the code. Setup's first sync
+follows the same rule. Disabled selections are skipped. `--noninteractive` never prompts and
 never opens a browser; the LaunchAgent uses it.
 
 ## Advanced: manual commands
@@ -294,8 +301,10 @@ Schedule only after the acceptance above. `intake setup --schedule <value>`
 (or a yes answer in interactive setup) writes
 `~/Library/LaunchAgents/click.atomai.ttobak.intake.plist`, boots out any old
 job and runs `launchctl bootstrap gui/<uid>` with argv, never a shell.
-`--schedule off` boots the job out and deletes the plist. No plist is
-written without `--schedule` or that answer. A launchctl failure is
+Turn it off with `intake schedule off`, which boots the job out and deletes
+the plist. `intake schedule <value>` only writes or removes the plist and
+reloads the job; it starts no server and runs no sync. Setup's `--schedule`
+calls the same step at the end. No plist is written without one of these. A launchctl failure is
 `SCHEDULE_FAILED`.
 
 | Value | launchd key |
@@ -380,4 +389,5 @@ only and makes no TTOBAK calls. It holds `sfdc.lock`.
 Acceptance on the Mac is pending: run `intake sfdc --dry-run`, compare the
 counts with AWSentral, then run `intake sfdc` and re-run to confirm empty
 batches. The scheduled `intake run` includes SFDC whenever it is selected, so
-schedule only after that, or pass `--skip sfdc` to setup.
+schedule only after that, or pass `--skip sfdc` to setup, which disables
+SFDC and keeps its ledger.

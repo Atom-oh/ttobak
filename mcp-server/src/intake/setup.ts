@@ -10,7 +10,7 @@ import type { ConnectorId } from './connectors.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, listHosts, parsePathList, type HostId } from './hosts.js';
 import { runConnectors, selectConnector, SYNC_CONNECTORS, type IntakeEnvironment, type RunOutput, type Selection } from './run.js';
-import { applySchedule, defaultLaunchctl, parseSchedule, scheduleLabel, type Schedule } from './schedule.js';
+import { installSchedule, parseSchedule, type Schedule } from './schedule.js';
 import type { IntakeStore } from './store.js';
 
 const ORDER: readonly ConnectorId[] = ['calendar', 'sfdc', 'meetings', 'specreq', 'slack'];
@@ -28,8 +28,8 @@ const LABELS: Record<ConnectorId, string> = {
   calendar: '캘린더', sfdc: 'SFDC', meetings: '회의', specreq: 'SpecReq', slack: 'Slack',
 };
 
-type ConnectorStatus = { status: 'selected'; server: string; host: HostId; autoAck?: false }
-  | { status: 'skipped'; code: IntakeCode; removedPrevious?: true };
+type ConnectorStatus = { status: 'selected'; server: string; host: HostId; autoAck?: false; consentReused?: true }
+  | { status: 'skipped'; code: IntakeCode; disabled?: true };
 
 interface SetupOptions {
   yes: boolean;
@@ -99,10 +99,14 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
     return { ok: false, code, message, connectors, dryRun, synced, schedule, ...(sync ? { sync } : {}) };
   };
 
-  // An AUTH_EXPIRED_MIDWAY stop during verification restores the selection file as it was.
-  const before = store.read<Selection>('selection.json');
+  // An AUTH_EXPIRED_MIDWAY stop during verification restores the selection file byte for byte.
+  const before = store.readText('selection.json');
+  const previous = before === null ? null : store.read<Selection>('selection.json');
   const restore = () => {
-    try { if (before) store.write(before, 'selection.json'); else rmSync(join(store.directory, 'selection.json'), { force: true }); } catch { /* the stop code matters more */ }
+    try {
+      if (before !== null) store.writeText(before, 'selection.json');
+      else rmSync(join(store.directory, 'selection.json'), { force: true });
+    } catch { /* the stop code matters more */ }
   };
 
   // 1. Discover: enabled stdio servers whose command is found.
@@ -124,8 +128,13 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
     }
     // 2. Calendar consent: private items are included (ADR-065/068).
     let accept = false;
+    let consentReused = false;
     if (connector === 'calendar') {
-      accept = options.acceptUnknownSensitivity || (!options.yes &&
+      // Consent stored by an earlier select or setup of the same server counts on a rerun.
+      consentReused = !options.acceptUnknownSensitivity && previous?.calendar?.server === server &&
+        previous.calendar.acceptUnknownSensitivity === true;
+      if (consentReused) say(`${label}: 이전에 동의한 비공개 일정 포함 설정을 그대로 사용합니다.`);
+      accept = options.acceptUnknownSensitivity || consentReused || (!options.yes &&
         yes(await question('캘린더 원본은 비공개 표시를 알려주지 않아 비공개 일정도 TTOBAK 개인 캘린더로 들어갑니다. 동의할까요? [y/N]')));
       if (!accept) {
         connectors[connector] = { status: 'skipped', code: 'SENSITIVITY_UNKNOWN' };
@@ -144,7 +153,8 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
       // SpecReq auto-ack stays off: turning it on is a deliberate `intake select specreq ... --auto-ack on`.
       await selectConnector(connector, { host, server, autoAck: false, acceptUnknownSensitivity: accept,
         identityAuthFatal: true }, environment, store);
-      connectors[connector] = { status: 'selected', server, host, ...(connector === 'specreq' ? { autoAck: false as const } : {}) };
+      connectors[connector] = { status: 'selected', server, host, ...(connector === 'specreq' ? { autoAck: false as const } : {}),
+        ...(consentReused ? { consentReused: true as const } : {}) };
       say(`${label}: ${host}의 ${server} 확인 완료`);
       if (connector === 'specreq') {
         say('SpecReq 자동 수락(auto-ack)은 꺼져 있습니다. 켜려면 `intake select specreq --host <host> --server spec-req-mcp --auto-ack on`을 실행하세요.');
@@ -160,16 +170,18 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
     }
   }
 
-  // Setup is the source of truth: a skipped connector leaves the saved selection.
+  // Setup is the source of truth: a skipped connector is disabled. Its entry stays, so
+  // the source ID and ledger survive and a later re-select creates no duplicate copies.
   const saved = store.read<Selection>('selection.json');
   if (saved) {
     const next: Selection = { ...saved };
     for (const connector of ORDER) {
       const entry = connectors[connector];
-      if (entry?.status === 'skipped' && next[connector]) {
-        delete next[connector];
-        connectors[connector] = { ...entry, removedPrevious: true };
-        say(`${LABELS[connector]}: 이전 선택을 제거했습니다.`);
+      const stored = next[connector];
+      if (entry?.status === 'skipped' && stored) {
+        (next as unknown as Record<string, unknown>)[connector] = { ...stored, disabled: true };
+        connectors[connector] = { ...entry, disabled: true };
+        say(`${LABELS[connector]}: 이전 선택을 비활성화했습니다 (원본 ID와 기록은 유지).`);
       }
     }
     store.write(next, 'selection.json');
@@ -204,17 +216,17 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
     }
   }
   if (wanted) {
-    const uid = environment.uid ?? process.getuid?.();
-    const cliPath = environment.cliPath ?? (process.argv[1] ? resolve(process.argv[1]) : '');
-    if (uid === undefined) return stop('SCHEDULE_FAILED', 'no user ID for launchctl');
+    if (wanted.kind !== 'off' && !selected.length) say('경고: 수집할 캘린더/SFDC 선택이 없어 예약 실행은 NOT_SELECTED로 끝납니다.');
+    const cliPath = environment.cliPath ?? process.argv[1] ?? '';
+    if (wanted.kind !== 'off' && !resolve(cliPath).startsWith(join(environment.home, '.ttobak') + '/')) {
+      say('경고: CLI가 ~/.ttobak 밖에 있습니다. CLI를 옮기거나 다시 설치하면 `intake setup --schedule ...`을 다시 실행하세요.');
+    }
     try {
-      await applySchedule(wanted, { home: environment.home, uid, nodePath: environment.nodePath ?? process.execPath, cliPath,
-        launchctl: environment.launchctl ?? defaultLaunchctl });
+      schedule = await installSchedule(wanted, environment);
     } catch (error) {
       say('자동 수집 일정을 설정하지 못했습니다.');
       return stop(intakeCode(error), error instanceof IntakeError ? error.message : 'schedule failed');
     }
-    schedule = scheduleLabel(wanted);
     say(wanted.kind === 'off' ? '자동 수집 일정을 제거했습니다.' : `자동 수집 일정을 설정했습니다: ${schedule}`);
   }
   return { ok: true, connectors, dryRun, synced, schedule, ...(sync ? { sync } : {}) };

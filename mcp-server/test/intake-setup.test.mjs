@@ -2,7 +2,7 @@
 // is synthetic; launchctl is always the injected runner and HOME is a temp dir.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +61,9 @@ function fakeApi() {
       return { sources: Object.entries(revision).map(([source, value]) => ({ source, revision: value })) };
     },
     async performanceMappings() { return { items: [], truncated: false }; },
+    // Task step reads: no tasks and no TTOBAK events.
+    async listSpecReqTasks() { return { tasks: [], nextCursor: null }; },
+    async listCalendarEvents() { return { events: [], nextCursor: null }; },
     async syncPerformance(source, body) {
       calls.push(source);
       revision[source] = body.expectedRevision + 1;
@@ -345,23 +348,110 @@ test('setup selects specreq with auto-ack off', async t => {
   assert.equal(context.last().code, 'INVALID_ARGUMENT');
 });
 
-test('setup removes a previously selected connector it skips', async t => {
+test('skip disables without losing ledger', async t => {
   const home = tempHome(t);
   writeHosts(home, { only: ['aws-outlook-mcp', 'aws-sentral-mcp'] });
   const context = environment(home);
   await selectBoth(home, context);
-  // Calendar loses consent, sfdc loses its server; slack was never selected.
+  assert.equal(await runIntake(['run', '--noninteractive'], context.env), 0, context.lines.at(-1));
+  const first = selection(home);
+  const ledgers = () => readdirSync(join(home, '.ttobak', 'intake'), { recursive: true }).filter(path => /state\.json$|sfdc-/.test(path));
+  const kept = ledgers();
+  assert.ok(kept.length >= 2, 'calendar and sfdc ledgers exist');
+  // Calendar is skipped by hand, sfdc loses its server; slack was never selected.
   writeHosts(home, { only: ['aws-outlook-mcp'] });
-  assert.equal(await runIntake(['setup', '--yes'], context.env), 0, context.lines.at(-1));
+  assert.equal(await runIntake(['setup', '--yes', '--skip', 'calendar'], context.env), 0, context.lines.at(-1));
   const output = context.last();
-  assert.deepEqual(output.connectors.calendar, { status: 'skipped', code: 'SENSITIVITY_UNKNOWN', removedPrevious: true });
-  assert.deepEqual(output.connectors.sfdc, { status: 'skipped', code: 'SERVER_NOT_CONFIGURED', removedPrevious: true });
+  assert.deepEqual(output.connectors.calendar, { status: 'skipped', code: 'SKIPPED_BY_USER', disabled: true });
+  assert.deepEqual(output.connectors.sfdc, { status: 'skipped', code: 'SERVER_NOT_CONFIGURED', disabled: true });
   assert.deepEqual(output.connectors.slack, { status: 'skipped', code: 'SERVER_NOT_CONFIGURED' });
   const stored = selection(home);
-  assert.equal(stored.calendar, undefined);
-  assert.equal(stored.sfdc, undefined);
+  assert.equal(stored.calendar.disabled, true);
+  assert.equal(stored.calendar.sourceId, first.calendar.sourceId);
+  assert.equal(stored.sfdc.disabled, true);
+  assert.equal(stored.sfdc.sourceId, first.sfdc.sourceId);
+  assert.deepEqual(ledgers(), kept, 'no ledger is deleted');
   assert.equal(await runIntake(['run', '--noninteractive'], context.env), 2);
   assert.equal(context.last().code, 'NOT_SELECTED', 'run matches what setup reported');
+  assert.equal(await runIntake(['calendar', '--dry-run'], context.env), 2, 'a disabled connector is not selected');
+  assert.equal(await runIntake(['status'], context.env), 0);
+  assert.equal(context.last().selection.calendar.disabled, true);
+});
+
+test('setup rerun keeps calendar sourceId', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['aws-outlook-mcp'] });
+  const context = environment(home);
+  assert.equal(await runIntake(['setup', '--yes', '--accept-unknown-sensitivity'], context.env), 0, context.lines.at(-1));
+  const sourceId = selection(home).calendar.sourceId;
+  assert.equal(await runIntake(['setup', '--yes', '--skip', 'calendar'], context.env), 0);
+  assert.equal(await runIntake(['setup', '--yes'], context.env), 0, context.lines.at(-1));
+  assert.equal(context.last().connectors.calendar.status, 'selected');
+  const stored = selection(home);
+  assert.equal(stored.calendar.sourceId, sourceId, 'the same server keeps its source');
+  assert.equal(stored.calendar.disabled, undefined, 'a re-select enables it again');
+});
+
+test('stored consent is reused', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['aws-outlook-mcp'] });
+  const context = environment(home);
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'aws-outlook-mcp',
+    '--accept-unknown-sensitivity'], context.env), 0);
+  assert.equal(await runIntake(['setup', '--yes'], context.env), 0, context.lines.at(-1));
+  assert.deepEqual(context.last().connectors.calendar,
+    { status: 'selected', server: 'aws-outlook-mcp', host: 'claude', consentReused: true });
+  assert.equal(selection(home).calendar.acceptUnknownSensitivity, true);
+  assert.ok(context.errors.some(line => line.includes('이전에 동의한')));
+  // Interactive: no consent question; only the first-sync and schedule questions remain.
+  const asked = environment(home, { answers: ['n', ''] });
+  assert.equal(await runIntake(['setup'], asked.env), 0, asked.lines.at(-1));
+  assert.equal(asked.asked.length, 2, asked.asked.join(' | '));
+});
+
+test('intake schedule off removes plist without running connectors', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['aws-outlook-mcp', 'aws-sentral-mcp'] });
+  const context = environment(home);
+  await selectBoth(home, context);
+  // Broken servers prove that nothing is started or verified.
+  writeHosts(home, { only: ['aws-outlook-mcp', 'aws-sentral-mcp'], outlook: { FAKE_OUTLOOK_MODE: 'auth' } });
+  const lines = context.lines.length;
+  assert.equal(await runIntake(['schedule', 'hourly'], context.env), 0, context.lines.at(-1));
+  assert.deepEqual(context.last(), { ok: true, schedule: 'hourly' });
+  assert.ok(existsSync(plistPath(home)));
+  assert.equal(await runIntake(['schedule', 'off'], context.env), 0);
+  assert.deepEqual(context.last(), { ok: true, schedule: 'off' });
+  assert.equal(context.lines.length, lines + 2, 'one JSON line per command');
+  assert.equal(existsSync(plistPath(home)), false);
+  assert.deepEqual(context.runner.calls, [
+    ['bootout', `gui/501/${LAUNCH_AGENT_LABEL}`], ['bootstrap', 'gui/501', plistPath(home)],
+    ['bootout', `gui/501/${LAUNCH_AGENT_LABEL}`]]);
+  assert.equal(context.api.calls.length, 0);
+  assert.equal(existsSync(join(home, '.ttobak', 'intake', 'status.json')), false, 'no connector ran');
+  assert.equal(await runIntake(['schedule', 'weekly'], context.env), 2);
+  assert.equal(context.last().code, 'INVALID_ARGUMENT');
+});
+
+test('run stops on Midway expiry in the task step', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['aws-outlook-mcp', 'aws-sentral-mcp', 'amazon-meetings-mcp', 'spec-req-mcp'] });
+  const context = environment(home);
+  await selectBoth(home, context);
+  for (const [connector, server] of [['meetings', 'amazon-meetings-mcp'], ['specreq', 'spec-req-mcp']]) {
+    assert.equal(await runIntake(['select', connector, '--host', 'claude', '--server', server], context.env), 0);
+  }
+  writeHosts(home, { only: ['aws-outlook-mcp', 'aws-sentral-mcp', 'amazon-meetings-mcp', 'spec-req-mcp'],
+    work: { FAKE_WORK_TAM_AUTH: '1' } });
+  assert.equal(await runIntake(['run', '--noninteractive'], context.env), 2, context.lines.at(-1));
+  const output = context.last();
+  assert.equal(output.ok, false);
+  assert.equal(output.code, 'AUTH_EXPIRED_MIDWAY');
+  assert.equal(output.results.calendar.result, 'ok', 'the calendar itself synced');
+  assert.equal(output.results.calendar.tasks.failures.specreq, 'AUTH_EXPIRED_MIDWAY');
+  assert.equal(output.results.sfdc, undefined, 'sfdc is not attempted');
+  assert.deepEqual([...new Set(context.api.calls)], ['calendar']);
+  assertNoSecrets(context, home);
 });
 
 test('setup AUTH_EXPIRED_MIDWAY leaves the earlier selection untouched', async t => {
