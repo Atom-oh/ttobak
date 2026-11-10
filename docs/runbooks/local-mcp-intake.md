@@ -1,4 +1,4 @@
-# Local MCP intake (calendar)
+# Local MCP intake (calendar and SFDC)
 
 This runbook covers the Phase 1 calendar runner from
 [ADR-065](../decisions/ADR-065-local-mcp-intake.md). It is a command line in
@@ -6,7 +6,9 @@ the TTOBAK stdio adapter, `ttobak-mcp intake`. The Mac Settings UI does not
 exist yet. Acceptance on the user's Mac is pending; nothing here proves it.
 
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
-contract for one reader, `aws-outlook-mcp` `calendar_view`.
+contract for one reader, `aws-outlook-mcp` `calendar_view`. The
+[SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
+SA performance data of [ADR-066](../decisions/ADR-066-sa-performance-data-residency.md).
 
 ## Commands
 
@@ -99,3 +101,43 @@ Load it with `launchctl bootstrap gui/$(id -u) <plist>`, and remove it with
 `launchctl bootout gui/$(id -u)/click.atomai.ttobak.intake`. The log holds
 codes and counts only. Delete `~/.ttobak/intake/` to forget the local ledger.
 The TTOBAK copies stay until removed in TTOBAK.
+
+## SFDC connector
+
+`intake select sfdc --host <claude|codex|kiro> --server aws-sentral-mcp` checks
+the input schemas of `get_my_personal_details`, `get_registry_assignments` and
+`search_tasks`, and keeps the calendar selection. `intake sfdc [--dry-run]
+[--noninteractive] [--reconcile]` then reads and syncs; a dry run prints counts
+only and makes no TTOBAK calls. It holds `sfdc.lock`.
+
+- **Reads.** The alias and SFDC user ID come from `get_my_personal_details`.
+  Registry L14 assignments use hierarchy `sales/<current year>-01-01`. Tasks
+  are the owner's (`ownerId`) with `activityDate` from January 1 of the
+  previous year. Both follow `cursor` pages of 500, at most 20 pages each.
+  A capped, cursorless, short (`totalCount`) or malformed page fails with
+  `PARSE_FAILED`; a changed schema with `SCHEMA_CHANGED`. Every read finishes
+  before any batch is built, so `AUTH_EXPIRED_MIDWAY` never leaves a partial
+  snapshot.
+- **Content.** Tasks send only `taskId`, `sfdcAccountId` (empty when the task
+  has no account), `activityDate` (`sa_Activity_Date__c`, else
+  `activityDate`), `type` (`sa_Activity_Category__c`, else `type`), `subject`
+  and `status`. No SpecReq ID is guessed from the subject. Descriptions,
+  comments, owners, opportunities and other fields never leave the parser.
+  Tasks dated outside January 1 of the previous year through today are
+  skipped and counted.
+- **Assignments.** Registry entries carry their `assignmentSource` as role.
+  Every other account of an in-window task is added with role `activity` and
+  the task's account name. A registry entry wins.
+- **Snapshots.** Both reads are complete, so a tracked assignment or task that
+  is absent from a later read is removed.
+- **Delivery.** `sfdc-assignments` is sent first, then `sfdc-tasks`, through
+  `POST /api/performance/sources/{source}/sync`. Each source keeps its own
+  ledger, revision and pending batch at
+  `~/.ttobak/intake/sfdc/<sourceId>/<scope>/<source>.json`. Batches, retries,
+  4xx/409 handling and `complete:true` follow the calendar rules above. The
+  receipt must carry revision+1 and matching counts. `--reconcile` adopts the
+  revisions of `GET /api/performance/sources` and resends every current row.
+
+Acceptance on the Mac is pending: run `intake sfdc --dry-run`, compare the
+counts with AWSentral, then run `intake sfdc` and re-run to confirm empty
+batches. Add `intake sfdc --noninteractive` to the schedule only after that.

@@ -4,9 +4,10 @@
 // exclusions of tracked occurrences become removals; absence never does.
 
 import { createHash, randomUUID } from 'node:crypto';
-import { ApiResponseError, type TtobakApi } from '../api.js';
+import type { TtobakApi } from '../api.js';
 import { callCalendarTool, validateCalendarReceipt, validateCalendarSync,
   type CalendarSyncRequest } from '../calendar.js';
+import { batches as splitBatches, deliveryFailure } from './batch.js';
 import { IntakeError } from './errors.js';
 import { resultJson } from './mcp-client.js';
 import type { IntakeStore } from './store.js';
@@ -15,8 +16,6 @@ export const CALENDAR_TOOL = { name: 'calendar_view', properties: ['start_date',
 export const PAST_DAYS = 7;
 export const FUTURE_DAYS = 30;
 const MAX_ITEMS = 5000;
-const MAX_BATCH = 20;
-const MAX_BATCH_BYTES = 60_000;
 const LEDGER_RETENTION_DAYS = 120;
 const UNTITLED = '(제목 없음)';
 
@@ -333,21 +332,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
 
 /** Splits mutations into batches of at most 20 within the request byte budget. */
 export function batches(mutations: Mutation[]): Mutation[][] {
-  const result: Mutation[][] = [];
-  let current: Mutation[] = [];
-  let bytes = 0;
-  for (const mutation of mutations) {
-    const size = Buffer.byteLength(JSON.stringify(mutation)) + 1;
-    if (current.length && (current.length >= MAX_BATCH || bytes + size > MAX_BATCH_BYTES)) {
-      result.push(current);
-      current = [];
-      bytes = 0;
-    }
-    current.push(mutation);
-    bytes += size;
-  }
-  if (current.length) result.push(current);
-  return result;
+  return splitBatches(mutations);
 }
 
 export function pruneLedger(ledger: Ledger, now: Date): Ledger {
@@ -420,15 +405,14 @@ async function send(api: TtobakApi, store: IntakeStore, state: CalendarState): P
   try {
     receipt = await api.syncCalendarEvents(sourceId, body);
   } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (message.startsWith('TTOBAK_LOGIN_REQUIRED')) throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
-    if (error instanceof ApiResponseError && error.status === 401) throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
-    if (error instanceof ApiResponseError && error.status >= 400 && error.status < 500) {
+    const failure = deliveryFailure(error);
+    if (failure.kind === 'login') throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
+    if (failure.kind === 'rejected') {
       // A definitive rejection: drop the batch and require reconciliation on a 409.
       state.pending = null;
-      if (error.status === 409) state.reconcileRequired = true;
+      if (failure.status === 409) state.reconcileRequired = true;
       store.write(state, ...statePath(state));
-      throw new IntakeError(error.status === 409 ? 'TTOBAK_CONFLICT' : 'TTOBAK_REJECTED', `HTTP ${error.status}`);
+      throw new IntakeError(failure.status === 409 ? 'TTOBAK_CONFLICT' : 'TTOBAK_REJECTED', `HTTP ${failure.status}`);
     }
     // Ambiguous delivery: keep the identical pending batch for the next run.
     throw new IntakeError('TTOBAK_UNAVAILABLE', 'calendar sync unconfirmed; the identical batch will be retried');
