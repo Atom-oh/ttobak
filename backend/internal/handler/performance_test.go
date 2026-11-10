@@ -95,6 +95,16 @@ func (store *performanceMemoryStore) ListPerformanceAssignments(_ context.Contex
 	return out, nil
 }
 
+func (store *performanceMemoryStore) ListPerformanceTasks(_ context.Context, userID, from, to string) ([]model.SFDCTask, error) {
+	var out []model.SFDCTask
+	for _, task := range store.tasks[userID] {
+		if (from == "" || task.ActivityDate >= from) && (to == "" || task.ActivityDate <= to) {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
 func (store *performanceMemoryStore) ListAccountMappings(_ context.Context, userID string) ([]model.AccountMapping, error) {
 	var out []model.AccountMapping
 	for _, mapping := range store.mappings[userID] {
@@ -283,8 +293,8 @@ func TestPerformanceRoutesAreOwnerScoped(test *testing.T) {
 	reads := map[string]string{
 		"/api/performance/mappings":           `{"items":[]}`,
 		"/api/performance/goals?year=" + year: `{"year":` + year + `,"text":"","updatedAt":""}`,
-		"/api/performance/missed?period=week": `{"items":[]}`,
-		"/api/performance/missed?period=year": `{"items":[]}`,
+		"/api/performance/missed?period=week": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}]}`,
+		"/api/performance/missed?period=year": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}]}`,
 	}
 	for target, expected := range reads {
 		response := performanceHTTPDo(api, "user-b", http.MethodGet, target, "")

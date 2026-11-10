@@ -104,7 +104,9 @@ func init() {
 	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Owner-private SA performance data: every route reads only the JWT user's
 	// own USER# partition (ADR-066).
-	performanceHandler := handler.NewPerformanceHandler(service.NewPerformanceService(repo, accountService))
+	performanceService := service.NewPerformanceService(repo, accountService)
+	performanceService.SetMissedSources(calendarService, meetingService)
+	performanceHandler := handler.NewPerformanceHandler(performanceService)
 	// Reuse the same cold-start Cognito client for AddMember's PendingShare
 	// invited-check (see AccountService.SetCognitoAdminAPI).
 	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
