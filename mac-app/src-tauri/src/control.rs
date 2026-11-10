@@ -269,6 +269,26 @@ async fn dispatch(app: &AppHandle, request: proto::Request, origin: Origin) -> S
     }
 }
 
+/// True while native recording/finalizing/uploading or the SPA's own flow is
+/// in progress; the updater must not prompt or install then.
+pub fn app_busy(app: &AppHandle) -> bool {
+    let recorder = app.state::<RecorderState>();
+    let native_recording = recorder.recorder.lock().snapshot().recording;
+    let finalizing = recorder.finalizing.lock().len();
+    let uploads = recorder
+        .uploads_in_flight
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let control = app.state::<ControlState>();
+    let phase = control
+        .last_state
+        .lock()
+        .as_ref()
+        .and_then(|v| v.get("phase"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    crate::update_policy::is_busy(native_recording, finalizing, uploads, phase.as_deref())
+}
+
 fn status(app: &AppHandle, control: &ControlState) -> Value {
     let snapshot = app.state::<RecorderState>().recorder.lock().snapshot();
     json!({
@@ -277,6 +297,7 @@ fn status(app: &AppHandle, control: &ControlState) -> Value {
         "signedIn": *control.ready.lock(),
         "native": { "recording": snapshot.recording, "elapsedMs": snapshot.elapsed_ms },
         "spa": control.last_state.lock().clone(),
+        "updateBusy": app_busy(app),
     })
 }
 

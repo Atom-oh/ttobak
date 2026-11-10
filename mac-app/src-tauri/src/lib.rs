@@ -40,6 +40,7 @@ mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
 mod sleep;
+mod update_policy;
 mod upload;
 pub mod zoom_mute;
 
@@ -111,6 +112,10 @@ pub struct RecorderState {
     /// overlap, which is exactly the scenario this whole mechanism exists to
     /// handle correctly.
     pub finalizing: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Number of `upload_recording` calls currently running (RAII-tracked by
+    /// `upload::UploadGuard`). Counts toward the updater's busy check so an
+    /// update never installs mid-upload.
+    pub uploads_in_flight: Arc<std::sync::atomic::AtomicUsize>,
     /// Stop-diagnosis warnings per canonical path, recorded when finalize
     /// completes (including a finalize that outlived `STOP_CAPTURE_TIMEOUT`,
     /// whose stop response could not carry them). `recording_status`
@@ -724,6 +729,7 @@ pub fn run() {
             recorded_paths: Mutex::new(HashSet::new()),
             adopted_paths: Mutex::new(HashSet::new()),
             finalizing: Arc::new(Mutex::new(HashSet::new())),
+            uploads_in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             finalize_warnings: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "macos")]
             recording_power: Mutex::new(power::RecordingPower::new()),

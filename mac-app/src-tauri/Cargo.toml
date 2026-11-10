@@ -26,6 +26,7 @@ tauri-plugin-notification = "2"
 parking_lot = "0.12"
 hound = "3.5"
 base64 = "0.22"
+semver = "1"
 
 # Streaming upload of the recorded WAV straight to a presigned S3 URL — see
 # `src/upload.rs`. Bulk audio bytes must never cross the Tauri IPC bridge to
