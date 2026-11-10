@@ -390,6 +390,9 @@ pub async fn caption_overlay_open(
     let saved = settings.windows.get(&lang).cloned().unwrap_or_default();
     let (saved_pos, size) = sanitize_geometry(&saved);
 
+    // The window this call creates, if any: a failed settings commit below
+    // must not leave it on screen untracked.
+    let mut created = None;
     let pos = if app.get_webview_window(label).is_some() {
         saved_pos
     } else {
@@ -415,6 +418,7 @@ pub async fn caption_overlay_open(
             Ok(window) => {
                 float_above_full_screen(&window);
                 watch(&app, &window, lang.clone());
+                created = Some(window);
             }
             // A concurrent open created it first.
             Err(_) if app.get_webview_window(label).is_some() => {}
@@ -423,7 +427,7 @@ pub async fn caption_overlay_open(
         Some((x, y))
     };
 
-    let next = state.update(true, |s| {
+    let committed = state.update(true, |s| {
         let w = s.windows.entry(lang.clone()).or_default();
         w.open = true;
         if let Some((x, y)) = pos {
@@ -432,7 +436,22 @@ pub async fn caption_overlay_open(
         }
         w.width = size.0;
         w.height = size.1;
-    })?;
+    });
+    let next = match committed {
+        Ok(next) => next,
+        Err(e) => {
+            // The save failed or the extra language changed meanwhile: the
+            // overlay has no close control and its open flag was not saved,
+            // so remove the window this call made. `destroy` skips the
+            // close-requested path, which would try to save again.
+            if let Some(window) = created {
+                if let Err(destroy) = window.destroy() {
+                    log::warn!("caption overlay cleanup failed: {destroy}");
+                }
+            }
+            return Err(e);
+        }
+    };
     Ok(next.windows.get(&lang).cloned().unwrap_or_default())
 }
 
