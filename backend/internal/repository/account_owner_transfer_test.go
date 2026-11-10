@@ -37,7 +37,7 @@ func TestTransferAccountOwnerTransaction(t *testing.T) {
 		if meta.Key["PK"]["S"] != "ACCOUNT#a" || meta.Key["SK"]["S"] != "META" {
 			t.Fatalf("wrong META key: %+v", meta.Key)
 		}
-		requireHierarchyCondition(t, meta, "attribute_exists(PK)", `ownerUserId = "u-old"`)
+		requireHierarchyCondition(t, meta, "attribute_exists(PK)", `ownerUserId = "u-old"`, "attribute_not_exists(mergingInto)", "attribute_not_exists(mergedInto)")
 		update := hierarchyUpdateText(meta)
 		for _, want := range []string{`ownerUserId = "u-new"`, "updatedAt", `originalOwnerUserId = if_not_exists(originalOwnerUserId, "u-old")`, "REMOVE", "initialOwnerEmail", "initialOwnerInvitationPending"} {
 			if !strings.Contains(update, want) {

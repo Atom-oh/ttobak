@@ -323,6 +323,8 @@ func (h *AccountHandler) RevokePendingMember(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
 		case errors.Is(err, service.ErrPendingAlreadyClaimed):
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "This invite was already claimed -- remove the user from Members instead")
+		case errors.Is(err, service.ErrAccountMerging):
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Account is merging or merged")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}

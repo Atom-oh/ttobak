@@ -20,8 +20,11 @@ import (
 // Account-specific sentinel errors. (ErrForbidden, ErrNotFound, ErrUserNotFound
 // are already declared in service/meeting.go in this same package — reuse them.)
 var (
-	ErrInvalidInput   = errors.New("invalid input")
-	ErrMemberExists   = errors.New("member already exists")
+	ErrInvalidInput = errors.New("invalid input")
+	ErrMemberExists = errors.New("member already exists")
+	// ErrAccountMerging means the account is the source of an in-flight or
+	// finished merge and rejects this mutation (HTTP 409).
+	ErrAccountMerging = errors.New("account is merging or merged")
 	ErrAmbiguousAlias = errors.New("alias maps to multiple accounts")
 	ErrLoopGuard      = errors.New("document originated from ttobak (loop guard)")
 	// ErrAmbiguousShareBlocksRemoval is returned by RemoveMember when the
@@ -189,6 +192,8 @@ func toAccountResponse(a *model.Account, members []model.AccountMember) *model.A
 		Industry:               a.Industry,
 		OwnerUserID:            a.OwnerUserID,
 		OwnerInvitationPending: a.InitialOwnerInvitationPending,
+		MergingInto:            a.MergingInto,
+		MergedInto:             a.MergedInto,
 		Members:                dtos,
 		CreatedAt:              a.CreatedAt,
 	}
@@ -325,14 +330,14 @@ func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]mod
 		if err != nil {
 			return nil, err
 		}
-		if account == nil {
-			continue
+		if account == nil || account.MergedInto != "" {
+			continue // a merge tombstone is not listed; its target is
 		}
 		role := grant.Member.Role
 		if grant.inherited() {
 			role = ""
 		}
-		out = append(out, model.AccountSummary{AccountID: id, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: role, AccessPermission: grant.permission(), InheritedFromAccountID: grant.InheritedFromAccountID})
+		out = append(out, model.AccountSummary{AccountID: id, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: role, MergingInto: account.MergingInto, AccessPermission: grant.permission(), InheritedFromAccountID: grant.InheritedFromAccountID})
 		grants = append(grants, grant)
 	}
 	recheck, err := primedAccountReads(ctx, s.repo, userID, grantAccountIDs(grants), true)
@@ -489,6 +494,18 @@ func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserI
 			return ErrNotFound
 		}
 		return ErrForbidden
+	}
+	// A queued invite for a merging/merged account may materialize into the
+	// merge target, which this revoke could not observe; reject instead.
+	account, err := s.repo.GetAccount(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if account == nil {
+		return ErrNotFound
+	}
+	if account.MergingInto != "" || account.MergedInto != "" {
+		return ErrAccountMerging
 	}
 	sk := model.PrefixPendingAccount + accountID
 	// Captured BEFORE the delete attempt: narrows the window in which
@@ -997,7 +1014,7 @@ func (s *AccountService) ResolveAccountByAlias(ctx context.Context, userID, alia
 		if err != nil {
 			return nil, err
 		}
-		if account == nil {
+		if account == nil || account.MergedInto != "" {
 			continue
 		}
 		if strings.ToLower(account.Name) == target {

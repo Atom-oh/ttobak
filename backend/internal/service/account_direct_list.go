@@ -33,9 +33,13 @@ func directAccountListRow(ctx context.Context, reads accountReads, user, id stri
 	if account.AccountID != id {
 		return nil, "", ErrReadingData
 	}
+	// A merged source is a tombstone: hide it like the unpaged list does.
+	if account.MergedInto != "" {
+		return nil, "", nil
+	}
 	row := &model.AccountSummary{
 		AccountID: id, ParentAccountID: account.ParentAccountID, Name: account.Name,
-		Role: member.Role, AccessPermission: model.PermissionEdit,
+		Role: member.Role, AccessPermission: model.PermissionEdit, MergingInto: account.MergingInto,
 	}
 	return row, readingHash([]interface{}{account, grant.fingerprint()}), nil
 }
