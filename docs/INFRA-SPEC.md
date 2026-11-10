@@ -265,8 +265,15 @@ retained-grant removal using deployed function timeout/last-modified metadata.
 `gateway-stack.ts` defaults to GPT-6.1 Sol for final notes via
 `BEDROCK_SUMMARY_MODEL_ID`, while auxiliary Opus calls remain on `BEDROCK_MODEL_ID`.
 Only the summary role receives the selected final-note model/profile grant.
-Images use Opus 4.8, Sonnet 5.5 is used
-for QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
+Images use GPT-6.1 Terra via independent `BEDROCK_IMAGE_MODEL_ID` in us-west-2.
+Legacy news briefings and the structured news worker use GPT-6 Luna in the stack
+region. Their exact model/profile grants retain outgoing Claude permissions for
+rollout safety; runtime has no expensive-model fallback. Structured news prices
+are conservatively metered at USD 0.125 for all input (including separate
+cache-read/write tokens) / USD 0.50 output per million tokens. Verified
+2026-11-10: uncached input 0.10, cache write 0.125, cache read 0.01;
+the existing 100,000-token input cap and USD 2/run, USD 25/month limits remain.
+Sonnet 5.5 is used for QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
 use Haiku 5.5. QA detection and Translate are separate service/model choices.
 The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` defaults to GPT-6 Luna for
 `/api/translate` `quality=high`; only the API role receives the selected exact

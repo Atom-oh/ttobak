@@ -6,7 +6,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Construct } from 'constructs';
 import { RESEARCH_SFN_NAME } from './gateway-stack';
-import { DEFAULT_MODEL_CONFIGURATION, ModelConfiguration, validateModelConfiguration } from './model-config';
+import { DEFAULT_MODEL_CONFIGURATION, IMAGE_MODEL_ID, NEWS_MODEL_ID, extractionModelResources, ModelConfiguration, validateModelConfiguration } from './model-config';
 
 export interface AiStackProps extends cdk.StackProps {
   bucket: s3.IBucket;
@@ -425,6 +425,13 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // Keep the outgoing Claude permission while old image invocations drain.
+    this.processImageRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InvokeImageModel',
+      actions: ['bedrock:InvokeModel'],
+      resources: extractionModelResources(this.partition, this.account, 'us-west-2', IMAGE_MODEL_ID),
+    }));
+
     // ==================== Convert Doc Role ====================
     // Needs: S3 read on docs/ (untrusted uploaded files), S3 write on
     // docs-pdf/ only (its sidecar output prefix). No DynamoDB access at
@@ -723,6 +730,13 @@ export class AiStack extends cdk.Stack {
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*`,
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*claude-haiku*`,
       ],
+    }));
+
+    // The shared role still runs Claude-based technical-source extraction.
+    this.crawlerRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InvokeNewsSummaryModel',
+      actions: ['bedrock:InvokeModel'],
+      resources: extractionModelResources(this.partition, this.account, this.region, NEWS_MODEL_ID),
     }));
 
     this.crawlerRole.addToPolicy(new iam.PolicyStatement({
