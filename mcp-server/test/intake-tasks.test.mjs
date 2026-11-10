@@ -358,6 +358,19 @@ test('ledger is written before the ack call', async t => {
   assert.equal(statSync(ledgerFile(home)).mode & 0o777, 0o600);
 });
 
+test('ack ledger clears cloudSynced when the outcome changes', async t => {
+  const { beginAck, finishAck, markSynced, loadAckLedger } = await import('../dist/intake/ack-ledger.js');
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  const store = new IntakeStore(tempHome(t));
+  beginAck(store, SCOPE, RID_HEX, 'e'.repeat(64), NOW);
+  finishAck(store, SCOPE, RID_HEX, 'unknown');
+  markSynced(store, SCOPE, RID_HEX);
+  finishAck(store, SCOPE, RID_HEX, 'unknown');
+  assert.equal(loadAckLedger(store, SCOPE).entries[RID_HEX].cloudSynced, true);
+  finishAck(store, SCOPE, RID_HEX, 'ok');
+  assert.equal(loadAckLedger(store, SCOPE).entries[RID_HEX].cloudSynced, false);
+});
+
 test('ack ledger keeps every entry, normalizes keys and rejects a malformed file', async t => {
   const { beginAck, finishAck, markSynced, loadAckLedger } = await import('../dist/intake/ack-ledger.js');
   const { IntakeStore } = await import('../dist/intake/store.js');
@@ -411,6 +424,10 @@ test('search sends fixed fields and stops after four pages', async t => {
   assert.equal((await searchRequests(withCursor.session, { requesterId: ['me'] })).length, 50);
   const dropped = await specreqSession(t, home, { FAKE_WORK_SEARCH: JSON.stringify([page([request(), request({ stateId: 'DONE' })])]) });
   await assert.rejects(searchRequests(dropped.session, { requesterId: ['me'] }), error => error.code === 'PARSE_FAILED');
+
+  const manyRanges = Array.from({ length: 51 }, () => '2026-11-12 - 2026-11-12');
+  assert.throws(() => parseSearch(page([request({ meetingDateRanges: manyRanges })])), error => error.code === 'PARSE_FAILED');
+  assert.equal(parseSearch(page([request({ meetingDateRanges: manyRanges.slice(1) })])).requests[0].meetingDateRanges.length, 50);
 
   for (const bad of [request({ requestId: 'bad' }), request({ stateId: 'DONE' }), 'x']) {
     assert.throws(() => parseSearch(page([request(), bad])), error => error.code === 'PARSE_FAILED');
