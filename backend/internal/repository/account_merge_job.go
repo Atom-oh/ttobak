@@ -382,7 +382,7 @@ func (r *DynamoDBRepository) FailMergeJob(ctx context.Context, job *model.Accoun
 }
 
 // FinishAccountMerge completes a job at its finish step in one transaction:
-// the job becomes done and releases its lease, the source META replaces
+// the job becomes done (with resolvePending set) and releases its lease, the source META replaces
 // mergingInto with mergedInto and mergedAt (the tombstone), and the target's
 // incomingMerges is decremented. The requester's source ownership and target
 // membership are checked again. A lost lease or authority returns
@@ -394,6 +394,7 @@ func (r *DynamoDBRepository) FinishAccountMerge(ctx context.Context, job *model.
 	}
 	now := time.Now().UTC()
 	jobUpdate := expression.Set(expression.Name("state"), expression.Value(model.MergeStateDone)).
+		Set(expression.Name("resolvePending"), expression.Value(true)).
 		Set(expression.Name("finishedAt"), expression.Value(now)).
 		Set(expression.Name("updatedAt"), expression.Value(now)).
 		Remove(expression.Name("leaseOwner")).Remove(expression.Name("leaseUntil")).Remove(expression.Name("cursor"))
@@ -453,6 +454,34 @@ func (r *DynamoDBRepository) FinishAccountMerge(ctx context.Context, job *model.
 		return fmt.Errorf("finish account merge: %w", err)
 	}
 	job.State, job.FinishedAt, job.UpdatedAt, job.LeaseOwner, job.LeaseUntil, job.Cursor = model.MergeStateDone, &now, now, "", 0, ""
+	job.ResolvePending = true
+	return nil
+}
+
+// ClearMergeResolvePending clears a done job's resolvePending flag after the
+// people resolve request was published. A job that is not done or already
+// cleared is left as is (nil).
+func (r *DynamoDBRepository) ClearMergeResolvePending(ctx context.Context, sourceID string) error {
+	if !validMergeAccountID(sourceID) {
+		return fmt.Errorf("invalid merge resolve clear")
+	}
+	cond := expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("state").Equal(expression.Value(model.MergeStateDone))).
+		And(expression.Name("resolvePending").Equal(expression.Value(true)))
+	expr, err := expression.NewBuilder().WithUpdate(expression.Remove(expression.Name("resolvePending"))).WithCondition(cond).Build()
+	if err != nil {
+		return fmt.Errorf("build merge resolve clear: %w", err)
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{TableName: aws.String(r.tableName), Key: mergeJobKey(sourceID),
+		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()})
+	if err != nil {
+		var ccf *types.ConditionalCheckFailedException
+		if errors.As(err, &ccf) {
+			return nil
+		}
+		return fmt.Errorf("clear merge resolve pending: %w", err)
+	}
 	return nil
 }
 

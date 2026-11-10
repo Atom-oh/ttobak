@@ -42,6 +42,10 @@ type AccountMergeJob struct {
 	// LeaseOwner, so the previous holder's fenced writes fail.
 	LeaseUntil    int64 `dynamodbav:"leaseUntil,omitempty"`
 	AcceptUnmoved bool  `dynamodbav:"acceptUnmoved,omitempty"`
+	// ResolvePending is set by the finish transaction and cleared once the
+	// target's people resolve request is published, so a redelivered worker
+	// event on a done job publishes it again when the first attempt failed.
+	ResolvePending bool `dynamodbav:"resolvePending,omitempty"`
 	// Counts holds per-step totals keyed "{step}.{moved|skipped|resumed|unreadable|keptSeparate}".
 	Counts     map[string]int `dynamodbav:"counts,omitempty"`
 	StartedAt  time.Time      `dynamodbav:"startedAt"`

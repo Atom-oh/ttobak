@@ -335,8 +335,11 @@ func TestFinishAccountMerge(t *testing.T) {
 	if !strings.Contains(resolvedCondition(items[4]), "incomingMerges >") {
 		t.Error("decrement must keep incomingMerges non-negative")
 	}
-	if job.State != model.MergeStateDone || job.FinishedAt == nil || job.LeaseOwner != "" {
+	if job.State != model.MergeStateDone || job.FinishedAt == nil || job.LeaseOwner != "" || !job.ResolvePending {
 		t.Fatalf("job = %+v", job)
+	}
+	if u := resolvedCondition(map[string]any{"ConditionExpression": items[0]["UpdateExpression"], "ExpressionAttributeNames": items[0]["ExpressionAttributeNames"]}); !strings.Contains(u, "resolvePending") {
+		t.Errorf("finish must set resolvePending: %s", u)
 	}
 
 	for _, tc := range []struct {
@@ -533,5 +536,29 @@ func TestAbortAccountMerge(t *testing.T) {
 		if err := failing.AbortAccountMerge(context.Background(), failedJob(), now); !errors.Is(err, tc.want) {
 			t.Errorf("idx %d: err = %v, want %v", tc.idx, err, tc.want)
 		}
+	}
+}
+
+func TestClearMergeResolvePending(t *testing.T) {
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 200, `{}` })
+	if err := r.ClearMergeResolvePending(context.Background(), "src"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].target != "UpdateItem" {
+		t.Fatalf("calls = %+v", calls)
+	}
+	cond := resolvedCondition(calls[0].body)
+	if !strings.Contains(cond, "state = ") || !strings.Contains(cond, "resolvePending = ") {
+		t.Errorf("clear condition %q must require a done job with the flag", cond)
+	}
+	cleared := fenceRepo(t, new([]fenceRequest), func(fenceRequest) (int, string) {
+		return 400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
+	})
+	if err := cleared.ClearMergeResolvePending(context.Background(), "src"); err != nil {
+		t.Fatalf("an already cleared flag must be nil: %v", err)
+	}
+	if err := r.ClearMergeResolvePending(context.Background(), "a#b"); err == nil {
+		t.Fatal("invalid source accepted")
 	}
 }

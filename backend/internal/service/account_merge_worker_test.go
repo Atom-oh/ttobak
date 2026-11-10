@@ -29,6 +29,7 @@ type fakeMergeWorker struct {
 	released  int
 	finished  int
 	finishErr []error
+	cleared   int
 
 	reparentErr   map[string]error
 	reparented    []string
@@ -72,9 +73,16 @@ func (f *fakeMergeWorker) FinishAccountMerge(_ context.Context, job *model.Accou
 		}
 	}
 	f.finished++
-	job.State, job.LeaseOwner, job.LeaseUntil = model.MergeStateDone, "", 0
+	job.State, job.LeaseOwner, job.LeaseUntil, job.ResolvePending = model.MergeStateDone, "", 0, true
 	if f.jobs.job != nil {
-		f.jobs.job.State, f.jobs.job.LeaseOwner, f.jobs.job.LeaseUntil = model.MergeStateDone, "", 0
+		f.jobs.job.State, f.jobs.job.LeaseOwner, f.jobs.job.LeaseUntil, f.jobs.job.ResolvePending = model.MergeStateDone, "", 0, true
+	}
+	return nil
+}
+func (f *fakeMergeWorker) ClearMergeResolvePending(context.Context, string) error {
+	f.cleared++
+	if f.jobs.job != nil && f.jobs.job.State == model.MergeStateDone {
+		f.jobs.job.ResolvePending = false
 	}
 	return nil
 }
@@ -311,10 +319,35 @@ func TestWorkerFinishEmitsPeopleResolve(t *testing.T) {
 		t.Fatalf("people=%v merges=%v", h.people, h.merges)
 	}
 
+	if h.worker.cleared != 1 || h.jobs.job.ResolvePending {
+		t.Fatalf("a published request must clear resolvePending: cleared=%d", h.worker.cleared)
+	}
+	// A redelivery after a successful publish does nothing.
+	if err := h.run(); err != nil || len(h.people) != 1 {
+		t.Fatalf("redelivery republished: err=%v people=%v", err, h.people)
+	}
+
 	failing := newWorkerHarness("finish")
 	failing.peopErr = errors.New("bus down")
 	if err := failing.run(); err == nil || failing.worker.finished != 1 || len(failing.jobs.failed) != 0 {
 		t.Fatalf("people publish failure must surface without failing the done job: err=%v failed=%v", err, failing.jobs.failed)
+	}
+	if failing.worker.cleared != 0 || !failing.jobs.job.ResolvePending {
+		t.Fatal("a failed publish must keep resolvePending")
+	}
+	// The redelivered event finds the job done and republishes once.
+	if err := failing.run(); err == nil || len(failing.people) != 2 {
+		t.Fatalf("a failing republish must surface for retry: err=%v people=%d", err, len(failing.people))
+	}
+	failing.peopErr = nil
+	if err := failing.run(); err != nil || len(failing.people) != 3 || failing.worker.cleared != 1 || failing.jobs.job.ResolvePending {
+		t.Fatalf("redelivery must republish and clear: err=%v people=%d cleared=%d", err, len(failing.people), failing.worker.cleared)
+	}
+	if err := failing.run(); err != nil || len(failing.people) != 3 {
+		t.Fatalf("a cleared flag must not republish: err=%v people=%d", err, len(failing.people))
+	}
+	if failing.worker.finished != 1 {
+		t.Fatalf("redeliveries must not finish again: %d", failing.worker.finished)
 	}
 }
 

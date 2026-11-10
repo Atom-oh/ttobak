@@ -58,6 +58,7 @@ type accountMergeWorkerRepo interface {
 	SaveMergeProgress(ctx context.Context, job *model.AccountMergeJob, step, cursor string, counts map[string]int) error
 	ReleaseMergeLease(ctx context.Context, job *model.AccountMergeJob) error
 	FinishAccountMerge(ctx context.Context, job *model.AccountMergeJob) error
+	ClearMergeResolvePending(ctx context.Context, sourceID string) error
 
 	ReparentAccountForMerge(ctx context.Context, job *model.AccountMergeJob, childID string, intoAncestors []repository.AccountParentLink) error
 	ListProjectRefsForAccount(ctx context.Context, accountID string) ([]model.ProjectRef, error)
@@ -230,7 +231,7 @@ func (s *AccountMergeService) ProcessAccountMergeRequested(ctx context.Context, 
 	job, err := s.jobs.ClaimMergeLease(ctx, e.SourceAccountID, owner, claimedAt, mergeLeaseTTL)
 	if errors.Is(err, repository.ErrMergeLeaseHeld) {
 		log.Printf("account merge: source=%s lease held elsewhere or job not running", e.SourceAccountID)
-		return nil
+		return s.republishPeopleResolve(ctx, e.SourceAccountID)
 	}
 	if err != nil {
 		return err
@@ -337,11 +338,13 @@ func (s *AccountMergeService) runMergeStep(fence *mergeFence, job *model.Account
 		}
 		log.Printf("account merge: source=%s finished", job.SourceAccountID)
 		if err := s.publishPeople(ctx, model.PeopleResolveRequested{AccountID: job.TargetAccountID, Reason: model.PeopleResolveReasonContacts}); err != nil {
-			// The merge is complete; a redelivery would find it done, so the
-			// failure is surfaced rather than retried.
+			// The merge is complete and resolvePending stays set: the error
+			// makes the event redeliver, and a redelivery on the done job
+			// publishes the request again (republishPeopleResolve).
 			log.Printf("account merge: source=%s people resolve request failed", job.SourceAccountID)
 			return true, fmt.Errorf("account merge finished but people resolve was not requested: %w", err)
 		}
+		s.clearResolvePending(ctx, job.SourceAccountID)
 		return true, nil
 	}
 	mover := s.mergeStep(job.Step)
@@ -365,6 +368,35 @@ func (s *AccountMergeService) runMergeStep(fence *mergeFence, job *model.Account
 		return false, fence.translate(err)
 	}
 	return false, nil
+}
+
+// republishPeopleResolve handles a delivery for a job the worker cannot
+// claim. A done job whose people resolve request was never published
+// (resolvePending) publishes it once and clears the flag; a failed publish
+// is returned so the event is retried. Anything else is a no-op.
+func (s *AccountMergeService) republishPeopleResolve(ctx context.Context, sourceID string) error {
+	job, err := s.jobs.GetAccountMergeJob(ctx, sourceID)
+	if err != nil {
+		return err
+	}
+	if job == nil || job.State != model.MergeStateDone || !job.ResolvePending || job.TargetAccountID == "" {
+		return nil
+	}
+	if err := s.publishPeople(ctx, model.PeopleResolveRequested{AccountID: job.TargetAccountID, Reason: model.PeopleResolveReasonContacts}); err != nil {
+		log.Printf("account merge: source=%s people resolve republish failed", sourceID)
+		return fmt.Errorf("republish people resolve after merge: %w", err)
+	}
+	log.Printf("account merge: source=%s people resolve republished", sourceID)
+	s.clearResolvePending(ctx, sourceID)
+	return nil
+}
+
+// clearResolvePending clears the flag after a published request. A failure
+// only means a later redelivery publishes once more, so it is logged.
+func (s *AccountMergeService) clearResolvePending(ctx context.Context, sourceID string) {
+	if err := s.worker.ClearMergeResolvePending(ctx, sourceID); err != nil {
+		log.Printf("account merge: source=%s resolve flag clear failed", sourceID)
+	}
 }
 
 // continueMerge hands the job to a fresh invocation: release the lease so
