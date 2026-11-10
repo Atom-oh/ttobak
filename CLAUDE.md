@@ -14,8 +14,8 @@ documentation stays English.
 - Verify implementation claims against the reviewed revision's code, tests,
   manifests, and CDK. Documentation records intent, not proof of deployment.
   Keep security requirements even when existing code has a documented gap.
-- `docs/README.md` indexes current references. ADRs record decisions and name
-  superseding decisions explicitly. Plans, research, benchmarks, and old
+- `docs/README.md` indexes current references. ADRs are topic records of
+  the decisions in force, rewritten in place when a decision changes. Plans, research, benchmarks, and old
   review reports are historical evidence, not current acceptance criteria.
 - Report a PR defect only with a changed path/line, a concrete failing scenario,
   and code evidence. Model agreement is not evidence. Missing context is an
