@@ -502,7 +502,23 @@ func (svc *PerformanceService) ListMissed(ctx context.Context, userID, period st
 	if items == nil {
 		items = []MissedItem{}
 	}
-	return &model.PerformanceMissedList{Items: items, UnmappedCount: unmapped, SourceFreshness: freshness}, nil
+	return &model.PerformanceMissedList{Items: items, UnmappedCount: unmapped, SourceFreshness: freshness,
+		CalendarCoverageStart: calendarCoverageStart(events)}, nil
+}
+
+// calendarCoverageStart is the earliest event start among the events read, as
+// RFC3339 UTC, or empty when there are none.
+func calendarCoverageStart(events []model.CalendarEvent) string {
+	var earliest time.Time
+	for _, event := range events {
+		if earliest.IsZero() || event.StartsAt.Before(earliest) {
+			earliest = event.StartsAt
+		}
+	}
+	if earliest.IsZero() {
+		return ""
+	}
+	return earliest.UTC().Format(time.RFC3339)
 }
 
 // missedReadableAccounts lists only accounts the owner can read now; names,

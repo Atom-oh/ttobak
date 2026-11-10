@@ -122,7 +122,7 @@ runner collects and syncs.
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
 | `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}]}` sorted by SFDC ID |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
-| `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}]}` |
+| `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}]},calendarCoverageStart}` |
 
 Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
 trailing data and unsupported query parameters are rejected. A sync batch has at
@@ -185,6 +185,10 @@ account names, aliases and domains come only from those accounts.
   than returning partial results. An API without the calendar and meeting
   readers wired also fails with `500`. `sourceFreshness` lists `sfdc-assignments`,
   `sfdc-tasks` and `calendar` (the latest completed calendar source).
+- `calendarCoverageStart` is the earliest start (RFC3339 UTC) among the calendar
+  events read for the request, or an empty string when none were read.
+  Calendar rows expire 90 days after they end and the runner re-reads only its
+  intake window, so calendar-based gaps cover only events from that time on.
 
 Residency: rows use default table encryption without envelope sealing (an
 ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
