@@ -28,8 +28,10 @@ UpdateMemberRole and pending-share materialization stay owner-free.
   transferred Account. It also sets `originalOwnerUserId` once
   (`if_not_exists`), so ADR-055 creation receipts keep replaying the original Owner.
 - **Owner-fenced member writers:** generic role-update and removal writes condition
-  on `role <> owner`; one that interleaves with a transfer returns 409 instead of
-  overwriting or deleting the new Owner row.
+  on `role <> owner`, removal also on the requester still being Owner (META and
+  MEMBER), and AddMember's put is always create-only. A writer that interleaves
+  with a transfer returns 409 (or member-exists) instead of overwriting or
+  deleting the new Owner row.
 - **One transaction:** META, target MEMBER and previous-owner MEMBER change
   together; any condition failure writes nothing and returns 409.
 - **Non-delegable:** delegation is

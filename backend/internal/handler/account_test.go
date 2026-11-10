@@ -170,7 +170,7 @@ func (m *mockHandlerAccountRepo) PutMember(_ context.Context, member *model.Acco
 	m.members[acctMemberKey(member.AccountID, member.UserID)] = &c
 	return nil
 }
-func (m *mockHandlerAccountRepo) DeleteMember(_ context.Context, accountID, userID string) error {
+func (m *mockHandlerAccountRepo) DeleteMember(_ context.Context, accountID, _, userID string) error {
 	key := acctMemberKey(accountID, userID)
 	if _, ok := m.members[key]; !ok {
 		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)

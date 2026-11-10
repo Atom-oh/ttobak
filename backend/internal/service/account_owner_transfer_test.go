@@ -194,7 +194,10 @@ func TestTransferOwnerThenGenericRoutesStillOwnerFree(t *testing.T) {
 
 // racingMemberRepo commits an owner transfer to the target after the service
 // read the target's non-owner role but before its member write lands.
-type racingMemberRepo struct{ *transferRepo }
+type racingMemberRepo struct {
+	*transferRepo
+	to string // removal races a transfer to this member; "" means the target
+}
 
 func (r *racingMemberRepo) race(accountID, userID string) {
 	if err := r.TransferAccountOwner(context.Background(), accountID, "owner", userID, time.Now()); err != nil {
@@ -202,14 +205,21 @@ func (r *racingMemberRepo) race(accountID, userID string) {
 	}
 }
 
+func (r *racingMemberRepo) raceTarget(userID string) string {
+	if r.to != "" {
+		return r.to
+	}
+	return userID
+}
+
 func (r *racingMemberRepo) UpdateMemberRole(ctx context.Context, accountID, userID, role string) error {
 	r.race(accountID, userID)
 	return r.transferRepo.UpdateMemberRole(ctx, accountID, userID, role)
 }
 
-func (r *racingMemberRepo) DeleteMember(ctx context.Context, accountID, userID string) error {
-	r.race(accountID, userID)
-	return r.transferRepo.DeleteMember(ctx, accountID, userID)
+func (r *racingMemberRepo) DeleteMember(ctx context.Context, accountID, ownerID, userID string) error {
+	r.race(accountID, r.raceTarget(userID))
+	return r.transferRepo.DeleteMember(ctx, accountID, ownerID, userID)
 }
 
 func TestMemberWritersInterleavedWithTransferKeepNewOwner(t *testing.T) {
@@ -231,5 +241,35 @@ func TestMemberWritersInterleavedWithTransferKeepNewOwner(t *testing.T) {
 				t.Fatalf("new Owner row overwritten: %+v", m)
 			}
 		})
+	}
+}
+
+func TestRemoveMemberRequiresRequesterStillOwner(t *testing.T) {
+	_, base, _ := newTransferFixture()
+	// Ownership moves to "target" between the requester check and the delete of "am".
+	r := &racingMemberRepo{transferRepo: base, to: "target"}
+	s := newAccountServiceWithRepo(r)
+	if _, err := s.RemoveMember(context.Background(), "owner", "acc", "am", false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+	if r.members[memberKey("acc", "am")] == nil {
+		t.Fatal("former owner removed a member after losing ownership")
+	}
+}
+
+type existsOnPutRepo struct{ *mockAccountRepo }
+
+func (r *existsOnPutRepo) PutMember(context.Context, *model.AccountMember) error {
+	return repository.ErrConditionFailed
+}
+
+func TestAddMemberConcurrentCreateIsMemberExists(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "Customer"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.repo = &existsOnPutRepo{mockAccountRepo: repo}
+	if _, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM}); !errors.Is(err, ErrMemberExists) {
+		t.Fatalf("err = %v, want ErrMemberExists", err)
 	}
 }

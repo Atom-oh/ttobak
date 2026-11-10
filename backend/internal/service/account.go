@@ -75,7 +75,7 @@ type accountRepo interface {
 	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	PutMember(ctx context.Context, member *model.AccountMember) error
-	DeleteMember(ctx context.Context, accountID, userID string) error
+	DeleteMember(ctx context.Context, accountID, ownerID, userID string) error
 	UpdateMemberRole(ctx context.Context, accountID, userID, role string) error
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
@@ -441,6 +441,9 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		EntityType: model.EntityTypeAccountMember,
 	}
 	if err := s.repo.PutMember(ctx, member); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrMemberExists // added concurrently between our Get and Put
+		}
 		return nil, err
 	}
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
@@ -647,7 +650,7 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		}
 	}
 
-	if err := s.repo.DeleteMember(ctx, accountID, targetUserID); err != nil {
+	if err := s.repo.DeleteMember(ctx, accountID, requesterUserID, targetUserID); err != nil {
 		return nil, s.nonOwnerMemberWriteError(ctx, accountID, targetUserID, err)
 	}
 
@@ -742,8 +745,8 @@ func (s *AccountService) UpdateMemberRole(ctx context.Context, requesterUserID, 
 }
 
 // nonOwnerMemberWriteError maps a rejected owner-fenced member write: the row
-// was removed concurrently (ErrNotFound) or became the Owner through a
-// concurrent transfer (ErrConflict).
+// was removed concurrently (ErrNotFound), or it became the Owner or the
+// requester stopped being the Owner through a concurrent transfer (ErrConflict).
 func (s *AccountService) nonOwnerMemberWriteError(ctx context.Context, accountID, userID string, err error) error {
 	if !errors.Is(err, repository.ErrConditionFailed) {
 		return err
