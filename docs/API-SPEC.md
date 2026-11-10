@@ -2268,8 +2268,10 @@ never included in error responses.
 (`contentEn`) beside the Korean note. Both routes are authenticated, reject query
 strings with 400, and POST caps its body at 1 KiB and rejects any field (no
 `sharingSafe`, text or language). Errors and limits match re-summary: 403, 404,
-`409 MEETING_BUSY`, `409 NO_SUMMARY_SOURCE`, `409 SOURCE_NOT_READY`, 413, 503;
-a Korean note awaiting its sharing-safe reset does not block reading the English note.
+`409 MEETING_BUSY`, `409 NO_SUMMARY_SOURCE`, `409 SOURCE_NOT_READY`, 413, 503.
+POST returns `409 SHARING_REGEN_REQUIRED` while the meeting is read-restricted
+(its Korean note awaits the owner's regeneration); that restriction does not
+block GET.
 
 The run uses the same `SummaryRequested` event with target `en` and its own
 `ANALYSIS#summaryEn` state, so it neither blocks nor is blocked by a Korean run.
@@ -2284,8 +2286,11 @@ the previous English note; an oversized result fails as `OUTPUT_TOO_LARGE`.
 `content` (omitted until a note exists), `generatedAt` (RFC3339) and `stale`.
 `stale` is true when the transcript selection or revision, saved notes or
 verified documents changed since generation (or the source hash was never
-stored); it is not set by Korean note or live-draft edits. A capture failure is
-returned as an error, never guessed. Meeting detail adds only
+stored); it is not set by Korean note or live-draft edits. Freshness is checked
+after the caller's access: authorization and not-found outcomes remain errors,
+while any other freshness-capture failure (for example more than 20 attachments
+or the check bound) still returns `200` with the stored content and
+`stale: true`, never a fresh guess. Meeting detail adds only
 `hasEnglishNote` (presence of the note); it never inlines `contentEn`.
 
 State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
