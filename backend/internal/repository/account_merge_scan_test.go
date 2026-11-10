@@ -93,7 +93,7 @@ func TestScanMergeUserRowsRewritesOnlyA(t *testing.T) {
 		t.Fatalf("event update has %d items", len(items))
 	}
 	set := resolvedExpression(items[0], "UpdateExpression")
-	for _, want := range []string{`accountId = "tgt"`, `ciphertext = "c2-new"`} {
+	for _, want := range []string{`accountId = "tgt"`, `ciphertext = "c2-new"`, "shareVersion = 3"} {
 		if !strings.Contains(set, want) {
 			t.Errorf("event update %q missing %q", set, want)
 		}
