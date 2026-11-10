@@ -150,6 +150,16 @@ func (readable performanceHTTPAccounts) GetAccount(_ context.Context, userID, ac
 	return &model.AccountResponse{}, nil
 }
 
+func (readable performanceHTTPAccounts) ListReadableAccountCandidates(_ context.Context, userID string) ([]service.NamedCandidate, error) {
+	var candidates []service.NamedCandidate
+	for key, ok := range readable {
+		if accountID, found := strings.CutPrefix(key, userID+"/"); ok && found {
+			candidates = append(candidates, service.NamedCandidate{Kind: "account", ID: accountID})
+		}
+	}
+	return candidates, nil
+}
+
 func performanceHTTPRouter(api PerformanceAPI, userID string) http.Handler {
 	handler := NewPerformanceHandler(api)
 	router := chi.NewRouter()

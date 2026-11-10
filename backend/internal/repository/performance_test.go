@@ -129,6 +129,37 @@ func TestApplyPerformanceBatchReceiptReplay(test *testing.T) {
 	}
 }
 
+func TestApplyPerformanceBatchAmbiguousErrorReturnsStoredReceipt(test *testing.T) {
+	var stored map[string]any
+	gets, transactions := 0, 0
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		body := performanceBody(test, request)
+		switch performanceTarget(request) {
+		case "GetItem":
+			gets++
+			if stored != nil {
+				return summaryHTTPResponse(200, `{"Item":`+mustJSON(test, stored)+`}`, nil), nil
+			}
+			return summaryHTTPResponse(200, `{}`, nil), nil
+		case "TransactWriteItems":
+			transactions++
+			// The write commits, but the response is lost as a server error.
+			operations := body["TransactItems"].([]any)
+			stored = operations[len(operations)-1].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
+			return summaryHTTPResponse(500, `{"__type":"com.amazonaws.dynamodb.v20120810#InternalServerError","message":"lost"}`, nil), nil
+		}
+		test.Fatalf("unexpected call %s", performanceTarget(request))
+		return nil, nil
+	})
+	receipt, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, performanceTaskRequest(0), performanceTestDigest)
+	if err != nil || receipt == nil || receipt.Revision != 1 || !receipt.Completed || receipt.Upserted != 1 || receipt.Removed != 1 || !receipt.Replayed {
+		test.Fatalf("an ambiguous error with a matching stored receipt must return it: %+v %v", receipt, err)
+	}
+	if transactions != 1 || gets != 2 {
+		test.Fatalf("one unretried transaction and one re-read expected: transactions=%d gets=%d", transactions, gets)
+	}
+}
+
 func mustJSON(test *testing.T, value any) string {
 	test.Helper()
 	encoded, err := json.Marshal(value)

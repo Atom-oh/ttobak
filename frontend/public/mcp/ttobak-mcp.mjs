@@ -23925,7 +23925,7 @@ function parseApiResponse(status, body) {
   }
   return parsed;
 }
-var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, ApiResponseError, TtobakApi;
+var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, ApiResponseError, TtobakApi;
 var init_api2 = __esm({
   "src/api.ts"() {
     "use strict";
@@ -23970,6 +23970,7 @@ var init_api2 = __esm({
     PROJECT_OPTIONAL_FIELDS = ["description", "sfdcOpptyId", "sfdcUrl", "stage"];
     PERFORMANCE_SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     MAX_PERFORMANCE_API_BYTES = 14e3;
+    MAX_PERFORMANCE_MAPPINGS_BYTES = 2e6;
     ApiResponseError = class extends Error {
       constructor(message, status, code) {
         super(message);
@@ -24012,6 +24013,10 @@ var init_api2 = __esm({
       /** The owner's per-source performance sync revisions. */
       async performanceSources() {
         return this.request("GET", "/api/performance/sources", void 0, MAX_PERFORMANCE_API_BYTES, false, true);
+      }
+      /** The owner's SFDC assignments joined with their mappings (local intake reads only the SFDC IDs). */
+      async performanceMappings() {
+        return this.request("GET", "/api/performance/mappings", void 0, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
       }
       async listCalendarEvents(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
@@ -27812,6 +27817,23 @@ async function serverRevisions(api) {
   }
   return result;
 }
+async function serverAssignmentIds(api) {
+  let value;
+  try {
+    value = await api.performanceMappings();
+  } catch (error3) {
+    if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments could not be read");
+  }
+  const items = record17(value) && Array.isArray(value.items) ? value.items : null;
+  if (!items) throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
+  return items.map((item) => {
+    if (!record17(item) || typeof item.sfdcAccountId !== "string" || !ID.test(item.sfdcAccountId)) {
+      throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
+    }
+    return item.sfdcAccountId;
+  });
+}
 async function deliver(api, store, state, plan) {
   const groups = batches(plan.mutations);
   if (!groups.length) groups.push([]);
@@ -27848,6 +27870,9 @@ async function runSfdc(options) {
         remote ??= await serverRevisions(options.api);
         state.revision = remote[state.source];
         if (options.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map((id) => [id, ""]));
+        if (state.source === "sfdc-assignments") {
+          for (const id of await serverAssignmentIds(options.api)) if (!Object.hasOwn(state.ledger, id)) state.ledger[id] = "";
+        }
         state.reconcileRequired = false;
         store.write(state, ...statePath2(state));
       }
