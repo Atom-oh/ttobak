@@ -191,8 +191,21 @@ case "$1" in
     if [ -n "${REMOTE_TAG_SHA:-}" ]; then
       printf 'aaaa\trefs/tags/mac-v0.2.0\n%s\trefs/tags/mac-v0.2.0^{}\n' "$REMOTE_TAG_SHA"
     fi ;;
-  for-each-ref) printf '%s\n' "${TAG_NOTES:-}" ;;
-  tag|push) ;;
+  for-each-ref)
+    if [ -n "${TAG_STORE:-}" ] && [ -f "$TAG_STORE" ]; then cat "$TAG_STORE"; echo
+    else printf '%s\n' "${TAG_NOTES:-}"; fi ;;
+  tag)
+    # Emulate git: without --cleanup=verbatim the message is stripped.
+    if [ -n "${TAG_STORE:-}" ]; then
+      verbatim=0; msg=""
+      while [ $# -gt 0 ]; do
+        case "$1" in --cleanup=verbatim) verbatim=1;; -m) msg=$2; shift;; esac
+        shift
+      done
+      if [ $verbatim -eq 1 ]; then printf '%s' "$msg" > "$TAG_STORE"
+      else printf '%s' "$msg" | grep -v '^#' | sed 's/[[:space:]]*$//' > "$TAG_STORE"; fi
+    fi ;;
+  push) ;;
   *) exit 99 ;;
 esac
 '''
@@ -382,6 +395,24 @@ class ReleaseGuardTest(unittest.TestCase):
         self.put_s3("TTOBAK_0.2.0_aarch64.app.tar.gz.sig", fake_signature().encode())
         r, calls = self.run_release("other notes", REMOTE_TAG_SHA="h" * 40)
         self.assert_refused_before_work(r, calls, "notes")
+
+    def test_tag_is_created_verbatim_and_resume_accepts_markdown_notes(self):
+        notes = "# Heading  \nline two   \n\n  - item"
+        store = os.path.join(self.tmp, "tagstore")
+        # A fresh release creates the tag with the exact notes.
+        with open(os.path.join(HERE, "release.sh")) as f:
+            tag_lines = [l for l in f if " tag -a " in l]
+        self.assertEqual(len(tag_lines), 1)
+        self.assertIn("--cleanup=verbatim", tag_lines[0])
+        # Resume compares against what git stored from that same command.
+        subprocess.run([os.path.join(self.bin, "git"), "tag", "-a", "--cleanup=verbatim",
+                        "mac-v0.2.0", "-m", notes, "h" * 40],
+                       env=dict(self.env, TAG_STORE=store, CALLS=self.calls), check=True)
+        self.local_artifacts(fake_signature())
+        self.put_s3("TTOBAK_0.2.0_aarch64.app.tar.gz", b"built-archive")
+        self.put_s3("TTOBAK_0.2.0_aarch64.app.tar.gz.sig", fake_signature().encode())
+        r, calls = self.run_release(notes, REMOTE_TAG_SHA="h" * 40, TAG_STORE=store)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_resume_with_matching_signature_uploads_only_install_and_manifest(self):
         self.local_artifacts(fake_signature())

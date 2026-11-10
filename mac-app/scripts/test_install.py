@@ -176,6 +176,38 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(self.marker(), "old")
         self.assertFalse(os.path.exists(os.path.join(self.dest, "TTOBAK.app.previous")))
 
+    def test_cleanup_failure_of_previous_copy_is_not_an_install_failure(self):
+        self.install_old()
+        # Removing an existing .previous copy fails; absent ones are fine.
+        self.stub("rm", 'for a in "$@"; do case "$a" in *.previous) '
+                  '[ ! -e "$a" ] || exit 1;; esac; done\n'
+                  'exec /bin/rm "$@"')
+        r = self.run_install()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(), "new")
+        self.assertIn("open ", self.calls())
+
+    def test_stale_previous_is_restored_when_app_is_missing(self):
+        d = os.path.join(self.dest, "TTOBAK.app.previous/Contents")
+        os.makedirs(d)
+        with open(os.path.join(d, "marker"), "w") as f:
+            f.write("old")
+        # Fail the new copy so the restored previous app is what remains.
+        self.stub("mv", 'case "$1" in */x/TTOBAK.app) exit 1;; esac\n'
+                  'exec /bin/mv "$@"')
+        r = self.run_install()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.marker(), "old")
+
+    def test_truncated_script_runs_nothing(self):
+        with open(SCRIPT) as f:
+            text = f.read()
+        cut = text[:text.index("\nmain \"$@\"")]
+        r = subprocess.run(["sh", "-c", cut], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, env={"PATH": self.bin + ":/usr/bin:/bin", "HOME": self.home})
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+        self.assertEqual(self.calls(), "")
+
     def test_never_calls_kill(self):
         self.install_old()
         self.real_socket()

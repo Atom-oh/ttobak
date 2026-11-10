@@ -176,6 +176,8 @@ if [[ $RESUME -eq 1 ]]; then
     git -C "$ROOT" fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" ||
       die "could not fetch tag $TAG"
   fi
+  # The tag is stored with --cleanup=verbatim, so the annotation is the notes
+  # byte for byte; $(...) drops trailing newlines on both sides.
   TAG_NOTES="$(git -C "$ROOT" for-each-ref --format='%(contents)' "refs/tags/$TAG")"
   [[ "$TAG_NOTES" == "$(printf '%s' "$NOTES")" ]] ||
     die "resuming $TAG: pass the same notes as the tag annotation"
@@ -276,7 +278,7 @@ sh -n "$SCRIPT_DIR/install.sh" || die "install.sh has a syntax error"
 
 # 6. Tag first, then immutable files, then the mutable entry points.
 if [[ -z "$LOCAL_TAG" && -z "$REMOTE_TAG" ]]; then
-  plan git -C "$ROOT" tag -a "$TAG" -m "$NOTES" "$HEAD_SHA"
+  plan git -C "$ROOT" tag -a --cleanup=verbatim "$TAG" -m "$NOTES" "$HEAD_SHA"
 fi
 if [[ -z "$REMOTE_TAG" ]]; then
   plan git -C "$ROOT" push origin "refs/tags/$TAG" || die "could not push $TAG"
