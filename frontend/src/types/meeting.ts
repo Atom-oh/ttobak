@@ -824,7 +824,11 @@ export interface FlowItem {
   origin?: string;
   evidence?: string;
   need?: string;
+  /** At most 5 readable people of the item (attendee, participant, speaker, assignee). */
+  people?: FlowPerson[];
 }
+
+export interface FlowPerson { kind: 'member' | 'contact'; id: string; label: string; role: string }
 
 export interface ProjectStageChange {
   projectId: string;
@@ -850,8 +854,42 @@ export interface AccountFlow {
 }
 
 export interface AccountGraphNode { id: string; kind: string; label: string }
-export interface AccountGraphEdge { from: string; to: string; kind: string; origin?: string }
-export interface AccountGraph { nodes: AccountGraphNode[]; edges: AccountGraphEdge[]; truncated: boolean }
+/** `role` is set only on `person` edges. */
+export interface AccountGraphEdge { from: string; to: string; kind: string; origin?: string; role?: string }
+/** `memberCount` counts direct members; only members with a people edge are nodes. */
+export interface AccountGraph { nodes: AccountGraphNode[]; edges: AccountGraphEdge[]; truncated: boolean; memberCount?: number }
+
+export type PeopleRole = 'participant' | 'speaker' | 'assignee' | 'mentions';
+
+/** One resolved member or contact of the account people panel. */
+export interface AccountPerson { kind: 'member' | 'contact'; id: string; label: string; meetings: number; roles: Record<string, number> }
+export interface AccountPeoplePage { people: AccountPerson[]; nextCursor?: string; truncated: boolean }
+
+/** One normalized unresolved mention across meetings; `key` is its 32-hex hash. */
+export interface MentionGroup { key: string; text: string; meetings: number; roles: string[] }
+export interface MentionGroupsPage { groups: MentionGroup[]; nextCursor?: string; truncated: boolean }
+
+/** A people edge. `meetingId` is the link form `{ownerUserId}:{meetingId}`. */
+export interface PeopleLink {
+  meetingId: string;
+  toKind: string;
+  toId: string;
+  role: string;
+  origin: 'auto' | 'manual' | string;
+  rule?: string;
+  sourceField: string;
+  mention?: string;
+  sourceRef?: string;
+  evidence?: string;
+  createdBy?: string;
+  createdAt: string;
+}
+
+/** People edges of one meeting; `labels` is keyed `{kind}:{id}` and holds only readable targets. */
+export interface MeetingPeopleEdges { edges: PeopleLink[]; labels: Record<string, string> }
+export interface PeopleEdgeKey { meetingId: string; toKind: string; toId: string; role: string }
+export interface PeopleEdgeInput extends PeopleEdgeKey { sourceRef?: string }
+export interface ResolveMentionResult { written: number; remaining: boolean }
 
 export interface CreateAccountNewsSourceInput {
   sourceName: string;

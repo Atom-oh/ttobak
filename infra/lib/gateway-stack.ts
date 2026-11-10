@@ -563,6 +563,8 @@ export class GatewayStack extends cdk.Stack {
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         // The resummary worker re-fences inherited members; match the API flag.
         ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
+        // The people resolver opens sealed account contacts (decrypt only).
+        KMS_KEY_ID: props.kmsKeyId || '',
         ...autoTermsEnvironment(this),
         ...transcriptCorrectionEnvironment(this),
         ...sourceTermsEnvironment(this),
@@ -1263,6 +1265,26 @@ export class GatewayStack extends cdk.Stack {
     pipelineFailures.watchQueue('SavedSummary', savedSummaryDlq);
     pipelineFailures.watchQueue('Terms', termsDlq);
 
+    // People resolution for speaker map and contact changes runs in its own
+    // summarize invocation; it can open up to 2,000 sealed contacts.
+    const peopleResolveDlq = new sqs.Queue(this, 'PeopleResolveDlq', {
+      queueName: 'ttobak-people-resolve-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const peopleResolveRule = new events.Rule(this, 'PeopleResolveRequestedRule', {
+      ruleName: 'ttobak-people-resolve-requested',
+      description: 'Resolve account meeting people after speaker map or contact changes',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['PeopleResolveRequested'] },
+    });
+    peopleResolveRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: peopleResolveDlq,
+    }));
+    pipelineFailures.watchQueue('PeopleResolve', peopleResolveDlq);
+
     // KB documents and research reports as term sources (layered dictionary
     // 4.2). The KB bucket already sends S3 events to EventBridge; summarize
     // maps kb/{uid}/... and shared/research/{id}.md to TermsSourceRequested
@@ -1325,7 +1347,7 @@ export class GatewayStack extends cdk.Stack {
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
-    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, this.qaFunction);
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, peopleResolveRule, this.qaFunction);
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like

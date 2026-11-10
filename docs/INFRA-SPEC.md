@@ -319,6 +319,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom ImageUploadCompleted | process-image |
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
 | Custom TermsRequested, ttobak.analysis | summarize, automatic term extraction only |
+| Custom PeopleResolveRequested, ttobak.analysis | summarize, account people resolution only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
 | S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-062; skips checkpoints) |
@@ -638,6 +639,11 @@ delivered and retries once with its `url.QueryUnescape` form only when the key
 contains `%` or `+` and the object is missing; an object still missing (404, or
 403 because the role has no `s3:ListBucket`) logs `outcome=NOT_FOUND` and is not
 retried.
+Objects created before a source flag was `on` never received a trigger; the
+operator CLI `backend/cmd/backfill-terms-sources` (dry run by default) passes
+every `kb/` and `shared/research/` key to the same mapper and spaces the
+published requests (`-interval`, default 5s). The worker's run row makes a rerun
+a no-op for unchanged content.
 
 Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
 (`cron(0 21 * * ? *)`, after the 19:00 crawl) invokes summarize with
@@ -653,7 +659,11 @@ ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
 crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
 searched, non-synthetic source (ADR-008 amendment, 2026-11-09). Invalid values
-fail synth. `ttobak:kbTermsMode` and
+fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
+with up to a seven-day lag: candidate history keeps sightings from formerly
+eligible sources for the repeat window, so one such sighting plus one global
+source can still qualify a term; `ttobak:newsTermsMode=off` stops news terms
+immediately. `ttobak:kbTermsMode` and
 `ttobak:researchTermsMode` may use `personal`; `on` (Account writes) waits for
 ADR-008 FU4 (Account-layer cleanup on unlink).
 
@@ -699,6 +709,23 @@ longer streak cannot be one alarm. Triggers are logged
 `QUEUED` only while `KB_TERMS_MODE` or `RESEARCH_TERMS_MODE` is `on`, so the
 alarm stays quiet with both off. Missing data is `notBreaching`, and the alarm
 action follows the `PipelineAlarmTopicArn` convention of the other alarms.
+
+## Account people resolution delivery
+
+Rule `ttobak-people-resolve-requested` routes default-bus `ttobak.analysis`
+events with detail-type `PeopleResolveRequested` to the summarize Lambda. Detail
+holds IDs and a reason only (`{accountId,ownerId?,meetingId?,reason}`); the
+worker rereads the meeting, members, contacts and entities. Delivery expires
+after five minutes, with three retry attempts and the SSE-SQS
+`ttobak-people-resolve-dlq` (seven-day retention, redrive denied), scoped to
+the exact rule ARN; `PipelineFailures` watches the DLQ (`PeopleResolve`). The
+API function depends on the rule, so the consumer exists before publishers.
+The API role's existing `events:PutEvents` grant covers publication.
+
+The resolver opens sealed account contacts, so summarize receives `KMS_KEY_ID`
+and its role gains `kms:Decrypt` on the encryption key, never encrypt or data
+key generation. The existing table grant covers the link, mention and run rows.
+The post-summary pass runs inline with its own 30-second bound.
 
 ## Summary privacy writer activation
 

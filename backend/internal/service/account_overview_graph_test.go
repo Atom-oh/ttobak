@@ -148,6 +148,8 @@ func TestGraph_LinksAndContacts(t *testing.T) {
 	repo.meetings["o1:m1"] = flowMeeting("o1", "m1", signalsNow.Add(-day), true, "p1", "gone")
 	repo.acctRefs = []model.MeetingRef{acctMeetingRef("o1", "m1", signalsNow.Add(-day))}
 	repo.members = []model.AccountMember{{PK: model.PrefixAccount + linkAcct, SK: model.PrefixMember + linkUser, AccountID: linkAcct, UserID: linkUser, Email: "a@example.com", Role: "owner"}}
+	// Members are nodes only when a people edge connects them.
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m1", "member", linkUser, "speaker")}
 	links.links = []model.AccountLink{
 		{FromKind: "news", FromID: newsID, ToKind: "project", ToID: "p1", Origin: "manual"},
 		{FromKind: "news", FromID: deletedID, ToKind: "project", ToID: "p1", Origin: "manual"},
@@ -424,5 +426,189 @@ func TestGraph_ContactReadsBounded(t *testing.T) {
 		if !g.Truncated || repo.contactGets > maxGraphContactReads || (fillCap && repo.contactGets != 0) {
 			t.Fatalf("fillCap=%v: contact reads %d truncated=%v", fillCap, repo.contactGets, g.Truncated)
 		}
+	}
+}
+
+func (r *overviewTestRepo) ListPeopleLinksByTarget(_ context.Context, _, kind, _ string, maxRows int) ([]model.PeopleLink, string, error) {
+	var out []model.PeopleLink
+	for _, l := range r.people {
+		if l.ToKind == kind {
+			if len(out) == maxRows {
+				return out, "more", nil
+			}
+			out = append(out, l)
+		}
+	}
+	return out, "", nil
+}
+
+func (r *overviewTestRepo) ListPeopleLinksToTarget(_ context.Context, _, kind, id string, maxRows int) ([]model.PeopleLink, bool, error) {
+	var out []model.PeopleLink
+	for _, l := range r.people {
+		if l.ToKind == kind && l.ToID == id {
+			if len(out) == maxRows {
+				return out, true, nil
+			}
+			out = append(out, l)
+		}
+	}
+	return out, false, nil
+}
+
+func graphPersonEdge(meeting, kind, id, role string) model.PeopleLink {
+	return model.PeopleLink{AccountID: linkAcct, MeetingID: meeting, ToKind: kind, ToID: id, Role: role, Origin: model.LinkOriginAuto}
+}
+
+// graphPeopleFixture publishes o1:m1 and leaves o1:m2 unpublished.
+func graphPeopleFixture() (*AccountOverviewService, *overviewTestRepo) {
+	svc, repo, _, _ := newGraphTest()
+	repo.meetings["o1:m1"] = flowMeeting("o1", "m1", signalsNow.Add(-day), true)
+	repo.meetings["o1:m2"] = flowMeeting("o1", "m2", signalsNow.Add(-day), false)
+	repo.acctRefs = []model.MeetingRef{acctMeetingRef("o1", "m1", signalsNow.Add(-day)), acctMeetingRef("o1", "m2", signalsNow.Add(-2*day))}
+	return svc, repo
+}
+
+func graphPersonEdges(g *model.AccountGraph) map[string]string {
+	out := map[string]string{}
+	for _, e := range g.Edges {
+		if e.Kind == model.GraphEdgePerson {
+			out[e.From+">"+e.To+">"+e.Role] = e.Origin
+		}
+	}
+	return out
+}
+
+func TestGraph_PersonEdgesByRole(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	c := flowEventID(80)
+	repo.contacts[c] = &model.AccountContact{ContactID: c, Name: "Kim"}
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m1", "contact", c, "speaker"), graphPersonEdge("o1:m1", "contact", c, "participant")}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkGraphConsistent(t, g)
+	edges := graphPersonEdges(g)
+	if len(edges) != 2 || edges["meeting:o1:m1>contact:"+c+">speaker"] != "auto" || edges["meeting:o1:m1>contact:"+c+">participant"] != "auto" {
+		t.Fatalf("person edges %v", edges)
+	}
+}
+
+func TestGraph_MembersOnlyWhenConnected(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	for _, u := range []string{"u1", "u2", "u3"} {
+		repo.members = append(repo.members, model.AccountMember{PK: model.PrefixAccount + linkAcct, SK: model.PrefixMember + u, AccountID: linkAcct, UserID: u, Email: u + "@x.example"})
+	}
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m1", "member", "u2", "assignee"), graphPersonEdge("o1:m1", "member", "gone", "speaker")}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, edges := graphIndex(g)
+	members := 0
+	for _, n := range g.Nodes {
+		if n.Kind == model.GraphNodeMember {
+			members++
+		}
+	}
+	if members != 1 || g.MemberCount != 3 || nodes["member:u2"].Label != "u2@x.example" || !edges["member:u2>account:"+linkAcct+">member_of"] {
+		t.Fatalf("members=%d count=%d nodes=%+v", members, g.MemberCount, g.Nodes)
+	}
+}
+
+func TestGraph_PersonEdgeNeedsPresentMeeting(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	c := flowEventID(81)
+	repo.contacts[c] = &model.AccountContact{ContactID: c, Name: "Lee"}
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m2", "contact", c, "speaker")}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes, _ := graphIndex(g); nodes["contact:"+c].ID != "" || len(graphPersonEdges(g)) != 0 || repo.contactGets != 0 {
+		t.Fatalf("unpublished meeting added a person: %+v", g)
+	}
+}
+
+func TestGraph_SkipsUnreadableContact(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	bad, good := flowEventID(82), flowEventID(83)
+	repo.contactErrs = map[string]error{bad: fmt.Errorf("open: %w", repository.ErrContactUnreadable)}
+	repo.contacts[good] = &model.AccountContact{ContactID: good, Name: "Park"}
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m1", "contact", bad, "speaker"), graphPersonEdge("o1:m1", "contact", good, "speaker")}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edges := graphPersonEdges(g)
+	if len(edges) != 1 || edges["meeting:o1:m1>contact:"+good+">speaker"] == "" {
+		t.Fatalf("edges %v", edges)
+	}
+}
+
+func TestGraph_AccountMentionNeedsReadGrant(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	repo.accountNames = map[string]string{"sub1": "Sub One", "sub2": "Sub Two"}
+	repo.noMemberIn = map[string]bool{"sub2": true}
+	repo.addProject(&model.Project{ProjectID: "p1", Name: "P1", AccountIDs: []string{linkAcct}})
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m1", "account", "sub1", "mentions"), graphPersonEdge("o1:m1", "account", "sub2", "mentions"),
+		graphPersonEdge("o1:m1", "project", "p1", "mentions"), graphPersonEdge("o1:m1", "project", "p9", "mentions")}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, _ := graphIndex(g)
+	edges := graphPersonEdges(g)
+	if nodes["account:sub1"].Label != "Sub One" || nodes["account:sub2"].ID != "" || len(edges) != 2 ||
+		edges["meeting:o1:m1>project:p1>mentions"] == "" || nodes["project:p9"].ID != "" {
+		t.Fatalf("nodes=%+v edges=%v", g.Nodes, edges)
+	}
+}
+
+func TestGraph_PeopleRowBoundSetsTruncated(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	for i := 0; i <= maxGraphPeopleRows; i++ {
+		repo.people = append(repo.people, graphPersonEdge("o1:m1", "member", fmt.Sprint("u", i), "speaker"))
+	}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil || !g.Truncated {
+		t.Fatalf("truncated=%v err=%v", g.Truncated, err)
+	}
+}
+
+func TestGraph_PeopleHonorSummaryGuard(t *testing.T) {
+	withPeopleSummaryGuard(t)
+	svc, repo := graphPeopleFixture()
+	c := flowEventID(84)
+	repo.contacts[c] = &model.AccountContact{ContactID: c, Name: "Kim"}
+	insight := graphPersonEdge("o1:m1", "contact", c, "mentions")
+	insight.SourceField = model.PeopleSourceInsights
+	spoken := graphPersonEdge("o1:m1", "contact", c, "speaker")
+	spoken.SourceField = model.PeopleSourceSpeakerMap
+	repo.people = []model.PeopleLink{insight, spoken}
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edges := graphPersonEdges(g); len(edges) != 1 || edges["meeting:o1:m1>contact:"+c+">speaker"] == "" {
+		t.Fatalf("edges %v", edges)
+	}
+}
+
+func TestGraph_AccountTargetReadsBounded(t *testing.T) {
+	svc, repo := graphPeopleFixture()
+	repo.accountNames = map[string]string{}
+	for i := 0; i < 3*maxGraphAccountTargets; i++ {
+		id := fmt.Sprint("sub", i)
+		repo.accountNames[id] = "Sub " + id
+		repo.people = append(repo.people, graphPersonEdge("o1:m1", "account", id, "mentions"))
+	}
+	before := repo.memberGets
+	g, err := svc.Graph(context.Background(), linkUser, linkAcct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads := repo.memberGets - before; !g.Truncated || reads > maxGraphAccountTargets+1 || len(graphPersonEdges(g)) != maxGraphAccountTargets {
+		t.Fatalf("truncated=%v memberGets=%d edges=%d", g.Truncated, reads, len(graphPersonEdges(g)))
 	}
 }

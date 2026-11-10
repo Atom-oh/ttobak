@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { accountApi } from '@/lib/api';
-import { toMermaid } from '@/lib/accountGraph';
+import { memberCountNote, toMermaid } from '@/lib/accountGraph';
 import { TRUNCATED_NOTICE } from '@/lib/accountOverview';
 import { useTheme } from '@/hooks/useTheme';
 import { ZoomPanViewport } from '@/components/markdown/ZoomPanViewport';
@@ -14,6 +14,7 @@ export function AccountGraph({ accountId, userId, refreshKey }: Props) {
   const [svg, setSvg] = useState('');
   const [source, setSource] = useState('');
   const [truncated, setTruncated] = useState(false);
+  const [memberNote, setMemberNote] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const uniqueId = useId().replace(/:/g, '-');
@@ -37,6 +38,7 @@ export function AccountGraph({ accountId, userId, refreshKey }: Props) {
         if (controller.signal.aborted) return;
         setSource(code);
         setTruncated(!!graph.truncated);
+        setMemberNote(memberCountNote(graph.memberCount));
         setSvg(rendered);
         setLoading(false);
       } catch (e) {
@@ -51,6 +53,7 @@ export function AccountGraph({ accountId, userId, refreshKey }: Props) {
   if (error) return <p role="alert" className="text-sm text-error">{error}</p>;
   return <div>
     {truncated && <p role="status" className="mb-2 text-xs text-text-secondary">{TRUNCATED_NOTICE}</p>}
+    {memberNote && <p className="mb-2 text-xs text-text-secondary">{memberNote}</p>}
     {loading && !svg && <div className="flex justify-center p-6"><div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>}
     {svg && <div className="rounded-xl border border-slate-200 bg-white dark:border-white/[0.06] dark:bg-[#0a0a0f]">
       <ZoomPanViewport resetKey={source}>
