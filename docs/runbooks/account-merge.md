@@ -48,21 +48,21 @@ it off peak and one merge at a time. It handles three kinds of rows:
   worker's meetings step.
 
 Each rewrite is one transaction with the merge fence checks (running job, CLI lease,
-source owner, requester membership of the target, open target) and is conditioned on
-`accountId` still naming A and on the row state the scan read. A lost fence stops
-the scan. A changed row is counted as `Skipped` and the scan runs again, up to three
-passes. The CLI holds the job lease from the scan through its in-process worker. If
-rows remain skipped or any row fails, it marks the job `failed` with
-`SCAN_INCOMPLETE` instead of releasing the lease, so no worker delivery can finish
-the job over rows left behind; rerun the step 2 command to restart it from its
-saved step. A calendar move also bumps the row's `shareVersion`, so a sync that read
-the row before the move fails and re-reads it. A sync authorized before the start
-that reads the row after the move can still write A back (an accepted narrow
-window): `-verify` reports such rows. Any other
-failure is counted in `errors` and by reason in `errors.decrypt`, `errors.payload`,
-`errors.encrypt` or `errors.write`, and fails the job the same way. The scan reads
-eventually consistent, so a row committed just before the start can be missed; the
-worker is not started while any observed row remains, and `-verify` reports the rest.
+source owner, requester membership of the target, open target), conditioned on
+`accountId` still naming A and the row state the scan read. A lost fence stops the
+scan. A changed row counts as `Skipped` and the scan repeats, up to three passes;
+other failures count in `errors` (by reason: `errors.decrypt`, `errors.payload`,
+`errors.encrypt`, `errors.write`). If any row stays skipped or failed, the CLI marks
+the job `failed` with `SCAN_INCOMPLETE` instead of releasing its lease, so no worker
+delivery finishes the job over rows left behind; rerun step 2 to restart it from its
+saved step. The scan is eventually consistent, so a row committed just before the
+start can be missed; `-verify` reports it.
+
+A calendar move bumps the row's `shareVersion`, so a sync that read the row before
+the move fails and re-reads it, and a sync naming a merging or merged account is
+refused with 409 `ACCOUNT_MERGING`. A sync authorized before the start that reads
+the row after the move can still write A back (an accepted narrow window);
+`-verify` reports such rows.
 
 ## 1. Preview (dry run)
 
@@ -87,8 +87,9 @@ TABLE_NAME=ttobak-main KMS_KEY_ID=KEY_ID go run ./cmd/merge-accounts \
 ```
 
 The CLI starts the job, claims the job lease as `cli-<host>-<pid>`, rewrites the
-user-partition rows under that lease, releases it, then runs the worker in this
-process until the job is `done` or `failed`. Keep the session alive; it can run a
+user-partition rows under that lease (renewed before every row), then runs the
+worker in this process as the same lease owner, without releasing the lease in
+between, until the job is `done` or `failed`. Keep the session alive; it can run a
 long time. Result fields: `state`, `step`, `errorCode`, `counts` (job counts keyed
 `{step}.{moved|skipped|resumed|unreadable|keptSeparate}`) and `userRows` (suffix
 `Moved`, `Skipped`; `errors`).
@@ -128,8 +129,6 @@ it to expire, then rerun the step 2 command (add `-scan-users` only if the scan 
 not complete). Start hands a `running` job whose lease expired to this process and
 the saved step and cursor continue. A live lease returns `JOB_RUNNING`: do not force
 it. Every mover is idempotent, so a repeated step moves nothing twice.
-
-Rerunning with `-scan-users` repeats the scan; rows already moved no longer match.
 
 A `failed` job restarts the same way from its saved step; the source stays fenced
 after a failure and nothing is rolled back. `DISPATCH_FAILED`, `MERGE_CONFLICT` and

@@ -152,6 +152,7 @@ func (f *fakeUsers) MoveSpecReqTaskRowForMerge(_ context.Context, job *model.Acc
 		return errors.New("task moved without the CLI lease")
 	}
 	f.moves = append(f.moves, "task:"+job.SourceAccountID+">"+job.TargetAccountID+postMergeTag(job))
+	*f.log = append(*f.log, "move")
 	if f.fenceTask != nil {
 		return f.fenceTask
 	}
@@ -168,6 +169,7 @@ func (f *fakeUsers) MoveCalendarEventRowForMerge(_ context.Context, job *model.A
 		return errors.New("event moved without the CLI lease")
 	}
 	f.moves = append(f.moves, "event:"+job.SourceAccountID+">"+job.TargetAccountID+postMergeTag(job))
+	*f.log = append(*f.log, "move")
 	f.cipher = ciphertext
 	return nil
 }
@@ -178,6 +180,7 @@ func (f *fakeUsers) MoveMeetingForAccountMerge(_ context.Context, job *model.Acc
 		return errors.New("meeting moved without the CLI lease")
 	}
 	f.moves = append(f.moves, "meeting:"+meetingID+postMergeTag(job))
+	*f.log = append(*f.log, "move")
 	f.refs = append(f.refs, ref)
 	return f.fence
 }
@@ -342,7 +345,7 @@ func TestMergeCLIApplyRewritesUserRowsUnderLeaseThenRunsWorker(t *testing.T) {
 	}
 	// The scan lease is never released before the worker runs: the worker
 	// claims as exactly the CLI owner and continues from it.
-	if got := strings.Join(h.log, ","); got != "claim" || h.jobs.claims[0] != cliOwner {
+	if got := strings.Join(h.log, ","); !strings.HasPrefix(got, "claim") || strings.Contains(got, "release") || h.jobs.claims[0] != cliOwner {
 		t.Fatalf("lease log %q owners %v", got, h.jobs.claims)
 	}
 	for _, owner := range h.svc.exactOwners {
@@ -715,5 +718,23 @@ func TestMergeCLIPostMergeRefusals(t *testing.T) {
 				t.Fatalf("refused post-merge run wrote: %v", h.users.moves)
 			}
 		})
+	}
+}
+
+// The lease is renewed before every row move, not only per scan page.
+func TestMergeCLIRenewsLeaseBeforeEachRow(t *testing.T) {
+	h := newHarness()
+	clock := time.Unix(1000, 0)
+	h.d.now = func() time.Time { clock = clock.Add(2 * leaseRenewAfter); return clock }
+	o := opts()
+	o.Apply = true
+	if _, err := run(context.Background(), h.d, o); err != nil {
+		t.Fatal(err)
+	}
+	log := h.log
+	for i, entry := range log {
+		if entry == "move" && (i == 0 || log[i-1] != "claim") {
+			t.Fatalf("a row moved without a renewal just before it: %v", log)
+		}
 	}
 }

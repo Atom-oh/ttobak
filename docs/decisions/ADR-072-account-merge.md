@@ -101,18 +101,16 @@ unshare. This deliberately departs from the design's rewrite of `shareAccountId`
 link-only meeting moves with the meeting writer, which writes no target
 `MEETINGREF#` row for an unpublished meeting. The scan must run inside the `-apply`
 invocation that starts or resumes the job, before it finishes; `-verify` is the
-read-only post-merge count. Rows a concurrent edit made the scan skip are re-scanned,
-and the worker is not started while any remain. A calendar move bumps the row's
-`shareVersion`, so a sync that read the row before the move fails and re-reads it.
-Accepted residual window: a sync authorized before the merge started that reads the
-row after the move can still write A back; `-verify` reports such rows. A scan that
-leaves rows behind fails the job with `SCAN_INCOMPLETE`, a persisted barrier no
-worker delivery processes, and the CLI holds the job lease from the scan through its
-in-process worker, so no delivery finishes the job in between. The CLI decrypts and re-seals calendar
-payloads in the operator's process with the operator host's existing KMS grant. A
-merge started from the web runs no user-partition scan, so its CLI-only rows stay
-on A's tombstone unless an operator runs the CLI before the job finishes; this is
-an accepted v1 limit. The CLI dry run prints the preview's `newAudience` disclosure.
+read-only post-merge count. Skipped rows are re-scanned; the CLI holds the job lease
+from the scan through its in-process worker, and a scan that leaves rows behind fails
+the job with `SCAN_INCOMPLETE`, which no delivery processes. A calendar move bumps
+`shareVersion`, defeating a sync that read the row before it, and calendar sync
+refuses an event naming a merging or merged account; a sync authorized before the
+start that reads the row after the move remains an accepted narrow window that
+`-verify` reports. The CLI re-seals calendar payloads with the operator host's
+existing KMS grant and its dry run prints the preview's `newAudience`. A merge
+started on the web runs no user-partition scan, so its CLI-only rows stay on A's
+tombstone unless an operator runs the CLI before it finishes (an accepted v1 limit).
 
 ## Consequences
 
