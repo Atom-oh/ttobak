@@ -59,7 +59,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | caption_overlay_open | lang ko/en/ja/zh (ja/zh only as the extra language); opens or reuses the window, returns its saved layout |
 | caption_overlay_close | lang; closes the window and saves it closed |
 | caption_overlay_set_style | lang, style {fontFamily, fontSize 16-160, fontColor, outlineColor, outlineWidth 0-12, backgroundOpacity 0-1}; saved and sent to the window |
-| caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it |
+| caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus |
 
 Caption command errors carry a fixed `code`: profile-missing, credentials-expired,
 model-access, rate-limited, invalid-input, invalid-output, timeout, aws-error,

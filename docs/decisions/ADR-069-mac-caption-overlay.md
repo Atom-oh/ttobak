@@ -50,7 +50,10 @@ text, which removes its line, so expired credentials mid-sentence never leave a 
 draft on the projector. Text longer than the 4,000-byte push cap is cut to its tail
 on a UTF-8 character boundary before pushing (`MAX_PUSH_TEXT_BYTES`). Skipped filler
 finals push nothing. Once an id is shown as final, later drafts for it are dropped
-because commands can emit out of order.
+because commands can emit out of order. A transparent overlay still takes clicks meant for
+the windows under it, so a `clear` push orders the window out, and a non-empty entry
+or a preview orders it back in without making it key, so focus stays with the
+slideshow.
 
 **Transparency.** `tauri.conf.json` sets `macOSPrivateApi: true` and Cargo enables
 the `macos-private-api` feature of `tauri`; windows are built `transparent`. This
