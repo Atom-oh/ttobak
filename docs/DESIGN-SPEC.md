@@ -506,13 +506,18 @@ Failures retain that draft and expose retry. Editing preserves canonical
 attachment/transcript citation IDs; signed URLs and page anchors are display
 targets only. Ordinary links and literal citation text keep their identity.
 
-The same panel shows editors a note-language select (automatic, Korean,
-English). A change saves `noteLanguage` through the meeting update and then
-offers a regenerate-in-this-language action, which sends the existing empty
-re-summary request. The select is
-disabled while a batch summary or re-summary is running, because a mid-run change
-discards that run as `SOURCE_CHANGED`. Save failures show an inline alert and
-keep the previous value.
+The re-summary panel has no note-language select or regenerate-in-language button;
+generated notes are Korean. The AI Summary card adds a Korean/English segmented
+toggle once an English note exists. The page reads `GET .../notes/en` on every visit, so a
+pending or failed first run shows its badge and retry even with no stored note. The
+English tab is a read-only `MarkdownRenderer` using the Korean view's citation
+resolver. The selected tab is per-meeting component state and is not persisted.
+Editors see a generate action (no note yet), a regenerate action (existing note)
+or a retry action (failed run); readers see none. Badges mark generating, failed and
+source-changed (`stale`) states, and polling reuses the re-summary interval and
+bound, stopping on unmount or meeting change. A failed run keeps the previous
+English note visible. Request errors map `MEETING_BUSY`, `SOURCE_NOT_READY`,
+`NO_SUMMARY_SOURCE`, `SHARING_REGEN_REQUIRED` and `OUTPUT_TOO_LARGE` to Korean text.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
@@ -524,9 +529,15 @@ independently of preparation documents, refreshes on authenticated membership
 changes, and distinguishes loading, empty results and retryable errors.
 
 Protected account readers see an explicit owner-sharing-update status while
-retaining raw notes/transcript access. Owners can confirm sharing-safe regeneration
-when the API reports it available. The confirmation explains the current-source
-inputs, omitted predecessor/prior generated evidence, replacement of existing
+retaining raw notes/transcript access. Linked previous meetings in the header and picker are plain navigation; the copy
+does not promise carried-over context.
+
+Owners see a plain "regenerate notes" action only when the API reports that
+regeneration is required and available. Its copy says the note was made the old
+way and cannot be shared individually, and that regenerating also recreates action
+items and insights; the UI has no "sharing-safe" wording. The confirmation explains
+the current-source inputs (saved notes, selected transcript, extracted documents),
+that prior generated results are not used, replacement of existing
 analysis/simulator output, failure preservation and task-completion continuity.
 Unsaved edits and active work disable the operation. Loading its verified result
 also clears obsolete generated fields from the displayed meeting.

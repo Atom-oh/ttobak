@@ -102,7 +102,8 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
         ) : (
           <ol aria-label="통역 자막" className="space-y-4">
             {translations.map((entry) => {
-              const languages = bilingual ? ['ko', 'en']
+              const fixedColumns = bilingual && (entry.sourceLang === 'ko' || entry.sourceLang === 'en');
+              const languages = fixedColumns ? ['ko', 'en']
                 : entry.sourceLang === entry.targetLang ? [entry.sourceLang]
                 : [entry.sourceLang, entry.targetLang];
               return (
@@ -128,7 +129,7 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
                   </div>
                   <div className={`grid ${languages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} gap-2 sm:gap-3`}>
                     {languages.map((language, index) => {
-                      const isOriginal = bilingual ? language === entry.sourceLang : index === 0;
+                      const isOriginal = fixedColumns ? language === entry.sourceLang : index === 0;
                       return (
                         <CaptionText
                           key={`${language}-${index}`}

@@ -261,6 +261,10 @@ export const meetingsApi = {
     api.get<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, options),
   requestResummary: (id: string, options?: { signal?: AbortSignal }) =>
     api.post<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, undefined, options),
+  getEnglishNote: (id: string, options?: { signal?: AbortSignal }) =>
+    api.get<import('@/types/meeting').EnglishNote>(`/api/meetings/${encodeURIComponent(id)}/notes/en`, options),
+  requestEnglishNote: (id: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/types/meeting').EnglishNote>(`/api/meetings/${encodeURIComponent(id)}/notes/en`, {}, options),
   requestSharingSafeResummary: (id: string, options?: { signal?: AbortSignal }) =>
     api.post<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, { sharingSafe: true }, options),
   readSummary: (id: string, cursor?: string, options?: { signal?: AbortSignal }) => {

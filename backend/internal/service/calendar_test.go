@@ -177,6 +177,20 @@ func TestCalendarSyncValidatesEntireBatchBeforeAnyIO(test *testing.T) {
 	}
 }
 
+func TestCalendarSyncRejectsBadOrganizerDomain(test *testing.T) {
+	for _, domain := range []string{"a b", "Example.com", "a@b.com", strings.Repeat("a", 254), "é.com"} {
+		svc, store, sdk, accounts := calendarFixture()
+		request := calendarRequest()
+		request.Mutations[0].Event.OrganizerDomain = domain
+		if _, err := svc.Sync(context.Background(), "owner", calendarSourceID, request); !errors.Is(err, ErrInvalidInput) {
+			test.Fatalf("domain %q accepted: %v", domain, err)
+		}
+		if len(store.batches) != 0 || sdk.encryptCalls != 0 || len(accounts.calls) != 0 {
+			test.Fatal("rejection must precede any I/O")
+		}
+	}
+}
+
 func TestCalendarSyncNormalizesRetryAndKeepsCiphertextPrivate(test *testing.T) {
 	svc, store, sdk, accounts := calendarFixture()
 	request := calendarRequest()

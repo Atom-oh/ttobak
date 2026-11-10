@@ -17,6 +17,9 @@ import { resetProactiveClaims } from '@/lib/proactiveSearch';
 import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
+import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
+import { readSidePanelPref, writeSidePanelPref } from '@/lib/recordLayoutPrefs';
+import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
@@ -160,6 +163,15 @@ function RecordPageInner() {
 
   // Mobile Q&A bottom sheet state
   const [isQAOpen, setIsQAOpen] = useState(false);
+  // Desktop side panel (Q&A / reference). Hidden with CSS, never unmounted:
+  // LiveQAPanel keeps its question history in local state. The saved choice is
+  // read after mount so server and client markup match.
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
+  useEffect(() => { setSidePanelOpen(readSidePanelPref() === 'open'); }, []);
+  const changeSidePanel = (open: boolean) => {
+    setSidePanelOpen(open);
+    writeSidePanelPref(open ? 'open' : 'closed');
+  };
   const [detectedCount, setDetectedCount] = useState(0);
   // Hoisted so the desktop aside and mobile bottom sheet ReferencePanel
   // instances share one selection -- the mobile sheet unmounts on close.
@@ -188,7 +200,18 @@ function RecordPageInner() {
   // --- Hooks ---
   const summary = useLiveSummary({ summaryInterval });
 
+  // Mac caption windows. Their hook reads the session's recording state, so
+  // it runs after useRecordingSession; the session reaches it through this
+  // ref, read only when a recording starts or a segment arrives.
+  const captionLinkRef = useRef<Pick<CaptionOverlayState, 'extraLanguage' | 'onSegment'> | null>(null);
+  const getCaptionExtraLanguage = useCallback(() => captionLinkRef.current?.extraLanguage, []);
+  const forwardCaptionSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
+    captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
+  }, []);
+
   const session = useRecordingSession({
+    getExtraLanguage: getCaptionExtraLanguage,
+    onSegment: forwardCaptionSegment,
     targetLang,
     translationEnabled,
     interimTranslation,
@@ -215,6 +238,12 @@ function RecordPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   });
+
+  const captions = useCaptionOverlay({ isRecording: session.isRecording || isNativeRecording });
+  const { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment } = captions;
+  useEffect(() => {
+    captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
+  }, [captionExtraLanguage, captionOnSegment]);
 
   const postRecording = usePostRecording({
     meetingTitle,
@@ -746,6 +775,8 @@ function RecordPageInner() {
     setQuestionDraft((current) => ({ id: (current?.id || 0) + 1, text }));
     setReferenceTab('qa');
     setIsQAOpen(true);
+    // Reopen the desktop side panel for this question without changing the saved preference.
+    setSidePanelOpen(true);
   }, []);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
@@ -1104,6 +1135,7 @@ function RecordPageInner() {
               현재 브라우저 인식은 한국어 기준입니다. 한·영 자동 인식은 AWS Streaming 연결이 필요합니다.
             </p>
           )}
+          <CaptionOverlayPanel {...captions} isRecording={session.isRecording || isNativeRecording} onExpandedChange={captions.setArranging} />
         </div>
       )}
 
@@ -1197,7 +1229,7 @@ function RecordPageInner() {
       {sourceMessage && <p role="status" className="mx-6 mt-3 text-xs text-primary">{sourceMessage}</p>}
       {postRecording.preparationError && <p role="alert" className="mx-6 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">{postRecording.preparationError}</p>}
       {/* Main Content */}
-      <div className="flex flex-1 min-h-0">
+      <div className="relative flex flex-1 min-h-0">
       <main className="flex-1 flex flex-col px-6 lg:px-8 pt-8 lg:pt-8 pb-32 lg:pb-8 overflow-y-auto">
         {user && !postRecording.step && !session.isRecording && !isNativeRecording && (
           <BrowserRecordingsCard key={user.userId} userId={user.userId} busy={meetingFlowBusy} onRestore={async (backup) => {
@@ -1788,8 +1820,36 @@ function RecordPageInner() {
       </main>
 
       {/* Desktop Side Panel: AI Q&A during recording */}
+      {session.isRecording && !sidePanelOpen && (
+        <button
+          type="button"
+          aria-label="Q&A·자료 열기"
+          aria-expanded={false}
+          aria-controls="record-side-panel"
+          onClick={() => changeSidePanel(true)}
+          className="hidden lg:flex absolute right-0 top-3 z-10 items-center justify-center w-7 h-10 rounded-l-lg border border-r-0 border-slate-200 dark:border-white/10 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
+        >
+          <span aria-hidden="true" className="material-symbols-outlined text-lg">chevron_left</span>
+        </button>
+      )}
       {session.isRecording && (
-        <aside className="hidden lg:flex w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col">
+        <aside
+          id="record-side-panel"
+          className={`${sidePanelOpen ? 'hidden lg:flex' : 'hidden'} w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col`}
+        >
+          <div className="flex justify-end px-2 pt-1 flex-shrink-0">
+            <button
+              type="button"
+              aria-label="Q&A·자료 접기"
+              aria-expanded={sidePanelOpen}
+              aria-controls="record-side-panel"
+              onClick={() => changeSidePanel(false)}
+              className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-500 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-lg">chevron_right</span>
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 flex flex-col">
           <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
             qaPanel={
               <LiveQAPanel
@@ -1813,6 +1873,7 @@ function RecordPageInner() {
               />
             }
           />
+          </div>
         </aside>
       )}
       </div>

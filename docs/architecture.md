@@ -92,7 +92,7 @@ membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
-Private linked meetings require independent publication or a separate grant;
+Linked meetings are navigation only and never note evidence (ADR-070);
 mutations remain direct-only. Billing read/upload access also follows ancestor
 membership, with an atomic path/grant confirmation (ADR-060).
 
@@ -369,6 +369,16 @@ These modules do not activate a scheduler, change legacy news results or establi
 production acceptance. Infrastructure wiring and consumer rollout remain separate
 delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).
 
+The English meeting note is an independent derivative: `SummaryRequested` with
+target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
+state, regenerates from the transcript, notes, verified documents and image
+analyses (never the Korean note) and writes only `contentEn` fields (ADR-070).
+During rollout, a summarize Lambda that predates the English path treats a
+target `en` event as Korean, finds a run-ID mismatch on `ANALYSIS#summary` and
+does nothing; the English row then expires to `INTERRUPTED`, which is retryable.
+Rolling back after English notes exist leaves Korean size guards ignoring
+`contentEn`, so a large item can fail with DynamoDB's clean item-size rejection.
+
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to
 the same summarize Lambda. Run/source/prior-item checks publish items and success
@@ -510,8 +520,7 @@ and preserves infrastructure-owned runtime config. See the
 Summary-sharing privacy is staged across the Go readers/writers and Python QA.
 Protected account views retain raw parent-owned source and invalidate derived
 history when scope changes. Activated writers snapshot parent authorization/link
-state before predecessor reads, pin predecessor bytes through publication, fence
-every new grant, and stamp new memberships. Owner-confirmed regeneration uses
+state, fence every new grant, and stamp new memberships. Owner-confirmed regeneration uses
 current own sources and atomically clears prior model outputs; later derivatives,
 simulator claims and insight copies fence the captured generation. The canonical
 index worker retains immutable revision-checked publication; activated summarizers

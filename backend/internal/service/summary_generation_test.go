@@ -37,3 +37,25 @@ func TestResummaryRejectsIncompleteModelAndEmptySources(t *testing.T) {
 		t.Fatal("empty source reached model")
 	}
 }
+
+func TestGenerateEnglishNoteUsesEnglishDirectiveWithoutKoreanNote(t *testing.T) {
+	m := &model.Meeting{MeetingID: "m", UserID: "owner", Notes: "synthetic memo", Content: "KOREAN-NOTE-BODY", NoteLanguage: model.NoteLanguageKorean}
+	request, content, writes, err := invokeNoteSourceFixture(t, m, `{"content":[{"type":"text","text":"# Meeting Notes\n\nSynthetic overview sentence."}],"stop_reason":"end_turn"}`,
+		func(s *BedrockService) (string, error) { return s.GenerateEnglishNote(context.Background(), m, nil) })
+	if err != nil || writes != 0 || content == "" {
+		t.Fatalf("content=%q writes=%d err=%v", content, writes, err)
+	}
+	if !strings.Contains(request.System, noteLanguageDirective(model.NoteLanguageEnglish)) || strings.Contains(request.System, noteLanguageDirective(model.NoteLanguageKorean)) {
+		t.Fatal("English note prompt missing the English directive")
+	}
+	if strings.Contains(request.Messages[0].Content[0].Text, "KOREAN-NOTE-BODY") || strings.Contains(request.System, "KOREAN-NOTE-BODY") {
+		t.Fatal("English note prompt contains the Korean note")
+	}
+	if !strings.Contains(request.Messages[0].Content[0].Text, m.Notes) {
+		t.Fatal("English note prompt lost saved notes")
+	}
+	s := &BedrockService{}
+	if _, err := s.GenerateEnglishNote(context.Background(), &model.Meeting{Content: "KOREAN-ONLY"}, nil); !errors.Is(err, ErrResummaryNoSource) {
+		t.Fatal("Korean note alone reached the model")
+	}
+}
