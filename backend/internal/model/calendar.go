@@ -26,7 +26,9 @@ type CalendarEvent struct {
 	StartDate string    `json:"startDate,omitempty"`
 	EndDate   string    `json:"endDate,omitempty"`
 	Location  string    `json:"location,omitempty"`
-	AccountID string    `json:"accountId,omitempty"`
+	// OrganizerDomain is the lowercase organizer email domain only.
+	OrganizerDomain string `json:"organizerDomain,omitempty"`
+	AccountID       string `json:"accountId,omitempty"`
 
 	ShareAccountID      string   `json:"shareAccountId,omitempty"`
 	ShareEvidence       []string `json:"shareEvidence,omitempty"`
@@ -46,7 +48,9 @@ type CalendarEventInput struct {
 	StartDate  string    `json:"startDate,omitempty"`
 	EndDate    string    `json:"endDate,omitempty"`
 	Location   string    `json:"location,omitempty"`
-	AccountID  string    `json:"accountId,omitempty"`
+	// OrganizerDomain is the lowercase organizer email domain only.
+	OrganizerDomain string `json:"organizerDomain,omitempty"`
+	AccountID       string `json:"accountId,omitempty"`
 
 	ShareAccountID      string   `json:"shareAccountId,omitempty"`
 	ShareEvidence       []string `json:"shareEvidence,omitempty"`

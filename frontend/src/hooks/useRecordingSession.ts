@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { SttManager, type LiveSttProvider, type TranscribeStreamingConfig } from '@/lib/sttManager';
 import { countWords } from '@/lib/speechRecognition';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
-import { MAX_TRANSLATION_ENTRIES, type TranslationEntry } from '@/lib/liveTranslation';
+import { MAX_TRANSLATION_ENTRIES, type ExtraLiveLanguage, type TranslationEntry } from '@/lib/liveTranslation';
 import { VOCABULARY_FALLBACK_NOTICE } from '@/lib/liveVocabulary';
 
 export interface TranscriptEntry {
@@ -79,6 +79,10 @@ interface UseRecordingSessionOptions {
   liveSttProvider: LiveSttProvider;
   /** Called each time a final transcript arrives with updated word count and full text */
   onTranscriptUpdate?: (totalWordCount: number, allText: string) => void;
+  /** Optional third recognition language (Mac caption windows); read when a recording starts. */
+  getExtraLanguage?: () => ExtraLiveLanguage | undefined;
+  /** Receives every live segment (interim and final), e.g. for the Mac caption windows. */
+  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
 }
 
 export function useRecordingSession({
@@ -87,6 +91,8 @@ export function useRecordingSession({
   interimTranslation = false,
   liveSttProvider,
   onTranscriptUpdate,
+  getExtraLanguage,
+  onSegment,
 }: UseRecordingSessionOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -105,6 +111,9 @@ export function useRecordingSession({
   const interimTranslationRef = useRef(interimTranslation);
   const transcriptsRef = useRef(transcripts);
   const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
+  // The manager is created once per recording, so these are read via refs.
+  const getExtraLanguageRef = useRef(getExtraLanguage);
+  const onSegmentRef = useRef(onSegment);
   const transcribeConfigRef = useRef<TranscribeStreamingConfig | null>(null);
   // Read inside the config-load effect below, which has an empty dep array
   // (it must only run once, not re-fetch on every liveSttProvider change) --
@@ -156,6 +165,8 @@ export function useRecordingSession({
   useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
   useEffect(() => { transcriptsRef.current = transcripts; }, [transcripts]);
   useEffect(() => { onTranscriptUpdateRef.current = onTranscriptUpdate; }, [onTranscriptUpdate]);
+  useEffect(() => { getExtraLanguageRef.current = getExtraLanguage; }, [getExtraLanguage]);
+  useEffect(() => { onSegmentRef.current = onSegment; }, [onSegment]);
 
   // Propagate target language changes to STT manager
   useEffect(() => {
@@ -266,6 +277,8 @@ export function useRecordingSession({
       translationEnabled,
       interimTranslation: interimTranslationRef.current,
       transcribeStreamingConfig: transcribeConfig ?? undefined,
+      extraLanguage: getExtraLanguageRef.current?.(),
+      onSegment: (id, text, isFinal, languageCode) => onSegmentRef.current?.(id, text, isFinal, languageCode),
       onReconnecting: () => {
         setSpeechError(speechErrorMessages['transcribe-stream-reconnecting']);
       },

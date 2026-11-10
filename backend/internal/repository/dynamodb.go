@@ -1070,13 +1070,14 @@ func (r *DynamoDBRepository) updateMeetingFieldsChecked(ctx context.Context, use
 						return ErrConditionFailed
 					}
 				}
-				state := parent.SummaryPrivacyState()
+				state := editedSummaryPrivacyState(parent)
+				inherited := state
 				if state == model.SummaryPrivacySafe {
-					state = model.SummaryPrivacyUnknown
+					inherited = ""
 				}
 				fields["summaryPrivacy"] = &model.SummaryPrivacy{
 					Version: model.SummaryPrivacyVersion, State: state, GenerationID: uuid.NewString(),
-					ContentSHA256: model.SummaryPrivacyHash(content), InheritedState: state,
+					ContentSHA256: model.SummaryPrivacyHash(content), InheritedState: inherited,
 				}
 			}
 		}

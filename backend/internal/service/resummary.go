@@ -355,9 +355,6 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 	}
 	documents := 0
 	for _, att := range snapshot.Attachments {
-		if snapshot.SharingSafe && att.Type != model.AttachTypeDocument {
-			continue
-		}
 		if att.Type == model.AttachTypeDocument && attachmentFormat(att.OriginalKey) != "" &&
 			resummaryDocumentReady(snapshot.Meeting, &att, snapshot.TextStates[att.AttachmentID]) {
 			documents++
@@ -369,10 +366,8 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 	}
 	attachments := make([]model.Attachment, 0, len(snapshot.Attachments))
 	for _, att := range snapshot.Attachments {
-		if snapshot.SharingSafe {
-			if att.Type != model.AttachTypeDocument {
-				continue
-			}
+		if snapshot.SharingSafe && att.Type == model.AttachTypeDocument {
+			// Document text comes only from the verified current extraction below.
 			att.ProcessedContent, att.Description, att.ExtractedText = "", "", nil
 		}
 		if att.Type == model.AttachTypeDocument && attachmentFormat(att.OriginalKey) != "" {
@@ -398,9 +393,10 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 			att.ExtractedRevision = attachmentRevision(state)
 			bindings = append(bindings, model.SummaryObject{Bucket: result.Source.Bucket, Key: result.Source.Key, ETag: result.Source.ETag})
 		}
-		if snapshot.SharingSafe {
+		if snapshot.SharingSafe && att.Type == model.AttachTypeDocument {
 			// Only the verified current DOCUMENT extraction is model
-			// evidence. Old image/preview summaries are not declassified.
+			// evidence; old preview summaries are not declassified. Image
+			// analyses are the user's own attachments and stay evidence.
 			att.ProcessedContent, att.Description = "", ""
 			if att.ExtractedText == nil {
 				att.SummaryOmitted = true

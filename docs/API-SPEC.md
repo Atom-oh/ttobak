@@ -35,14 +35,16 @@ Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
 - `{"op":"upsert","event":{...}}`: required `externalId`, `title`, `startsAt`,
   `endsAt`, `timeZone`; optional `isAllDay`, `startDate`, `endDate`, `location`,
-  `accountId`, `shareAccountId`, `shareEvidence`, `candidateAccountIds`,
+  `organizerDomain`, `accountId`, `shareAccountId`, `shareEvidence`, `candidateAccountIds`,
   `private`, `seriesKey`. IDs/titles are nonblank and at most 512 UTF-8 bytes; location is
   at most 256 and timeZone at most 128. Time zones must be IANA/UTC, not `Local`.
   All-day events require date-only start and exclusive end matching local
   midnight instants; timed events omit those dates. The encoded event payload
   must fit 4096 bytes. Account IDs match `[A-Za-z0-9_-]{1,128}` and require current
-  caller access. Body, attendees, provider credentials and arbitrary metadata
-  are not accepted.
+  caller access. `organizerDomain` is only the lowercase organizer email domain
+  (`^[a-z0-9.-]{1,253}$`); the organizer's name and local part are never sent, and
+  `GET /api/calendar/events` returns it when present. Body, attendees, provider
+  credentials and arbitrary metadata are not accepted.
 - `{"op":"remove","externalId":"..."}`: explicit removal of that source's
   occurrence. The same ID/text bounds apply. No absence-based deletion occurs,
   including for empty `mutations` with `complete:true`.
@@ -56,7 +58,7 @@ batch. On a definitive 409 refetch source status and reconcile before new work;
 never blindly rebase old mutations. Provider checkpoint ownership is local.
 
 Event responses contain `eventId`, `sourceId`, `provider:"outlook"`, `title`,
-`startsAt`, `endsAt`, `timeZone`, `isAllDay`, and optional date/location/account
+`startsAt`, `endsAt`, `timeZone`, `isAllDay`, and optional date/location/`organizerDomain`/account
 fields; they omit `externalId`. Instants are normalized to UTC. Event reads use
 overlap with the half-open requested window and default/cap at 50 rows.
 Source reads default/cap at 20 (query limits 1–50 are accepted, capped to 20).
@@ -99,6 +101,69 @@ scheduled at 90 days after event end and receipts at seven days. TTL is
 asynchronous, not a deletion SLA. No source-delete endpoint is implemented.
 Repository code and synthetic fixtures do not certify deployed/provider
 acceptance or the Calendar 5 persisted integration.
+
+## SA performance
+
+Owner-only SA performance data ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)).
+Routes are in `backend/internal/handler/performance.go`, validation in
+`backend/internal/service/performance.go`, and wire types in
+`backend/internal/model/performance.go`. Every route reads or writes only the
+verified JWT caller's own `USER#` partition; no path, query or body field names a
+user. No account-membership, admin or Billing read path reaches these rows, and
+there is no share action. They are not delegated connector operations. The
+server never calls SFDC or other internal MCP servers; only the owner's Mac
+runner collects and syncs.
+
+| Route | Request | Success |
+|---|---|---|
+| `POST /api/performance/sources/{source}/sync` | `source` is `sfdc-assignments` or `sfdc-tasks`; JSON `batchId`, `expectedRevision`, `complete`, `mutations` | `200` receipt: `revision`, `completed`, `upserted`, `removed` |
+| `GET /api/performance/sources` | none | `{sources:[{source,revision,lastAttemptAt?,lastCompletedAt?}]}`, one entry per source; never-synced sources report revision 0 |
+| `GET /api/performance/goals?year=YYYY` | `year` within previous/current/next year | `{year,text,updatedAt}`; empty text when unset |
+| `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
+| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
+| `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
+| `GET /api/performance/missed` | optional `period` = `week`, `quarter` or `year` | `{items:[]}` until the missed-item rules are implemented |
+
+Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
+trailing data and unsupported query parameters are rejected. A sync batch has at
+most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
+lowercase); `expectedRevision` is the source's current revision (zero when new).
+
+- Assignment upsert (`sfdc-assignments` only): `sfdcAccountId`, `name` (at most
+  200 bytes) and `role` (at most 64 bytes). An owner keeps at most 500
+  assignments: a batch raising the stored count above 500 (current plus new IDs
+  minus removes) returns `400 BAD_REQUEST`; updates and removes always pass.
+  The check is read-then-write, so concurrent batches may overshoot by 20 each.
+- Task upsert (`sfdc-tasks` only): `taskId`, optional `sfdcAccountId` (an
+  accountless task is kept and stays unmapped), `activityDate`, `type`,
+  `subject` (at most 300 bytes), `status`, optional `specReqId`. Type and
+  status are at most 64 bytes. `activityDate` is a real `YYYY-MM-DD` date from
+  January 1 of the previous UTC year through one year after today.
+  Descriptions and comments are not accepted.
+- Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
+  or task ID.
+
+The mappings list reads at most 501 assignment rows (no cursor), returns the
+first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
+retained mapping rows never hide a mapping.
+
+IDs match `[A-Za-z0-9_-]{1,64}`. The service hashes the normalized request
+(SHA-256 of its canonical JSON); an identical batch replays its receipt within
+seven days, and a reused `batchId` with a different payload or a stale revision
+returns `409 CONFLICT`.
+
+A mapping write requires that the caller can currently read the target Account
+(`AccountService.GetAccount`; otherwise `403 FORBIDDEN`) and that the SFDC
+account is in the caller's own assignments (otherwise `404 NOT_FOUND`). Manual
+mappings always win over automatic ones. Unmapped assignments are listed with
+`mapped:false`, never guessed.
+
+Residency: rows use default table encryption without envelope sealing (an
+ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
+two years after their own year through `pendingShareExpiresAt`; batch receipts
+expire after seven days. Errors use `{error:{code,message}}` with `400`, `401`,
+`403`, `404`, `409`, `413` and `500`, as for the private calendar. Responses use
+`Cache-Control: private, no-store`.
 
 ## SpecReq tasks
 
@@ -527,9 +592,9 @@ other value, including case variants, returns 400 `BAD_REQUEST`. An explicit `""
 returns the meeting to automatic; an omitted field preserves the stored value,
 and an unchanged value is not written. It cannot be combined with an
 `expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
-(`""` for legacy rows). Batch and saved-source summaries map it to a fixed prompt
-directive (`noteLanguageDirective`); automatic keeps the historical "Korean unless
-the transcript is entirely English" rule. Both summary captures pin the field in
+(`""` for legacy rows). The field is stored and accepted but no longer
+affects generation: Korean final notes always use the Korean directive
+(`noteLanguageDirective`, ADR-070). Both summary captures still pin the field in
 their source conditions, so a change during a run fails that run with
 `SOURCE_CHANGED` and keeps the prior summary.
 
@@ -1794,6 +1859,13 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/calendar/sources/{sourceId}/sync` | `calendarHandler.Sync` |
 | GET | `/api/calendar/sources` | `calendarHandler.ListSources` |
 | GET | `/api/calendar/events` | `calendarHandler.ListEvents` |
+| POST | `/api/performance/sources/{source}/sync` | `performanceHandler.Sync` |
+| GET | `/api/performance/sources` | `performanceHandler.ListSources` |
+| GET | `/api/performance/goals` | `performanceHandler.GetGoals` |
+| PUT | `/api/performance/goals` | `performanceHandler.PutGoals` |
+| GET | `/api/performance/mappings` | `performanceHandler.ListMappings` |
+| PUT | `/api/performance/mappings/{sfdcAccountId}` | `performanceHandler.PutMapping` |
+| GET | `/api/performance/missed` | `performanceHandler.ListMissed` |
 | GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
@@ -2229,8 +2301,10 @@ persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
 saved summary text.
 
 The explicit owner `sharingSafe` mode uses the selected saved transcript, saved
-notes and verified current DOCUMENT extraction. It excludes predecessor and prior
-generated/image/preview evidence. Mode is persisted and pinned through delivery.
+notes, verified current DOCUMENT extraction and the owner's own image analyses.
+It excludes prior generated and preview evidence; no mode reads linked
+predecessors (ADR-070). It is the owner-only reset; ordinary human edits keep
+`safe` provenance and need no reset. Mode is persisted and pinned through delivery.
 Success atomically publishes safe provenance, resets tasks/insights/tags/sentiment/
 live draft, and deletes action-analysis and simulator state. Source/edit-grant CAS
 preserves concurrent human edits; failures retain old content and provenance.
@@ -2245,9 +2319,8 @@ server draft meeting ID. A browser-only `meeting_<epoch ms>` ID is still accepte
 without a meeting check during the frontend rollout; remove that allowance once the
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
-verified document extraction, and writes notes in the meeting's stored
-`noteLanguage`; the POST body never selects a language. Change the language
-through the meeting update first, then request a re-summary. It does not rerun STT or refinement and does not
+verified document extraction, and writes Korean notes; the POST body never selects a language and the stored `noteLanguage`
+does not change it (ADR-070). It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;

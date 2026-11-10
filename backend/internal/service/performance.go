@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -49,6 +50,7 @@ type PerformanceStore interface {
 	// GetAccountMappings returns the mappings for exactly the given SFDC IDs.
 	GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error)
 	PutAccountMapping(ctx context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error
+	DeleteAccountMappingIfAutomatic(ctx context.Context, userID, sfdcAccountID string) error
 	GetPerformanceGoals(ctx context.Context, userID string, year int) (*model.PerformanceGoals, error)
 	PutPerformanceGoals(ctx context.Context, userID string, goals model.PerformanceGoals) error
 }
@@ -110,7 +112,26 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 			return nil, err
 		}
 	}
-	return svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, digest)
+	receipt, err := svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, digest)
+	if err != nil {
+		return nil, err
+	}
+	if source == model.PerformanceSourceSFDCAssignments && !receipt.Replayed {
+		// The sync is committed; mapping failures must not undo it. Removals are
+		// deleted post-commit (not inside the batch transaction, which would need
+		// a repository change) for every batch, complete or not, so an assignment
+		// removed in a non-final batch cannot orphan its automatic mapping. The
+		// delete is conditional on manual = false and never touches manual rows.
+		if err := svc.deleteRemovedAutoMappings(ctx, userID, removedAssignmentIDs(normalized)); err != nil {
+			log.Printf("performance removed mapping cleanup failed: %v", err)
+		}
+		if normalized.Complete {
+			if err := svc.autoMapAssignments(ctx, userID, nil); err != nil {
+				log.Printf("performance auto mapping failed: %v", err)
+			}
+		}
+	}
+	return receipt, nil
 }
 
 // checkAssignmentCap rejects a batch that takes the stored count (current plus

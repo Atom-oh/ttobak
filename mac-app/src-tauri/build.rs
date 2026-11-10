@@ -20,6 +20,13 @@ const COMMANDS: &[&str] = &[
     "meeting_detection_respond",
     "meeting_prompt_choose",
     "update_prompt_choose",
+    "caption_settings_get",
+    "caption_settings_set",
+    "caption_translate",
+    "caption_overlay_open",
+    "caption_overlay_close",
+    "caption_overlay_set_style",
+    "caption_overlay_push",
 ];
 
 fn main() {

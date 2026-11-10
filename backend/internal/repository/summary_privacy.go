@@ -141,76 +141,6 @@ func (r *DynamoDBRepository) CaptureSummaryPrivacy(ctx context.Context, ownerID,
 	}))
 }
 
-// Called before any model invocation. Account publication itself is sufficient
-// to skip private predecessors, even before any member/share cache row exists.
-// Account-origin caches on an unshared meeting do not confer read access.
-func (r *DynamoDBRepository) BindLinkedSummarySources(ctx context.Context, snapshot *model.SummarySnapshot) error {
-	if !validSummarySnapshot(snapshot) {
-		return ErrConditionFailed
-	}
-	for _, field := range summaryPrivacyFields {
-		if _, ok := snapshot.Checks[0].Fields[field]; !ok {
-			return ErrConditionFailed
-		}
-	}
-	meeting := snapshot.Meeting
-	if snapshot.SharingSafe || meeting.SharedToAccount || len(meeting.LinkedMeetingIDs) == 0 {
-		return nil
-	}
-	if len(meeting.LinkedMeetingIDs) > 3 {
-		return ErrSummaryLimit
-	}
-	shares, err := r.ListSharesForMeetingConsistent(ctx, meeting.MeetingID)
-	if err != nil {
-		return err
-	}
-	for _, share := range shares {
-		if share.SharedToID != meeting.UserID && share.Origin != model.ShareOriginAccount {
-			return nil
-		}
-	}
-	seen := map[string]bool{meeting.MeetingID: true}
-	for _, id := range meeting.LinkedMeetingIDs {
-		if id == "" || seen[id] {
-			return ErrSummaryAccess
-		}
-		seen[id] = true
-		pk, sk := model.PrefixUser+meeting.UserID, model.PrefixMeeting+id
-		row, err := r.summaryRow(ctx, pk, sk)
-		if err != nil {
-			return err
-		}
-		check, err := summaryCheck(pk, sk, row, []string{"meetingId", "userId", "title", "content", "actionItems", "summaryPrivacy"})
-		if err != nil {
-			return err
-		}
-		// Pin absent/empty sources too: a predecessor appearing during
-		// generation requires a fresh attempt, not retroactive source binding.
-		snapshot.Checks = append(snapshot.Checks, check)
-		if !check.Exists {
-			continue
-		}
-		source, err := r.captureMeetingSummaryFromRow(row, meeting.UserID, id)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(source.Content) == "" {
-			continue
-		}
-		snapshot.LinkedSources = append(snapshot.LinkedSources, model.LinkedSummarySource{
-			MeetingID: id, Title: source.Title, Content: source.Content, ActionItems: source.ActionItems,
-		})
-	}
-	body, err := json.Marshal(snapshot.Checks)
-	if err != nil {
-		return err
-	}
-	if len(body) > 1024*1024 {
-		return ErrSummaryLimit
-	}
-	return nil
-}
-
 // A grant and the revision increment are one transaction item alongside the
 // actual recipient/cache writes. Parent conditions include exact provenance,
 // content, relation set and derivative values observed before the grant.
@@ -256,6 +186,18 @@ func summaryPublicationPrivacy(snapshot *model.SummarySnapshot, content string) 
 			ActionItemsSHA256: model.SummaryPrivacyHash(source.ActionItems)})
 	}
 	return result
+}
+
+// editedSummaryPrivacyState is the state kept when an owner/editor writes
+// content or liveSummary. A human edit preserves safe; private and unknown
+// stay sticky. A row with no provenance and no generated derivatives has
+// nothing that could have consumed private sources, so its first write is
+// safe. Nil provenance with any existing derivative stays unknown.
+func editedSummaryPrivacyState(parent *model.Meeting) string {
+	if parent.SummaryPrivacy == nil && !parent.HasSummaryDerivatives() {
+		return model.SummaryPrivacySafe
+	}
+	return parent.SummaryPrivacyState()
 }
 
 func summaryPrivacyRevisionUpdate(update expression.UpdateBuilder) expression.UpdateBuilder {

@@ -22,5 +22,5 @@ func (s *BedrockService) GenerateResummary(ctx context.Context, meeting *model.M
 	if !hasSource {
 		return "", ErrResummaryNoSource
 	}
-	return s.generateSummarySnapshot(ctx, meeting, attachments, "", true)
+	return s.generateSummarySnapshot(ctx, meeting, attachments, "", true, model.NoteLanguageKorean)
 }
