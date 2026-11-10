@@ -27,6 +27,7 @@
 //! `docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md`.
 
 mod audio;
+mod caption_model;
 mod control;
 mod control_proto;
 mod error;
