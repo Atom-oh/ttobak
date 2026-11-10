@@ -10,7 +10,8 @@ import { CALENDAR_TOOL, SCOPE_PATTERN, runCalendar, type CalendarCounts } from '
 import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type TaskConnectorId } from './connectors.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
-import { McpSession, resultJson } from './mcp-client.js';
+import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
+import { SFDC_TOOLS, runSfdc, type SfdcCounts } from './sfdc.js';
 import { IntakeStore } from './store.js';
 import { runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
 
@@ -24,6 +25,8 @@ export interface Selection {
   slack?: ConnectorSelection;
   calendar?: { host: HostId; server: string; sourceId: string; pathDirs: string[]; selectedAt: string;
     acceptUnknownSensitivity?: boolean };
+  /** The SA performance connector keeps its own source and ledger, like calendar. */
+  sfdc?: ConnectorSelection & { sourceId: string };
   ttobak?: { apiUrl: string; cognitoDomain: string; clientId: string; userPoolId?: string };
 }
 
@@ -38,6 +41,15 @@ export interface RunStatus {
     counts?: CalendarCounts;
     revision?: number | null;
     /** Scope of the last sync; a dry run plans against that ledger. */
+    scope?: string;
+  };
+  sfdc?: {
+    lastRunAt: string;
+    lastSuccessAt?: string;
+    result: 'ok' | IntakeCode;
+    dryRun: boolean;
+    counts?: SfdcCounts;
+    revisions?: Record<string, number | null>;
     scope?: string;
   };
 }
@@ -82,9 +94,11 @@ export function tokenEmail(idToken: string): string {
 const USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
+  ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
   ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
     (a synced run also runs the SpecReq task step when meetings and specreq are selected)
+  ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
   ttobak-mcp intake status`;
 
 function flags(args: string[], allowed: Record<string, 'value' | 'flag'>): Record<string, string | true> {
@@ -118,11 +132,12 @@ function definedTtobakEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith('TTOBAK_') && value));
 }
 
-async function openCalendarSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[]) {
+async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
+  tools: readonly ToolExpectation[]) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [CALENDAR_TOOL.name] });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: tools.map(tool => tool.name) });
   try {
-    await session.requireTool(CALENDAR_TOOL);
+    for (const tool of tools) await session.requireTool(tool);
   } catch (error) {
     await session.close();
     throw error;
@@ -159,17 +174,34 @@ async function selectTaskConnector(connector: TaskConnectorId, args: string[], e
 
 async function select(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
   if (isTaskConnector(args[0])) return selectTaskConnector(args[0], args.slice(1), environment, store);
-  if (args[0] !== 'calendar') throw new IntakeError('INVALID_ARGUMENT', 'connector must be calendar, meetings, specreq or slack');
-  const options = flags(args.slice(1), { '--host': 'value', '--server': 'value', '--accept-unknown-sensitivity': 'flag' });
+  const connector = args[0];
+  if (connector !== 'calendar' && connector !== 'sfdc') {
+    throw new IntakeError('INVALID_ARGUMENT', 'connector must be calendar, sfdc, meetings, specreq or slack');
+  }
+  const options = flags(args.slice(1), connector === 'calendar'
+    ? { '--host': 'value', '--server': 'value', '--accept-unknown-sensitivity': 'flag' }
+    : { '--host': 'value', '--server': 'value' });
   const host = options['--host'] as HostId;
   const server = options['--server'] as string;
   if (!HOSTS.includes(host) || typeof server !== 'string') throw new IntakeError('INVALID_ARGUMENT', '--host and --server are required');
   // The approved PATH is the one of the terminal running this command; it is
   // stored because background runs get a minimal environment.
   const pathDirs = parsePathList(environment.env.PATH);
-  const session = await openCalendarSession(environment, host, server, pathDirs);
+  const session = await openSession(environment, host, server, pathDirs,
+    connector === 'calendar' ? [CALENDAR_TOOL] : SFDC_TOOLS);
   await session.close();
   const previous = store.read<Selection>('selection.json');
+  // Terminal env wins; otherwise the host's own TTOBAK server entry supplies
+  // the endpoints, then the previous selection.
+  const ttobak = ttobakConfig(previous, { ...hostTtobakEndpoints(environment.home, host), ...definedTtobakEnv(environment.env) });
+  if (connector === 'sfdc') {
+    const sourceId = previous?.sfdc?.server === server ? previous.sfdc.sourceId : randomUUID();
+    // The other connector's selection is kept.
+    store.write({ ...previous, version: 1,
+      sfdc: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString() }, ttobak } satisfies Selection,
+    'selection.json');
+    return { ok: true, connector, host, server, sourceId, pathDirectories: pathDirs.length };
+  }
   // The same server name reads the same mailbox, so its ledger stays valid when
   // the user switches hosts. Another server gets a new source.
   const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID();
@@ -178,12 +210,33 @@ async function select(args: string[], environment: IntakeEnvironment, store: Int
     version: 1,
     calendar: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString(),
       ...(options['--accept-unknown-sensitivity'] ? { acceptUnknownSensitivity: true } : {}) },
-    // Terminal env wins; otherwise the host's own TTOBAK server entry supplies
-    // the endpoints, then the previous selection.
-    ttobak: ttobakConfig(previous, { ...hostTtobakEndpoints(environment.home, host), ...definedTtobakEnv(environment.env) }),
+    ttobak,
   };
   store.write(selection, 'selection.json');
   return { ok: true, connector: 'calendar', host, server, sourceId, pathDirectories: pathDirs.length };
+}
+
+/** The TTOBAK API and account scope of a real run; a dry run only uses the test seam. */
+async function signIn(selection: Selection | null, environment: IntakeEnvironment, dryRun: boolean, noninteractive: boolean) {
+  let api = environment.api;
+  let scope = environment.scope;
+  let me = environment.me;
+  if (!dryRun && !api) {
+    const config = ttobakConfig(selection, environment.env);
+    const auth = new CognitoAuth(config, { interactive: !noninteractive });
+    api = new TtobakApi(auth, config.apiUrl);
+    let idToken: string;
+    try { idToken = await auth.getIdToken(); } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (message.startsWith('TTOBAK_LOGIN_REQUIRED')) throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
+      throw error;
+    }
+    // The ledger and any pending batch belong to this deployment and user.
+    const subject = tokenSubject(idToken);
+    scope = accountScope(config.apiUrl, subject);
+    try { me = { email: tokenEmail(idToken), userId: subject }; } catch { me = undefined; }
+  }
+  return { api, scope, me };
 }
 
 /**
@@ -225,28 +278,11 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
   try {
     // Inside the try: an unreadable status file must still release the lock.
     status = store.read<RunStatus>('status.json') ?? {};
-    let api = environment.api;
-    let scope = environment.scope;
-    let me = environment.me;
-    if (!dryRun && !api) {
-      const config = ttobakConfig(selection, environment.env);
-      const auth = new CognitoAuth(config, { interactive: options['--noninteractive'] !== true });
-      api = new TtobakApi(auth, config.apiUrl);
-      let idToken: string;
-      try { idToken = await auth.getIdToken(); } catch (error) {
-        const message = error instanceof Error ? error.message : '';
-        if (message.startsWith('TTOBAK_LOGIN_REQUIRED')) throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
-        throw error;
-      }
-      // The ledger and any pending batch belong to this deployment and user.
-      const subject = tokenSubject(idToken);
-      scope = accountScope(config.apiUrl, subject);
-      try { me = { email: tokenEmail(idToken), userId: subject }; } catch { me = undefined; }
-    }
+    let { api, scope, me } = await signIn(selection, environment, dryRun, options['--noninteractive'] === true);
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
-    session = await openCalendarSession(environment, selected.host, selected.server, selected.pathDirs);
+    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, [CALENDAR_TOOL]);
     const active = session;
     const result = await runCalendar({
       store, api, sourceId: selected.sourceId, scope, zone: environment.zone, now: startedAt, dryRun,
@@ -300,6 +336,47 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
   }
 }
 
+async function sfdc(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
+  const options = flags(args, { '--dry-run': 'flag', '--noninteractive': 'flag', '--reconcile': 'flag' });
+  const dryRun = options['--dry-run'] === true;
+  const selection = store.read<Selection>('selection.json');
+  const selected = selection?.sfdc;
+  if (!selected) throw new IntakeError('NOT_SELECTED', 'run "intake select sfdc" first');
+  const release = store.lock('sfdc');
+  const startedAt = environment.now();
+  let session: McpSession | undefined;
+  // Re-read right before each write: a calendar run may have updated its own entry meanwhile.
+  const writeStatus = (entry: NonNullable<RunStatus['sfdc']>) => {
+    const status = store.read<RunStatus>('status.json') ?? {};
+    store.write({ ...status, sfdc: entry }, 'status.json');
+  };
+  let previous: RunStatus['sfdc'];
+  try {
+    previous = store.read<RunStatus>('status.json')?.sfdc;
+    let { api, scope } = await signIn(selection, environment, dryRun, options['--noninteractive'] === true);
+    if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
+    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
+    const active = session;
+    const result = await runSfdc({
+      store, api, sourceId: selected.sourceId, scope, now: startedAt, dryRun, reconcile: options['--reconcile'] === true,
+      source: { call: async (tool, request) => resultJson(await active.call(tool, request), tool) },
+    });
+    const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
+    writeStatus({ lastRunAt: startedAt.toISOString(), result: 'ok', dryRun, counts: result.counts,
+      revisions: result.revisions, ...(scope ? { scope } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}) });
+    return { ok: true, connector: 'sfdc', dryRun, counts: result.counts };
+  } catch (error) {
+    const entry: NonNullable<RunStatus['sfdc']> = { ...(previous ?? {}), lastRunAt: startedAt.toISOString(),
+      result: intakeCode(error), dryRun };
+    delete entry.counts;
+    try { writeStatus(entry); } catch { /* the original error matters more */ }
+    throw error;
+  } finally {
+    await session?.close();
+    release();
+  }
+}
+
 export async function runIntake(args: string[], environment: IntakeEnvironment): Promise<number> {
   const store = new IntakeStore(environment.home);
   try {
@@ -309,10 +386,11 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
       output = { ok: true, hosts: listHosts(environment.home, parsePathList(environment.env.PATH)) };
     } else if (command === 'select') output = await select(rest, environment, store);
     else if (command === 'calendar') output = await calendar(rest, environment, store);
+    else if (command === 'sfdc') output = await sfdc(rest, environment, store);
     else if (command === 'status' && rest.length === 0) {
       const selection = store.read<Selection>('selection.json');
       const listed: Record<string, { host: HostId; server: string }> = {};
-      for (const id of ['calendar', 'meetings', 'specreq', 'slack'] as const) {
+      for (const id of ['calendar', 'sfdc', 'meetings', 'specreq', 'slack'] as const) {
         const entry = selection?.[id];
         if (entry) listed[id] = { host: entry.host, server: entry.server };
       }

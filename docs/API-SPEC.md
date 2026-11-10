@@ -35,14 +35,16 @@ Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
 - `{"op":"upsert","event":{...}}`: required `externalId`, `title`, `startsAt`,
   `endsAt`, `timeZone`; optional `isAllDay`, `startDate`, `endDate`, `location`,
-  `accountId`, `shareAccountId`, `shareEvidence`, `candidateAccountIds`,
+  `organizerDomain`, `accountId`, `shareAccountId`, `shareEvidence`, `candidateAccountIds`,
   `private`, `seriesKey`. IDs/titles are nonblank and at most 512 UTF-8 bytes; location is
   at most 256 and timeZone at most 128. Time zones must be IANA/UTC, not `Local`.
   All-day events require date-only start and exclusive end matching local
   midnight instants; timed events omit those dates. The encoded event payload
   must fit 4096 bytes. Account IDs match `[A-Za-z0-9_-]{1,128}` and require current
-  caller access. Body, attendees, provider credentials and arbitrary metadata
-  are not accepted.
+  caller access. `organizerDomain` is only the lowercase organizer email domain
+  (`^[a-z0-9.-]{1,253}$`); the organizer's name and local part are never sent, and
+  `GET /api/calendar/events` returns it when present. Body, attendees, provider
+  credentials and arbitrary metadata are not accepted.
 - `{"op":"remove","externalId":"..."}`: explicit removal of that source's
   occurrence. The same ID/text bounds apply. No absence-based deletion occurs,
   including for empty `mutations` with `complete:true`.
@@ -56,7 +58,7 @@ batch. On a definitive 409 refetch source status and reconcile before new work;
 never blindly rebase old mutations. Provider checkpoint ownership is local.
 
 Event responses contain `eventId`, `sourceId`, `provider:"outlook"`, `title`,
-`startsAt`, `endsAt`, `timeZone`, `isAllDay`, and optional date/location/account
+`startsAt`, `endsAt`, `timeZone`, `isAllDay`, and optional date/location/`organizerDomain`/account
 fields; they omit `externalId`. Instants are normalized to UTC. Event reads use
 overlap with the half-open requested window and default/cap at 50 rows.
 Source reads default/cap at 20 (query limits 1–50 are accepted, capped to 20).
