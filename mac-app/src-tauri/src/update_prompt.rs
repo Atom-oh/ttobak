@@ -40,9 +40,15 @@ pub fn centered_x(screen_x: f64, screen_width: f64) -> f64 {
     screen_x + ((screen_width - WIDTH) / 2.0).max(0.0)
 }
 
-/// Opens the popup for `version`, replacing any earlier one.
+/// Opens the popup for `version`. An already-open popup is focused and left
+/// alone: closing and rebuilding under the same label races the async close
+/// and could drop the window mid-download.
 pub fn offer(app: &AppHandle, version: &str, notes: &str) {
-    close(app);
+    if let Some(w) = app.get_webview_window(WINDOW_LABEL) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
     let (x, y) = match app.primary_monitor() {
         Ok(Some(m)) => {
             let scale = m.scale_factor();
