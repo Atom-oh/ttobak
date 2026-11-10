@@ -90,14 +90,11 @@ event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
 use the Account ID format and differ from each other; `shareEvidence` holds up to
 three distinct kinds (`title`, `location`, `domain`) and requires
 `shareAccountId`; `private` excludes both; `seriesKey` is 64 lowercase hex.
-No share rows are written yet. Owner event views report `sharingMode:"auto"`,
-`candidateAccountIds` and `private`; `shareAccountId` and `shareEvidence` appear
-only once a stored share is granted.
 
 Rollback boundary: API builds older than this contract reject a stored event
 carrying any of these fields as corrupt, failing every event page that contains
 it. Do not roll the API Lambda back past this contract once a client has sent
-sharing fields; the intake runner sends them only from a later release.
+sharing fields.
 
 Errors use `{error:{code,message}}`: `400 BAD_REQUEST` for invalid input/cursor,
 `401 UNAUTHORIZED` for missing authentication, `403 FORBIDDEN` for denied access,

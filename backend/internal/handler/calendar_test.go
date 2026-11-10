@@ -346,12 +346,20 @@ func (store *calendarMemoryStore) ListCalendarEventRows(context.Context, string,
 	return &repository.CalendarRowPage{Rows: store.rows, RowCursors: make([]string, len(store.rows))}, nil
 }
 
+func (*calendarMemoryStore) GetCalendarEventRow(context.Context, string, string, string) (*repository.CalendarEventRow, error) {
+	return nil, nil
+}
+
+func (*calendarMemoryStore) GetCalendarOverride(context.Context, string, string, string) (*repository.CalendarOverrideRow, error) {
+	return nil, nil
+}
+
 func TestCalendarHTTPOrganizerDomainRoundTrips(test *testing.T) {
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
 	store := &calendarMemoryStore{}
 	handler := NewCalendarHandler(service.NewCalendarService(store,
-		service.NewCalendarCipher(persistedCalendarKMS{cipher: gcm}, "synthetic-calendar-key"), persistedCalendarAccounts{}))
+		service.NewCalendarCipher(persistedCalendarKMS{cipher: gcm}, "synthetic-calendar-key"), persistedCalendarAccounts{}, nil))
 	router := chi.NewRouter()
 	router.Post("/sync/{sourceId}", handler.Sync)
 	router.Get("/events", handler.ListEvents)
