@@ -32,6 +32,8 @@ export const DRAFTS_MAX = 10;
 const SEEN_RETENTION_MS = 120 * 24 * 60 * 60 * 1000;
 /** A request_needed notice waits this long for a draft outcome, then goes out copy-only. */
 export const DRAFT_NOTICE_WAIT_MS = 60 * 60 * 1000;
+/** Consecutive unknown attendee reads before an occurrence is skipped for good. */
+export const UNKNOWN_ATTENDEES_MAX = 3;
 const EVENT_ID = /^[0-9a-f]{64}$/;
 const STATES: readonly SpecReqTaskState[] = ['issue_needed', 'issued', 'request_needed', 'requested', 'acked',
   'ack_failed', 'resolved', 'needs_account', 'needs_owner', 'closed'];
@@ -76,7 +78,7 @@ export interface TaskRunOptions {
   sessions: { meetings?: McpSession; specreq?: McpSession; slack?: McpSession };
   /** Selected connectors whose session could not be opened, with the code. */
   unavailable?: Partial<Record<TaskConnectorId, IntakeCode>>;
-  calendar: { upserted: OutlookItem[]; removedExternalIds: string[] };
+  calendar: { upserted: OutlookItem[] };
   me: { email: string; userId: string };
 }
 
@@ -104,6 +106,10 @@ interface SeenState {
   refreshed: Record<string, string>;
   /** When each request_needed task first waited for a draft outcome. */
   requestDue: Record<string, string>;
+  /** Consecutive unknown attendee reads per pending occurrence. */
+  unknown: Record<string, number>;
+  /** Ledger occurrences at the last task step (eventId -> endsAt); a later absence is a removal. */
+  tracked?: Record<string, string>;
 }
 
 interface AccountInfo { name: string; members: MemberView[] }
@@ -157,14 +163,18 @@ function seenPath(scope: string): string[] {
 
 function loadSeen(store: IntakeStore, scope: string): SeenState {
   const raw = store.read<SeenState>(...seenPath(scope));
-  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {} };
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {}, unknown: {} };
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (raw.version !== 1 || !record(raw.seen) || !record(raw.pending) || !record(raw.closing)) {
     throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   }
   raw.refreshed ??= {};
   raw.requestDue ??= {};
-  if (!record(raw.refreshed) || !record(raw.requestDue)) throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
+  raw.unknown ??= {};
+  if (!record(raw.refreshed) || !record(raw.requestDue) || !record(raw.unknown)
+    || (raw.tracked !== undefined && !record(raw.tracked))) {
+    throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
+  }
   return raw;
 }
 
@@ -229,6 +239,7 @@ class TaskRun {
     this.seen.seen = recent(this.seen.seen);
     this.seen.refreshed = recent(this.seen.refreshed);
     this.seen.requestDue = recent(this.seen.requestDue);
+    this.seen.unknown = Object.fromEntries(Object.entries(this.seen.unknown).filter(([id]) => this.seen.pending[id]));
     try { this.saveSeen(); } catch (error) { this.fail('classify', error); }
     return this.result();
   }
@@ -242,7 +253,7 @@ class TaskRun {
     try { await body(); } catch (error) { this.fail(name, error); }
   }
 
-  /** Records this sync's new and removed occurrences first, so a failed step retries them next run. */
+  /** Records this sync's new occurrences first, so a failed step retries them next run. */
   private register(): void {
     const { sourceId, calendar, now, store, scope, zone } = this.options;
     for (const item of calendar.upserted) {
@@ -251,17 +262,19 @@ class TaskRun {
     }
     // Occurrences a run synced without reaching this step (crash, no identity) are still evaluated.
     const window = syncWindow(now, zone);
+    const tracked: Record<string, string> = {};
     for (const [externalId, entry] of Object.entries(loadState(store, sourceId, scope).ledger)) {
       const eventId = calendarEventId(sourceId, externalId);
+      tracked[eventId] = entry.endsAt;
       if (new Date(entry.endsAt) > window.start && new Date(entry.startsAt) < window.end && !this.seen.seen[eventId]) {
         this.seen.pending[eventId] = externalId;
       }
     }
-    for (const externalId of calendar.removedExternalIds) {
-      const eventId = calendarEventId(sourceId, externalId);
-      this.seen.closing[eventId] = now.toISOString();
-      delete this.seen.pending[eventId];
+    // Removed since the last task step (replayed batch, skipped step), even for a row past the list cap.
+    for (const [eventId, endsAt] of Object.entries(this.seen.tracked ?? {})) {
+      if (!tracked[eventId] && new Date(endsAt) > window.start) this.seen.closing[eventId] ??= now.toISOString();
     }
+    this.seen.tracked = tracked;
     this.saveSeen();
   }
 
@@ -334,6 +347,16 @@ class TaskRun {
   // ---------- step 2: removed occurrences ----------
 
   private async close(): Promise<void> {
+    // Derived from state, so removals from a replayed batch or a skipped task step still close:
+    // an open task of this source in the window whose occurrence the synced ledger no longer tracks.
+    const { sourceId, now, zone } = this.options;
+    const window = syncWindow(now, zone);
+    for (const task of this.tasks.values()) {
+      if (task.sourceId === sourceId && task.state !== 'closed' && !this.seen.tracked?.[task.eventId]
+        && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
+        this.seen.closing[task.eventId] ??= now.toISOString();
+      }
+    }
     let failure: unknown;
     for (const eventId of Object.keys(this.seen.closing)) {
       try {
@@ -438,9 +461,18 @@ class TaskRun {
         reads++;
         const attendees = parseAttendees(resultJson(await session.call('get_meeting', { meetingId: joined.meetingId,
           getMaster: false, userEmail: me.email }), 'get_meeting'));
+        if (!attendees) {
+          // Unknown (no privacy flag or over the cap): retried, then skipped after a bounded number of reads.
+          if (candidate.task) continue;
+          const count = (this.seen.unknown[candidate.eventId] ?? 0) + 1;
+          if (count < UNKNOWN_ATTENDEES_MAX) this.seen.unknown[candidate.eventId] = count;
+          else this.markSeen(candidate.eventId);
+          continue;
+        }
+        delete this.seen.unknown[candidate.eventId];
         const accountId = this.events.get(candidate.eventId)?.accountId ?? candidate.task?.accountId ?? null;
         let classification: Classification = { kind: 'skip' };
-        if (attendees && !attendees.isPrivate) {
+        if (!attendees.isPrivate) {
           let members: MemberView[] = [];
           let anyAccountSaEmails = new Set<string>();
           if (accountId) {
@@ -469,6 +501,7 @@ class TaskRun {
   private markSeen(eventId: string): void {
     this.seen.seen[eventId] = this.options.now.toISOString();
     delete this.seen.pending[eventId];
+    delete this.seen.unknown[eventId];
   }
 
   private async create(candidate: { eventId: string; externalId: string }, accountId: string | null,

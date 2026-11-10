@@ -1268,3 +1268,46 @@ test('a request_needed notice waiting for a draft goes out copy-only after 60 mi
   await run(api, [occurrence()], {}, later(60));
   assert.deepEqual(notices().map(line => [line.state, line.body]), [['request_needed', NOTICE_COPY.request_needed.copy]]);
 });
+
+test('removals from a replayed batch or a skipped task step still close the task', async t => {
+  const { ApiResponseError } = await import('../dist/api.js');
+  for (const skip of ['replay', 'identity']) {
+    const { run } = await taskHome(t);
+    const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+    const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+    await run(api, [occurrence()], work);
+    const [created] = api.tasks.values();
+    const sync = api.syncCalendarEvents;
+    if (skip === 'replay') {
+      // The removal lands, but its receipt is lost: the next run replays the batch.
+      api.syncCalendarEvents = async (...args) => { await sync(...args); throw new ApiResponseError('HTTP 503', 503); };
+      assert.notEqual((await run(api, [occurrence({ isCanceled: true })], work)).code, 0);
+      api.syncCalendarEvents = sync;
+    } else {
+      const skipped = await run(api, [occurrence({ isCanceled: true })], work, { me: undefined });
+      assert.equal(skipped.output.tasks.result, 'TTOBAK_LOGIN_REQUIRED');
+    }
+    const next = await run(api, [occurrence({ isCanceled: true })], work);
+    assert.equal(next.output.counts.removals, 0, skip);
+    assert.equal(next.output.tasks.counts.closed, 1, skip);
+    assert.equal(api.tasks.get(created.eventId).state, 'closed');
+  }
+});
+
+test('unknown attendees stay pending, then are skipped after three reads', async t => {
+  const unknown = { FAKE_WORK_DETAILS: JSON.stringify({ 'i:1': { requiredAttendees: ['alice@amazon.com'], organizer: 'me@amazon.com' } }) };
+  const known = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const retried = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  assert.equal((await retried.run(api, [occurrence()], unknown)).output.tasks.counts.created, 0);
+  assert.equal((await retried.run(api, [occurrence()], known)).output.tasks.counts.created, 1);
+
+  const capped = await taskHome(t);
+  const other = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  for (let index = 0; index < 3; index++) {
+    assert.ok((await capped.run(other, [occurrence()], unknown)).calls.includes('get_meeting'));
+  }
+  const after = await capped.run(other, [occurrence()], known);
+  assert.ok(!after.calls.includes('get_meeting'));
+  assert.equal(other.calls.filter(call => call[0] === 'create').length, 0);
+});
