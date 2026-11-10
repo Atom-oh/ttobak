@@ -604,3 +604,49 @@ func TestNewsUserCopyOfASharedArticleDoesNotHideTheGlobalCopy(t *testing.T) {
 		t.Fatal("two global sources named the term; the user copy must not veto it")
 	}
 }
+
+// With NEWS_TERMS_SOURCES=all every searched source is eligible for Common
+// (no global-source lookup); custom-URL documents and the repeat threshold
+// still apply.
+func TestNewsAllSourcesMode(t *testing.T) {
+	cfg := newsOn()
+	cfg.NewsSources = NewsTermsSourcesAll
+	env := newNewsTestEnv(cfg)
+	env.docFrom("userSrc1", "aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
+	env.docFrom("userSrc2", "bbbb2222", "업계 동향", "여러 기업이 AlphaGrid 도입을 검토합니다.", 20)
+	env.docFrom("userSrc3", "cccc3333", "고객 소식", "고객사 BetaMesh 계약 내용입니다.", 30).IngestSource = "custom"
+	env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid", "news-1", "news-2")}
+	env.run(t)
+	if _, ok := env.common("AlphaGrid"); !ok {
+		t.Fatal("two subscribed sources named the term; all mode must add it to Common")
+	}
+	if len(env.store.lookups) != 0 {
+		t.Fatalf("all mode never looks up global sources: %v", env.store.lookups)
+	}
+	if strings.Contains(fmt.Sprint(env.llm.requests), "계약 내용") {
+		t.Fatal("custom-URL text must not reach the model in all mode")
+	}
+	env.onlyCommon(t)
+}
+
+func TestNewsAllSourcesModeSingleSourceNotAdded(t *testing.T) {
+	cfg := newsOn()
+	cfg.NewsSources = NewsTermsSourcesAll
+	env := newNewsTestEnv(cfg)
+	env.docFrom("userSrc1", "aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
+	env.docFrom("userSrc1", "aaaa2222", "업계 동향", "여러 기업이 AlphaGrid 도입을 검토합니다.", 20)
+	env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid", "news-1", "news-2")}
+	env.run(t)
+	if _, ok := env.common("AlphaGrid"); ok {
+		t.Fatal("one source alone never qualifies a term, in any mode")
+	}
+}
+
+func TestNewsTermsSourcesFromEnv(t *testing.T) {
+	for value, want := range map[string]string{"": NewsTermsSourcesGlobal, "global": NewsTermsSourcesGlobal, "all": NewsTermsSourcesAll, " all ": NewsTermsSourcesAll, "ALL": NewsTermsSourcesGlobal, "on": NewsTermsSourcesGlobal} {
+		t.Setenv("NEWS_TERMS_SOURCES", value)
+		if got := TermsConfigFromEnv().NewsSources; got != want {
+			t.Fatalf("NEWS_TERMS_SOURCES=%q gave %q", value, got)
+		}
+	}
+}

@@ -651,8 +651,11 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 (`TRANSCRIPT_CORRECTION_MODE`).
 
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
-ADR-008). News terms stay at `NO_DOCUMENTS` until a crawler source qualifies as
-global (`IsGlobalNewsSource`). `ttobak:kbTermsMode` and
+ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
+`NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
+crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
+searched, non-synthetic source (ADR-008 amendment, 2026-11-09). Invalid values
+fail synth. `ttobak:kbTermsMode` and
 `ttobak:researchTermsMode` stay `off`: ADR-008 FU4 (Account-layer cleanup on
 unlink) must land before either source writes Account terms.
 

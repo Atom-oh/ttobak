@@ -30,6 +30,12 @@ const (
 	// ACCOUNT_TERMS_MODE: also merge a linked meeting's terms into its Account.
 	AccountTermsModeOff = "off"
 	AccountTermsModeOn  = "on"
+
+	// NEWS_TERMS_SOURCES: which crawler sources' news may feed Common.
+	// global (default): only operator-curated sources (IsGlobalNewsSource);
+	// all: every searched, non-synthetic source.
+	NewsTermsSourcesGlobal = "global"
+	NewsTermsSourcesAll    = "all"
 	// termsRefreshCap bounds the vocabulary refreshes one run triggers.
 	termsRefreshCap = 50
 
@@ -54,7 +60,8 @@ const (
 // ACCOUNT_TERMS_MODE (off|on; needs AUTO_TERMS_MODE on), KB_TERMS_MODE and
 // RESEARCH_TERMS_MODE (off|on; KB documents and research reports, see
 // ProcessSource), NEWS_TERMS_MODE (off|on; daily news into Common, see
-// ProcessNewsDaily; independent of AUTO_TERMS_MODE and the canary list).
+// ProcessNewsDaily; independent of AUTO_TERMS_MODE and the canary list) and
+// NEWS_TERMS_SOURCES (global|all; which sources' news is eligible).
 type TermsConfig struct {
 	Mode          string
 	Users         map[string]bool
@@ -64,12 +71,16 @@ type TermsConfig struct {
 	KBMode        string
 	ResearchMode  string
 	NewsMode      string
+	NewsSources   string
 }
 
 // TermsConfigFromEnv parses the flags; unknown modes are off.
 func TermsConfigFromEnv() TermsConfig {
 	cfg := TermsConfig{Mode: AutoTermsModeOff, AccountMode: AccountTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID),
-		KBMode: sourceTermsMode("KB_TERMS_MODE"), ResearchMode: sourceTermsMode("RESEARCH_TERMS_MODE"), NewsMode: sourceTermsMode("NEWS_TERMS_MODE")}
+		KBMode: sourceTermsMode("KB_TERMS_MODE"), ResearchMode: sourceTermsMode("RESEARCH_TERMS_MODE"), NewsMode: sourceTermsMode("NEWS_TERMS_MODE"), NewsSources: NewsTermsSourcesGlobal}
+	if strings.TrimSpace(os.Getenv("NEWS_TERMS_SOURCES")) == NewsTermsSourcesAll {
+		cfg.NewsSources = NewsTermsSourcesAll
+	}
 	if strings.TrimSpace(os.Getenv("AUTO_TERMS_MODE")) == AutoTermsModePersonal {
 		cfg.Mode = AutoTermsModePersonal
 	}
