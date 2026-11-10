@@ -162,6 +162,31 @@ class TestCandidateDiscovery(unittest.TestCase):
         self.assertTrue(news_pipeline.is_within_days(
             "2026-07-15T00:00:00Z", 30, now))
 
+    def test_parse_published_at_accepts_web_search_gateway_format(self):
+        # The production web-search gateway returns publishedDate as
+        # "hh:mmAM, Weekday, Month DD YYYY, TZ" (observed 2026-11-09 on stored
+        # pubDate values); ISO-only parsing marked every result stale.
+        cases = {
+            "12:44AM, Friday, July 24 2026, PDT": datetime(2026, 7, 24, 7, 44, tzinfo=timezone.utc),
+            "05:00PM, Thursday, May 28 2026, PDT": datetime(2026, 5, 29, 0, 0, tzinfo=timezone.utc),
+            "12:00PM, Tuesday, October 06 2026, PDT": datetime(2026, 10, 6, 19, 0, tzinfo=timezone.utc),
+            "04:00PM, Sunday, November 16 2025, PST": datetime(2025, 11, 17, 0, 0, tzinfo=timezone.utc),
+            "9:05AM, Monday, November 9 2026, UTC": datetime(2026, 11, 9, 9, 5, tzinfo=timezone.utc),
+        }
+        for value, want in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(news_pipeline.parse_published_at(value), want)
+        now = datetime(2026, 11, 9, 19, 10, tzinfo=timezone.utc)
+        self.assertTrue(news_pipeline.is_within_days("12:00PM, Tuesday, October 13 2026, PDT", 30, now))
+        self.assertFalse(news_pipeline.is_within_days("12:00PM, Tuesday, October 06 2026, PDT", 30, now))
+
+    def test_parse_published_at_gateway_format_fails_closed(self):
+        for value in ("unknown", "12:44AM, Friday, July 24 2026, XYZ", "13:00PM, Friday, July 24 2026, PDT",
+                      "12:44AM, Friday, Smarch 24 2026, PDT", "12:44AM, Friday, February 30 2026, PST",
+                      "12:44AM, Friday, July 24 2026", " 12:44AM, Friday, July 24 2026, PDT trailing"):
+            with self.subTest(value=value):
+                self.assertIsNone(news_pipeline.parse_published_at(value))
+
     def test_is_within_days_unparseable_fails_closed(self):
         now = datetime(2026, 8, 9, tzinfo=timezone.utc)
         self.assertFalse(news_pipeline.is_within_days("not-a-date", 7, now))

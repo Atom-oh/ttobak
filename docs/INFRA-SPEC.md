@@ -635,6 +635,11 @@ delivered and retries once with its `url.QueryUnescape` form only when the key
 contains `%` or `+` and the object is missing; an object still missing (404, or
 403 because the role has no `s3:ListBucket`) logs `outcome=NOT_FOUND` and is not
 retried.
+Objects created before a source flag was `on` never received a trigger; the
+operator CLI `backend/cmd/backfill-terms-sources` (dry run by default) passes
+every `kb/` and `shared/research/` key to the same mapper and spaces the
+published requests (`-interval`, default 5s). The worker's run row makes a rerun
+a no-op for unchanged content.
 
 Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
 (`cron(0 21 * * ? *)`, after the 19:00 crawl) invokes summarize with
@@ -644,6 +649,15 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 `off` each run logs `outcome=DISABLED`. The same pattern applies to
 `ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
 (`TRANSCRIPT_CORRECTION_MODE`).
+
+`infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
+ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
+`NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
+crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
+searched, non-synthetic source (ADR-008 amendment, 2026-11-09). Invalid values
+fail synth. `ttobak:kbTermsMode` and
+`ttobak:researchTermsMode` stay `off`: ADR-008 FU4 (Account-layer cleanup on
+unlink) must land before either source writes Account terms.
 
 ### Dictionary layer metrics
 

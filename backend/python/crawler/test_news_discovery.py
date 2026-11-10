@@ -95,6 +95,17 @@ class TestDiscovery(unittest.TestCase):
         self.assertEqual([item["url"] for item in result["candidates"]], ["https://example.com/4"])
         self.assertGreaterEqual(result["staleRejected"], 3)
 
+    def test_web_search_gateway_date_form_is_fresh(self):
+        # Production gateway publishedDate form; ISO-only parsing rejected
+        # every result as stale (280/280 per source run, 2026-11-08).
+        values = [article(1, publishedDate="09:30AM, Monday, October 19 2026, PDT"),
+                  article(2, publishedDate="unknown")]
+        result, _, _ = self.run_discovery(values)
+        self.assertEqual([item["url"] for item in result["candidates"]], ["https://example.com/1"])
+        self.assertEqual(result["candidates"][0]["publishedAt"], "09:30AM, Monday, October 19 2026, PDT")
+        from news_worker import _candidate
+        _candidate(result["candidates"][0])
+
     def test_seven_day_miss_falls_back_to_verified_thirty_day_dates(self):
         result, gateway, _ = self.run_discovery([article(publishedDate="2026-10-01")])
         self.assertEqual(result["freshnessDays"], 30)
