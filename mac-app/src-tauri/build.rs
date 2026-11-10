@@ -19,6 +19,7 @@ const COMMANDS: &[&str] = &[
     "meeting_detection_set_enabled",
     "meeting_detection_respond",
     "meeting_prompt_choose",
+    "update_prompt_choose",
 ];
 
 fn main() {

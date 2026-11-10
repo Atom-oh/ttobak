@@ -57,6 +57,29 @@ type CalendarEventRow struct {
 	Ciphertext string    `dynamodbav:"ciphertext"`
 	Revision   int64     `dynamodbav:"revision"`
 	ExpiresAt  int64     `dynamodbav:"pendingShareExpiresAt"`
+
+	// Share fields mirror the account share row this event currently owns.
+	ShareAccountID string `dynamodbav:"shareAccountId,omitempty"`
+	MeetingKey     string `dynamodbav:"meetingKey,omitempty"`
+	ShareState     string `dynamodbav:"shareState,omitempty"`
+	SeriesKey      string `dynamodbav:"seriesKey,omitempty"`
+	// ShareVersion is bumped by each direct share-state change and fences sync writes read before it.
+	ShareVersion int64 `dynamodbav:"shareVersion,omitempty"`
+}
+
+// CalendarRowVersion is the event row state a caller planned from; Exists=false means absent.
+type CalendarRowVersion struct {
+	Exists       bool
+	Revision     int64
+	ShareVersion int64
+}
+
+// CalendarRowVersionOf returns the version of a row as read (nil: absent).
+func CalendarRowVersionOf(row *CalendarEventRow) CalendarRowVersion {
+	if row == nil {
+		return CalendarRowVersion{}
+	}
+	return CalendarRowVersion{Exists: true, Revision: row.Revision, ShareVersion: row.ShareVersion}
 }
 
 type CalendarWriteMutation struct {
@@ -64,6 +87,20 @@ type CalendarWriteMutation struct {
 	ExternalID string
 	EventID    string
 	Event      *CalendarEventRow
+	// Share is the account share or veto row to write with an upsert; nil when none.
+	Share *CalendarShareRow
+	// PreviousShareKey is deleted unless it equals the new share key.
+	PreviousShareKey *ShareKey
+	// Expected is the event row version the caller planned this mutation from. A different
+	// stored version returns ErrCalendarShareStateChanged before any write, and the event
+	// write is conditioned on that version, so a share decision made from an earlier read
+	// never lands. Expected is required for every mutation that can change share state: one
+	// carrying Share or PreviousShareKey (else ErrInvalidCalendarBatch), and an
+	// upsert of an event whose stored row holds a share or veto (it would vacate it; else
+	// the retryable ErrCalendarShareStateChanged). nil is accepted only for an upsert without share fields of
+	// an absent or never-shared event, and for a remove, which retires the event together
+	// with every share row it holds whatever their state.
+	Expected *CalendarRowVersion
 }
 
 type CalendarWriteBatch struct {
@@ -144,7 +181,11 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 		return nil, err
 	}
 	operations := []types.TransactWriteItem{{Update: source}}
-	for _, mutation := range batch.Mutations {
+	// fenced marks operations whose condition failure means a concurrent share-state change.
+	fenced := make(map[int]bool)
+	olds := make([]*CalendarEventRow, len(batch.Mutations))
+	intents := make([]calendarShareIntent, len(batch.Mutations))
+	for index, mutation := range batch.Mutations {
 		old, err := repo.getCalendarEventRow(ctx, userID, sourceID, mutation.EventID)
 		if err != nil {
 			return nil, err
@@ -152,6 +193,30 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 		if old != nil && !validCalendarEventIdentity(old, userID, sourceID, mutation.EventID) {
 			return nil, ErrCalendarCorruptData
 		}
+		switch {
+		case mutation.Expected != nil:
+			if *mutation.Expected != CalendarRowVersionOf(old) {
+				return nil, ErrCalendarShareStateChanged
+			}
+		case mutation.Op == "upsert" && calendarRowHoldsShare(old):
+			return nil, ErrCalendarShareStateChanged
+		}
+		olds[index] = old
+		intents[index], err = newCalendarShareIntent(userID, mutation.EventID, old, []*CalendarShareRow{mutation.Share}, mutation.PreviousShareKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	shareOperations, granted, err := repo.planCalendarShares(ctx, userID, sourceID, intents)
+	if err != nil {
+		return nil, err
+	}
+	for _, operation := range shareOperations {
+		fenced[len(operations)] = true
+		operations = append(operations, operation)
+	}
+	for index, mutation := range batch.Mutations {
+		old := olds[index]
 		if old != nil && (mutation.Op == "remove" || !old.StartsAt.Equal(mutation.Event.StartsAt)) {
 			deletion, err := repo.calendarDelete(userID, sourceID, mutation.EventID, model.CalendarTimeSortKey(old.StartsAt, sourceID, mutation.EventID))
 			if err != nil {
@@ -159,20 +224,31 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 			}
 			operations = append(operations, types.TransactWriteItem{Delete: deletion})
 		}
+		eventCondition := calendarEventWriteCondition(userID, sourceID, mutation.EventID).And(calendarShareVersionCondition(old))
 		if mutation.Op == "remove" {
-			deletion, err := repo.calendarDelete(userID, sourceID, mutation.EventID, model.CalendarEventSortKey(sourceID, mutation.EventID))
+			built, err := expression.NewBuilder().WithCondition(eventCondition).Build()
 			if err != nil {
 				return nil, err
 			}
-			operations = append(operations, types.TransactWriteItem{Delete: deletion})
+			fenced[len(operations)] = true
+			operations = append(operations, types.TransactWriteItem{Delete: &types.Delete{
+				TableName: aws.String(repo.tableName), Key: calendarKey(userID, model.CalendarEventSortKey(sourceID, mutation.EventID)),
+				ConditionExpression: built.Condition(), ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
+			}})
 			continue
 		}
 		row := *mutation.Event
 		row.PK, row.SK = model.PrefixUser+userID, model.CalendarEventSortKey(sourceID, mutation.EventID)
 		row.UserID, row.SourceID, row.EventID = userID, sourceID, mutation.EventID
 		row.StartsAt, row.EndsAt = row.StartsAt.UTC(), row.EndsAt.UTC()
-		condition := calendarEventWriteCondition(userID, sourceID, row.EventID)
-		canonical, err := repo.calendarPut(row, condition)
+		row.ShareVersion = 0
+		if old != nil {
+			row.ShareVersion = old.ShareVersion
+		}
+		if !calendarIntentGranted(intents[index], granted[index], mutation.Share) {
+			row.ShareAccountID, row.MeetingKey, row.ShareState = "", "", ""
+		}
+		canonical, err := repo.calendarPut(row, eventCondition)
 		if err != nil {
 			return nil, err
 		}
@@ -181,10 +257,11 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 			UserID: userID, SourceID: sourceID, EventID: row.EventID,
 			StartsAt: row.StartsAt, EndsAt: row.EndsAt, Revision: row.Revision, ExpiresAt: row.ExpiresAt,
 		}
-		refPut, err := repo.calendarPut(reference, condition)
+		refPut, err := repo.calendarPut(reference, calendarEventWriteCondition(userID, sourceID, row.EventID))
 		if err != nil {
 			return nil, err
 		}
+		fenced[len(operations)] = true
 		operations = append(operations, types.TransactWriteItem{Put: canonical}, types.TransactWriteItem{Put: refPut})
 	}
 	receipt := CalendarBatchReceipt{
@@ -199,6 +276,9 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 		return nil, err
 	}
 	operations = append(operations, types.TransactWriteItem{Put: receiptPut})
+	if len(operations) > calendarMaxTransactItems {
+		return nil, ErrInvalidCalendarBatch
+	}
 	_, err = repo.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: operations},
 		func(options *dynamodb.Options) { options.Retryer = aws.NopRetryer{} })
 	if err != nil {
@@ -209,13 +289,8 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 		if saved != nil {
 			return calendarRetryReceipt(saved, batch.PayloadDigest)
 		}
-		var cancellation *types.TransactionCanceledException
-		if errors.As(err, &cancellation) {
-			for _, reason := range cancellation.CancellationReasons {
-				if aws.ToString(reason.Code) == "ConditionalCheckFailed" {
-					return nil, errors.Join(ErrConditionFailed, err)
-				}
-			}
+		if mapped := calendarFencedConditionError(err, fenced); mapped != nil {
+			return nil, mapped
 		}
 		return nil, fmt.Errorf("calendar transaction: %w", err)
 	}
@@ -398,6 +473,9 @@ func validateCalendarBatch(userID, sourceID string, batch CalendarWriteBatch) er
 			}
 			removed++
 		default:
+			return ErrInvalidCalendarBatch
+		}
+		if !validCalendarShareMutation(userID, sourceID, mutation) {
 			return ErrInvalidCalendarBatch
 		}
 	}
