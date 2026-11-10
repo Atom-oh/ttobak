@@ -19,12 +19,16 @@ import (
 // caller's own USER# partition and takes no other user identifier.
 
 const (
-	performanceMaxMutations  = 20
-	performanceMaxNameBytes  = 200
-	performanceMaxSubject    = 300
-	performanceMaxLabelBytes = 64
-	performanceDateLayout    = "2006-01-02"
-	performanceMaxRevision   = 1<<62 - 1
+	// MaxPerformanceAssignments caps stored sfdc-assignments rows per owner and
+	// the items one mapping list returns. repository.PerformanceListRowLimit
+	// must stay one larger so overflow is detectable.
+	MaxPerformanceAssignments = 500
+	performanceMaxMutations   = 20
+	performanceMaxNameBytes   = 200
+	performanceMaxSubject     = 300
+	performanceMaxLabelBytes  = 64
+	performanceDateLayout     = "2006-01-02"
+	performanceMaxRevision    = 1<<62 - 1
 )
 
 var (
@@ -101,7 +105,44 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 	if err := svc.checkPerformanceActivityWindow(normalized); err != nil {
 		return nil, err
 	}
+	if source == model.PerformanceSourceSFDCAssignments {
+		if err := svc.checkAssignmentCap(ctx, userID, normalized); err != nil {
+			return nil, err
+		}
+	}
 	return svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, digest)
+}
+
+// checkAssignmentCap rejects a batch that would take the owner's stored
+// assignment count over MaxPerformanceAssignments: current rows, plus new IDs,
+// minus removed IDs. Updates of existing IDs and removes always pass. The
+// count is read before the write and is not atomic with it, so concurrent
+// batches can overshoot, but each adds at most performanceMaxMutations rows and
+// the read side is bounded independently, so the overshoot is small and harmless.
+func (svc *PerformanceService) checkAssignmentCap(ctx context.Context, userID string, req model.PerformanceSyncRequest) error {
+	current, err := svc.store.ListPerformanceAssignments(ctx, userID)
+	if err != nil {
+		return err
+	}
+	stored := make(map[string]bool, len(current))
+	for _, assignment := range current {
+		stored[assignment.SFDCAccountID] = true
+	}
+	count := len(stored)
+	for _, mutation := range req.Mutations {
+		switch {
+		case mutation.Op == "remove" && stored[mutation.ExternalID]:
+			delete(stored, mutation.ExternalID)
+			count--
+		case mutation.Op == "upsert" && mutation.Assignment != nil && !stored[mutation.Assignment.SFDCAccountID]:
+			stored[mutation.Assignment.SFDCAccountID] = true
+			count++
+		}
+	}
+	if count > MaxPerformanceAssignments && count > len(current) {
+		return ErrInvalidInput
+	}
+	return nil
 }
 
 func (svc *PerformanceService) normalizePerformanceRequest(source string, request model.PerformanceSyncRequest) (model.PerformanceSyncRequest, error) {
@@ -255,8 +296,9 @@ func (svc *PerformanceService) PutGoals(ctx context.Context, userID string, year
 	return &goals, nil
 }
 
-// ListMappings returns every assignment with its mapping; assignments without
-// one are reported with mapped=false and never guessed.
+// ListMappings returns up to MaxPerformanceAssignments assignments (lowest SFDC
+// IDs first) with their mappings, and truncated=true when more exist.
+// Assignments without a mapping are reported with mapped=false, never guessed.
 func (svc *PerformanceService) ListMappings(ctx context.Context, userID string) (*model.PerformanceMappingList, error) {
 	if !performanceUserPattern.MatchString(userID) {
 		return nil, ErrForbidden
@@ -269,11 +311,16 @@ func (svc *PerformanceService) ListMappings(ctx context.Context, userID string) 
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(assignments, func(i, j int) bool { return assignments[i].SFDCAccountID < assignments[j].SFDCAccountID })
+	truncated := len(assignments) > MaxPerformanceAssignments
+	if truncated {
+		assignments = assignments[:MaxPerformanceAssignments]
+	}
 	bySFDC := make(map[string]model.AccountMapping, len(mappings))
 	for _, mapping := range mappings {
 		bySFDC[mapping.SFDCAccountID] = mapping
 	}
-	list := &model.PerformanceMappingList{Items: make([]model.PerformanceMappingItem, 0, len(assignments))}
+	list := &model.PerformanceMappingList{Items: make([]model.PerformanceMappingItem, 0, len(assignments)), Truncated: truncated}
 	for _, assignment := range assignments {
 		item := model.PerformanceMappingItem{SFDCAccountID: assignment.SFDCAccountID, Name: assignment.Name, Role: assignment.Role}
 		if mapping, found := bySFDC[assignment.SFDCAccountID]; found && mapping.AccountID != "" {

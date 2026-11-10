@@ -3,6 +3,7 @@ package repository
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -477,5 +478,30 @@ func TestApplyPerformanceBatchReplayAcrossYearBoundary(test *testing.T) {
 	request.BatchID = "11111111-2222-4333-8444-555555555555"
 	if _, err = apply(request); !errors.Is(err, ErrInvalidPerformanceBatch) || writes != 1 {
 		test.Fatalf("new expired batch must be rejected: %v writes=%d", err, writes)
+	}
+}
+
+func TestListPerformanceAssignmentsReadIsBounded(test *testing.T) {
+	queries := 0
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		if performanceTarget(request) != "Query" {
+			return nil, errors.New("unexpected call")
+		}
+		body := performanceBody(test, request)
+		queries++
+		if limit, _ := body["Limit"].(float64); queries == 1 && int(limit) != PerformanceListRowLimit {
+			test.Fatalf("first query must carry Limit %d: %v", PerformanceListRowLimit, body["Limit"])
+		}
+		rows := make([]string, 400)
+		for i := range rows {
+			id := fmt.Sprintf("A%d_%04d", queries, i)
+			rows[i] = `{"PK":{"S":"USER#owner"},"SK":{"S":"PERFASSIGN#` + id + `"},"userId":{"S":"owner"},"sfdcAccountId":{"S":"` + id + `"},"name":{"S":"n"}}`
+		}
+		// Every page claims more rows exist; the reader must stop on its own.
+		return summaryHTTPResponse(200, `{"Items":[`+strings.Join(rows, ",")+`],"LastEvaluatedKey":{"PK":{"S":"USER#owner"},"SK":{"S":"x"}}}`, nil), nil
+	})
+	assignments, err := repo.ListPerformanceAssignments(test.Context(), "owner")
+	if err != nil || len(assignments) != PerformanceListRowLimit || queries != 2 {
+		test.Fatalf("assignments=%d queries=%d err=%v", len(assignments), queries, err)
 	}
 }

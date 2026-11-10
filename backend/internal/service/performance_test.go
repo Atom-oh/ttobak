@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -329,5 +330,61 @@ func TestPerformanceMissedPlaceholder(test *testing.T) {
 	}
 	if _, err := svc.ListMissed(test.Context(), "owner", "month"); !errors.Is(err, ErrInvalidInput) {
 		test.Fatalf("bad period: %v", err)
+	}
+}
+
+func performanceAssignmentRows(n int) []model.SFDCAssignment {
+	rows := make([]model.SFDCAssignment, n)
+	for i := range rows {
+		rows[i] = model.SFDCAssignment{SFDCAccountID: fmt.Sprintf("A%04d", i), Name: "n"}
+	}
+	return rows
+}
+
+func TestSyncRejectsAssignmentsOverCap(test *testing.T) {
+	upsert := func(id string) model.PerformanceMutation {
+		return model.PerformanceMutation{Op: "upsert", Assignment: &model.SFDCAssignment{SFDCAccountID: id, Name: "n"}}
+	}
+	for _, tc := range []struct {
+		name      string
+		stored    int
+		mutations []model.PerformanceMutation
+		ok        bool
+	}{
+		{"new id at cap", MaxPerformanceAssignments, []model.PerformanceMutation{upsert("NEW")}, false},
+		{"new id below cap", MaxPerformanceAssignments - 1, []model.PerformanceMutation{upsert("NEW")}, true},
+		{"update existing at cap", MaxPerformanceAssignments, []model.PerformanceMutation{upsert("A0001")}, true},
+		{"remove at cap", MaxPerformanceAssignments, []model.PerformanceMutation{{Op: "remove", ExternalID: "A0001"}}, true},
+		{"remove offsets new", MaxPerformanceAssignments, []model.PerformanceMutation{{Op: "remove", ExternalID: "A0001"}, upsert("NEW")}, true},
+		{"remove of unknown id offsets nothing", MaxPerformanceAssignments, []model.PerformanceMutation{{Op: "remove", ExternalID: "GONE"}, upsert("NEW")}, false},
+		{"over cap removal still allowed", MaxPerformanceAssignments + 5, []model.PerformanceMutation{{Op: "remove", ExternalID: "A0001"}}, true},
+	} {
+		test.Run(tc.name, func(test *testing.T) {
+			store := &performanceStoreFake{assignments: map[string][]model.SFDCAssignment{"owner": performanceAssignmentRows(tc.stored)}}
+			request := model.PerformanceSyncRequest{BatchID: performanceServiceBatch, Complete: true, Mutations: tc.mutations}
+			_, err := performanceTestService(store, nil).Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, request)
+			if tc.ok && err != nil || !tc.ok && !errors.Is(err, ErrInvalidInput) {
+				test.Fatalf("err = %v, want ok=%v", err, tc.ok)
+			}
+			if !tc.ok && store.applied != 0 {
+				test.Fatal("rejected batch must not be applied")
+			}
+		})
+	}
+}
+
+func TestListMappingsBoundedAndTruncated(test *testing.T) {
+	for _, tc := range []struct {
+		n         int
+		truncated bool
+	}{{MaxPerformanceAssignments, false}, {MaxPerformanceAssignments + 1, true}, {MaxPerformanceAssignments + 50, true}} {
+		rows := performanceAssignmentRows(tc.n)
+		rows[0], rows[len(rows)-1] = rows[len(rows)-1], rows[0] // unsorted input
+		store := &performanceStoreFake{assignments: map[string][]model.SFDCAssignment{"owner": rows}}
+		list, err := performanceTestService(store, nil).ListMappings(test.Context(), "owner")
+		if err != nil || len(list.Items) > MaxPerformanceAssignments || list.Truncated != tc.truncated ||
+			list.Items[0].SFDCAccountID != "A0000" {
+			test.Fatalf("n=%d: items=%d truncated=%v err=%v", tc.n, len(list.Items), list.Truncated, err)
+		}
 	}
 }

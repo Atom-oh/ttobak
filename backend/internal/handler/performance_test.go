@@ -286,7 +286,7 @@ func TestPerformanceRoutesAreOwnerScoped(test *testing.T) {
 		test.Fatalf("owner mappings: %s", owner.Body.String())
 	}
 	reads := map[string]string{
-		"/api/performance/mappings":           `{"items":[]}`,
+		"/api/performance/mappings":           `{"items":[],"truncated":false}`,
 		"/api/performance/goals?year=" + year: `{"year":` + year + `,"text":"","updatedAt":""}`,
 		"/api/performance/missed?period=week": `{"items":[]}`,
 		"/api/performance/missed?period=year": `{"items":[]}`,
