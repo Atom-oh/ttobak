@@ -231,8 +231,8 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 // inline budget but have NO S3 overflow path of their own — the budget must
 // leave room for them or the transcript family alone can look fine while
 // the whole item still exceeds 400KB (liveSummary alone may reach
-// MaxLiveSummaryRunes*4 ≈ 128KB of UTF-8).
-var nonSpillableSizedFields = []string{"content", "notes", "liveSummary", "actionItems"}
+// MaxLiveSummaryRunes*4 ≈ 128KB of UTF-8). contentEn is the English note.
+var nonSpillableSizedFields = []string{"content", "notes", "liveSummary", "actionItems", "contentEn"}
 
 // inlineFieldSize carries a stored String attribute's size in the two units
 // this package needs it in, per the 2026-09-01 sibling-size-guard incident
@@ -1694,103 +1694,66 @@ func (r *DynamoDBRepository) ClaimSummarizeRetry(ctx context.Context, userID, me
 // DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.
 // DynamoDB TransactWriteItems supports up to 100 items per transaction.
 func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingID string) error {
-	// Collect all items to delete
-	var transactItems []types.TransactWriteItem
+	// Each group stays inside one transaction. The first group holds the
+	// meeting row with every singleton state (action analysis, sim run, saved
+	// and English summary states), so delayed workers cannot recreate the
+	// source or a state: all their writes are conditional on both.
+	var groups [][]types.TransactWriteItem
+	singletons := make([]types.TransactWriteItem, 0, 5)
+	for _, key := range meetingSingletonDeleteKeys(userID, meetingID) {
+		singletons = append(singletons, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: key}})
+	}
+	groups = append(groups, singletons)
 
-	// 1. The meeting itself
-	transactItems = append(transactItems, types.TransactWriteItem{
-		Delete: &types.Delete{
-			TableName: aws.String(r.tableName),
-			Key: map[string]types.AttributeValue{
-				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
-				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-			},
-		},
-	})
-
-	// Keep singleton analysis cleanup with the source deletion. Delayed workers
-	// cannot recreate the source or this state because all writes are conditional.
-	transactItems = append(transactItems, types.TransactWriteItem{
-		Delete: &types.Delete{TableName: aws.String(r.tableName), Key: actionAnalysisKey(meetingID)},
-	})
-
-	// 4. Sim run (ADR-033) -- unconditional delete; a Delete against a
-	// nonexistent key is a no-op, not an error, so this is safe whether or
-	// not a simulation was ever run for this meeting. Exactly +1 item
-	// regardless of how many times the meeting was re-simulated, because
-	// SimRun is a singleton (SK=SIMRUN), not a history.
-	transactItems = append(transactItems, types.TransactWriteItem{
-		Delete: &types.Delete{
-			TableName: aws.String(r.tableName),
-			Key: map[string]types.AttributeValue{
-				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-				"SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun},
-			},
-		},
-	})
-
-	// Keep source and summary in one transaction. Four leading singleton
-	// deletes preserve every attachment/share pair at 100-item boundaries.
-	transactItems = append(transactItems, types.TransactWriteItem{
-		Delete: &types.Delete{TableName: aws.String(r.tableName), Key: summaryKey(meetingID)},
-	})
-
-	// 2. Attachments
+	// Attachments with their text states
 	attachments, err := r.ListAttachments(ctx, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to list attachments: %w", err)
 	}
 	for _, att := range attachments {
-		transactItems = append(transactItems, types.TransactWriteItem{
-			Delete: &types.Delete{
+		groups = append(groups, []types.TransactWriteItem{
+			{Delete: &types.Delete{
 				TableName: aws.String(r.tableName),
 				Key: map[string]types.AttributeValue{
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 					"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + att.AttachmentID},
 				},
-			},
-		})
-		transactItems = append(transactItems, types.TransactWriteItem{
-			Delete: &types.Delete{TableName: aws.String(r.tableName), Key: attachmentTextKey(meetingID, att.AttachmentID)},
+			}},
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: attachmentTextKey(meetingID, att.AttachmentID)}},
 		})
 	}
 
-	// 3. Shares (both recipient and meeting records)
+	// Shares (both recipient and meeting records)
 	shares, err := r.ListSharesForMeeting(ctx, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to list shares: %w", err)
 	}
 	for _, share := range shares {
-		// Recipient record: PK=USER#{sharedToId}, SK=SHARED#{meetingId}
-		transactItems = append(transactItems, types.TransactWriteItem{
-			Delete: &types.Delete{
+		groups = append(groups, []types.TransactWriteItem{
+			// Recipient record: PK=USER#{sharedToId}, SK=SHARED#{meetingId}
+			{Delete: &types.Delete{
 				TableName: aws.String(r.tableName),
 				Key: map[string]types.AttributeValue{
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + share.SharedToID},
 					"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
 				},
-			},
-		})
-		// Meeting record: PK=MEETING#{meetingId}, SK=SHARE_TO#{userId}
-		transactItems = append(transactItems, types.TransactWriteItem{
-			Delete: &types.Delete{
+			}},
+			// Meeting record: PK=MEETING#{meetingId}, SK=SHARE_TO#{userId}
+			{Delete: &types.Delete{
 				TableName: aws.String(r.tableName),
 				Key: map[string]types.AttributeValue{
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 					"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + share.SharedToID},
 				},
-			},
+			}},
 		})
 	}
 
-	// Execute in batches of 100 (TransactWriteItems limit)
-	for i := 0; i < len(transactItems); i += 100 {
-		end := i + 100
-		if end > len(transactItems) {
-			end = len(transactItems)
-		}
+	// Execute in transactions of at most 100 items (TransactWriteItems limit)
+	// without splitting a group.
+	for _, batch := range packDeleteGroups(groups, 100) {
 		_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-			TransactItems: transactItems[i:end],
+			TransactItems: batch,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to delete meeting batch: %w", err)
@@ -1800,6 +1763,24 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 	// The source is now gone, so conditional workers cannot create new states.
 	// Sweep rows whose attachments disappeared or were created after enumeration.
 	return errors.Join(r.deleteAttachmentTextStates(ctx, meetingID), r.SweepMeetingTerms(ctx, userID, meetingID))
+}
+
+// packDeleteGroups packs ordered groups into batches of at most limit items,
+// never splitting a group across batches.
+func packDeleteGroups(groups [][]types.TransactWriteItem, limit int) [][]types.TransactWriteItem {
+	var batches [][]types.TransactWriteItem
+	var current []types.TransactWriteItem
+	for _, group := range groups {
+		if len(current) > 0 && len(current)+len(group) > limit {
+			batches = append(batches, current)
+			current = nil
+		}
+		current = append(current, group...)
+	}
+	if len(current) > 0 {
+		batches = append(batches, current)
+	}
+	return batches
 }
 
 // ListMeetingsParams contains parameters for listing meetings
