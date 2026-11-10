@@ -103,7 +103,7 @@ func init() {
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Owner-private SA performance data: every route reads only the JWT user's
-	// own USER# partition (ADR-066).
+	// own USER# partition (ADR-068).
 	performanceHandler := handler.NewPerformanceHandler(service.NewPerformanceService(repo, accountService))
 	calendarRepo := repository.NewCalendarRepository(dynamoClient, tableName)
 	specReqTaskHandler := handler.NewSpecReqTaskHandler(service.NewSpecReqTaskService(
