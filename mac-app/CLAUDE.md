@@ -52,7 +52,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-061) |
 | meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
-| update_prompt_choose | action `install`/`later`; local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
+| update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
 
 Socket `status` also returns `updateBusy` (`control::app_busy`) for local tooling that must not replace a busy app.
 

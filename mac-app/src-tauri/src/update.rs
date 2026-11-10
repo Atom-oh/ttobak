@@ -67,6 +67,8 @@ pub enum InstallError {
     Busy,
     #[error("no update is available")]
     NoUpdate,
+    #[error("the popup shows another version than the available update")]
+    Stale,
     #[error("update download or install failed: {0}")]
     Download(String),
 }
@@ -344,16 +346,21 @@ impl Drop for FlagGuard<'_> {
     }
 }
 
-/// Downloads, verifies and installs the known update, then restarts. Refuses
+/// Downloads, verifies and installs the known update if it is the `shown`
+/// version, then restarts. Refuses
 /// while busy before the download and again before installing; a refusal
 /// keeps the update available.
-pub async fn install(app: &AppHandle) -> Result<(), InstallError> {
+pub async fn install(app: &AppHandle, shown: &str) -> Result<(), InstallError> {
     let state = app.state::<UpdateState>();
     let update = state
         .available
         .lock()
         .clone()
         .ok_or(InstallError::NoUpdate)?;
+    // Install only the version the user saw and confirmed.
+    if update.version != shown {
+        return Err(InstallError::Stale);
+    }
     if crate::control::app_busy(app) || state.installing.swap(true, Ordering::SeqCst) {
         return Err(InstallError::Busy);
     }
@@ -398,12 +405,21 @@ pub fn installing(app: &AppHandle) -> bool {
     app.state::<UpdateState>().installing.load(Ordering::SeqCst)
 }
 
-/// Stores the available version as declined (persisted in `update.json`).
-pub fn decline(app: &AppHandle) {
+/// The available version, for binding popup actions to what it shows.
+pub fn pending_version(app: &AppHandle) -> Option<String> {
+    app.state::<UpdateState>().pending().map(|(v, _)| v)
+}
+
+/// The available update's version and notes.
+pub fn pending(app: &AppHandle) -> Option<(String, String)> {
+    app.state::<UpdateState>().pending()
+}
+
+/// Stores `version` (the one the popup showed) as declined, persisted in
+/// `update.json`.
+pub fn decline(app: &AppHandle, version: &str) {
     let state = app.state::<UpdateState>();
-    let Some((version, _)) = state.pending() else {
-        return;
-    };
+    let version = version.to_owned();
     *state.declined.lock() = Some(version.clone());
     let path = state.settings_path.lock().clone();
     if let Some(path) = path {

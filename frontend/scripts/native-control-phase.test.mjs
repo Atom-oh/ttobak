@@ -14,7 +14,7 @@ function load() {
   return exports;
 }
 
-const idle = { recording: false, step: null, startInFlight: false, importing: false };
+const idle = { recording: false, step: null, startInFlight: false, importing: false, finalizing: false, flowBusy: false };
 
 test('an audio file import reports a busy uploading phase', () => {
   const { nativeControlPhase } = load();
@@ -22,6 +22,35 @@ test('an audio file import reports a busy uploading phase', () => {
   // The page must feed the import state into the reported phase.
   const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /nativeControlPhase\(\{[^}]*importing: uploadProgress !== null/);
+});
+
+// Every phase below must be in update_policy.rs BUSY_PHASES.
+const BUSY = ['starting', 'recording', 'notes', 'creating', 'saving', 'uploading', 'redirecting'];
+
+test('browser finalization before the notes step reports a busy phase', () => {
+  const { nativeControlPhase } = load();
+  // RecordButton clears isRecording at once; the notes step starts only after the backup await.
+  const phase = nativeControlPhase({ ...idle, finalizing: true });
+  assert.equal(phase, 'saving');
+  assert.ok(BUSY.includes(phase));
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /nativeControlPhase\(\{[^}]*finalizing: browserFinalizing/);
+});
+
+test('the page flow reservation (draft creation, leftover upload) reports a busy phase', () => {
+  const { nativeControlPhase } = load();
+  const phase = nativeControlPhase({ ...idle, flowBusy: true });
+  assert.equal(phase, 'creating');
+  assert.ok(BUSY.includes(phase));
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /nativeControlPhase\(\{[^}]*flowBusy \}\)/);
+});
+
+test('any busy input yields a busy phase', () => {
+  const { nativeControlPhase } = load();
+  for (const key of ['recording', 'startInFlight', 'importing', 'finalizing', 'flowBusy']) {
+    assert.ok(BUSY.includes(nativeControlPhase({ ...idle, [key]: true })), key);
+  }
 });
 
 test('recording and post-recording steps take precedence; otherwise starting or idle', () => {

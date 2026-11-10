@@ -128,6 +128,10 @@ pub fn install_outcome(result: Result<(), InstallError>) -> InstallOutcome {
             reply: Ok("busy".into()),
             close: false,
         },
+        Err(InstallError::Stale) => InstallOutcome {
+            reply: Err(STALE_MESSAGE.into()),
+            close: false,
+        },
         Err(InstallError::NoUpdate) => InstallOutcome {
             reply: Err("설치할 업데이트가 없습니다.".into()),
             close: false,
@@ -139,19 +143,67 @@ pub fn install_outcome(result: Result<(), InstallError>) -> InstallOutcome {
     }
 }
 
-/// The popup's buttons: `install` or `later`. Replies `"installed"` (the app
-/// restarts or defers the restart) or `"busy"` (the page shows the retry-after-recording message).
+const STALE_MESSAGE: &str =
+    "새 버전 정보로 화면을 바꿨습니다. 내용을 확인한 뒤 다시 선택해 주세요.";
+
+/// How a popup action relates to the available update.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Binding {
+    /// The popup shows the available version.
+    Current,
+    /// A check replaced the shown version; the popup must refresh first.
+    Stale,
+    /// No update is available any more.
+    Gone,
+}
+
+pub fn binding(available: Option<&str>, shown: &str) -> Binding {
+    match available {
+        Some(v) if v == shown => Binding::Current,
+        Some(_) => Binding::Stale,
+        None => Binding::Gone,
+    }
+}
+
+/// Reloads the popup with the available update after a stale action.
+fn refresh(app: &AppHandle) {
+    if let Some((version, notes)) = crate::update::pending(app) {
+        offer(app, &version, &notes);
+    }
+}
+
+/// The popup's buttons: `install` or `later`, bound to the `version` the
+/// popup shows. Replies `"installed"` (the app restarts or defers the
+/// restart), `"later"`, or `"busy"` (the page shows the
+/// retry-after-recording message). When a check replaced the shown version,
+/// nothing is declined or installed: the popup reloads with the new version
+/// and the reply asks the user to choose again.
 #[tauri::command]
-pub async fn update_prompt_choose(action: String, app: AppHandle) -> Result<String, String> {
+pub async fn update_prompt_choose(
+    action: String,
+    version: String,
+    app: AppHandle,
+) -> Result<String, String> {
     log::info!("update prompt: {action}");
+    if semver::Version::parse(&version).is_err() {
+        return Err("version must be the shown semver".into());
+    }
+    let bound = binding(crate::update::pending_version(&app).as_deref(), &version);
+    if bound == Binding::Stale && (action == "later" || action == "install") {
+        refresh(&app);
+        return Err(STALE_MESSAGE.into());
+    }
     match action.as_str() {
         "later" => {
-            crate::update::decline(&app);
+            crate::update::decline(&app, &version);
             close(&app);
             Ok("later".into())
         }
         "install" => {
-            let result = crate::update::install(&app).await;
+            let result = crate::update::install(&app, &version).await;
+            if matches!(result, Err(InstallError::Stale)) {
+                refresh(&app);
+            }
             if let Err(e) = &result {
                 log::warn!("update install did not complete: {e}");
             }
@@ -228,6 +280,18 @@ mod tests {
             let message = outcome.reply.expect_err("an error message");
             assert!(!message.contains("boom"), "internal detail leaked");
         }
+    }
+
+    #[test]
+    fn actions_bind_to_the_shown_version() {
+        assert_eq!(binding(Some("0.2.0"), "0.2.0"), Binding::Current);
+        assert_eq!(binding(Some("0.3.0"), "0.2.0"), Binding::Stale);
+        assert_eq!(binding(None, "0.2.0"), Binding::Gone);
+        let stale = install_outcome(Err(InstallError::Stale));
+        assert!(!stale.close);
+        assert_eq!(stale.reply, Err(STALE_MESSAGE.to_owned()));
+        let page = include_str!("../../src/update-prompt.html");
+        assert!(page.contains("{ action: action, version: version }"));
     }
 
     #[test]

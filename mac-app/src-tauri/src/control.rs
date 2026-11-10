@@ -273,7 +273,11 @@ async fn dispatch(app: &AppHandle, request: proto::Request, origin: Origin) -> S
 /// in progress; the updater must not prompt or install then.
 pub fn app_busy(app: &AppHandle) -> bool {
     let recorder = app.state::<RecorderState>();
-    let native_recording = recorder.recorder.lock().snapshot().recording;
+    // A start reservation counts too: capture begins once it completes.
+    let native_recording = {
+        let rec = recorder.recorder.lock();
+        rec.snapshot().recording || rec.is_starting()
+    };
     let finalizing = recorder.finalizing.lock().len();
     let uploads = recorder
         .uploads_in_flight

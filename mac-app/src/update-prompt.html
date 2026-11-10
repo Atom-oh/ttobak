@@ -114,7 +114,7 @@
           if (!invoke) return;
           setDisabled(true);
           status.textContent = action === 'install' ? '업데이트를 내려받는 중입니다…' : '';
-          invoke('update_prompt_choose', { action: action })
+          invoke('update_prompt_choose', { action: action, version: version })
             .then(function (reply) {
               if (reply === 'busy') {
                 status.textContent = '녹음이 끝난 뒤 다시 시도해 주세요.';
