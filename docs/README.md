@@ -26,7 +26,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [MCP adapter](../mcp-server/README.md) | Stdio/HTTP transports, OAuth, local recording and Mac app control | `mcp-server/src/`, `mcp-server/test/` |
 | [Local Outlook sync](runbooks/local-outlook-calendar-sync.md) | Local reader prerequisites, explicit lifecycle/checkpoints, user-local scheduling and acceptance limits | Calendar handler/service/model, `mcp-server/src/calendar.ts`, guide and protocol tests |
 | [Local MCP intake](runbooks/local-mcp-intake.md) | `ttobak-mcp intake` calendar runner over a local `aws-outlook-mcp`, meeting SpecReq task step, acceptance and LaunchAgent template | `mcp-server/src/intake/`, ADR-065, `test/intake.test.mjs`, `test/intake-tasks.test.mjs` |
-| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts | `mac-app/src-tauri/`, ADR-046, ADR-061 |
+| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-046, ADR-061, ADR-069 |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
@@ -53,6 +53,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Account relationship links, signals and KB references](decisions/ADR-064-account-relationship-links.md) | Typed account links with manual/auto origin and read-time revalidation, account news sources, KB refs, bounded overview reads; QA retrieval unchanged | `backend/internal/service/account_links.go`, `account_overview.go`, `account_kb.go`, `account_news.go` |
 | [Account people edges](decisions/ADR-067-account-people-edges.md) | Deterministic member/contact/entity resolution into role-keyed `LINK#meeting#` edges; manual wins, mention review, leased runs | `backend/internal/service/account_people*.go`, `backend/cmd/backfill-account-people` |
 | [SA performance data residency](decisions/ADR-068-sa-performance-data-residency.md) | Owner-private `PERF*` field table, default-encryption exception, per-row retention (year+2 TTL for dated rows), organizer-domain calendar counterpart | `backend/internal/model/performance.go`, `backend/internal/repository/performance.go` |
+| [Mac caption overlay](decisions/ADR-069-mac-caption-overlay.md) | Floating per-language caption windows (PR 2/4); translation on the user's own AWS profile (Bedrock Luna finals, Amazon Translate interims) and a native confirmation of profile changes; seven validated remote commands (three in 1/4, four overlay commands in 2/4); listen-only overlay capability (2/4); Zoom whole-screen limit | `mac-app/src-tauri/src/caption_*.rs`, `capabilities/caption-overlay.json` (2/4), `frontend/src/lib/captionOverlay.ts` (3/4) |
 
 ## Feature workflows
 
