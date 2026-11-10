@@ -592,9 +592,9 @@ other value, including case variants, returns 400 `BAD_REQUEST`. An explicit `""
 returns the meeting to automatic; an omitted field preserves the stored value,
 and an unchanged value is not written. It cannot be combined with an
 `expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
-(`""` for legacy rows). Batch and saved-source summaries map it to a fixed prompt
-directive (`noteLanguageDirective`); automatic keeps the historical "Korean unless
-the transcript is entirely English" rule. Both summary captures pin the field in
+(`""` for legacy rows). The field is stored and accepted but no longer
+affects generation: Korean final notes always use the Korean directive
+(`noteLanguageDirective`, ADR-070). Both summary captures still pin the field in
 their source conditions, so a change during a run fails that run with
 `SOURCE_CHANGED` and keeps the prior summary.
 
@@ -2301,8 +2301,10 @@ persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
 saved summary text.
 
 The explicit owner `sharingSafe` mode uses the selected saved transcript, saved
-notes and verified current DOCUMENT extraction. It excludes predecessor and prior
-generated/image/preview evidence. Mode is persisted and pinned through delivery.
+notes, verified current DOCUMENT extraction and the owner's own image analyses.
+It excludes prior generated and preview evidence; no mode reads linked
+predecessors (ADR-070). It is the owner-only reset; ordinary human edits keep
+`safe` provenance and need no reset. Mode is persisted and pinned through delivery.
 Success atomically publishes safe provenance, resets tasks/insights/tags/sentiment/
 live draft, and deletes action-analysis and simulator state. Source/edit-grant CAS
 preserves concurrent human edits; failures retain old content and provenance.
@@ -2317,9 +2319,8 @@ server draft meeting ID. A browser-only `meeting_<epoch ms>` ID is still accepte
 without a meeting check during the frontend rollout; remove that allowance once the
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
-verified document extraction, and writes notes in the meeting's stored
-`noteLanguage`; the POST body never selects a language. Change the language
-through the meeting update first, then request a re-summary. It does not rerun STT or refinement and does not
+verified document extraction, and writes Korean notes; the POST body never selects a language and the stored `noteLanguage`
+does not change it (ADR-070). It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;

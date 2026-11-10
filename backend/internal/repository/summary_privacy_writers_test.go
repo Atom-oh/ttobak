@@ -205,42 +205,6 @@ func TestAccountPublicationFencesCanonicalMembershipAndParent(t *testing.T) {
 	}
 }
 
-func TestBatchLinkedPublicationPinsPredecessorBytesAndAuthorizationRevision(t *testing.T) {
-	privacyWriterEnabled(t)
-	parent := privacyParent()
-	parent.LinkedMeetingIDs, parent.TranscriptA = []string{"predecessor"}, "own raw transcript"
-	source := &model.Meeting{PK: "USER#owner", SK: "MEETING#predecessor", UserID: "owner",
-		MeetingID: "predecessor", Title: "before", Content: "PRIVATE_SOURCE", ActionItems: "[]"}
-	rows := map[string]interface{}{"USER#owner/MEETING#meeting": parent, "USER#owner/MEETING#predecessor": source}
-	repo := privacyWriterWire(t, rows, func(_ string, body map[string]any) (int, string) {
-		ops := body["TransactItems"].([]any)
-		if len(ops) != 2 {
-			t.Fatal("linked predecessor is not part of publication transaction")
-		}
-		meeting := ops[0].(map[string]any)["Update"].(map[string]any)
-		if !strings.Contains(analysisCondition(t, meeting), "authorizationRevision") {
-			t.Fatal("a grant created during generation would not invalidate publication")
-		}
-		check := ops[1].(map[string]any)["ConditionCheck"].(map[string]any)
-		privacyWriterFences(t, analysisCondition(t, check), "predecessor changed during generation was not pinned: %s", []string{"userId", "title", "before", "content", "PRIVATE_SOURCE", "actionItems", "summaryPrivacy"})
-		return 400, projectCancellation(2, 1)
-	})
-	snapshot, err := repo.CaptureMeetingSummary(context.Background(), "owner", "meeting")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.BindLinkedSummarySources(context.Background(), snapshot); err != nil || len(snapshot.LinkedSources) != 1 {
-		t.Fatalf("pre-model source binding failed: %+v %v", snapshot.LinkedSources, err)
-	}
-	source.Content = "edited while model was running"
-	if err := repo.SaveMeetingSummary(context.Background(), snapshot, "late private summary", ""); !errors.Is(err, ErrConditionFailed) {
-		t.Fatalf("late linked generation published: %v", err)
-	}
-	if parent.Content != "" {
-		t.Fatal("conflict altered current parent content")
-	}
-}
-
 func TestDerivativePublicationRejectsResetWithSameContent(t *testing.T) {
 	privacyWriterEnabled(t)
 	parent := privacyParent()
@@ -482,5 +446,68 @@ func TestMemberSimulatorClaimFencesPublicationAndGrant(t *testing.T) {
 			(tc.want == ErrConditionFailed && (errors.Is(err, ErrSimRunActive) || errors.Is(err, ErrSummaryAccess))) {
 			t.Fatalf("%s: err=%v writes=%d", tc.name, err, writes)
 		}
+	}
+}
+
+// editWriteStoredPrivacy performs an IfMatch write and returns the stored
+// summaryPrivacy state and inheritedState from the UpdateItem body.
+func editWriteStoredPrivacy(t *testing.T, parent *model.Meeting, fields map[string]interface{}) (string, string) {
+	t.Helper()
+	privacyWriterEnabled(t)
+	var state, inherited string
+	var wrote bool
+	repo := privacyWriterWire(t, privacyParentRows(parent), func(target string, body map[string]any) (int, string) {
+		if strings.HasSuffix(target, ".UpdateItem") {
+			privacy := privacyWriterSetValue(t, body, "summaryPrivacy")["M"].(map[string]any)
+			state = privacy["state"].(map[string]any)["S"].(string)
+			if value, ok := privacy["inheritedState"]; ok {
+				inherited = value.(map[string]any)["S"].(string)
+			}
+			wrote = true
+		}
+		return 200, `{}`
+	})
+	match := map[string]interface{}{}
+	for field := range fields {
+		match[field] = map[string]interface{}{"content": parent.Content, "liveSummary": parent.LiveSummary}[field]
+	}
+	if err := repo.UpdateMeetingFieldsIfMatch(context.Background(), "owner", "meeting", match, fields); err != nil {
+		t.Fatal(err)
+	}
+	if !wrote {
+		t.Fatal("no UpdateItem observed")
+	}
+	return state, inherited
+}
+
+func TestLiveSummaryFirstWriteStampsSafe(t *testing.T) {
+	state, inherited := editWriteStoredPrivacy(t, privacyParent(), map[string]interface{}{"liveSummary": "draft"})
+	if state != model.SummaryPrivacySafe || inherited != "" {
+		t.Fatalf("first live draft stored %q/%q, want safe with no inherited state", state, inherited)
+	}
+}
+
+func TestOwnerEditKeepsSafe(t *testing.T) {
+	parent := privacyParent()
+	parent.Content = "old note"
+	privacyStamp(parent, model.SummaryPrivacySafe, "before")
+	state, inherited := editWriteStoredPrivacy(t, parent, map[string]interface{}{"content": "edited note"})
+	if state != model.SummaryPrivacySafe || inherited != "" {
+		t.Fatalf("owner edit stored %q/%q, want safe", state, inherited)
+	}
+}
+
+func TestOwnerEditKeepsUnknownSticky(t *testing.T) {
+	parent := privacyParent()
+	parent.Content = "legacy note"
+	state, inherited := editWriteStoredPrivacy(t, parent, map[string]interface{}{"content": "edited note"})
+	if state != model.SummaryPrivacyUnknown || inherited != model.SummaryPrivacyUnknown {
+		t.Fatalf("legacy edit stored %q/%q, want unknown/unknown", state, inherited)
+	}
+	parent.Content = "legacy note"
+	privacyStamp(parent, model.SummaryPrivacyPrivate, "before")
+	state, _ = editWriteStoredPrivacy(t, parent, map[string]interface{}{"content": "edited note"})
+	if state != model.SummaryPrivacyPrivate {
+		t.Fatalf("private edit stored %q", state)
 	}
 }
