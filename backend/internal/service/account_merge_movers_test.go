@@ -9,6 +9,7 @@ import (
 )
 
 type fakeMoverRepo struct {
+	contactFake
 	members map[string]map[string]*model.AccountMember
 	puts    []string
 	putErr  error

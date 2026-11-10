@@ -19,6 +19,13 @@ type accountMergeMoverRepo interface {
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	PutMergedMember(ctx context.Context, job *model.AccountMergeJob, member *model.AccountMember) error
+
+	ListAccountPartitionKeys(ctx context.Context, accountID, prefix string, limit int) ([]string, bool, error)
+	ListAccountContactsForMerge(ctx context.Context, accountID string, limit int, after string) ([]model.AccountContact, []string, string, error)
+	GetAccountContact(ctx context.Context, accountID, contactID string) (*model.AccountContact, error)
+	GetMergeContactMap(ctx context.Context, sourceAccountID string, ids []string) (map[string]string, error)
+	MoveContactForMerge(ctx context.Context, job *model.AccountMergeJob, from model.AccountContact) error
+	MergeContactIntoExisting(ctx context.Context, job *model.AccountMergeJob, from model.AccountContact, into model.AccountContact) error
 }
 
 // mergeFence carries one worker's authority over a job. The lease heartbeat
@@ -68,9 +75,14 @@ func (f *mergeFence) translate(err error) error {
 // mergeMoveResult is one mover run. Cursor is the value to persist; it equals
 // the input cursor whenever an error is returned alongside the result.
 type mergeMoveResult struct {
-	Moved  int
-	Cursor string
-	Done   bool
+	Moved int
+	// Skipped counts items already moved by an earlier run.
+	Skipped int
+	// Unreadable counts source items left in place because they could not
+	// be opened; the worker reports them on the job.
+	Unreadable int
+	Cursor     string
+	Done       bool
 }
 
 // mergedMemberRole maps a source role onto the target: the source Owner joins
