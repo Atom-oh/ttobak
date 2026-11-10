@@ -30,6 +30,8 @@ export const OPPTY_ACCOUNTS_MAX = 20;
 export const MEMBER_ACCOUNTS_MAX = 50;
 export const DRAFTS_MAX = 10;
 const SEEN_RETENTION_MS = 120 * 24 * 60 * 60 * 1000;
+/** A request_needed notice waits this long for a draft outcome, then goes out copy-only. */
+export const DRAFT_NOTICE_WAIT_MS = 60 * 60 * 1000;
 /** Consecutive unknown attendee reads before an occurrence is skipped for good. */
 export const UNKNOWN_ATTENDEES_MAX = 3;
 const EVENT_ID = /^[0-9a-f]{64}$/;
@@ -102,6 +104,8 @@ interface SeenState {
   closing: Record<string, string>;
   /** Last `get_request` refresh per task, so the refresh budget rotates. */
   refreshed: Record<string, string>;
+  /** When each request_needed task first waited for a draft outcome. */
+  requestDue: Record<string, string>;
   /** Consecutive unknown attendee reads per pending occurrence. */
   unknown: Record<string, number>;
   /** Ledger occurrences at the last task step (eventId -> endsAt); a later absence is a removal. */
@@ -159,14 +163,16 @@ function seenPath(scope: string): string[] {
 
 function loadSeen(store: IntakeStore, scope: string): SeenState {
   const raw = store.read<SeenState>(...seenPath(scope));
-  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, unknown: {} };
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {}, unknown: {} };
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (raw.version !== 1 || !record(raw.seen) || !record(raw.pending) || !record(raw.closing)) {
     throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   }
   raw.refreshed ??= {};
+  raw.requestDue ??= {};
   raw.unknown ??= {};
-  if (!record(raw.refreshed) || !record(raw.unknown) || (raw.tracked !== undefined && !record(raw.tracked))) {
+  if (!record(raw.refreshed) || !record(raw.requestDue) || !record(raw.unknown)
+    || (raw.tracked !== undefined && !record(raw.tracked))) {
     throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   }
   return raw;
@@ -232,6 +238,7 @@ class TaskRun {
       .filter(([, at]) => this.options.now.getTime() - Date.parse(at) < SEEN_RETENTION_MS));
     this.seen.seen = recent(this.seen.seen);
     this.seen.refreshed = recent(this.seen.refreshed);
+    this.seen.requestDue = recent(this.seen.requestDue);
     this.seen.unknown = Object.fromEntries(Object.entries(this.seen.unknown).filter(([id]) => this.seen.pending[id]));
     try { this.saveSeen(); } catch (error) { this.fail('classify', error); }
     return this.result();
@@ -709,9 +716,10 @@ class TaskRun {
       .slice(0, REFRESH_MAX).map(item => item.task);
     let failure: unknown;
     for (const task of open) {
+      // Stamped before the read, so a permanently failing read still rotates out of the budget.
+      this.seen.refreshed[task.eventId] = this.options.now.toISOString();
       try {
         const request = await readRequest(session, task.specReqId!);
-        this.seen.refreshed[task.eventId] = this.options.now.toISOString();
         const confirmed = request.resolverLogin === this.myLogin && ACK_CONFIRMED.includes(request.stateId);
         // Auto-ack off: the user acknowledged in SpecReq; a later read moves the task to acked.
         if (task.path === 'theirs' && ['request_needed', 'requested'].includes(task.state) && confirmed
@@ -722,15 +730,15 @@ class TaskRun {
           if (next) this.counts.acked++;
           continue;
         }
+        // An observed status promotes ack_failed to acked, so it is sent only for a request I resolve.
+        if (task.state === 'ack_failed' && request.resolverLogin !== this.myLogin) continue;
         // An unchanged read still goes out while the rules would move the state (acked -> resolved, ack_failed -> acked).
         const promotes = (task.path === 'theirs' && task.state === 'acked' && request.stateId === 'COMPLETED')
           || (task.state === 'ack_failed' && confirmed);
         if (!promotes && request.stateId === task.specReqStatus && (!request.title || request.title === task.specReqTitle)) continue;
-        // The backend promotes ack_failed to acked on a confirmed state; only my own resolution may do that.
-        const mayRefresh = (current: TaskView) => current.state !== 'ack_failed' || request.resolverLogin === this.myLogin;
-        if (!mayRefresh(task)) continue;
         const next = await this.transition(task, current => current.specReqId === request.requestId && current.state !== 'closed'
-          && mayRefresh(current) ? { op: 'refreshSpecReq', specReqId: request.requestId, specReqStatus: request.stateId,
+          && (current.state !== 'ack_failed' || request.resolverLogin === this.myLogin)
+          ? { op: 'refreshSpecReq', specReqId: request.requestId, specReqStatus: request.stateId,
             ...(request.title ? { specReqTitle: request.title } : {}) } : null);
         if (next) this.counts.refreshed++;
       } catch (error) { failure ??= error; }
@@ -791,9 +799,16 @@ class TaskRun {
       let body: string;
       if (state === 'request_needed') {
         const outcome = outcomes.get(task.eventId) ?? draftEntry(store, scope, task.eventId)?.outcome;
-        // Wait for the draft attempt while the selected Slack server is down.
-        // Announce only after the draft attempt while Slack is selected.
-        if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) continue;
+        // While Slack is selected, wait for the draft attempt, but at most DRAFT_NOTICE_WAIT_MS
+        // after the task first waited; then announce the copy-only notice.
+        if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) {
+          let due = Date.parse(this.seen.requestDue[task.eventId] ?? '');
+          if (!Number.isFinite(due)) {
+            due = now.getTime();
+            this.seen.requestDue[task.eventId] = now.toISOString();
+          }
+          if (now.getTime() - due < DRAFT_NOTICE_WAIT_MS) continue;
+        }
         const copy = NOTICE_COPY.request_needed;
         title = copy.title;
         body = outcome === 'drafted' ? copy.drafted : outcome === 'kept_existing' ? copy.kept_existing : copy.copy;
