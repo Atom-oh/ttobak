@@ -54,7 +54,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 | update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
 | caption_settings_get | returns {settings {profile, region, extraLanguage, windows}, profiles (names only), fonts} (ADR-069) |
-| caption_settings_set | profile?, region, extraLanguage ja/zh/null; profile must be in the local AWS profile list; choosing or changing the profile or region first shows a native confirmation sheet from Rust (취소: `confirmation-declined`, settings unchanged; a call while one runs: `invalid-input`); clears cached AWS clients |
+| caption_settings_set | profile?, region, extraLanguage ja/zh/null; profile must be in the local AWS profile list; choosing or changing the profile or region first shows a native confirmation sheet from Rust (cancel: `confirmation-declined`, settings unchanged; a call while one runs: `invalid-input`); clears cached AWS clients |
 | caption_translate | text, sourceLang, targetLang, isFinal, context[]; returns translatedText, engine llm/translate; credentials only from the selected profile, never the default chain or environment; 600 requests per sliding minute; text at most 9,000 bytes, context at most five items |
 
 Caption command errors carry a fixed `code`: profile-missing, credentials-expired,

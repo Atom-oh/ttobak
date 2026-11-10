@@ -96,8 +96,8 @@ AWS account is billed and receives meeting text. So `caption_settings_set` shows
 native macOS sheet on the main window, raised from Rust, before it chooses or
 changes the profile or region (`needs_confirmation`): title "TTOBAK", a Korean
 message naming the profile and region and warning that the account may be charged,
-buttons 허용 and 취소. Clearing the profile, or changing only the extra language,
-asks nothing. 취소 (or a failure to show the sheet) leaves the settings unchanged
+buttons Allow and Cancel (in Korean). Clearing the profile, or changing only the extra language,
+asks nothing. Cancel (or a failure to show the sheet) leaves the settings unchanged
 and returns `confirmation-declined`; a second call while one is running returns
 `invalid-input` instead of stacking sheets. The sheet uses `rfd` directly, not
 `tauri-plugin-dialog`, because that plugin injects `window.alert`/`window.confirm`
@@ -206,5 +206,5 @@ modules and the frontend scripts are separate from this checklist.
 | Hover chrome appears, the move handle drags and the resize grip resizes | observed by the owner, local test build, 2026-11-10 |
 | Overlay becomes invisible after a recording stops | observed by the owner, local test build, 2026-11-10 |
 | Display unplugged: window reopens visible on the primary display | not run |
-| Changing the profile or region shows the native confirmation above the main window; 취소 keeps the saved values and 허용 applies them | not run |
+| Changing the profile or region shows the native confirmation above the main window; Cancel keeps the saved values and Allow applies them | not run |
 | Overlay translation on a real account | `caption_translate` returned an Amazon Translate interim and a Luna final for ko to zh once, 2026-11-10; latency not measured |
