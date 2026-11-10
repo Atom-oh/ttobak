@@ -1065,3 +1065,37 @@ func TestCalendarFilteredPaginationKeepsLimitOrderingAndContinuation(test *testi
 		test.Fatalf("filtered pagination dropped ordering, rows or continuation: %+v", page)
 	}
 }
+
+func TestGetCalendarEventRow_IdentityChecked(test *testing.T) {
+	row := calendarTestRow()
+	var item map[string]types.AttributeValue
+	mock := &calendarSDKMock{get: func(*dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) {
+		return &dynamodb.GetItemOutput{Item: item}, nil
+	}}
+	repo := calendarTestRepo(test, mock)
+	item = calendarTestItem(test, row)
+	got, err := repo.GetCalendarEventRow(context.Background(), "owner", calendarTestSource, "event-1")
+	if err != nil || got == nil || got.EventID != "event-1" {
+		test.Fatalf("matching row rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*CalendarEventRow){
+		"user":   func(r *CalendarEventRow) { r.UserID = "other" },
+		"source": func(r *CalendarEventRow) { r.SourceID = "other" },
+		"event":  func(r *CalendarEventRow) { r.EventID = "other" },
+	} {
+		test.Run(name, func(test *testing.T) {
+			mismatched := row
+			mutate(&mismatched)
+			item = calendarTestItem(test, mismatched)
+			got, err := repo.GetCalendarEventRow(context.Background(), "owner", calendarTestSource, "event-1")
+			if !errors.Is(err, ErrCalendarCorruptData) || got != nil {
+				test.Fatalf("foreign identity accepted: %v", err)
+			}
+		})
+	}
+	item = nil
+	got, err = repo.GetCalendarEventRow(context.Background(), "owner", calendarTestSource, "event-1")
+	if err != nil || got != nil {
+		test.Fatalf("absent row must be nil, nil: %v %v", got, err)
+	}
+}
