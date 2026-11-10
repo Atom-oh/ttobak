@@ -308,6 +308,8 @@ func writeDocumentServiceError(w http.ResponseWriter, err error, invalidInputMsg
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "자신에게는 공유할 수 없습니다")
 	case errors.Is(err, service.ErrLoopGuard):
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document originated from TTOBAK (loop guard)")
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, service.ErrInvalidInput):
 		msg := invalidInputMsg
 		if msg == "" {

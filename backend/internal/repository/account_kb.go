@@ -71,8 +71,9 @@ func validAccountKBRef(ref *model.AccountKBRef) bool {
 }
 
 // PutAccountKBRef creates the ref only if absent and never untagged, in one
-// transaction with a KBUNTAG# absence check. An existing ref is
-// ErrConditionFailed; an untagged one also wraps ErrAccountKBRefUntagged.
+// transaction with a KBUNTAG# absence check and the account open check. An
+// existing ref is ErrConditionFailed; an untagged one also wraps
+// ErrAccountKBRefUntagged; a merging or merged account is ErrAccountMerging.
 func (r *DynamoDBRepository) PutAccountKBRef(ctx context.Context, ref *model.AccountKBRef) error {
 	if !validAccountKBRef(ref) {
 		return fmt.Errorf("invalid account KB ref")
@@ -88,15 +89,23 @@ func (r *DynamoDBRepository) PutAccountKBRef(ctx context.Context, ref *model.Acc
 	if err != nil {
 		return err
 	}
+	open, err := r.accountOpenCheck(ref.AccountID)
+	if err != nil {
+		return err
+	}
 	items := []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: av,
 			ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, model.PrefixAccountKBUntag+ref.RefID),
 			ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+		open,
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
+	}
+	if merging := mergeFenceError(err); merging != nil {
+		return merging
 	}
 	if failed, ok := accountKBCancelled(err, len(items)); ok {
 		switch {
@@ -104,6 +113,8 @@ func (r *DynamoDBRepository) PutAccountKBRef(ctx context.Context, ref *model.Acc
 			return fmt.Errorf("%w: %w", ErrConditionFailed, ErrAccountKBRefUntagged)
 		case failed[0]:
 			return fmt.Errorf("%w: account KB ref exists", ErrConditionFailed)
+		case failed[2]:
+			return fmt.Errorf("%w: account missing", ErrConditionFailed)
 		}
 	}
 	return fmt.Errorf("put account KB ref: %w", err)

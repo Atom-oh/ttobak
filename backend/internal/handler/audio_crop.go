@@ -46,6 +46,8 @@ func writeCropError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the creator or account team members can crop this recording")
 	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, repository.ErrConditionFailed):
 		writeError(w, http.StatusConflict, "CONFLICT", "The meeting changed; refresh and retry")
 	default:

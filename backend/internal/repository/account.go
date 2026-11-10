@@ -202,7 +202,8 @@ func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, ownerI
 // UpdateMemberRole conditionally updates a non-owner member's role -- a
 // concurrent RemoveMember or owner transfer between the service's GetMember
 // check and this call surfaces ErrConditionFailed instead of resurrecting a
-// deleted row or overwriting the new Owner.
+// deleted row or overwriting the new Owner. The same transaction requires the
+// account to be open, so a merging or merged account returns ErrAccountMerging.
 func (r *DynamoDBRepository) UpdateMemberRole(ctx context.Context, accountID, userID, role string) error {
 	condition := nonOwnerMemberCondition()
 	update := expression.Set(expression.Name("role"), expression.Value(role))
@@ -210,20 +211,20 @@ func (r *DynamoDBRepository) UpdateMemberRole(ctx context.Context, accountID, us
 	if err != nil {
 		return fmt.Errorf("build update member role condition: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + userID},
-		},
-		ConditionExpression:       expr.Condition(),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
+	open, err := r.accountOpenCheck(accountID)
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		return err
+	}
+	item := types.TransactWriteItem{Update: &types.Update{
+		TableName: aws.String(r.tableName), Key: accountHierarchyKey(accountID, model.PrefixMember+userID),
+		ConditionExpression: expr.Condition(), UpdateExpression: expr.Update(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	}}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{item, open}}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
+		if isConditionalCheckFailedTransaction(err) {
 			return fmt.Errorf("%w: non-owner member %s not found", ErrConditionFailed, userID)
 		}
 		return fmt.Errorf("update member role: %w", err)
@@ -678,12 +679,39 @@ func (r *DynamoDBRepository) UpdateAccountDocumentFields(ctx context.Context, pk
 	return oldValues, nil
 }
 
+// PutAccountDocument writes a document row. An account document (AccountID
+// set) is written in one transaction with the account open check, so a
+// merging or merged account returns ErrAccountMerging and a missing account
+// ErrConditionFailed; a personal document is a plain put.
 func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error {
+	if doc == nil {
+		return fmt.Errorf("invalid account doc")
+	}
+	if doc.AccountID != "" && doc.PK != model.PrefixAccount+doc.AccountID {
+		return fmt.Errorf("account doc partition does not match its account")
+	}
 	item, err := attributevalue.MarshalMap(doc)
 	if err != nil {
 		return fmt.Errorf("marshal account doc: %w", err)
 	}
-	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(r.tableName), Item: item}); err != nil {
+	if doc.AccountID == "" {
+		if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(r.tableName), Item: item}); err != nil {
+			return fmt.Errorf("put account doc: %w", err)
+		}
+		return nil
+	}
+	open, err := r.accountOpenCheck(doc.AccountID)
+	if err != nil {
+		return err
+	}
+	put := types.TransactWriteItem{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{put, open}}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
+		if isConditionalCheckFailedTransaction(err) {
+			return fmt.Errorf("put account doc: %w", ErrConditionFailed)
+		}
 		return fmt.Errorf("put account doc: %w", err)
 	}
 	return nil

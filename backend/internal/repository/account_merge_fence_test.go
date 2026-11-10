@@ -166,6 +166,16 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 			return r.ReplaceUnresolvedMentions(ctx, "acct", "o:m1", []model.UnresolvedMention{row}, nil,
 				&model.PeopleRun{AccountID: "acct", Scope: "o:m1", LeaseToken: "tok"})
 		}},
+		{"member role", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
+			return r.UpdateMemberRole(ctx, "acct", "u2", model.RoleSA)
+		}},
+		{"account document", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
+			return r.PutAccountDocument(ctx, &model.AccountDocument{PK: "ACCOUNT#acct", SK: "DOC#d1", AccountID: "acct", DocID: "d1"})
+		}},
+		{"account KB ref", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
+			key := "kb/u/1_a.pdf"
+			return r.PutAccountKBRef(ctx, &model.AccountKBRef{AccountID: "acct", RefID: model.AccountKBRefID(key), S3Key: key, UploadedBy: "u"})
+		}},
 		{"meeting create", "acct", nil, func(r *DynamoDBRepository) error {
 			_, err := r.CreateMeeting(ctx, "u", "t", time.Unix(1700000000, 0), nil, "", model.MeetingPreparation{AccountID: "acct"})
 			return err
@@ -368,5 +378,57 @@ func TestConnectorWriteErrorMapsMergeFence(t *testing.T) {
 	}
 	if err := connectorWriteError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountMerging) {
 		t.Fatalf("plain cancellation=%v, want ErrConditionFailed", err)
+	}
+}
+
+// A personal document write names no account and carries no fence.
+func TestPersonalDocumentWriteCarriesNoMergeFence(t *testing.T) {
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 200, `{}` })
+	if err := r.PutAccountDocument(context.Background(), &model.AccountDocument{PK: "USER#u", SK: "DOC#d1", DocID: "d1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].target != "PutItem" {
+		t.Fatalf("calls=%+v, want one PutItem", calls)
+	}
+	if err := r.PutAccountDocument(context.Background(), &model.AccountDocument{PK: "USER#u", SK: "DOC#d2", AccountID: "acct"}); err == nil {
+		t.Fatal("an account document outside its account partition must be rejected")
+	}
+}
+
+// A member's team crop copy is published only into an open account.
+func TestTeamAudioCropCarriesMergeFence(t *testing.T) {
+	t.Setenv(AccountDescendantReadsEnv, "")
+	memberRow := `{"Item":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"MEMBER#member"},"accountId":{"S":"acc"},"userId":{"S":"member"}}}`
+	respond := func(failAt int, marker bool) func(fenceRequest) (int, string) {
+		return func(call fenceRequest) (int, string) {
+			if call.target == "GetItem" {
+				return 200, memberRow
+			}
+			if failAt >= 0 {
+				return 400, cancelledAt(len(call.body["TransactItems"].([]any)), failAt, marker)
+			}
+			return 200, `{}`
+		}
+	}
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, respond(-1, false))
+	source, cropped, ref := teamCropFixture()
+	if err := r.CreateAudioCropForTeam(context.Background(), source, cropped, "member", ref); err != nil {
+		t.Fatal(err)
+	}
+	items := fenceItems(t, calls[len(calls)-1])
+	idx := metaIndex(t, items, "acc")
+	if cond := strings.ReplaceAll(resolvedCondition(items[idx]), "attribute_not_exists (", "attribute_not_exists("); !strings.Contains(cond, "attribute_not_exists(mergingInto)") ||
+		!strings.Contains(cond, "attribute_not_exists(mergedInto)") {
+		t.Fatalf("team META condition %q lacks the merge fence", cond)
+	}
+	source, cropped, ref = teamCropFixture()
+	if err := fenceRepo(t, new([]fenceRequest), respond(idx, true)).CreateAudioCropForTeam(context.Background(), source, cropped, "member", ref); !errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("error=%v, want ErrAccountMerging", err)
+	}
+	source, cropped, ref = teamCropFixture()
+	if err := fenceRepo(t, new([]fenceRequest), respond(idx, false)).CreateAudioCropForTeam(context.Background(), source, cropped, "member", ref); !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("error=%v, want ErrConditionFailed", err)
 	}
 }

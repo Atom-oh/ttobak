@@ -16,7 +16,7 @@ func TestPutAccountKBRefIsConditionalCreate(t *testing.T) {
 	id := model.AccountKBRefID(key)
 	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
 		items := body["TransactItems"].([]interface{})
-		if target != "DynamoDB_20120810.TransactWriteItems" || len(items) != 2 {
+		if target != "DynamoDB_20120810.TransactWriteItems" || len(items) != 3 {
 			t.Fatalf("not a transaction: %s %#v", target, body)
 		}
 		put := items[0].(map[string]interface{})["Put"].(map[string]interface{})
@@ -53,8 +53,8 @@ func TestPutAccountKBRefIsConditionalCreate(t *testing.T) {
 		reasons  string
 		untagged bool
 	}{
-		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]`, false},
-		{`[{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, true},
+		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]`, false},
+		{`[{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]`, true},
 	} {
 		repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
 			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reasons+`}`, nil), nil
