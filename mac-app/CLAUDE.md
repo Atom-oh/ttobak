@@ -54,7 +54,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 | update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
 
-Socket `status` also returns `updateBusy` (`control::app_busy`) for local tooling that must not replace a busy app.
+Socket `status` also returns `updateBusy` (`control::app_busy`), which `scripts/install.sh` reads.
 
 finalizing_for_path is deliberately a new per-path field, not the older global
 finalizing flag. Frontend wire compatibility checks rely on that distinction.
