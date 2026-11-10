@@ -8,7 +8,7 @@ exist yet. Acceptance on the user's Mac is pending; nothing here proves it.
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
 contract for one reader, `aws-outlook-mcp` `calendar_view`. The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
-SA performance data of [ADR-066](../decisions/ADR-066-sa-performance-data-residency.md).
+SA performance data of [ADR-068](../decisions/ADR-068-sa-performance-data-residency.md).
 
 ## Commands
 

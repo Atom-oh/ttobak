@@ -1,7 +1,9 @@
-# ADR-065: Account people edges and deterministic entity resolution
+# ADR-067: Account people edges and deterministic entity resolution
 
-- Status: Accepted; implemented on the account entity resolution branch. Nothing
-  in it is deployed yet.
+- Status: Accepted; merged and deployed to production on 2026-11-10.
+- Numbering: first filed as ADR-065, which duplicated
+  [ADR-065 local MCP intake](ADR-065-local-mcp-intake.md); renumbered to
+  ADR-067 because ADR-066 is reserved by the account-shared calendar work.
 - Decision date: 2026-11-10.
 - Related: ADR-016 (meeting publication), ADR-063 (account contact encryption),
   ADR-064 (account relationship links). Design record:

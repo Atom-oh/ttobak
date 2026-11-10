@@ -332,7 +332,7 @@ reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A c
 Person edges carry the Korean role label (dotted when auto), and a note gives
 the direct member count because only connected members are drawn.
 
-A **people** panel follows the flow (ADR-065, `components/account/AccountPeople.tsx`,
+A **people** panel follows the flow (ADR-067, `components/account/AccountPeople.tsx`,
 copy in `src/lib/accountPeople.ts`). It lists resolved members and contacts with
 meeting counts and a role summary, then unresolved names with their meeting
 count. "Link" opens a member/contact picker fed by the speaker-team and
@@ -601,7 +601,7 @@ and shows an informational "recognizing without the custom dictionary" line.
 `/performance` (`app/performance/page.tsx`, `components/performance/`, pure
 helpers and wire types in `lib/performance.ts`, client `performanceApi` in
 `lib/api.ts`) is the owner's own page: every request reads only the caller's
-rows ([ADR-066](decisions/ADR-066-sa-performance-data-residency.md)) and there is
+rows ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)) and there is
 no share control. The Work menu entry is SA Activity. A segmented
 period control (this week / quarter / this year, default this week) drives
 `GET /api/performance/missed`. Sections, in order:

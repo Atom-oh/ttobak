@@ -3,7 +3,7 @@
 // performance API. Both reads are complete snapshots, so an entry that
 // vanishes from a complete read is removed. Any failed, partial or malformed
 // read aborts the run before a batch is built. Only the stored fields of
-// ADR-066 leave the parser: never descriptions, comments, owners or opportunities.
+// ADR-068 leave the parser: never descriptions, comments, owners or opportunities.
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { PerformanceSource, PerformanceSyncBody, TtobakApi } from '../api.js';

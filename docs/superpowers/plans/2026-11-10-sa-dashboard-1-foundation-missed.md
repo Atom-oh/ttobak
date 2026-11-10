@@ -49,7 +49,7 @@ for SFDC.
   `pendingShareExpiresAt` set to 00:00 UTC on January 1 of the year two years
   after the row's own year (`year+2`).
 - **Encryption:** default table encryption plus owner-only authorization (the
-  owner's decision). There is no envelope sealing for `PERF*` rows. ADR-066
+  owner's decision). There is no envelope sealing for `PERF*` rows. ADR-068
   records this as an accepted exception.
 - **Unmapped data:** unmapped items stay unmapped and are counted, never
   guessed. A manual mapping always wins over an automatic one.
@@ -82,19 +82,19 @@ for SFDC.
 
 ---
 
-### Task 1: ADR-066 and spec correction
+### Task 1: ADR-068 and spec correction
 
 **Files:**
-- Create: `docs/decisions/ADR-066-sa-performance-data-residency.md`
+- Create: `docs/decisions/ADR-068-sa-performance-data-residency.md`
 - Modify: `docs/README.md` (ADR index, near the other ADR-06x rows)
 - Modify: `docs/superpowers/specs/2026-11-10-sa-performance-dashboard-design.md`
 
 **Interfaces:** Produces the residency rules that Tasks 2–8 cite.
 
-- [ ] **Step 1: Write ADR-066.**
-  - Use the existing ADR format: `# ADR-066: SA performance data residency`, a
+- [ ] **Step 1: Write ADR-068.**
+  - Use the existing ADR format: `# ADR-068: SA performance data residency`, a
     bullet header (Status Accepted, Decision date 2026-11-10, Design = the spec,
-    Related = ADR-065 local MCP intake and ADR-065 account people edges by
+    Related = ADR-065 local MCP intake and ADR-067 account people edges by
     title), then Context, Decision and Consequences.
   - The Decision section records:
     - the spec's residency table, as owner-private and separate from the
@@ -114,7 +114,7 @@ for SFDC.
 - [ ] **Step 3: Check the docs and commit.** Run
   `python3 scripts/docs/check_docs.py`. Expected: no new errors. The ADR-065
   broken link that already exists on main is the only error left.
-  `git commit -m "docs: ADR-066 SA performance data residency"`
+  `git commit -m "docs: ADR-068 SA performance data residency"`
 
 ### Task 2: Performance row model and repository
 
