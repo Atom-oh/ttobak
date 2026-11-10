@@ -121,11 +121,12 @@ Settings' Mac app section (`MacAppInstall.tsx`, `lib/macRelease.ts`) shows the
 copyable `curl -fsSL https://ttobak.atomai.click/mac/install.sh | sh` command and,
 when `/mac/latest.json` is readable, the published version; the version line is
 hidden on any failure. The Mac app's own update UI is native, not the SPA: the
-TTOBAK app menu has a check-for-updates item (manual check; a notification reports
-the result either way) that becomes an update-available item with the version once an
-update is known, and a small local popup (`update-prompt.html`, ADR-067) with Update
-and Later buttons shows download progress, stays open until install succeeds, and asks
-the user to retry after the recording when work is in progress. Copy is Korean; see
+TTOBAK app menu has a check-for-updates item (a manual check reports up-to-date or
+failure by notification, and opens the popup when an update exists) that becomes an
+update-available item with the version once an update is known. The small local popup
+(`update-prompt.html`, ADR-067) has Update and Later buttons, shows a static
+downloading status (not progress) after Update, stays open until install succeeds, and
+asks the user to retry after the recording when work is in progress. Copy is Korean; see
 `update.rs` and the page for exact strings. No popup appears while recording, finalizing or
 uploading.
 

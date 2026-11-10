@@ -55,6 +55,9 @@ placeholder, the app disables update checks and `npm run release` refuses.
   3. During a recording the menu update is refused; after it ends, install works.
   4. After the update: permissions still granted, recording works, version shown.
   5. A tampered archive or signature is refused.
+  6. The installer quits a running app via osascript, which may trigger a macOS
+     Automation prompt (Terminal -> TTOBAK); denying it makes the installer wait 30 s
+     and exit 5.
 
 Mac changes have no CI. The menu item, popup, notifications, install and restart are
 manual-only checks. If MDM or binary authorization blocks the app, stop and revisit

@@ -3,7 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 Historical plan record (2026-11-10); the ADR and runbook it produces become the
-current references.
+current references. Backticked English UI labels here are descriptors; the exact
+Korean strings live in `update.rs`, `update_prompt.rs` and `mac-app/src/update-prompt.html`.
 
 **Goal:** Install the TTOBAK Mac app with one `curl | sh` command and announce
 tagged releases in-app with an Update/Later (Korean labels) popup and an app-menu item, never
