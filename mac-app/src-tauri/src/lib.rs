@@ -34,6 +34,7 @@ mod control;
 mod control_proto;
 mod error;
 mod input_select;
+mod intake_notify;
 mod interpreter;
 mod leftover;
 pub mod meet_mute;
@@ -817,6 +818,8 @@ pub fn run() {
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());
+            // SpecReq task notices from the local intake runner (ADR-065).
+            intake_notify::start(app.handle().clone());
             // App menu with the update item; failure keeps Tauri's default menu.
             if let Err(e) = update::install_menu(app.handle()) {
                 log::warn!("update menu unavailable: {e}");
