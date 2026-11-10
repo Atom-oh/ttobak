@@ -1049,3 +1049,96 @@ func TestApplyBatchNilExpectedNeverChangesShareState(test *testing.T) {
 		})
 	}
 }
+
+func calendarTestHasNumber(values map[string]types.AttributeValue, wanted int64) bool {
+	for _, value := range values {
+		if number, ok := value.(*types.AttributeValueMemberN); ok && number.Value == fmt.Sprint(wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestApplyBatchVetoWindowCoversLatestMember keeps a veto row alive as long as its latest
+// member, so TTL never removes it while its set is non-empty.
+func TestApplyBatchVetoWindowCoversLatestMember(test *testing.T) {
+	later := calendarTestNow.Add(5 * time.Hour)
+	laterExpiry := later.Add(90 * 24 * time.Hour).Unix()
+	vetoBatch := func(eventID string, endsAt time.Time) CalendarWriteBatch {
+		batch := calendarTestWrite()
+		batch.Mutations[0].EventID = eventID
+		event := batch.Mutations[0].Event
+		event.EventID, event.SK = eventID, "CALEVENT#"+calendarTestSource+"#"+eventID
+		event.EndsAt, event.ExpiresAt = endsAt, endsAt.Add(90*24*time.Hour).Unix()
+		calendarTestShareMutation(&batch, 0, "acc_1", "mk")
+		batch.Mutations[0].Share.State, batch.Mutations[0].Share.Ciphertext, event.ShareState = "veto", "", "veto"
+		return batch
+	}
+	for _, scenario := range []struct {
+		name    string
+		members []string
+		eventID string
+		endsAt  time.Time
+		action  string // "-": no share-row write expected
+	}{
+		{"joining member ends later", []string{"event-9"}, "event-1", later, "ADD vetoEventIds"},
+		{"existing member now ends later", []string{"event-1", "event-9"}, "event-1", later, ""},
+		{"existing member unchanged", []string{"event-1", "event-9"}, "event-1", calendarTestRow().EndsAt, "-"},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			shareID, shareItem := calendarTestVetoRow(test, scenario.members...)
+			items := map[string]map[string]types.AttributeValue{shareID: shareItem}
+			batch := vetoBatch(scenario.eventID, scenario.endsAt)
+			if scenario.action != "ADD vetoEventIds" {
+				stored := *batch.Mutations[0].Event
+				stored.EndsAt, stored.ExpiresAt = calendarTestRow().EndsAt, calendarTestRow().ExpiresAt
+				items["USER#owner|"+stored.SK] = calendarTestItem(test, stored)
+			}
+			writes := 0
+			mock := &calendarSDKMock{get: calendarTestStore(test, items), transact: func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+				for _, operation := range input.TransactItems {
+					if operation.Put != nil && calendarTestString(test, operation.Put.Item, "PK") == "ACCOUNT#acc_1" ||
+						operation.Delete != nil && calendarTestString(test, operation.Delete.Key, "PK") == "ACCOUNT#acc_1" {
+						test.Fatalf("veto row must be updated in place, never replaced: %+v", operation)
+					}
+					if operation.Update == nil || calendarTestString(test, operation.Update.Key, "PK") != "ACCOUNT#acc_1" {
+						continue
+					}
+					writes++
+					fields := calendarTestExpression(operation.Update.UpdateExpression, operation.Update.ExpressionAttributeNames, operation.Update.ExpressionAttributeValues)
+					if !strings.Contains(fields, scenario.action) || !strings.Contains(fields, "endsAt = "+later.Format(time.RFC3339Nano)) ||
+						!strings.Contains(fields, "pendingShareExpiresAt") || !calendarTestHasNumber(operation.Update.ExpressionAttributeValues, laterExpiry) {
+						test.Fatalf("veto row must extend to the latest member: %s", fields)
+					}
+				}
+				return &dynamodb.TransactWriteItemsOutput{}, nil
+			}}
+			wanted := 1
+			if scenario.action == "-" {
+				wanted = 0
+			}
+			if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch)); err != nil || writes != wanted {
+				test.Fatalf("veto row updates: %v writes=%d want %d", err, writes, wanted)
+			}
+		})
+	}
+	test.Run("new row spans every claimant", func(test *testing.T) {
+		batch := vetoBatch("event-1", calendarTestRow().EndsAt)
+		second := vetoBatch("event-2", later)
+		second.Mutations[0].ExternalID = "external-event-2"
+		batch.Mutations = append(batch.Mutations, second.Mutations[0])
+		batch.Receipt.Upserted = 2
+		mock := &calendarSDKMock{get: calendarTestStore(test, map[string]map[string]types.AttributeValue{}), transact: func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+			ops := calendarTestCollect(test, input)
+			row := ops.puts["ACCOUNT#acc_1|"+model.CalendarShareSortKey(calendarTestRow().StartsAt, "mk", "owner")]
+			if row == nil || calendarTestString(test, row, "endsAt") != later.Format(time.RFC3339Nano) ||
+				row["pendingShareExpiresAt"].(*types.AttributeValueMemberN).Value != fmt.Sprint(laterExpiry) {
+				test.Fatalf("new veto row must span its latest claimant: %v", row)
+			}
+			return &dynamodb.TransactWriteItemsOutput{}, nil
+		}}
+		if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch)); err != nil {
+			test.Fatal(err)
+		}
+	})
+}

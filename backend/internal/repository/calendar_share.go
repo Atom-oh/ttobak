@@ -224,7 +224,10 @@ type calendarShareOwner struct {
 	eventID  string
 	state    string
 	vetoes   []string
-	valid    bool
+	// endsAt and expiresAt are a veto row's window end and TTL: the latest of its members'.
+	endsAt    time.Time
+	expiresAt int64
+	valid     bool
 }
 
 func (repo *CalendarRepository) readCalendarShareOwner(ctx context.Context, userID string, key ShareKey) (*calendarShareOwner, error) {
@@ -244,7 +247,8 @@ func (repo *CalendarRepository) readCalendarShareOwner(ctx context.Context, user
 			row.State == calendarShareStateVeto && validCalendarVetoSet(row.VetoEventIDs)) {
 		return &calendarShareOwner{}, nil
 	}
-	return &calendarShareOwner{sourceID: row.SourceID, eventID: row.EventID, state: row.State, vetoes: row.VetoEventIDs, valid: true}, nil
+	return &calendarShareOwner{sourceID: row.SourceID, eventID: row.EventID, state: row.State, vetoes: row.VetoEventIDs,
+		endsAt: row.EndsAt, expiresAt: row.ExpiresAt, valid: true}, nil
 }
 
 // calendarSharedOwnerCondition requires a shared row to still belong to the owner as read.
@@ -283,6 +287,9 @@ func calendarStringSet(values []string) expression.ValueBuilder {
 //     claimant, replaced) only when its set as read would become empty. A shared claimant
 //     never replaces a veto row that keeps members.
 //   - Invalid row: a veto claimant returns ErrCalendarCorruptData; otherwise it is left alone.
+//   - Every veto write spans the latest endsAt and TTL of the row as read and its veto
+//     claimants, so the row outlives every member; an unchanged set whose window grows
+//     is extended under the set as read.
 //
 // It returns the operations and, per intent, whether its desired share row is held.
 func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, sourceID string, intents []calendarShareIntent) ([]types.TransactWriteItem, [][]bool, error) {
@@ -322,11 +329,33 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 		return -1, false
 	}
 	var operations []types.TransactWriteItem
+	// vetoWindow is the latest window end and TTL among the veto claimants of a key and,
+	// for an existing veto row, its stored ones, so the row outlives every member.
+	vetoWindow := func(refs []claimRef, owner *calendarShareOwner) (time.Time, int64) {
+		var endsAt time.Time
+		var expiresAt int64
+		if owner != nil {
+			endsAt, expiresAt = owner.endsAt, owner.expiresAt
+		}
+		for _, ref := range refs {
+			row := intents[ref.intent].desired[ref.slot].row
+			if row.EndsAt.After(endsAt) {
+				endsAt = row.EndsAt
+			}
+			expiresAt = max(expiresAt, row.ExpiresAt)
+		}
+		return endsAt.UTC(), expiresAt
+	}
+	// vetoRefs are the veto claimants of the key being planned; a veto put spans their window.
+	var vetoRefs []claimRef
 	put := func(key ShareKey, ref claimRef, vetoes []string, condition expression.ConditionBuilder) error {
 		row := *intents[ref.intent].desired[ref.slot].row
 		row.PK, row.SK = model.PrefixAccount+key.AccountID, key.SK
 		row.StartsAt, row.EndsAt = row.StartsAt.UTC(), row.EndsAt.UTC()
 		row.VetoEventIDs = vetoes
+		if vetoes != nil {
+			row.EndsAt, row.ExpiresAt = vetoWindow(vetoRefs, nil)
+		}
 		item, err := repo.calendarPut(row, condition)
 		if err != nil {
 			return err
@@ -370,6 +399,7 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 				sharedClaimants = append(sharedClaimants, ref)
 			}
 		}
+		vetoRefs = vetoClaimants
 		var vetoTokens []string
 		for _, ref := range vetoClaimants {
 			vetoTokens = append(vetoTokens, calendarVetoToken(sourceID, intents[ref.intent].eventID))
@@ -435,8 +465,21 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 			}
 			grantVetoes()
 			set := expression.Name("vetoEventIds")
+			// A claimant whose window ends later than the row's extends it (TTL drift).
+			endsAt, expiresAt := vetoWindow(vetoClaimants, owner)
+			extend := func(update expression.UpdateBuilder) expression.UpdateBuilder {
+				if expiresAt == owner.expiresAt && endsAt.Equal(owner.endsAt) {
+					return update
+				}
+				return update.Set(expression.Name("endsAt"), expression.Value(endsAt)).
+					Set(expression.Name("pendingShareExpiresAt"), expression.Value(expiresAt))
+			}
 			switch {
 			case len(leavers) == 0 && len(joiners) == 0:
+				if expiresAt != owner.expiresAt || !endsAt.Equal(owner.endsAt) {
+					update := extend(expression.UpdateBuilder{})
+					err = conditional(key, &update, calendarVetoSetCondition(userID, owner.vetoes))
+				}
 			case len(joiners) > 0 && len(leavers) > 0:
 				// DynamoDB rejects an UpdateExpression that names one path in two actions,
 				// so a join and a leave on the same key SET the final set as read.
@@ -451,17 +494,17 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 					}
 				}
 				final = append(final, joiners...)
-				update := expression.Set(set, calendarStringSet(final))
+				update := extend(expression.Set(set, calendarStringSet(final)))
 				err = conditional(key, &update, calendarVetoSetCondition(userID, owner.vetoes))
 			case len(owner.vetoes)-len(leavers)+len(joiners) > 0:
 				condition := expression.Name("userId").Equal(expression.Value(userID)).
 					And(expression.Name("state").Equal(expression.Value(calendarShareStateVeto)))
 				var update expression.UpdateBuilder
 				if len(joiners) > 0 {
-					update = expression.Add(set, calendarStringSet(joiners))
+					update = extend(expression.Add(set, calendarStringSet(joiners)))
 				}
 				if len(leavers) > 0 {
-					update = expression.Delete(set, calendarStringSet(leavers))
+					update = extend(expression.Delete(set, calendarStringSet(leavers)))
 					for _, leaver := range leavers {
 						condition = condition.And(expression.Contains(set, leaver))
 					}
