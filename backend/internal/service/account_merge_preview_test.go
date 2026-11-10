@@ -180,7 +180,7 @@ func TestAccountMergeAuthorize(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(repo)
 			}
-			got, err := svc.authorize(context.Background(), "u1", tc.from, tc.to)
+			got, err := svc.authorize(context.Background(), "u1", tc.from, tc.to, "")
 			if tc.want == nil {
 				if err != nil || got == nil || got.From.AccountID != "a" || got.Into.AccountID != "b" {
 					t.Fatalf("got %+v, %v", got, err)
@@ -202,7 +202,7 @@ func TestAccountMergeAuthorizeSubjects(t *testing.T) {
 	repo.addAccount("a2", "a")
 	repo.addAccount("a11", "a1")
 	repo.children["a"] = append(repo.children["a"], "stale") // no META row: skipped
-	got, err := svc.authorize(context.Background(), "u1", "a", "b")
+	got, err := svc.authorize(context.Background(), "u1", "a", "b", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestAccountMergeAuthorizeRejectsOversizedSubtree(t *testing.T) {
 	for i := 0; i < mergeSubtreeMaxAccounts; i++ {
 		repo.addAccount(fmt.Sprintf("k%d", i), "a")
 	}
-	if _, err := svc.authorize(context.Background(), "u1", "a", "b"); !errors.Is(err, ErrAccountMergeIneligible) {
+	if _, err := svc.authorize(context.Background(), "u1", "a", "b", ""); !errors.Is(err, ErrAccountMergeIneligible) {
 		t.Fatalf("err=%v", err)
 	}
 }

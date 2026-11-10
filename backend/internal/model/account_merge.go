@@ -24,23 +24,27 @@ var MergeSteps = []string{"members", "children", "projects", "research", "contac
 
 // AccountMergeJob is the resumable state of one source-into-target merge.
 type AccountMergeJob struct {
-	PK              string         `dynamodbav:"PK"`
-	SK              string         `dynamodbav:"SK"`
-	SourceAccountID string         `dynamodbav:"sourceAccountId"`
-	TargetAccountID string         `dynamodbav:"targetAccountId"`
-	RequesterUserID string         `dynamodbav:"requesterUserId"`
-	State           string         `dynamodbav:"state"`
-	Step            string         `dynamodbav:"step"`
-	Cursor          string         `dynamodbav:"cursor,omitempty"`
-	ErrorCode       string         `dynamodbav:"errorCode,omitempty"`
-	LeaseOwner      string         `dynamodbav:"leaseOwner,omitempty"`
-	LeaseUntil      int64          `dynamodbav:"leaseUntil,omitempty"`
-	AcceptUnmoved   bool           `dynamodbav:"acceptUnmoved,omitempty"`
-	Counts          map[string]int `dynamodbav:"counts,omitempty"`
-	StartedAt       time.Time      `dynamodbav:"startedAt"`
-	UpdatedAt       time.Time      `dynamodbav:"updatedAt"`
-	FinishedAt      *time.Time     `dynamodbav:"finishedAt,omitempty"`
-	EntityType      string         `dynamodbav:"entityType"` // "ACCOUNT_MERGE_JOB"
+	PK              string `dynamodbav:"PK"`
+	SK              string `dynamodbav:"SK"`
+	SourceAccountID string `dynamodbav:"sourceAccountId"`
+	TargetAccountID string `dynamodbav:"targetAccountId"`
+	RequesterUserID string `dynamodbav:"requesterUserId"`
+	State           string `dynamodbav:"state"`
+	Step            string `dynamodbav:"step"`
+	Cursor          string `dynamodbav:"cursor,omitempty"`
+	ErrorCode       string `dynamodbav:"errorCode,omitempty"`
+	LeaseOwner      string `dynamodbav:"leaseOwner,omitempty"`
+	// LeaseUntil is the lease expiry in Unix seconds. Another worker may take
+	// the lease over only after it passes, and a takeover always replaces
+	// LeaseOwner, so the previous holder's fenced writes fail.
+	LeaseUntil    int64 `dynamodbav:"leaseUntil,omitempty"`
+	AcceptUnmoved bool  `dynamodbav:"acceptUnmoved,omitempty"`
+	// Counts holds per-step totals keyed "{step}.{moved|skipped|resumed|unreadable|keptSeparate}".
+	Counts     map[string]int `dynamodbav:"counts,omitempty"`
+	StartedAt  time.Time      `dynamodbav:"startedAt"`
+	UpdatedAt  time.Time      `dynamodbav:"updatedAt"`
+	FinishedAt *time.Time     `dynamodbav:"finishedAt,omitempty"`
+	EntityType string         `dynamodbav:"entityType"` // "ACCOUNT_MERGE_JOB"
 }
 
 // AccountMergeContactMap records which target contact a source contact became.
@@ -84,4 +88,44 @@ type AccountMergePreview struct {
 	CLIOnly               []string               `json:"cliOnly"`
 	NewAudience           MergeAudience          `json:"newAudience"`
 	RequiresAcceptUnmoved bool                   `json:"requiresAcceptUnmoved"`
+}
+
+// StartAccountMergeRequest is the body of POST /api/accounts/{accountId}/merge.
+type StartAccountMergeRequest struct {
+	IntoAccountID string `json:"intoAccountId"`
+	AcceptUnmoved bool   `json:"acceptUnmoved"`
+}
+
+// AccountMergeJobDTO is the progress view of a merge job. Lease and cursor
+// details stay internal.
+type AccountMergeJobDTO struct {
+	FromAccountID string         `json:"fromAccountId"`
+	IntoAccountID string         `json:"intoAccountId"`
+	State         string         `json:"state"`
+	Step          string         `json:"step"`
+	ErrorCode     string         `json:"errorCode,omitempty"`
+	Counts        map[string]int `json:"counts"`
+	StartedAt     time.Time      `json:"startedAt"`
+	UpdatedAt     time.Time      `json:"updatedAt"`
+	FinishedAt    *time.Time     `json:"finishedAt,omitempty"`
+}
+
+// DTO returns the public progress view of the job.
+func (j *AccountMergeJob) DTO() *AccountMergeJobDTO {
+	counts := make(map[string]int, len(j.Counts))
+	for k, v := range j.Counts {
+		counts[k] = v
+	}
+	return &AccountMergeJobDTO{FromAccountID: j.SourceAccountID, IntoAccountID: j.TargetAccountID, State: j.State,
+		Step: j.Step, ErrorCode: j.ErrorCode, Counts: counts, StartedAt: j.StartedAt, UpdatedAt: j.UpdatedAt, FinishedAt: j.FinishedAt}
+}
+
+// MergeStepIndex returns the position of step in MergeSteps, or -1.
+func MergeStepIndex(step string) int {
+	for i, s := range MergeSteps {
+		if s == step {
+			return i
+		}
+	}
+	return -1
 }

@@ -167,7 +167,9 @@ func init() {
 	healthHandler := handler.NewHealthHandler()
 	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
 	accountHandler := handler.NewAccountHandler(accountService, uploadService)
-	accountMergeHandler := handler.NewAccountMergeHandler(service.NewAccountMergeService(repo, accountService))
+	accountMergeService := service.NewAccountMergeService(repo, accountService)
+	accountMergeService.SetJobRepo(repo)
+	accountMergeHandler := handler.NewAccountMergeHandler(accountMergeService)
 	// Speaker map and contact changes queue a people resolve run in the
 	// summarize worker (best-effort); the people panel reads metadata only.
 	peopleResolvePublisher := service.PeopleResolvePublisher(ebClient)
