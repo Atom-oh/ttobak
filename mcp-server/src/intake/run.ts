@@ -272,7 +272,7 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
           const run = await runTasks({ store, api, scope, zone: environment.zone, now: ranAt, sourceId: selected.sourceId,
             selection: { autoAck: selection.specreq.autoAck !== false }, sessions: opened.sessions,
             unavailable: opened.unavailable, me,
-            calendar: { upserted: result.upserted ?? [], removedExternalIds: result.removedExternalIds ?? [] } });
+            calendar: { upserted: result.upserted ?? [] } });
           tasks = { result: run.result, counts: run.counts,
             ...(Object.keys(run.failures).length ? { failures: run.failures } : {}) };
         } catch (error) {

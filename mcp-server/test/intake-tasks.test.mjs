@@ -743,6 +743,7 @@ function applyRules(task, body) {
       if (!task.specReqId || task.state === 'closed' || !body.specReqStatus) return null;
       set();
       if (task.path === 'theirs' && task.state === 'acked' && body.specReqStatus === 'COMPLETED') next.state = 'resolved';
+      if (task.state === 'ack_failed' && ['WORKING', 'WAITING', 'COMPLETED'].includes(body.specReqStatus)) next.state = 'acked';
       return next;
     case 'close':
       return task.state === 'closed' ? null : { ...next, state: 'closed' };
@@ -1133,4 +1134,60 @@ test('an occurrence synced by a run that skipped the task step is evaluated late
   const second = await run(api, [occurrence()], work);
   assert.equal(second.output.counts.upserts, 0);
   assert.equal(second.output.tasks.counts.created, 1);
+});
+
+test('removals from a replayed batch or a skipped task step still close the task', async t => {
+  const { ApiResponseError } = await import('../dist/api.js');
+  for (const skip of ['replay', 'identity']) {
+    const { run } = await taskHome(t);
+    const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+    const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+    await run(api, [occurrence()], work);
+    const [created] = api.tasks.values();
+    const sync = api.syncCalendarEvents;
+    if (skip === 'replay') {
+      // The removal lands, but its receipt is lost: the next run replays the batch.
+      api.syncCalendarEvents = async (...args) => { await sync(...args); throw new ApiResponseError('HTTP 503', 503); };
+      assert.notEqual((await run(api, [occurrence({ isCanceled: true })], work)).code, 0);
+      api.syncCalendarEvents = sync;
+    } else {
+      const skipped = await run(api, [occurrence({ isCanceled: true })], work, { me: undefined });
+      assert.equal(skipped.output.tasks.result, 'TTOBAK_LOGIN_REQUIRED');
+    }
+    const next = await run(api, [occurrence({ isCanceled: true })], work);
+    assert.equal(next.output.counts.removals, 0, skip);
+    assert.equal(next.output.tasks.counts.closed, 1, skip);
+    assert.equal(api.tasks.get(created.eventId).state, 'closed');
+  }
+});
+
+test('unknown attendees stay pending, then are skipped after three reads', async t => {
+  const unknown = { FAKE_WORK_DETAILS: JSON.stringify({ 'i:1': { requiredAttendees: ['alice@amazon.com'], organizer: 'me@amazon.com' } }) };
+  const known = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const retried = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  assert.equal((await retried.run(api, [occurrence()], unknown)).output.tasks.counts.created, 0);
+  assert.equal((await retried.run(api, [occurrence()], known)).output.tasks.counts.created, 1);
+
+  const capped = await taskHome(t);
+  const other = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  for (let index = 0; index < 3; index++) {
+    assert.ok((await capped.run(other, [occurrence()], unknown)).calls.includes('get_meeting'));
+  }
+  const after = await capped.run(other, [occurrence()], known);
+  assert.ok(!after.calls.includes('get_meeting'));
+  assert.equal(other.calls.filter(call => call[0] === 'create').length, 0);
+});
+
+test('refresh promotes ack_failed only when I am the resolver', async t => {
+  for (const [resolverLogin, state] of [['bob', 'ack_failed'], ['me', 'acked']]) {
+    const { run, queue } = await taskHome(t);
+    const seed = [linkedTask(0, { specReqId: RID, state: 'ack_failed', failureCode: 'ACK_UNCONFIRMED', specReqStatus: 'NEXT_UP' })];
+    const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+    await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+      FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'WORKING', resolverLogin }) }) });
+    assert.equal(transitions(api, 'refreshSpecReq').length, resolverLogin === 'me' ? 1 : 0);
+    assert.equal(api.tasks.get(seed[0].eventId).state, state);
+    assert.equal(queue().some(line => line.state === 'acked'), state === 'acked');
+  }
 });

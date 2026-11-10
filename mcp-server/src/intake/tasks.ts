@@ -29,6 +29,8 @@ export const OPPTY_ACCOUNTS_MAX = 20;
 export const MEMBER_ACCOUNTS_MAX = 50;
 export const DRAFTS_MAX = 10;
 const SEEN_RETENTION_MS = 120 * 24 * 60 * 60 * 1000;
+/** Consecutive unknown attendee reads before an occurrence is skipped for good. */
+export const UNKNOWN_ATTENDEES_MAX = 3;
 const EVENT_ID = /^[0-9a-f]{64}$/;
 const STATES: readonly SpecReqTaskState[] = ['issue_needed', 'issued', 'request_needed', 'requested', 'acked',
   'ack_failed', 'resolved', 'needs_account', 'needs_owner', 'closed'];
@@ -71,7 +73,7 @@ export interface TaskRunOptions {
   sessions: { meetings?: McpSession; specreq?: McpSession; slack?: McpSession };
   /** Selected connectors whose session could not be opened, with the code. */
   unavailable?: Partial<Record<TaskConnectorId, IntakeCode>>;
-  calendar: { upserted: OutlookItem[]; removedExternalIds: string[] };
+  calendar: { upserted: OutlookItem[] };
   me: { email: string; userId: string };
 }
 
@@ -97,6 +99,8 @@ interface SeenState {
   closing: Record<string, string>;
   /** Last `get_request` refresh per task, so the refresh budget rotates. */
   refreshed: Record<string, string>;
+  /** Consecutive unknown attendee reads per pending occurrence. */
+  unknown: Record<string, number>;
 }
 
 interface AccountInfo { name: string; members: MemberView[] }
@@ -150,13 +154,14 @@ function seenPath(scope: string): string[] {
 
 function loadSeen(store: IntakeStore, scope: string): SeenState {
   const raw = store.read<SeenState>(...seenPath(scope));
-  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {} };
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, unknown: {} };
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (raw.version !== 1 || !record(raw.seen) || !record(raw.pending) || !record(raw.closing)) {
     throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   }
   raw.refreshed ??= {};
-  if (!record(raw.refreshed)) throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
+  raw.unknown ??= {};
+  if (!record(raw.refreshed) || !record(raw.unknown)) throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   return raw;
 }
 
@@ -215,6 +220,7 @@ class TaskRun {
       .filter(([, at]) => this.options.now.getTime() - Date.parse(at) < SEEN_RETENTION_MS));
     this.seen.seen = recent(this.seen.seen);
     this.seen.refreshed = recent(this.seen.refreshed);
+    this.seen.unknown = Object.fromEntries(Object.entries(this.seen.unknown).filter(([id]) => this.seen.pending[id]));
     try { this.saveSeen(); } catch (error) { this.fail('classify', error); }
     return this.result();
   }
@@ -228,7 +234,7 @@ class TaskRun {
     try { await body(); } catch (error) { this.fail(name, error); }
   }
 
-  /** Records this sync's new and removed occurrences first, so a failed step retries them next run. */
+  /** Records this sync's new occurrences first, so a failed step retries them next run. */
   private register(): void {
     const { sourceId, calendar, now, store, scope, zone } = this.options;
     for (const item of calendar.upserted) {
@@ -242,11 +248,6 @@ class TaskRun {
       if (new Date(entry.endsAt) > window.start && new Date(entry.startsAt) < window.end && !this.seen.seen[eventId]) {
         this.seen.pending[eventId] = externalId;
       }
-    }
-    for (const externalId of calendar.removedExternalIds) {
-      const eventId = calendarEventId(sourceId, externalId);
-      this.seen.closing[eventId] = now.toISOString();
-      delete this.seen.pending[eventId];
     }
     this.saveSeen();
   }
@@ -316,6 +317,17 @@ class TaskRun {
   // ---------- step 2: removed occurrences ----------
 
   private async close(): Promise<void> {
+    // Derived from state, so removals from a replayed batch or a skipped task step still close:
+    // an open task of this source in the window whose occurrence the synced ledger no longer tracks.
+    const { sourceId, store, scope, now, zone } = this.options;
+    const window = syncWindow(now, zone);
+    const tracked = new Set(Object.keys(loadState(store, sourceId, scope).ledger).map(id => calendarEventId(sourceId, id)));
+    for (const task of this.tasks.values()) {
+      if (task.sourceId === sourceId && task.state !== 'closed' && !tracked.has(task.eventId)
+        && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
+        this.seen.closing[task.eventId] ??= now.toISOString();
+      }
+    }
     let failure: unknown;
     for (const eventId of Object.keys(this.seen.closing)) {
       const task = this.tasks.get(eventId);
@@ -418,9 +430,18 @@ class TaskRun {
         reads++;
         const attendees = parseAttendees(resultJson(await session.call('get_meeting', { meetingId: joined.meetingId,
           getMaster: false, userEmail: me.email }), 'get_meeting'));
+        if (!attendees) {
+          // Unknown (no privacy flag or over the cap): retried, then skipped after a bounded number of reads.
+          if (candidate.task) continue;
+          const count = (this.seen.unknown[candidate.eventId] ?? 0) + 1;
+          if (count < UNKNOWN_ATTENDEES_MAX) this.seen.unknown[candidate.eventId] = count;
+          else this.markSeen(candidate.eventId);
+          continue;
+        }
+        delete this.seen.unknown[candidate.eventId];
         const accountId = this.events.get(candidate.eventId)?.accountId ?? candidate.task?.accountId ?? null;
         let classification: Classification = { kind: 'skip' };
-        if (attendees && !attendees.isPrivate) {
+        if (!attendees.isPrivate) {
           let members: MemberView[] = [];
           let anyAccountSaEmails = new Set<string>();
           if (accountId) {
@@ -449,6 +470,7 @@ class TaskRun {
   private markSeen(eventId: string): void {
     this.seen.seen[eventId] = this.options.now.toISOString();
     delete this.seen.pending[eventId];
+    delete this.seen.unknown[eventId];
   }
 
   private async create(candidate: { eventId: string; externalId: string }, accountId: string | null,
@@ -671,8 +693,11 @@ class TaskRun {
           continue;
         }
         if (request.stateId === task.specReqStatus && (!request.title || request.title === task.specReqTitle)) continue;
+        // The backend promotes ack_failed to acked on a confirmed state; only my own resolution may do that.
+        const mayRefresh = (current: TaskView) => current.state !== 'ack_failed' || request.resolverLogin === this.myLogin;
+        if (!mayRefresh(task)) continue;
         const next = await this.transition(task, current => current.specReqId === request.requestId && current.state !== 'closed'
-          ? { op: 'refreshSpecReq', specReqId: request.requestId, specReqStatus: request.stateId,
+          && mayRefresh(current) ? { op: 'refreshSpecReq', specReqId: request.requestId, specReqStatus: request.stateId,
             ...(request.title ? { specReqTitle: request.title } : {}) } : null);
         if (next) this.counts.refreshed++;
       } catch (error) { failure ??= error; }
