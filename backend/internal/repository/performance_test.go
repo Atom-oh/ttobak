@@ -201,7 +201,10 @@ func TestPerformanceAssignmentRowsHaveNoTTL(test *testing.T) {
 func TestApplyPerformanceBatchRejectsInvalid(test *testing.T) {
 	pinPerformanceNow(test)
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
-		test.Fatalf("invalid batch reached DynamoDB: %s", performanceTarget(request))
+		if performanceTarget(request) == "GetItem" { // content errors follow the receipt lookup
+			return summaryHTTPResponse(200, `{}`, nil), nil
+		}
+		test.Fatalf("invalid batch reached a DynamoDB write: %s", performanceTarget(request))
 		return nil, nil
 	})
 	mutate := func(edit func(*model.PerformanceSyncRequest)) model.PerformanceSyncRequest {
@@ -371,7 +374,10 @@ func TestApplyPerformanceBatchAcceptsAccountlessTask(test *testing.T) {
 func TestPerformanceRejectsAlreadyExpiredWrites(test *testing.T) {
 	pinPerformanceNow(test)
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
-		test.Fatalf("expired write must be rejected before any call: %s", performanceTarget(request))
+		if performanceTarget(request) == "GetItem" { // receipt lookup precedes expiry validation
+			return summaryHTTPResponse(200, `{}`, nil), nil
+		}
+		test.Fatalf("expired write must be rejected before any write: %s", performanceTarget(request))
 		return nil, errors.New("unexpected call")
 	})
 	if err := repo.PutPerformanceGoals(test.Context(), "owner", model.PerformanceGoals{Year: 2019, Text: "old"}); !errors.Is(err, ErrInvalidPerformanceInput) {
@@ -400,5 +406,50 @@ func TestGetPerformanceGoalsHidesExpired(test *testing.T) {
 	ttl = time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
 	if goals, err := repo.GetPerformanceGoals(test.Context(), "owner", 2024); err != nil || goals == nil {
 		test.Fatalf("live goals must be returned: %+v %v", goals, err)
+	}
+}
+
+func TestApplyPerformanceBatchReplayAcrossYearBoundary(test *testing.T) {
+	pinPerformanceNow(test)
+	performanceNow = func() time.Time { return time.Date(2026, time.December, 30, 0, 0, 0, 0, time.UTC) }
+	request := performanceTaskRequest(0)
+	request.Mutations[0].Task.ActivityDate = "2025-06-01"
+	var stored map[string]any
+	writes := 0
+	repo := summarySDKRepo(func(httpRequest *http.Request) (*http.Response, error) {
+		body := performanceBody(test, httpRequest)
+		switch performanceTarget(httpRequest) {
+		case "GetItem":
+			if stored != nil && strings.Contains(mustJSON(test, body), performanceTestBatch) {
+				return summaryHTTPResponse(200, `{"Item":`+mustJSON(test, stored)+`}`, nil), nil
+			}
+			return summaryHTTPResponse(200, `{}`, nil), nil
+		case "TransactWriteItems":
+			writes++
+			operations := body["TransactItems"].([]any)
+			stored = operations[len(operations)-1].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
+			return summaryHTTPResponse(200, `{}`, nil), nil
+		}
+		test.Fatalf("unexpected call %s", performanceTarget(httpRequest))
+		return nil, nil
+	})
+	first, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, request, performanceTestDigest)
+	if err != nil || writes != 1 {
+		test.Fatalf("first apply: %+v %v writes=%d", first, err, writes)
+	}
+	performanceNow = func() time.Time { return time.Date(2027, time.January, 2, 0, 0, 0, 0, time.UTC) }
+	again, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, request, performanceTestDigest)
+	if err != nil || *again != *first || writes != 1 {
+		test.Fatalf("replay after expiry must return the stored receipt without a write: %+v %v writes=%d", again, err, writes)
+	}
+	_, err = repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, request, strings.Repeat("b", 64))
+	if !errors.Is(err, ErrConditionFailed) {
+		test.Fatalf("a mismatched digest must still conflict: %v", err)
+	}
+	fresh := request
+	fresh.BatchID = "11111111-2222-4333-8444-555555555555"
+	_, err = repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, fresh, performanceTestDigest)
+	if !errors.Is(err, ErrInvalidPerformanceBatch) || writes != 1 {
+		test.Fatalf("a new batch with an expired task must be rejected: %v writes=%d", err, writes)
 	}
 }

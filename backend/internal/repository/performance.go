@@ -121,16 +121,21 @@ func performanceScopeCondition(userID, source string) expression.ConditionBuilde
 // receipt. An identical retry returns the saved receipt; a reused batch ID
 // with a different digest, or a stale revision, returns ErrConditionFailed.
 func (r *DynamoDBRepository) ApplyPerformanceBatch(ctx context.Context, userID, source string, req model.PerformanceSyncRequest, digest string) (*model.PerformanceSyncReceipt, error) {
-	rows, receipt, err := buildPerformanceRows(userID, source, req, digest)
-	if err != nil {
-		return nil, err
+	if !validPerformanceBatchShape(userID, source, req, digest) {
+		return nil, ErrInvalidPerformanceBatch
 	}
+	// Look up the receipt before the clock-dependent row validation so an
+	// identical retry replays after a task's retention year has passed.
 	saved, err := r.getPerformanceReceipt(ctx, userID, source, req.BatchID)
 	if err != nil {
 		return nil, err
 	}
 	if saved != nil {
 		return performanceRetryReceipt(saved, digest)
+	}
+	rows, receipt, err := buildPerformanceRows(userID, source, req, digest)
+	if err != nil {
+		return nil, err
 	}
 	now := performanceNow().UTC()
 	sourceUpdate, err := r.performanceSourceUpdate(userID, source, req, receipt.Revision, now)
@@ -183,10 +188,15 @@ type performanceRow struct {
 	item    any
 }
 
+// validPerformanceBatchShape checks the clock-independent batch envelope.
+func validPerformanceBatchShape(userID, source string, req model.PerformanceSyncRequest, digest string) bool {
+	return performanceUserID.MatchString(userID) && validPerformanceSource(source) && uuid.Validate(req.BatchID) == nil &&
+		performanceDigest.MatchString(digest) && req.ExpectedRevision >= 0 && req.ExpectedRevision != 1<<63-1 &&
+		len(req.Mutations) <= performanceMaxMutations
+}
+
 func buildPerformanceRows(userID, source string, req model.PerformanceSyncRequest, digest string) ([]performanceRow, *model.PerformanceSyncReceipt, error) {
-	if !performanceUserID.MatchString(userID) || !validPerformanceSource(source) || uuid.Validate(req.BatchID) != nil ||
-		!performanceDigest.MatchString(digest) || req.ExpectedRevision < 0 || req.ExpectedRevision == 1<<63-1 ||
-		len(req.Mutations) > performanceMaxMutations {
+	if !validPerformanceBatchShape(userID, source, req, digest) {
 		return nil, nil, ErrInvalidPerformanceBatch
 	}
 	pk := model.PrefixUser + userID
