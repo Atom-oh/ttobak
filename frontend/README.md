@@ -20,6 +20,10 @@ See [module guidance](CLAUDE.md), [UI reference](../docs/DESIGN-SPEC.md), and th
 
 The [product guide](https://www.atomai.click/ttobak/) is published from
 `docs/user-guide`; see its [authoring and packaging notes](../docs/user-guide/README.md).
+The guide includes actual frontend screenshots of the menus, Account tabs,
+sharing controls, settings and mobile layouts, using fictional example data.
+Conditional Billing/admin controls depend on configuration and permissions;
+these screenshots do not establish production or native macOS acceptance.
 
 See [recording and upload workflows](https://www.atomai.click/ttobak/#record) for meeting capture.
 
