@@ -11,6 +11,7 @@ import (
 type fakeMoverRepo struct {
 	contactFake
 	eventFake
+	meetingFake
 	members map[string]map[string]*model.AccountMember
 	puts    []string
 	putErr  error

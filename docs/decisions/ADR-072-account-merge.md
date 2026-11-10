@@ -29,8 +29,8 @@ change of meeting owners or S3 object locations.
   A `PENDING_ACCOUNT#A` grant is redirected one hop to `A.mergedInto` when it
   materializes, and a merging or merged target fails closed.
 - **Stale references.** `MEETINGREF#` and `INSIGHT#` rows left on A are harmless:
-  readers already require the meeting to be published to A. The mover still deletes
-  A's reference in its transaction so a resumed run stays idempotent.
+  readers already require the meeting to be published to A. A reference whose meeting
+  is gone or on a third account is skipped and left in place.
 - **Children.** A's children move to B through a writer fenced by the merge job and
   B's ancestor chain, because the generic reparent requires the child's Owner.
 - **Audience.** Moved meetings become visible to B's direct members and ADR-058
@@ -68,6 +68,22 @@ contact and event creates, news source create and delete checks (the same checks
 unpublish and the legacy document claim), people-link and
 unresolved-mention writes, and meeting creation that names an account. A people
 resolver run that meets the fence stops quietly without an error to retry.
+
+### Amendment: meeting mover
+
+The meetings step walks A's `MEETINGREF#` pages, at most 50 references per
+invocation, and reads each meeting canonically. One transaction sets `accountId` to
+B, increments `authorizationRevision`, rebinds an approval whose `accountId` is A
+(other approval fields unchanged), writes B's reference under the same sort key, and
+carries the merge fence. It is conditioned on the full summary privacy snapshot and
+`accountId = A` and never writes `sharedToAccount`, so a link-only meeting stays
+link-only and an unpublished one never becomes visible; the generic sharing-safe
+gate does not apply. Afterwards A-origin shares are retagged to B (both rows
+conditioned on `origin = account` and `accountId = A`, fenced), B members without a
+share are granted one and B's insight rows are written only for a published meeting.
+A's reference is deleted last, in its own fenced write, instead of in the move
+transaction: a meeting already on B whose A reference remains is a run interrupted
+after its move, and a rerun finishes its shares and insights without moving it again.
 
 ## Consequences
 

@@ -31,6 +31,8 @@ type accountMergeMoverRepo interface {
 	ListAccountEventsForMerge(ctx context.Context, accountID string, limit int, afterSK string) ([]repository.MergeEventRow, []string, string, error)
 	ExistingAccountContactIDs(ctx context.Context, accountID string, ids []string) (map[string]bool, error)
 	MoveEventForMerge(ctx context.Context, job *model.AccountMergeJob, sk string, from model.AccountEvent, contactMap map[string]string) error
+
+	accountMergeMeetingRepo
 }
 
 // mergeFence carries one worker's authority over a job. The lease heartbeat
