@@ -59,7 +59,8 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | caption_overlay_open | lang ko/en/ja/zh (ja/zh only as the extra language); opens or reuses the window, returns its saved layout |
 | caption_overlay_close | lang; closes the window and saves it closed |
 | caption_overlay_set_style | lang, style {fontFamily, fontSize 16-160, fontColor, outlineColor, outlineWidth 0-12, backgroundOpacity 0-1}; saved and sent to the window |
-| caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus |
+| caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus; `clear` also makes the window ignore the pointer |
+| caption_overlay_idle | idle; overlay windows only (`caption-overlay.json`, never the remote SPA); sets only the calling `caption-<lang>` window to let clicks through while it shows no caption, and to take them again once it does; sync, main thread, no lock |
 
 Caption command errors carry a fixed `code`: profile-missing, credentials-expired,
 model-access, rate-limited, invalid-input, invalid-output, timeout, aws-error,
@@ -83,7 +84,9 @@ Caption overlay (ADR-069): `caption-update` ({lang, kind, id, order, text, isFin
 page listens with target `{kind: 'WebviewWindow', label: 'caption-<lang>'}` and also drops
 payloads whose `lang` is not its own. The page loads
 bundled `caption-overlay.html` under the listen-only `capabilities/caption-overlay.json`
-(plus window dragging and `allow-set-size`; no emit, no command). Hover chrome
+(plus window dragging, `allow-set-size` and `allow-caption-overlay-idle`; no emit, no
+other command). An idle page (no caption line) reports idle, so its transparent window
+passes clicks through and shows no hover chrome until text returns. Hover chrome
 (outline, move handle, resize grip) is invisible without a pointer; the grip resizes
 via page `setSize` because tao has no macOS `startResizeDragging`. Credentials stay in Rust;
 only profile names cross IPC. The event ACL has no per-event scope, so the overlay could

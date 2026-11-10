@@ -4,8 +4,10 @@
 //! The remote main window opens and closes them, sets their style and pushes
 //! caption text; Rust relays text to the matching window as Tauri events.
 //! Each window loads the bundled `src/caption-overlay.html` (a local origin),
-//! holds no token, makes no network request and may call no app command
-//! (`capabilities/caption-overlay.json`). Caption text is never logged.
+//! holds no token, makes no network request and may call only
+//! `caption_overlay_idle`, which changes nothing but its own window's click
+//! pass-through (`capabilities/caption-overlay.json`). Caption text is never
+//! logged.
 //!
 //! Each page listens with a target scoped to its own window, so an event sent
 //! with `emit_to` reaches only that window; every payload also names its
@@ -263,6 +265,26 @@ fn visibility_after(kind: &str, text: &str) -> Option<bool> {
     }
 }
 
+/// Whether `label`'s window should ignore the pointer, so clicks reach the
+/// windows under it. Only a caption window may ask, and only for itself; an
+/// idle (empty, transparent) overlay must never swallow clicks.
+pub fn pass_through(label: &str, idle: bool) -> Result<bool, CaptionError> {
+    let is_overlay = caption_model::LANGS
+        .iter()
+        .any(|lang| caption_model::window_label(lang) == Some(label));
+    if !is_overlay {
+        return Err(CaptionError::invalid("Only a caption window can do this."));
+    }
+    Ok(idle)
+}
+
+fn set_pass_through(window: &WebviewWindow, idle: bool) -> Result<(), CaptionError> {
+    let ignore = pass_through(window.label(), idle)?;
+    window
+        .set_ignore_cursor_events(ignore)
+        .map_err(|e| window_error("pass-through", e))
+}
+
 /// Shows or hides the window without making it key, so a caption arriving
 /// mid-talk never takes focus from the slideshow.
 #[cfg(target_os = "macos")]
@@ -505,6 +527,11 @@ pub async fn caption_overlay_push(
     let Some(window) = app.get_webview_window(label) else {
         return Ok(());
     };
+    // A clear lets clicks through at once, before the page hears of it, so
+    // a later line's report from the page cannot be overtaken by this one.
+    if kind == "clear" {
+        set_pass_through(&window, true)?;
+    }
     let update = CaptionUpdate::new(&lang, &kind, &id, order, &text, is_final);
     app.emit_to(EventTarget::webview_window(label), "caption-update", update)
         .map_err(|e| window_error("push", e))?;
@@ -512,6 +539,17 @@ pub async fn caption_overlay_push(
         set_shown(&window, shown);
     }
     Ok(())
+}
+
+/// Called by an overlay page whenever it gains or loses its last caption
+/// line: an idle window lets clicks through to what is under it, and takes
+/// them again (drag, resize) once it shows text. It acts only on the calling
+/// window and is granted only to the overlay capability, not the remote SPA.
+/// Synchronous, so it runs on the main thread in the order the page sent its
+/// reports; it takes no lock.
+#[tauri::command]
+pub fn caption_overlay_idle(window: WebviewWindow, idle: bool) -> Result<(), CaptionError> {
+    set_pass_through(&window, idle)
 }
 
 #[cfg(test)]
@@ -525,6 +563,21 @@ mod tests {
         assert_eq!(visibility_after("entry", "hello"), Some(true));
         // Removing a failed line must not bring a hidden window back.
         assert_eq!(visibility_after("entry", ""), None);
+    }
+
+    #[test]
+    fn idle_overlays_pass_clicks_through_and_only_overlays_may_ask() {
+        for label in ["caption-ko", "caption-en", "caption-ja", "caption-zh"] {
+            assert!(pass_through(label, true).unwrap(), "{label}");
+            assert!(!pass_through(label, false).unwrap(), "{label}");
+        }
+        for label in ["main", "meeting-prompt", "update-prompt", "caption-fr", ""] {
+            assert_eq!(
+                pass_through(label, true).unwrap_err().code,
+                "invalid-input",
+                "{label}"
+            );
+        }
     }
 
     #[test]
@@ -617,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_capability_grants_only_listening_dragging_and_sizing() {
+    fn overlay_capability_grants_only_listening_dragging_sizing_and_idle() {
         let cap: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/caption-overlay.json"))
                 .expect("json");
@@ -642,6 +695,7 @@ mod tests {
         assert_eq!(
             granted,
             [
+                "allow-caption-overlay-idle",
                 "core:event:allow-listen",
                 "core:event:allow-unlisten",
                 "core:window:allow-set-size",
@@ -651,8 +705,19 @@ mod tests {
         for p in &granted {
             assert_ne!(*p, "core:event:default");
             assert!(!p.contains("allow-emit"), "{p}");
-            assert!(p.starts_with("core:"), "app command permission {p}");
+            assert!(
+                p.starts_with("core:") || *p == "allow-caption-overlay-idle",
+                "app command permission {p}"
+            );
         }
+        // The remote SPA must not toggle overlay pass-through.
+        let main: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        assert!(!main["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .any(|p| p.as_str() == Some("allow-caption-overlay-idle")));
     }
 
     #[test]

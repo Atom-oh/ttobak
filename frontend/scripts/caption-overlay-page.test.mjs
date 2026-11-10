@@ -48,7 +48,7 @@ class FakeGrip extends FakeElement {
   }
 }
 
-function loadPage(lang, { tauriWindow = true } = {}) {
+function loadPage(lang, { tauriWindow = true, invokeFails = false } = {}) {
   const box = new FakeElement('div');
   const grip = new FakeGrip();
   const properties = {};
@@ -56,13 +56,21 @@ function loadPage(lang, { tauriWindow = true } = {}) {
   const sizes = [];
   const frames = [];
   const rootClasses = new Set();
+  const invokes = [];
+  const frameEl = new FakeElement('div');
+  const frameClasses = new Set();
+  frameEl.classList = {
+    add: (c) => frameClasses.add(c),
+    remove: (c) => frameClasses.delete(c),
+    toggle: (c, on) => (on ? frameClasses.add(c) : frameClasses.delete(c)),
+  };
   const document = {
     documentElement: {
       lang: '',
       style: { setProperty: (k, v) => { properties[k] = v; } },
       classList: { add: (c) => rootClasses.add(c), remove: (c) => rootClasses.delete(c) },
     },
-    getElementById: (id) => (id === 'captions' ? box : id === 'grip' ? grip : null),
+    getElementById: (id) => (id === 'captions' ? box : id === 'grip' ? grip : id === 'frame' ? frameEl : null),
     createElement: (tag) => new FakeElement(tag),
   };
   class LogicalSize {
@@ -73,6 +81,12 @@ function loadPage(lang, { tauriWindow = true } = {}) {
     innerHeight: 160,
     requestAnimationFrame: (cb) => { frames.push(cb); return frames.length; },
     __TAURI__: {
+      core: {
+        invoke: (cmd, args) => {
+          invokes.push([cmd, JSON.parse(JSON.stringify(args))]);
+          return invokeFails ? Promise.reject(new Error('denied')) : Promise.resolve();
+        },
+      },
       event: {
         listen: (event, handler, options) => {
           listeners.push({ event, handler, options });
@@ -96,7 +110,7 @@ function loadPage(lang, { tauriWindow = true } = {}) {
   };
   const lines = () => box.children.map((c) => c.textContent);
   const runFrames = () => { for (const cb of frames.splice(0)) cb(); };
-  return { listeners, emit, lines, properties, grip, sizes, runFrames, rootClasses, frames, context };
+  return { listeners, emit, lines, properties, grip, sizes, runFrames, rootClasses, frames, context, invokes, frameClasses };
 }
 
 const entry = (lang, id, text, isFinal, order = 0) => ({ lang, kind: 'entry', id, order, text, isFinal });
@@ -206,4 +220,36 @@ test('page chrome is a drag handle and a non-drag grip, with no text', () => {
   assert.match(html, /<body data-tauri-drag-region="deep">/);
   assert.match(html, /html:hover \.chrome/);
   assert.doesNotMatch(html, /console\.|fetch\(|XMLHttpRequest|innerHTML/);
+});
+
+const clear = (lang) => ({ lang, kind: 'clear', id: '', order: 0, text: '', isFinal: false });
+const idleReports = (page) => page.invokes.filter(([cmd]) => cmd === 'caption_overlay_idle').map(([, a]) => a.idle);
+
+test('an idle window reports idle so clicks pass through, and takes them back with text', () => {
+  const page = loadPage('en');
+  assert.deepEqual(idleReports(page), [false], 'the preview takes clicks');
+  page.emit('caption-update', entry('en', 'u1', 'Hello', false));
+  assert.deepEqual(idleReports(page), [false], 'replacing the preview does not flip pass-through');
+  page.emit('caption-update', clear('en'));
+  assert.ok(page.frameClasses.has('idle'));
+  assert.deepEqual(idleReports(page), [false, true]);
+  page.emit('caption-update', clear('en'));
+  assert.deepEqual(idleReports(page), [false, true], 'unchanged state is not re-sent');
+  page.emit('caption-update', entry('en', 'u2', 'Back', true));
+  assert.ok(!page.frameClasses.has('idle'));
+  assert.deepEqual(idleReports(page), [false, true, false]);
+  page.emit('caption-update', entry('en', 'u2', '', true));
+  assert.deepEqual(idleReports(page), [false, true, false, true], 'removing the last line goes idle');
+  page.emit('caption-update', { lang: 'en', kind: 'preview', id: '', order: 0, text: '', isFinal: false });
+  assert.deepEqual(idleReports(page), [false, true, false, true, false]);
+  page.emit('caption-update', clear('ko'));
+  assert.equal(idleReports(page).length, 5, 'another language changes nothing');
+  assert.deepEqual(page.invokes.filter(([cmd]) => cmd !== 'caption_overlay_idle'), [], 'no other command');
+});
+
+test('a failed idle report is retried on the next update', async () => {
+  const page = loadPage('en', { invokeFails: true });
+  await new Promise((r) => setImmediate(r));
+  page.emit('caption-update', entry('en', 'u1', 'Hello', false));
+  assert.deepEqual(idleReports(page), [false, false]);
 });

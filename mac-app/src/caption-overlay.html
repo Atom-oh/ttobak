@@ -31,8 +31,8 @@
         background: var(--bg);
       }
       /* No caption to show: the whole window is invisible, so nothing stays
-         over the slides after a recording stops. Hovering still shows the
-         outline and handles. */
+         over the slides after a recording stops. The page also reports idle
+         so the window lets clicks through (no hover chrome while idle). */
       #frame.idle {
         background: transparent;
       }
@@ -180,6 +180,19 @@
           }
         }
 
+        // An idle window is transparent but would still take clicks meant
+        // for the slides under it, so the page asks Rust to let them through
+        // (only for this window) and to take them again once text appears.
+        var core = window.__TAURI__ && window.__TAURI__.core;
+        var reportedIdle = null;
+        function reportIdle(idle) {
+          if (idle === reportedIdle || !core || typeof core.invoke !== 'function') return;
+          reportedIdle = idle;
+          core.invoke('caption_overlay_idle', { idle: idle }).catch(function () {
+            reportedIdle = null;
+          });
+        }
+
         function syncIdle() {
           var frame = document.getElementById('frame');
           if (frame && frame.classList) frame.classList.toggle('idle', entries.size === 0);
@@ -271,7 +284,14 @@
         // Interim and final text share one style. Empty text removes the
         // line (a failed translation); once an id is final, later drafts for
         // it are dropped (commands may emit out of order).
+        // Reported once per update, after it is applied, so a preview or a
+        // first line replacing the preview never flips pass-through on and off.
         function onUpdate(p) {
+          applyUpdate(p);
+          reportIdle(entries.size === 0);
+        }
+
+        function applyUpdate(p) {
           if (!ours(p)) return;
           if (p.kind === 'clear') {
             previewing = false;
@@ -296,6 +316,7 @@
 
         applyStyle(window.__TTOBAK_CAPTION_STYLE__);
         preview();
+        reportIdle(false);
 
         var events = window.__TAURI__ && window.__TAURI__.event;
         if (events) {
