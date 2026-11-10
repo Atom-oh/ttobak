@@ -372,6 +372,7 @@ func performanceRetryReceipt(saved *performanceBatchReceipt, digest string) (*mo
 		return nil, ErrConditionFailed
 	}
 	receipt := saved.Receipt
+	receipt.Replayed = true
 	return &receipt, nil
 }
 
@@ -531,6 +532,30 @@ func (r *DynamoDBRepository) PutAccountMapping(ctx context.Context, userID strin
 			return errors.Join(ErrConditionFailed, err)
 		}
 		return fmt.Errorf("put account mapping: %w", err)
+	}
+	return nil
+}
+
+// DeleteAccountMappingIfAutomatic removes an automatic mapping. A manual row
+// (or none) fails the condition and is a no-op, never an error.
+func (r *DynamoDBRepository) DeleteAccountMappingIfAutomatic(ctx context.Context, userID, sfdcAccountID string) error {
+	if !performanceUserID.MatchString(userID) || !performanceExternal.MatchString(sfdcAccountID) {
+		return ErrInvalidPerformanceInput
+	}
+	built, err := expression.NewBuilder().WithCondition(expression.Name("manual").Equal(expression.Value(false))).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName), Key: performanceKey(userID, model.PerformanceMappingSortKey(sfdcAccountID)),
+		ConditionExpression: built.Condition(), ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
+	})
+	if err != nil {
+		var rejected *types.ConditionalCheckFailedException
+		if errors.As(err, &rejected) {
+			return nil
+		}
+		return fmt.Errorf("delete account mapping: %w", err)
 	}
 	return nil
 }

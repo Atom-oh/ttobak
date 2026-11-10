@@ -66,21 +66,37 @@ line adds `tasks: {result, counts, failures?}`; `status.json` keeps the same
 under `tasks`. `failures` maps a step to a code, and any failure makes the
 result `TASKS_PARTIAL` while independent steps still run.
 
+**Who "me" is.** The SpecReq login (`check_user_is_tam` → `employee_login`)
+is the authoritative Amazon identity; the TTOBAK sign-in email may be any
+address (for example a personal one). Me is the TTOBAK token `sub` plus the
+addresses {TTOBAK email, `<login>@amazon.com`}, lowercased. My account
+membership and role are matched by TTOBAK user ID, never by email; I am
+excluded from attendees by both addresses and never become a counterpart; the
+meetings provider gets `<login>@amazon.com`; requester/resolver checks and the
+Slack request signature use the login. The first confirmed login is recorded in
+`tasks/<scope>/identity.json` (scope = deployment + TTOBAK user).
+`intake select specreq` prints the detected `login` (or `identityError`), never
+an email.
+
 Steps per run (see `mcp-server/src/intake/tasks.ts`):
 
 1. `load`: every task page (at most 50 pages, 1,000 tasks) and the window's
    TTOBAK events. Past the cap, `failures.load` is `PARSE_FAILED` and
-   `counts.skipped` is 3: `specreq`, `mine`, `theirs` and `refresh` do not run
-   (a hidden row could make a link ambiguous), while `close`, `classify`,
-   `drafts` and `notices` still run.
+   `counts.skipped` is 3: `mine`, `theirs` and `refresh` do not run (a hidden
+   row could make a link ambiguous), while `close`, the read-only `specreq`
+   identity check, `classify`, `drafts` and `notices` still run.
 2. `close`: tasks of removed occurrences are closed.
-3. `classify`: new occurrences and `needs_*` tasks with an account. One
+3. `specreq`: `check_user_is_tam` returns my login; it must equal the login
+   recorded for this TTOBAK account (recorded on the first success). It runs
+   before `classify` (also past the task cap) because classification needs my
+   Amazon address. If SpecReq is unreachable, `classify` uses the recorded
+   login; on a mismatch, only the TTOBAK email.
+4. `classify`: new occurrences and `needs_*` tasks with an account. One
    `list_meetings`, at most 25 `get_meeting`, then the deterministic classifier.
    Only a customer meeting creates a task: at least one attendee or the
    organizer must be outside `@amazon.com`. An internal-only meeting, a list
    over its cap, an unknown attendee list or a private meeting creates no task
    (not even `needs_account`). Addresses stay in memory.
-4. `specreq`: `check_user_is_tam` must equal the signed-in `@amazon.com` alias.
 5. `mine` and `theirs`: exact linking by opportunity, date range and
    requester; for theirs, the single acknowledge (auto-ack on) or an
    `ack_needed` notice (off). Unsynced ack ledger entries are written to
@@ -100,16 +116,19 @@ and resends only if the change is still valid, so a web pick is never
 overwritten (`counts.conflicts`).
 
 Local task state: `tasks/<scope>/seen.json` (evaluated, pending, closing,
-last-refreshed and first-waited occurrence IDs), `specreq/<scope>/ack-ledger.json` (permanent, one entry per
+last-refreshed and first-waited occurrence IDs), `tasks/<scope>/identity.json`
+(the recorded SpecReq login), `specreq/<scope>/ack-ledger.json` (permanent, one entry per
 request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 (outcomes and keys only).
 
 ### Recovery
 
-- `IDENTITY_MISMATCH` (`failures.specreq`): the SpecReq server is signed in as
-  someone other than the TTOBAK user, or TTOBAK's email is not
-  `@amazon.com`. No SpecReq step runs. Fix the provider login or sign in to
-  TTOBAK with the matching account, then rerun.
+- `IDENTITY_MISMATCH` (`failures.specreq`): SpecReq returned no valid login,
+  or a login other than the one recorded for this TTOBAK account (an Amazon
+  account switch). No SpecReq linking, acknowledge or refresh runs. Sign the
+  SpecReq server back in as the recorded login; if the switch is intended,
+  delete `~/.ttobak/intake/tasks/<scope>/identity.json` and rerun. A non-Amazon
+  TTOBAK email is not a mismatch.
 - `ack_failed` on a task (`ACK_REJECTED` or `ACK_UNCONFIRMED`): the runner will
   not acknowledge that request again. Acknowledge it in SpecReq by hand; a
   later run reads `WORKING` and moves the task to `acked`. Never edit or delete
