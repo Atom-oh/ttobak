@@ -96,9 +96,12 @@ function homeFixture(initial, { search = '?uploaded=uploaded' } = {}) {
     react,
     'react/jsx-runtime': { jsx, jsxs: jsx },
     'next/link': { default: 'Link' },
+    '@/types/specreqTask': { parseTaskHighlight: () => undefined },
+    'next/navigation': { useSearchParams: () => new URLSearchParams() },
     '@/components/auth/AuthProvider': { useAuth: () => auth },
     '@/lib/meetingStatus': load(),
     '@/lib/api': {
+      specReqTaskApi: { list: async () => ({ tasks: [], nextCursor: null }), get: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); } },
       accountApi: { list: async () => ({ accounts: [] }), peekList: () => undefined },
       meetingsApi: { list: (filter, options) => {
         requests.push({ filter, signal: options.signal });

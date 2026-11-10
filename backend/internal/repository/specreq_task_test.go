@@ -308,3 +308,50 @@ func TestSpecReqTaskRowCursor_ResumesAfterRow(test *testing.T) {
 		test.Fatalf("foreign row: %v", err)
 	}
 }
+
+func TestUpdateSpecReqTask_TerminalTTL(test *testing.T) {
+	short := specReqTestNow.Add(14 * 24 * time.Hour).Unix()
+	cases := []struct {
+		name    string
+		state   string
+		path    string
+		endsAt  time.Time
+		current int64
+		want    int64 // 0 means TTL untouched
+	}{
+		{"closed long past", "closed", "mine", specReqTestNow.Add(-100 * 24 * time.Hour), short + 1000, short},
+		{"resolved future occurrence", "resolved", "theirs", specReqTestNow.Add(10 * 24 * time.Hour), 1 << 40, specReqTestNow.Add(55 * 24 * time.Hour).Unix()},
+		{"mine issued future occurrence", "issued", "mine", specReqTestNow.Add(time.Hour), 1 << 40, specReqTestNow.Add(time.Hour + 45*24*time.Hour).Unix()},
+		{"missing ttl", "closed", "mine", specReqTestNow.Add(-100 * 24 * time.Hour), 0, short},
+		{"earlier ttl kept", "closed", "mine", specReqTestNow.Add(-100 * 24 * time.Hour), short - 1000, 0},
+		{"linked resolved keeps ttl", "resolved", "theirs", specReqTestNow.Add(-100 * 24 * time.Hour), short + 1000, 0},
+		{"linked mine issued keeps ttl", "issued", "mine", specReqTestNow.Add(-100 * 24 * time.Hour), short + 1000, 0},
+		{"theirs issued is not terminal", "issued", "theirs", specReqTestNow, short + 1000, 0},
+		{"non-terminal", "requested", "theirs", specReqTestNow, short + 1000, 0},
+	}
+	for _, tc := range cases {
+		test.Run(tc.name, func(test *testing.T) {
+			var captured *dynamodb.UpdateItemInput
+			repo := specReqTestRepo(test, &specReqSDKMock{update: func(input *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+				captured = input
+				return &dynamodb.UpdateItemOutput{}, nil
+			}})
+			row := specReqTestRow("event-1")
+			row.PreviousState, row.State, row.Path, row.ExpiresAt, row.OccurrenceEndsAt = "issue_needed", tc.state, tc.path, tc.current, tc.endsAt
+			if strings.HasPrefix(tc.name, "linked") {
+				row.SpecReqID = "SR-1"
+			}
+			if err := repo.UpdateSpecReqTask(context.Background(), row, 1); err != nil {
+				test.Fatal(err)
+			}
+			update := specReqResolve(captured.UpdateExpression, captured.ExpressionAttributeNames, captured.ExpressionAttributeValues)
+			if tc.want == 0 {
+				if strings.Contains(update, "pendingShareExpiresAt") {
+					test.Fatalf("ttl must be unchanged: %q", update)
+				}
+			} else if want := fmt.Sprintf("pendingShareExpiresAt = <%v>", float64(tc.want)); !strings.Contains(update, want) {
+				test.Fatalf("update %q lacks %q", update, want)
+			}
+		})
+	}
+}

@@ -8,10 +8,10 @@ import type { McpSession } from './mcp-client.js';
 import { resultJson } from './mcp-client.js';
 import type { IntakeStore } from './store.js';
 
-/** Korean request text; placeholders {account}, {title}, {when}, {me}. Mirrored by contracts/specreq/slack-request-v1.json. */
+/** Korean request text, sent before the meeting; placeholders {account}, {title}, {when}, {me}. Mirrored by contracts/specreq/slack-request-v1.json. */
 export const SLACK_REQUEST_TEMPLATE =
-  '안녕하세요, {account} 관련 미팅 "{title}" ({when})을 진행했습니다. ' +
-  '미팅 내용을 바탕으로 SpecReq 요청을 부탁드립니다. 감사합니다.\n- {me} 드림';
+  '안녕하세요, {account} 미팅 "{title}" ({when})이 잡혀 있어 SpecReq 발행을 부탁드립니다. ' +
+  '발행해 주시면 제가 확인하겠습니다.\n- {me}';
 
 export const SLACK_TEXT_MAX_CHARS = 2000;
 

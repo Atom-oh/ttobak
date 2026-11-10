@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "update-prompt",
+  "description": "The update-available popup (update_prompt.rs). It loads the bundled update-prompt.html, a local origin, and may only answer its prompt.",
+  "windows": [
+    "update-prompt"
+  ],
+  "permissions": [
+    "allow-update-prompt-choose"
+  ]
+}
