@@ -2,13 +2,14 @@
 // It holds the selection (references to host entries, never their values),
 // per-source calendar ledgers and pending batches, run status and a lock.
 
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync,
-  unlinkSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync,
+  renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { IntakeError } from './errors.js';
 
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
+export const MAX_APPEND_LINE_BYTES = 4 * 1024;
 
 export class IntakeStore {
   readonly directory: string;
@@ -54,10 +55,14 @@ export class IntakeStore {
   }
 
   write(value: unknown, ...relative: string[]): void {
+    this.writeText(JSON.stringify(value, null, 2) + '\n', ...relative);
+  }
+
+  /** Atomically replaces a file with `data` (0600, fsync, rename). */
+  writeText(data: string, ...relative: string[]): void {
     const path = this.path(relative);
     this.ensureDirectory(this.directory);
     for (let index = 1; index < relative.length; index++) this.ensureDirectory(this.path(relative.slice(0, index)));
-    const data = JSON.stringify(value, null, 2) + '\n';
     if (Buffer.byteLength(data) > MAX_STATE_BYTES) throw new IntakeError('STORE_INVALID', 'state too large');
     const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`;
     const descriptor = openSync(temporary, 'wx', 0o600);
@@ -71,6 +76,58 @@ export class IntakeStore {
       try { unlinkSync(temporary); } catch { /* best effort */ }
       throw error;
     }
+  }
+
+  /** The raw text of a state file, or null when absent. Same owner/type checks as `read`. */
+  readText(...relative: string[]): string | null {
+    const path = this.path(relative);
+    let stat;
+    try { stat = lstatSync(path); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new IntakeError('STORE_INVALID', 'state file unreadable');
+    }
+    const uid = process.getuid?.();
+    if (!stat.isFile() || stat.isSymbolicLink() || (uid !== undefined && stat.uid !== uid) ||
+        stat.size > MAX_STATE_BYTES) throw new IntakeError('STORE_INVALID', 'state file rejected');
+    try { return readFileSync(path, 'utf8'); } catch { throw new IntakeError('STORE_INVALID', 'state file unreadable'); }
+  }
+
+  /**
+   * Appends one line (plus a newline) to a state file: O_APPEND|O_CREAT, 0600,
+   * never following a symlink. The line must be at most 4 KiB and hold no CR/LF.
+   */
+  append(line: string, ...relative: string[]): void {
+    if (typeof line !== 'string' || /[\r\n]/.test(line) || Buffer.byteLength(line) > MAX_APPEND_LINE_BYTES) {
+      throw new IntakeError('STORE_INVALID', 'append line rejected');
+    }
+    const path = this.path(relative);
+    this.ensureDirectory(this.directory);
+    for (let index = 1; index < relative.length; index++) this.ensureDirectory(this.path(relative.slice(0, index)));
+    const uid = process.getuid?.();
+    const check = (stat: { isFile(): boolean; isSymbolicLink?(): boolean; uid: number; size: number }): void => {
+      if (!stat.isFile() || stat.isSymbolicLink?.() || (uid !== undefined && stat.uid !== uid) ||
+          stat.size > MAX_STATE_BYTES) throw new IntakeError('STORE_INVALID', 'state file rejected');
+    };
+    try { check(lstatSync(path)); } catch (error) {
+      if (error instanceof IntakeError) throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new IntakeError('STORE_INVALID', 'state file unreadable');
+    }
+    let descriptor: number;
+    try {
+      descriptor = openSync(path, constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    } catch { throw new IntakeError('STORE_INVALID', 'state file rejected'); }
+    try {
+      check(fstatSync(descriptor));
+      writeSync(descriptor, line + '\n');
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+
+  /** Size in bytes of a state file, or 0 when absent. */
+  size(...relative: string[]): number {
+    try { return lstatSync(this.path(relative)).size; } catch { return 0; }
   }
 
   /**

@@ -14,20 +14,51 @@ current-chapter links, mobile navigation, light/dark themes, copyable question
 examples and complete print/PDF output. No JavaScript is required to read the
 manual or follow its anchors. Search leaves all printable chapters intact.
 
-Preview from the repository root:
+The 2026-11-10 UI correction replaces the simplified menu illustrations with
+36 actual frontend screenshots captured at revision
+`0d9f1075169ba8d4692036dc98360b6514ef3b44`. The app DOM, icons and CSS are
+unchanged. Only API response data is fictional, using the built-in development
+user/admin and an enabled Billing configuration. Empty states are real product
+UI, not fabricated completed work. Native macOS UI and live provider flows
+were not captured.
+
+Build and preview from the repository root:
 
 ```bash
-python3 -m http.server 8080 --bind 127.0.0.1 --directory docs/user-guide
+python3 scripts/docs/build_user_guide.py --output /tmp/ttobak-guide-preview
+python3 -m http.server 8080 --bind 127.0.0.1 --directory /tmp/ttobak-guide-preview
 ```
 
 Only files explicitly named in `scripts/docs/build_user_guide.py` enter the
-public artifact: HTML, CSS, JavaScript, a local SVG favicon and eight reviewed
-SVG menu illustrations. README, plans, source inventories and review reports are never
+public artifact: HTML, CSS, JavaScript, a local SVG favicon and 36 reviewed
+lossless WebP screenshots. README, manifests, plans, source inventories and review reports are never
 copied. A local-only CSP disables API connections and remote scripts/assets.
-The illustrations are simplified, text-reviewable menu diagrams derived from
-local UI inspection. Captions explicitly distinguish them from screenshots.
-Local raster walkthrough captures remain internal evidence. No production
-account, customer records, credentials or private meeting data were accessed.
+Captions identify actual app UI, example data and capture date; every screenshot
+has an accessible description and a local original-size link. Mobile screenshots
+retain their 390x844 dimensions. All screenshots load eagerly for complete
+printing and no-JavaScript reading.
+
+Reviewed image bytes are stored in the documentation-only prerelease
+`guide-ui-2026-11-10`, asset `guide-ui.zip`. This is not an application version.
+`screenshots.json` binds the archive and each image to SHA-256, size, dimensions,
+route, chapter, UI action and captured source revision. The packager downloads
+the exact public GitHub Release asset API URL, checks the entire archive and explicit inventory
+before creating output, and emits only verified local images. Readers never
+contact GitHub or an app API. No source-review/workflow limit is changed.
+An offline `--screenshot-archive /path/to/guide-ui.zip` uses the same checks.
+Do not replace a published archive; issue a new documentation release and review
+its new pins when screenshots change.
+
+Capture with `scripts/docs/capture_user_guide.py` against the unchanged
+loopback frontend started with `NEXT_PUBLIC_DEV_AUTH=true`, using a separate
+Playwright/Pillow environment and a system font with Korean coverage. On Linux,
+set the `system-ui` and `sans-serif` Fontconfig aliases to `Noto Sans CJK KR`
+and pass that configuration through `FONTCONFIG_FILE`. Do not inject app font
+styles or rewrite product labels. The only excluded element is the Next.js
+development indicator. Every screenshot must be visually reviewed before
+publishing the image archive. Non-loopback HTTP and external WebSockets are
+blocked; API mutations fail. No production account, customer records,
+credentials or private meeting data were accessed.
 
 The repository Pages API reports `https://www.atomai.click/ttobak/` as its publication URL (verified 2026-11-10).
 
@@ -133,19 +164,22 @@ HTTP requests and external WebSocket construction were blocked. This was not a
 production login, not an authentication test and not a live connector acceptance
 test. Screens were captured with Noto Sans CJK KR for legible system typography.
 
-The browser walkthrough opened 19 primary/detail routes and seven additional
-Account tabs (26 routes total), including the conditionally enabled local Billing
-entry. Its generated Billing bundle used only checked-in page sources and local
-vendor packages. Empty costs and unavailable conditional data are not a claim
-that a production dataset was connected. Mac-only controls were source-inspected;
-no macOS capture or Outlook provider acceptance was performed on this Linux host.
+The final capture pass produced 36 real screens covering primary menus,
+Account tabs, sharing, simulation entry, settings/admin and mobile layouts.
+There were no browser page errors or attempted API mutations. The resulting
+archive contains only those reviewed image bytes. Empty costs and unavailable
+conditional data do not establish a production dataset connection. Mac-only
+controls were source-inspected; no native macOS capture or Outlook provider
+acceptance was performed on this Linux host.
 
-Publication-boundary tests cover the reviewed illustrations, rejection of an
-unreviewed image even if present in the source directory, symlink rejection, CSP,
-remote/path references, missing/duplicate anchors and preservation of existing
-output directories. Browser checks cover 1920/3840 desktop, tablet, 390/360 mobile,
+Publication-boundary tests cover archive/image hash and size changes,
+inventory/ZIP rejection, lossless WebP headers and dimensions, symlink rejection,
+unreviewed/remote/path references, CSP, missing/duplicate anchors and existing
+output preservation. Browser checks cover 1920/3840 desktop, tablet, 390/360 mobile,
 body search, empty results, inert search input text, keyboard shortcut/drawer,
-active chapter, theme persistence, no-JavaScript reading and full A4 printing, including no-JavaScript readers with a dark OS preference.
+active chapter, theme persistence, all 36 image dimensions/captions/original-size
+links, no-JavaScript reading and full A4 printing, including no-JavaScript
+readers with a dark OS preference. The actual PDF contains all 36 screenshots.
 
 Re-run repository checks:
 
