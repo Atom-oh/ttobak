@@ -1,5 +1,5 @@
 // Pure helpers and Korean UI copy for the account people panel, mention
-// review and speaker binding (ADR-065). Keep this module dependency-free:
+// review and speaker binding (ADR-067). Keep this module dependency-free:
 // unit tests load it in a bare vm context.
 import type { AccountPerson, MentionGroup } from '@/types/meeting';
 

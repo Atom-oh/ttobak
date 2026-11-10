@@ -104,7 +104,7 @@ acceptance or the Calendar 5 persisted integration.
 
 ## SA performance
 
-Owner-only SA performance data ([ADR-066](decisions/ADR-066-sa-performance-data-residency.md)).
+Owner-only SA performance data ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)).
 Routes are in `backend/internal/handler/performance.go`, validation in
 `backend/internal/service/performance.go`, and wire types in
 `backend/internal/model/performance.go`. Every route reads or writes only the
@@ -187,11 +187,43 @@ account names, aliases and domains come only from those accounts.
   `sfdc-tasks` and `calendar` (the latest completed calendar source).
 
 Residency: rows use default table encryption without envelope sealing (an
-ADR-066 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
+ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
 two years after their own year through `pendingShareExpiresAt`; batch receipts
 expire after seven days. Errors use `{error:{code,message}}` with `400`, `401`,
 `403`, `404`, `409`, `413` and `500`, as for the private calendar. Responses use
 `Cache-Control: private, no-store`.
+
+## SpecReq tasks
+
+Private per-occurrence task rows for calendar events, implemented in
+`backend/internal/handler/specreq_task.go` and
+`backend/internal/service/specreq_task.go` (rules in `specreq_task_rules.go`),
+with wire types in `backend/internal/model/specreq_task.go`. They use the verified
+caller identity only, are not delegated connector operations (`api.specReqTask.list`,
+`.get`, `.create`, `.transition` are all `delegationAllowed: false`) and are
+absent from generic and private HTTP MCP tools.
+
+| Route | Request | Success |
+|---|---|---|
+| `GET /api/specreq-tasks` | Optional `limit` 1-20, `cursor` (at most 4096 bytes) | `200` `{tasks:[...],nextCursor?}` |
+| `GET /api/specreq-tasks/{eventId}` | `eventId` is 64 lowercase hex | `200` task view |
+| `POST /api/specreq-tasks` | JSON `sourceId`, `externalId`, `state`; optional `accountId`, `path`, `counterpartUserId` | `201` task view |
+| `POST /api/specreq-tasks/{eventId}/transitions` | JSON `op`, `version`; optional fields per `op` (transition table: `op` names in `model/specreq_task.go`, rules in `specreq_task_rules.go`) | `200` task view |
+
+A task view holds the task fields (`eventId`, `sourceId`, `accountId`, `path`,
+`state`, `counterpartUserId`, `specReqId`, `specReqTitle`, `specReqStatus`,
+`failureCode`, occurrence and state timestamps, `version`) plus an optional
+`event` summary joined from the calendar row. `accountId` is omitted when the
+caller can no longer read that Account. Transitions are conditioned on `version`.
+Bodies are limited to 4 KiB; unknown fields, trailing data and unsupported query
+parameters are rejected, and `eventId` must match `^[0-9a-f]{64}$`.
+
+Privacy: rows never hold attendee addresses, mail, Slack data or SpecReq bodies;
+`specReqTitle` is stored encrypted. All responses use `Cache-Control: no-store`.
+Errors use `{error:{code,message}}`: `400 BAD_REQUEST` (also `413` for oversized
+bodies), `401`, `403 FORBIDDEN`, `404 NOT_FOUND`, `409 CONFLICT` for a version or
+duplicate conflict, `503 INTERNAL_ERROR` when encryption is unavailable, and
+`500 INTERNAL_ERROR` otherwise.
 
 ## Transport and authentication
 
@@ -966,7 +998,7 @@ automatic linker never re-creates that pair. None of the three routes is
 connector-delegable; the list carries meeting-derived evidence. People edges
 (below) live in the `LINK#meeting#` range and never appear on these routes.
 
-The `/api/accounts/{accountId}/people` routes serve ADR-065 people edges for
+The `/api/accounts/{accountId}/people` routes serve ADR-067 people edges for
 **direct** members, checked on every request (not connector-delegable;
 `Cache-Control: no-store`; 400 uses `BAD_REQUEST`, an unreadable contact
 directory 503 `CONTACTS_UNAVAILABLE`). Meeting IDs are `{ownerUserId}:{meetingId}`,
@@ -1862,6 +1894,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/performance/mappings` | `performanceHandler.ListMappings` |
 | PUT | `/api/performance/mappings/{sfdcAccountId}` | `performanceHandler.PutMapping` |
 | GET | `/api/performance/missed` | `performanceHandler.ListMissed` |
+| GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
+| GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
+| POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
+| POST | `/api/specreq-tasks/{eventId}/transitions` | `specReqTaskHandler.Transition` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |

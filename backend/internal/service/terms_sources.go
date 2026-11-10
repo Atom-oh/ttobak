@@ -36,6 +36,10 @@ import (
 const (
 	SourceTermsModeOff = "off"
 	SourceTermsModeOn  = "on"
+	// SourceTermsModePersonal (KB and research only) extracts into the
+	// owner's Personal layer and never an Account: Account cleanup on unlink
+	// (ADR-008 FU4) does not exist yet.
+	SourceTermsModePersonal = "personal"
 
 	// termsSourceMaxBytes caps the text one source sends, as the meeting path
 	// caps owner documents: 64 KiB in documents of at most 16 KiB.
@@ -70,6 +74,18 @@ func sourceTermsMode(env string) string {
 	return SourceTermsModeOff
 }
 
+// sourceLayerMode parses a KB/research mode: off, personal or on.
+func sourceLayerMode(env string) string {
+	if strings.TrimSpace(os.Getenv(env)) == SourceTermsModePersonal {
+		return SourceTermsModePersonal
+	}
+	return sourceTermsMode(env)
+}
+
+func sourceModeActive(mode string) bool {
+	return mode == SourceTermsModeOn || mode == SourceTermsModePersonal
+}
+
 // SourceEnabled reports whether a KB or research source of ownerID is
 // extracted: its mode is on and the AUTO_TERMS_USERS canary list is empty or
 // contains the owner. Other kinds are never sources here.
@@ -83,12 +99,18 @@ func (c TermsConfig) SourceEnabled(kind, ownerID string) bool {
 	default:
 		return false
 	}
-	return mode == SourceTermsModeOn && ownerID != "" && (len(c.Users) == 0 || c.Users[ownerID])
+	return sourceModeActive(mode) && ownerID != "" && (len(c.Users) == 0 || c.Users[ownerID])
 }
 
 func (c TermsConfig) sourceModeOn(kind string) bool {
-	return (kind == model.DictSourceKB && c.KBMode == SourceTermsModeOn) ||
-		(kind == model.DictSourceResearch && c.ResearchMode == SourceTermsModeOn)
+	return (kind == model.DictSourceKB && sourceModeActive(c.KBMode)) ||
+		(kind == model.DictSourceResearch && sourceModeActive(c.ResearchMode))
+}
+
+// sourcePersonalOnly reports whether kind writes only the Personal layer.
+func (c TermsConfig) sourcePersonalOnly(kind string) bool {
+	return (kind == model.DictSourceKB && c.KBMode == SourceTermsModePersonal) ||
+		(kind == model.DictSourceResearch && c.ResearchMode == SourceTermsModePersonal)
 }
 
 // TermsSourceStore is the source persistence: the idempotency row and the
@@ -410,6 +432,9 @@ func (s *TermsAnalysisService) ProcessSource(ctx context.Context, ev model.Terms
 	accounts, outcome, err := s.currentSourceAccounts(ctx, ev, doc.accounts)
 	if outcome != "" {
 		return done(outcome, err)
+	}
+	if s.cfg.sourcePersonalOnly(ev.Kind) {
+		accounts = nil // the re-read above still guards the merge
 	}
 	refresh, err := s.mergeSource(ctx, label, ev, accounts, terms)
 	if err != nil {
