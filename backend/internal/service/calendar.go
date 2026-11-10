@@ -402,8 +402,10 @@ func (svc *CalendarService) decryptCalendarEvent(ctx context.Context, userID str
 		return model.CalendarEvent{}, err
 	}
 	var input model.CalendarEventInput
+	// The sealed payload tolerates unknown fields so an older reader can still
+	// open events sealed by a newer writer; HTTP request decoding stays strict.
+	// Identity, time and account are rechecked against the row below.
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
-	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF {
 		return model.CalendarEvent{}, repository.ErrCalendarCorruptData
 	}
