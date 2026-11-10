@@ -304,3 +304,20 @@ func TestCalendarHTTPBoundsEncodedResponsesBeforeWriting(test *testing.T) {
 		}
 	}
 }
+
+func TestCalendarHTTPSyncAcceptsSharingFields(test *testing.T) {
+	key := strings.Repeat("ab", 32)
+	eventJSON := `{"externalId":"synthetic-first","title":"Synthetic event","startsAt":"2026-11-08T00:00:00Z","endsAt":"2026-11-09T00:00:00Z","timeZone":"UTC","shareAccountId":"acc_1","shareEvidence":["title"],"candidateAccountIds":["acc_2"],"private":false,"seriesKey":"` + key + `"}`
+	body := strings.Replace(calendarHTTPBody, `"mutations":[]`, `"mutations":[{"op":"upsert","event":`+eventJSON+`}]`, 1)
+	api := &calendarAPIFake{}
+	response := calendarHTTPRequest(api, "owner", http.MethodPost, "/api/calendar/sources/"+calendarHTTPSource+"/sync", body)
+	if response.Code != http.StatusOK || api.calls != 1 {
+		test.Fatalf("sharing fields rejected: status=%d calls=%d", response.Code, api.calls)
+	}
+	alias := strings.Replace(body, `"seriesKey"`, `"SeriesKey"`, 1)
+	api = &calendarAPIFake{}
+	response = calendarHTTPRequest(api, "owner", http.MethodPost, "/api/calendar/sources/"+calendarHTTPSource+"/sync", alias)
+	if response.Code != http.StatusBadRequest || api.calls != 0 {
+		test.Fatalf("alias reached service: status=%d calls=%d", response.Code, api.calls)
+	}
+}
