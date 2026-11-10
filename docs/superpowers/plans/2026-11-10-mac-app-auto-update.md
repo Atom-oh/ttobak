@@ -6,7 +6,7 @@ Historical plan record (2026-11-10); the ADR and runbook it produces become the
 current references.
 
 **Goal:** Install the TTOBAK Mac app with one `curl | sh` command and announce
-tagged releases in-app with an 업데이트/나중에 popup and an app-menu item, never
+tagged releases in-app with an Update/Later (Korean labels) popup and an app-menu item, never
 interrupting a recording.
 
 **Architecture:** `tauri-plugin-updater` (Rust API only) checks a static
@@ -34,7 +34,7 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
 - Update commands are never granted to the remote `https://ttobak.atomai.click` capability;
   `capabilities/default.json` must not contain any `updater:` permission.
 - No install while busy; never `kill` the app from the installer.
-- Korean UI copy: buttons `업데이트` / `나중에`; menu `업데이트 확인…` / `업데이트 가능 (vX.Y.Z)…`.
+- Korean UI copy: buttons `Update` / `Later`; menu `check-for-updates` / `update-available (vX.Y.Z)`.
 - Repository docs and commits in English. Mac changes have no CI: run
   `(cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)`.
 - No new API route, origin, IAM role or bucket; bucket/distribution come from CloudFormation
@@ -46,7 +46,7 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
    clear message on manual check; never a crash or a bogus popup (Task 2).
 2. SPA never reported a phase (page not loaded) while native is idle → not busy; native
    recording with stale SPA "idle" → busy (Task 1).
-3. User clicks 업데이트, then a recording starts before download finishes → install refused
+3. User clicks Update, then a recording starts before download finishes → install refused
    after download, update stays available (Task 2).
 4. Old installed app (no `updateBusy` in socket status) → installer asks the user to quit
    TTOBAK and rerun; never quits it blindly (Task 4).
@@ -125,15 +125,15 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
     available), then install and `app.restart()`.
   - `pub fn decline(app: &AppHandle)` — store the available version as declined.
   - App menu: build `Menu::default(app)` and insert into the app submenu, after "About", one
-    item id `update` whose text is `업데이트 확인…` or `업데이트 가능 (v{version})…`;
+    item id `update` whose text is `check-for-updates` or `update-available (v{version})`;
     `pub fn refresh_menu(app: &AppHandle)` updates it. Clicking runs `check_now(manual=true)`
     or opens the popup when an update is known.
 - Pubkey: until the owner generates the key (Task 8), `tauri.conf.json` carries the literal
   placeholder `"REPLACE_WITH_TTOBAK_UPDATER_PUBKEY"`; `update::start` logs and does nothing
   when the configured pubkey equals it. The release script refuses it (Task 5).
 
-- [ ] **Step 1:** Unit tests for pure helpers in `update.rs`: `menu_label(None) == "업데이트 확인…"`,
-  `menu_label(Some("0.3.0")) == "업데이트 가능 (v0.3.0)…"`; `declined` JSON round-trip and
+- [ ] **Step 1:** Unit tests for pure helpers in `update.rs`: `menu_label(None) == "check-for-updates"`,
+  `menu_label(Some("0.3.0")) == "update-available (v0.3.0)"`; `declined` JSON round-trip and
   malformed/missing `update.json` → `None`; a manifest with `"sha256"` extra field parses via
   the plugin's response type (or document that it is ignored, verified by a test using the
   plugin's deserializer if public; otherwise a manual acceptance check).
@@ -165,14 +165,14 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
   - `#[tauri::command] pub async fn update_prompt_choose(action: String, app: AppHandle) -> Result<String, String>`
     — `action` is `install` or `later`; `later` → `decline`, close; `install` → close and
     run `install`; `Busy` → returns `"busy"` and the page shows
-    `녹음이 끝난 뒤 다시 시도해 주세요.`; unknown action → `Err`.
+    `retry-after-recording notice`; unknown action → `Err`.
   - Capability `update-prompt`: windows `["update-prompt"]`, permissions
     `["allow-update-prompt-choose"]`, no `remote`. `default.json` must NOT get
     `allow-update-prompt-choose`.
-- Page copy: title `새 버전 v{version}이 있습니다`, notes paragraph, buttons `업데이트` (primary)
-  and `나중에`. Text inserted with `textContent`, never `innerHTML`.
+- Page copy: title `new-version title`, notes paragraph, buttons `Update` (primary)
+  and `Later`. Text inserted with `textContent`, never `innerHTML`.
 
-- [ ] **Step 1:** Tests: `page_url("0.3.0", "메모")` percent-encodes and truncates notes to
+- [ ] **Step 1:** Tests: `page_url("0.3.0", "note")` percent-encodes and truncates notes to
   500 chars; ACL test — `update_prompt_choose` is in `COMMANDS`, granted only by
   `update-prompt.json`, absent from `default.json`; `update-prompt.html` contains no
   `innerHTML`.
@@ -197,7 +197,7 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
      equals `sha256` (mismatch → exit 3, nothing installed).
   3. If an app with bundle id `click.atomai.ttobak.mac` is running: send
      `{"v":1,"id":"install","action":"status"}` to the control socket with `/usr/bin/nc -U`;
-     `"updateBusy":true` → exit 4 with `녹음이 끝난 뒤 다시 실행해 주세요.`; `false` →
+     `"updateBusy":true` → exit 4 with `rerun-after-recording notice`; `false` →
      `osascript -e 'tell application id "click.atomai.ttobak.mac" to quit'`, wait ≤ 30 s;
      socket missing or field absent → exit 5 asking the user to quit TTOBAK and rerun.
   4. Extract, move existing app to `TTOBAK.app.previous` in the install dir, move new app in,
@@ -257,7 +257,7 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
 - [ ] **Step 4:** Tests PASS.
 - [ ] **Step 5:** Commit `feat(mac): one-command tagged release`.
 
-### Task 6: Web "Mac 앱" section
+### Task 6: Web "Mac app" section
 
 **Files:**
 - Create: `frontend/src/components/MacAppInstall.tsx`, `frontend/src/lib/macRelease.ts`,
@@ -268,8 +268,8 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
 - `macRelease.ts`: `export const MAC_INSTALL_COMMAND = 'curl -fsSL https://ttobak.atomai.click/mac/install.sh | sh'`;
   `export function publishedVersion(manifest: unknown): string | null` (valid semver string
   in `version`, else null).
-- Component: heading `Mac 앱`, one-line explanation (Apple Silicon, macOS 14.2+), the command
-  in a code block with a copy button (same pattern as `McpGuide`), `현재 버전 v{version}` from
+- Component: heading `Mac app`, one-line explanation (Apple Silicon, macOS 14.2+), the command
+  in a code block with a copy button (same pattern as `McpGuide`), `current-version line` from
   `fetch('/mac/latest.json', { cache: 'no-store' })`; on failure hide the version line. No
   download button.
 
@@ -302,6 +302,6 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
 ### Task 8: Owner setup and manual acceptance (owner, on real Macs)
 
 - [ ] Generate the updater key; replace the placeholder pubkey through a PR; back up key and `.p12`.
-- [ ] Version-bump PR to `0.2.0`; after merge `npm run release -- "첫 자동 업데이트 버전"`.
-- [ ] Spec Verification steps 1–6 (fresh install, 나중에 + menu, busy refusal, permissions kept,
+- [ ] Version-bump PR to `0.2.0`; after merge `npm run release -- "first auto-update release"`.
+- [ ] Spec Verification steps 1–6 (fresh install, Later + menu, busy refusal, permissions kept,
   tampered archive refused, teammate Mac). Record results in the ADR status line.

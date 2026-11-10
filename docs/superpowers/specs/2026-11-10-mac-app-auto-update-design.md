@@ -40,18 +40,18 @@ will therefore be occasional, not continuous.
    `curl -fsSL https://ttobak.atomai.click/mac/install.sh | sh`. It installs or
    replaces `/Applications/TTOBAK.app` and launches it.
 2. **Update notice:** when the app finds a newer version it shows a popup with
-   the version and short release notes, and two buttons: **업데이트** and
-   **나중에**.
-   - 업데이트: download, verify, install, relaunch.
-   - 나중에: close the popup. The newer version stays announced in the app
+   the version and short release notes, and two buttons: **Update** and
+   **Later**.
+   - Update: download, verify, install, relaunch.
+   - Later: close the popup. The newer version stays announced in the app
      menu (see 4) until installed.
 3. **Never interrupt a recording.** No popup while recording, finalizing or
    uploading; it appears once that work ends. Install never starts while any of
    that is in progress, including from the menu.
 4. **App menu:** the TTOBAK app menu (macOS menu bar) always has an update item:
-   - no known update: "업데이트 확인…" (manual check, with a result message
+   - no known update: "check-for-updates" (manual check, with a result message
      either way);
-   - update known: "업데이트 가능 (vX.Y.Z)…" which opens the same popup.
+   - update known: "update-available (vX.Y.Z)" which opens the same popup.
 5. **Tag-driven release:** pushing a `mac-v<version>` tag publishes that
    build; only published tagged builds are announced (see Release trigger).
 6. **Integrity:** an update is installed only if its minisign signature verifies
@@ -61,7 +61,7 @@ will therefore be occasional, not continuous.
 
 ## Non-goals
 
-- Silent/background installs without the user clicking 업데이트.
+- Silent/background installs without the user clicking Update.
 - Downgrades or per-user release channels (beta/stable).
 - Intel Macs. The app requires macOS 14.2 and the Core Audio process tap; builds
   target `aarch64-apple-darwin` only, and the installer refuses other
@@ -136,7 +136,7 @@ Tauri updater static JSON format, plus a SHA-256 used by `install.sh`:
   from the manual check's message. (Interval is the builder's call.)
 - Popup: a small local window, following `meeting_prompt.rs` /
   `mac-app/src/meeting-prompt.html` (bundled page, own capability). Korean copy.
-- "나중에" records the declined version; the popup does not reappear for that
+- "Later" records the declined version; the popup does not reappear for that
   version, only for a newer one. The menu item remains.
 - Recording guard (design call): "busy" means any of native recording, native
   finalizing, an in-flight `upload_recording`, or a busy phase (recording or
@@ -228,7 +228,7 @@ not hard-coded IDs.
 
 ### Web
 
-A "Mac 앱" section (Settings page) with the install command, a copy button, a
+A "Mac app" section (Settings page) with the install command, a copy button, a
 one-line explanation, and the currently published version read from
 `/mac/latest.json`. No download button. (Placement is the builder's call.)
 
@@ -248,7 +248,7 @@ parsing, version comparison, declined-version rule, recording guard decision).
 Manual acceptance on a real Mac, then on one teammate's Mac:
 
 1. Fresh install with the curl command; grant permissions; record a short meeting.
-2. Publish a newer version; popup appears; 나중에 → menu shows it, no popup again.
+2. Publish a newer version; popup appears; Later → menu shows it, no popup again.
 3. Start recording; trigger update from the menu → refused; stop → install works.
 4. After update: permissions still granted, recording works, version shown.
 5. Tampered archive or signature → update refused.

@@ -59,7 +59,7 @@ use CSS variants.
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
-| Settings | Integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
+| Settings | Mac app install (`MacAppInstall`, section `#mac-app`), integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
 
 Resolve exact paths under `frontend/src/` rather than treating this table as an
 exhaustive file inventory. New static pages need the CloudFront knownPages mapping.
@@ -116,6 +116,18 @@ Browser modes use microphone/tab MediaStreams; the macOS system-audio mode uses
 native recording and PCM events. Finished native WAVs remain on disk and upload
 through Rust. `usePostRecording` accepts a tagged native-path/browser-Blob payload.
 Never load a finished native recording into the WebView just to upload it.
+
+Settings' Mac app section (`MacAppInstall.tsx`, `lib/macRelease.ts`) shows the
+copyable `curl -fsSL https://ttobak.atomai.click/mac/install.sh | sh` command and,
+when `/mac/latest.json` is readable, the published version; the version line is
+hidden on any failure. The Mac app's own update UI is native, not the SPA: the
+TTOBAK app menu has a check-for-updates item (manual check; a notification reports
+the result either way) that becomes an update-available item with the version once an
+update is known, and a small local popup (`update-prompt.html`, ADR-067) with Update
+and Later buttons shows download progress, stays open until install succeeds, and asks
+the user to retry after the recording when work is in progress. Copy is Korean; see
+`update.rs` and the page for exact strings. No popup appears while recording, finalizing or
+uploading.
 
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
 the app detects a meeting, and after that meeting ends during a native recording
