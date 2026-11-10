@@ -168,6 +168,7 @@ type jobStore interface {
 	GetAccountMergeJob(ctx context.Context, sourceID string) (*model.AccountMergeJob, error)
 	ClaimMergeLease(ctx context.Context, sourceID, owner string, now time.Time, ttl time.Duration) (*model.AccountMergeJob, error)
 	ReleaseMergeLease(ctx context.Context, job *model.AccountMergeJob) error
+	FailMergeJob(ctx context.Context, job *model.AccountMergeJob, code string) error
 }
 
 type userRowStore interface {
@@ -290,7 +291,7 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 	}
 	res.State, res.Step = dto.State, dto.Step
 	if o.ScanUsers {
-		counts, err := d.scanUntilSettled(ctx, o)
+		counts, err := d.scanApply(ctx, o)
 		res.UserRows = counts
 		if err != nil {
 			return res, err
@@ -360,12 +361,32 @@ func (d deps) postMerge(ctx context.Context, o options, job *model.AccountMergeJ
 // made the CLI skip (its version condition failed).
 const scanApplyPasses = 3
 
-// scanUntilSettled re-scans while rows were skipped and nothing failed. Moved
-// counts accumulate across passes; skip counts come from the last pass.
-func (d deps) scanUntilSettled(ctx context.Context, o options) (map[string]int, error) {
+// scanIncompleteCode is the job error code that keeps a scan-incomplete job
+// out of the worker until an -apply rerun restarts it.
+const scanIncompleteCode = "SCAN_INCOMPLETE"
+
+// scanApply claims the job lease once and holds it through every scan pass,
+// re-scanning while rows were skipped and nothing failed. Moved counts
+// accumulate across passes; skip counts come from the last pass.
+//
+// A clean scan returns with the lease still held: the in-process worker claims
+// with the same owner, so no remote delivery can take the job between the scan
+// and the drive. A scan that leaves rows behind fails the job with
+// SCAN_INCOMPLETE instead of releasing it. A failed job is never processed by
+// a delivery, so it cannot finish over stranded rows, and an -apply rerun
+// restarts it from its saved step. A lost fence only releases the lease: the
+// fence's own cause (requester revoked, target merging, lease taken) stops the
+// worker.
+func (d deps) scanApply(ctx context.Context, o options) (map[string]int, error) {
+	lease := &cliLease{d: d, source: o.From}
+	if err := lease.renew(ctx); err != nil {
+		return nil, err
+	}
 	total := map[string]int{}
+	var err error
 	for pass := 0; pass < scanApplyPasses; pass++ {
-		counts, err := d.scanApply(ctx, o)
+		var counts map[string]int
+		counts, err = d.scanUserRows(ctx, o, lease)
 		for key := range total {
 			if strings.HasSuffix(key, "Skipped") {
 				delete(total, key)
@@ -379,10 +400,32 @@ func (d deps) scanUntilSettled(ctx context.Context, o options) (map[string]int, 
 			}
 		}
 		if err != nil || total["errors"] > 0 || skippedRows(counts) == 0 {
-			return total, err
+			break
 		}
 	}
-	return total, nil
+	if err == nil && total["errors"] == 0 && skippedRows(total) == 0 {
+		return total, nil
+	}
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	job := lease.current()
+	if job == nil {
+		if err == nil {
+			err = errScanIncomplete
+		}
+		return total, err
+	}
+	if errors.Is(err, repository.ErrMergeFenceLost) || errors.Is(err, repository.ErrAccountMerging) {
+		_ = d.jobs.ReleaseMergeLease(stopCtx, job)
+		return total, err
+	}
+	if ferr := d.jobs.FailMergeJob(stopCtx, job, scanIncompleteCode); ferr != nil && err == nil {
+		err = ferr
+	}
+	if err == nil {
+		err = errScanIncomplete
+	}
+	return total, err
 }
 
 func skippedRows(counts map[string]int) int {
@@ -393,27 +436,6 @@ func skippedRows(counts map[string]int) int {
 		}
 	}
 	return n
-}
-
-// scanApply holds the job lease for the scan, so the meeting writer's fence
-// (running job, this lease owner, requester authority) applies, and releases
-// it before the worker runs.
-func (d deps) scanApply(ctx context.Context, o options) (map[string]int, error) {
-	lease := &cliLease{d: d, source: o.From}
-	if err := lease.renew(ctx); err != nil {
-		return nil, err
-	}
-	counts, err := d.scanUserRows(ctx, o, lease)
-	// Free the lease even when the scan failed so a rerun or the next
-	// worker can claim it at once.
-	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	if job := lease.current(); job != nil {
-		if rerr := d.jobs.ReleaseMergeLease(releaseCtx, job); rerr != nil && err == nil {
-			err = rerr
-		}
-	}
-	return counts, err
 }
 
 // cliLease keeps the CLI's claim on the job fresh for the duration of a scan.
@@ -642,7 +664,9 @@ func rewriteCalendarPayload(plaintext []byte, from, to string) ([]byte, error) {
 // job nothing advances (its lease held by another worker) ends the loop with
 // errNoProgress after maxIdleRuns pauses.
 func (d deps) drive(ctx context.Context, from string) (*model.AccountMergeJob, error) {
-	runCtx := lambdacontext.NewContext(ctx, &lambdacontext.LambdaContext{AwsRequestID: d.owner})
+	// The worker claims as exactly the CLI owner, so it continues from a scan
+	// lease the CLI still holds instead of being refused by it.
+	runCtx := service.WithMergeWorkerOwner(lambdacontext.NewContext(ctx, &lambdacontext.LambdaContext{AwsRequestID: d.owner}), d.owner)
 	var lastUpdate time.Time
 	idle := 0
 	for runs := 0; runs < maxWorkerRuns; runs++ {
