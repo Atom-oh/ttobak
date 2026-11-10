@@ -113,7 +113,7 @@
   search.disabled = false;
   search.addEventListener('input', renderSearch);
   search.addEventListener('keydown', event => {
-    if (event.key === 'Enter' && search.value.trim()) {
+    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229 && search.value.trim()) {
       event.preventDefault(); closeMenu(false);
       results.scrollIntoView({ block: 'start' });
       results.setAttribute('tabindex', '-1'); results.focus({ preventScroll: true });
