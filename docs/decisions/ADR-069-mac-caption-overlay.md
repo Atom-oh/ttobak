@@ -11,8 +11,9 @@
 - Design: the working design and plan documents were not merged; this ADR is
   the durable decision.
 - Delivery: four stacked PRs. 1/4: caption model, profile discovery, interpreter,
-  the three translation commands and the profile confirmation; 2/4: overlay
-  windows, page and capability, byte budget, open-window check; 3/4: record-page
+  the three translation commands with their request and byte ceilings, and the
+  profile confirmation; 2/4: overlay windows, page and capability, open-window
+  check; 3/4: record-page
   bridge and panel; 4/4: layout menu and remaining docs. Parts of later PRs do not
   exist before they land: the windows, event routing, transparency, window level
   and overlay capability sections describe 2/4, and window reopen on the record
