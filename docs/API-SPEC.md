@@ -126,7 +126,7 @@ Bodies are limited to 4 KiB; unknown fields, trailing data and unsupported query
 parameters are rejected, and `eventId` must match `^[0-9a-f]{64}$`.
 
 Privacy: rows never hold attendee addresses, mail, Slack data or SpecReq bodies;
-`specReqTitle` is stored encrypted. All responses use `Cache-Control: no-store`.
+`specReqTitle` is stored encrypted. Rows expire 90 days after the occurrence ends; a transition into a terminal state (`closed`, `resolved`, or `issued` on the `mine` path) caps the expiry at 14 days from that transition and never extends it. All responses use `Cache-Control: no-store`.
 Errors use `{error:{code,message}}`: `400 BAD_REQUEST` (also `413` for oversized
 bodies), `401`, `403 FORBIDDEN`, `404 NOT_FOUND`, `409 CONFLICT` for a version or
 duplicate conflict, `503 INTERNAL_ERROR` when encryption is unavailable, and

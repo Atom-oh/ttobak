@@ -308,3 +308,44 @@ func TestSpecReqTaskRowCursor_ResumesAfterRow(test *testing.T) {
 		test.Fatalf("foreign row: %v", err)
 	}
 }
+
+func TestUpdateSpecReqTask_TerminalTTL(test *testing.T) {
+	cap := specReqTestNow.Add(14 * 24 * time.Hour).Unix()
+	cases := []struct {
+		name    string
+		state   string
+		path    string
+		current int64
+		want    string // substring of the resolved update; empty means TTL untouched
+	}{
+		{"closed", "closed", "mine", cap + 1000, fmt.Sprintf("pendingShareExpiresAt = <%v>", float64(cap))},
+		{"resolved", "resolved", "theirs", cap + 1000, fmt.Sprintf("pendingShareExpiresAt = <%v>", float64(cap))},
+		{"mine issued", "issued", "mine", cap + 1000, fmt.Sprintf("pendingShareExpiresAt = <%v>", float64(cap))},
+		{"missing ttl", "closed", "mine", 0, fmt.Sprintf("pendingShareExpiresAt = <%v>", float64(cap))},
+		{"earlier ttl kept", "closed", "mine", cap - 1000, ""},
+		{"theirs issued is not terminal", "issued", "theirs", cap + 1000, ""},
+		{"non-terminal", "requested", "theirs", cap + 1000, ""},
+	}
+	for _, tc := range cases {
+		test.Run(tc.name, func(test *testing.T) {
+			var captured *dynamodb.UpdateItemInput
+			repo := specReqTestRepo(test, &specReqSDKMock{update: func(input *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+				captured = input
+				return &dynamodb.UpdateItemOutput{}, nil
+			}})
+			row := specReqTestRow("event-1")
+			row.PreviousState, row.State, row.Path, row.ExpiresAt = "issue_needed", tc.state, tc.path, tc.current
+			if err := repo.UpdateSpecReqTask(context.Background(), row, 1); err != nil {
+				test.Fatal(err)
+			}
+			update := specReqResolve(captured.UpdateExpression, captured.ExpressionAttributeNames, captured.ExpressionAttributeValues)
+			if tc.want == "" {
+				if strings.Contains(update, "pendingShareExpiresAt") {
+					test.Fatalf("ttl must be unchanged: %q", update)
+				}
+			} else if !strings.Contains(update, tc.want) {
+				test.Fatalf("update %q lacks %q", update, tc.want)
+			}
+		})
+	}
+}

@@ -28,7 +28,21 @@ const (
 	specReqTaskEntityType = "SPECREQ_TASK"
 	specReqTaskCursorKind = "specreq-tasks"
 	specReqTaskMaxLimit   = 20
+	// specReqTerminalRetention bounds how long a terminal task row is kept.
+	specReqTerminalRetention = 14 * 24 * time.Hour
 )
+
+// specReqTaskTerminal reports whether the row's state needs no further action:
+// closed, resolved, or issued on the mine path (the user issued it themselves).
+func specReqTaskTerminal(row SpecReqTaskRow) bool {
+	switch row.State {
+	case model.SpecReqStateClosed, model.SpecReqStateResolved:
+		return true
+	case model.SpecReqStateIssued:
+		return row.Path == model.SpecReqPathMine
+	}
+	return false
+}
 
 // SpecReqTaskDynamoDBClient is the DynamoDB surface the task repository uses.
 type SpecReqTaskDynamoDBClient interface {
@@ -223,7 +237,8 @@ func (repo *SpecReqTaskRepository) SpecReqTaskRowCursor(userID string, limit int
 }
 
 // UpdateSpecReqTask writes the mutable fields of row when the stored version
-// equals expectedVersion, then bumps the version by one. It sets updatedAt from
+// equals expectedVersion, then bumps the version by one. A terminal state (see
+// specReqTaskTerminal) also caps the row TTL at now + 14 days, never extending it. It sets updatedAt from
 // the repository clock and moves stateChangedAt only when row.State differs from
 // row.PreviousState (the state the caller read). Empty optional fields are removed.
 func (repo *SpecReqTaskRepository) UpdateSpecReqTask(ctx context.Context, row SpecReqTaskRow, expectedVersion int64) error {
@@ -236,6 +251,13 @@ func (repo *SpecReqTaskRepository) UpdateSpecReqTask(ctx context.Context, row Sp
 		Set(expression.Name("version"), expression.Value(expectedVersion+1))
 	if row.State != row.PreviousState {
 		update = update.Set(expression.Name("stateChangedAt"), expression.Value(now))
+	}
+	// A terminal row expires at min(existing TTL, now + 14 days). row.ExpiresAt is
+	// the value the caller read; the version condition below guarantees it is current.
+	if specReqTaskTerminal(row) {
+		if cap := now.Add(specReqTerminalRetention).Unix(); row.ExpiresAt == 0 || cap < row.ExpiresAt {
+			update = update.Set(expression.Name("pendingShareExpiresAt"), expression.Value(cap))
+		}
 	}
 	for _, field := range []struct{ name, value string }{
 		{"accountId", row.AccountID}, {"path", row.Path}, {"counterpartUserId", row.CounterpartUserID},
