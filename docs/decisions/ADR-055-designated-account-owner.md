@@ -4,6 +4,8 @@
 - Decision date: 2026-10-26.
 - Supersedes ADR-015's creator-only initial ownership. Extends ADR-034/054 only
   for initial creation and canonical Owner invitation recovery.
+- Amended by [ADR-071](ADR-071-account-owner-transfer.md): ownership may later move
+  through owner transfer, which clears the initial-owner invitation designation.
 
 ## Decision
 

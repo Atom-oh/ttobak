@@ -358,6 +358,7 @@ func init() {
 		r.Get("/api/navigation/accounts", accountCatalogHandler.Get)
 		r.Post("/api/accounts", accountHandler.CreateAccount)
 		r.Post("/api/accounts/{accountId}/owner-invitation", accountHandler.ResendOwnerInvitation)
+		r.Post("/api/accounts/{accountId}/owner-transfer", accountHandler.TransferOwner)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Get("/api/accounts/{accountId}/reading", accountReadingHandler.Get)
 		r.Get("/api/accounts/{accountId}/contacts", accountContactsHandler.List)

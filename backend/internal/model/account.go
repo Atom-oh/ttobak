@@ -45,6 +45,7 @@ type Account struct {
 	Industry                      string    `dynamodbav:"industry,omitempty"`
 	OwnerUserID                   string    `dynamodbav:"ownerUserId"`
 	CreatedByUserID               string    `dynamodbav:"createdByUserId,omitempty"`
+	OriginalOwnerUserID           string    `dynamodbav:"originalOwnerUserId,omitempty"` // set by the first owner transfer (ADR-071)
 	CreationRequestHash           string    `dynamodbav:"creationRequestHash,omitempty"`
 	InitialOwnerEmail             string    `dynamodbav:"initialOwnerEmail,omitempty"`
 	InitialOwnerInvitationPending bool      `dynamodbav:"initialOwnerInvitationPending,omitempty"`
@@ -96,6 +97,18 @@ type UpdateAccountParentRequest struct {
 type UpdateAccountParentResponse struct {
 	AccountID       string `json:"accountId"`
 	ParentAccountID string `json:"parentAccountId,omitempty"`
+}
+
+// TransferOwnerRequest names the existing member who becomes the account Owner.
+type TransferOwnerRequest struct {
+	TargetUserID string `json:"targetUserId"`
+}
+
+type TransferOwnerResponse struct {
+	AccountID           string `json:"accountId"`
+	OwnerUserID         string `json:"ownerUserId"`
+	PreviousOwnerUserID string `json:"previousOwnerUserId"`
+	PreviousOwnerRole   string `json:"previousOwnerRole"`
 }
 
 type AddMemberRequest struct {
