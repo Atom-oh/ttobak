@@ -103,10 +103,17 @@ func init() {
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Owner-private SA performance data: every route reads only the JWT user's
-	// own USER# partition (ADR-066).
+	// own USER# partition (ADR-068).
 	performanceService := service.NewPerformanceService(repo, accountService)
 	performanceService.SetMissedSources(calendarService, meetingService)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
+	calendarRepo := repository.NewCalendarRepository(dynamoClient, tableName)
+	specReqTaskHandler := handler.NewSpecReqTaskHandler(service.NewSpecReqTaskService(
+		repository.NewSpecReqTaskRepository(dynamoClient, tableName),
+		calendarRepo,
+		service.NewCalendarCipher(kmsClient, os.Getenv("KMS_KEY_ID")),
+		accountService,
+	))
 	// Reuse the same cold-start Cognito client for AddMember's PendingShare
 	// invited-check (see AccountService.SetCognitoAdminAPI).
 	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
@@ -341,6 +348,10 @@ func init() {
 		r.Get("/api/performance/mappings", performanceHandler.ListMappings)
 		r.Put("/api/performance/mappings/{sfdcAccountId}", performanceHandler.PutMapping)
 		r.Get("/api/performance/missed", performanceHandler.ListMissed)
+		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
+		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
+		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
+		r.Post("/api/specreq-tasks/{eventId}/transitions", specReqTaskHandler.Transition)
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)

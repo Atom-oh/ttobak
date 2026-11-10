@@ -139,7 +139,10 @@
   }
   let active = null;
   const updatePosition = () => {
-    const current = [...sections].reverse().find(section => section.getBoundingClientRect().top <= 150) || sections[0];
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const current = max > 0 && window.scrollY >= max - 1
+      ? sections[sections.length - 1]
+      : [...sections].reverse().find(section => section.getBoundingClientRect().top <= 150) || sections[0];
     if (current !== active) {
       active = current;
       for (const link of navLinks) {
@@ -152,7 +155,6 @@
       }
       document.querySelector('.page-toc').hidden = !toc.children.length;
     }
-    const max = document.documentElement.scrollHeight - window.innerHeight;
     progress.value = max > 0 ? Math.min(100, window.scrollY / max * 100) : 100;
   };
   let scheduled = false;

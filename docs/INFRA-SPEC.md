@@ -623,10 +623,14 @@ minutes with three retries into the SSE-SQS `ttobak-terms-source-dlq`, which
 nothing is published from the agent. The summarize role gains only
 `s3:GetObject` on `kb/*` and `shared/research/*` of the KB bucket (statement
 `TermsSourceRead`, which also covers HeadObject). Summarize receives
-`KB_TERMS_MODE` and `RESEARCH_TERMS_MODE` (`off` by default, or `on`) from CDK
-context `ttobak:kbTermsMode` and `ttobak:researchTermsMode`; invalid values fail
-synth, and with `off` the mapper and worker log `outcome=DISABLED` and do nothing
-else. The source flags are independent of `AUTO_TERMS_MODE` and
+`KB_TERMS_MODE` and `RESEARCH_TERMS_MODE` (`off` by default, `personal` or `on`)
+from CDK context `ttobak:kbTermsMode` and `ttobak:researchTermsMode`; invalid
+values fail synth, and with `off` the mapper and worker log `outcome=DISABLED`
+and do nothing else. `personal` extracts as `on` does but merges only into the
+owner's Personal layer, never an Account, so it needs no ADR-008 FU4 cleanup; the
+source is still re-read before the merge. A source processed under `personal`
+keeps its run row, so switching to `on` later does not re-merge unchanged content
+into Accounts. The source flags are independent of `AUTO_TERMS_MODE` and
 `ACCOUNT_TERMS_MODE` (only the `AUTO_TERMS_USERS` canary list is shared): a
 source flag set to `on` writes the Account layer even with `ACCOUNT_TERMS_MODE`
 `off`. Only plain-text KB files (`.md`, `.markdown`, `.txt`) contribute terms
@@ -660,8 +664,9 @@ with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global
 source can still qualify a term; `ttobak:newsTermsMode=off` stops news terms
 immediately. `ttobak:kbTermsMode` and
-`ttobak:researchTermsMode` stay `off`: ADR-008 FU4 (Account-layer cleanup on
-unlink) must land before either source writes Account terms.
+`ttobak:researchTermsMode` may use `personal`; `on` (Account writes) waits for
+ADR-008 FU4 (Account-layer cleanup on unlink). `infra/cdk.json` sets
+`ttobak:kbTermsMode` and `ttobak:researchTermsMode` to `personal`.
 
 ### Dictionary layer metrics
 

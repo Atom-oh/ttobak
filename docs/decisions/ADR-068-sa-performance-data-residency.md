@@ -1,9 +1,9 @@
-# ADR-066: SA performance data residency
+# ADR-068: SA performance data residency
 
 - Status: Accepted; not yet implemented.
 - Decision date: 2026-11-10.
 - Design: [SA performance dashboard](../superpowers/specs/2026-11-10-sa-performance-dashboard-design.md).
-- Related: ADR-065 (Local MCP intake), ADR-065 (Account people edges and
+- Related: ADR-065 (Local MCP intake), ADR-067 (Account people edges and
   deterministic entity resolution), ADR-063 (account contact encryption).
 
 ## Context
