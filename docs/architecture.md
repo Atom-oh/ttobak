@@ -236,6 +236,9 @@ reject oversized, partial, paywalled or script-only input instead of publishing
 snippet-based summaries. Scoped article/container text and nested trailing corrections
 are retained even without paragraph tags; the paywall scan is independent of body
 boilerplate exclusion. Nonrepresentable UTC dates remain unknown freshness.
+Search freshness accepts ISO-8601 and the web-search gateway's
+`hh:mmAM, Weekday, Month DD YYYY, TZ` form with a fixed-offset zone table;
+`unknown` and other zones stay unknown freshness.
 `news_enrichment.py` accepts only bounded schema-v1
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts
@@ -389,6 +392,14 @@ an auto link only with a verbatim evidence quote. Signals, flow, graph and KB
 reads revalidate membership and every endpoint, apply fixed bounds and report
 truncation instead of guessing. Account KB uploads gain a `KBREF#` row at presign;
 QA retrieval scope is unchanged.
+
+Account people edges (ADR-065) bind meeting participants, speakers, assignees and
+insight entities to members, contacts, sub-accounts and projects with a
+deterministic resolver (no model call). Summarize runs it inline after summary
+publication; speaker map and contact changes publish `PeopleResolveRequested` to
+the same Lambda, and `backend/cmd/backfill-account-people` replays older meetings.
+Runs hold a per-meeting lease that fences their writes. The people panel, graph
+and flow read the rows back with read-time revalidation.
 
 The authenticated `/api/meetings/{id}/reading` route bounds JSON before Lambda
 serialization. Notes, summary and action sections use metadata views; transcript

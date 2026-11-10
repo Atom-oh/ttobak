@@ -21,6 +21,7 @@ type contactsAPIStub struct {
 	limit int
 	err   error
 	calls int
+	opt   service.ContactMutateOptions
 }
 
 func (s *contactsAPIStub) List(_ context.Context, _, user string, limit int, _ string) (*model.AccountContactsPage, error) {
@@ -29,8 +30,8 @@ func (s *contactsAPIStub) List(_ context.Context, _, user string, limit int, _ s
 	s.calls++
 	return &model.AccountContactsPage{Contacts: []model.AccountContact{}}, s.err
 }
-func (s *contactsAPIStub) Mutate(_ context.Context, _, user, op, id string, c model.AccountContact) (*model.AccountContact, error) {
-	s.user = user
+func (s *contactsAPIStub) MutateWith(_ context.Context, _, user, op, id string, c model.AccountContact, opt service.ContactMutateOptions) (*model.AccountContact, error) {
+	s.user, s.opt = user, opt
 	s.calls++
 	return &c, s.err
 }
@@ -119,6 +120,22 @@ func TestContactJSONContainsExactPublicFields(t *testing.T) {
 	for _, key := range keys {
 		if _, ok := row[key]; !ok {
 			t.Fatalf("missing %s", key)
+		}
+	}
+}
+
+func TestContactWriteDefersPeopleResolveOnRequest(t *testing.T) {
+	s := &contactsAPIStub{}
+	h := contactRouter(s)
+	if w := contactRequest(h, "POST", "/accounts/a/contacts?peopleResolve=defer", `{"name":"A"}`); w.Code != 201 || !s.opt.DeferPeopleResolve {
+		t.Fatalf("defer: %d opt=%+v", w.Code, s.opt)
+	}
+	if w := contactRequest(h, "PUT", "/accounts/a/contacts/c1", `{"name":"A"}`); w.Code != 200 || s.opt.DeferPeopleResolve {
+		t.Fatalf("default: %d opt=%+v", w.Code, s.opt)
+	}
+	for _, q := range []string{"?peopleResolve=now", "?peopleResolve=defer&peopleResolve=defer", "?other=1"} {
+		if w := contactRequest(h, "POST", "/accounts/a/contacts"+q, `{"name":"A"}`); w.Code != 400 {
+			t.Fatalf("%s: %d", q, w.Code)
 		}
 	}
 }

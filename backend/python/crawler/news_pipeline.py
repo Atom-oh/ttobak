@@ -10,6 +10,7 @@ candidate contract fields and reconstructs corroborating URLs.
 
 import hashlib
 import ipaddress
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -177,13 +178,46 @@ def expand_queries(source_name: str, aliases, keywords, after_date: date) -> lis
 # Freshness
 # ---------------------------------------------------------------------------
 
+# The web-search gateway's publishedDate form, e.g.
+# "12:44AM, Friday, July 24 2026, PDT". The weekday is not checked.
+_GATEWAY_DATE = re.compile(
+    r"(\d{1,2}):(\d{2})(AM|PM), [A-Za-z]+, ([A-Za-z]+) (\d{1,2}) (\d{4}), ([A-Z]{2,4})")
+_MONTHS = {name: i for i, name in enumerate(
+    ("January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"), 1)}
+# Only abbreviations with one unambiguous offset; any other fails closed.
+_ZONE_OFFSETS = {"UTC": 0, "GMT": 0, "PST": -8, "PDT": -7, "MST": -7, "MDT": -6,
+                 "CST": -6, "CDT": -5, "EST": -5, "EDT": -4, "KST": 9, "JST": 9}
+
+
+def _parse_gateway_date(text):
+    match = _GATEWAY_DATE.fullmatch(text)
+    if not match:
+        return None
+    hour, minute, meridiem, month, day, year, zone = match.groups()
+    hour, minute = int(hour), int(minute)
+    if month not in _MONTHS or zone not in _ZONE_OFFSETS or not 1 <= hour <= 12 or minute > 59:
+        return None
+    hour = hour % 12 + (12 if meridiem == "PM" else 0)
+    try:
+        local = datetime(int(year), _MONTHS[month], int(day), hour, minute,
+                         tzinfo=timezone(timedelta(hours=_ZONE_OFFSETS[zone])))
+        return local.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
 def parse_published_at(value):
-    """Parse an ISO-8601 timestamp (with or without a 'Z' suffix) to an
-    aware UTC datetime. Returns None on any unparseable input -- callers
-    must treat that as "freshness unknown", not "fresh"."""
+    """Parse an ISO-8601 timestamp (with or without a 'Z' suffix) or the
+    web-search gateway's "hh:mmAM, Weekday, Month DD YYYY, TZ" form to an
+    aware UTC datetime. Returns None on any unparseable input (including
+    the gateway's "unknown") -- callers must treat that as "freshness
+    unknown", not "fresh"."""
     if not value or not isinstance(value, str):
         return None
     text = value.strip()
+    if text[:1].isdigit() and ("AM, " in text or "PM, " in text):
+        return _parse_gateway_date(text)
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:

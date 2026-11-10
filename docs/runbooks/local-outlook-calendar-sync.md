@@ -2,7 +2,9 @@
 
 This guide describes the implemented calendar API and local MCP protocol.
 It does not install an Outlook reader, obtain consent, or activate a scheduler.
-No reader, host or OS has been selected or tested for this installation.
+No reader, host or OS has been accepted for this installation. The built-in
+`ttobak-mcp intake` runner implements this contract for a local
+`aws-outlook-mcp` ([local MCP intake](local-mcp-intake.md)); its acceptance is pending.
 The in-app prerequisites are always available at `/settings#outlook-sync`.
 Full persisted stdio → Go → DynamoDB acceptance belongs to Calendar 5;
 synthetic protocol fixtures do not establish provider or unattended acceptance.

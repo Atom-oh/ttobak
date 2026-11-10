@@ -48,6 +48,11 @@ and superseded historical decisions.
   when at most one model remains. A response is not proof that every relevant line
   was reviewed; inspect coverage and truncation notices before merging.
 
+The filters exclude lockfiles, binary assets, build output and the generated
+stdio bundle `frontend/public/mcp/ttobak-mcp.mjs` (exact path). That bundle is
+reviewed through its `mcp-server/src` sources; `test-mcp.yml` rebuilds it and
+fails unless it is byte-identical.
+
 Current limits: workflow input is the first 3,000 filtered diff lines; Kiro also
 has a 100,000-byte diff cap. These are partial-review limits, not proof of a clean
 full diff. For a change exceeding them, split into reviewable PRs or obtain

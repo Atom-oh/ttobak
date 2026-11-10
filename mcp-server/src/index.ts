@@ -1198,8 +1198,13 @@ export function createMcpServer(options: ServerOptions): Server {
 
 async function main() {
   const cliArguments = process.argv.slice(2);
+  if (cliArguments[0] === 'intake') {
+    const { runIntake, defaultEnvironment } = await import('./intake/run.js');
+    process.exitCode = await runIntake(cliArguments.slice(1), defaultEnvironment());
+    return;
+  }
   if (cliArguments.includes('--help')) {
-    console.log('Usage: ttobak-mcp [--transport stdio|http]. Downloaded adapter: stdio only; HTTP requires the installed server package.');
+    console.log('Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help. Downloaded adapter: stdio only; HTTP requires the installed server package.');
     return;
   }
   if (cliArguments.length && (cliArguments.length !== 2 || cliArguments[0] !== '--transport')) {
