@@ -59,7 +59,7 @@ use CSS variants.
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
-| Settings | Integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
+| Settings | Mac app install (`MacAppInstall`, section `#mac-app`), integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
 
 Resolve exact paths under `frontend/src/` rather than treating this table as an
 exhaustive file inventory. New static pages need the CloudFront knownPages mapping.
@@ -116,6 +116,19 @@ Browser modes use microphone/tab MediaStreams; the macOS system-audio mode uses
 native recording and PCM events. Finished native WAVs remain on disk and upload
 through Rust. `usePostRecording` accepts a tagged native-path/browser-Blob payload.
 Never load a finished native recording into the WebView just to upload it.
+
+Settings' Mac app section (`MacAppInstall.tsx`, `lib/macRelease.ts`) shows the
+copyable `curl -fsSL https://ttobak.atomai.click/mac/install.sh | sh` command and,
+when `/mac/latest.json` is readable, the published version; the version line is
+hidden on any failure. The Mac app's own update UI is native, not the SPA: the
+TTOBAK app menu has a check-for-updates item (a manual check reports up-to-date or
+failure by notification, and opens the popup when an update exists) that becomes an
+update-available item with the version once an update is known. The small local popup
+(`update-prompt.html`, ADR-071) has Update and Later buttons, shows a static
+downloading status (not progress) after Update, stays open until install succeeds, and
+asks the user to retry after the recording when work is in progress. Copy is Korean; see
+`update.rs` and the page for exact strings. No popup appears while recording, finalizing or
+uploading.
 
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
 the app detects a meeting, and after that meeting ends during a native recording
@@ -675,10 +688,14 @@ period control (this week / quarter / this year, default this week) drives
   failed missed read or mapping-list read shows a retry. A calendar-coverage note states the earliest calendar event read (`calendarCoverageStart`, or that no events were read) and qualifies the logging-gap empty state. A positive `unmappedCount` is shown as an
   excluded count, never guessed; the notice says only SFDC-account activity can
   be fixed in the queue.
-- Mapping queue (`MappingQueue`): unmapped SFDC assignments, plus mapped ones
-  whose account is not in the loaded readable account list (shown with that
-  reason; nothing is judged until the list loads), each with a plain account
-  select (hierarchy paths from `lib/accountTree.ts`) and a connect button. `403` reads as "cannot read this account", `404` as "not your
+- Mapping queue (`MappingQueue`): unmapped SFDC assignments, each with a plain
+  account select (hierarchy paths from `lib/accountTree.ts`) and a connect
+  button. An assignment whose mapped account is no longer readable (the API's
+  `reason:"unreadable"`, or an account absent from the loaded readable list)
+  is listed with that reason. Below them, automatic mappings preselect their
+  account with a confirm button (saving makes the mapping manual) that becomes
+  "change" when another account is selected. Manual mappings are not listed.
+  `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
 - Source freshness: one line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or

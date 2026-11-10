@@ -17,6 +17,29 @@ type PerformanceAccountCandidates interface {
 	ListReadableAccountCandidates(ctx context.Context, userID string) ([]NamedCandidate, error)
 }
 
+var _ PerformanceAccountCandidates = (*AccountService)(nil)
+
+// readablePerformanceAccounts is the set of account IDs the owner can read
+// now, from the same discovery /missed uses. It fails closed when the account
+// reader cannot list candidates.
+func (svc *PerformanceService) readablePerformanceAccounts(ctx context.Context, userID string) (map[string]bool, error) {
+	source, ok := svc.accounts.(PerformanceAccountCandidates)
+	if !ok {
+		return nil, ErrPerformanceSourcesUnavailable
+	}
+	candidates, err := source.ListReadableAccountCandidates(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	readable := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ID != "" {
+			readable[candidate.ID] = true
+		}
+	}
+	return readable, nil
+}
+
 // ListReadableAccountCandidates returns the caller's readable accounts using
 // the same discovery as alias resolution; it adds no access rule.
 func (s *AccountService) ListReadableAccountCandidates(ctx context.Context, userID string) ([]NamedCandidate, error) {
