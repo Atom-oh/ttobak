@@ -91,8 +91,9 @@ TABLE_NAME=ttobak-main KMS_KEY_ID=KEY_ID go run ./cmd/merge-accounts \
 ```
 
 The CLI starts the job, claims the job lease as `cli-<host>-<pid>`, rewrites the
-user-partition rows under that lease, releases it, then runs the worker in this
-process until the job is `done` or `failed`. Keep the session alive; it can run a
+user-partition rows under that lease (renewed before every row), then runs the
+worker in this process as the same lease owner, without releasing the lease in
+between, until the job is `done` or `failed`. Keep the session alive; it can run a
 long time. Result fields: `state`, `step`, `errorCode`, `counts` (job counts keyed
 `{step}.{moved|skipped|resumed|unreadable|keptSeparate}`) and `userRows` (suffix
 `Moved`, `Skipped`; `errors`).
@@ -131,8 +132,6 @@ it to expire, then rerun the step 2 command (add `-scan-users` only if the scan 
 not complete). Start hands a `running` job whose lease expired to this process and
 the saved step and cursor continue. A live lease returns `JOB_RUNNING`: do not force
 it. Every mover is idempotent, so a repeated step moves nothing twice.
-
-Rerunning with `-scan-users` repeats the scan; rows already moved no longer match.
 
 A `failed` job restarts the same way from its saved step; the source stays fenced
 after a failure and nothing is rolled back. `DISPATCH_FAILED`, `MERGE_CONFLICT` and
