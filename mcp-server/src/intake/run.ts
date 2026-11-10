@@ -3,14 +3,17 @@
 // configuration values; only `--preview` prints titles, and only locally.
 
 import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { TtobakApi } from '../api.js';
 import { CognitoAuth } from '../auth.js';
 import { CALENDAR_TOOL, SCOPE_PATTERN, runCalendar, type CalendarCounts } from './calendar.js';
-import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type TaskConnectorId } from './connectors.js';
+import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type ConnectorId, type TaskConnectorId } from './connectors.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
+import { defaultLaunchctl, type LaunchctlRunner } from './schedule.js';
 import { SFDC_TOOLS, runSfdc, type SfdcCounts } from './sfdc.js';
 import { resolveMe } from './specreq.js';
 import { IntakeStore } from './store.js';
@@ -67,6 +70,15 @@ export interface IntakeEnvironment {
   scope?: string;
   /** Test seam: the signed-in identity that goes with `api`. */
   me?: { email: string; userId: string };
+  /** Korean prompts and progress of `setup`; never host values. */
+  stderr?: (line: string) => void;
+  /** Interactive answer source of `setup`; absent without a terminal. */
+  prompt?: (question: string) => Promise<string>;
+  /** Schedule seams: launchctl runner, user ID, node executable and CLI script. */
+  launchctl?: LaunchctlRunner;
+  uid?: number;
+  nodePath?: string;
+  cliPath?: string;
 }
 
 /** Deployment and signed-in user, as a fixed-length key (never logged). */
@@ -100,6 +112,9 @@ const USAGE = `Usage:
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
     (a synced run also runs the SpecReq task step when meetings and specreq are selected)
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
+  ttobak-mcp intake setup [--yes] [--accept-unknown-sensitivity] [--auto-ack on|off] [--skip <connector>]...
+    [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
+  ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
   ttobak-mcp intake status`;
 
 function flags(args: string[], allowed: Record<string, 'value' | 'flag'>): Record<string, string | true> {
@@ -146,16 +161,21 @@ async function openSession(environment: IntakeEnvironment, host: HostId, server:
   return session;
 }
 
-async function selectTaskConnector(connector: TaskConnectorId, args: string[], environment: IntakeEnvironment,
+export interface SelectRequest {
+  host: HostId;
+  server: string;
+  /** specreq only; defaults to on. */
+  autoAck?: boolean;
+  /** calendar only. */
+  acceptUnknownSensitivity?: boolean;
+  /** Setup: a Midway failure of the SpecReq identity read throws before anything is written. */
+  identityAuthFatal?: boolean;
+}
+
+async function selectTaskConnector(connector: TaskConnectorId, request: SelectRequest, environment: IntakeEnvironment,
   store: IntakeStore) {
-  const options = flags(args, connector === 'specreq'
-    ? { '--host': 'value', '--server': 'value', '--auto-ack': 'value' }
-    : { '--host': 'value', '--server': 'value' });
-  const host = options['--host'] as HostId;
-  const server = options['--server'] as string;
-  if (!HOSTS.includes(host) || typeof server !== 'string') throw new IntakeError('INVALID_ARGUMENT', '--host and --server are required');
-  const autoAckValue = options['--auto-ack'] ?? 'on';
-  if (autoAckValue !== 'on' && autoAckValue !== 'off') throw new IntakeError('INVALID_ARGUMENT', '--auto-ack must be on or off');
+  const { host, server } = request;
+  const autoAck = request.autoAck !== false;
   const pathDirs = parsePathList(environment.env.PATH);
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
@@ -169,27 +189,40 @@ async function selectTaskConnector(connector: TaskConnectorId, args: string[], e
   } finally {
     await session.close();
   }
+  if (request.identityAuthFatal && identity && 'identityError' in identity && identity.identityError === 'AUTH_EXPIRED_MIDWAY') {
+    throw new IntakeError('AUTH_EXPIRED_MIDWAY', `${server} reported an authentication failure`);
+  }
   const previous = store.read<Selection>('selection.json') ?? { version: 1 as const };
   const base = { host, server, pathDirs, selectedAt: environment.now().toISOString() };
   const next: Selection = { ...previous, version: 1,
-    [connector]: connector === 'specreq' ? { ...base, autoAck: autoAckValue === 'on' } : base };
+    [connector]: connector === 'specreq' ? { ...base, autoAck } : base };
   store.write(next, 'selection.json');
   return { ok: true, connector, host, server, pathDirectories: pathDirs.length,
-    ...(connector === 'specreq' ? { autoAck: autoAckValue === 'on', ...identity } : {}) };
+    ...(connector === 'specreq' ? { autoAck, ...identity } : {}) };
 }
 
 async function select(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
-  if (isTaskConnector(args[0])) return selectTaskConnector(args[0], args.slice(1), environment, store);
   const connector = args[0];
-  if (connector !== 'calendar' && connector !== 'sfdc') {
+  if (!isTaskConnector(connector) && connector !== 'calendar' && connector !== 'sfdc') {
     throw new IntakeError('INVALID_ARGUMENT', 'connector must be calendar, sfdc, meetings, specreq or slack');
   }
-  const options = flags(args.slice(1), connector === 'calendar'
-    ? { '--host': 'value', '--server': 'value', '--accept-unknown-sensitivity': 'flag' }
-    : { '--host': 'value', '--server': 'value' });
-  const host = options['--host'] as HostId;
-  const server = options['--server'] as string;
+  const allowed: Record<string, 'value' | 'flag'> = { '--host': 'value', '--server': 'value' };
+  if (connector === 'specreq') allowed['--auto-ack'] = 'value';
+  if (connector === 'calendar') allowed['--accept-unknown-sensitivity'] = 'flag';
+  const options = flags(args.slice(1), allowed);
+  const autoAckValue = options['--auto-ack'] ?? 'on';
+  if (autoAckValue !== 'on' && autoAckValue !== 'off') throw new IntakeError('INVALID_ARGUMENT', '--auto-ack must be on or off');
+  return selectConnector(connector, { host: options['--host'] as HostId, server: options['--server'] as string,
+    autoAck: autoAckValue === 'on', acceptUnknownSensitivity: options['--accept-unknown-sensitivity'] === true },
+  environment, store);
+}
+
+/** Starts the server once, checks the connector's tool schemas and stores the reference. */
+export async function selectConnector(connector: ConnectorId, request: SelectRequest, environment: IntakeEnvironment,
+  store: IntakeStore) {
+  const { host, server } = request;
   if (!HOSTS.includes(host) || typeof server !== 'string') throw new IntakeError('INVALID_ARGUMENT', '--host and --server are required');
+  if (isTaskConnector(connector)) return selectTaskConnector(connector, request, environment, store);
   // The approved PATH is the one of the terminal running this command; it is
   // stored because background runs get a minimal environment.
   const pathDirs = parsePathList(environment.env.PATH);
@@ -215,7 +248,7 @@ async function select(args: string[], environment: IntakeEnvironment, store: Int
     ...(previous ?? {}),
     version: 1,
     calendar: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString(),
-      ...(options['--accept-unknown-sensitivity'] ? { acceptUnknownSensitivity: true } : {}) },
+      ...(request.acceptUnknownSensitivity ? { acceptUnknownSensitivity: true } : {}) },
     ttobak,
   };
   store.write(selection, 'selection.json');
@@ -270,10 +303,23 @@ async function openTaskSessions(environment: IntakeEnvironment, selection: Selec
   return { sessions, unavailable };
 }
 
+export interface ConnectorRunOptions { dryRun: boolean; noninteractive: boolean; reconcile?: boolean; preview?: boolean }
+type SignedIn = Awaited<ReturnType<typeof signIn>>;
+/** Shared sign-in of `intake run`; a single command signs in itself. */
+type SignInOnce = () => Promise<SignedIn>;
+
 async function calendar(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
   const options = flags(args, { '--dry-run': 'flag', '--preview': 'flag', '--noninteractive': 'flag', '--reconcile': 'flag' });
   const dryRun = options['--dry-run'] === true;
   if (options['--preview'] && !dryRun) throw new IntakeError('INVALID_ARGUMENT', '--preview needs --dry-run');
+  return calendarRun({ dryRun, preview: options['--preview'] === true, noninteractive: options['--noninteractive'] === true,
+    reconcile: options['--reconcile'] === true }, environment, store);
+}
+
+/** One calendar run (plus the task step on a synced run); returns the result object it would print. */
+export async function calendarRun(options: ConnectorRunOptions, environment: IntakeEnvironment, store: IntakeStore,
+  signedIn?: SignInOnce) {
+  const { dryRun } = options;
   const selection = store.read<Selection>('selection.json');
   const selected = selection?.calendar;
   if (!selected) throw new IntakeError('NOT_SELECTED', 'run "intake select calendar" first');
@@ -284,7 +330,7 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
   try {
     // Inside the try: an unreadable status file must still release the lock.
     status = store.read<RunStatus>('status.json') ?? {};
-    let { api, scope, me } = await signIn(selection, environment, dryRun, options['--noninteractive'] === true);
+    let { api, scope, me } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
@@ -292,7 +338,7 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
     const active = session;
     const result = await runCalendar({
       store, api, sourceId: selected.sourceId, scope, zone: environment.zone, now: startedAt, dryRun,
-      reconcile: options['--reconcile'] === true, acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
+      reconcile: options.reconcile === true, acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
       source: { view: async request => resultJson(await active.call(CALENDAR_TOOL.name, request), CALENDAR_TOOL.name) },
     });
     status.calendar = {
@@ -328,7 +374,7 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
     }
     return { ok: true, connector: 'calendar', dryRun, counts: result.counts,
       ...(tasks ? { tasks } : {}),
-      ...(options['--preview'] ? { preview: result.preview } : {}) };
+      ...(options.preview ? { preview: result.preview } : {}) };
   } catch (error) {
     status.calendar = {
       ...(status.calendar ?? {}), lastRunAt: startedAt.toISOString(), result: intakeCode(error), dryRun,
@@ -344,7 +390,14 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
 
 async function sfdc(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
   const options = flags(args, { '--dry-run': 'flag', '--noninteractive': 'flag', '--reconcile': 'flag' });
-  const dryRun = options['--dry-run'] === true;
+  return sfdcRun({ dryRun: options['--dry-run'] === true, noninteractive: options['--noninteractive'] === true,
+    reconcile: options['--reconcile'] === true }, environment, store);
+}
+
+/** One SFDC run; returns the result object it would print. */
+export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeEnvironment, store: IntakeStore,
+  signedIn?: SignInOnce) {
+  const { dryRun } = options;
   const selection = store.read<Selection>('selection.json');
   const selected = selection?.sfdc;
   if (!selected) throw new IntakeError('NOT_SELECTED', 'run "intake select sfdc" first');
@@ -359,12 +412,12 @@ async function sfdc(args: string[], environment: IntakeEnvironment, store: Intak
   let previous: RunStatus['sfdc'];
   try {
     previous = store.read<RunStatus>('status.json')?.sfdc;
-    let { api, scope } = await signIn(selection, environment, dryRun, options['--noninteractive'] === true);
+    let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
     const active = session;
     const result = await runSfdc({
-      store, api, sourceId: selected.sourceId, scope, now: startedAt, dryRun, reconcile: options['--reconcile'] === true,
+      store, api, sourceId: selected.sourceId, scope, now: startedAt, dryRun, reconcile: options.reconcile === true,
       source: { call: async (tool, request) => resultJson(await active.call(tool, request), tool) },
     });
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
@@ -383,6 +436,57 @@ async function sfdc(args: string[], environment: IntakeEnvironment, store: Intak
   }
 }
 
+export const SYNC_CONNECTORS = ['calendar', 'sfdc'] as const;
+export type SyncConnectorId = typeof SYNC_CONNECTORS[number];
+export interface RunOutput {
+  ok: boolean;
+  code?: IntakeCode;
+  message?: string;
+  results: Partial<Record<SyncConnectorId, { result: 'ok' | IntakeCode } & Record<string, unknown>>>;
+}
+
+/**
+ * Runs the selected sync connectors in order (calendar, then SFDC) with one
+ * shared sign-in. A Midway failure stops the run because the connectors share
+ * Midway; any other failure is recorded and the next connector still runs.
+ */
+export async function runConnectors(options: { dryRun: boolean; noninteractive: boolean; only?: readonly SyncConnectorId[] },
+  environment: IntakeEnvironment, store: IntakeStore): Promise<RunOutput> {
+  const selection = store.read<Selection>('selection.json');
+  const wanted = options.only ?? SYNC_CONNECTORS.filter(id => selection?.[id]);
+  const missing = wanted.find(id => !selection?.[id]);
+  if (!wanted.length || missing) throw new IntakeError('NOT_SELECTED', `run "intake select ${missing ?? 'calendar'}" or "intake setup" first`);
+  let pending: Promise<SignedIn> | undefined;
+  const signedIn = () => (pending ??= signIn(selection, environment, options.dryRun, options.noninteractive));
+  const results: RunOutput['results'] = {};
+  let code: IntakeCode | undefined;
+  for (const id of SYNC_CONNECTORS.filter(item => wanted.includes(item))) {
+    try {
+      const run = id === 'calendar' ? calendarRun(options, environment, store, signedIn) : sfdcRun(options, environment, store, signedIn);
+      const { ok: _ok, connector: _connector, dryRun: _dryRun, ...rest } = await run;
+      results[id] = { result: 'ok', ...rest };
+    } catch (error) {
+      const failure = intakeCode(error);
+      results[id] = { result: failure };
+      code ??= 'PARTIAL_FAILURE';
+      if (failure === 'AUTH_EXPIRED_MIDWAY') { code = failure; break; }
+    }
+  }
+  return code ? { ok: false, code, message: code === 'AUTH_EXPIRED_MIDWAY' ? 'run mwinit -o, then retry' : 'a connector failed',
+    results } : { ok: true, results };
+}
+
+async function run(args: string[], environment: IntakeEnvironment, store: IntakeStore): Promise<RunOutput> {
+  const options = flags(args, { '--dry-run': 'flag', '--noninteractive': 'flag', '--only': 'value' });
+  let only: SyncConnectorId[] | undefined;
+  if (typeof options['--only'] === 'string') {
+    only = [...new Set(options['--only'].split(','))] as SyncConnectorId[];
+    if (only.some(id => !SYNC_CONNECTORS.includes(id))) throw new IntakeError('INVALID_ARGUMENT', '--only takes calendar and/or sfdc');
+  }
+  return runConnectors({ dryRun: options['--dry-run'] === true, noninteractive: options['--noninteractive'] === true,
+    ...(only ? { only } : {}) }, environment, store);
+}
+
 export async function runIntake(args: string[], environment: IntakeEnvironment): Promise<number> {
   const store = new IntakeStore(environment.home);
   try {
@@ -393,6 +497,12 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     } else if (command === 'select') output = await select(rest, environment, store);
     else if (command === 'calendar') output = await calendar(rest, environment, store);
     else if (command === 'sfdc') output = await sfdc(rest, environment, store);
+    else if (command === 'run' || command === 'setup') {
+      const result = command === 'run' ? await run(rest, environment, store)
+        : await (await import('./setup.js')).setup(rest, environment, store);
+      environment.stdout(JSON.stringify(result));
+      return result.ok ? 0 : 2;
+    }
     else if (command === 'status' && rest.length === 0) {
       const selection = store.read<Selection>('selection.json');
       const listed: Record<string, { host: HostId; server: string }> = {};
@@ -421,5 +531,16 @@ export function defaultEnvironment(): IntakeEnvironment {
     home: homedir(), env: process.env, now: () => new Date(),
     zone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     stdout: line => process.stdout.write(line + '\n'),
+    stderr: line => process.stderr.write(line + '\n'),
+    ...(process.stdin.isTTY ? { prompt: terminalPrompt } : {}),
+    launchctl: defaultLaunchctl,
+    ...(process.getuid ? { uid: process.getuid() } : {}),
+    nodePath: process.execPath,
+    ...(process.argv[1] ? { cliPath: resolve(process.argv[1]) } : {}),
   };
+}
+
+async function terminalPrompt(question: string): Promise<string> {
+  const reader = createInterface({ input: process.stdin, output: process.stderr });
+  try { return await reader.question(question + ' '); } finally { reader.close(); }
 }

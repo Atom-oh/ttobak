@@ -16,7 +16,8 @@
 // Meetings knobs: FAKE_WORK_MEETINGS (list_meetings result JSON),
 // FAKE_WORK_MEETINGS_OVERFLOW=1 (5,001 items), FAKE_WORK_DETAILS (meetingId ->
 // get_meeting result JSON). Slack: FAKE_WORK_SLACK_USER, FAKE_WORK_SLACK_CHANNEL,
-// FAKE_WORK_DRAFTS (list_drafts `drafts`).
+// FAKE_WORK_DRAFTS (list_drafts `drafts`). FAKE_WORK_TAM_AUTH=1 makes
+// check_user_is_tam fail like an expired Midway session.
 import { appendFileSync, readFileSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -97,6 +98,10 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   if (process.env.FAKE_WORK_ARGS) appendFileSync(process.env.FAKE_WORK_ARGS, `${JSON.stringify({ name, args })}\n`);
   switch (name) {
     case 'check_user_is_tam':
+      if (process.env.FAKE_WORK_TAM_AUTH) {
+        process.stderr.write('Midway cookie expired; run mwinit\n');
+        return { isError: true, content: [{ type: 'text', text: 'Authentication failed: run mwinit -o' }] };
+      }
       return json({ success: true, data: { employee_login: process.env.FAKE_WORK_TAM ?? null } });
     case 'get_request':
       return json({ success: true, data: requestData(args.request_id) });
