@@ -35,16 +35,6 @@ const (
 	performanceMaxYear      = 2100
 )
 
-type performanceSourceRow struct {
-	PK              string `dynamodbav:"PK"`
-	SK              string `dynamodbav:"SK"`
-	UserID          string `dynamodbav:"userId"`
-	Source          string `dynamodbav:"source"`
-	Revision        int64  `dynamodbav:"revision"`
-	LastAttemptAt   string `dynamodbav:"lastAttemptAt"`
-	LastCompletedAt string `dynamodbav:"lastCompletedAt,omitempty"`
-}
-
 type performanceBatchReceipt struct {
 	PK            string                       `dynamodbav:"PK"`
 	SK            string                       `dynamodbav:"SK"`
@@ -220,7 +210,7 @@ func buildPerformanceRows(userID, source string, req model.PerformanceSyncReques
 			if mutation.Op == "upsert" {
 				t := mutation.Task
 				if t == nil || mutation.ExternalID != "" || !performanceExternal.MatchString(t.TaskID) ||
-					!performanceExternal.MatchString(t.SFDCAccountID) || !performanceTaskText(t) {
+					(t.SFDCAccountID != "" && !performanceExternal.MatchString(t.SFDCAccountID)) || !performanceTaskText(t) {
 					return nil, nil, ErrInvalidPerformanceBatch
 				}
 				expires, err := performanceTaskExpiry(t.ActivityDate)

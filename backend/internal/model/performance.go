@@ -32,8 +32,9 @@ type SFDCAssignment struct {
 
 // SFDCTask carries only metadata; descriptions and comments are never stored.
 type SFDCTask struct {
-	TaskID        string `json:"taskId" dynamodbav:"taskId"`
-	SFDCAccountID string `json:"sfdcAccountId" dynamodbav:"sfdcAccountId"`
+	TaskID string `json:"taskId" dynamodbav:"taskId"`
+	// SFDCAccountID may be empty: tasks without an account stay unmapped.
+	SFDCAccountID string `json:"sfdcAccountId" dynamodbav:"sfdcAccountId,omitempty"`
 	// ActivityDate is YYYY-MM-DD.
 	ActivityDate string `json:"activityDate" dynamodbav:"activityDate"`
 	Type         string `json:"type" dynamodbav:"type"`

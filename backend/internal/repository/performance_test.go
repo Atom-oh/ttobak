@@ -318,3 +318,33 @@ func TestPerformanceGoalsRoundTrip(test *testing.T) {
 		test.Fatalf("oversized goals: %v", err)
 	}
 }
+
+func TestApplyPerformanceBatchAcceptsAccountlessTask(test *testing.T) {
+	var stored map[string]any
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		body := performanceBody(test, request)
+		switch performanceTarget(request) {
+		case "GetItem":
+			return summaryHTTPResponse(200, `{}`, nil), nil
+		case "TransactWriteItems":
+			stored = body["TransactItems"].([]any)[1].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
+			return summaryHTTPResponse(200, `{}`, nil), nil
+		case "Query":
+			return summaryHTTPResponse(200, `{"Items":[`+mustJSON(test, stored)+`]}`, nil), nil
+		}
+		return nil, errors.New("unexpected call")
+	})
+	req := model.PerformanceSyncRequest{BatchID: performanceTestBatch, Mutations: []model.PerformanceMutation{
+		{Op: "upsert", Task: &model.SFDCTask{TaskID: "T9", ActivityDate: "2026-05-05", Type: "Call", Subject: "s", Status: "Open"}},
+	}}
+	if _, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, req, performanceTestDigest); err != nil {
+		test.Fatalf("accountless task must be accepted: %v", err)
+	}
+	if _, found := stored["sfdcAccountId"]; found {
+		test.Fatalf("empty account must be stored without the attribute: %v", stored)
+	}
+	tasks, err := repo.ListPerformanceTasks(test.Context(), "owner", "", "")
+	if err != nil || len(tasks) != 1 || tasks[0].TaskID != "T9" || tasks[0].SFDCAccountID != "" {
+		test.Fatalf("list: %+v %v", tasks, err)
+	}
+}
