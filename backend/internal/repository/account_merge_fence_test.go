@@ -369,4 +369,18 @@ func TestConnectorWriteErrorMapsMergeFence(t *testing.T) {
 	if err := connectorWriteError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountMerging) {
 		t.Fatalf("plain cancellation=%v, want ErrConditionFailed", err)
 	}
+	// A replay with an existing receipt is never a definitive merge refusal.
+	if err := connectorReplayError(cancelled(marked)); !errors.Is(err, ErrConnectorReplayAccountMerging) || errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("replay fence trip=%v, want ErrConnectorReplayAccountMerging only", err)
+	}
+	if err := connectorReplayError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("replay plain cancellation=%v, want ErrConditionFailed", err)
+	}
+	// The replay-only probe follows a consistent read that found no receipt.
+	if err := connectorProbeError(cancelled(marked)); !errors.Is(err, ErrConnectorReceiptMissing) || errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("probe fence trip=%v, want ErrConnectorReceiptMissing", err)
+	}
+	if err := connectorProbeError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("probe plain cancellation=%v, want ErrConditionFailed", err)
+	}
 }

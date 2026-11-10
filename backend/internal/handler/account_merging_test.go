@@ -79,6 +79,18 @@ func TestAccountMergingIsDefinitiveForConnectorCreates(t *testing.T) {
 	}
 }
 
+func TestReplayAccountMergingIsDistinctForConnectorCreates(t *testing.T) {
+	for name, result := range map[string]connector.InvokeResult{
+		"contact": contactCreateFailure(repository.ErrConnectorReplayAccountMerging),
+		"event":   eventCreateFailure(repository.ErrConnectorReplayAccountMerging),
+	} {
+		if result.StatusCode != http.StatusConflict || !strings.Contains(result.Body, model.ErrCodeReplayAccountMerging) ||
+			strings.Contains(result.Body, `"`+model.ErrCodeAccountMerging+`"`) {
+			t.Fatalf("%s: status=%d body=%s, want 409 %s", name, result.StatusCode, result.Body, model.ErrCodeReplayAccountMerging)
+		}
+	}
+}
+
 func TestAccountMergingMapsTo409ForNewsAndPeople(t *testing.T) {
 	for name, write := range map[string]func(http.ResponseWriter, error){
 		"news":            accountNewsError,
