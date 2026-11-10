@@ -462,8 +462,15 @@ are added next to the personal one, which stays the only layer a user owns.
   terms and names. `ttobak:newsTermsSources` (`global` by default, or `all`)
   makes every searched, non-synthetic source eligible when set to `all`.
   Custom-URL documents stay excluded, and the two-distinct-source threshold
-  still applies. Accepted consequence: a term from a user's subscribed source is
-  visible to all users once a second source also names it.
+  still applies. Accepted consequences (owner, 2026-11-10): a term from a user's
+  subscribed source is visible to all users once a second source also names it,
+  and the threshold counts sources, not people, so one user subscribed to two
+  sources can qualify a term alone (in production every active source had the
+  same single subscriber, so a distinct-people rule would admit nothing). The
+  owner judged dictionary additions low risk: accounts are admin-created only,
+  documents are public search results (custom URLs excluded), terms are
+  recognition hints written as `system:news` with audit rows, and signed-in
+  users can edit or delete Common terms.
 - **Flags.** `ttobak:accountTermsMode`, `ttobak:transcriptCorrection`,
   `ttobak:kbTermsMode`, `ttobak:researchTermsMode` and `ttobak:newsTermsMode`
   (`off|on`) all default off; a run skipped by a flag logs `outcome=DISABLED`.
