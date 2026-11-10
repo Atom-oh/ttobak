@@ -88,6 +88,29 @@ A's reference is deleted last, in its own fenced write, instead of in the move
 transaction: a meeting already on B whose A reference remains is a run interrupted
 after its move, and a rerun finishes it without moving it again (counted as resumed).
 
+### Amendment: CLI-only rows
+
+`merge-accounts -scan-users` rewrites the user-partition rows the worker cannot reach,
+under the CLI-held job lease, each in one transaction with the merge fence checks.
+SpecReq tasks and calendar events change `accountId` A to B (events also replace A in
+the sealed payload's candidate account IDs, then pass the reader's payload
+normalization). Calendar `shareAccountId`, share state and meeting key are never
+rewritten, and each is pinned in the update condition: `CALSHARE#` rows stay on A (an
+unmoved category), so repointing the share account would orphan them and break
+unshare. This deliberately departs from the design's rewrite of `shareAccountId`. A
+link-only meeting moves with the meeting writer, which writes no target
+`MEETINGREF#` row for an unpublished meeting. The scan must run inside the `-apply`
+invocation that starts or resumes the job, before it finishes; `-verify` is the
+read-only post-merge count. Skipped rows are re-scanned; the CLI holds the job lease
+from the scan through its in-process worker, and a scan that leaves rows behind fails
+the job with `SCAN_INCOMPLETE`, which no delivery processes. A calendar move bumps
+`shareVersion`, defeating a sync that read the row before it; calendar sync does not
+yet check merge state, so a later sync naming A can write it back (an accepted gap
+`-verify` reports). The CLI re-seals calendar payloads with the operator host's
+existing KMS grant and its dry run prints the preview's `newAudience`. A merge
+started on the web runs no user-partition scan, so its CLI-only rows stay on A's
+tombstone unless an operator runs the CLI before it finishes (an accepted v1 limit).
+
 ## Consequences
 
 The preview is read-only and bounded: members, projects, research, contacts and events

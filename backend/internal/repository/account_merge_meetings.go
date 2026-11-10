@@ -36,7 +36,7 @@ func validMergeJob(job *model.AccountMergeJob) bool {
 // and an approval bound to the source is rebound to the target with every
 // other field unchanged; an approval bound elsewhere is left as is. The
 // target's MEETINGREF# row (same sort key as ref) is written in the same
-// transaction. The source ref is deleted separately by
+// transaction when the meeting is published; a link-only meeting gets none. The source ref is deleted separately by
 // DeleteMeetingRefForMerge once the caller has finished the meeting's
 // shares and insights, so a resumed run can still find it.
 //
@@ -77,7 +77,11 @@ func (r *DynamoDBRepository) MoveMeetingForAccountMerge(ctx context.Context, job
 		return fmt.Errorf("marshal merge meeting ref: %w", err)
 	}
 	items := append([]types.TransactWriteItem{{Update: meetingUpdate}}, fence...)
-	items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}})
+	// A link-only meeting gets no target reference: it is not published to
+	// the target, and a reference would only be a stale row to revalidate.
+	if snapshot.Meeting.SharedToAccount {
+		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}})
+	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		moverFailed, fenceErr := classifyMergeFence(err)
 		if fenceErr != nil {
