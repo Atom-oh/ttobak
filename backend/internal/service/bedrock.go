@@ -25,7 +25,7 @@ import (
 
 // Model IDs for different use cases (cost optimization)
 var (
-	// ClaudeOpusModelID is for complex tasks (Q&A with tools, summarization, image analysis)
+	// ClaudeOpusModelID is for complex auxiliary text tasks.
 	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-5-5")
 	// ClaudeSonnetModelID is for transcript refinement and mid-tier tasks
 	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-5-5", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
@@ -72,6 +72,7 @@ type BedrockService struct {
 	repo           *repository.DynamoDBRepository
 	attachmentText summaryAttachmentProvider
 	summaryModelID string
+	imageModelID   string
 }
 
 func (s *BedrockService) SetAttachmentTextService(text summaryAttachmentProvider) {
@@ -89,6 +90,7 @@ func NewBedrockService(
 		s3Client:       s3Client,
 		repo:           repo,
 		summaryModelID: getEnvOrDefault("BEDROCK_SUMMARY_MODEL_ID", ClaudeOpusModelID),
+		imageModelID:   getEnvOrDefault("BEDROCK_IMAGE_MODEL_ID", defaultImageModelID),
 	}
 }
 
@@ -1665,8 +1667,12 @@ func chunkWhisperSegments(segments []WhisperSegment, chunkSeconds float64) [][]W
 	return chunks
 }
 
-// AnalyzeImage analyzes an image using Claude Vision
+// AnalyzeImage classifies and extracts an uploaded image using Terra.
 func (s *BedrockService) AnalyzeImage(ctx context.Context, bucket, key string) (string, string, error) {
+	mediaType := s.getImageMediaType(key)
+	if mediaType == "" {
+		return "", "", fmt.Errorf("unsupported image format")
+	}
 	// Download image from S3
 	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -1677,15 +1683,13 @@ func (s *BedrockService) AnalyzeImage(ctx context.Context, bucket, key string) (
 	}
 	defer result.Body.Close()
 
-	imageData, err := io.ReadAll(result.Body)
+	imageData, err := io.ReadAll(io.LimitReader(result.Body, maxImageBytes+1))
 	if err != nil {
 		return "", "", fmt.Errorf("failed to read image data: %w", err)
 	}
 
-	// Determine media type
-	mediaType := s.getImageMediaType(key)
-	if mediaType == "" {
-		return "", "", fmt.Errorf("unsupported image format")
+	if len(imageData) == 0 || len(imageData) > maxImageBytes {
+		return "", "", fmt.Errorf("image size must be between 1 and %d bytes", maxImageBytes)
 	}
 
 	// Encode image to base64
@@ -1716,29 +1720,7 @@ func (s *BedrockService) classifyImage(ctx context.Context, imageBase64, mediaTy
 
 Respond with ONLY the category name, nothing else.`
 
-	request := ClaudeRequest{
-		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        50,
-		System:           systemPrompt,
-		Messages: []ClaudeMessage{
-			{
-				Role: "user",
-				Content: []ContentBlock{
-					{
-						Type: "image",
-						Source: &ImageSource{
-							Type:      "base64",
-							MediaType: mediaType,
-							Data:      imageBase64,
-						},
-					},
-					{Type: "text", Text: "Classify this image."},
-				},
-			},
-		},
-	}
-
-	response, err := s.invokeClaudeModel(ctx, request)
+	response, err := s.invokeImageModel(ctx, systemPrompt, "Classify this image.", imageBase64, mediaType, 50)
 	if err != nil {
 		return "", err
 	}
@@ -1792,29 +1774,7 @@ If there are diagrams or charts, describe them.
 Format the output in clean Markdown.`
 	}
 
-	request := ClaudeRequest{
-		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        4096,
-		System:           systemPrompt,
-		Messages: []ClaudeMessage{
-			{
-				Role: "user",
-				Content: []ContentBlock{
-					{
-						Type: "image",
-						Source: &ImageSource{
-							Type:      "base64",
-							MediaType: mediaType,
-							Data:      imageBase64,
-						},
-					},
-					{Type: "text", Text: "Analyze this image according to your instructions."},
-				},
-			},
-		},
-	}
-
-	return s.invokeClaudeModel(ctx, request)
+	return s.invokeImageModel(ctx, systemPrompt, "Analyze this image according to your instructions.", imageBase64, mediaType, 4096)
 }
 
 // ProcessImageAttachment processes an uploaded image for a meeting
