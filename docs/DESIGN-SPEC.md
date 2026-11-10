@@ -615,12 +615,16 @@ period control (this week / quarter / this year, default this week) drives
   customers, each newest `at` first. A meeting touchpoint links to
   `/meeting/{id}`; calendar gaps and silent customers link to `/accounts/{id}`.
   Account names come from the readable account list. If that list fails, the
-  items render with a notice and a neutral placeholder name, never the raw ID,
-  and the mapping queue shows an error with a retry instead of "no accounts".
-  A positive `unmappedCount` is shown as an excluded count, never guessed.
-- Mapping queue (`MappingQueue`): unmapped SFDC assignments, each with a plain
-  account select (hierarchy paths from `lib/accountTree.ts`) and a connect
-  button. `403` reads as "cannot read this account", `404` as "not your
+  items render with a notice, a neutral placeholder name (never the raw ID) and
+  a retry, and the mapping queue shows the same error and retry above its list
+  or empty message. A period change also retries a failed account list, and a
+  failed missed read shows a retry. A positive `unmappedCount` is shown as an
+  excluded count, never guessed; the notice says only SFDC-account activity can
+  be fixed in the queue.
+- Mapping queue (`MappingQueue`): unmapped SFDC assignments, plus mapped ones
+  whose account is not in the loaded readable account list (shown with that
+  reason; nothing is judged until the list loads), each with a plain account
+  select (hierarchy paths from `lib/accountTree.ts`) and a connect button. `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
 - Source freshness: one line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or

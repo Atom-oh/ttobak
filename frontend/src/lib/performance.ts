@@ -145,8 +145,17 @@ export function utf8ByteLength(text: string): number {
   return bytes;
 }
 
-export function unmappedAssignments(items: PerformanceMappingItem[]): PerformanceMappingItem[] {
-  return items.filter(item => !item.mapped);
+/**
+ * Whether a stored mapping points at an account outside the loaded readable
+ * list. `readable` is null until that list loads, so nothing is judged then.
+ */
+export function mappingTargetUnreadable(item: PerformanceMappingItem, readable: ReadonlySet<string> | null): boolean {
+  return item.mapped && readable !== null && !readable.has(item.accountId ?? '');
+}
+
+/** The mapping queue: unmapped assignments and mappings whose account is not readable. */
+export function unmappedAssignments(items: PerformanceMappingItem[], readable: ReadonlySet<string> | null = null): PerformanceMappingItem[] {
+  return items.filter(item => !item.mapped || mappingTargetUnreadable(item, readable));
 }
 
 export type AccountListResult<T> = { userId: string; key: string | number; accounts?: T[]; error?: boolean };

@@ -89,6 +89,19 @@ test('unmapped assignments are the mapping queue', () => {
   assert.deepEqual(plain(queue.map(item => item.sfdcAccountId)), ['002', '003']);
 });
 
+test('a mapping to an account outside the readable list is queued as unmapped', () => {
+  const items = [
+    { sfdcAccountId: '001', name: 'A', role: 'SA', mapped: true, accountId: 'a', manual: true },
+    { sfdcAccountId: '002', name: 'B', role: 'SA', mapped: true, accountId: 'gone', manual: true },
+    { sfdcAccountId: '003', name: 'C', role: 'SA', mapped: false, manual: false },
+  ];
+  const ids = readable => plain(perf.unmappedAssignments(items, readable).map(item => item.sfdcAccountId));
+  assert.deepEqual(ids(new Set(['a'])), ['002', '003']);
+  assert.deepEqual(ids(null), ['003'], 'nothing is judged before the account list loads');
+  assert.equal(perf.mappingTargetUnreadable(items[1], new Set(['a'])), true);
+  assert.equal(perf.mappingTargetUnreadable(items[2], new Set()), false);
+});
+
 test('account list state separates loading, failure and a real empty list', () => {
   assert.deepEqual(plain(perf.accountListState(null, 'u1', 0)), { status: 'loading', accounts: [] });
   assert.deepEqual(plain(perf.accountListState({ userId: 'u1', key: 0, error: true }, 'u1', 0)), { status: 'error', accounts: [] });
