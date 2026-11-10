@@ -371,8 +371,13 @@ delivery stages; see the [news release contract](runbooks/knowledge-grade-news-r
 
 The English meeting note is an independent derivative: `SummaryRequested` with
 target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
-state, regenerates from the transcript, notes and verified documents (never the
-Korean note) and writes only `contentEn` fields (ADR-070).
+state, regenerates from the transcript, notes, verified documents and image
+analyses (never the Korean note) and writes only `contentEn` fields (ADR-070).
+During rollout, a summarize Lambda that predates the English path treats a
+target `en` event as Korean, finds a run-ID mismatch on `ANALYSIS#summary` and
+does nothing; the English row then expires to `INTERRUPTED`, which is retryable.
+Rolling back after English notes exist leaves Korean size guards ignoring
+`contentEn`, so a large item can fail with DynamoDB's clean item-size rejection.
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to

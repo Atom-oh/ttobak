@@ -36,12 +36,16 @@ type resummaryTestRepo struct {
 	enState                                *model.ResummaryState
 	enQueues, enFails, enCompletes         int
 	enCompleteError                        error
+	captureError                           error
 }
 
 func (r *resummaryTestRepo) CaptureResummary(_ context.Context, owner, mid, requester string) (*model.SummarySnapshot, error) {
 	r.captures++
 	if r.revoked {
 		return nil, repository.ErrSummaryAccess
+	}
+	if r.captureError != nil {
+		return nil, r.captureError
 	}
 	m := r.meetings[meetingKey(owner, mid)]
 	if m == nil {
@@ -957,6 +961,38 @@ func TestEnglishStaleWhenTranscriptChanges(t *testing.T) {
 	m.ContentEn = ""
 	if note, err = s.GetEnglish(context.Background(), "owner", "meeting"); err != nil || note.Stale || note.Content != "" {
 		t.Fatalf("absent note: %+v %v", note, err)
+	}
+}
+
+// A freshness capture that fails for a non-authorization reason (too many
+// attachments/checks, a transient read error) must not hide a stored English
+// note: the reader still gets the content, flagged stale.
+func TestEnglishReadableWhenFreshnessCaptureFails(t *testing.T) {
+	for name, captureErr := range map[string]error{
+		"limit":     repository.ErrSummaryLimit,
+		"transient": errors.New("dynamodb unavailable"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, repo, published := newEnglishFixture(t, englishOK)
+			if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Process(context.Background(), (*published)[0]); err != nil {
+				t.Fatal(err)
+			}
+			repo.shares[shareKey("reader", "meeting")] = &model.Share{MeetingID: "meeting", OwnerID: "owner", Permission: model.PermissionRead}
+			repo.captureError = captureErr
+			note, err := s.GetEnglish(context.Background(), "reader", "meeting")
+			if err != nil {
+				t.Fatalf("capture failure hid the English note: %v", err)
+			}
+			if note.Content == "" || !note.Stale || note.Status != model.AnalysisSucceeded {
+				t.Fatalf("want stored content flagged stale: %+v", note)
+			}
+			if _, err := s.GetEnglish(context.Background(), "stranger", "meeting"); err == nil {
+				t.Fatal("capture failure bypassed the access check")
+			}
+		})
 	}
 }
 

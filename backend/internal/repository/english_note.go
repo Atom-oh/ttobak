@@ -24,6 +24,15 @@ var englishResultFields = []string{"contentEn", "contentEnSourceHash", "contentE
 // the same budget saved-source and batch publication use.
 const summaryInlineBudget = 300 * 1024
 
+// englishItemBudget bounds the marshaled meeting item for an English
+// publication. The English path writes only englishResultFields and cannot
+// spill transcripts, so applying summaryInlineBudget would reject meetings
+// whose unspilled transcript family legitimately sits near
+// transcriptInlineBudget even though DynamoDB accepts 400KB items. 380KiB
+// leaves headroom for attribute-name and type overhead; DynamoDB's own
+// item-size rejection of the transaction remains the backstop.
+const englishItemBudget = 380 * 1024
+
 // englishSourceFields are the canonical meeting fields an English run pins:
 // the saved-source fence without the Korean note. A Korean resummary or a
 // human Korean edit therefore never invalidates an English run.
@@ -106,8 +115,8 @@ func (r *DynamoDBRepository) FailEnglishSummary(ctx context.Context, meetingID s
 
 // CompleteEnglishSummary atomically publishes the English note and run
 // success. It writes only englishResultFields: Korean content, derivatives,
-// provenance, status and transcript spills are untouched, so an item over the
-// inline budget fails with ErrSummaryLimit instead of spilling.
+// provenance, status and transcript spills are untouched, so an item over
+// englishItemBudget fails with ErrSummaryLimit instead of spilling.
 func (r *DynamoDBRepository) CompleteEnglishSummary(ctx context.Context, snapshot *model.SummarySnapshot, state *model.ResummaryState, content, sourceHash string, now time.Time) error {
 	if !validEnglishSummaryWrite(snapshot, state) {
 		return ErrConditionFailed
@@ -132,7 +141,7 @@ func (r *DynamoDBRepository) CompleteEnglishSummary(ctx context.Context, snapsho
 	if err != nil {
 		return err
 	}
-	if len(body) > summaryInlineBudget {
+	if len(body) > englishItemBudget {
 		return ErrSummaryLimit
 	}
 	meeting, err := analysisUpdate(r.tableName, meetingKey(state.OwnerID, snapshot.Meeting.MeetingID), update, summaryCondition(checks[0]))

@@ -273,16 +273,32 @@ func TestEnglishWritesRejectBeforeSDK(t *testing.T) {
 	}
 }
 
+// The English path cannot spill transcripts, so its pre-check is the
+// DynamoDB-item-safe bound rather than the Korean writers' 300KB budget: a
+// legitimately unspilled ~290KB transcript family still accepts an English
+// note, while an item beyond englishItemBudget is rejected before the SDK.
 func TestCompleteEnglishSummaryTooLarge(t *testing.T) {
-	repo := actionAnalysisWire(t, func(string, map[string]any) {
-		t.Fatal("oversized English note reached DynamoDB")
-	}, 200, `{}`)
 	now := time.Now().UTC()
-	snapshot := englishTestSnapshot(strings.Repeat("k", 290*1024))
-	err := repo.CompleteEnglishSummary(context.Background(), snapshot, englishTestState(now), strings.Repeat("e", 20*1024), "source-hash", now)
-	if !errors.Is(err, ErrSummaryLimit) {
-		t.Fatalf("want ErrSummaryLimit, got %v", err)
-	}
+	t.Run("near Korean budget still publishes", func(t *testing.T) {
+		ops, repo := captureEnglishTransaction(t)
+		snapshot := englishTestSnapshot(strings.Repeat("k", 290*1024))
+		if err := repo.CompleteEnglishSummary(context.Background(), snapshot, englishTestState(now), strings.Repeat("e", 20*1024), "source-hash", now); err != nil {
+			t.Fatalf("want success, got %v", err)
+		}
+		if len(*ops) < 2 {
+			t.Fatalf("publication not sent: %v", *ops)
+		}
+	})
+	t.Run("above item budget rejected", func(t *testing.T) {
+		repo := actionAnalysisWire(t, func(string, map[string]any) {
+			t.Fatal("oversized English note reached DynamoDB")
+		}, 200, `{}`)
+		snapshot := englishTestSnapshot(strings.Repeat("k", 290*1024))
+		err := repo.CompleteEnglishSummary(context.Background(), snapshot, englishTestState(now), strings.Repeat("e", 91*1024), "source-hash", now)
+		if !errors.Is(err, ErrSummaryLimit) {
+			t.Fatalf("want ErrSummaryLimit, got %v", err)
+		}
+	})
 }
 
 func TestKoreanResummaryCountsStoredEnglishNote(t *testing.T) {
