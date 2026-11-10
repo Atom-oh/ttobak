@@ -618,7 +618,7 @@ period control (this week / quarter / this year, default this week) drives
   items render with a notice, a neutral placeholder name (never the raw ID) and
   a retry, and the mapping queue shows the same error and retry above its list
   or empty message. A period change also retries a failed account list, and a
-  failed missed read shows a retry. A positive `unmappedCount` is shown as an
+  failed missed read or mapping-list read shows a retry. A calendar-coverage note states the earliest calendar event read (`calendarCoverageStart`, or that no events were read) and qualifies the logging-gap empty state. A positive `unmappedCount` is shown as an
   excluded count, never guessed; the notice says only SFDC-account activity can
   be fixed in the queue.
 - Mapping queue (`MappingQueue`): unmapped SFDC assignments, plus mapped ones

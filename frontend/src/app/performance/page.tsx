@@ -148,7 +148,12 @@ export default function PerformancePage() {
           <section className={cardClass} aria-labelledby="perf-mapping">
             <h3 id="perf-mapping" className={headingClass}>SFDC 계정 매핑 대기열</h3>
             <p className="mt-1 mb-3 text-sm text-slate-500 dark:text-text-muted">연결되지 않은 SFDC 계정은 추정하지 않습니다. 직접 연결한 매핑이 자동 매핑보다 우선합니다.</p>
-            {mappingsError ? <p role="alert" className="text-sm text-red-600 dark:text-red-400">{mappingsError}</p>
+            {mappingsError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-600 dark:text-red-400">
+                <span>{mappingsError}</span>
+                <button type="button" onClick={() => setReloadKey(key => key + 1)} className="font-semibold text-primary hover:underline">다시 불러오기</button>
+              </div>
+            )
               : mappings ? <MappingQueue items={mappings} accounts={accounts} accountsStatus={accountList.status}
                 onRetryAccounts={retryAccounts} userId={userId} onSaved={() => setReloadKey(key => key + 1)} />
                 : <div className="flex justify-center py-8"><Spinner /></div>}

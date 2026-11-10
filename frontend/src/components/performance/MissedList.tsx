@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useMemo } from 'react';
-import { groupMissedItems, missedItemDetail, missedItemHref, missedItemTitle, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
+import { calendarCoverageNotice, groupMissedItems, loggingGapsEmptyText, missedItemDetail, missedItemHref, missedItemTitle, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
 
 function MissedGroup({ title, icon, empty, items, accountNames }: {
   title: string;
@@ -57,8 +57,9 @@ export function MissedList({ list, accountNames, onRetryAccounts }: {
           <button type="button" onClick={onRetryAccounts} className="font-semibold text-primary hover:underline">다시 불러오기</button>
         </p>
       )}
+      <p role="note" className="text-xs text-slate-500 dark:text-text-muted">{calendarCoverageNotice(list.calendarCoverageStart)}</p>
       <div className="grid gap-6 md:grid-cols-2">
-        <MissedGroup title="SFDC 로깅 누락" icon="edit_note" empty="이 기간에 로깅 누락이 없습니다."
+        <MissedGroup title="SFDC 로깅 누락" icon="edit_note" empty={loggingGapsEmptyText(list.calendarCoverageStart)}
           items={groups.loggingGaps} accountNames={accountNames} />
         <MissedGroup title="연락 끊긴 고객" icon="history" empty="연락이 끊긴 고객이 없습니다."
           items={groups.silentCustomers} accountNames={accountNames} />

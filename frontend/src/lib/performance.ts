@@ -24,6 +24,8 @@ export interface PerformanceMissedList {
   items: PerformanceMissedItem[];
   unmappedCount: number;
   sourceFreshness: PerformanceSourceFreshness[];
+  /** Earliest start (RFC3339 UTC) among the calendar events read; empty when none. */
+  calendarCoverageStart?: string;
 }
 
 export interface PerformanceGoals {
@@ -95,7 +97,7 @@ export function groupMissedItems(items: PerformanceMissedItem[]) {
 }
 
 export function missedItemHref(item: PerformanceMissedItem): string {
-  if (item.refKind === 'meeting' && item.refId) return `/meeting/${encodeURIComponent(item.refId)}`;
+  if (item.kind === 'logging_gap' && item.refKind === 'meeting' && item.refId) return `/meeting/${encodeURIComponent(item.refId)}`;
   return `/accounts/${encodeURIComponent(item.accountId)}`;
 }
 
@@ -156,6 +158,20 @@ export function mappingTargetUnreadable(item: PerformanceMappingItem, readable: 
 /** The mapping queue: unmapped assignments and mappings whose account is not readable. */
 export function unmappedAssignments(items: PerformanceMappingItem[], readable: ReadonlySet<string> | null = null): PerformanceMappingItem[] {
   return items.filter(item => !item.mapped || mappingTargetUnreadable(item, readable));
+}
+
+/** Notice that calendar-based gaps only cover retained calendar events. */
+export function calendarCoverageNotice(start: string | undefined): string {
+  const date = seoulParts(start)?.date;
+  if (!date) return '수집된 캘린더 일정이 없어 캘린더 기반 로깅 누락은 표시되지 않습니다.';
+  return `캘린더 기반 로깅 누락은 ${date} 이후 일정만 확인합니다.`;
+}
+
+/** Empty state for the logging-gap group, qualified by what the calendar coverage could evaluate. */
+export function loggingGapsEmptyText(start: string | undefined): string {
+  const date = seoulParts(start)?.date;
+  if (!date) return '확인된 로깅 누락이 없습니다. 캘린더 일정이 없어 캘린더 기반 누락은 평가하지 않았습니다.';
+  return `${date} 이후 일정 기준으로 확인된 로깅 누락이 없습니다.`;
 }
 
 export type AccountListResult<T> = { userId: string; key: string | number; accounts?: T[]; error?: boolean };

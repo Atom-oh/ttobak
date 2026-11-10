@@ -63,6 +63,7 @@ test('missed items link to their meeting or account', () => {
   assert.equal(perf.missedItemHref({ kind: 'logging_gap', accountId: 'acc 1', refKind: 'meeting', refId: 'm/1', daysSince: 0 }), '/meeting/m%2F1');
   assert.equal(perf.missedItemHref({ kind: 'logging_gap', accountId: 'acc 1', refKind: 'calendar', refId: 'e1', daysSince: 0 }), '/accounts/acc%201');
   assert.equal(perf.missedItemHref({ kind: 'silent_customer', accountId: 'acc1', daysSince: -1 }), '/accounts/acc1');
+  assert.equal(perf.missedItemHref({ kind: 'silent_customer', accountId: 'acc1', refKind: 'meeting', refId: 'm1', daysSince: 3 }), '/accounts/acc1', 'silent customers link to the account page');
 });
 
 test('missed item details describe the touchpoint', () => {
@@ -70,6 +71,18 @@ test('missed item details describe the touchpoint', () => {
   assert.equal(perf.missedItemDetail({ kind: 'logging_gap', accountId: 'a', refKind: 'calendar', refId: 'e', at: '2026-11-03T01:00:00Z', daysSince: 7 }), '캘린더 일정 · 2026-11-03');
   assert.equal(perf.missedItemDetail({ kind: 'silent_customer', accountId: 'a', at: '2026-08-01T00:00:00Z', daysSince: 101 }), '마지막 접점 101일 전 · 2026-08-01');
   assert.equal(perf.missedItemDetail({ kind: 'silent_customer', accountId: 'a', at: '', daysSince: -1 }), '조회 기간 내 접점 없음');
+});
+
+test('calendar coverage notice names the Seoul start date', () => {
+  assert.equal(perf.calendarCoverageNotice('2026-08-11T23:30:00Z'), '캘린더 기반 로깅 누락은 2026-08-12 이후 일정만 확인합니다.');
+  assert.match(perf.calendarCoverageNotice(''), /캘린더 일정이 없어/);
+  assert.match(perf.calendarCoverageNotice(undefined), /캘린더 일정이 없어/);
+});
+
+test('logging-gap empty state is qualified by calendar coverage', () => {
+  assert.match(perf.loggingGapsEmptyText('2026-08-11T23:30:00Z'), /2026-08-12 이후 일정 기준/);
+  assert.match(perf.loggingGapsEmptyText(undefined), /평가하지 않았습니다/);
+  assert.match(perf.loggingGapsEmptyText(''), /평가하지 않았습니다/);
 });
 
 test('goal text is measured in UTF-8 bytes', () => {
