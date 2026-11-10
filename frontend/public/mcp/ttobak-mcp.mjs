@@ -27874,7 +27874,11 @@ function finishAck(store, scope, requestId, outcome) {
   if (!["ok", "rejected", "unknown"].includes(outcome)) {
     throw new IntakeError("INVALID_ARGUMENT", "ack outcome is invalid");
   }
-  update(store, scope, requestId, (entry2) => ({ ...entry2, outcome }));
+  update(store, scope, requestId, (entry2) => ({
+    ...entry2,
+    outcome,
+    cloudSynced: entry2.outcome === outcome ? entry2.cloudSynced : false
+  }));
 }
 function markSynced(store, scope, requestId) {
   update(store, scope, requestId, (entry2) => ({ ...entry2, cloudSynced: true }));
@@ -28132,7 +28136,8 @@ function parseSummary(raw) {
   const r = raw;
   if (typeof r.requestId !== "string" || !REQUEST_ID_PATTERN.test(r.requestId)) return null;
   if (!STATES.includes(r.stateId)) return null;
-  const ranges = Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length <= MAX_RANGES ? r.meetingDateRanges.filter((range) => typeof range === "string") : [];
+  if (Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length > MAX_RANGES) return null;
+  const ranges = Array.isArray(r.meetingDateRanges) ? r.meetingDateRanges.filter((range) => typeof range === "string") : [];
   return {
     requestId: r.requestId.toLowerCase(),
     title: typeof r.title === "string" ? clipUtf8(r.title, TITLE_MAX_BYTES) : "",
