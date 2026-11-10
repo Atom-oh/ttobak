@@ -27,10 +27,11 @@ const calendarTestBatch = "90ec2d25-a32e-43a5-96a9-e203859b7d19"
 var calendarTestNow = time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
 type calendarSDKMock struct {
-	test     *testing.T
-	get      func(*dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error)
-	query    func(*dynamodb.QueryInput) (*dynamodb.QueryOutput, error)
-	transact func(*dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error)
+	test        *testing.T
+	get         func(*dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error)
+	query       func(*dynamodb.QueryInput) (*dynamodb.QueryOutput, error)
+	transact    func(*dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error)
+	transactGet func(*dynamodb.TransactGetItemsInput) (*dynamodb.TransactGetItemsOutput, error)
 }
 
 func (mock *calendarSDKMock) GetItem(_ context.Context, input *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
@@ -50,6 +51,22 @@ func (mock *calendarSDKMock) Query(_ context.Context, input *dynamodb.QueryInput
 		mock.test.Fatalf("unexpected Query: %v", input)
 	}
 	return mock.query(input)
+}
+
+func (mock *calendarSDKMock) TransactGetItems(_ context.Context, input *dynamodb.TransactGetItemsInput, _ ...func(*dynamodb.Options)) (*dynamodb.TransactGetItemsOutput, error) {
+	mock.test.Helper()
+	if len(input.TransactItems) == 0 || len(input.TransactItems) > 100 {
+		mock.test.Fatalf("a snapshot must read 1-100 items: %d", len(input.TransactItems))
+	}
+	for _, item := range input.TransactItems {
+		if item.Get == nil || aws.ToString(item.Get.TableName) != "calendar-test" {
+			mock.test.Fatal("snapshot reads must use the configured table")
+		}
+	}
+	if mock.transactGet == nil {
+		mock.test.Fatal("unexpected snapshot read")
+	}
+	return mock.transactGet(input)
 }
 
 func (mock *calendarSDKMock) TransactWriteItems(_ context.Context, input *dynamodb.TransactWriteItemsInput, options ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error) {

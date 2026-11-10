@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import * as React from 'react';
+import * as ReactDOM from 'react-dom';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -88,6 +89,7 @@ function workspace(entry, options = {}) {
       getIdToken: () => `header.${Buffer.from(JSON.stringify({ sub: options.tokenUserId ?? auth.user?.userId })).toString('base64url')}.signature`,
     },
     react: { ...React, ...hooks, useLayoutEffect: hooks.useEffect },
+    'react-dom': ReactDOM,
     'react/jsx-runtime': jsxRuntime,
     'next/link': { default: ({ children, ...props }) => React.createElement('a', props, children) },
     'next/navigation': {

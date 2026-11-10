@@ -561,6 +561,19 @@ directories. Infrastructure publishes `staticRouterRevision: "segmented-rsc-v1"`
 after distribution update; the shared publisher checks it before segmented
 exports, preserving runtime config rather than manufacturing readiness.
 
+The `/user-guide/*` behavior serves the verified public manual from the existing
+private site origin and application cache policy. Its dedicated response headers
+allow same-origin framing (`SAMEORIGIN` and `frame-ancestors 'self'`) and restrict
+scripts, styles and images to self, with no connections, forms or objects. Other
+application paths retain frame denial; the Billing page exception is separate.
+The manual behavior supports HTTPS and read methods only. Its explicit
+`/user-guide/index.html` entry does not depend on the application SPA router.
+Infrastructure publishes `userGuideRevision: "same-origin-framing-v1"` through
+the distribution-dependent config deployment. Before any upload or invalidation,
+the publisher requires this exact deployed marker for exports containing the
+manual. A missing or incompatible marker fails publication without modifying the
+site; retry publication after the infrastructure deployment finishes.
+
 The StorageStack OAC custom resource reads the distribution ID and tightens the
 bucket policy. Its changing Timestamp deliberately forces re-invocation. The infra
 workflow redeploys StorageStack after FrontendStack even following earlier failure;
@@ -1016,7 +1029,8 @@ and `/api/*`, so `/api/billing/*` wins over `/api/*`.
     `deploy-frontend.yml` fails unless `out/billing-app/index.html` and
     `upload.html` exist before publishing.
   - Response headers: `frame-ancestors 'self'` and `X-Frame-Options:
-    SAMEORIGIN`, so only `/billing` can frame them. Every other path keeps
+    SAMEORIGIN`, so same-origin application pages can frame them. Apart from
+    the separate `/user-guide/*` manual policy, other application paths keep
     `frame-ancestors 'none'` and `DENY`, and the default CSP's `frame-src 'self'`
     lets `/billing` frame them.
   - `script-src` is `'self'` only: no `'unsafe-inline'`, no hashes and no

@@ -79,8 +79,9 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: 
  * the owner can confirm or correct. A manual mapping always wins and is not
  * listed.
  */
-export function MappingQueue({ items, accounts, accountsStatus, onRetryAccounts, userId, onSaved }: {
+export function MappingQueue({ items, truncated, accounts, accountsStatus, onRetryAccounts, userId, onSaved }: {
   items: PerformanceMappingItem[];
+  truncated: boolean;
   accounts: AccountSummary[];
   accountsStatus: AccountsStatus;
   onRetryAccounts: () => void;
@@ -105,6 +106,9 @@ export function MappingQueue({ items, accounts, accountsStatus, onRetryAccounts,
           <span>연결할 어카운트 목록을 불러오지 못했습니다.</span>
           <button type="button" onClick={onRetryAccounts} className="font-semibold text-primary hover:underline">다시 불러오기</button>
         </div>
+      )}
+      {truncated && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">담당 SFDC 계정이 500개를 넘어 앞의 500개만 표시합니다. 나머지는 표시되지 않습니다.</p>
       )}
       {groups.unmapped.length > 0 && (
         <ul className="divide-y divide-slate-100 dark:divide-white/5">{groups.unmapped.map(row)}</ul>
