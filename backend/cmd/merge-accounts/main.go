@@ -288,9 +288,7 @@ const scanIncompleteCode = "SCAN_INCOMPLETE"
 // and the drive. A scan that leaves rows behind fails the job with
 // SCAN_INCOMPLETE instead of releasing it. A failed job is never processed by
 // a delivery, so it cannot finish over stranded rows, and an -apply rerun
-// restarts it from its saved step. A lost fence only releases the lease: the
-// fence's own cause (requester revoked, target merging, lease taken) stops the
-// worker.
+// restarts it from its saved step.
 func (d deps) scanApply(ctx context.Context, o options) (map[string]int, error) {
 	lease := &cliLease{d: d, source: o.From}
 	if err := lease.renew(ctx); err != nil {
@@ -329,10 +327,10 @@ func (d deps) scanApply(ctx context.Context, o options) (map[string]int, error) 
 		}
 		return total, err
 	}
-	if errors.Is(err, repository.ErrMergeFenceLost) || errors.Is(err, repository.ErrAccountMerging) {
-		_ = d.jobs.ReleaseMergeLease(stopCtx, job)
-		return total, err
-	}
+	// Fail the job even after a lost fence: FailMergeJob is conditioned on
+	// this lease owner, so a real takeover refuses it, while a revocation under
+	// our lease leaves a barrier instead of an unleased running job a retried
+	// delivery would finish over the rows left behind.
 	if ferr := d.jobs.FailMergeJob(stopCtx, job, scanIncompleteCode); ferr != nil && err == nil {
 		err = ferr
 	}
