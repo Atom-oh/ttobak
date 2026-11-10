@@ -182,6 +182,21 @@ func (r *DynamoDBRepository) ApplyPerformanceBatch(ctx context.Context, userID, 
 	return receipt, nil
 }
 
+// ReplayPerformanceBatch returns the stored receipt of an identical applied
+// batch, nil when no live receipt exists, or ErrConditionFailed when the batch
+// ID was reused with a different digest.
+func (r *DynamoDBRepository) ReplayPerformanceBatch(ctx context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error) {
+	if !performanceUserID.MatchString(userID) || !validPerformanceSource(source) || uuid.Validate(batchID) != nil ||
+		!performanceDigest.MatchString(digest) {
+		return nil, ErrInvalidPerformanceBatch
+	}
+	saved, err := r.getPerformanceReceipt(ctx, userID, source, batchID)
+	if err != nil || saved == nil {
+		return nil, err
+	}
+	return performanceRetryReceipt(saved, digest)
+}
+
 type performanceRow struct {
 	sortKey string
 	remove  bool
@@ -360,8 +375,14 @@ func performanceRetryReceipt(saved *performanceBatchReceipt, digest string) (*mo
 	return &receipt, nil
 }
 
-// queryPerformanceRows pages through every row under prefix in the owner's partition.
-func (r *DynamoDBRepository) queryPerformanceRows(ctx context.Context, userID, prefix string) ([]map[string]types.AttributeValue, error) {
+// PerformanceListRowLimit bounds assignment and mapping reads: the service cap
+// (service.MaxPerformanceAssignments, 500) plus one row to detect overflow.
+const PerformanceListRowLimit = 501
+
+// queryPerformanceRows pages through the rows under prefix in the owner's
+// partition. A positive limit stops after that many rows and never follows
+// further pages; zero reads every page.
+func (r *DynamoDBRepository) queryPerformanceRows(ctx context.Context, userID, prefix string, limit int) ([]map[string]types.AttributeValue, error) {
 	if !performanceUserID.MatchString(userID) {
 		return nil, ErrInvalidPerformanceInput
 	}
@@ -374,15 +395,22 @@ func (r *DynamoDBRepository) queryPerformanceRows(ctx context.Context, userID, p
 	var items []map[string]types.AttributeValue
 	var startKey map[string]types.AttributeValue
 	for {
-		result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		input := &dynamodb.QueryInput{
 			TableName: aws.String(r.tableName), KeyConditionExpression: built.KeyCondition(),
 			ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
 			ConsistentRead: aws.Bool(true), ExclusiveStartKey: startKey,
-		})
+		}
+		if limit > 0 {
+			input.Limit = aws.Int32(int32(limit - len(items)))
+		}
+		result, err := r.client.Query(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("query performance rows: %w", err)
 		}
 		items = append(items, result.Items...)
+		if limit > 0 && len(items) >= limit {
+			return items[:limit], nil
+		}
 		if len(result.LastEvaluatedKey) == 0 {
 			return items, nil
 		}
@@ -401,7 +429,7 @@ func (r *DynamoDBRepository) ListPerformanceTasks(ctx context.Context, userID st
 			return nil, ErrInvalidPerformanceInput
 		}
 	}
-	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceTask)
+	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceTask, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -424,8 +452,9 @@ func (r *DynamoDBRepository) ListPerformanceTasks(ctx context.Context, userID st
 	return tasks, nil
 }
 
+// ListPerformanceAssignments returns at most PerformanceListRowLimit rows.
 func (r *DynamoDBRepository) ListPerformanceAssignments(ctx context.Context, userID string) ([]model.SFDCAssignment, error) {
-	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceAssignment)
+	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceAssignment, PerformanceListRowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -441,19 +470,33 @@ func (r *DynamoDBRepository) ListPerformanceAssignments(ctx context.Context, use
 	return assignments, nil
 }
 
-func (r *DynamoDBRepository) ListAccountMappings(ctx context.Context, userID string) ([]model.AccountMapping, error) {
-	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceMapping)
+// GetAccountMappings reads the mapping rows for the given SFDC account IDs by
+// key (consistent BatchGetItem, 100 keys per chunk, bounded UnprocessedKeys
+// retries). Missing rows are absent from the result; an incomplete read is an
+// error, never partial data.
+func (r *DynamoDBRepository) GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error) {
+	if !performanceUserID.MatchString(userID) {
+		return nil, ErrInvalidPerformanceInput
+	}
+	keys := make([]batchRowKey, 0, len(sfdcAccountIDs))
+	for _, id := range sfdcAccountIDs {
+		if !performanceExternal.MatchString(id) {
+			return nil, ErrInvalidPerformanceInput
+		}
+		keys = append(keys, batchRowKey{PK: model.PrefixUser + userID, SK: model.PerformanceMappingSortKey(id)})
+	}
+	mappings := make(map[string]model.AccountMapping, len(keys))
+	err := r.batchGetConsistent(ctx, keys, nil, func(key batchRowKey, item map[string]types.AttributeValue) error {
+		var row performanceMappingRow
+		if err := attributevalue.UnmarshalMap(item, &row); err != nil || row.UserID != userID ||
+			row.SK != model.PerformanceMappingSortKey(row.SFDCAccountID) {
+			return fmt.Errorf("invalid account mapping row")
+		}
+		mappings[row.SFDCAccountID] = row.AccountMapping
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	mappings := make([]model.AccountMapping, 0, len(items))
-	for _, item := range items {
-		var row performanceMappingRow
-		if attributevalue.UnmarshalMap(item, &row) != nil || row.PK != model.PrefixUser+userID || row.UserID != userID ||
-			row.SK != model.PerformanceMappingSortKey(row.SFDCAccountID) {
-			continue
-		}
-		mappings = append(mappings, row.AccountMapping)
 	}
 	return mappings, nil
 }
@@ -546,4 +589,28 @@ func (r *DynamoDBRepository) PutPerformanceGoals(ctx context.Context, userID str
 		return fmt.Errorf("put performance goals: %w", err)
 	}
 	return nil
+}
+
+// ListPerformanceSources returns the owner's stored source states. Rows that
+// fail identity checks or name an unknown source are skipped.
+func (r *DynamoDBRepository) ListPerformanceSources(ctx context.Context, userID string) ([]model.PerformanceSourceStatus, error) {
+	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceSource, 0)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]model.PerformanceSourceStatus, 0, len(items))
+	for _, item := range items {
+		var row struct {
+			PK     string `dynamodbav:"PK"`
+			SK     string `dynamodbav:"SK"`
+			UserID string `dynamodbav:"userId"`
+			model.PerformanceSourceStatus
+		}
+		if attributevalue.UnmarshalMap(item, &row) != nil || row.PK != model.PrefixUser+userID || row.UserID != userID ||
+			!validPerformanceSource(row.Source) || row.SK != model.PerformanceSourceSortKey(row.Source) || row.Revision < 0 {
+			continue
+		}
+		sources = append(sources, row.PerformanceSourceStatus)
+	}
+	return sources, nil
 }

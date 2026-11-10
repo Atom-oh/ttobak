@@ -463,25 +463,35 @@ func TestSummarizeTranscript_IncompleteResponseNeverSavesDone(t *testing.T) {
 	}
 }
 
-func TestAnalyzeByClassification_PreservesLegacyCompletionContract(t *testing.T) {
+func TestAnalyzeByClassification_PreservesUsablePartialAnalysis(t *testing.T) {
 	for _, tt := range []struct {
 		name, body, want string
 		wantErr          bool
 	}{
 		{
 			name: "partial image analysis remains usable",
-			body: `{"content":[{"type":"text","text":"Whiteboard: "},{"type":"text","text":"partial analysis"}],"stop_reason":"max_tokens"}`,
+			body: `{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"Whiteboard: partial analysis"}}]}`,
 			want: "Whiteboard: partial analysis",
 		},
 		{
-			name: "legacy response without stop reason",
-			body: `{"content":[{"type":"text","text":"image analysis"}]}`,
+			name: "completed analysis",
+			body: `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"image analysis"}}]}`,
 			want: "image analysis",
 		},
 		{
-			name: "non-text blocks retain legacy empty-text behavior",
-			body: `{"content":[{"type":"thinking","thinking":"auxiliary block"}],"stop_reason":"end_turn"}`,
-			want: "",
+			name:    "reasoning without visible text is rejected",
+			body:    `{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":""}}],"usage":{"completion_tokens_details":{"reasoning_tokens":20}}}`,
+			wantErr: true,
+		},
+		{
+			name:    "refusal is not analysis",
+			body:    `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ignored","refusal":"declined"}}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "response byte limit prevents oversized analysis",
+			body:    `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"` + strings.Repeat("x", 128*1024) + `"}}]}`,
+			wantErr: true,
 		},
 		{
 			name:    "missing content still reports failure",

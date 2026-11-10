@@ -54,6 +54,16 @@ configuration.
     `post_draft`.
   Never `post_message`, `schedule_message`, `complete_request` or any other
   write. Classification, linking and drafting are deterministic; no model runs.
+- **Mac notices (amendment, 2026-11-10).** The runner appends one line per
+  (task, state) to `~/.ttobak/intake/notify.jsonl` (contract in
+  `mcp-server/src/intake/notify.ts`). The Mac app reads it
+  (`mac-app/src-tauri/src/intake_notify.rs`) and posts a notification per
+  unseen `key`, tracked in `intake-notified.json` in its app data directory. A
+  line must pass strict shape, age (at most 24 hours old) and path checks; a
+  partial or malformed line is skipped. Notifications are informational: they
+  never navigate the app (a reload could discard unsaved input), and the task
+  strip on the meetings page shows the task. Delivery is unverified until the
+  Mac acceptance in the runbook.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** uses a user-installed launchd LaunchAgent that runs
   `intake calendar --noninteractive`. Background runs never open a browser
