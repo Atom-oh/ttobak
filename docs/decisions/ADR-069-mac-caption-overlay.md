@@ -97,7 +97,7 @@ Caption text is never logged, only codes and byte lengths.
 **Region.** New settings default to `ap-northeast-2` (saved settings keep their
 region). The model is a global inference profile, so the region only selects the
 endpoint requests go to and the Amazon Translate region; the record page offers
-`ap-northeast-2` and `us-east-1` plus any other saved region.
+`ap-northeast-2` and `us-east-1` plus any other saved region. Because the profile is global, Bedrock may process a final's text in a region other than the selected one; only the Amazon Translate interims stay in that region.
 
 **Profile confirmation.** The remote origin can call all three translation
 commands, and a compromised page must not silently switch which AWS account is

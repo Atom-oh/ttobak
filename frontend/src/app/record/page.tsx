@@ -1629,7 +1629,7 @@ function RecordPageInner() {
         {/* Desktop: translation, summary + notes, transcript. Visible rows share
             a bounded column height; hidden cards stay mounted (recordLayout). */}
         {session.isRecording && (
-          <div className="hidden lg:flex lg:flex-col gap-4 shrink-0 min-h-[28rem]" style={{ height: 'calc(100dvh - 8rem)' }}>
+          <div className="hidden lg:flex lg:flex-col gap-4 shrink-0" style={{ height: desktopLayout.columnHeight }}>
             {translationEnabled && (
               <div className={desktopLayout.translationRow}>
                 <TranslationView

@@ -167,3 +167,25 @@ test('layout shares space between visible rows', () => {
   assert.equal(hiddenTranscript.transcriptRow, 'hidden');
   assert.equal(hiddenTranscript.transcriptBodyShown, false);
 });
+
+test('column height keeps a floor per visible row on short viewports', () => {
+  // One row: the viewport height wins unless it is under one row's floor.
+  assert.equal(prefs.recordColumnHeight(1, false), 'max(calc(100dvh - 8rem), 22rem)');
+  // Three rows and two gaps: 3 * 22 + 2 = 68rem, well over a 720px viewport,
+  // so the column grows and the page scrolls instead of clipping the transcript.
+  assert.equal(prefs.recordColumnHeight(3, false), 'max(calc(100dvh - 8rem), 68rem)');
+  // Two rows plus a collapsed transcript strip: 44 + 2 gaps + 3.5.
+  assert.equal(prefs.recordColumnHeight(2, true), 'max(calc(100dvh - 8rem), 49.5rem)');
+  assert.equal(prefs.recordColumnHeight(0, false), 'max(calc(100dvh - 8rem), 22rem)');
+});
+
+test('layout reports the column height for its visible rows', () => {
+  const all = { translation: true, summary: true, notes: true, transcript: true };
+  assert.equal(prefs.recordLayout(all, true, true).columnHeight, prefs.recordColumnHeight(3, false));
+  assert.equal(prefs.recordLayout(all, true, false).columnHeight, prefs.recordColumnHeight(2, true));
+  assert.equal(prefs.recordLayout(all, false, false).columnHeight, prefs.recordColumnHeight(1, true));
+  assert.equal(
+    prefs.recordLayout({ ...all, transcript: false }, true, false).columnHeight,
+    prefs.recordColumnHeight(2, false),
+  );
+});

@@ -156,6 +156,26 @@ export interface RecordLayout {
   transcriptBodyShown: boolean;
   /** The header chevron is offered only when other rows can take the height. */
   transcriptCollapsible: boolean;
+  /** CSS height of the desktop column; see `recordColumnHeight`. */
+  columnHeight: string;
+}
+
+/** Height each visible row keeps even on a short viewport. */
+export const RECORD_ROW_MIN_REM = 22;
+const RECORD_ROW_GAP_REM = 1;
+const RECORD_STRIP_REM = 3.5;
+
+/**
+ * The desktop column fills the viewport, but never squeezes a row below
+ * RECORD_ROW_MIN_REM: three rows on a 720px-tall window would otherwise leave
+ * the transcript no room for text. When the rows need more than the viewport
+ * the column grows and the page scrolls, as the fixed-height layout did.
+ */
+export function recordColumnHeight(rows: number, collapsedStrip: boolean): string {
+  const count = Math.max(1, rows);
+  const gaps = count - 1 + (collapsedStrip ? 1 : 0);
+  const floor = count * RECORD_ROW_MIN_REM + gaps * RECORD_ROW_GAP_REM + (collapsedStrip ? RECORD_STRIP_REM : 0);
+  return `max(calc(100dvh - 8rem), ${floor}rem)`;
 }
 
 // Visible rows share the column height (flex-1); hidden cards stay mounted and
@@ -168,6 +188,7 @@ export function recordLayout(
   const pair = summary || notes;
   const otherRows = translation || pair;
   const transcriptBodyShown = transcript && (transcriptExpanded || !otherRows);
+  const rows = (translation ? 1 : 0) + (pair ? 1 : 0) + (transcriptBodyShown ? 1 : 0);
   return {
     translationRow: translation ? 'flex-1 min-h-0' : 'hidden',
     pairRow: pair ? `flex-1 min-h-0 grid grid-rows-1 ${summary && notes ? 'grid-cols-2' : 'grid-cols-1'} gap-4` : 'hidden',
@@ -176,5 +197,6 @@ export function recordLayout(
     transcriptRow: !transcript ? 'hidden' : transcriptBodyShown ? 'flex-1 min-h-0' : 'shrink-0',
     transcriptBodyShown,
     transcriptCollapsible: otherRows,
+    columnHeight: recordColumnHeight(rows, transcript && !transcriptBodyShown),
   };
 }
