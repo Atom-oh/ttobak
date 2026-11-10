@@ -111,9 +111,12 @@ the input schemas of `get_my_personal_details`, `get_registry_assignments` and
 only and makes no TTOBAK calls. It holds `sfdc.lock`.
 
 - **Reads.** The alias and SFDC user ID come from `get_my_personal_details`.
-  Registry L14 assignments use hierarchy `sales/<current year>-01-01`. Tasks
+  Registry assignments are requested at level L14 without a `hierarchyId`,
+  because hierarchy IDs are versions, not years. Only `sales/YYYY-MM-DD`
+  records of the newest returned version are kept; other hierarchies (for
+  example Partner L14 sellers) are not SFDC accounts and are dropped. Tasks
   are the owner's (`ownerId`) with `activityDate` from January 1 of the
-  previous year. Both follow `cursor` pages of 500, at most 20 pages each.
+  previous year through one year after today. Both follow `cursor` pages of 500, at most 20 pages each.
   A capped, cursorless, short (`totalCount`) or malformed page fails with
   `PARSE_FAILED`; a changed schema with `SCHEMA_CHANGED`. Every read finishes
   before any batch is built, so `AUTH_EXPIRED_MIDWAY` never leaves a partial

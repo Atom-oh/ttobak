@@ -1,11 +1,13 @@
 // Synthetic stand-in for a local aws-sentral-mcp server. It mirrors only the
 // recorded result shapes of three read tools; every ID and name is synthetic.
 // FAKE_SENTRAL_MODE: ok | auth (second task page fails) | schema (search_tasks changed).
+// FAKE_SENTRAL_REGISTRY: single | mixed (adds a Partner L14 record and an older sales version).
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 const mode = process.env.FAKE_SENTRAL_MODE || 'ok';
+const registryMode = process.env.FAKE_SENTRAL_REGISTRY || 'single';
 const CANARY = 'SECRET-CANARY-7f3a9c';
 const ALIAS = 'testalias';
 const OWNER = '005XX0000000001AAA';
@@ -57,18 +59,30 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
     case 'get_my_personal_details':
       return wrap({ alias: ALIAS, sfdcId: OWNER, directReports: [], email: `${CANARY}@example.invalid` });
     case 'get_registry_assignments':
+      // hierarchyId is optional and must not be sent: versions are not years.
       if (args.employeeIdentifier !== ALIAS || args.hierarchyLevel !== 'L14' || args.limit !== 500 ||
-          !/^sales\/\d{4}-01-01$/.test(String(args.hierarchyId))) return fail('unexpected registry arguments');
-      return wrap({ resultRecords: [{ id: 'guid:r:001XX000000001AAA', hierarchyLevel: 'L14', hierarchyId: args.hierarchyId,
+          'hierarchyId' in args) return fail('unexpected registry arguments');
+      const records = [{ id: 'guid:r:001XX000000001AAA', hierarchyLevel: 'L14', hierarchyId: 'sales/2026-01-01',
         assignmentSource: 'REGISTRY', nodeId: '001XX000000001AAA', nodeName: 'Example Corp.',
-        parentNode: { area: 'Korea', awsentralTerritory: { name: 'NAMED-EXAMPLE' } } }],
-      totalCount: '1', hasNextPage: false, cursor: null });
+        parentNode: { area: 'Korea', awsentralTerritory: { name: 'NAMED-EXAMPLE' } } }];
+      if (registryMode === 'mixed') {
+        records.push(
+          { id: 'guid:r:PS:SELLER.0001', hierarchyLevel: 'L14', hierarchyId: 'partner/2026-01-01',
+            assignmentSource: 'REGISTRY', nodeId: 'PS:SELLER.0001', nodeName: 'Partner seller' },
+          { id: 'guid:r:PSXX0000000002AAA', hierarchyLevel: 'L14', hierarchyId: 'partner/2026-01-01',
+            assignmentSource: 'REGISTRY', nodeId: 'PSXX0000000002AAA', nodeName: 'Partner seller two' },
+          { id: 'guid:r:001XX0000000OLDAAA', hierarchyLevel: 'L14', hierarchyId: 'sales/2025-01-01',
+            assignmentSource: 'REGISTRY', nodeId: '001XX0000000OLDAAA', nodeName: 'Old version' });
+      }
+      return wrap({ resultRecords: records, totalCount: String(records.length), hasNextPage: false, cursor: null });
     case 'search_tasks': {
       const conditions = args.condition?.conditions ?? [];
       const owner = conditions.find(item => item.field === 'ownerId');
-      const since = conditions.find(item => item.field === 'activityDate');
-      if (args.condition?.operator !== 'AND' || owner?.value !== OWNER || owner?.operator !== 'EXACT_MATCH' ||
-          since?.operator !== 'GTE' || !/^\d{4}-01-01$/.test(String(since?.value)) || args.limit !== 500) {
+      const since = conditions.find(item => item.field === 'activityDate' && item.operator === 'GTE');
+      const until = conditions.find(item => item.field === 'activityDate' && item.operator === 'LTE');
+      if (args.condition?.operator !== 'AND' || conditions.length !== 3 || owner?.value !== OWNER ||
+          owner?.operator !== 'EXACT_MATCH' || !/^\d{4}-01-01$/.test(String(since?.value)) ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(String(until?.value)) || args.limit !== 500) {
         return fail('unexpected task arguments');
       }
       const index = args.after === undefined ? 0 : args.after === 'page-2' ? 1 : -1;

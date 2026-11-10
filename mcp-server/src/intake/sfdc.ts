@@ -15,7 +15,7 @@ import type { IntakeStore } from './store.js';
 
 export const SFDC_PERSONAL_TOOL: ToolExpectation = { name: 'get_my_personal_details', properties: [] };
 export const SFDC_REGISTRY_TOOL: ToolExpectation = { name: 'get_registry_assignments',
-  properties: ['employeeIdentifier', 'hierarchyId', 'hierarchyLevel', 'limit', 'after'] };
+  properties: ['employeeIdentifier', 'hierarchyLevel', 'limit', 'after'] };
 export const SFDC_TASKS_TOOL: ToolExpectation = { name: 'search_tasks', properties: ['condition', 'limit', 'after'] };
 export const SFDC_TOOLS: readonly ToolExpectation[] = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];
 
@@ -124,14 +124,36 @@ export function parsePersonal(payload: unknown): { alias: string; sfdcId: string
   return { alias: data.alias, sfdcId: data.sfdcId };
 }
 
-/** An L14 registry record, or null for another hierarchy level. */
-function assignmentRecord(value: Record<string, unknown>): SFDCAssignment | null {
-  if (typeof value.nodeId !== 'string' || !ID.test(value.nodeId) || typeof value.hierarchyLevel !== 'string') {
+/** Sales hierarchy IDs are versions (`sales/YYYY-MM-DD`), not years. */
+const SALES_HIERARCHY = /^sales\/(\d{4}-\d{2}-\d{2})$/;
+
+interface RegistryRecord { version: string; assignment: SFDCAssignment }
+
+/**
+ * A sales-hierarchy L14 record, or null for any other hierarchy or level.
+ * Other hierarchies (for example Partner) have L14 nodes that are not SFDC
+ * accounts, so they are dropped before their node IDs are read.
+ */
+function registryRecord(value: Record<string, unknown>): RegistryRecord | null {
+  if (typeof value.hierarchyId !== 'string' || typeof value.hierarchyLevel !== 'string') {
     throw parseFailed('registry record has unexpected field types');
   }
-  if (value.hierarchyLevel !== 'L14') return null;
-  return { sfdcAccountId: value.nodeId, name: text(value, 'nodeName', NAME_BYTES),
-    role: text(value, 'assignmentSource', LABEL_BYTES) };
+  const version = SALES_HIERARCHY.exec(value.hierarchyId)?.[1];
+  if (value.hierarchyLevel !== 'L14' || !version) return null;
+  if (typeof value.nodeId !== 'string' || !ID.test(value.nodeId)) throw parseFailed('registry record has an unexpected node');
+  return { version, assignment: { sfdcAccountId: value.nodeId, name: text(value, 'nodeName', NAME_BYTES),
+    role: text(value, 'assignmentSource', LABEL_BYTES) } };
+}
+
+/** Sales L14 assignments of the newest sales hierarchy version present, one per account. */
+function registryAssignments(records: Record<string, unknown>[]): SFDCAssignment[] {
+  const sales = records.map(registryRecord).filter((item): item is RegistryRecord => item !== null);
+  const newest = sales.reduce((latest, item) => item.version > latest ? item.version : latest, '');
+  const result = new Map<string, SFDCAssignment>();
+  for (const { version, assignment } of sales) {
+    if (version === newest && !result.has(assignment.sfdcAccountId)) result.set(assignment.sfdcAccountId, assignment);
+  }
+  return [...result.values()];
 }
 
 interface ParsedTask { task: SFDCTask; accountName: string }
@@ -163,8 +185,7 @@ function taskRecord(value: Record<string, unknown>): ParsedTask {
 
 /** Strictly parses one complete `get_registry_assignments` result. */
 export function parseAssignments(payload: unknown): SFDCAssignment[] {
-  return completePage(payload, SFDC_REGISTRY_TOOL.name).map(assignmentRecord)
-    .filter((item): item is SFDCAssignment => item !== null);
+  return registryAssignments(completePage(payload, SFDC_REGISTRY_TOOL.name));
 }
 
 /** Strictly parses one complete `search_tasks` result, copying only the stored fields. */
@@ -181,6 +202,13 @@ export function parseTasks(payload: unknown): SFDCTask[] {
 export function taskWindow(now: Date): { earliest: string; latest: string } {
   const latest = new Date(now.getTime() + 14 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return { earliest: `${now.getUTCFullYear() - 1}-01-01`, latest };
+}
+
+/** The server's upper bound for an activity date: one year after today (UTC). */
+export function queryLatest(now: Date): string {
+  const date = new Date(now.getTime());
+  date.setUTCFullYear(date.getUTCFullYear() + 1);
+  return date.toISOString().slice(0, 10);
 }
 
 export function fingerprint(row: SFDCAssignment | SFDCTask): string {
@@ -435,12 +463,13 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
 
   // Read both snapshots completely before any batch is built.
   const personal = parsePersonal(await source.call(SFDC_PERSONAL_TOOL.name, {}));
-  const registry = (await readAll(source, SFDC_REGISTRY_TOOL.name, { employeeIdentifier: personal.alias,
-    hierarchyId: `sales/${now.getUTCFullYear()}-01-01`, hierarchyLevel: 'L14' }))
-    .map(assignmentRecord).filter((item): item is SFDCAssignment => item !== null);
+  // No hierarchyId: versions change on their own schedule; records are filtered to the newest sales version.
+  const registry = registryAssignments(await readAll(source, SFDC_REGISTRY_TOOL.name,
+    { employeeIdentifier: personal.alias, hierarchyLevel: 'L14' }));
   const tasks = (await readAll(source, SFDC_TASKS_TOOL.name, { condition: { operator: 'AND', conditions: [
     { field: 'ownerId', operator: 'EXACT_MATCH', value: personal.sfdcId },
     { field: 'activityDate', operator: 'GTE', value: taskWindow(now).earliest },
+    { field: 'activityDate', operator: 'LTE', value: queryLatest(now) },
   ] } })).map(taskRecord);
   const [assignmentState, taskState] = states;
   const plan = planSfdc(registry, tasks, { 'sfdc-assignments': assignmentState.ledger, 'sfdc-tasks': taskState.ledger }, now);

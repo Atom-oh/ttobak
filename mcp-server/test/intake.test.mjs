@@ -692,3 +692,62 @@ test('selecting one connector keeps the other selection', async t => {
   assert.equal(await runIntake(['select', 'sfdc', '--host', 'claude', '--server', 'aws-sentral-mcp',
     '--accept-unknown-sensitivity'], environment), 2);
 });
+
+test('sfdc registry ignores partner L14 records', async t => {
+  const home = tempHome(t);
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: { 'aws-sentral-mcp': { command: process.execPath,
+    args: [SENTRAL], env: { FAKE_SENTRAL_REGISTRY: 'mixed' } } } }));
+  const lines = [];
+  const environment = cliEnvironment(home, lines);
+  assert.equal(await runIntake(['select', 'sfdc', '--host', 'claude', '--server', 'aws-sentral-mcp'], environment), 0);
+  const api = performanceApi();
+  environment.api = api;
+  assert.equal(await runIntake(['sfdc', '--noninteractive'], environment), 0, lines.at(-1));
+  const sent = api.calls[0].body.mutations.map(m => m.assignment.sfdcAccountId).sort();
+  assert.deepEqual(sent, ['001XX000000001AAA', '001XX000000002AAA'], 'partner sellers and older versions are not accounts');
+  assert.equal(JSON.parse(lines.at(-1)).counts.assignments.registry, 1);
+
+  const page = records => ({ data: { resultRecords: records, totalCount: String(records.length), hasNextPage: false, cursor: null } });
+  const partner = { ...registryRecord('PSXX0000000002AAA', 'Partner'), hierarchyId: 'partner/2026-01-01' };
+  assert.deepEqual(parseAssignments(page([partner, { ...partner, nodeId: 'PS:not an id' }])), []);
+  assert.deepEqual(parseAssignments(page([{ ...partner, hierarchyId: 'sales' }])), []);
+  assert.throws(() => parseAssignments(page([{ ...registryRecord('001XX0000000A1AAA', 'Alpha'), hierarchyId: undefined }])),
+    error => error.code === 'PARSE_FAILED');
+  assert.throws(() => parseAssignments(page([{ ...registryRecord('001XX0000000A1AAA', 'Alpha'), nodeId: 'bad id' }])),
+    error => error.code === 'PARSE_FAILED');
+});
+
+test('sfdc registry keeps newest sales hierarchy version', async t => {
+  const version = (id, name, hierarchyId) => ({ ...registryRecord(id, name), hierarchyId });
+  const page = records => ({ data: { resultRecords: records, totalCount: String(records.length), hasNextPage: false, cursor: null } });
+  assert.deepEqual(parseAssignments(page([
+    version('001XX0000000A1AAA', 'Alpha old', 'sales/2025-01-01'),
+    version('001XX0000000B1AAA', 'Beta', 'sales/2026-03-15'),
+    version('001XX0000000A1AAA', 'Alpha new', 'sales/2026-03-15'),
+    version('001XX0000000A1AAA', 'Alpha dup', 'sales/2026-03-15'),
+    version('001XX0000000C1AAA', 'Gamma old', 'sales/2026-01-01'),
+  ])), [{ sfdcAccountId: '001XX0000000B1AAA', name: 'Beta', role: 'REGISTRY' },
+    { sfdcAccountId: '001XX0000000A1AAA', name: 'Alpha new', role: 'REGISTRY' }]);
+
+  // A version transition replaces the registry set; requests never name a hierarchyId.
+  const store = new IntakeStore(tempHome(t));
+  const api = performanceApi();
+  const requests = [];
+  const source = records => ({ async call(tool, args) {
+    requests.push({ tool, args });
+    if (tool === 'get_my_personal_details') return { data: { alias: 'testalias', sfdcId: '005XX0000000001AAA' } };
+    return page(tool === 'get_registry_assignments' ? records : []);
+  } });
+  const base = { store, api, sourceId: SFDC_SOURCE_ID, scope: SCOPE_A, now: NOW, dryRun: false };
+  await runSfdc({ ...base, source: source([version('001XX0000000A1AAA', 'Alpha', 'sales/2026-01-01')]) });
+  const result = await runSfdc({ ...base, source: source([version('001XX0000000A1AAA', 'Alpha', 'sales/2026-01-01'),
+    version('001XX0000000B1AAA', 'Beta', 'sales/2027-01-01')]) });
+  assert.deepEqual(result.counts.assignments, { fetched: 1, registry: 1, activity: 0, upserts: 1, removals: 1, unchanged: 0 });
+  const registryArgs = requests.filter(request => request.tool === 'get_registry_assignments').map(request => request.args);
+  assert.ok(registryArgs.every(args => !('hierarchyId' in args) && args.hierarchyLevel === 'L14'));
+  const taskArgs = requests.find(request => request.tool === 'search_tasks').args;
+  assert.deepEqual(taskArgs.condition.conditions.slice(1), [
+    { field: 'activityDate', operator: 'GTE', value: '2025-01-01' },
+    { field: 'activityDate', operator: 'LTE', value: '2027-11-09' }]);
+  assert.ok(!SFDC_TOOLS[1].properties.includes('hierarchyId'));
+});
