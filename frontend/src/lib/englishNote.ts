@@ -15,3 +15,12 @@ export function englishNoteView(note: EnglishNote | null, canEdit: boolean): Eng
   const action = !canEdit || pending ? null : failed ? 'retry' : hasContent ? 'regenerate' : 'generate';
   return { showToggle: hasContent, action, badge };
 }
+
+/**
+ * The state read is one authorization check plus one row read, so it runs on
+ * every visit: a first run may be pending, or may have failed with no stored note.
+ * `hasEnglishNote` is not a gate.
+ */
+export function shouldLoadEnglishNote(enabled: boolean): boolean {
+  return enabled;
+}

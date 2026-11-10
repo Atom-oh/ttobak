@@ -60,3 +60,12 @@ test('the summary card offers English generation, badges and a Korean/English to
 test('linked meetings are navigation only', () => {
   assert.ok(!read('../src/components/meeting/LinkMeetingsModal.tsx').includes('컨텍스트'));
 });
+
+test('English note status loads on every authenticated visit, not only when a note exists', () => {
+  const { shouldLoadEnglishNote } = load();
+  assert.equal(shouldLoadEnglishNote(true), true);
+  assert.equal(shouldLoadEnglishNote(false), false);
+  const hook = read('../src/hooks/useEnglishNote.ts');
+  assert.ok(hook.includes('shouldLoadEnglishNote(enabled)'));
+  assert.ok(!hook.includes('hasNote'));
+});

@@ -508,7 +508,8 @@ targets only. Ordinary links and literal citation text keep their identity.
 
 The re-summary panel has no note-language select or regenerate-in-language button;
 generated notes are Korean. The AI Summary card adds a Korean/English segmented
-toggle once an English note exists (`hasEnglishNote`, then `GET .../notes/en`). The
+toggle once an English note exists. The page reads `GET .../notes/en` on every visit, so a
+pending or failed first run shows its badge and retry even with no stored note. The
 English tab is a read-only `MarkdownRenderer` using the Korean view's citation
 resolver. The selected tab is per-meeting component state and is not persisted.
 Editors see a generate action (no note yet), a regenerate action (existing note)

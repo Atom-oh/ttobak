@@ -421,7 +421,6 @@ function MeetingDetailContent() {
   const englishNote = useEnglishNote({
     meetingId,
     enabled: isAuthenticated && meeting?.meetingId === meetingId,
-    hasNote: meeting?.hasEnglishNote === true,
   });
   const englishView = englishNoteView(englishNote.note, canEditEnglish && meeting?.status === 'done');
 

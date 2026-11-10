@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, meetingsApi } from '@/lib/api';
+import { shouldLoadEnglishNote } from '@/lib/englishNote';
 import type { EnglishNote } from '@/types/meeting';
 
 const requestErrors: Record<string, string> = {
@@ -21,20 +22,19 @@ export const englishFailures: Record<string, string> = {
 };
 
 /**
- * Loads the English note only when one exists (`hasNote`) or after a request,
- * and polls while a run is pending with the re-summary interval and bound.
+ * Reads the English note state on every visit (a run may be pending or failed
+ * with no stored note) and polls while a run is pending with the re-summary interval and bound.
  */
-export function useEnglishNote({ meetingId, enabled, hasNote }: { meetingId: string; enabled: boolean; hasNote: boolean }) {
+export function useEnglishNote({ meetingId, enabled }: { meetingId: string; enabled: boolean }) {
   const [state, setState] = useState<{ meetingId: string; note: EnglishNote | null }>({ meetingId, note: null });
   const [error, setError] = useState<string | null>(null);
   const [requesting, setRequesting] = useState(false);
-  const [requested, setRequested] = useState<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const mutationRef = useRef<AbortController | null>(null);
   const alive = useRef(true);
   const note = state.meetingId === meetingId ? state.note : null;
   const pending = note?.status === 'queued' || note?.status === 'running';
-  const shouldLoad = enabled && (hasNote || requested === meetingId);
+  const shouldLoad = shouldLoadEnglishNote(enabled);
   useEffect(() => {
     alive.current = true;
     return () => { alive.current = false; requestRef.current?.abort(); mutationRef.current?.abort(); };
@@ -68,7 +68,6 @@ export function useEnglishNote({ meetingId, enabled, hasNote }: { meetingId: str
     try {
       const next = await meetingsApi.requestEnglishNote(meetingId, { signal: controller.signal });
       if (!controller.signal.aborted && alive.current) {
-        setRequested(meetingId);
         // The 202 carries status only; keep any earlier content visible until the run publishes.
         setState((current) => ({ meetingId, note: { ...next, content: next.content ?? (current.meetingId === meetingId ? current.note?.content : undefined) } }));
       }
@@ -76,7 +75,6 @@ export function useEnglishNote({ meetingId, enabled, hasNote }: { meetingId: str
       if (!controller.signal.aborted && alive.current) {
         setError(cause instanceof ApiError ? requestErrors[cause.code] ?? '영문 회의록을 요청하지 못했습니다.' : '영문 회의록을 요청하지 못했습니다.');
         reconcile = cause instanceof ApiError && cause.code === 'MEETING_BUSY';
-        if (reconcile) setRequested(meetingId);
       }
     } finally {
       if (mutationRef.current === controller) mutationRef.current = null;
