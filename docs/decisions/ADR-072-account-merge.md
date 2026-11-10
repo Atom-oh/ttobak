@@ -1,7 +1,8 @@
 # ADR-072: Merge one Account into another
 
-- Status: Accepted for implementation; only eligibility and preview exist so far.
-  Deployed acceptance is recorded separately.
+- Status: Accepted. Preview, start, status, the write fence, the summarize worker,
+  the operator CLI (`merge-accounts`) and the web merge dialog are implemented on
+  this branch; deployed acceptance is recorded separately.
 - Decision date: 2026-11-10.
 - Design: [account owner transfer and merge](../superpowers/specs/2026-11-10-account-owner-transfer-and-merge-design.md).
 - Relies on [ADR-071](ADR-071-account-owner-transfer.md) for the dual Owner condition.
@@ -99,18 +100,55 @@ rewritten, and each is pinned in the update condition: `CALSHARE#` rows stay on 
 unmoved category), so repointing the share account would orphan them and break
 unshare. This deliberately departs from the design's rewrite of `shareAccountId`. A
 link-only meeting moves with the meeting writer, which writes no target
-`MEETINGREF#` row for an unpublished meeting. The scan must run inside the `-apply`
-invocation that starts or resumes the job, before it finishes; `-verify` is the
-read-only post-merge count. Skipped rows are re-scanned; the CLI holds the job lease
-from the scan through its in-process worker, and a scan that leaves rows behind fails
-the job with `SCAN_INCOMPLETE`, which no delivery processes. A calendar move bumps
-`shareVersion`, defeating a sync that read the row before it, and calendar sync
-refuses an event naming a merging or merged account; a sync authorized before the
-start that reads the row after the move remains an accepted narrow window that
-`-verify` reports. The CLI re-seals calendar payloads with the operator host's
-existing KMS grant and its dry run prints the preview's `newAudience`. A merge
-started on the web runs no user-partition scan, so its CLI-only rows stay on A's
-tombstone unless an operator runs the CLI before it finishes (an accepted v1 limit).
+`MEETINGREF#` row for an unpublished meeting. While the job runs, the scan runs inside
+the `-apply` invocation that starts or resumes it; `-verify` is the read-only
+post-merge count. Rows a concurrent edit made the scan skip are re-scanned, and the
+worker is not started while any remain. A calendar move bumps the row's
+`shareVersion`, so a sync that read the row before the move fails and re-reads it.
+Accepted residual window: a sync authorized before the merge started that reads the
+row after the move can still write A back; `-verify` reports such rows and a
+post-merge run moves them. A scan that leaves rows behind fails the job with
+`SCAN_INCOMPLETE`, a persisted barrier no worker delivery processes, and the CLI holds
+the job lease from the scan through its in-process worker, so no delivery finishes
+the job in between. The CLI decrypts and re-seals
+calendar payloads in the operator's process with the operator host's existing KMS
+grant. The CLI dry run prints the preview's `newAudience` disclosure.
+
+### Amendment: post-merge CLI rows
+
+A merge started on the web finishes without reaching these rows, so
+`merge-accounts -scan-users -apply` also runs once the job is `done`. There is no lease
+then. Each row write carries a post-merge fence instead of the job fence: the job row
+is `done` for B (and names the operator as requester unless the operator owns B), A's
+META is the tombstone `mergedInto = B` with no `mergingInto`, the operator is a direct
+member of B, and B is open (and owned by the operator when the operator was not the
+job's requester); only the B check reports its stored row, so a merge marker on B is
+`ACCOUNT_MERGING`. Each row stays conditioned on `accountId = A` and its observed
+state, and nothing writes into A. Link-only meetings move with the meeting writer and
+stay link-only (no grants, no target reference); a published meeting still on A is
+counted, not moved, because its shares and insights need the worker. The in-job path
+is unchanged and the post-merge fence never accepts a running job.
+
+### Amendment: abort, more fenced writers, people resolve redelivery
+
+- **Abort.** `merge-accounts -abort` ends a `failed` job, or a `running` one whose
+  lease is absent or expired, for the job's requester while still Owner of A (META
+  owner and MEMBER role). One transaction conditioned on the observed job state and
+  lease owner sets the job `aborted`, removes A's `mergingInto` and decrements B's
+  `incomingMerges` (which must be positive). Data already moved stays on B: there is
+  no rollback. A fresh start may replace an aborted job; contact mapping rows name
+  their merge target, so the replacement ignores and overwrites an aborted
+  merge's rows, and the CLI refuses a renewed lease on a replaced job.
+- **More fenced writers.** Member role updates, Account document creation (including
+  a personal document shared to an Account), Account KB reference creation (the KB
+  upload presign) and a member's team audio-crop copy carry the open check on the
+  Account (folded into an ancestor grant's META check when present), returning 409
+  `ACCOUNT_MERGING`. Calendar sync rejects an event classified to a merging or merged
+  Account, and the navigation catalog skips merge tombstones as account lists do.
+- **People resolve after finish.** The finish transaction sets `resolvePending` on the
+  job; a successful people resolve publish clears it. When the publish fails, the
+  worker returns an error so the event is redelivered, and a delivery on a `done` job
+  with the flag set publishes the request again before clearing it.
 
 ## Consequences
 
@@ -121,6 +159,17 @@ start route, worker and fence; none is active until each is deployed and accepte
 
 ## Evidence
 
-- [Preview service](../../backend/internal/service/account_merge_preview.go) and
+- [Preview, start and status](../../backend/internal/service/account_merge_preview.go),
+  [job service](../../backend/internal/service/account_merge_job.go) and
   [handler](../../backend/internal/handler/account_merge.go), with their tests.
-- Route contract: [API-SPEC](../API-SPEC.md) Accounts section.
+- [Worker](../../backend/internal/service/account_merge_worker.go) and the job store,
+  lease, finish and abort transactions in
+  [account_merge_job.go](../../backend/internal/repository/account_merge_job.go).
+- Fences: [open check](../../backend/internal/repository/account_merge_fence.go), the
+  in-job and post-merge mover fences in
+  [account_merge_rows.go](../../backend/internal/repository/account_merge_rows.go), and
+  `TestAccountWritesCarryMergeFence` and the post-merge fence tests.
+- Operator CLI: [merge-accounts](../../backend/cmd/merge-accounts/main.go) and the
+  [runbook](../runbooks/account-merge.md).
+- Route contract: [API-SPEC](../API-SPEC.md) Accounts section; delivery:
+  [INFRA-SPEC](../INFRA-SPEC.md) "Account merge worker delivery".
