@@ -18,16 +18,18 @@ UpdateMemberRole and pending-share materialization stay owner-free.
   concurrent transfer fails closed.
 - **Target identity:** the target must be an existing direct non-owner member
   (not self). Cognito `AdminGetUser` must report the same `sub`, Enabled and
-  CONFIRMED; the repository cannot distinguish pending or disabled invitees.
-  Lookup failure or an unwired client is 503, never a fallback.
+  CONFIRMED with a verified email; the repository cannot distinguish pending or
+  disabled invitees. UserNotFound, disabled, unconfirmed or sub-mismatch targets
+  are 400; an unverified email is 403. 503 is returned only for an unwired
+  Cognito client or a lookup error other than not-found, never a fallback.
 - **Previous Owner:** becomes SA, retaining access without Owner-only powers.
 - **Initial-owner designation:** the same transaction clears `initialOwnerEmail`
   and `initialOwnerInvitationPending`, so ADR-055 resend cannot re-target a
   transferred Account.
 - **One transaction:** META, target MEMBER and previous-owner MEMBER change
   together; any condition failure writes nothing and returns 409.
-- **Non-delegable:** the connector inventory disables delegation; the route is not
-  exposed to MCP or other delegated callers.
+- **Non-delegable:** delegation is
+  disabled for this operation in the connector inventory.
 
 ## Consequences
 
