@@ -210,6 +210,24 @@ export type DocumentInput = {
   path?: string;
 };
 
+export const PERFORMANCE_SOURCES = ['sfdc-assignments', 'sfdc-tasks'] as const;
+export type PerformanceSource = typeof PERFORMANCE_SOURCES[number];
+const MAX_PERFORMANCE_API_BYTES = 14_000;
+const MAX_PERFORMANCE_MAPPINGS_BYTES = 2_000_000;
+
+/** `POST /api/performance/sources/{source}/sync` body; the server rejects unknown fields. */
+export interface PerformanceSyncBody {
+  batchId: string;
+  expectedRevision: number;
+  complete: boolean;
+  mutations: Record<string, unknown>[];
+}
+
+function performanceSource(source: string): string {
+  if (!(PERFORMANCE_SOURCES as readonly string[]).includes(source)) throw new Error('performance source is invalid');
+  return source;
+}
+
 export class ApiResponseError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
@@ -265,6 +283,22 @@ export class TtobakApi {
   async syncCalendarEvents(sourceId: string, body: CalendarSyncRequest) {
     return this.request('POST', `/api/calendar/sources/${identifier(sourceId, 'sourceId')}/sync`,
       body, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  /** Owner-only SA performance sync of one revisioned batch (local intake only). */
+  async syncPerformance(source: PerformanceSource, body: PerformanceSyncBody) {
+    return this.request('POST', `/api/performance/sources/${performanceSource(source)}/sync`,
+      body, MAX_PERFORMANCE_API_BYTES, false, true);
+  }
+
+  /** The owner's per-source performance sync revisions. */
+  async performanceSources() {
+    return this.request('GET', '/api/performance/sources', undefined, MAX_PERFORMANCE_API_BYTES, false, true);
+  }
+
+  /** The owner's SFDC assignments; local intake reads only the IDs. */
+  async performanceMappings() {
+    return this.request('GET', '/api/performance/mappings', undefined, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
   }
 
   async listCalendarEvents(options: CalendarEventQuery) {
