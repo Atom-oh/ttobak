@@ -515,6 +515,10 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 			if a == nil || a.AccountID != id {
 				return nil, ErrStaleReadingCursor
 			}
+			// Merged sources are tombstones; traversal continues past them.
+			if a.MergedInto != "" {
+				continue
+			}
 			role := g.Member.Role
 			if g.inherited() {
 				role = ""
@@ -522,6 +526,7 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 			page.Accounts = append(page.Accounts, model.AccountSummary{
 				AccountID: id, ParentAccountID: a.ParentAccountID, Name: a.Name,
 				Role: role, AccessPermission: g.permission(), InheritedFromAccountID: g.InheritedFromAccountID,
+				MergingInto: a.MergingInto,
 			})
 			c.Anchor, c.Revision = id, readingHash([]interface{}{a, g.fingerprint()})
 			observed = append(observed, [2]string{c.Anchor, c.Revision})
