@@ -410,3 +410,28 @@ func TestResendOwnerInvitation_OnlyCanonicalOwnerAndAuthorizedCaller(t *testing.
 		})
 	}
 }
+
+func TestCreateAccount_ReplayAfterTransferReturnsOriginalOwner(t *testing.T) {
+	f, r := newCreationFixture(t)
+	req := creationRequest()
+	req.KeepCreatorAsMember = true
+	first, err := f.svc.CreateAccountWithOwner(context.Background(), "creator", "creator@example.com", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the transfer transaction's META update (ADR-071).
+	account := r.accounts[first.AccountID]
+	account.OriginalOwnerUserID, account.OwnerUserID, account.InitialOwnerEmail = first.OwnerUserID, "later-owner", ""
+	retry, err := f.svc.CreateAccountWithOwner(context.Background(), "creator", "creator@example.com", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.OwnerUserID != first.OwnerUserID || len(retry.Members) == 0 || retry.Members[0].UserID != first.OwnerUserID {
+		t.Fatalf("replay revealed later owner: %+v", retry)
+	}
+	for _, m := range retry.Members {
+		if m.UserID == "later-owner" {
+			t.Fatalf("replay revealed later owner: %+v", retry.Members)
+		}
+	}
+}

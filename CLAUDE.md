@@ -162,20 +162,21 @@ limit instead of claiming a Mac build passed.
   checkpoints; marked-failure deletion spares user data.
 - **Accounts:** members add/change non-owner roles (ADR-034/054). Creation permits
   another Owner and optional creator AM (ADR-055). Removal/revocation/reparenting
-  are owner-only. Ancestor reads permit Billing (ADR-058/060); filters classify
-  (ADR-036); members manage published meetings (ADR-016).
+  are owner-only; Owner changes only via owner transfer (ADR-071). Ancestor reads
+  permit Billing (ADR-058/060); filters classify (ADR-036); members manage
+  published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
-  `ProjectService.ListMyProjects` unions all three; its repository primitive only
-  covers owner/direct membership. Delete rejects existing relations (ADR-025).
+  `ProjectService.ListMyProjects` unions all three; the repository primitive
+  covers only owner/direct. Delete rejects relations (ADR-025).
 - **Sharing:** account document shares copy the S3 object to a fresh key; email
-  document shares reference the owner's document and are always read-only.
-  Owner-only mutations use partition isolation; authorized recipients can read
-  through the share row. Inaccessible docs return 404. Use `SHAREDDOC#` and
-  `DOCSHARE_TO#`, never meeting `SHARED#` keys (ADR-022/029).
+  document shares reference the owner's document, always read-only.
+  Owner-only mutations use partition isolation; recipients read through the
+  share row. Inaccessible docs 404. Use `SHAREDDOC#`/`DOCSHARE_TO#`, never
+  meeting `SHARED#` keys (ADR-022/029).
 - **Public routes:** `GET /api/public/docs/{token}` and ADR-045's two static MCP
   discovery GETs are the only unauthenticated routes. Revalidate `PublicShareToken`;
-  conditional minting prevents orphans; downloads last five minutes. Edge bypass
+  conditional minting prevents orphans; downloads last 5 minutes. Edge bypass
   covers `/api/public/*`; API Gateway registers only the literal doc route.
   A new unauthenticated route is CRITICAL (ADR-022).
 - **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows

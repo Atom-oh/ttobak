@@ -8,6 +8,8 @@
   aligns pending Account materialization with current-member addition authority.
 - [ADR-055](ADR-055-designated-account-owner.md) permits another initial Owner and
   optional creator AM membership only during creation; member role rules remain.
+- [ADR-071](ADR-071-account-owner-transfer.md) amends the Owner rule: Owner changes
+  only through the dedicated owner transfer; member role updates stay owner-free.
 
 ## Original decision and rationale
 

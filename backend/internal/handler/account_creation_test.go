@@ -3,16 +3,20 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	idp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	ct "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/service"
 )
 
 type creationCognito struct{ *stubCognitoAdminAPI }
@@ -106,5 +110,80 @@ func TestAccountCreation_DesignatedOwnerRequiresVerifiedEmail(t *testing.T) {
 	h.CreateAccount(out, req)
 	if out.Code != http.StatusForbidden || len(repo.accounts) != 0 {
 		t.Fatalf("unverified creator accepted: %d", out.Code)
+	}
+}
+
+type transferHandlerRepo struct {
+	*mockHandlerAccountRepo
+	err error
+}
+
+func (r transferHandlerRepo) TransferAccountOwner(context.Context, string, string, string, time.Time) error {
+	return r.err
+}
+
+func TestTransferOwnerHandler(t *testing.T) {
+	post := func(h *AccountHandler, user, body string, verified bool) *httptest.ResponseRecorder {
+		req := withChiParam(withUserEmailCtx(httptest.NewRequest(http.MethodPost, "/api/accounts/acc/owner-transfer", strings.NewReader(body)), user, "o@example.com"), "accountId", "acc")
+		req = req.WithContext(context.WithValue(req.Context(), middleware.UserEmailVerifiedKey, verified))
+		out := httptest.NewRecorder()
+		h.TransferOwner(out, req)
+		return out
+	}
+	build := func(repoErr error, wired bool) *AccountHandler {
+		base := newMockHandlerAccountRepo()
+		base.accounts["acc"] = &model.Account{AccountID: "acc", OwnerUserID: "owner"}
+		base.members[acctMemberKey("acc", "owner")] = &model.AccountMember{AccountID: "acc", UserID: "owner", Role: model.RoleOwner}
+		base.members[acctMemberKey("acc", "colleague-sub")] = &model.AccountMember{AccountID: "acc", UserID: "colleague-sub", Role: model.RoleSA}
+		base.members[acctMemberKey("acc", "member")] = &model.AccountMember{AccountID: "acc", UserID: "member", Role: model.RoleSA}
+		svc := service.NewAccountServiceForTest(transferHandlerRepo{base, repoErr})
+		if wired {
+			svc.SetCognitoAdminAPI(creationCognito{&stubCognitoAdminAPI{}}, "pool")
+		}
+		return &AccountHandler{accountService: svc}
+	}
+	good := `{"targetUserId":"colleague-sub"}`
+	for _, tc := range []struct {
+		name     string
+		h        *AccountHandler
+		body     string
+		verified bool
+		want     int
+		code     string
+	}{
+		{"unverified email", build(nil, true), good, false, http.StatusForbidden, model.ErrCodeForbidden},
+		{"unknown field", build(nil, true), `{"targetUserId":"colleague-sub","role":"owner"}`, true, http.StatusBadRequest, model.ErrCodeBadRequest},
+		{"trailing value", build(nil, true), good + ` {}`, true, http.StatusBadRequest, model.ErrCodeBadRequest},
+		{"oversized", build(nil, true), good + strings.Repeat(" ", 2048), true, http.StatusBadRequest, model.ErrCodeBadRequest},
+		{"self transfer", build(nil, true), `{"targetUserId":"owner"}`, true, http.StatusBadRequest, model.ErrCodeBadRequest},
+		{"non-owner requester", build(nil, true), good, true, http.StatusForbidden, model.ErrCodeForbidden},
+		{"target not a member", build(nil, true), `{"targetUserId":"nobody"}`, true, http.StatusNotFound, model.ErrCodeNotFound},
+		{"conflict", build(fmt.Errorf("tx: %w", repository.ErrConditionFailed), true), good, true, http.StatusConflict, model.ErrCodeConflict},
+		{"cognito unwired", build(nil, false), good, true, http.StatusServiceUnavailable, model.ErrCodeInternalError},
+		{"success", build(nil, true), good, true, http.StatusOK, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := "owner"
+			if tc.name == "non-owner requester" {
+				user = "member"
+			}
+			out := post(tc.h, user, tc.body, tc.verified)
+			if out.Code != tc.want {
+				t.Fatalf("status=%d want %d: %s", out.Code, tc.want, out.Body)
+			}
+			if tc.code != "" {
+				var e struct {
+					Error struct{ Code string } `json:"error"`
+				}
+				if err := json.Unmarshal(out.Body.Bytes(), &e); err != nil || e.Error.Code != tc.code {
+					t.Fatalf("error body %s", out.Body)
+				}
+				return
+			}
+			var got model.TransferOwnerResponse
+			if err := json.Unmarshal(out.Body.Bytes(), &got); err != nil || got.OwnerUserID != "colleague-sub" || got.PreviousOwnerRole != model.RoleSA {
+				t.Fatalf("response %s", out.Body)
+			}
+		})
 	}
 }

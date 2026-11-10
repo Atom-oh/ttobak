@@ -119,6 +119,14 @@ function useAccountSection<T>(load: (signal: AbortSignal) => Promise<T>, enabled
   return { data: current?.data ?? null, loading: enabled && !current, error: current?.error ?? null, retry };
 }
 
+export const OWNER_TRANSFER_COPY = {
+  action: '소유권 이전',
+  confirm: (email: string) => `${email}님에게 이 어카운트의 소유권을 이전할까요?`,
+  previousOwnerNote: '이전 소유자는 SA로 변경됩니다.',
+  conflict: '멤버 구성이 변경되었습니다. 새로고침 후 다시 시도하세요.',
+  failed: '소유권을 이전하지 못했습니다.',
+} as const;
+
 function SectionStatus({ loading, error, retry }: { loading: boolean; error: string | null; retry: () => void }) {
   if (loading) return <p role="status" className="py-4 text-sm text-text-secondary">불러오는 중…</p>;
   if (!error) return null;
@@ -495,6 +503,25 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     }
   };
 
+  const handleTransferOwner = async (userId: string) => {
+    if (!isOwner || !user?.userId || !canAct()) return;
+    const target = account?.members.find((member) => member.userId === userId);
+    if (!target) return;
+    if (!await confirmDialog(`${OWNER_TRANSFER_COPY.confirm(target.email || userId)}\n${OWNER_TRANSFER_COPY.previousOwnerNote}`)) return;
+    if (!canAct()) return;
+    const isCurrent = currentOperation();
+    setError(null);
+    try {
+      await accountApi.transferOwner(accountId, userId, user.userId);
+      if (!isCurrent()) return;
+      await currentFetchAll.current();
+    } catch (err) {
+      if (!isCurrent()) return;
+      setError((err as { status?: number })?.status === 409 ? OWNER_TRANSFER_COPY.conflict
+        : err instanceof Error ? err.message : OWNER_TRANSFER_COPY.failed);
+    }
+  };
+
   const handleCreateNote = async () => {
     if (!canEdit || !canAct()) return;
     const isCurrent = currentOperation();
@@ -673,6 +700,12 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                                     <option key={r} value={r}>{r}</option>
                                   ))}
                                 </select>
+                                {isOwner && (
+                                  <button type="button" onClick={() => handleTransferOwner(m.userId)}
+                                    className="text-xs text-primary hover:underline">
+                                    {OWNER_TRANSFER_COPY.action}
+                                  </button>
+                                )}
                                 {isOwner && (
                                   <button
                                     onClick={() => handleRemoveMember(m.userId)}

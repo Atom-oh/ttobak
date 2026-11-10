@@ -967,6 +967,10 @@ export const accountApi = {
   removeMember: (id: string, userId: string, force?: boolean) =>
     invalidatingAccountList(api.delete<{ removed: boolean; cleanupFailedForMeetings: string[]; ambiguousUntaggedMeetingIDs: string[] } | undefined>(
       `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}${force ? '?force=true' : ''}`)),
+  // Owner-only; the previous owner stays a member with `previousOwnerRole` (SA).
+  transferOwner: (id: string, targetUserId: string, expectedUserId: string) =>
+    invalidatingAccountList(api.post<{ accountId: string; ownerUserId: string; previousOwnerUserId: string; previousOwnerRole: string }>(
+      `/api/accounts/${encodeURIComponent(id)}/owner-transfer`, { targetUserId }, { expectedUserId })),
   meetings: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`, options),
   insights: (id: string, params?: { from?: string; to?: string; types?: string[] }, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
