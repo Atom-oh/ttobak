@@ -52,6 +52,12 @@ pub fn extra_language_gate(lang: &str, extra: Option<&str>) -> Result<&'static s
     Ok(label)
 }
 
+/// Window label for `lang` under the current settings. Open, set-style and
+/// push all go through this gate.
+pub fn gated_label(settings: &CaptionSettings, lang: &str) -> Result<&'static str, CaptionError> {
+    extra_language_gate(lang, settings.extra_language.as_deref())
+}
+
 /// Validates a caption push.
 pub fn check_push(kind: &str, id: &str, text: &str) -> Result<(), CaptionError> {
     if !PUSH_KINDS.contains(&kind) {
@@ -282,7 +288,7 @@ pub async fn caption_overlay_open(
     lang: String,
 ) -> Result<WindowLayout, CaptionError> {
     let settings = state.snapshot();
-    let label = extra_language_gate(&lang, settings.extra_language.as_deref())?;
+    let label = gated_label(&settings, &lang)?;
     let saved = settings.windows.get(&lang).cloned().unwrap_or_default();
     let (saved_pos, size) = sanitize_geometry(&saved);
 
@@ -356,12 +362,17 @@ pub async fn caption_overlay_set_style(
     lang: String,
     style: CaptionStyle,
 ) -> Result<(), CaptionError> {
-    let label = caption_model::window_label(&lang)
-        .ok_or_else(|| CaptionError::invalid("Unsupported caption language."))?;
+    let label = gated_label(&state.snapshot(), &lang)?;
     caption_model::validate_style(&style).map_err(|e| CaptionError::invalid(&e))?;
+    let mut gated = Ok(label);
     state.update(true, |s| {
-        s.windows.entry(lang.clone()).or_default().style = style.clone();
+        // Re-checked under the lock: the extra language may have changed.
+        gated = gated_label(s, &lang);
+        if gated.is_ok() {
+            s.windows.entry(lang.clone()).or_default().style = style.clone();
+        }
     })?;
+    gated?;
     if app.get_webview_window(label).is_some() {
         app.emit_to(EventTarget::webview_window(label), "caption-style", &style)
             .map_err(|e| window_error("style", e))?;
@@ -370,9 +381,12 @@ pub async fn caption_overlay_set_style(
 }
 
 /// Sends caption text to the window for `lang`; a closed window ignores it.
+// The arguments are the command's wire contract (one per payload field).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn caption_overlay_push(
     app: AppHandle,
+    state: State<'_, CaptionState>,
     lang: String,
     kind: String,
     id: String,
@@ -380,8 +394,7 @@ pub async fn caption_overlay_push(
     text: String,
     is_final: bool,
 ) -> Result<(), CaptionError> {
-    let label = caption_model::window_label(&lang)
-        .ok_or_else(|| CaptionError::invalid("Unsupported caption language."))?;
+    let label = gated_label(&state.snapshot(), &lang)?;
     check_push(&kind, &id, &text)?;
     if app.get_webview_window(label).is_none() {
         return Ok(());
@@ -441,6 +454,60 @@ mod tests {
         assert_eq!(extra_language_gate("ja", Some("ja")).unwrap(), "caption-ja");
         assert_eq!(extra_language_gate("ko", Some("zh")).unwrap(), "caption-ko");
         assert_eq!(extra_language_gate("en", None).unwrap(), "caption-en");
+    }
+
+    #[test]
+    fn open_style_and_push_share_the_extra_language_gate() {
+        let zh = CaptionSettings {
+            extra_language: Some("zh".into()),
+            ..CaptionSettings::default()
+        };
+        assert_eq!(gated_label(&zh, "ja").unwrap_err().code, "invalid-input");
+        assert_eq!(gated_label(&zh, "zh").unwrap(), "caption-zh");
+        assert_eq!(gated_label(&zh, "ko").unwrap(), "caption-ko");
+        let none = CaptionSettings::default();
+        assert!(gated_label(&none, "ja").is_err());
+        assert!(gated_label(&none, "zh").is_err());
+        assert!(gated_label(&none, "fr").is_err());
+        assert_eq!(gated_label(&none, "en").unwrap(), "caption-en");
+    }
+
+    #[test]
+    fn overlay_capability_grants_only_listening_and_dragging() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/caption-overlay.json"))
+                .expect("json");
+        assert!(cap.get("remote").is_none(), "no remote origin");
+        let windows: Vec<&str> = cap["windows"]
+            .as_array()
+            .expect("windows")
+            .iter()
+            .filter_map(|w| w.as_str())
+            .collect();
+        assert_eq!(
+            windows,
+            ["caption-ko", "caption-en", "caption-ja", "caption-zh"]
+        );
+        let mut granted: Vec<&str> = cap["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .map(|p| p.as_str().expect("plain permission id"))
+            .collect();
+        granted.sort();
+        assert_eq!(
+            granted,
+            [
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "core:window:allow-start-dragging",
+            ]
+        );
+        for p in &granted {
+            assert_ne!(*p, "core:event:default");
+            assert!(!p.contains("allow-emit"), "{p}");
+            assert!(p.starts_with("core:"), "app command permission {p}");
+        }
     }
 
     #[test]
