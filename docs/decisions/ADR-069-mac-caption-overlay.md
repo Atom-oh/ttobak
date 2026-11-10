@@ -1,7 +1,8 @@
 # ADR-069: Mac caption overlay windows
 
 - Status: Accepted for implementation; partly observed in a local test build (see the verification record); not verified on a projector or over a full-screen slideshow
-  or against a real AWS account (see the verification record).
+  (see the verification record); the only real AWS call recorded is one
+  `caption_translate` round in that local session.
 - Decision date: 2026-11-10.
 - Numbering: ADR-069 because ADR-066 is reserved by the account-shared
   calendar work and ADR-068 is SA performance data residency.
@@ -186,7 +187,7 @@ Recorded 2026-11-10. The owner ran a local test build (the app pointed at a
 local dev server) on a laptop with an external display; rows marked "observed"
 come from that single session. Nothing was run on a projector, over a full-screen
 slideshow or in a Zoom share. Go is not installed locally, so `go vet` was
-not run for the comment-only change in `translate.go`. Unit tests in the Rust
+not run for the comment-only change in `translate.go` (delivered in PR 1/4). Unit tests in the Rust
 modules and the frontend scripts are separate from this checklist.
 
 | Check | Result |

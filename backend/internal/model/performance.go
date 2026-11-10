@@ -64,6 +64,9 @@ type PerformanceSyncReceipt struct {
 	Completed bool  `json:"completed" dynamodbav:"completed"`
 	Upserted  int   `json:"upserted" dynamodbav:"upserted"`
 	Removed   int   `json:"removed" dynamodbav:"removed"`
+	// Replayed marks a stored receipt returned for an identical retry. It is
+	// never serialized or persisted.
+	Replayed bool `json:"-" dynamodbav:"-"`
 }
 
 // AccountMapping links an SFDC account to a TTOBAK account. A manual mapping
