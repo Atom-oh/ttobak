@@ -203,6 +203,10 @@ alone. Codes and counts are as in section 2: a lost fence is `FENCE_LOST`, chang
 rows are `Skipped`, failures are counted in `errors` and the command can be rerun.
 Finish with the `-verify` check of section 6.
 
+Until this scan moves a calendar row, a calendar sync that sends that row's
+`accountId` of a merging or merged account is rejected with 409 `ACCOUNT_MERGING`;
+reads keep listing the event with its stored account.
+
 ## 8. Abort a stuck job
 
 Use this only when a job cannot be finished: it is `failed`, or `running` with no

@@ -387,7 +387,7 @@ func calendarStoredEvents(test *testing.T, svc *CalendarService, store *calendar
 }
 
 func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) {
-	for _, scenario := range []string{"owner", "other member", "revoked unfiltered", "missing unfiltered", "revoked filtered", "transient unfiltered", "transient filtered", "ciphertext moved", "missing key", "anonymous", "corrupt plaintext"} {
+	for _, scenario := range []string{"owner", "other member", "revoked unfiltered", "missing unfiltered", "revoked filtered", "transient unfiltered", "transient filtered", "merged unfiltered", "merging filtered", "ciphertext moved", "missing key", "anonymous", "corrupt plaintext"} {
 		test.Run(scenario, func(test *testing.T) {
 			svc, store, sdk, accounts := calendarFixture()
 			calendarStoredEvents(test, svc, store, calendarRequest())
@@ -411,6 +411,10 @@ func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) 
 				if scenario == "transient filtered" {
 					query.AccountID = "account-1"
 				}
+			case "merged unfiltered":
+				accounts.merge = map[string]string{"account-1": "merged"}
+			case "merging filtered":
+				accounts.merge, query.AccountID = map[string]string{"account-1": "merging"}, "account-1"
 			case "ciphertext moved":
 				store.rows.Rows[0].EventID = strings.Repeat("b", 64)
 				store.rows.Rows[0].SK = model.CalendarEventSortKey(calendarSourceID, store.rows.Rows[0].EventID)
@@ -438,6 +442,9 @@ func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) 
 			}
 			if (scenario == "revoked unfiltered" || scenario == "missing unfiltered") && page.Events[0].AccountID != "" {
 				test.Fatal("revoked classification remained visible")
+			}
+			if strings.HasPrefix(scenario, "merg") && page.Events[0].AccountID != "account-1" {
+				test.Fatal("an event on a merging or merged account must keep its label in reads")
 			}
 			if store.rows.Rows[0].AccountID != "account-1" {
 				test.Fatal("read mutated stored personal classification")
