@@ -4,6 +4,13 @@ import "time"
 
 const ResummarySK = "ANALYSIS#summary"
 
+// EnglishSummarySK holds the English note's run state; SummaryTargetEnglish
+// routes a SummaryRequested event to it. An empty target is the Korean note.
+const (
+	EnglishSummarySK     = "ANALYSIS#summaryEn"
+	SummaryTargetEnglish = "en"
+)
+
 // ResummaryState never stores note/transcript text. Results and success are
 // published atomically; failures retain the meeting's previous content.
 type ResummaryState struct {
@@ -26,4 +33,5 @@ func (s *ResummaryState) Pending() bool {
 type SummaryRequested struct {
 	MeetingID string `json:"meetingId"`
 	RunID     string `json:"runId"`
+	Target    string `json:"target,omitempty"`
 }
