@@ -19,7 +19,8 @@ import (
 
 var (
 	ErrCalendarEventNotFound = errors.New("calendar event not found")
-	// ErrCalendarShareGroupTooLarge reports one meetingKey group that did not end within the bounded read.
+	// ErrCalendarShareGroupTooLarge reports a group that did not end within the bounded read or
+	// has more rows than one TransactGetItems snapshot can hold.
 	ErrCalendarShareGroupTooLarge = errors.New("calendar share group exceeds the bounded read")
 	// ErrCalendarShareStateChanged reports that an event's share state changed after a sync
 	// batch read it (SetCalendarShareState won); the caller may recompute and retry.
@@ -65,7 +66,7 @@ type CalendarShareRow struct {
 }
 
 // CalendarSharePage groups rows by (startsAt, meetingKey), the sort-key prefix; a page never
-// splits a group.
+// splits a group, and each group is one transactional snapshot of its member rows.
 // GroupCursors[i] resumes the same query right after Groups[i], so a caller can trim a
 // page at a group boundary.
 type CalendarSharePage struct {
@@ -681,11 +682,23 @@ func validCalendarShareRow(row CalendarShareRow, accountID string, now int64) bo
 
 // ListCalendarShareRows reads share rows overlapping the window, grouped by (startsAt,
 // meetingKey). Groups are contiguous in the sort key; a page always ends after a complete
-// group, so a veto row is never separated from the shared rows it hides, and a page resumed
-// from a cursor skips the rest of the cursor's group. Cursor and row sort keys are parsed
-// with the writer's grammar; a malformed cursor is invalid and a malformed row is ignored, so
-// neither can open a new group inside an existing one. A single group larger than the limit
-// is returned whole; a group that does not end within five queries is an error.
+// group, and a page resumed from a cursor skips the rest of the cursor's group. Cursor and
+// row sort keys are parsed with the writer's grammar; a malformed cursor is invalid and a
+// malformed row is ignored, so neither can open a new group inside an existing one.
+//
+// The queries only discover each group's member keys. Every published group, whether it
+// came from one Query or several, is rebuilt from one TransactGetItems over exactly those
+// keys, so a published group never omits a veto that existed in the snapshot of its member
+// rows; rows deleted or changed after the query are taken from the snapshot. A row added to
+// a group after the query passed its position is not a member and is not returned, as if it
+// were written after the read; this read does not fence group membership.
+//
+// Bounds: at most five Query calls per page; a group that does not end within them, or a
+// published group with more than 100 member keys (the TransactGetItems limit), returns
+// ErrCalendarShareGroupTooLarge. Snapshots pack whole groups into TransactGetItems calls of
+// at most 100 keys. A single group larger than the limit is otherwise returned whole. A
+// failed snapshot, including a transaction conflict, is returned wrapped and is
+// retryable.
 func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accountID string, query model.CalendarQuery) (*CalendarSharePage, error) {
 	limit, err := calendarQueryLimit(accountID, query.Limit)
 	if err != nil || !validCalendarWindow(query.From, query.To) || query.AccountID != "" && query.AccountID != accountID {
@@ -721,7 +734,8 @@ func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accou
 	kept := 0
 	var groupPrefix, groupLastSK, completeSK string
 	var group []CalendarShareRow
-	var groupSKs []string
+	var groupSKs, memberSKs []string
+	var groupMembers [][]string
 	complete := func() {
 		if groupPrefix == "" {
 			return
@@ -730,11 +744,21 @@ func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accou
 			if row.StartsAt.Before(query.To) && row.EndsAt.After(query.From) {
 				page.Groups = append(page.Groups, group)
 				groupSKs = append(groupSKs, groupLastSK)
+				groupMembers = append(groupMembers, memberSKs)
 				kept += len(group)
 				break
 			}
 		}
-		completeSK, groupPrefix, group = groupLastSK, "", nil
+		completeSK, groupPrefix, group, memberSKs = groupLastSK, "", nil, nil
+	}
+	publish := func(err error) (*CalendarSharePage, error) {
+		if err != nil {
+			return nil, err
+		}
+		if err := repo.snapshotCalendarShareGroups(ctx, accountID, query, now, page, groupMembers); err != nil {
+			return nil, err
+		}
+		return page, nil
 	}
 	finish := func() error {
 		for _, sortKey := range groupSKs {
@@ -780,10 +804,11 @@ func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accou
 			if groupPrefix != "" && prefix != groupPrefix {
 				complete()
 				if kept >= int(limit) {
-					return calendarSharePageOrError(page, cursorAt(completeSK))
+					return publish(cursorAt(completeSK))
 				}
 			}
 			groupPrefix, groupLastSK = prefix, sortKey.Value
+			memberSKs = append(memberSKs, sortKey.Value)
 			var row CalendarShareRow
 			if attributevalue.UnmarshalMap(item, &row) == nil && validCalendarShareRow(row, accountID, now) {
 				group = append(group, row)
@@ -792,12 +817,12 @@ func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accou
 		startKey = result.LastEvaluatedKey
 		if len(startKey) == 0 {
 			complete()
-			return calendarSharePageOrError(page, finish())
+			return publish(finish())
 		}
 	}
 	switch {
 	case completeSK != "":
-		return calendarSharePageOrError(page, cursorAt(completeSK))
+		return publish(cursorAt(completeSK))
 	case groupPrefix != "":
 		return nil, ErrCalendarShareGroupTooLarge
 	}
@@ -805,14 +830,63 @@ func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accou
 	if err != nil {
 		return nil, err
 	}
-	return calendarSharePageOrError(page, finish())
+	return publish(finish())
 }
 
-func calendarSharePageOrError(page *CalendarSharePage, err error) (*CalendarSharePage, error) {
-	if err != nil {
-		return nil, err
+// snapshotCalendarShareGroups rebuilds each group from a TransactGetItems over its member
+// keys. Several whole groups may share one transaction; a group is never split across two.
+// Snapshot rows pass the same validation and window overlap as queried rows, and a group
+// left with no overlapping row is dropped together with its cursor.
+func (repo *CalendarRepository) snapshotCalendarShareGroups(ctx context.Context, accountID string, query model.CalendarQuery, now int64,
+	page *CalendarSharePage, groupMembers [][]string) error {
+	if len(groupMembers) != len(page.Groups) || len(page.GroupCursors) != len(page.Groups) {
+		return errors.New("snapshot calendar share groups: inconsistent page")
 	}
-	return page, nil
+	groups, cursors := make([][]CalendarShareRow, 0, len(groupMembers)), make([]string, 0, len(groupMembers))
+	for start := 0; start < len(groupMembers); {
+		end, size := start, 0
+		for end < len(groupMembers) && size+len(groupMembers[end]) <= calendarMaxTransactItems {
+			size += len(groupMembers[end])
+			end++
+		}
+		if end == start {
+			return ErrCalendarShareGroupTooLarge
+		}
+		gets := make([]types.TransactGetItem, 0, size)
+		for _, members := range groupMembers[start:end] {
+			for _, sortKey := range members {
+				gets = append(gets, types.TransactGetItem{Get: &types.Get{TableName: aws.String(repo.tableName), Key: accountShareKey(accountID, sortKey)}})
+			}
+		}
+		result, err := repo.client.TransactGetItems(ctx, &dynamodb.TransactGetItemsInput{TransactItems: gets})
+		if err != nil {
+			return fmt.Errorf("snapshot calendar share groups: %w", err)
+		}
+		if result == nil || len(result.Responses) != len(gets) {
+			return errors.New("snapshot calendar share groups: incomplete response")
+		}
+		offset := 0
+		for index, members := range groupMembers[start:end] {
+			group, overlaps := make([]CalendarShareRow, 0, len(members)), false
+			for _, sortKey := range members {
+				item := result.Responses[offset].Item
+				offset++
+				var row CalendarShareRow
+				if len(item) == 0 || attributevalue.UnmarshalMap(item, &row) != nil || row.SK != sortKey || !validCalendarShareRow(row, accountID, now) {
+					continue
+				}
+				group = append(group, row)
+				overlaps = overlaps || row.StartsAt.Before(query.To) && row.EndsAt.After(query.From)
+			}
+			if overlaps {
+				groups = append(groups, group)
+				cursors = append(cursors, page.GroupCursors[start+index])
+			}
+		}
+		start = end
+	}
+	page.Groups, page.GroupCursors = groups, cursors
+	return nil
 }
 
 func validCalendarOverrideScope(userID, sourceID, scopeKey string) bool {

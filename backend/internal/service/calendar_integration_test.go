@@ -83,6 +83,11 @@ func (sdk *calendarReadSDK) Query(_ context.Context, input *dynamodb.QueryInput,
 	return result, nil
 }
 
+func (sdk *calendarReadSDK) TransactGetItems(context.Context, *dynamodb.TransactGetItemsInput, ...func(*dynamodb.Options)) (*dynamodb.TransactGetItemsOutput, error) {
+	sdk.test.Fatal("calendar event reads attempted a share snapshot")
+	return nil, nil
+}
+
 func (sdk *calendarReadSDK) TransactWriteItems(context.Context, *dynamodb.TransactWriteItemsInput, ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error) {
 	sdk.test.Fatal("calendar reads attempted a mutation")
 	return nil, nil
