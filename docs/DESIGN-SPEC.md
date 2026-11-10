@@ -364,7 +364,14 @@ company domain is used. Matching requires complete account metadata and consider
 all nonpersonal domains in a company group; conflicting account matches require
 an explicit choice regardless of row order. Similar names (containment, shared head or bigram
 similarity) and unmatched groups ask the user to pick an Account, create a new
-one (with the mail domain), or drop the group; undecided groups drop. The same
+one (with the mail domain), or drop the group; undecided groups drop. A leading
+"KEB " brand prefix is ignored. When a non-exact group has exactly one strong
+candidate (one normalized name contains the other with at least two characters,
+similarity of at least 0.8, or a unique domain match), that Account is
+preselected with a "추천" badge and can be changed; ambiguous or weak candidates
+still drop. Ancestor/descendant Accounts readable through the hierarchy are also
+matched, but contacts can only be added to directly joined Accounts, so they are
+shown as "상위/하위 고객사 — 직접 멤버만 추가 가능", disabled and never preselected. The same
 person is the same email, or the same name with a shared mobile or work phone
 when emails do not differ; a shared office line alone never matches. A match
 fills only empty fields; differing values are listed as change candidates and
