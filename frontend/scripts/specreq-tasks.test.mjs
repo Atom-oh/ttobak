@@ -356,3 +356,35 @@ test('a complete list is not partial', async context => {
   assert.equal(probe.result().partial, false);
 });
 
+test('needs_account on an account without an invited SA explains why it waits', () => {
+  const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
+  const row = task(id('a'), 'needs_account', { accountId: 'acct-1' });
+  const none = view({ task: row, members: [{ userId: 'me', role: 'SA' }, { userId: 'u3', role: 'AM' }, { userId: 'u6', role: 'SA', pending: true }] });
+  assert.ok(none.includes(copy.accountNoSa));
+  assert.ok(!none.includes(copy.accountWaiting));
+  const some = view({ task: row, members: [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }] });
+  assert.ok(some.includes(copy.accountWaiting) && !some.includes(copy.accountNoSa));
+  assert.ok(view({ task: row, members: null }).includes(copy.accountWaiting), 'members still loading');
+  assert.ok(!view({ task: row, members: [], message: copy.loadFailed }).includes(copy.accountNoSa), 'a failed read is not "no SA"');
+});
+
+test('a row moved from needs_account to needs_owner reloads its members', async context => {
+  const harness = accountComponentHarness();
+  context.after(() => harness.unmount());
+  const reads = [];
+  const replies = [[], [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }]];
+  const accountApi = { list: async () => ({ accounts: [] }), get: async accountId => { reads.push(accountId); return { members: replies[reads.length - 1] }; } };
+  const actions = loader({ react: harness.react, 'react/jsx-runtime': jsxRuntime,
+    '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId: 'me' } }) }, '@/lib/api': { accountApi } })(
+    '@/components/workspace/SpecReqTaskActions');
+  const stop = new Set([actions.SpecReqActionsView]);
+  const draw = state => harness.render(actions.SpecReqTaskActions, stop,
+    { task: task(id('a'), state, { accountId: 'acct-1' }), transition: async () => {} }).props.members;
+  draw('needs_account');
+  await settle();
+  assert.deepEqual(draw('needs_account'), []);
+  assert.equal(draw('needs_owner'), null, 'the empty needs_account list is not reused');
+  await settle();
+  assert.equal(draw('needs_owner').length, 1);
+  assert.deepEqual(reads, ['acct-1', 'acct-1']);
+});

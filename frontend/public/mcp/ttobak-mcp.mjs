@@ -27901,6 +27901,7 @@ function classifyOccurrence(input) {
   if (input.isPrivate) return { kind: "skip" };
   const me = input.me.trim().toLowerCase();
   const attendees = [...new Set(input.attendees.map((a) => a.trim().toLowerCase()))].filter((a) => a && a !== me);
+  if (!attendees.some((a) => !a.endsWith("@amazon.com"))) return { kind: "skip" };
   if (!input.accountId) {
     return attendees.some((a) => input.anyAccountSaEmails.has(a)) ? { kind: "task", state: "needs_account" } : { kind: "skip" };
   }
@@ -28105,7 +28106,7 @@ var init_slack_draft = __esm({
     "use strict";
     init_errors4();
     init_mcp_client();
-    SLACK_REQUEST_TEMPLATE = '\uC548\uB155\uD558\uC138\uC694, {account} \uAD00\uB828 \uBBF8\uD305 "{title}" ({when})\uC744 \uC9C4\uD589\uD588\uC2B5\uB2C8\uB2E4. \uBBF8\uD305 \uB0B4\uC6A9\uC744 \uBC14\uD0D5\uC73C\uB85C SpecReq \uC694\uCCAD\uC744 \uBD80\uD0C1\uB4DC\uB9BD\uB2C8\uB2E4. \uAC10\uC0AC\uD569\uB2C8\uB2E4.\n- {me} \uB4DC\uB9BC';
+    SLACK_REQUEST_TEMPLATE = '\uC548\uB155\uD558\uC138\uC694, {account} \uBBF8\uD305 "{title}" ({when})\uC774 \uC7A1\uD600 \uC788\uC5B4 SpecReq \uBC1C\uD589\uC744 \uBD80\uD0C1\uB4DC\uB9BD\uB2C8\uB2E4. \uBC1C\uD589\uD574 \uC8FC\uC2DC\uBA74 \uC81C\uAC00 \uD655\uC778\uD558\uACA0\uC2B5\uB2C8\uB2E4.\n- {me}';
     SLACK_TEXT_MAX_CHARS = 2e3;
     escapeSlack = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     USER_ID = /^[UW][A-Z0-9]{2,20}$/;
@@ -28408,14 +28409,15 @@ function seenPath(scope) {
 }
 function loadSeen(store, scope) {
   const raw = store.read(...seenPath(scope));
-  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, unknown: {} };
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {}, unknown: {} };
   const record17 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
   if (raw.version !== 1 || !record17(raw.seen) || !record17(raw.pending) || !record17(raw.closing)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   raw.refreshed ??= {};
+  raw.requestDue ??= {};
   raw.unknown ??= {};
-  if (!record17(raw.refreshed) || !record17(raw.unknown) || raw.tracked !== void 0 && !record17(raw.tracked)) {
+  if (!record17(raw.refreshed) || !record17(raw.requestDue) || !record17(raw.unknown) || raw.tracked !== void 0 && !record17(raw.tracked)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   return raw;
@@ -28423,7 +28425,7 @@ function loadSeen(store, scope) {
 async function runTasks(options) {
   return new TaskRun(options).run();
 }
-var TASK_LIST_MAX_PAGES, EVENT_LIST_MAX_PAGES, GET_MEETING_MAX, REFRESH_MAX, OPPTY_ACCOUNTS_MAX, MEMBER_ACCOUNTS_MAX, DRAFTS_MAX, SEEN_RETENTION_MS, UNKNOWN_ATTENDEES_MAX, EVENT_ID, STATES2, NOTICED, ACK_CONFIRMED2, str, optional2, isStatus, alias, TaskRun;
+var TASK_LIST_MAX_PAGES, EVENT_LIST_MAX_PAGES, GET_MEETING_MAX, REFRESH_MAX, OPPTY_ACCOUNTS_MAX, MEMBER_ACCOUNTS_MAX, DRAFTS_MAX, SEEN_RETENTION_MS, DRAFT_NOTICE_WAIT_MS, UNKNOWN_ATTENDEES_MAX, EVENT_ID, STATES2, NOTICED, ACK_CONFIRMED2, str, optional2, isStatus, alias, TaskRun;
 var init_tasks = __esm({
   "src/intake/tasks.ts"() {
     "use strict";
@@ -28446,6 +28448,7 @@ var init_tasks = __esm({
     MEMBER_ACCOUNTS_MAX = 50;
     DRAFTS_MAX = 10;
     SEEN_RETENTION_MS = 120 * 24 * 60 * 60 * 1e3;
+    DRAFT_NOTICE_WAIT_MS = 60 * 60 * 1e3;
     UNKNOWN_ATTENDEES_MAX = 3;
     EVENT_ID = /^[0-9a-f]{64}$/;
     STATES2 = [
@@ -28539,6 +28542,7 @@ var init_tasks = __esm({
         const recent = (map2) => Object.fromEntries(Object.entries(map2).filter(([, at]) => this.options.now.getTime() - Date.parse(at) < SEEN_RETENTION_MS));
         this.seen.seen = recent(this.seen.seen);
         this.seen.refreshed = recent(this.seen.refreshed);
+        this.seen.requestDue = recent(this.seen.requestDue);
         this.seen.unknown = Object.fromEntries(Object.entries(this.seen.unknown).filter(([id]) => this.seen.pending[id]));
         try {
           this.saveSeen();
@@ -29016,20 +29020,19 @@ var init_tasks = __esm({
         const open = this.allTasks().filter((task) => task.specReqId && !this.touched.has(task.eventId) && task.state !== "closed" && task.state !== "resolved" && task.specReqStatus !== "CANCELLED" && !(task.path === "mine" && task.specReqStatus === "COMPLETED")).map((task) => ({ task, at: this.seen.refreshed[task.eventId] ?? "" })).sort((first, second) => first.at < second.at ? -1 : first.at > second.at ? 1 : first.task.stateChangedAt < second.task.stateChangedAt ? -1 : 1).slice(0, REFRESH_MAX).map((item) => item.task);
         let failure2;
         for (const task of open) {
+          this.seen.refreshed[task.eventId] = this.options.now.toISOString();
           try {
             const request2 = await readRequest(session, task.specReqId);
-            this.seen.refreshed[task.eventId] = this.options.now.toISOString();
             const confirmed = request2.resolverLogin === this.myLogin && ACK_CONFIRMED2.includes(request2.stateId);
             if (task.path === "theirs" && ["request_needed", "requested"].includes(task.state) && confirmed && !ackEntry(this.options.store, this.options.scope, request2.requestId)) {
               const next2 = await this.transition(task, (current) => current.specReqId === request2.requestId && ["request_needed", "requested"].includes(current.state) ? { op: "recordAck", specReqId: request2.requestId, state: "acked", specReqStatus: request2.stateId } : null);
               if (next2) this.counts.acked++;
               continue;
             }
+            if (task.state === "ack_failed" && request2.resolverLogin !== this.myLogin) continue;
             const promotes = task.path === "theirs" && task.state === "acked" && request2.stateId === "COMPLETED" || task.state === "ack_failed" && confirmed;
             if (!promotes && request2.stateId === task.specReqStatus && (!request2.title || request2.title === task.specReqTitle)) continue;
-            const mayRefresh = (current) => current.state !== "ack_failed" || request2.resolverLogin === this.myLogin;
-            if (!mayRefresh(task)) continue;
-            const next = await this.transition(task, (current) => current.specReqId === request2.requestId && current.state !== "closed" && mayRefresh(current) ? {
+            const next = await this.transition(task, (current) => current.specReqId === request2.requestId && current.state !== "closed" && (current.state !== "ack_failed" || request2.resolverLogin === this.myLogin) ? {
               op: "refreshSpecReq",
               specReqId: request2.requestId,
               specReqStatus: request2.stateId,
@@ -29102,7 +29105,14 @@ var init_tasks = __esm({
           let body;
           if (state === "request_needed") {
             const outcome = outcomes.get(task.eventId) ?? draftEntry(store, scope, task.eventId)?.outcome;
-            if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) continue;
+            if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) {
+              let due = Date.parse(this.seen.requestDue[task.eventId] ?? "");
+              if (!Number.isFinite(due)) {
+                due = now.getTime();
+                this.seen.requestDue[task.eventId] = now.toISOString();
+              }
+              if (now.getTime() - due < DRAFT_NOTICE_WAIT_MS) continue;
+            }
             const copy = NOTICE_COPY.request_needed;
             title = copy.title;
             body = outcome === "drafted" ? copy.drafted : outcome === "kept_existing" ? copy.kept_existing : copy.copy;
