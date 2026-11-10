@@ -31,7 +31,7 @@ const (
 	MissedMaxItems = 500
 
 	performanceMissedCalendarMaxPages = 200
-	performanceMissedMeetingMaxPages  = 50
+	performanceMissedMeetingMaxPages  = 200
 	performanceMissedMeetingChunk     = 100
 	performanceMissedMinLabelRunes    = 2
 	performanceMissedLocation         = "Asia/Seoul"
@@ -588,18 +588,15 @@ func meetingCursorStage(encoded string) string {
 
 // missedMeetingTouchpoints lists meetings linked to the mapped readable
 // accounts that the owner owns or that were shared to the owner through a
-// share row. ListMeetingsForAccounts has no date bound, so it reads two
-// narrowed streams:
-//   - owned: tab "all" while its cursor stays in the owned stage. That stage is
-//     the owner's GSI1 query (GSI1SK = date, ScanIndexForward false), newest
-//     first, so reading stops at the first meeting older than the lookback.
-//   - shared: tab "shared" while its cursor stays in the shared stage. Share
-//     rows are not date ordered, so that stage is read in full; it holds only
-//     shares addressed to the owner.
+// share row. ListMeetingsForAccounts has no date bound, and neither stage is
+// ordered by the meeting Date (the owned GSI1 sort key is the creation time),
+// so both streams are read in full and filtered by Date here:
+//   - owned: tab "all" while its cursor stays in the owned stage;
+//   - shared: tab "shared" while its cursor stays in the shared stage.
 //
 // Neither read enters the account-team stage, and team items (shared with no
-// share row) are dropped if a final page carries them. A genuine bound hit
-// still fails closed.
+// share row) are dropped if a final page carries them. A bound hit fails
+// closed with ErrPerformanceReadBound.
 func (svc *PerformanceService) missedMeetingTouchpoints(ctx context.Context, userID string, accounts map[string]bool, from, to time.Time) ([]Touchpoint, error) {
 	if len(accounts) == 0 {
 		return nil, nil
@@ -623,27 +620,19 @@ func (svc *PerformanceService) missedMeetingTouchpoints(ctx context.Context, use
 			if err != nil {
 				return err
 			}
-			older := false
 			for _, meeting := range page.Meetings {
 				owned := !meeting.IsShared
 				if stage == "owned" && !owned || stage == "shared" && meeting.SharedBy == nil {
 					continue
 				}
 				at, err := time.Parse(time.RFC3339, meeting.Date)
-				if err != nil {
-					continue
-				}
-				if at.Before(from) {
-					older = older || owned
-					continue
-				}
-				if !accounts[meeting.AccountID] || seen[meeting.MeetingID] || at.After(to) {
+				if err != nil || at.Before(from) || at.After(to) || !accounts[meeting.AccountID] || seen[meeting.MeetingID] {
 					continue
 				}
 				seen[meeting.MeetingID] = true
 				touchpoints = append(touchpoints, Touchpoint{AccountID: meeting.AccountID, Kind: TouchpointMeeting, RefID: meeting.MeetingID, At: at})
 			}
-			if older || page.NextCursor == nil || *page.NextCursor == "" || meetingCursorStage(*page.NextCursor) != stage {
+			if page.NextCursor == nil || *page.NextCursor == "" || meetingCursorStage(*page.NextCursor) != stage {
 				return nil
 			}
 			cursor = *page.NextCursor

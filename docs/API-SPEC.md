@@ -155,9 +155,9 @@ Missed items (`backend/internal/service/performance_missed.go`) are computed at
 read time from the caller's own SFDC rows, calendar events (`CalendarService`,
 decrypted, owner only) and meetings linked to an account that the caller owns or
 received through a share row (`MeetingService.ListMeetingsForAccounts`). The
-owned read (tab `all`) stays in the owned stage, which is newest first, and
-stops at the first meeting older than the lookback. The shared read (tab
-`shared`) reads share rows in full. Neither read enters the account-team stage. Every SFDC mapping, manual or
+owned read (tab `all`) and the shared read (tab `shared`) each read their stage
+in full, because neither is ordered by meeting date, and filter by date in the
+service. Neither read enters the account-team stage. Every SFDC mapping, manual or
 automatic, is rechecked against the caller's currently readable accounts;
 account names, aliases and domains come only from those accounts.
 
@@ -181,7 +181,7 @@ account names, aliases and domains come only from those accounts.
 - `unmappedCount` counts in-period tasks without a readable mapping and
   in-period calendar events that match no account. They are never guessed.
 - At most 500 items, newest `at` first. The calendar read is bounded to 200
-  pages and the meeting read to 50; exceeding a bound fails the request rather
+  pages and the meeting read to 200; exceeding a bound fails the request rather
   than returning partial results. An API without the calendar and meeting
   readers wired also fails with `500`. `sourceFreshness` lists `sfdc-assignments`,
   `sfdc-tasks` and `calendar` (the latest completed calendar source).

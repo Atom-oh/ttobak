@@ -340,6 +340,7 @@ type missedMeetingsFake struct {
 	recent     time.Time
 	selections [][]string
 	tabs       []string
+	stages     []string // stage served by each call
 	users      []string
 }
 
@@ -370,6 +371,7 @@ func (fake *missedMeetingsFake) ListMeetingsForAccounts(_ context.Context, userI
 		}
 		stage, offset = cursor.Stage, cursor.Offset
 	}
+	fake.stages = append(fake.stages, stage)
 	response := &model.MeetingListResponse{Meetings: []model.MeetingListItem{}}
 	if fake.endless && stage == "owned" {
 		response.Meetings = append(response.Meetings, model.MeetingListItem{
@@ -674,26 +676,24 @@ func TestListMissedReadBounds(test *testing.T) {
 	if _, err := missedWiredService(test, &missedCalendarFake{}, meetings).ListMissed(test.Context(), "owner", "week"); !errors.Is(err, ErrPerformanceReadBound) {
 		test.Fatalf("meeting bound: %v", err)
 	}
-	if len(meetings.tabs) != performanceMissedMeetingMaxPages {
+	if performanceMissedMeetingMaxPages != 200 || len(meetings.tabs) != 200 {
 		test.Fatalf("meeting pages: %d", len(meetings.tabs))
 	}
 }
 
-func TestMissedMeetingReadStopsAtLookbackAndSkipsTeam(test *testing.T) {
+func TestMissedMeetingReadSkipsTeamAndKeepsBackdated(test *testing.T) {
 	now := time.Date(2026, 11, 10, 9, 0, 0, 0, missedSeoul(test))
 	lookback := now.AddDate(0, 0, -64)
 	owner := "owner@example.com"
+	// Owned items arrive in creation order, not Date order: the newest-created
+	// meeting is backdated outside the window, and an in-window meeting is on a
+	// later page.
 	meetings := &missedMeetingsFake{pageSize: 1, meetings: []model.MeetingListItem{
-		// Owned, newest first as the GSI1 query returns them.
-		{MeetingID: "own-1", AccountID: "acct-1", Date: now.Add(-time.Hour).Format(time.RFC3339)},
-		{MeetingID: "own-2", AccountID: "acct-1", Date: now.AddDate(0, 0, -10).Format(time.RFC3339)},
-		{MeetingID: "own-old", AccountID: "acct-1", Date: now.AddDate(0, 0, -100).Format(time.RFC3339)},
+		{MeetingID: "own-backdated", AccountID: "acct-1", Date: now.AddDate(0, 0, -120).Format(time.RFC3339)},
 		{MeetingID: "own-older", AccountID: "acct-1", Date: now.AddDate(0, 0, -200).Format(time.RFC3339)},
-		{MeetingID: "own-oldest", AccountID: "acct-1", Date: now.AddDate(0, 0, -300).Format(time.RFC3339)},
-		// Share rows are unordered and read in full.
+		{MeetingID: "own-in-window", AccountID: "acct-1", Date: now.AddDate(0, 0, -10).Format(time.RFC3339)},
 		{MeetingID: "shared-old", AccountID: "acct-1", Date: now.AddDate(0, 0, -90).Format(time.RFC3339), IsShared: true, SharedBy: &owner},
 		{MeetingID: "shared-new", AccountID: "acct-1", Date: now.AddDate(0, 0, -5).Format(time.RFC3339), IsShared: true, SharedBy: &owner},
-		// Team-stream items must never be read.
 		{MeetingID: "team-1", AccountID: "acct-1", Date: now.Add(-2 * time.Hour).Format(time.RFC3339), IsShared: true},
 		{MeetingID: "team-2", AccountID: "acct-1", Date: now.Add(-3 * time.Hour).Format(time.RFC3339), IsShared: true},
 	}}
@@ -706,13 +706,18 @@ func TestMissedMeetingReadStopsAtLookbackAndSkipsTeam(test *testing.T) {
 	for _, touch := range touchpoints {
 		got[touch.RefID] = true
 	}
-	if len(got) != 3 || !got["own-1"] || !got["own-2"] || !got["shared-new"] {
+	if len(got) != 2 || !got["own-in-window"] || !got["shared-new"] {
 		test.Fatalf("touchpoints: %+v", touchpoints)
 	}
-	// Owned: three pages, stopping at the first meeting older than the lookback.
-	// Shared: two pages, stopping when the cursor reaches the team stage.
+	// Owned: three one-item pages, read in full. Shared: two pages, ending when
+	// the cursor reaches the team stage. No team page is requested.
 	want := []string{"all", "all", "all", "shared", "shared"}
 	if strings.Join(meetings.tabs, ",") != strings.Join(want, ",") {
 		test.Fatalf("reads: %v", meetings.tabs)
+	}
+	for _, stage := range meetings.stages {
+		if stage == "team" {
+			test.Fatalf("team stage requested: %v", meetings.stages)
+		}
 	}
 }
