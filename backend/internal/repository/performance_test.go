@@ -411,41 +411,41 @@ func TestGetPerformanceGoalsHidesExpired(test *testing.T) {
 
 func TestApplyPerformanceBatchReplayAcrossYearBoundary(test *testing.T) {
 	pinPerformanceNow(test)
-	performanceNow = func() time.Time { return time.Date(2026, time.December, 30, 0, 0, 0, 0, time.UTC) }
+	at := func(year int, month time.Month, day int) {
+		performanceNow = func() time.Time { return time.Date(year, month, day, 0, 0, 0, 0, time.UTC) }
+	}
+	at(2026, time.December, 30)
 	request := performanceTaskRequest(0)
 	request.Mutations[0].Task.ActivityDate = "2025-06-01"
 	var stored map[string]any
 	writes := 0
-	repo := summarySDKRepo(func(httpRequest *http.Request) (*http.Response, error) {
-		body := performanceBody(test, httpRequest)
-		switch performanceTarget(httpRequest) {
-		case "GetItem":
+	repo := summarySDKRepo(func(r *http.Request) (*http.Response, error) {
+		body := performanceBody(test, r)
+		if performanceTarget(r) == "GetItem" {
 			if stored != nil && strings.Contains(mustJSON(test, body), performanceTestBatch) {
 				return summaryHTTPResponse(200, `{"Item":`+mustJSON(test, stored)+`}`, nil), nil
 			}
 			return summaryHTTPResponse(200, `{}`, nil), nil
-		case "TransactWriteItems":
-			writes++
-			operations := body["TransactItems"].([]any)
-			stored = operations[len(operations)-1].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
-			return summaryHTTPResponse(200, `{}`, nil), nil
 		}
-		test.Fatalf("unexpected call %s", performanceTarget(httpRequest))
-		return nil, nil
+		writes++
+		operations := body["TransactItems"].([]any)
+		stored = operations[len(operations)-1].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
+		return summaryHTTPResponse(200, `{}`, nil), nil
 	})
-	first, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, request, performanceTestDigest)
+	apply := func(r model.PerformanceSyncRequest) (*model.PerformanceSyncReceipt, error) {
+		return repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, r, performanceTestDigest)
+	}
+	first, err := apply(request)
 	if err != nil || writes != 1 {
 		test.Fatalf("first apply: %v writes=%d", err, writes)
 	}
-	performanceNow = func() time.Time { return time.Date(2027, time.January, 2, 0, 0, 0, 0, time.UTC) }
-	again, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, request, performanceTestDigest)
+	at(2027, time.January, 2)
+	again, err := apply(request)
 	if err != nil || *again != *first || writes != 1 {
 		test.Fatalf("replay must return the stored receipt without a write: %v writes=%d", err, writes)
 	}
-	fresh := request
-	fresh.BatchID = "11111111-2222-4333-8444-555555555555"
-	_, err = repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, fresh, performanceTestDigest)
-	if !errors.Is(err, ErrInvalidPerformanceBatch) || writes != 1 {
+	request.BatchID = "11111111-2222-4333-8444-555555555555"
+	if _, err = apply(request); !errors.Is(err, ErrInvalidPerformanceBatch) || writes != 1 {
 		test.Fatalf("new expired batch must be rejected: %v writes=%d", err, writes)
 	}
 }
