@@ -79,28 +79,37 @@ pub fn build_request(text: &str, source: &str, target: &str, context: &[String])
     .into_bytes()
 }
 
+/// Treats JSON `null` like an absent key, as Go's decoder does.
+fn null_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 struct Response {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     choices: Vec<Choice>,
 }
 
 #[derive(Deserialize)]
 struct Choice {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     finish_reason: String,
     message: Message,
 }
 
 #[derive(Deserialize)]
 struct Message {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     role: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     refusal: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     tool_calls: Vec<serde_json::Value>,
 }
 
@@ -256,6 +265,30 @@ mod tests {
             "hello"
         );
         assert!(parse_response(&resp("stop", "   ")).is_err());
+    }
+
+    #[test]
+    fn parse_accepts_null_optional_fields() {
+        let body = br#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"hi","refusal":null,"tool_calls":null}}]}"#;
+        assert_eq!(parse_response(body).unwrap(), "hi");
+    }
+
+    #[test]
+    fn parse_rejects_null_content_as_blank() {
+        let body = br#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":null,"refusal":null}}]}"#;
+        assert_eq!(parse_response(body), Err("blank output"));
+    }
+
+    #[test]
+    fn parse_rejects_refusal() {
+        let body = br#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"hi","refusal":"no"}}]}"#;
+        assert!(parse_response(body).is_err());
+    }
+
+    #[test]
+    fn parse_rejects_tool_calls() {
+        let body = br#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"hi","tool_calls":[{"id":"x"}]}}]}"#;
+        assert!(parse_response(body).is_err());
     }
 
     #[test]
