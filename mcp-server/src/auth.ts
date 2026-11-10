@@ -37,6 +37,8 @@ export interface AuthDependencies {
   openBrowser?: (url: string) => void;
   callbackPort?: number;
   loginTimeoutMs?: number;
+  /** False for background runs: a missing or expired session fails instead of opening a browser. */
+  interactive?: boolean;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -248,6 +250,9 @@ export class CognitoAuth {
         this.assertGeneration(generation);
         this.tokens = null;
       }
+    }
+    if (this.dependencies.interactive === false) {
+      throw new Error('TTOBAK_LOGIN_REQUIRED: sign in to TTOBAK interactively first');
     }
     await this.login(generation);
     this.assertGeneration(generation);
