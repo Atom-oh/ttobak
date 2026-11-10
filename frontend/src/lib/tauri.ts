@@ -536,7 +536,7 @@ export function markNativeControlReady(loggedIn: boolean, mounted = true): Promi
 
 /** Latest recording phase for `status` over the control socket. */
 export function reportNativeControlState(state: {
-  phase: 'idle' | 'starting' | 'importing' | 'recording' | 'notes' | 'creating' | 'saving' | 'uploading' | 'redirecting' | 'error';
+  phase: 'idle' | 'starting' | 'recording' | 'notes' | 'creating' | 'saving' | 'uploading' | 'redirecting' | 'error';
   /** For `recording`: the app's native capture, or a browser-mode recording
    * in the window that MCP cannot stop. */
   source?: 'native' | 'browser';

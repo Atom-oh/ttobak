@@ -189,21 +189,15 @@ meeting prompt. Check by hand with the packaged app running:
    (the format is in the header of `mcp-server/src/intake/notify.ts`) and keep the file at
    mode 0600. Within about a minute exactly one notification appears. Append the
    same line again: no second notification.
-2. Click it. macOS may only activate the app. Then click the Dock icon (reopen)
-   within 10 minutes while TTOBAK is idle: it should load
-   `/meetings?task=<id>` once. After 10 minutes it should not navigate.
+2. Clicking the notification only activates the app; it does not navigate. The
+   task is on the meetings page's task strip.
 3. Make the file a symlink: nothing posts and the log says the queue is
    unreadable. `chmod 666` it: nothing posts and the log says it was ignored.
 4. Record the observed behaviour (delivered or not, whether the click activates
-   the app, whether the Dock click navigated) in ADR-065's status line.
+   the app) in ADR-065's status line.
 
-A notice opens only on a Dock click (reopen), never on window focus, and only
-when the native recorder is idle, the TTOBAK record page last reported phase
-`idle` (not recording, starting, importing a file or in a post-recording or
-upload step) and no MCP control request is pending. A missing or unknown state
-counts as busy, so the target is kept until it expires after 10 minutes. The
-record page is the only page that reports state. Only the latest notice of a
-burst is openable.
+Notifications are informational: the app never navigates because of one, so it
+cannot discard unsaved input. The task strip on the meetings page shows the task.
 
 ## Schedule (after acceptance)
 

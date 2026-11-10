@@ -881,13 +881,6 @@ pub fn run() {
             // capture stop at this point is better to just wait out
             // (process exit is already in motion; nothing else needs this
             // thread) than to abandon and lose the tail of the recording.
-            // The notification plugin has no desktop click callback, so a
-            // recent notice opens on the next Dock click (reopen) when idle.
-            // Focus events never navigate.
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = &event {
-                intake_notify::open_pending(app_handle);
-            }
             if let tauri::RunEvent::Exit = event {
                 let state = app_handle.state::<RecorderState>();
                 let handle = {

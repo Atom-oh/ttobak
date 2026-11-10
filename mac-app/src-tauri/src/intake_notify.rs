@@ -1,22 +1,20 @@
 //! Reads the SpecReq task notification queue written by the local MCP intake
 //! runner (`mcp-server/src/intake/notify.ts`, ADR-065) and posts each unseen
-//! notice as a desktop notification.
+//! notice as an informational desktop notification. Notices never navigate the
+//! app; the task strip on the meetings page shows the task.
 //!
 //! The queue is `~/.ttobak/intake/notify.jsonl`: append-only JSON lines, a
 //! crash can duplicate a line (same `key`), and the last line may be partial.
-//! Everything read from it is untrusted text: the in-app path is re-validated
-//! against a strict shape and joined onto the origin of the configured main
-//! window, never onto anything taken from the file.
+//! Everything read from it is untrusted text: each line must pass a strict
+//! shape check, including the in-app path, which is validated but not used.
 
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use parking_lot::Mutex;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, Url, WebviewUrl};
+use tauri::{AppHandle, Manager};
 
 /// Queue contract version this reader understands.
 const QUEUE_VERSION: u64 = 1;
@@ -31,8 +29,6 @@ const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_FUTURE: Duration = Duration::from_secs(5 * 60);
 /// Seen-store entries are dropped after this long.
 const SEEN_RETENTION: Duration = Duration::from_secs(48 * 60 * 60);
-/// How long a posted notice may be opened by the next reopen or focus.
-const OPEN_WINDOW: Duration = Duration::from_secs(10 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// A burst (first launch with a day of backlog) posts a few per cycle; the
 /// rest stay unseen and follow on later cycles.
@@ -45,7 +41,6 @@ pub struct Notice {
     pub key: String,
     pub title: String,
     pub body: String,
-    pub path: String,
 }
 
 fn is_lower_hex64(s: &str) -> bool {
@@ -139,7 +134,6 @@ fn parse_line(line: &[u8], now: i64) -> Option<Notice> {
         key: key.to_string(),
         title: title.to_string(),
         body: body.to_string(),
-        path: path.to_string(),
     })
 }
 
@@ -239,112 +233,6 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     f.write_all(bytes)
 }
 
-/// Latest posted notice path, openable once within ten minutes.
-#[derive(Debug, Default)]
-pub struct OpenTarget {
-    slot: Mutex<Option<(String, SystemTime)>>,
-}
-
-impl OpenTarget {
-    pub fn set(&self, path: &str, now: SystemTime) {
-        *self.slot.lock() = Some((path.to_string(), now));
-    }
-
-    /// Returns the path once if it is still inside the window, and clears it.
-    /// While `blocked` (a recording is running) the target is kept, still
-    /// bounded by its expiry, so a later focus can open it.
-    pub fn take(&self, now: SystemTime, blocked: bool) -> Option<String> {
-        let mut slot = self.slot.lock();
-        let (_, at) = slot.as_ref()?;
-        if now.duration_since(*at).unwrap_or_default() > OPEN_WINDOW {
-            *slot = None;
-            return None;
-        }
-        if blocked {
-            return None;
-        }
-        slot.take().map(|(path, _)| path)
-    }
-}
-
-/// Joins a validated in-app path onto the configured origin. The path is
-/// re-checked here so the open step does not depend on the parser alone.
-fn target_url(base: &Url, path: &str) -> Option<Url> {
-    let id = path.strip_prefix("/meetings?task=")?;
-    if !is_lower_hex64(id) || !matches!(base.scheme(), "https" | "http") {
-        return None;
-    }
-    let mut url = base.clone();
-    url.set_path("/meetings");
-    url.set_query(Some(&format!("task={id}")));
-    url.set_fragment(None);
-    (url.origin() == base.origin()).then_some(url)
-}
-
-/// Origin source: the main window URL in the app config, never the queue.
-fn main_window_base(app: &AppHandle) -> Option<Url> {
-    app.config()
-        .app
-        .windows
-        .iter()
-        .find(|w| w.label == "main")
-        .and_then(|w| match &w.url {
-            WebviewUrl::External(u) => Some(u.clone()),
-            _ => None,
-        })
-}
-
-/// Pure navigation guard: the native recorder must be idle and the SPA must
-/// have reported phase `idle` (not recording, starting or in a post-recording
-/// step). A missing or unrecognised state is treated as busy.
-fn may_navigate(native_recording: bool, spa: Option<&Value>, control_pending: bool) -> bool {
-    !native_recording
-        && !control_pending
-        && spa
-            .and_then(|v| v.get("phase"))
-            .and_then(Value::as_str)
-            .is_some_and(|p| p == "idle")
-}
-
-/// Called on `RunEvent::Reopen` (an explicit Dock click) only: navigates the
-/// main window to the pending notice once, if it has not expired and the app
-/// is idle. Focus events never navigate (programmatic focus, such as an MCP
-/// start, would reload the SPA before it sees the request).
-pub fn open_pending(app: &AppHandle) {
-    let Some(target) = app.try_state::<Arc<OpenTarget>>() else {
-        return;
-    };
-    // Reloading the SPA mid-recording, during the stop/upload tail or an
-    // import would lose live-caption state and unsaved text. Navigate only
-    // when the native recorder is idle, the SPA reports `idle`, and no control
-    // request is pending; unknown state fails closed.
-    let native_recording = app
-        .try_state::<crate::RecorderState>()
-        .map(|s| s.recorder.lock().snapshot().recording)
-        .unwrap_or(false);
-    let spa = app
-        .try_state::<crate::control::ControlState>()
-        .and_then(|c| c.spa_state());
-    let pending = app
-        .try_state::<crate::control::ControlState>()
-        .is_some_and(|c| c.has_pending());
-    let blocked = !may_navigate(native_recording, spa.as_ref(), pending);
-    let Some(path) = target.take(SystemTime::now(), blocked) else {
-        return;
-    };
-    let Some(url) = main_window_base(app).and_then(|b| target_url(&b, &path)) else {
-        return;
-    };
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        if let Err(e) = window.navigate(url) {
-            log::warn!("intake notice navigation failed: {e}");
-        }
-        let _ = window.set_focus();
-    }
-}
-
 #[cfg(unix)]
 fn queue_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
@@ -386,7 +274,7 @@ fn read_queue(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
 
 /// One poll cycle: read, validate, post unseen notices, record them.
 #[cfg(unix)]
-fn poll_once(app: &AppHandle, store: &mut SeenStore, target: &OpenTarget, queue: &Path) {
+fn poll_once(app: &AppHandle, store: &mut SeenStore, queue: &Path) {
     use tauri_plugin_notification::NotificationExt;
     let now = SystemTime::now();
     store.prune(now);
@@ -412,7 +300,6 @@ fn poll_once(app: &AppHandle, store: &mut SeenStore, target: &OpenTarget, queue:
             .show()
         {
             Ok(()) => {
-                target.set(&notice.path, SystemTime::now());
                 store.record(&notice.key);
             }
             // Not recorded, so the next cycle retries it.
@@ -438,14 +325,12 @@ pub fn start(app: AppHandle) {
             log::warn!("intake notices unavailable: no home or data directory");
             return;
         };
-        let target = Arc::new(OpenTarget::default());
-        app.manage(target.clone());
         let spawned = std::thread::Builder::new()
             .name("intake-notify".into())
             .spawn(move || {
                 let mut store = SeenStore::load(dir.join(SEEN_FILE));
                 loop {
-                    poll_once(&app, &mut store, &target, &queue);
+                    poll_once(&app, &mut store, &queue);
                     std::thread::sleep(POLL_INTERVAL);
                 }
             });
@@ -602,60 +487,6 @@ mod tests {
     }
 
     #[test]
-    fn open_target_expires_and_is_consumed_once() {
-        let t = OpenTarget::default();
-        let p = format!("/meetings?task={ID}");
-        t.set(&p, at(NOW));
-        assert_eq!(t.take(at(NOW + 599), false), Some(p.clone()));
-        assert_eq!(t.take(at(NOW + 600), false), None, "consumed");
-        t.set(&p, at(NOW));
-        assert_eq!(t.take(at(NOW + 601), false), None, "expired");
-        assert_eq!(t.take(at(NOW), false), None, "expiry also clears");
-    }
-
-    #[test]
-    fn open_target_is_kept_while_recording() {
-        let t = OpenTarget::default();
-        let p = format!("/meetings?task={ID}");
-        t.set(&p, at(NOW));
-        assert_eq!(t.take(at(NOW + 60), true), None, "blocked");
-        assert_eq!(t.take(at(NOW + 120), false), Some(p.clone()), "kept");
-        t.set(&p, at(NOW));
-        assert_eq!(t.take(at(NOW + 601), true), None);
-        assert_eq!(t.take(at(NOW + 602), false), None, "expired while blocked");
-    }
-
-    #[test]
-    fn navigation_guard_fails_closed() {
-        let idle = serde_json::json!({"phase": "idle"});
-        assert!(may_navigate(false, Some(&idle), false));
-        let browser = serde_json::json!({"phase": "recording", "source": "browser"});
-        assert!(
-            !may_navigate(false, Some(&browser), false),
-            "browser recording"
-        );
-        // Native stop tail: recorder handle gone, SPA still finalizing/uploading.
-        let tail = serde_json::json!({"phase": "uploading"});
-        assert!(!may_navigate(false, Some(&tail), false), "stop/upload tail");
-        let starting = serde_json::json!({"phase": "starting"});
-        assert!(!may_navigate(false, Some(&starting), false));
-        assert!(!may_navigate(true, Some(&idle), false), "native recording");
-        assert!(!may_navigate(false, None, false), "unknown state");
-        let importing = serde_json::json!({"phase": "importing"});
-        assert!(!may_navigate(false, Some(&importing), false), "import");
-        assert!(
-            !may_navigate(false, Some(&idle), true),
-            "pending control request"
-        );
-        assert!(!may_navigate(false, Some(&serde_json::json!({})), false));
-        assert!(!may_navigate(
-            false,
-            Some(&serde_json::json!({"phase": 1})),
-            false
-        ));
-    }
-
-    #[test]
     fn seen_store_retries_failed_save_and_saves_after_prune() {
         let dir = std::env::temp_dir().join(format!(
             "ttobak-seen-dirty-{}-{}",
@@ -682,18 +513,5 @@ mod tests {
         );
         let _ = std::fs::remove_file(&file);
         let _ = std::fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn target_url_uses_configured_origin_only() {
-        let base = Url::parse("https://ttobak.atomai.click/some/page?x=1#f").unwrap();
-        let p = format!("/meetings?task={ID}");
-        assert_eq!(
-            target_url(&base, &p).unwrap().as_str(),
-            format!("https://ttobak.atomai.click/meetings?task={ID}")
-        );
-        assert!(target_url(&base, "//evil.example/meetings?task=x").is_none());
-        assert!(target_url(&base, &format!("/meetings?task={OTHER}&a=b")).is_none());
-        assert!(target_url(&Url::parse("file:///x").unwrap(), &p).is_none());
     }
 }

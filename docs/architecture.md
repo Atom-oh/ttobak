@@ -423,8 +423,9 @@ The local intake runner (ADR-065) appends SpecReq task notices to
 `~/.ttobak/intake/notify.jsonl`. The Mac app polls that file every 60 seconds
 (`mac-app/src-tauri/src/intake_notify.rs`), validates each line, dedupes on `key`
 in its own seen store and posts a desktop notification. The file is read only
-when it is a private regular file of at most 1 MiB, and the in-app target is
-re-derived from the configured main-window origin, never from the file.
+when it is a private regular file of at most 1 MiB. Notifications are
+informational and never navigate the app; the task strip on the meetings page
+shows the task.
 
 The private connector transport signs verified request identities and exact arguments,
 then invokes private API and QA consumers through service IAM. Atomic current client
