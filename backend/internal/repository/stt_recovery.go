@@ -29,7 +29,10 @@ var ErrSttNoSpeechSnapshot = errors.New("no-speech mark needs exactly one meetin
 // rows were already deleted; object cleanup must still run.
 var ErrSttDeletionPostCommit = errors.New("failed recording rows deleted; post-commit cleanup failed")
 
-var sttRecoveryEmptyFields = []string{"transcriptA", "transcriptB", "transcriptSegments", "content"}
+// sttRecoveryEmptyFields mark a meeting as never processed: any transcript
+// or generated note (Korean content or the English note) excludes it from
+// re-drive, failure marking and auto-deletion.
+var sttRecoveryEmptyFields = []string{"transcriptA", "transcriptB", "transcriptSegments", "content", "contentEn"}
 
 func emptyOrAbsent(name string) expression.ConditionBuilder {
 	return expression.AttributeNotExists(expression.Name(name)).Or(expression.Name(name).Equal(expression.Value("")))
@@ -360,7 +363,7 @@ func sttFailedMeetingDeleteCondition(mark model.SttFailureMark) expression.Condi
 		And(expression.AttributeNotExists(expression.Name("diarizationSpeakerHint")).Or(expression.Name("diarizationSpeakerHint").Equal(expression.Value(0)))).
 		And(expression.AttributeNotExists(expression.Name("audioCrop"))).
 		And(expression.AttributeNotExists(expression.Name("summarizeRetryClaimedAt")))
-	for _, field := range []string{"notes", "content", "transcriptA", "transcriptB", "transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "meetingCategory"} {
+	for _, field := range []string{"notes", "content", "contentEn", "transcriptA", "transcriptB", "transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "meetingCategory"} {
 		condition = condition.And(emptyOrAbsent(field))
 	}
 	for _, field := range []string{"audioKeys", "linkedMeetingIds", "participants", "speakerMap"} {
