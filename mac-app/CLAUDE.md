@@ -146,13 +146,13 @@ ACL for every command called from the remote SPA: each command must be listed in
   log from the IOProc.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
   within its deadline, recording or not.
-- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`): update
+- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-068): update
   commands are never in the remote capability (`command_acl_tests` enforces it), and
   nothing installs or restarts while `app_busy`. Update checks are disabled while the
   `tauri.conf.json` updater pubkey is the placeholder. The archive download is bounded
   by 60 seconds of stalled progress, never a total duration (the check's request
-  timeout is cleared from the found `Update`). Sign releases only with the pinned
-  "TTOBAK Dev" identity.
+  timeout is cleared from the found `Update`). Releases follow
+  `docs/runbooks/mac-app-release.md`; sign only with the pinned "TTOBAK Dev" identity.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.
 
