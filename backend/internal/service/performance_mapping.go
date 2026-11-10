@@ -83,6 +83,21 @@ func removedAssignmentIDs(req model.PerformanceSyncRequest) []string {
 	return ids
 }
 
+// deleteRemovedAutoMappings removes the automatic mapping of each unassigned
+// SFDC account. It returns the joined failures without user data.
+func (svc *PerformanceService) deleteRemovedAutoMappings(ctx context.Context, userID string, removed []string) error {
+	var failures []error
+	for _, id := range removed {
+		if err := svc.store.DeleteAccountMappingIfAutomatic(ctx, userID, id); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%d mapping deletes failed: %w", len(failures), errors.Join(failures...))
+	}
+	return nil
+}
+
 // autoMapAssignments writes unique matches for the owner's assignments. A
 // manual mapping is kept by the store's onlyIfNotManual guard. It returns the
 // joined failures without user data; the caller logs them. removed are the
