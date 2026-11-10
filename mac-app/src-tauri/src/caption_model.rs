@@ -117,7 +117,7 @@ impl Default for CaptionSettings {
     fn default() -> Self {
         Self {
             profile: None,
-            region: "us-east-1".into(),
+            region: "ap-northeast-2".into(),
             extra_language: None,
             windows: BTreeMap::new(),
         }
@@ -321,6 +321,7 @@ mod tests {
             ..CaptionSettings::default()
         };
         assert!(validate_settings(&bad_region).is_err());
+        assert_eq!(CaptionSettings::default().region, "ap-northeast-2");
     }
 
     #[test]
