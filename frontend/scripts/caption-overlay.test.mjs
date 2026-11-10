@@ -106,7 +106,8 @@ test('expired credentials surface once and recover', async () => {
   controller.update('u2', '반갑습니다', true, 'ko-KR');
   await flush();
   assert.deepEqual(errors, ['credentials-expired']);
-  assert.equal(pushes.length, 0);
+  // Failed entries only clear their lines.
+  assert.ok(pushes.length > 0 && pushes.every((p) => p.kind === 'entry' && p.text === ''));
   failing = false;
   controller.resetErrors();
   controller.update('u3', '다시 시작', true, 'ko-KR');
@@ -114,6 +115,60 @@ test('expired credentials surface once and recover', async () => {
   assert.equal(entryPushes(pushes, 'en').at(-1).text, 'hello');
   assert.deepEqual(errors, ['credentials-expired']);
   controller.stop();
+});
+
+test('a failed final clears the line that showed its draft', async () => {
+  let fail = false;
+  const { controller, pushes } = fixture((text, sourceLang, targetLang) => {
+    if (fail) return Promise.reject({ code: 'credentials-expired', message: 'x' });
+    return Promise.resolve({ translatedText: `[${targetLang}] ${text}`, engine: 'translate' });
+  });
+  controller.setLanguages(['en']);
+  controller.update('u1', '안녕하세요 여러분', false, 'ko-KR');
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await flush();
+  assert.equal(entryPushes(pushes, 'en').at(-1).text, '[en] 안녕하세요 여러분');
+  fail = true;
+  controller.update('u1', '안녕하세요 여러분 반갑습니다', true, 'ko-KR');
+  await flush();
+  const last = entryPushes(pushes, 'en').at(-1);
+  assert.equal(last.id, 'u1');
+  assert.equal(last.text, '');
+  controller.stop();
+});
+
+test('skipped fillers push nothing', async () => {
+  const { controller, pushes } = fixture();
+  controller.setLanguages(['en']);
+  controller.update('u1', '음', true, 'ko-KR');
+  await flush();
+  assert.equal(entryPushes(pushes, 'en').length, 0);
+  controller.stop();
+});
+
+test('a final longer than the push cap keeps its tail', async () => {
+  const long = `${'가'.repeat(2000)}끝`;
+  const { overlay, controller, pushes } = fixture(() => Promise.resolve({ translatedText: long, engine: 'translate' }));
+  controller.setLanguages(['en']);
+  controller.update('u1', 'hello there', true, 'ko-KR');
+  await flush();
+  const text = entryPushes(pushes, 'en').at(-1).text;
+  const bytes = new TextEncoder().encode(text).length;
+  assert.ok(bytes <= overlay.MAX_PUSH_TEXT_BYTES, `${bytes}`);
+  assert.ok(bytes > overlay.MAX_PUSH_TEXT_BYTES - 3);
+  assert.ok(text.endsWith('가끝'));
+  assert.ok(long.endsWith(text));
+  controller.stop();
+});
+
+test('tail cut keeps whole characters', () => {
+  const { overlay } = fixture();
+  assert.equal(overlay.MAX_PUSH_TEXT_BYTES, 4000);
+  assert.equal(overlay.utf8Tail('abc', 10), 'abc');
+  assert.equal(overlay.utf8Tail('a가b', 4), '가b');
+  assert.equal(overlay.utf8Tail('a가b', 3), 'b');
+  assert.equal(overlay.utf8Tail('x😀', 4), '😀');
+  assert.equal(overlay.utf8Tail('x😀', 3), '');
 });
 
 test('closing a language stops its requests', async () => {

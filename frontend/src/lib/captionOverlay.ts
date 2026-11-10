@@ -52,7 +52,31 @@ export type CaptionErrorCode =
   | 'invalid-input'
   | 'invalid-output'
   | 'timeout'
-  | 'aws-error';
+  | 'aws-error'
+  | 'save-failed'
+  | 'window-error';
+
+/** Largest caption push, in UTF-8 bytes; matches `MAX_TEXT_BYTES` in caption_overlay.rs. */
+export const MAX_PUSH_TEXT_BYTES = 4000;
+
+function utf8Bytes(char: string): number {
+  const code = char.codePointAt(0) ?? 0;
+  return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+}
+
+/** Longest tail of `text` within `maxBytes` UTF-8 bytes, cut on a character boundary. */
+export function utf8Tail(text: string, maxBytes: number): string {
+  const chars = Array.from(text);
+  let bytes = 0;
+  let start = chars.length;
+  while (start > 0) {
+    const size = utf8Bytes(chars[start - 1]);
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    start--;
+  }
+  return start === 0 ? text : chars.slice(start).join('');
+}
 
 export interface CaptionTranslateResult {
   translatedText: string;
@@ -185,8 +209,16 @@ export class CaptionOverlayController {
   }
 
   private publish(lang: CaptionLang, entry: TranslationEntry): void {
-    if (entry.status === 'error' || entry.status === 'skipped' || !entry.translated) return;
-    void this.send(lang, 'entry', entry.id, entry.order, entry.translated, entry.isFinal);
+    if (entry.status === 'skipped') return;
+    // A failed translation clears its line rather than leaving a stale draft.
+    if (entry.status === 'error') {
+      void this.send(lang, 'entry', entry.id, entry.order, '', entry.isFinal);
+      return;
+    }
+    if (!entry.translated) return;
+    // The window shows the end of a long sentence; the Mac app rejects longer text.
+    const text = utf8Tail(entry.translated, MAX_PUSH_TEXT_BYTES);
+    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal);
   }
 
   private send(

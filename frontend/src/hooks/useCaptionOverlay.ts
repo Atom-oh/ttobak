@@ -68,6 +68,18 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
     controllerRef.current?.setLanguages(next);
   }, []);
 
+  // Stops the engine before the window closes: the Mac app refuses to
+  // translate for a closed window. A failed close restarts the engine.
+  const closeWindow = useCallback(async (lang: CaptionLang, extra: CaptionSettings['extraLanguage']) => {
+    applyLangs(openRef.current.filter((item) => item !== lang), extra);
+    try {
+      await closeCaptionWindow(lang);
+    } catch (err) {
+      applyLangs([...openRef.current, lang], extra);
+      throw err;
+    }
+  }, [applyLangs]);
+
   const applyView = useCallback((next: CaptionSettingsView) => {
     setSupported(true);
     setView(next);
@@ -156,10 +168,7 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
     void (async () => {
       try {
         // The Mac app rejects dropping a language whose window is still open.
-        if (current && openRef.current.includes(current)) {
-          await closeCaptionWindow(current);
-          applyLangs(openRef.current.filter((lang) => lang !== current), current);
-        }
+        if (current && openRef.current.includes(current)) await closeWindow(current, current);
         await save(settings.profile, settings.region, next);
         applyLangs(openRef.current, next);
       } catch (err) {
@@ -179,8 +188,7 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
     void (async () => {
       try {
         if (openRef.current.includes(lang)) {
-          await closeCaptionWindow(lang);
-          applyLangs(openRef.current.filter((item) => item !== lang), extra);
+          await closeWindow(lang, extra);
           setView((previous) => previous && patchWindow(previous, lang, { open: false }));
           return;
         }
