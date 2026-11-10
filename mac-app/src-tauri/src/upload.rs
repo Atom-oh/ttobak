@@ -243,6 +243,8 @@ pub async fn upload_recording(
     state: State<'_, RecorderState>,
     app: AppHandle,
 ) -> Result<u16, AppError> {
+    // Held for the whole call so the updater sees the upload as busy work.
+    let _in_flight = UploadGuard::new(&state.uploads_in_flight);
     let canonical = {
         let recorded = state.recorded_paths.lock();
         validate_recording_path(&path, &recorded)?
@@ -314,10 +316,45 @@ pub async fn upload_recording(
     .await
 }
 
+/// RAII marker for an in-flight upload: increments on creation, decrements on
+/// drop, so every exit path (including `?` and panics) restores the counter.
+pub(crate) struct UploadGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl UploadGuard {
+    pub(crate) fn new(counter: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(counter))
+    }
+}
+
+impl Drop for UploadGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[test]
+    fn upload_guard_restores_counter_on_early_return() {
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        fn fails(c: &Arc<std::sync::atomic::AtomicUsize>) -> Result<(), ()> {
+            let _g = UploadGuard::new(c);
+            assert_eq!(c.load(Ordering::SeqCst), 1);
+            Err(())?;
+            Ok(())
+        }
+        assert!(fails(&counter).is_err());
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        let (a, b) = (UploadGuard::new(&counter), UploadGuard::new(&counter));
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+        drop(a);
+        drop(b);
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
     use std::net::TcpListener;
 
     /// Raw TCP mock: accepts one connection, reads the request line +
