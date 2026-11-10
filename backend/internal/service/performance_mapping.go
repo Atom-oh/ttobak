@@ -33,7 +33,7 @@ func (s *AccountService) ListReadableAccountCandidates(ctx context.Context, user
 		if account == nil {
 			continue
 		}
-		candidates = append(candidates, NamedCandidate{Kind: "account", ID: id, Name: account.Name, Aliases: account.Aliases})
+		candidates = append(candidates, NamedCandidate{Kind: "account", ID: id, Name: account.Name, Aliases: account.Aliases, Domains: account.Domains})
 	}
 	return candidates, nil
 }
