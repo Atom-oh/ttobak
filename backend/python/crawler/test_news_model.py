@@ -14,7 +14,7 @@ def count_request():
     return {"modelId": FINAL_MODEL_ID, "input": {"converse": {
         "messages": [{"role": "user", "content": [{"text": "공개 기사 요약"}]}],
         "system": [{"text": "Use the source."}],
-        "additionalModelRequestFields": {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}},
+        "additionalModelRequestFields": {"reasoning": {"effort": "none"}},
     }}}
 
 
@@ -64,6 +64,31 @@ class TestNewsModel(unittest.TestCase):
             with self.assertRaisesRegex(QualityRejected, "MODEL_BUDGET"):
                 self.model.converse(**value)
         self.runtime.converse.assert_not_called()
+
+    def test_converse_rejects_anthropic_fields_before_runtime_call(self):
+        self.runtime.converse.return_value = bedrock_response()
+        enrich_article(candidate_fixture(), [valid_body()], self.model)
+        request = dict(self.runtime.converse.call_args.kwargs)
+        self.runtime.reset_mock()
+        request["additionalModelRequestFields"] = {"thinking": {"type": "adaptive"}}
+        with self.assertRaisesRegex(QualityRejected, "MODEL_BUDGET"):
+            self.model.converse(**request)
+        self.runtime.converse.assert_not_called()
+
+    def test_cached_input_is_included_in_budget_settlement(self):
+        from news_worker import MeteredModel, ModelPolicy
+        response = bedrock_response(usage={
+            "inputTokens": 2, "outputTokens": 50,
+            "cacheReadInputTokens": 3000, "cacheWriteInputTokens": 2000,
+        })
+        self.runtime.converse.return_value = response
+        policy = ModelPolicy(Decimal("0.125"), Decimal("0.50"))
+        meter = MeteredModel(self.model, policy, lambda: 900)
+        _, usage = enrich_article(candidate_fixture(), [valid_body()], meter)
+        self.assertEqual(usage["inputTokens"], 5002)
+        self.assertEqual(meter.usage["inputTokens"], 5002)
+        self.assertEqual(policy.cost(meter.usage), Decimal("0.000650250000"))
+        self.assertEqual(response["usage"]["inputTokens"], 2)
 
     def test_adapter_has_no_network_or_signing_path(self):
         source = Path(__file__).with_name("news_model.py").read_text(encoding="utf-8")
