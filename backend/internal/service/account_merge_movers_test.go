@@ -11,10 +11,13 @@ import (
 type fakeMoverRepo struct {
 	contactFake
 	eventFake
+	meetingFake
 	members map[string]map[string]*model.AccountMember
 	puts    []string
 	putErr  error
 	onPut   func()
+	// memberLists counts ListAccountMembers calls.
+	memberLists int
 }
 
 func newFakeMoverRepo() *fakeMoverRepo {
@@ -29,6 +32,7 @@ func (f *fakeMoverRepo) add(account, user, role string) {
 }
 
 func (f *fakeMoverRepo) ListAccountMembers(_ context.Context, account string) ([]model.AccountMember, error) {
+	f.memberLists++
 	var out []model.AccountMember
 	for _, m := range f.members[account] {
 		out = append(out, *m)
