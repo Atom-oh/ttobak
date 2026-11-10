@@ -20,8 +20,11 @@ import (
 // Account-specific sentinel errors. (ErrForbidden, ErrNotFound, ErrUserNotFound
 // are already declared in service/meeting.go in this same package — reuse them.)
 var (
-	ErrInvalidInput   = errors.New("invalid input")
-	ErrMemberExists   = errors.New("member already exists")
+	ErrInvalidInput = errors.New("invalid input")
+	ErrMemberExists = errors.New("member already exists")
+	// ErrAccountMerging means the account is the source of an in-flight or
+	// finished merge and rejects this mutation (HTTP 409).
+	ErrAccountMerging = errors.New("account is merging or merged")
 	ErrAmbiguousAlias = errors.New("alias maps to multiple accounts")
 	ErrLoopGuard      = errors.New("document originated from ttobak (loop guard)")
 	// ErrAmbiguousShareBlocksRemoval is returned by RemoveMember when the
@@ -491,6 +494,18 @@ func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserI
 			return ErrNotFound
 		}
 		return ErrForbidden
+	}
+	// A queued invite for a merging/merged account may materialize into the
+	// merge target, which this revoke could not observe; reject instead.
+	account, err := s.repo.GetAccount(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if account == nil {
+		return ErrNotFound
+	}
+	if account.MergingInto != "" || account.MergedInto != "" {
+		return ErrAccountMerging
 	}
 	sk := model.PrefixPendingAccount + accountID
 	// Captured BEFORE the delete attempt: narrows the window in which

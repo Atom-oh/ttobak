@@ -60,3 +60,33 @@ func TestResolveAccountByAliasSkipsTombstone(t *testing.T) {
 		t.Fatalf("got=%+v err=%v, want %s", got, err, b.AccountID)
 	}
 }
+
+func TestRevokePendingMemberRejectsMergeStates(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(*model.Account)
+	}{
+		{"mergingInto", func(a *model.Account) { a.MergingInto = "b" }},
+		{"mergedInto", func(a *model.Account) { a.MergedInto = "b" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockAccountRepo()
+			svc := newAccountServiceWithRepo(repo)
+			ctx := context.Background()
+			acc, _ := svc.CreateAccount(ctx, "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "A"})
+			repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+				Email: "invited@x.com", Kind: model.PendingShareKindAccount,
+				AccountID: acc.AccountID, Role: model.RoleSSA,
+				SK: model.PrefixPendingAccount + acc.AccountID,
+			})
+			tc.apply(repo.accounts[acc.AccountID])
+			err := svc.RevokePendingMember(ctx, "owner-1", acc.AccountID, "invited@x.com")
+			if !errors.Is(err, ErrAccountMerging) {
+				t.Fatalf("err=%v, want ErrAccountMerging", err)
+			}
+			if len(repo.pendingShares) != 1 {
+				t.Fatalf("pending row must stay, got %d", len(repo.pendingShares))
+			}
+		})
+	}
+}

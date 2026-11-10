@@ -3187,7 +3187,8 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 		return false, fmt.Errorf("build not-exists condition: %w", err)
 	}
 	notMergedExpr, err := expression.NewBuilder().
-		WithCondition(expression.AttributeNotExists(expression.Name("mergedInto"))).
+		WithCondition(expression.AttributeNotExists(expression.Name("mergingInto")).
+			And(expression.AttributeNotExists(expression.Name("mergedInto")))).
 		Build()
 	if err != nil {
 		return false, fmt.Errorf("build not-merged condition: %w", err)
@@ -3241,7 +3242,7 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 				},
 			},
 			{
-				// The destination must not itself be a merge tombstone.
+				// The granted account must be neither mid-merge nor a tombstone.
 				ConditionCheck: &types.ConditionCheck{
 					TableName: aws.String(r.tableName),
 					Key: map[string]types.AttributeValue{
@@ -3262,14 +3263,19 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 		return false, nil
 	}
 	if metaFailed, ok := transactionItemFailed(err, idxMeta, numItems); ok && metaFailed {
-		if redirected {
-			// The merge target is itself a tombstone: no grant, drop the row.
+		// Re-read to tell a finished tombstone (drop the row) from a merge in
+		// flight or a race with the source's tombstoning (keep the row, so a
+		// later sign-in follows the redirect).
+		granted, getErr := r.GetAccount(ctx, accountID)
+		if getErr != nil {
+			return false, fmt.Errorf("read pending grant target %s: %w", accountID, getErr)
+		}
+		if redirected && granted != nil && granted.MergedInto != "" {
 			if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
 				return false, fmt.Errorf("drop pending account grant for merged account %s: %w", p.AccountID, delErr)
 			}
 			return true, nil
 		}
-		// The source was tombstoned after it was read; retry follows the redirect.
 		return false, nil
 	}
 	inviterFailed, ok1 := transactionItemFailed(err, idxInviter, numItems)
