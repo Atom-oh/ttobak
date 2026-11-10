@@ -178,6 +178,8 @@ const members = [
   { userId: '', email: 'eve@amazon.com', role: 'SA' },
 ];
 
+const GUEST = 'guest@customer.example';
+
 test('classify ignores me in organizer and attendees', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const out = classifyOccurrence({ me: 'ME@amazon.com', accountId: 'a', attendees: ['me@amazon.com'],
@@ -188,16 +190,16 @@ test('classify ignores me in organizer and attendees', async () => {
 test('classify matches case-insensitively and rejects non-amazon counterpart', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const base = { me: 'zed@amazon.com', accountId: 'a', members, anyAccountSaEmails: new Set(), isPrivate: false };
-  assert.deepEqual(classifyOccurrence({ ...base, attendees: ['ALICE@Amazon.com'] }),
+  assert.deepEqual(classifyOccurrence({ ...base, attendees: ['ALICE@Amazon.com', GUEST] }),
     { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
   assert.deepEqual(classifyOccurrence({ ...base, attendees: ['dan@example.com'] }), { kind: 'skip' });
-  assert.deepEqual(classifyOccurrence({ ...base, attendees: ['eve@amazon.com'] }), { kind: 'skip' });
+  assert.deepEqual(classifyOccurrence({ ...base, attendees: ['eve@amazon.com', GUEST] }), { kind: 'skip' });
 });
 
 test('classify table', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const c = (me, accountId, attendees, sa = []) =>
-    classifyOccurrence({ me, accountId, attendees, members, anyAccountSaEmails: new Set(sa), isPrivate: false });
+    classifyOccurrence({ me, accountId, attendees: [...attendees, GUEST], members, anyAccountSaEmails: new Set(sa), isPrivate: false });
   assert.deepEqual(c('me@amazon.com', 'a', ['alice@amazon.com']), { kind: 'task', state: 'issue_needed', path: 'mine' });
   assert.deepEqual(c('carol@amazon.com', 'a', ['alice@amazon.com']),
     { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
@@ -207,6 +209,19 @@ test('classify table', async () => {
   assert.deepEqual(c('me@amazon.com', null, ['zoe@amazon.com'], ['zoe@amazon.com']),
     { kind: 'task', state: 'needs_account' });
   assert.deepEqual(c('me@amazon.com', null, ['zoe@amazon.com']), { kind: 'skip' });
+});
+
+test('an internal-only meeting is not a customer meeting', async () => {
+  const { classifyOccurrence } = await import('../dist/intake/classify.js');
+  const c = (attendees, accountId = 'a', sa = []) => classifyOccurrence({ me: 'carol@amazon.com', accountId, attendees, members,
+    anyAccountSaEmails: new Set(sa), isPrivate: false });
+  // An SA meeting with only @amazon.com addresses: no task, not even needs_account.
+  assert.deepEqual(c(['alice@amazon.com', 'Bob@Amazon.com']), { kind: 'skip' });
+  assert.deepEqual(c(['zoe@amazon.com'], null, ['zoe@amazon.com']), { kind: 'skip' });
+  // The same meeting with one external attendee keeps the existing behavior.
+  assert.deepEqual(c(['alice@amazon.com', 'Partner@Example.com']),
+    { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
+  assert.deepEqual(c(['zoe@amazon.com', GUEST], null, ['zoe@amazon.com']), { kind: 'task', state: 'needs_account' });
 });
 
 test('private meeting is skipped', async () => {
@@ -232,7 +247,7 @@ test('attendee overflow and missing isPrivate are unknown', async () => {
 test('classify normalizes member emails and handles organizer-me', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const ms = [{ userId: 'u-me', email: ' ME@Amazon.com ', role: 'AM' }, { userId: 'u-a', email: 'Alice@Amazon.com', role: 'SA' }];
-  assert.deepEqual(classifyOccurrence({ me: 'me@amazon.com', accountId: 'a', attendees: ['me@amazon.com', 'alice@amazon.com'],
+  assert.deepEqual(classifyOccurrence({ me: 'me@amazon.com', accountId: 'a', attendees: ['me@amazon.com', 'alice@amazon.com', GUEST],
     members: ms, anyAccountSaEmails: new Set(), isPrivate: false }),
   { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
 });
@@ -616,7 +631,7 @@ test('slack template renders the contract fixture', async () => {
   assert.ok(long.length <= 2000);
   const escaped = renderSlackRequest({ accountName: 'A&B', meetingTitle: '<!here> x', localDateTime: 'W', myName: 'M' });
   assert.ok(escaped.includes('&lt;!here&gt; x') && escaped.includes('A&amp;B') && !escaped.includes('<!here>'));
-  assert.ok(renderSlackRequest({ accountName: '{title}', meetingTitle: 'T', localDateTime: 'W', myName: 'M' }).includes('{title} 관련'));
+  assert.ok(renderSlackRequest({ accountName: '{title}', meetingTitle: 'T', localDateTime: 'W', myName: 'M' }).includes('{title} 미팅'));
 });
 
 test('notice is enqueued once per task and state', async t => {
@@ -705,8 +720,9 @@ const occurrence = (over = {}) => ({ meetingId: 'occ-1', subject: 'Customer sync
   end: '2026-11-12T11:00:00+09:00', sensitivity: 'Normal', isCanceled: false, isAllDay: false, ...over });
 const MEETING_LIST = { meetings: [{ meetingId: 'i:1', subject: 'Customer sync', startTime: '2026-11-12T01:00:00Z',
   endTime: '2026-11-12T02:00:00Z' }] };
-const details = (attendees, isPrivate = false) => ({ 'i:1': { requiredAttendees: attendees, optionalAttendees: [],
-  organizer: 'Me@Amazon.com', isPrivate } });
+// One customer attendee by default: only a customer meeting produces a task.
+const details = (attendees, isPrivate = false, external = [GUEST]) => ({ 'i:1': { requiredAttendees: attendees,
+  optionalAttendees: external, organizer: 'Me@Amazon.com', isPrivate } });
 const theirsRequest = (over = {}) => ({ requestId: RID, title: 'Design review', stateId: 'NEXT_UP', requesterLogin: 'alice',
   resolverLogin: 'me', salesforceId: '006A', meetingDateRanges: ['2026-11-12 - 2026-11-12'],
   createdAt: Date.parse('2026-11-10T05:00:00Z'), ...over });
@@ -743,6 +759,10 @@ function applyRules(task, body) {
       if (!task.specReqId || task.state === 'closed' || !body.specReqStatus) return null;
       set();
       if (task.path === 'theirs' && task.state === 'acked' && body.specReqStatus === 'COMPLETED') next.state = 'resolved';
+      if (task.path === 'theirs' && task.state === 'ack_failed' && ['WORKING', 'WAITING', 'COMPLETED'].includes(body.specReqStatus)) {
+        next.state = 'acked';
+        delete next.failureCode;
+      }
       return next;
     case 'close':
       return task.state === 'closed' ? null : { ...next, state: 'closed' };
@@ -1133,4 +1153,118 @@ test('an occurrence synced by a run that skipped the task step is evaluated late
   const second = await run(api, [occurrence()], work);
   assert.equal(second.output.counts.upserts, 0);
   assert.equal(second.output.tasks.counts.created, 1);
+});
+
+test('an internal-only occurrence creates no task end to end', async t => {
+  const { run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const internal = await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'], false, [])) });
+  assert.equal(internal.output.tasks.result, 'ok');
+  assert.equal(api.calls.filter(call => call[0] === 'create').length, 0);
+  assert.ok(!JSON.stringify(api.calls).includes(GUEST));
+});
+
+test('past the task list cap, classification and notices run but linking and ack are skipped', async t => {
+  const { TASK_LIST_MAX_PAGES } = await import('../dist/intake/tasks.js');
+  assert.equal(TASK_LIST_MAX_PAGES, 50);
+  const { run } = await taskHome(t);
+  const closedRow = index => ({ eventId: (index + 1).toString(16).padStart(64, '0'), sourceId: 'other', state: 'closed',
+    occurrenceStartsAt: '2026-11-01T00:00:00Z', occurrenceEndsAt: '2026-11-01T01:00:00Z',
+    createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]), FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) };
+  const exact = await fakeTaskApi({ seed: Array.from({ length: 999 }, (_, index) => closedRow(index)),
+    eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const full = await run(exact, [occurrence()], work);
+  assert.equal(full.output.tasks.counts.skipped, 0, '1,000 tasks fit');
+  assert.ok(full.calls.includes('search_requests_advanced'));
+
+  const { run: overRun, queue } = await taskHome(t);
+  const api = await fakeTaskApi({ seed: Array.from({ length: 1001 }, (_, index) => closedRow(index)),
+    eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const over = await overRun(api, [occurrence()], work);
+  assert.equal(over.output.tasks.result, 'TASKS_PARTIAL');
+  assert.deepEqual(over.output.tasks.failures, { load: 'PARSE_FAILED' });
+  assert.equal(over.output.tasks.counts.skipped, 3);
+  assert.equal(over.output.tasks.counts.created, 1, 'a new occurrence is still classified');
+  assert.equal(api.calls.filter(call => call[0] === 'listTasks').length, 50);
+  assert.ok(!over.calls.includes('check_user_is_tam') && !over.calls.includes('search_requests_advanced')
+    && !over.calls.includes('get_request') && !over.calls.includes('acknowledge_request'));
+  assert.equal(transitions(api).length, 0);
+  assert.deepEqual(queue().map(line => line.state), ['request_needed'], 'notices still run');
+});
+
+test('past the task list cap a removed occurrence still closes its unloaded task', async t => {
+  const { run } = await taskHome(t);
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  await run(api, [occurrence()], work);
+  const [created] = api.tasks.values();
+  // Push the occurrence's task past the cap.
+  const rows = [...api.tasks.entries()];
+  api.tasks.clear();
+  for (let index = 0; index < 1000; index++) {
+    const eventId = (index + 1).toString(16).padStart(64, '0');
+    api.tasks.set(eventId, { eventId, sourceId: 'other', state: 'closed', occurrenceStartsAt: '2026-11-01T00:00:00Z',
+      occurrenceEndsAt: '2026-11-01T01:00:00Z', createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 });
+  }
+  for (const [eventId, row] of rows) api.tasks.set(eventId, row);
+  const second = await run(api, [occurrence({ isCanceled: true })], work);
+  assert.equal(second.output.tasks.counts.closed, 1);
+  assert.equal(api.tasks.get(created.eventId).state, 'closed');
+});
+
+test('an ack_failed task whose request another resolver acked is not moved to acked', async t => {
+  const seed = [linkedTask(0, { specReqId: RID, state: 'ack_failed', failureCode: 'ACK_REJECTED', specReqStatus: 'NEXT_UP' })];
+  const reassigned = await taskHome(t);
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  await reassigned.run(api, [occurrence()], { FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'WORKING', resolverLogin: 'bob' }) }) });
+  assert.equal(api.tasks.get(seed[0].eventId).state, 'ack_failed');
+  assert.equal(transitions(api, 'refreshSpecReq').length, 0);
+  assert.ok(!reassigned.queue().some(line => line.state === 'acked'));
+
+  // Control: my own request seen WORKING is promoted.
+  const mine = await taskHome(t);
+  const other = await fakeTaskApi({ seed: structuredClone(seed), eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  await mine.run(other, [occurrence()], { FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'WORKING' }) }) });
+  assert.equal(other.tasks.get(seed[0].eventId).state, 'acked');
+});
+
+test('refresh rotates even when every read fails', async t => {
+  const { run } = await taskHome(t);
+  const seed = Array.from({ length: 30 }, (_, index) => linkedTask(index));
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const args = join(tempHome(t), 'args.log');
+  const work = { FAKE_WORK_REQUESTS: '{}', FAKE_WORK_ARGS: args };
+  const first = await run(api, [occurrence()], work);
+  assert.equal(first.output.tasks.failures.refresh, 'PARSE_FAILED');
+  await run(api, [occurrence()], work);
+  const read = readFileSync(args, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .filter(call => call.name === 'get_request').map(call => call.args.request_id);
+  assert.equal(read.length, 50);
+  assert.equal(new Set(read).size, 30);
+});
+
+test('a request_needed notice waiting for a draft goes out copy-only after 60 minutes', async t => {
+  const { ApiResponseError } = await import('../dist/api.js');
+  const { NOTICE_COPY } = await import('../dist/intake/notify.js');
+  const { run, queue } = await taskHome(t);
+  const seed = [linkedTask(0, { state: 'request_needed', accountId: 'acct-2', specReqId: undefined, specReqStatus: undefined })];
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  // The draft cannot be attempted: the account read keeps failing.
+  const getAccount = api.getAccount;
+  api.getAccount = async accountId => {
+    if (accountId === 'acct-2') throw new ApiResponseError('HTTP 503', 503);
+    return getAccount(accountId);
+  };
+  const later = minutes => ({ now: () => new Date(NOW.getTime() + minutes * 60_000) });
+  const notices = () => queue().filter(line => line.key.startsWith(seed[0].eventId));
+  const first = await run(api, [occurrence()], {});
+  assert.equal(first.output.tasks.failures.drafts, 'TTOBAK_UNAVAILABLE');
+  assert.equal(notices().length, 0, 'waits for the draft attempt');
+  await run(api, [occurrence()], {}, later(59));
+  assert.equal(notices().length, 0);
+  await run(api, [occurrence()], {}, later(60));
+  assert.deepEqual(notices().map(line => [line.state, line.body]), [['request_needed', NOTICE_COPY.request_needed.copy]]);
 });

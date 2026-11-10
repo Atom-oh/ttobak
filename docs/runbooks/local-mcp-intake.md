@@ -68,27 +68,39 @@ result `TASKS_PARTIAL` while independent steps still run.
 
 Steps per run (see `mcp-server/src/intake/tasks.ts`):
 
-1. `load`: every task page (at most 10) and the window's TTOBAK events.
+1. `load`: every task page (at most 50 pages, 1,000 tasks) and the window's
+   TTOBAK events. Past the cap, `failures.load` is `PARSE_FAILED` and
+   `counts.skipped` is 3: `specreq`, `mine`, `theirs` and `refresh` do not run
+   (a hidden row could make a link ambiguous), while `close`, `classify`,
+   `drafts` and `notices` still run.
 2. `close`: tasks of removed occurrences are closed.
 3. `classify`: new occurrences and `needs_*` tasks with an account. One
    `list_meetings`, at most 25 `get_meeting`, then the deterministic classifier.
-   A list over its cap, an unknown attendee list or a private meeting creates
-   no task.
+   Only a customer meeting creates a task: at least one attendee or the
+   organizer must be outside `@amazon.com`. An internal-only meeting, a list
+   over its cap, an unknown attendee list or a private meeting creates no task
+   (not even `needs_account`). Addresses stay in memory.
 4. `specreq`: `check_user_is_tam` must equal the signed-in `@amazon.com` alias.
 5. `mine` and `theirs`: exact linking by opportunity, date range and
    requester; for theirs, the single acknowledge (auto-ack on) or an
    `ack_needed` notice (off). Unsynced ack ledger entries are written to
    TTOBAK first, decided by `get_request`, never by a second acknowledge.
-6. `refresh`: at most 25 linked tasks, least recently refreshed first, re-read with `get_request`.
+6. `refresh`: at most 25 linked tasks, least recently refreshed first, re-read
+   with `get_request`. The refresh time is stamped before the read, so a read
+   that keeps failing still rotates. An `ack_failed` task is refreshed only
+   when I am still the request's resolver.
 7. `drafts`: one unsent Slack draft per `request_needed` task.
 8. `notices`: one line per (task, state) in `~/.ttobak/intake/notify.jsonl`.
+   While Slack is selected, a `request_needed` notice waits for the draft
+   outcome, but at most 60 minutes after the task first waited; then it goes
+   out with the copy-from-TTOBAK text.
 
 Every transition sends the last seen `version`. A 409 re-reads the task once
 and resends only if the change is still valid, so a web pick is never
 overwritten (`counts.conflicts`).
 
-Local task state: `tasks/<scope>/seen.json` (evaluated, pending, closing and last-refreshed
-occurrence IDs), `specreq/<scope>/ack-ledger.json` (permanent, one entry per
+Local task state: `tasks/<scope>/seen.json` (evaluated, pending, closing,
+last-refreshed and first-waited occurrence IDs), `specreq/<scope>/ack-ledger.json` (permanent, one entry per
 request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 (outcomes and keys only).
 
@@ -104,6 +116,19 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
   the ack ledger to force a retry.
 - A `theirs` failure with a `TTOBAK_*` code after an acknowledge: the ledger
   keeps the outcome with `cloudSynced: false` and the next run writes it.
+
+### Known limits
+
+- **Cross-device re-ack window.** The ack ledger is per device. The task row
+  is the cross-device record, so a second device skips a row that is already
+  `acked`, `ack_failed` or `resolved`, and every acknowledge first reads the
+  request and needs `NEXT_UP`. Between one device's refused or unconfirmed
+  acknowledge (the request stays `NEXT_UP`) and its cloud write of `ack_failed`
+  (delayed by a crash or a `TTOBAK_*` failure), or during two concurrent runs,
+  a second device sees an unchanged row and can acknowledge the same request
+  once more. Run the task step on one device only.
+- **Task cap.** Past 1,000 tasks no SpecReq linking, acknowledge or refresh
+  runs (see `load`). Closed rows count toward the cap.
 
 ## Acceptance on the Mac (required before scheduling)
 

@@ -21,7 +21,8 @@ import { acknowledgeOnce, linkRequests, readRequest, resolveAck, resolveMe, sear
   type LinkTask, type SpecReqSummary } from './specreq.js';
 import type { IntakeStore } from './store.js';
 
-export const TASK_LIST_MAX_PAGES = 10;
+/** 50 pages of 20: 1,000 tasks. Beyond it linking and ack fail closed; classification still runs. */
+export const TASK_LIST_MAX_PAGES = 50;
 export const EVENT_LIST_MAX_PAGES = 40;
 export const GET_MEETING_MAX = 25;
 export const REFRESH_MAX = 25;
@@ -29,6 +30,8 @@ export const OPPTY_ACCOUNTS_MAX = 20;
 export const MEMBER_ACCOUNTS_MAX = 50;
 export const DRAFTS_MAX = 10;
 const SEEN_RETENTION_MS = 120 * 24 * 60 * 60 * 1000;
+/** A request_needed notice waits this long for a draft outcome, then goes out copy-only. */
+export const DRAFT_NOTICE_WAIT_MS = 60 * 60 * 1000;
 const EVENT_ID = /^[0-9a-f]{64}$/;
 const STATES: readonly SpecReqTaskState[] = ['issue_needed', 'issued', 'request_needed', 'requested', 'acked',
   'ack_failed', 'resolved', 'needs_account', 'needs_owner', 'closed'];
@@ -51,6 +54,8 @@ export interface TaskCounts {
   notices: number;
   /** Transitions dropped after one re-read showed the task had changed (usually a web pick). */
   conflicts: number;
+  /** SpecReq sub-steps (mine, theirs, refresh) skipped because the task list exceeded its cap. */
+  skipped: number;
 }
 
 export interface TaskRunResult {
@@ -97,6 +102,8 @@ interface SeenState {
   closing: Record<string, string>;
   /** Last `get_request` refresh per task, so the refresh budget rotates. */
   refreshed: Record<string, string>;
+  /** When each request_needed task first waited for a draft outcome. */
+  requestDue: Record<string, string>;
 }
 
 interface AccountInfo { name: string; members: MemberView[] }
@@ -150,19 +157,20 @@ function seenPath(scope: string): string[] {
 
 function loadSeen(store: IntakeStore, scope: string): SeenState {
   const raw = store.read<SeenState>(...seenPath(scope));
-  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {} };
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {} };
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (raw.version !== 1 || !record(raw.seen) || !record(raw.pending) || !record(raw.closing)) {
     throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   }
   raw.refreshed ??= {};
-  if (!record(raw.refreshed)) throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
+  raw.requestDue ??= {};
+  if (!record(raw.refreshed) || !record(raw.requestDue)) throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   return raw;
 }
 
 class TaskRun {
   readonly counts: TaskCounts = { tasks: 0, created: 0, classified: 0, closed: 0, linked: 0, acked: 0, ackFailed: 0,
-    ackNeeded: 0, refreshed: 0, drafted: 0, notices: 0, conflicts: 0 };
+    ackNeeded: 0, refreshed: 0, drafted: 0, notices: 0, conflicts: 0, skipped: 0 };
   readonly failures: Partial<Record<TaskStep, IntakeCode>> = {};
   readonly tasks = new Map<string, TaskView>();
   /** Cloud events in the sync window: eventId -> account and timing. */
@@ -171,6 +179,8 @@ class TaskRun {
   private seen!: SeenState;
   private myLogin = '';
   private opptyAccounts: Map<string, Set<string>> | null = null;
+  /** False when the task list exceeded its cap: `tasks` is then a prefix of the rows. */
+  private complete = true;
   /** Tasks this run already linked, acknowledged or refreshed. */
   private readonly touched = new Set<string>();
 
@@ -197,7 +207,10 @@ class TaskRun {
     await this.step('close', () => this.close());
     await this.step('classify', () => this.classify());
     let specreqReady = false;
-    await this.step('specreq', async () => {
+    if (!this.complete) {
+      // A partial list could hide a competing task, so linking and ack fail closed.
+      this.counts.skipped = 3;
+    } else await this.step('specreq', async () => {
       const session = this.options.sessions.specreq;
       if (!session) throw new IntakeError(this.options.unavailable?.specreq ?? 'NOT_SELECTED');
       this.myLogin = await resolveMe(session, this.options.me.email);
@@ -215,6 +228,7 @@ class TaskRun {
       .filter(([, at]) => this.options.now.getTime() - Date.parse(at) < SEEN_RETENTION_MS));
     this.seen.seen = recent(this.seen.seen);
     this.seen.refreshed = recent(this.seen.refreshed);
+    this.seen.requestDue = recent(this.seen.requestDue);
     try { this.saveSeen(); } catch (error) { this.fail('classify', error); }
     return this.result();
   }
@@ -257,7 +271,11 @@ class TaskRun {
     const { api, now, zone } = this.options;
     let cursor: string | undefined;
     for (let page = 0; ; page++) {
-      if (page === TASK_LIST_MAX_PAGES) throw new IntakeError('PARSE_FAILED', `task list exceeds ${TASK_LIST_MAX_PAGES} pages`);
+      if (page === TASK_LIST_MAX_PAGES) {
+        this.complete = false;
+        this.fail('load', new IntakeError('PARSE_FAILED', `task list exceeds ${TASK_LIST_MAX_PAGES} pages`));
+        break;
+      }
       const result = await api.listSpecReqTasks(cursor) as { tasks?: unknown; nextCursor?: unknown } | null;
       if (!result || !Array.isArray(result.tasks)) throw new IntakeError('PARSE_FAILED', 'task list has an unexpected shape');
       for (const raw of result.tasks) {
@@ -318,8 +336,10 @@ class TaskRun {
   private async close(): Promise<void> {
     let failure: unknown;
     for (const eventId of Object.keys(this.seen.closing)) {
-      const task = this.tasks.get(eventId);
       try {
+        // Past the list cap a row may exist without being loaded.
+        const task = this.tasks.get(eventId) ?? (this.complete ? undefined
+          : parseTask(await this.options.api.getSpecReqTask(eventId)));
         if (task && task.state !== 'closed') {
           if (await this.transition(task, current => current.state === 'closed' ? null : { op: 'close' })) this.counts.closed++;
         }
@@ -657,9 +677,10 @@ class TaskRun {
       .slice(0, REFRESH_MAX).map(item => item.task);
     let failure: unknown;
     for (const task of open) {
+      // Stamped before the read, so a permanently failing read still rotates out of the budget.
+      this.seen.refreshed[task.eventId] = this.options.now.toISOString();
       try {
         const request = await readRequest(session, task.specReqId!);
-        this.seen.refreshed[task.eventId] = this.options.now.toISOString();
         const confirmed = request.resolverLogin === this.myLogin && ACK_CONFIRMED.includes(request.stateId);
         // Auto-ack off: the user acknowledged in SpecReq; a later read moves the task to acked.
         if (task.path === 'theirs' && ['request_needed', 'requested'].includes(task.state) && confirmed
@@ -670,8 +691,11 @@ class TaskRun {
           if (next) this.counts.acked++;
           continue;
         }
+        // An observed status promotes ack_failed to acked, so it is sent only for a request I resolve.
+        if (task.state === 'ack_failed' && request.resolverLogin !== this.myLogin) continue;
         if (request.stateId === task.specReqStatus && (!request.title || request.title === task.specReqTitle)) continue;
         const next = await this.transition(task, current => current.specReqId === request.requestId && current.state !== 'closed'
+          && (current.state !== 'ack_failed' || request.resolverLogin === this.myLogin)
           ? { op: 'refreshSpecReq', specReqId: request.requestId, specReqStatus: request.stateId,
             ...(request.title ? { specReqTitle: request.title } : {}) } : null);
         if (next) this.counts.refreshed++;
@@ -733,9 +757,16 @@ class TaskRun {
       let body: string;
       if (state === 'request_needed') {
         const outcome = outcomes.get(task.eventId) ?? draftEntry(store, scope, task.eventId)?.outcome;
-        // Wait for the draft attempt while the selected Slack server is down.
-        // Announce only after the draft attempt while Slack is selected.
-        if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) continue;
+        // While Slack is selected, wait for the draft attempt, but at most DRAFT_NOTICE_WAIT_MS
+        // after the task first waited; then announce the copy-only notice.
+        if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) {
+          let due = Date.parse(this.seen.requestDue[task.eventId] ?? '');
+          if (!Number.isFinite(due)) {
+            due = now.getTime();
+            this.seen.requestDue[task.eventId] = now.toISOString();
+          }
+          if (now.getTime() - due < DRAFT_NOTICE_WAIT_MS) continue;
+        }
         const copy = NOTICE_COPY.request_needed;
         title = copy.title;
         body = outcome === 'drafted' ? copy.drafted : outcome === 'kept_existing' ? copy.kept_existing : copy.copy;
