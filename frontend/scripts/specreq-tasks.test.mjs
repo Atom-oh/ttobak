@@ -156,6 +156,11 @@ test('hook loads every page, replaces on transition and reloads on 409', async c
   await assert.rejects(() => probe.result().transition(id('b'), { op: 'close' }));
   harness.render(Probe);
   assert.equal(probe.result().byEventId.get(id('b')).version, 5, 'reloaded after the conflict');
+  api.get = async () => { throw new Error('offline'); };
+  const failed = await probe.result().transition(id('b'), { op: 'close' }).catch(error => error);
+  const { changeErrorMessage, SPECREQ_ACTION_COPY } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
+  assert.equal(changeErrorMessage(failed), SPECREQ_ACTION_COPY.loadFailed, 'a failed reload never claims the latest state');
+  assert.equal(changeErrorMessage({ status: 409 }), SPECREQ_ACTION_COPY.conflict);
 });
 
 test('task API uses private no-store requests', async () => {
@@ -214,7 +219,7 @@ test('actions per state', () => {
   const cases = [
     [{ state: 'request_needed', path: 'theirs' }, ['copy', 'sent']],
     [{ state: 'needs_account' }, ['account']],
-    [{ state: 'needs_owner', accountId: 'acct-1' }, ['owner'], [{ userId: 'u1', role: 'SA' }]],
+    [{ state: 'needs_owner', accountId: 'acct-1' }, ['owner'], [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }]],
     [{ state: 'issue_needed', path: 'mine' }, ['link']],
     [{ state: 'issue_needed', path: 'theirs' }, []],
     [{ state: 'requested', path: 'theirs' }, ['link']],
@@ -268,14 +273,16 @@ test('request_needed explains an unresolved account', () => {
 test('owner picker excludes me, AM roles and pending members', () => {
   const { ownerCandidates } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
   const members = [
-    { userId: 'me', role: 'SA' }, { userId: 'u1', role: 'SA', email: 'a@example.test' }, { userId: 'u2', role: 'SSA' },
+    { userId: 'me', role: 'SA', email: 'me@amazon.com' }, { userId: 'u1', role: 'SA', email: 'A@Amazon.com' },
+    { userId: 'u2', role: 'SSA', email: 'b@amazon.com' }, { userId: 'u7', role: 'SA', email: 'a@example.test' },
+    { userId: 'u8', role: 'SA' }, { userId: 'u9', role: 'SA', email: '@amazon.com' },
     { userId: 'u3', role: 'AM' }, { userId: 'u4', role: 'TAM' }, { userId: 'u5', role: 'SA Manager' },
     { email: 'pending@example.test', role: 'SA', pending: true }, { userId: 'u6', role: 'SA', pending: true },
   ];
   assert.deepEqual(Array.from(ownerCandidates(members, 'me'), member => member.userId), ['u1', 'u2']);
   const output = view({ task: task(id('a'), 'needs_owner', { accountId: 'acct-1' }), members });
   assert.match(output, /value="u1"/);
-  assert.doesNotMatch(output, /value="(me|u3|u4|u5|u6)"/);
+  assert.doesNotMatch(output, /value="(me|u3|u4|u5|u6|u7|u8|u9)"/);
 });
 
 test('transition sends the current version', async context => {
@@ -301,3 +308,51 @@ test('transition sends the current version', async context => {
   await probe.result().transition(id('a'), { op: 'linkSpecReq', specReqId: '11111111-2222-4333-8444-555555555555' });
   assert.deepEqual(sent.map(change => [change.op, change.version]), [['markRequested', 4], ['linkSpecReq', 5]]);
 });
+
+test('hook flags a partial list when the page cap leaves a cursor, and the strip says so', async context => {
+  const harness = accountComponentHarness();
+  context.after(() => harness.unmount());
+  let pages = 0;
+  const api = {
+    list: async query => {
+      pages++;
+      const page = Number(query.cursor ?? 0);
+      return { tasks: [task(page.toString(16).padStart(64, '0'), 'issue_needed')], nextCursor: String(page + 1) };
+    },
+    get: async () => { throw new Error('unused'); },
+    transition: async () => { throw new Error('unused'); },
+  };
+  const auth = { isAuthenticated: true, user: { userId: 'owner' }, membershipRevision: 0 };
+  const load = loader({ react: harness.react, '@/components/auth/AuthProvider': { useAuth: () => auth }, '@/lib/api': { specReqTaskApi: api } });
+  const hook = load('@/hooks/useSpecReqTasks');
+  assert.equal(hook.MAX_PAGES, 50);
+  const probe = hookProbe(hook.useSpecReqTasks);
+  harness.render(probe.Probe);
+  await settle();
+  harness.render(probe.Probe);
+  assert.equal(pages, 50);
+  assert.equal(probe.result().state, 'ready');
+  assert.equal(probe.result().partial, true);
+  assert.equal(probe.result().tasks.length, 50);
+
+  const copy = loader({ react: React, 'react/jsx-runtime': jsxRuntime, '@/components/workspace/SpecReqTaskActions': {} })(
+    '@/components/workspace/SpecReqTasks').SPECREQ_TASK_COPY;
+  const rows = [task(id('a'), 'issue_needed')];
+  assert.ok(markup({ tasks: rows, tasksState: 'ready', tasksPartial: true }).includes(copy.partial));
+  assert.ok(!markup({ tasks: rows, tasksState: 'ready' }).includes(copy.partial));
+});
+
+test('a complete list is not partial', async context => {
+  const harness = accountComponentHarness();
+  context.after(() => harness.unmount());
+  const api = { list: async () => ({ tasks: [task(id('a'), 'issue_needed')], nextCursor: null }),
+    get: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); } };
+  const auth = { isAuthenticated: true, user: { userId: 'owner' }, membershipRevision: 0 };
+  const load = loader({ react: harness.react, '@/components/auth/AuthProvider': { useAuth: () => auth }, '@/lib/api': { specReqTaskApi: api } });
+  const probe = hookProbe(load('@/hooks/useSpecReqTasks').useSpecReqTasks);
+  harness.render(probe.Probe);
+  await settle();
+  harness.render(probe.Probe);
+  assert.equal(probe.result().partial, false);
+});
+

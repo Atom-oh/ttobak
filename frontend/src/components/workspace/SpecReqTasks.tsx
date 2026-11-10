@@ -14,6 +14,7 @@ export const SPECREQ_TASK_COPY = {
   error: 'SpecReq 할 일을 불러오지 못했습니다.',
   retry: '할 일 다시 불러오기',
   empty: '처리할 SpecReq 할 일이 없습니다.',
+  partial: '할 일이 많아 1,000건까지만 불러왔습니다. 일부 할 일은 보이지 않을 수 있습니다.',
   timeUnknown: '미팅 시간 확인 필요',
   untitledEvent: '미팅 정보 없음',
   specReqPrefix: 'SpecReq',
@@ -84,13 +85,15 @@ function TaskRow({ task, highlighted, onTransition }: {
 export interface SpecReqTasksProps {
   tasks: SpecReqTaskView[];
   state?: 'loading' | 'ready' | 'unavailable' | 'error';
+  /** True when more task pages remained after the hook's cap. */
+  partial?: boolean;
   accountId?: string;
   highlight?: string;
   onRetry?: () => void;
   onTransition?: (eventId: string, change: SpecReqTaskChange) => Promise<unknown>;
 }
 
-export function SpecReqTasks({ tasks, state = 'ready', accountId, highlight, onRetry, onTransition }: SpecReqTasksProps) {
+export function SpecReqTasks({ tasks, state = 'ready', partial, accountId, highlight, onRetry, onTransition }: SpecReqTasksProps) {
   if (state === 'unavailable') return null;
   const wanted = parseTaskHighlight(highlight);
   const open = openSpecReqTasks(tasks, accountId);
@@ -104,6 +107,7 @@ export function SpecReqTasks({ tasks, state = 'ready', accountId, highlight, onR
         {onRetry && <div><button type="button" onClick={onRetry}
           className="mt-2 rounded-lg border border-border-subtle px-3 py-2 text-primary focus-visible:outline-2 focus-visible:outline-primary">{SPECREQ_TASK_COPY.retry}</button></div>}
       </div>}
+      {state === 'ready' && partial && <p role="status" className="mt-3 text-xs text-text-secondary">{SPECREQ_TASK_COPY.partial}</p>}
       {state === 'ready' && (open.length
         ? <ul className="mt-3 space-y-2">{open.map(task => <TaskRow key={task.eventId} task={task} highlighted={task.eventId === wanted} onTransition={onTransition} />)}</ul>
         : <p className="mt-3 text-sm text-text-secondary">{SPECREQ_TASK_COPY.empty}</p>)}
