@@ -330,17 +330,18 @@ func (r *DynamoDBRepository) ScanSttDeletionReferences(ctx context.Context) (map
 
 // sttDeletionAllowedChildren are the only MEETING# partition rows a failed
 // recording may have and still be auto-deleted.
-var sttDeletionAllowedChildren = map[string]bool{model.ActionAnalysisSK: true, model.ResummarySK: true}
+var sttDeletionAllowedChildren = map[string]bool{model.ActionAnalysisSK: true, model.ResummarySK: true, model.EnglishSummarySK: true}
 
-// meetingSingletonDeleteKeys mirrors DeleteMeeting's leading singleton deletes
-// (meeting row, action analysis, sim run, saved summary state). A drift test
-// keeps both paths aligned.
+// meetingSingletonDeleteKeys is DeleteMeeting's first-transaction singleton
+// set (meeting row, action analysis, sim run, saved and English summary
+// states), shared with the guarded failed-recording deletion.
 func meetingSingletonDeleteKeys(ownerID, meetingID string) []map[string]types.AttributeValue {
 	return []map[string]types.AttributeValue{
 		meetingRowKey(ownerID, meetingID),
 		actionAnalysisKey(meetingID),
 		{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID}, "SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun}},
 		summaryKey(meetingID),
+		englishSummaryKey(meetingID),
 	}
 }
 

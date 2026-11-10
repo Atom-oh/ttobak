@@ -429,7 +429,7 @@ func TestDeleteSttFailedMeetingMatchesDeleteMeetingSingletons(t *testing.T) {
 	guarded := capture(func(r *DynamoDBRepository) error {
 		return r.DeleteSttFailedMeeting(context.Background(), "owner", "m", sttDeleteMark())
 	})
-	if strings.Join(base, ",") != strings.Join(guarded, ",") || len(base) != 4 {
+	if strings.Join(base, ",") != strings.Join(guarded, ",") || len(base) != 5 {
 		t.Fatalf("singleton drift:\nDeleteMeeting=%v\nguarded=%v", base, guarded)
 	}
 }
