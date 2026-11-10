@@ -417,6 +417,9 @@ const (
 	// profile and no Cognito invite yet; an admin must invite them first.
 	ErrCodeInvitationRequired    = "INVITATION_REQUIRED"
 	ErrCodeInvitationGrantFailed = "INVITATION_GRANT_FAILED"
+	// ErrCodeMergeIneligible marks an account merge that cannot start for a
+	// structural reason named in the message.
+	ErrCodeMergeIneligible = "MERGE_INELIGIBLE"
 )
 
 // AskQuestionRequest represents the request body for asking a question about a meeting

@@ -51,3 +51,34 @@ type AccountMergeContactMap struct {
 	TargetContactID string `dynamodbav:"targetContactId"`
 	EntityType      string `dynamodbav:"entityType"` // "ACCOUNT_MERGE_CONTACT_MAP"
 }
+
+// Preview unmoved-category and CLI-only names, in response order.
+var (
+	MergeUnmovedCategories = []string{"newsSources", "kb", "documents", "calendarShares", "dictionary", "billing"}
+	MergeCLIOnlyCategories = []string{"specreqTasks", "calendarEvents", "linkOnlyMeetings"}
+)
+
+// MergeUnmovedCategory names a category v1 does not move and whether the
+// source account holds any of it.
+type MergeUnmovedCategory struct {
+	Category string `json:"category"`
+	Present  bool   `json:"present"`
+}
+
+// MergeAudience describes who gains access to the source's moved content.
+type MergeAudience struct {
+	IntoMembersNotInFrom int  `json:"intoMembersNotInFrom"`
+	IntoHasAncestors     bool `json:"intoHasAncestors"`
+}
+
+// AccountMergePreview is the read-only inventory of a proposed merge. A count
+// of -1 means the category exceeded its bounded read cap.
+type AccountMergePreview struct {
+	FromAccountID         string                 `json:"fromAccountId"`
+	IntoAccountID         string                 `json:"intoAccountId"`
+	Counts                map[string]int         `json:"counts"`
+	Unmoved               []MergeUnmovedCategory `json:"unmoved"`
+	CLIOnly               []string               `json:"cliOnly"`
+	NewAudience           MergeAudience          `json:"newAudience"`
+	RequiresAcceptUnmoved bool                   `json:"requiresAcceptUnmoved"`
+}
