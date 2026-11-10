@@ -148,3 +148,45 @@ func TestCalendarCipherFailsClosedAndBoundsPlaintext(test *testing.T) {
 		}
 	}
 }
+
+func TestSealTaskText_UsesTaskPurpose(test *testing.T) {
+	sdk := &calendarKMSFake{}
+	crypto := NewCalendarCipher(sdk, "configured-key")
+	plaintext := []byte("Follow up with the customer")
+	sealed, err := crypto.SealTaskText(context.Background(), "owner", "source", "event", plaintext)
+	if err != nil || sealed == "" {
+		test.Fatalf("seal failed: %v", err)
+	}
+	expected := map[string]string{"purpose": "ttobak-specreq-task-v1", "userId": "owner", "sourceId": "source", "eventId": "event"}
+	if !reflect.DeepEqual(sdk.contexts[0], expected) {
+		test.Fatalf("unexpected context: %v", sdk.contexts[0])
+	}
+	opened, err := crypto.OpenTaskText(context.Background(), "owner", "source", "event", sealed)
+	if err != nil || !bytes.Equal(opened, plaintext) {
+		test.Fatalf("task text did not round-trip: %v", err)
+	}
+	eventCiphertext, err := crypto.Encrypt(context.Background(), "owner", "source", "event", plaintext)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if result, err := crypto.OpenTaskText(context.Background(), "owner", "source", "event", eventCiphertext); !errors.Is(err, ErrCalendarEncryption) || result != nil {
+		test.Fatal("an event ciphertext must not open as task text")
+	}
+	if result, err := crypto.Decrypt(context.Background(), "owner", "source", "event", sealed); !errors.Is(err, ErrCalendarEncryption) || result != nil {
+		test.Fatal("task text must not open as an event ciphertext")
+	}
+	if _, err := crypto.SealTaskText(context.Background(), "owner", "source", "event", nil); !errors.Is(err, ErrCalendarEncryption) {
+		test.Fatal("empty task text must be rejected")
+	}
+}
+
+func TestCalendarCipher_EventPurposeUnchanged(test *testing.T) {
+	sdk := &calendarKMSFake{}
+	crypto := NewCalendarCipher(sdk, "configured-key")
+	if _, err := crypto.Encrypt(context.Background(), "owner", "source", "event", []byte("x")); err != nil {
+		test.Fatal(err)
+	}
+	if sdk.contexts[0]["purpose"] != "ttobak-calendar-event-v1" {
+		test.Fatalf("event purpose changed: %v", sdk.contexts[0])
+	}
+}

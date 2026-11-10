@@ -447,6 +447,19 @@ func (repo *CalendarRepository) getCalendarEventRow(ctx context.Context, userID,
 	return &row, nil
 }
 
+// GetCalendarEventRow reads one canonical event row and verifies that the stored
+// identity matches the requested key. A missing row returns nil, nil.
+func (repo *CalendarRepository) GetCalendarEventRow(ctx context.Context, userID, sourceID, eventID string) (*CalendarEventRow, error) {
+	row, err := repo.getCalendarEventRow(ctx, userID, sourceID, eventID)
+	if err != nil || row == nil {
+		return nil, err
+	}
+	if row.UserID != userID || row.SourceID != sourceID || row.EventID != eventID {
+		return nil, ErrCalendarCorruptData
+	}
+	return row, nil
+}
+
 func calendarScopeCondition(userID, sourceID string) expression.ConditionBuilder {
 	return expression.Name("userId").Equal(expression.Value(userID)).
 		And(expression.Name("sourceId").Equal(expression.Value(sourceID)))
