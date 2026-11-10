@@ -152,7 +152,9 @@ implementation, not inferred from those decisions alone.
 - QA/Assistant: Sonnet 5.5, with Haiku 5.5 detection configuration.
 - Research: Opus 5.5 defaults for all three modes and chat; modes change workflow
   depth, not necessarily the model family.
-- Images: Opus 4.8. Simulation and news summaries: Sonnet 5.5 configuration.
+- Images: GPT-6.1 Terra for classification and Markdown/Mermaid extraction.
+- News: GPT-6 Luna for both legacy briefings and structured publication.
+- Simulation: Sonnet 5.5 configuration.
 - Live STT and final batch transcription remain separate from note generation.
 - External MCP clients choose their own conversation model.
 
