@@ -2,14 +2,14 @@
 
 import Link from 'next/link';
 import { useMemo } from 'react';
-import { groupMissedItems, missedItemDetail, missedItemHref, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
+import { groupMissedItems, missedItemDetail, missedItemHref, missedItemTitle, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
 
 function MissedGroup({ title, icon, empty, items, accountNames }: {
   title: string;
   icon: string;
   empty: string;
   items: PerformanceMissedItem[];
-  accountNames: Map<string, string>;
+  accountNames: Map<string, string> | null;
 }) {
   return (
     <div className="min-w-0">
@@ -25,8 +25,8 @@ function MissedGroup({ title, icon, empty, items, accountNames }: {
           {items.map((item, index) => (
             <li key={`${index}:${item.kind}:${item.accountId}:${item.refKind ?? ''}:${item.refId ?? ''}:${item.sfdcAccountId ?? ''}`}>
               <Link href={missedItemHref(item)} className="flex min-w-0 items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-slate-50 dark:hover:bg-white/5">
-                <span className="min-w-0 truncate text-sm font-medium text-slate-800 dark:text-text-main">
-                  {accountNames.get(item.accountId) ?? item.accountId}
+                <span className={`min-w-0 truncate text-sm font-medium ${accountNames?.has(item.accountId) ? 'text-slate-800 dark:text-text-main' : 'italic text-slate-500 dark:text-text-muted'}`}>
+                  {missedItemTitle(item, accountNames)}
                 </span>
                 <span className="shrink-0 text-xs text-slate-500 dark:text-text-muted">{missedItemDetail(item)}</span>
               </Link>
@@ -38,15 +38,23 @@ function MissedGroup({ title, icon, empty, items, accountNames }: {
   );
 }
 
-/** Section B: logging gaps and silent customers. Unmapped data is counted, never guessed. */
-export function MissedList({ list, accountNames }: { list: PerformanceMissedList; accountNames: Map<string, string> }) {
+/**
+ * Section B: logging gaps and silent customers. Unmapped data is counted, never
+ * guessed. `accountNames` is null when the account list failed to load.
+ */
+export function MissedList({ list, accountNames }: { list: PerformanceMissedList; accountNames: Map<string, string> | null }) {
   const groups = useMemo(() => groupMissedItems(list.items), [list.items]);
   return (
     <div className="space-y-6">
+      {!accountNames && (
+        <p role="status" className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-white/5 dark:text-text-muted">
+          어카운트 목록을 불러오지 못해 이름 없이 표시합니다. 각 항목을 눌러 어카운트를 확인하세요.
+        </p>
+      )}
       <div className="grid gap-6 md:grid-cols-2">
         <MissedGroup title="SFDC 로깅 누락" icon="edit_note" empty="이 기간에 로깅 누락이 없습니다."
           items={groups.loggingGaps} accountNames={accountNames} />
-        <MissedGroup title="연락 끊긴 고객" icon="history" empty="60일 넘게 연락이 끊긴 고객이 없습니다."
+        <MissedGroup title="연락 끊긴 고객" icon="history" empty="연락이 끊긴 고객이 없습니다."
           items={groups.silentCustomers} accountNames={accountNames} />
       </div>
       {list.unmappedCount > 0 && (

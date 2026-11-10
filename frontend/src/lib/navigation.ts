@@ -27,7 +27,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/accounts', icon: 'corporate_fare', label: 'Accounts' },
       { href: '/projects', icon: 'work', label: 'Projects' },
       { href: '/docs', icon: 'article', label: 'Docs' },
-      { href: '/performance', icon: 'insights', label: 'SA 활동' },
+      { href: '/performance', icon: 'insights', label: 'SA Activity' },
     ],
   },
   {

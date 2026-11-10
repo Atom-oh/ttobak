@@ -8,7 +8,7 @@ export interface PerformanceMissedItem {
   kind: 'logging_gap' | 'silent_customer' | string;
   accountId: string;
   sfdcAccountId?: string;
-  refKind?: 'calendar' | 'meeting' | string;
+  refKind?: 'calendar' | 'meeting' | 'sfdc' | string;
   refId?: string;
   at?: string;
   /** -1 when the account had no touchpoint in the lookback window. */
@@ -147,4 +147,30 @@ export function utf8ByteLength(text: string): number {
 
 export function unmappedAssignments(items: PerformanceMappingItem[]): PerformanceMappingItem[] {
   return items.filter(item => !item.mapped);
+}
+
+export type AccountListResult<T> = { userId: string; key: string | number; accounts?: T[]; error?: boolean };
+
+/**
+ * Whether the readable account list for this user and request is still
+ * loading, failed, or ready. A failure is never treated as an empty list.
+ */
+export function accountListState<T>(result: AccountListResult<T> | null, userId: string, key: string | number): { status: 'loading' | 'error' | 'ready'; accounts: T[] } {
+  if (!result || result.userId !== userId || result.key !== key) return { status: 'loading', accounts: [] };
+  if (result.error || !result.accounts) return { status: 'error', accounts: [] };
+  return { status: 'ready', accounts: result.accounts };
+}
+
+/** Display name for a missed item; `names` is null when the account list failed to load. */
+export function missedItemTitle(item: PerformanceMissedItem, names: Map<string, string> | null): string {
+  if (!names) return '어카운트 이름을 불러오지 못함';
+  return names.get(item.accountId) || '이름 없는 어카운트';
+}
+
+export type GoalsLoadStatus = 'loading' | 'error' | 'ready' | 'saving';
+
+/** Goals are editable only after a successful load, so a save never overwrites unseen stored goals. */
+export function goalsEditorControls({ status, dirty, tooLong }: { status: GoalsLoadStatus; dirty: boolean; tooLong: boolean }) {
+  const editable = status === 'ready';
+  return { editable, canSave: editable && dirty && !tooLong };
 }

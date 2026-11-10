@@ -88,3 +88,28 @@ test('unmapped assignments are the mapping queue', () => {
   ]);
   assert.deepEqual(plain(queue.map(item => item.sfdcAccountId)), ['002', '003']);
 });
+
+test('account list state separates loading, failure and a real empty list', () => {
+  assert.deepEqual(plain(perf.accountListState(null, 'u1', 0)), { status: 'loading', accounts: [] });
+  assert.deepEqual(plain(perf.accountListState({ userId: 'u1', key: 0, error: true }, 'u1', 0)), { status: 'error', accounts: [] });
+  assert.deepEqual(plain(perf.accountListState({ userId: 'u1', key: 0, accounts: [] }, 'u1', 0)), { status: 'ready', accounts: [] });
+  assert.equal(perf.accountListState({ userId: 'u1', key: 0, accounts: [{ accountId: 'a' }] }, 'u1', 0).accounts.length, 1);
+  assert.equal(perf.accountListState({ userId: 'u0', key: 0, accounts: [{ accountId: 'a' }] }, 'u1', 0).status, 'loading', 'another user never renders');
+  assert.equal(perf.accountListState({ userId: 'u1', key: 0, error: true }, 'u1', 1).status, 'loading', 'a retry is pending');
+});
+
+test('missed item titles never present IDs as names', () => {
+  const item = { kind: 'silent_customer', accountId: 'acc-1', daysSince: -1 };
+  assert.equal(perf.missedItemTitle(item, new Map([['acc-1', 'Acme']])), 'Acme');
+  assert.equal(perf.missedItemTitle(item, new Map()), '이름 없는 어카운트');
+  assert.equal(perf.missedItemTitle(item, null), '어카운트 이름을 불러오지 못함');
+});
+
+test('goals stay read-only until a successful load', () => {
+  assert.deepEqual(plain(perf.goalsEditorControls({ status: 'loading', dirty: false, tooLong: false })), { editable: false, canSave: false });
+  assert.deepEqual(plain(perf.goalsEditorControls({ status: 'error', dirty: true, tooLong: false })), { editable: false, canSave: false });
+  assert.deepEqual(plain(perf.goalsEditorControls({ status: 'ready', dirty: false, tooLong: false })), { editable: true, canSave: false });
+  assert.deepEqual(plain(perf.goalsEditorControls({ status: 'ready', dirty: true, tooLong: false })), { editable: true, canSave: true });
+  assert.deepEqual(plain(perf.goalsEditorControls({ status: 'ready', dirty: true, tooLong: true })), { editable: true, canSave: false });
+  assert.deepEqual(plain(perf.goalsEditorControls({ status: 'saving', dirty: true, tooLong: false })), { editable: false, canSave: false });
+});

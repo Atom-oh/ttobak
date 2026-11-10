@@ -12,9 +12,18 @@ function mappingError(error: unknown): string {
   return '매핑을 저장하지 못했습니다.';
 }
 
-function MappingRow({ item, options, userId, onSaved }: {
+type AccountsStatus = 'loading' | 'error' | 'ready';
+
+function placeholder(status: AccountsStatus, hasOptions: boolean): string {
+  if (status === 'loading') return '어카운트 불러오는 중…';
+  if (status === 'error') return '어카운트 목록을 불러오지 못했습니다';
+  return hasOptions ? 'TTOBAK 어카운트 선택' : '연결할 어카운트가 없습니다';
+}
+
+function MappingRow({ item, options, accountsStatus, userId, onSaved }: {
   item: PerformanceMappingItem;
   options: { accountId: string; path: string }[];
+  accountsStatus: AccountsStatus;
   userId: string;
   onSaved: () => void;
 }) {
@@ -44,12 +53,12 @@ function MappingRow({ item, options, userId, onSaved }: {
         <span className="text-xs text-slate-500 dark:text-text-muted">{item.role ? `${item.role} · ` : ''}{item.sfdcAccountId}</span>
       </div>
       <div className="flex min-w-0 gap-2">
-        <select id={selectId} value={accountId} onChange={event => setAccountId(event.target.value)} disabled={saving || !options.length}
+        <select id={selectId} value={accountId} onChange={event => setAccountId(event.target.value)} disabled={saving || accountsStatus !== 'ready' || !options.length}
           className="w-full min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-50 dark:border-white/10 dark:bg-surface-lowest dark:text-text-secondary">
-          <option value="">{options.length ? 'TTOBAK 어카운트 선택' : '연결할 어카운트가 없습니다'}</option>
+          <option value="">{placeholder(accountsStatus, options.length > 0)}</option>
           {options.map(option => <option key={option.accountId} value={option.accountId}>{option.path}</option>)}
         </select>
-        <button type="button" onClick={save} disabled={saving || !accountId}
+        <button type="button" onClick={save} disabled={saving || accountsStatus !== 'ready' || !accountId}
           className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-40">
           {saving ? '저장 중…' : '연결'}
         </button>
@@ -60,9 +69,11 @@ function MappingRow({ item, options, userId, onSaved }: {
 }
 
 /** SFDC accounts assigned to the owner with no readable TTOBAK Account mapping. A manual mapping always wins. */
-export function MappingQueue({ items, accounts, userId, onSaved }: {
+export function MappingQueue({ items, accounts, accountsStatus, onRetryAccounts, userId, onSaved }: {
   items: PerformanceMappingItem[];
   accounts: AccountSummary[];
+  accountsStatus: AccountsStatus;
+  onRetryAccounts: () => void;
   userId: string;
   onSaved: () => void;
 }) {
@@ -74,8 +85,16 @@ export function MappingQueue({ items, accounts, userId, onSaved }: {
     return <p className="rounded-lg bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:bg-white/5 dark:text-text-muted">매핑을 기다리는 SFDC 계정이 없습니다.</p>;
   }
   return (
-    <ul className="divide-y divide-slate-100 dark:divide-white/5">
-      {queue.map(item => <MappingRow key={item.sfdcAccountId} item={item} options={options} userId={userId} onSaved={onSaved} />)}
-    </ul>
+    <div className="space-y-2">
+      {accountsStatus === 'error' && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-600 dark:text-red-400">
+          <span>연결할 어카운트 목록을 불러오지 못했습니다.</span>
+          <button type="button" onClick={onRetryAccounts} className="font-semibold text-primary hover:underline">다시 불러오기</button>
+        </div>
+      )}
+      <ul className="divide-y divide-slate-100 dark:divide-white/5">
+        {queue.map(item => <MappingRow key={item.sfdcAccountId} item={item} options={options} accountsStatus={accountsStatus} userId={userId} onSaved={onSaved} />)}
+      </ul>
+    </div>
   );
 }
