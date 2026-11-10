@@ -426,7 +426,7 @@ func TestTermsBudget(t *testing.T) {
 	}
 }
 
-// Long transcripts use at most three calls, each bounded by 90 s, 3000
+// Long transcripts use at most three calls, each bounded by 90 s, termsMaxTokens
 // output tokens, thinking off, and data-only JSON user input.
 func TestTermsProcessCallsAreBounded(t *testing.T) {
 	meeting := termsTestMeeting()
@@ -450,7 +450,7 @@ func TestTermsProcessCallsAreBounded(t *testing.T) {
 		t.Fatalf("calls=%d renews=%d", len(llm.requests), repo.renews)
 	}
 	for i, req := range llm.requests {
-		if req.MaxTokens != 3000 || req.Thinking == nil || req.Thinking.Type != "disabled" || llm.deadlines[i] > termsCallTimeout {
+		if req.MaxTokens != termsMaxTokens || req.Thinking == nil || req.Thinking.Type != "disabled" || llm.deadlines[i] > termsCallTimeout {
 			t.Fatalf("call %d: max=%d thinking=%v deadline=%v", i, req.MaxTokens, req.Thinking, llm.deadlines[i])
 		}
 		var input termsCallInput

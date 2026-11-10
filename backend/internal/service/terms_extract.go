@@ -18,7 +18,7 @@ const (
 	termsChunkMaxBytes       = 40 * 1024
 	termsMaxCalls            = 3
 	termsMaxTermsPerCall     = 40
-	termsMaxTokens           = 3000
+	termsMaxTokens           = 8192 // ~100 output tokens per term; holds termsMaxTermsPerCall
 	termsMaxKnownCandidates  = 40
 	termsMaxEvidencePerTerm  = 5
 	termsMaxHeardAsPerOutput = 5
