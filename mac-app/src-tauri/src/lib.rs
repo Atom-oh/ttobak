@@ -319,6 +319,32 @@ mod command_acl_tests {
         let default = include_str!("../capabilities/default.json");
         assert!(!default.contains("updater:"));
     }
+
+    /// The caption profile confirmation is raised from Rust; no window may
+    /// open (or answer) dialogs itself through a `dialog:` permission.
+    #[test]
+    fn no_capability_grants_dialog_permissions() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("capabilities dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read");
+            let capability: serde_json::Value = serde_json::from_str(&text).expect("json");
+            for permission in capability["permissions"].as_array().expect("permissions") {
+                let id = permission
+                    .as_str()
+                    .or_else(|| permission["identifier"].as_str())
+                    .unwrap_or_default();
+                assert!(!id.starts_with("dialog:"), "{} grants {id}", path.display());
+            }
+            assert!(!text.contains("dialog:"), "{}", path.display());
+            checked += 1;
+        }
+        assert!(checked >= 3);
+    }
 }
 
 #[cfg(test)]
@@ -810,7 +836,8 @@ pub fn run() {
             caption_translate::caption_translate,
         ])
         .setup(|app| {
-            caption_translate::manage(app)?;
+            // Caption translation; failure only disables it.
+            caption_translate::manage(app);
             // MCP control channel (ADR-046); failure only disables it.
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.

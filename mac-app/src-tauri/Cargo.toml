@@ -41,7 +41,6 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 aws-config = { version = "1.8.11", features = ["behavior-version-latest"] }
 aws-sdk-bedrockruntime = "1.46.0"
 aws-sdk-translate = "1.39.0"
-aws-credential-types = "1.2.10"
 
 # macOS-only audio capture (Core Audio process tap + microphone aggregate
 # device, macOS 14.2+) and IOKit idle-sleep protection.
@@ -53,6 +52,10 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFString", "CFDictionary", "CFArray", "CFNumber", "CFBase"] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "block2", "objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardware"] }
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+# Native confirmation sheet for caption AWS profile changes, driven from Rust
+# only (caption_translate.rs). Not tauri-plugin-dialog: that plugin injects
+# window.alert/confirm overrides into every page and registers page commands.
+rfd = { version = "0.17", default-features = false }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
