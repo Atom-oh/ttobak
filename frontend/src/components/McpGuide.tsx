@@ -6,7 +6,7 @@ import {
   type GuideCode, type McpClient, type McpGuideConfig, type McpTransport,
 } from '@/lib/mcpGuide';
 
-function CopyButton({ text, label, disabled = false }: { text: string; label: string; disabled?: boolean }) {
+export function CopyButton({ text, label, disabled = false }: { text: string; label: string; disabled?: boolean }) {
   const [status, setStatus] = useState<{ text: string; result: 'copied' | 'failed' } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
