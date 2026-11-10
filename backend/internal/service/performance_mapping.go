@@ -89,13 +89,36 @@ func (svc *PerformanceService) autoMapAssignments(ctx context.Context, userID st
 		return fmt.Errorf("list readable accounts: %w", err)
 	}
 	matched := MatchSFDCAccounts(assignments, candidates)
+	existing, err := svc.store.ListAccountMappings(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("list mappings: %w", err)
+	}
+	current := make(map[string]model.AccountMapping, len(existing))
+	for _, mapping := range existing {
+		current[mapping.SFDCAccountID] = mapping
+	}
+	var failures []error
+	var stale []string
+	for sfdcID, mapping := range current {
+		if _, ok := matched[sfdcID]; !ok && !mapping.Manual {
+			stale = append(stale, sfdcID)
+		}
+	}
+	sort.Strings(stale)
+	for _, sfdcID := range stale {
+		if err := svc.store.DeleteAccountMappingIfAutomatic(ctx, userID, sfdcID); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	sfdcIDs := make([]string, 0, len(matched))
 	for sfdcID := range matched {
+		if prior, found := current[sfdcID]; found && (prior.Manual || prior.AccountID == matched[sfdcID]) {
+			continue
+		}
 		sfdcIDs = append(sfdcIDs, sfdcID)
 	}
 	sort.Strings(sfdcIDs)
 	updatedAt := svc.now().UTC().Format(time.RFC3339)
-	var failures []error
 	for _, sfdcID := range sfdcIDs {
 		mapping := model.AccountMapping{SFDCAccountID: sfdcID, AccountID: matched[sfdcID], UpdatedAt: updatedAt}
 		err := svc.store.PutAccountMapping(ctx, userID, mapping, true)
@@ -104,7 +127,7 @@ func (svc *PerformanceService) autoMapAssignments(ctx context.Context, userID st
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf("%d of %d mappings failed: %w", len(failures), len(sfdcIDs), errors.Join(failures...))
+		return fmt.Errorf("%d mapping writes failed: %w", len(failures), errors.Join(failures...))
 	}
 	return nil
 }

@@ -119,3 +119,56 @@ func TestSyncSurvivesAutoMappingFailure(test *testing.T) {
 		test.Fatalf("calls %d puts %v", accounts.calls, store.put)
 	}
 }
+
+func staleMappingStore(mappings ...model.AccountMapping) *performanceStoreFake {
+	return &performanceStoreFake{
+		assignments: map[string][]model.SFDCAssignment{"owner": {
+			{SFDCAccountID: "S1", Name: "Acme", Role: "REGISTRY"},
+			{SFDCAccountID: "S2", Name: "Gone", Role: "REGISTRY"},
+		}},
+		mappings: map[string][]model.AccountMapping{"owner": mappings},
+	}
+}
+
+func TestAutoMappingRemovesStaleAutomatic(test *testing.T) {
+	store := staleMappingStore(
+		model.AccountMapping{SFDCAccountID: "S1", AccountID: "a1"},
+		model.AccountMapping{SFDCAccountID: "S2", AccountID: "a2"},
+		model.AccountMapping{SFDCAccountID: "S9", AccountID: "a9"},
+	)
+	// S1 is now ambiguous, S2 has no readable match, S9 is no longer assigned.
+	accounts := &performanceCandidatesFake{candidates: []NamedCandidate{{ID: "a1", Name: "Acme"}, {ID: "a3", Name: "acme"}}}
+	svc := performanceTestService(store, accounts)
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, performanceAssignmentSync(true)); err != nil {
+		test.Fatal(err)
+	}
+	if len(store.deleted) != 3 || store.deleted[0] != "S1" || store.deleted[1] != "S2" || store.deleted[2] != "S9" || len(store.put) != 0 {
+		test.Fatalf("deleted %v put %v", store.deleted, store.put)
+	}
+}
+
+func TestAutoMappingKeepsManualWhenStale(test *testing.T) {
+	store := staleMappingStore(
+		model.AccountMapping{SFDCAccountID: "S1", AccountID: "a1", Manual: true},
+		model.AccountMapping{SFDCAccountID: "S9", AccountID: "a9", Manual: true},
+	)
+	svc := performanceTestService(store, &performanceCandidatesFake{})
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, performanceAssignmentSync(true)); err != nil {
+		test.Fatal(err)
+	}
+	if len(store.deleted) != 0 {
+		test.Fatalf("manual rows must not be deleted: %v", store.deleted)
+	}
+}
+
+func TestAutoMappingSkipsUnchangedAutomatic(test *testing.T) {
+	store := staleMappingStore(model.AccountMapping{SFDCAccountID: "S1", AccountID: "a1", UpdatedAt: "2026-01-01T00:00:00Z"})
+	accounts := &performanceCandidatesFake{candidates: []NamedCandidate{{ID: "a1", Name: "Acme"}}}
+	svc := performanceTestService(store, accounts)
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, performanceAssignmentSync(true)); err != nil {
+		test.Fatal(err)
+	}
+	if len(store.put) != 0 || len(store.deleted) != 0 {
+		test.Fatalf("put %v deleted %v", store.put, store.deleted)
+	}
+}

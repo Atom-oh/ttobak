@@ -42,6 +42,7 @@ type PerformanceStore interface {
 	ListPerformanceAssignments(ctx context.Context, userID string) ([]model.SFDCAssignment, error)
 	ListAccountMappings(ctx context.Context, userID string) ([]model.AccountMapping, error)
 	PutAccountMapping(ctx context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error
+	DeleteAccountMappingIfAutomatic(ctx context.Context, userID, sfdcAccountID string) error
 	GetPerformanceGoals(ctx context.Context, userID string, year int) (*model.PerformanceGoals, error)
 	PutPerformanceGoals(ctx context.Context, userID string, goals model.PerformanceGoals) error
 }

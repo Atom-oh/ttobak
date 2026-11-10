@@ -26,6 +26,8 @@ type performanceStoreFake struct {
 	putManual   []bool
 	applyErr    error
 	putErr      error
+	deleted     []string
+	deleteErr   error
 	replay      bool
 }
 
@@ -56,6 +58,11 @@ func (fake *performanceStoreFake) PutAccountMapping(_ context.Context, userID st
 	fake.put = append(fake.put, mapping)
 	fake.putManual = append(fake.putManual, onlyIfNotManual)
 	return fake.putErr
+}
+
+func (fake *performanceStoreFake) DeleteAccountMappingIfAutomatic(_ context.Context, userID, sfdcAccountID string) error {
+	fake.deleted = append(fake.deleted, sfdcAccountID)
+	return fake.deleteErr
 }
 
 func (fake *performanceStoreFake) GetPerformanceGoals(_ context.Context, userID string, year int) (*model.PerformanceGoals, error) {

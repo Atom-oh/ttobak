@@ -380,3 +380,33 @@ func TestListPerformanceSourcesOwnerRows(test *testing.T) {
 		test.Fatalf("bad user: %v", err)
 	}
 }
+
+func TestDeleteAccountMappingIfAutomatic(test *testing.T) {
+	var body map[string]any
+	var target string
+	reject := false
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		target = performanceTarget(request)
+		body = performanceBody(test, request)
+		if reject {
+			return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"x"}`, nil), nil
+		}
+		return summaryHTTPResponse(200, `{}`, nil), nil
+	})
+	if err := repo.DeleteAccountMappingIfAutomatic(test.Context(), "owner", "A1"); err != nil {
+		test.Fatal(err)
+	}
+	key := body["Key"].(map[string]any)
+	condition := analysisCondition(test, body)
+	if target != "DeleteItem" || key["SK"].(map[string]any)["S"] != "PERFMAP#A1" ||
+		!strings.Contains(condition, "manual") || !strings.Contains(condition, `{"BOOL":false}`) {
+		test.Fatalf("target %s key %v condition %s", target, key, condition)
+	}
+	reject = true
+	if err := repo.DeleteAccountMappingIfAutomatic(test.Context(), "owner", "A1"); err != nil {
+		test.Fatalf("a manual row is a no-op: %v", err)
+	}
+	if err := repo.DeleteAccountMappingIfAutomatic(test.Context(), "bad user", "A1"); !errors.Is(err, ErrInvalidPerformanceInput) {
+		test.Fatalf("bad user: %v", err)
+	}
+}
