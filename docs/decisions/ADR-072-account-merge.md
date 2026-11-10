@@ -102,7 +102,11 @@ unshare. This deliberately departs from the design's rewrite of `shareAccountId`
 link-only meeting moves with the meeting writer, which writes no target
 `MEETINGREF#` row for an unpublished meeting. While the job runs, the scan runs inside
 the `-apply` invocation that starts or resumes it; `-verify` is the read-only
-post-merge count.
+post-merge count. Rows a concurrent edit made the scan skip are re-scanned, and the
+worker is not started while any remain. A calendar move bumps the row's
+`shareVersion` so an in-flight sync cannot restore A. The CLI decrypts and re-seals
+calendar payloads in the operator's process with the operator host's existing KMS
+grant. The CLI dry run prints the preview's `newAudience` disclosure.
 
 ### Amendment: post-merge CLI rows
 

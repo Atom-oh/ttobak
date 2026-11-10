@@ -113,6 +113,7 @@ type fakeUsers struct {
 	cipher    string
 	refs      []*model.MeetingRef
 	failTask  error
+	skipTask  int // the next n task moves fail their version condition
 	fence     error
 	fenceTask error
 	log       *[]string
@@ -145,6 +146,10 @@ func (f *fakeUsers) MoveSpecReqTaskRowForMerge(_ context.Context, job *model.Acc
 	f.moves = append(f.moves, "task:"+job.SourceAccountID+">"+job.TargetAccountID+postMergeTag(job))
 	if f.fenceTask != nil {
 		return f.fenceTask
+	}
+	if f.skipTask > 0 {
+		f.skipTask--
+		return repository.ErrConditionFailed
 	}
 	return f.failTask
 }
@@ -201,7 +206,8 @@ func newHarness() *harness {
 	h.svc = &fakeSvc{jobs: h.jobs, finishAfter: 2,
 		final: &model.AccountMergeJob{SourceAccountID: "src", TargetAccountID: "tgt", State: model.MergeStateDone, Step: "finish", Counts: map[string]int{"members.moved": 3}},
 		preview: &model.AccountMergePreview{Counts: map[string]int{"meetings": 5}, RequiresAcceptUnmoved: true,
-			Unmoved: []model.MergeUnmovedCategory{{Category: "kb", Present: true}, {Category: "documents"}}}}
+			Unmoved:     []model.MergeUnmovedCategory{{Category: "kb", Present: true}, {Category: "documents"}},
+			NewAudience: model.MergeAudience{IntoMembersNotInFrom: 2, IntoHasAncestors: true}}}
 	h.jobs.job = &model.AccountMergeJob{SourceAccountID: "src", TargetAccountID: "tgt", State: model.MergeStateRunning, Step: "members", UpdatedAt: time.Unix(100, 0)}
 	payload := `{"externalId":"x","title":"t","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-11-01T01:00:00Z","timeZone":"UTC","accountId":"src","shareAccountId":"shared","candidateAccountIds":["src","other","tgt"]}`
 	h.users = &fakeUsers{log: &h.log, rows: []repository.MergeUserRow{
@@ -247,6 +253,9 @@ func TestMergeCLIDryRunWritesNothing(t *testing.T) {
 	}
 	if strings.Join(h.svc.calls, ",") != "preview" || len(h.jobs.claims) != 0 || h.jobs.released != 0 || len(h.users.moves) != 0 {
 		t.Fatalf("dry run wrote: calls=%v claims=%v moves=%v", h.svc.calls, h.jobs.claims, h.users.moves)
+	}
+	if res.NewAudience == nil || res.NewAudience.IntoMembersNotInFrom != 2 || !res.NewAudience.IntoHasAncestors {
+		t.Fatalf("dry run must disclose the new audience: %+v", res.NewAudience)
 	}
 	if res.Mode != "dry-run" || res.Counts["meetings"] != 5 || !res.RequiresAcceptUnmoved || len(res.UnmovedPresent) != 1 || res.UnmovedPresent[0] != "kb" {
 		t.Fatalf("preview not reported: %+v", res)
@@ -390,8 +399,17 @@ func TestMergeCLIChangedRowsAreSkippedAndFenceAbortsScan(t *testing.T) {
 	o := opts()
 	o.Apply = true
 	res, err := run(context.Background(), h.d, o)
-	if err != nil || res.UserRows["specreqTasksSkipped"] != 1 || res.UserRows["errors"] != 0 {
-		t.Fatalf("a changed row must be skipped, not an error: %+v / %v", res, err)
+	if errorCode(err) != "SCAN_INCOMPLETE" || res.UserRows["specreqTasksSkipped"] != 1 || res.UserRows["errors"] != 0 ||
+		h.jobs.released != scanApplyPasses || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
+		t.Fatalf("a row still skipped after every pass must stop before the worker: %+v / %v released=%d calls=%v", res, err, h.jobs.released, h.svc.calls)
+	}
+
+	// A row skipped once is picked up by the next pass and the worker runs.
+	h = newHarness()
+	h.users.skipTask = 1
+	res, err = run(context.Background(), h.d, o)
+	if err != nil || res.UserRows["specreqTasksSkipped"] != 0 || res.UserRows["specreqTasksMoved"] < 1 || !strings.Contains(strings.Join(h.svc.calls, ","), "process") {
+		t.Fatalf("a re-scan must pick up a once-skipped row: %+v / %v calls=%v", res, err, h.svc.calls)
 	}
 
 	h = newHarness()

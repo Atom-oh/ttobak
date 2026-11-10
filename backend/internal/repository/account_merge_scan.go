@@ -227,7 +227,11 @@ func (r *DynamoDBRepository) MoveCalendarEventRowForMerge(ctx context.Context, j
 		row.PK != model.PrefixUser+row.UserID || row.SK != model.CalendarEventSortKey(row.SourceID, row.EventID) {
 		return fmt.Errorf("invalid merge calendar move")
 	}
-	update := expression.Set(expression.Name("accountId"), expression.Value(job.TargetAccountID)).Set(expression.Name("ciphertext"), expression.Value(ciphertext))
+	// shareVersion is the row's optimistic token for sync and share writers:
+	// bumping it makes a sync that read the row before the move fail its
+	// condition and re-read, instead of restoring the source account.
+	update := expression.Set(expression.Name("accountId"), expression.Value(job.TargetAccountID)).Set(expression.Name("ciphertext"), expression.Value(ciphertext)).
+		Set(expression.Name("shareVersion"), expression.Value(row.ShareVersion+1))
 	cond := expression.AttributeExists(expression.Name("PK")).And(expression.Name("accountId").Equal(expression.Value(job.SourceAccountID))).
 		And(expression.Name("revision").Equal(expression.Value(row.Revision))).
 		And(expression.Name("ciphertext").Equal(expression.Value(row.Ciphertext)))

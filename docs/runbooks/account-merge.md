@@ -52,7 +52,13 @@ Each rewrite is one transaction with the merge fence checks (running job, CLI le
 source owner, requester membership of the target, open target; after the job is done
 the post-merge fence of section 7) and is conditioned on
 `accountId` still naming A and on the row state the scan read. A lost fence stops
-the scan. A changed row is counted as `Skipped`: rerun to pick it up. Any other
+the scan. A changed row is counted as `Skipped` and the scan runs again, up to three
+passes; rows still skipped after that stop the run with `SCAN_INCOMPLETE` before the
+worker starts, so the in-job scan never finishes over rows it left behind (a
+post-merge run, section 7, reports the same code while rows stay skipped). A calendar move also bumps the row's
+`shareVersion`, so a sync that read the row before the move fails and re-reads it,
+and a sync naming a merging or merged account is refused with 409
+`ACCOUNT_MERGING`. Any other
 failure is counted in `errors` and by reason in `errors.decrypt`, `errors.payload`,
 `errors.encrypt` or `errors.write`; the CLI then releases its lease and does not
 start the worker, so nothing finishes while rows are left behind. The scan reads
@@ -138,9 +144,9 @@ job is `failed` at the step it reached.
 1. Confirm with `-status` that `errorCode` is `REQUESTER_REVOKED`.
 2. Decide who should finish the merge. Either restore the original requester's
    Owner role and target membership through the normal member and owner-transfer
-   routes, or choose another user who is Owner of the source and a direct member of
-   the target (a new Owner of the source through ADR-071 owner transfer, joined to
-   the target).
+   routes, or choose another user who is already Owner of the source and a direct
+   member of the target. ADR-071 owner transfer is refused while the source carries
+   `mergingInto`, so it cannot appoint a new Owner during a fenced job.
 3. Rerun the step 2 command with `-requester` set to that user and the same `-into`
    (the target must match the failed job). Start re-authorizes the new requester and
    resumes the job from its saved step with that user as the job's requester.
