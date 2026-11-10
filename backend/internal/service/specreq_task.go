@@ -225,8 +225,8 @@ func (svc *SpecReqTaskService) Transition(ctx context.Context, userID, eventID s
 		return nil, ErrConflict
 	}
 	current := taskFromRow(*row)
-	if change.Op == model.SpecReqOpLinkSpecReq && change.SpecReqID != "" &&
-		current.SpecReqID != "" && current.SpecReqID != change.SpecReqID {
+	// No op may re-bind a task that is already linked to a different SpecReq.
+	if change.SpecReqID != "" && current.SpecReqID != "" && current.SpecReqID != change.SpecReqID {
 		return nil, ErrConflict
 	}
 	next, err := applySpecReqTransition(current, change)

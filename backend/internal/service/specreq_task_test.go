@@ -316,11 +316,15 @@ func TestSpecReqTransition_LinkRejectsDifferentSpecReq(test *testing.T) {
 	fixture.seed(func(row *repository.SpecReqTaskRow) {
 		row.Path, row.State, row.CounterpartUserID, row.SpecReqID = model.SpecReqPathTheirs, model.SpecReqStateRequested, srCounterpart, srSpecReqA
 	})
-	_, err := fixture.svc.Transition(context.Background(), srUser, fixture.eventID, model.SpecReqTaskTransition{
-		Op: model.SpecReqOpLinkSpecReq, Version: 3, SpecReqID: srSpecReqB,
-	})
-	if !errors.Is(err, ErrConflict) || len(fixture.store.updates) != 0 {
-		test.Fatalf("error = %v, updates = %d", err, len(fixture.store.updates))
+	for _, change := range []model.SpecReqTaskTransition{
+		{Op: model.SpecReqOpLinkSpecReq, Version: 3, SpecReqID: srSpecReqB},
+		{Op: model.SpecReqOpRecordAck, Version: 3, SpecReqID: srSpecReqB, State: model.SpecReqStateAcked},
+		{Op: model.SpecReqOpRefreshSpecReq, Version: 3, SpecReqID: srSpecReqB, SpecReqStatus: model.SpecReqStatusWorking},
+	} {
+		_, err := fixture.svc.Transition(context.Background(), srUser, fixture.eventID, change)
+		if !errors.Is(err, ErrConflict) || len(fixture.store.updates) != 0 {
+			test.Fatalf("%s: error = %v, updates = %d", change.Op, err, len(fixture.store.updates))
+		}
 	}
 	if _, err := fixture.svc.Transition(context.Background(), srUser, fixture.eventID, model.SpecReqTaskTransition{
 		Op: model.SpecReqOpLinkSpecReq, Version: 3, SpecReqID: srSpecReqA,
