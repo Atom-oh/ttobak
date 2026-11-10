@@ -10,7 +10,7 @@ import { MissedList } from '@/components/performance/MissedList';
 import { accountApi, performanceApi } from '@/lib/api';
 import {
   accountListState, describeFreshness, PERFORMANCE_PERIODS, periodLabel, type AccountListResult,
-  type PerformanceMappingItem, type PerformanceMissedList, type PerformancePeriod,
+  type PerformanceMappingList, type PerformanceMissedList, type PerformancePeriod,
 } from '@/lib/performance';
 import type { AccountSummary } from '@/types/meeting';
 
@@ -27,7 +27,7 @@ function Spinner() {
 // Owner-only SA activity page: every request reads the caller's own rows and
 // the page has no share control (ADR-068).
 export default function PerformancePage() {
-  const { isLoading, isAuthenticated, user } = useAuth();
+  const { isLoading, isAuthenticated, user, membershipRevision } = useAuth();
   const router = useRouter();
   const userId = user?.userId ?? '';
   const [period, setPeriod] = useState<PerformancePeriod>('week');
@@ -35,7 +35,7 @@ export default function PerformancePage() {
   // Results are tagged with the request that produced them, so a period
   // change or reload shows the spinner without resetting state in an effect.
   const [missedResult, setMissedResult] = useState<{ key: string; data?: PerformanceMissedList; error?: string } | null>(null);
-  const [mappingsResult, setMappingsResult] = useState<{ key: string; data?: PerformanceMappingItem[]; error?: string } | null>(null);
+  const [mappingsResult, setMappingsResult] = useState<{ key: string; data?: PerformanceMappingList; error?: string } | null>(null);
   const [accountsResult, setAccountsResult] = useState<AccountListResult<AccountSummary> | null>(null);
   const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [year] = useState(seoulYear);
@@ -47,43 +47,46 @@ export default function PerformancePage() {
   useEffect(() => {
     if (!userId) return;
     let active = true;
-    const key = `${reloadKey}:${accountsAttempt}`;
+    const key = `${membershipRevision}:${reloadKey}:${accountsAttempt}`;
     // A failed list is an error state with a retry, never an empty account list.
-    accountApi.list({ expectedUserId: userId })
+    // accountApi.list can throw synchronously (AUTH_CHANGED); start from a promise so it becomes the error state.
+    Promise.resolve()
+      .then(() => accountApi.list({ expectedUserId: userId }))
       .then(result => { if (active) setAccountsResult(Array.isArray(result?.accounts) ? { userId, key, accounts: result.accounts } : { userId, key, error: true }); })
       .catch(() => { if (active) setAccountsResult({ userId, key, error: true }); });
     return () => { active = false; };
-  }, [userId, reloadKey, accountsAttempt]);
+  }, [userId, membershipRevision, reloadKey, accountsAttempt]);
 
   useEffect(() => {
     if (!userId) return;
     const controller = new AbortController();
-    const key = `${userId}:${period}:${reloadKey}`;
+    const key = `${userId}:${membershipRevision}:${period}:${reloadKey}`;
     performanceApi.missed(period, { signal: controller.signal, expectedUserId: userId })
       .then(data => setMissedResult({ key, data }))
       .catch(() => { if (!controller.signal.aborted) setMissedResult({ key, error: '놓친 항목을 불러오지 못했습니다.' }); });
     return () => controller.abort();
-  }, [userId, period, reloadKey]);
+  }, [userId, membershipRevision, period, reloadKey]);
 
   useEffect(() => {
     if (!userId) return;
     const controller = new AbortController();
-    const key = `${userId}:${reloadKey}`;
+    const key = `${userId}:${membershipRevision}:${reloadKey}`;
     performanceApi.mappings({ signal: controller.signal, expectedUserId: userId })
-      .then(result => setMappingsResult({ key, data: result.items }))
+      .then(result => setMappingsResult({ key, data: result }))
       .catch(() => { if (!controller.signal.aborted) setMappingsResult({ key, error: 'SFDC 매핑 목록을 불러오지 못했습니다.' }); });
     return () => controller.abort();
-  }, [userId, reloadKey]);
+  }, [userId, membershipRevision, reloadKey]);
 
-  // Every result is bound to the signed-in user; another user's rows never render.
-  const currentMissed = missedResult?.key === `${userId}:${period}:${reloadKey}` ? missedResult : null;
+  // Every result is bound to the signed-in user and the membership revision: grants that
+  // materialize in a later bootstrap pass refetch the missed list and the queue too.
+  const currentMissed = missedResult?.key === `${userId}:${membershipRevision}:${period}:${reloadKey}` ? missedResult : null;
   const missed = currentMissed?.data ?? null;
   const missedError = currentMissed?.error ?? null;
   // Keep the previous queue visible while a reload after a saved mapping runs.
   const ownMappings = mappingsResult?.key.startsWith(`${userId}:`) ? mappingsResult : null;
   const mappings = ownMappings?.data ?? null;
-  const mappingsError = ownMappings?.key === `${userId}:${reloadKey}` ? ownMappings.error ?? null : null;
-  const accountList = useMemo(() => accountListState(accountsResult, userId, `${reloadKey}:${accountsAttempt}`), [accountsResult, userId, reloadKey, accountsAttempt]);
+  const mappingsError = ownMappings?.key === `${userId}:${membershipRevision}:${reloadKey}` ? ownMappings.error ?? null : null;
+  const accountList = useMemo(() => accountListState(accountsResult, userId, `${membershipRevision}:${reloadKey}:${accountsAttempt}`), [accountsResult, userId, membershipRevision, reloadKey, accountsAttempt]);
   const accounts = accountList.accounts;
   const accountNames = useMemo(() => accountList.status === 'error' ? null : new Map(accounts.map(account => [account.accountId, account.name])), [accountList.status, accounts]);
   const retryAccounts = () => setAccountsAttempt(attempt => attempt + 1);
@@ -154,7 +157,7 @@ export default function PerformancePage() {
                 <button type="button" onClick={() => setReloadKey(key => key + 1)} className="font-semibold text-primary hover:underline">다시 불러오기</button>
               </div>
             )
-              : mappings ? <MappingQueue items={mappings} accounts={accounts} accountsStatus={accountList.status}
+              : mappings ? <MappingQueue items={mappings.items} truncated={mappings.truncated} accounts={accounts} accountsStatus={accountList.status}
                 onRetryAccounts={retryAccounts} userId={userId} onSaved={() => setReloadKey(key => key + 1)} />
                 : <div className="flex justify-center py-8"><Spinner /></div>}
           </section>

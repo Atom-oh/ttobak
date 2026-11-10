@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useMemo } from 'react';
-import { calendarCoverageNotice, groupMissedItems, loggingGapsEmptyText, missedItemDetail, missedItemHref, missedItemTitle, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
+import { calendarCoverageNotice, groupMissedItems, loggingGapsEmptyText, MISSED_ITEM_CAP, missedGroupEmptyText, missedListMayBeCapped, missedItemDetail, missedItemHref, missedItemTitle, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
 
 function MissedGroup({ title, icon, empty, items, accountNames }: {
   title: string;
@@ -49,6 +49,7 @@ export function MissedList({ list, accountNames, onRetryAccounts }: {
   onRetryAccounts: () => void;
 }) {
   const groups = useMemo(() => groupMissedItems(list.items), [list.items]);
+  const capped = missedListMayBeCapped(list);
   return (
     <div className="space-y-6">
       {!accountNames && (
@@ -58,10 +59,15 @@ export function MissedList({ list, accountNames, onRetryAccounts }: {
         </p>
       )}
       <p role="note" className="text-xs text-slate-500 dark:text-text-muted">{calendarCoverageNotice(list.calendarCoverageStart)}</p>
+      {capped && (
+        <p role="alert" className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+          항목이 {MISSED_ITEM_CAP}건 표시 한도에 도달했습니다. 건수는 최소값이며, 활동이 전혀 없는 고객부터 빠졌을 수 있습니다. 기간을 좁혀 확인하세요.
+        </p>
+      )}
       <div className="grid gap-6 md:grid-cols-2">
-        <MissedGroup title="SFDC 로깅 누락" icon="edit_note" empty={loggingGapsEmptyText(list.calendarCoverageStart)}
+        <MissedGroup title="SFDC 로깅 누락" icon="edit_note" empty={missedGroupEmptyText(loggingGapsEmptyText(list.calendarCoverageStart), capped)}
           items={groups.loggingGaps} accountNames={accountNames} />
-        <MissedGroup title="연락 끊긴 고객" icon="history" empty="연락이 끊긴 고객이 없습니다."
+        <MissedGroup title="연락 끊긴 고객" icon="history" empty={missedGroupEmptyText('연락이 끊긴 고객이 없습니다.', capped)}
           items={groups.silentCustomers} accountNames={accountNames} />
       </div>
       {list.unmappedCount > 0 && (

@@ -25,7 +25,7 @@ export interface PerformanceMissedList {
   unmappedCount: number;
   sourceFreshness: PerformanceSourceFreshness[];
   /** Earliest start (RFC3339 UTC) among the calendar events read; empty when none. */
-  calendarCoverageStart?: string;
+  calendarCoverageStart: string;
 }
 
 export interface PerformanceGoals {
@@ -48,6 +48,8 @@ export interface PerformanceMappingItem {
 
 export interface PerformanceMappingList {
   items: PerformanceMappingItem[];
+  /** True when more than 500 assignments exist and only the first 500 are listed. */
+  truncated: boolean;
 }
 
 export interface AccountMapping {
@@ -194,6 +196,19 @@ export function loggingGapsEmptyText(start: string | undefined): string {
   const date = seoulParts(start)?.date;
   if (!date) return '확인된 로깅 누락이 없습니다. 캘린더 일정이 없어 캘린더 기반 누락은 평가하지 않았습니다.';
   return `${date} 이후 일정 기준으로 확인된 로깅 누락이 없습니다.`;
+}
+
+/** The server caps the missed list at this many items (newest first, untouched silent customers last). */
+export const MISSED_ITEM_CAP = 500;
+
+/** Whether the missed list may have been cut at the server cap. */
+export function missedListMayBeCapped(list: { items: unknown[] }): boolean {
+  return list.items.length >= MISSED_ITEM_CAP;
+}
+
+/** Empty-state text for a missed group; never a clean result when the list may be capped. */
+export function missedGroupEmptyText(base: string, capped: boolean): string {
+  return capped ? `표시 한도(${MISSED_ITEM_CAP}건)에 도달해 이 항목은 표시되지 않았을 수 있습니다. 기간을 좁혀 다시 확인하세요.` : base;
 }
 
 export type AccountListResult<T> = { userId: string; key: string | number; accounts?: T[]; error?: boolean };
