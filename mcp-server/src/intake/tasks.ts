@@ -360,6 +360,11 @@ class TaskRun {
     let failure: unknown;
     for (const eventId of Object.keys(this.seen.closing)) {
       try {
+        // Still synced to TTOBAK: not removed, whatever the local ledger says.
+        if (this.events.has(eventId)) {
+          delete this.seen.closing[eventId];
+          continue;
+        }
         // Past the list cap a row may exist without being loaded.
         const task = this.tasks.get(eventId) ?? (this.complete ? undefined
           : parseTask(await this.options.api.getSpecReqTask(eventId)));
@@ -681,7 +686,8 @@ class TaskRun {
             this.counts.linked++;
           }
           this.touched.add(eventId);
-          // The task row is the cross-device record: an attempted or finished ack is never repeated.
+          // A recorded attempt (row state or failure code) is not repeated. The ack ledger that guards
+          // the call itself is device-local, so another device may still attempt once before the row records it.
           if (['acked', 'ack_failed', 'resolved'].includes(task.state) || task.failureCode) continue;
           if (!this.options.selection.autoAck) {
             if (enqueueNotice(this.options.store, this.options.scope, { eventId, state: 'ack_needed',

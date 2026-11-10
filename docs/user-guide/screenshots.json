@@ -1,0 +1,373 @@
+{
+  "capturedOn": "2026-11-10",
+  "sourceRevision": "0d9f1075169ba8d4692036dc98360b6514ef3b44",
+  "method": "Unchanged local frontend; fictional read-only API fixtures; Chromium with Korean system fonts; lossless WebP at original viewport size.",
+  "limitations": "Development user/admin and enabled Billing configuration; no production data, native macOS capture, microphone recording, provider approval or live acceptance. Only the development indicator is excluded.",
+  "archive": {
+    "url": "https://api.github.com/repos/Atom-oh/ttobak/releases/assets/730636766",
+    "bytes": 1465184,
+    "sha256": "e1afd007ef453a50d9515ee58bbd6a4f8b3247e5ee156ddbbe4ad418271f8b42"
+  },
+  "screens": [
+    {
+      "file": "screen-home.webp",
+      "route": "/",
+      "chapter": "home",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 58702,
+      "sha256": "832894a4cc9957731e8f5e37999ca66fd1b8b10cd593952332516e461413ba50"
+    },
+    {
+      "file": "screen-assistant.webp",
+      "route": "/chat",
+      "chapter": "qa",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 32328,
+      "sha256": "e5a2e52586398eb0fe2a75d0bf65f27d13c37ec027cc55dec7f40c2847e73a2f"
+    },
+    {
+      "file": "screen-meetings.webp",
+      "route": "/meetings",
+      "chapter": "meeting",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 58736,
+      "sha256": "4bb52cdec7a3eff435d8b58b355f417425a6129f790320e3304c1cdb61458321"
+    },
+    {
+      "file": "screen-record.webp",
+      "route": "/record",
+      "chapter": "record",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 46708,
+      "sha256": "f6d81d43e4834ea1e26124827640b59ff7134759c8a9d788fa4f4d28eeead4bb"
+    },
+    {
+      "file": "screen-upload.webp",
+      "route": "/record?mode=upload",
+      "chapter": "upload",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 26352,
+      "sha256": "7ad1fd4e34bbb497a7813f574c9d7bc4044e95a8ded2021d9e845c0f96299065"
+    },
+    {
+      "file": "screen-meeting.webp",
+      "route": "/meeting/guide-meeting",
+      "chapter": "meeting",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 56014,
+      "sha256": "fff205dd9cc0c0094a28136ffb45c0a2239301b72188486f61d6b515a991cdb0"
+    },
+    {
+      "file": "screen-meeting-followup.webp",
+      "route": "/meeting/guide-meeting",
+      "chapter": "followup",
+      "action": "#sa-follow-up",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 58762,
+      "sha256": "d1032bfec8ae3a2a8bb962a939303209b6e41d63aeb9efdc7929e47dfd164179"
+    },
+    {
+      "file": "screen-accounts.webp",
+      "route": "/accounts",
+      "chapter": "accounts",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 49152,
+      "sha256": "33e53d945a9988f0cfca279b817e4be24a90366b6c9a08c51670083ffb8274a3"
+    },
+    {
+      "file": "screen-account-overview.webp",
+      "route": "/accounts/guide-account",
+      "chapter": "accounts",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 47468,
+      "sha256": "e8d8b1e61d044568cf084ed955d18a6df097d909d32c607f11f0dd43545e6526"
+    },
+    {
+      "file": "screen-contacts.webp",
+      "route": "/accounts/guide-account",
+      "chapter": "contacts",
+      "action": "heading:고객 연락처",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 40194,
+      "sha256": "aa30f7b1458782517ac3a112b76ba8c6b90da5569a487e4360e6fc47e6ab598e"
+    },
+    {
+      "file": "screen-people.webp",
+      "route": "/accounts/guide-account",
+      "chapter": "people",
+      "action": "#account-people-heading",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 47468,
+      "sha256": "e8d8b1e61d044568cf084ed955d18a6df097d909d32c607f11f0dd43545e6526"
+    },
+    {
+      "file": "screen-projects.webp",
+      "route": "/projects",
+      "chapter": "projects",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 22310,
+      "sha256": "6a4503ffe9f7c7e8123c3c0a647ff367746b8a1f9704201a597f336e78b8db47"
+    },
+    {
+      "file": "screen-project-create.webp",
+      "route": "/projects",
+      "chapter": "projects",
+      "action": "button:새 프로젝트",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 26386,
+      "sha256": "a9e70512e3fa7f6ff123aab3a503ec75e50221df011cab20515f9b9a9296474b"
+    },
+    {
+      "file": "screen-project-detail.webp",
+      "route": "/projects/guide-project",
+      "chapter": "projects",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 37122,
+      "sha256": "7725b6a9ad1bff965a06fd3c1140ff9ebf569931c9c37af1d121d11a45e00781"
+    },
+    {
+      "file": "screen-documents.webp",
+      "route": "/docs",
+      "chapter": "documents",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 24446,
+      "sha256": "bd58ab16a1fca4706f4ec7610372e053d6272039f59bf3fcfbaef71a9d0c7d10"
+    },
+    {
+      "file": "screen-library.webp",
+      "route": "/kb",
+      "chapter": "knowledge",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 36896,
+      "sha256": "a9f99b42772cc8b5ccfa68a5ec0ad0765ddf54c8d948b81798810acf87252d85"
+    },
+    {
+      "file": "screen-library-attachments.webp",
+      "route": "/kb?source=meeting",
+      "chapter": "knowledge",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 30346,
+      "sha256": "d8785848797dda6dfdbfbb0be3f29496be9561484ea58e0260e14ffd14059b9e"
+    },
+    {
+      "file": "screen-research.webp",
+      "route": "/insights?tab=research",
+      "chapter": "research",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 28518,
+      "sha256": "7605094c7e50454499692e0999a0835c7f3c53aca6919c606bd4c99da688c78a"
+    },
+    {
+      "file": "screen-news.webp",
+      "route": "/insights",
+      "chapter": "news",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 27618,
+      "sha256": "674bac508221b5ff14fc97224a5e24910c00929c4c80a7807f23637b71c15a80"
+    },
+    {
+      "file": "screen-tech.webp",
+      "route": "/insights?tab=tech",
+      "chapter": "news",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 28604,
+      "sha256": "679ef6662bb92f72388b0eb6fd21219c14ffc185e4d3e9be0cc444ba295db4be"
+    },
+    {
+      "file": "screen-dictionary.webp",
+      "route": "/dictionary",
+      "chapter": "dictionary",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 35752,
+      "sha256": "443ceef1d24a4ccb83e6f9c0170c76050e0b6e73aa2cf3172f7f5f271b0e049b"
+    },
+    {
+      "file": "screen-billing.webp",
+      "route": "/billing",
+      "chapter": "billing",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 71316,
+      "sha256": "5730b292bc77e83a43c6d04c7871d151817c96db71867105fab0170b33ee1780"
+    },
+    {
+      "file": "screen-settings.webp",
+      "route": "/settings",
+      "chapter": "settings",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 50438,
+      "sha256": "35651764545e86671f0b2420011c7dc99537128c1bb97b7f978ac84446facb43"
+    },
+    {
+      "file": "screen-settings-import.webp",
+      "route": "/settings#contact-import",
+      "chapter": "contacts",
+      "action": "#contact-import",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 48008,
+      "sha256": "b5d0fb9c500f33780e6438dc33f73f81994ce150f4b484507c196bfc54c6bf43"
+    },
+    {
+      "file": "screen-admin.webp",
+      "route": "/settings#user-management",
+      "chapter": "admin",
+      "action": "#user-management",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 42840,
+      "sha256": "6cd96ca78fa8f081fceff365fab0e779c187bd9323308528ca7695cc21b17361"
+    },
+    {
+      "file": "screen-settings-connectors.webp",
+      "route": "/settings",
+      "chapter": "settings",
+      "action": "heading:AI 연결 권한",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 46082,
+      "sha256": "37637971aeef56f21a1bb2b13ac58c8487c211ded01469dd159924d357d4a0db"
+    },
+    {
+      "file": "screen-sharing.webp",
+      "route": "/meeting/guide-meeting",
+      "chapter": "sharing",
+      "action": "button:Share",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 66006,
+      "sha256": "f201d9fbb05441adb229f0c8ed888f62d5355d34636b1140c54fd493c0185c0f"
+    },
+    {
+      "file": "screen-simulation.webp",
+      "route": "/meeting/guide-meeting",
+      "chapter": "simulation",
+      "action": "heading:비용·사이징 시뮬레이션 (베타)",
+      "width": 1440,
+      "height": 1080,
+      "bytes": 61428,
+      "sha256": "b1bc65692c850f370075f222e1097b4864e2125eba7bdbd8510788823701d3b0"
+    },
+    {
+      "file": "screen-mobile-home.webp",
+      "route": "/",
+      "chapter": "devices",
+      "action": null,
+      "width": 390,
+      "height": 844,
+      "bytes": 25424,
+      "sha256": "979fb9f5625a2c17ff723bf1de7c744ae888d336524bf9ea9ccb4ebf398f7e91"
+    },
+    {
+      "file": "screen-mobile-record.webp",
+      "route": "/record",
+      "chapter": "devices",
+      "action": null,
+      "width": 390,
+      "height": 844,
+      "bytes": 18402,
+      "sha256": "bf5cded39d74c7ade353d2b89a056451ca5b14eda5a5550fe02ee5cdaee99299"
+    },
+    {
+      "file": "screen-account-meetings.webp",
+      "route": "/accounts/guide-account?tab=meetings",
+      "chapter": "accounts",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 46808,
+      "sha256": "2ff508f06e8390d0d88fcf0857ad1f088fc6af1363e0d1df0fdc9269ec061b93"
+    },
+    {
+      "file": "screen-account-events.webp",
+      "route": "/accounts/guide-account?tab=events",
+      "chapter": "calendar",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 37700,
+      "sha256": "d17d8da3642831744d856a168d106faa8059c78cca7d47d465fbdfe0017dfd7f"
+    },
+    {
+      "file": "screen-account-insights.webp",
+      "route": "/accounts/guide-account?tab=insights",
+      "chapter": "accounts",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 33706,
+      "sha256": "a212582fe7d3467a06846c1391f716142227092b42156fe92d1c6129fd8dec92"
+    },
+    {
+      "file": "screen-account-projects.webp",
+      "route": "/accounts/guide-account?tab=projects",
+      "chapter": "accounts",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 30800,
+      "sha256": "82794c88dac247979a9ac44d1ef3768a1c4af11a65071f91513c69c9a7fcedd6"
+    },
+    {
+      "file": "screen-account-docs.webp",
+      "route": "/accounts/guide-account?tab=docs",
+      "chapter": "accounts",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 30822,
+      "sha256": "a683631eb0b803da20dbdc0cf76bea185905117efc120d185d01876934d3ab85"
+    },
+    {
+      "file": "screen-account-kb.webp",
+      "route": "/accounts/guide-account?tab=kb",
+      "chapter": "knowledge",
+      "action": null,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 31160,
+      "sha256": "4f86281c33087878eee3c5b295099905e54944480d2bc552ca4bae1b5984e15d"
+    }
+  ]
+}

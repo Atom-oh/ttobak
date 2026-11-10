@@ -28668,6 +28668,10 @@ var init_tasks = __esm({
         let failure2;
         for (const eventId of Object.keys(this.seen.closing)) {
           try {
+            if (this.events.has(eventId)) {
+              delete this.seen.closing[eventId];
+              continue;
+            }
             const task = this.tasks.get(eventId) ?? (this.complete ? void 0 : parseTask(await this.options.api.getSpecReqTask(eventId)));
             if (task && task.state !== "closed") {
               if (await this.transition(task, (current) => current.state === "closed" ? null : { op: "close" })) this.counts.closed++;

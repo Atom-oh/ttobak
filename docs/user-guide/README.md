@@ -17,17 +17,18 @@ manual or follow its anchors. Search leaves all printable chapters intact.
 Preview from the repository root:
 
 ```bash
-python3 -m http.server 8080 --bind 127.0.0.1 --directory docs/user-guide
+python3 scripts/docs/build_user_guide.py --output /tmp/ttobak-guide-preview
+python3 -m http.server 8080 --bind 127.0.0.1 --directory /tmp/ttobak-guide-preview
 ```
 
-Only files explicitly named in `scripts/docs/build_user_guide.py` enter the
-public artifact: HTML, CSS, JavaScript, a local SVG favicon and eight reviewed
-SVG menu illustrations. README, plans, source inventories and review reports are never
-copied. A local-only CSP disables API connections and remote scripts/assets.
-The illustrations are simplified, text-reviewable menu diagrams derived from
-local UI inspection. Captions explicitly distinguish them from screenshots.
-Local raster walkthrough captures remain internal evidence. No production
-account, customer records, credentials or private meeting data were accessed.
+Only allowlisted HTML/CSS/JS/favicon and 36 actual lossless UI captures are
+published. Eight figures are replaced here; remaining figures follow in the
+dependent update. Captures use unchanged frontend UI and fictional read-only
+data. The documentation-only `guide-ui-2026-11-10` Release's `guide-ui.zip`
+is pinned by archive/image SHA-256, bounded sizes and dimensions in
+`screenshots.json`. The credential-free public asset API fetch (or offline
+`--screenshot-archive`) verifies all bytes before output. Serve packaged output.
+Internal files stay excluded; CSP and review gates remain. No production data.
 
 The repository Pages API reports `https://www.atomai.click/ttobak/` as its publication URL (verified 2026-11-10).
 
@@ -140,7 +141,7 @@ vendor packages. Empty costs and unavailable conditional data are not a claim
 that a production dataset was connected. Mac-only controls were source-inspected;
 no macOS capture or Outlook provider acceptance was performed on this Linux host.
 
-Publication-boundary tests cover the reviewed illustrations, rejection of an
+Publication-boundary tests cover verified media and rejection of an
 unreviewed image even if present in the source directory, symlink rejection, CSP,
 remote/path references, missing/duplicate anchors and preservation of existing
 output directories. Browser checks cover 1920/3840 desktop, tablet, 390/360 mobile,
