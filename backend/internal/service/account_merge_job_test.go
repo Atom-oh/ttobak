@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -20,12 +21,50 @@ type fakeMergeJobRepo struct {
 	resumed   []*model.AccountMergeJob
 	ancestors []repository.AccountParentLink
 	failed    []string
+	claimErr  error
+	claimErrs []error  // consumed one per claim before claimErr applies
+	claims    []string // lease owners, one per successful claim
+
+	redispatched int
+}
+
+// ClaimMergeLease leases the stored running job like the repository: free,
+// expired, or already held by owner.
+func (f *fakeMergeJobRepo) ClaimMergeLease(_ context.Context, _ string, owner string, now time.Time, ttl time.Duration) (*model.AccountMergeJob, error) {
+	if len(f.claimErrs) > 0 {
+		err := f.claimErrs[0]
+		f.claimErrs = f.claimErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	if f.claimErr != nil {
+		return nil, f.claimErr
+	}
+	if f.job == nil || f.job.State != model.MergeStateRunning ||
+		(f.job.LeaseOwner != "" && f.job.LeaseOwner != owner && f.job.LeaseUntil >= now.Unix()) {
+		return nil, repository.ErrMergeLeaseHeld
+	}
+	f.job.LeaseOwner, f.job.LeaseUntil = owner, now.Add(ttl).Unix()
+	f.claims = append(f.claims, owner)
+	copied := *f.job
+	return &copied, nil
 }
 
 func (f *fakeMergeJobRepo) GetAccountMergeJob(_ context.Context, _ string) (*model.AccountMergeJob, error) {
 	if f.job == nil {
 		return nil, nil
 	}
+	copied := *f.job
+	return &copied, nil
+}
+
+// RedispatchMergeJob touches a running job whose lease is absent or expired.
+func (f *fakeMergeJobRepo) RedispatchMergeJob(_ context.Context, _ string, now time.Time) (*model.AccountMergeJob, error) {
+	if f.job == nil || f.job.State != model.MergeStateRunning || (f.job.LeaseUntil != 0 && f.job.LeaseUntil >= now.Unix()) {
+		return nil, repository.ErrMergeLeaseHeld
+	}
+	f.redispatched++
 	copied := *f.job
 	return &copied, nil
 }
@@ -43,11 +82,15 @@ func (f *fakeMergeJobRepo) ResumeAccountMerge(_ context.Context, job *model.Acco
 	f.resumed, f.ancestors = append(f.resumed, job), a
 	return nil
 }
-func (f *fakeMergeJobRepo) FailMergeJob(_ context.Context, _ *model.AccountMergeJob, code string) error {
+func (f *fakeMergeJobRepo) FailMergeJob(_ context.Context, job *model.AccountMergeJob, code string) error {
 	if f.failErr != nil {
 		return f.failErr
 	}
 	f.failed = append(f.failed, code)
+	job.State, job.ErrorCode, job.LeaseOwner, job.LeaseUntil = model.MergeStateFailed, code, "", 0
+	if f.job != nil {
+		f.job.State, f.job.ErrorCode, f.job.LeaseOwner, f.job.LeaseUntil = model.MergeStateFailed, code, "", 0
+	}
 	return nil
 }
 
@@ -58,6 +101,7 @@ func startFixture() (*fakeMergeRepo, *fakeMergeJobRepo, *AccountMergeService) {
 	repo.accounts["b"].ParentAccountID = "p"
 	jobs := &fakeMergeJobRepo{}
 	svc.SetJobRepo(jobs)
+	svc.SetMergePublisher(func(context.Context, model.AccountMergeRequested) error { return nil })
 	return repo, jobs, svc
 }
 
@@ -185,13 +229,15 @@ func TestStartResumesFailedJob(t *testing.T) {
 func TestStartRejectsRunningJob(t *testing.T) {
 	repo, jobs, svc := startFixture()
 	repo.accounts["a"].MergingInto = "b"
-	jobs.job = &model.AccountMergeJob{SourceAccountID: "a", TargetAccountID: "b", RequesterUserID: "u1", State: model.MergeStateRunning, Step: "contacts"}
+	// A worker holds a live lease.
+	jobs.job = &model.AccountMergeJob{SourceAccountID: "a", TargetAccountID: "b", RequesterUserID: "u1", State: model.MergeStateRunning,
+		Step: "contacts", LeaseOwner: "w1", LeaseUntil: time.Now().Add(time.Minute).Unix()}
 	req := &model.StartAccountMergeRequest{IntoAccountID: "b", AcceptUnmoved: true}
 	if _, err := svc.Start(context.Background(), "u1", "a", req); !errors.Is(err, ErrMergeJobRunning) {
 		t.Fatalf("err = %v, want ErrMergeJobRunning", err)
 	}
-	if len(jobs.started)+len(jobs.resumed) != 0 {
-		t.Fatal("running job was overwritten")
+	if len(jobs.started)+len(jobs.resumed)+jobs.redispatched != 0 {
+		t.Fatal("running job was overwritten or redispatched")
 	}
 
 	// A job that appeared between the read and the transaction is also a running merge.

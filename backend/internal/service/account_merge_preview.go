@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -45,7 +46,18 @@ type AccountMergeService struct {
 	repo     accountMergeRepo
 	mover    accountMergeMoverRepo
 	jobs     accountMergeJobRepo
+	worker   accountMergeWorkerRepo
 	accounts *AccountService
+
+	publishMerge  func(context.Context, model.AccountMergeRequested) error
+	publishPeople func(context.Context, model.PeopleResolveRequested) error
+	// now, sleep and steps are test seams; nil uses the real clock, a
+	// timer and the movers.
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
+	steps map[string]mergeStepFunc
+	// callBudget, when set, replaces the computed per-call time bound.
+	callBudget time.Duration
 }
 
 // SetMoverRepo wires the job-fenced writers merge movers use.
