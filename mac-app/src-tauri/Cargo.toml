@@ -56,5 +56,8 @@ objc2-core-audio-types = { version = "0.3", default-features = false, features =
 # tauri-plugin-dialog would inject alert/confirm overrides and page commands.
 rfd = { version = "0.17", default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

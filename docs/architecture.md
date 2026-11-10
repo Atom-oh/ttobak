@@ -424,6 +424,13 @@ file bytes. Remote hosting and OAuth client acceptance remain separate from code
 readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
 Stdio alone can record the Mac microphone through a local ffmpeg child and upload
 the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
+The local intake runner (ADR-065) appends SpecReq task notices to
+`~/.ttobak/intake/notify.jsonl`. The Mac app polls that file every 60 seconds
+(`mac-app/src-tauri/src/intake_notify.rs`), validates each line, dedupes on `key`
+in its own seen store and posts a desktop notification. The file is read only
+when it is a private regular file of at most 1 MiB. Notifications are
+informational and never navigate the app; the task strip on the meetings page
+shows the task.
 
 The private connector transport signs verified request identities and exact arguments,
 then invokes private API and QA consumers through service IAM. Atomic current client
