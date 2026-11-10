@@ -44,7 +44,12 @@ Each batch has at most 20 distinct occurrence IDs, with only these mutations:
   caller access. `organizerDomain` is only the lowercase organizer email domain
   (`^[a-z0-9.-]{1,253}$`); the organizer's name and local part are never sent, and
   `GET /api/calendar/events` returns it when present. Body, attendees, provider
-  credentials and arbitrary metadata are not accepted.
+  credentials and arbitrary metadata are not accepted. The request decoder stays
+  strict, so an API that predates `organizerDomain` rejects it with 400; deploy
+  the API before a runner that sends it. The sealed event plaintext is decoded
+  tolerantly of unknown fields, but an API older than that tolerant reader
+  fails to read events sealed with `organizerDomain` until they are re-synced
+  without it or expire.
 - `{"op":"remove","externalId":"..."}`: explicit removal of that source's
   occurrence. The same ID/text bounds apply. No absence-based deletion occurs,
   including for empty `mutations` with `complete:true`.

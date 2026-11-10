@@ -446,6 +446,29 @@ func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) 
 	}
 }
 
+func TestCalendarSealedPayloadToleratesUnknownFields(test *testing.T) {
+	svc, store, _, _ := calendarFixture()
+	calendarStoredEvents(test, svc, store, calendarRequest())
+	row := &store.rows.Rows[0]
+	plaintext, err := svc.cipher.Decrypt(context.Background(), "owner", row.SourceID, row.EventID, row.Ciphertext)
+	if err != nil {
+		test.Fatalf("decrypt stored event: %v", err)
+	}
+	var sealed map[string]any
+	if err := json.Unmarshal(plaintext, &sealed); err != nil {
+		test.Fatalf("decode sealed payload: %v", err)
+	}
+	sealed["futureOptionalField"] = "added by a newer writer"
+	extended, _ := json.Marshal(sealed)
+	if row.Ciphertext, err = svc.cipher.Encrypt(context.Background(), "owner", row.SourceID, row.EventID, extended); err != nil {
+		test.Fatalf("reseal: %v", err)
+	}
+	page, err := svc.ListEvents(context.Background(), "owner", model.CalendarQuery{From: calendarNow, To: calendarNow.Add(24 * time.Hour)})
+	if err != nil || len(page.Events) != 1 || page.Events[0].Title != "Synthetic private title" {
+		test.Fatalf("an unknown sealed field must not break reads: %+v, %v", page, err)
+	}
+}
+
 func TestCalendarEventReadsReturnStoredSharingFields(test *testing.T) {
 	svc, store, _, _ := calendarFixture()
 	request := calendarRequest()
