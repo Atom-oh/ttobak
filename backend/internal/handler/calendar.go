@@ -215,7 +215,8 @@ func validCalendarJSONField(depth int, name string) bool {
 	case 3:
 		return name == "externalId" || name == "title" || name == "startsAt" || name == "endsAt" ||
 			name == "timeZone" || name == "isAllDay" || name == "startDate" || name == "endDate" ||
-			name == "location" || name == "accountId"
+			name == "location" || name == "accountId" || name == "shareAccountId" ||
+			name == "shareEvidence" || name == "candidateAccountIds" || name == "private" || name == "seriesKey"
 	default:
 		return false
 	}
