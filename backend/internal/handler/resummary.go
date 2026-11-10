@@ -68,12 +68,58 @@ func (h *ResummaryHandler) Request(w http.ResponseWriter, r *http.Request) {
 	}
 	writeResummary(w, http.StatusAccepted, result, err)
 }
+
+type englishNoteService interface {
+	GetEnglish(context.Context, string, string) (*service.EnglishNoteResponse, error)
+	RequestEnglish(context.Context, string, string) (*service.ResummaryResponse, error)
+}
+
+// GetEnglish returns the saved English note and its run status. It never
+// inlines the Korean note.
+func (h *ResummaryHandler) GetEnglish(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	english, ok := h.service.(englishNoteService)
+	if r.URL.RawQuery != "" || !ok {
+		writeResummary(w, 0, nil, service.ErrInvalidInput)
+		return
+	}
+	result, err := english.GetEnglish(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "meetingId"))
+	if err != nil {
+		writeResummary(w, 0, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// RequestEnglish queues an English note run from the saved sources. The body
+// is empty or {}; it carries no caller text and no mode.
+func (h *ResummaryHandler) RequestEnglish(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	english, ok := h.service.(englishNoteService)
+	if r.URL.RawQuery != "" || !ok {
+		writeResummary(w, 0, nil, service.ErrInvalidInput)
+		return
+	}
+	var request struct{}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil && err != io.EOF {
+		writeResummary(w, 0, nil, service.ErrInvalidInput)
+		return
+	}
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
+		writeResummary(w, 0, nil, service.ErrInvalidInput)
+		return
+	}
+	result, err := english.RequestEnglish(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "meetingId"))
+	writeResummary(w, http.StatusAccepted, result, err)
+}
 func writeResummary(w http.ResponseWriter, status int, result *service.ResummaryResponse, err error) {
 	switch {
 	case err == nil:
 		writeJSON(w, status, result)
 	case errors.Is(err, service.ErrSummaryReadRestricted):
-		writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "소유자가 공유용 회의록을 먼저 재생성해야 합니다.")
+		writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "이 회의록은 이전 방식으로 만들어졌습니다. 소유자가 회의록을 먼저 다시 생성해야 합니다.")
 	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, 400, model.ErrCodeBadRequest, "Invalid re-summary request")
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, repository.ErrSummaryAccess):

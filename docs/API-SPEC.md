@@ -1951,6 +1951,8 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/meetings/{meetingId}/action-items` | `actionItemsHandler.Get` |
 | GET | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Get` |
 | POST | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Request` |
+| GET | `/api/meetings/{meetingId}/notes/en` | `resummaryHandler.GetEnglish` |
+| POST | `/api/meetings/{meetingId}/notes/en` | `resummaryHandler.RequestEnglish` |
 | GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/status` | `attachmentTextHandler.Status` |
 | POST | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry` | `attachmentTextHandler.Retry` |
 | GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text` | `attachmentTextHandler.Read` |
@@ -2291,6 +2293,8 @@ Deployment prerequisites and runtime acceptance are recorded in
 | --- | --- | --- |
 | GET | `/api/meetings/{meetingId}/resummary` | Current meeting readers; small status response |
 | POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; owner-only `{sharingSafe:true}` with activated privacy writers; `202` with status |
+| GET | `/api/meetings/{meetingId}/notes/en` | Current meeting readers; `200` English note and status |
+| POST | `/api/meetings/{meetingId}/notes/en` | Owner/edit; empty body or `{}` only; `202` with status |
 
 Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?, sharingSafe?}`.
 Both routes reject query strings with 400. POST accepts no caller source fields
@@ -2329,6 +2333,37 @@ return 413 and publish failures return 503. After a 202, source conflicts and
 output limits are reported through failed status; oversized output uses
 `OUTPUT_TOO_LARGE`. Raw source/model text is
 never included in error responses.
+
+### English meeting note
+
+`GET`/`POST /api/meetings/{meetingId}/notes/en` manage a second, English-only note
+(`contentEn`) beside the Korean note. Both routes are authenticated, reject query
+strings with 400, and POST caps its body at 1 KiB and rejects any field (no
+`sharingSafe`, text or language). Errors and limits match re-summary: 403, 404,
+`409 MEETING_BUSY`, `409 NO_SUMMARY_SOURCE`, `409 SOURCE_NOT_READY`, 413, 503.
+POST returns `409 SHARING_REGEN_REQUIRED` while the meeting is read-restricted
+(its Korean note awaits the owner's regeneration); that restriction does not
+block GET.
+
+The run uses the same `SummaryRequested` event with target `en` and its own
+`ANALYSIS#summaryEn` state, so it neither blocks nor is blocked by a Korean run.
+It requires a `done` meeting and the same sources as re-summary (selected
+transcript, saved notes, verified DOCUMENT text, image analyses). It never reads
+the Korean note or a prior English note, and writes only `contentEn` with its
+source hash and `contentEnGeneratedAt`: tasks, insights, tags, sentiment, live
+draft, privacy provenance and simulator/action state are untouched. Failures keep
+the previous English note; an oversized result fails as `OUTPUT_TOO_LARGE`.
+
+`GET` returns `200` with the status fields of the re-summary response plus
+`content` (omitted until a note exists), `generatedAt` (RFC3339) and `stale`.
+`stale` is true when the transcript selection or revision, saved notes or
+verified documents changed since generation (or the source hash was never
+stored); it is not set by Korean note or live-draft edits. Freshness is checked
+after the caller's access: authorization and not-found outcomes remain errors,
+while any other freshness-capture failure (for example more than 20 attachments
+or the check bound) still returns `200` with the stored content and
+`stale: true`, never a fresh guess. Meeting detail adds only
+`hasEnglishNote` (presence of the note); it never inlines `contentEn`.
 
 State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
 requester's edit grant, source fields, attachment inventory and object ETags.

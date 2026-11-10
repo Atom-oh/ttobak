@@ -344,50 +344,6 @@ func FoldLiveSummary(priorContext, liveSummary string) string {
 		liveSummaryFenceStart + "\n" + liveSummary + "\n" + liveSummaryFenceEnd
 }
 
-// AnyNonOwnerShare reports whether shares contains a grant (any permission
-// level) to someone other than ownerID. Used to decide whether it's safe to
-// fold another meeting's content into this meeting's summarize prompt
-// alongside client-controlled liveSummary -- see FoldLiveSummary's
-// threat-model comment for the exfiltration path this guards against.
-//
-// Gates on ANY share, not just a currently-active edit share: only an edit
-// collaborator can ever WRITE liveSummary (UpdateMeeting's permission
-// check), but a leaked linked-meeting content only needs someone with READ
-// access to this meeting to be visible -- including a collaborator who
-// injected while they still had edit and was later demoted to read-only.
-// Demotion doesn't retroactively un-leak an already-injected liveSummary,
-// so the gate must not un-trip on demotion either.
-func AnyNonOwnerShare(shares []model.Share, ownerID string) bool {
-	for _, share := range shares {
-		if share.SharedToID != ownerID {
-			return true
-		}
-	}
-	return false
-}
-
-// HasNonOwnerCollaborator reports whether meeting has any reader/writer
-// other than its owner -- either a direct Share row (any permission level,
-// via AnyNonOwnerShare) or live account membership.
-//
-// Account membership must be checked separately from Share rows:
-// resolveSharedAccess (service/meeting.go) grants account members read
-// access to a meeting with SharedToAccount=true purely from live
-// AccountMember lookups -- a member added after the share was written gets
-// access immediately too, by that function's own design -- and AddMember
-// never backfills a Share row for meetings already shared to the account.
-// So a meeting shared to an account, with a member who joined after that
-// share, has a real non-owner reader with NO corresponding Share row at
-// all; relying on AnyNonOwnerShare alone would miss them. Conservatively
-// treating any account-shared meeting as having a collaborator (skipping
-// the per-member membership query entirely) is the cheap, fail-closed fix.
-func HasNonOwnerCollaborator(meeting *model.Meeting, shares []model.Share) bool {
-	if meeting.SharedToAccount && meeting.AccountID != "" {
-		return true
-	}
-	return AnyNonOwnerShare(shares, meeting.UserID)
-}
-
 // buildSummarizeUserPrompt assembles SummarizeTranscript's user-turn prompt:
 // the speaker-segment transcript if segments were parsed, else the plain
 // transcript, with priorContext (e.g. a persisted live summary) always
@@ -575,6 +531,16 @@ const attachmentSentinel = "<!-- ttobak:attachments -->"
 //
 // Returns "" when there is nothing to append (caller adds nothing).
 func buildAttachmentLinkSections(attachments []model.Attachment) string {
+	return buildAttachmentLinkSectionsFor(attachments, model.NoteLanguageKorean)
+}
+
+// buildAttachmentLinkSectionsFor renders the same tail with headings in the
+// note's language; anything other than English keeps the Korean headings.
+func buildAttachmentLinkSectionsFor(attachments []model.Attachment, language string) string {
+	imageHeading, documentHeading := "\n## 첨부 이미지\n", "\n## 첨부 문서\n"
+	if language == model.NoteLanguageEnglish {
+		imageHeading, documentHeading = "\n## Attached images\n", "\n## Attached documents\n"
+	}
 	var imgSection, docSection strings.Builder
 	seenDocLinks := make(map[string]bool)
 	for _, att := range attachments {
@@ -599,10 +565,10 @@ func buildAttachmentLinkSections(attachments []model.Attachment) string {
 	}
 	out := "\n\n---\n\n" + attachmentSentinel
 	if imgSection.Len() > 0 {
-		out += "\n## 첨부 이미지\n" + imgSection.String()
+		out += imageHeading + imgSection.String()
 	}
 	if docSection.Len() > 0 {
-		out += "\n## 첨부 문서\n" + docSection.String()
+		out += documentHeading + docSection.String()
 	}
 	return out
 }
@@ -997,13 +963,13 @@ DOCUMENT 근거:
 	if len(parsedSegments) == 0 {
 		content = regexp.MustCompile(`\[[^\]]*\]\(transcript://[^)]*\)`).ReplaceAllString(content, "")
 	}
-	content += summaryAttachmentNotice(attachments)
+	content += summaryAttachmentNoticeFor(attachments, language)
 
 	// Append inline image references for processed attachments, plus download
 	// links for document attachments alongside their independently verified text.
 	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
 	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
-		content += buildAttachmentLinkSections(attachments)
+		content += buildAttachmentLinkSectionsFor(attachments, language)
 	}
 
 	return content, nil
