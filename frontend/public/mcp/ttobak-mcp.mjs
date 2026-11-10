@@ -28415,7 +28415,9 @@ function loadSeen(store, scope) {
   }
   raw.refreshed ??= {};
   raw.unknown ??= {};
-  if (!record17(raw.refreshed) || !record17(raw.unknown)) throw new IntakeError("STORE_INVALID", "task seen state is malformed");
+  if (!record17(raw.refreshed) || !record17(raw.unknown) || raw.tracked !== void 0 && !record17(raw.tracked)) {
+    throw new IntakeError("STORE_INVALID", "task seen state is malformed");
+  }
   return raw;
 }
 async function runTasks(options) {
@@ -28436,7 +28438,7 @@ var init_tasks = __esm({
     init_notify();
     init_slack_draft();
     init_specreq();
-    TASK_LIST_MAX_PAGES = 10;
+    TASK_LIST_MAX_PAGES = 50;
     EVENT_LIST_MAX_PAGES = 40;
     GET_MEETING_MAX = 25;
     REFRESH_MAX = 25;
@@ -28484,7 +28486,8 @@ var init_tasks = __esm({
         refreshed: 0,
         drafted: 0,
         notices: 0,
-        conflicts: 0
+        conflicts: 0,
+        skipped: 0
       };
       failures = {};
       tasks = /* @__PURE__ */ new Map();
@@ -28494,6 +28497,8 @@ var init_tasks = __esm({
       seen;
       myLogin = "";
       opptyAccounts = null;
+      /** False when the task list exceeded its cap: `tasks` is then a prefix of the rows. */
+      complete = true;
       /** Tasks this run already linked, acknowledged or refreshed. */
       touched = /* @__PURE__ */ new Set();
       fail(step, error3) {
@@ -28515,7 +28520,9 @@ var init_tasks = __esm({
         await this.step("close", () => this.close());
         await this.step("classify", () => this.classify());
         let specreqReady = false;
-        await this.step("specreq", async () => {
+        if (!this.complete) {
+          this.counts.skipped = 3;
+        } else await this.step("specreq", async () => {
           const session = this.options.sessions.specreq;
           if (!session) throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
           this.myLogin = await resolveMe(session, this.options.me.email);
@@ -28559,12 +28566,18 @@ var init_tasks = __esm({
           if (!this.seen.seen[eventId]) this.seen.pending[eventId] = item.meetingId;
         }
         const window = syncWindow(now, zone);
+        const tracked = {};
         for (const [externalId, entry2] of Object.entries(loadState(store, sourceId, scope).ledger)) {
           const eventId = calendarEventId(sourceId, externalId);
+          tracked[eventId] = entry2.endsAt;
           if (new Date(entry2.endsAt) > window.start && new Date(entry2.startsAt) < window.end && !this.seen.seen[eventId]) {
             this.seen.pending[eventId] = externalId;
           }
         }
+        for (const [eventId, endsAt] of Object.entries(this.seen.tracked ?? {})) {
+          if (!tracked[eventId] && new Date(endsAt) > window.start) this.seen.closing[eventId] ??= now.toISOString();
+        }
+        this.seen.tracked = tracked;
         this.saveSeen();
       }
       // ---------- step 1: cloud tasks and window events ----------
@@ -28572,7 +28585,11 @@ var init_tasks = __esm({
         const { api, now, zone } = this.options;
         let cursor;
         for (let page2 = 0; ; page2++) {
-          if (page2 === TASK_LIST_MAX_PAGES) throw new IntakeError("PARSE_FAILED", `task list exceeds ${TASK_LIST_MAX_PAGES} pages`);
+          if (page2 === TASK_LIST_MAX_PAGES) {
+            this.complete = false;
+            this.fail("load", new IntakeError("PARSE_FAILED", `task list exceeds ${TASK_LIST_MAX_PAGES} pages`));
+            break;
+          }
           const result = await api.listSpecReqTasks(cursor);
           if (!result || !Array.isArray(result.tasks)) throw new IntakeError("PARSE_FAILED", "task list has an unexpected shape");
           for (const raw of result.tasks) {
@@ -28637,18 +28654,21 @@ var init_tasks = __esm({
       }
       // ---------- step 2: removed occurrences ----------
       async close() {
-        const { sourceId, store, scope, now, zone } = this.options;
+        const { sourceId, now, zone } = this.options;
         const window = syncWindow(now, zone);
-        const tracked = new Set(Object.keys(loadState(store, sourceId, scope).ledger).map((id) => calendarEventId(sourceId, id)));
         for (const task of this.tasks.values()) {
-          if (task.sourceId === sourceId && task.state !== "closed" && !tracked.has(task.eventId) && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
+          if (task.sourceId === sourceId && task.state !== "closed" && !this.seen.tracked?.[task.eventId] && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
             this.seen.closing[task.eventId] ??= now.toISOString();
           }
         }
         let failure2;
         for (const eventId of Object.keys(this.seen.closing)) {
-          const task = this.tasks.get(eventId);
           try {
+            if (this.events.has(eventId)) {
+              delete this.seen.closing[eventId];
+              continue;
+            }
+            const task = this.tasks.get(eventId) ?? (this.complete ? void 0 : parseTask(await this.options.api.getSpecReqTask(eventId)));
             if (task && task.state !== "closed") {
               if (await this.transition(task, (current) => current.state === "closed" ? null : { op: "close" })) this.counts.closed++;
             }
