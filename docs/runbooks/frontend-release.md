@@ -87,7 +87,13 @@ The export must contain `index.html` and an `_next/static` directory, with no
 symlinks anywhere under the export.
 For segmented exports it privately reads the infrastructure-owned
 `staticRouterRevision` from `config.json` and requires `segmented-rsc-v1`.
-This marker is the only runtime-config field checked by the publisher.
+For exports containing `user-guide/index.html`, the publisher also requires
+`userGuideRevision: "same-origin-framing-v1"` from that same deployed config
+before any upload or invalidation. ConfigDeployment follows the distribution
+update, so this marker records readiness of the manual's dedicated same-origin
+framing policy. A missing, incompatible or unreadable marker stops publication
+without changing the site; retry after FrontendStack finishes deploying.
+The publisher checks these readiness fields without printing runtime config.
 Valid authentication/API configuration, every referenced chunk's availability,
 and the actual target/router/header/cache/OAC mapping require separate acceptance.
 ConfigDeployment depends on the distribution, so this producer gate follows the

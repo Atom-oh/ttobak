@@ -36,6 +36,7 @@ export const NON_ICON_LITERALS = new Set([
   'event', // account link / flow item kind (lib/accountOverview.ts, types/meeting.ts)
   'clear', // caption push kind (lib/captionOverlay.ts)
   'preview', // caption push kind (lib/captionOverlay.ts)
+  'message', // window postMessage event type (components/layout/UserGuideButton.tsx)
 ]);
 
 function collectIcons(sources, codepoints) {
