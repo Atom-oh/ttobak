@@ -52,6 +52,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Account contact encryption and retention](decisions/ADR-063-account-contact-encryption-and-retention.md) | Contact fields KMS envelope-encrypted per row, bound to account/contact; kept until deleted, PITR window disclosed | `backend/internal/sealing`, contact repository, `KMS_KEY_ID` |
 | [Account relationship links, signals and KB references](decisions/ADR-064-account-relationship-links.md) | Typed account links with manual/auto origin and read-time revalidation, account news sources, KB refs, bounded overview reads; QA retrieval unchanged | `backend/internal/service/account_links.go`, `account_overview.go`, `account_kb.go`, `account_news.go` |
 | [Account people edges](decisions/ADR-065-account-people-edges.md) | Deterministic member/contact/entity resolution into role-keyed `LINK#meeting#` edges; manual wins, mention review, leased runs | `backend/internal/service/account_people*.go`, `backend/cmd/backfill-account-people` |
+| [SA performance data residency](decisions/ADR-066-sa-performance-data-residency.md) | Owner-private `PERF*` field table, default-encryption exception, year+2 retention, organizer-domain calendar counterpart | Design spec only; not implemented |
 
 ## Feature workflows
 
