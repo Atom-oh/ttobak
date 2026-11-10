@@ -25450,7 +25450,7 @@ async function runCalendar(options) {
   store.write(state, ...statePath(state));
   const upserted = /* @__PURE__ */ new Map();
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
-  return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()], removedExternalIds: [...plan.remove] };
+  return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
 var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, MAX_BATCH, MAX_BATCH_BYTES, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
 var init_calendar2 = __esm({
@@ -28408,19 +28408,20 @@ function seenPath(scope) {
 }
 function loadSeen(store, scope) {
   const raw = store.read(...seenPath(scope));
-  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {} };
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, unknown: {} };
   const record17 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
   if (raw.version !== 1 || !record17(raw.seen) || !record17(raw.pending) || !record17(raw.closing)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   raw.refreshed ??= {};
-  if (!record17(raw.refreshed)) throw new IntakeError("STORE_INVALID", "task seen state is malformed");
+  raw.unknown ??= {};
+  if (!record17(raw.refreshed) || !record17(raw.unknown)) throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   return raw;
 }
 async function runTasks(options) {
   return new TaskRun(options).run();
 }
-var TASK_LIST_MAX_PAGES, EVENT_LIST_MAX_PAGES, GET_MEETING_MAX, REFRESH_MAX, OPPTY_ACCOUNTS_MAX, MEMBER_ACCOUNTS_MAX, DRAFTS_MAX, SEEN_RETENTION_MS, EVENT_ID, STATES2, NOTICED, ACK_CONFIRMED2, str, optional2, isStatus, alias, TaskRun;
+var TASK_LIST_MAX_PAGES, EVENT_LIST_MAX_PAGES, GET_MEETING_MAX, REFRESH_MAX, OPPTY_ACCOUNTS_MAX, MEMBER_ACCOUNTS_MAX, DRAFTS_MAX, SEEN_RETENTION_MS, UNKNOWN_ATTENDEES_MAX, EVENT_ID, STATES2, NOTICED, ACK_CONFIRMED2, str, optional2, isStatus, alias, TaskRun;
 var init_tasks = __esm({
   "src/intake/tasks.ts"() {
     "use strict";
@@ -28443,6 +28444,7 @@ var init_tasks = __esm({
     MEMBER_ACCOUNTS_MAX = 50;
     DRAFTS_MAX = 10;
     SEEN_RETENTION_MS = 120 * 24 * 60 * 60 * 1e3;
+    UNKNOWN_ATTENDEES_MAX = 3;
     EVENT_ID = /^[0-9a-f]{64}$/;
     STATES2 = [
       "issue_needed",
@@ -28530,6 +28532,7 @@ var init_tasks = __esm({
         const recent = (map2) => Object.fromEntries(Object.entries(map2).filter(([, at]) => this.options.now.getTime() - Date.parse(at) < SEEN_RETENTION_MS));
         this.seen.seen = recent(this.seen.seen);
         this.seen.refreshed = recent(this.seen.refreshed);
+        this.seen.unknown = Object.fromEntries(Object.entries(this.seen.unknown).filter(([id]) => this.seen.pending[id]));
         try {
           this.saveSeen();
         } catch (error3) {
@@ -28548,7 +28551,7 @@ var init_tasks = __esm({
           this.fail(name, error3);
         }
       }
-      /** Records this sync's new and removed occurrences first, so a failed step retries them next run. */
+      /** Records this sync's new occurrences first, so a failed step retries them next run. */
       register() {
         const { sourceId, calendar: calendar2, now, store, scope, zone } = this.options;
         for (const item of calendar2.upserted) {
@@ -28561,11 +28564,6 @@ var init_tasks = __esm({
           if (new Date(entry2.endsAt) > window.start && new Date(entry2.startsAt) < window.end && !this.seen.seen[eventId]) {
             this.seen.pending[eventId] = externalId;
           }
-        }
-        for (const externalId of calendar2.removedExternalIds) {
-          const eventId = calendarEventId(sourceId, externalId);
-          this.seen.closing[eventId] = now.toISOString();
-          delete this.seen.pending[eventId];
         }
         this.saveSeen();
       }
@@ -28639,6 +28637,14 @@ var init_tasks = __esm({
       }
       // ---------- step 2: removed occurrences ----------
       async close() {
+        const { sourceId, store, scope, now, zone } = this.options;
+        const window = syncWindow(now, zone);
+        const tracked = new Set(Object.keys(loadState(store, sourceId, scope).ledger).map((id) => calendarEventId(sourceId, id)));
+        for (const task of this.tasks.values()) {
+          if (task.sourceId === sourceId && task.state !== "closed" && !tracked.has(task.eventId) && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
+            this.seen.closing[task.eventId] ??= now.toISOString();
+          }
+        }
         let failure2;
         for (const eventId of Object.keys(this.seen.closing)) {
           const task = this.tasks.get(eventId);
@@ -28738,9 +28744,17 @@ var init_tasks = __esm({
               getMaster: false,
               userEmail: me.email
             }), "get_meeting"));
+            if (!attendees) {
+              if (candidate.task) continue;
+              const count = (this.seen.unknown[candidate.eventId] ?? 0) + 1;
+              if (count < UNKNOWN_ATTENDEES_MAX) this.seen.unknown[candidate.eventId] = count;
+              else this.markSeen(candidate.eventId);
+              continue;
+            }
+            delete this.seen.unknown[candidate.eventId];
             const accountId = this.events.get(candidate.eventId)?.accountId ?? candidate.task?.accountId ?? null;
             let classification = { kind: "skip" };
-            if (attendees && !attendees.isPrivate) {
+            if (!attendees.isPrivate) {
               let members = [];
               let anyAccountSaEmails = /* @__PURE__ */ new Set();
               if (accountId) {
@@ -28774,6 +28788,7 @@ var init_tasks = __esm({
       markSeen(eventId) {
         this.seen.seen[eventId] = this.options.now.toISOString();
         delete this.seen.pending[eventId];
+        delete this.seen.unknown[eventId];
       }
       async create(candidate, accountId, classification) {
         if (classification.kind === "skip") {
@@ -28991,7 +29006,9 @@ var init_tasks = __esm({
               continue;
             }
             if (request2.stateId === task.specReqStatus && (!request2.title || request2.title === task.specReqTitle)) continue;
-            const next = await this.transition(task, (current) => current.specReqId === request2.requestId && current.state !== "closed" ? {
+            const mayRefresh = (current) => current.state !== "ack_failed" || request2.resolverLogin === this.myLogin;
+            if (!mayRefresh(task)) continue;
+            const next = await this.transition(task, (current) => current.specReqId === request2.requestId && current.state !== "closed" && mayRefresh(current) ? {
               op: "refreshSpecReq",
               specReqId: request2.requestId,
               specReqStatus: request2.stateId,
@@ -29312,7 +29329,7 @@ async function calendar(args, environment, store) {
             sessions: opened.sessions,
             unavailable: opened.unavailable,
             me,
-            calendar: { upserted: result.upserted ?? [], removedExternalIds: result.removedExternalIds ?? [] }
+            calendar: { upserted: result.upserted ?? [] }
           });
           tasks = {
             result: run.result,
