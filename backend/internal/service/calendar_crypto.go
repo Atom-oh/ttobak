@@ -26,13 +26,36 @@ func NewCalendarCipher(client CalendarKMSClient, keyID string) *CalendarCipher {
 	return &CalendarCipher{client: client, keyID: keyID}
 }
 
+const (
+	calendarEventPurpose = "ttobak-calendar-event-v1"
+	specReqTaskPurpose   = "ttobak-specreq-task-v1"
+)
+
 func (crypto *CalendarCipher) Encrypt(ctx context.Context, userID, sourceID, eventID string, plaintext []byte) (string, error) {
+	return crypto.encryptWithContext(ctx, calendarEventPurpose, userID, sourceID, eventID, plaintext)
+}
+
+func (crypto *CalendarCipher) Decrypt(ctx context.Context, userID, sourceID, eventID string, ciphertext string) ([]byte, error) {
+	return crypto.decryptWithContext(ctx, calendarEventPurpose, userID, sourceID, eventID, ciphertext)
+}
+
+// SealTaskText encrypts a SpecReq task title under its own KMS purpose, so a
+// calendar-event ciphertext cannot be opened as task text or the reverse.
+func (crypto *CalendarCipher) SealTaskText(ctx context.Context, userID, sourceID, eventID string, plaintext []byte) (string, error) {
+	return crypto.encryptWithContext(ctx, specReqTaskPurpose, userID, sourceID, eventID, plaintext)
+}
+
+func (crypto *CalendarCipher) OpenTaskText(ctx context.Context, userID, sourceID, eventID string, ciphertext string) ([]byte, error) {
+	return crypto.decryptWithContext(ctx, specReqTaskPurpose, userID, sourceID, eventID, ciphertext)
+}
+
+func (crypto *CalendarCipher) encryptWithContext(ctx context.Context, purpose, userID, sourceID, eventID string, plaintext []byte) (string, error) {
 	if !crypto.configured() || userID == "" || sourceID == "" || eventID == "" || len(plaintext) == 0 || len(plaintext) > 4096 {
 		return "", ErrCalendarEncryption
 	}
 	result, err := crypto.client.Encrypt(ctx, &kms.EncryptInput{
 		KeyId: aws.String(crypto.keyID), Plaintext: plaintext,
-		EncryptionContext: calendarEncryptionContext(userID, sourceID, eventID),
+		EncryptionContext: calendarEncryptionContext(purpose, userID, sourceID, eventID),
 	})
 	if err != nil || result == nil || len(result.CiphertextBlob) == 0 || len(result.CiphertextBlob) > 6144 {
 		return "", ErrCalendarEncryption
@@ -40,7 +63,7 @@ func (crypto *CalendarCipher) Encrypt(ctx context.Context, userID, sourceID, eve
 	return base64.StdEncoding.EncodeToString(result.CiphertextBlob), nil
 }
 
-func (crypto *CalendarCipher) Decrypt(ctx context.Context, userID, sourceID, eventID string, ciphertext string) ([]byte, error) {
+func (crypto *CalendarCipher) decryptWithContext(ctx context.Context, purpose, userID, sourceID, eventID string, ciphertext string) ([]byte, error) {
 	if !crypto.configured() || userID == "" || sourceID == "" || eventID == "" || len(ciphertext) == 0 || len(ciphertext) > 8192 {
 		return nil, ErrCalendarEncryption
 	}
@@ -50,7 +73,7 @@ func (crypto *CalendarCipher) Decrypt(ctx context.Context, userID, sourceID, eve
 	}
 	result, err := crypto.client.Decrypt(ctx, &kms.DecryptInput{
 		KeyId: aws.String(crypto.keyID), CiphertextBlob: blob,
-		EncryptionContext: calendarEncryptionContext(userID, sourceID, eventID),
+		EncryptionContext: calendarEncryptionContext(purpose, userID, sourceID, eventID),
 	})
 	if err != nil || result == nil || len(result.Plaintext) == 0 || len(result.Plaintext) > 4096 {
 		return nil, ErrCalendarEncryption
@@ -62,9 +85,9 @@ func (crypto *CalendarCipher) configured() bool {
 	return crypto != nil && crypto.client != nil && strings.TrimSpace(crypto.keyID) != ""
 }
 
-func calendarEncryptionContext(userID, sourceID, eventID string) map[string]string {
+func calendarEncryptionContext(purpose, userID, sourceID, eventID string) map[string]string {
 	return map[string]string{
-		"purpose": "ttobak-calendar-event-v1",
+		"purpose": purpose,
 		"userId":  userID, "sourceId": sourceID, "eventId": eventID,
 	}
 }

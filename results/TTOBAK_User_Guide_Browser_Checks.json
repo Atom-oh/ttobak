@@ -1,0 +1,180 @@
+{
+  "date": "2026-11-10",
+  "method": "Local Python Playwright with Chromium; not Playwright MCP",
+  "scope": "Complete corrected 28-chapter manual; local asset hashes identify the tested publication artifact",
+  "limitations": [
+    "No production login or customer data",
+    "No macOS capture or Outlook provider acceptance"
+  ],
+  "reader": {
+    "checks": [
+      {
+        "name": "28 readable chapters",
+        "pass": true
+      },
+      {
+        "name": "all local anchors resolve",
+        "pass": true
+      },
+      {
+        "name": "JavaScript search ready",
+        "pass": true
+      },
+      {
+        "name": "desktop no page overflow",
+        "pass": true
+      },
+      {
+        "name": "4k no page overflow",
+        "pass": true
+      },
+      {
+        "name": "tablet no page overflow",
+        "pass": true
+      },
+      {
+        "name": "mobile no page overflow",
+        "pass": true
+      },
+      {
+        "name": "mobile-small no page overflow",
+        "pass": true
+      },
+      {
+        "name": "4k final chapter navigation remains active",
+        "pass": true
+      },
+      {
+        "name": "legacy flow arrows do not occupy grid cells",
+        "pass": true
+      },
+      {
+        "name": "keyboard shortcut focuses search",
+        "pass": true
+      },
+      {
+        "name": "IME Enter keeps search focus",
+        "pass": true
+      },
+      {
+        "name": "search result clears sticky header",
+        "pass": true
+      },
+      {
+        "name": "body text searchable",
+        "pass": true
+      },
+      {
+        "name": "search preserves full guide",
+        "pass": true
+      },
+      {
+        "name": "navigation labels searchable",
+        "pass": true
+      },
+      {
+        "name": "query renders as text",
+        "pass": true
+      },
+      {
+        "name": "empty result explains recovery",
+        "pass": true
+      },
+      {
+        "name": "cleared result hidden",
+        "pass": true
+      },
+      {
+        "name": "dark theme selected",
+        "pass": true
+      },
+      {
+        "name": "theme persists",
+        "pass": true
+      },
+      {
+        "name": "active chapter reflected",
+        "pass": true
+      },
+      {
+        "name": "current chapter subcontents",
+        "pass": true
+      },
+      {
+        "name": "mobile contents initially collapsed",
+        "pass": true
+      },
+      {
+        "name": "mobile contents opens",
+        "pass": true
+      },
+      {
+        "name": "Escape closes and restores focus",
+        "pass": true
+      },
+      {
+        "name": "mobile chapter selection closes contents",
+        "pass": true
+      },
+      {
+        "name": "mobile search Enter exposes results",
+        "pass": true
+      },
+      {
+        "name": "all chapters printable after search",
+        "pass": true
+      },
+      {
+        "name": "print hides search/navigation",
+        "pass": true
+      },
+      {
+        "name": "all images loaded",
+        "pass": true
+      },
+      {
+        "name": "no-JavaScript contents and 28 chapters",
+        "pass": true
+      },
+      {
+        "name": "dark-preference no-JavaScript print stays readable",
+        "pass": true
+      },
+      {
+        "name": "no-JavaScript complete print",
+        "pass": true
+      },
+      {
+        "name": "no console/page errors",
+        "pass": true
+      },
+      {
+        "name": "no 404 or HTTP errors",
+        "pass": true
+      }
+    ],
+    "errors": [],
+    "failedRequests": [],
+    "screens": [
+      "desktop.png",
+      "4k.png",
+      "tablet.png",
+      "mobile.png",
+      "mobile-small.png"
+    ]
+  },
+  "assets": {
+    "favicon.svg": "af0638f836b54089f277b5a8f3adf19d39edb4dcfe4d7fbcc62a6379c145bef6",
+    "guide.js": "06aacbdd4fdf5583ed59bd44f8a1aa2e822e1fad4050356859eefe23a8151d6c",
+    "index.html": "19cedb0887006dbcb1dc922ce654b20fcdf7280ffb415f87f5ecb953ca588d97",
+    "screen-accounts.svg": "e3dd3f63af0fd42e05d2c2123b49dad1aa1c967bf9df88b61f421032041ba459",
+    "screen-assistant.svg": "0b5695d2207843433a49c3e571ed2ddfbde874563b4327d7d39130c52c42fbe5",
+    "screen-home.svg": "3198677827f3a7be6803035700d7c66d7a4b6f84c940e516ba3721725e5ad48c",
+    "screen-library.svg": "a983d1183aaa6aaee78bb1b94e7e0124e4900b8f94d3540d5c9e9179c942eabe",
+    "screen-meeting.svg": "fcf6ee9468af5b916b5726b41a0c3d55a761159c71e94ce162525d3a1fb3fc34",
+    "screen-research.svg": "61a761ad2080f79895ba87a941cff400ed8a4d0af56d2e15847d880086ca1698",
+    "screen-settings.svg": "ec5daabc2a724ec4fa2d2a3d4d2c87cfa97b32d28d925c08c81ad30df97748d2",
+    "screen-upload.svg": "8ebdba1d01cbbb8054a2162e5cd1b73e7f180b5546b8f0655a1dbdd4eb74a3f7",
+    "style.css": "7782c44748ab378a92e77de987e8aaa6afaf4a97eeaccccf4e89e07d064392cd"
+  }
+}
