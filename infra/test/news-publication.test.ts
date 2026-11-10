@@ -242,8 +242,13 @@ describe('private news publication release', () => {
     }
     const model = all.filter(s => actions(s).includes('bedrock:InvokeModel'));
     expect(model).toHaveLength(1);
-    expect(resolved(model[0].Resource)).toHaveLength(3);
-    expect(resolved(model[0].Resource).every((r: string) => r.endsWith('anthropic.claude-opus-5-5'))).toBe(true);
+    expect(resolved(model[0].Resource)).toHaveLength(6);
+    expect(resolved(model[0].Resource).filter((r: string) => r.endsWith('openai.gpt-6-luna'))).toHaveLength(3);
+    expect(resolved(model[0].Resource).filter((r: string) => r.endsWith('anthropic.claude-opus-5-5'))).toHaveLength(3);
+    const worker = resources.find(r => r.Properties?.Handler === 'news_runtime.worker_handler');
+    expect(worker.Properties.Environment.Variables.FINAL_MODEL_ID).toBe('global.openai.gpt-6-luna');
+    expect(worker.Properties.Environment.Variables.NEWS_INPUT_USD_PER_MTOK).toBe('0.125');
+    expect(worker.Properties.Environment.Variables.NEWS_OUTPUT_USD_PER_MTOK).toBe('0.50');
     expect(resolved(model[0].Resource).some((r: string) => r.includes('*'))).toBe(false);
   });
 

@@ -1,6 +1,6 @@
-"""Opus Converse adapter with a local, conservative input-token bound.
+"""Luna Converse adapter with a local, conservative input-token bound.
 
-The runtime CountTokens API does not support this model's CRIS profile, so the
+CountTokens is not part of this worker's runtime contract, so the
 bound is computed locally from UTF-8 text bytes plus a fixed framing allowance,
 assuming each model token covers at least one byte. Service-reported usage
 remains the authoritative charge and the post-call cap still applies.
@@ -62,7 +62,19 @@ class NewsModel:
     def converse(self, **request):
         if (request.get("modelId") != FINAL_MODEL_ID
                 or request.get("inferenceConfig") != {"maxTokens": MAX_TOKENS}
+                or request.get("additionalModelRequestFields") != MODEL_REQUEST_FIELDS
                 or set(request) != {"modelId", "system", "messages", "inferenceConfig",
                                     "additionalModelRequestFields"}):
             raise QualityRejected("MODEL_BUDGET")
-        return self.runtime.converse(**request)
+        response = self.runtime.converse(**request)
+        usage = response.get("usage", {})
+        # Converse reports cached input separately. Normalize it before both
+        # the worker meter and enrichment inspect usage, without mutating the
+        # runtime response. The configured input rate covers cache writes too.
+        keys = ("inputTokens", "cacheReadInputTokens", "cacheWriteInputTokens")
+        values = [usage.get(key, 0) if key != "inputTokens" else usage.get(key)
+                  for key in keys]
+        if any(type(value) is not int or not 0 <= value <= 10000000 for value in values):
+            raise QualityRejected("USAGE_INVALID")
+        normalized = {**usage, "inputTokens": sum(values)}
+        return {**response, "usage": normalized}

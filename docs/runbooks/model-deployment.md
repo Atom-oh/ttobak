@@ -187,3 +187,38 @@ https://developers.openai.com/api/docs/models/gpt-6.1-terra.md
 https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-west-2/index.json
 https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html
 ```
+
+## Fixed image and news extraction workloads
+
+Uploaded-image classification and analysis use `BEDROCK_IMAGE_MODEL_ID` =
+`global.openai.gpt-6.1-terra`, with the existing us-west-2 runtime. Legacy news
+uses `SUMMARIZE_MODEL_ID` = `global.openai.gpt-6-luna`; structured publication
+uses the same `FINAL_MODEL_ID` in the stack region. These settings are independent
+of meeting-summary and translation presets. Technical-source crawling retains
+its Sonnet setting.
+
+Both image requests use native OpenAI image data URLs and `reasoning_effort=none`.
+News Converse uses `additionalModelRequestFields.reasoning.effort=none` (the
+native Chat field `reasoning_effort` is not accepted by Converse). Synthetic
+runtime probes verified both transports on 2026-11-10. Image reads are capped at
+16 MiB; structured news retains the 100,000-input-token, 6,000-output-token and
+two-attempt ceilings. Converse cache-read/write input is included in metering.
+Verified global Luna rates are USD 0.10 uncached input, 0.125 cache write, 0.01
+cache read and 0.50 output per million tokens. Reservations and settlement charge
+all input at the highest 0.125 rate conservatively; run/month limits remain
+USD 2/USD 25.
+
+Deploy AiStack before GatewayStack/CrawlerStack through the existing release
+coordinator. Exact new model resources coexist with outgoing image/structured
+news Claude grants while old invocations drain. The shared crawler role still
+needs Claude for technical sources. No runtime request falls back to Claude.
+Remove transitional grants only in a later reviewed cleanup after verifying
+old function timeouts, last-modified times and rollback requirements. Model
+migration must preserve deployed news mode/canary/legacy-writer parameters and
+must not trigger source activation or a reprocessing run.
+
+After deployment, verify the three Lambda settings (`ttobak-process-image`,
+`ttobak-crawler-news`, `ttobak-news-worker`), corresponding exact IAM grants and
+worker pricing fields. Check public guide model rows after Pages publication.
+A successful synthetic model call establishes transport compatibility; it does
+not establish live customer-article publication acceptance.

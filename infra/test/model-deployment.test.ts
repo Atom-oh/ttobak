@@ -83,6 +83,27 @@ describe('model deployment wiring', () => {
     expect(oldSol).toHaveLength(mode === 'standard' ? 1 : 0);
   });
 
+  test('image extraction uses Terra in its invocation region independently of summaries', () => {
+    const { ai, gateway } = deployment({ MODEL_MEETING_SUMMARY: 'anthropic.claude-sonnet-5-5' });
+    const image = Object.values(gateway.findResources('AWS::Lambda::Function'))
+      .find(fn => fn.Properties.FunctionName === 'ttobak-process-image')!;
+    expect(image.Properties.Environment.Variables.BEDROCK_IMAGE_MODEL_ID).toBe('global.openai.gpt-6.1-terra');
+    expect(image.Properties.Environment.Variables.BEDROCK_REGION).toBe('us-west-2');
+    expect(image.Properties.Environment.Variables.BEDROCK_MODEL_ID).toBeUndefined();
+    const grants = Object.values(ai.findResources('AWS::IAM::Policy'))
+      .flatMap(policy => policy.Properties.PolicyDocument.Statement);
+    expect(grants.find(s => s.Sid === 'InvokeImageModel').Resource).toEqual([
+      arn(':bedrock:us-west-2:111111111111:inference-profile/global.openai.gpt-6.1-terra'),
+      arn(':bedrock:us-west-2::foundation-model/openai.gpt-6.1-terra'),
+      arn(':bedrock:::foundation-model/openai.gpt-6.1-terra'),
+    ]);
+    expect(grants.find(s => s.Sid === 'InvokeNewsSummaryModel').Resource).toEqual([
+      arn(':bedrock:ap-northeast-2:111111111111:inference-profile/global.openai.gpt-6-luna'),
+      arn(':bedrock:ap-northeast-2::foundation-model/openai.gpt-6-luna'),
+      arn(':bedrock:::foundation-model/openai.gpt-6-luna'),
+    ]);
+  });
+
   test('translation override changes only its own Lambda setting and model grant', () => {
     const { ai, gateway } = deployment({ MODEL_TRANSLATION: 'openai.gpt-6.1-terra' });
     const functions = Object.values(gateway.findResources('AWS::Lambda::Function'));
@@ -97,7 +118,7 @@ describe('model deployment wiring', () => {
       arn(':bedrock:*::foundation-model/openai.gpt-6.1-terra'),
       arn(':bedrock:*:111111111111:inference-profile/global.openai.gpt-6.1-terra'),
     ]);
-    expect(JSON.stringify(grants)).not.toContain('openai.gpt-6-luna');
+    expect(JSON.stringify(interpreter)).not.toContain('openai.gpt-6-luna');
   });
 
   test('staged transition retains only explicitly named old models and publishes retention metadata', () => {

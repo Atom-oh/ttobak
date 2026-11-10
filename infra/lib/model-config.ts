@@ -1,5 +1,19 @@
 import { Construct } from 'constructs';
 
+// Fixed extraction workloads remain independent of meeting/translation presets.
+export const IMAGE_MODEL_ID = 'global.openai.gpt-6.1-terra';
+export const NEWS_MODEL_ID = 'global.openai.gpt-6-luna';
+
+/** Exact global/profile ARNs observed with GetInferenceProfile. */
+export function extractionModelResources(partition: string, account: string, region: string, profile: string): string[] {
+  const model = profile.slice('global.'.length);
+  return [
+    `arn:${partition}:bedrock:${region}:${account}:inference-profile/${profile}`,
+    `arn:${partition}:bedrock:${region}::foundation-model/${model}`,
+    `arn:${partition}:bedrock:::foundation-model/${model}`,
+  ];
+}
+
 export interface ModelConfiguration {
   readonly meetingSummary: string;
   readonly translation: string;
