@@ -98,7 +98,10 @@ type fakeJobs struct {
 	released int
 	failed   []string
 	claimErr error
-	log      *[]string
+	// replaceAt makes the claim with this 1-based index return a replacement
+	// job for another target, as after an abort and a fresh merge.
+	replaceAt int
+	log       *[]string
 }
 
 func (f *fakeJobs) GetAccountMergeJob(context.Context, string) (*model.AccountMergeJob, error) {
@@ -112,7 +115,11 @@ func (f *fakeJobs) ClaimMergeLease(_ context.Context, source, owner string, _ ti
 	defer f.mu.Unlock()
 	f.claims = append(f.claims, owner)
 	appendLog(f.log, "claim")
-	return &model.AccountMergeJob{SourceAccountID: source, TargetAccountID: "tgt", RequesterUserID: "owner-1", State: model.MergeStateRunning, LeaseOwner: owner}, nil
+	target := "tgt"
+	if f.replaceAt > 0 && len(f.claims) >= f.replaceAt {
+		target = "other"
+	}
+	return &model.AccountMergeJob{SourceAccountID: source, TargetAccountID: target, RequesterUserID: "owner-1", State: model.MergeStateRunning, LeaseOwner: owner}, nil
 }
 func (f *fakeJobs) FailMergeJob(_ context.Context, _ *model.AccountMergeJob, code string) error {
 	f.failed = append(f.failed, code)
@@ -749,5 +756,20 @@ func TestMergeCLIRenewsLeaseBeforeEachRow(t *testing.T) {
 		if entry == "move" && (i == 0 || log[i-1] != "claim") {
 			t.Fatalf("a row moved without a renewal just before it: %v", log)
 		}
+	}
+}
+
+// A stalled CLI never adopts a replacement job (abort plus a fresh merge of
+// the same source into another target): the renewal is a lost fence.
+func TestMergeCLIRefusesAReplacedJob(t *testing.T) {
+	h := newHarness()
+	h.jobs.replaceAt = 2
+	clock := time.Unix(1000, 0)
+	h.d.now = func() time.Time { clock = clock.Add(2 * leaseRenewAfter); return clock }
+	o := opts()
+	o.Apply = true
+	_, err := run(context.Background(), h.d, o)
+	if errorCode(err) != "FENCE_LOST" || len(h.users.moves) > 1 || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
+		t.Fatalf("a replaced job must stop the scan: %v moves=%v calls=%v", err, h.users.moves, h.svc.calls)
 	}
 }

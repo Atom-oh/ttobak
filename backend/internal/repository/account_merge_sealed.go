@@ -49,10 +49,12 @@ func (r *DynamoDBRepository) ListAccountContactsForMerge(ctx context.Context, ac
 }
 
 // GetMergeContactMap returns, for each given source contact ID that already
-// has a MERGE#contact# row in the source partition, the target contact ID it
-// became. IDs without a row are absent from the result.
-func (r *DynamoDBRepository) GetMergeContactMap(ctx context.Context, sourceAccountID string, ids []string) (map[string]string, error) {
-	if sourceAccountID == "" || strings.Contains(sourceAccountID, "#") {
+// has a MERGE#contact# row in the source partition for a merge into
+// targetAccountID, the target contact ID it became. IDs without a row, or with
+// a row another (aborted) merge wrote, are absent from the result. A row
+// without a target account predates the binding and still counts.
+func (r *DynamoDBRepository) GetMergeContactMap(ctx context.Context, sourceAccountID, targetAccountID string, ids []string) (map[string]string, error) {
+	if sourceAccountID == "" || strings.Contains(sourceAccountID, "#") || targetAccountID == "" {
 		return nil, fmt.Errorf("invalid merge contact map read")
 	}
 	keys := make([]batchRowKey, 0, len(ids))
@@ -70,6 +72,9 @@ func (r *DynamoDBRepository) GetMergeContactMap(ctx context.Context, sourceAccou
 		}
 		if row.SK != model.PrefixMergeContactMap+row.SourceContactID || row.TargetContactID == "" {
 			return fmt.Errorf("invalid merge contact map row")
+		}
+		if row.TargetAccountID != "" && row.TargetAccountID != targetAccountID {
+			return nil
 		}
 		out[row.SourceContactID] = row.TargetContactID
 		return nil
@@ -168,12 +173,16 @@ func (r *DynamoDBRepository) commitContactMerge(ctx context.Context, job *model.
 	}
 	mapItem, err := attributevalue.MarshalMap(model.AccountMergeContactMap{
 		PK: model.PrefixAccount + job.SourceAccountID, SK: model.PrefixMergeContactMap + from.ContactID,
-		SourceContactID: from.ContactID, TargetContactID: targetID, EntityType: model.EntityTypeAccountMergeContactMap,
+		SourceContactID: from.ContactID, TargetContactID: targetID, TargetAccountID: job.TargetAccountID,
+		EntityType: model.EntityTypeAccountMergeContactMap,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal merge contact map: %w", err)
 	}
-	absent, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
+	// A row another (aborted) merge wrote is replaced; one for this target
+	// means the contact already moved.
+	otherMerge := expression.AttributeExists(expression.Name("targetAccountId")).And(expression.Name("targetAccountId").NotEqual(expression.Value(job.TargetAccountID)))
+	absent, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK")).Or(otherMerge)).Build()
 	if err != nil {
 		return err
 	}
@@ -185,7 +194,7 @@ func (r *DynamoDBRepository) commitContactMerge(ctx context.Context, job *model.
 		}},
 		types.TransactWriteItem{Put: &types.Put{
 			TableName: aws.String(r.tableName), Item: mapItem,
-			ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names(),
+			ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names(), ExpressionAttributeValues: absent.Values(),
 		}})
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		moverFailed, fenceErr := classifyMergeFence(err)

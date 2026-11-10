@@ -383,7 +383,7 @@ const scanIncompleteCode = "SCAN_INCOMPLETE"
 // a delivery, so it cannot finish over stranded rows, and an -apply rerun
 // restarts it from its saved step.
 func (d deps) scanApply(ctx context.Context, o options) (map[string]int, error) {
-	lease := &cliLease{d: d, source: o.From}
+	lease := &cliLease{d: d, source: o.From, into: o.Into}
 	if err := lease.renew(ctx); err != nil {
 		return nil, err
 	}
@@ -445,8 +445,12 @@ func skippedRows(counts map[string]int) int {
 
 // cliLease keeps the CLI's claim on the job fresh for the duration of a scan.
 type cliLease struct {
-	d       deps
-	source  string
+	d      deps
+	source string
+	// into is the expected target; a claimed job for another target, or a
+	// different job instance than the first claim, is a lost fence (an abort
+	// and a fresh merge can replace the job while this process stalled).
+	into    string
 	mu      sync.Mutex
 	job     *model.AccountMergeJob
 	claimed time.Time
@@ -473,6 +477,10 @@ func (l *cliLease) renew(ctx context.Context) error {
 	job, err := l.d.jobs.ClaimMergeLease(ctx, l.source, l.d.owner, now, leaseTTL)
 	if err != nil {
 		return err
+	}
+	if job == nil || (l.into != "" && job.TargetAccountID != l.into) ||
+		(l.job != nil && (job.TargetAccountID != l.job.TargetAccountID || !job.StartedAt.Equal(l.job.StartedAt))) {
+		return fmt.Errorf("%w: the merge job was replaced", repository.ErrMergeFenceLost)
 	}
 	l.job, l.claimed = job, now
 	return nil
