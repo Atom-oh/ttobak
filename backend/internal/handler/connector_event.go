@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/ttobak/backend/internal/connector"
+	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
@@ -24,12 +25,20 @@ func (h *ConnectorEventHandler) Create(ctx context.Context, p connector.Principa
 		body, _ := json.Marshal(receipt)
 		return connector.InvokeResult{StatusCode: 200, Body: string(body)}
 	}
+	return eventCreateFailure(err)
+}
+
+// eventCreateFailure maps a failed event creation to its connector result.
+func eventCreateFailure(err error) connector.InvokeResult {
 	status, code, message := 503, "CONNECTOR_WRITE_UNCONFIRMED", "Event creation could not be confirmed"
 	switch {
 	case errors.Is(err, service.ErrInvalidInput):
 		status, code = 400, "BAD_REQUEST"
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, connector.ErrCapabilityDenied), errors.Is(err, repository.ErrEventAccess):
 		status, code = 403, "CAPABILITY_DENIED"
+	case errors.Is(err, service.ErrAccountMerging):
+		// The fence rejected the write before any row changed: definitive.
+		status, code, message = 409, model.ErrCodeAccountMerging, "Account is merging into another account or already merged"
 	case errors.Is(err, repository.ErrConnectorReceiptMissing):
 		status, code = 404, "RECEIPT_NOT_FOUND"
 	case errors.Is(err, repository.ErrConditionFailed):

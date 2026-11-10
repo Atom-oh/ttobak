@@ -153,6 +153,19 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 			l := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1")
 			return r.DeletePeopleLink(ctx, "acct", "actor", l.Key(), model.LinkOriginManual, false)
 		}},
+		{"mention ignore", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error {
+			return r.PutMentionIgnore(ctx, "acct", "actor", testMentionHash('a'))
+		}},
+		{"people link alias", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error {
+			l := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1")
+			return r.AddPeopleLinkAlias(ctx, "acct", "actor", l.Key(), testMentionHash('b'))
+		}},
+		{"unresolved mentions", "acct", nil, func(r *DynamoDBRepository) error {
+			row := testUnresolved(testMentionHash('c'), "participant")
+			row.AccountID = "acct"
+			return r.ReplaceUnresolvedMentions(ctx, "acct", "o:m1", []model.UnresolvedMention{row}, nil,
+				&model.PeopleRun{AccountID: "acct", Scope: "o:m1", LeaseToken: "tok"})
+		}},
 		{"meeting create", "acct", nil, func(r *DynamoDBRepository) error {
 			_, err := r.CreateMeeting(ctx, "u", "t", time.Unix(1700000000, 0), nil, "", model.MeetingPreparation{AccountID: "acct"})
 			return err

@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -61,6 +63,30 @@ func TestAccountMergingMapsTo409ForAccountWrites(t *testing.T) {
 	} {
 		w := httptest.NewRecorder()
 		write(w, service.ErrAccountMerging)
+		requireAccountMerging(t, name, w)
+	}
+}
+
+func TestAccountMergingIsDefinitiveForConnectorCreates(t *testing.T) {
+	for name, result := range map[string]connector.InvokeResult{
+		"contact": contactCreateFailure(fmt.Errorf("wrapped: %w", service.ErrAccountMerging)),
+		"event":   eventCreateFailure(fmt.Errorf("wrapped: %w", service.ErrAccountMerging)),
+	} {
+		if result.StatusCode != http.StatusConflict || !strings.Contains(result.Body, model.ErrCodeAccountMerging) ||
+			strings.Contains(result.Body, "CONNECTOR_WRITE_UNCONFIRMED") {
+			t.Fatalf("%s: status=%d body=%s, want definitive 409 ACCOUNT_MERGING", name, result.StatusCode, result.Body)
+		}
+	}
+}
+
+func TestAccountMergingMapsTo409ForNewsAndPeople(t *testing.T) {
+	for name, write := range map[string]func(http.ResponseWriter, error){
+		"news":            accountNewsError,
+		"people":          accountPeopleError,
+		"insights delete": writeInsightsDeleteError,
+	} {
+		w := httptest.NewRecorder()
+		write(w, fmt.Errorf("wrapped: %w", service.ErrAccountMerging))
 		requireAccountMerging(t, name, w)
 	}
 }

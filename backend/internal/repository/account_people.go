@@ -497,6 +497,9 @@ func (r *DynamoDBRepository) PutMentionIgnore(ctx context.Context, accountID, ac
 	}
 	items := append([]types.TransactWriteItem{{Put: &types.Put{TableName: aws.String(r.tableName), Item: row}}}, access...)
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return classifyAccountLinkDelete(err, len(items), 1)
 	}
 	return nil
@@ -735,6 +738,9 @@ func (r *DynamoDBRepository) AddPeopleLinkAlias(ctx context.Context, accountID, 
 	}
 	items = append(items, access...)
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return classifyAccountLinkDelete(err, len(items), 1)
 	}
 	return nil
