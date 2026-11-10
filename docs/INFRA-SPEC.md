@@ -556,6 +556,14 @@ workers/PDF frames, Tauri IPC and WASM; static bootstrap/native injection still
 require inline scripts. Media and PDF policies remain separate. These are source
 declarations, not a live-header or device acceptance claim. See the
 [frontend release contract](runbooks/frontend-release.md).
+`/user-guide/*` serves the bundled manual (`frontend/public/user-guide/`, from
+`docs/user-guide`) from the same site origin and cache policy, without the SPA
+router. Its own headers policy allows only same-origin framing for the app's
+reader dialog (`X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`) and keeps
+nosniff, HSTS and no-referrer. Its CSP is the packager-enforced meta policy
+(`default-src 'none'`, same-origin script/style/images, no connections) plus
+`frame-ancestors`; a meta policy cannot set framing. FrontendStack must be
+deployed before a frontend release that opens the reader.
 The router preserves segmented `__next.*.txt` payload names and maps their route
 directories. Infrastructure publishes `staticRouterRevision: "segmented-rsc-v1"`
 after distribution update; the shared publisher checks it before segmented
@@ -1016,8 +1024,8 @@ and `/api/*`, so `/api/billing/*` wins over `/api/*`.
     `deploy-frontend.yml` fails unless `out/billing-app/index.html` and
     `upload.html` exist before publishing.
   - Response headers: `frame-ancestors 'self'` and `X-Frame-Options:
-    SAMEORIGIN`, so only `/billing` can frame them. Every other path keeps
-    `frame-ancestors 'none'` and `DENY`, and the default CSP's `frame-src 'self'`
+    SAMEORIGIN`, so only `/billing` can frame them. Every other path except
+    `/user-guide/*` keeps `frame-ancestors 'none'` and `DENY`, and the default CSP's `frame-src 'self'`
     lets `/billing` frame them.
   - `script-src` is `'self'` only: no `'unsafe-inline'`, no hashes and no
     `'wasm-unsafe-eval'`. `services/billing/page/build_page.py` moves each

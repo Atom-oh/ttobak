@@ -61,6 +61,27 @@ describe('FrontendStack', () => {
     });
   });
 
+  test('only the public manual path permits same-origin framing with local-only scripts and connections', () => {
+    const resources = template.toJSON().Resources;
+    const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
+    const config = distribution.Properties.DistributionConfig;
+    const guide = config.CacheBehaviors.find((value: { PathPattern: string }) => value.PathPattern === '/user-guide/*');
+    expect(guide).toBeDefined();
+    expect(guide.TargetOriginId).toEqual(config.DefaultCacheBehavior.TargetOriginId);
+    expect(guide.CachePolicyId).toEqual(config.DefaultCacheBehavior.CachePolicyId);
+    const headers = resources[guide.ResponseHeadersPolicyId.Ref].Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    expect(headers.FrameOptions).toEqual({ FrameOption: 'SAMEORIGIN', Override: true });
+    expect(headers.ContentSecurityPolicy.Override).toBe(true);
+    expect(headers.ContentSecurityPolicy.ContentSecurityPolicy).toBe(
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'; frame-ancestors 'self'; object-src 'none'",
+    );
+    const application = resources[config.DefaultCacheBehavior.ResponseHeadersPolicyId.Ref].Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    expect(application.FrameOptions.FrameOption).toBe('DENY');
+    expect(JSON.stringify(application.ContentSecurityPolicy.ContentSecurityPolicy)).toContain("frame-ancestors 'none'");
+    expect(config.CacheBehaviors.filter((value: { ResponseHeadersPolicyId?: unknown }) =>
+      JSON.stringify(value.ResponseHeadersPolicyId) === JSON.stringify(guide.ResponseHeadersPolicyId))).toHaveLength(1);
+  });
+
   test('the HTTP origin resolves only the current field of an explicit secret version', () => {
     const dist = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
     const origin = dist.Properties.DistributionConfig.Origins.find(
