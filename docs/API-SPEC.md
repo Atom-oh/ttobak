@@ -35,7 +35,8 @@ Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
 - `{"op":"upsert","event":{...}}`: required `externalId`, `title`, `startsAt`,
   `endsAt`, `timeZone`; optional `isAllDay`, `startDate`, `endDate`, `location`,
-  `accountId`. IDs/titles are nonblank and at most 512 UTF-8 bytes; location is
+  `accountId`, `shareAccountId`, `shareEvidence`, `candidateAccountIds`,
+  `private`, `seriesKey`. IDs/titles are nonblank and at most 512 UTF-8 bytes; location is
   at most 256 and timeZone at most 128. Time zones must be IANA/UTC, not `Local`.
   All-day events require date-only start and exclusive end matching local
   midnight instants; timed events omit those dates. The encoded event payload
@@ -73,6 +74,20 @@ also caps original calendar HTTP bytes at 14,000 and its serialized tool result
 at 32,000, returning errors rather than truncating receipts or continuations.
 An Account association classifies private data; it grants no sharing. Personal
 reads omit a revoked association; an inaccessible Account-filtered read is denied.
+
+Account-sharing fields (ADR-066) are validated and stored encrypted with the
+event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
+use the Account ID format and differ from each other; `shareEvidence` holds up to
+three distinct kinds (`title`, `location`, `domain`) and requires
+`shareAccountId`; `private` excludes both; `seriesKey` is 64 lowercase hex.
+No share rows are written yet. Owner event views report `sharingMode:"auto"`,
+`candidateAccountIds` and `private`; `shareAccountId` and `shareEvidence` appear
+only once a stored share is granted.
+
+Rollback boundary: API builds older than this contract reject a stored event
+carrying any of these fields as corrupt, failing every event page that contains
+it. Do not roll the API Lambda back past this contract once a client has sent
+sharing fields; the intake runner sends them only from a later release.
 
 Errors use `{error:{code,message}}`: `400 BAD_REQUEST` for invalid input/cursor,
 `401 UNAUTHORIZED` for missing authentication, `403 FORBIDDEN` for denied access,
