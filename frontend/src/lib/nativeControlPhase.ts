@@ -17,12 +17,17 @@ export interface NativeControlPhaseInput<Step extends string> {
   /** The page's own meeting-flow reservation (`flowBusy`): draft creation,
    * a leftover upload across its confirmation, a backup restore. */
   flowBusy: boolean;
+  /** The post-recording hook still holds the only copy of browser audio
+   * (`hasPendingAudio`), for example at step `error` awaiting a retry. */
+  pendingAudio: boolean;
 }
 
 export function nativeControlPhase<Step extends string>(
-  { recording, step, startInFlight, importing, finalizing, flowBusy }: NativeControlPhaseInput<Step>,
+  { recording, step, startInFlight, importing, finalizing, flowBusy, pendingAudio }: NativeControlPhaseInput<Step>,
 ): Step | 'recording' | 'uploading' | 'saving' | 'creating' | 'starting' | 'idle' {
   if (recording) return 'recording';
+  // A failed step keeps the unsaved Blob in memory for retry; a restart would lose it.
+  if (pendingAudio && (step === null || step === 'error')) return 'saving';
   if (step) return step;
   // A file import uploads through the browser, so no native upload is counted.
   if (importing) return 'uploading';

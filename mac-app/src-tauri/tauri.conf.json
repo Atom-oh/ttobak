@@ -56,7 +56,8 @@
   "plugins": {
     "updater": {
       "endpoints": ["https://ttobak.atomai.click/mac/latest.json"],
-      "pubkey": "REPLACE_WITH_TTOBAK_UPDATER_PUBKEY"
+      "pubkey": "REPLACE_WITH_TTOBAK_UPDATER_PUBKEY",
+      "requireSignedVersion": true
     }
   }
 }

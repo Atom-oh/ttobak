@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -62,5 +63,53 @@ func TestSummaryRejectsHeadingOnlyWithoutDocumentInstructions(t *testing.T) {
 	request, _, _, err := summarizeNoteSourceResponse(t, meeting, `{"content":[{"type":"text","text":"검증된 회의 내용"}],"stop_reason":"end_turn"}`)
 	if err != nil || strings.Contains(request.System, "DOCUMENT 근거:") {
 		t.Fatalf("document instructions appeared without evidence: %v", err)
+	}
+}
+
+func trailerTestAttachments() []model.Attachment {
+	return []model.Attachment{
+		{AttachmentID: "img", FileName: "slide.png", Type: "image", Status: model.AttachStatusDone, ProcessedContent: "chart analysis"},
+		{AttachmentID: "doc", FileName: "spec.pdf", Type: model.AttachTypeDocument, Status: model.AttachStatusDone},
+	}
+}
+
+// An English note gets an English machine trailer; the Korean helpers keep
+// the historical headings and notices byte-for-byte.
+func TestAttachmentTrailerFollowsNoteLanguage(t *testing.T) {
+	attachments := trailerTestAttachments()
+	korean := buildAttachmentLinkSections(attachments) + summaryAttachmentNotice(attachments)
+	if korean != buildAttachmentLinkSectionsFor(attachments, model.NoteLanguageKorean)+summaryAttachmentNoticeFor(attachments, model.NoteLanguageKorean) {
+		t.Fatal("Korean trailer changed")
+	}
+	for _, want := range []string{"\n## 첨부 이미지\n", "\n## 첨부 문서\n", "\n\n### 첨부 근거 범위\n", "- spec.pdf: 문서 본문은 이 요약에 반영되지 않았습니다. 추출 상태 확인 후 다시 요약하세요."} {
+		if !strings.Contains(korean, want) {
+			t.Fatalf("Korean trailer lost %q: %s", want, korean)
+		}
+	}
+	english := buildAttachmentLinkSectionsFor(attachments, model.NoteLanguageEnglish) + summaryAttachmentNoticeFor(attachments, model.NoteLanguageEnglish)
+	for _, want := range []string{"\n## Attached images\n", "![slide.png](attachment://img)", "\n## Attached documents\n", "- [spec.pdf](attachment://doc)", "\n\n### Attachment evidence coverage\n", "- spec.pdf: The document text is not reflected in these notes."} {
+		if !strings.Contains(english, want) {
+			t.Fatalf("English trailer missing %q: %s", want, english)
+		}
+	}
+	if strings.ContainsFunc(english, func(r rune) bool { return r >= 0xAC00 && r <= 0xD7A3 }) {
+		t.Fatalf("English trailer contains Korean: %s", english)
+	}
+}
+
+func TestEnglishSnapshotAppendsEnglishTrailer(t *testing.T) {
+	meeting := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone, TranscriptA: noteSourceGroupedA, TranscriptSegments: noteSourceSegments}
+	for language, heading := range map[string]string{model.NoteLanguageEnglish: "## Attached images", model.NoteLanguageKorean: "## 첨부 이미지"} {
+		_, content, _, err := invokeNoteSourceFixture(t, meeting,
+			`{"content":[{"type":"text","text":"# Meeting Notes\n\n## Overview\nDiscussed the plan [TS:12]"}],"stop_reason":"end_turn"}`,
+			func(s *BedrockService) (string, error) {
+				return s.generateSummarySnapshot(context.Background(), meeting, trailerTestAttachments(), "", false, language)
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(content, heading) {
+			t.Fatalf("%s note trailer missing %q: %s", language, heading, content)
+		}
 	}
 }

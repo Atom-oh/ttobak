@@ -51,7 +51,7 @@ func (h *MeetingReadingHandler) Get(w http.ResponseWriter, r *http.Request) {
 func readingErrorResponse(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, service.ErrSummaryReadRestricted):
-		return http.StatusConflict, "SHARING_REGEN_REQUIRED", "소유자가 공유용 회의록을 재생성해야 이 내용을 읽을 수 있습니다."
+		return http.StatusConflict, "SHARING_REGEN_REQUIRED", "이 회의록은 이전 방식으로 만들어졌습니다. 소유자가 회의록을 다시 생성해야 이 내용을 읽을 수 있습니다."
 	case errors.Is(err, service.ErrForbidden):
 		return http.StatusForbidden, "FORBIDDEN", "Access denied"
 	case errors.Is(err, service.ErrNotFound):

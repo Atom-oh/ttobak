@@ -16,6 +16,8 @@ import { FileUploader } from '@/components/FileUploader';
 import { IndexStatus } from '@/components/IndexStatus';
 import { ResummaryControls } from '@/components/meeting/ResummaryControls';
 import { useResummary } from '@/hooks/useResummary';
+import { useEnglishNote } from '@/hooks/useEnglishNote';
+import { englishNoteView } from '@/lib/englishNote';
 import { QAPanel } from '@/components/QAPanel';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { MeetingNotesEditor } from '@/components/meeting/MeetingNotesEditor';
@@ -415,6 +417,13 @@ function MeetingDetailContent() {
     onLoaded: applyResummary,
   });
 
+  const canEditEnglish = !!meeting && (meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read'));
+  const englishNote = useEnglishNote({
+    meetingId,
+    enabled: isAuthenticated && meeting?.meetingId === meetingId,
+  });
+  const englishView = englishNoteView(englishNote.note, canEditEnglish && meeting?.status === 'done');
+
   const hasAudio = meeting?.audioKey || (meeting?.audioKeys && meeting.audioKeys.length > 0);
   useEffect(() => {
     let canceled = false;
@@ -620,12 +629,6 @@ function MeetingDetailContent() {
             onRequest={() => { void resummary.request(); }}
             onRefresh={() => { void resummary.refresh(); }}
             onLoad={() => { void resummary.load(); }}
-            noteLanguage={meeting.noteLanguage ?? ''}
-            languageLocked={meeting.status === 'summarizing'}
-            onNoteLanguageChange={canEdit ? async (noteLanguage) => {
-              await meetingsApi.update(meeting.meetingId, { noteLanguage });
-              setMeeting((current) => current?.meetingId === meeting.meetingId ? { ...current, noteLanguage } : current);
-            } : undefined}
             sharing={meeting.summarySharing}
             onSharingSafe={() => { void resummary.request(true); }}
           />
@@ -728,6 +731,7 @@ function MeetingDetailContent() {
                   interactionLocked={resummary.action === 'load'}
                   meetingId={meeting.meetingId}
                   translationEnabled={meeting.supportsMeetingTranslation === true}
+                  english={{ view: englishView, note: englishNote.note, busy: englishNote.requesting || englishNote.pending, error: englishNote.error, onRequest: () => { void englishNote.request(); } }}
                   onSave={canEdit ? async (content) => {
                     await meetingsApi.update(meeting.meetingId, { content });
                     // Publish the saved snapshot; AISummaryCard keeps newer typing local.

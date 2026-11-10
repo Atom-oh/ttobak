@@ -1,7 +1,7 @@
 # ADR-070: Shareable-by-default note provenance
 
 - Status: Accepted; implementation in `backend/internal/repository/summary_privacy.go`
-  and `backend/internal/service/` (PR 1 of the shareable notes work).
+  and `backend/internal/service/`.
 - Decision date: 2026-11-10. Human edits keep `safe` was decided by the product
   owner; the predecessor, image-evidence, first-draft and owner-only-reset rules
   were design choices approved with the spec.
@@ -26,14 +26,18 @@ before an account could receive them.
 - **First live draft is safe.** A row with no provenance and no generated
   derivatives has nothing that could have consumed private sources, so its first
   write stamps `safe`.
-- **Own image analyses are safe evidence.** Sharing-safe preparation keeps the
-  owner's own image analyses. Verified at revision `d53c1471`:
+- **Own image analyses are safe evidence.** Sharing-safe preparation keeps this
+  meeting's own image analyses. Verified at revision `d53c1471`:
   `BedrockService.AnalyzeImage` reads only the S3 image object, and
   `invokeImageModel` sends only fixed prompts plus that image.
   `ProcessImageAttachment` and `backend/cmd/process-image` additionally read only
   the attachment row. No other meeting content enters the prompt.
 - **Language.** Final notes always use the Korean directive. `noteLanguage` stays
   stored and accepted but no longer affects generation.
+- **English note follows the same evidence rule.** The English note has separate
+  run state (`ANALYSIS#summaryEn`) and `contentEn` fields, is built from the same
+  safe evidence (selected transcript, saved notes, verified documents, this
+  meeting's image analyses) and is never derived from the Korean note.
 - **Reset stays owner-only.** `{sharingSafe:true}` remains the derivative-clearing
   reset (`RequestSharingSafe`), owner-only and unchanged.
 

@@ -57,6 +57,7 @@ Normalize locally before calling TTOBAK:
 | `timeZone` | IANA zone or `UTC`, at most 128 UTF-8 bytes; map provider/Windows zones locally, never `Local`. |
 | `isAllDay` | Optional boolean, default false. If true, require `startDate` and exclusive `endDate` (`YYYY-MM-DD`), matching local midnight instants in `timeZone`; a DST day may be 23 or 25 hours. Omit dates for timed events. |
 | `location` | Optional, at most 256 UTF-8 bytes; omit join URLs and sensitive details. |
+| `organizerDomain` | Optional lowercase domain of the organizer's email only; never the name or local part. |
 | `accountId` | Optional explicit user-approved TTOBAK Account mapping, `[A-Za-z0-9_-]{1,128}`. Verify current access; omit if unmapped. Classification never shares the private event. |
 | Upsert | `{"op":"upsert","event":{...}}` with only the fields above. |
 | Removal | `{"op":"remove","externalId":"exact previously tracked occurrence ID"}`. No event body. |

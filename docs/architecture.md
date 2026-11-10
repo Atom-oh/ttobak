@@ -155,6 +155,11 @@ retired. Its data moves in a one-time cutover
    placeholder-protected and without speaker labels or times, through the same
    interpreter path to client memory only (`MEETING_TRANSLATION_ENABLED`, daily
    byte budget).
+   In the Mac app only, caption overlay windows (ADR-069) translate on a separate
+   local path: the main window calls Rust, which uses the user's own AWS profile
+   (Bedrock Luna for finals, Amazon Translate for interims and fallback) and relays
+   text to bundled overlay pages. It never uses the server's `/api/translate`, so
+   server limits and cost are not involved; credentials stay in Rust.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.
@@ -368,6 +373,16 @@ deployed read/delete acceptance before writer activation.
 These modules do not activate a scheduler, change legacy news results or establish
 production acceptance. Infrastructure wiring and consumer rollout remain separate
 delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).
+
+The English meeting note is an independent derivative: `SummaryRequested` with
+target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
+state, regenerates from the transcript, notes, verified documents and image
+analyses (never the Korean note) and writes only `contentEn` fields (ADR-070).
+During rollout, a summarize Lambda that predates the English path treats a
+target `en` event as Korean, finds a run-ID mismatch on `ANALYSIS#summary` and
+does nothing; the English row then expires to `INTERRUPTED`, which is retryable.
+Rolling back after English notes exist leaves Korean size guards ignoring
+`contentEn`, so a large item can fail with DynamoDB's clean item-size rejection.
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to
