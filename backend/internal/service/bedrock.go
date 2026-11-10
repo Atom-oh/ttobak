@@ -575,6 +575,16 @@ const attachmentSentinel = "<!-- ttobak:attachments -->"
 //
 // Returns "" when there is nothing to append (caller adds nothing).
 func buildAttachmentLinkSections(attachments []model.Attachment) string {
+	return buildAttachmentLinkSectionsFor(attachments, model.NoteLanguageKorean)
+}
+
+// buildAttachmentLinkSectionsFor renders the same tail with headings in the
+// note's language; anything other than English keeps the Korean headings.
+func buildAttachmentLinkSectionsFor(attachments []model.Attachment, language string) string {
+	imageHeading, documentHeading := "\n## 첨부 이미지\n", "\n## 첨부 문서\n"
+	if language == model.NoteLanguageEnglish {
+		imageHeading, documentHeading = "\n## Attached images\n", "\n## Attached documents\n"
+	}
 	var imgSection, docSection strings.Builder
 	seenDocLinks := make(map[string]bool)
 	for _, att := range attachments {
@@ -599,10 +609,10 @@ func buildAttachmentLinkSections(attachments []model.Attachment) string {
 	}
 	out := "\n\n---\n\n" + attachmentSentinel
 	if imgSection.Len() > 0 {
-		out += "\n## 첨부 이미지\n" + imgSection.String()
+		out += imageHeading + imgSection.String()
 	}
 	if docSection.Len() > 0 {
-		out += "\n## 첨부 문서\n" + docSection.String()
+		out += documentHeading + docSection.String()
 	}
 	return out
 }
@@ -997,13 +1007,13 @@ DOCUMENT 근거:
 	if len(parsedSegments) == 0 {
 		content = regexp.MustCompile(`\[[^\]]*\]\(transcript://[^)]*\)`).ReplaceAllString(content, "")
 	}
-	content += summaryAttachmentNotice(attachments)
+	content += summaryAttachmentNoticeFor(attachments, language)
 
 	// Append inline image references for processed attachments, plus download
 	// links for document attachments alongside their independently verified text.
 	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
 	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
-		content += buildAttachmentLinkSections(attachments)
+		content += buildAttachmentLinkSectionsFor(attachments, language)
 	}
 
 	return content, nil
