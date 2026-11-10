@@ -671,7 +671,7 @@ row and shows reload copy.
 | `needs_owner` | Owner picker over the account's direct `SA`/`SSA` members with a user ID, excluding me and pending members (`pickOwner`). |
 | mine `issue_needed`, theirs `requested` | SpecReq ID input accepting a UUID (`linkSpecReq`). |
 
-A linked SpecReq opens in a new tab with `rel="noopener noreferrer"`. The Slack
+A linked SpecReq shows its ID in a code element with a copy button; there is no known SpecReq page URL, so no link is rendered. When the account cannot be resolved, the copy button stays disabled and a hint explains why. The Slack
 request text is built in the browser from cloud fields only (account name, event
 title and time in the event zone, my display name) with `renderSlackRequest`; its
 `SLACK_REQUEST_TEMPLATE` mirrors the runner's and `contracts/specreq/slack-request-v1.json`.

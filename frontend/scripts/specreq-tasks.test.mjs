@@ -201,7 +201,7 @@ test('slack copy renders the contract fixture', () => {
 function view(extra) {
   const { SpecReqActionsView } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
   return renderToStaticMarkup(React.createElement(SpecReqActionsView, {
-    task: task(id('a'), 'issue_needed'), myName: 'Me', accounts: [{ accountId: 'acct-1', name: 'Acme', role: 'SA' }],
+    task: task(id('a'), 'issue_needed'), accounts: [{ accountId: 'acct-1', name: 'Acme', role: 'SA' }],
     members: null, myUserId: 'me', pending: false, onCopy() {}, onChange() {}, ...extra,
   }));
 }
@@ -235,15 +235,25 @@ test('actions per state', () => {
   assert.match(view({ message: copy.conflict }), /role="alert"[^>]*>다른 곳에서/);
 });
 
-test('SpecReq link is a noopener new-tab link to the pinned ID', () => {
+test('linked SpecReq ID renders as copyable text, never a link', () => {
   const specReqId = '11111111-2222-4333-8444-555555555555';
+  const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
   const output = view({ task: task(id('a'), 'requested', { path: 'theirs', specReqId }) });
-  assert.match(output, /<a href="[^"]*11111111-2222-4333-8444-555555555555" target="_blank" rel="noopener noreferrer"/);
-  assert.doesNotMatch(view({ task: task(id('a'), 'requested', { path: 'theirs', specReqId: 'javascript:alert(1)' }) }), /<a /);
+  assert.doesNotMatch(output, /<a /);
+  assert.match(output, new RegExp(`<code[^>]*>${specReqId}</code>`));
+  assert.ok(output.includes(copy.copyId));
   const { parseSpecReqId } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
   assert.equal(parseSpecReqId(` ${specReqId.toUpperCase()} `), specReqId);
   assert.equal(parseSpecReqId('00000000-0000-0000-0000-000000000000'), undefined);
   assert.equal(parseSpecReqId('nope'), undefined);
+});
+
+test('request_needed explains an unresolved account', () => {
+  const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
+  const unresolved = view({ task: task(id('a'), 'request_needed', { path: 'theirs' }) });
+  assert.ok(unresolved.includes(copy.accountUnresolved));
+  assert.match(unresolved, /<button[^>]*disabled=""[^>]*>Slack 요청 문구 복사/);
+  assert.ok(!view({ task: task(id('a'), 'request_needed', { path: 'theirs' }), slackText: 'x' }).includes(copy.accountUnresolved));
 });
 
 test('owner picker excludes me, AM roles and pending members', () => {

@@ -27,13 +27,12 @@ export const SPECREQ_ACTION_COPY = {
   linkPlaceholder: 'SpecReq ID (UUID)',
   linkSubmit: 'SpecReq 연결',
   linkInvalid: 'SpecReq ID는 UUID 형식이어야 합니다.',
-  openSpecReq: 'SpecReq 열기',
+  copyId: 'ID 복사',
+  idLabel: '연결된 SpecReq ID',
+  accountUnresolved: '어카운트를 아직 확인하지 못해 요청 문구를 만들 수 없습니다. 잠시 후 다시 확인해 주세요.',
   conflict: '다른 곳에서 먼저 변경되었습니다. 최신 상태로 다시 불러왔으니 확인해 주세요.',
   failed: '변경하지 못했습니다. 잠시 후 다시 시도해 주세요.',
 } as const;
-
-/** SpecReq request page; the linked request ID is appended. */
-export const SPECREQ_PAGE_URL_PREFIX = 'https://specreq.aws.dev/requests/';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
@@ -43,11 +42,6 @@ const OWNER_ROLES: readonly string[] = ['SA', 'SSA'];
 export function parseSpecReqId(value: string): string | undefined {
   const id = value.trim().toLowerCase();
   return UUID.test(id) && id !== NIL_UUID ? id : undefined;
-}
-
-export function specReqPageUrl(specReqId: string): string | undefined {
-  const id = parseSpecReqId(specReqId);
-  return id ? `${SPECREQ_PAGE_URL_PREFIX}${id}` : undefined;
 }
 
 export type SpecReqActionKind = 'copySlack' | 'markRequested' | 'pickAccount' | 'pickOwner' | 'linkSpecReq';
@@ -72,7 +66,6 @@ export function ownerCandidates(members: AccountMember[], myUserId: string): Acc
 
 export interface SpecReqActionsViewProps {
   task: SpecReqTaskView;
-  myName: string;
   accounts: AccountSummary[];
   members: AccountMember[] | null;
   myUserId: string;
@@ -81,6 +74,7 @@ export interface SpecReqActionsViewProps {
   slackText?: string;
   copyNote?: string;
   onCopy: () => void;
+  onCopyId?: () => void;
   onChange: (change: SpecReqTaskChange) => void;
   onLinkInvalid?: () => void;
 }
@@ -89,19 +83,21 @@ const buttonClass = 'rounded-lg border border-border-subtle px-3 py-2 text-sm te
 const fieldClass = 'min-w-0 rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-text-main focus-visible:outline-2 focus-visible:outline-primary';
 
 export function SpecReqActionsView({
-  task, accounts, members, myUserId, pending, message, slackText, copyNote, onCopy, onChange, onLinkInvalid,
+  task, accounts, members, myUserId, pending, message, slackText, copyNote, onCopy, onCopyId, onChange, onLinkInvalid,
 }: SpecReqActionsViewProps) {
   const [account, setAccount] = useState('');
   const [owner, setOwner] = useState('');
   const [link, setLink] = useState('');
   const kinds = taskActionKinds(task);
   const owners = members ? ownerCandidates(members, myUserId) : [];
-  const specReqUrl = task.specReqId ? specReqPageUrl(task.specReqId) : undefined;
   const copy = SPECREQ_ACTION_COPY;
   return (
     <div className="mt-3 space-y-2" data-specreq-actions={task.state}>
-      {specReqUrl && <a href={specReqUrl} target="_blank" rel="noopener noreferrer"
-        className="inline-block text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-primary">{copy.openSpecReq}</a>}
+      {task.specReqId && <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+        <span>{copy.idLabel}</span>
+        <code className="break-all rounded bg-surface-container px-1.5 py-0.5 text-text-main">{task.specReqId}</code>
+        <button type="button" onClick={onCopyId} className={buttonClass}>{copy.copyId}</button>
+      </div>}
       {kinds.includes('copySlack') && <div className="space-y-2">
         <div className="flex flex-wrap gap-2">
           <button type="button" disabled={pending || !slackText} onClick={onCopy} className={buttonClass}>{copy.copySlack}</button>
@@ -109,6 +105,7 @@ export function SpecReqActionsView({
         </div>
         {slackText && <textarea readOnly aria-label={copy.slackLabel} value={slackText} rows={4}
           className={`${fieldClass} block w-full resize-y`} />}
+        {!slackText && !pending && <p className="text-xs text-text-secondary">{copy.accountUnresolved}</p>}
         {copyNote && <p role="status" className="text-xs text-text-secondary">{copyNote}</p>}
       </div>}
       {kinds.includes('pickAccount') && <div className="space-y-2">
@@ -210,8 +207,13 @@ export function SpecReqTaskActions({ task, transition }: SpecReqTaskActionsProps
     try { await navigator.clipboard.writeText(text); setCopyNote(SPECREQ_ACTION_COPY.copied); } catch { setCopyNote(SPECREQ_ACTION_COPY.copyFailed); }
   };
 
+  const copyId = async () => {
+    if (!task.specReqId) return;
+    try { await navigator.clipboard.writeText(task.specReqId); setCopyNote(SPECREQ_ACTION_COPY.copied); } catch { setCopyNote(SPECREQ_ACTION_COPY.copyFailed); }
+  };
+
   return <SpecReqActionsView task={task} accounts={accounts} members={needsMembers ? members : null} myUserId={userId}
-    myName={user?.name || user?.email || ''} pending={pending} message={message}
-    slackText={slackText ?? text} copyNote={copyNote} onCopy={copy} onChange={change}
+    pending={pending} message={message}
+    slackText={slackText ?? text} copyNote={copyNote} onCopy={copy} onCopyId={copyId} onChange={change}
     onLinkInvalid={() => setMessage(SPECREQ_ACTION_COPY.linkInvalid)} />;
 }
