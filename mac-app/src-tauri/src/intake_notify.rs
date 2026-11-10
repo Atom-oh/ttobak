@@ -161,6 +161,8 @@ pub fn parse_notices(bytes: &[u8], now: SystemTime) -> Vec<Notice> {
 pub struct SeenStore {
     posted: HashMap<String, i64>,
     path: Option<PathBuf>,
+    /// Unsaved changes; a failed save stays dirty and is retried.
+    dirty: bool,
 }
 
 impl SeenStore {
@@ -173,6 +175,7 @@ impl SeenStore {
         Self {
             posted,
             path: Some(path),
+            dirty: false,
         }
     }
 
@@ -188,12 +191,25 @@ impl SeenStore {
     pub fn record(&mut self, key: &str) {
         self.posted
             .insert(key.to_string(), unix_secs(SystemTime::now()));
+        self.dirty = true;
     }
 
     /// Drops entries posted more than 48 hours before `now`.
     pub fn prune(&mut self, now: SystemTime) {
         let cutoff = unix_secs(now) - SEEN_RETENTION.as_secs() as i64;
+        let before = self.posted.len();
         self.posted.retain(|_, at| *at >= cutoff);
+        self.dirty |= self.posted.len() != before;
+    }
+
+    /// Saves only when something changed; a failure stays dirty for the next call.
+    pub fn save_if_dirty(&mut self) -> std::io::Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
+        self.save()?;
+        self.dirty = false;
+        Ok(())
     }
 
     /// Atomically writes the store with mode 0600.
@@ -278,19 +294,35 @@ fn main_window_base(app: &AppHandle) -> Option<Url> {
         })
 }
 
+/// Pure navigation guard: the native recorder must be idle and the SPA must
+/// have reported phase `idle` (not recording, starting or in a post-recording
+/// step). A missing or unrecognised state is treated as busy.
+fn may_navigate(native_recording: bool, spa: Option<&Value>) -> bool {
+    !native_recording
+        && spa
+            .and_then(|v| v.get("phase"))
+            .and_then(Value::as_str)
+            .is_some_and(|p| p == "idle")
+}
+
 /// Called on `RunEvent::Reopen` and main-window `Focused(true)`: navigates the
 /// main window to the pending notice once, if it has not expired.
 pub fn open_pending(app: &AppHandle) {
     let Some(target) = app.try_state::<Arc<OpenTarget>>() else {
         return;
     };
-    // Reloading the SPA mid-recording would lose live-caption state and
-    // unsaved text, so a notice never navigates while recording.
-    let recording = app
+    // Reloading the SPA mid-recording, or during the stop/upload tail, would
+    // lose live-caption state and unsaved text. Navigate only when the native
+    // recorder is idle AND the SPA reports `idle`; unknown state fails closed.
+    let native_recording = app
         .try_state::<crate::RecorderState>()
         .map(|s| s.recorder.lock().snapshot().recording)
         .unwrap_or(false);
-    let Some(path) = target.take(SystemTime::now(), recording) else {
+    let spa = app
+        .try_state::<crate::control::ControlState>()
+        .and_then(|c| c.spa_state());
+    let blocked = !may_navigate(native_recording, spa.as_ref());
+    let Some(path) = target.take(SystemTime::now(), blocked) else {
         return;
     };
     let Some(url) = main_window_base(app).and_then(|b| target_url(&b, &path)) else {
@@ -349,6 +381,9 @@ fn read_queue(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
 #[cfg(unix)]
 fn poll_once(app: &AppHandle, store: &mut SeenStore, target: &OpenTarget, queue: &Path) {
     use tauri_plugin_notification::NotificationExt;
+    let now = SystemTime::now();
+    store.prune(now);
+    persist(store);
     let bytes = match read_queue(queue) {
         Ok(Some(b)) => b,
         Ok(None) => return,
@@ -357,9 +392,6 @@ fn poll_once(app: &AppHandle, store: &mut SeenStore, target: &OpenTarget, queue:
             return;
         }
     };
-    let now = SystemTime::now();
-    store.prune(now);
-    let mut changed = false;
     for notice in store
         .unseen(parse_notices(&bytes, now))
         .into_iter()
@@ -375,16 +407,18 @@ fn poll_once(app: &AppHandle, store: &mut SeenStore, target: &OpenTarget, queue:
             Ok(()) => {
                 target.set(&notice.path, SystemTime::now());
                 store.record(&notice.key);
-                changed = true;
             }
             // Not recorded, so the next cycle retries it.
             Err(e) => log::warn!("intake notice not posted: {e}"),
         }
     }
-    if changed {
-        if let Err(e) = store.save() {
-            log::warn!("intake seen store not saved: {e}");
-        }
+    persist(store);
+}
+
+#[cfg(unix)]
+fn persist(store: &mut SeenStore) {
+    if let Err(e) = store.save_if_dirty() {
+        log::warn!("intake seen store not saved (will retry): {e}");
     }
 }
 
@@ -582,6 +616,52 @@ mod tests {
         t.set(&p, at(NOW));
         assert_eq!(t.take(at(NOW + 601), true), None);
         assert_eq!(t.take(at(NOW + 602), false), None, "expired while blocked");
+    }
+
+    #[test]
+    fn navigation_guard_fails_closed() {
+        let idle = serde_json::json!({"phase": "idle"});
+        assert!(may_navigate(false, Some(&idle)));
+        let browser = serde_json::json!({"phase": "recording", "source": "browser"});
+        assert!(!may_navigate(false, Some(&browser)), "browser recording");
+        // Native stop tail: recorder handle gone, SPA still finalizing/uploading.
+        let tail = serde_json::json!({"phase": "uploading"});
+        assert!(!may_navigate(false, Some(&tail)), "stop/upload tail");
+        let starting = serde_json::json!({"phase": "starting"});
+        assert!(!may_navigate(false, Some(&starting)));
+        assert!(!may_navigate(true, Some(&idle)), "native recording");
+        assert!(!may_navigate(false, None), "unknown state");
+        assert!(!may_navigate(false, Some(&serde_json::json!({}))));
+        assert!(!may_navigate(false, Some(&serde_json::json!({"phase": 1}))));
+    }
+
+    #[test]
+    fn seen_store_retries_failed_save_and_saves_after_prune() {
+        let dir = std::env::temp_dir().join(format!(
+            "ttobak-seen-dirty-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = dir.join("intake-notified.json");
+        // A directory squatting on the tmp path makes the first save fail.
+        std::fs::create_dir_all(file.with_extension("json.tmp")).unwrap();
+        let mut store = SeenStore::load(file.clone());
+        store.record("k");
+        assert!(store.save_if_dirty().is_err());
+        std::fs::remove_dir(file.with_extension("json.tmp")).unwrap();
+        assert!(store.save_if_dirty().is_ok(), "retried while dirty");
+        assert!(SeenStore::load(file.clone()).posted.contains_key("k"));
+        store.prune(SystemTime::now() + Duration::from_secs(49 * 3600));
+        store.save_if_dirty().unwrap();
+        assert!(
+            SeenStore::load(file.clone()).posted.is_empty(),
+            "prune persisted"
+        );
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

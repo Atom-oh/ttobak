@@ -192,15 +192,17 @@ meeting prompt. Check by hand with the packaged app running:
 2. Click it. macOS may only activate the app. Then switch to another app and
    back, or click the dock icon, within 10 minutes: TTOBAK should load
    `/meetings?task=<id>` once. After 10 minutes it should not navigate.
-3. Make the file a symlink or `chmod 666` it: nothing posts and the log says the
-   queue was ignored.
+3. Make the file a symlink: nothing posts and the log says the queue is
+   unreadable. `chmod 666` it: nothing posts and the log says it was ignored.
 4. Record the observed behaviour (delivered or not, whether the click activates
    the app, which reopen or focus path navigated) in ADR-065's status line.
 
 Any focus of the main window inside the 10-minute window navigates it, even if
-you were already on another page. It never navigates while a recording is
-running; the target is kept and a later focus after the recording stops can
-still open it until the 10 minutes pass. Only the latest notice of a burst is
+you were already on another page. It navigates only when the native recorder
+is idle and the TTOBAK page last reported phase `idle` (not recording, starting
+or in a post-recording or upload step); a missing or unknown state counts as
+busy, so the target is kept until it expires after 10 minutes. The record page
+is the only page that reports state. Only the latest notice of a burst is
 openable.
 
 ## Schedule (after acceptance)

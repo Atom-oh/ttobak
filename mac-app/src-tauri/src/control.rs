@@ -37,6 +37,13 @@ const START_TIMEOUT: Duration = Duration::from_secs(45);
 const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_CONNECTIONS: usize = 8;
 
+impl ControlState {
+    /// Last state the SPA reported via `control_report_state`, if any.
+    pub fn spa_state(&self) -> Option<Value> {
+        self.last_state.lock().clone()
+    }
+}
+
 #[derive(Default)]
 pub struct ControlState {
     /// `Some(logged_in)` once the SPA's bridge has mounted.
