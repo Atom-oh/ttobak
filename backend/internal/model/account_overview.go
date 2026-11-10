@@ -116,6 +116,18 @@ type FlowItem struct {
 	Origin   string `json:"origin,omitempty"`
 	Evidence string `json:"evidence,omitempty"`
 	Need     string `json:"need,omitempty"`
+	// People ran or attended the item: readable event attendee contacts, or
+	// a meeting's member and contact people edges. At most 5.
+	People []FlowPerson `json:"people,omitempty"`
+}
+
+// FlowPerson is one person of a flow item. Role is attendee, participant,
+// speaker or assignee.
+type FlowPerson struct {
+	Kind  string `json:"kind"` // member|contact
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Role  string `json:"role"`
 }
 
 // FlowResult is the opportunity's current state.
@@ -144,6 +156,9 @@ const (
 	GraphEdgeLink           = "link"
 	GraphEdgeAttends        = "attends"
 	GraphEdgeMemberOf       = "member_of"
+	// GraphEdgePerson joins a meeting to a member, contact, account or
+	// project people edge target; Role carries the people role.
+	GraphEdgePerson = "person"
 )
 
 // AccountGraph is the account's relationship graph. Every node and edge comes
@@ -153,6 +168,9 @@ type AccountGraph struct {
 	Edges []GraphEdge `json:"edges"` // at most 300
 	// Truncated reports that a node, edge, read or size bound was hit.
 	Truncated bool `json:"truncated"`
+	// MemberCount counts the canonical direct members; only members with a
+	// people edge are nodes.
+	MemberCount int `json:"memberCount"`
 }
 
 // GraphNode ID is {kind}:{id}, where id is the link-form ID of the item
@@ -164,10 +182,12 @@ type GraphNode struct {
 	Label string `json:"label"`
 }
 
-// GraphEdge joins two node IDs. Origin is set only for link edges.
+// GraphEdge joins two node IDs. Origin is set only for link and person
+// edges, Role only for person edges.
 type GraphEdge struct {
 	From   string `json:"from"`
 	To     string `json:"to"`
 	Kind   string `json:"kind"` // GraphEdge*
 	Origin string `json:"origin,omitempty"`
+	Role   string `json:"role,omitempty"`
 }
