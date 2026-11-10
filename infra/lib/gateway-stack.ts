@@ -57,7 +57,7 @@ export interface GatewayStackProps extends cdk.StackProps {
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
   convertDocRole?: iam.IRole;
-  /** ADR-062 playback-copy worker; optional so unit tests skip the Docker asset. */
+  /** ADR-014 playback-copy worker; optional so unit tests skip the Docker asset. */
   audioRemuxRole?: iam.IRole;
   // VPC ID for convert-doc's network isolation (ADR-022 residual-risk
   // follow-up) -- same pre-existing VPC WhisperStack already uses
@@ -1440,7 +1440,7 @@ export class GatewayStack extends cdk.Stack {
       pipelineFailures.addTarget('ConvertDoc', docSlideUploadRule, this.convertDocFunction);
     }
 
-    // ADR-062: seekable playback copies of browser-recorded audio. Container
+    // ADR-014: seekable playback copies of browser-recorded audio. Container
     // image for ffmpeg; same isolated-subnet placement as convert-doc because
     // ffmpeg parses user-supplied media. S3 goes through the existing gateway
     // endpoint (never add a second one).
@@ -1475,7 +1475,7 @@ export class GatewayStack extends cdk.Stack {
       });
       const audioRemuxRule = new events.Rule(this, 'AudioRemuxRule', {
         ruleName: 'ttobak-audio-remux',
-        description: 'Write a seekable playback copy when WebM/Ogg meeting audio is uploaded (ADR-062)',
+        description: 'Write a seekable playback copy when WebM/Ogg meeting audio is uploaded (ADR-014)',
         eventPattern: {
           source: ['aws.s3'],
           detailType: ['Object Created'],

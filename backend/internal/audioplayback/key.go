@@ -1,4 +1,4 @@
-// Package audioplayback names the playback copies of meeting audio (ADR-062).
+// Package audioplayback names the playback copies of meeting audio (ADR-014).
 //
 // Browser MediaRecorder WebM/Ogg lacks Duration and Cues, and an interrupted
 // recording can end mid-cluster. A remuxed copy under a separate top-level
