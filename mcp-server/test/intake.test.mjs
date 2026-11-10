@@ -569,6 +569,19 @@ test('sfdc snapshot removes vanished assignments', async t => {
   assert.equal(third.counts.tasks.removals, 1);
 });
 
+test('sfdc overlapping task pages fail closed', async t => {
+  const api = performanceApi();
+  const [one, two] = ['00TXX00000000T1AAA', '00TXX00000000T2AAA'].map(id => taskRecord(id, '001XX0000000A1AAA', 'A'));
+  // Three records in total, but the second page repeats one and hides the third.
+  const pages = [{ resultRecords: [one, two], totalCount: '3', hasNextPage: true, cursor: 'c1' },
+    { resultRecords: [one], totalCount: '3', hasNextPage: false, cursor: null }];
+  const base = sentralData({ registry: [registryRecord('001XX0000000A1AAA', 'A')], tasks: [] });
+  const source = { call: (tool, args) => tool === 'search_tasks' ? { data: pages[args.after ? 1 : 0] } : base.call(tool) };
+  await assert.rejects(runSfdc({ store: new IntakeStore(tempHome(t)), api, source, sourceId: SFDC_SOURCE_ID, scope: SCOPE_A,
+    now: NOW, dryRun: false }), error => error.code === 'PARSE_FAILED');
+  assert.equal(api.calls.length, 0);
+});
+
 test('sfdc auth expiry keeps no partial snapshot', async t => {
   const home = tempHome(t);
   writeSentral(home);

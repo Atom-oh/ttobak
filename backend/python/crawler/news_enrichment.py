@@ -21,6 +21,10 @@ FINAL_MODEL_ID = os.environ.get("FINAL_MODEL_ID", "global.anthropic.claude-opus-
 PROMPT_VERSION = "news-v1"
 QUALITY_GATE_VERSION = "news-v1"
 MAX_TOKENS = 6000
+# Claude Opus 5.5 rejects {"thinking": {"type": "disabled"}} (thinking cannot
+# be turned off); low effort keeps reasoning brief within MAX_TOKENS. Reasoning
+# blocks are ignored by _response_text. news_model validates this exact value.
+MODEL_REQUEST_FIELDS = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
 MAX_SOURCES = 3
 MAX_RESPONSE_BYTES = 48000
 MAX_PROMPT_BYTES = 300000
@@ -335,9 +339,12 @@ def _response_text(response):
     _require(isinstance(content, list) and 1 <= len(content) <= 16, "content blocks")
     chunks = []
     for block in content:
+        if isinstance(block, dict) and set(block) == {"reasoningContent"}:
+            continue  # adaptive thinking; never part of the answer
         _require(isinstance(block, dict) and set(block) == {"text"}
                  and isinstance(block["text"], str), "text blocks")
         chunks.append(block["text"])
+    _require(chunks, "text blocks")
     text = "".join(chunks)
     _require(len(text.encode("utf-8")) <= MAX_RESPONSE_BYTES, "response size")
     return text
@@ -367,7 +374,7 @@ def enrich_article(candidate, article_bodies, bedrock, require_relevance=None, *
                 system=[{"text": _SYSTEM}],
                 messages=[{"role": "user", "content": [{"text": request}]}],
                 inferenceConfig={"maxTokens": MAX_TOKENS},
-                additionalModelRequestFields={"thinking": {"type": "disabled"}},
+                additionalModelRequestFields=MODEL_REQUEST_FIELDS,
             )
         except (BotoCoreError, ClientError):
             # The failed call may have consumed tokens without returning usage.
