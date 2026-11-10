@@ -66,6 +66,9 @@ type AccountMergeContactMap struct {
 	SK              string `dynamodbav:"SK"`
 	SourceContactID string `dynamodbav:"sourceContactId"`
 	TargetContactID string `dynamodbav:"targetContactId"`
+	// TargetAccountID binds the mapping to the merge that wrote it: after an
+	// abort the source can merge elsewhere, and that merge ignores this row.
+	TargetAccountID string `dynamodbav:"targetAccountId,omitempty"`
 	EntityType      string `dynamodbav:"entityType"` // "ACCOUNT_MERGE_CONTACT_MAP"
 }
 

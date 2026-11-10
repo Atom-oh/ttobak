@@ -38,7 +38,7 @@ func (s *AccountMergeService) resolveEventContacts(ctx context.Context, job *mod
 	if len(ids) == 0 {
 		return resolved, nil
 	}
-	mapped, err := s.mover.GetMergeContactMap(ctx, job.SourceAccountID, ids)
+	mapped, err := s.mover.GetMergeContactMap(ctx, job.SourceAccountID, job.TargetAccountID, ids)
 	if err != nil {
 		return nil, err
 	}
