@@ -28,6 +28,14 @@ type accountMergeMeetingRepo interface {
 	RetagAccountShareForMerge(ctx context.Context, job *model.AccountMergeJob, meetingID, sharedToID string) error
 	CreateShareIfMember(ctx context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error)
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
+	ClearAccountInsights(ctx context.Context, ownerID, meetingID, accountID, generation, revision string) error
+}
+
+// meetingMoveRun caches what one moveMeetings call reads once: the target's
+// member list, loaded on the first published meeting.
+type meetingMoveRun struct {
+	members []model.AccountMember
+	loaded  bool
 }
 
 // moveMeetings re-points up to mergeMeetingsPerRun meetings referenced by
@@ -39,7 +47,8 @@ type accountMergeMeetingRepo interface {
 // no longer describes (gone, or on another account) is Skipped and its stale
 // reference left in place (readers revalidate). A meeting already on the
 // target with its source reference still present is a run interrupted after
-// its move, so it is finished again without a second move. The cursor is
+// its move, so it is finished again without a second move and counted as
+// Resumed. The cursor is
 // the reference page position to continue from; a repeat run moves nothing.
 func (s *AccountMergeService) moveMeetings(fence *mergeFence, job *model.AccountMergeJob) (mergeMoveResult, error) {
 	result := mergeMoveResult{Cursor: job.Cursor}
@@ -49,6 +58,7 @@ func (s *AccountMergeService) moveMeetings(fence *mergeFence, job *model.Account
 	}
 	var out mergeMoveResult
 	cursor, processed := job.Cursor, 0
+	run := &meetingMoveRun{}
 	for {
 		refs, next, err := s.mover.ListMeetingRefsForAccountPage(ctx, job.SourceAccountID, cursor, int32(min(mergeMeetingPageSize, mergeMeetingsPerRun-processed)))
 		if err != nil {
@@ -58,13 +68,16 @@ func (s *AccountMergeService) moveMeetings(fence *mergeFence, job *model.Account
 			if err := fence.Err(); err != nil {
 				return result, err
 			}
-			moved, err := s.moveMeeting(ctx, job, &refs[i])
+			outcome, err := s.moveMeeting(ctx, job, run, &refs[i])
 			if err != nil {
 				return result, fence.translate(err)
 			}
-			if moved {
+			switch outcome {
+			case meetingMoved:
 				out.Moved++
-			} else {
+			case meetingResumed:
+				out.Resumed++
+			default:
 				out.Skipped++
 			}
 		}
@@ -79,47 +92,59 @@ func (s *AccountMergeService) moveMeetings(fence *mergeFence, job *model.Account
 		}
 	}
 	out.Cursor = cursor
-	log.Printf("account merge meetings: source=%s moved=%d skipped=%d", job.SourceAccountID, out.Moved, out.Skipped)
+	log.Printf("account merge meetings: source=%s moved=%d resumed=%d skipped=%d", job.SourceAccountID, out.Moved, out.Resumed, out.Skipped)
 	return out, nil
 }
 
-// moveMeeting handles one source reference and reports whether it moved the
-// meeting in this call.
-func (s *AccountMergeService) moveMeeting(ctx context.Context, job *model.AccountMergeJob, ref *model.MeetingRef) (bool, error) {
+type meetingMoveOutcome int
+
+const (
+	meetingSkipped meetingMoveOutcome = iota
+	meetingMoved
+	meetingResumed
+)
+
+// moveMeeting handles one source reference.
+func (s *AccountMergeService) moveMeeting(ctx context.Context, job *model.AccountMergeJob, run *meetingMoveRun, ref *model.MeetingRef) (meetingMoveOutcome, error) {
 	if ref.MeetingID == "" {
-		return false, nil
+		return meetingSkipped, nil
 	}
 	meeting, err := s.mover.GetMeetingByID(ctx, ref.MeetingID)
-	if err != nil {
-		return false, err
+	if err != nil || meeting == nil {
+		return meetingSkipped, err
 	}
-	if meeting == nil {
-		return false, nil
-	}
-	moved := false
+	outcome := meetingResumed
 	switch meeting.AccountID {
 	case job.SourceAccountID:
 		if err := s.mover.MoveMeetingForAccountMerge(ctx, job, meeting.UserID, meeting.MeetingID, ref); err != nil {
-			return false, err
+			return meetingSkipped, err
 		}
-		meeting.AccountID, moved = job.TargetAccountID, true
+		outcome = meetingMoved
 	case job.TargetAccountID:
 		// Interrupted after the move: finish it below.
 	default:
-		return false, nil
+		return meetingSkipped, nil
 	}
-	if err := s.finishMeetingMove(ctx, job, meeting); err != nil {
-		return false, err
+	if err := s.finishMeetingMove(ctx, job, run, meeting.MeetingID); err != nil {
+		return meetingSkipped, err
 	}
-	return moved, s.mover.DeleteMeetingRefForMerge(ctx, job, ref)
+	return outcome, s.mover.DeleteMeetingRefForMerge(ctx, job, ref)
 }
 
 // finishMeetingMove brings a meeting now on the target to the state a
 // target publication would have: source-granted account shares retagged,
-// every other target member granted read when the meeting is published, and
-// the target's insight rows written. Every write is idempotent. A link-only
-// meeting gains no share and no insight.
-func (s *AccountMergeService) finishMeetingMove(ctx context.Context, job *model.AccountMergeJob, meeting *model.Meeting) error {
+// every other target member granted read and the target's insight rows
+// written (or cleared when the meeting has none). Grants and insights use a
+// fresh canonical read taken after the move and require the meeting to be
+// on the target and published: the share and legacy insight writers do not
+// revalidate publication when the summary privacy writer is off, so a
+// meeting unpublished concurrently, or link-only, gains no share and no
+// insight. Every write is idempotent.
+func (s *AccountMergeService) finishMeetingMove(ctx context.Context, job *model.AccountMergeJob, run *meetingMoveRun, meetingID string) error {
+	meeting, err := s.mover.GetMeetingByID(ctx, meetingID)
+	if err != nil || meeting == nil || meeting.AccountID != job.TargetAccountID {
+		return err
+	}
 	shares, err := s.mover.ListSharesForMeeting(ctx, meeting.MeetingID)
 	if err != nil {
 		return err
@@ -143,11 +168,13 @@ func (s *AccountMergeService) finishMeetingMove(ctx context.Context, job *model.
 	if !meeting.SharedToAccount {
 		return nil
 	}
-	members, err := s.mover.ListAccountMembers(ctx, job.TargetAccountID)
-	if err != nil {
-		return err
+	if !run.loaded {
+		if run.members, err = s.mover.ListAccountMembers(ctx, job.TargetAccountID); err != nil {
+			return err
+		}
+		run.loaded = true
 	}
-	for _, member := range members {
+	for _, member := range run.members {
 		if member.UserID == "" || shared[member.UserID] {
 			continue
 		}
@@ -168,5 +195,8 @@ func (s *AccountMergeService) finishMeetingMove(ctx context.Context, job *model.
 	if len(items) > 0 {
 		return s.mover.PutAccountInsights(ctx, items)
 	}
-	return nil
+	// As on a target publication, an empty result must not leave earlier
+	// target rows for this meeting visible.
+	return s.mover.ClearAccountInsights(ctx, meeting.UserID, meeting.MeetingID, job.TargetAccountID,
+		meeting.SummaryGeneration(), meeting.InsightsRevision)
 }

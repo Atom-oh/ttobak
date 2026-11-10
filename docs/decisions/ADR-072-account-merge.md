@@ -79,11 +79,14 @@ carries the merge fence. It is conditioned on the full summary privacy snapshot 
 `accountId = A` and never writes `sharedToAccount`, so a link-only meeting stays
 link-only and an unpublished one never becomes visible; the generic sharing-safe
 gate does not apply. Afterwards A-origin shares are retagged to B (both rows
-conditioned on `origin = account` and `accountId = A`, fenced), B members without a
-share are granted one and B's insight rows are written only for a published meeting.
+conditioned on `origin = account` and `accountId = A`, fenced). A fresh read after the
+move gates the rest: only a meeting on B and published grants B members without a
+share (member list read once per run) and writes B's insight rows, or clears them when
+it has none. The share and legacy insight writers do not revalidate publication while
+the summary privacy writer is off, so the mover does.
 A's reference is deleted last, in its own fenced write, instead of in the move
 transaction: a meeting already on B whose A reference remains is a run interrupted
-after its move, and a rerun finishes its shares and insights without moving it again.
+after its move, and a rerun finishes it without moving it again (counted as resumed).
 
 ## Consequences
 

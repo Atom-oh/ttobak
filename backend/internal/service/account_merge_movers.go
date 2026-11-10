@@ -85,6 +85,9 @@ type mergeMoveResult struct {
 	Moved int
 	// Skipped counts items already moved by an earlier run.
 	Skipped int
+	// Resumed counts items an interrupted earlier run had moved but not
+	// finished; this run finished them without moving them again.
+	Resumed int
 	// Unreadable counts source items left in place because they could not
 	// be opened; the worker reports them on the job.
 	Unreadable int

@@ -22,6 +22,8 @@ type meetingFake struct {
 	meetingWrites []string
 	// beforeGrant may fail a share grant before it is applied.
 	beforeGrant func(user string) error
+	// afterMove runs after a committed move, e.g. a concurrent unpublish.
+	afterMove func(m *model.Meeting)
 }
 
 var meetingDate = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
@@ -98,6 +100,9 @@ func (f *meetingFake) MoveMeetingForAccountMerge(_ context.Context, job *model.A
 	moved.PK, moved.AccountID = model.PrefixAccount+job.TargetAccountID, job.TargetAccountID
 	f.refs[job.TargetAccountID] = append(f.refs[job.TargetAccountID], moved)
 	f.meetingWrites = append(f.meetingWrites, "move:"+id)
+	if f.afterMove != nil {
+		f.afterMove(m)
+	}
 	return nil
 }
 
@@ -157,6 +162,16 @@ func (f *meetingFake) PutAccountInsights(_ context.Context, items []model.Accoun
 		f.insights[it.AccountID][it.SK] = it
 	}
 	f.meetingWrites = append(f.meetingWrites, fmt.Sprintf("insights:%d", len(items)))
+	return nil
+}
+
+func (f *meetingFake) ClearAccountInsights(_ context.Context, owner, id, account, _, _ string) error {
+	for sk, it := range f.insights[account] {
+		if it.SourceID == id && it.SourceUserID == owner {
+			delete(f.insights[account], sk)
+		}
+	}
+	f.meetingWrites = append(f.meetingWrites, "clear:"+id)
 	return nil
 }
 
@@ -255,7 +270,7 @@ func TestMoveMeetings_Idempotent(t *testing.T) {
 		}
 		repo.beforeGrant = nil
 		res, err := s.moveMeetings(fence, job)
-		if err != nil || res.Moved != 0 || res.Skipped != 1 {
+		if err != nil || res.Moved != 0 || res.Resumed != 1 || res.Skipped != 0 {
 			t.Fatalf("resume %+v err=%v", res, err)
 		}
 		if got := repo.shares["m1"]["tgtonly"]; got.AccountID != "tgt" {
@@ -322,5 +337,64 @@ func TestMoveMeetingsStopsOnLostFence(t *testing.T) {
 	res, err := s.moveMeetings(fence, job)
 	if !errors.Is(err, ErrMergeFenceLost) || fence.Err() == nil || res.Cursor != job.Cursor || !repo.hasRef("src", "m1") {
 		t.Fatalf("err=%v fence=%v cursor=%q", err, fence.Err(), res.Cursor)
+	}
+}
+
+// Production runs with the summary privacy writer off, where the share and
+// legacy insight writers do not revalidate publication: grants must follow a
+// read taken after the move.
+func TestMoveMeetingsConcurrentUnpublishSkipsGrants(t *testing.T) {
+	repo, s, job := meetingMoverFixture()
+	repo.putMeeting(&model.Meeting{MeetingID: "m1", UserID: "author", AccountID: "src", SharedToAccount: true,
+		Insights: `[{"type":"risk","text":"Budget"}]`}, "src")
+	repo.add("tgt", "tgtonly", model.RoleSA)
+	repo.afterMove = func(m *model.Meeting) { m.SharedToAccount = false }
+	res, err := s.moveMeetings(newMergeFence(context.Background()), job)
+	if err != nil || res.Moved != 1 {
+		t.Fatalf("result %+v err=%v", res, err)
+	}
+	if _, ok := repo.shares["m1"]["tgtonly"]; ok {
+		t.Error("a meeting unpublished after the move must not be granted to target members")
+	}
+	if len(repo.insights["tgt"]) != 0 {
+		t.Errorf("a meeting unpublished after the move must not fan out insights: %v", repo.insights["tgt"])
+	}
+	if repo.hasRef("src", "m1") {
+		t.Error("the finished meeting's source ref must be deleted")
+	}
+}
+
+func TestMoveMeetingsClearsEmptyInsightsForB(t *testing.T) {
+	repo, s, job := meetingMoverFixture()
+	repo.putMeeting(&model.Meeting{MeetingID: "m1", UserID: "author", AccountID: "src", SharedToAccount: true}, "src")
+	if err := repo.PutAccountInsights(context.Background(), []model.AccountInsight{{PK: "ACCOUNT#tgt", SK: "INSIGHT#old#m1#0",
+		AccountID: "tgt", SourceID: "m1", SourceUserID: "author"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.moveMeetings(newMergeFence(context.Background()), job); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.insights["tgt"]) != 0 {
+		t.Errorf("stale target insight rows must be cleared: %v", repo.insights["tgt"])
+	}
+}
+
+func TestMoveMeetingsListsTargetMembersOncePerRun(t *testing.T) {
+	repo, s, job := meetingMoverFixture()
+	for i := 0; i < 3; i++ {
+		repo.putMeeting(&model.Meeting{MeetingID: fmt.Sprintf("m%d", i), UserID: "author", AccountID: "src", SharedToAccount: true}, "src")
+	}
+	repo.add("tgt", "tgtonly", model.RoleSA)
+	res, err := s.moveMeetings(newMergeFence(context.Background()), job)
+	if err != nil || res.Moved != 3 {
+		t.Fatalf("result %+v err=%v", res, err)
+	}
+	if repo.memberLists != 1 {
+		t.Errorf("target members listed %d times, want 1", repo.memberLists)
+	}
+	for i := 0; i < 3; i++ {
+		if _, ok := repo.shares[fmt.Sprintf("m%d", i)]["tgtonly"]; !ok {
+			t.Errorf("meeting m%d not granted", i)
+		}
 	}
 }
