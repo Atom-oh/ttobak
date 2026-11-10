@@ -33,6 +33,7 @@ type fakeSvc struct {
 	processErr  error
 	owners      []string
 	jobs        *fakeJobs
+	abortErr    error
 }
 
 func (f *fakeSvc) Preview(_ context.Context, requester, from, into string) (*model.AccountMergePreview, error) {
@@ -50,6 +51,17 @@ func (f *fakeSvc) Start(_ context.Context, requester, from string, req *model.St
 		return nil, f.startErr
 	}
 	return &model.AccountMergeJobDTO{FromAccountID: from, IntoAccountID: req.IntoAccountID, State: model.MergeStateRunning, Step: "members"}, nil
+}
+func (f *fakeSvc) Abort(_ context.Context, requester, from, into string, apply bool) (*model.AccountMergeJobDTO, error) {
+	f.calls = append(f.calls, fmt.Sprintf("abort:%s:%s>%s:%v", requester, from, into, apply))
+	if f.abortErr != nil {
+		return nil, f.abortErr
+	}
+	state := model.MergeStateFailed
+	if apply {
+		state = model.MergeStateAborted
+	}
+	return &model.AccountMergeJobDTO{FromAccountID: from, IntoAccountID: into, State: state, Step: "contacts", Counts: map[string]int{"members.moved": 2}}, nil
 }
 func (f *fakeSvc) ProcessAccountMergeRequested(ctx context.Context, e model.AccountMergeRequested, deadline time.Time) error {
 	f.calls = append(f.calls, "process")
@@ -540,5 +552,47 @@ func TestMergeCLIFenceLostOnTaskAbortsScan(t *testing.T) {
 func TestLeaseOwnerShape(t *testing.T) {
 	if got := leaseOwner("my host/1", 77); got != "cli-my_host_1-77" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMergeCLIAbort(t *testing.T) {
+	h := newHarness()
+	o := options{From: "src", Into: "tgt", Requester: "owner-1", Abort: true, MaxPages: 1}
+	res, err := run(context.Background(), h.d, o)
+	if err != nil || res.Mode != "abort-dry-run" || res.State != model.MergeStateFailed || strings.Join(h.svc.calls, ",") != "abort:owner-1:src>tgt:false" {
+		t.Fatalf("dry run %+v / %v calls=%v", res, err, h.svc.calls)
+	}
+	h = newHarness()
+	o.Apply = true
+	res, err = run(context.Background(), h.d, o)
+	if err != nil || res.Mode != "abort" || res.State != model.MergeStateAborted || res.Counts["members.moved"] != 2 ||
+		strings.Join(h.svc.calls, ",") != "abort:owner-1:src>tgt:true" || len(h.jobs.claims) != 0 || len(h.users.moves) != 0 {
+		t.Fatalf("abort %+v / %v calls=%v", res, err, h.svc.calls)
+	}
+	for want, abortErr := range map[string]error{
+		"NOT_ABORTABLE":  service.ErrMergeNotAbortable,
+		"FORBIDDEN":      service.ErrForbidden,
+		"NOT_FOUND":      service.ErrNotFound,
+		"START_CONFLICT": service.ErrAccountMergeConflict,
+	} {
+		h := newHarness()
+		h.svc.abortErr = abortErr
+		if _, err := run(context.Background(), h.d, o); errorCode(err) != want {
+			t.Errorf("%v -> %q, want %q", abortErr, errorCode(err), want)
+		}
+	}
+	for name, mutate := range map[string]func(*options){
+		"with status":         func(o *options) { o.Status = true },
+		"with verify":         func(o *options) { o.Verify = true },
+		"with scan-users":     func(o *options) { o.ScanUsers = true },
+		"with accept-unmoved": func(o *options) { o.AcceptUnmoved = true },
+		"without into":        func(o *options) { o.Into = "" },
+	} {
+		h := newHarness()
+		bad := o
+		mutate(&bad)
+		if _, err := run(context.Background(), h.d, bad); errorCode(err) != "INVALID_INPUT" || len(h.svc.calls) != 0 {
+			t.Errorf("%s: %v calls=%v", name, err, h.svc.calls)
+		}
 	}
 }

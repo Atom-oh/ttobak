@@ -17,6 +17,9 @@ const (
 	MergeStateRunning = "running"
 	MergeStateDone    = "done"
 	MergeStateFailed  = "failed"
+	// MergeStateAborted is an operator-aborted job: the source is open again
+	// and data already moved stays on the target (no rollback).
+	MergeStateAborted = "aborted"
 )
 
 // MergeSteps is the ordered list of merge job steps.
@@ -44,6 +47,7 @@ type AccountMergeJob struct {
 	StartedAt  time.Time      `dynamodbav:"startedAt"`
 	UpdatedAt  time.Time      `dynamodbav:"updatedAt"`
 	FinishedAt *time.Time     `dynamodbav:"finishedAt,omitempty"`
+	AbortedAt  *time.Time     `dynamodbav:"abortedAt,omitempty"`
 	EntityType string         `dynamodbav:"entityType"` // "ACCOUNT_MERGE_JOB"
 }
 
@@ -108,6 +112,7 @@ type AccountMergeJobDTO struct {
 	StartedAt     time.Time      `json:"startedAt"`
 	UpdatedAt     time.Time      `json:"updatedAt"`
 	FinishedAt    *time.Time     `json:"finishedAt,omitempty"`
+	AbortedAt     *time.Time     `json:"abortedAt,omitempty"`
 }
 
 // DTO returns the public progress view of the job.
@@ -117,7 +122,8 @@ func (j *AccountMergeJob) DTO() *AccountMergeJobDTO {
 		counts[k] = v
 	}
 	return &AccountMergeJobDTO{FromAccountID: j.SourceAccountID, IntoAccountID: j.TargetAccountID, State: j.State,
-		Step: j.Step, ErrorCode: j.ErrorCode, Counts: counts, StartedAt: j.StartedAt, UpdatedAt: j.UpdatedAt, FinishedAt: j.FinishedAt}
+		Step: j.Step, ErrorCode: j.ErrorCode, Counts: counts, StartedAt: j.StartedAt, UpdatedAt: j.UpdatedAt, FinishedAt: j.FinishedAt,
+		AbortedAt: j.AbortedAt}
 }
 
 // MergeStepIndex returns the position of step in MergeSteps, or -1.

@@ -16,6 +16,9 @@ var (
 	// ErrAccountMergeConflict means an account, membership or the hierarchy
 	// changed between the start checks and the start transaction.
 	ErrAccountMergeConflict = errors.New("account merge start conflict")
+	// ErrMergeNotAbortable means the job is not failed and not a running job
+	// whose lease is absent or expired.
+	ErrMergeNotAbortable = errors.New("account merge job cannot be aborted")
 )
 
 // MergeErrorRequesterRevoked is the job error code when the requester lost
@@ -31,6 +34,7 @@ type accountMergeJobRepo interface {
 	FailMergeJob(ctx context.Context, job *model.AccountMergeJob, code string) error
 	ClaimMergeLease(ctx context.Context, sourceID, owner string, now time.Time, ttl time.Duration) (*model.AccountMergeJob, error)
 	RedispatchMergeJob(ctx context.Context, sourceID string, now time.Time) (*model.AccountMergeJob, error)
+	AbortAccountMerge(ctx context.Context, observed *model.AccountMergeJob, now time.Time) error
 }
 
 // SetJobRepo wires the merge job store.
@@ -244,4 +248,63 @@ func addMergeMoveCounts(counts map[string]int, step string, r mergeMoveResult) {
 			counts[step+"."+outcome] += n
 		}
 	}
+}
+
+// Abort ends a stuck merge of fromID into intoID: a failed job, or a running
+// job whose lease is absent or expired. Only the job's requester may abort,
+// and only while still the Owner of the source (META owner and MEMBER role,
+// checked here and in the abort transaction). Aborting clears the source's
+// mergingInto (it is open again) and the target's incomingMerges count; data
+// already moved stays on the target and nothing is rolled back. With apply
+// false nothing is written and the current job is returned.
+func (s *AccountMergeService) Abort(ctx context.Context, requesterID, fromID, intoID string, apply bool) (*model.AccountMergeJobDTO, error) {
+	if s.jobs == nil {
+		return nil, fmt.Errorf("account merge job store is not configured")
+	}
+	if requesterID == "" || validateAccountHierarchyIDs(fromID, intoID) != nil || fromID == intoID {
+		return nil, ErrInvalidInput
+	}
+	job, err := s.jobs.GetAccountMergeJob(ctx, fromID)
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, ErrNotFound
+	}
+	if job.TargetAccountID != intoID || job.RequesterUserID != requesterID {
+		return nil, ErrForbidden
+	}
+	now := s.clock()
+	leaseLive := job.LeaseOwner != "" && job.LeaseUntil >= now.Unix()
+	if job.State != model.MergeStateFailed && (job.State != model.MergeStateRunning || leaseLive) {
+		return nil, ErrMergeNotAbortable
+	}
+	source, err := s.repo.GetAccount(ctx, fromID)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := s.repo.GetMember(ctx, fromID, requesterID)
+	if err != nil {
+		return nil, err
+	}
+	if source == nil || source.OwnerUserID != requesterID || owner == nil || owner.Role != model.RoleOwner {
+		return nil, ErrForbidden
+	}
+	if !apply {
+		return job.DTO(), nil
+	}
+	if err := s.jobs.AbortAccountMerge(ctx, job, now); err != nil {
+		switch {
+		case errors.Is(err, repository.ErrMergeFenceLost):
+			return nil, ErrForbidden
+		case errors.Is(err, repository.ErrMergeLeaseHeld):
+			return nil, ErrMergeNotAbortable
+		case errors.Is(err, repository.ErrConditionFailed):
+			return nil, ErrAccountMergeConflict
+		}
+		return nil, err
+	}
+	aborted := now.UTC()
+	job.State, job.LeaseOwner, job.LeaseUntil, job.Cursor, job.AbortedAt, job.UpdatedAt = model.MergeStateAborted, "", 0, "", &aborted, aborted
+	return job.DTO(), nil
 }

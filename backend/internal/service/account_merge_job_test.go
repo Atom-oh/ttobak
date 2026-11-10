@@ -26,6 +26,17 @@ type fakeMergeJobRepo struct {
 	claims    []string // lease owners, one per successful claim
 
 	redispatched int
+	aborted      []*model.AccountMergeJob
+	abortErr     error
+}
+
+func (f *fakeMergeJobRepo) AbortAccountMerge(_ context.Context, observed *model.AccountMergeJob, _ time.Time) error {
+	if f.abortErr != nil {
+		return f.abortErr
+	}
+	copied := *observed
+	f.aborted = append(f.aborted, &copied)
+	return nil
 }
 
 // ClaimMergeLease leases the stored running job like the repository: free,
@@ -359,5 +370,82 @@ func TestAccountMergeJobDTOHidesLease(t *testing.T) {
 		if v.FieldByName(hidden).IsValid() {
 			t.Fatalf("DTO exposes %s", hidden)
 		}
+	}
+}
+
+func TestAbortAccountMergeRules(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	failed := func() *model.AccountMergeJob {
+		return &model.AccountMergeJob{SourceAccountID: "a", TargetAccountID: "b", RequesterUserID: "u1",
+			State: model.MergeStateFailed, Step: "contacts", ErrorCode: "STEP_FAILED"}
+	}
+	cases := []struct {
+		name      string
+		job       func() *model.AccountMergeJob
+		requester string
+		into      string
+		setup     func(*fakeMergeRepo, *fakeMergeJobRepo)
+		want      error
+	}{
+		{name: "failed job", job: failed, requester: "u1", into: "b"},
+		{name: "running with expired lease", requester: "u1", into: "b", job: func() *model.AccountMergeJob {
+			j := failed()
+			j.State, j.LeaseOwner, j.LeaseUntil = model.MergeStateRunning, "w1", now.Unix()-1
+			return j
+		}},
+		{name: "running unleased", requester: "u1", into: "b", job: func() *model.AccountMergeJob {
+			j := failed()
+			j.State = model.MergeStateRunning
+			return j
+		}},
+		{name: "running with live lease", requester: "u1", into: "b", want: ErrMergeNotAbortable, job: func() *model.AccountMergeJob {
+			j := failed()
+			j.State, j.LeaseOwner, j.LeaseUntil = model.MergeStateRunning, "w1", now.Unix()+60
+			return j
+		}},
+		{name: "done job", requester: "u1", into: "b", want: ErrMergeNotAbortable, job: func() *model.AccountMergeJob {
+			j := failed()
+			j.State = model.MergeStateDone
+			return j
+		}},
+		{name: "no job", requester: "u1", into: "b", want: ErrNotFound, job: func() *model.AccountMergeJob { return nil }},
+		{name: "other requester", job: failed, requester: "u2", into: "b", want: ErrForbidden,
+			setup: func(r *fakeMergeRepo, _ *fakeMergeJobRepo) { r.addMember("a", "u2", model.RoleOwner) }},
+		{name: "wrong target", job: failed, requester: "u1", into: "c", want: ErrForbidden},
+		{name: "requester no longer META owner", job: failed, requester: "u1", into: "b", want: ErrForbidden,
+			setup: func(r *fakeMergeRepo, _ *fakeMergeJobRepo) { r.accounts["a"].OwnerUserID = "u2" }},
+		{name: "requester lost Owner role", job: failed, requester: "u1", into: "b", want: ErrForbidden,
+			setup: func(r *fakeMergeRepo, _ *fakeMergeJobRepo) { r.addMember("a", "u1", model.RoleSA) }},
+		{name: "authority lost in the transaction", job: failed, requester: "u1", into: "b", want: ErrForbidden,
+			setup: func(_ *fakeMergeRepo, j *fakeMergeJobRepo) { j.abortErr = repository.ErrMergeFenceLost }},
+		{name: "job changed in the transaction", job: failed, requester: "u1", into: "b", want: ErrAccountMergeConflict,
+			setup: func(_ *fakeMergeRepo, j *fakeMergeJobRepo) { j.abortErr = repository.ErrConditionFailed }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, jobs, svc := startFixture()
+			svc.now = func() time.Time { return now }
+			jobs.job = tc.job()
+			if tc.setup != nil {
+				tc.setup(repo, jobs)
+			}
+			dry, err := svc.Abort(context.Background(), tc.requester, "a", tc.into, false)
+			if tc.want == nil && (err != nil || dry.State == model.MergeStateAborted || len(jobs.aborted) != 0) {
+				t.Fatalf("dry run: dto=%+v err=%v aborted=%d, want no write", dry, err, len(jobs.aborted))
+			}
+			dto, err := svc.Abort(context.Background(), tc.requester, "a", tc.into, true)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err=%v, want %v", err, tc.want)
+			}
+			if tc.want != nil {
+				return
+			}
+			if len(jobs.aborted) != 1 || dto.State != model.MergeStateAborted || dto.AbortedAt == nil {
+				t.Fatalf("aborted=%d dto=%+v", len(jobs.aborted), dto)
+			}
+			if observed := jobs.aborted[0]; observed.State != tc.job().State || observed.LeaseOwner != tc.job().LeaseOwner {
+				t.Fatalf("abort must be conditioned on the observed job: %+v", observed)
+			}
+		})
 	}
 }

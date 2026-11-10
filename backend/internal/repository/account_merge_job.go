@@ -104,7 +104,10 @@ func (r *DynamoDBRepository) startAccountMerge(ctx context.Context, job *model.A
 		return fmt.Errorf("marshal merge job: %w", err)
 	}
 	failed := expression.Name("state").Equal(expression.Value(model.MergeStateFailed))
-	jobCond := expression.AttributeNotExists(expression.Name("PK")).Or(failed)
+	aborted := expression.Name("state").Equal(expression.Value(model.MergeStateAborted))
+	// A fresh start replaces an absent, failed or aborted job; a resume
+	// continues only a failed one.
+	jobCond := expression.AttributeNotExists(expression.Name("PK")).Or(failed).Or(aborted)
 	if resume {
 		jobCond = expression.AttributeExists(expression.Name("PK")).And(failed).
 			And(expression.Name("targetAccountId").Equal(expression.Value(job.TargetAccountID)))
@@ -450,5 +453,88 @@ func (r *DynamoDBRepository) FinishAccountMerge(ctx context.Context, job *model.
 		return fmt.Errorf("finish account merge: %w", err)
 	}
 	job.State, job.FinishedAt, job.UpdatedAt, job.LeaseOwner, job.LeaseUntil, job.Cursor = model.MergeStateDone, &now, now, "", 0, ""
+	return nil
+}
+
+// AbortAccountMerge ends a stuck merge without rolling back moved data, in
+// one transaction conditioned on the observed job: the job (still in
+// observed.State, for observed's target and requester, with observed's lease
+// owner or none, and a lease that is absent or expired at now) becomes
+// aborted and drops its lease and cursor; the source META drops mergingInto
+// (it must still be mergingInto the target, not merged, and owned by the
+// requester); the requester must still hold the Owner MEMBER row of the
+// source; and the target's incomingMerges is decremented (it must be > 0).
+// Only a failed job, or a running one whose lease is absent or expired, can
+// be aborted. A changed job or target count returns ErrConditionFailed; lost
+// requester authority returns ErrMergeFenceLost.
+func (r *DynamoDBRepository) AbortAccountMerge(ctx context.Context, observed *model.AccountMergeJob, now time.Time) error {
+	if observed == nil || !validMergeAccountID(observed.SourceAccountID) || !validMergeAccountID(observed.TargetAccountID) ||
+		observed.SourceAccountID == observed.TargetAccountID || observed.RequesterUserID == "" ||
+		(observed.State != model.MergeStateFailed && observed.State != model.MergeStateRunning) {
+		return fmt.Errorf("invalid merge job abort")
+	}
+	if observed.State == model.MergeStateRunning && observed.LeaseUntil >= now.Unix() && observed.LeaseOwner != "" {
+		return fmt.Errorf("abort merge job: %w", ErrMergeLeaseHeld)
+	}
+	now = now.UTC()
+	exists := expression.AttributeExists(expression.Name("PK"))
+	lease := expression.Name("leaseUntil")
+	jobCond := exists.And(expression.Name("state").Equal(expression.Value(observed.State))).
+		And(expression.Name("targetAccountId").Equal(expression.Value(observed.TargetAccountID))).
+		And(expression.Name("requesterUserId").Equal(expression.Value(observed.RequesterUserID))).
+		And(lease.AttributeNotExists().Or(lease.LessThan(expression.Value(now.Unix()))))
+	if observed.LeaseOwner == "" {
+		jobCond = jobCond.And(expression.AttributeNotExists(expression.Name("leaseOwner")))
+	} else {
+		jobCond = jobCond.And(expression.Name("leaseOwner").Equal(expression.Value(observed.LeaseOwner)))
+	}
+	jobUpdate := expression.Set(expression.Name("state"), expression.Value(model.MergeStateAborted)).
+		Set(expression.Name("abortedAt"), expression.Value(now)).
+		Set(expression.Name("updatedAt"), expression.Value(now)).
+		Remove(expression.Name("leaseOwner")).Remove(lease).Remove(expression.Name("cursor"))
+	jobExpr, err := expression.NewBuilder().WithUpdate(jobUpdate).WithCondition(jobCond).Build()
+	if err != nil {
+		return fmt.Errorf("build merge job abort: %w", err)
+	}
+	source, err := r.metaUpdate(observed.SourceAccountID,
+		expression.Remove(expression.Name("mergingInto")).Set(expression.Name("updatedAt"), expression.Value(now)),
+		exists.And(expression.Name("mergingInto").Equal(expression.Value(observed.TargetAccountID))).
+			And(expression.AttributeNotExists(expression.Name("mergedInto"))).
+			And(expression.Name("ownerUserId").Equal(expression.Value(observed.RequesterUserID))))
+	if err != nil {
+		return err
+	}
+	owner, err := r.hierarchyCheck(observed.SourceAccountID, model.PrefixMember+observed.RequesterUserID,
+		exists.And(expression.Name("role").Equal(expression.Value(model.RoleOwner))))
+	if err != nil {
+		return err
+	}
+	target, err := r.metaUpdate(observed.TargetAccountID, expression.Add(expression.Name("incomingMerges"), expression.Value(-1)),
+		exists.And(expression.Name("incomingMerges").GreaterThan(expression.Value(0))))
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{{Update: &types.Update{
+		TableName: aws.String(r.tableName), Key: mergeJobKey(observed.SourceAccountID),
+		UpdateExpression: jobExpr.Update(), ConditionExpression: jobExpr.Condition(),
+		ExpressionAttributeNames: jobExpr.Names(), ExpressionAttributeValues: jobExpr.Values(),
+	}}, source, owner, target}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		var cancelled *types.TransactionCanceledException
+		if errors.As(err, &cancelled) {
+			for i, reason := range cancelled.CancellationReasons {
+				switch aws.ToString(reason.Code) {
+				case "ConditionalCheckFailed":
+					if i == 1 || i == 2 {
+						return fmt.Errorf("abort account merge: %w: %w", ErrMergeFenceLost, err)
+					}
+					return fmt.Errorf("abort account merge: %w: %w", ErrConditionFailed, err)
+				case "TransactionConflict":
+					return fmt.Errorf("abort account merge: %w: %w", ErrConditionFailed, err)
+				}
+			}
+		}
+		return fmt.Errorf("abort account merge: %w", err)
+	}
 	return nil
 }

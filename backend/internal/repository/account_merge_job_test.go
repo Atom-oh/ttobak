@@ -461,3 +461,77 @@ func TestRedispatchMergeJob(t *testing.T) {
 		t.Fatalf("held err = %v", err)
 	}
 }
+
+func TestAbortAccountMerge(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	failedJob := func() *model.AccountMergeJob {
+		j := leasedJob()
+		j.State, j.LeaseOwner, j.LeaseUntil = model.MergeStateFailed, "", 0
+		return j
+	}
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 200, `{}` })
+	if err := r.AbortAccountMerge(context.Background(), failedJob(), now); err != nil {
+		t.Fatal(err)
+	}
+	items := fenceItems(t, calls[0])
+	wantKeys := []string{"ACCOUNT#src|MERGE#job", "ACCOUNT#src|META", "ACCOUNT#src|MEMBER#owner-1", "ACCOUNT#tgt|META"}
+	if len(items) != len(wantKeys) {
+		t.Fatalf("items = %d", len(items))
+	}
+	for i, want := range wantKeys {
+		if got := mergeJobOpKey(items[i]); got != want {
+			t.Errorf("item %d key %s, want %s", i, got, want)
+		}
+	}
+	jobCond := strings.ReplaceAll(resolvedCondition(items[0]), "attribute_not_exists (", "attribute_not_exists(")
+	for _, want := range []string{"state = ", "targetAccountId = ", "requesterUserId = ", "attribute_not_exists(leaseOwner)", "leaseUntil <"} {
+		if !strings.Contains(jobCond, want) {
+			t.Errorf("job condition %q missing %q", jobCond, want)
+		}
+	}
+	if u, _ := items[0]["UpdateExpression"].(string); !strings.Contains(u, "REMOVE") {
+		t.Errorf("abort must drop the lease and cursor: %s", u)
+	}
+	if cond := resolvedCondition(items[1]); !strings.Contains(cond, "mergingInto = ") || !strings.Contains(cond, "ownerUserId = ") {
+		t.Errorf("source condition %q must pin mergingInto and the owner", cond)
+	}
+	if u, _ := items[1]["UpdateExpression"].(string); !strings.Contains(u, "REMOVE") {
+		t.Errorf("source must drop mergingInto: %s", u)
+	}
+	if cond := resolvedCondition(items[2]); !strings.Contains(cond, "role = ") {
+		t.Errorf("owner check %q must pin the Owner role", cond)
+	}
+	if u, _ := items[3]["UpdateExpression"].(string); !strings.HasPrefix(u, "ADD ") || !strings.Contains(resolvedCondition(items[3]), "incomingMerges >") {
+		t.Errorf("target must decrement a positive incomingMerges: %s", u)
+	}
+
+	running := failedJob()
+	running.State, running.LeaseOwner, running.LeaseUntil = model.MergeStateRunning, "w1", now.Unix()-1
+	calls = nil
+	if err := r.AbortAccountMerge(context.Background(), running, now); err != nil {
+		t.Fatal(err)
+	}
+	if cond := resolvedCondition(fenceItems(t, calls[0])[0]); !strings.Contains(cond, "leaseOwner = ") {
+		t.Errorf("a running abort must pin the observed lease owner: %q", cond)
+	}
+	live := failedJob()
+	live.State, live.LeaseOwner, live.LeaseUntil = model.MergeStateRunning, "w1", now.Unix()+60
+	if err := r.AbortAccountMerge(context.Background(), live, now); !errors.Is(err, ErrMergeLeaseHeld) {
+		t.Fatalf("live lease abort err = %v", err)
+	}
+	done := failedJob()
+	done.State = model.MergeStateDone
+	if err := r.AbortAccountMerge(context.Background(), done, now); err == nil {
+		t.Fatal("aborted a finished job")
+	}
+	for _, tc := range []struct {
+		idx  int
+		want error
+	}{{0, ErrConditionFailed}, {1, ErrMergeFenceLost}, {2, ErrMergeFenceLost}, {3, ErrConditionFailed}} {
+		failing := fenceRepo(t, new([]fenceRequest), func(fenceRequest) (int, string) { return 400, cancelledAt(4, tc.idx, false) })
+		if err := failing.AbortAccountMerge(context.Background(), failedJob(), now); !errors.Is(err, tc.want) {
+			t.Errorf("idx %d: err = %v, want %v", tc.idx, err, tc.want)
+		}
+	}
+}

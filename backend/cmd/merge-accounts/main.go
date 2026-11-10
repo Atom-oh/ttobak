@@ -30,6 +30,14 @@
 // that fails to move is counted in errors; the worker is then not started,
 // so a rerun resumes from the same state.
 //
+// -abort ends a stuck merge: a failed job, or a running one whose lease is
+// absent or expired. Only the job's requester may abort it, and only while
+// still the Owner of -from (META owner and MEMBER role). Without -apply it
+// prints the job and writes nothing; with -apply one transaction marks the
+// job aborted, removes the source's mergingInto (the source is open again)
+// and decrements the target's incomingMerges. Data already moved stays on the
+// target; nothing is rolled back.
+//
 // Output is JSON counts and the job state only: no names, titles, mention
 // text, calendar fields or contact fields. Errors print a code only.
 //
@@ -40,6 +48,7 @@
 //
 //	TABLE_NAME=ttobak-main KMS_KEY_ID=... go run ./cmd/merge-accounts -from A -into B -requester USER_ID [-scan-users] [-accept-unmoved] [-apply]
 //	TABLE_NAME=ttobak-main go run ./cmd/merge-accounts -from A -requester USER_ID -status
+//	TABLE_NAME=ttobak-main go run ./cmd/merge-accounts -from A -into B -requester USER_ID -abort [-apply]
 package main
 
 import (
@@ -89,7 +98,7 @@ type options struct {
 	From, Into, Requester string
 	Apply, AcceptUnmoved  bool
 	ScanUsers, Status     bool
-	Verify                bool
+	Verify, Abort         bool
 	MaxPages              int
 }
 
@@ -99,6 +108,7 @@ var (
 	errInvalidMaxPages  = errors.New("-max-pages must be > 0")
 	errNoProgress       = errors.New("merge worker made no progress; the job lease may be held elsewhere")
 	errVerifyReadOnly   = errors.New("-verify is read-only and excludes -apply and -status")
+	errAbortExclusive   = errors.New("-abort excludes -status, -verify, -scan-users and -accept-unmoved")
 	errScanIncomplete   = errors.New("user row scan reported errors; worker not started")
 )
 
@@ -120,6 +130,9 @@ func validateOptions(o options) error {
 	if o.Verify && (o.Apply || o.Status) {
 		return errVerifyReadOnly
 	}
+	if o.Abort && (o.Status || o.Verify || o.ScanUsers || o.AcceptUnmoved) {
+		return errAbortExclusive
+	}
 	return nil
 }
 
@@ -129,6 +142,7 @@ type mergeService interface {
 	Preview(ctx context.Context, requesterID, fromID, intoID string) (*model.AccountMergePreview, error)
 	Start(ctx context.Context, requesterID, fromID string, req *model.StartAccountMergeRequest) (*model.AccountMergeJobDTO, error)
 	ProcessAccountMergeRequested(ctx context.Context, e model.AccountMergeRequested, deadline time.Time) error
+	Abort(ctx context.Context, requesterID, fromID, intoID string, apply bool) (*model.AccountMergeJobDTO, error)
 }
 
 type memberReader interface {
@@ -192,6 +206,18 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 			return res, err
 		}
 		res.Into, res.State, res.Step, res.ErrorCode, res.Counts = dto.IntoAccountID, dto.State, dto.Step, dto.ErrorCode, dto.Counts
+		return res, nil
+	}
+	if o.Abort {
+		res.Mode = "abort-dry-run"
+		if o.Apply {
+			res.Mode = "abort"
+		}
+		dto, err := d.svc.Abort(ctx, o.Requester, o.From, o.Into, o.Apply)
+		if err != nil {
+			return res, err
+		}
+		res.State, res.Step, res.ErrorCode, res.Counts = dto.State, dto.Step, dto.ErrorCode, dto.Counts
 		return res, nil
 	}
 	if o.Verify {
@@ -537,7 +563,7 @@ func errorCode(err error) string {
 		return "FORBIDDEN"
 	case errors.Is(err, service.ErrNotFound):
 		return "NOT_FOUND"
-	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, errFromIntoRequired), errors.Is(err, errRequesterNeeded), errors.Is(err, errInvalidMaxPages), errors.Is(err, errVerifyReadOnly):
+	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, errFromIntoRequired), errors.Is(err, errRequesterNeeded), errors.Is(err, errInvalidMaxPages), errors.Is(err, errVerifyReadOnly), errors.Is(err, errAbortExclusive):
 		return "INVALID_INPUT"
 	case errors.Is(err, service.ErrAccountMergeIneligible):
 		return "INELIGIBLE"
@@ -545,6 +571,8 @@ func errorCode(err error) string {
 		return "JOB_RUNNING"
 	case errors.Is(err, service.ErrAccountMergeConflict):
 		return "START_CONFLICT"
+	case errors.Is(err, service.ErrMergeNotAbortable):
+		return "NOT_ABORTABLE"
 	case errors.Is(err, service.ErrMergeContactIndexTooLarge):
 		return "CONTACT_INDEX_TOO_LARGE"
 	case errors.Is(err, repository.ErrMergeFenceLost), errors.Is(err, repository.ErrAccountMerging):
@@ -582,6 +610,7 @@ func main() {
 	flag.BoolVar(&o.ScanUsers, "scan-users", false, "also rewrite SpecReq tasks, calendar events and link-only meetings")
 	flag.BoolVar(&o.Status, "status", false, "print the source's merge job state and counts (needs -from and -requester only)")
 	flag.BoolVar(&o.Verify, "verify", false, "read-only: count CLI-only rows still naming -from; needs -from, -into and -requester (a direct member of -into); usable after the merge is done")
+	flag.BoolVar(&o.Abort, "abort", false, "end a failed (or stalled running) job: the source opens again and moved data stays on -into; needs -from, -into and -requester (the job's requester, still Owner of -from); writes only with -apply")
 	flag.IntVar(&o.MaxPages, "max-pages", defaultMaxPages, "page limit per user scan segment")
 	flag.Parse()
 	if err := validateOptions(o); err != nil {
