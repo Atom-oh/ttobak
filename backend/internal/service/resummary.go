@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -32,9 +33,15 @@ type resummaryRepo interface {
 	FailResummary(context.Context, string, *model.ResummaryState, string, time.Time) error
 	ReadResummaryTranscript(context.Context, string, string, string) (string, *model.SummaryObject, error)
 	CheckResummaryObjects(context.Context, string, []model.SummaryObject) error
+	GetEnglishSummary(context.Context, string) (*model.ResummaryState, error)
+	QueueEnglishSummary(context.Context, *model.SummarySnapshot, *model.ResummaryState, *model.ResummaryState) error
+	StartEnglishSummary(context.Context, *model.SummarySnapshot, *model.ResummaryState, time.Time, int64) error
+	FailEnglishSummary(context.Context, string, *model.ResummaryState, string, time.Time) error
+	CompleteEnglishSummary(context.Context, *model.SummarySnapshot, *model.ResummaryState, string, string, time.Time) error
 }
 type resummaryGenerator interface {
 	GenerateResummary(context.Context, *model.Meeting, []model.Attachment) (string, error)
+	GenerateEnglishNote(context.Context, *model.Meeting, []model.Attachment) (string, error)
 }
 type ResummaryResponse struct {
 	Status      string     `json:"status"`
@@ -123,14 +130,32 @@ func (s *ResummaryService) authorized(ctx context.Context, userID, meetingID str
 	}
 	return meeting, nil
 }
+
+// getState and failState select the Korean (ANALYSIS#summary) or English
+// (ANALYSIS#summaryEn) run row; the two runs never share state.
+func (s *ResummaryService) getState(ctx context.Context, target, meetingID string) (*model.ResummaryState, error) {
+	if target == model.SummaryTargetEnglish {
+		return s.repo.GetEnglishSummary(ctx, meetingID)
+	}
+	return s.repo.GetResummary(ctx, meetingID)
+}
+func (s *ResummaryService) failState(ctx context.Context, target, meetingID string, state *model.ResummaryState, code string, now time.Time) error {
+	if target == model.SummaryTargetEnglish {
+		return s.repo.FailEnglishSummary(ctx, meetingID, state, code, now)
+	}
+	return s.repo.FailResummary(ctx, meetingID, state, code, now)
+}
 func (s *ResummaryService) state(ctx context.Context, meetingID string) (*model.ResummaryState, error) {
+	return s.stateFor(ctx, "", meetingID)
+}
+func (s *ResummaryService) stateFor(ctx context.Context, target, meetingID string) (*model.ResummaryState, error) {
 	for i := 0; i < 3; i++ {
-		state, err := s.repo.GetResummary(ctx, meetingID)
+		state, err := s.getState(ctx, target, meetingID)
 		if err != nil {
 			return nil, err
 		}
 		if state.Pending() && state.LeaseUntil <= s.now().UnixMilli() {
-			err = s.repo.FailResummary(ctx, meetingID, state, model.AnalysisInterrupted, s.now().UTC())
+			err = s.failState(ctx, target, meetingID, state, model.AnalysisInterrupted, s.now().UTC())
 			if err != nil && !errors.Is(err, repository.ErrConditionFailed) {
 				return nil, err
 			}
@@ -248,9 +273,12 @@ func (s *ResummaryService) request(ctx context.Context, userID, meetingID string
 	return summaryResponse(next), nil
 }
 func (s *ResummaryService) fail(ctx context.Context, meetingID string, state *model.ResummaryState, code string) error {
+	return s.failFor(ctx, "", meetingID, state, code)
+}
+func (s *ResummaryService) failFor(ctx context.Context, target, meetingID string, state *model.ResummaryState, code string) error {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	err := s.repo.FailResummary(cleanup, meetingID, state, code, s.now().UTC())
+	err := s.failState(cleanup, target, meetingID, state, code, s.now().UTC())
 	if errors.Is(err, repository.ErrConditionFailed) {
 		return nil
 	}
@@ -320,11 +348,22 @@ func boundResummaryDocument(att model.Attachment, result *model.AttachmentTextRe
 	return att, nil
 }
 func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummarySnapshot) (*model.Meeting, []model.Attachment, []model.SummaryObject, error) {
+	return s.prepareFor(ctx, snapshot, "")
+}
+
+// prepareFor builds model evidence. A sharing-safe Korean run and every
+// English run drop generated derivatives, linked meetings and legacy document
+// previews; English additionally never sees a stored English note. Both keep
+// this meeting's transcript, saved notes, image analyses and verified
+// DOCUMENT extraction.
+func (s *ResummaryService) prepareFor(ctx context.Context, snapshot *model.SummarySnapshot, target string) (*model.Meeting, []model.Attachment, []model.SummaryObject, error) {
 	meeting := *snapshot.Meeting
-	if snapshot.SharingSafe {
+	ownSourcesOnly := snapshot.SharingSafe || target == model.SummaryTargetEnglish
+	if ownSourcesOnly {
 		meeting.Content, meeting.ActionItems, meeting.Insights, meeting.LiveSummary, meeting.Sentiment = "", "", "", "", ""
 		meeting.Tags, meeting.LinkedMeetingIDs = nil, nil
 	}
+	meeting.ContentEn, meeting.ContentEnSourceHash, meeting.ContentEnGeneratedAt = "", "", ""
 	raw, variant := selectMeetingTranscript(&meeting)
 	meeting.TranscriptA, meeting.TranscriptB, meeting.TranscriptSegments = "", "", ""
 	var bindings []model.SummaryObject
@@ -366,7 +405,7 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 	}
 	attachments := make([]model.Attachment, 0, len(snapshot.Attachments))
 	for _, att := range snapshot.Attachments {
-		if snapshot.SharingSafe && att.Type == model.AttachTypeDocument {
+		if ownSourcesOnly && att.Type == model.AttachTypeDocument {
 			// Document text comes only from the verified current extraction below.
 			att.ProcessedContent, att.Description, att.ExtractedText = "", "", nil
 		}
@@ -393,7 +432,7 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 			att.ExtractedRevision = attachmentRevision(state)
 			bindings = append(bindings, model.SummaryObject{Bucket: result.Source.Bucket, Key: result.Source.Key, ETag: result.Source.ETag})
 		}
-		if snapshot.SharingSafe && att.Type == model.AttachTypeDocument {
+		if ownSourcesOnly && att.Type == model.AttachTypeDocument {
 			// Only the verified current DOCUMENT extraction is model
 			// evidence; old preview summaries are not declassified. Image
 			// analyses are the user's own attachments and stay evidence.
@@ -407,7 +446,20 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 	return &meeting, attachments, bindings, nil
 }
 
+// Process dispatches a SummaryRequested event to the Korean saved-source run
+// ("" target) or the English note run. Unknown targets are invalid input.
 func (s *ResummaryService) Process(ctx context.Context, event model.SummaryRequested) error {
+	switch event.Target {
+	case "":
+		return s.processKorean(ctx, event)
+	case model.SummaryTargetEnglish:
+		return s.processEnglish(ctx, event)
+	default:
+		return ErrInvalidInput
+	}
+}
+
+func (s *ResummaryService) processKorean(ctx context.Context, event model.SummaryRequested) error {
 	if !resummaryID.MatchString(event.MeetingID) || !resummaryID.MatchString(event.RunID) {
 		return ErrInvalidInput
 	}
@@ -558,4 +610,273 @@ func resummaryCompletionSnapshot(snapshot *model.SummarySnapshot) (*model.Summar
 	meeting.ActionItems = string(body)
 	completion.Meeting = &meeting
 	return &completion, nil
+}
+
+// EnglishNoteResponse is the English note view for any meeting reader. Stale
+// means the meeting's sources changed since the note was generated; a Korean
+// note edit alone never makes it stale.
+type EnglishNoteResponse struct {
+	ResummaryResponse
+	Content     string `json:"content,omitempty"`
+	GeneratedAt string `json:"generatedAt,omitempty"`
+	Stale       bool   `json:"stale"`
+}
+
+// englishEvidenceFields are the canonical meeting fields that feed an English
+// note. Access, status and language fields are excluded so freshness does not
+// depend on who reads, on account publication or on a Korean run.
+var englishEvidenceFields = []string{"meetingId", "userId", "notes", "transcriptA", "transcriptB", "selectedTranscript",
+	"transcriptSegments", "transcriptQualityA", "transcriptQualityB", "transcriptRevisionA", "transcriptRevisionB"}
+
+// englishChecks filters a CaptureResummary snapshot: the meeting check keeps
+// only fields, the Korean action-analysis fence is dropped, attachment and
+// text-state checks are kept, and requester access checks only when access.
+func englishChecks(snapshot *model.SummarySnapshot, fields []string, access bool) []model.SummaryCheck {
+	if snapshot == nil || snapshot.Meeting == nil || len(snapshot.Checks) == 0 {
+		return nil
+	}
+	parent := snapshot.Checks[0]
+	meeting := model.SummaryCheck{PK: parent.PK, SK: parent.SK, Exists: parent.Exists, Fields: map[string]model.SummaryValue{}}
+	for _, field := range fields {
+		if value, ok := parent.Fields[field]; ok {
+			meeting.Fields[field] = value
+		}
+	}
+	checks := []model.SummaryCheck{meeting}
+	own := model.PrefixMeeting + snapshot.Meeting.MeetingID
+	for _, check := range snapshot.Checks[1:] {
+		if check.PK == own && check.SK == model.ActionAnalysisSK {
+			continue
+		}
+		source := check.PK == own && (strings.HasPrefix(check.SK, model.PrefixAttachment) || strings.HasPrefix(check.SK, model.PrefixAttachmentText))
+		if source || access {
+			checks = append(checks, check)
+		}
+	}
+	return checks
+}
+
+func englishChecksHash(checks []model.SummaryCheck) string {
+	body, _ := json.Marshal(checks)
+	return actionSourceHash(string(append(body, []byte("\x00en")...)))
+}
+
+// englishSourceHash is the stored freshness hash of an English note: the
+// evidence checks without the Korean content, independent of the requester.
+func englishSourceHash(snapshot *model.SummarySnapshot) string {
+	return englishChecksHash(englishChecks(snapshot, englishEvidenceFields, false))
+}
+
+// englishRunHash pins an English run to the fields the repository fences
+// (all English source fields plus the requester's edit grant).
+func englishRunHash(snapshot *model.SummarySnapshot) string {
+	return englishChecksHash(englishChecks(snapshot, repository.EnglishSourceFields(), true))
+}
+
+// validateEnglishSource requires a done meeting and the same usable sources as
+// a saved-source resummary, never counting the Korean note as a source.
+func validateEnglishSource(snapshot *model.SummarySnapshot) error {
+	if snapshot == nil || snapshot.Meeting == nil {
+		return ErrNotFound
+	}
+	if snapshot.Meeting.Status != model.StatusDone {
+		return ErrResummaryBusy
+	}
+	view, meeting := *snapshot, *snapshot.Meeting
+	meeting.Content, meeting.LiveSummary = "", ""
+	view.Meeting, view.SharingSafe = &meeting, false
+	return validateResummarySource(&view)
+}
+
+// RequestEnglish queues an English note run for an owner or editor. It is
+// independent of the Korean run row and never resets Korean derivatives.
+func (s *ResummaryService) RequestEnglish(ctx context.Context, userID, meetingID string) (*ResummaryResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	meeting, err := s.authorized(ctx, userID, meetingID, true)
+	if err != nil {
+		return nil, err
+	}
+	prior, err := s.stateFor(ctx, model.SummaryTargetEnglish, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if prior.Pending() {
+		return summaryResponse(prior), nil
+	}
+	snapshot, err := s.repo.CaptureResummary(ctx, meeting.UserID, meetingID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEnglishSource(snapshot); err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	next := &model.ResummaryState{RunID: uuid.NewString(), Status: model.AnalysisQueued, OwnerID: meeting.UserID, RequestedBy: userID,
+		SourceHash: englishRunHash(snapshot), LeaseUntil: now.Add(5 * time.Minute).UnixMilli(), UpdatedAt: now}
+	if err := s.repo.QueueEnglishSummary(ctx, snapshot, prior, next); err != nil {
+		return nil, err
+	}
+	err = ErrResummaryPublish
+	if s.publish != nil {
+		err = s.publish(ctx, model.SummaryRequested{MeetingID: meetingID, RunID: next.RunID, Target: model.SummaryTargetEnglish})
+	}
+	if err != nil {
+		if failErr := s.failFor(ctx, model.SummaryTargetEnglish, meetingID, next, model.AnalysisPublishFailed); failErr != nil {
+			return nil, failErr
+		}
+		return nil, ErrResummaryPublish
+	}
+	return summaryResponse(next), nil
+}
+
+// GetEnglish returns the English note, its run status and freshness to any
+// meeting reader. The English note is built only from sources the reader
+// projection leaves readable, so it is returned even when the Korean note is
+// read-restricted for this reader.
+func (s *ResummaryService) GetEnglish(ctx context.Context, userID, meetingID string) (*EnglishNoteResponse, error) {
+	meeting, err := s.authorized(ctx, userID, meetingID, false)
+	if err != nil {
+		return nil, err
+	}
+	state, err := s.stateFor(ctx, model.SummaryTargetEnglish, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	result := &EnglishNoteResponse{ResummaryResponse: *summaryResponse(state), Content: meeting.ContentEn, GeneratedAt: meeting.ContentEnGeneratedAt}
+	if meeting.ContentEn == "" {
+		result.GeneratedAt = ""
+		return result, nil
+	}
+	// Freshness is requester-independent: capture as the owner, after the
+	// caller's own access was checked above.
+	snapshot, err := s.repo.CaptureResummary(ctx, meeting.UserID, meetingID, meeting.UserID)
+	if englishFreshnessFatal(err) {
+		return nil, err
+	}
+	if err != nil {
+		// Freshness is advisory: a capture that exceeds its bounds (too many
+		// attachments or checks) or fails transiently must not hide a note
+		// the caller may read. Report it stale rather than fresh.
+		log.Printf("english note freshness capture failed for meeting %s: %v", meetingID, err)
+		result.Stale = true
+		return result, nil
+	}
+	if snapshot == nil {
+		return nil, ErrNotFound
+	}
+	result.Stale = meeting.ContentEnSourceHash == "" || englishSourceHash(snapshot) != meeting.ContentEnSourceHash
+	return result, nil
+}
+
+// englishFreshnessFatal reports capture errors that must still fail an
+// English read: authorization and not-found outcomes. Anything else only
+// degrades freshness.
+func englishFreshnessFatal(err error) bool {
+	return errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) || errors.Is(err, repository.ErrSummaryAccess)
+}
+
+func englishGenerationCode(work context.Context, err error) string {
+	switch {
+	case work.Err() != nil:
+		return "TIMEOUT"
+	case errors.Is(err, ErrInvalidAnalysisResponse):
+		return model.AnalysisInvalidOutput
+	case errors.Is(err, ErrResummaryNoSource):
+		return "NO_SUMMARY_SOURCE"
+	default:
+		return model.AnalysisProviderFailed
+	}
+}
+
+// processEnglish mirrors the Korean saved-source run on the English state row:
+// run/source/lease CAS, source revalidation before and after generation, and
+// publication of only the English fields. Failures keep the previous note.
+// English runs enqueue no term extraction.
+func (s *ResummaryService) processEnglish(ctx context.Context, event model.SummaryRequested) error {
+	const target = model.SummaryTargetEnglish
+	if !resummaryID.MatchString(event.MeetingID) || !resummaryID.MatchString(event.RunID) {
+		return ErrInvalidInput
+	}
+	state, err := s.repo.GetEnglishSummary(ctx, event.MeetingID)
+	if err != nil {
+		return err
+	}
+	if state == nil || state.RunID != event.RunID || state.Status != model.AnalysisQueued {
+		return nil
+	}
+	if state.SharingSafe || state.LeaseUntil <= s.now().UnixMilli() {
+		return s.failFor(ctx, target, event.MeetingID, state, model.AnalysisInterrupted)
+	}
+	revalidate := func(ctx context.Context) (*model.SummarySnapshot, error) {
+		snapshot, err := s.repo.CaptureResummary(ctx, state.OwnerID, event.MeetingID, state.RequestedBy)
+		if err != nil {
+			return nil, err
+		}
+		if snapshot == nil {
+			return nil, ErrNotFound
+		}
+		// The hash pins status and sources, so a concurrent batch run or
+		// source edit is a retryable source change, not "unavailable".
+		if englishRunHash(snapshot) != state.SourceHash {
+			return nil, repository.ErrConditionFailed
+		}
+		return snapshot, validateEnglishSource(snapshot)
+	}
+	snapshot, err := revalidate(ctx)
+	if err != nil {
+		return s.failFor(ctx, target, event.MeetingID, state, resummaryErrorCode(err))
+	}
+	now := s.now().UTC()
+	lease := now.Add(10 * time.Minute).UnixMilli()
+	if err := s.repo.StartEnglishSummary(ctx, snapshot, state, now, lease); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return s.failFor(ctx, target, event.MeetingID, state, model.AnalysisSourceChanged)
+		}
+		return err
+	}
+	running := *state
+	running.Status = model.AnalysisRunning
+	running.LeaseUntil = lease
+	work, cancel := context.WithTimeout(ctx, 8*time.Minute)
+	defer cancel()
+	failed := func(code string) error { return s.failFor(ctx, target, event.MeetingID, &running, code) }
+	meeting, attachments, bindings, err := s.prepareFor(work, snapshot, target)
+	if err != nil {
+		return failed(resummaryErrorCode(err))
+	}
+	if err := s.repo.CheckResummaryObjects(work, event.MeetingID, bindings); err != nil {
+		return failed(resummaryErrorCode(err))
+	}
+	if _, err := revalidate(work); err != nil {
+		return failed(resummaryErrorCode(err))
+	}
+	if s.generator == nil {
+		return failed(model.AnalysisProviderFailed)
+	}
+	content, err := s.generator.GenerateEnglishNote(work, meeting, attachments)
+	if err != nil {
+		return failed(englishGenerationCode(work, err))
+	}
+	if strings.TrimSpace(content) == "" {
+		return failed(model.AnalysisInvalidOutput)
+	}
+	if _, err := revalidate(work); err != nil {
+		return failed(resummaryErrorCode(err))
+	}
+	if err := s.repo.CheckResummaryObjects(work, event.MeetingID, bindings); err != nil {
+		return failed(resummaryErrorCode(err))
+	}
+	snapshot.Objects = bindings
+	if err := s.repo.CompleteEnglishSummary(work, snapshot, &running, content, englishSourceHash(snapshot), s.now().UTC()); err != nil {
+		code := model.AnalysisPersistenceFail
+		if errors.Is(err, repository.ErrConditionFailed) {
+			code = model.AnalysisSourceChanged
+		}
+		if errors.Is(err, repository.ErrSummaryLimit) {
+			code = "OUTPUT_TOO_LARGE"
+		}
+		return errors.Join(err, failed(code))
+	}
+	return nil
 }

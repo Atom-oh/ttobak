@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -42,6 +45,10 @@ func englishSourceFields() []string {
 	}
 	return fields
 }
+
+// EnglishSourceFields exposes the English run's pinned meeting fields so the
+// service hashes exactly what the repository fences.
+func EnglishSourceFields() []string { return englishSourceFields() }
 
 // englishSummaryChecks derives the English fences from a CaptureResummary
 // snapshot. The canonical meeting check keeps only englishSourceFields (each
@@ -160,5 +167,31 @@ func (r *DynamoDBRepository) CompleteEnglishSummary(ctx context.Context, snapsho
 	}
 	items := append([]types.TransactWriteItem{{Update: meeting}, {Update: run}}, fences...)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}, noSummaryRetries)
+	if itemSizeRejected(err) {
+		return errors.Join(ErrSummaryLimit, err)
+	}
 	return summaryWriteError(err)
+}
+
+// itemSizeRejected reports DynamoDB's definitive item-size rejection, either
+// as a transaction cancellation reason or a direct ValidationException. The
+// write did not apply, so callers can record a clean output-too-large failure.
+func itemSizeRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	sizeMessage := func(message string) bool {
+		return strings.Contains(strings.ToLower(message), "item size")
+	}
+	var cancelled *types.TransactionCanceledException
+	if errors.As(err, &cancelled) {
+		for _, reason := range cancelled.CancellationReasons {
+			if aws.ToString(reason.Code) == "ValidationError" && sizeMessage(aws.ToString(reason.Message)) {
+				return true
+			}
+		}
+		return false
+	}
+	var api smithy.APIError
+	return errors.As(err, &api) && api.ErrorCode() == "ValidationException" && sizeMessage(api.ErrorMessage())
 }

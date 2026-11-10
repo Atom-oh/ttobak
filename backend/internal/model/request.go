@@ -186,6 +186,7 @@ type MeetingDetailResponse struct {
 	TranscriptQuality          *TranscriptQuality    `json:"transcriptQuality,omitempty"`
 	SelectedTranscript         *string               `json:"selectedTranscript,omitempty"` // "A" | "B" | null
 	NoteLanguage               string                `json:"noteLanguage"`                 // "" (auto) | "ko" | "en"
+	HasEnglishNote             bool                  `json:"hasEnglishNote"`               // presence only; read the note via /notes/en
 	AudioKey                   string                `json:"audioKey,omitempty"`
 	AudioKeys                  []string              `json:"audioKeys,omitempty"`
 	AudioPartCount             int                   `json:"audioPartCount,omitempty"`

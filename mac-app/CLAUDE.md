@@ -66,7 +66,7 @@ model-access, rate-limited, invalid-input, invalid-output, timeout, aws-error,
 save-failed, window-error, confirmation-declined, unavailable (no app config directory;
 recording is unaffected). No capability grants a `dialog:` permission.
 
-Socket `status` also returns `updateBusy` (`control::app_busy`) for local tooling that must not replace a busy app.
+Socket `status` also returns `updateBusy` (`control::app_busy`), which `scripts/install.sh` reads.
 
 finalizing_for_path is deliberately a new per-path field, not the older global
 finalizing flag. Frontend wire compatibility checks rely on that distinction.

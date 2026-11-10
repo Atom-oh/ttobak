@@ -7,6 +7,8 @@ import { markdownLinkRenderer } from '@/lib/markdownHtml';
 import TurndownService from 'turndown';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 import { bindMeetingCitations, restoreMeetingCitations } from '@/lib/meetingCitations';
+import { englishFailures, type EnglishNoteView } from '@/lib/englishNote';
+import type { EnglishNote } from '@/types/meeting';
 import { TranslationControls, TranslationStatus, useMeetingTranslation } from './MeetingTranslation';
 
 const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
@@ -43,6 +45,21 @@ function normalizeMarkdown(md: string): string {
     .replace(/^(\s*- )\\?\[([ xX])\\?\] /gm, '$1[$2] ');
 }
 
+const englishBadges = {
+  generating: { label: '영문 회의록 생성 중', className: 'bg-primary/10 text-primary animate-pulse' },
+  failed: { label: '영문 회의록 생성 실패', className: 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300' },
+  stale: { label: '원본이 바뀌었어요', className: 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200' },
+} as const;
+const englishActions = { generate: '영문 회의록 생성', regenerate: '영문 회의록 다시 생성', retry: '다시 시도' } as const;
+
+export interface EnglishNoteControls {
+  view: EnglishNoteView;
+  note: EnglishNote | null;
+  busy: boolean;
+  error: string | null;
+  onRequest: () => void;
+}
+
 interface AISummaryCardProps {
   content?: string;
   summary?: string;
@@ -55,9 +72,11 @@ interface AISummaryCardProps {
   meetingId?: string;
   /** Server-advertised meeting translation flag; hides the control when off. */
   translationEnabled?: boolean;
+  /** English note state; absent hides every English control. */
+  english?: EnglishNoteControls;
 }
 
-export function AISummaryCard({ content, summary, canonicalContent, resolveCitation, transcriptA, onSave, onDirtyChange, interactionLocked = false, meetingId, translationEnabled = false }: AISummaryCardProps) {
+export function AISummaryCard({ content, summary, canonicalContent, resolveCitation, transcriptA, onSave, onDirtyChange, interactionLocked = false, meetingId, translationEnabled = false, english }: AISummaryCardProps) {
   const rawText = content || summary || '';
   const translation = useMeetingTranslation(meetingId, 'notes', canonicalContent ?? rawText);
   const renderEditorContent = () => bindMeetingCitations(
@@ -65,6 +84,11 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
     resolveCitation ?? ((source) => source),
   );
   const [editing, setEditing] = useState(false);
+  // The selected tab belongs to one meeting only and is never persisted.
+  const [tabState, setTabState] = useState<{ meetingId?: string; tab: 'ko' | 'en' }>({ tab: 'ko' });
+  const englishContent = english?.note?.content ?? '';
+  const tab = tabState.meetingId === meetingId && english?.view.showToggle && englishContent ? tabState.tab : 'ko';
+  const showEnglish = tab === 'en' && !editing;
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const latestHTML = useRef('');
@@ -129,8 +153,17 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
         <span className="material-symbols-outlined text-primary dark:text-accent">auto_awesome</span>
         <h3 className="font-bold dark:font-headline text-primary dark:text-accent">AI Summary</h3>
         <div className="flex-1" />
-        {translationEnabled && meetingId && rawText && !editing && <TranslationControls translation={translation} />}
-        {rawText && onSave && (
+        {english?.view.showToggle && !editing && (
+          <div role="group" aria-label="회의록 언어" className="flex rounded-lg border border-slate-200 p-0.5 text-xs dark:border-white/10">
+            {([['ko', '한국어'], ['en', 'English']] as const).map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={tab === value}
+                onClick={() => setTabState({ meetingId, tab: value })}
+                className={`rounded-md px-2.5 py-1 font-semibold ${tab === value ? 'bg-primary text-white' : 'text-slate-600 dark:text-text-secondary'}`}>{label}</button>
+            ))}
+          </div>
+        )}
+        {translationEnabled && meetingId && rawText && !editing && !showEnglish && <TranslationControls translation={translation} />}
+        {rawText && onSave && !showEnglish && (
           <div className="flex items-center gap-2">
             {saving && <span className="text-xs text-slate-400 animate-pulse">Saving...</span>}
             {savedAt && !saving && <span className="text-xs text-slate-400">Saved {savedAt}</span>}
@@ -152,10 +185,23 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
           </div>
         )}
       </div>
+      {english && !editing && (english.view.badge || english.view.action || english.error) && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+          {english.view.badge && <span role="status" className={`rounded-full px-2 py-0.5 font-semibold ${englishBadges[english.view.badge].className}`}>{englishBadges[english.view.badge].label}</span>}
+          {english.view.badge === 'failed' && <span className="text-slate-600 dark:text-text-secondary">{englishFailures[english.note?.errorCode ?? ''] ?? '영문 회의록을 만들지 못했습니다.'}{english.note?.content ? ' 기존 영문 회의록은 유지됩니다.' : ''}</span>}
+          {english.view.action && <button type="button" onClick={english.onRequest} disabled={english.busy}
+            className="rounded-lg border border-primary/30 px-2.5 py-1 font-semibold text-primary disabled:opacity-40">{englishActions[english.view.action]}</button>}
+          {english.error && <span role="alert" className="text-red-700 dark:text-red-300">{english.error}</span>}
+        </div>
+      )}
       {saveError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-300">{saveError} <button type="button" disabled={saving} onClick={() => { void handleAutoSave(); }} className="underline">저장 다시 시도</button></p>}
       {dirty && !saving && !saveError && <p className="mb-3 text-xs text-slate-500">변경 사항 저장 대기 중…</p>}
 
-      {editing ? (
+      {showEnglish ? (
+        <div className="ai-summary-prose" lang="en">
+          <MarkdownRenderer content={resolveCitation ? resolveCitation(englishContent) : englishContent} />
+        </div>
+      ) : editing ? (
         <MeetingEditor
           content={renderEditorContent()}
           preserveMeetingCitations
@@ -189,7 +235,7 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
         <div className="text-slate-600 dark:text-text-secondary dark:font-body leading-relaxed">요약이 없습니다.</div>
       )}
 
-      {!editing && transcriptA && (
+      {!editing && !showEnglish && transcriptA && (
         <details className="mt-6 border border-slate-200 dark:border-white/10 rounded-lg">
           <summary className="px-4 py-3 text-sm font-medium text-slate-600 dark:text-text-muted cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg flex items-center gap-2">
             <span className="material-symbols-outlined text-lg">notes</span>

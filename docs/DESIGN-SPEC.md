@@ -182,6 +182,42 @@ the 9,000-byte translation request limit; the full transcript remains separate.
 Auto-scroll follows new captions only while the reader remains near the bottom.
 A polite live region announces completed translations, not provisional updates.
 Single-target speech already in the target language uses one original column.
+In the bilingual ko-en mode, a Japanese or Chinese source renders as the original plus a
+Korean translation (`TranslationView`). `translationSourceLanguage` labels `zh` and `ja`.
+
+Mac app caption windows (ADR-069) are separate from this card. In the Mac app only,
+the record page shows `CaptionOverlayPanel` (state from `useCaptionOverlay`, wired in
+`record/page.tsx`): an AWS profile select (from the local profile names), a region
+select (`ap-northeast-2`, the default, and `us-east-1`; a saved region outside that list
+stays as an extra option; the model is a global inference profile, so the region only
+picks the request endpoint and the Amazon Translate region), and a third-language select (none, Japanese, Chinese; disabled while recording,
+with a note that recognition language changes only before recording). Each allowed
+language (Korean, English, the extra language) has an open/close toggle, disabled until
+a profile is chosen. Each open window gets a style editor: font, size (16-160), font and
+outline colors, outline width (0-12) and background opacity. Controls live in this
+panel, never on the projected window. Hovering a caption window shows a dashed
+outline, a grip-glyph move handle at the top centre and a diagonal resize grip at the
+bottom-right corner (minimum 320x80); they fade out within about 200 ms when the
+pointer leaves, and the whole window stays draggable. A note says Zoom shows the overlay only when the
+whole screen is shared, not a single window. Choosing or changing the profile or region raises a
+native Mac confirmation; if the user cancels, the panel shows a Korean "change cancelled" message
+and re-reads the saved settings so the selects show them again. Sample captions appear only while the settings section is expanded, or for about 4 seconds after an explicit open with it collapsed; windows reopened at page load, recording start and recording stop leave the windows hidden, and expanding or collapsing never touches them while recording.
+Failures show a Korean message
+(`captionErrorMessage`) with a retry button that also resets once-only error reporting.
+A failed translation removes that line from the window (an empty-text push), so no stale
+draft stays projected; a translation longer than the 4,000-byte push cap shows its end. The panel renders nothing outside the Mac app or when the app
+build lacks the caption commands. The panel is collapsed to one row by default (title, per-language toggles, a settings disclosure button); the profile, region, third-language, style and Zoom controls expand on demand, while the error line and the profile-missing note always show. The choice is stored in `localStorage` (`ttobak-caption-panel-expanded`). On desktop, the record page's right Q&A/reference aside can be hidden with a chevron button and reopened from a button on the right edge (`ttobak-record-side-panel`, default open); it is hidden with CSS so Q&A history survives, and asking from a reference reopens it.
+
+While recording on desktop, a layout menu at the right of the meeting title shows or hides each card with checkboxes: translation (only when enabled), live summary, notes, live transcript and the Q&A/reference aside. The column fills the viewport but keeps a floor per visible row (`recordColumnHeight` in `frontend/src/lib/recordLayoutPrefs.ts`), so on a short window the column grows and the page scrolls instead of squeezing a card. The aside checkbox drives the same preference as its chevron buttons. Card choices are stored as one JSON value (`ttobak-record-cards`, default all shown; corrupt values fall back to defaults) and the pure rules live in `lib/recordLayoutPrefs.ts`. Hidden cards stay mounted and are hidden with CSS, so typed notes and live subscriptions survive. The visible rows share a bounded column (viewport height minus 8rem, at least 28rem): translation, summary/notes and an expanded transcript each take an equal share, a lone summary or notes card spans the full width, and a collapsed transcript is a header strip that gives its height back. The transcript starts collapsed as before, expands when re-shown from the menu, and is always expanded when it is the only row. The last visible main card cannot be unchecked. Mobile tabs are unchanged.
+
+`useCaptionOverlay` runs one `CaptionOverlayController` (one `LiveTranslation` engine per
+open window, interims on) over the local AWS profile, never `/api/translate`. The record
+page passes every live segment to it (`onSegment`) and `useRecordingSession` reads the
+extra recognition language through a getter (`getExtraLanguage`) when a recording starts.
+Opening a window while idle shows preview text; when a recording stops the windows are
+cleared and the engines are rebuilt so the next recording's segment IDs cannot collide.
+Closing a window stops its engine first. Each window shows only payloads tagged with its
+own language, and once a line is final later drafts for it are ignored.
 Desktop Web
 Speech fallback remains Korean-configured and the interpretation UI explains
 that mixed-language recognition requires the Transcribe Streaming connection.
@@ -506,14 +542,18 @@ Failures retain that draft and expose retry. Editing preserves canonical
 attachment/transcript citation IDs; signed URLs and page anchors are display
 targets only. Ordinary links and literal citation text keep their identity.
 
-The same panel still shows editors a note-language select (automatic, Korean,
-English). It saves `noteLanguage` through the meeting update. After a successful
-change the UI still offers a regenerate button, which runs the standard re-summary
-and produces a Korean note, because `noteLanguage` no longer affects generation
-(ADR-070). The select is disabled while saving, locked, or while a batch summary
-or re-summary is pending or running, because a mid-run change discards that run as
-`SOURCE_CHANGED`. Save failures show an inline alert and keep the previous value.
-Both the select and the regenerate button are slated for removal.
+The re-summary panel has no note-language select or regenerate-in-language button;
+generated notes are Korean. The AI Summary card adds a Korean/English segmented
+toggle once an English note exists. The page reads `GET .../notes/en` on every visit, so a
+pending or failed first run shows its badge and retry even with no stored note. The
+English tab is a read-only `MarkdownRenderer` using the Korean view's citation
+resolver. The selected tab is per-meeting component state and is not persisted.
+Editors see a generate action (no note yet), a regenerate action (existing note)
+or a retry action (failed run); readers see none. Badges mark generating, failed and
+source-changed (`stale`) states, and polling reuses the re-summary interval and
+bound, stopping on unmount or meeting change. A failed run keeps the previous
+English note visible. Request errors map `MEETING_BUSY`, `SOURCE_NOT_READY`,
+`NO_SUMMARY_SOURCE`, `SHARING_REGEN_REQUIRED` and `OUTPUT_TOO_LARGE` to Korean text.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
@@ -525,9 +565,15 @@ independently of preparation documents, refreshes on authenticated membership
 changes, and distinguishes loading, empty results and retryable errors.
 
 Protected account readers see an explicit owner-sharing-update status while
-retaining raw notes/transcript access. Owners can confirm sharing-safe regeneration
-when the API reports it available. The confirmation explains the current-source
-inputs, omitted predecessor/prior generated evidence, replacement of existing
+retaining raw notes/transcript access. Linked previous meetings in the header and picker are plain navigation; the copy
+does not promise carried-over context.
+
+Owners see a plain "regenerate notes" action only when the API reports that
+regeneration is required and available. Its copy says the note was made the old
+way and cannot be shared individually, and that regenerating also recreates action
+items and insights; the UI has no "sharing-safe" wording. The confirmation explains
+the current-source inputs (saved notes, selected transcript, extracted documents),
+that prior generated results are not used, replacement of existing
 analysis/simulator output, failure preservation and task-completion continuity.
 Unsaved edits and active work disable the operation. Loading its verified result
 also clears obsolete generated fields from the displayed meeting.

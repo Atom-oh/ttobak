@@ -3,9 +3,8 @@
 /**
  * ADR-014 Phase 6 — picker modal that lets the user pick previous meetings
  * as predecessors of the current meeting. On save, calls
- * `meetingsApi.link()`. The backend prepends those meetings' summaries as
- * prior context the next time this meeting is summarized, so users get
- * cross-meeting continuity for follow-up discussions.
+ * `meetingsApi.link()`. Links are navigation only; linked meetings never
+ * feed note generation.
  *
  * Scope of this component:
  * - Multi-select previous meetings from `meetingsApi.list()`.
@@ -162,7 +161,7 @@ export function LinkMeetingsModal({
           <div>
             <h3 className="font-bold text-slate-900 dark:text-white">이전 미팅 연결</h3>
             <p className="text-xs text-slate-500 dark:text-text-muted mt-0.5">
-              선택한 미팅의 요약이 다음 요약 생성 시 컨텍스트로 추가됩니다
+              선택한 미팅으로 바로 이동할 수 있도록 연결합니다
             </p>
           </div>
           <button
