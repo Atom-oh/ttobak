@@ -173,6 +173,32 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 4. Confirm `status` and the log hold codes and counts only.
 5. Record the date and results in ADR-065's status line.
 
+### Mac notification acceptance
+
+The Mac app (`intake_notify.rs`) polls `~/.ttobak/intake/notify.jsonl` at launch
+and every 60 seconds. It reads the file only when it is a regular, non-symlink
+file owned by you, not writable by others, and at most 1 MiB. It skips malformed
+or partial lines, `v` other than 1, keys or paths that do not match the 64-hex
+event ID, entries older than 24 hours or more than 5 minutes ahead, and over-long
+text. It dedupes on `key` in `intake-notified.json` (app data directory, 0600,
+pruned after 48 hours) and posts at most 5 per cycle. Notification delivery has
+not been verified on a Mac; ADR-061 found app notifications unreliable for the
+meeting prompt. Check by hand with the packaged app running:
+
+1. Append one synthetic line with a fresh 64-hex ID and a current `createdAt`
+   (the format is in the header of `mcp-server/src/intake/notify.ts`) and keep the file at
+   mode 0600. Within about a minute exactly one notification appears. Append the
+   same line again: no second notification.
+2. Clicking the notification only activates the app; it does not navigate. The
+   task is on the meetings page's task strip.
+3. Make the file a symlink: nothing posts and the log says the queue is
+   unreadable. `chmod 666` it: nothing posts and the log says it was ignored.
+4. Record the observed behaviour (delivered or not, whether the click activates
+   the app) in ADR-065's status line.
+
+Notifications are informational: the app never navigates because of one, so it
+cannot discard unsaved input. The task strip on the meetings page shows the task.
+
 ## Schedule (after acceptance)
 
 Install a LaunchAgent at `~/Library/LaunchAgents/click.atomai.ttobak.intake.plist`.
