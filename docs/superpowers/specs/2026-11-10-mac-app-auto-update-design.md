@@ -186,19 +186,16 @@ After it merges, the owner's one command (e.g. `npm run release -- "notes"` in
 `mac-vX.Y.Z` with the notes, and publishes. Release notes come from the
 command argument (stored in the tag annotation).
 
-**Open decision — where the tagged build runs:**
+**Where the build runs (decided 2026-11-10): on the owner's Mac.** The release
+command builds, signs and publishes locally and pushes the tag as the record.
+Signing certificate and updater key never leave that Mac; no GitHub-hosted
+runner, OIDC role or new IAM is added. The command keeps tag and published
+build consistent: refuse if the tag already exists locally or on the remote,
+build and verify first, push the tag, then upload (manifest last). If upload
+fails after the tag push, rerunning the command for the same version resumes
+the upload of that tag's build instead of creating a new tag.
 
-- (A) A GitHub Actions workflow on a macOS arm64 runner, triggered by the tag.
-  The "TTOBAK Dev" `.p12` and its password, the minisign private key and its
-  password become GitHub Actions secrets; AWS upload uses the existing
-  deployment role pattern. Fully automatic after the tag push; the signing
-  certificate and updater key leave the owner's Mac.
-- (B) The release command on the owner's Mac builds and publishes, then pushes
-  the tag as the record. Keys stay on the Mac; the tag and the published build
-  are kept consistent by the command (publish only after the tag push
-  succeeds, refuse if the tag already exists).
-
-Either way the build/publish steps are:
+Build/publish steps:
 
 1. Require the tag's commit on `main`, the tag version equal to the
    `tauri.conf.json`/`Cargo.toml` version, and the "TTOBAK Dev" identity;
@@ -255,7 +252,9 @@ Manual acceptance on a real Mac, then on one teammate's Mac:
 3. Start recording; trigger update from the menu → refused; stop → install works.
 4. After update: permissions still granted, recording works, version shown.
 5. Tampered archive or signature → update refused.
-6. Managed-Mac check on the teammate's machine (binary authorization/MDM).
+6. On a teammate's Mac (managed status unknown as of 2026-11-10): install,
+   grant, update. If binary authorization or MDM blocks the self-signed app,
+   stop and revisit the Developer ID migration before wider rollout.
 
 ## Left to the builder
 
