@@ -1,7 +1,7 @@
 # WhisperX benchmark operations
 
 Compare engines using operator-authorized recordings and isolated benchmark output.
-ADR-035 changed production to pyannote 4.x/community-1 on 2026-09-03 while preserving
+ADR-009 changed production to pyannote 4.x/community-1 on 2026-09-03 while preserving
 production ASR pins. A new ttobak-whisper run is therefore not a pyannote 3.1 baseline,
 even if an old script labels its suffix legacy. Record image digest and actual
 engine; a task family or mutable latest tag is insufficient provenance.
@@ -106,7 +106,7 @@ For WhisperX tuning, inspect the validated WHISPERX_VAD_METHOD/ONSET/OFFSET/CHUN
 options in transcribe_whisperx.py. Record actual effective settings. Lower thresholds
 may recover speech but also include noise/hallucination; inspect real missed content,
 not just segment count or transcript length. The historical 2026-09-02 comparisons
-motivated keeping production ASR while upgrading diarization (ADR-035).
+motivated keeping production ASR while upgrading diarization (ADR-009).
 
 ## Measure and retain evidence
 
@@ -140,5 +140,5 @@ version deletion under explicit authorization.
 Do not kill unrelated tasks or force the shared ASG to zero; its capacity provider
 scales idle capacity down. Record cleanup and any failed attempt's product-state
 impact. Current constraints are in [infrastructure](../INFRA-SPEC.md),
-[ADR-035](../decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md), and
+[ADR-009](../decisions/ADR-009-batch-stt-and-diarization.md), and
 [STT troubleshooting](stt-pipeline-troubleshooting.md).

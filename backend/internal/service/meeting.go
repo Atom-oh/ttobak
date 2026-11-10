@@ -971,7 +971,7 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	// Apply replacements to all text fields. Plain-text fields use a
 	// word-boundary-aware replacement so a label like
 	// "spk_1" never partially matches a namespaced label like "spk_1000000"
-	// (multi-part meetings produce exactly that pair -- see ADR-019).
+	// (multi-part meetings produce exactly that pair -- see ADR-009).
 	// TranscriptSegments is JSON, not prose, so it's updated structurally
 	// instead: parsing out the `speaker` field and comparing for exact
 	// equality has no substring-collision failure mode at all.

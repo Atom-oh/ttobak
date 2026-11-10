@@ -26,10 +26,10 @@ MODEL_LOCAL_DIR = "/tmp/whisper-model"
 # is what fixes phantom speakers (legacy 8-with-phantoms -> 4 clean, matching
 # operator-confirmed ground truth). Same self-contained bundle the whisperx
 # bench image stages. This in-image default is the key's SOURCE OF TRUTH
-# (ADR-035): the CDK task definition deliberately does not set it, so the
+# (ADR-009): the CDK task definition deliberately does not set it, so the
 # bundle generation always ships atomically with this image's pyannote pin.
 # The 3.1 bundle stays in S3, but rolling back means reverting the whole
-# ADR-035 commit and rebuilding -- not editing env or this line alone.
+# ADR-009 commit and rebuilding -- not editing env or this line alone.
 DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/whisperx-diarization-4.x.tar.gz")
 DIARIZATION_LOCAL_DIR = "/tmp/diarization-model"
 
@@ -108,8 +108,8 @@ def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | 
     generation (from its key name) can't work with the installed
     pyannote.audio major, else None. Pure and unit-testable.
 
-    Why (ADR-035): the bundle key is image-owned (the CDK task definition
-    deliberately doesn't set it), but a stale pre-ADR-035 env on an old
+    Why (ADR-009): the bundle key is image-owned (the CDK task definition
+    deliberately doesn't set it), but a stale pre-pyannote-4 env on an old
     task-def revision or a per-run RunTask override can still pair a 4.x
     runtime with the 3.1 bundle (or the reverse). Loading such a pair fails
     config-incompatible and _diarize would swallow it into a silent
@@ -132,7 +132,7 @@ def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | 
         return (f"DIARIZATION BUNDLE/RUNTIME MISMATCH: bundle {bundle_key!r} "
                 f"expects pyannote.audio {expected}.x but {installed_version} "
                 f"is installed -- check for a stale DIARIZATION_S3_KEY env "
-                f"or RunTask override (ADR-035); skipping diarization")
+                f"or RunTask override (ADR-009); skipping diarization")
     return None
 
 

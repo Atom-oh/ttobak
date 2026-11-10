@@ -1,4 +1,4 @@
-"""Build-time pin verifier for the production whisper image (ADR-035).
+"""Build-time pin verifier for the production whisper image (ADR-009).
 
 Fails the docker build if any exact-pinned package didn't survive pip's
 dependency resolution -- the guard that makes "pins must not move" a loud

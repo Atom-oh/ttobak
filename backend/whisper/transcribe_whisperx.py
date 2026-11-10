@@ -1,6 +1,6 @@
 """WhisperX batch transcription + pyannote 4.x diarization entry point.
 
-Benchmark twin of transcribe.py (Phase 1, ADR-019 follow-up): same env-var
+Benchmark twin of transcribe.py (Phase 1, ADR-009 follow-up): same env-var
 and output-JSON contract, different engine. Never wired into cmd/transcribe;
 operators invoke it via `aws ecs run-task` with OUTPUT_KEY REQUIRED and
 explicitly set (see docs/runbooks/whisperx-benchmark.md). Unlike

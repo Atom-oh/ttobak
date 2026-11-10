@@ -23,6 +23,6 @@ and domain evaluation. Its suggested language-percentage thresholds and claims
 about provider internals were hypotheses, not measured API guarantees. Scores were
 subjective LLM assessments, not WER/CER/DER or a statistical quality comparison.
 
-Current production batch selection is documented in ADR-009/035. For a new comparison,
+Current production batch selection is documented in ADR-009. For a new comparison,
 use reviewed ground truth, identical audio and recorded configuration. Preserve
 aggregate metrics rather than copying raw meeting transcripts into review context.
