@@ -353,10 +353,13 @@ func TermScopeOf(pk string) (scope, accountID string, ok bool) {
 // DictObservation records that one meeting produced evidence for a term. It
 // is the unit of provenance; hits counts observation rows ever created.
 type DictObservation struct {
-	PK        string `dynamodbav:"PK"`
-	SK        string `dynamodbav:"SK"`
-	TermKey   string `dynamodbav:"termKey"`
-	MeetingID string `dynamodbav:"meetingId"`
+	PK      string `dynamodbav:"PK"`
+	SK      string `dynamodbav:"SK"`
+	TermKey string `dynamodbav:"termKey"`
+	// MeetingID is omitted when empty: GSI3 is keyed on meetingId and an
+	// empty string in an index key is rejected, so KB, research and news
+	// observations carry no attribute (and stay out of GSI3).
+	MeetingID string `dynamodbav:"meetingId,omitempty"`
 	// SourceKind/SourceRef name the evidence (meeting, kb, research, news);
 	// meeting rows also keep meetingId.
 	SourceKind        string   `dynamodbav:"sourceKind,omitempty"`
