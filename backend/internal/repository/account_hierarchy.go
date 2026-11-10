@@ -54,9 +54,6 @@ func (r *DynamoDBRepository) hierarchyCheck(accountID, sk string, condition expr
 	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 		TableName: aws.String(r.tableName), Key: accountHierarchyKey(accountID, sk),
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
-		// The stored row lets writeAccountHierarchy tell a merge fence from
-		// any other failed condition.
-		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
 	}}, nil
 }
 
@@ -95,6 +92,9 @@ func (r *DynamoDBRepository) hierarchyParentChecks(childID, userID, parentID str
 			condition = condition.And(accountOpenCondition())
 		}
 		check, err := r.hierarchyCheck(ancestor.AccountID, model.SKAccountMeta, condition)
+		if err == nil && i == 0 {
+			returnStoredRow(check)
+		}
 		if err != nil {
 			return nil, err
 		}

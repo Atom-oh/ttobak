@@ -385,14 +385,14 @@ func TestReplaceUnresolvedMentions_DeletesOnlyStale(t *testing.T) {
 	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, []string{skA, skB}, testRunFence); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Put ACCOUNT#acc " + skB, "Put ACCOUNT#acc " + skC, "Delete ACCOUNT#acc " + skA, "ConditionCheck ACCOUNT#acc PEOPLERUN#o:m1"}
+	want := []string{"Put ACCOUNT#acc " + skB, "Put ACCOUNT#acc " + skC, "Delete ACCOUNT#acc " + skA, "ConditionCheck ACCOUNT#acc META", "ConditionCheck ACCOUNT#acc PEOPLERUN#o:m1"}
 	if got := txOpKeys(t, items); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
 	}
 	if put := items[0].(wireMap)["Put"].(wireMap); wireS(put["Item"], "entityType") != "ACCOUNT_PEOPLE_MENTION" {
 		t.Fatalf("item %#v", put["Item"])
 	}
-	if !wireValues(items[3].(wireMap)["ConditionCheck"].(wireMap))["value:tok"] {
+	if !wireValues(items[4].(wireMap)["ConditionCheck"].(wireMap))["value:tok"] {
 		t.Fatal("lease check does not pin the token")
 	}
 	for _, prior := range [][]string{{model.MentionSortKey(a, "o:m2", "participant")}, {"LINK#meeting#o:m1#member#u#speaker"}} {
@@ -418,7 +418,7 @@ func TestReplaceUnresolvedMentions_LostLeaseStopsChunks(t *testing.T) {
 	calls := 0
 	repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
 		calls++
-		reasons := strings.Repeat(`{"Code":"None"},`, 24) + `{"Code":"ConditionalCheckFailed"}`
+		reasons := strings.Repeat(`{"Code":"None"},`, 25) + `{"Code":"ConditionalCheckFailed"}`
 		return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[`+reasons+`]}`, nil), nil
 	})
 	err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, nil, testRunFence)

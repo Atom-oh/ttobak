@@ -609,3 +609,16 @@ func TestLoadDirectory_DescendantCapMarksEntitiesTruncated(t *testing.T) {
 		t.Fatalf("entities=%d truncated=%v err=%v", len(dir.Entities), dir.EntitiesTruncated, err)
 	}
 }
+
+// A merging or merged account stops the resolver quietly: no error to retry.
+func TestResolveMeeting_StopsQuietlyOnMergingAccount(t *testing.T) {
+	f := newFakePeopleRepo()
+	f.contacts = []model.AccountContact{peopleContact(peopleTestContact, "Kim Minsu", "")}
+	f.meetings["owner:m1"].Participants = []string{"Kim Minsu"}
+	k := model.PeopleLinkKey{MeetingID: "owner:m1", ToKind: "contact", ToID: peopleTestContact, Role: "participant"}
+	f.putErr[k] = fmt.Errorf("put: %w", repository.ErrAccountMerging)
+	res, err := newPeopleTestService(f).ResolveMeeting(context.Background(), "owner", "m1", PeopleRunOptions{})
+	if err != nil || res.Skipped != 1 || res.Written != 0 || res.Busy {
+		t.Fatalf("res=%+v err=%v, want a quiet skip", res, err)
+	}
+}

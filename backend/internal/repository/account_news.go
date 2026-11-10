@@ -109,6 +109,10 @@ func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *m
 		p.ConditionExpression, p.ExpressionAttributeNames = absent.Condition(), absent.Names()
 		return types.TransactWriteItem{Put: p}
 	}
+	open, err := r.accountOpenCheck(ref.AccountID)
+	if err != nil {
+		return err
+	}
 	count := expression.Name(accountNewsCountAttr)
 	counterExpr, err := expression.NewBuilder().
 		WithCondition(count.AttributeNotExists().Or(count.LessThan(expression.Value(limit)))).
@@ -123,9 +127,12 @@ func (r *DynamoDBRepository) CreateAccountNewsSource(ctx context.Context, src *m
 	counter.UpdateExpression, counter.ConditionExpression = counterExpr.Update(), counterExpr.Condition()
 	counter.ExpressionAttributeNames, counter.ExpressionAttributeValues = counterExpr.Names(), counterExpr.Values()
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
-		check(model.SKAccountMeta), check(model.PrefixMember + ref.CreatedBy), put(configAV), put(refAV), {Update: counter},
+		open, check(model.PrefixMember + ref.CreatedBy), put(configAV), put(refAV), {Update: counter},
 	}})
 	if err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return classifyAccountNewsCreate(err)
 	}
 	return nil
@@ -387,6 +394,9 @@ func (r *DynamoDBRepository) deleteAccountNewsSourceOnce(ctx context.Context, ac
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return false, nil
+	}
+	if merging := mergeFenceError(err); merging != nil {
+		return false, merging
 	}
 	var cancelled *types.TransactionCanceledException
 	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == len(items) {

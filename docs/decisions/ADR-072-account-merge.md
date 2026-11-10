@@ -57,6 +57,17 @@ change of meeting owners or S3 object locations.
   live in user partitions; only the operator CLI rewrites them. The preview names
   them in `cliOnly`.
 
+### Amendment: fence classification and extra writers
+
+A cancelled transaction is classified as `ErrAccountMerging` when the failed item
+returns its stored row (`ReturnValuesOnConditionCheckFailure=ALL_OLD`) carrying
+`mergingInto` or `mergedInto`, not by item index: several META items also check owner
+or parent, so the index cannot tell a merge from an owner change. Only items that
+carry the open condition request the stored row. The fence also covers connector
+contact and event creates, news source create and delete checks, people-link and
+unresolved-mention writes, and meeting creation that names an account. A people
+resolver run that meets the fence stops quietly without an error to retry.
+
 ## Consequences
 
 The preview is read-only and bounded: members, projects, research, contacts and events

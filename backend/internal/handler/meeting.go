@@ -251,6 +251,8 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		model.MeetingPreparation{Notes: req.Notes, AccountID: req.AccountID, Category: req.MeetingCategory})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
 		case errors.Is(err, service.ErrForbidden):

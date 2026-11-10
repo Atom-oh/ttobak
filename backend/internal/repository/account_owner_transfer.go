@@ -21,7 +21,6 @@ func (r *DynamoDBRepository) ownerTransferUpdate(accountID, sk string, update ex
 		TableName: aws.String(r.tableName), Key: accountHierarchyKey(accountID, sk),
 		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
-		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
 	}}, nil
 }
 
@@ -47,6 +46,7 @@ func (r *DynamoDBRepository) TransferAccountOwner(ctx context.Context, accountID
 	if err != nil {
 		return err
 	}
+	returnStoredRow(meta)
 	target, err := r.ownerTransferUpdate(accountID, model.PrefixMember+targetUserID,
 		expression.Set(expression.Name("role"), expression.Value(model.RoleOwner)),
 		exists.And(expression.Name("userId").Equal(expression.Value(targetUserID))).

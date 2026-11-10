@@ -56,7 +56,7 @@ func (r *DynamoDBRepository) CreateConnectorContact(ctx context.Context, in Conn
 	if err != nil {
 		return empty, err
 	}
-	accountCheck, err := r.noteCondition(accountPK, model.SKAccountMeta, expression.AttributeExists(expression.Name("PK")))
+	accountCheck, err := r.accountOpenCheck(in.Account)
 	if err != nil {
 		return empty, err
 	}

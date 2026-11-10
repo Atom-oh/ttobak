@@ -479,6 +479,23 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 		return nil, fmt.Errorf("failed to marshal meeting: %w", err)
 	}
 
+	if meeting.AccountID != "" {
+		// Classifying at creation needs an open target account, like a later link.
+		open, err := r.accountOpenCheck(meeting.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}}, open,
+		}}, singleDynamoDBAttempt)
+		if merging := mergeFenceError(err); merging != nil {
+			return nil, merging
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to put meeting: %w", err)
+		}
+		return meeting, nil
+	}
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
 		Item:      item,

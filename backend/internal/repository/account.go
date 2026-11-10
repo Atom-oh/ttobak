@@ -179,6 +179,7 @@ func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, ownerI
 	if err != nil {
 		return err
 	}
+	returnStoredRow(meta)
 	owner, err := r.hierarchyCheck(accountID, model.PrefixMember+ownerID,
 		expression.Name("role").Equal(expression.Value(model.RoleOwner)))
 	if err != nil {

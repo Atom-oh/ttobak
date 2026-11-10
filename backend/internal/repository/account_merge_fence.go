@@ -53,6 +53,18 @@ func andOpenIntoCheck(check *types.ConditionCheck) {
 	check.ReturnValuesOnConditionCheckFailure = types.ReturnValuesOnConditionCheckFailureAllOld
 }
 
+// returnStoredRow asks a condition check or update that carries the open
+// condition to report the stored row when it fails, so classification can see
+// the merge marker. Items without the open condition never set it.
+func returnStoredRow(item types.TransactWriteItem) {
+	switch {
+	case item.ConditionCheck != nil:
+		item.ConditionCheck.ReturnValuesOnConditionCheckFailure = types.ReturnValuesOnConditionCheckFailureAllOld
+	case item.Update != nil:
+		item.Update.ReturnValuesOnConditionCheckFailure = types.ReturnValuesOnConditionCheckFailureAllOld
+	}
+}
+
 // reasonShowsMerge reports whether a cancellation reason is a failed
 // condition on an account META row that carries a merge marker.
 func reasonShowsMerge(reason types.CancellationReason) bool {

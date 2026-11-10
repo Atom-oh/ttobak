@@ -85,6 +85,9 @@ func (r *CrawlerRepository) MarkNewsDeleted(ctx context.Context, key NewsReadKey
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		var canceled *types.TransactionCanceledException
 		if errors.As(err, &canceled) {
 			failed := false
@@ -162,6 +165,9 @@ func (r *CrawlerRepository) ClaimLegacyAccountDocumentDelete(ctx context.Context
 	if err == nil {
 		return nil
 	}
+	if merging := mergeFenceError(err); merging != nil {
+		return merging
+	}
 	var canceled *types.TransactionCanceledException
 	if errors.As(err, &canceled) && len(canceled.CancellationReasons) == len(items) {
 		failed := false
@@ -184,8 +190,8 @@ func (r *CrawlerRepository) ClaimLegacyAccountDocumentDelete(ctx context.Context
 	return fmt.Errorf("claim legacy document delete: %w", err)
 }
 
-// accountAccessChecks returns ConditionChecks that the account META row and
-// the user's direct MEMBER# row exist, like the other account writers.
+// accountAccessChecks returns ConditionChecks that the account META row is open
+// (exists, not merging or merged) and the user's direct MEMBER# row exists, like the other account writers.
 func accountAccessChecks(table, accountID, userID string) ([]types.TransactWriteItem, error) {
 	if accountID == "" || userID == "" {
 		return nil, fmt.Errorf("account access check needs account and user")
@@ -194,10 +200,10 @@ func accountAccessChecks(table, accountID, userID string) ([]types.TransactWrite
 	if err != nil {
 		return nil, err
 	}
-	items := []types.TransactWriteItem{}
-	for _, sk := range []string{model.SKAccountMeta, model.PrefixMember + userID} {
-		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(table),
-			Key: accountNewsKey(model.PrefixAccount+accountID, sk), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}})
+	open, err := metaOpenCheck(table, accountID)
+	if err != nil {
+		return nil, err
 	}
-	return items, nil
+	return []types.TransactWriteItem{open, {ConditionCheck: &types.ConditionCheck{TableName: aws.String(table),
+		Key: accountNewsKey(model.PrefixAccount+accountID, model.PrefixMember+userID), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}}}, nil
 }

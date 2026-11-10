@@ -102,42 +102,60 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 	cases := []struct {
 		name    string
 		account string // account whose META must carry the fence
+		plain   error  // sentinel kept when the same item fails without a merge marker (nil: any error)
 		call    func(r *DynamoDBRepository) error
 	}{
-		{"contact", "acct", func(r *DynamoDBRepository) error {
+		{"contact", "acct", ErrContactAccess, func(r *DynamoDBRepository) error {
 			return r.WriteAccountContact(ctx, "acct", "u", &model.AccountContact{ContactID: "c1", Revision: "rev"}, "delete")
 		}},
-		{"event", "acct", func(r *DynamoDBRepository) error {
+		{"event", "acct", ErrEventAccess, func(r *DynamoDBRepository) error {
 			return r.WriteAccountEvent(ctx, "acct", "u", &model.AccountEvent{EventID: "e1"}, "delete", "", "EVENT#x", "rev")
 		}},
-		{"link put", "acct", func(r *DynamoDBRepository) error { return r.PutAccountLink(ctx, link, "u") }},
-		{"link delete", "acct", func(r *DynamoDBRepository) error {
+		{"link put", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error { return r.PutAccountLink(ctx, link, "u") }},
+		{"link delete", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error {
 			return r.DeleteAccountLink(ctx, "acct", "u", link.Input(), false)
 		}},
-		{"member add", "acct", func(r *DynamoDBRepository) error {
+		{"member add", "acct", nil, func(r *DynamoDBRepository) error {
 			return r.PutMember(ctx, &model.AccountMember{PK: "ACCOUNT#acct", SK: "MEMBER#u2", AccountID: "acct", UserID: "u2", Role: model.RoleSA})
 		}},
-		{"member remove", "acct", func(r *DynamoDBRepository) error { return r.DeleteMember(ctx, "acct", "owner", "u2") }},
-		{"project link", "acct", func(r *DynamoDBRepository) error {
+		{"member remove", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error { return r.DeleteMember(ctx, "acct", "owner", "u2") }},
+		{"project link", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
 			return r.ProjectAccountLinkTransactional(ctx, "p1", "acct", &model.ProjectRef{PK: "ACCOUNT#acct", SK: "PROJECTREF#p1"})
 		}},
-		{"research link", "acct", func(r *DynamoDBRepository) error {
+		{"research link", "acct", nil, func(r *DynamoDBRepository) error {
 			return NewResearchRepository(r.client, fenceTable).LinkAccountTransactional(ctx, "r1", "acct", &model.ResearchRef{PK: "ACCOUNT#acct", SK: "RESEARCHREF#r1"})
 		}},
-		{"reparent child", "acct", func(r *DynamoDBRepository) error {
+		{"reparent child", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
 			return r.UpdateAccountParent(ctx, "acct", "owner", "", "par", []AccountParentLink{{AccountID: "par"}})
 		}},
-		{"reparent new parent", "par", func(r *DynamoDBRepository) error {
+		{"reparent new parent", "par", ErrConditionFailed, func(r *DynamoDBRepository) error {
 			return r.UpdateAccountParent(ctx, "acct", "owner", "", "par", []AccountParentLink{{AccountID: "par"}})
 		}},
-		{"owner transfer", "acct", func(r *DynamoDBRepository) error {
+		{"owner transfer", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
 			return r.TransferAccountOwner(ctx, "acct", "owner", "u2", time.Unix(1700000000, 0))
 		}},
-		{"meeting publish", "acct", func(r *DynamoDBRepository) error {
+		{"meeting publish", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
 			return r.PublishMeetingToAccount(ctx, "owner", "m1", "acct")
 		}},
-		{"meeting classify", "acct", func(r *DynamoDBRepository) error {
+		{"meeting classify", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
 			return r.LinkMeetingToAccountAs(ctx, "owner", "owner", "m1", "acct")
+		}},
+		{"news source create", "acct", ErrAccountNewsAccess, func(r *DynamoDBRepository) error {
+			return r.CreateAccountNewsSource(ctx, &model.CrawlerSource{SourceID: "s1", AccountID: "acct"},
+				&model.AccountNewsSourceRef{AccountID: "acct", SourceID: "s1", CreatedBy: "u"}, 0, 5)
+		}},
+		{"people link put", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error {
+			l := testPeopleLink(model.LinkOriginAuto, model.LinkKindContact, "c1")
+			l.AccountID = "acct"
+			return r.PutPeopleLink(ctx, l, "")
+		}},
+		{"people link delete", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error {
+			l := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1")
+			return r.DeletePeopleLink(ctx, "acct", "actor", l.Key(), model.LinkOriginManual, false)
+		}},
+		{"meeting create", "acct", nil, func(r *DynamoDBRepository) error {
+			_, err := r.CreateMeeting(ctx, "u", "t", time.Unix(1700000000, 0), nil, "", model.MeetingPreparation{AccountID: "acct"})
+			return err
 		}},
 	}
 	for _, tc := range cases {
@@ -167,8 +185,9 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 				t.Fatalf("merge cancellation error=%v, want ErrAccountMerging only", err)
 			}
 			plain := fenceRepo(t, new([]fenceRequest), func(fenceRequest) (int, string) { return 400, cancelledAt(len(items), idx, false) })
-			if err := tc.call(plain); errors.Is(err, ErrAccountMerging) {
-				t.Fatalf("a failed condition without a merge marker must not report a merge: %v", err)
+			err := tc.call(plain)
+			if err == nil || errors.Is(err, ErrAccountMerging) || (tc.plain != nil && !errors.Is(err, tc.plain)) {
+				t.Fatalf("a failed condition without a merge marker must keep its mapping %v, got %v", tc.plain, err)
 			}
 		})
 	}
@@ -321,4 +340,20 @@ func wireMeetingWrite(body map[string]any) map[string]any {
 		return wireUpdateOp(items)
 	}
 	return body
+}
+
+// Connector creates reach the same classifier through connectorWriteError.
+func TestConnectorWriteErrorMapsMergeFence(t *testing.T) {
+	cancelled := func(item map[string]types.AttributeValue) error {
+		return &types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{
+			{Code: aws.String("None")}, {Code: aws.String("None")}, {Code: aws.String("ConditionalCheckFailed"), Item: item},
+		}}
+	}
+	marked := map[string]types.AttributeValue{"mergedInto": &types.AttributeValueMemberS{Value: "target"}}
+	if err := connectorWriteError(cancelled(marked)); !errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("marked cancellation=%v, want ErrAccountMerging", err)
+	}
+	if err := connectorWriteError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("plain cancellation=%v, want ErrConditionFailed", err)
+	}
 }
