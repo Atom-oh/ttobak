@@ -189,6 +189,8 @@ func toAccountResponse(a *model.Account, members []model.AccountMember) *model.A
 		Industry:               a.Industry,
 		OwnerUserID:            a.OwnerUserID,
 		OwnerInvitationPending: a.InitialOwnerInvitationPending,
+		MergingInto:            a.MergingInto,
+		MergedInto:             a.MergedInto,
 		Members:                dtos,
 		CreatedAt:              a.CreatedAt,
 	}
@@ -325,14 +327,14 @@ func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]mod
 		if err != nil {
 			return nil, err
 		}
-		if account == nil {
-			continue
+		if account == nil || account.MergedInto != "" {
+			continue // a merge tombstone is not listed; its target is
 		}
 		role := grant.Member.Role
 		if grant.inherited() {
 			role = ""
 		}
-		out = append(out, model.AccountSummary{AccountID: id, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: role, AccessPermission: grant.permission(), InheritedFromAccountID: grant.InheritedFromAccountID})
+		out = append(out, model.AccountSummary{AccountID: id, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: role, MergingInto: account.MergingInto, AccessPermission: grant.permission(), InheritedFromAccountID: grant.InheritedFromAccountID})
 		grants = append(grants, grant)
 	}
 	recheck, err := primedAccountReads(ctx, s.repo, userID, grantAccountIDs(grants), true)
@@ -997,7 +999,7 @@ func (s *AccountService) ResolveAccountByAlias(ctx context.Context, userID, alia
 		if err != nil {
 			return nil, err
 		}
-		if account == nil {
+		if account == nil || account.MergedInto != "" {
 			continue
 		}
 		if strings.ToLower(account.Name) == target {

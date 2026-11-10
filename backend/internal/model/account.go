@@ -35,23 +35,29 @@ var AssignableRoles = []string{RoleAM, RoleTAM, RoleSSA, RoleSA, RoleSAManager, 
 // Its news sources are ACCOUNT#{accountId} / NEWSSRC#{sourceId} refs
 // (AccountNewsSourceRef), replacing the unused single crawlerSourceId field.
 type Account struct {
-	PK                            string    `dynamodbav:"PK"` // ACCOUNT#{accountId}
-	SK                            string    `dynamodbav:"SK"` // META
-	AccountID                     string    `dynamodbav:"accountId"`
-	ParentAccountID               string    `dynamodbav:"parentAccountId,omitempty" json:"parentAccountId,omitempty"`
-	Name                          string    `dynamodbav:"name"`
-	Aliases                       []string  `dynamodbav:"aliases,omitempty"` // tag mapping e.g. ["하나은행","Hana Bank"]
-	Domains                       []string  `dynamodbav:"domains,omitempty"`
-	Industry                      string    `dynamodbav:"industry,omitempty"`
-	OwnerUserID                   string    `dynamodbav:"ownerUserId"`
-	CreatedByUserID               string    `dynamodbav:"createdByUserId,omitempty"`
-	OriginalOwnerUserID           string    `dynamodbav:"originalOwnerUserId,omitempty"` // set by the first owner transfer (ADR-071)
-	CreationRequestHash           string    `dynamodbav:"creationRequestHash,omitempty"`
-	InitialOwnerEmail             string    `dynamodbav:"initialOwnerEmail,omitempty"`
-	InitialOwnerInvitationPending bool      `dynamodbav:"initialOwnerInvitationPending,omitempty"`
-	CreatedAt                     time.Time `dynamodbav:"createdAt"`
-	UpdatedAt                     time.Time `dynamodbav:"updatedAt"`
-	EntityType                    string    `dynamodbav:"entityType"` // "ACCOUNT"
+	PK                            string   `dynamodbav:"PK"` // ACCOUNT#{accountId}
+	SK                            string   `dynamodbav:"SK"` // META
+	AccountID                     string   `dynamodbav:"accountId"`
+	ParentAccountID               string   `dynamodbav:"parentAccountId,omitempty" json:"parentAccountId,omitempty"`
+	Name                          string   `dynamodbav:"name"`
+	Aliases                       []string `dynamodbav:"aliases,omitempty"` // tag mapping e.g. ["하나은행","Hana Bank"]
+	Domains                       []string `dynamodbav:"domains,omitempty"`
+	Industry                      string   `dynamodbav:"industry,omitempty"`
+	OwnerUserID                   string   `dynamodbav:"ownerUserId"`
+	CreatedByUserID               string   `dynamodbav:"createdByUserId,omitempty"`
+	OriginalOwnerUserID           string   `dynamodbav:"originalOwnerUserId,omitempty"` // set by the first owner transfer (ADR-071)
+	CreationRequestHash           string   `dynamodbav:"creationRequestHash,omitempty"`
+	InitialOwnerEmail             string   `dynamodbav:"initialOwnerEmail,omitempty"`
+	InitialOwnerInvitationPending bool     `dynamodbav:"initialOwnerInvitationPending,omitempty"`
+	// MergingInto marks the source of an in-flight merge; MergedInto marks a
+	// finished merge tombstone; IncomingMerges counts merges targeting this account.
+	MergingInto    string     `dynamodbav:"mergingInto,omitempty"`
+	MergedInto     string     `dynamodbav:"mergedInto,omitempty"`
+	MergedAt       *time.Time `dynamodbav:"mergedAt,omitempty"`
+	IncomingMerges int        `dynamodbav:"incomingMerges,omitempty"`
+	CreatedAt      time.Time  `dynamodbav:"createdAt"`
+	UpdatedAt      time.Time  `dynamodbav:"updatedAt"`
+	EntityType     string     `dynamodbav:"entityType"` // "ACCOUNT"
 }
 
 // AccountMember binds a user (with a role) to an account.
@@ -146,6 +152,8 @@ type AccountResponse struct {
 	OwnerUserID            string   `json:"ownerUserId"`
 	// Initial invitation hint only; explicit resend rechecks current status.
 	OwnerInvitationPending bool               `json:"ownerInvitationPending"`
+	MergingInto            string             `json:"mergingInto,omitempty"`
+	MergedInto             string             `json:"mergedInto,omitempty"`
 	Members                []AccountMemberDTO `json:"members"`
 	CreatedAt              time.Time          `json:"createdAt"`
 }
@@ -158,6 +166,7 @@ type AccountSummary struct {
 	ParentAccountID        string `json:"parentAccountId,omitempty"`
 	Name                   string `json:"name"`
 	Role                   string `json:"role"`
+	MergingInto            string `json:"mergingInto,omitempty"`
 }
 
 const (
