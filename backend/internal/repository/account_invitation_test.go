@@ -11,6 +11,9 @@ import (
 
 func TestMaterializePendingAccountGrant_InviterMembershipAndIdentity(t *testing.T) {
 	repo := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
+		if strings.HasSuffix(target, ".GetItem") {
+			return 200, "{}"
+		}
 		if !strings.HasSuffix(target, ".TransactWriteItems") {
 			t.Fatalf("unexpected operation %s", target)
 		}
@@ -51,12 +54,14 @@ func TestPendingAccountGrant_RemovedInviterCannotMaterialize(t *testing.T) {
 	deleted := false
 	repo := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
 		switch {
+		case strings.HasSuffix(target, ".GetItem"):
+			return 200, "{}"
 		case strings.HasSuffix(target, ".TransactWriteItems"):
 			items := body["TransactItems"].([]any)
-			if len(items) != 3 || items[0].(map[string]any)["ConditionCheck"] == nil {
+			if len(items) != 4 || items[0].(map[string]any)["ConditionCheck"] == nil {
 				t.Fatalf("claim omitted membership authority: %+v", items)
 			}
-			return 400, projectCancellation(3, 0)
+			return 400, projectCancellation(4, 0)
 		case strings.HasSuffix(target, ".DeleteItem"):
 			deleted = true
 			if body["ConditionExpression"] == nil {

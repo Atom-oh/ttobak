@@ -3144,16 +3144,28 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 		p.InvitedCognitoSub == "" || p.InvitedCognitoSub != userID || !slices.Contains(model.AssignableRoles, p.Role) {
 		return false, fmt.Errorf("invalid pending account grant")
 	}
+	// A merged source account is a tombstone; follow exactly one hop to the
+	// merge target so the grant lands where the members now live.
+	accountID := p.AccountID
+	redirected := false
+	source, err := r.GetAccount(ctx, p.AccountID)
+	if err != nil {
+		return false, fmt.Errorf("read pending grant account %s: %w", p.AccountID, err)
+	}
+	if source != nil && source.MergedInto != "" {
+		accountID = source.MergedInto
+		redirected = true
+	}
 	member := &model.AccountMember{
-		PK:         model.PrefixAccount + p.AccountID,
+		PK:         model.PrefixAccount + accountID,
 		SK:         model.PrefixMember + userID,
-		AccountID:  p.AccountID,
+		AccountID:  accountID,
 		UserID:     userID,
 		Email:      email,
 		Role:       p.Role,
 		AddedAt:    time.Now().UTC(),
 		GSI1PK:     model.PrefixUser + userID,
-		GSI1SK:     model.PrefixAccount + p.AccountID,
+		GSI1SK:     model.PrefixAccount + accountID,
 		EntityType: model.EntityTypeAccountMember,
 	}
 	member = stampSummaryMembership(member)
@@ -3174,6 +3186,13 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 	if err != nil {
 		return false, fmt.Errorf("build not-exists condition: %w", err)
 	}
+	notMergedExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("mergingInto")).
+			And(expression.AttributeNotExists(expression.Name("mergedInto")))).
+		Build()
+	if err != nil {
+		return false, fmt.Errorf("build not-merged condition: %w", err)
+	}
 	deleteExpr, err := expression.NewBuilder().WithCondition(
 		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)).
 			And(expression.Name("invitedCognitoSub").Equal(expression.Value(userID))).
@@ -3187,7 +3206,8 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 		idxInviter = 0
 		idxPut     = 1
 		idxDelete  = 2
-		numItems   = 3
+		idxMeta    = 3
+		numItems   = 4
 	)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
@@ -3195,7 +3215,7 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 				ConditionCheck: &types.ConditionCheck{
 					TableName: aws.String(r.tableName),
 					Key: map[string]types.AttributeValue{
-						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + p.AccountID},
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
 						"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + p.InvitedByUserID},
 					},
 					ConditionExpression:       inviterExpr.Condition(),
@@ -3221,6 +3241,19 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 					ExpressionAttributeValues: deleteExpr.Values(),
 				},
 			},
+			{
+				// The granted account must be neither mid-merge nor a tombstone.
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+						"SK": &types.AttributeValueMemberS{Value: model.SKAccountMeta},
+					},
+					ConditionExpression:       notMergedExpr.Condition(),
+					ExpressionAttributeNames:  notMergedExpr.Names(),
+					ExpressionAttributeValues: notMergedExpr.Values(),
+				},
+			},
 		},
 	})
 	if err == nil {
@@ -3229,9 +3262,32 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 	if deleteFailed, ok := transactionItemFailed(err, idxDelete, numItems); ok && deleteFailed {
 		return false, nil
 	}
-	inviterFailed, ok1 := transactionItemFailed(err, idxInviter, numItems)
-	putFailed, ok2 := transactionItemFailed(err, idxPut, numItems)
-	if (ok1 && inviterFailed) || (ok2 && putFailed) {
+	// A failed membership Put means userID already holds this membership, so
+	// the row is dead whatever the merge fence says; evaluate it first.
+	if putFailed, ok := transactionItemFailed(err, idxPut, numItems); ok && putFailed {
+		if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+			return false, fmt.Errorf("drop dead pending account grant for %s: %w", p.AccountID, delErr)
+		}
+		return true, nil
+	}
+	if metaFailed, ok := transactionItemFailed(err, idxMeta, numItems); ok && metaFailed {
+		// Re-read to tell a finished tombstone (drop the row) from a merge in
+		// flight or a race with the source's tombstoning (keep the row, so a
+		// later sign-in follows the redirect). An inviter failure here may be
+		// that same race moving members, so it does not drop the row.
+		granted, getErr := r.GetAccount(ctx, accountID)
+		if getErr != nil {
+			return false, fmt.Errorf("read pending grant target %s: %w", accountID, getErr)
+		}
+		if redirected && granted != nil && granted.MergedInto != "" {
+			if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+				return false, fmt.Errorf("drop pending account grant for merged account %s: %w", p.AccountID, delErr)
+			}
+			return true, nil
+		}
+		return false, nil
+	}
+	if inviterFailed, ok := transactionItemFailed(err, idxInviter, numItems); ok && inviterFailed {
 		if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
 			return false, fmt.Errorf("drop dead pending account grant for %s: %w", p.AccountID, delErr)
 		}
