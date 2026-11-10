@@ -39,8 +39,9 @@
   10-second abort. The rate-limit downgrade applies before the model is called.
 - Model output must pass `validateInterpretation` (meta labels, echoed
   structure, length, target-script share); rejected output falls back to Amazon
-  Translate. Only forms that announce a translation are rejected as meta
-  labels, and a Korean target may keep at most four Latin words that all occur
+  Translate. Output longer than four times the source plus 200 bytes and a
+  Korean target under 30 percent Hangul are rejected. Only forms that announce
+  a translation are rejected as meta labels, and a Korean target may keep at most four Latin words that all occur
   in a Latin-only source. The UI labels each line as AI, machine or machine
   fallback.
 - Amazon Translate to Korean uses the formal register; profanity masking is off.
@@ -67,7 +68,7 @@
   left as they are.
 - A request is bounded to 12 chunks of 3,000 bytes, four at a time, a 20-second
   budget and a 64 KB response, with a per-user daily byte brake charged on
-  attempt (`MEETING_TRANSLATE_DAILY_BYTES`).
+  attempt (`MEETING_TRANSLATE_DAILY_BYTES`, 2 MB by default).
   `MEETING_TRANSLATION_ENABLED` defaults off.
 
 ## Not implemented or off by default
@@ -90,6 +91,7 @@
 
 ## Source
 
+`backend/internal/handler/translate.go`,
 `backend/internal/service/transcribe.go`, `translate.go`,
 `meeting_translation.go`, `ratelimit.go`, `backend/cmd/transcribe/main.go`,
 `backend/whisper/transcribe.py`, `frontend/src/lib/sttManager.ts`,
