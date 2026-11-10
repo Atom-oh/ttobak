@@ -30,6 +30,12 @@
         display: flex;
         background: var(--bg);
       }
+      /* No caption to show: the whole window is invisible, so nothing stays
+         over the slides after a recording stops. Hovering still shows the
+         outline and handles. */
+      #frame.idle {
+        background: transparent;
+      }
       #captions {
         flex: 1;
         min-width: 0;
@@ -174,10 +180,16 @@
           }
         }
 
+        function syncIdle() {
+          var frame = document.getElementById('frame');
+          if (frame && frame.classList) frame.classList.toggle('idle', entries.size === 0);
+        }
+
         function clearAll() {
           entries.forEach(function (e) { e.el.remove(); });
           entries.clear();
           finals.clear();
+          syncIdle();
         }
 
         function remove(id) {
@@ -185,6 +197,7 @@
           if (!e) return;
           e.el.remove();
           entries.delete(id);
+          syncIdle();
         }
 
         function markFinal(id) {
@@ -214,6 +227,7 @@
             if (e.el.textContent !== e.text) e.el.textContent = e.text;
             box.appendChild(e.el);
           });
+          syncIdle();
           if (!added) return;
           before.forEach(function (top, id) {
             var e = entries.get(id);
