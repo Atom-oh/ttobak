@@ -102,6 +102,9 @@ func init() {
 		accountService,
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
+	// Owner-private SA performance data: every route reads only the JWT user's
+	// own USER# partition (ADR-066).
+	performanceHandler := handler.NewPerformanceHandler(service.NewPerformanceService(repo, accountService))
 	// Reuse the same cold-start Cognito client for AddMember's PendingShare
 	// invited-check (see AccountService.SetCognitoAdminAPI).
 	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
@@ -329,6 +332,13 @@ func init() {
 		r.Post("/api/calendar/sources/{sourceId}/sync", calendarHandler.Sync)
 		r.Get("/api/calendar/sources", calendarHandler.ListSources)
 		r.Get("/api/calendar/events", calendarHandler.ListEvents)
+		r.Post("/api/performance/sources/{source}/sync", performanceHandler.Sync)
+		r.Get("/api/performance/sources", performanceHandler.ListSources)
+		r.Get("/api/performance/goals", performanceHandler.GetGoals)
+		r.Put("/api/performance/goals", performanceHandler.PutGoals)
+		r.Get("/api/performance/mappings", performanceHandler.ListMappings)
+		r.Put("/api/performance/mappings/{sfdcAccountId}", performanceHandler.PutMapping)
+		r.Get("/api/performance/missed", performanceHandler.ListMissed)
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)

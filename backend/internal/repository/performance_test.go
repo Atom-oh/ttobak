@@ -348,3 +348,33 @@ func TestApplyPerformanceBatchAcceptsAccountlessTask(test *testing.T) {
 		test.Fatalf("list: %+v %v", tasks, err)
 	}
 }
+
+func TestListPerformanceSourcesOwnerRows(test *testing.T) {
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		body := performanceBody(test, request)
+		if performanceTarget(request) != "Query" {
+			return nil, errors.New("unexpected call")
+		}
+		values := body["ExpressionAttributeValues"].(map[string]any)
+		if mustJSON(test, values) == "" || !strings.Contains(mustJSON(test, values), `"USER#owner"`) ||
+			!strings.Contains(mustJSON(test, values), `"PERFSRC#"`) {
+			test.Fatalf("query must target the owner's source rows: %v", values)
+		}
+		row := func(pk, user, source, completed string) string {
+			return `{"PK":{"S":"` + pk + `"},"SK":{"S":"PERFSRC#` + source + `"},"userId":{"S":"` + user + `"},"source":{"S":"` + source +
+				`"},"revision":{"N":"3"},"lastAttemptAt":{"S":"2026-11-10T00:00:00Z"}` + completed + `}`
+		}
+		return summaryHTTPResponse(200, `{"Items":[`+
+			row("USER#owner", "owner", "sfdc-tasks", `,"lastCompletedAt":{"S":"2026-11-09T00:00:00Z"}`)+`,`+
+			row("USER#owner", "other", "sfdc-assignments", "")+`,`+
+			row("USER#owner", "owner", "mail", "")+`]}`, nil), nil
+	})
+	sources, err := repo.ListPerformanceSources(test.Context(), "owner")
+	if err != nil || len(sources) != 1 || sources[0].Source != "sfdc-tasks" || sources[0].Revision != 3 ||
+		sources[0].LastCompletedAt != "2026-11-09T00:00:00Z" || sources[0].LastAttemptAt == "" {
+		test.Fatalf("sources must keep only valid owner rows: %+v %v", sources, err)
+	}
+	if _, err := repo.ListPerformanceSources(test.Context(), "bad/user"); !errors.Is(err, ErrInvalidPerformanceInput) {
+		test.Fatalf("bad user: %v", err)
+	}
+}

@@ -518,3 +518,27 @@ func (r *DynamoDBRepository) PutPerformanceGoals(ctx context.Context, userID str
 	}
 	return nil
 }
+
+// ListPerformanceSources returns the owner's stored source states. Rows that
+// fail identity checks or name an unknown source are skipped.
+func (r *DynamoDBRepository) ListPerformanceSources(ctx context.Context, userID string) ([]model.PerformanceSourceStatus, error) {
+	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceSource)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]model.PerformanceSourceStatus, 0, len(items))
+	for _, item := range items {
+		var row struct {
+			PK     string `dynamodbav:"PK"`
+			SK     string `dynamodbav:"SK"`
+			UserID string `dynamodbav:"userId"`
+			model.PerformanceSourceStatus
+		}
+		if attributevalue.UnmarshalMap(item, &row) != nil || row.PK != model.PrefixUser+userID || row.UserID != userID ||
+			!validPerformanceSource(row.Source) || row.SK != model.PerformanceSourceSortKey(row.Source) || row.Revision < 0 {
+			continue
+		}
+		sources = append(sources, row.PerformanceSourceStatus)
+	}
+	return sources, nil
+}
