@@ -423,6 +423,12 @@ const (
 	// ErrCodeAccountMerging marks a write rejected because the account is
 	// merging into another account or already merged (HTTP 409).
 	ErrCodeAccountMerging = "ACCOUNT_MERGING"
+	// ErrCodeMergeRunning marks a merge start while the source's merge job
+	// is still running.
+	ErrCodeMergeRunning = "MERGE_RUNNING"
+	// ErrCodeContactIndexTooLarge marks a merge start whose source and
+	// target contacts together exceed the contact dedupe index.
+	ErrCodeContactIndexTooLarge = "CONTACT_INDEX_TOO_LARGE"
 )
 
 // AskQuestionRequest represents the request body for asking a question about a meeting

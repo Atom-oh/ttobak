@@ -44,6 +44,7 @@ type accountMergeRepo interface {
 type AccountMergeService struct {
 	repo     accountMergeRepo
 	mover    accountMergeMoverRepo
+	jobs     accountMergeJobRepo
 	accounts *AccountService
 }
 
@@ -69,8 +70,10 @@ func mergeIneligible(reason string) error {
 // authorize requires the requester to own `from` (MEMBER role and META) and be
 // a direct member of `into`, then rejects tombstones, concurrent merges, a
 // target inside the source subtree and hierarchies that would exceed the
-// ancestor limit once the source's children move under the target.
-func (s *AccountMergeService) authorize(ctx context.Context, requesterID, fromID, intoID string) (*mergeSubjects, error) {
+// ancestor limit once the source's children move under the target. A
+// non-empty resumeInto names the target of the source's existing job: the
+// source may then already be mergingInto that target (and only that one).
+func (s *AccountMergeService) authorize(ctx context.Context, requesterID, fromID, intoID, resumeInto string) (*mergeSubjects, error) {
 	if requesterID == "" || intoID == "" {
 		return nil, ErrInvalidInput
 	}
@@ -108,7 +111,8 @@ func (s *AccountMergeService) authorize(ctx context.Context, requesterID, fromID
 	if member == nil || member.UserID != requesterID {
 		return nil, ErrForbidden
 	}
-	if from.MergingInto != "" || from.MergedInto != "" || into.MergingInto != "" || into.MergedInto != "" {
+	resuming := resumeInto != "" && resumeInto == intoID && from.MergingInto == intoID
+	if (from.MergingInto != "" && !resuming) || from.MergedInto != "" || into.MergingInto != "" || into.MergedInto != "" {
 		return nil, mergeIneligible("an account is already merging or merged")
 	}
 	if from.IncomingMerges > 0 {
@@ -207,7 +211,7 @@ func (s *AccountMergeService) subtreeHeight(ctx context.Context, rootID string) 
 
 // Preview inventories what a merge would move. It performs no writes.
 func (s *AccountMergeService) Preview(ctx context.Context, requesterID, fromID, intoID string) (*model.AccountMergePreview, error) {
-	subjects, err := s.authorize(ctx, requesterID, fromID, intoID)
+	subjects, err := s.authorize(ctx, requesterID, fromID, intoID, "")
 	if err != nil {
 		return nil, err
 	}
