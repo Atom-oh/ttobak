@@ -9,13 +9,11 @@
   capture), ADR-061 (floating prompt window pattern).
 - Design: the working design and plan documents were not merged; this ADR is
   the durable decision.
-- Delivery: four stacked PRs. 1/4 adds the caption model, AWS profile
-  discovery, the interpreter port and the three translation commands
-  (`caption_settings_get`, `caption_settings_set`, `caption_translate`) with the
-  native profile confirmation; 2/4 adds the overlay windows, bundled page,
-  overlay capability, byte budget and open-window check; 3/4 adds the record-page
-  bridge and panel; 4/4 adds the layout menu and the remaining docs. Until a later
-  PR lands, the parts it adds do not exist yet.
+- Delivery: four stacked PRs. 1/4: caption model, profile discovery, interpreter,
+  the three translation commands and the profile confirmation; 2/4: overlay
+  windows, page and capability, byte budget, open-window check; 3/4: record-page
+  bridge and panel; 4/4: layout menu and remaining docs. Parts of later PRs do not
+  exist before they land.
 
 ## Context
 
@@ -119,10 +117,8 @@ minute across all callers so a misbehaving page cannot run up the user's bill.
 `caption_translate` also rejects a target language whose overlay window is not open;
 the record page starts an engine only after its window opened and stops it before
 closing the window. None of the commands reads
-arbitrary files, reaches an arbitrary network address or exposes tokens. Errors
-carry one fixed `code`: profile-missing, credentials-expired, model-access,
-rate-limited, invalid-input, invalid-output, timeout, aws-error, save-failed,
-confirmation-declined, unavailable and (for overlay windows) window-error.
+arbitrary files, reaches an arbitrary network address or exposes tokens. Error
+codes are listed in `mac-app/CLAUDE.md`.
 
 **Overlay capability.** The overlay windows get `capabilities/caption-overlay.json`:
 `core:event:allow-listen`, `allow-unlisten`, `core:window:allow-start-dragging`
