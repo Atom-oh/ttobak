@@ -10,7 +10,7 @@
 | Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
 | Scale | 90 points: Playwright MCP unavailable, so the rubric's 10-point MCP visual category is exempt |
-| Current score | **90 / 90** |
+| Current score | **88 / 90** |
 | Verdict | **PASS**; also meets the loaded plugin's mandatory >=85 deployment gate |
 
 The user's lifecycle rule requires closing every spawned agent. This host has no
@@ -24,7 +24,7 @@ to the exempt rubric category.
 | Category | Score | Critical | Warning | Info |
 |---|---:|---:|---:|---:|
 | Layout | 8/8 | 0 | 0 | 0 |
-| Terminology | 8/8 | 0 | 0 | 0 |
+| Terminology | 6/8 | 0 | 1 | 0 |
 | No hallucination | 12/12 | 0 | 0 | 0 |
 | Language consistency | 8/8 | 0 | 0 | 0 |
 | No sensitive data | 12/12 | 0 | 0 | 1 |
@@ -37,12 +37,12 @@ to the exempt rubric category.
 | Legal compliance | 5/5 | 0 | 0 | 0 |
 | Message clarity | 5/5 | 0 | 0 | 0 |
 | Duplication / gaps | 5/5 | 0 | 0 | 0 |
-| **Total** | **90/90** | **0** | **0** | **2** |
+| **Total** | **88/90** | **0** | **1** | **2** |
 
 Scoring follows the fixed rubric: deductions require a located, quoted defect;
 each defect costs one quarter of its category, summed then rounded once to the
-nearest 0.5 with midpoints up. No unresolved defect was identified after revision,
-so no deduction applies. Informational scope boundaries do not count as defects.
+nearest 0.5 with midpoints up. The retained legacy menu labels/numbering cost 2 terminology points; the next
+operations PR replaces those chapters. Scope boundaries do not count as defects.
 
 ## Evidence and revisions
 
