@@ -156,9 +156,6 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const isOwner = caps.isOwner && !mergeFenced;
   const mergeOwner = caps.isOwner;
   const mergedInto = account?.accountId === accountId ? account.mergedInto : undefined;
-  useEffect(() => {
-    if (mergedInto) router.replace(`/accounts/${encodeURIComponent(mergedInto)}`);
-  }, [mergedInto, router]);
   const parentUpdateScope = useMemo(() => ({ accountId, isOwner, active: true }), [accountId, isOwner]);
   useLayoutEffect(() => {
     parentUpdateScope.active = true;
@@ -609,10 +606,15 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
           <div role="status" aria-label="어카운트 불러오는 중" className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
           </div>
-        ) : mergedInto ? (
-          <p role="status" className="py-8 text-sm text-text-secondary">{ACCOUNT_MERGE_COPY.redirecting}</p>
         ) : account && (
           <>
+            {mergedInto && (
+              // A tombstone stays readable for its unmoved categories (ADR-072).
+              <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
+                <span>{ACCOUNT_MERGE_COPY.mergedBanner}</span>
+                <button type="button" onClick={() => router.push(`/accounts/${encodeURIComponent(mergedInto)}`)} className="font-semibold underline">{ACCOUNT_MERGE_COPY.openTarget}</button>
+              </div>
+            )}
             {account.mergingInto && (
               <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
                 <span>{ACCOUNT_MERGE_COPY.mergingBanner}</span>
