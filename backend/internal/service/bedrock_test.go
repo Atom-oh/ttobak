@@ -206,6 +206,119 @@ func TestBuildAttachmentLinkSections(t *testing.T) {
 	}
 }
 
+func TestHasNonOwnerCollaborator(t *testing.T) {
+	tests := []struct {
+		name    string
+		meeting *model.Meeting
+		shares  []model.Share
+		want    bool
+	}{
+		{
+			name:    "owner-only meeting, no shares, not account-shared",
+			meeting: &model.Meeting{UserID: "owner-1"},
+			shares:  nil,
+			want:    false,
+		},
+		{
+			name:    "direct share to a non-owner",
+			meeting: &model.Meeting{UserID: "owner-1"},
+			shares:  []model.Share{{SharedToID: "other-1", Permission: model.PermissionRead}},
+			want:    true,
+		},
+		{
+			// The exact gap the review confirmed: SharedToAccount=true with
+			// no corresponding Share row (a member who joined the account
+			// after the share was made -- resolveSharedAccess grants them
+			// live access with no Share row ever written).
+			name: "shared to an account, no Share rows at all",
+			meeting: &model.Meeting{
+				UserID: "owner-1", SharedToAccount: true, AccountID: "acc-1",
+			},
+			shares: nil,
+			want:   true,
+		},
+		{
+			name: "linked to an account (AccountID set) but NOT published (SharedToAccount false)",
+			meeting: &model.Meeting{
+				UserID: "owner-1", SharedToAccount: false, AccountID: "acc-1",
+			},
+			shares: nil,
+			want:   false,
+		},
+		{
+			name:    "SharedToAccount true but AccountID empty (inconsistent data, treat as not account-shared)",
+			meeting: &model.Meeting{UserID: "owner-1", SharedToAccount: true, AccountID: ""},
+			shares:  nil,
+			want:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasNonOwnerCollaborator(tt.meeting, tt.shares); got != tt.want {
+				t.Errorf("HasNonOwnerCollaborator() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAnyNonOwnerShare(t *testing.T) {
+	tests := []struct {
+		name    string
+		shares  []model.Share
+		ownerID string
+		want    bool
+	}{
+		{
+			name:    "no shares",
+			shares:  nil,
+			ownerID: "owner-1",
+			want:    false,
+		},
+		{
+			name:    "read-only share to someone else DOES count -- they can still read an already-leaked summary",
+			shares:  []model.Share{{SharedToID: "other-1", Permission: model.PermissionRead}},
+			ownerID: "owner-1",
+			want:    true,
+		},
+		{
+			name:    "edit share to someone else",
+			shares:  []model.Share{{SharedToID: "other-1", Permission: model.PermissionEdit}},
+			ownerID: "owner-1",
+			want:    true,
+		},
+		{
+			name:    "share to the owner themselves does not count",
+			shares:  []model.Share{{SharedToID: "owner-1", Permission: model.PermissionEdit}},
+			ownerID: "owner-1",
+			want:    false,
+		},
+		{
+			name: "a collaborator demoted from edit to read still counts",
+			shares: []model.Share{
+				{SharedToID: "other-1", Permission: model.PermissionRead},
+			},
+			ownerID: "owner-1",
+			want:    true,
+		},
+		{
+			name: "mixed shares, only the owner's own",
+			shares: []model.Share{
+				{SharedToID: "owner-1", Permission: model.PermissionRead},
+				{SharedToID: "owner-1", Permission: model.PermissionEdit},
+			},
+			ownerID: "owner-1",
+			want:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AnyNonOwnerShare(tt.shares, tt.ownerID); got != tt.want {
+				t.Errorf("AnyNonOwnerShare() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFoldLiveSummary_SentinelStripping(t *testing.T) {
 	const prior = "PRIOR LINKED CONTEXT"
 
