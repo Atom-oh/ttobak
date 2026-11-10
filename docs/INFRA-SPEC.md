@@ -650,6 +650,12 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 `ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
 (`TRANSCRIPT_CORRECTION_MODE`).
 
+`infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
+ADR-008). News terms stay at `NO_DOCUMENTS` until a crawler source qualifies as
+global (`IsGlobalNewsSource`). `ttobak:kbTermsMode` and
+`ttobak:researchTermsMode` stay `off`: ADR-008 FU4 (Account-layer cleanup on
+unlink) must land before either source writes Account terms.
+
 ### Dictionary layer metrics
 
 `PipelineFailures.watchTermsLogs` adds metric filters on the summarize log group
