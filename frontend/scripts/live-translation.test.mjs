@@ -666,3 +666,12 @@ test('the fragment counter appears only with debugCaptions', async () => {
   assert.match(renderView(state, { debugCaptions: true }), /2단어 이하\): 1\/2 \(50%\)/);
   state.translator.stop();
 });
+
+test('detects zh and ja', () => {
+  const { translationSourceLanguage } = loadModule('lib/liveTranslation.ts');
+  assert.equal(translationSourceLanguage('你好', 'zh-CN'), 'zh');
+  assert.equal(translationSourceLanguage('こんにちは'), 'ja');
+  assert.equal(translationSourceLanguage('你好'), 'zh');
+  assert.equal(translationSourceLanguage('안녕 你好'), 'ko');
+  assert.equal(translationSourceLanguage('hello'), 'en');
+});
