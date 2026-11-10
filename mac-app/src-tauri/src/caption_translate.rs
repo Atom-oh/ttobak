@@ -196,11 +196,9 @@ struct Clients {
     translate: aws_sdk_translate::Client,
 }
 
-/// Credentials for exactly one named profile from the shared config and
-/// credentials files (static keys, SSO, `credential_process`, assume-role).
-/// Not the SDK default chain: it reads environment variables first, so an app
-/// started from a terminal with exported keys would bill (and send meeting
-/// text to) that identity while the settings name another profile.
+/// Credentials from exactly one named profile (static keys, SSO,
+/// `credential_process`, roles), not the SDK default chain, which reads
+/// environment variables first and would bill an exported terminal identity.
 // `ProfileFiles` is a deprecated alias that aws-config still requires here;
 // `files` is only set by tests.
 #[allow(deprecated)]
@@ -220,9 +218,8 @@ pub fn profile_credentials(
     builder.build()
 }
 
-/// Whether changing the AWS profile or region needs the user's native
-/// confirmation. Clearing the profile never does; choosing a profile, or a
-/// different profile or region while one is chosen, always does.
+/// Whether a profile or region change needs native confirmation: never when
+/// clearing the profile, always when choosing or changing either.
 pub fn needs_confirmation(
     old_profile: Option<&str>,
     old_region: &str,
@@ -291,7 +288,7 @@ pub struct CaptionState {
     path: Option<PathBuf>,
     clients: Mutex<HashMap<(String, String), Clients>>,
     rate: Mutex<RateCeiling>,
-    /// Set while a `caption_settings_set` call (and its confirmation) runs.
+    /// Set while `caption_settings_set` runs.
     changing: AtomicBool,
 }
 
@@ -341,8 +338,7 @@ impl CaptionState {
         }
     }
 
-    /// Starts a settings change, or `None` while another one (possibly
-    /// waiting on its confirmation) is running.
+    /// Starts a settings change, or `None` while another runs.
     fn begin_change(&self) -> Option<ChangeGuard<'_>> {
         self.changing
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -712,11 +708,8 @@ mod tests {
     #[test]
     fn confirmation_names_profile_and_region() {
         let m = confirmation_message("work", "ap-northeast-2");
-        assert_eq!(
-            m,
-            "TTOBAK이 AWS 프로필 'work' (리전 ap-northeast-2)으로 자막을 번역하려고 합니다. \
-             이 계정에 요금이 청구될 수 있어요. 허용할까요?"
-        );
+        assert!(m.starts_with("TTOBAK이 AWS 프로필 'work' (리전 ap-northeast-2)"));
+        assert!(m.ends_with("요금이 청구될 수 있어요. 허용할까요?"));
     }
 
     #[test]

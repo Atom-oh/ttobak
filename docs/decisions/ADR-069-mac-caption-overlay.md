@@ -93,7 +93,7 @@ window titled "TTOBAK" whose Korean text names the profile and region and warns 
 charges, with Allow and Cancel buttons. Clearing the profile or changing only the
 extra language asks nothing. Cancel, or a sheet that cannot be shown, keeps the
 settings and returns `confirmation-declined`; a call while another runs returns
-`invalid-input`. The command awaits the sheet without holding a lock. The sheet
+`invalid-input`. The sheet
 uses `rfd` directly: `tauri-plugin-dialog` would inject `window.alert`/`confirm`
 overrides and page-callable commands into every page. No capability grants a
 `dialog:` permission (`no_capability_grants_updater_permissions`).
