@@ -1,6 +1,5 @@
 //! Pure caption overlay model: styles, window layouts, settings validation and
 //! persistence, and window placement. No Tauri imports.
-#![allow(dead_code)] // the overlay windows (caption_overlay.rs) consume the rest
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -190,8 +189,14 @@ pub fn save(path: &Path, s: &CaptionSettings) -> std::io::Result<()> {
     })
 }
 
-/// Saved position if the window rect intersects any monitor `(x, y, w, h)`,
-/// else bottom-centered on `primary` with an 80pt bottom margin.
+/// Width a saved window must keep on one display to stay where it was.
+const MIN_VISIBLE_WIDTH: f64 = 100.0;
+/// Height a saved window must keep on one display to stay where it was.
+const MIN_VISIBLE_HEIGHT: f64 = 40.0;
+
+/// Saved position if at least `MIN_VISIBLE_WIDTH` x `MIN_VISIBLE_HEIGHT` of
+/// the window lies on one monitor `(x, y, w, h)`, else bottom-centered on
+/// `primary` with an 80pt bottom margin.
 pub fn placement(
     saved: Option<(f64, f64)>,
     size: (f64, f64),
@@ -200,7 +205,9 @@ pub fn placement(
 ) -> (f64, f64) {
     if let Some((x, y)) = saved {
         let visible = monitors.iter().any(|&(mx, my, mw, mh)| {
-            x < mx + mw && x + size.0 > mx && y < my + mh && y + size.1 > my
+            let w = (x + size.0).min(mx + mw) - x.max(mx);
+            let h = (y + size.1).min(my + mh) - y.max(my);
+            w >= MIN_VISIBLE_WIDTH && h >= MIN_VISIBLE_HEIGHT
         });
         if visible {
             return (x, y);
@@ -368,5 +375,45 @@ mod tests {
             (100.0, 100.0)
         );
         assert_eq!(placement(None, (900.0, 180.0), &mon, prim), (270.0, 640.0));
+    }
+
+    #[test]
+    fn barely_visible_position_falls_back() {
+        let mon = [(0.0, 0.0, 1440.0, 900.0)];
+        let prim = mon[0];
+        let size = (900.0, 180.0);
+        // 1 pt on screen horizontally, then vertically.
+        assert_eq!(
+            placement(Some((1439.0, 100.0)), size, &mon, prim),
+            (270.0, 640.0)
+        );
+        assert_eq!(
+            placement(Some((100.0, 899.0)), size, &mon, prim),
+            (270.0, 640.0)
+        );
+        // 99 pt wide or 39 pt tall is still too little.
+        assert_eq!(
+            placement(Some((1341.0, 100.0)), size, &mon, prim),
+            (270.0, 640.0)
+        );
+        assert_eq!(
+            placement(Some((100.0, 861.0)), size, &mon, prim),
+            (270.0, 640.0)
+        );
+        // Exactly 100 pt wide and 40 pt tall is kept, including off the left/top edge.
+        assert_eq!(
+            placement(Some((1340.0, 860.0)), size, &mon, prim),
+            (1340.0, 860.0)
+        );
+        assert_eq!(
+            placement(Some((-800.0, -140.0)), size, &mon, prim),
+            (-800.0, -140.0)
+        );
+        // A second display counts.
+        let two = [mon[0], (1440.0, 0.0, 1920.0, 1080.0)];
+        assert_eq!(
+            placement(Some((2000.0, 500.0)), size, &two, prim),
+            (2000.0, 500.0)
+        );
     }
 }

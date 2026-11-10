@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>TTOBAK captions</title>
+    <style>
+      :root {
+        --font: "Apple SD Gothic Neo", system-ui, sans-serif;
+        --size: 48px;
+        --color: #ffffff;
+        --stroke: 3px #000000;
+        --bg: rgba(0, 0, 0, 0.4);
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: default;
+      }
+      /* The frame's padding reserves the strips the hover chrome sits in,
+         so the move handle and resize grip never cover caption text. */
+      #frame {
+        box-sizing: border-box;
+        height: 100%;
+        padding: 14px 18px 6px;
+        display: flex;
+        background: var(--bg);
+      }
+      /* No caption to show: the whole window is invisible, so nothing stays
+         over the slides after a recording stops. Hovering still shows the
+         outline and handles. */
+      #frame.idle {
+        background: transparent;
+      }
+      #captions {
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        overflow: hidden;
+      }
+      /* Hover chrome: shown only while the pointer is over the window (or a
+         resize is in progress), so a projected view shows only subtitles. */
+      .chrome {
+        position: fixed;
+        opacity: 0;
+        transition: opacity 180ms ease-out;
+        pointer-events: none;
+      }
+      html:hover .chrome,
+      html.resizing .chrome {
+        opacity: 1;
+      }
+      html:hover #move,
+      html:hover #grip,
+      html.resizing #grip {
+        pointer-events: auto;
+      }
+      #outline {
+        inset: 0;
+        border: 1px dashed rgba(255, 255, 255, 0.7);
+      }
+      #move {
+        top: 2px;
+        left: 50%;
+        width: 40px;
+        height: 10px;
+        margin-left: -20px;
+        border-radius: 5px;
+        background: rgba(0, 0, 0, 0.55);
+        color: rgba(255, 255, 255, 0.9);
+        font: 9px/10px system-ui, sans-serif;
+        letter-spacing: 2px;
+        text-align: center;
+        overflow: hidden;
+        cursor: move;
+      }
+      #grip {
+        right: 2px;
+        bottom: 2px;
+        width: 14px;
+        height: 14px;
+        cursor: nwse-resize;
+        background: linear-gradient(
+          135deg,
+          transparent 0 45%,
+          rgba(255, 255, 255, 0.85) 45% 52%,
+          transparent 52% 64%,
+          rgba(255, 255, 255, 0.85) 64% 71%,
+          transparent 71% 83%,
+          rgba(255, 255, 255, 0.85) 83% 90%,
+          transparent 90%
+        );
+      }
+      .line {
+        max-width: 100%;
+        margin: 0;
+        text-align: center;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-family: var(--font);
+        font-size: var(--size);
+        line-height: 1.25;
+        font-weight: 700;
+        color: var(--color);
+        -webkit-text-stroke: var(--stroke);
+        paint-order: stroke fill;
+      }
+      .line.moving {
+        transition: transform 150ms ease-out;
+      }
+    </style>
+  </head>
+  <body data-tauri-drag-region="deep">
+    <div id="frame"><div id="captions"></div></div>
+    <div id="outline" class="chrome" aria-hidden="true"></div>
+    <div id="move" class="chrome" data-tauri-drag-region aria-hidden="true">⠿</div>
+    <div id="grip" class="chrome" data-tauri-drag-region="false" aria-hidden="true"></div>
+    <script>
+      // Size for a grip drag: the starting inner size plus the pointer
+      // delta, rounded and clamped to the window minimum (320x80 points).
+      function captionResizeSize(startWidth, startHeight, dx, dy) {
+        function finite(v, fallback) {
+          return typeof v === 'number' && isFinite(v) ? v : fallback;
+        }
+        var w = Math.round(finite(startWidth, 320) + finite(dx, 0));
+        var h = Math.round(finite(startHeight, 80) + finite(dy, 0));
+        return { width: Math.max(320, w), height: Math.max(80, h) };
+      }
+    </script>
+    <script>
+      (function () {
+        var MAX_LINES = 3;
+        // Ids already shown as final; bounded, reset by clear and preview.
+        var MAX_FINAL_IDS = 200;
+        var SAMPLES = {
+          ko: '실시간 자막이 여기에 표시됩니다.',
+          en: 'Live captions will appear here.',
+          ja: 'ここにリアルタイム字幕が表示されます。',
+          zh: '实时字幕将显示在这里。'
+        };
+        var params = new URLSearchParams(location.search);
+        var lang = Object.prototype.hasOwnProperty.call(SAMPLES, params.get('lang'))
+          ? params.get('lang')
+          : 'ko';
+        document.documentElement.lang = lang;
+
+        var box = document.getElementById('captions');
+        // id -> { order, text, el }
+        var entries = new Map();
+        var finals = new Set();
+
+        function applyStyle(s) {
+          if (!s || typeof s !== 'object') return;
+          var root = document.documentElement.style;
+          var hex = /^#[0-9A-Fa-f]{6}$/;
+          function num(v, lo, hi) {
+            return typeof v === 'number' && isFinite(v) && v >= lo && v <= hi;
+          }
+          if (typeof s.fontFamily === 'string' && s.fontFamily) {
+            var family = s.fontFamily === 'system-ui'
+              ? 'system-ui'
+              : '"' + s.fontFamily.replace(/["\\]/g, '') + '"';
+            root.setProperty('--font', family + ', system-ui, sans-serif');
+          }
+          if (num(s.fontSize, 16, 160)) root.setProperty('--size', s.fontSize + 'px');
+          if (hex.test(s.fontColor)) root.setProperty('--color', s.fontColor);
+          if (num(s.outlineWidth, 0, 12) && hex.test(s.outlineColor)) {
+            root.setProperty('--stroke', s.outlineWidth + 'px ' + s.outlineColor);
+          }
+          if (num(s.backgroundOpacity, 0, 1)) {
+            root.setProperty('--bg', 'rgba(0, 0, 0, ' + s.backgroundOpacity + ')');
+          }
+        }
+
+        function syncIdle() {
+          var frame = document.getElementById('frame');
+          if (frame && frame.classList) frame.classList.toggle('idle', entries.size === 0);
+        }
+
+        function clearAll() {
+          entries.forEach(function (e) { e.el.remove(); });
+          entries.clear();
+          finals.clear();
+          syncIdle();
+        }
+
+        function remove(id) {
+          var e = entries.get(id);
+          if (!e) return;
+          e.el.remove();
+          entries.delete(id);
+          syncIdle();
+        }
+
+        function markFinal(id) {
+          finals.add(id);
+          if (finals.size > MAX_FINAL_IDS) finals.delete(finals.values().next().value);
+        }
+
+        // Shows the newest MAX_LINES entries by order. When a line is added,
+        // the lines already shown slide up from their old position (FLIP);
+        // replacing a line's text does not animate.
+        function render(added) {
+          var before = new Map();
+          if (added) {
+            entries.forEach(function (e, id) {
+              if (e.el.isConnected) before.set(id, e.el.getBoundingClientRect().top);
+            });
+          }
+          var sorted = Array.from(entries.entries()).sort(function (a, b) {
+            return a[1].order - b[1].order;
+          });
+          sorted.slice(0, Math.max(0, sorted.length - MAX_LINES)).forEach(function (pair) {
+            pair[1].el.remove();
+            entries.delete(pair[0]);
+          });
+          sorted.slice(-MAX_LINES).forEach(function (pair) {
+            var e = pair[1];
+            if (e.el.textContent !== e.text) e.el.textContent = e.text;
+            box.appendChild(e.el);
+          });
+          syncIdle();
+          if (!added) return;
+          before.forEach(function (top, id) {
+            var e = entries.get(id);
+            if (!e) return;
+            var dy = top - e.el.getBoundingClientRect().top;
+            if (!dy) return;
+            e.el.classList.remove('moving');
+            e.el.style.transform = 'translateY(' + dy + 'px)';
+            void e.el.offsetHeight;
+            e.el.classList.add('moving');
+            e.el.style.transform = '';
+          });
+        }
+
+        function upsert(id, order, text) {
+          var e = entries.get(id);
+          if (e) {
+            e.text = text;
+            render(false);
+            return;
+          }
+          var el = document.createElement('p');
+          el.className = 'line';
+          el.addEventListener('transitionend', function () { el.classList.remove('moving'); });
+          entries.set(id, { order: order, text: text, el: el });
+          render(true);
+        }
+
+        var previewing = false;
+        function preview() {
+          clearAll();
+          previewing = true;
+          upsert('preview', 0, SAMPLES[lang]);
+        }
+
+        // Only this window's language; Rust also targets the window.
+        function ours(p) {
+          return !!p && typeof p === 'object' && p.lang === lang;
+        }
+
+        // Interim and final text share one style. Empty text removes the
+        // line (a failed translation); once an id is final, later drafts for
+        // it are dropped (commands may emit out of order).
+        function onUpdate(p) {
+          if (!ours(p)) return;
+          if (p.kind === 'clear') {
+            previewing = false;
+            clearAll();
+          } else if (p.kind === 'preview') {
+            preview();
+          } else if (p.kind === 'entry' && typeof p.id === 'string' && typeof p.text === 'string') {
+            if (finals.has(p.id) && p.isFinal !== true) return;
+            if (!p.text) {
+              if (p.isFinal === true) markFinal(p.id);
+              remove(p.id);
+              return;
+            }
+            if (previewing) {
+              previewing = false;
+              clearAll();
+            }
+            if (p.isFinal === true) markFinal(p.id);
+            upsert(p.id, typeof p.order === 'number' ? p.order : 0, p.text);
+          }
+        }
+
+        applyStyle(window.__TTOBAK_CAPTION_STYLE__);
+        preview();
+
+        var events = window.__TAURI__ && window.__TAURI__.event;
+        if (events) {
+          // Scoped to this window: an unscoped listener receives every
+          // window's events.
+          var scope = { target: { kind: 'WebviewWindow', label: 'caption-' + lang } };
+          events.listen('caption-update', function (e) { onUpdate(e.payload); }, scope);
+          events.listen('caption-style', function (e) {
+            if (ours(e.payload)) applyStyle(e.payload);
+          }, scope);
+        }
+
+        // Resize from the bottom-right grip. tao 0.37 does not support
+        // startResizeDragging on macOS, so the page sets the size itself,
+        // at most once per animation frame. The grip is not a drag region.
+        var tauriWindow = window.__TAURI__ && window.__TAURI__.window;
+        var grip = document.getElementById('grip');
+        if (grip && tauriWindow && typeof tauriWindow.getCurrentWindow === 'function') {
+          var current = tauriWindow.getCurrentWindow();
+          var drag = null;
+          var pending = null;
+          var frame = 0;
+          var flush = function () {
+            frame = 0;
+            if (!pending) return;
+            var size = pending;
+            pending = null;
+            current.setSize(new tauriWindow.LogicalSize(size.width, size.height)).catch(function () {});
+          };
+          var end = function () {
+            if (!drag) return;
+            drag = null;
+            document.documentElement.classList.remove('resizing');
+          };
+          grip.addEventListener('pointerdown', function (e) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            drag = { x: e.screenX, y: e.screenY, w: window.innerWidth, h: window.innerHeight };
+            document.documentElement.classList.add('resizing');
+            if (grip.setPointerCapture) grip.setPointerCapture(e.pointerId);
+          });
+          grip.addEventListener('pointermove', function (e) {
+            if (!drag) return;
+            pending = captionResizeSize(drag.w, drag.h, e.screenX - drag.x, e.screenY - drag.y);
+            if (!frame) frame = window.requestAnimationFrame(flush);
+          });
+          grip.addEventListener('pointerup', end);
+          grip.addEventListener('pointercancel', end);
+          grip.addEventListener('lostpointercapture', end);
+        }
+      })();
+    </script>
+  </body>
+</html>
