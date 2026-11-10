@@ -134,6 +134,12 @@ func (s *AccountContactsService) List(ctx context.Context, account, user string,
 	return page, nil
 }
 
+// Contact size limits; the merge mover keeps merged notes within them too.
+const (
+	contactNotesMaxBytes   = 8192
+	contactEncodedMaxBytes = 12000
+)
+
 func validateContact(c model.AccountContact) error {
 	if strings.TrimSpace(c.Name) == "" {
 		return ErrInvalidInput
@@ -144,7 +150,7 @@ func validateContact(c model.AccountContact) error {
 			return ErrInvalidInput
 		}
 	}
-	if len(c.Address) > 1024 || len(c.Notes) > 8192 || !utf8.ValidString(c.Address) || !utf8.ValidString(c.Notes) {
+	if len(c.Address) > 1024 || len(c.Notes) > contactNotesMaxBytes || !utf8.ValidString(c.Address) || !utf8.ValidString(c.Notes) {
 		return ErrInvalidInput
 	}
 	return nil
@@ -182,7 +188,7 @@ func (s *AccountContactsService) MutateWith(ctx context.Context, account, user, 
 	c.ContactID = id
 	if op != "delete" {
 		encoded, err := json.Marshal(c)
-		if err != nil || len(encoded) > 12000 {
+		if err != nil || len(encoded) > contactEncodedMaxBytes {
 			return nil, ErrInvalidInput
 		}
 	}

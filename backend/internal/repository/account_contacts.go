@@ -145,6 +145,22 @@ func (r *DynamoDBRepository) GetAccountContact(ctx context.Context, account, id 
 }
 
 func (r *DynamoDBRepository) ListAccountContacts(ctx context.Context, account string, limit int, after string) ([]model.AccountContact, string, error) {
+	items, next, err := r.queryContactPage(ctx, account, limit, after)
+	if err != nil {
+		return nil, "", err
+	}
+	contacts, errs := r.openContactPage(ctx, account, items)
+	for _, err := range errs {
+		if err != nil {
+			return nil, "", fmt.Errorf("decode contacts: %w", err)
+		}
+	}
+	return contacts, next, nil
+}
+
+// queryContactPage reads one bounded, strongly consistent page of an
+// account's contact rows and returns the contact ID to continue after.
+func (r *DynamoDBRepository) queryContactPage(ctx context.Context, account string, limit int, after string) ([]map[string]types.AttributeValue, string, error) {
 	key := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + account)).And(expression.Key("SK").BeginsWith(contactPrefix))
 	expr, err := expression.NewBuilder().WithKeyCondition(key).Build()
 	if err != nil {
@@ -158,25 +174,6 @@ func (r *DynamoDBRepository) ListAccountContacts(ctx context.Context, account st
 	if err != nil {
 		return nil, "", fmt.Errorf("query contacts: %w", err)
 	}
-	contacts := make([]model.AccountContact, len(out.Items))
-	errs := make([]error, len(out.Items))
-	sem := make(chan struct{}, contactReadConcurrency)
-	var wg sync.WaitGroup
-	for i, item := range out.Items {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, item map[string]types.AttributeValue) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			contacts[i], errs[i] = r.openContact(ctx, account, item)
-		}(i, item)
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, "", fmt.Errorf("decode contacts: %w", err)
-		}
-	}
 	next := ""
 	if len(out.LastEvaluatedKey) > 0 {
 		pk, pkOK := out.LastEvaluatedKey["PK"].(*types.AttributeValueMemberS)
@@ -186,7 +183,27 @@ func (r *DynamoDBRepository) ListAccountContacts(ctx context.Context, account st
 		}
 		next = strings.TrimPrefix(sk.Value, contactPrefix)
 	}
-	return contacts, next, nil
+	return out.Items, next, nil
+}
+
+// openContactPage opens each row with bounded concurrency; errs[i] belongs
+// to items[i].
+func (r *DynamoDBRepository) openContactPage(ctx context.Context, account string, items []map[string]types.AttributeValue) ([]model.AccountContact, []error) {
+	contacts := make([]model.AccountContact, len(items))
+	errs := make([]error, len(items))
+	sem := make(chan struct{}, contactReadConcurrency)
+	var wg sync.WaitGroup
+	for i, item := range items {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, item map[string]types.AttributeValue) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			contacts[i], errs[i] = r.openContact(ctx, account, item)
+		}(i, item)
+	}
+	wg.Wait()
+	return contacts, errs
 }
 
 // Query a bounded page from the canonical partition strongly consistently.
