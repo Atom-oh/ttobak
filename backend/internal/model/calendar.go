@@ -10,6 +10,8 @@ const (
 
 	// Account partition share rows: PK ACCOUNT#{accountId}.
 	PrefixCalendarShare = "CALSHARE#"
+	// User partition sharing overrides: PK USER#{userId}.
+	PrefixCalendarOverride = "CALOVERRIDE#"
 )
 
 type CalendarEvent struct {
@@ -24,7 +26,9 @@ type CalendarEvent struct {
 	StartDate string    `json:"startDate,omitempty"`
 	EndDate   string    `json:"endDate,omitempty"`
 	Location  string    `json:"location,omitempty"`
-	AccountID string    `json:"accountId,omitempty"`
+	// OrganizerDomain is the lowercase organizer email domain only.
+	OrganizerDomain string `json:"organizerDomain,omitempty"`
+	AccountID       string `json:"accountId,omitempty"`
 
 	ShareAccountID      string   `json:"shareAccountId,omitempty"`
 	ShareEvidence       []string `json:"shareEvidence,omitempty"`
@@ -44,7 +48,9 @@ type CalendarEventInput struct {
 	StartDate  string    `json:"startDate,omitempty"`
 	EndDate    string    `json:"endDate,omitempty"`
 	Location   string    `json:"location,omitempty"`
-	AccountID  string    `json:"accountId,omitempty"`
+	// OrganizerDomain is the lowercase organizer email domain only.
+	OrganizerDomain string `json:"organizerDomain,omitempty"`
+	AccountID       string `json:"accountId,omitempty"`
 
 	ShareAccountID      string   `json:"shareAccountId,omitempty"`
 	ShareEvidence       []string `json:"shareEvidence,omitempty"`
@@ -124,4 +130,8 @@ func CalendarBatchSortKey(sourceID, batchID string) string {
 // CalendarShareSortKey orders share rows by start time; rows of one meetingKey are contiguous.
 func CalendarShareSortKey(startsAt time.Time, meetingKey, userID string) string {
 	return PrefixCalendarShare + startsAt.UTC().Format("2006-01-02T15:04:05.000000000Z") + "#" + meetingKey + "#" + userID
+}
+
+func CalendarOverrideSortKey(sourceID, scopeKey string) string {
+	return PrefixCalendarOverride + sourceID + "#" + scopeKey
 }

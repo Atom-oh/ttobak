@@ -4,8 +4,9 @@
 
 import type { ToolExpectation } from './mcp-client.js';
 
-export type ConnectorId = 'calendar' | 'meetings' | 'specreq' | 'slack';
-export type TaskConnectorId = Exclude<ConnectorId, 'calendar'>;
+export type ConnectorId = 'calendar' | 'sfdc' | 'meetings' | 'specreq' | 'slack';
+/** Calendar and SFDC are sync connectors with their own run commands, not task-runner providers. */
+export type TaskConnectorId = Exclude<ConnectorId, 'calendar' | 'sfdc'>;
 
 export const TASK_CONNECTORS: readonly TaskConnectorId[] = ['meetings', 'specreq', 'slack'];
 

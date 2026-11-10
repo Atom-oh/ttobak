@@ -31,15 +31,15 @@ fi
 aws s3 sync "$export_dir/_next/static/" "s3://${S3_BUCKET}/_next/static/" \
   --cache-control "public,max-age=31536000,immutable" --only-show-errors --no-progress
 
-# Runtime config is infrastructure-owned. Mutable public assets refresh first.
+# Runtime config is infrastructure-owned; mac/ is owned by mac-app/scripts/release.sh. Mutable public assets refresh first.
 aws s3 sync "$export_dir/" "s3://${S3_BUCKET}/" \
-  --exclude "_next/static/*" --exclude "*.html" --exclude "*.txt" --exclude "config.json" \
+  --exclude "_next/static/*" --exclude "mac/*" --exclude "*.html" --exclude "*.txt" --exclude "config.json" \
   --cache-control "no-cache,max-age=0,must-revalidate" --only-show-errors --no-progress
 
 # cp forces upload and metadata replacement even when size/mtime are unchanged.
 # Publish HTML and route payloads only after their referenced chunks are present.
 aws s3 cp "$export_dir/" "s3://${S3_BUCKET}/" --recursive \
-  --exclude "*" --include "*.html" --include "*.txt" --exclude "config.json" \
+  --exclude "*" --include "*.html" --include "*.txt" --exclude "config.json" --exclude "mac/*" \
   --cache-control "no-cache,max-age=0,must-revalidate" --only-show-errors --no-progress
 
 aws cloudfront create-invalidation --distribution-id "$CF_DISTRIBUTION" --paths "/*" \

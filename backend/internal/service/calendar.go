@@ -24,6 +24,7 @@ import (
 const CalendarResponseMaxBytes = 14000
 const calendarMaxDuration = 93 * 24 * time.Hour
 
+var calendarOrganizerDomain = regexp.MustCompile(`^[a-z0-9.-]{1,253}$`)
 var calendarIdentifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 type CalendarStore interface {
@@ -205,6 +206,7 @@ func normalizeCalendarEvent(event model.CalendarEventInput) (model.CalendarEvent
 	if !validCalendarText(event.ExternalID, 512, true) || !validCalendarText(event.Title, 512, true) ||
 		!validCalendarText(event.Location, 256, false) || !validCalendarInterval(event.StartsAt, event.EndsAt) ||
 		!validCalendarText(event.TimeZone, 128, true) || event.TimeZone == "Local" ||
+		event.OrganizerDomain != "" && !calendarOrganizerDomain.MatchString(event.OrganizerDomain) ||
 		event.AccountID != "" && !calendarIdentifier.MatchString(event.AccountID) {
 		return model.CalendarEventInput{}, ErrInvalidInput
 	}
@@ -413,7 +415,7 @@ func (svc *CalendarService) decryptCalendarEvent(ctx context.Context, userID str
 	return model.CalendarEvent{
 		EventID: row.EventID, SourceID: row.SourceID, Provider: "outlook",
 		Title: input.Title, StartsAt: input.StartsAt, EndsAt: input.EndsAt, TimeZone: input.TimeZone,
-		IsAllDay: input.IsAllDay, StartDate: input.StartDate, EndDate: input.EndDate, Location: input.Location, AccountID: input.AccountID,
+		IsAllDay: input.IsAllDay, StartDate: input.StartDate, EndDate: input.EndDate, Location: input.Location, OrganizerDomain: input.OrganizerDomain, AccountID: input.AccountID,
 		// No share rows exist yet, so nothing is reported as shared: shareAccountId and its
 		// evidence are reported only once the account share is stored.
 		CandidateAccountIDs: input.CandidateAccountIDs, Private: input.Private, SharingMode: "auto",

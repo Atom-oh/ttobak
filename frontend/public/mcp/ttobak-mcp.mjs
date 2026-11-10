@@ -19429,7 +19429,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text3, msg) => text3 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -23441,6 +23441,7 @@ function eventInput(value) {
   exact(value, Object.keys(eventFields), requiredEventFields);
   for (const field of ["externalId", "title"]) if (!validText(value[field], 512)) invalid(field);
   if ("location" in value && !validText(value.location, 256, false)) invalid("location");
+  if ("organizerDomain" in value && (typeof value.organizerDomain !== "string" || !/^[a-z0-9.-]{1,253}$/.test(value.organizerDomain))) invalid("organizerDomain");
   if ("accountId" in value && (typeof value.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.accountId))) invalid("accountId");
   if (!validText(value.timeZone, 128) || value.timeZone === "Local" || /^[+-]/.test(value.timeZone)) invalid("timeZone");
   if ("isAllDay" in value && typeof value.isAllDay !== "boolean") invalid("isAllDay");
@@ -23469,7 +23470,7 @@ function eventInput(value) {
     }
   } else if ("startDate" in value || "endDate" in value) invalid("timed event dates");
   const payload = { ...value, startsAt: first.utc, endsAt: last.utc, isAllDay: value.isAllDay ?? false };
-  for (const field of ["location", "accountId", "startDate", "endDate"]) {
+  for (const field of ["location", "organizerDomain", "accountId", "startDate", "endDate"]) {
     if (payload[field] === "") delete payload[field];
   }
   const encoded = JSON.stringify(payload) + "\n";
@@ -23603,7 +23604,8 @@ var init_calendar = __esm({
       startDate: { type: "string", format: "date", description: "All-day local start date at midnight." },
       endDate: { type: "string", format: "date", description: "All-day exclusive local end date at midnight." },
       location: textSchema(256, false),
-      accountId: identifierSchema
+      accountId: identifierSchema,
+      organizerDomain: { type: "string", pattern: "^[a-z0-9.-]{1,253}$", description: "Lowercase organizer email domain only; never a name or local part." }
     };
     requiredEventFields = ["externalId", "title", "startsAt", "endsAt", "timeZone"];
     syncFields = {
@@ -23901,6 +23903,10 @@ function taskEventId(value) {
 function documentsPath(accountId) {
   return accountId === void 0 ? "/api/documents" : `/api/accounts/${identifier(accountId, "accountId")}/documents`;
 }
+function performanceSource(source) {
+  if (!PERFORMANCE_SOURCES.includes(source)) throw new Error("performance source is invalid");
+  return source;
+}
 function parseApiResponse(status, body) {
   if (status === 204) return {};
   let parsed;
@@ -23919,7 +23925,7 @@ function parseApiResponse(status, body) {
   }
   return parsed;
 }
-var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, ApiResponseError, TtobakApi;
+var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, ApiResponseError, TtobakApi;
 var init_api2 = __esm({
   "src/api.ts"() {
     "use strict";
@@ -23962,6 +23968,9 @@ var init_api2 = __esm({
       // SSH keypairs: id_rsa, id_ed25519(.pub)
     ];
     PROJECT_OPTIONAL_FIELDS = ["description", "sfdcOpptyId", "sfdcUrl", "stage"];
+    PERFORMANCE_SOURCES = ["sfdc-assignments", "sfdc-tasks"];
+    MAX_PERFORMANCE_API_BYTES = 14e3;
+    MAX_PERFORMANCE_MAPPINGS_BYTES = 2e6;
     ApiResponseError = class extends Error {
       constructor(message, status, code) {
         super(message);
@@ -23989,6 +23998,25 @@ var init_api2 = __esm({
           false,
           true
         );
+      }
+      /** Owner-only SA performance sync of one revisioned batch (local intake only). */
+      async syncPerformance(source, body) {
+        return this.request(
+          "POST",
+          `/api/performance/sources/${performanceSource(source)}/sync`,
+          body,
+          MAX_PERFORMANCE_API_BYTES,
+          false,
+          true
+        );
+      }
+      /** The owner's per-source performance sync revisions. */
+      async performanceSources() {
+        return this.request("GET", "/api/performance/sources", void 0, MAX_PERFORMANCE_API_BYTES, false, true);
+      }
+      /** The owner's SFDC assignments; local intake reads only the IDs. */
+      async performanceMappings() {
+        return this.request("GET", "/api/performance/mappings", void 0, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
       }
       async listCalendarEvents(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
@@ -25066,6 +25094,43 @@ var init_auth = __esm({
   }
 });
 
+// src/intake/batch.ts
+function batches(mutations) {
+  const result = [];
+  let current = [];
+  let bytes = 0;
+  for (const mutation of mutations) {
+    const size = Buffer.byteLength(JSON.stringify(mutation)) + 1;
+    if (current.length && (current.length >= MAX_BATCH || bytes + size > MAX_BATCH_BYTES)) {
+      result.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(mutation);
+    bytes += size;
+  }
+  if (current.length) result.push(current);
+  return result;
+}
+function deliveryFailure(error3) {
+  const message = error3 instanceof Error ? error3.message : "";
+  if (message.startsWith("TTOBAK_LOGIN_REQUIRED")) return { kind: "login" };
+  if (error3 instanceof ApiResponseError && error3.status === 401) return { kind: "login" };
+  if (error3 instanceof ApiResponseError && error3.status >= 400 && error3.status < 500) {
+    return { kind: "rejected", status: error3.status };
+  }
+  return { kind: "ambiguous" };
+}
+var MAX_BATCH, MAX_BATCH_BYTES;
+var init_batch = __esm({
+  "src/intake/batch.ts"() {
+    "use strict";
+    init_api2();
+    MAX_BATCH = 20;
+    MAX_BATCH_BYTES = 6e4;
+  }
+});
+
 // src/intake/errors.ts
 function intakeCode(error3) {
   if (error3 instanceof IntakeError) return error3.code;
@@ -25156,6 +25221,8 @@ function parseOutlookItems(payload) {
     if (typeof value.meetingId !== "string" || !value.meetingId || typeof value.start !== "string" || typeof value.end !== "string" || !optionalType2(value, "subject", "string") || !optionalType2(value, "location", "string") || !optionalType2(value, "isCanceled", "boolean") || !optionalType2(value, "isAllDay", "boolean") || !optionalType2(value, "sensitivity", "string")) {
       throw new IntakeError("PARSE_FAILED", "calendar item has unexpected field types");
     }
+    const organizer = value.organizer;
+    const email3 = organizer && typeof organizer === "object" && !Array.isArray(organizer) ? organizer.email : void 0;
     return {
       meetingId: value.meetingId,
       start: value.start,
@@ -25164,7 +25231,8 @@ function parseOutlookItems(payload) {
       ...typeof value.location === "string" ? { location: value.location } : {},
       ...typeof value.isCanceled === "boolean" ? { isCanceled: value.isCanceled } : {},
       ...typeof value.isAllDay === "boolean" ? { isAllDay: value.isAllDay } : {},
-      ...typeof value.sensitivity === "string" ? { sensitivity: value.sensitivity } : {}
+      ...typeof value.sensitivity === "string" ? { sensitivity: value.sensitivity } : {},
+      ...typeof email3 === "string" ? { organizer: { email: email3 } } : {}
     };
   });
 }
@@ -25186,6 +25254,13 @@ function sanitizeLocation(location) {
   }
   const joined = truncateBytes(parts.join("; "), 256).trim();
   return joined || void 0;
+}
+function organizerDomain(email3) {
+  if (typeof email3 !== "string") return void 0;
+  const at = email3.lastIndexOf("@");
+  if (at < 0) return void 0;
+  const domain2 = email3.slice(at + 1).trim().toLowerCase();
+  return /^[a-z0-9.-]{1,253}$/.test(domain2) ? domain2 : void 0;
 }
 function excludedSensitivity(item) {
   return item.sensitivity !== void 0 && /^(private|confidential)$/i.test(item.sensitivity.trim());
@@ -25217,6 +25292,8 @@ function toEvent(item, zone) {
   }
   const location = sanitizeLocation(item.location);
   if (location) event.location = location;
+  const domain2 = organizerDomain(item.organizer?.email);
+  if (domain2) event.organizerDomain = domain2;
   return event;
 }
 function fingerprint(event) {
@@ -25313,22 +25390,8 @@ function planCalendar(items, ledger, window, zone) {
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
   return { mutations, set: set2, remove, counts, preview };
 }
-function batches(mutations) {
-  const result = [];
-  let current = [];
-  let bytes = 0;
-  for (const mutation of mutations) {
-    const size = Buffer.byteLength(JSON.stringify(mutation)) + 1;
-    if (current.length && (current.length >= MAX_BATCH || bytes + size > MAX_BATCH_BYTES)) {
-      result.push(current);
-      current = [];
-      bytes = 0;
-    }
-    current.push(mutation);
-    bytes += size;
-  }
-  if (current.length) result.push(current);
-  return result;
+function batches2(mutations) {
+  return batches(mutations);
 }
 function pruneLedger(ledger, now) {
   const cutoff = now.getTime() - LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
@@ -25353,12 +25416,12 @@ async function serverRevision(api, sourceId) {
   let cursor;
   for (let page2 = 0; page2 < 1e3; page2++) {
     const result = await callCalendarTool("ttobak_calendar_sync_status", cursor ? { cursor } : {}, api);
-    const text2 = result.content?.[0]?.type === "text" ? result.content[0].text : "";
+    const text3 = result.content?.[0]?.type === "text" ? result.content[0].text : "";
     if (result.isError) {
-      if (/TTOBAK_LOGIN_REQUIRED/.test(text2)) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+      if (/TTOBAK_LOGIN_REQUIRED/.test(text3)) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
       throw new IntakeError("TTOBAK_UNAVAILABLE", "calendar source status could not be read");
     }
-    const value = JSON.parse(text2);
+    const value = JSON.parse(text3);
     const match = value.sources.find((source) => source.sourceId.toLowerCase() === sourceId.toLowerCase());
     if (match) return match.revision;
     if (value.nextCursor === null) return 0;
@@ -25373,14 +25436,13 @@ async function send(api, store, state) {
   try {
     receipt = await api.syncCalendarEvents(sourceId, body);
   } catch (error3) {
-    const message = error3 instanceof Error ? error3.message : "";
-    if (message.startsWith("TTOBAK_LOGIN_REQUIRED")) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
-    if (error3 instanceof ApiResponseError && error3.status === 401) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
-    if (error3 instanceof ApiResponseError && error3.status >= 400 && error3.status < 500) {
+    const failure2 = deliveryFailure(error3);
+    if (failure2.kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    if (failure2.kind === "rejected") {
       state.pending = null;
-      if (error3.status === 409) state.reconcileRequired = true;
+      if (failure2.status === 409) state.reconcileRequired = true;
       store.write(state, ...statePath(state));
-      throw new IntakeError(error3.status === 409 ? "TTOBAK_CONFLICT" : "TTOBAK_REJECTED", `HTTP ${error3.status}`);
+      throw new IntakeError(failure2.status === 409 ? "TTOBAK_CONFLICT" : "TTOBAK_REJECTED", `HTTP ${failure2.status}`);
     }
     throw new IntakeError("TTOBAK_UNAVAILABLE", "calendar sync unconfirmed; the identical batch will be retried");
   }
@@ -25424,7 +25486,7 @@ async function runCalendar(options) {
     );
   }
   const api = options.api;
-  const groups = batches(plan.mutations);
+  const groups = batches2(plan.mutations);
   if (!groups.length) groups.push([]);
   for (let index = 0; index < groups.length; index++) {
     const group = groups[index];
@@ -25452,19 +25514,17 @@ async function runCalendar(options) {
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, MAX_BATCH, MAX_BATCH_BYTES, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
-    init_api2();
     init_calendar();
+    init_batch();
     init_errors4();
     CALENDAR_TOOL = { name: "calendar_view", properties: ["start_date", "end_date"] };
     PAST_DAYS = 7;
     FUTURE_DAYS = 30;
     MAX_ITEMS = 5e3;
-    MAX_BATCH = 20;
-    MAX_BATCH_BYTES = 6e4;
     LEDGER_RETENTION_DAYS = 120;
     UNTITLED = "(\uC81C\uBAA9 \uC5C6\uC74C)";
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
@@ -25517,9 +25577,9 @@ var init_connectors = __esm({
 function isTable(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function parseToml(text2) {
-  if (text2.includes("\0")) throw new TomlSyntaxError(1);
-  return new Parser(text2.replace(/^﻿/, "")).parse();
+function parseToml(text3) {
+  if (text3.includes("\0")) throw new TomlSyntaxError(1);
+  return new Parser(text3.replace(/^﻿/, "")).parse();
 }
 var MAX_DEPTH, TomlSyntaxError, Parser;
 var init_toml = __esm({
@@ -25532,8 +25592,8 @@ var init_toml = __esm({
       }
     };
     Parser = class {
-      constructor(text2) {
-        this.text = text2;
+      constructor(text3) {
+        this.text = text3;
       }
       text;
       pos = 0;
@@ -25873,12 +25933,12 @@ function entry(host, value) {
   }
   return { transport: "stdio", disabled, command: expand(value.command, host), args, env, cwd };
 }
-function entries(host, text2) {
+function entries(host, text3) {
   let servers;
   try {
-    if (host === "codex") servers = parseToml(text2).mcp_servers;
+    if (host === "codex") servers = parseToml(text3).mcp_servers;
     else {
-      const parsed = JSON.parse(text2);
+      const parsed = JSON.parse(text3);
       servers = record16(parsed) ? parsed.mcpServers : void 0;
     }
   } catch {
@@ -25926,12 +25986,12 @@ function parsePathList(value) {
 function listHosts(home, pathDirs) {
   return HOSTS.map((host) => {
     const file2 = hostFileLabel(host);
-    let text2;
+    let text3;
     let parsed;
     try {
-      text2 = readHostFile(home, host);
-      if (text2 === null) return { host, file: file2, status: "missing", servers: [] };
-      parsed = entries(host, text2);
+      text3 = readHostFile(home, host);
+      if (text3 === null) return { host, file: file2, status: "missing", servers: [] };
+      parsed = entries(host, text3);
     } catch {
       return { host, file: file2, status: "invalid", servers: [] };
     }
@@ -25947,9 +26007,9 @@ function listHosts(home, pathDirs) {
 }
 function resolveServer(home, host, name, pathDirs) {
   if (!HOSTS.includes(host) || !NAME.test(name)) throw new IntakeError("INVALID_ARGUMENT", "host or server name");
-  const text2 = readHostFile(home, host);
-  if (text2 === null) throw new IntakeError("SERVER_NOT_CONFIGURED", `${host} has no configuration file`);
-  const value = entries(host, text2).get(name);
+  const text3 = readHostFile(home, host);
+  if (text3 === null) throw new IntakeError("SERVER_NOT_CONFIGURED", `${host} has no configuration file`);
+  const value = entries(host, text3).get(name);
   if (!value) throw new IntakeError("SERVER_NOT_CONFIGURED", `${name} is not configured in ${host}`);
   if (value.disabled) throw new IntakeError("SERVER_NOT_CONFIGURED", `${name} is disabled in ${host}`);
   if (value.transport === "remote") throw new IntakeError("SERVER_NOT_SUPPORTED", `${name} in ${host} is a remote server`);
@@ -25963,9 +26023,9 @@ function hostTtobakEndpoints(home, preferred) {
   for (const host of order) {
     let servers;
     try {
-      const text2 = readHostFile(home, host);
-      if (text2 === null) continue;
-      servers = entries(host, text2);
+      const text3 = readHostFile(home, host);
+      if (text3 === null) continue;
+      servers = entries(host, text3);
     } catch {
       continue;
     }
@@ -27366,9 +27426,9 @@ var init_stdio2 = __esm({
 function resultJson(result, tool) {
   if (result.structuredContent !== void 0) return result.structuredContent;
   const texts = (result.content ?? []).filter((item) => item.type === "text").map((item) => item.text);
-  for (const text2 of texts) {
-    const wrapped = /<untrusted_content_[A-Za-z0-9]+>\s*([\s\S]*?)\s*<\/untrusted_content_[A-Za-z0-9]+>/.exec(text2);
-    const candidate = (wrapped ? wrapped[1] : text2).trim();
+  for (const text3 of texts) {
+    const wrapped = /<untrusted_content_[A-Za-z0-9]+>\s*([\s\S]*?)\s*<\/untrusted_content_[A-Za-z0-9]+>/.exec(text3);
+    const candidate = (wrapped ? wrapped[1] : text3).trim();
     if (!candidate.startsWith("[") && !candidate.startsWith("{")) continue;
     try {
       return JSON.parse(candidate);
@@ -27466,8 +27526,8 @@ var init_mcp_client = __esm({
           throw new IntakeError("PARSE_FAILED", `${name} result exceeds ${MAX_RESULT_BYTES2} bytes`);
         }
         if (result.isError) {
-          const text2 = (result.content ?? []).map((item) => item.type === "text" ? item.text : "").join(" ");
-          if (AUTH_PATTERN.test(text2) || AUTH_PATTERN.test(this.stderr())) {
+          const text3 = (result.content ?? []).map((item) => item.type === "text" ? item.text : "").join(" ");
+          if (AUTH_PATTERN.test(text3) || AUTH_PATTERN.test(this.stderr())) {
             throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${name} reported an authentication failure`);
           }
           throw new ToolResultError(`${name} returned an error`);
@@ -27480,6 +27540,721 @@ var init_mcp_client = __esm({
         await this.transport.close().catch(() => {
         });
       }
+    };
+  }
+});
+
+// src/intake/sfdc.ts
+import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
+function record17(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function parseFailed(detail) {
+  return new IntakeError("PARSE_FAILED", detail);
+}
+function truncateBytes2(value, bytes) {
+  const clean = value.replace(/\0/g, "");
+  if (Buffer.byteLength(clean) <= bytes) return clean;
+  let result = "";
+  for (const character of clean) {
+    if (Buffer.byteLength(result + character) > bytes) break;
+    result += character;
+  }
+  return result;
+}
+function text(value, key, bytes) {
+  const item = value[key];
+  if (item === void 0 || item === null) return "";
+  if (typeof item !== "string") throw parseFailed(`${key} has an unexpected type`);
+  return truncateBytes2(item.trim(), bytes);
+}
+function validDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date4 = new Date(Date.UTC(year, month - 1, day));
+  return date4.getUTCFullYear() === year && date4.getUTCMonth() === month - 1 && date4.getUTCDate() === day;
+}
+function parsePage(payload, tool) {
+  const data = record17(payload) ? payload.data : void 0;
+  if (!record17(data) || !Array.isArray(data.resultRecords) || data.resultRecords.length > PAGE_LIMIT || typeof data.totalCount !== "string" || !/^\d{1,9}$/.test(data.totalCount) || typeof data.hasNextPage !== "boolean" || !(data.cursor === void 0 || data.cursor === null || typeof data.cursor === "string")) {
+    throw parseFailed(`${tool} returned an unexpected shape`);
+  }
+  const cursor = typeof data.cursor === "string" && data.cursor ? data.cursor : null;
+  if (data.hasNextPage && (cursor === null || cursor.length > 4096)) throw parseFailed(`${tool} page has no cursor`);
+  if (!data.resultRecords.every(record17)) throw parseFailed(`${tool} record is not an object`);
+  return {
+    records: data.resultRecords,
+    hasNextPage: data.hasNextPage,
+    cursor,
+    totalCount: Number(data.totalCount)
+  };
+}
+function parsePersonal(payload) {
+  const data = record17(payload) ? payload.data : void 0;
+  if (!record17(data) || typeof data.alias !== "string" || !ALIAS.test(data.alias) || typeof data.sfdcId !== "string" || !ID.test(data.sfdcId)) {
+    throw parseFailed(`${SFDC_PERSONAL_TOOL.name} returned an unexpected shape`);
+  }
+  return { alias: data.alias, sfdcId: data.sfdcId };
+}
+function registryRecord(value) {
+  if (typeof value.hierarchyId !== "string" || typeof value.hierarchyLevel !== "string") {
+    throw parseFailed("registry record has unexpected field types");
+  }
+  const version3 = SALES_HIERARCHY.exec(value.hierarchyId)?.[1];
+  if (value.hierarchyLevel !== "L14" || !version3) return null;
+  if (typeof value.nodeId !== "string" || !ID.test(value.nodeId)) throw parseFailed("registry record has an unexpected node");
+  return { version: version3, assignment: {
+    sfdcAccountId: value.nodeId,
+    name: text(value, "nodeName", NAME_BYTES),
+    role: text(value, "assignmentSource", LABEL_BYTES)
+  } };
+}
+function registryAssignments(records2) {
+  const sales = records2.map(registryRecord).filter((item) => item !== null);
+  const newest = sales.reduce((latest, item) => item.version > latest ? item.version : latest, "");
+  const result = /* @__PURE__ */ new Map();
+  for (const { version: version3, assignment } of sales) {
+    if (version3 === newest && !result.has(assignment.sfdcAccountId)) result.set(assignment.sfdcAccountId, assignment);
+  }
+  return [...result.values()];
+}
+function taskRecord(value) {
+  if (typeof value.id !== "string" || !ID.test(value.id)) throw parseFailed("task record has an unexpected id");
+  const accountId = value.accountId;
+  if (!(accountId === void 0 || accountId === null || typeof accountId === "string" && ID.test(accountId))) {
+    throw parseFailed("task record has an unexpected account");
+  }
+  if (!(value.account === void 0 || value.account === null || record17(value.account))) {
+    throw parseFailed("task record has an unexpected account");
+  }
+  const saDate = text(value, "sa_Activity_Date__c", LABEL_BYTES);
+  const activityDate = saDate || text(value, "activityDate", LABEL_BYTES);
+  if (!validDate(activityDate)) throw parseFailed("task record has an unexpected date");
+  return {
+    task: {
+      taskId: value.id,
+      sfdcAccountId: typeof accountId === "string" ? accountId : "",
+      activityDate,
+      type: text(value, "sa_Activity_Category__c", LABEL_BYTES) || text(value, "type", LABEL_BYTES),
+      subject: text(value, "subject", SUBJECT_BYTES),
+      status: text(value, "status", LABEL_BYTES)
+    },
+    accountName: record17(value.account) ? text(value.account, "name", NAME_BYTES) : ""
+  };
+}
+function taskWindow(now) {
+  const latest = new Date(now.getTime() + 14 * 60 * 60 * 1e3).toISOString().slice(0, 10);
+  return { earliest: `${now.getUTCFullYear() - 1}-01-01`, latest };
+}
+function queryLatest(now) {
+  const date4 = new Date(now.getTime());
+  date4.setUTCFullYear(date4.getUTCFullYear() + 1);
+  return date4.toISOString().slice(0, 10);
+}
+function fingerprint2(row) {
+  return createHash5("sha256").update(JSON.stringify(row)).digest("hex").slice(0, 32);
+}
+function planSource(rows, key, ledger) {
+  const mutations = [];
+  const set2 = [];
+  const remove = [];
+  let unchanged = 0;
+  for (const [id, row] of rows) {
+    const fp = fingerprint2(row);
+    if (Object.hasOwn(ledger, id) && ledger[id] === fp) {
+      unchanged++;
+      continue;
+    }
+    mutations.push(key === "assignment" ? { op: "upsert", assignment: row } : { op: "upsert", task: row });
+    set2.push([id, fp]);
+  }
+  for (const id of Object.keys(ledger)) {
+    if (rows.has(id)) continue;
+    mutations.push({ op: "remove", externalId: id });
+    remove.push(id);
+  }
+  const external = (mutation) => mutation.op === "remove" ? mutation.externalId : "assignment" in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId;
+  const rank = (mutation) => `${mutation.op === "remove" ? 0 : 1}${external(mutation)}`;
+  mutations.sort((first, second) => rank(first) < rank(second) ? -1 : rank(first) > rank(second) ? 1 : 0);
+  const plan = { mutations, set: Object.fromEntries(set2), remove };
+  return { plan, upserts: set2.length, removals: remove.length, unchanged };
+}
+function planSfdc(registry3, tasks, ledgers, now) {
+  const { earliest, latest } = taskWindow(now);
+  const taskRows = /* @__PURE__ */ new Map();
+  const activity = /* @__PURE__ */ new Map();
+  let skippedOutOfWindow = 0, unmapped = 0;
+  const seen = /* @__PURE__ */ new Set();
+  for (const { task, accountName } of [...tasks].sort((a, b) => a.task.taskId < b.task.taskId ? -1 : 1)) {
+    if (seen.has(task.taskId)) continue;
+    seen.add(task.taskId);
+    if (task.activityDate < earliest || task.activityDate > latest) {
+      skippedOutOfWindow++;
+      continue;
+    }
+    taskRows.set(task.taskId, task);
+    if (!task.sfdcAccountId) unmapped++;
+    else if (!activity.has(task.sfdcAccountId)) activity.set(task.sfdcAccountId, accountName);
+  }
+  const assignmentRows = /* @__PURE__ */ new Map();
+  for (const assignment of registry3) if (!assignmentRows.has(assignment.sfdcAccountId)) assignmentRows.set(assignment.sfdcAccountId, assignment);
+  const registryCount = assignmentRows.size;
+  for (const [id, name] of activity) {
+    if (!assignmentRows.has(id)) assignmentRows.set(id, { sfdcAccountId: id, name, role: ACTIVITY_ROLE });
+  }
+  const assignments = planSource(assignmentRows, "assignment", ledgers["sfdc-assignments"]);
+  const taskPlan = planSource(taskRows, "task", ledgers["sfdc-tasks"]);
+  return {
+    assignments: assignments.plan,
+    tasks: taskPlan.plan,
+    counts: {
+      assignments: {
+        fetched: assignmentRows.size,
+        registry: registryCount,
+        activity: assignmentRows.size - registryCount,
+        upserts: assignments.upserts,
+        removals: assignments.removals,
+        unchanged: assignments.unchanged
+      },
+      tasks: {
+        fetched: seen.size,
+        upserts: taskPlan.upserts,
+        removals: taskPlan.removals,
+        unchanged: taskPlan.unchanged,
+        skippedOutOfWindow,
+        unmapped
+      }
+    }
+  };
+}
+async function readAll(source, tool, args) {
+  const records2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  let after;
+  for (let index = 0; index < MAX_PAGES; index++) {
+    const page2 = parsePage(await source.call(tool, { ...args, limit: PAGE_LIMIT, ...after ? { after } : {} }), tool);
+    for (const { id } of page2.records) {
+      if (typeof id === "string" && seen.size === seen.add(id).size) throw parseFailed(`${tool} repeated a record ID`);
+    }
+    records2.push(...page2.records);
+    if (!page2.hasNextPage) {
+      if (records2.length < page2.totalCount) throw parseFailed(`${tool} result is incomplete`);
+      return records2;
+    }
+    if (page2.cursor === after) throw parseFailed(`${tool} cursor did not advance`);
+    after = page2.cursor;
+  }
+  throw parseFailed(`${tool} exceeded ${MAX_PAGES} pages`);
+}
+function statePath2(state) {
+  return ["sfdc", state.sourceId, state.scope, `${state.source}.json`];
+}
+function emptyState2(source, sourceId, scope) {
+  return { version: 1, source, sourceId, scope, revision: null, ledger: {}, reconcileRequired: false, pending: null };
+}
+function loadSfdcState(store, source, sourceId, scope) {
+  if (!SCOPE_PATTERN.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "sfdc state scope is invalid");
+  const state = store.read(...statePath2({ source, sourceId, scope }));
+  if (state === null) return emptyState2(source, sourceId, scope);
+  if (state.version !== 1 || state.source !== source || state.sourceId !== sourceId || state.scope !== scope || !record17(state.ledger)) {
+    throw new IntakeError("STORE_INVALID", "sfdc state does not match its source");
+  }
+  return state;
+}
+function validReceipt(receipt, body) {
+  if (!record17(receipt)) throw new Error("receipt");
+  const upserts = body.mutations.filter((mutation) => mutation.op === "upsert").length;
+  const revision = body.expectedRevision + 1;
+  if (receipt.revision !== revision || !Number.isSafeInteger(revision) || receipt.completed !== body.complete || receipt.upserted !== upserts || receipt.removed !== body.mutations.length - upserts) throw new Error("receipt");
+  return revision;
+}
+async function send2(api, store, state) {
+  const pending = state.pending;
+  let receipt;
+  try {
+    receipt = await api.syncPerformance(state.source, pending.body);
+  } catch (error3) {
+    const failure2 = deliveryFailure(error3);
+    if (failure2.kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    if (failure2.kind === "rejected") {
+      state.pending = null;
+      if (failure2.status === 409) state.reconcileRequired = true;
+      store.write(state, ...statePath2(state));
+      throw new IntakeError(failure2.status === 409 ? "TTOBAK_CONFLICT" : "TTOBAK_REJECTED", `${state.source} HTTP ${failure2.status}`);
+    }
+    throw new IntakeError("TTOBAK_UNAVAILABLE", `${state.source} sync unconfirmed; the identical batch will be retried`);
+  }
+  let revision;
+  try {
+    revision = validReceipt(receipt, pending.body);
+  } catch {
+    throw new IntakeError("TTOBAK_UNAVAILABLE", `${state.source} sync receipt invalid; the identical batch will be retried`);
+  }
+  const removed = new Set(pending.remove);
+  state.ledger = Object.fromEntries([
+    ...Object.entries(state.ledger).filter(([id]) => !removed.has(id)),
+    ...Object.entries(pending.set)
+  ]);
+  state.revision = revision;
+  state.pending = null;
+  store.write(state, ...statePath2(state));
+}
+async function serverRevisions(api) {
+  let value;
+  try {
+    value = await api.performanceSources();
+  } catch (error3) {
+    if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status could not be read");
+  }
+  const sources = record17(value) && Array.isArray(value.sources) ? value.sources : null;
+  if (!sources) throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
+  const result = { "sfdc-assignments": 0, "sfdc-tasks": 0 };
+  for (const item of sources) {
+    if (!record17(item) || typeof item.source !== "string" || !Number.isSafeInteger(item.revision) || item.revision < 0) {
+      throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
+    }
+    if (item.source === "sfdc-assignments" || item.source === "sfdc-tasks") result[item.source] = item.revision;
+  }
+  return result;
+}
+async function serverAssignmentIds(api) {
+  let value;
+  try {
+    value = await api.performanceMappings();
+  } catch (error3) {
+    if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments could not be read");
+  }
+  if (!record17(value) || !Array.isArray(value.items) || typeof value.truncated !== "boolean") {
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
+  }
+  const items = value.items;
+  if (value.truncated) throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `server holds more than ${items.length} assignments`);
+  return items.map((item) => {
+    if (!record17(item) || typeof item.sfdcAccountId !== "string" || !ID.test(item.sfdcAccountId)) {
+      throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
+    }
+    return item.sfdcAccountId;
+  });
+}
+async function deliver(api, store, state, plan) {
+  const groups = batches(plan.mutations);
+  if (!groups.length) groups.push([]);
+  for (let index = 0; index < groups.length; index++) {
+    const group = groups[index];
+    const ids = new Set(group.map((mutation) => mutation.op === "remove" ? mutation.externalId : "assignment" in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId));
+    state.pending = {
+      body: {
+        batchId: randomUUID4(),
+        expectedRevision: state.revision,
+        complete: index === groups.length - 1,
+        mutations: group
+      },
+      set: Object.fromEntries(Object.entries(plan.set).filter(([id]) => ids.has(id))),
+      remove: plan.remove.filter((id) => ids.has(id))
+    };
+    store.write(state, ...statePath2(state));
+    await send2(api, store, state);
+  }
+}
+async function runSfdc(options) {
+  const { store, source, sourceId, now, dryRun } = options;
+  if (!dryRun && !options.scope) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK account scope is required");
+  const states = SOURCES.map((name) => options.scope ? loadSfdcState(store, name, sourceId, options.scope) : emptyState2(name, sourceId, "0".repeat(32)));
+  if (!dryRun) {
+    if (!options.api) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK API is required");
+    if (states.some((state) => state.reconcileRequired) && !options.reconcile) {
+      throw new IntakeError("TTOBAK_CONFLICT", "source revision conflict; run with --reconcile");
+    }
+    for (const state of states) if (state.pending) await send2(options.api, store, state);
+    let remote;
+    for (const state of states) {
+      if (options.reconcile || state.revision === null) {
+        remote ??= await serverRevisions(options.api);
+        state.revision = remote[state.source];
+        if (options.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map((id) => [id, ""]));
+        if (state.source === "sfdc-assignments") {
+          for (const id of await serverAssignmentIds(options.api)) if (!Object.hasOwn(state.ledger, id)) state.ledger[id] = "";
+        }
+        state.reconcileRequired = false;
+        store.write(state, ...statePath2(state));
+      }
+    }
+  }
+  const personal = parsePersonal(await source.call(SFDC_PERSONAL_TOOL.name, {}));
+  const registry3 = registryAssignments(await readAll(
+    source,
+    SFDC_REGISTRY_TOOL.name,
+    { employeeIdentifier: personal.alias, hierarchyLevel: "L14" }
+  ));
+  const tasks = (await readAll(source, SFDC_TASKS_TOOL.name, { condition: { operator: "AND", conditions: [
+    { field: "ownerId", operator: "EXACT_MATCH", value: personal.sfdcId },
+    { field: "activityDate", operator: "GTE", value: taskWindow(now).earliest },
+    { field: "activityDate", operator: "LTE", value: queryLatest(now) }
+  ] } })).map(taskRecord);
+  const [assignmentState, taskState] = states;
+  const plan = planSfdc(registry3, tasks, { "sfdc-assignments": assignmentState.ledger, "sfdc-tasks": taskState.ledger }, now);
+  const revisions = () => ({ "sfdc-assignments": assignmentState.revision, "sfdc-tasks": taskState.revision });
+  if (dryRun) return { counts: plan.counts, revisions: revisions() };
+  if (plan.counts.assignments.fetched > MAX_ASSIGNMENTS) {
+    throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `${plan.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
+  }
+  await deliver(options.api, store, assignmentState, plan.assignments);
+  await deliver(options.api, store, taskState, plan.tasks);
+  return { counts: plan.counts, revisions: revisions() };
+}
+var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT, MAX_ASSIGNMENTS, MAX_PAGES, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
+var init_sfdc = __esm({
+  "src/intake/sfdc.ts"() {
+    "use strict";
+    init_batch();
+    init_calendar2();
+    init_errors4();
+    SFDC_PERSONAL_TOOL = { name: "get_my_personal_details", properties: [] };
+    SFDC_REGISTRY_TOOL = {
+      name: "get_registry_assignments",
+      properties: ["employeeIdentifier", "hierarchyLevel", "limit", "after"]
+    };
+    SFDC_TASKS_TOOL = { name: "search_tasks", properties: ["condition", "limit", "after"] };
+    SFDC_TOOLS = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];
+    ACTIVITY_ROLE = "activity";
+    SOURCES = ["sfdc-assignments", "sfdc-tasks"];
+    PAGE_LIMIT = 500;
+    MAX_ASSIGNMENTS = 500;
+    MAX_PAGES = 20;
+    ID = /^[A-Za-z0-9_-]{1,64}$/;
+    ALIAS = /^[A-Za-z0-9._-]{1,64}$/;
+    NAME_BYTES = 200;
+    SUBJECT_BYTES = 300;
+    LABEL_BYTES = 64;
+    SALES_HIERARCHY = /^sales\/(\d{4}-\d{2}-\d{2})$/;
+  }
+});
+
+// src/intake/ack-ledger.ts
+function ledgerPath(scope) {
+  if (!SCOPE_PATTERN2.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "ack ledger scope is invalid");
+  return ["specreq", scope, "ack-ledger.json"];
+}
+function requireRequestId(requestId) {
+  if (typeof requestId !== "string" || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  }
+  return requestId.toLowerCase();
+}
+function validEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry2 = value;
+  return typeof entry2.eventId === "string" && EVENT_ID_PATTERN.test(entry2.eventId) && typeof entry2.attemptedAt === "string" && Number.isFinite(Date.parse(entry2.attemptedAt)) && OUTCOMES.includes(entry2.outcome) && typeof entry2.cloudSynced === "boolean";
+}
+function loadAckLedger(store, scope) {
+  const raw = store.read(...ledgerPath(scope));
+  if (raw === null) return { version: 1, entries: {} };
+  const ledger = raw;
+  if (!raw || typeof raw !== "object" || ledger.version !== 1 || !ledger.entries || typeof ledger.entries !== "object" || Array.isArray(ledger.entries)) {
+    throw new IntakeError("STORE_INVALID", "ack ledger is malformed");
+  }
+  for (const [requestId, entry2] of Object.entries(ledger.entries)) {
+    if (!LEDGER_KEY_PATTERN.test(requestId) || !validEntry(entry2)) {
+      throw new IntakeError("STORE_INVALID", "ack ledger entry is malformed");
+    }
+  }
+  return ledger;
+}
+function save(store, scope, ledger) {
+  store.write(ledger, ...ledgerPath(scope));
+}
+function beginAck(store, scope, requestId, eventId, now = /* @__PURE__ */ new Date()) {
+  const key = requireRequestId(requestId);
+  if (typeof eventId !== "string" || !EVENT_ID_PATTERN.test(eventId)) {
+    throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
+  }
+  const ledger = loadAckLedger(store, scope);
+  if (Object.hasOwn(ledger.entries, key)) {
+    throw new IntakeError("STORE_INVALID", "an acknowledge attempt is already recorded for this request");
+  }
+  ledger.entries[key] = { eventId, attemptedAt: now.toISOString(), outcome: "pending", cloudSynced: false };
+  save(store, scope, ledger);
+}
+function ackEntry(store, scope, requestId) {
+  const key = requireRequestId(requestId);
+  const ledger = loadAckLedger(store, scope);
+  return Object.hasOwn(ledger.entries, key) ? ledger.entries[key] : null;
+}
+function update(store, scope, requestId, change) {
+  const key = requireRequestId(requestId);
+  const ledger = loadAckLedger(store, scope);
+  if (!Object.hasOwn(ledger.entries, key)) {
+    throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
+  }
+  ledger.entries[key] = change(ledger.entries[key]);
+  save(store, scope, ledger);
+}
+function finishAck(store, scope, requestId, outcome) {
+  if (!["ok", "rejected", "unknown"].includes(outcome)) {
+    throw new IntakeError("INVALID_ARGUMENT", "ack outcome is invalid");
+  }
+  update(store, scope, requestId, (entry2) => ({
+    ...entry2,
+    outcome,
+    cloudSynced: entry2.outcome === outcome ? entry2.cloudSynced : false
+  }));
+}
+function markSynced(store, scope, requestId) {
+  update(store, scope, requestId, (entry2) => ({ ...entry2, cloudSynced: true }));
+}
+var REQUEST_ID_PATTERN, SCOPE_PATTERN2, EVENT_ID_PATTERN, OUTCOMES, LEDGER_KEY_PATTERN;
+var init_ack_ledger = __esm({
+  "src/intake/ack-ledger.ts"() {
+    "use strict";
+    init_errors4();
+    REQUEST_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    SCOPE_PATTERN2 = /^[0-9a-f]{32}$/;
+    EVENT_ID_PATTERN = /^[0-9a-f]{64}$/;
+    OUTCOMES = ["pending", "ok", "rejected", "unknown"];
+    LEDGER_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  }
+});
+
+// src/intake/specreq.ts
+function clipUtf8(value, maxBytes) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  let out = "";
+  let bytes = 0;
+  for (const character of value) {
+    const size = Buffer.byteLength(character);
+    if (bytes + size > maxBytes) break;
+    out += character;
+    bytes += size;
+  }
+  return out;
+}
+function parseSummary(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  if (typeof r.requestId !== "string" || !REQUEST_ID_PATTERN.test(r.requestId)) return null;
+  if (!STATES.includes(r.stateId)) return null;
+  if (Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length > MAX_RANGES) return null;
+  const ranges = Array.isArray(r.meetingDateRanges) ? r.meetingDateRanges.filter((range) => typeof range === "string") : [];
+  return {
+    requestId: r.requestId.toLowerCase(),
+    title: typeof r.title === "string" ? clipUtf8(r.title, TITLE_MAX_BYTES) : "",
+    stateId: r.stateId,
+    requesterLogin: login(r.requesterLogin),
+    resolverLogin: login(r.resolverLogin),
+    salesforceId: typeof r.salesforceId === "string" ? r.salesforceId.trim() : "",
+    meetingDateRanges: ranges,
+    createdAt: typeof r.createdAt === "number" && Number.isFinite(r.createdAt) ? r.createdAt : Number.NaN
+  };
+}
+function envelope(payload, tool) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
+  }
+  const p = payload;
+  if (p.success !== true || !p.data || typeof p.data !== "object" || Array.isArray(p.data)) {
+    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
+  }
+  return p.data;
+}
+function parseSearch(payload) {
+  const data = envelope(payload, "search_requests_advanced");
+  if (!Array.isArray(data.results) || data.results.length > SEARCH_PAGE_SIZE) {
+    throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned an unexpected shape");
+  }
+  const requests = data.results.map(parseSummary).filter((item) => item !== null);
+  const dropped = data.results.length - requests.length;
+  if (dropped > 0) throw new IntakeError("PARSE_FAILED", `search_requests_advanced returned ${dropped} malformed records`);
+  const cursor = data.lastEvaluatedIndex;
+  let next = null;
+  if (typeof cursor === "string" && cursor) next = cursor;
+  else if (Array.isArray(cursor) ? cursor.length > 0 : cursor && typeof cursor === "object") next = JSON.stringify(cursor);
+  return { requests, next };
+}
+function parseRequest(payload) {
+  const summary = parseSummary(envelope(payload, "get_request"));
+  if (!summary) throw new IntakeError("PARSE_FAILED", "get_request returned an unexpected shape");
+  return summary;
+}
+async function searchRequests(session, filter) {
+  const requests = [];
+  let next = null;
+  for (let page2 = 0; page2 < SEARCH_MAX_PAGES; page2++) {
+    const result = await session.call("search_requests_advanced", {
+      ...filter,
+      pageSize: SEARCH_PAGE_SIZE,
+      fields_json: JSON.stringify(SEARCH_FIELDS),
+      ...next ? { lastEvaluatedIndex_json: next } : {}
+    });
+    const parsed = parseSearch(resultJson(result, "search_requests_advanced"));
+    if (parsed.requests.length === SEARCH_PAGE_SIZE && !parsed.next) {
+      throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned a full page without a cursor");
+    }
+    requests.push(...parsed.requests);
+    next = parsed.next;
+    if (!next) return requests;
+  }
+  throw new IntakeError("PARSE_FAILED", `search_requests_advanced exceeds ${SEARCH_MAX_PAGES} pages`);
+}
+function realDate(value) {
+  const time3 = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(time3) && new Date(time3).toISOString().slice(0, 10) === value;
+}
+function localDate2(instant2, zone) {
+  const time3 = Date.parse(instant2);
+  if (!Number.isFinite(time3)) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(time3));
+    const part = (type) => parts.find((item) => item.type === type)?.value ?? "";
+    const date4 = `${part("year")}-${part("month")}-${part("day")}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(date4) ? date4 : null;
+  } catch {
+    return null;
+  }
+}
+function meetingInRanges(startsAt, zone, ranges) {
+  const date4 = localDate2(startsAt, zone);
+  if (!date4 || !Array.isArray(ranges)) return false;
+  return ranges.some((range) => {
+    if (typeof range !== "string") return false;
+    const match = DATE_RANGE.exec(range);
+    if (!match || !realDate(match[1]) || !realDate(match[2]) || match[1] > match[2]) return false;
+    return match[1] <= date4 && date4 <= match[2];
+  });
+}
+function matches(request2, task, opptyAccounts, rule) {
+  if (!task.accountId || !request2.salesforceId || !opptyAccounts.get(request2.salesforceId)?.has(task.accountId)) return false;
+  if (!meetingInRanges(task.occurrenceStartsAt, rule.zone, request2.meetingDateRanges)) return false;
+  const me = login(rule.me);
+  if (!me) return false;
+  if (rule.path === "mine") {
+    if (login(request2.requesterLogin) !== me) return false;
+    const created = Date.parse(task.createdAt);
+    const ends = Date.parse(task.occurrenceEndsAt);
+    return Number.isFinite(created) && Number.isFinite(ends) && request2.createdAt >= created && request2.createdAt < ends + 7 * DAY_MS;
+  }
+  const counterpart = login(rule.counterpartLogin(task));
+  return counterpart !== "" && login(request2.requesterLogin) === counterpart && login(request2.resolverLogin) === me;
+}
+function linkRequests(requests, tasks, opptyAccounts, rule) {
+  const own = tasks.filter((task) => task.path === rule.path);
+  const linkedTo = /* @__PURE__ */ new Map();
+  for (const task of tasks) {
+    if (!task.specReqId) continue;
+    const id = task.specReqId.toLowerCase();
+    linkedTo.set(id, [...linkedTo.get(id) ?? [], task]);
+  }
+  const pairs = [];
+  for (const request2 of requests) {
+    const linked = linkedTo.get(request2.requestId.toLowerCase());
+    const candidates = !linked ? own.filter((task) => !task.specReqId && UNLINKED_STATES[rule.path].includes(task.state)) : linked.length === 1 && linked[0].path === rule.path && LINKED_STATES[rule.path].includes(linked[0].state) ? linked : [];
+    for (const task of candidates) {
+      if (matches(request2, task, opptyAccounts, rule)) pairs.push([request2.requestId, task.eventId]);
+    }
+  }
+  const count = (values) => values.reduce(
+    (map2, value) => map2.set(value, (map2.get(value) ?? 0) + 1),
+    /* @__PURE__ */ new Map()
+  );
+  const perRequest = count(pairs.map(([requestId]) => requestId));
+  const perTask = count(pairs.map(([, eventId]) => eventId));
+  const out = /* @__PURE__ */ new Map();
+  for (const [requestId, eventId] of pairs) {
+    if (perRequest.get(requestId) === 1 && perTask.get(eventId) === 1) out.set(requestId, eventId);
+  }
+  return out;
+}
+async function resolveMe(session) {
+  const payload = resultJson(await session.call("check_user_is_tam", {}), "check_user_is_tam");
+  const data = payload && typeof payload === "object" && payload.success !== false ? payload.data : null;
+  const employee = data && typeof data === "object" ? login(data.employee_login) : "";
+  if (!LOGIN_PATTERN.test(employee)) throw new IntakeError("IDENTITY_MISMATCH", "SpecReq returned no valid login");
+  return employee;
+}
+async function readRequest(session, requestId) {
+  const request2 = parseRequest(resultJson(await session.call("get_request", { request_id: requestId }), "get_request"));
+  if (request2.requestId !== requestId) throw new IntakeError("PARSE_FAILED", "get_request returned another request");
+  return request2;
+}
+function ackSucceeded(result) {
+  let payload;
+  try {
+    payload = resultJson(result, "acknowledge_request");
+  } catch {
+    return "unknown";
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "unknown";
+  const success2 = payload.success;
+  return success2 === true ? "ok" : success2 === false ? "rejected" : "unknown";
+}
+async function acknowledgeOnce(session, ledger, request2, me) {
+  const requestId = typeof request2.requestId === "string" ? request2.requestId.toLowerCase() : "";
+  if (!REQUEST_ID_PATTERN.test(requestId)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  const now = () => ledger.now?.() ?? /* @__PURE__ */ new Date();
+  const existing = ackEntry(ledger.store, ledger.scope, requestId);
+  if (existing) return existing.outcome === "pending" ? "unknown" : existing.outcome;
+  const myLogin = login(me);
+  const current = await readRequest(session, requestId);
+  if (!myLogin || current.stateId !== "NEXT_UP" || current.resolverLogin !== myLogin) return "not_eligible";
+  beginAck(ledger.store, ledger.scope, requestId, request2.eventId, now());
+  let outcome;
+  try {
+    outcome = ackSucceeded(await session.call("acknowledge_request", { request_id: requestId }));
+  } catch (error3) {
+    outcome = error3 instanceof ToolResultError ? "rejected" : "unknown";
+  }
+  finishAck(ledger.store, ledger.scope, requestId, outcome);
+  return outcome;
+}
+async function resolveAck(session, ledger, requestId, me) {
+  const id = typeof requestId === "string" ? requestId.toLowerCase() : "";
+  if (!REQUEST_ID_PATTERN.test(id)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  const entry2 = ackEntry(ledger.store, ledger.scope, id);
+  if (!entry2) throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
+  if (entry2.outcome === "ok") return { state: "acked" };
+  const current = await readRequest(session, id);
+  const myLogin = login(me);
+  if (myLogin && current.resolverLogin === myLogin && ACK_CONFIRMED.includes(current.stateId)) {
+    finishAck(ledger.store, ledger.scope, id, "ok");
+    return { state: "acked" };
+  }
+  return { state: "ack_failed", failureCode: entry2.outcome === "rejected" ? "ACK_REJECTED" : "ACK_UNCONFIRMED" };
+}
+var SEARCH_FIELDS, SEARCH_PAGE_SIZE, SEARCH_MAX_PAGES, STATES, TITLE_MAX_BYTES, MAX_RANGES, LOGIN_PATTERN, ACK_CONFIRMED, DAY_MS, login, DATE_RANGE, UNLINKED_STATES, LINKED_STATES;
+var init_specreq = __esm({
+  "src/intake/specreq.ts"() {
+    "use strict";
+    init_mcp_client();
+    init_errors4();
+    init_ack_ledger();
+    SEARCH_FIELDS = [
+      "requestId",
+      "title",
+      "stateId",
+      "requesterLogin",
+      "resolverLogin",
+      "salesforceId",
+      "meetingDateRanges",
+      "createdAt"
+    ];
+    SEARCH_PAGE_SIZE = 50;
+    SEARCH_MAX_PAGES = 4;
+    STATES = ["PENDING", "NEXT_UP", "WORKING", "WAITING", "COMPLETED", "CANCELLED"];
+    TITLE_MAX_BYTES = 512;
+    MAX_RANGES = 50;
+    LOGIN_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+    ACK_CONFIRMED = ["WORKING", "WAITING", "COMPLETED"];
+    DAY_MS = 24 * 60 * 60 * 1e3;
+    login = (value) => typeof value === "string" ? value.trim().toLowerCase() : "";
+    DATE_RANGE = /^(\d{4}-\d{2}-\d{2}) - (\d{4}-\d{2}-\d{2})$/;
+    UNLINKED_STATES = {
+      mine: ["issue_needed"],
+      theirs: ["request_needed", "requested"]
+    };
+    LINKED_STATES = {
+      mine: [],
+      theirs: ["request_needed", "requested", "ack_failed"]
     };
   }
 });
@@ -27811,105 +28586,22 @@ var init_attendees = __esm({
   }
 });
 
-// src/intake/ack-ledger.ts
-function ledgerPath(scope) {
-  if (!SCOPE_PATTERN2.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "ack ledger scope is invalid");
-  return ["specreq", scope, "ack-ledger.json"];
-}
-function requireRequestId(requestId) {
-  if (typeof requestId !== "string" || !REQUEST_ID_PATTERN.test(requestId)) {
-    throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
-  }
-  return requestId.toLowerCase();
-}
-function validEntry(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry2 = value;
-  return typeof entry2.eventId === "string" && EVENT_ID_PATTERN.test(entry2.eventId) && typeof entry2.attemptedAt === "string" && Number.isFinite(Date.parse(entry2.attemptedAt)) && OUTCOMES.includes(entry2.outcome) && typeof entry2.cloudSynced === "boolean";
-}
-function loadAckLedger(store, scope) {
-  const raw = store.read(...ledgerPath(scope));
-  if (raw === null) return { version: 1, entries: {} };
-  const ledger = raw;
-  if (!raw || typeof raw !== "object" || ledger.version !== 1 || !ledger.entries || typeof ledger.entries !== "object" || Array.isArray(ledger.entries)) {
-    throw new IntakeError("STORE_INVALID", "ack ledger is malformed");
-  }
-  for (const [requestId, entry2] of Object.entries(ledger.entries)) {
-    if (!LEDGER_KEY_PATTERN.test(requestId) || !validEntry(entry2)) {
-      throw new IntakeError("STORE_INVALID", "ack ledger entry is malformed");
-    }
-  }
-  return ledger;
-}
-function save(store, scope, ledger) {
-  store.write(ledger, ...ledgerPath(scope));
-}
-function beginAck(store, scope, requestId, eventId, now = /* @__PURE__ */ new Date()) {
-  const key = requireRequestId(requestId);
-  if (typeof eventId !== "string" || !EVENT_ID_PATTERN.test(eventId)) {
-    throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
-  }
-  const ledger = loadAckLedger(store, scope);
-  if (Object.hasOwn(ledger.entries, key)) {
-    throw new IntakeError("STORE_INVALID", "an acknowledge attempt is already recorded for this request");
-  }
-  ledger.entries[key] = { eventId, attemptedAt: now.toISOString(), outcome: "pending", cloudSynced: false };
-  save(store, scope, ledger);
-}
-function ackEntry(store, scope, requestId) {
-  const key = requireRequestId(requestId);
-  const ledger = loadAckLedger(store, scope);
-  return Object.hasOwn(ledger.entries, key) ? ledger.entries[key] : null;
-}
-function update(store, scope, requestId, change) {
-  const key = requireRequestId(requestId);
-  const ledger = loadAckLedger(store, scope);
-  if (!Object.hasOwn(ledger.entries, key)) {
-    throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
-  }
-  ledger.entries[key] = change(ledger.entries[key]);
-  save(store, scope, ledger);
-}
-function finishAck(store, scope, requestId, outcome) {
-  if (!["ok", "rejected", "unknown"].includes(outcome)) {
-    throw new IntakeError("INVALID_ARGUMENT", "ack outcome is invalid");
-  }
-  update(store, scope, requestId, (entry2) => ({
-    ...entry2,
-    outcome,
-    cloudSynced: entry2.outcome === outcome ? entry2.cloudSynced : false
-  }));
-}
-function markSynced(store, scope, requestId) {
-  update(store, scope, requestId, (entry2) => ({ ...entry2, cloudSynced: true }));
-}
-var REQUEST_ID_PATTERN, SCOPE_PATTERN2, EVENT_ID_PATTERN, OUTCOMES, LEDGER_KEY_PATTERN;
-var init_ack_ledger = __esm({
-  "src/intake/ack-ledger.ts"() {
-    "use strict";
-    init_errors4();
-    REQUEST_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    SCOPE_PATTERN2 = /^[0-9a-f]{32}$/;
-    EVENT_ID_PATTERN = /^[0-9a-f]{64}$/;
-    OUTCOMES = ["pending", "ok", "rejected", "unknown"];
-    LEDGER_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-  }
-});
-
 // src/intake/classify.ts
 function classifyOccurrence(input) {
   if (input.isPrivate) return { kind: "skip" };
-  const me = input.me.trim().toLowerCase();
-  const attendees = [...new Set(input.attendees.map((a) => a.trim().toLowerCase()))].filter((a) => a && a !== me);
+  const myEmails = new Set(input.me.emails.map((e) => e.trim().toLowerCase()).filter(Boolean));
+  const myUserId = input.me.userId;
+  const isMe = (m) => myUserId !== "" && m.userId === myUserId;
+  const attendees = [...new Set(input.attendees.map((a) => a.trim().toLowerCase()))].filter((a) => a && !myEmails.has(a));
   if (!attendees.some((a) => !a.endsWith("@amazon.com"))) return { kind: "skip" };
   if (!input.accountId) {
     return attendees.some((a) => input.anyAccountSaEmails.has(a)) ? { kind: "task", state: "needs_account" } : { kind: "skip" };
   }
   const present = new Set(attendees);
   const members = input.members.map((m) => ({ ...m, email: m.email.trim().toLowerCase() }));
-  const counterparts = members.filter((m) => SA_ROLES.has(m.role) && m.userId !== "" && m.email.endsWith("@amazon.com") && present.has(m.email));
+  const counterparts = members.filter((m) => SA_ROLES.has(m.role) && m.userId !== "" && !isMe(m) && m.email.endsWith("@amazon.com") && present.has(m.email));
   if (counterparts.length === 0) return { kind: "skip" };
-  const mine = members.find((m) => m.email === me);
+  const mine = members.find(isMe);
   if (mine?.role === "SA") return { kind: "task", state: "issue_needed", path: "mine" };
   if (counterparts.length === 1) {
     return { kind: "task", state: "request_needed", path: "theirs", counterpartUserId: counterparts[0].userId };
@@ -27925,10 +28617,10 @@ var init_classify = __esm({
 });
 
 // src/intake/event-id.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 function calendarEventId(sourceId, externalId) {
   const encoded = JSON.stringify([sourceId, externalId]).replace(/[<>&\u2028\u2029]/g, (character) => "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0"));
-  return createHash5("sha256").update(encoded, "utf8").digest("hex");
+  return createHash6("sha256").update(encoded, "utf8").digest("hex");
 }
 var init_event_id = __esm({
   "src/intake/event-id.ts"() {
@@ -27968,10 +28660,10 @@ function enqueueNotice(store, scope, notice, now = /* @__PURE__ */ new Date()) {
   return true;
 }
 function compactQueue(store, now) {
-  const text2 = store.readText(QUEUE_FILE);
-  if (text2 === null) return;
+  const text3 = store.readText(QUEUE_FILE);
+  if (text3 === null) return;
   const cutoff = now.getTime() - QUEUE_RETENTION_MS;
-  const kept = text2.split("\n").filter((line) => {
+  const kept = text3.split("\n").filter((line) => {
     if (!line) return false;
     try {
       const created = Date.parse(JSON.parse(line).createdAt ?? "");
@@ -28013,8 +28705,8 @@ var init_notify = __esm({
 
 // src/intake/slack-draft.ts
 function clip2(value, maxChars) {
-  const text2 = typeof value === "string" ? value.replace(/[\r\n]+/g, " ").trim() : "";
-  return Array.from(text2).slice(0, maxChars).join("");
+  const text3 = typeof value === "string" ? value.replace(/[\r\n]+/g, " ").trim() : "";
+  return Array.from(text3).slice(0, maxChars).join("");
 }
 function renderSlackRequest(fields2) {
   const values = {
@@ -28023,8 +28715,8 @@ function renderSlackRequest(fields2) {
     when: escapeSlack(clip2(fields2.localDateTime, 64)),
     me: escapeSlack(clip2(fields2.myName, 100))
   };
-  const text2 = SLACK_REQUEST_TEMPLATE.replace(/\{(account|title|when|me)\}/g, (_match, key) => values[key]);
-  return Array.from(text2).slice(0, SLACK_TEXT_MAX_CHARS).join("");
+  const text3 = SLACK_REQUEST_TEMPLATE.replace(/\{(account|title|when|me)\}/g, (_match, key) => values[key]);
+  return Array.from(text3).slice(0, SLACK_TEXT_MAX_CHARS).join("");
 }
 function draftChannels(draft) {
   if (!isRecord(draft)) return [];
@@ -28041,7 +28733,7 @@ function matchUser(payload, email3) {
   const id = typeof user.id === "string" ? user.id : "";
   return USER_ID.test(id) && user.isBot === false && user.deleted === false ? id : "";
 }
-async function prepareDraft(session, counterpartEmail, text2, options = {}) {
+async function prepareDraft(session, counterpartEmail, text3, options = {}) {
   try {
     const userId = matchUser(
       resultJson(await session.call("lookup_user", { query: counterpartEmail }), "lookup_user"),
@@ -28061,7 +28753,7 @@ async function prepareDraft(session, counterpartEmail, text2, options = {}) {
       const channels = draftChannels(draft);
       if (channels.length === 0 || channels.includes(channel)) return "kept_existing";
     }
-    const posted = await session.call("post_draft", { channel, text: text2 });
+    const posted = await session.call("post_draft", { channel, text: text3 });
     try {
       const reply = resultJson(posted, "post_draft");
       if (isRecord(reply) && reply.replacedExisting === true) options.onReplaced?.(1);
@@ -28085,7 +28777,7 @@ function draftEntry(store, scope, eventId) {
   if (!isRecord(entry2) || !ENTRY_OUTCOMES.includes(entry2.outcome)) return { at: "", outcome: "failed" };
   return entry2;
 }
-async function draftOnce(store, scope, eventId, session, counterpartEmail, text2, options = {}) {
+async function draftOnce(store, scope, eventId, session, counterpartEmail, text3, options = {}) {
   if (!EVENT_ID_PATTERN3.test(eventId)) throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
   const existing = draftEntry(store, scope, eventId);
   if (existing) return existing.outcome === "attempting" ? "failed" : existing.outcome;
@@ -28096,7 +28788,7 @@ async function draftOnce(store, scope, eventId, session, counterpartEmail, text2
     store.write(ledger, ...ledgerPath2(scope));
   };
   save2({ at: now().toISOString(), outcome: "attempting" });
-  const outcome = await prepareDraft(session, counterpartEmail, text2, options);
+  const outcome = await prepareDraft(session, counterpartEmail, text3, options);
   save2({ at: now().toISOString(), outcome });
   return outcome;
 }
@@ -28116,253 +28808,6 @@ var init_slack_draft = __esm({
     ENTRY_OUTCOMES = ["attempting", "drafted", "kept_existing", "no_user", "failed"];
     SCOPE_PATTERN4 = /^[0-9a-f]{32}$/;
     EVENT_ID_PATTERN3 = /^[0-9a-f]{64}$/;
-  }
-});
-
-// src/intake/specreq.ts
-function clipUtf8(value, maxBytes) {
-  if (Buffer.byteLength(value) <= maxBytes) return value;
-  let out = "";
-  let bytes = 0;
-  for (const character of value) {
-    const size = Buffer.byteLength(character);
-    if (bytes + size > maxBytes) break;
-    out += character;
-    bytes += size;
-  }
-  return out;
-}
-function parseSummary(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const r = raw;
-  if (typeof r.requestId !== "string" || !REQUEST_ID_PATTERN.test(r.requestId)) return null;
-  if (!STATES.includes(r.stateId)) return null;
-  if (Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length > MAX_RANGES) return null;
-  const ranges = Array.isArray(r.meetingDateRanges) ? r.meetingDateRanges.filter((range) => typeof range === "string") : [];
-  return {
-    requestId: r.requestId.toLowerCase(),
-    title: typeof r.title === "string" ? clipUtf8(r.title, TITLE_MAX_BYTES) : "",
-    stateId: r.stateId,
-    requesterLogin: login(r.requesterLogin),
-    resolverLogin: login(r.resolverLogin),
-    salesforceId: typeof r.salesforceId === "string" ? r.salesforceId.trim() : "",
-    meetingDateRanges: ranges,
-    createdAt: typeof r.createdAt === "number" && Number.isFinite(r.createdAt) ? r.createdAt : Number.NaN
-  };
-}
-function envelope(payload, tool) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
-  }
-  const p = payload;
-  if (p.success !== true || !p.data || typeof p.data !== "object" || Array.isArray(p.data)) {
-    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
-  }
-  return p.data;
-}
-function parseSearch(payload) {
-  const data = envelope(payload, "search_requests_advanced");
-  if (!Array.isArray(data.results) || data.results.length > SEARCH_PAGE_SIZE) {
-    throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned an unexpected shape");
-  }
-  const requests = data.results.map(parseSummary).filter((item) => item !== null);
-  const dropped = data.results.length - requests.length;
-  if (dropped > 0) throw new IntakeError("PARSE_FAILED", `search_requests_advanced returned ${dropped} malformed records`);
-  const cursor = data.lastEvaluatedIndex;
-  let next = null;
-  if (typeof cursor === "string" && cursor) next = cursor;
-  else if (Array.isArray(cursor) ? cursor.length > 0 : cursor && typeof cursor === "object") next = JSON.stringify(cursor);
-  return { requests, next };
-}
-function parseRequest(payload) {
-  const summary = parseSummary(envelope(payload, "get_request"));
-  if (!summary) throw new IntakeError("PARSE_FAILED", "get_request returned an unexpected shape");
-  return summary;
-}
-async function searchRequests(session, filter) {
-  const requests = [];
-  let next = null;
-  for (let page2 = 0; page2 < SEARCH_MAX_PAGES; page2++) {
-    const result = await session.call("search_requests_advanced", {
-      ...filter,
-      pageSize: SEARCH_PAGE_SIZE,
-      fields_json: JSON.stringify(SEARCH_FIELDS),
-      ...next ? { lastEvaluatedIndex_json: next } : {}
-    });
-    const parsed = parseSearch(resultJson(result, "search_requests_advanced"));
-    if (parsed.requests.length === SEARCH_PAGE_SIZE && !parsed.next) {
-      throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned a full page without a cursor");
-    }
-    requests.push(...parsed.requests);
-    next = parsed.next;
-    if (!next) return requests;
-  }
-  throw new IntakeError("PARSE_FAILED", `search_requests_advanced exceeds ${SEARCH_MAX_PAGES} pages`);
-}
-function realDate(value) {
-  const time3 = Date.parse(`${value}T00:00:00Z`);
-  return Number.isFinite(time3) && new Date(time3).toISOString().slice(0, 10) === value;
-}
-function localDate2(instant2, zone) {
-  const time3 = Date.parse(instant2);
-  if (!Number.isFinite(time3)) return null;
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(time3));
-    const part = (type) => parts.find((item) => item.type === type)?.value ?? "";
-    const date4 = `${part("year")}-${part("month")}-${part("day")}`;
-    return /^\d{4}-\d{2}-\d{2}$/.test(date4) ? date4 : null;
-  } catch {
-    return null;
-  }
-}
-function meetingInRanges(startsAt, zone, ranges) {
-  const date4 = localDate2(startsAt, zone);
-  if (!date4 || !Array.isArray(ranges)) return false;
-  return ranges.some((range) => {
-    if (typeof range !== "string") return false;
-    const match = DATE_RANGE.exec(range);
-    if (!match || !realDate(match[1]) || !realDate(match[2]) || match[1] > match[2]) return false;
-    return match[1] <= date4 && date4 <= match[2];
-  });
-}
-function matches(request2, task, opptyAccounts, rule) {
-  if (!task.accountId || !request2.salesforceId || !opptyAccounts.get(request2.salesforceId)?.has(task.accountId)) return false;
-  if (!meetingInRanges(task.occurrenceStartsAt, rule.zone, request2.meetingDateRanges)) return false;
-  const me = login(rule.me);
-  if (!me) return false;
-  if (rule.path === "mine") {
-    if (login(request2.requesterLogin) !== me) return false;
-    const created = Date.parse(task.createdAt);
-    const ends = Date.parse(task.occurrenceEndsAt);
-    return Number.isFinite(created) && Number.isFinite(ends) && request2.createdAt >= created && request2.createdAt < ends + 7 * DAY_MS;
-  }
-  const counterpart = login(rule.counterpartLogin(task));
-  return counterpart !== "" && login(request2.requesterLogin) === counterpart && login(request2.resolverLogin) === me;
-}
-function linkRequests(requests, tasks, opptyAccounts, rule) {
-  const own = tasks.filter((task) => task.path === rule.path);
-  const linkedTo = /* @__PURE__ */ new Map();
-  for (const task of tasks) {
-    if (!task.specReqId) continue;
-    const id = task.specReqId.toLowerCase();
-    linkedTo.set(id, [...linkedTo.get(id) ?? [], task]);
-  }
-  const pairs = [];
-  for (const request2 of requests) {
-    const linked = linkedTo.get(request2.requestId.toLowerCase());
-    const candidates = !linked ? own.filter((task) => !task.specReqId && UNLINKED_STATES[rule.path].includes(task.state)) : linked.length === 1 && linked[0].path === rule.path && LINKED_STATES[rule.path].includes(linked[0].state) ? linked : [];
-    for (const task of candidates) {
-      if (matches(request2, task, opptyAccounts, rule)) pairs.push([request2.requestId, task.eventId]);
-    }
-  }
-  const count = (values) => values.reduce(
-    (map2, value) => map2.set(value, (map2.get(value) ?? 0) + 1),
-    /* @__PURE__ */ new Map()
-  );
-  const perRequest = count(pairs.map(([requestId]) => requestId));
-  const perTask = count(pairs.map(([, eventId]) => eventId));
-  const out = /* @__PURE__ */ new Map();
-  for (const [requestId, eventId] of pairs) {
-    if (perRequest.get(requestId) === 1 && perTask.get(eventId) === 1) out.set(requestId, eventId);
-  }
-  return out;
-}
-async function resolveMe(session, email3) {
-  const normalized = typeof email3 === "string" ? email3.trim().toLowerCase() : "";
-  const match = /^([^@\s]+)@amazon\.com$/.exec(normalized);
-  if (!match) throw new IntakeError("IDENTITY_MISMATCH", "the signed-in email is not an @amazon.com address");
-  const payload = resultJson(await session.call("check_user_is_tam", {}), "check_user_is_tam");
-  const data = payload && typeof payload === "object" && payload.success !== false ? payload.data : null;
-  const employee = data && typeof data === "object" ? login(data.employee_login) : "";
-  if (!LOGIN_PATTERN.test(employee) || employee !== match[1]) {
-    throw new IntakeError("IDENTITY_MISMATCH", "the SpecReq login differs from the signed-in identity");
-  }
-  return employee;
-}
-async function readRequest(session, requestId) {
-  const request2 = parseRequest(resultJson(await session.call("get_request", { request_id: requestId }), "get_request"));
-  if (request2.requestId !== requestId) throw new IntakeError("PARSE_FAILED", "get_request returned another request");
-  return request2;
-}
-function ackSucceeded(result) {
-  let payload;
-  try {
-    payload = resultJson(result, "acknowledge_request");
-  } catch {
-    return "unknown";
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "unknown";
-  const success2 = payload.success;
-  return success2 === true ? "ok" : success2 === false ? "rejected" : "unknown";
-}
-async function acknowledgeOnce(session, ledger, request2, me) {
-  const requestId = typeof request2.requestId === "string" ? request2.requestId.toLowerCase() : "";
-  if (!REQUEST_ID_PATTERN.test(requestId)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
-  const now = () => ledger.now?.() ?? /* @__PURE__ */ new Date();
-  const existing = ackEntry(ledger.store, ledger.scope, requestId);
-  if (existing) return existing.outcome === "pending" ? "unknown" : existing.outcome;
-  const myLogin = login(me);
-  const current = await readRequest(session, requestId);
-  if (!myLogin || current.stateId !== "NEXT_UP" || current.resolverLogin !== myLogin) return "not_eligible";
-  beginAck(ledger.store, ledger.scope, requestId, request2.eventId, now());
-  let outcome;
-  try {
-    outcome = ackSucceeded(await session.call("acknowledge_request", { request_id: requestId }));
-  } catch (error3) {
-    outcome = error3 instanceof ToolResultError ? "rejected" : "unknown";
-  }
-  finishAck(ledger.store, ledger.scope, requestId, outcome);
-  return outcome;
-}
-async function resolveAck(session, ledger, requestId, me) {
-  const id = typeof requestId === "string" ? requestId.toLowerCase() : "";
-  if (!REQUEST_ID_PATTERN.test(id)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
-  const entry2 = ackEntry(ledger.store, ledger.scope, id);
-  if (!entry2) throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
-  if (entry2.outcome === "ok") return { state: "acked" };
-  const current = await readRequest(session, id);
-  const myLogin = login(me);
-  if (myLogin && current.resolverLogin === myLogin && ACK_CONFIRMED.includes(current.stateId)) {
-    finishAck(ledger.store, ledger.scope, id, "ok");
-    return { state: "acked" };
-  }
-  return { state: "ack_failed", failureCode: entry2.outcome === "rejected" ? "ACK_REJECTED" : "ACK_UNCONFIRMED" };
-}
-var SEARCH_FIELDS, SEARCH_PAGE_SIZE, SEARCH_MAX_PAGES, STATES, TITLE_MAX_BYTES, MAX_RANGES, LOGIN_PATTERN, ACK_CONFIRMED, DAY_MS, login, DATE_RANGE, UNLINKED_STATES, LINKED_STATES;
-var init_specreq = __esm({
-  "src/intake/specreq.ts"() {
-    "use strict";
-    init_mcp_client();
-    init_errors4();
-    init_ack_ledger();
-    SEARCH_FIELDS = [
-      "requestId",
-      "title",
-      "stateId",
-      "requesterLogin",
-      "resolverLogin",
-      "salesforceId",
-      "meetingDateRanges",
-      "createdAt"
-    ];
-    SEARCH_PAGE_SIZE = 50;
-    SEARCH_MAX_PAGES = 4;
-    STATES = ["PENDING", "NEXT_UP", "WORKING", "WAITING", "COMPLETED", "CANCELLED"];
-    TITLE_MAX_BYTES = 512;
-    MAX_RANGES = 50;
-    LOGIN_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-    ACK_CONFIRMED = ["WORKING", "WAITING", "COMPLETED"];
-    DAY_MS = 24 * 60 * 60 * 1e3;
-    login = (value) => typeof value === "string" ? value.trim().toLowerCase() : "";
-    DATE_RANGE = /^(\d{4}-\d{2}-\d{2}) - (\d{4}-\d{2}-\d{2})$/;
-    UNLINKED_STATES = {
-      mine: ["issue_needed"],
-      theirs: ["request_needed", "requested"]
-    };
-    LINKED_STATES = {
-      mine: [],
-      theirs: ["request_needed", "requested", "ack_failed"]
-    };
   }
 });
 
@@ -28403,21 +28848,29 @@ function apiCode(error3) {
   const message = error3 instanceof Error ? error3.message : "";
   return message.startsWith("TTOBAK_LOGIN_REQUIRED") ? "TTOBAK_LOGIN_REQUIRED" : "TTOBAK_UNAVAILABLE";
 }
-function seenPath(scope) {
+function seenPath(scope, file2 = "seen.json") {
   if (!/^[0-9a-f]{32}$/.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "task scope is invalid");
-  return ["tasks", scope, "seen.json"];
+  return ["tasks", scope, file2];
+}
+function loadIdentity(store, scope) {
+  const raw = store.read(...seenPath(scope, "identity.json"));
+  if (raw === null) return null;
+  if (raw.version !== 1 || typeof raw.login !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.login)) {
+    throw new IntakeError("STORE_INVALID", "task identity state is malformed");
+  }
+  return raw;
 }
 function loadSeen(store, scope) {
   const raw = store.read(...seenPath(scope));
   if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {}, unknown: {} };
-  const record17 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
-  if (raw.version !== 1 || !record17(raw.seen) || !record17(raw.pending) || !record17(raw.closing)) {
+  const record18 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+  if (raw.version !== 1 || !record18(raw.seen) || !record18(raw.pending) || !record18(raw.closing)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   raw.refreshed ??= {};
   raw.requestDue ??= {};
   raw.unknown ??= {};
-  if (!record17(raw.refreshed) || !record17(raw.requestDue) || !record17(raw.unknown) || raw.tracked !== void 0 && !record17(raw.tracked)) {
+  if (!record18(raw.refreshed) || !record18(raw.requestDue) || !record18(raw.unknown) || raw.tracked !== void 0 && !record18(raw.tracked)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   return raw;
@@ -28498,7 +28951,10 @@ var init_tasks = __esm({
       events = /* @__PURE__ */ new Map();
       accounts = /* @__PURE__ */ new Map();
       seen;
+      /** My SpecReq login, confirmed this run. */
       myLogin = "";
+      /** The recorded login, used for addresses only when this run could not reach SpecReq. */
+      fallbackLogin = "";
       opptyAccounts = null;
       /** False when the task list exceeded its cap: `tasks` is then a prefix of the rows. */
       complete = true;
@@ -28521,17 +28977,11 @@ var init_tasks = __esm({
           return this.result();
         }
         await this.step("close", () => this.close());
+        await this.step("specreq", () => this.identity());
         await this.step("classify", () => this.classify());
-        let specreqReady = false;
         if (!this.complete) {
           this.counts.skipped = 3;
-        } else await this.step("specreq", async () => {
-          const session = this.options.sessions.specreq;
-          if (!session) throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
-          this.myLogin = await resolveMe(session, this.options.me.email);
-          specreqReady = true;
-        });
-        if (specreqReady) {
+        } else if (this.myLogin) {
           await this.step("mine", () => this.linkMine());
           await this.step("theirs", () => this.theirs());
           await this.step("refresh", () => this.refresh());
@@ -28561,6 +29011,47 @@ var init_tasks = __esm({
         } catch (error3) {
           this.fail(name, error3);
         }
+      }
+      /**
+       * Confirms my SpecReq login. The first confirmed login is recorded for this
+       * TTOBAK account; a different login later (an Amazon account switch) fails.
+       */
+      async identity() {
+        const { store, scope, now } = this.options;
+        const recorded = loadIdentity(store, scope);
+        const session = this.options.sessions.specreq;
+        if (!session) {
+          this.fallbackLogin = recorded?.login ?? "";
+          throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
+        }
+        let login2;
+        try {
+          login2 = await resolveMe(session);
+        } catch (error3) {
+          this.fallbackLogin = recorded?.login ?? "";
+          throw error3;
+        }
+        if (recorded && recorded.login !== login2) {
+          throw new IntakeError("IDENTITY_MISMATCH", "the SpecReq login differs from the one recorded for this TTOBAK account");
+        }
+        if (!recorded) store.write(
+          { version: 1, login: login2, recordedAt: now.toISOString() },
+          ...seenPath(scope, "identity.json")
+        );
+        this.myLogin = login2;
+      }
+      amazonLogin() {
+        return this.myLogin || this.fallbackLogin || alias(this.options.me.email) || "";
+      }
+      /** Every address I may attend with, lowercased and deduplicated. */
+      myEmails() {
+        const login2 = this.amazonLogin();
+        return [...new Set([this.options.me.email.trim().toLowerCase(), ...login2 ? [`${login2}@amazon.com`] : []].filter(Boolean))];
+      }
+      /** The address the meetings provider expects; the TTOBAK email only when no Amazon login is known. */
+      meetingsEmail() {
+        const login2 = this.amazonLogin();
+        return login2 ? `${login2}@amazon.com` : this.options.me.email;
       }
       /** Records this sync's new occurrences first, so a failed step retries them next run. */
       register() {
@@ -28710,7 +29201,10 @@ var init_tasks = __esm({
         const emails = /* @__PURE__ */ new Set();
         for (const account of mine) {
           const info = await this.account(account.accountId);
-          for (const member of info?.members ?? []) if (member.role === "SA" || member.role === "SSA") emails.add(member.email);
+          for (const member of info?.members ?? []) {
+            if (member.userId === this.options.me.userId) continue;
+            if (member.role === "SA" || member.role === "SSA") emails.add(member.email);
+          }
         }
         return emails;
       }
@@ -28751,7 +29245,7 @@ var init_tasks = __esm({
         const list = parseMeetingList(resultJson(await session.call("list_meetings", {
           startTime: window.start.toISOString(),
           endTime: window.end.toISOString(),
-          userEmail: me.email
+          userEmail: this.meetingsEmail()
         }), "list_meetings"));
         if (list === null) throw new IntakeError("PARSE_FAILED", "list_meetings exceeds its cap");
         let saEmails;
@@ -28766,7 +29260,7 @@ var init_tasks = __esm({
             const attendees = parseAttendees(resultJson(await session.call("get_meeting", {
               meetingId: joined.meetingId,
               getMaster: false,
-              userEmail: me.email
+              userEmail: this.meetingsEmail()
             }), "get_meeting"));
             if (!attendees) {
               if (candidate.task) continue;
@@ -28791,7 +29285,7 @@ var init_tasks = __esm({
                 anyAccountSaEmails = saEmails;
               }
               classification = classifyOccurrence({
-                me: me.email,
+                me: { userId: me.userId, emails: this.myEmails() },
                 accountId,
                 attendees: attendees.addresses,
                 members,
@@ -29061,7 +29555,7 @@ var init_tasks = __esm({
         }
       }
       async drafts(outcomes) {
-        const { store, scope, sessions, me } = this.options;
+        const { store, scope, sessions } = this.options;
         const due = this.allTasks().filter((task) => task.state === "request_needed" && task.path === "theirs" && task.counterpartUserId && task.accountId && !draftEntry(store, scope, task.eventId));
         if (!due.length) return;
         const session = sessions.slack;
@@ -29081,13 +29575,13 @@ var init_tasks = __esm({
               continue;
             }
             attempts++;
-            const text2 = renderSlackRequest({
+            const text3 = renderSlackRequest({
               accountName: info.name,
               meetingTitle: task.event?.title ?? "",
               localDateTime: this.localWhen(task),
-              myName: alias(me.email) ?? ""
+              myName: this.amazonLogin()
             });
-            const outcome = await draftOnce(store, scope, task.eventId, session, email3, text2, { now: () => this.options.now });
+            const outcome = await draftOnce(store, scope, task.eventId, session, email3, text3, { now: () => this.options.now });
             outcomes.set(task.eventId, outcome);
             if (outcome === "drafted") this.counts.drafted++;
           } catch (error3) {
@@ -29135,9 +29629,9 @@ __export(run_exports, {
   tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
-import { createHash as createHash6, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
 function accountScope(apiUrl, subject) {
-  return createHash6("sha256").update(`${apiUrl.replace(/\/+$/, "")}
+  return createHash7("sha256").update(`${apiUrl.replace(/\/+$/, "")}
 ${subject}`).digest("hex").slice(0, 32);
 }
 function tokenSubject(idToken) {
@@ -29184,11 +29678,11 @@ function ttobakConfig(selection, env) {
 function definedTtobakEnv(env) {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith("TTOBAK_") && value));
 }
-async function openCalendarSession(environment, host, server, pathDirs) {
+async function openSession(environment, host, server, pathDirs, tools) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [CALENDAR_TOOL.name] });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: tools.map((tool) => tool.name) });
   try {
-    await session.requireTool(CALENDAR_TOOL);
+    for (const tool of tools) await session.requireTool(tool);
   } catch (error3) {
     await session.close();
     throw error3;
@@ -29205,8 +29699,16 @@ async function selectTaskConnector(connector, args, environment, store) {
   const pathDirs = parsePathList(environment.env.PATH);
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
+  let identity;
   try {
     for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+    if (connector === "specreq") {
+      try {
+        identity = { login: await resolveMe(session) };
+      } catch (error3) {
+        identity = { identityError: intakeCode(error3) };
+      }
+    }
   } finally {
     await session.close();
   }
@@ -29224,21 +29726,44 @@ async function selectTaskConnector(connector, args, environment, store) {
     host,
     server,
     pathDirectories: pathDirs.length,
-    ...connector === "specreq" ? { autoAck: autoAckValue === "on" } : {}
+    ...connector === "specreq" ? { autoAck: autoAckValue === "on", ...identity } : {}
   };
 }
 async function select(args, environment, store) {
   if (isTaskConnector(args[0])) return selectTaskConnector(args[0], args.slice(1), environment, store);
-  if (args[0] !== "calendar") throw new IntakeError("INVALID_ARGUMENT", "connector must be calendar, meetings, specreq or slack");
-  const options = flags(args.slice(1), { "--host": "value", "--server": "value", "--accept-unknown-sensitivity": "flag" });
+  const connector = args[0];
+  if (connector !== "calendar" && connector !== "sfdc") {
+    throw new IntakeError("INVALID_ARGUMENT", "connector must be calendar, sfdc, meetings, specreq or slack");
+  }
+  const options = flags(args.slice(1), connector === "calendar" ? { "--host": "value", "--server": "value", "--accept-unknown-sensitivity": "flag" } : { "--host": "value", "--server": "value" });
   const host = options["--host"];
   const server = options["--server"];
   if (!HOSTS.includes(host) || typeof server !== "string") throw new IntakeError("INVALID_ARGUMENT", "--host and --server are required");
   const pathDirs = parsePathList(environment.env.PATH);
-  const session = await openCalendarSession(environment, host, server, pathDirs);
+  const session = await openSession(
+    environment,
+    host,
+    server,
+    pathDirs,
+    connector === "calendar" ? [CALENDAR_TOOL] : SFDC_TOOLS
+  );
   await session.close();
   const previous = store.read("selection.json");
-  const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID4();
+  const ttobak = ttobakConfig(previous, { ...hostTtobakEndpoints(environment.home, host), ...definedTtobakEnv(environment.env) });
+  if (connector === "sfdc") {
+    const sourceId2 = previous?.sfdc?.server === server ? previous.sfdc.sourceId : randomUUID5();
+    store.write(
+      {
+        ...previous,
+        version: 1,
+        sfdc: { host, server, sourceId: sourceId2, pathDirs, selectedAt: environment.now().toISOString() },
+        ttobak
+      },
+      "selection.json"
+    );
+    return { ok: true, connector, host, server, sourceId: sourceId2, pathDirectories: pathDirs.length };
+  }
+  const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID5();
   const selection = {
     ...previous ?? {},
     version: 1,
@@ -29250,12 +29775,36 @@ async function select(args, environment, store) {
       selectedAt: environment.now().toISOString(),
       ...options["--accept-unknown-sensitivity"] ? { acceptUnknownSensitivity: true } : {}
     },
-    // Terminal env wins; otherwise the host's own TTOBAK server entry supplies
-    // the endpoints, then the previous selection.
-    ttobak: ttobakConfig(previous, { ...hostTtobakEndpoints(environment.home, host), ...definedTtobakEnv(environment.env) })
+    ttobak
   };
   store.write(selection, "selection.json");
   return { ok: true, connector: "calendar", host, server, sourceId, pathDirectories: pathDirs.length };
+}
+async function signIn(selection, environment, dryRun, noninteractive) {
+  let api = environment.api;
+  let scope = environment.scope;
+  let me = environment.me;
+  if (!dryRun && !api) {
+    const config2 = ttobakConfig(selection, environment.env);
+    const auth = new CognitoAuth2(config2, { interactive: !noninteractive });
+    api = new TtobakApi(auth, config2.apiUrl);
+    let idToken;
+    try {
+      idToken = await auth.getIdToken();
+    } catch (error3) {
+      const message = error3 instanceof Error ? error3.message : "";
+      if (message.startsWith("TTOBAK_LOGIN_REQUIRED")) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+      throw error3;
+    }
+    const subject = tokenSubject(idToken);
+    scope = accountScope(config2.apiUrl, subject);
+    try {
+      me = { email: tokenEmail(idToken), userId: subject };
+    } catch {
+      me = void 0;
+    }
+  }
+  return { api, scope, me };
 }
 async function openTaskSessions(environment, selection) {
   const sessions = {};
@@ -29292,33 +29841,11 @@ async function calendar(args, environment, store) {
   let status = {};
   try {
     status = store.read("status.json") ?? {};
-    let api = environment.api;
-    let scope = environment.scope;
-    let me = environment.me;
-    if (!dryRun && !api) {
-      const config2 = ttobakConfig(selection, environment.env);
-      const auth = new CognitoAuth2(config2, { interactive: options["--noninteractive"] !== true });
-      api = new TtobakApi(auth, config2.apiUrl);
-      let idToken;
-      try {
-        idToken = await auth.getIdToken();
-      } catch (error3) {
-        const message = error3 instanceof Error ? error3.message : "";
-        if (message.startsWith("TTOBAK_LOGIN_REQUIRED")) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
-        throw error3;
-      }
-      const subject = tokenSubject(idToken);
-      scope = accountScope(config2.apiUrl, subject);
-      try {
-        me = { email: tokenEmail(idToken), userId: subject };
-      } catch {
-        me = void 0;
-      }
-    }
+    let { api, scope, me } = await signIn(selection, environment, dryRun, options["--noninteractive"] === true);
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
-    session = await openCalendarSession(environment, selected.host, selected.server, selected.pathDirs);
+    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, [CALENDAR_TOOL]);
     const active = session;
     const result = await runCalendar({
       store,
@@ -29405,6 +29932,65 @@ async function calendar(args, environment, store) {
     release();
   }
 }
+async function sfdc(args, environment, store) {
+  const options = flags(args, { "--dry-run": "flag", "--noninteractive": "flag", "--reconcile": "flag" });
+  const dryRun = options["--dry-run"] === true;
+  const selection = store.read("selection.json");
+  const selected = selection?.sfdc;
+  if (!selected) throw new IntakeError("NOT_SELECTED", 'run "intake select sfdc" first');
+  const release = store.lock("sfdc");
+  const startedAt = environment.now();
+  let session;
+  const writeStatus = (entry2) => {
+    const status = store.read("status.json") ?? {};
+    store.write({ ...status, sfdc: entry2 }, "status.json");
+  };
+  let previous;
+  try {
+    previous = store.read("status.json")?.sfdc;
+    let { api, scope } = await signIn(selection, environment, dryRun, options["--noninteractive"] === true);
+    if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
+    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
+    const active = session;
+    const result = await runSfdc({
+      store,
+      api,
+      sourceId: selected.sourceId,
+      scope,
+      now: startedAt,
+      dryRun,
+      reconcile: options["--reconcile"] === true,
+      source: { call: async (tool, request2) => resultJson(await active.call(tool, request2), tool) }
+    });
+    const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
+    writeStatus({
+      lastRunAt: startedAt.toISOString(),
+      result: "ok",
+      dryRun,
+      counts: result.counts,
+      revisions: result.revisions,
+      ...scope ? { scope } : {},
+      ...lastSuccessAt ? { lastSuccessAt } : {}
+    });
+    return { ok: true, connector: "sfdc", dryRun, counts: result.counts };
+  } catch (error3) {
+    const entry2 = {
+      ...previous ?? {},
+      lastRunAt: startedAt.toISOString(),
+      result: intakeCode(error3),
+      dryRun
+    };
+    delete entry2.counts;
+    try {
+      writeStatus(entry2);
+    } catch {
+    }
+    throw error3;
+  } finally {
+    await session?.close();
+    release();
+  }
+}
 async function runIntake(args, environment) {
   const store = new IntakeStore(environment.home);
   try {
@@ -29414,10 +30000,11 @@ async function runIntake(args, environment) {
       output = { ok: true, hosts: listHosts(environment.home, parsePathList(environment.env.PATH)) };
     } else if (command === "select") output = await select(rest, environment, store);
     else if (command === "calendar") output = await calendar(rest, environment, store);
+    else if (command === "sfdc") output = await sfdc(rest, environment, store);
     else if (command === "status" && rest.length === 0) {
       const selection = store.read("selection.json");
       const listed = {};
-      for (const id of ["calendar", "meetings", "specreq", "slack"]) {
+      for (const id of ["calendar", "sfdc", "meetings", "specreq", "slack"]) {
         const entry2 = selection?.[id];
         if (entry2) listed[id] = { host: entry2.host, server: entry2.server };
       }
@@ -29459,14 +30046,18 @@ var init_run = __esm({
     init_errors4();
     init_hosts();
     init_mcp_client();
+    init_sfdc();
+    init_specreq();
     init_store();
     init_tasks();
     USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
+  ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
   ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
     (a synced run also runs the SpecReq task step when meetings and specreq are selected)
+  ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
   ttobak-mcp intake status`;
   }
 });
@@ -31133,11 +31724,11 @@ function vaultReadingResult(value, options) {
   } else {
     const manifest = options.section === "manifest";
     if (!hash2(value.revision) || (manifest ? value.consistency !== "current_group" || value.unionKey !== "path" || !["meetings", "personal_docs", "account_docs"].includes(value.phase) : value.mode !== "text" || value.fileId !== options.fileId || !path(value.path) || !hash2(value.sourceRevision) || value.consistency !== "current_source_and_group" || !["meeting", "document"].includes(value.sourceKind) || !["body", "attachments"].includes(value.phase) || value.sourceKind === "document" && value.phase === "attachments" || value.sourceKind === "meeting" && value.phase === "body" && value.page.complete)) throw new Error("INVALID_READING_RESPONSE: invalid vault source");
-    const text2 = manifest ? value.dataJson : value.markdown, f = value.fragment;
-    if (typeof text2 !== "string" || !record14(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text2).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
+    const text3 = manifest ? value.dataJson : value.markdown, f = value.fragment;
+    if (typeof text3 !== "string" || !record14(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text3).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
     if (manifest && f.startOffset === 0 && f.complete) {
       try {
-        const files = JSON.parse(text2);
+        const files = JSON.parse(text3);
         if (!Array.isArray(files) || files.some((file2) => !record14(file2) || typeof file2.fileId !== "string" || !file2.fileId.length || file2.fileId.length > 2048 || !path(file2.path) || !hash2(file2.sourceMetadataRevision) || !["text", "non_text"].includes(file2.mode))) throw new Error("bad manifest");
       } catch {
         throw new Error("INVALID_READING_RESPONSE: invalid completed vault manifest group");
@@ -31644,8 +32235,8 @@ function sendAppRequest(request2, options = {}) {
       ) : new AppControlError("connection_failed", `Could not reach the TTOBAK Mac app: ${err.code ?? err.message}`)
     )));
     function finish() {
-      const text2 = Buffer.concat(chunks).toString("utf8");
-      const first = text2.split("\n", 1)[0];
+      const text3 = Buffer.concat(chunks).toString("utf8");
+      const first = text3.split("\n", 1)[0];
       let parsed;
       try {
         parsed = JSON.parse(first);
@@ -32238,11 +32829,11 @@ async function callTool(request2, options) {
       }
       case "ttobak_login": {
         await auth.getIdToken();
-        return text("Authenticated successfully with TTOBAK.");
+        return text2("Authenticated successfully with TTOBAK.");
       }
       case "ttobak_status": {
         const status = auth.getStatus ? await auth.getStatus() : { authenticated: auth.isAuthenticated() };
-        return text(
+        return text2(
           `Authenticated: ${status.authenticated}
 ` + (status.identity ? `Signed in: ${JSON.stringify(status.identity)}
 ` : "") + `API: ${API_URL}
@@ -32286,7 +32877,7 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         const { name: name2, description, sfdcOpptyId, sfdcUrl, stage } = args;
         if (!name2) return error2("name is required");
         const result = await api.createProject({ name: name2, description, sfdcOpptyId, sfdcUrl, stage });
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_projects": {
         const options2 = navigationOptions(args);
@@ -32309,21 +32900,21 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         if (!projectId) return error2("projectId is required");
         if (!name2) return error2("name is required");
         const result = await api.updateProject(projectId, { name: name2, description, sfdcOpptyId, sfdcUrl, stage });
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_link_project_account": {
         const { projectId, accountId } = args;
         if (!projectId) return error2("projectId is required");
         if (!accountId) return error2("accountId is required");
         const result = await api.linkProjectAccount(projectId, accountId);
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_unlink_project_account": {
         const { projectId, accountId } = args;
         if (!projectId) return error2("projectId is required");
         if (!accountId) return error2("accountId is required");
         await api.unlinkProjectAccount(projectId, accountId);
-        return text(`Unlinked account ${accountId} from project ${projectId}.`);
+        return text2(`Unlinked account ${accountId} from project ${projectId}.`);
       }
       case "ttobak_export_vault": {
         const options2 = vaultReadingOptions(args);
@@ -32334,7 +32925,7 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         if (typeof title !== "string" || !title.trim()) return error2("title is required");
         if (typeof markdown !== "string" || !markdown.trim()) return error2("markdown is required");
         const result = await api.putDocument(accountId, { title, markdown, docType, path: path2, idempotencyKey });
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_documents": {
         const options2 = documentCatalogOptions(args);
@@ -32349,32 +32940,32 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         if (typeof title !== "string" || !title.trim()) return error2("title is required");
         if (markdown !== void 0 && typeof markdown !== "string") return error2("markdown must be a string");
         const result = await api.updateDocument(accountId, docId, { title, markdown, docType, path: path2 });
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_ask": {
         const { question, meetingId, sessionId } = args;
         if (!question) return error2("question is required");
         const result = await api.askQuestion(question, meetingId, sessionId);
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_kb_upload": {
         if (options.mode === "http") {
           const { data, fileName: fileName2 } = decodeUpload(args);
           const fileType2 = args.fileType;
           if (fileType2 !== void 0 && typeof fileType2 !== "string") return error2("fileType must be a string");
-          return text(JSON.stringify(await api.uploadBytesToKB(data, fileName2, fileType2), null, 2));
+          return text2(JSON.stringify(await api.uploadBytesToKB(data, fileName2, fileType2), null, 2));
         }
         const { filePath, fileName, fileType } = args;
         if (!filePath) return error2("filePath is required");
         const result = await api.uploadToKB(filePath, fileName, fileType);
-        return text(
+        return text2(
           `Uploaded to Knowledge Base: ${JSON.stringify(result)}
 Retrieval is scoped to you -- only your own ttobak_ask queries can find this file. Call ttobak_kb_sync to index it now; if that returns "skipped" (a deployment without the KB env vars), it is still indexed by the next completed meeting summary or document-bearing crawler run.`
         );
       }
       case "ttobak_kb_sync": {
         const result = await api.syncKB();
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_kb_list_files": {
         const options2 = kbReadingOptions(args);
@@ -32384,7 +32975,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         const { fileId } = args;
         if (!fileId) return error2("fileId is required");
         await api.deleteKBFile(fileId);
-        return text(
+        return text2(
           `Deleted Knowledge Base file ${fileId}. It stays retrievable (by you only -- retrieval is user-scoped) until the next ingestion run: call ttobak_kb_sync to reindex now, or wait for the next completed meeting summary / document-bearing crawler run.`
         );
       }
@@ -32395,7 +32986,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           for (const key of ["accountId", "fileType", "docType", "path"]) {
             if (args[key] !== void 0 && typeof args[key] !== "string") return error2(`${key} must be a string`);
           }
-          return text(JSON.stringify(await api.uploadDocumentBytes(data, args.title, fileName2, args), null, 2));
+          return text2(JSON.stringify(await api.uploadDocumentBytes(data, args.title, fileName2, args), null, 2));
         }
         const { filePath, title, accountId, fileName, fileType, docType, path: path2 } = args;
         if (!filePath) return error2("filePath is required");
@@ -32407,13 +32998,13 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           docType,
           path: path2
         });
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_create_account": {
         const { name: name2, aliases, domains, industry, parentAccountId } = args;
         if (!name2) return error2("name is required");
         const result = await api.createAccount({ name: name2, aliases, domains, industry, parentAccountId });
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_add_account_member": {
         const { accountId, email: email3, role } = args;
@@ -32421,15 +33012,15 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         if (!email3) return error2("email is required");
         if (!role) return error2("role is required");
         const result = await api.addAccountMember(accountId, email3, role);
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_audio_devices": {
-        return text(JSON.stringify({ devices: await requireRecorder(options).listDevices() }, null, 2));
+        return text2(JSON.stringify({ devices: await requireRecorder(options).listDevices() }, null, 2));
       }
       case "ttobak_start_recording": {
         if (typeof args.title !== "string") return error2("title is required");
         const info = await requireRecorder(options).start({ title: args.title, device: args.device, maxMinutes: args.maxMinutes });
-        return text(JSON.stringify({
+        return text2(JSON.stringify({
           recordingId: info.id,
           title: info.title,
           device: info.device,
@@ -32440,7 +33031,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
       }
       case "ttobak_recording_status": {
         const rec = requireRecorder(options);
-        return text(JSON.stringify({ active: rec.status(), saved: rec.listSaved() }, null, 2));
+        return text2(JSON.stringify({ active: rec.status(), saved: rec.listSaved() }, null, 2));
       }
       case "ttobak_stop_recording": {
         const rec = requireRecorder(options);
@@ -32459,10 +33050,10 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
             warnings.push(`Recording appears silent (max ${silence.maxVolumeDb} dB): grant this MCP host app microphone access in System Settings > Privacy & Security > Microphone.`);
           }
           if (args.upload === false || silence?.silent && args.allowSilent !== true) {
-            return text(JSON.stringify({ uploaded: false, ...kept, warnings, next: "ttobak_upload_audio with recordingId" }, null, 2));
+            return text2(JSON.stringify({ uploaded: false, ...kept, warnings, next: "ttobak_upload_audio with recordingId" }, null, 2));
           }
           const uploaded = await uploadAudio(options, stopped.file, target, stopped.title, stopped.startedAt, stopped.id);
-          return text(JSON.stringify({
+          return text2(JSON.stringify({
             ...uploaded,
             durationSeconds: stopped.durationSeconds,
             warnings: [...warnings, ...uploaded.warnings]
@@ -32497,7 +33088,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
               saved.id,
               previousUpload
             );
-            return text(JSON.stringify(result2, null, 2));
+            return text2(JSON.stringify(result2, null, 2));
           } finally {
             release();
           }
@@ -32505,7 +33096,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         if (previousUpload !== void 0) return error2("previousUpload applies only to a kept recordingId");
         const { path: path2 } = api.resolveMeetingAudio(filePath);
         const result = await uploadAudio(options, path2, target, title ?? basename3(path2, extname2(path2)));
-        return text(JSON.stringify(result, null, 2));
+        return text2(JSON.stringify(result, null, 2));
       }
       case "ttobak_app_status":
       case "ttobak_app_start_recording":
@@ -32529,7 +33120,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         try {
           const reply = await sendAppRequest(request3, options.appControl);
           if (!reply.ok) return error2(`${reply.error?.code}: ${reply.error?.message}`);
-          return text(JSON.stringify(reply.data ?? {}, null, 2));
+          return text2(JSON.stringify(reply.data ?? {}, null, 2));
         } catch (e) {
           if (e instanceof AppControlError) return error2(`${e.code}: ${e.message}`);
           throw e;
@@ -32537,7 +33128,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
       }
       case "ttobak_logout": {
         await auth.logout?.();
-        return text("Logged out. Saved credentials for this deployment and profile were removed.");
+        return text2("Logged out. Saved credentials for this deployment and profile were removed.");
       }
       default:
         return error2(`Unknown tool: ${name}`);
@@ -32548,7 +33139,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
     return error2(msg);
   }
 }
-function text(content) {
+function text2(content) {
   return { content: [{ type: "text", text: content }] };
 }
 function error2(message) {
@@ -32682,7 +33273,7 @@ function createMcpServer(options) {
     if (options.mode === "http" && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
       const content = result.content[0];
       const receipt = !("isError" in result && result.isError) && mutationReceipt(request2.params.name, content?.type === "text" ? content.text : "");
-      return receipt ? text(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
+      return receipt ? text2(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
     }
     return result;
   });
