@@ -20,6 +20,8 @@ export const INTAKE_CODES = [
   'TTOBAK_CONFLICT',
   'TTOBAK_REJECTED',
   'TTOBAK_UNAVAILABLE',
+  'IDENTITY_MISMATCH',
+  'TASKS_PARTIAL',
 ] as const;
 
 export type IntakeCode = typeof INTAKE_CODES[number];

@@ -58,8 +58,8 @@ const (
 // TermsConfig: AUTO_TERMS_MODE (off|personal), AUTO_TERMS_USERS (canary
 // subs; empty means everyone), AUTO_TERMS_MIN_CONFIDENCE, BEDROCK_TERMS_MODEL_ID,
 // ACCOUNT_TERMS_MODE (off|on; needs AUTO_TERMS_MODE on), KB_TERMS_MODE and
-// RESEARCH_TERMS_MODE (off|on; KB documents and research reports, see
-// ProcessSource), NEWS_TERMS_MODE (off|on; daily news into Common, see
+// RESEARCH_TERMS_MODE (off|personal|on; KB documents and research reports,
+// personal never writes an Account, see ProcessSource), NEWS_TERMS_MODE (off|on; daily news into Common, see
 // ProcessNewsDaily; independent of AUTO_TERMS_MODE and the canary list) and
 // NEWS_TERMS_SOURCES (global|all; which sources' news is eligible).
 type TermsConfig struct {
@@ -77,7 +77,7 @@ type TermsConfig struct {
 // TermsConfigFromEnv parses the flags; unknown modes are off.
 func TermsConfigFromEnv() TermsConfig {
 	cfg := TermsConfig{Mode: AutoTermsModeOff, AccountMode: AccountTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID),
-		KBMode: sourceTermsMode("KB_TERMS_MODE"), ResearchMode: sourceTermsMode("RESEARCH_TERMS_MODE"), NewsMode: sourceTermsMode("NEWS_TERMS_MODE"), NewsSources: NewsTermsSourcesGlobal}
+		KBMode: sourceLayerMode("KB_TERMS_MODE"), ResearchMode: sourceLayerMode("RESEARCH_TERMS_MODE"), NewsMode: sourceTermsMode("NEWS_TERMS_MODE"), NewsSources: NewsTermsSourcesGlobal}
 	if strings.TrimSpace(os.Getenv("NEWS_TERMS_SOURCES")) == NewsTermsSourcesAll {
 		cfg.NewsSources = NewsTermsSourcesAll
 	}

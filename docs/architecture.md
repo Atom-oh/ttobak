@@ -393,7 +393,7 @@ reads revalidate membership and every endpoint, apply fixed bounds and report
 truncation instead of guessing. Account KB uploads gain a `KBREF#` row at presign;
 QA retrieval scope is unchanged.
 
-Account people edges (ADR-065) bind meeting participants, speakers, assignees and
+Account people edges (ADR-067) bind meeting participants, speakers, assignees and
 insight entities to members, contacts, sub-accounts and projects with a
 deterministic resolver (no model call). Summarize runs it inline after summary
 publication; speaker map and contact changes publish `PeopleResolveRequested` to
