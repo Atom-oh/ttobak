@@ -148,12 +148,19 @@ func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.Accoun
 	return nil
 }
 
-// DeleteMember requires the member item to already exist so removing a
-// non-member surfaces ErrConditionFailed (mapped to ErrNotFound in the
-// service layer) instead of silently succeeding -- same pattern as
-// DeleteAccountDocument below.
+// nonOwnerMemberCondition fences generic member writers: the Owner row can
+// change concurrently through owner transfer (ADR-071), so these writes must
+// never land on a row that is (or just became) the Owner.
+func nonOwnerMemberCondition() expression.ConditionBuilder {
+	return expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("role").NotEqual(expression.Value(model.RoleOwner)))
+}
+
+// DeleteMember requires an existing non-owner member item, so removing a
+// non-member or the Owner surfaces ErrConditionFailed (the service re-reads to
+// map not-found vs conflict) instead of silently succeeding.
 func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, userID string) error {
-	condition := expression.AttributeExists(expression.Name("PK"))
+	condition := nonOwnerMemberCondition()
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return fmt.Errorf("build delete member condition: %w", err)
@@ -171,19 +178,19 @@ func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, userID
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: member %s not found", ErrConditionFailed, userID)
+			return fmt.Errorf("%w: non-owner member %s not found", ErrConditionFailed, userID)
 		}
 		return fmt.Errorf("delete member: %w", err)
 	}
 	return nil
 }
 
-// UpdateMemberRole conditionally updates a member's role, requiring the item
-// to already exist -- a concurrent RemoveMember between the service's
-// GetMember check and this call surfaces ErrConditionFailed (mapped to
-// ErrNotFound) instead of silently resurrecting a deleted membership row.
+// UpdateMemberRole conditionally updates a non-owner member's role -- a
+// concurrent RemoveMember or owner transfer between the service's GetMember
+// check and this call surfaces ErrConditionFailed instead of resurrecting a
+// deleted row or overwriting the new Owner.
 func (r *DynamoDBRepository) UpdateMemberRole(ctx context.Context, accountID, userID, role string) error {
-	condition := expression.AttributeExists(expression.Name("PK"))
+	condition := nonOwnerMemberCondition()
 	update := expression.Set(expression.Name("role"), expression.Value(role))
 	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
 	if err != nil {
@@ -203,7 +210,7 @@ func (r *DynamoDBRepository) UpdateMemberRole(ctx context.Context, accountID, us
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: member %s not found", ErrConditionFailed, userID)
+			return fmt.Errorf("%w: non-owner member %s not found", ErrConditionFailed, userID)
 		}
 		return fmt.Errorf("update member role: %w", err)
 	}

@@ -354,6 +354,8 @@ func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role ("+strings.Join(model.AssignableRoles, "/")+") or target is the owner")
+		case errors.Is(err, service.ErrConflict):
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "The member changed concurrently; reload and retry")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
@@ -381,6 +383,8 @@ func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "The owner cannot be removed")
+		case errors.Is(err, service.ErrConflict):
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "The member changed concurrently; reload and retry")
 		case errors.Is(err, service.ErrAmbiguousShareBlocksRemoval):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "This member holds an untagged share that may be a direct grant or a legacy account-share; pass ?force=true to remove anyway (the share will be left untouched and reported in the response)")
 		default:

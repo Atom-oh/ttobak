@@ -1278,11 +1278,13 @@ The operation's connector inventory disables delegation (ADR-055).
 `POST /api/accounts/{accountId}/owner-transfer` requires verified email and a body
 `{"targetUserId"}` capped at 1,024 bytes with unknown fields rejected. Only the
 current Owner (both the MEMBER role and META `ownerUserId`) may transfer, to an
-existing direct non-owner member whom Cognito `AdminGetUser` reports Enabled and
-CONFIRMED. The previous Owner becomes SA in one three-item transaction that also
-clears the initial-owner invitation fields. Responses: 200 with `accountId`,
+existing direct non-owner member whom Cognito `AdminGetUser` reports Enabled,
+CONFIRMED and `email_verified`. The previous Owner becomes SA in one three-item transaction that also
+clears the initial-owner invitation fields and records `originalOwnerUserId` for
+creation receipts. Member role updates and removals that race a transfer onto the
+new Owner return 409. Responses: 200 with `accountId`,
 `ownerUserId`, `previousOwnerUserId`, `previousOwnerRole`; 400 invalid or self
-target, pending or disabled identity; 403 non-owner; 404 missing account or
+target, pending, disabled or unverified identity; 403 non-owner; 404 missing account or
 non-member target; 409 concurrent change; 503 Cognito unwired or lookup failure.
 It is the only path that grants Owner; its connector inventory disables delegation.
 

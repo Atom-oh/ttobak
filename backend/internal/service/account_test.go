@@ -247,8 +247,8 @@ func (m *mockAccountRepo) PutMember(_ context.Context, member *model.AccountMemb
 
 func (m *mockAccountRepo) DeleteMember(_ context.Context, accountID, userID string) error {
 	key := memberKey(accountID, userID)
-	if _, ok := m.members[key]; !ok {
-		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	if member, ok := m.members[key]; !ok || member.Role == model.RoleOwner {
+		return fmt.Errorf("%w: non-owner member %s not found", repository.ErrConditionFailed, userID)
 	}
 	delete(m.members, key)
 	return nil
@@ -257,8 +257,8 @@ func (m *mockAccountRepo) DeleteMember(_ context.Context, accountID, userID stri
 func (m *mockAccountRepo) UpdateMemberRole(_ context.Context, accountID, userID, role string) error {
 	key := memberKey(accountID, userID)
 	member, ok := m.members[key]
-	if !ok {
-		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	if !ok || member.Role == model.RoleOwner {
+		return fmt.Errorf("%w: non-owner member %s not found", repository.ErrConditionFailed, userID)
 	}
 	member.Role = role
 	return nil

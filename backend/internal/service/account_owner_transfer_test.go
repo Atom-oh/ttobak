@@ -33,13 +33,20 @@ func (r *transferRepo) TransferAccountOwner(_ context.Context, id, from, to stri
 }
 
 func confirmedUser(status ct.UserStatusType, enabled bool) func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+	return cognitoTarget(status, enabled, "true")
+}
+
+// cognitoTarget returns the "target" user; verified "" omits email_verified.
+func cognitoTarget(status ct.UserStatusType, enabled bool, verified string) func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
 	return func(_ context.Context, in *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
 		if aws.ToString(in.UserPoolId) != "pool" || aws.ToString(in.Username) != "target" {
 			return nil, fmt.Errorf("unexpected lookup %v", in)
 		}
-		return &idp.AdminGetUserOutput{Enabled: enabled, UserStatus: status, UserAttributes: []ct.AttributeType{
-			{Name: aws.String("sub"), Value: aws.String("target")},
-		}}, nil
+		attrs := []ct.AttributeType{{Name: aws.String("sub"), Value: aws.String("target")}}
+		if verified != "" {
+			attrs = append(attrs, ct.AttributeType{Name: aws.String("email_verified"), Value: aws.String(verified)})
+		}
+		return &idp.AdminGetUserOutput{Enabled: enabled, UserStatus: status, UserAttributes: attrs}, nil
 	}
 }
 
@@ -80,6 +87,14 @@ func TestTransferOwner(t *testing.T) {
 		{name: "cognito not confirmed", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
 			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
 				c.adminGetUserFn = confirmedUser(ct.UserStatusTypeForceChangePassword, true)
+			}},
+		{name: "email not verified", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = cognitoTarget(ct.UserStatusTypeConfirmed, true, "false")
+			}},
+		{name: "email_verified absent", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = cognitoTarget(ct.UserStatusTypeConfirmed, true, "")
 			}},
 		{name: "cognito sub mismatch", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
 			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
@@ -174,5 +189,47 @@ func TestTransferOwnerThenGenericRoutesStillOwnerFree(t *testing.T) {
 	}
 	if _, err := s.ResendOwnerInvitation(ctx, "target", "acc"); !errors.Is(err, ErrInvitationUnavailable) {
 		t.Fatalf("resend after transfer = %v", err)
+	}
+}
+
+// racingMemberRepo commits an owner transfer to the target after the service
+// read the target's non-owner role but before its member write lands.
+type racingMemberRepo struct{ *transferRepo }
+
+func (r *racingMemberRepo) race(accountID, userID string) {
+	if err := r.TransferAccountOwner(context.Background(), accountID, "owner", userID, time.Now()); err != nil {
+		panic(err)
+	}
+}
+
+func (r *racingMemberRepo) UpdateMemberRole(ctx context.Context, accountID, userID, role string) error {
+	r.race(accountID, userID)
+	return r.transferRepo.UpdateMemberRole(ctx, accountID, userID, role)
+}
+
+func (r *racingMemberRepo) DeleteMember(ctx context.Context, accountID, userID string) error {
+	r.race(accountID, userID)
+	return r.transferRepo.DeleteMember(ctx, accountID, userID)
+}
+
+func TestMemberWritersInterleavedWithTransferKeepNewOwner(t *testing.T) {
+	for _, op := range []string{"update", "remove"} {
+		t.Run(op, func(t *testing.T) {
+			_, base, _ := newTransferFixture()
+			r := &racingMemberRepo{transferRepo: base}
+			s := newAccountServiceWithRepo(r)
+			var err error
+			if op == "update" {
+				_, err = s.UpdateMemberRole(context.Background(), "am", "acc", "target", &model.UpdateMemberRequest{Role: model.RoleAM})
+			} else {
+				_, err = s.RemoveMember(context.Background(), "owner", "acc", "target", false)
+			}
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("err = %v, want ErrConflict", err)
+			}
+			if m := r.members[memberKey("acc", "target")]; m == nil || m.Role != model.RoleOwner || r.accounts["acc"].OwnerUserID != "target" {
+				t.Fatalf("new Owner row overwritten: %+v", m)
+			}
+		})
 	}
 }

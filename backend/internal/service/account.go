@@ -648,10 +648,7 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 	}
 
 	if err := s.repo.DeleteMember(ctx, accountID, targetUserID); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return nil, ErrNotFound // removed concurrently between our Get and Delete
-		}
-		return nil, err
+		return nil, s.nonOwnerMemberWriteError(ctx, accountID, targetUserID, err)
 	}
 
 	result := &RemoveMemberResult{
@@ -739,12 +736,26 @@ func (s *AccountService) UpdateMemberRole(ctx context.Context, requesterUserID, 
 		return nil, ErrInvalidInput
 	}
 	if err := s.repo.UpdateMemberRole(ctx, accountID, targetUserID, req.Role); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return nil, ErrNotFound // removed concurrently between our Get and Update
-		}
-		return nil, err
+		return nil, s.nonOwnerMemberWriteError(ctx, accountID, targetUserID, err)
 	}
 	return &model.AccountMemberDTO{UserID: target.UserID, Email: target.Email, Role: req.Role}, nil
+}
+
+// nonOwnerMemberWriteError maps a rejected owner-fenced member write: the row
+// was removed concurrently (ErrNotFound) or became the Owner through a
+// concurrent transfer (ErrConflict).
+func (s *AccountService) nonOwnerMemberWriteError(ctx context.Context, accountID, userID string, err error) error {
+	if !errors.Is(err, repository.ErrConditionFailed) {
+		return err
+	}
+	current, getErr := s.repo.GetMember(ctx, accountID, userID)
+	if getErr != nil {
+		return getErr
+	}
+	if current == nil {
+		return ErrNotFound
+	}
+	return ErrConflict
 }
 
 // isMeetingPublishedToAccount revalidates each projection against a strong,

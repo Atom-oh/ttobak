@@ -25,7 +25,8 @@ type accountOwnerTransferRepo interface {
 	TransferAccountOwner(ctx context.Context, accountID, currentOwnerID, targetUserID string, at time.Time) error
 }
 
-// requireConfirmedUser fails closed: the repository cannot tell a pending or
+// requireConfirmedUser requires an enabled, CONFIRMED user whose sub matches
+// and whose email is verified (absent counts as unverified). It fails closed: the repository cannot tell a pending or
 // disabled invitee from a confirmed user, so Cognito is the identity authority.
 func (s *AccountService) requireConfirmedUser(ctx context.Context, userID string) error {
 	if s.cognito == nil || s.cognitoPoolID == "" {
@@ -46,12 +47,19 @@ func (s *AccountService) requireConfirmedUser(ctx context.Context, userID string
 	if out == nil || !out.Enabled || out.UserStatus != cognitotypes.UserStatusTypeConfirmed {
 		return ErrInvalidInput
 	}
+	subMatches, verified := false, false
 	for _, attribute := range out.UserAttributes {
-		if aws.ToString(attribute.Name) == "sub" && aws.ToString(attribute.Value) == userID {
-			return nil
+		switch aws.ToString(attribute.Name) {
+		case "sub":
+			subMatches = aws.ToString(attribute.Value) == userID
+		case "email_verified":
+			verified = aws.ToString(attribute.Value) == "true"
 		}
 	}
-	return ErrInvalidInput
+	if !subMatches || !verified {
+		return ErrInvalidInput
+	}
+	return nil
 }
 
 // TransferOwner moves ownership to an existing, confirmed direct member. The

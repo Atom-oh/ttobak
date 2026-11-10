@@ -37,7 +37,7 @@ func TestTransferAccountOwnerTransaction(t *testing.T) {
 		}
 		requireHierarchyCondition(t, meta, "attribute_exists(PK)", `ownerUserId = "u-old"`)
 		update := hierarchyUpdateText(meta)
-		for _, want := range []string{`ownerUserId = "u-new"`, "updatedAt", "REMOVE", "initialOwnerEmail", "initialOwnerInvitationPending"} {
+		for _, want := range []string{`ownerUserId = "u-new"`, "updatedAt", `originalOwnerUserId = if_not_exists(originalOwnerUserId, "u-old")`, "REMOVE", "initialOwnerEmail", "initialOwnerInvitationPending"} {
 			if !strings.Contains(update, want) {
 				t.Errorf("META update %q missing %q", update, want)
 			}
@@ -77,5 +77,41 @@ func TestTransferAccountOwnerRejectsSelfTransfer(t *testing.T) {
 	r := hierarchyWireRepo(t, func([]hierarchyWireItem) { t.Fatal("must not send a transaction") }, 200, `{}`)
 	if err := r.TransferAccountOwner(context.Background(), "a", "u-1", "u-1", time.Now()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestGenericMemberWritersFenceOwnerRow(t *testing.T) {
+	for _, op := range []string{"DeleteItem", "UpdateItem"} {
+		t.Run(op, func(t *testing.T) {
+			sent := false
+			r := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
+				if !strings.HasSuffix(target, "."+op) {
+					t.Fatalf("unexpected request %s", target)
+				}
+				sent = true
+				cond := body["ConditionExpression"].(string)
+				for alias, name := range body["ExpressionAttributeNames"].(map[string]any) {
+					cond = strings.ReplaceAll(cond, alias, name.(string))
+				}
+				for alias, value := range body["ExpressionAttributeValues"].(map[string]any) {
+					cond = strings.ReplaceAll(cond, alias, `"`+value.(map[string]any)["S"].(string)+`"`)
+				}
+				for _, want := range []string{"attribute_exists (PK)", `role <> "owner"`} {
+					if !strings.Contains(cond, want) {
+						t.Errorf("condition %q missing %q", cond, want)
+					}
+				}
+				return 400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
+			})
+			var err error
+			if op == "DeleteItem" {
+				err = r.DeleteMember(context.Background(), "a", "u")
+			} else {
+				err = r.UpdateMemberRole(context.Background(), "a", "u", "AM")
+			}
+			if !sent || !errors.Is(err, ErrConditionFailed) {
+				t.Fatalf("sent=%v err=%v, want ErrConditionFailed", sent, err)
+			}
+		})
 	}
 }
