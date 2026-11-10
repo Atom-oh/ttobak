@@ -414,6 +414,9 @@ func (svc *CalendarService) decryptCalendarEvent(ctx context.Context, userID str
 		EventID: row.EventID, SourceID: row.SourceID, Provider: "outlook",
 		Title: input.Title, StartsAt: input.StartsAt, EndsAt: input.EndsAt, TimeZone: input.TimeZone,
 		IsAllDay: input.IsAllDay, StartDate: input.StartDate, EndDate: input.EndDate, Location: input.Location, AccountID: input.AccountID,
+		// No share rows exist yet, so nothing is reported as shared: shareAccountId and its
+		// evidence are reported only once the account share is stored.
+		CandidateAccountIDs: input.CandidateAccountIDs, Private: input.Private, SharingMode: "auto",
 	}, nil
 }
 
