@@ -17,6 +17,8 @@ export interface McpSessionOptions {
   startTimeoutMs?: number;
   callTimeoutMs?: number;
   pathDirs: string[];
+  /** Exact tool names this session may call; any other name is refused before sending. */
+  allowedTools: string[];
 }
 
 export interface ToolExpectation {
@@ -27,7 +29,8 @@ export interface ToolExpectation {
 
 export class McpSession {
   private constructor(private readonly client: Client, private readonly transport: StdioClientTransport,
-    private readonly stderr: () => string, private readonly callTimeoutMs: number) {}
+    private readonly stderr: () => string, private readonly callTimeoutMs: number,
+    private readonly allowedTools: ReadonlySet<string>) {}
 
   static async open(spec: SpawnSpec, serverName: string, options: McpSessionOptions): Promise<McpSession> {
     const env: Record<string, string> = { PATH: options.pathDirs.join(':'), ...spec.env };
@@ -47,7 +50,8 @@ export class McpSession {
       if (AUTH_PATTERN.test(stderr)) throw new IntakeError('AUTH_EXPIRED_MIDWAY', `${serverName} reported an authentication failure`);
       throw new IntakeError('SERVER_START_FAILED', `${serverName} did not start`);
     }
-    return new McpSession(client, transport, () => stderr, options.callTimeoutMs ?? 120_000);
+    return new McpSession(client, transport, () => stderr, options.callTimeoutMs ?? 120_000,
+      new Set(options.allowedTools));
   }
 
   async requireTool(expectation: ToolExpectation): Promise<Tool> {
@@ -68,6 +72,7 @@ export class McpSession {
   }
 
   async call(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+    if (!this.allowedTools.has(name)) throw new IntakeError('INVALID_ARGUMENT', 'tool is not on the allowlist');
     let result: CallToolResult;
     try {
       result = await this.client.callTool({ name, arguments: args }, undefined, { timeout: this.callTimeoutMs }) as CallToolResult;

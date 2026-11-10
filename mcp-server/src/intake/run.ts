@@ -7,21 +7,30 @@ import { createHash, randomUUID } from 'node:crypto';
 import { TtobakApi } from '../api.js';
 import { CognitoAuth } from '../auth.js';
 import { CALENDAR_TOOL, SCOPE_PATTERN, runCalendar, type CalendarCounts } from './calendar.js';
+import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type TaskConnectorId } from './connectors.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { SFDC_TOOLS, runSfdc, type SfdcCounts } from './sfdc.js';
 import { IntakeStore } from './store.js';
 
+/** A task-runner provider connector: where it runs, never how it is launched. */
+export interface ConnectorSelection { host: HostId; server: string; pathDirs: string[]; selectedAt: string }
+
 export interface Selection {
   version: 1;
+  meetings?: ConnectorSelection;
+  specreq?: ConnectorSelection & { autoAck: boolean };
+  slack?: ConnectorSelection;
   calendar?: { host: HostId; server: string; sourceId: string; pathDirs: string[]; selectedAt: string;
     acceptUnknownSensitivity?: boolean };
-  sfdc?: { host: HostId; server: string; sourceId: string; pathDirs: string[]; selectedAt: string };
+  /** The SA performance connector keeps its own source and ledger, like calendar. */
+  sfdc?: ConnectorSelection & { sourceId: string };
   ttobak?: { apiUrl: string; cognitoDomain: string; clientId: string; userPoolId?: string };
 }
 
 export interface RunStatus {
+  tasks?: { lastRunAt: string; result: 'ok' | IntakeCode };
   calendar?: {
     lastRunAt: string;
     lastSuccessAt?: string;
@@ -69,10 +78,20 @@ function tokenSubject(idToken: string): string {
   throw new IntakeError('TTOBAK_LOGIN_REQUIRED', 'the signed-in identity could not be read');
 }
 
+/** The lowercased `email` claim of an ID token the auth client already verified. */
+export function tokenEmail(idToken: string): string {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as { email?: unknown };
+    if (typeof payload.email === 'string' && payload.email.trim()) return payload.email.trim().toLowerCase();
+  } catch { /* falls through */ }
+  throw new IntakeError('TTOBAK_LOGIN_REQUIRED', 'the signed-in identity could not be read');
+}
+
 const USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
   ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
+  ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
   ttobak-mcp intake status`;
@@ -111,7 +130,7 @@ function definedTtobakEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
   tools: readonly ToolExpectation[]) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: tools.map(tool => tool.name) });
   try {
     for (const tool of tools) await session.requireTool(tool);
   } catch (error) {
@@ -121,10 +140,38 @@ async function openSession(environment: IntakeEnvironment, host: HostId, server:
   return session;
 }
 
+async function selectTaskConnector(connector: TaskConnectorId, args: string[], environment: IntakeEnvironment,
+  store: IntakeStore) {
+  const options = flags(args, connector === 'specreq'
+    ? { '--host': 'value', '--server': 'value', '--auto-ack': 'value' }
+    : { '--host': 'value', '--server': 'value' });
+  const host = options['--host'] as HostId;
+  const server = options['--server'] as string;
+  if (!HOSTS.includes(host) || typeof server !== 'string') throw new IntakeError('INVALID_ARGUMENT', '--host and --server are required');
+  const autoAckValue = options['--auto-ack'] ?? 'on';
+  if (autoAckValue !== 'on' && autoAckValue !== 'off') throw new IntakeError('INVALID_ARGUMENT', '--auto-ack must be on or off');
+  const pathDirs = parsePathList(environment.env.PATH);
+  const spec = resolveServer(environment.home, host, server, pathDirs);
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
+  try {
+    for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+  } finally {
+    await session.close();
+  }
+  const previous = store.read<Selection>('selection.json') ?? { version: 1 as const };
+  const base = { host, server, pathDirs, selectedAt: environment.now().toISOString() };
+  const next: Selection = { ...previous, version: 1,
+    [connector]: connector === 'specreq' ? { ...base, autoAck: autoAckValue === 'on' } : base };
+  store.write(next, 'selection.json');
+  return { ok: true, connector, host, server, pathDirectories: pathDirs.length,
+    ...(connector === 'specreq' ? { autoAck: autoAckValue === 'on' } : {}) };
+}
+
 async function select(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
+  if (isTaskConnector(args[0])) return selectTaskConnector(args[0], args.slice(1), environment, store);
   const connector = args[0];
   if (connector !== 'calendar' && connector !== 'sfdc') {
-    throw new IntakeError('INVALID_ARGUMENT', 'the connectors are calendar and sfdc');
+    throw new IntakeError('INVALID_ARGUMENT', 'connector must be calendar, sfdc, meetings, specreq or slack');
   }
   const options = flags(args.slice(1), connector === 'calendar'
     ? { '--host': 'value', '--server': 'value', '--accept-unknown-sensitivity': 'flag' }
@@ -154,7 +201,7 @@ async function select(args: string[], environment: IntakeEnvironment, store: Int
   // the user switches hosts. Another server gets a new source.
   const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID();
   const selection: Selection = {
-    ...previous,
+    ...(previous ?? {}),
     version: 1,
     calendar: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString(),
       ...(options['--accept-unknown-sensitivity'] ? { acceptUnknownSensitivity: true } : {}) },
@@ -284,11 +331,12 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     else if (command === 'sfdc') output = await sfdc(rest, environment, store);
     else if (command === 'status' && rest.length === 0) {
       const selection = store.read<Selection>('selection.json');
-      output = { ok: true,
-        selection: {
-          ...(selection?.calendar ? { calendar: { host: selection.calendar.host, server: selection.calendar.server } } : {}),
-          ...(selection?.sfdc ? { sfdc: { host: selection.sfdc.host, server: selection.sfdc.server } } : {}),
-        },
+      const listed: Record<string, { host: HostId; server: string }> = {};
+      for (const id of ['calendar', 'sfdc', 'meetings', 'specreq', 'slack'] as const) {
+        const entry = selection?.[id];
+        if (entry) listed[id] = { host: entry.host, server: entry.server };
+      }
+      output = { ok: true, selection: listed,
         status: store.read<RunStatus>('status.json') ?? {} };
     } else {
       environment.stdout(USAGE);

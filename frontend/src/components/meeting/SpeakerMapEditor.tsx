@@ -20,7 +20,7 @@ interface SpeakerMapEditorProps {
   accountId?: string;
   userId?: string;
   membershipRevision?: number;
-  /** Speaker-to-person binding needs the owner, the meeting and an account publication (ADR-065). */
+  /** Speaker-to-person binding needs the owner, the meeting and an account publication (ADR-067). */
   meetingOwnerId?: string;
   meetingId?: string;
   sharedToAccount?: boolean;

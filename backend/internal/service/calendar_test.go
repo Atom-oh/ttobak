@@ -588,3 +588,17 @@ func TestCalendarSourcePagesAndEmptyEventContinuationsAreBounded(test *testing.T
 		test.Fatal("anonymous source metadata disclosed")
 	}
 }
+
+func TestCalendarEventIDVectors(t *testing.T) {
+	// The TypeScript intake client derives the same IDs; its test carries these vectors.
+	vectors := []struct{ source, external, want string }{
+		{"source-1", "event-1", "72d7d2e4b17347a51f4b59d2e99398890170d1eaef4681437adc3ba9a1660645"},
+		{"source-1", "a<b>&c", "b3848d80ea020156e5e4bcd6cd2f5d1a312ff458c82b3d7afe393a08f2de4530"},
+		{"source-1", "line\u2028para\u2029end", "2b841269015688eccb45b0e102aaf1f68037061d11eab44853ffbd6ecdb42f14"},
+	}
+	for _, vector := range vectors {
+		if got := calendarEventID(vector.source, vector.external); got != vector.want {
+			t.Errorf("calendarEventID(%q, %q) = %s, want %s", vector.source, vector.external, got, vector.want)
+		}
+	}
+}
