@@ -60,31 +60,32 @@ export default function PerformancePage() {
   useEffect(() => {
     if (!userId) return;
     const controller = new AbortController();
-    const key = `${userId}:${period}:${reloadKey}`;
+    const key = `${userId}:${membershipRevision}:${period}:${reloadKey}`;
     performanceApi.missed(period, { signal: controller.signal, expectedUserId: userId })
       .then(data => setMissedResult({ key, data }))
       .catch(() => { if (!controller.signal.aborted) setMissedResult({ key, error: '놓친 항목을 불러오지 못했습니다.' }); });
     return () => controller.abort();
-  }, [userId, period, reloadKey]);
+  }, [userId, membershipRevision, period, reloadKey]);
 
   useEffect(() => {
     if (!userId) return;
     const controller = new AbortController();
-    const key = `${userId}:${reloadKey}`;
+    const key = `${userId}:${membershipRevision}:${reloadKey}`;
     performanceApi.mappings({ signal: controller.signal, expectedUserId: userId })
       .then(result => setMappingsResult({ key, data: result }))
       .catch(() => { if (!controller.signal.aborted) setMappingsResult({ key, error: 'SFDC 매핑 목록을 불러오지 못했습니다.' }); });
     return () => controller.abort();
-  }, [userId, reloadKey]);
+  }, [userId, membershipRevision, reloadKey]);
 
-  // Every result is bound to the signed-in user; another user's rows never render.
-  const currentMissed = missedResult?.key === `${userId}:${period}:${reloadKey}` ? missedResult : null;
+  // Every result is bound to the signed-in user and the membership revision: grants that
+  // materialize in a later bootstrap pass refetch the missed list and the queue too.
+  const currentMissed = missedResult?.key === `${userId}:${membershipRevision}:${period}:${reloadKey}` ? missedResult : null;
   const missed = currentMissed?.data ?? null;
   const missedError = currentMissed?.error ?? null;
   // Keep the previous queue visible while a reload after a saved mapping runs.
   const ownMappings = mappingsResult?.key.startsWith(`${userId}:`) ? mappingsResult : null;
   const mappings = ownMappings?.data ?? null;
-  const mappingsError = ownMappings?.key === `${userId}:${reloadKey}` ? ownMappings.error ?? null : null;
+  const mappingsError = ownMappings?.key === `${userId}:${membershipRevision}:${reloadKey}` ? ownMappings.error ?? null : null;
   const accountList = useMemo(() => accountListState(accountsResult, userId, `${membershipRevision}:${reloadKey}:${accountsAttempt}`), [accountsResult, userId, membershipRevision, reloadKey, accountsAttempt]);
   const accounts = accountList.accounts;
   const accountNames = useMemo(() => accountList.status === 'error' ? null : new Map(accounts.map(account => [account.accountId, account.name])), [accountList.status, accounts]);
