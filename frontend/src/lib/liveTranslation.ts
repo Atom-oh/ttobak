@@ -104,8 +104,18 @@ const utf8Length = (text: string) => new TextEncoder().encode(text).length;
 
 export function translationSourceLanguage(text: string, detectedLanguage?: string): string {
   const language = detectedLanguage?.split('-')[0];
-  if (language === 'ko' || language === 'en') return language;
-  return /[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(text) ? 'ko' : 'en';
+  if (language === 'ko' || language === 'en' || language === 'ja' || language === 'zh') return language;
+  if (/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(text)) return 'ko';
+  if (/[\u3040-\u30ff]/.test(text)) return 'ja';
+  if (/[\u3400-\u4dbf\u4e00-\u9fff]/.test(text)) return 'zh';
+  return 'en';
+}
+
+/** Optional third recognition language beyond the default Korean + English. */
+export type ExtraLiveLanguage = 'zh-CN' | 'ja-JP';
+
+export function liveLanguageOptions(extra?: ExtraLiveLanguage): string {
+  return extra ? `ko-KR,en-US,${extra}` : 'ko-KR,en-US';
 }
 
 export class LiveTranslation {
