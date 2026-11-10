@@ -1,6 +1,6 @@
 # ADR-069: Mac caption overlay windows
 
-- Status: Accepted for implementation; nothing has been verified on a real display
+- Status: Accepted for implementation; partly observed in a local test build (see the verification record); not verified on a projector or over a full-screen slideshow
   or against a real AWS account (see the verification record).
 - Decision date: 2026-11-10.
 - Numbering: ADR-069 because ADR-066 is reserved by the account-shared
@@ -141,9 +141,10 @@ other must stay aligned; change both together.
 
 ## Manual verification record
 
-Recorded 2026-11-10. Nothing below was run on a real display. The app bundle
-built; the DMG step failed because a disk image was busy; the app was never
-launched; no real AWS call was made. Go is not installed locally, so `go vet` was
+Recorded 2026-11-10. The owner ran a local test build (the app pointed at a
+local dev server) on a laptop with an external display; rows marked "observed"
+come from that single session. Nothing was run on a projector, over a full-screen
+slideshow or in a Zoom share. Go is not installed locally, so `go vet` was
 not run for the comment-only change in `translate.go`. Unit tests in the Rust
 modules and the frontend scripts are separate from this checklist.
 
@@ -158,6 +159,10 @@ modules and the frontend scripts are separate from this checklist.
 | Missing model access and missing profile show their own messages | not run |
 | Chinese and Japanese speakers with the third language on (recognition, source labels, original-vs-translation windows) | not run |
 | Saved layout and style restored after app restart | not run |
-| Two windows open: each shows only its own language and style | not run |
+| Two windows open: each shows only its own language | observed by the owner, local test build, 2026-11-10 |
+| Two windows open: a style change applies only to its own window | not run |
+| Three windows (ko, en, zh) open with the third language on: each shows its own language | observed by the owner, local test build, 2026-11-10 |
+| Hover chrome appears, the move handle drags and the resize grip resizes | observed by the owner, local test build, 2026-11-10 |
+| Overlay becomes invisible after a recording stops | observed by the owner, local test build, 2026-11-10 |
 | Display unplugged: window reopens visible on the primary display | not run |
-| Overlay translation latency and Luna output on a real account | not run |
+| Overlay translation on a real account | `caption_translate` returned an Amazon Translate interim and a Luna final for ko to zh once, 2026-11-10; latency not measured |
