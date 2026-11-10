@@ -10,6 +10,8 @@ const (
 
 	// Account partition share rows: PK ACCOUNT#{accountId}.
 	PrefixCalendarShare = "CALSHARE#"
+	// User partition sharing overrides: PK USER#{userId}.
+	PrefixCalendarOverride = "CALOVERRIDE#"
 )
 
 type CalendarEvent struct {
@@ -128,4 +130,8 @@ func CalendarBatchSortKey(sourceID, batchID string) string {
 // CalendarShareSortKey orders share rows by start time; rows of one meetingKey are contiguous.
 func CalendarShareSortKey(startsAt time.Time, meetingKey, userID string) string {
 	return PrefixCalendarShare + startsAt.UTC().Format("2006-01-02T15:04:05.000000000Z") + "#" + meetingKey + "#" + userID
+}
+
+func CalendarOverrideSortKey(sourceID, scopeKey string) string {
+	return PrefixCalendarOverride + sourceID + "#" + scopeKey
 }

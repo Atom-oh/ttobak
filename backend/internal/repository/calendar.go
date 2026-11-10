@@ -63,8 +63,12 @@ type CalendarEventRow struct {
 	MeetingKey     string `dynamodbav:"meetingKey,omitempty"`
 	ShareState     string `dynamodbav:"shareState,omitempty"`
 	SeriesKey      string `dynamodbav:"seriesKey,omitempty"`
-	// ShareVersion is bumped by each direct share-state change and fences sync writes read before it.
+	// ShareVersion is bumped by SetCalendarShareState and fences sync writes read before it.
 	ShareVersion int64 `dynamodbav:"shareVersion,omitempty"`
+	// ExtraVeto* record a second veto row this event holds (hidden mode vetoes both the
+	// automatic account and the account where the event was visible).
+	ExtraVetoAccountID  string `dynamodbav:"extraVetoAccountId,omitempty"`
+	ExtraVetoMeetingKey string `dynamodbav:"extraVetoMeetingKey,omitempty"`
 }
 
 // CalendarRowVersion is the event row state a caller planned from; Exists=false means absent.
@@ -91,11 +95,13 @@ type CalendarWriteMutation struct {
 	Share *CalendarShareRow
 	// PreviousShareKey is deleted unless it equals the new share key.
 	PreviousShareKey *ShareKey
+	// ExtraVeto is a second veto row in another account; it requires Share to be a veto.
+	ExtraVeto *CalendarShareRow
 	// Expected is the event row version the caller planned this mutation from. A different
 	// stored version returns ErrCalendarShareStateChanged before any write, and the event
 	// write is conditioned on that version, so a share decision made from an earlier read
 	// never lands. Expected is required for every mutation that can change share state: one
-	// carrying Share or PreviousShareKey (else ErrInvalidCalendarBatch), and an
+	// carrying Share, ExtraVeto or PreviousShareKey (else ErrInvalidCalendarBatch), and an
 	// upsert of an event whose stored row holds a share or veto (it would vacate it; else
 	// the retryable ErrCalendarShareStateChanged). nil is accepted only for an upsert without share fields of
 	// an absent or never-shared event, and for a remove, which retires the event together
@@ -202,7 +208,7 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 			return nil, ErrCalendarShareStateChanged
 		}
 		olds[index] = old
-		intents[index], err = newCalendarShareIntent(userID, mutation.EventID, old, []*CalendarShareRow{mutation.Share}, mutation.PreviousShareKey)
+		intents[index], err = newCalendarShareIntent(userID, mutation.EventID, old, []*CalendarShareRow{mutation.Share, mutation.ExtraVeto}, mutation.PreviousShareKey)
 		if err != nil {
 			return nil, err
 		}
@@ -247,6 +253,9 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 		}
 		if !calendarIntentGranted(intents[index], granted[index], mutation.Share) {
 			row.ShareAccountID, row.MeetingKey, row.ShareState = "", "", ""
+		}
+		if !calendarIntentGranted(intents[index], granted[index], mutation.ExtraVeto) {
+			row.ExtraVetoAccountID, row.ExtraVetoMeetingKey = "", ""
 		}
 		canonical, err := repo.calendarPut(row, eventCondition)
 		if err != nil {
