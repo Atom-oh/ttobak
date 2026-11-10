@@ -45,3 +45,14 @@ func TestTermsRequestForModelThinking(t *testing.T) {
 		})
 	}
 }
+
+// The output budget must hold a full answer: live Sonnet 5.5 calls used
+// ~100 output tokens per term (28 terms in 2,857 tokens), and a 14 KB KB
+// document stopped at max_tokens=3000 with truncated JSON, which the
+// strict decoder reports as INVALID_OUTPUT (2026-11-10).
+func TestTermsMaxTokensCoversMaxTerms(t *testing.T) {
+	const tokensPerTerm, margin = 100, 1.5
+	if need := int(float64(termsMaxTermsPerCall*tokensPerTerm) * margin); termsMaxTokens < need {
+		t.Fatalf("termsMaxTokens = %d, want >= %d for %d terms", termsMaxTokens, need, termsMaxTermsPerCall)
+	}
+}
