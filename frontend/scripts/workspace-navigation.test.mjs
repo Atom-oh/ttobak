@@ -106,6 +106,7 @@ function workspace(entry, options = {}) {
       AppLayout: ({ activePath, children }) => React.createElement('main', { 'data-active-path': activePath }, children),
     },
     '@/lib/api': {
+      specReqTaskApi: { list: async () => ({ tasks: [], nextCursor: null }), get: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); } },
       calendarApi: {
         events: (...args) => {
           calls.calendarEvents.push(args);

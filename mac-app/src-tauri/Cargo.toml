@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "TTOBAK Mac App — system audio and microphone capture for desktop meetings"
 authors = ["TTOBAK"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.90"
 
 [lib]
 name = "ttobak_mac_lib"
@@ -23,9 +23,13 @@ env_logger = "0.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "fs", "time", "net", "io-util"] }
 # Local notification when MCP starts a recording (control.rs); Rust-side only.
 tauri-plugin-notification = "2"
+# In-app updates (update.rs); used only through its Rust API. No `updater:`
+# permission is granted to any capability, so the remote SPA cannot call it.
+tauri-plugin-updater = "=2.14.1"
 parking_lot = "0.12"
 hound = "3.5"
 base64 = "0.22"
+semver = "1"
 
 # Streaming upload of the recorded WAV straight to a presigned S3 URL — see
 # `src/upload.rs`. Bulk audio bytes must never cross the Tauri IPC bridge to
