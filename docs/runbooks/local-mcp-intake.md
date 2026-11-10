@@ -129,6 +129,12 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
   once more. Run the task step on one device only.
 - **Task cap.** Past 1,000 tasks no SpecReq linking, acknowledge or refresh
   runs (see `load`). Closed rows count toward the cap.
+- **Attendees are read once.** An occurrence is classified on its first
+  evaluation. Later attendee changes are not re-evaluated, so an occurrence
+  classified as skip stays skipped.
+- **External means not `@amazon.com`.** Any other address, including
+  affiliates and resource mailboxes, counts as an external attendee and makes
+  the occurrence a customer meeting.
 
 ## Acceptance on the Mac (required before scheduling)
 
