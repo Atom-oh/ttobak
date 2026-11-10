@@ -39,6 +39,7 @@
     "ttobak:autoTermsMode": "personal",
     "ttobak:newsTermsMode": "on",
     "ttobak:newsTermsSources": "all",
+    "ttobak:kbTermsMode": "personal",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
