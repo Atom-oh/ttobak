@@ -34,6 +34,8 @@ async function readSources(directory) {
 export const NON_ICON_LITERALS = new Set([
   'task', // `?task=` query parameter name (components/workspace/MeetingsWorkspace.tsx)
   'event', // account link / flow item kind (lib/accountOverview.ts, types/meeting.ts)
+  'clear', // caption push kind (lib/captionOverlay.ts)
+  'preview', // caption push kind (lib/captionOverlay.ts)
 ]);
 
 function collectIcons(sources, codepoints) {
