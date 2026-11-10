@@ -182,6 +182,37 @@ the 9,000-byte translation request limit; the full transcript remains separate.
 Auto-scroll follows new captions only while the reader remains near the bottom.
 A polite live region announces completed translations, not provisional updates.
 Single-target speech already in the target language uses one original column.
+In the bilingual ko-en mode, a Japanese or Chinese source renders as the original plus a
+Korean translation (`TranslationView`). `translationSourceLanguage` labels `zh` and `ja`.
+
+Mac app caption windows (ADR-069) are separate from this card. In the Mac app only,
+the record page shows `CaptionOverlayPanel` (state from `useCaptionOverlay`, wired in
+`record/page.tsx`): an AWS profile select (from the local profile names), a region
+input, and a third-language select (none, Japanese, Chinese; disabled while recording,
+with a note that recognition language changes only before recording). Each allowed
+language (Korean, English, the extra language) has an open/close toggle, disabled until
+a profile is chosen. Each open window gets a style editor: font, size (16-160), font and
+outline colors, outline width (0-12) and background opacity. Controls live in this
+panel, never on the projected window. Hovering a caption window shows a dashed
+outline, a grip-glyph move handle at the top centre and a diagonal resize grip at the
+bottom-right corner (minimum 320x80); they fade out within about 200 ms when the
+pointer leaves, and the whole window stays draggable. A note says Zoom shows the overlay only when the
+whole screen is shared, not a single window. Failures show a Korean message
+(`captionErrorMessage`) with a retry button that also resets once-only error reporting.
+A failed translation removes that line from the window (an empty-text push), so no stale
+draft stays projected; a translation longer than the 4,000-byte push cap shows its end. The panel renders nothing outside the Mac app or when the app
+build lacks the caption commands. The panel is collapsed to one row by default (title, per-language toggles, a settings disclosure button); the profile, region, third-language, style and Zoom controls expand on demand, while the error line and the profile-missing note always show. The choice is stored in `localStorage` (`ttobak-caption-panel-expanded`). On desktop, the record page's right Q&A/reference aside can be hidden with a chevron button and reopened from a button on the right edge (`ttobak-record-side-panel`, default open); it is hidden with CSS so Q&A history survives, and asking from a reference reopens it.
+
+While recording on desktop, a layout menu at the right of the meeting title shows or hides each card with checkboxes: translation (only when enabled), live summary, notes, live transcript and the Q&A/reference aside. The aside checkbox drives the same preference as its chevron buttons. Card choices are stored as one JSON value (`ttobak-record-cards`, default all shown; corrupt values fall back to defaults) and the pure rules live in `lib/recordLayoutPrefs.ts`. Hidden cards stay mounted and are hidden with CSS, so typed notes and live subscriptions survive. The visible rows share a bounded column (viewport height minus 8rem, at least 28rem): translation, summary/notes and an expanded transcript each take an equal share, a lone summary or notes card spans the full width, and a collapsed transcript is a header strip that gives its height back. The transcript starts collapsed as before, expands when re-shown from the menu, and is always expanded when it is the only row. The last visible main card cannot be unchecked. Mobile tabs are unchanged.
+
+`useCaptionOverlay` runs one `CaptionOverlayController` (one `LiveTranslation` engine per
+open window, interims on) over the local AWS profile, never `/api/translate`. The record
+page passes every live segment to it (`onSegment`) and `useRecordingSession` reads the
+extra recognition language through a getter (`getExtraLanguage`) when a recording starts.
+Opening a window while idle shows preview text; when a recording stops the windows are
+cleared and the engines are rebuilt so the next recording's segment IDs cannot collide.
+Closing a window stops its engine first. Each window shows only payloads tagged with its
+own language, and once a line is final later drafts for it are ignored.
 Desktop Web
 Speech fallback remains Korean-configured and the interpretation UI explains
 that mixed-language recognition requires the Transcribe Streaming connection.
