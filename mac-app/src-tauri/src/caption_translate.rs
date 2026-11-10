@@ -21,6 +21,10 @@ use tauri::{AppHandle, Manager, State};
 
 /// Requests allowed per sliding minute, across all callers.
 const RATE_PER_MINUTE: u32 = 600;
+/// Input bytes (text plus context) allowed per sliding minute, across all
+/// callers. Bounds what a script in the remote page can send to the user's
+/// AWS account.
+const BYTES_PER_MINUTE: usize = 600_000;
 const LLM_TIMEOUT: Duration = Duration::from_secs(6);
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -104,6 +108,45 @@ impl RateCeiling {
         self.seen.push_back(now);
         true
     }
+}
+
+/// Sliding 60 s window input-byte budget. A rejected request is not counted.
+pub struct ByteBudget {
+    per_minute: usize,
+    used: usize,
+    seen: VecDeque<(Instant, usize)>,
+}
+
+impl ByteBudget {
+    pub fn new(per_minute: usize) -> Self {
+        Self {
+            per_minute,
+            used: 0,
+            seen: VecDeque::new(),
+        }
+    }
+
+    pub fn allow(&mut self, now: Instant, bytes: usize) -> bool {
+        while let Some(&(at, n)) = self.seen.front() {
+            if now.saturating_duration_since(at) >= Duration::from_secs(60) {
+                self.seen.pop_front();
+                self.used -= n;
+            } else {
+                break;
+            }
+        }
+        if self.used.saturating_add(bytes) > self.per_minute {
+            return false;
+        }
+        self.used += bytes;
+        self.seen.push_back((now, bytes));
+        true
+    }
+}
+
+/// Input bytes a request sends: the text plus every context entry.
+pub fn request_bytes(text: &str, context: &[String]) -> usize {
+    text.len() + context.iter().map(String::len).sum::<usize>()
 }
 
 /// Maps an AWS error code and message to one of the page-facing codes.
@@ -281,13 +324,14 @@ async fn confirm_aws_change(_app: &AppHandle, _profile: &str, _region: &str) -> 
 }
 
 /// Managed state: current settings, the settings file, cached AWS clients
-/// keyed by `(profile, region)` and the request limiter. Without a settings
-/// file every caption command returns `unavailable`.
+/// keyed by `(profile, region)` and the request and byte limiters. Without a
+/// settings file every caption command returns `unavailable`.
 pub struct CaptionState {
     settings: Mutex<CaptionSettings>,
     path: Option<PathBuf>,
     clients: Mutex<HashMap<(String, String), Clients>>,
     rate: Mutex<RateCeiling>,
+    budget: Mutex<ByteBudget>,
     /// Set while `caption_settings_set` runs.
     changing: AtomicBool,
 }
@@ -325,6 +369,7 @@ impl CaptionState {
             path,
             clients: Mutex::new(HashMap::new()),
             rate: Mutex::new(RateCeiling::new(RATE_PER_MINUTE)),
+            budget: Mutex::new(ByteBudget::new(BYTES_PER_MINUTE)),
             changing: AtomicBool::new(false),
         }
     }
@@ -575,6 +620,13 @@ pub async fn caption_translate(
         return Err(CaptionError::from_code("rate-limited"));
     }
     let context = check_input(&text, &source_lang, &target_lang, &context)?;
+    if !state
+        .budget
+        .lock()
+        .allow(Instant::now(), request_bytes(&text, &context))
+    {
+        return Err(CaptionError::from_code("rate-limited"));
+    }
     let (profile, region) = {
         let s = state.settings.lock();
         (s.profile.clone(), s.region.clone())
@@ -659,6 +711,30 @@ mod tests {
         assert!(r.allow(t0));
         assert!(!r.allow(t0 + Duration::from_secs(59)));
         assert!(r.allow(t0 + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn byte_budget_limits_input_per_minute() {
+        let mut b = ByteBudget::new(600_000);
+        let t0 = Instant::now();
+        assert!(b.allow(t0, 400_000));
+        assert!(b.allow(t0, 200_000));
+        assert!(!b.allow(t0, 1), "budget spent");
+        assert!(!b.allow(t0 + Duration::from_secs(59), 1));
+        // A rejected request does not count against the budget.
+        assert!(b.allow(t0 + Duration::from_secs(60), 600_000));
+        let mut fresh = ByteBudget::new(600_000);
+        assert!(!fresh.allow(t0, 600_001));
+        assert!(fresh.allow(t0, 600_000));
+    }
+
+    #[test]
+    fn request_bytes_count_text_and_context() {
+        assert_eq!(
+            request_bytes("가나", &["ab".to_string(), "c".to_string()]),
+            9
+        );
+        assert_eq!(request_bytes("x", &[]), 1);
     }
 
     #[test]

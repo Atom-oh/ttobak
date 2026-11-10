@@ -1,7 +1,8 @@
 # ADR-069: Mac caption overlay windows
 
-- Status: Accepted for implementation; partly observed in a local test build (see the verification record); not verified on a projector or over a full-screen slideshow
-  or against a real AWS account (see the verification record).
+- Status: Accepted for implementation; not verified on a projector or over a
+  full-screen slideshow or against a real AWS account. The manual verification
+  record arrives with the overlay PR (2/4).
 - Decision date: 2026-11-10.
 - Numbering: ADR-069 because ADR-066 is reserved by the account-shared
   calendar work and ADR-068 is SA performance data residency.
@@ -13,7 +14,9 @@
   the three translation commands and the profile confirmation; 2/4: overlay
   windows, page and capability, byte budget, open-window check; 3/4: record-page
   bridge and panel; 4/4: layout menu and remaining docs. Parts of later PRs do not
-  exist before they land.
+  exist before they land: the windows, event routing, transparency, window level
+  and overlay capability sections describe 2/4, and window reopen on the record
+  page describes 3/4.
 
 ## Context
 
@@ -45,13 +48,6 @@ target (`Any`) receives every emit. Each page therefore listens with a target sc
 to its own window (`{kind: 'WebviewWindow', label: 'caption-<lang>'}`), and both
 payloads carry `lang`; the page drops any payload for another language.
 
-**Idle and failure display.** A failed translation pushes that entry's id with empty
-text, which removes its line, so expired credentials mid-sentence never leave a stale
-draft on the projector. Text longer than the 4,000-byte push cap is cut to its tail
-on a UTF-8 character boundary before pushing (`MAX_PUSH_TEXT_BYTES`). Skipped filler
-finals push nothing. Once an id is shown as final, later drafts for it are dropped
-because commands can emit out of order.
-
 **Transparency.** `tauri.conf.json` sets `macOSPrivateApi: true` and Cargo enables
 the `macos-private-api` feature of `tauri`; windows are built `transparent`. This
 fits the app's existing non-App-Store distribution. It is an app-wide config
@@ -76,10 +72,12 @@ LLM failure other than expired credentials or missing model access use Amazon Tr
 server's `/api/translate`, so server limits, cost and configuration are not
 involved and that path and the in-page translation tab are unchanged. There is no
 fallback to the server when the profile is missing. Credentials are resolved and
-held in Rust only; only profile names cross IPC. They come only from the selected
-profile (`profile_credentials`: static keys, SSO, `credential_process`, roles),
-never from the SDK default chain, which reads environment variables first and
-would bill an exported terminal identity instead of the named profile. Expired credentials, missing
+held in Rust only; only profile names cross IPC. SigV4 credentials come only from
+the selected profile (`profile_credentials`: static keys, SSO, `credential_process`,
+roles), never from the SDK default credentials chain, which reads environment
+variables first and would bill an exported terminal identity instead of the named
+profile. Other SDK settings are still loaded by `aws_config::defaults` and can come
+from the environment or the shared config files. Expired credentials, missing
 model access, a missing profile, rate limiting, timeout and rejected output
 return distinct fixed error codes; an expired-credential failure drops the cached
 client so the next call after `mwinit` uses fresh credentials without a restart.
@@ -104,33 +102,25 @@ control channel and meeting detection already fail open.
 
 **Remote origin command set.** The remote `default` capability gains exactly
 seven commands (also listed in `build.rs` COMMANDS; `command_acl_tests` enforces
-both): `caption_settings_get`, `caption_settings_set`, `caption_translate`,
-`caption_overlay_open`, `caption_overlay_close`, `caption_overlay_set_style`,
-`caption_overlay_push`. Rust validates every input: language allowlist (and the
-extra-language gate), AWS profile name pattern and membership in the local
-profile list, region pattern, style ranges (font allowlist, size 16-160, outline
-0-12, opacity 0-1, `#RRGGBB` colors), push kind (`entry`, `clear`, `preview`), id
-at most 64 bytes, pushed text at most 4,000 bytes, translation text at most 9,000
-bytes with at most five context items of at most 3,000 bytes, and a sliding
-ceiling of 600 translation requests and 600,000 input bytes (text plus context) per
-minute across all callers so a misbehaving page cannot run up the user's bill.
-`caption_translate` also rejects a target language whose overlay window is not open;
-the record page starts an engine only after its window opened and stops it before
-closing the window. None of the commands reads
+both): `caption_settings_get`, `caption_settings_set` and `caption_translate` in
+1/4, and `caption_overlay_open`, `caption_overlay_close`, `caption_overlay_set_style`
+and `caption_overlay_push` in 2/4. Rust validates every input: language allowlist,
+AWS profile name pattern and membership in the local profile list, region pattern,
+translation text at most 9,000 bytes with at most five context items of at most
+3,000 bytes, and a sliding ceiling of 600 translation requests and 600,000 input
+bytes (text plus context) per minute across all callers so a misbehaving page
+cannot run up the user's bill (1/4). From 2/4 it also enforces the extra-language
+gate, style ranges (font allowlist, size 16-160, outline 0-12, opacity 0-1,
+`#RRGGBB` colors), push kind (`entry`, `clear`, `preview`), id at most 64 bytes and
+pushed text at most 4,000 bytes, and `caption_translate` rejects a target language
+whose overlay window is not open; the record page (3/4) starts an engine only after
+its window opened and stops it before closing the window. None of the commands reads
 arbitrary files, reaches an arbitrary network address or exposes tokens. Error
 codes are listed in `mac-app/CLAUDE.md`.
 
 **Overlay capability.** The overlay windows get `capabilities/caption-overlay.json`:
 `core:event:allow-listen`, `allow-unlisten`, `core:window:allow-start-dragging`
 and `core:window:allow-set-size` only. No event emit and no app command.
-
-**Mouse move and resize.** Hovering an overlay shows a dashed outline, a top-centre
-move handle and a bottom-right resize grip, all hidden again when the pointer leaves,
-so a projected view shows only subtitles; the chrome sits in reserved padding and
-never covers text. tao 0.37 returns `NotSupported` for `drag_resize_window` on macOS,
-so the grip resizes the window from the page with `setSize(LogicalSize)` once per
-animation frame, clamped to 320x80; the resulting `Resized` event saves the layout. The page is a local origin, holds no
-token and makes no network call.
 
 **Recognition language.** The third recognition language is opt-in per session;
 the default stays `ko-KR,en-US` on web, mobile and Mac. The record page option
@@ -168,32 +158,10 @@ other must stay aligned; change both together.
 - `mac-app/src-tauri/Cargo.lock` stays git-ignored (existing policy), so the AWS
   SDK crates resolve at build time.
 - Mac changes have no CI coverage.
+- Known gap: an echoed English final passes validation for ja and zh targets. The
+  server validator has the same gap, so change `interpreter.rs` and `translate.go`
+  together.
 
 ## Manual verification record
 
-Recorded 2026-11-10. The owner ran a local test build (the app pointed at a
-local dev server) on a laptop with an external display; rows marked "observed"
-come from that single session. Nothing was run on a projector, over a full-screen
-slideshow or in a Zoom share. Go is not installed locally, so `go vet` was
-not run for the comment-only change in `translate.go`. Unit tests in the Rust
-modules and the frontend scripts are separate from this checklist.
-
-| Check | Result |
-|---|---|
-| Overlay stays above a full-screen PowerPoint slideshow on an external display | not run |
-| Overlay stays above a full-screen Keynote slideshow on an external display | not run |
-| Transparent background and text outline render correctly | not run |
-| Zoom full-screen share shows the overlay | not run |
-| Zoom single-window share does not show the overlay | not run |
-| Expired credentials show the error, then `mwinit`, then retry succeeds without restart | not run |
-| Missing model access and missing profile show their own messages | not run |
-| Chinese and Japanese speakers with the third language on (recognition, source labels, original-vs-translation windows) | not run |
-| Saved layout and style restored after app restart | not run |
-| Two windows open: each shows only its own language | observed by the owner, local test build, 2026-11-10 |
-| Two windows open: a style change applies only to its own window | not run |
-| Three windows (ko, en, zh) open with the third language on: each shows its own language | observed by the owner, local test build, 2026-11-10 |
-| Hover chrome appears, the move handle drags and the resize grip resizes | observed by the owner, local test build, 2026-11-10 |
-| Overlay becomes invisible after a recording stops | observed by the owner, local test build, 2026-11-10 |
-| Display unplugged: window reopens visible on the primary display | not run |
-| Changing the profile or region shows the native confirmation above the main window; Cancel keeps the saved values and Allow applies them | not run |
-| Overlay translation on a real account | `caption_translate` returned an Amazon Translate interim and a Luna final for ko to zh once, 2026-11-10; latency not measured |
+The verification record arrives with the overlay PR (2/4), whose windows it checks.
