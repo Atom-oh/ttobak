@@ -26,6 +26,7 @@ from the account-shared limit, which stays opportunity ID, name and stage.
   | Outlook mail | subject, date, counterpart domain, mapped account | body, attachments, full addresses beyond domain |
   | Outlook calendar | title, start/end, organizer email domain, mapped account | body, notes, join links |
   | Slack | per channel/account/month counts, thread counts, permalinks, channel names | message bodies |
+  | SFDC assignments | account ID, account name, role (registry `assignmentSource` or `activity`) | none |
   | SFDC Tasks | ID, date, account, type/category, subject, status, linked SpecReq ID | description, comments |
   | SFDC opportunities | ID, name, stage, close date, SA-on-team flag, amount band | exact amounts, contact details |
   | SpecReq | ID, title, state, complexity, type, customer, created/closed dates | body, comments |
@@ -45,7 +46,7 @@ from the account-shared limit, which stays opportunity ID, name and stage.
 
   | Row | Retention |
   |---|---|
-  | `PERFTASK#` SFDC Task, `PERFGOAL#` yearly goals | TTL at 00:00 UTC on January 1 of the year two years after the row's own year (`year+2`), so the current and previous year stay readable. Task reads hide expired rows before TTL deletion. The runner also removes a task that vanishes from a complete SFDC read. |
+  | `PERFTASK#` SFDC Task, `PERFGOAL#` yearly goals | TTL at 00:00 UTC on January 1 of the year two years after the row's own year (`year+2`), so the current and previous year stay readable. Task and goals reads hide expired rows before TTL deletion, and a task or goals write whose expiry is not in the future is rejected, because DynamoDB would never sweep it. The runner also removes a task that vanishes from a complete SFDC read. |
   | `PERFBATCH#` batch receipt | TTL seven days after the batch; it holds counts and a payload digest only. |
   | `PERFASSIGN#` SFDC assignment | No TTL. A current-state row, removed when a complete assignment snapshot from the runner no longer lists it. It persists while the owner runs no sync. |
   | `PERFMAP#` automatic mapping | No TTL. Removed by the automatic mapping pass after the next complete assignment sync when it is stale (no longer a unique name match) or its assignment is gone. |

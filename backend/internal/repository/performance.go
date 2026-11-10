@@ -82,6 +82,14 @@ func performanceKey(userID, sortKey string) map[string]types.AttributeValue {
 	}
 }
 
+// performanceNow is the repository clock for retention checks; tests replace it.
+var performanceNow = time.Now
+
+// performanceExpired reports whether an expiry is not in the future.
+func performanceExpired(expiresAt int64) bool {
+	return expiresAt <= performanceNow().Unix()
+}
+
 // performanceYearExpiry returns 00:00 UTC on January 1 of year+2.
 func performanceYearExpiry(year int) int64 {
 	return time.Date(year+2, time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
@@ -92,7 +100,11 @@ func performanceTaskExpiry(activityDate string) (int64, error) {
 	if err != nil {
 		return 0, ErrInvalidPerformanceBatch
 	}
-	return performanceYearExpiry(date.Year()), nil
+	expires := performanceYearExpiry(date.Year())
+	if performanceExpired(expires) {
+		return 0, ErrInvalidPerformanceBatch // already past retention; TTL would never sweep it
+	}
+	return expires, nil
 }
 
 func validPerformanceSource(source string) bool {
@@ -120,7 +132,7 @@ func (r *DynamoDBRepository) ApplyPerformanceBatch(ctx context.Context, userID, 
 	if saved != nil {
 		return performanceRetryReceipt(saved, digest)
 	}
-	now := time.Now().UTC()
+	now := performanceNow().UTC()
 	sourceUpdate, err := r.performanceSourceUpdate(userID, source, req, receipt.Revision, now)
 	if err != nil {
 		return nil, err
@@ -324,7 +336,7 @@ func (r *DynamoDBRepository) getPerformanceReceipt(ctx context.Context, userID, 
 		saved.Receipt.Revision < 1 || !performanceDigest.MatchString(saved.PayloadDigest) {
 		return nil, ErrPerformanceCorruptData
 	}
-	if saved.ExpiresAt <= time.Now().Unix() {
+	if performanceExpired(saved.ExpiresAt) {
 		return nil, nil
 	}
 	return &saved, nil
@@ -383,7 +395,7 @@ func (r *DynamoDBRepository) ListPerformanceTasks(ctx context.Context, userID st
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().Unix()
+	now := performanceNow().Unix()
 	tasks := make([]model.SFDCTask, 0, len(items))
 	for _, item := range items {
 		var row performanceTaskRow
@@ -444,7 +456,7 @@ func (r *DynamoDBRepository) PutAccountMapping(ctx context.Context, userID strin
 		return ErrInvalidPerformanceInput
 	}
 	if m.UpdatedAt == "" {
-		m.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		m.UpdatedAt = performanceNow().UTC().Format(time.RFC3339)
 	}
 	sortKey := model.PerformanceMappingSortKey(m.SFDCAccountID)
 	var condition *expression.ConditionBuilder
@@ -494,6 +506,9 @@ func (r *DynamoDBRepository) GetPerformanceGoals(ctx context.Context, userID str
 		row.SK != sortKey || row.UserID != userID || row.Year != year {
 		return nil, ErrPerformanceCorruptData
 	}
+	if row.ExpiresAt != 0 && performanceExpired(row.ExpiresAt) { // TTL deletion lags; hide expired rows.
+		return nil, nil
+	}
 	goals := row.PerformanceGoals
 	return &goals, nil
 }
@@ -504,11 +519,15 @@ func (r *DynamoDBRepository) PutPerformanceGoals(ctx context.Context, userID str
 		return ErrInvalidPerformanceInput
 	}
 	if g.UpdatedAt == "" {
-		g.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		g.UpdatedAt = performanceNow().UTC().Format(time.RFC3339)
+	}
+	expires := performanceYearExpiry(g.Year)
+	if performanceExpired(expires) {
+		return ErrInvalidPerformanceInput // already past retention; TTL would never sweep it
 	}
 	put, err := r.performancePut(performanceGoalsRow{
 		PK: model.PrefixUser + userID, SK: model.PerformanceGoalsSortKey(g.Year), UserID: userID,
-		ExpiresAt: performanceYearExpiry(g.Year), PerformanceGoals: g,
+		ExpiresAt: expires, PerformanceGoals: g,
 	}, nil)
 	if err != nil {
 		return err

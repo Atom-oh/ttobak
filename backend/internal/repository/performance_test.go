@@ -11,6 +11,16 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
+var performanceTestClock = time.Date(2026, time.November, 10, 0, 0, 0, 0, time.UTC)
+
+// pinPerformanceNow fixes the repository clock for one test.
+func pinPerformanceNow(test *testing.T) {
+	test.Helper()
+	previous := performanceNow
+	performanceNow = func() time.Time { return performanceTestClock }
+	test.Cleanup(func() { performanceNow = previous })
+}
+
 const performanceTestBatch = "90ec2d25-a32e-43a5-96a9-e203859b7d19"
 
 var performanceTestDigest = strings.Repeat("a", 64)
@@ -42,6 +52,7 @@ func performanceTaskRequest(expected int64) model.PerformanceSyncRequest {
 const performanceCancelled = `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","Message":"x","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]}`
 
 func TestApplyPerformanceBatchRevisionCAS(test *testing.T) {
+	pinPerformanceNow(test)
 	for _, expected := range []int64{0, 4} {
 		var source map[string]any
 		repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
@@ -75,6 +86,7 @@ func TestApplyPerformanceBatchRevisionCAS(test *testing.T) {
 }
 
 func TestApplyPerformanceBatchReceiptReplay(test *testing.T) {
+	pinPerformanceNow(test)
 	var receiptPut map[string]any
 	var stored map[string]any
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
@@ -125,6 +137,7 @@ func mustJSON(test *testing.T, value any) string {
 }
 
 func TestPerformanceTaskTTL(test *testing.T) {
+	pinPerformanceNow(test)
 	var task, removal map[string]any
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
 		body := performanceBody(test, request)
@@ -162,6 +175,7 @@ func mustJSONInt(n int64) string {
 }
 
 func TestPerformanceAssignmentRowsHaveNoTTL(test *testing.T) {
+	pinPerformanceNow(test)
 	var assignment map[string]any
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
 		body := performanceBody(test, request)
@@ -185,6 +199,7 @@ func TestPerformanceAssignmentRowsHaveNoTTL(test *testing.T) {
 }
 
 func TestApplyPerformanceBatchRejectsInvalid(test *testing.T) {
+	pinPerformanceNow(test)
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
 		test.Fatalf("invalid batch reached DynamoDB: %s", performanceTarget(request))
 		return nil, nil
@@ -218,6 +233,7 @@ func TestApplyPerformanceBatchRejectsInvalid(test *testing.T) {
 }
 
 func TestPutAccountMappingKeepsManual(test *testing.T) {
+	pinPerformanceNow(test)
 	var put map[string]any
 	reject := false
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
@@ -257,6 +273,7 @@ func TestPutAccountMappingKeepsManual(test *testing.T) {
 }
 
 func TestPerformanceListsPaginateAndFilter(test *testing.T) {
+	pinPerformanceNow(test)
 	pages := 0
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
 		body := performanceBody(test, request)
@@ -267,7 +284,7 @@ func TestPerformanceListsPaginateAndFilter(test *testing.T) {
 			return `{"PK":{"S":"USER#owner"},"SK":{"S":"PERFTASK#` + id + `"},"userId":{"S":"owner"},"taskId":{"S":"` + id +
 				`"},"sfdcAccountId":{"S":"A1"},"activityDate":{"S":"` + date + `"},"type":{"S":"Call"},"subject":{"S":"s"},"status":{"S":"Done"},"pendingShareExpiresAt":{"N":"` + mustJSONInt(ttl) + `"}}`
 		}
-		future := time.Now().AddDate(1, 0, 0).Unix()
+		future := performanceNow().AddDate(1, 0, 0).Unix()
 		pages++
 		if _, again := body["ExclusiveStartKey"]; !again {
 			return summaryHTTPResponse(200, `{"Items":[`+task("T1", "2026-03-04", future)+`,`+task("T0", "2025-12-31", future)+`],"LastEvaluatedKey":{"PK":{"S":"USER#owner"},"SK":{"S":"PERFTASK#T1"}}}`, nil), nil
@@ -284,6 +301,7 @@ func TestPerformanceListsPaginateAndFilter(test *testing.T) {
 }
 
 func TestPerformanceGoalsRoundTrip(test *testing.T) {
+	pinPerformanceNow(test)
 	var put map[string]any
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
 		body := performanceBody(test, request)
@@ -320,6 +338,7 @@ func TestPerformanceGoalsRoundTrip(test *testing.T) {
 }
 
 func TestApplyPerformanceBatchAcceptsAccountlessTask(test *testing.T) {
+	pinPerformanceNow(test)
 	var stored map[string]any
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
 		body := performanceBody(test, request)
@@ -346,5 +365,40 @@ func TestApplyPerformanceBatchAcceptsAccountlessTask(test *testing.T) {
 	tasks, err := repo.ListPerformanceTasks(test.Context(), "owner", "", "")
 	if err != nil || len(tasks) != 1 || tasks[0].TaskID != "T9" || tasks[0].SFDCAccountID != "" {
 		test.Fatalf("list: %+v %v", tasks, err)
+	}
+}
+
+func TestPerformanceRejectsAlreadyExpiredWrites(test *testing.T) {
+	pinPerformanceNow(test)
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		test.Fatalf("expired write must be rejected before any call: %s", performanceTarget(request))
+		return nil, errors.New("unexpected call")
+	})
+	if err := repo.PutPerformanceGoals(test.Context(), "owner", model.PerformanceGoals{Year: 2019, Text: "old"}); !errors.Is(err, ErrInvalidPerformanceInput) {
+		test.Fatalf("expired goals: %v", err)
+	}
+	req := model.PerformanceSyncRequest{BatchID: performanceTestBatch, Mutations: []model.PerformanceMutation{
+		{Op: "upsert", Task: &model.SFDCTask{TaskID: "T1", ActivityDate: "2019-12-31", Type: "Call", Subject: "s", Status: "Open"}},
+	}}
+	if _, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, req, performanceTestDigest); !errors.Is(err, ErrInvalidPerformanceBatch) {
+		test.Fatalf("expired task: %v", err)
+	}
+}
+
+func TestGetPerformanceGoalsHidesExpired(test *testing.T) {
+	pinPerformanceNow(test)
+	row := func(ttl int64) string {
+		return `{"Item":{"PK":{"S":"USER#owner"},"SK":{"S":"PERFGOAL#2024"},"userId":{"S":"owner"},"year":{"N":"2024"},"text":{"S":"g"},"pendingShareExpiresAt":{"N":"` + mustJSONInt(ttl) + `"}}}`
+	}
+	ttl := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		return summaryHTTPResponse(200, row(ttl), nil), nil
+	})
+	if goals, err := repo.GetPerformanceGoals(test.Context(), "owner", 2024); goals != nil || err != nil {
+		test.Fatalf("expired goals must read as not found: %+v %v", goals, err)
+	}
+	ttl = time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
+	if goals, err := repo.GetPerformanceGoals(test.Context(), "owner", 2024); err != nil || goals == nil {
+		test.Fatalf("live goals must be returned: %+v %v", goals, err)
 	}
 }
