@@ -905,7 +905,7 @@ automatic linker never re-creates that pair. None of the three routes is
 connector-delegable; the list carries meeting-derived evidence. People edges
 (below) live in the `LINK#meeting#` range and never appear on these routes.
 
-The `/api/accounts/{accountId}/people` routes serve ADR-065 people edges for
+The `/api/accounts/{accountId}/people` routes serve ADR-067 people edges for
 **direct** members, checked on every request (not connector-delegable;
 `Cache-Control: no-store`; 400 uses `BAD_REQUEST`, an unreadable contact
 directory 503 `CONTACTS_UNAVAILABLE`). Meeting IDs are `{ownerUserId}:{meetingId}`,
