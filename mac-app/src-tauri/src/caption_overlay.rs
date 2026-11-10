@@ -251,6 +251,53 @@ fn float_above_full_screen(window: &WebviewWindow) {
 #[cfg(not(target_os = "macos"))]
 fn float_above_full_screen(_window: &WebviewWindow) {}
 
+/// Whether a push should show (`Some(true)`) or hide (`Some(false)`) the
+/// window. A transparent window still takes clicks meant for what is under
+/// it, so a cleared overlay is ordered out instead of left on screen.
+fn visibility_after(kind: &str, text: &str) -> Option<bool> {
+    match kind {
+        "clear" => Some(false),
+        "preview" => Some(true),
+        "entry" if !text.is_empty() => Some(true),
+        _ => None,
+    }
+}
+
+/// Shows or hides the window without making it key, so a caption arriving
+/// mid-talk never takes focus from the slideshow.
+#[cfg(target_os = "macos")]
+fn set_shown(window: &WebviewWindow, shown: bool) {
+    let target = window.clone();
+    let result = window.run_on_main_thread(move || {
+        let Ok(ns_window) = target.ns_window() else {
+            return;
+        };
+        let ns_window = ns_window.cast::<objc2::runtime::AnyObject>();
+        if ns_window.is_null() {
+            return;
+        }
+        // SAFETY: `ns_window` is the live NSWindow of `target`, used on the
+        // main thread; `orderFrontRegardless` takes no argument and
+        // `orderOut:` takes a nullable sender, and both return void.
+        unsafe {
+            if shown {
+                let _: () = objc2::msg_send![ns_window, orderFrontRegardless];
+            } else {
+                let nil: *const objc2::runtime::AnyObject = std::ptr::null();
+                let _: () = objc2::msg_send![ns_window, orderOut: nil];
+            }
+        }
+    });
+    if let Err(e) = result {
+        log::warn!("caption overlay visibility change failed: {e}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_shown(window: &WebviewWindow, shown: bool) {
+    let _ = if shown { window.show() } else { window.hide() };
+}
+
 /// Records a geometry change in memory and schedules a throttled write.
 fn remember(app: &AppHandle, lang: &str, change: impl FnOnce(&mut WindowLayout)) {
     let state = app.state::<CaptionState>();
@@ -455,17 +502,30 @@ pub async fn caption_overlay_push(
     state.require_available()?;
     let label = gated_label(&state.snapshot(), &lang)?;
     check_push(&kind, &id, &text)?;
-    if app.get_webview_window(label).is_none() {
+    let Some(window) = app.get_webview_window(label) else {
         return Ok(());
-    }
+    };
     let update = CaptionUpdate::new(&lang, &kind, &id, order, &text, is_final);
     app.emit_to(EventTarget::webview_window(label), "caption-update", update)
-        .map_err(|e| window_error("push", e))
+        .map_err(|e| window_error("push", e))?;
+    if let Some(shown) = visibility_after(&kind, &text) {
+        set_shown(&window, shown);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleared_overlays_hide_and_captions_show() {
+        assert_eq!(visibility_after("clear", ""), Some(false));
+        assert_eq!(visibility_after("preview", ""), Some(true));
+        assert_eq!(visibility_after("entry", "hello"), Some(true));
+        // Removing a failed line must not bring a hidden window back.
+        assert_eq!(visibility_after("entry", ""), None);
+    }
 
     #[test]
     fn push_rejects_bad_kind_and_oversized_fields() {
