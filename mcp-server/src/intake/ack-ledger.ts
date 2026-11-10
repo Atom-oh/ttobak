@@ -118,7 +118,10 @@ export function finishAck(store: IntakeStore, scope: string, requestId: string,
   if (!(['ok', 'rejected', 'unknown'] as string[]).includes(outcome)) {
     throw new IntakeError('INVALID_ARGUMENT', 'ack outcome is invalid');
   }
-  update(store, scope, requestId, entry => ({ ...entry, outcome }));
+  // cloudSynced means the task row reflects THIS outcome, so a changed outcome clears it.
+  update(store, scope, requestId, entry => ({
+    ...entry, outcome, cloudSynced: entry.outcome === outcome ? entry.cloudSynced : false,
+  }));
 }
 
 /** Records that the TTOBAK task row now reflects the entry. */

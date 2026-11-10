@@ -51,7 +51,7 @@ function clipUtf8(value: string, maxBytes: number): string {
 const login = (value: unknown): string => typeof value === 'string' ? value.trim().toLowerCase() : '';
 
 /**
- * One request record, or null without a UUID `requestId` and a known `stateId`
+ * One request record, or null without a UUID `requestId`, a known `stateId` or a bounded range list
  * (callers fail on null); any other malformed field becomes a value that can
  * never match.
  */
@@ -60,7 +60,9 @@ function parseSummary(raw: unknown): SpecReqSummary | null {
   const r = raw as Record<string, unknown>;
   if (typeof r.requestId !== 'string' || !REQUEST_ID_PATTERN.test(r.requestId)) return null;
   if (!STATES.includes(r.stateId as SpecReqState)) return null;
-  const ranges = Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length <= MAX_RANGES
+  // An oversized list is dropped as a whole record so the page fails closed (PARSE_FAILED).
+  if (Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length > MAX_RANGES) return null;
+  const ranges = Array.isArray(r.meetingDateRanges)
     ? r.meetingDateRanges.filter((range): range is string => typeof range === 'string') : [];
   return {
     requestId: r.requestId.toLowerCase(),
