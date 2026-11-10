@@ -11,6 +11,7 @@ use aws_config::provider_config::ProviderConfig;
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_bedrockruntime::error::{DisplayErrorContext, ProvideErrorMetadata};
 use aws_sdk_bedrockruntime::primitives::Blob;
+use aws_smithy_runtime_api::client::auth::AuthSchemeId;
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -27,9 +28,15 @@ const RATE_PER_MINUTE: u32 = 600;
 const BYTES_PER_MINUTE: usize = 600_000;
 const LLM_TIMEOUT: Duration = Duration::from_secs(6);
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(6);
+/// After a declined confirmation, further changes that need one are refused
+/// for this long without showing a sheet, so a page cannot wear the user
+/// down with repeated prompts.
+const CONFIRM_COOLDOWN: Duration = Duration::from_secs(30);
+/// SigV4, the only auth scheme caption requests may use.
+const SIGV4: AuthSchemeId = AuthSchemeId::new("sigv4");
 
 #[cfg(test)]
-const ERROR_CODES: [&str; 12] = [
+const ERROR_CODES: [&str; 13] = [
     "profile-missing",
     "credentials-expired",
     "model-access",
@@ -41,6 +48,7 @@ const ERROR_CODES: [&str; 12] = [
     "save-failed",
     "window-error",
     "confirmation-declined",
+    "confirmation-cooldown",
     "unavailable",
 ];
 
@@ -65,6 +73,9 @@ impl CaptionError {
             "save-failed" => "Caption settings could not be saved.",
             "window-error" => "The caption window could not be updated.",
             "confirmation-declined" => "The AWS profile change was cancelled.",
+            "confirmation-cooldown" => {
+                "The AWS profile change was cancelled recently. Try again shortly."
+            }
             "unavailable" => "Captions are unavailable on this Mac.",
             _ => "The AWS translation request failed.",
         };
@@ -168,11 +179,23 @@ pub fn require_open_window(
     }
 }
 
+/// Error codes that mean the account is being throttled: Bedrock
+/// `ThrottlingException` and `ServiceQuotaExceededException` (InvokeModel)
+/// and Amazon Translate `TooManyRequestsException` (TranslateText).
+/// TranslateText has no `LimitExceededException`.
+const THROTTLE_CODES: [&str; 3] = [
+    "ThrottlingException",
+    "ServiceQuotaExceededException",
+    "TooManyRequestsException",
+];
+
 /// Maps an AWS error code and message to one of the page-facing codes.
 pub fn classify(error_code: Option<&str>, message: &str) -> &'static str {
     let code = error_code.unwrap_or_default();
     let lower = message.to_lowercase();
-    if code.starts_with("ExpiredToken")
+    if THROTTLE_CODES.contains(&code) {
+        "rate-limited"
+    } else if code.starts_with("ExpiredToken")
         || code.starts_with("UnrecognizedClient")
         || code.starts_with("InvalidSignature")
         || lower.contains("credential")
@@ -280,6 +303,39 @@ pub fn profile_credentials(
     builder.build()
 }
 
+/// Bedrock client settings from the shared SDK config, pinned to SigV4.
+/// aws-sdk-bedrockruntime honours `AWS_BEARER_TOKEN_BEDROCK`: when that
+/// variable is set it prefers bearer auth with that API key unless the
+/// service config sets its own auth preference, which would bill the key's
+/// account instead of the confirmed profile. With SigV4 first the profile
+/// credentials always sign; a failure to resolve them is returned, not
+/// retried with the token.
+pub fn bedrock_config(sdk: &aws_config::SdkConfig) -> aws_sdk_bedrockruntime::Config {
+    aws_sdk_bedrockruntime::config::Builder::from(sdk)
+        .auth_scheme_preference([SIGV4])
+        .build()
+}
+
+/// Refuses confirmation prompts for `CONFIRM_COOLDOWN` after a decline.
+#[derive(Default)]
+pub struct ConfirmCooldown {
+    declined_at: Option<Instant>,
+}
+
+impl ConfirmCooldown {
+    /// Whether a change needing confirmation must be refused at `now`
+    /// without asking.
+    pub fn blocks(&self, now: Instant) -> bool {
+        self.declined_at
+            .is_some_and(|at| now.saturating_duration_since(at) < CONFIRM_COOLDOWN)
+    }
+
+    /// Records a declined (or unshown) confirmation.
+    pub fn declined(&mut self, now: Instant) {
+        self.declined_at = Some(now);
+    }
+}
+
 /// Whether a profile or region change needs native confirmation: never when
 /// clearing the profile, always when choosing or changing either.
 pub fn needs_confirmation(
@@ -353,6 +409,7 @@ pub struct CaptionState {
     budget: Mutex<ByteBudget>,
     /// Set while `caption_settings_set` runs.
     changing: AtomicBool,
+    cooldown: Mutex<ConfirmCooldown>,
 }
 
 /// Clears `CaptionState::changing` when a settings change ends.
@@ -390,6 +447,7 @@ impl CaptionState {
             rate: Mutex::new(RateCeiling::new(RATE_PER_MINUTE)),
             budget: Mutex::new(ByteBudget::new(BYTES_PER_MINUTE)),
             changing: AtomicBool::new(false),
+            cooldown: Mutex::new(ConfirmCooldown::default()),
         }
     }
 
@@ -422,7 +480,7 @@ impl CaptionState {
             .load()
             .await;
         let built = Clients {
-            bedrock: aws_sdk_bedrockruntime::Client::new(&config),
+            bedrock: aws_sdk_bedrockruntime::Client::from_conf(bedrock_config(&config)),
             translate: aws_sdk_translate::Client::new(&config),
         };
         self.clients.lock().insert(key, built.clone());
@@ -531,7 +589,9 @@ fn apply_settings(
 
 /// Saves the profile, region and extra language. Choosing or changing the
 /// profile or region first asks natively (the remote page must not silently
-/// switch the billed account); declining returns `confirmation-declined`.
+/// switch the billed account); declining returns `confirmation-declined`,
+/// and for `CONFIRM_COOLDOWN` afterwards such a change returns
+/// `confirmation-cooldown` without asking.
 #[tauri::command]
 pub async fn caption_settings_set(
     app: AppHandle,
@@ -562,10 +622,16 @@ pub async fn caption_settings_set(
             &current.region,
             Some(next),
             &region,
-        ) && !confirm_aws_change(&app, next, &region).await
-        {
-            log::info!("caption AWS profile change declined");
-            return Err(CaptionError::from_code("confirmation-declined"));
+        ) {
+            if state.cooldown.lock().blocks(Instant::now()) {
+                log::info!("caption AWS profile change refused during cooldown");
+                return Err(CaptionError::from_code("confirmation-cooldown"));
+            }
+            if !confirm_aws_change(&app, next, &region).await {
+                state.cooldown.lock().declined(Instant::now());
+                log::info!("caption AWS profile change declined");
+                return Err(CaptionError::from_code("confirmation-declined"));
+            }
         }
     }
     apply_settings(&state, profile, region, extra_language)
@@ -910,12 +976,91 @@ mod tests {
     }
 
     #[test]
+    fn classify_maps_throttling() {
+        for code in [
+            "ThrottlingException",
+            "ServiceQuotaExceededException",
+            "TooManyRequestsException",
+        ] {
+            assert_eq!(classify(Some(code), "slow down"), "rate-limited", "{code}");
+            // The code decides even when the message mentions credentials.
+            assert_eq!(
+                classify(Some(code), "too many requests for these credentials"),
+                "rate-limited",
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
     fn classify_defaults_to_aws_error() {
         assert_eq!(
-            classify(Some("ThrottlingException"), "slow down"),
+            classify(Some("LimitExceededException"), "limit"),
+            "aws-error"
+        );
+        assert_eq!(
+            classify(Some("ServiceUnavailableException"), "busy"),
             "aws-error"
         );
         assert_eq!(classify(None, "dispatch failure"), "aws-error");
+    }
+
+    #[test]
+    fn confirmation_cooldown_lasts_thirty_seconds_after_a_decline() {
+        let t0 = Instant::now();
+        let mut c = ConfirmCooldown::default();
+        assert!(!c.blocks(t0), "nothing declined yet");
+        c.declined(t0);
+        assert!(c.blocks(t0));
+        assert!(c.blocks(t0 + Duration::from_secs(29)));
+        assert!(!c.blocks(t0 + Duration::from_secs(30)));
+        // A new decline restarts it.
+        c.declined(t0 + Duration::from_secs(40));
+        assert!(c.blocks(t0 + Duration::from_secs(69)));
+        assert!(!c.blocks(t0 + Duration::from_secs(70)));
+        // A clock reading before the decline still blocks.
+        assert!(c.blocks(t0));
+    }
+
+    /// Stands in for the environment: `AWS_BEARER_TOKEN_BEDROCK` is the
+    /// `bedrock` service key with env name `AWS_BEARER_TOKEN`.
+    #[derive(Debug)]
+    struct BearerEnv;
+
+    impl aws_types::service_config::LoadServiceConfig for BearerEnv {
+        fn load_config(
+            &self,
+            key: aws_types::service_config::ServiceConfigKey<'_>,
+        ) -> Option<String> {
+            (key.service_id() == "bedrock" && key.env() == "AWS_BEARER_TOKEN")
+                .then(|| "bedrock-api-key".to_string())
+        }
+    }
+
+    #[test]
+    fn bedrock_ignores_a_bearer_token_from_the_environment() {
+        let sdk = aws_config::SdkConfig::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .service_config(BearerEnv)
+            .build();
+        // The vendored SDK switches to bearer auth on its own...
+        let plain = aws_sdk_bedrockruntime::Config::from(&sdk);
+        let preferred: Vec<AuthSchemeId> = plain
+            .auth_scheme_preference()
+            .cloned()
+            .expect("bearer preference")
+            .into_iter()
+            .collect();
+        assert_eq!(preferred, [AuthSchemeId::new("httpBearerAuth")]);
+        // ...and the caption client keeps SigV4.
+        let pinned: Vec<AuthSchemeId> = bedrock_config(&sdk)
+            .auth_scheme_preference()
+            .cloned()
+            .expect("sigv4 preference")
+            .into_iter()
+            .collect();
+        assert_eq!(pinned, [SIGV4]);
     }
 
     #[test]

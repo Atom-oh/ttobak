@@ -167,6 +167,16 @@ test('a final line ignores later drafts for the same id', () => {
   assert.deepEqual(page.lines(), ['New session draft'], 'clear starts a new session');
 });
 
+test('replacing the preview keeps ids already final', () => {
+  const page = loadPage('en');
+  page.emit('caption-update', entry('en', 'u1', '', true, 0));
+  assert.deepEqual(page.lines(), ['Live captions will appear here.'], 'a failed final leaves the preview');
+  page.emit('caption-update', entry('en', 'u2', 'Second', true, 1));
+  assert.deepEqual(page.lines(), ['Second'], 'the first line replaces the preview');
+  page.emit('caption-update', entry('en', 'u1', 'Late draft', false, 0));
+  assert.deepEqual(page.lines(), ['Second'], 'a late draft for the failed final is dropped');
+});
+
 test('shows at most three lines, newest last', () => {
   const page = loadPage('en');
   for (let i = 0; i < 5; i++) page.emit('caption-update', entry('en', `u${i}`, `Line ${i}`, true, i));

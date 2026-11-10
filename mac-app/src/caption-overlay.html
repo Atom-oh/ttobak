@@ -198,11 +198,18 @@
           if (frame && frame.classList) frame.classList.toggle('idle', entries.size === 0);
         }
 
-        function clearAll() {
+        // Removes every line but keeps the ids already final, so a late
+        // draft for a failed final cannot appear after the preview goes.
+        function clearLines() {
           entries.forEach(function (e) { e.el.remove(); });
           entries.clear();
-          finals.clear();
           syncIdle();
+        }
+
+        // A new session: lines and final ids both go.
+        function clearAll() {
+          clearLines();
+          finals.clear();
         }
 
         function remove(id) {
@@ -307,7 +314,7 @@
             }
             if (previewing) {
               previewing = false;
-              clearAll();
+              clearLines();
             }
             if (p.isFinal === true) markFinal(p.id);
             upsert(p.id, typeof p.order === 'number' ? p.order : 0, p.text);

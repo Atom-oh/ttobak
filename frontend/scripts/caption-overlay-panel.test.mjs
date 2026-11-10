@@ -212,6 +212,7 @@ test('an unlisted saved region stays available as an option', () => {
 
 test('a declined profile change has its own message and re-reads settings', () => {
   assert.equal(overlay.captionErrorMessage('confirmation-declined'), 'AWS 프로필 변경을 취소했어요.');
+  assert.equal(overlay.captionErrorMessage('confirmation-cooldown'), '잠시 후 다시 시도해 주세요.');
   const hook = readFileSync(new URL('../src/hooks/useCaptionOverlay.ts', import.meta.url), 'utf8');
   const handler = hook.slice(hook.indexOf('const saveFailed'), hook.indexOf('const setProfile'));
   assert.match(handler, /'confirmation-declined'/);

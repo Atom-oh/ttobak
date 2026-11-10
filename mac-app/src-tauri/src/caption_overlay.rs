@@ -133,10 +133,30 @@ impl SaveThrottle {
     }
 }
 
-/// Managed state for layout write throttling.
+/// One async lock per overlay window: a push's event, pass-through and
+/// visibility change are all posted before the next push for that window
+/// starts, so two concurrent pushes cannot leave a hidden window with fresh
+/// text or a shown, empty one. Windows do not wait for each other.
+#[derive(Default)]
+pub struct PushLanes {
+    lanes: [tokio::sync::Mutex<()>; 4],
+}
+
+impl PushLanes {
+    /// The lane for an overlay window label, or `None` for any other label.
+    pub fn lane(&self, label: &str) -> Option<&tokio::sync::Mutex<()>> {
+        caption_model::LANGS
+            .iter()
+            .position(|lang| caption_model::window_label(lang) == Some(label))
+            .and_then(|i| self.lanes.get(i))
+    }
+}
+
+/// Managed state for layout write throttling and push ordering.
 #[derive(Default)]
 pub struct OverlayState {
     throttle: Mutex<SaveThrottle>,
+    pushes: PushLanes,
 }
 
 /// `caption-update` payload.
@@ -533,6 +553,7 @@ pub async fn caption_overlay_set_style(
 pub async fn caption_overlay_push(
     app: AppHandle,
     state: State<'_, CaptionState>,
+    overlays: State<'_, OverlayState>,
     lang: String,
     kind: String,
     id: String,
@@ -543,6 +564,13 @@ pub async fn caption_overlay_push(
     state.require_available()?;
     let label = gated_label(&state.snapshot(), &lang)?;
     check_push(&kind, &id, &text)?;
+    let lane = overlays
+        .pushes
+        .lane(label)
+        .ok_or_else(|| CaptionError::invalid("Unsupported caption language."))?;
+    // Held until this push has posted all its changes (no other lock is
+    // held, and nothing below awaits).
+    let _turn = lane.lock().await;
     let Some(window) = app.get_webview_window(label) else {
         return Ok(());
     };
@@ -574,6 +602,57 @@ pub fn caption_overlay_idle(window: WebviewWindow, idle: bool) -> Result<(), Cap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_overlay_window_has_its_own_push_lane() {
+        let lanes = PushLanes::default();
+        let labels = ["caption-ko", "caption-en", "caption-ja", "caption-zh"];
+        for (i, a) in labels.iter().enumerate() {
+            let lane = lanes.lane(a).expect("lane");
+            assert!(std::ptr::eq(lane, lanes.lane(a).unwrap()), "{a} is stable");
+            for b in &labels[i + 1..] {
+                assert!(!std::ptr::eq(lane, lanes.lane(b).unwrap()), "{a} vs {b}");
+            }
+        }
+        for label in ["main", "caption-fr", ""] {
+            assert!(lanes.lane(label).is_none(), "{label}");
+        }
+    }
+
+    /// Two pushes for one window run one after the other even when each
+    /// yields between its steps; another window's push is not held up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pushes_for_one_window_do_not_interleave() {
+        use std::sync::Arc;
+        let lanes = Arc::new(PushLanes::default());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let push = |name: &'static str| {
+            let (lanes, log) = (lanes.clone(), log.clone());
+            tokio::spawn(async move {
+                let _turn = lanes.lane("caption-en").unwrap().lock().await;
+                for step in ["emit", "pass-through", "show"] {
+                    log.lock().push(format!("{name}:{step}"));
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+        let held = lanes.lane("caption-en").unwrap().lock().await;
+        let (a, b) = (push("a"), push("b"));
+        tokio::task::yield_now().await;
+        assert!(log.lock().is_empty(), "both wait for the held lane");
+        assert!(
+            lanes.lane("caption-ko").unwrap().try_lock().is_ok(),
+            "another window is independent"
+        );
+        drop(held);
+        a.await.unwrap();
+        b.await.unwrap();
+        let log = log.lock().clone();
+        assert_eq!(log.len(), 6);
+        let first = &log[0][..1];
+        assert!(log[..3].iter().all(|s| s.starts_with(first)), "{log:?}");
+        assert!(log[3..].iter().all(|s| !s.starts_with(first)), "{log:?}");
+    }
 
     #[test]
     fn cleared_overlays_hide_and_captions_show() {

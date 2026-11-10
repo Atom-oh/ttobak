@@ -39,7 +39,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 aws-config = { version = "1.8.11", features = ["behavior-version-latest"] }
-aws-sdk-bedrockruntime = "1.46.0"
+# 1.154 is the version whose AWS_BEARER_TOKEN_BEDROCK handling was checked;
+# caption_translate.rs `bedrock_config` turns that override off.
+aws-sdk-bedrockruntime = "1.154.0"
+# `AuthSchemeId` for pinning Bedrock to SigV4 (caption_translate.rs).
+aws-smithy-runtime-api = "1.20"
 aws-sdk-translate = "1.39.0"
 
 # macOS-only audio capture (Core Audio process tap + microphone aggregate
@@ -61,3 +65,7 @@ libc = "0.2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+# `LoadServiceConfig` for the bearer-token test in caption_translate.rs.
+aws-types = "1.7"
