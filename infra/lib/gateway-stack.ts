@@ -176,20 +176,22 @@ export function transcriptCorrectionEnvironment(scope: Construct): Record<string
 
 /**
  * KB-document, research-report and daily news term extraction for the
- * summarize Lambda (layered dictionary 4.2). CDK context `ttobak:kbTermsMode`,
- * `ttobak:researchTermsMode` and `ttobak:newsTermsMode` (off|on, default off),
- * plus `ttobak:newsTermsSources` (global|all, default global); invalid values
- * fail synth.
+ * summarize Lambda (layered dictionary 4.2). CDK context `ttobak:kbTermsMode` and
+ * `ttobak:researchTermsMode` (off|personal|on; personal never writes an Account,
+ * ADR-008 FU4), `ttobak:newsTermsMode` (off|on), all default off, plus
+ * `ttobak:newsTermsSources` (global|all, default global); invalid values fail
+ * synth.
  */
 export function sourceTermsEnvironment(scope: Construct): Record<string, string> {
-  const read = (key: string) => {
+  const read = (key: string, allowed: string[] = ['off', 'on']) => {
     const raw = scope.node.tryGetContext(key);
     const mode = raw === undefined || raw === null ? 'off' : String(raw).trim() || 'off';
-    if (mode !== 'off' && mode !== 'on') {
-      throw new Error(`${key} must be off or on, got ${JSON.stringify(mode)}`);
+    if (!allowed.includes(mode)) {
+      throw new Error(`${key} must be ${allowed.join(', ')}, got ${JSON.stringify(mode)}`);
     }
     return mode;
   };
+  const layered = ['off', 'personal', 'on'];
   // Which crawler sources' news may feed Common: operator-curated global
   // sources only (default) or every searched source.
   const rawSources = scope.node.tryGetContext('ttobak:newsTermsSources');
@@ -198,8 +200,8 @@ export function sourceTermsEnvironment(scope: Construct): Record<string, string>
     throw new Error(`ttobak:newsTermsSources must be global or all, got ${JSON.stringify(newsSources)}`);
   }
   return {
-    KB_TERMS_MODE: read('ttobak:kbTermsMode'),
-    RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode'),
+    KB_TERMS_MODE: read('ttobak:kbTermsMode', layered),
+    RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode', layered),
     NEWS_TERMS_MODE: read('ttobak:newsTermsMode'),
     NEWS_TERMS_SOURCES: newsSources,
   };

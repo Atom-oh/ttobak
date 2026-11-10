@@ -977,6 +977,8 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { [key]: 'true' }))
         .toThrow(new RegExp(key));
     }
+    const personal = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:kbTermsMode': 'personal', 'ttobak:researchTermsMode': 'personal' });
+    expect(summarizeEnv(personal)).toMatchObject({ KB_TERMS_MODE: 'personal', RESEARCH_TERMS_MODE: 'personal' });
   });
 
   test('daily news terms run on a 21:00 UTC schedule into summarize, off by default and validated', () => {
@@ -1009,6 +1011,8 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsMode': 'on' });
     expect(summarizeEnv(on).NEWS_TERMS_MODE).toBe('on');
     expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsMode': 'true' }))
+      .toThrow(/ttobak:newsTermsMode/);
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsMode': 'personal' }))
       .toThrow(/ttobak:newsTermsMode/);
     expect(summarizeEnv(template).NEWS_TERMS_SOURCES).toBe('global');
     const all = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsSources': 'all' });
