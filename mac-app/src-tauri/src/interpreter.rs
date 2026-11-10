@@ -2,7 +2,6 @@
 //! response parsing, output validation). Mirrors
 //! `backend/internal/service/translate.go`; keep aligned. Pure: no Tauri or
 //! AWS SDK imports. Errors never carry segment text.
-#![allow(dead_code)] // consumers land in later tasks of the caption overlay plan
 
 use serde::Deserialize;
 use serde_json::json;

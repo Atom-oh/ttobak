@@ -38,6 +38,10 @@ semver = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+aws-config = { version = "1.8.11", features = ["behavior-version-latest"] }
+aws-sdk-bedrockruntime = "1.46.0"
+aws-sdk-translate = "1.39.0"
+aws-credential-types = "1.2.10"
 
 # macOS-only audio capture (Core Audio process tap + microphone aggregate
 # device, macOS 14.2+) and IOKit idle-sleep protection.

@@ -29,6 +29,7 @@
 mod audio;
 mod aws_profiles;
 mod caption_model;
+mod caption_translate;
 mod control;
 mod control_proto;
 mod error;
@@ -804,8 +805,12 @@ pub fn run() {
             meeting_detect::meeting_detection_respond,
             meeting_prompt::meeting_prompt_choose,
             update_prompt::update_prompt_choose,
+            caption_translate::caption_settings_get,
+            caption_translate::caption_settings_set,
+            caption_translate::caption_translate,
         ])
         .setup(|app| {
+            caption_translate::manage(app)?;
             // MCP control channel (ADR-046); failure only disables it.
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.

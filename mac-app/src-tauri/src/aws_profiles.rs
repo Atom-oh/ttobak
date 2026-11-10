@@ -1,6 +1,5 @@
 //! AWS profile-name discovery from the shared credentials and config files.
 //! Pure parsing only; no AWS SDK. Secrets are never read into the result.
-#![allow(dead_code)] // consumers land in later tasks of the caption overlay plan
 
 use std::path::PathBuf;
 
