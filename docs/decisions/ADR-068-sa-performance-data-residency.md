@@ -1,6 +1,7 @@
 # ADR-068: SA performance data residency
 
-- Status: Accepted; not yet implemented.
+- Status: Accepted; implementation in progress (storage in
+  `backend/internal/repository/performance.go`).
 - Decision date: 2026-11-10.
 - Design: [SA performance dashboard](../superpowers/specs/2026-11-10-sa-performance-dashboard-design.md).
 - Related: ADR-065 (Local MCP intake), ADR-067 (Account people edges and
@@ -39,9 +40,20 @@ from the account-shared limit, which stays opportunity ID, name and stage.
 - **Private calendar items.** They are included. The calendar source exposes no
   sensitivity flag, so the performance connector runs as if
   `--accept-unknown-sensitivity` were set. This acceptance is explicit.
-- **Retention.** Keep the current year plus the previous one. Each row carries
-  `pendingShareExpiresAt` set to 00:00 UTC on January 1 of the year two years
-  after the row's own year (`year+2`).
+- **Retention.** Retention differs by row type; only dated rows carry a TTL.
+  The table TTL attribute is `pendingShareExpiresAt`.
+
+  | Row | Retention |
+  |---|---|
+  | `PERFTASK#` SFDC Task, `PERFGOAL#` yearly goals | TTL at 00:00 UTC on January 1 of the year two years after the row's own year (`year+2`), so the current and previous year stay readable. Task reads hide expired rows before TTL deletion. The runner also removes a task that vanishes from a complete SFDC read. |
+  | `PERFBATCH#` batch receipt | TTL seven days after the batch; it holds counts and a payload digest only. |
+  | `PERFASSIGN#` SFDC assignment | No TTL. A current-state row, removed when a complete assignment snapshot from the runner no longer lists it. It persists while the owner runs no sync. |
+  | `PERFMAP#` automatic mapping | No TTL. Removed by the automatic mapping pass after the next complete assignment sync when it is stale (no longer a unique name match) or its assignment is gone. |
+  | `PERFMAP#` manual mapping | No TTL and no deletion path: kept until the owner changes it, including after its assignment disappears. Accepted owner-scoped persistence: it holds only an SFDC account ID and a TTOBAK account ID, the mapping list shows it only while its assignment exists, and it is reused if the assignment returns. |
+  | `PERFSRC#` source revision | No TTL. Status and revision only (no customer fields), like the calendar source row; it lives with the user's partition like other `USER#` state, and user deletion does not remove it (ADR-032). |
+
+  Calendar events keep the calendar intake's own retention (90 days after the
+  event ends).
 - **Calendar counterpart.** `calendar_view` exposes no attendee list, so a
   calendar event's counterpart is its organizer's email domain only. An event
   maps to an account by organizer domain, or by a unique title match on the
