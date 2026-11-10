@@ -162,6 +162,35 @@ fn hangul_share(text: &str) -> (usize, usize) {
     (hangul, letters)
 }
 
+/// Han ideographs, matching the ranges of Go's `unicode.Han` used here.
+fn is_han(c: char) -> bool {
+    matches!(c as u32,
+        0x3005 | 0x3007 | 0x3021..=0x3029 | 0x3038..=0x303B
+        | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+        | 0x20000..=0x323AF)
+}
+
+/// Hiragana and katakana, matching Go's `unicode.Hiragana`/`unicode.Katakana`.
+fn is_kana(c: char) -> bool {
+    matches!(c as u32,
+        0x3041..=0x3096 | 0x309D..=0x309F | 0x30A1..=0x30FA | 0x30FD..=0x30FF
+        | 0x31F0..=0x31FF | 0xFF66..=0xFF6F | 0xFF71..=0xFF9D | 0x1B000..=0x1B16F)
+}
+
+/// (han letters, kana letters)
+fn han_kana_counts(text: &str) -> (usize, usize) {
+    let mut han = 0;
+    let mut kana = 0;
+    for c in text.chars().filter(|c| c.is_alphabetic()) {
+        if is_han(c) {
+            han += 1;
+        } else if is_kana(c) {
+            kana += 1;
+        }
+    }
+    (han, kana)
+}
+
 fn is_latin_only(text: &str) -> bool {
     text.chars().all(|c| !c.is_alphabetic() || is_latin(c))
 }
@@ -206,12 +235,15 @@ pub fn validate(source: &str, output: &str, target: &str) -> Result<(), &'static
         return Ok(());
     }
     let share = hangul as f64 / letters as f64;
+    // A source made only of Latin names, identifiers or acronyms may come back
+    // unchanged in any target.
+    let kept = is_latin_only(source) && tokens_appear_in(trimmed, source);
+    let (han, kana) = han_kana_counts(trimmed);
     match target {
-        "ko" if share < 0.3 && !(is_latin_only(source) && tokens_appear_in(trimmed, source)) => {
-            Err("not Korean")
-        }
-        "en" if share > 0.1 => Err("not English"),
-        "ja" | "zh" if share > 0.1 => Err("not the target language"),
+        "ko" if share < 0.3 && !kept => Err("not Korean"),
+        "en" if share > 0.1 || (han + kana) as f64 / letters as f64 > 0.1 => Err("not English"),
+        "ja" if share > 0.1 || (han + kana == 0 && !kept) => Err("not the target language"),
+        "zh" if share > 0.1 || (han == 0 && !kept) => Err("not the target language"),
         _ => Ok(()),
     }
 }
@@ -309,6 +341,64 @@ mod tests {
     #[test]
     fn validate_accepts_plain_chinese() {
         assert!(validate("안녕하세요", "大家好", "zh").is_ok());
+    }
+
+    /// Mirrors the ja/zh/en cases of `TestValidateInterpretation` in
+    /// `backend/internal/service/translate_validate_test.go`.
+    #[test]
+    fn validate_script_rules_match_server() {
+        let cases: &[(&str, &str, &str, bool)] = &[
+            ("안녕하세요", "こんにちは", "ja", true),
+            ("안녕하세요", "大家好", "zh", true),
+            ("도쿄 본사", "東京本社", "ja", true),
+            (
+                "Lambda 함수를 CDK로 배포합니다.",
+                "我们用 CDK 部署 Lambda 函数。",
+                "zh",
+                true,
+            ),
+            (
+                "Lambda 함수를 CDK로 배포합니다.",
+                "Lambda 関数を CDK でデプロイします。",
+                "ja",
+                true,
+            ),
+            ("AWS", "AWS", "zh", true),
+            ("AWS", "AWS", "ja", true),
+            ("2026", "2026", "zh", true),
+            (
+                "https://aws.amazon.com",
+                "https://aws.amazon.com",
+                "ja",
+                true,
+            ),
+            (
+                "We will deploy next week.",
+                "We will deploy next week.",
+                "zh",
+                false,
+            ),
+            (
+                "We will deploy next week.",
+                "We will deploy next week.",
+                "ja",
+                false,
+            ),
+            ("다음 주에 배포합니다.", "We deploy next week.", "zh", false),
+            ("안녕하세요", "안녕하세요 여러분", "zh", false),
+            ("안녕하세요", "안녕하세요 여러분", "ja", false),
+            ("회의 시작", "會議 시작합니다 여러분", "zh", false),
+            ("我们下周部署。", "我们下周部署。", "en", false),
+            ("来週デプロイします。", "来週デプロイします。", "en", false),
+            ("我们下周部署。", "We deploy next week.", "en", true),
+        ];
+        for (source, output, target, ok) in cases {
+            assert_eq!(
+                validate(source, output, target).is_ok(),
+                *ok,
+                "{source:?} -> {output:?} ({target})"
+            );
+        }
     }
 
     #[test]

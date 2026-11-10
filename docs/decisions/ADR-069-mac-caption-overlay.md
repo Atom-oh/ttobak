@@ -213,9 +213,10 @@ other must stay aligned; change both together.
   the local per-minute ceilings; the page cannot tell them apart.
 - Push ordering per window is posting order to the main thread; it is unit-tested
   with a stand-in for the window calls, not observed in the app.
-- Known gap: an echoed English final passes validation for ja and zh targets. The
-  server validator has the same gap, so change `interpreter.rs` and `translate.go`
-  together.
+- Closed gap: an echoed English final used to pass validation for ja and zh
+  targets in both validators. `interpreter.rs` and `translate.go` now require Han
+  (zh) or kana/Han (ja) output, and at most a 0.1 Han/kana share for en, except a
+  few words that all occur in a Latin-only source. Keep changing both together.
 
 ## Manual verification record
 
