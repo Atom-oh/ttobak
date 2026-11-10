@@ -19,7 +19,7 @@ export function classifyOccurrence(input: {
   attendees: string[];
   members: MemberView[];
   anyAccountSaEmails: Set<string>;
-  isPrivate?: boolean;
+  isPrivate: boolean;
 }): Classification {
   if (input.isPrivate) return { kind: 'skip' };
   const me = input.me.trim().toLowerCase();
@@ -29,10 +29,11 @@ export function classifyOccurrence(input: {
       ? { kind: 'task', state: 'needs_account' } : { kind: 'skip' };
   }
   const present = new Set(attendees);
-  const counterparts = input.members.filter(m => SA_ROLES.has(m.role) && m.userId !== ''
-    && m.email === m.email.toLowerCase() && m.email.endsWith('@amazon.com') && present.has(m.email));
+  const members = input.members.map(m => ({ ...m, email: m.email.trim().toLowerCase() }));
+  const counterparts = members.filter(m => SA_ROLES.has(m.role) && m.userId !== ''
+    && m.email.endsWith('@amazon.com') && present.has(m.email));
   if (counterparts.length === 0) return { kind: 'skip' };
-  const mine = input.members.find(m => m.email.toLowerCase() === me);
+  const mine = members.find(m => m.email === me);
   if (mine?.role === 'SA') return { kind: 'task', state: 'issue_needed', path: 'mine' };
   if (counterparts.length === 1) {
     return { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: counterparts[0].userId };

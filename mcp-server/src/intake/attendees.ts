@@ -24,10 +24,12 @@ function records(payload: unknown): unknown[] {
   return [];
 }
 
-export function parseMeetingList(payload: unknown): MeetingListItem[] {
+/** Returns null when the list exceeds the cap: a truncated list could hide a second candidate. */
+export function parseMeetingList(payload: unknown): MeetingListItem[] | null {
+  const all = records(payload);
+  if (all.length > MAX_LIST) return null;
   const out: MeetingListItem[] = [];
-  for (const raw of records(payload)) {
-    if (out.length >= MAX_LIST) break;
+  for (const raw of all) {
     if (!raw || typeof raw !== 'object') continue;
     const r = raw as Record<string, unknown>;
     if (typeof r.meetingId !== 'string' || !r.meetingId || typeof r.subject !== 'string'
@@ -51,16 +53,19 @@ export function joinMeeting(item: OutlookItem, list: MeetingListItem[]): Meeting
 export function parseAttendees(payload: unknown): { addresses: string[]; isPrivate: boolean } | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
   const r = payload as Record<string, unknown>;
+  if (typeof r.isPrivate !== 'boolean') return null;
   const seen = new Set<string>();
   const add = (value: unknown): void => {
     if (typeof value !== 'string') return;
     const address = value.trim().toLowerCase();
-    if (address && seen.size < MAX_ATTENDEES) seen.add(address);
+    if (address) seen.add(address);
   };
   for (const key of ['requiredAttendees', 'optionalAttendees']) {
     const list = r[key];
     if (Array.isArray(list)) list.forEach(add);
   }
   add(r.organizer);
-  return { addresses: [...seen], isPrivate: r.isPrivate === true };
+  // A truncated list could hide a second SA, so overflow means unknown.
+  if (seen.size > MAX_ATTENDEES) return null;
+  return { addresses: [...seen], isPrivate: r.isPrivate };
 }

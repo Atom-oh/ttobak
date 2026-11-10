@@ -164,6 +164,9 @@ test('join requires exactly one exact match', async () => {
   const other = parseMeetingList([listItem('2026-11-12T01:00:00Z', '2026-11-12T02:00:00Z', 'Sync ')]);
   assert.equal(joinMeeting(item, other), null);
   assert.deepEqual(parseMeetingList([{ meetingId: 5 }, 'x', null]), []);
+  const big = Array.from({ length: 5001 }, (_, i) => listItem('2026-11-12T01:00:00Z', '2026-11-12T02:00:00Z', 'Sync', `i:${i}`));
+  assert.equal(parseMeetingList(big), null);
+  assert.equal(parseMeetingList(big.slice(0, 5000)).length, 5000);
 });
 
 const members = [
@@ -178,13 +181,13 @@ const members = [
 test('classify ignores me in organizer and attendees', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const out = classifyOccurrence({ me: 'ME@amazon.com', accountId: 'a', attendees: ['me@amazon.com'],
-    members, anyAccountSaEmails: new Set() });
+    members, anyAccountSaEmails: new Set(), isPrivate: false });
   assert.deepEqual(out, { kind: 'skip' });
 });
 
 test('classify matches case-insensitively and rejects non-amazon counterpart', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
-  const base = { me: 'zed@amazon.com', accountId: 'a', members, anyAccountSaEmails: new Set() };
+  const base = { me: 'zed@amazon.com', accountId: 'a', members, anyAccountSaEmails: new Set(), isPrivate: false };
   assert.deepEqual(classifyOccurrence({ ...base, attendees: ['ALICE@Amazon.com'] }),
     { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
   assert.deepEqual(classifyOccurrence({ ...base, attendees: ['dan@example.com'] }), { kind: 'skip' });
@@ -194,7 +197,7 @@ test('classify matches case-insensitively and rejects non-amazon counterpart', a
 test('classify table', async () => {
   const { classifyOccurrence } = await import('../dist/intake/classify.js');
   const c = (me, accountId, attendees, sa = []) =>
-    classifyOccurrence({ me, accountId, attendees, members, anyAccountSaEmails: new Set(sa) });
+    classifyOccurrence({ me, accountId, attendees, members, anyAccountSaEmails: new Set(sa), isPrivate: false });
   assert.deepEqual(c('me@amazon.com', 'a', ['alice@amazon.com']), { kind: 'task', state: 'issue_needed', path: 'mine' });
   assert.deepEqual(c('carol@amazon.com', 'a', ['alice@amazon.com']),
     { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
@@ -215,4 +218,21 @@ test('private meeting is skipped', async () => {
   assert.deepEqual(classifyOccurrence({ me: 'me@amazon.com', accountId: 'a', attendees: parsed.addresses,
     members, anyAccountSaEmails: new Set(), isPrivate: parsed.isPrivate }), { kind: 'skip' });
   assert.equal(parseAttendees('x'), null);
+});
+
+test('attendee overflow and missing isPrivate are unknown', async () => {
+  const { parseAttendees } = await import('../dist/intake/attendees.js');
+  const many = Array.from({ length: 501 }, (_, i) => `u${i}@amazon.com`);
+  assert.equal(parseAttendees({ requiredAttendees: many, isPrivate: false }), null);
+  assert.equal(parseAttendees({ requiredAttendees: many.slice(0, 500), isPrivate: false }).addresses.length, 500);
+  assert.equal(parseAttendees({ requiredAttendees: ['a@amazon.com'] }), null);
+  assert.equal(parseAttendees({ requiredAttendees: ['a@amazon.com'], isPrivate: 'no' }), null);
+});
+
+test('classify normalizes member emails and handles organizer-me', async () => {
+  const { classifyOccurrence } = await import('../dist/intake/classify.js');
+  const ms = [{ userId: 'u-me', email: ' ME@Amazon.com ', role: 'AM' }, { userId: 'u-a', email: 'Alice@Amazon.com', role: 'SA' }];
+  assert.deepEqual(classifyOccurrence({ me: 'me@amazon.com', accountId: 'a', attendees: ['me@amazon.com', 'alice@amazon.com'],
+    members: ms, anyAccountSaEmails: new Set(), isPrivate: false }),
+  { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
 });
