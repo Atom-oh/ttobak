@@ -547,6 +547,10 @@ mod tests {
         let parsed: tauri_plugin_updater::Config =
             serde_json::from_value(updater.clone()).expect("plugin config parses");
         assert_eq!(parsed.endpoints.len(), 1);
+        // The release signs with `--app-version`; a manifest pairing a new
+        // version with an older signed archive must be rejected.
+        assert!(parsed.require_signed_version);
+        assert!(!parsed.allow_downgrades);
         assert!(!pubkey_configured(updater["pubkey"].as_str()));
     }
 

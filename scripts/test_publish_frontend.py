@@ -85,6 +85,24 @@ class FrontendPublicationTests(unittest.TestCase):
         self.assertEqual(calls[-1][calls[-1].index("--paths") + 1], "/*")
         self.assertNotIn("BUILD_MUST_NOT_PUBLISH_CONFIG", json.dumps(state))
 
+    def test_mac_release_prefix_is_never_deleted_or_overwritten(self):
+        state = json.loads(self.store.read_text())
+        state["mac/latest.json"] = {"body": "RELEASED_MANIFEST", "cache": "no-cache"}
+        state["mac/TTOBAK_0.2.0_aarch64.app.tar.gz"] = {"body": "ARCHIVE", "cache": "immutable"}
+        self.store.write_text(json.dumps(state))
+        (self.export / "mac").mkdir()
+        (self.export / "mac/latest.json").write_text("STALE_FRONTEND_COPY")
+        (self.export / "mac/install.txt").write_text("STALE_FRONTEND_TXT")
+        result, calls, installed = self.run_publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed["mac/latest.json"], state["mac/latest.json"])
+        self.assertEqual(installed["mac/TTOBAK_0.2.0_aarch64.app.tar.gz"],
+                         state["mac/TTOBAK_0.2.0_aarch64.app.tar.gz"])
+        self.assertNotIn("mac/install.txt", installed)
+        for call in calls:
+            self.assertNotIn("--delete", call)
+            self.assertFalse(any(arg.startswith("s3://") and "/mac" in arg for arg in call), call)
+
     def test_asset_failure_keeps_previous_html_and_never_invalidates(self):
         result, calls, state = self.run_publish(FAIL_PHASE="assets")
         self.assertNotEqual(result.returncode, 0)
