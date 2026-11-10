@@ -27,6 +27,8 @@ const COMMANDS: &[&str] = &[
     "caption_overlay_close",
     "caption_overlay_set_style",
     "caption_overlay_push",
+    // Granted only to the local overlay windows (capabilities/caption-overlay.json).
+    "caption_overlay_idle",
 ];
 
 fn main() {

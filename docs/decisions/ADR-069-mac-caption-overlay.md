@@ -57,7 +57,13 @@ finals push nothing. Once an id is shown as final, later drafts for it are dropp
 because commands can emit out of order. A transparent overlay still takes clicks meant for
 the windows under it, so a `clear` push orders the window out, and a non-empty entry
 or a preview orders it back in without making it key, so focus stays with the
-slideshow.
+slideshow. Ordering out alone left cases where an empty window kept swallowing
+clicks (for example when failed translations removed every line), so the page also
+reports each idle/active change through `caption_overlay_idle`, which sets only the
+calling overlay window to ignore the pointer while it shows no caption; `clear` sets
+it in Rust before emitting. An idle window cannot be dragged or hovered, which is
+acceptable because it is invisible; windows are never closed automatically, so the
+user's layout choice survives.
 
 **Transparency.** `tauri.conf.json` sets `macOSPrivateApi: true` and Cargo enables
 the `macos-private-api` feature of `tauri`; windows are built `transparent`. This
@@ -136,7 +142,9 @@ codes are listed in `mac-app/CLAUDE.md`.
 
 **Overlay capability.** The overlay windows get `capabilities/caption-overlay.json`:
 `core:event:allow-listen`, `allow-unlisten`, `core:window:allow-start-dragging`
-and `core:window:allow-set-size` only. No event emit and no app command.
+and `core:window:allow-set-size`, plus the app command `allow-caption-overlay-idle`
+(own-window pass-through only; not granted to the remote SPA). No event emit and no
+other app command.
 
 **Mouse move and resize.** Hovering an overlay shows a dashed outline, a top-centre
 move handle and a bottom-right resize grip, all hidden again when the pointer leaves,
