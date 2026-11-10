@@ -55,12 +55,16 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
 | caption_settings_get | returns {settings {profile, region, extraLanguage, windows}, profiles (names only), fonts} (ADR-069) |
 | caption_settings_set | profile?, region, extraLanguage ja/zh/null; profile must be in the local AWS profile list; choosing or changing the profile or region first shows a native confirmation sheet from Rust (cancel: `confirmation-declined`, settings unchanged; a call while one runs: `invalid-input`); clears cached AWS clients |
-| caption_translate | text, sourceLang, targetLang, isFinal, context[]; returns translatedText, engine llm/translate; SigV4 credentials only from the selected profile, never the default credentials chain (other SDK settings still load via `aws_config::defaults`); 600 requests and 600,000 input bytes (text plus context) per sliding minute; text at most 9,000 bytes, context at most five items |
+| caption_translate | text, sourceLang, targetLang, isFinal, context[]; returns translatedText, engine llm/translate; SigV4 credentials only from the selected profile, never the default credentials chain (other SDK settings still load via `aws_config::defaults`); only while that language's overlay window is open; 600 requests and 600,000 input bytes (text plus context) per sliding minute; text at most 9,000 bytes, context at most five items |
+| caption_overlay_open | lang ko/en/ja/zh (ja/zh only as the extra language); opens or reuses the window, returns its saved layout |
+| caption_overlay_close | lang; closes the window and saves it closed |
+| caption_overlay_set_style | lang, style {fontFamily, fontSize 16-160, fontColor, outlineColor, outlineWidth 0-12, backgroundOpacity 0-1}; saved and sent to the window |
+| caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus |
 
 Caption command errors carry a fixed `code`: profile-missing, credentials-expired,
 model-access, rate-limited, invalid-input, invalid-output, timeout, aws-error,
-save-failed, confirmation-declined, unavailable (no app config directory; recording is
-unaffected). No capability grants a `dialog:` permission.
+save-failed, window-error, confirmation-declined, unavailable (no app config directory;
+recording is unaffected). No capability grants a `dialog:` permission.
 
 Socket `status` also returns `updateBusy` (`control::app_busy`) for local tooling that must not replace a busy app.
 
@@ -73,6 +77,21 @@ native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser
 recording}) also go to the main window only; native-meeting-answered (same shape)
 closes the banner after the floating prompt window (`meeting_prompt.rs`, local
 `meeting-prompt.html`, `meeting_prompt_choose` only) answered it.
+Caption overlay (ADR-069): `caption-update` ({lang, kind, id, order, text, isFinal}) and
+`caption-style` (style fields plus lang) are sent with `emit_to` to the matching
+`caption-<lang>` window. A JS listener with the default target receives every emit, so the
+page listens with target `{kind: 'WebviewWindow', label: 'caption-<lang>'}` and also drops
+payloads whose `lang` is not its own. The page loads
+bundled `caption-overlay.html` under the listen-only `capabilities/caption-overlay.json`
+(plus window dragging and `allow-set-size`; no emit, no command). Hover chrome
+(outline, move handle, resize grip) is invisible without a pointer; the grip resizes
+via page `setSize` because tao has no macOS `startResizeDragging`. Credentials stay in Rust;
+only profile names cross IPC. The event ACL has no per-event scope, so the overlay could
+listen to broadcast events such as native-pcm-chunk (accepted, ADR-069). Overlay windows
+use level 1000, all Spaces and full-screen-auxiliary behavior, are destroyed (keeping
+their saved `open` flags) when the main window is destroyed, and need
+`macOSPrivateApi` for transparency. `interpreter.rs` mirrors
+`backend/internal/service/translate.go`; keep them aligned.
 native-mic-muted ({muted, app Zoom|Google Meet, reason muted}) reports
 the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the
