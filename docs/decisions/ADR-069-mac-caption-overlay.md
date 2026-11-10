@@ -10,10 +10,13 @@
 - Design: the working design and plan documents were not merged; this ADR is
   the durable decision.
 - Delivery: four stacked PRs. 1/4: caption model, profile discovery, interpreter,
-  the three translation commands and the profile confirmation; 2/4: overlay
-  windows, page and capability, byte budget, open-window check; 3/4: record-page
+  the three translation commands with their request and byte ceilings, and the
+  profile confirmation; 2/4: overlay windows, page and capability, open-window
+  check; 3/4: record-page
   bridge and panel; 4/4: layout menu and remaining docs. Parts of later PRs do not
-  exist before they land.
+  exist before they land: the windows, event routing, idle display, transparency,
+  window level, overlay capability and mouse sections describe 2/4, and window
+  reopen on the record page describes 3/4.
 
 ## Context
 
@@ -79,10 +82,12 @@ LLM failure other than expired credentials or missing model access use Amazon Tr
 server's `/api/translate`, so server limits, cost and configuration are not
 involved and that path and the in-page translation tab are unchanged. There is no
 fallback to the server when the profile is missing. Credentials are resolved and
-held in Rust only; only profile names cross IPC. They come only from the selected
-profile (`profile_credentials`: static keys, SSO, `credential_process`, roles),
-never from the SDK default chain, which reads environment variables first and
-would bill an exported terminal identity instead of the named profile. Expired credentials, missing
+held in Rust only; only profile names cross IPC. SigV4 credentials come only from
+the selected profile (`profile_credentials`: static keys, SSO, `credential_process`,
+roles), never from the SDK default credentials chain, which reads environment
+variables first and would bill an exported terminal identity instead of the named
+profile. Other SDK settings are still loaded by `aws_config::defaults` and can come
+from the environment or the shared config files. Expired credentials, missing
 model access, a missing profile, rate limiting, timeout and rejected output
 return distinct fixed error codes; an expired-credential failure drops the cached
 client so the next call after `mwinit` uses fresh credentials without a restart.
@@ -107,19 +112,19 @@ control channel and meeting detection already fail open.
 
 **Remote origin command set.** The remote `default` capability gains exactly
 seven commands (also listed in `build.rs` COMMANDS; `command_acl_tests` enforces
-both): `caption_settings_get`, `caption_settings_set`, `caption_translate`,
-`caption_overlay_open`, `caption_overlay_close`, `caption_overlay_set_style`,
-`caption_overlay_push`. Rust validates every input: language allowlist (and the
-extra-language gate), AWS profile name pattern and membership in the local
-profile list, region pattern, style ranges (font allowlist, size 16-160, outline
-0-12, opacity 0-1, `#RRGGBB` colors), push kind (`entry`, `clear`, `preview`), id
-at most 64 bytes, pushed text at most 4,000 bytes, translation text at most 9,000
-bytes with at most five context items of at most 3,000 bytes, and a sliding
-ceiling of 600 translation requests and 600,000 input bytes (text plus context) per
-minute across all callers so a misbehaving page cannot run up the user's bill.
-`caption_translate` also rejects a target language whose overlay window is not open;
-the record page starts an engine only after its window opened and stops it before
-closing the window. None of the commands reads
+both): `caption_settings_get`, `caption_settings_set` and `caption_translate` in
+1/4, and `caption_overlay_open`, `caption_overlay_close`, `caption_overlay_set_style`
+and `caption_overlay_push` in 2/4. Rust validates every input: language allowlist,
+AWS profile name pattern and membership in the local profile list, region pattern,
+translation text at most 9,000 bytes with at most five context items of at most
+3,000 bytes, and a sliding ceiling of 600 translation requests and 600,000 input
+bytes (text plus context) per minute across all callers so a misbehaving page
+cannot run up the user's bill (1/4). From 2/4 it also enforces the extra-language
+gate, style ranges (font allowlist, size 16-160, outline 0-12, opacity 0-1,
+`#RRGGBB` colors), push kind (`entry`, `clear`, `preview`), id at most 64 bytes and
+pushed text at most 4,000 bytes, and `caption_translate` rejects a target language
+whose overlay window is not open; the record page (3/4) starts an engine only after
+its window opened and stops it before closing the window. None of the commands reads
 arbitrary files, reaches an arbitrary network address or exposes tokens. Error
 codes are listed in `mac-app/CLAUDE.md`.
 
@@ -171,6 +176,9 @@ other must stay aligned; change both together.
 - `mac-app/src-tauri/Cargo.lock` stays git-ignored (existing policy), so the AWS
   SDK crates resolve at build time.
 - Mac changes have no CI coverage.
+- Known gap: an echoed English final passes validation for ja and zh targets. The
+  server validator has the same gap, so change `interpreter.rs` and `translate.go`
+  together.
 
 ## Manual verification record
 

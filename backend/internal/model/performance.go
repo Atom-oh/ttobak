@@ -100,3 +100,49 @@ func PerformanceMappingSortKey(sfdcAccountID string) string {
 func PerformanceGoalsSortKey(year int) string {
 	return fmt.Sprintf("%s%04d", PrefixPerformanceGoals, year)
 }
+
+// PerformanceSourceStatus is the owner's sync state for one source. A source
+// that has never synced reports revision 0 and no timestamps.
+type PerformanceSourceStatus struct {
+	Source          string `json:"source" dynamodbav:"source"`
+	Revision        int64  `json:"revision" dynamodbav:"revision"`
+	LastAttemptAt   string `json:"lastAttemptAt,omitempty" dynamodbav:"lastAttemptAt,omitempty"`
+	LastCompletedAt string `json:"lastCompletedAt,omitempty" dynamodbav:"lastCompletedAt,omitempty"`
+}
+
+type PerformanceSourceList struct {
+	Sources []PerformanceSourceStatus `json:"sources"`
+}
+
+// PerformanceMappingItem is one assignment joined with its mapping, if any.
+type PerformanceMappingItem struct {
+	SFDCAccountID string `json:"sfdcAccountId"`
+	Name          string `json:"name"`
+	Role          string `json:"role"`
+	Mapped        bool   `json:"mapped"`
+	AccountID     string `json:"accountId,omitempty"`
+	Manual        bool   `json:"manual"`
+	UpdatedAt     string `json:"updatedAt,omitempty"`
+}
+
+type PerformanceMappingList struct {
+	Items []PerformanceMappingItem `json:"items"`
+	// Truncated is true when more assignments exist than Items holds.
+	Truncated bool `json:"truncated"`
+}
+
+type PerformanceGoalsInput struct {
+	Text *string `json:"text"`
+}
+
+type PerformanceMappingInput struct {
+	AccountID string `json:"accountId"`
+}
+
+// PerformanceMissedItem is defined by the missed-item rules; the list is
+// empty until those rules exist.
+type PerformanceMissedItem struct{}
+
+type PerformanceMissedList struct {
+	Items []PerformanceMissedItem `json:"items"`
+}
