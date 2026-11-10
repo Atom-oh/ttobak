@@ -693,3 +693,570 @@ test('no Slack ID or previous draft text reaches any file', async t => {
     for (const canary of [SLACK_USER, SLACK_CHANNEL, PREVIOUS_TEXT, 'them@amazon.com']) assert.ok(!content.includes(canary), `${canary} in ${file}`);
   }
 });
+
+// ---------- task step orchestration, end to end through runIntake ----------
+
+const OUTLOOK_FIXTURE = fileURLToPath(new URL('./fixtures/intake-outlook-server.mjs', import.meta.url));
+const ME = { email: 'me@amazon.com', userId: 'u-me' };
+const ATTENDEE_CANARY = 'attendee-canary-4e7a@example.com';
+const SLACK_ID_CANARY = 'UCANARY4E7A';
+const DM_CANARY = 'DCANARY4E7A';
+const occurrence = (over = {}) => ({ meetingId: 'occ-1', subject: 'Customer sync', start: '2026-11-12T10:00:00+09:00',
+  end: '2026-11-12T11:00:00+09:00', sensitivity: 'Normal', isCanceled: false, isAllDay: false, ...over });
+const MEETING_LIST = { meetings: [{ meetingId: 'i:1', subject: 'Customer sync', startTime: '2026-11-12T01:00:00Z',
+  endTime: '2026-11-12T02:00:00Z' }] };
+const details = (attendees, isPrivate = false) => ({ 'i:1': { requiredAttendees: attendees, optionalAttendees: [],
+  organizer: 'Me@Amazon.com', isPrivate } });
+const theirsRequest = (over = {}) => ({ requestId: RID, title: 'Design review', stateId: 'NEXT_UP', requesterLogin: 'alice',
+  resolverLogin: 'me', salesforceId: '006A', meetingDateRanges: ['2026-11-12 - 2026-11-12'],
+  createdAt: Date.parse('2026-11-10T05:00:00Z'), ...over });
+const account = (myRole, others) => ({ accountId: 'acct-1', name: 'Example Corp',
+  members: [{ userId: 'u-me', email: 'me@amazon.com', role: myRole }, ...others] });
+const ALICE = { userId: 'u-alice', email: 'alice@amazon.com', role: 'SA' };
+const BOB = { userId: 'u-bob', email: 'bob@amazon.com', role: 'SA' };
+
+/** Mirrors the backend transition table closely enough for the runner's paths. */
+function applyRules(task, body) {
+  const next = { ...task };
+  if (['linkSpecReq', 'recordAck', 'refreshSpecReq'].includes(body.op) && task.specReqId && body.specReqId
+    && body.specReqId !== task.specReqId) return null;
+  const set = () => {
+    if (body.specReqId) next.specReqId = body.specReqId;
+    if (body.specReqTitle) next.specReqTitle = body.specReqTitle;
+    if (body.specReqStatus) next.specReqStatus = body.specReqStatus;
+  };
+  switch (body.op) {
+    case 'classify':
+      if (!['needs_account', 'needs_owner'].includes(task.state)) return null;
+      return { ...next, state: body.state, path: body.path, counterpartUserId: body.counterpartUserId,
+        accountId: body.accountId ?? task.accountId };
+    case 'linkSpecReq':
+      if (task.path === 'mine' && task.state === 'issue_needed') next.state = 'issued';
+      else if (!(task.path === 'theirs' && ['request_needed', 'requested'].includes(task.state))) return null;
+      set();
+      return next;
+    case 'recordAck':
+      if (task.path !== 'theirs' || !['request_needed', 'requested', 'ack_failed'].includes(task.state)) return null;
+      set();
+      return { ...next, state: body.state, failureCode: body.failureCode };
+    case 'refreshSpecReq':
+      if (!task.specReqId || task.state === 'closed' || !body.specReqStatus) return null;
+      set();
+      if (task.path === 'theirs' && task.state === 'acked' && body.specReqStatus === 'COMPLETED') next.state = 'resolved';
+      if (task.state === 'ack_failed' && ['WORKING', 'WAITING', 'COMPLETED'].includes(body.specReqStatus)) next.state = 'acked';
+      return next;
+    case 'close':
+      return task.state === 'closed' ? null : { ...next, state: 'closed' };
+    default:
+      return null;
+  }
+}
+
+async function fakeTaskApi({ eventAccounts = {}, accounts = {}, projects = {}, seed = [], hooks = {} } = {}) {
+  const { ApiResponseError } = await import('../dist/api.js');
+  const { calendarEventId } = await import('../dist/intake/event-id.js');
+  const calls = [];
+  const events = new Map();
+  const tasks = new Map(seed.map(task => [task.eventId, task]));
+  const fail = status => new ApiResponseError(`HTTP ${status}`, status);
+  const view = task => {
+    const event = events.get(task.eventId);
+    return structuredClone({ ...task, ...(event ? { event: { title: event.title, startsAt: event.startsAt,
+      endsAt: event.endsAt, timeZone: event.timeZone, isAllDay: event.isAllDay } } : {}) });
+  };
+  return {
+    calls, tasks,
+    async calendarSyncStatus() { return { sources: [], nextCursor: null }; },
+    async syncCalendarEvents(sourceId, body) {
+      calls.push(['sync', structuredClone(body)]);
+      for (const mutation of body.mutations) {
+        if (mutation.op === 'upsert') {
+          const eventId = calendarEventId(sourceId, mutation.event.externalId);
+          const accountId = eventAccounts[mutation.event.externalId];
+          events.set(eventId, { eventId, sourceId, provider: 'outlook', ...mutation.event, ...(accountId ? { accountId } : {}) });
+        } else events.delete(calendarEventId(sourceId, mutation.externalId));
+      }
+      return { batchId: body.batchId.toLowerCase(), revision: body.expectedRevision + 1, completed: body.complete,
+        upserted: body.mutations.filter(m => m.op === 'upsert').length, removed: body.mutations.filter(m => m.op === 'remove').length };
+    },
+    async listCalendarEvents(query) {
+      calls.push(['listEvents', query]);
+      return { events: [...events.values()].map(event => structuredClone(event)), nextCursor: null };
+    },
+    async listSpecReqTasks(cursor) {
+      calls.push(['listTasks', cursor ?? null]);
+      const all = [...tasks.values()];
+      const start = cursor ? Number(cursor) : 0;
+      return { tasks: all.slice(start, start + 20).map(view), ...(start + 20 < all.length ? { nextCursor: String(start + 20) } : {}) };
+    },
+    async getSpecReqTask(eventId) {
+      calls.push(['getTask', eventId]);
+      if (!tasks.has(eventId)) throw fail(404);
+      return view(tasks.get(eventId));
+    },
+    async createSpecReqTask(body) {
+      calls.push(['create', structuredClone(body)]);
+      const eventId = calendarEventId(body.sourceId, body.externalId);
+      const event = events.get(eventId);
+      if (!event) throw fail(404);
+      if (tasks.has(eventId)) throw fail(409);
+      const { externalId, ...fields } = body;
+      const at = NOW.toISOString();
+      const task = { eventId, ...fields, occurrenceStartsAt: new Date(event.startsAt).toISOString(),
+        occurrenceEndsAt: new Date(event.endsAt).toISOString(), createdAt: at, updatedAt: at, stateChangedAt: at, version: 1 };
+      void externalId;
+      tasks.set(eventId, task);
+      return view(task);
+    },
+    async transitionSpecReqTask(eventId, body) {
+      calls.push(['transition', eventId, structuredClone(body)]);
+      await hooks.beforeTransition?.(eventId, body, tasks);
+      const task = tasks.get(eventId);
+      if (!task) throw fail(404);
+      if (body.version !== task.version) throw fail(409);
+      const status = hooks.fail?.(body);
+      if (status) throw fail(status);
+      const next = applyRules(task, body);
+      if (!next) throw fail(409);
+      next.version = task.version + 1;
+      tasks.set(eventId, next);
+      return view(next);
+    },
+    async listAccountProjects(accountId) {
+      calls.push(['projects', accountId]);
+      return projects[accountId] ?? [];
+    },
+    async getAccount(accountId) {
+      calls.push(['getAccount', accountId]);
+      if (!accounts[accountId]) throw fail(404);
+      return structuredClone(accounts[accountId]);
+    },
+    async listAccounts() {
+      calls.push(['listAccounts']);
+      return { accounts: Object.values(accounts).map(item => ({ accountId: item.accountId, name: item.name, role: 'SA' })) };
+    },
+  };
+}
+
+function writeTaskHosts(home, items, work = {}) {
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: {
+    outlook: { command: process.execPath, args: [OUTLOOK_FIXTURE], env: { TOKEN: CANARY, FAKE_OUTLOOK_ITEMS: JSON.stringify(items) } },
+    work: { command: process.execPath, args: [FIXTURE], env: { TOKEN: CANARY, FAKE_WORK_LOG: join(home, 'work.log'),
+      FAKE_WORK_TAM: 'me', FAKE_WORK_MEETINGS: JSON.stringify(MEETING_LIST), ...work } },
+  } }));
+}
+
+function taskEnvironment(home, lines, api) {
+  return { ...environment(home, lines), api, scope: SCOPE, me: ME };
+}
+
+/** Selects all four connectors; returns a runner for one synced calendar run. */
+async function taskHome(t, { autoAck = 'on' } = {}) {
+  const home = tempHome(t);
+  const lines = [];
+  writeTaskHosts(home, [occurrence()]);
+  const env = environment(home, lines);
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], env), 0);
+  for (const connector of ['meetings', 'specreq', 'slack']) {
+    const extra = connector === 'specreq' ? ['--auto-ack', autoAck] : [];
+    assert.equal(await runIntake(['select', connector, '--host', 'claude', '--server', 'work', ...extra], env), 0);
+  }
+  // Task connectors never set endpoints; the calendar selection keeps them.
+  assert.equal(selection(home).ttobak.apiUrl, 'https://api.example.invalid');
+  const log = () => existsSync(join(home, 'work.log')) ? readFileSync(join(home, 'work.log'), 'utf8').split('\n').filter(Boolean) : [];
+  const queue = () => {
+    const file = join(home, '.ttobak', 'intake', 'notify.jsonl');
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+  };
+  const run = async (api, items, work, overrides = {}) => {
+    writeTaskHosts(home, items, work);
+    const before = log().length;
+    const code = await runIntake(['calendar', '--noninteractive'], { ...taskEnvironment(home, lines, api), ...overrides });
+    const output = JSON.parse(lines.at(-1));
+    return { code, output, calls: log().slice(before) };
+  };
+  return { home, lines, run, log, queue };
+}
+
+const transitions = (api, op) => api.calls.filter(call => call[0] === 'transition' && (!op || call[2].op === op));
+
+test('theirs path: task, draft, ack, notices in order', async t => {
+  const { home, run, queue } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const attendees = { FAKE_WORK_DETAILS: JSON.stringify(details(['Alice@Amazon.com', ATTENDEE_CANARY])) };
+
+  const first = await run(api, [occurrence()], attendees);
+  assert.equal(first.code, 0);
+  assert.equal(first.output.tasks.result, 'ok');
+  assert.deepEqual(first.calls, ['list_meetings', 'get_meeting', 'check_user_is_tam', 'search_requests_advanced',
+    'lookup_user', 'open_dm_channel', 'list_drafts', 'post_draft']);
+  const [task] = api.tasks.values();
+  assert.equal(task.state, 'request_needed');
+  assert.equal(task.path, 'theirs');
+  assert.equal(task.counterpartUserId, 'u-alice');
+  assert.deepEqual(queue().map(line => line.state), ['request_needed']);
+  const { NOTICE_COPY } = await import('../dist/intake/notify.js');
+  assert.equal(queue()[0].body, NOTICE_COPY.request_needed.drafted);
+
+  const second = await run(api, [occurrence()], { ...attendees, FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]),
+    FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }), FAKE_WORK_STATEFUL: '1' });
+  assert.equal(second.output.tasks.result, 'ok');
+  assert.deepEqual(second.calls, ['check_user_is_tam', 'search_requests_advanced', 'get_request', 'acknowledge_request']);
+  assert.deepEqual(transitions(api).map(call => call[2].op), ['linkSpecReq', 'recordAck']);
+  assert.equal(api.tasks.get(task.eventId).state, 'acked');
+  assert.equal(api.tasks.get(task.eventId).specReqId, RID);
+  assert.deepEqual(queue().map(line => line.state), ['request_needed', 'acked']);
+  const ledger = JSON.parse(readFileSync(ledgerFile(home), 'utf8'));
+  assert.deepEqual([ledger.entries[RID].outcome, ledger.entries[RID].cloudSynced], ['ok', true]);
+  const status = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'status.json'), 'utf8'));
+  assert.equal(status.tasks.result, 'ok');
+
+  // A third run neither acknowledges again nor re-notifies.
+  const third = await run(api, [occurrence()], { ...attendees, FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]),
+    FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'WORKING' }) }) });
+  assert.ok(!third.calls.includes('acknowledge_request'));
+  assert.equal(queue().length, 2);
+});
+
+test('mine path links the created SpecReq and marks issued', async t => {
+  const { run, queue } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' },
+    accounts: { 'acct-1': account('SA', [{ ...ALICE, role: 'SSA' }]) }, projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const args = join(tempHome(t), 'args.log');
+  const mine = theirsRequest({ requesterLogin: 'me', resolverLogin: 'alice', stateId: 'PENDING', title: 'Mine review' });
+  const result = await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_MINE: JSON.stringify([mine]), FAKE_WORK_ARGS: args });
+  assert.equal(result.output.tasks.result, 'ok');
+  const [task] = api.tasks.values();
+  assert.equal(task.path, 'mine');
+  assert.equal(task.state, 'issued');
+  assert.equal(task.specReqId, RID);
+  assert.equal(task.specReqTitle, 'Mine review');
+  const search = readFileSync(args, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .find(call => call.name === 'search_requests_advanced' && call.args.requesterId);
+  assert.deepEqual(search.args.requesterId, ['me']);
+  assert.equal(search.args.au_ca_gte, NOW.getTime());
+  assert.ok(!result.calls.includes('acknowledge_request'));
+  assert.equal(result.output.tasks.counts.linked, 1);
+  assert.equal(queue().length, 0);
+});
+
+test('runner re-reads once on 409 and skips a web-picked task', async t => {
+  const { run } = await taskHome(t);
+  let picked = false;
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE, BOB]) },
+    hooks: { beforeTransition(eventId, body, tasks) {
+      if (body.op !== 'classify' || picked) return;
+      // The user picks Bob in the web while the runner classifies.
+      picked = true;
+      const task = tasks.get(eventId);
+      tasks.set(eventId, { ...task, state: 'request_needed', path: 'theirs', counterpartUserId: 'u-bob', version: task.version + 1 });
+    } } });
+  await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com', 'bob@amazon.com'])) });
+  const [created] = api.tasks.values();
+  assert.equal(created.state, 'needs_owner');
+
+  const second = await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) });
+  assert.equal(second.output.tasks.counts.conflicts, 1);
+  assert.equal(transitions(api, 'classify').length, 1);
+  assert.equal(api.calls.filter(call => call[0] === 'getTask').length, 1);
+  const task = api.tasks.get(created.eventId);
+  assert.deepEqual([task.state, task.counterpartUserId], ['request_needed', 'u-bob']);
+});
+
+test('removed occurrence closes its task', async t => {
+  const { run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  await run(api, [occurrence()], work);
+  const [created] = api.tasks.values();
+  const second = await run(api, [occurrence({ isCanceled: true })], work);
+  assert.equal(second.output.counts.removals, 1);
+  assert.equal(second.output.tasks.counts.closed, 1);
+  assert.equal(api.tasks.get(created.eventId).state, 'closed');
+  assert.deepEqual(transitions(api).map(call => call[2]), [{ op: 'close', version: created.version }]);
+});
+
+test('cloud write failure after ack is retried next run without a second ack', async t => {
+  const { home, run, log } = await taskHome(t);
+  let failures = 1;
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] },
+    hooks: { fail: body => body.op === 'recordAck' && failures-- > 0 ? 503 : 0 } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]), FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) };
+  const first = await run(api, [occurrence()], work);
+  assert.equal(first.code, 0, 'the calendar result decides the exit code');
+  assert.equal(first.output.tasks.result, 'TASKS_PARTIAL');
+  assert.deepEqual(first.output.tasks.failures, { theirs: 'TTOBAK_UNAVAILABLE' });
+  let ledger = JSON.parse(readFileSync(ledgerFile(home), 'utf8'));
+  assert.deepEqual([ledger.entries[RID].outcome, ledger.entries[RID].cloudSynced], ['ok', false]);
+  const [task] = api.tasks.values();
+  assert.equal(task.state, 'request_needed');
+
+  const second = await run(api, [occurrence()], work);
+  assert.equal(second.output.tasks.result, 'ok');
+  assert.equal(api.tasks.get(task.eventId).state, 'acked');
+  ledger = JSON.parse(readFileSync(ledgerFile(home), 'utf8'));
+  assert.equal(ledger.entries[RID].cloudSynced, true);
+  assert.equal(log().filter(name => name === 'acknowledge_request').length, 1);
+});
+
+test('no attendee address or Slack ID reaches the API or any file', async t => {
+  const { home, lines, run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['Alice@Amazon.com', ATTENDEE_CANARY])),
+    FAKE_WORK_SLACK_USER: SLACK_ID_CANARY, FAKE_WORK_SLACK_CHANNEL: DM_CANARY };
+  await run(api, [occurrence()], work);
+  await run(api, [occurrence()], { ...work, FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]),
+    FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) });
+  assert.equal(api.tasks.size, 1);
+  const sent = JSON.stringify(api.calls);
+  const files = allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
+  for (const text of [sent, files, lines.join('\n')]) {
+    for (const canary of [ATTENDEE_CANARY, 'alice@amazon.com', SLACK_ID_CANARY, DM_CANARY, CANARY]) {
+      assert.ok(!text.toLowerCase().includes(canary.toLowerCase()), `${canary} leaked`);
+    }
+  }
+});
+
+test('auto-ack off queues ack_needed and a later WORKING read records acked', async t => {
+  const { run, queue } = await taskHome(t, { autoAck: 'off' });
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const first = await run(api, [occurrence()], { ...work, FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]) });
+  assert.ok(!first.calls.includes('acknowledge_request'));
+  assert.deepEqual(queue().map(line => line.state), ['ack_needed', 'request_needed']);
+  const second = await run(api, [occurrence()], { ...work,
+    FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'WORKING' }) }) });
+  assert.ok(!second.calls.includes('acknowledge_request'));
+  const [task] = api.tasks.values();
+  assert.deepEqual([task.state, task.specReqStatus], ['acked', 'WORKING']);
+  assert.deepEqual(queue().map(line => line.state), ['ack_needed', 'request_needed', 'acked']);
+});
+
+test('meeting list overflow and private meetings create no task', async t => {
+  const overflow = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const result = await overflow.run(api, [occurrence()], { FAKE_WORK_MEETINGS_OVERFLOW: '1',
+    FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) });
+  assert.deepEqual(result.output.tasks.failures, { classify: 'PARSE_FAILED' });
+  assert.ok(!result.calls.includes('get_meeting'));
+  // Still pending: the next run evaluates it again.
+  const retry = await overflow.run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) });
+  assert.equal(retry.output.tasks.counts.created, 1);
+
+  const hidden = await taskHome(t);
+  const other = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  await hidden.run(other, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'], true)) });
+  assert.equal(other.calls.filter(call => call[0] === 'create').length, 0);
+  const again = await hidden.run(other, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) });
+  assert.ok(!again.calls.includes('get_meeting'), 'a skipped private occurrence is not re-read');
+});
+
+test('linking sees every task page', async t => {
+  const { run, log } = await taskHome(t);
+  const seed = Array.from({ length: 20 }, (_, index) => ({ eventId: index.toString(16).padStart(64, '0'), sourceId: 'other',
+    state: 'closed', occurrenceStartsAt: '2026-11-01T00:00:00Z', occurrenceEndsAt: '2026-11-01T01:00:00Z',
+    createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 }));
+  // On the second page: a competing task that makes the request ambiguous.
+  seed.push({ eventId: 'f'.repeat(64), sourceId: 'other', accountId: 'acct-1', path: 'theirs', state: 'requested',
+    counterpartUserId: 'u-alice', occurrenceStartsAt: '2026-11-12T03:00:00Z', occurrenceEndsAt: '2026-11-12T04:00:00Z',
+    createdAt: '2026-11-09T00:00:00Z', stateChangedAt: '2026-11-09T00:00:00Z', version: 1 });
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]), FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) });
+  assert.deepEqual(api.calls.filter(call => call[0] === 'listTasks').map(call => call[1]), [null, '20']);
+  assert.equal(transitions(api, 'linkSpecReq').length, 0);
+  assert.ok(!log().includes('acknowledge_request'));
+});
+
+test('an occurrence synced while TTOBAK tasks were unavailable is evaluated next run', async t => {
+  const { ApiResponseError } = await import('../dist/api.js');
+  const { run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const list = api.listSpecReqTasks;
+  api.listSpecReqTasks = async () => { throw new ApiResponseError('HTTP 503', 503); };
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const first = await run(api, [occurrence()], work);
+  assert.equal(first.code, 0);
+  assert.deepEqual(first.output.tasks.failures, { load: 'TTOBAK_UNAVAILABLE' });
+  api.listSpecReqTasks = list;
+  // The calendar has nothing new, but the pending occurrence is still evaluated.
+  const second = await run(api, [occurrence()], work);
+  assert.equal(second.output.counts.upserts, 0);
+  assert.equal(second.output.tasks.counts.created, 1);
+});
+
+const linkedTask = (index, over = {}) => ({ eventId: (index + 1).toString(16).padStart(64, '0'), sourceId: 'other',
+  accountId: 'acct-1', path: 'theirs', state: 'acked', counterpartUserId: 'u-alice',
+  specReqId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, specReqStatus: 'WORKING',
+  occurrenceStartsAt: '2026-11-12T03:00:00Z', occurrenceEndsAt: '2026-11-12T04:00:00Z',
+  createdAt: '2026-11-09T00:00:00Z', stateChangedAt: '2026-11-09T00:00:00Z', version: 1, ...over });
+
+test('refresh rotates its budget so every linked task is read across runs', async t => {
+  const { run } = await taskHome(t);
+  const seed = Array.from({ length: 30 }, (_, index) => linkedTask(index));
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const args = join(tempHome(t), 'args.log');
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])), FAKE_WORK_REQUEST_ECHO: '1',
+    FAKE_WORK_REQUEST: JSON.stringify(theirsRequest({ stateId: 'WORKING' })), FAKE_WORK_ARGS: args };
+  await run(api, [occurrence()], work);
+  await run(api, [occurrence()], work);
+  const read = readFileSync(args, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .filter(call => call.name === 'get_request').map(call => call.args.request_id);
+  assert.equal(read.length, 50);
+  assert.equal(new Set(read).size, 30);
+});
+
+test('a task row that records an ack attempt is never acknowledged again', async t => {
+  const { run, log } = await taskHome(t);
+  // Attempted on another device: no local ledger entry, but the row carries the failure.
+  const seed = [linkedTask(0, { specReqId: RID, state: 'ack_failed', failureCode: 'ACK_UNCONFIRMED', specReqStatus: 'NEXT_UP' })];
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]), FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) });
+  assert.ok(!log().includes('acknowledge_request'));
+  assert.equal(transitions(api, 'recordAck').length, 0);
+});
+
+test('an occurrence synced by a run that skipped the task step is evaluated later', async t => {
+  const { run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const first = await run(api, [occurrence()], work, { me: undefined });
+  assert.equal(first.output.tasks.result, 'TTOBAK_LOGIN_REQUIRED');
+  const second = await run(api, [occurrence()], work);
+  assert.equal(second.output.counts.upserts, 0);
+  assert.equal(second.output.tasks.counts.created, 1);
+});
+
+test('removals from a replayed batch or a skipped task step still close the task', async t => {
+  const { ApiResponseError } = await import('../dist/api.js');
+  for (const skip of ['replay', 'identity']) {
+    const { run } = await taskHome(t);
+    const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+    const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+    await run(api, [occurrence()], work);
+    const [created] = api.tasks.values();
+    const sync = api.syncCalendarEvents;
+    if (skip === 'replay') {
+      // The removal lands, but its receipt is lost: the next run replays the batch.
+      api.syncCalendarEvents = async (...args) => { await sync(...args); throw new ApiResponseError('HTTP 503', 503); };
+      assert.notEqual((await run(api, [occurrence({ isCanceled: true })], work)).code, 0);
+      api.syncCalendarEvents = sync;
+    } else {
+      const skipped = await run(api, [occurrence({ isCanceled: true })], work, { me: undefined });
+      assert.equal(skipped.output.tasks.result, 'TTOBAK_LOGIN_REQUIRED');
+    }
+    const next = await run(api, [occurrence({ isCanceled: true })], work);
+    assert.equal(next.output.counts.removals, 0, skip);
+    assert.equal(next.output.tasks.counts.closed, 1, skip);
+    assert.equal(api.tasks.get(created.eventId).state, 'closed');
+  }
+});
+
+test('unknown attendees stay pending, then are skipped after three reads', async t => {
+  const unknown = { FAKE_WORK_DETAILS: JSON.stringify({ 'i:1': { requiredAttendees: ['alice@amazon.com'], organizer: 'me@amazon.com' } }) };
+  const known = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const retried = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  assert.equal((await retried.run(api, [occurrence()], unknown)).output.tasks.counts.created, 0);
+  assert.equal((await retried.run(api, [occurrence()], known)).output.tasks.counts.created, 1);
+
+  const capped = await taskHome(t);
+  const other = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  for (let index = 0; index < 3; index++) {
+    assert.ok((await capped.run(other, [occurrence()], unknown)).calls.includes('get_meeting'));
+  }
+  const after = await capped.run(other, [occurrence()], known);
+  assert.ok(!after.calls.includes('get_meeting'));
+  assert.equal(other.calls.filter(call => call[0] === 'create').length, 0);
+});
+
+test('refresh promotes ack_failed only when I am the resolver', async t => {
+  for (const [resolverLogin, state] of [['bob', 'ack_failed'], ['me', 'acked']]) {
+    const { run, queue } = await taskHome(t);
+    const seed = [linkedTask(0, { specReqId: RID, state: 'ack_failed', failureCode: 'ACK_UNCONFIRMED', specReqStatus: 'NEXT_UP' })];
+    const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+    await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+      FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'WORKING', resolverLogin }) }) });
+    assert.equal(transitions(api, 'refreshSpecReq').length, resolverLogin === 'me' ? 1 : 0);
+    assert.equal(api.tasks.get(seed[0].eventId).state, state);
+    assert.equal(queue().some(line => line.state === 'acked'), state === 'acked');
+  }
+});
+
+test('a task stored with COMPLETED still moves to resolved on a later run', async t => {
+  for (const start of ['acked', 'ack_failed']) {
+    const { run } = await taskHome(t);
+    const seed = [linkedTask(0, { specReqId: RID, state: start, specReqTitle: 'Design review',
+      specReqStatus: start === 'acked' ? 'COMPLETED' : 'NEXT_UP',
+      ...(start === 'ack_failed' ? { failureCode: 'ACK_UNCONFIRMED' } : {}) })];
+    const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+    const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+      FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'COMPLETED' }) }) };
+    await run(api, [occurrence()], work);
+    if (start === 'ack_failed') {
+      assert.deepEqual([api.tasks.get(seed[0].eventId).state, api.tasks.get(seed[0].eventId).specReqStatus], ['acked', 'COMPLETED']);
+      await run(api, [occurrence()], work);
+    }
+    assert.equal(api.tasks.get(seed[0].eventId).state, 'resolved', start);
+  }
+});
+
+test('past the task list cap, classification and notices run but linking and ack are skipped', async t => {
+  const { TASK_LIST_MAX_PAGES } = await import('../dist/intake/tasks.js');
+  assert.equal(TASK_LIST_MAX_PAGES, 50);
+  const { run } = await taskHome(t);
+  const closedRow = index => ({ eventId: (index + 1).toString(16).padStart(64, '0'), sourceId: 'other', state: 'closed',
+    occurrenceStartsAt: '2026-11-01T00:00:00Z', occurrenceEndsAt: '2026-11-01T01:00:00Z',
+    createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]), FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) };
+  const exact = await fakeTaskApi({ seed: Array.from({ length: 999 }, (_, index) => closedRow(index)),
+    eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const full = await run(exact, [occurrence()], work);
+  assert.equal(full.output.tasks.counts.skipped, 0, '1,000 tasks fit');
+  assert.ok(full.calls.includes('search_requests_advanced'));
+
+  const { run: overRun, queue } = await taskHome(t);
+  const api = await fakeTaskApi({ seed: Array.from({ length: 1001 }, (_, index) => closedRow(index)),
+    eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const over = await overRun(api, [occurrence()], work);
+  assert.equal(over.output.tasks.result, 'TASKS_PARTIAL');
+  assert.deepEqual(over.output.tasks.failures, { load: 'PARSE_FAILED' });
+  assert.equal(over.output.tasks.counts.skipped, 3);
+  assert.equal(over.output.tasks.counts.created, 1, 'a new occurrence is still classified');
+  assert.equal(api.calls.filter(call => call[0] === 'listTasks').length, 50);
+  assert.ok(!over.calls.includes('check_user_is_tam') && !over.calls.includes('search_requests_advanced')
+    && !over.calls.includes('get_request') && !over.calls.includes('acknowledge_request'));
+  assert.equal(transitions(api).length, 0);
+  assert.deepEqual(queue().map(line => line.state), ['request_needed'], 'notices still run');
+});
+
+test('past the task list cap a removed occurrence still closes its unloaded task', async t => {
+  const { run } = await taskHome(t);
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  await run(api, [occurrence()], work);
+  const [created] = api.tasks.values();
+  // Push the occurrence's task past the cap.
+  const rows = [...api.tasks.entries()];
+  api.tasks.clear();
+  for (let index = 0; index < 1000; index++) {
+    const eventId = (index + 1).toString(16).padStart(64, '0');
+    api.tasks.set(eventId, { eventId, sourceId: 'other', state: 'closed', occurrenceStartsAt: '2026-11-01T00:00:00Z',
+      occurrenceEndsAt: '2026-11-01T01:00:00Z', createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 });
+  }
+  for (const [eventId, row] of rows) api.tasks.set(eventId, row);
+  const second = await run(api, [occurrence({ isCanceled: true })], work);
+  assert.equal(second.output.tasks.counts.closed, 1);
+  assert.equal(api.tasks.get(created.eventId).state, 'closed');
+});

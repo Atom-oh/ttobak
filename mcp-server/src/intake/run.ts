@@ -13,6 +13,7 @@ import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, ty
 import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { SFDC_TOOLS, runSfdc, type SfdcCounts } from './sfdc.js';
 import { IntakeStore } from './store.js';
+import { runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
 
 /** A task-runner provider connector: where it runs, never how it is launched. */
 export interface ConnectorSelection { host: HostId; server: string; pathDirs: string[]; selectedAt: string }
@@ -30,7 +31,8 @@ export interface Selection {
 }
 
 export interface RunStatus {
-  tasks?: { lastRunAt: string; result: 'ok' | IntakeCode };
+  tasks?: { lastRunAt: string; result: 'ok' | IntakeCode; counts?: TaskCounts;
+    failures?: TaskRunResult['failures'] };
   calendar?: {
     lastRunAt: string;
     lastSuccessAt?: string;
@@ -62,6 +64,8 @@ export interface IntakeEnvironment {
   api?: TtobakApi;
   /** Test seam: the account scope that goes with `api`. */
   scope?: string;
+  /** Test seam: the signed-in identity that goes with `api`. */
+  me?: { email: string; userId: string };
 }
 
 /** Deployment and signed-in user, as a fixed-length key (never logged). */
@@ -93,6 +97,7 @@ const USAGE = `Usage:
   ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
   ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
+    (a synced run also runs the SpecReq task step when meetings and specreq are selected)
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
   ttobak-mcp intake status`;
 
@@ -215,6 +220,7 @@ async function select(args: string[], environment: IntakeEnvironment, store: Int
 async function signIn(selection: Selection | null, environment: IntakeEnvironment, dryRun: boolean, noninteractive: boolean) {
   let api = environment.api;
   let scope = environment.scope;
+  let me = environment.me;
   if (!dryRun && !api) {
     const config = ttobakConfig(selection, environment.env);
     const auth = new CognitoAuth(config, { interactive: !noninteractive });
@@ -226,9 +232,36 @@ async function signIn(selection: Selection | null, environment: IntakeEnvironmen
       throw error;
     }
     // The ledger and any pending batch belong to this deployment and user.
-    scope = accountScope(config.apiUrl, tokenSubject(idToken));
+    const subject = tokenSubject(idToken);
+    scope = accountScope(config.apiUrl, subject);
+    try { me = { email: tokenEmail(idToken), userId: subject }; } catch { me = undefined; }
   }
-  return { api, scope };
+  return { api, scope, me };
+}
+
+/**
+ * Opens each selected task connector and checks its tool schemas. A connector
+ * that fails is reported by code; the steps that need it are skipped.
+ */
+async function openTaskSessions(environment: IntakeEnvironment, selection: Selection) {
+  const sessions: Partial<Record<TaskConnectorId, McpSession>> = {};
+  const unavailable: Partial<Record<TaskConnectorId, IntakeCode>> = {};
+  for (const connector of ['meetings', 'specreq', 'slack'] as const) {
+    const selected = selection[connector];
+    if (!selected) continue;
+    let session: McpSession | undefined;
+    try {
+      const spec = resolveServer(environment.home, selected.host, selected.server, selected.pathDirs);
+      session = await McpSession.open(spec, selected.server, { pathDirs: selected.pathDirs,
+        allowedTools: allowedToolNames(connector) });
+      for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+      sessions[connector] = session;
+    } catch (error) {
+      await session?.close();
+      unavailable[connector] = intakeCode(error);
+    }
+  }
+  return { sessions, unavailable };
 }
 
 async function calendar(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
@@ -245,7 +278,7 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
   try {
     // Inside the try: an unreadable status file must still release the lock.
     status = store.read<RunStatus>('status.json') ?? {};
-    let { api, scope } = await signIn(selection, environment, dryRun, options['--noninteractive'] === true);
+    let { api, scope, me } = await signIn(selection, environment, dryRun, options['--noninteractive'] === true);
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
@@ -263,7 +296,32 @@ async function calendar(args: string[], environment: IntakeEnvironment, store: I
         : { lastSuccessAt: startedAt.toISOString() }),
     };
     store.write(status, 'status.json');
+    // The task step reuses this run's TTOBAK API (calendar selection or TTOBAK_* env)
+    // and lock. Its failures never change the calendar result or exit code.
+    let tasks: { result: 'ok' | IntakeCode; counts?: TaskCounts; failures?: TaskRunResult['failures'] } | undefined;
+    if (!dryRun && selection.meetings && selection.specreq && api && scope) {
+      const ranAt = environment.now();
+      if (!me) tasks = { result: 'TTOBAK_LOGIN_REQUIRED' };
+      else {
+        const opened = await openTaskSessions(environment, selection);
+        try {
+          const run = await runTasks({ store, api, scope, zone: environment.zone, now: ranAt, sourceId: selected.sourceId,
+            selection: { autoAck: selection.specreq.autoAck !== false }, sessions: opened.sessions,
+            unavailable: opened.unavailable, me,
+            calendar: { upserted: result.upserted ?? [] } });
+          tasks = { result: run.result, counts: run.counts,
+            ...(Object.keys(run.failures).length ? { failures: run.failures } : {}) };
+        } catch (error) {
+          tasks = { result: intakeCode(error) };
+        } finally {
+          for (const session of Object.values(opened.sessions)) await session.close();
+        }
+      }
+      status.tasks = { lastRunAt: ranAt.toISOString(), ...tasks };
+      try { store.write(status, 'status.json'); } catch { /* the calendar result stands */ }
+    }
     return { ok: true, connector: 'calendar', dryRun, counts: result.counts,
+      ...(tasks ? { tasks } : {}),
       ...(options['--preview'] ? { preview: result.preview } : {}) };
   } catch (error) {
     status.calendar = {

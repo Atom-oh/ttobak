@@ -5,19 +5,20 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-10 |
-| Iteration | 4: complete manual and source evidence |
-| Scope | All 28 chapters: every primary menu, account tabs, contacts/people, documents/library, research/news/Tech, dictionary, billing, settings/admin, devices, security and recovery |
-| Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
+| Iteration | 5: actual app UI replaces simplified menu illustrations |
+| Scope | All 28 chapters and 36 actual UI screenshots |
+| Reviewer | Codex inline rubric review; independent latest-head CI review remains required |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
-| Scale | 90 points: Playwright MCP unavailable, so the rubric's 10-point MCP visual category is exempt |
-| Current score | **90 / 90** |
-| Verdict | **PASS**; also meets the loaded plugin's mandatory >=85 deployment gate |
+| Scale | 90 points: Playwright MCP cannot launch its missing Chrome distribution; its 10-point category is exempt |
+| Current score | **88.5 / 90** |
+| Verdict | **PASS**, including the loaded plugin's mandatory score >=85 before publication |
 
-The user's lifecycle rule requires closing every spawned agent. This host has no
-`close_agent` tool, so review ran inline. Independent latest-head CI review remains
-required before merge. Local Python Playwright/Chromium provided additional real
-browser evidence; that evidence is not represented as a MCP session or credited
-to the exempt rubric category.
+Local Python Playwright/Chromium provided real browser evidence separately;
+it is not represented as a Playwright MCP session. No subagent was started.
+Scoring starts each category at full marks: each located defect deducts one
+quarter of its category, summed and rounded once to the nearest 0.5, midpoints
+up. One accepted figure-duplication warning is scored below. Informational
+limitations do not deduct points; no Critical finding remains.
 
 ## Quality gate result
 
@@ -36,82 +37,94 @@ to the exempt rubric category.
 | Data accuracy / references | 5/5 | 0 | 0 | 0 |
 | Legal compliance | 5/5 | 0 | 0 | 0 |
 | Message clarity | 5/5 | 0 | 0 | 0 |
-| Duplication / gaps | 5/5 | 0 | 0 | 0 |
-| **Total** | **90/90** | **0** | **0** | **2** |
+| Duplication / gaps | 3.5/5 | 0 | 1 | 0 |
+| **Total** | **88.5/90** | **0** | **1** | **2** |
 
-Scoring follows the fixed rubric: deductions require a located, quoted defect;
-each defect costs one quarter of its category, summed then rounded once to the
-nearest 0.5 with midpoints up. No unresolved defect was identified after revision,
-so no deduction applies. Informational scope boundaries do not count as defects.
-Content quality and latest-head CI/publication are separate gates.
+## Evidence and corrected findings
 
-## Evidence and revisions
+- The user's requested actual UI is now shown directly. All 36 captures were
+  visually inspected at original resolution or in full-resolution review sheets.
+  Sidebar labels, menu order, icons, controls and layouts are the real frontend.
+  No app DOM/CSS rewrite, redrawing, cropping or image resizing was used.
+- The people figure explicitly describes the related-person area within the
+  Account overview; identical overview/people pixels are intentional context,
+  not an independently navigated people page. The Billing capture was inspected
+  and contains the rendered dashboard and service-tag controls, not a 404 frame.
+- Captured revision: `0d9f1075169ba8d4692036dc98360b6514ef3b44`.
+  Later main changes before review affect the MCP bundle/intake, not these UI
+  components. The manifest records the captured revision rather than implying
+  that guide tooling changes existed at capture time.
+- A Linux system-font issue made some Korean body text display as separated
+  jamo. Configuring the installed Korean system font fixed the browser environment;
+  the final complete capture pass has legible Hangul and unchanged app styles.
+- The local app used fictional read-only fixtures. External HTTP/WebSocket
+  access was blocked, no API mutations were attempted, and all 36 page-error
+  lists were empty. No provider request, production login or microphone was used.
+- Every figure has specific alt text, an original-size local link, and a caption
+  disclosing actual app UI, example data and capture date. The introduction
+  explains permission/configuration differences. Mobile captures stay at or
+  below their original 390-pixel width. All images load eagerly and stay visible.
+- The tested public artifact has 141 valid anchors and 40 explicit files.
+  All 45 reader/image checks passed at desktop FHD/4K, tablet and small mobile
+  sizes. Search, themes, keyboard navigation, no-JavaScript reading and printing
+  passed with no console/page/HTTP errors. The 83-page A4 PDF contains exactly
+  36 screenshot placements; a rendered screenshot page was visually inspected.
+- All 18 documentation unit tests, documentation validation and JavaScript
+  syntax validation passed. Archive/image identity, dimensions, inventory,
+  bounded fetches and rejection-before-output are covered. The media gate was
+  implemented only after its new tests failed against the original packager.
 
-- Eight text-reviewable SVG menu illustrations were checked against local UI
-  walkthroughs. Captions explicitly distinguish diagrams from illustrations. They
-  contain no customer records, credentials, internal URLs or remote resources.
-  Local raster walkthrough evidence remains private and outside the public artifact.
-- The application walkthrough opened 26 local routes: 19 primary/detail routes and
-  seven Account tab selections. API responses were fictional; non-loopback HTTP
-  and external WebSocket construction were blocked. This was not live acceptance.
-- Local guide checks covered 1920x1080, 3840x2160, 768x1024, 390x844 and 360x800;
-  no page overflow, console/page errors or HTTP failures remained.
-- Verified body search, inert search input, empty results, keyboard shortcut,
-  mobile contents/focus/Escape, active chapter, theme persistence, all image
-  loading, no-JavaScript reading and complete A4 PDF output.
-- Fixed the doubled anchor offset and missing local favicon discovered during
-  browser checks. Empty per-chapter contents stay hidden for legacy chapters.
-- Nine documentation unit checks passed, including seven public-packager cases.
-  Reviewed image references are copied; unreviewed images and symlinks are rejected.
-  Local-only CSP, anchor integrity and existing-output preservation remain checked.
-- The final artifact contains 141 validated anchors and 12 explicit public assets.
-  All 36 reader checks passed; structured evidence is recorded in
-  `results/TTOBAK_User_Guide_Browser_Checks.json` and is not published.
-- `check_docs.py` and JavaScript syntax validation passed. No runtime application,
-  AWS configuration or workflow/review-gate code changed.
+## Accepted warning
 
-## Independent CI review revisions and remaining issues
+The Account overview and People chapters reuse the same captured viewport.
+`screen-account-overview.webp` and `screen-people.webp` have SHA-256
+`e8d8b1e61d044568cf084ed955d18a6df097d909d32c607f11f0dd43545e6526`. The actual related-person area is visible near
+its bottom, and the People caption explicitly says it is within the Account
+overview. This preserves genuine UI context but repeats pixels instead of
+providing a focused second view. Retain the image archive unchanged and accept
+this visual redundancy: one Duplication/Gaps warning deducts 1.5 points from
+5, leaving 3.5/5 and a final 88.5/90, above the mandatory 85 deployment gate.
+All 36 captures remain real app output; they are not 36 unique pixel views.
 
-The independent review found mixed upload paths, an inaccurate connector-screen
-description, overstated Library status visibility and dropped operational limits.
-This revision separates the upload paths, corrects AI connection permissions and
-Library list capabilities, and restores sharing/project/simulation limits.
-Existing-meeting instructions distinguish the immediate attachment gallery from
-the queued audio/document uploader; password recovery guidance is restored.
-Project creation fields, Docs type badges and older Mac microphone behavior
-were checked against the current UI and corrected.
-Reader fixes also guard IME composition, keep search results below the sticky
-header and force readable no-JavaScript dark-preference printing. Fresh
-latest-head review remains required. Notes-only conflict checks, normalized
-dictionary aliases, all-mode research approval and Docs editor structures match source.
-Navigation labels are searchable; legacy flow arrows no longer occupy grid cells.
-The last chapter remains active on 4K screens where fragment scrolling is clamped.
+## Publication boundary
+
+The reviewed lossless images total a 1,465,184-byte stored ZIP. It contains only
+36 explicitly named WebP images. The documentation-only Release asset is
+separate from application version releases and is not marked latest. Its exact
+URL, size and SHA-256, plus every image identity/dimension/route, are reviewed in
+`docs/user-guide/screenshots.json`. The packager validates all media before
+creating output and emits only local files. The self-only CSP remains unchanged.
+The Pages reader makes no Release or API requests. Internal manifests, fixtures,
+plans and reports are not copied into the site. No workflow, source-review limit,
+application runtime or AWS deployment code changed.
 
 ## Source-omission cross-check
 
-| Source section | Status | Note |
+| Requested/source section | Status | Note |
 |---|---|---|
-| Original workflow coverage | INCLUDED | Rewritten manual retains verified operational limits |
-| Current menu workflows | INCLUDED | All 28 chapters, including conditional Billing and Mac-only settings |
-| Internal source inventory | INCLUDED | Verified menu/component/service paths, model defaults and walkthrough limits |
-| Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
-| Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
-| Production and native acceptance | OMITTED deliberately | No production login, customer records or macOS capture was performed |
+| Actual application menu UI | INCLUDED | Real sidebar and all primary menus, replacing eight schematic figures |
+| Detail controls and Account tabs | INCLUDED | Accounts, contacts/people, projects, documents/library, news/Tech/research |
+| Settings and permissions | INCLUDED | Notion form, import, admin and AI connection permissions; meeting sharing |
+| Recording, upload, meeting and follow-up | INCLUDED | Real entry screens and example meeting controls |
+| Mobile UI | INCLUDED | Actual responsive Home and recording layouts |
+| Enterprise explanations and workflows | INCLUDED | Existing verified 28-chapter manual retained |
+| Production/provider/native acceptance | OMITTED deliberately | Clearly disclosed; not required to show actual web UI |
 
 ## Informational boundaries
 
-1. Public illustrations contain generic menu labels. Public assets never contain
-   the internal fictional walkthrough evidence archive.
-2. The full product manual and internal source inventory are included. Four
-   dependent PRs preserve the existing 95,000-byte review limit. Source
-   configuration and local inspection are not production/native acceptance.
+1. Fictional customer/contact/meeting records use explicit example names and
+   reserved `example.invalid` addresses. The development user's source-defined
+   `Dev User` / `dev@ttobak.io` label remains unchanged; it is not a retrieved
+   production account. Notion inputs contain only the real form's placeholders.
+2. Empty lists show real product empty states. Enabled Billing and admin fixtures
+   illustrate conditional controls; they do not prove live permissions, costs,
+   completed AI work, native capture or provider authorization.
 
 ## Revision checklist and next steps
 
-- [x] Resolve browser defects and publication-boundary failures.
-- [x] Inspect all eight public illustration assets.
-- [x] Record review scale, limitations and source omissions honestly.
-- [ ] Obtain required latest-head CI review before merging the complete manual.
-- [x] Complete and re-review the 28-chapter content expansion.
-- [x] Add the full internal source/walkthrough evidence inventory.
-- [ ] Confirm latest-main Pages publication and public interactions.
+- [x] Replace schematic menus with actual UI and inspect every capture.
+- [x] Preserve UTF-8 readability, source identity and publication bounds.
+- [x] Verify all screenshots, responsive reading and complete PDF output.
+- [x] Pass the mandatory content quality gate before publishing the media.
+- [ ] Obtain required latest-head CI and independent review before merging.
+- [ ] Verify final Pages publication and all public asset hashes.
