@@ -236,3 +236,232 @@ test('classify normalizes member emails and handles organizer-me', async () => {
     members: ms, anyAccountSaEmails: new Set(), isPrivate: false }),
   { kind: 'task', state: 'request_needed', path: 'theirs', counterpartUserId: 'u-a' });
 });
+
+// SpecReq linking and the single acknowledge. Every call the fixture receives is
+// logged; the acknowledge handler also records the ledger outcome it observes.
+const SCOPE = 'a'.repeat(32);
+const RID = '11111111-2222-4333-8444-555555555555';
+const RID2 = '66666666-7777-4888-8999-000000000000';
+const ledgerFile = home => join(home, '.ttobak', 'intake', 'specreq', SCOPE, 'ack-ledger.json');
+const request = (over = {}) => ({ requestId: RID, title: 'Design review', stateId: 'NEXT_UP', requesterLogin: 'alice',
+  resolverLogin: 'me', salesforceId: '006A', meetingDateRanges: ['2026-11-12 - 2026-11-12'], createdAt: 1, ...over });
+
+async function specreqSession(t, home, env = {}, callTimeoutMs) {
+  const log = join(home, `calls-${Math.random().toString(16).slice(2)}.log`);
+  const session = await McpSession.open({ command: process.execPath, args: [FIXTURE],
+    env: { FAKE_WORK_LOG: log, FAKE_WORK_LEDGER: ledgerFile(home), FAKE_WORK_SEEN: join(home, 'seen.log'), ...env } }, 'work',
+  { pathDirs: ['/usr/bin', '/bin'], allowedTools: allowedToolNames('specreq'), ...(callTimeoutMs ? { callTimeoutMs } : {}) });
+  t.after(() => session.close());
+  const calls = () => existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+  return { session, calls };
+}
+
+async function ledgerRef(home) {
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  return { store: new IntakeStore(home), scope: SCOPE, now: () => NOW };
+}
+
+test('ack after pending ledger entry is never retried', async t => {
+  const { acknowledgeOnce, resolveAck } = await import('../dist/intake/specreq.js');
+  const { beginAck, loadAckLedger } = await import('../dist/intake/ack-ledger.js');
+  const home = tempHome(t);
+  const ledger = await ledgerRef(home);
+  beginAck(ledger.store, SCOPE, RID, 'e'.repeat(64), NOW);
+  assert.throws(() => beginAck(ledger.store, SCOPE, RID, 'e'.repeat(64), NOW), error => error.code === 'STORE_INVALID');
+  const { session, calls } = await specreqSession(t, home, { FAKE_WORK_REQUEST: JSON.stringify(request()) });
+  assert.equal(await acknowledgeOnce(session, ledger, { requestId: RID, eventId: 'e'.repeat(64) }, 'me'), 'unknown');
+  assert.deepEqual(calls(), []);
+  assert.deepEqual(await resolveAck(session, ledger, RID, 'me'), { state: 'ack_failed', failureCode: 'ACK_UNCONFIRMED' });
+  assert.deepEqual(calls(), ['get_request']);
+  assert.equal(calls().filter(name => name === 'acknowledge_request').length, 0);
+  assert.equal(loadAckLedger(ledger.store, SCOPE, NOW).entries[RID].outcome, 'pending');
+});
+
+test('unknown outcome resolves from later read', async t => {
+  const { acknowledgeOnce, resolveAck } = await import('../dist/intake/specreq.js');
+  const { loadAckLedger } = await import('../dist/intake/ack-ledger.js');
+  const home = tempHome(t);
+  const ledger = await ledgerRef(home);
+  const eventId = 'e'.repeat(64);
+  const first = await specreqSession(t, home, { FAKE_WORK_ACK: 'timeout', FAKE_WORK_REQUEST: JSON.stringify(request()) }, 400);
+  assert.equal(await acknowledgeOnce(first.session, ledger, { requestId: RID, eventId }, 'me'), 'unknown');
+  assert.deepEqual(first.calls(), ['get_request', 'acknowledge_request']);
+  assert.equal(loadAckLedger(ledger.store, SCOPE, NOW).entries[RID].outcome, 'unknown');
+  const crash = await specreqSession(t, home, { FAKE_WORK_ACK: 'crash', FAKE_WORK_REQUEST: JSON.stringify(request({ requestId: RID2 })) });
+  assert.equal(await acknowledgeOnce(crash.session, ledger, { requestId: RID2, eventId }, 'me'), 'unknown');
+
+  const working = await specreqSession(t, home, { FAKE_WORK_REQUEST: JSON.stringify(request({ stateId: 'WORKING' })) });
+  assert.deepEqual(await resolveAck(working.session, ledger, RID, 'me'), { state: 'acked' });
+  assert.equal(loadAckLedger(ledger.store, SCOPE, NOW).entries[RID].outcome, 'ok');
+  const nextUp = await specreqSession(t, home, { FAKE_WORK_REQUEST: JSON.stringify(request({ requestId: RID2 })) });
+  assert.deepEqual(await resolveAck(nextUp.session, ledger, RID2, 'me'), { state: 'ack_failed', failureCode: 'ACK_UNCONFIRMED' });
+  const otherResolver = await specreqSession(t, home,
+    { FAKE_WORK_REQUEST: JSON.stringify(request({ requestId: RID2, stateId: 'WORKING', resolverLogin: 'bob' })) });
+  assert.deepEqual(await resolveAck(otherResolver.session, ledger, RID2, 'me'), { state: 'ack_failed', failureCode: 'ACK_UNCONFIRMED' });
+  for (const later of [working, nextUp, otherResolver]) assert.deepEqual(later.calls(), ['get_request']);
+});
+
+test('rejected ack is never retried and resolves from later read', async t => {
+  const { acknowledgeOnce, resolveAck } = await import('../dist/intake/specreq.js');
+  const home = tempHome(t);
+  const ledger = await ledgerRef(home);
+  for (const [mode, id] of [['error', RID], ['false', RID2]]) {
+    const { session, calls } = await specreqSession(t, home, { FAKE_WORK_ACK: mode, FAKE_WORK_REQUEST: JSON.stringify(request({ requestId: id })) });
+    assert.equal(await acknowledgeOnce(session, ledger, { requestId: id, eventId: 'e'.repeat(64) }, 'me'), 'rejected');
+    assert.equal(await acknowledgeOnce(session, ledger, { requestId: id, eventId: 'e'.repeat(64) }, 'me'), 'rejected');
+    assert.deepEqual(calls(), ['get_request', 'acknowledge_request']);
+    assert.deepEqual(await resolveAck(session, ledger, id, 'me'), { state: 'ack_failed', failureCode: 'ACK_REJECTED' });
+  }
+});
+
+test('ack refused unless NEXT_UP and resolver is me', async t => {
+  const { acknowledgeOnce } = await import('../dist/intake/specreq.js');
+  const home = tempHome(t);
+  const ledger = await ledgerRef(home);
+  const refused = [request({ stateId: 'WORKING' }), request({ stateId: 'PENDING' }), request({ resolverLogin: 'bob' }),
+    request({ resolverLogin: '' }), request({ requestId: RID2 }), null];
+  for (const data of refused) {
+    const { session, calls } = await specreqSession(t, home, { FAKE_WORK_REQUEST: JSON.stringify(data) });
+    const outcome = await acknowledgeOnce(session, ledger, { requestId: RID, eventId: 'e'.repeat(64) }, 'me')
+      .catch(error => error.code);
+    assert.ok(outcome === 'not_eligible' || outcome === 'PARSE_FAILED', String(outcome));
+    assert.deepEqual(calls(), ['get_request']);
+    assert.ok(!existsSync(ledgerFile(home)));
+  }
+  const { session } = await specreqSession(t, home, { FAKE_WORK_REQUEST: JSON.stringify(request({ resolverLogin: 'ME' })) });
+  await assert.rejects(acknowledgeOnce(session, ledger, { requestId: 'not-a-uuid', eventId: 'e'.repeat(64) }, 'me'),
+    error => error.code === 'INVALID_ARGUMENT');
+  assert.equal(await acknowledgeOnce(session, ledger, { requestId: RID, eventId: 'e'.repeat(64) }, 'me'), 'ok');
+});
+
+test('ledger is written before the ack call', async t => {
+  const { acknowledgeOnce } = await import('../dist/intake/specreq.js');
+  const { loadAckLedger, markSynced } = await import('../dist/intake/ack-ledger.js');
+  const home = tempHome(t);
+  const ledger = await ledgerRef(home);
+  const { session, calls } = await specreqSession(t, home, { FAKE_WORK_REQUEST: JSON.stringify(request()) });
+  assert.equal(await acknowledgeOnce(session, ledger, { requestId: RID, eventId: 'e'.repeat(64) }, 'me'), 'ok');
+  assert.deepEqual(calls(), ['get_request', 'acknowledge_request']);
+  assert.equal(readFileSync(join(home, 'seen.log'), 'utf8'), 'pending\n');
+  assert.deepEqual(loadAckLedger(ledger.store, SCOPE, NOW).entries[RID],
+    { eventId: 'e'.repeat(64), attemptedAt: NOW.toISOString(), outcome: 'ok', cloudSynced: false });
+  markSynced(ledger.store, SCOPE, RID, NOW);
+  assert.equal(loadAckLedger(ledger.store, SCOPE, NOW).entries[RID].cloudSynced, true);
+  const { statSync } = await import('node:fs');
+  assert.equal(statSync(ledgerFile(home)).mode & 0o777, 0o600);
+});
+
+test('ack ledger prunes entries after 120 days and rejects a malformed file', async t => {
+  const { beginAck, loadAckLedger } = await import('../dist/intake/ack-ledger.js');
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  const home = tempHome(t);
+  const store = new IntakeStore(home);
+  const day = 24 * 60 * 60 * 1000;
+  beginAck(store, SCOPE, RID, 'e'.repeat(64), new Date(NOW.getTime() - 121 * day));
+  beginAck(store, SCOPE, RID2, 'e'.repeat(64), new Date(NOW.getTime() - 119 * day));
+  assert.deepEqual(Object.keys(loadAckLedger(store, SCOPE, NOW).entries), [RID2]);
+  store.write({ version: 1, entries: { [RID]: { eventId: 'x', attemptedAt: 'soon', outcome: 'ok', cloudSynced: false } } },
+    'specreq', SCOPE, 'ack-ledger.json');
+  assert.throws(() => loadAckLedger(store, SCOPE, NOW), error => error.code === 'STORE_INVALID');
+  assert.throws(() => loadAckLedger(store, 'x', NOW), error => error.code === 'INVALID_ARGUMENT');
+});
+
+test('search sends fixed fields and stops after four pages', async t => {
+  const { searchRequests, parseSearch, SEARCH_FIELDS } = await import('../dist/intake/specreq.js');
+  const home = tempHome(t);
+  const argsLog = join(home, 'args.log');
+  const page = (results, next) => ({ success: true, data: { results, ...(next ? { lastEvaluatedIndex: next } : {}) } });
+  const two = [page([request()], { k: 1 }), page([request({ requestId: RID2, meetingDateRanges: 'x', title: 7 })])];
+  const { session } = await specreqSession(t, home, { FAKE_WORK_SEARCH: JSON.stringify(two), FAKE_WORK_ARGS: argsLog });
+  const found = await searchRequests(session, { resolverId: ['me'], stateId: ['NEXT_UP'] });
+  assert.deepEqual(found.map(r => r.requestId), [RID, RID2]);
+  assert.deepEqual(found[1].meetingDateRanges, []);
+  assert.equal(found[1].title, '');
+  const sent = readFileSync(argsLog, 'utf8').trim().split('\n').map(line => JSON.parse(line).args);
+  assert.deepEqual(sent[0], { resolverId: ['me'], stateId: ['NEXT_UP'], pageSize: 50, fields_json: JSON.stringify(SEARCH_FIELDS) });
+  assert.equal(sent[1].lastEvaluatedIndex_json, JSON.stringify({ k: 1 }));
+  assert.deepEqual(SEARCH_FIELDS, ['requestId', 'title', 'stateId', 'requesterLogin', 'resolverLogin', 'salesforceId',
+    'meetingDateRanges', 'createdAt']);
+
+  const endless = Array.from({ length: 5 }, (_, i) => page([request()], { k: i }));
+  const capped = await specreqSession(t, home, { FAKE_WORK_SEARCH: JSON.stringify(endless) });
+  await assert.rejects(searchRequests(capped.session, { requesterId: ['me'] }), error => error.code === 'PARSE_FAILED');
+  assert.equal(capped.calls().length, 4);
+
+  assert.deepEqual(parseSearch(page([request({ requestId: 'bad' }), request({ stateId: 'DONE' }), 'x'])),
+    { requests: [], next: null });
+  assert.throws(() => parseSearch({ success: false }), error => error.code === 'PARSE_FAILED');
+  assert.equal(parseSearch(page([request({ title: 'é'.repeat(400) })])).requests[0].title.length, 256);
+});
+
+test('meetingInRanges uses the local date and rejects malformed ranges', async () => {
+  const { meetingInRanges } = await import('../dist/intake/specreq.js');
+  // 2026-11-11T16:30Z is 2026-11-12 01:30 in Seoul.
+  assert.equal(meetingInRanges('2026-11-11T16:30:00Z', 'Asia/Seoul', ['2026-11-12 - 2026-11-12']), true);
+  assert.equal(meetingInRanges('2026-11-11T16:30:00Z', 'UTC', ['2026-11-12 - 2026-11-12']), false);
+  assert.equal(meetingInRanges('2026-11-12T01:00:00Z', 'Asia/Seoul', ['2026-11-01 - 2026-11-11', '2026-11-12 - 2026-11-30']), true);
+  for (const bad of ['2026-11-12', '2026-11-12 -2026-11-12', '2026-11-13 - 2026-11-11', '2026-02-30 - 2026-11-30',
+    ' 2026-11-12 - 2026-11-12', '2026-11-12 - 2026-11-12x']) {
+    assert.equal(meetingInRanges('2026-11-12T01:00:00Z', 'Asia/Seoul', [bad]), false, bad);
+  }
+  assert.equal(meetingInRanges('garbage', 'Asia/Seoul', ['2026-11-12 - 2026-11-12']), false);
+  assert.equal(meetingInRanges('2026-11-12T01:00:00Z', 'Not/AZone', ['2026-11-12 - 2026-11-12']), false);
+  assert.equal(meetingInRanges('2026-11-12T01:00:00Z', 'Asia/Seoul', [5, null]), false);
+});
+
+test('link requires oppty account, date range and requester', async () => {
+  const { linkRequests } = await import('../dist/intake/specreq.js');
+  const ev = c => c.repeat(64);
+  const task = (over = {}) => ({ eventId: ev('1'), accountId: 'acct-1', path: 'theirs', state: 'request_needed',
+    counterpartUserId: 'u-a', occurrenceStartsAt: '2026-11-12T01:00:00Z', occurrenceEndsAt: '2026-11-12T02:00:00Z',
+    createdAt: '2026-11-10T00:00:00Z', ...over });
+  const oppty = new Map([['006A', new Set(['acct-1'])], ['006B', new Set(['acct-2'])]]);
+  const theirs = { path: 'theirs', me: 'me', zone: 'Asia/Seoul', counterpartLogin: t => t.counterpartUserId === 'u-a' ? 'alice' : 'bob' };
+  const created = Date.parse('2026-11-11T00:00:00Z');
+  const mine = { path: 'mine', me: 'me', zone: 'Asia/Seoul', counterpartLogin: () => null };
+  const mineTask = over => task({ path: 'mine', state: 'issue_needed', counterpartUserId: undefined, ...over });
+  const mineReq = over => request({ requesterLogin: 'me', resolverLogin: '', createdAt: created, ...over });
+  const link = (requests, tasks, rule = theirs) => Object.fromEntries(linkRequests(requests, tasks, oppty, rule));
+  const cases = [
+    ['theirs match', [request()], [task()], theirs, { [RID]: ev('1') }],
+    ['requested state links too', [request()], [task({ state: 'requested' })], theirs, { [RID]: ev('1') }],
+    ['requester case-insensitive', [request({ requesterLogin: 'Alice' })], [task()], theirs, { [RID]: ev('1') }],
+    ['wrong opportunity', [request({ salesforceId: '006B' })], [task()], theirs, {}],
+    ['unknown opportunity', [request({ salesforceId: '006Z' })], [task()], theirs, {}],
+    ['date outside range', [request({ meetingDateRanges: ['2026-11-13 - 2026-11-20'] })], [task()], theirs, {}],
+    ['malformed range -> no link', [request({ meetingDateRanges: ['2026-11-12'] })], [task()], theirs, {}],
+    ['requester not counterpart', [request({ requesterLogin: 'bob' })], [task()], theirs, {}],
+    ['resolver not me', [request({ resolverLogin: 'bob' })], [task()], theirs, {}],
+    ['two tasks match one request -> no link', [request()], [task(), task({ eventId: ev('2') })], theirs, {}],
+    ['two requests match one task -> no link', [request(), request({ requestId: RID2 })], [task()], theirs, {}],
+    ['already linked to another task', [request()], [task(), task({ eventId: ev('2'), specReqId: RID })], theirs, { [RID]: ev('2') }],
+    ['linked task is not a candidate for another request', [request({ requestId: RID2 })], [task({ specReqId: RID })], theirs, {}],
+    ['linked ack_failed task keeps its pair', [request()], [task({ state: 'ack_failed', specReqId: RID })], theirs, { [RID]: ev('1') }],
+    ['request linked to a closed task', [request()], [task({ state: 'closed', specReqId: RID }), task({ eventId: ev('2') })], theirs, {}],
+    ['wrong path', [request()], [mineTask()], theirs, {}],
+    ['no task account', [request()], [task({ accountId: undefined })], theirs, {}],
+    ['mine match', [mineReq()], [mineTask()], mine, { [RID]: ev('1') }],
+    ['mine requester not me', [mineReq({ requesterLogin: 'alice' })], [mineTask()], mine, {}],
+    ['mine created before task', [mineReq({ createdAt: Date.parse('2026-11-09T23:59:59Z') })], [mineTask()], mine, {}],
+    ['mine created at task creation', [mineReq({ createdAt: Date.parse('2026-11-10T00:00:00Z') })], [mineTask()], mine, { [RID]: ev('1') }],
+    ['mine created 7 days after end', [mineReq({ createdAt: Date.parse('2026-11-19T02:00:00Z') })], [mineTask()], mine, {}],
+    ['mine created just inside 7 days', [mineReq({ createdAt: Date.parse('2026-11-19T01:59:59Z') })], [mineTask()], mine, { [RID]: ev('1') }],
+    ['mine issued task is not a candidate', [mineReq()], [mineTask({ state: 'issued' })], mine, {}],
+  ];
+  for (const [name, requests, tasks, rule, expected] of cases) assert.deepEqual(link(requests, tasks, rule), expected, name);
+});
+
+test('identity mismatch stops SpecReq step', async t => {
+  const { resolveMe } = await import('../dist/intake/specreq.js');
+  const home = tempHome(t);
+  const mismatch = await specreqSession(t, home, { FAKE_WORK_TAM: 'someone' });
+  await assert.rejects(resolveMe(mismatch.session, 'me@amazon.com'), error => error.code === 'IDENTITY_MISMATCH');
+  assert.deepEqual(mismatch.calls(), ['check_user_is_tam']);
+  const missing = await specreqSession(t, home);
+  await assert.rejects(resolveMe(missing.session, 'me@amazon.com'), error => error.code === 'IDENTITY_MISMATCH');
+  const external = await specreqSession(t, home, { FAKE_WORK_TAM: 'me' });
+  await assert.rejects(resolveMe(external.session, 'me@example.com'), error => error.code === 'IDENTITY_MISMATCH');
+  assert.deepEqual(external.calls(), []);
+  const ok = await specreqSession(t, home, { FAKE_WORK_TAM: 'Me' });
+  assert.equal(await resolveMe(ok.session, 'ME@amazon.com'), 'me');
+});
