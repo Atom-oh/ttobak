@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>TTOBAK</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        --bg: #ffffff;
+        --fg: #0f172a;
+        --muted: #475569;
+        --border: rgba(15, 23, 42, 0.12);
+        --primary: #3211d4;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1930;
+          --fg: #f6f6f8;
+          --muted: #b4b0cc;
+          --border: rgba(255, 255, 255, 0.12);
+          --primary: #8b85f7;
+        }
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        overflow: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .card {
+        box-sizing: border-box;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+      .title {
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .notes {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        margin: 0;
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+        word-break: break-word;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .status {
+        font-size: 12px;
+        min-height: 16px;
+      }
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      button {
+        font: inherit;
+        font-size: 12px;
+        border-radius: 8px;
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #ffffff;
+        font-weight: 700;
+      }
+      button:disabled {
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card" data-tauri-drag-region>
+      <div class="title" id="title" data-tauri-drag-region>새 버전이 있습니다</div>
+      <p class="notes" id="notes"></p>
+      <div class="status" id="status" role="status"></div>
+      <div class="actions">
+        <button type="button" id="later">나중에</button>
+        <button type="button" class="primary" id="install">업데이트</button>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var params = new URLSearchParams(location.search);
+        var version = params.get('version') || '';
+        var notes = params.get('notes') || '';
+        if (version) document.getElementById('title').textContent = '새 버전 v' + version + '이 있습니다';
+        document.getElementById('notes').textContent = notes;
+        var status = document.getElementById('status');
+        var invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+        var buttons = document.querySelectorAll('button');
+        function setDisabled(disabled) {
+          buttons.forEach(function (b) { b.disabled = disabled; });
+        }
+        function choose(action) {
+          if (!invoke) return;
+          setDisabled(true);
+          status.textContent = action === 'install' ? '업데이트를 내려받는 중입니다…' : '';
+          invoke('update_prompt_choose', { action: action, version: version })
+            .then(function (reply) {
+              if (reply === 'busy') {
+                status.textContent = '녹음이 끝난 뒤 다시 시도해 주세요.';
+                setDisabled(false);
+              }
+            })
+            .catch(function (e) {
+              status.textContent = String(e);
+              setDisabled(false);
+            });
+        }
+        document.getElementById('install').addEventListener('click', function () { choose('install'); });
+        document.getElementById('later').addEventListener('click', function () { choose('later'); });
+      })();
+    </script>
+  </body>
+</html>

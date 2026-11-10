@@ -52,6 +52,9 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-061) |
 | meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
+| update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
+
+Socket `status` also returns `updateBusy` (`control::app_busy`) for local tooling that must not replace a busy app.
 
 finalizing_for_path is deliberately a new per-path field, not the older global
 finalizing flag. Frontend wire compatibility checks rely on that distinction.
@@ -116,6 +119,13 @@ ACL for every command called from the remote SPA: each command must be listed in
   log from the IOProc.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
   within its deadline, recording or not.
+- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`): update
+  commands are never in the remote capability (`command_acl_tests` enforces it), and
+  nothing installs or restarts while `app_busy`. Update checks are disabled while the
+  `tauri.conf.json` updater pubkey is the placeholder. The archive download is bounded
+  by 60 seconds of stalled progress, never a total duration (the check's request
+  timeout is cleared from the found `Update`). Sign releases only with the pinned
+  "TTOBAK Dev" identity.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.
 
