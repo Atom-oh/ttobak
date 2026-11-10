@@ -374,11 +374,11 @@ test('a row moved from needs_account to needs_owner reloads its members', async 
   const reads = [];
   const replies = [[], [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }]];
   const accountApi = { list: async () => ({ accounts: [] }), get: async accountId => { reads.push(accountId); return { members: replies[reads.length - 1] }; } };
-  const module = loader({ react: harness.react, 'react/jsx-runtime': jsxRuntime,
+  const actions = loader({ react: harness.react, 'react/jsx-runtime': jsxRuntime,
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId: 'me' } }) }, '@/lib/api': { accountApi } })(
     '@/components/workspace/SpecReqTaskActions');
-  const stop = new Set([module.SpecReqActionsView]);
-  const draw = state => harness.render(module.SpecReqTaskActions, stop,
+  const stop = new Set([actions.SpecReqActionsView]);
+  const draw = state => harness.render(actions.SpecReqTaskActions, stop,
     { task: task(id('a'), state, { accountId: 'acct-1' }), transition: async () => {} }).props.members;
   draw('needs_account');
   await settle();
