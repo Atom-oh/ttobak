@@ -106,8 +106,8 @@ export function SpecReqActionsView({
         {slackText && <textarea readOnly aria-label={copy.slackLabel} value={slackText} rows={4}
           className={`${fieldClass} block w-full resize-y`} />}
         {!slackText && !pending && <p className="text-xs text-text-secondary">{copy.accountUnresolved}</p>}
-        {copyNote && <p role="status" className="text-xs text-text-secondary">{copyNote}</p>}
       </div>}
+      {copyNote && <p role="status" className="text-xs text-text-secondary">{copyNote}</p>}
       {kinds.includes('pickAccount') && <div className="space-y-2">
         {task.accountId && <p className="text-xs text-text-secondary">{copy.accountWaiting}</p>}
         <div className="flex flex-wrap gap-2">

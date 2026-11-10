@@ -248,6 +248,15 @@ test('linked SpecReq ID renders as copyable text, never a link', () => {
   assert.equal(parseSpecReqId('nope'), undefined);
 });
 
+test('ID copy status renders for rows without the Slack block', () => {
+  const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
+  const row = task(id('a'), 'requested', { path: 'theirs', specReqId: '11111111-2222-4333-8444-555555555555' });
+  for (const note of [copy.copied, copy.copyFailed]) {
+    assert.match(view({ task: row, copyNote: note }), new RegExp(`role="status"[^>]*>${note}`));
+  }
+  assert.doesNotMatch(view({ task: row }), /role="status"/);
+});
+
 test('request_needed explains an unresolved account', () => {
   const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
   const unresolved = view({ task: task(id('a'), 'request_needed', { path: 'theirs' }) });
