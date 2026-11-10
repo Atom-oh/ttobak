@@ -51,7 +51,13 @@ func summarizeNoteSourceResponse(t *testing.T, meeting *model.Meeting, modelResp
 
 func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse string, invoke func(*BedrockService) (string, error)) (request ClaudeRequest, content string, writes int, err error) {
 	t.Helper()
-	item := map[string]map[string]string{}
+	return invokeObservedNoteSourceFixture(t, meeting, modelResponse, nil, invoke)
+}
+
+// observe, when set, receives every DynamoDB operation target and raw body.
+func invokeObservedNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse string, observe func(target, body string), invoke func(*BedrockService) (string, error)) (request ClaudeRequest, content string, writes int, err error) {
+	t.Helper()
+	item := map[string]interface{}{}
 	for name, value := range map[string]string{
 		"PK": "USER#" + meeting.UserID, "SK": "MEETING#" + meeting.MeetingID,
 		"meetingId": meeting.MeetingID, "userId": meeting.UserID,
@@ -61,6 +67,9 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 		"noteLanguage": meeting.NoteLanguage, "status": string(meeting.Status),
 	} {
 		item[name] = map[string]string{"S": value}
+	}
+	if len(meeting.LinkedMeetingIDs) > 0 {
+		item["linkedMeetingIds"] = map[string][]string{"SS": meeting.LinkedMeetingIDs}
 	}
 	body, err := json.Marshal(map[string]interface{}{"Item": item})
 	if err != nil {
@@ -76,6 +85,11 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 	db := dynamodb.New(dynamodb.Options{
 		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{},
 		HTTPClient: noteSourceHTTPClient(func(req *http.Request) (*http.Response, error) {
+			if observe != nil {
+				raw, _ := io.ReadAll(req.Body)
+				req.Body = io.NopCloser(strings.NewReader(string(raw)))
+				observe(req.Header.Get("X-Amz-Target"), string(raw))
+			}
 			switch req.Header.Get("X-Amz-Target") {
 			case "DynamoDB_20120810.GetItem":
 				return response(string(body)), nil
@@ -463,25 +477,35 @@ func TestSummarizeTranscript_IncompleteResponseNeverSavesDone(t *testing.T) {
 	}
 }
 
-func TestAnalyzeByClassification_PreservesLegacyCompletionContract(t *testing.T) {
+func TestAnalyzeByClassification_PreservesUsablePartialAnalysis(t *testing.T) {
 	for _, tt := range []struct {
 		name, body, want string
 		wantErr          bool
 	}{
 		{
 			name: "partial image analysis remains usable",
-			body: `{"content":[{"type":"text","text":"Whiteboard: "},{"type":"text","text":"partial analysis"}],"stop_reason":"max_tokens"}`,
+			body: `{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"Whiteboard: partial analysis"}}]}`,
 			want: "Whiteboard: partial analysis",
 		},
 		{
-			name: "legacy response without stop reason",
-			body: `{"content":[{"type":"text","text":"image analysis"}]}`,
+			name: "completed analysis",
+			body: `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"image analysis"}}]}`,
 			want: "image analysis",
 		},
 		{
-			name: "non-text blocks retain legacy empty-text behavior",
-			body: `{"content":[{"type":"thinking","thinking":"auxiliary block"}],"stop_reason":"end_turn"}`,
-			want: "",
+			name:    "reasoning without visible text is rejected",
+			body:    `{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":""}}],"usage":{"completion_tokens_details":{"reasoning_tokens":20}}}`,
+			wantErr: true,
+		},
+		{
+			name:    "refusal is not analysis",
+			body:    `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ignored","refusal":"declined"}}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "response byte limit prevents oversized analysis",
+			body:    `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"` + strings.Repeat("x", 128*1024) + `"}}]}`,
+			wantErr: true,
 		},
 		{
 			name:    "missing content still reports failure",

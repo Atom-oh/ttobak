@@ -123,8 +123,8 @@ describe('AiStack', () => {
     expect(resources).not.toContain('openai.*');
   });
 
-  test('only the API role can invoke the exact GPT-6 Luna interpreter model', () => {
-    const grants = openAiGrants().filter(grant => JSON.stringify(grant.statement.Resource).includes('gpt-6-luna'));
+  test('the interpreter grant belongs only to the API role', () => {
+    const grants = openAiGrants().filter(grant => grant.statement.Sid === 'InvokeInterpreterModel');
     expect(grants).toHaveLength(1);
     expect(JSON.stringify(grants[0].policy.Properties.Roles)).toContain('TtobakApiRole');
     expect(grants[0].statement.Action).toBe('bedrock:InvokeModel');
@@ -134,9 +134,12 @@ describe('AiStack', () => {
     expect(resources).not.toContain('openai.*');
   });
 
-  test('no other OpenAI model grant exists and none uses a wildcard', () => {
+  test('OpenAI model grants belong only to the four selected workloads and use exact model names', () => {
     const grants = openAiGrants();
-    expect(grants).toHaveLength(2);
+    expect(grants).toHaveLength(4);
+    expect(grants.map(g => g.statement.Sid).sort()).toEqual([
+      'InvokeFinalSummaryModel', 'InvokeImageModel', 'InvokeInterpreterModel', 'InvokeNewsSummaryModel',
+    ]);
     for (const grant of grants) {
       expect(JSON.stringify(grant.statement.Resource)).not.toMatch(/openai\.[^"]*\*/);
     }

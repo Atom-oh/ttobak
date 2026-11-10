@@ -17,14 +17,13 @@ from botocore.exceptions import BotoCoreError, ClientError
 from article_fetcher import ArticleBody, MAX_BODY_CHARS, MIN_BODY_CHARS
 from news_pipeline import canonicalize_url
 
-FINAL_MODEL_ID = os.environ.get("FINAL_MODEL_ID", "global.anthropic.claude-opus-5-5")
+FINAL_MODEL_ID = os.environ.get("FINAL_MODEL_ID", "global.openai.gpt-6-luna")
 PROMPT_VERSION = "news-v1"
 QUALITY_GATE_VERSION = "news-v1"
 MAX_TOKENS = 6000
-# Claude Opus 5.5 rejects {"thinking": {"type": "disabled"}} (thinking cannot
-# be turned off); low effort keeps reasoning brief within MAX_TOKENS. Reasoning
-# blocks are ignored by _response_text. news_model validates this exact value.
-MODEL_REQUEST_FIELDS = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
+# Converse maps the OpenAI reasoning configuration to the Responses-style field.
+# Extraction spends the output budget on visible JSON, not reasoning.
+MODEL_REQUEST_FIELDS = {"reasoning": {"effort": "none"}}
 MAX_SOURCES = 3
 MAX_RESPONSE_BYTES = 48000
 MAX_PROMPT_BYTES = 300000

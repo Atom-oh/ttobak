@@ -25,7 +25,7 @@ import { PipelineFailures } from './pipeline-failures';
 import { HttpOrigin } from './http-origin';
 import { connectorCryptoLayer } from './connector-crypto';
 import { billingInsightUrlContext } from './billing-insight';
-import { DEFAULT_MODEL_CONFIGURATION, ModelConfiguration, validateModelConfiguration } from './model-config';
+import { DEFAULT_MODEL_CONFIGURATION, IMAGE_MODEL_ID, ModelConfiguration, validateModelConfiguration } from './model-config';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -594,9 +594,8 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
-        // Vision stays on Opus 4.8 deliberately -- the Opus 5 swap above is
-        // scoped to final-note summarization text quality, not image analysis.
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-8',
+        BEDROCK_IMAGE_MODEL_ID: IMAGE_MODEL_ID,
+        BEDROCK_REGION: 'us-west-2',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
       timeout: cdk.Duration.minutes(2),
