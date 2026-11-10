@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from '../dist/intake/toml.js';
 import { listHosts, resolveServer, resolveCommand, hostTtobakEndpoints } from '../dist/intake/hosts.js';
-import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent }
+import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent, parseOutlookItems }
   from '../dist/intake/calendar.js';
 import { IntakeStore } from '../dist/intake/store.js';
 import { SFDC_TOOLS, parseAssignments, parseTasks, runSfdc } from '../dist/intake/sfdc.js';
@@ -149,6 +149,37 @@ test('calendar sends organizer domain only', () => {
   }
   const none = planCalendar([{ ...base, organizer: 'x' }], {}, window, ZONE);
   assert.equal('organizerDomain' in none.mutations[0].event, false);
+});
+
+test('calendar organizer name and local part never leave the parser', async t => {
+  const local = 'canary.local-7f3a9c';
+  const raw = request => {
+    const [month, day, year] = request.start_date.split('-');
+    return { meetings: [{
+      meetingId: `org-${year}${month}${day}`, subject: 'Quarterly review', sensitivity: 'Normal',
+      start: `${year}-${month}-${day}T10:00:00+09:00`, end: `${year}-${month}-${day}T11:00:00+09:00`,
+      isCanceled: false, isAllDay: false,
+      organizer: { name: CANARY, email: `${local}@Customer.Example.COM`, address: `${local}@customer.example.com` },
+      attendees: [{ name: CANARY, email: `${local}@customer.example.com` }], body: CANARY,
+    }] };
+  };
+  const parsed = parseOutlookItems(raw({ start_date: '11-10-2026' }));
+  assert.deepEqual(parsed[0].organizer, { email: `${local}@Customer.Example.COM` }, 'the name is dropped at parse time');
+  const event = toEvent(parsed[0], ZONE);
+  assert.equal(event.organizerDomain, 'customer.example.com');
+  assert.ok(!JSON.stringify(event).includes(local) && !JSON.stringify(event).includes(CANARY));
+
+  const home = tempHome(t);
+  const api = fakeApi();
+  await runCalendar({ store: new IntakeStore(home), api, source: source(raw), sourceId: SOURCE_ID, scope: SCOPE_A,
+    zone: ZONE, now: NOW, dryRun: false });
+  assert.ok(api.calls.length >= 1 && api.calls[0].mutations.length > 0);
+  for (const mutation of api.calls.flatMap(call => call.mutations)) {
+    assert.equal(mutation.event.organizerDomain, 'customer.example.com');
+  }
+  const outputs = JSON.stringify(api.calls) + allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
+  for (const secret of [CANARY, local, 'canary']) assert.ok(!outputs.toLowerCase().includes(secret.toLowerCase()), secret);
+  assert.ok(!outputs.includes('@'), 'no email address reaches the batch or the state');
 });
 
 test('calendar planning: window, exclusions, explicit removals only, sanitized locations', () => {
@@ -443,13 +474,22 @@ function writeSentral(home, mode = 'ok') {
     'aws-sentral-mcp': { command: process.execPath, args: [SENTRAL], env: { FAKE_SENTRAL_MODE: mode, TOKEN: CANARY } } } }));
 }
 
-function performanceApi({ fail = [], revisions = {} } = {}) {
+function performanceApi({ fail = [], revisions = {}, assignments = [] } = {}) {
   const calls = [];
+  const mappingReads = [];
   const revision = { 'sfdc-assignments': 0, 'sfdc-tasks': 0, ...revisions };
+  // The server's assignment rows, kept in step with applied batches.
+  const held = new Map(assignments.map(id => [id, { sfdcAccountId: id, name: 'Server only', role: 'REGISTRY' }]));
   return {
     calls,
+    mappingReads,
+    held,
     async performanceSources() {
       return { sources: Object.entries(revision).map(([source, value]) => ({ source, revision: value })) };
+    },
+    async performanceMappings() {
+      mappingReads.push(revision['sfdc-assignments']);
+      return { items: [...held.values()].map(item => ({ ...item, mapped: false, manual: false })) };
     },
     async syncPerformance(source, body) {
       calls.push({ source, body: structuredClone(body) });
@@ -457,6 +497,12 @@ function performanceApi({ fail = [], revisions = {} } = {}) {
       if (failure) throw failure;
       assert.equal(body.expectedRevision, revision[source]);
       revision[source] = body.expectedRevision + 1;
+      if (source === 'sfdc-assignments') {
+        for (const mutation of body.mutations) {
+          if (mutation.op === 'remove') held.delete(mutation.externalId);
+          else held.set(mutation.assignment.sfdcAccountId, mutation.assignment);
+        }
+      }
       return { revision: revision[source], completed: body.complete,
         upserted: body.mutations.filter(m => m.op === 'upsert').length,
         removed: body.mutations.filter(m => m.op === 'remove').length };
@@ -567,6 +613,42 @@ test('sfdc snapshot removes vanished assignments', async t => {
     registry: [registryRecord('001XX0000000A1AAA', 'Alpha'), registryRecord('001XX0000000C1AAA', 'Gamma')], tasks: [] }) });
   assert.equal(third.counts.assignments.upserts, 1);
   assert.equal(third.counts.tasks.removals, 1);
+});
+
+test('sfdc fresh ledger removes server assignments missing from snapshot', async t => {
+  // The server holds rows from a lost ledger: one still assigned, one stale.
+  const api = performanceApi({ revisions: { 'sfdc-assignments': 4, 'sfdc-tasks': 2 },
+    assignments: ['001XX0000000A1AAA', '001XX0000000Z9AAA'] });
+  const store = new IntakeStore(tempHome(t));
+  const base = { store, api, sourceId: SFDC_SOURCE_ID, scope: SCOPE_A, now: NOW, dryRun: false };
+  const data = sentralData({ registry: [registryRecord('001XX0000000A1AAA', 'Alpha')], tasks: [] });
+  const first = await runSfdc({ ...base, source: data });
+  assert.equal(api.mappingReads.length, 1, 'a fresh ledger reads the server assignments once');
+  assert.equal(first.counts.assignments.removals, 1);
+  const assignments = api.calls.find(call => call.source === 'sfdc-assignments');
+  assert.equal(assignments.body.expectedRevision, 4);
+  assert.deepEqual(assignments.body.mutations.filter(m => m.op === 'remove'), [{ op: 'remove', externalId: '001XX0000000Z9AAA' }]);
+  assert.deepEqual([...api.held.keys()], ['001XX0000000A1AAA']);
+  const tasks = api.calls.find(call => call.source === 'sfdc-tasks');
+  assert.deepEqual(tasks.body.mutations, [], 'tasks are unchanged and keep their TTL');
+
+  // A later run with the tracked ledger does not read the server again.
+  await runSfdc({ ...base, source: data });
+  assert.equal(api.mappingReads.length, 1);
+
+  // --reconcile reads them again and removes a server row the ledger never tracked.
+  api.held.set('001XX0000000Y8AAA', { sfdcAccountId: '001XX0000000Y8AAA', name: 'Elsewhere', role: 'activity' });
+  const reconciled = await runSfdc({ ...base, source: data, reconcile: true });
+  assert.equal(api.mappingReads.length, 2);
+  assert.equal(reconciled.counts.assignments.removals, 1);
+  assert.deepEqual([...api.held.keys()], ['001XX0000000A1AAA']);
+
+  // A malformed listing fails closed before any batch is built.
+  const broken = performanceApi();
+  broken.performanceMappings = async () => ({ items: [{ sfdcAccountId: '../x' }] });
+  await assert.rejects(runSfdc({ ...base, store: new IntakeStore(tempHome(t)), api: broken, source: data }),
+    error => error.code === 'TTOBAK_UNAVAILABLE');
+  assert.equal(broken.calls.length, 0);
 });
 
 test('sfdc auth expiry keeps no partial snapshot', async t => {

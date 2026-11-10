@@ -156,6 +156,14 @@ only and makes no TTOBAK calls. It holds `sfdc.lock`.
   4xx/409 handling and `complete:true` follow the calendar rules above. The
   receipt must carry revision+1 and matching counts. `--reconcile` adopts the
   revisions of `GET /api/performance/sources` and resends every current row.
+- **Stale server assignments.** On `--reconcile`, and whenever the local
+  assignments ledger is fresh (a new Mac, a deleted `~/.ttobak/intake`, or a new
+  `sourceId` after selecting another server name), the runner also reads
+  `GET /api/performance/mappings` and keeps only its SFDC account IDs. Every
+  server assignment absent from the current snapshot is sent as a `remove`, so a
+  lost ledger cannot leave false silent customers. Tasks are not listed; they
+  keep their `pendingShareExpiresAt` TTL. A malformed listing fails with
+  `TTOBAK_UNAVAILABLE` before any batch is built.
 
 Acceptance on the Mac is pending: run `intake sfdc --dry-run`, compare the
 counts with AWSentral, then run `intake sfdc` and re-run to confirm empty
