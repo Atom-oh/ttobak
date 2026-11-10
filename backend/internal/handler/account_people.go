@@ -40,6 +40,8 @@ func accountPeopleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 	case errors.Is(err, service.ErrNotFound):
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Not found")
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, service.ErrConflict):
 		writeError(w, http.StatusConflict, model.ErrCodeConflict, "Changed concurrently, retry")
 	case errors.Is(err, service.ErrContactsUnavailable):

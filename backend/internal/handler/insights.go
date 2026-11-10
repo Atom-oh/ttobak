@@ -128,19 +128,7 @@ func (h *InsightsHandler) DeleteDocument(w http.ResponseWriter, r *http.Request)
 
 	err := h.insightsService.DeleteDocument(ctx, userID, middleware.IsAdmin(ctx), sourceID, docHash)
 	if err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			writeError(w, http.StatusConflict, model.ErrCodeConflict, "document or source access changed; retry")
-			return
-		}
-		if errors.Is(err, service.ErrForbidden) {
-			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "only the source owner or an admin can delete this document")
-			return
-		}
-		if errors.Is(err, service.ErrNotFound) {
-			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "document not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		writeInsightsDeleteError(w, err)
 		return
 	}
 
@@ -156,4 +144,21 @@ func (h *InsightsHandler) DeleteDocument(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeInsightsDeleteError maps a failed document delete, including the news
+// unpublish and legacy claim writes that the account merge fence covers.
+func writeInsightsDeleteError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
+	case errors.Is(err, repository.ErrConditionFailed):
+		writeError(w, http.StatusConflict, model.ErrCodeConflict, "document or source access changed; retry")
+	case errors.Is(err, service.ErrForbidden):
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "only the source owner or an admin can delete this document")
+	case errors.Is(err, service.ErrNotFound):
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "document not found")
+	default:
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+	}
 }

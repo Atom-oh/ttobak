@@ -64,7 +64,8 @@ returns its stored row (`ReturnValuesOnConditionCheckFailure=ALL_OLD`) carrying
 `mergingInto` or `mergedInto`, not by item index: several META items also check owner
 or parent, so the index cannot tell a merge from an owner change. Only items that
 carry the open condition request the stored row. The fence also covers connector
-contact and event creates, news source create and delete checks, people-link and
+contact and event creates, news source create and delete checks (the same checks fence news document
+unpublish and the legacy document claim), people-link and
 unresolved-mention writes, and meeting creation that names an account. A people
 resolver run that meets the fence stops quietly without an error to retry.
 

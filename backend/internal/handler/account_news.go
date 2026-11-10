@@ -32,6 +32,8 @@ func accountNewsError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, service.ErrNotFound):
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "News source not found")
 	default:

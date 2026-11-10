@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/ttobak/backend/internal/connector"
+	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
@@ -22,12 +23,25 @@ func (h *ConnectorContactHandler) Create(ctx context.Context, p connector.Princi
 		body, _ := json.Marshal(receipt)
 		return connector.InvokeResult{StatusCode: 200, Body: string(body)}
 	}
+	return contactCreateFailure(err)
+}
+
+// contactCreateFailure maps a failed contact creation to its connector result.
+func contactCreateFailure(err error) connector.InvokeResult {
 	status, code := 503, "CONNECTOR_WRITE_UNCONFIRMED"
 	switch {
 	case errors.Is(err, service.ErrInvalidInput):
 		status, code = 400, "BAD_REQUEST"
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, connector.ErrCapabilityDenied), errors.Is(err, repository.ErrContactAccess):
 		status, code = 403, "CAPABILITY_DENIED"
+	case errors.Is(err, repository.ErrConnectorReplayAccountMerging):
+		// The receipt exists: the contact was created before the merge began.
+		body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": model.ErrCodeReplayAccountMerging, "message": "The contact was created before the account began merging; do not recreate it"}})
+		return connector.InvokeResult{StatusCode: 409, Body: string(body)}
+	case errors.Is(err, service.ErrAccountMerging):
+		// The fence rejected a first create before any row changed: definitive.
+		body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": model.ErrCodeAccountMerging, "message": "Account is merging into another account or already merged"}})
+		return connector.InvokeResult{StatusCode: 409, Body: string(body)}
 	case errors.Is(err, repository.ErrConnectorReceiptMissing):
 		status, code = 404, "RECEIPT_NOT_FOUND"
 	case errors.Is(err, repository.ErrConditionFailed):

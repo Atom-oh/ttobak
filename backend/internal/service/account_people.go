@@ -77,6 +77,9 @@ type PeopleRunResult struct {
 	// RerunPending: a rerun was still requested after the last allowed
 	// pass; the caller may request another run.
 	RerunPending bool
+	// merging: the account is merging or merged; an account pass stops at
+	// the first meeting that meets the fence.
+	merging bool
 }
 
 func (r PeopleRunResult) String() string {
@@ -195,6 +198,7 @@ func (s *AccountPeopleService) resolveMeeting(ctx context.Context, ownerID, meet
 			// fail the same way and the merge target resolves its own links.
 			s.release(ctx, run, mentionSKs, opt)
 			total.Skipped++
+			total.merging = true
 			return total, nil
 		}
 		if err != nil {
@@ -487,6 +491,9 @@ func (s *AccountPeopleService) resolveAccountPass(ctx context.Context, accountID
 				one.Skipped++
 			}
 			res.add(one)
+			if one.merging {
+				return res, ErrAccountMerging
+			}
 			if err != nil {
 				if ctx.Err() != nil {
 					res.Truncated = true

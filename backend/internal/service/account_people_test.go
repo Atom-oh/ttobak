@@ -622,3 +622,22 @@ func TestResolveMeeting_StopsQuietlyOnMergingAccount(t *testing.T) {
 		t.Fatalf("res=%+v err=%v, want a quiet skip", res, err)
 	}
 }
+
+// An account pass stops at the first meeting that meets the merge fence and
+// finishes quietly instead of attempting every remaining meeting.
+func TestResolveAccount_StopsAtFirstMergingMeeting(t *testing.T) {
+	now := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	f := newFakePeopleRepo()
+	for _, id := range []string{"a", "b", "c"} {
+		f.meetings["owner:"+id] = peopleTestMeeting(id)
+		f.refs = append(f.refs, model.MeetingRef{AccountID: "acc", MeetingID: id, OwnerUserID: "owner", Date: now})
+	}
+	f.replaceErr = fmt.Errorf("replace: %w", repository.ErrAccountMerging)
+	res, err := newPeopleTestService(f).ResolveAccount(context.Background(), "acc", now.Add(-time.Hour), 10, PeopleRunOptions{})
+	if err != nil || res.Busy || res.Meetings != 1 || res.Skipped < 1 {
+		t.Fatalf("res=%+v err=%v, want a quiet stop after one meeting", res, err)
+	}
+	if replaces := strings.Count(strings.Join(f.ops, ","), "replace"); replaces != 1 {
+		t.Fatalf("replace attempted %d times, want 1 (ops %v)", replaces, f.ops)
+	}
+}

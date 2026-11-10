@@ -135,6 +135,36 @@ func (r *DynamoDBRepository) ConnectorGrantResolver(audience, issuer string) con
 	}
 }
 
+// ErrConnectorReplayAccountMerging marks a replay whose receipt exists but
+// whose verification transaction the account merge fence refused. The original
+// write committed before the merge began, so the caller must not recreate it.
+var ErrConnectorReplayAccountMerging = errors.New("connector replay refused by account merge fence")
+
+// connectorReplayError maps a failed replay verification. A merge fence trip
+// there is not a definitive refusal: the receipt proves an earlier commit.
+func connectorReplayError(err error) error {
+	mapped := connectorWriteError(err)
+	if errors.Is(mapped, ErrAccountMerging) {
+		return ErrConnectorReplayAccountMerging
+	}
+	return mapped
+}
+
+// connectorProbeError maps a failed replay-only probe. On a merge fence trip
+// the receipt is read again consistently, because a same-key create may have
+// committed after the first read: a receipt found now takes the replay path.
+func connectorProbeError[T any](err error, reread func() (T, bool, error)) (T, error) {
+	var empty T
+	mapped := connectorWriteError(err)
+	if !errors.Is(mapped, ErrAccountMerging) {
+		return empty, mapped
+	}
+	if receipt, found, readErr := reread(); found || readErr != nil {
+		return receipt, readErr
+	}
+	return empty, ErrConnectorReceiptMissing
+}
+
 func connectorWriteError(err error) error {
 	if err == nil {
 		return nil

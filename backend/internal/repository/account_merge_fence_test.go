@@ -153,6 +153,19 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 			l := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1")
 			return r.DeletePeopleLink(ctx, "acct", "actor", l.Key(), model.LinkOriginManual, false)
 		}},
+		{"mention ignore", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error {
+			return r.PutMentionIgnore(ctx, "acct", "actor", testMentionHash('a'))
+		}},
+		{"people link alias", "acct", ErrAccountLinkAccess, func(r *DynamoDBRepository) error {
+			l := testPeopleLink(model.LinkOriginManual, model.LinkKindContact, "c1")
+			return r.AddPeopleLinkAlias(ctx, "acct", "actor", l.Key(), testMentionHash('b'))
+		}},
+		{"unresolved mentions", "acct", nil, func(r *DynamoDBRepository) error {
+			row := testUnresolved(testMentionHash('c'), "participant")
+			row.AccountID = "acct"
+			return r.ReplaceUnresolvedMentions(ctx, "acct", "o:m1", []model.UnresolvedMention{row}, nil,
+				&model.PeopleRun{AccountID: "acct", Scope: "o:m1", LeaseToken: "tok"})
+		}},
 		{"meeting create", "acct", nil, func(r *DynamoDBRepository) error {
 			_, err := r.CreateMeeting(ctx, "u", "t", time.Unix(1700000000, 0), nil, "", model.MeetingPreparation{AccountID: "acct"})
 			return err
@@ -355,5 +368,26 @@ func TestConnectorWriteErrorMapsMergeFence(t *testing.T) {
 	}
 	if err := connectorWriteError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountMerging) {
 		t.Fatalf("plain cancellation=%v, want ErrConditionFailed", err)
+	}
+	// A replay with an existing receipt is never a definitive merge refusal.
+	if err := connectorReplayError(cancelled(marked)); !errors.Is(err, ErrConnectorReplayAccountMerging) || errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("replay fence trip=%v, want ErrConnectorReplayAccountMerging only", err)
+	}
+	if err := connectorReplayError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("replay plain cancellation=%v, want ErrConditionFailed", err)
+	}
+	// A probe fence trip re-reads the receipt before reporting it missing.
+	none := func() (string, bool, error) { return "", false, nil }
+	if _, err := connectorProbeError(cancelled(marked), none); !errors.Is(err, ErrConnectorReceiptMissing) || errors.Is(err, ErrAccountMerging) {
+		t.Fatalf("probe fence trip=%v, want ErrConnectorReceiptMissing", err)
+	}
+	committed := func() (string, bool, error) { return "", true, ErrConnectorReplayAccountMerging }
+	if _, err := connectorProbeError(cancelled(marked), committed); !errors.Is(err, ErrConnectorReplayAccountMerging) {
+		t.Fatalf("probe with a late receipt=%v, want ErrConnectorReplayAccountMerging", err)
+	}
+	reads := 0
+	counted := func() (string, bool, error) { reads++; return "", false, nil }
+	if _, err := connectorProbeError(cancelled(nil), counted); !errors.Is(err, ErrConditionFailed) || reads != 0 {
+		t.Fatalf("probe plain cancellation=%v reads=%d, want ErrConditionFailed without a re-read", err, reads)
 	}
 }
