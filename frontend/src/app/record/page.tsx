@@ -17,6 +17,13 @@ import { resetProactiveClaims } from '@/lib/proactiveSearch';
 import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
+import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
+import {
+  DEFAULT_CARD_PREFS, effectiveCardPrefs, readRecordCardPrefs, readSidePanelPref, recordLayout,
+  toggleCard, writeRecordCardPrefs, writeSidePanelPref, type LayoutMenuKey, type RecordCardPrefs,
+} from '@/lib/recordLayoutPrefs';
+import { RecordLayoutMenu } from '@/components/record/RecordLayoutMenu';
+import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
@@ -160,6 +167,15 @@ function RecordPageInner() {
 
   // Mobile Q&A bottom sheet state
   const [isQAOpen, setIsQAOpen] = useState(false);
+  // Desktop side panel (Q&A / reference). Hidden with CSS, never unmounted:
+  // LiveQAPanel keeps its question history in local state. The saved choice is
+  // read after mount so server and client markup match.
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
+  useEffect(() => { setSidePanelOpen(readSidePanelPref() === 'open'); }, []);
+  const changeSidePanel = (open: boolean) => {
+    setSidePanelOpen(open);
+    writeSidePanelPref(open ? 'open' : 'closed');
+  };
   const [detectedCount, setDetectedCount] = useState(0);
   // Hoisted so the desktop aside and mobile bottom sheet ReferencePanel
   // instances share one selection -- the mobile sheet unmounts on close.
@@ -184,11 +200,36 @@ function RecordPageInner() {
 
   // Desktop transcript panel collapse state
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+  // Desktop card visibility ("화면 구성"). Hidden cards stay mounted (CSS only)
+  // so notes, Q&A history and scroll state survive; read after mount.
+  const [cardPrefs, setCardPrefs] = useState<RecordCardPrefs>(DEFAULT_CARD_PREFS);
+  useEffect(() => { setCardPrefs(readRecordCardPrefs()); }, []);
+  const visibleCards = effectiveCardPrefs(cardPrefs, translationEnabled);
+  const desktopLayout = recordLayout(visibleCards, translationEnabled, isTranscriptOpen);
+  const handleLayoutToggle = (key: LayoutMenuKey, checked: boolean) => {
+    if (key === 'sidePanel') { changeSidePanel(checked); return; }
+    const next = toggleCard(visibleCards, key, checked, translationEnabled);
+    if (next === visibleCards) return;
+    if (key === 'transcript' && checked) setIsTranscriptOpen(true);
+    setCardPrefs(next);
+    writeRecordCardPrefs(next);
+  };
 
   // --- Hooks ---
   const summary = useLiveSummary({ summaryInterval });
 
+  // Mac caption windows. Their hook reads the session's recording state, so
+  // it runs after useRecordingSession; the session reaches it through this
+  // ref, read only when a recording starts or a segment arrives.
+  const captionLinkRef = useRef<Pick<CaptionOverlayState, 'extraLanguage' | 'onSegment'> | null>(null);
+  const getCaptionExtraLanguage = useCallback(() => captionLinkRef.current?.extraLanguage, []);
+  const forwardCaptionSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
+    captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
+  }, []);
+
   const session = useRecordingSession({
+    getExtraLanguage: getCaptionExtraLanguage,
+    onSegment: forwardCaptionSegment,
     targetLang,
     translationEnabled,
     interimTranslation,
@@ -215,6 +256,12 @@ function RecordPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   });
+
+  const captions = useCaptionOverlay({ isRecording: session.isRecording || isNativeRecording });
+  const { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment } = captions;
+  useEffect(() => {
+    captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
+  }, [captionExtraLanguage, captionOnSegment]);
 
   const postRecording = usePostRecording({
     meetingTitle,
@@ -746,6 +793,8 @@ function RecordPageInner() {
     setQuestionDraft((current) => ({ id: (current?.id || 0) + 1, text }));
     setReferenceTab('qa');
     setIsQAOpen(true);
+    // Reopen the desktop side panel for this question without changing the saved preference.
+    setSidePanelOpen(true);
   }, []);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
@@ -1104,6 +1153,7 @@ function RecordPageInner() {
               현재 브라우저 인식은 한국어 기준입니다. 한·영 자동 인식은 AWS Streaming 연결이 필요합니다.
             </p>
           )}
+          <CaptionOverlayPanel {...captions} isRecording={session.isRecording || isNativeRecording} />
         </div>
       )}
 
@@ -1197,7 +1247,7 @@ function RecordPageInner() {
       {sourceMessage && <p role="status" className="mx-6 mt-3 text-xs text-primary">{sourceMessage}</p>}
       {postRecording.preparationError && <p role="alert" className="mx-6 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">{postRecording.preparationError}</p>}
       {/* Main Content */}
-      <div className="flex flex-1 min-h-0">
+      <div className="relative flex flex-1 min-h-0">
       <main className="flex-1 flex flex-col px-6 lg:px-8 pt-8 lg:pt-8 pb-32 lg:pb-8 overflow-y-auto">
         {user && !postRecording.step && !session.isRecording && !isNativeRecording && (
           <BrowserRecordingsCard key={user.userId} userId={user.userId} busy={meetingFlowBusy} onRestore={async (backup) => {
@@ -1382,10 +1432,20 @@ function RecordPageInner() {
 
         {/* Desktop: Meeting title during recording */}
         {(session.isRecording || isNativeRecording) && (
-          <div className="hidden lg:block mb-4">
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight">
+          <div className="hidden lg:block relative mb-4">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight px-32">
               {meetingTitle || 'Untitled Meeting'}
             </h1>
+            {session.isRecording && (
+              <div className="absolute right-0 top-0">
+                <RecordLayoutMenu
+                  cards={visibleCards}
+                  sidePanelOpen={sidePanelOpen}
+                  translationEnabled={translationEnabled}
+                  onToggle={handleLayoutToggle}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -1566,40 +1626,51 @@ function RecordPageInner() {
           />
         </div>
 
-        {/* Desktop: Summary (hero) + Notes side by side, transcript as collapsible strip */}
+        {/* Desktop: translation, summary + notes, transcript. Visible rows share
+            a bounded column height; hidden cards stay mounted (recordLayout). */}
         {session.isRecording && (
-          <div className="hidden lg:flex lg:flex-col gap-4">
+          <div className="hidden lg:flex lg:flex-col gap-4 shrink-0 min-h-[28rem]" style={{ height: 'calc(100dvh - 8rem)' }}>
             {translationEnabled && (
-              <TranslationView
-                translations={session.translations}
-                targetLang={targetLang}
-                onTargetLangChange={setTargetLang}
-                isActive={!session.isPaused}
-                debugCaptions={debugCaptions}
-              />
+              <div className={desktopLayout.translationRow}>
+                <TranslationView
+                  translations={session.translations}
+                  targetLang={targetLang}
+                  onTargetLangChange={setTargetLang}
+                  isActive={!session.isPaused}
+                  debugCaptions={debugCaptions}
+                  fill
+                />
+              </div>
             )}
-            <div className="grid grid-cols-2 gap-4" style={{ height: '48vh' }}>
-              <LiveSummary
-                summary={summary.liveSummary}
-                isGenerating={summary.isGenerating}
-                wordCount={session.totalWordCount}
-                lastSummaryWordCount={summary.lastSummaryWordCount}
-                summaryInterval={summaryInterval}
-                fill
-              />
-              <LiveNotes
-                value={notes}
-                onChange={setNotes}
-                saveStatus={notesSaveStatus}
-                fill
-              />
+            <div className={desktopLayout.pairRow}>
+              <div className={desktopLayout.summaryCard}>
+                <LiveSummary
+                  summary={summary.liveSummary}
+                  isGenerating={summary.isGenerating}
+                  wordCount={session.totalWordCount}
+                  lastSummaryWordCount={summary.lastSummaryWordCount}
+                  summaryInterval={summaryInterval}
+                  fill
+                />
+              </div>
+              <div className={desktopLayout.notesCard}>
+                <LiveNotes
+                  value={notes}
+                  onChange={setNotes}
+                  saveStatus={notesSaveStatus}
+                  fill
+                />
+              </div>
             </div>
 
-            {/* Collapsible Live Transcript */}
-            <div className="bg-white dark:bg-surface-lowest rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
+            {/* Live transcript: a header strip when collapsed, a full row when expanded */}
+            <div className={`${desktopLayout.transcriptRow} flex flex-col bg-white dark:bg-surface-lowest rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden`}>
               <button
-                onClick={() => setIsTranscriptOpen(!isTranscriptOpen)}
-                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors text-left"
+                type="button"
+                onClick={() => setIsTranscriptOpen(!desktopLayout.transcriptBodyShown)}
+                disabled={!desktopLayout.transcriptCollapsible}
+                aria-expanded={desktopLayout.transcriptBodyShown}
+                className="w-full shrink-0 flex items-center gap-3 px-4 py-3 enabled:hover:bg-slate-50 dark:enabled:hover:bg-white/5 transition-colors text-left"
               >
                 <span className="material-symbols-outlined text-primary text-xl">graphic_eq</span>
                 <span className="text-sm font-semibold text-slate-900 dark:text-text-main shrink-0">실시간 자막</span>
@@ -1608,25 +1679,25 @@ function RecordPageInner() {
                     {session.totalWordCount.toLocaleString()} words
                   </span>
                 )}
-                {!isTranscriptOpen && (
+                {!desktopLayout.transcriptBodyShown && (
                   <span className="flex-1 text-sm text-slate-500 dark:text-text-secondary truncate">
                     {session.displayTranscripts.length > 0
                       ? session.displayTranscripts[session.displayTranscripts.length - 1].text
                       : '음성을 기다리는 중...'}
                   </span>
                 )}
-                <span className="material-symbols-outlined text-slate-400 dark:text-text-muted ml-auto shrink-0">
-                  {isTranscriptOpen ? 'expand_less' : 'expand_more'}
-                </span>
+                {desktopLayout.transcriptCollapsible && (
+                  <span className="material-symbols-outlined text-slate-400 dark:text-text-muted ml-auto shrink-0">
+                    {desktopLayout.transcriptBodyShown ? 'expand_less' : 'expand_more'}
+                  </span>
+                )}
               </button>
-              {isTranscriptOpen && (
-                <div className="border-t border-slate-100 dark:border-white/5" style={{ height: '38vh' }}>
-                  <LiveTranscript
-                    transcripts={session.displayTranscripts}
-                    wordCount={session.totalWordCount}
-                  />
-                </div>
-              )}
+              <div className={desktopLayout.transcriptBodyShown ? 'flex-1 min-h-0 border-t border-slate-100 dark:border-white/5' : 'hidden'}>
+                <LiveTranscript
+                  transcripts={session.displayTranscripts}
+                  wordCount={session.totalWordCount}
+                />
+              </div>
             </div>
           </div>
         )}
@@ -1788,8 +1859,36 @@ function RecordPageInner() {
       </main>
 
       {/* Desktop Side Panel: AI Q&A during recording */}
+      {session.isRecording && !sidePanelOpen && (
+        <button
+          type="button"
+          aria-label="Q&A·자료 열기"
+          aria-expanded={false}
+          aria-controls="record-side-panel"
+          onClick={() => changeSidePanel(true)}
+          className="hidden lg:flex absolute right-0 top-3 z-10 items-center justify-center w-7 h-10 rounded-l-lg border border-r-0 border-slate-200 dark:border-white/10 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
+        >
+          <span aria-hidden="true" className="material-symbols-outlined text-lg">chevron_left</span>
+        </button>
+      )}
       {session.isRecording && (
-        <aside className="hidden lg:flex w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col">
+        <aside
+          id="record-side-panel"
+          className={`${sidePanelOpen ? 'hidden lg:flex' : 'hidden'} w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col`}
+        >
+          <div className="flex justify-end px-2 pt-1 flex-shrink-0">
+            <button
+              type="button"
+              aria-label="Q&A·자료 접기"
+              aria-expanded={sidePanelOpen}
+              aria-controls="record-side-panel"
+              onClick={() => changeSidePanel(false)}
+              className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-500 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-lg">chevron_right</span>
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 flex flex-col">
           <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
             qaPanel={
               <LiveQAPanel
@@ -1813,6 +1912,7 @@ function RecordPageInner() {
               />
             }
           />
+          </div>
         </aside>
       )}
       </div>
