@@ -537,7 +537,7 @@ func TestHasCrossSpeakerMerge_AllowsSingleSpeakerOverlap(t *testing.T) {
 		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
 	}
 	output := []RefinedSegment{
-		{StartTime: 0.0, EndTime: 4.9, Speaker: "spk_0"},  // entirely within spk_0's span
+		{StartTime: 0.0, EndTime: 4.9, Speaker: "spk_0"}, // entirely within spk_0's span
 		{StartTime: 5.0, EndTime: 10.0, Speaker: "spk_1"}, // entirely within spk_1's span
 	}
 	if hasCrossSpeakerMerge(input, output) {
@@ -585,7 +585,7 @@ func TestRemapPreservedSpeakers_IgnoresSwappedLLMLabels(t *testing.T) {
 		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
 	}
 	output := []RefinedSegment{
-		{StartTime: 0.0, EndTime: 5.0, Speaker: "spk_1"},  // swapped
+		{StartTime: 0.0, EndTime: 5.0, Speaker: "spk_1"}, // swapped
 		{StartTime: 5.0, EndTime: 10.0, Speaker: "spk_0"}, // swapped
 	}
 	remapPreservedSpeakers(input, output)

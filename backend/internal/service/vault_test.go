@@ -53,11 +53,11 @@ func (m *mockVaultRepo) GetAccountDocument(_ context.Context, pk, docID string) 
 
 func TestSanitizeFilename_PathTraversal(t *testing.T) {
 	cases := map[string]string{
-		"..":     "_",     // bare traversal segment neutralized
-		"../etc": "_-etc", // "/" → "-", ".." → "_"
-		"a/b":    "a-b",   // path separator stripped
-		"하나은행":   "하나은행",  // normal name preserved
-		"v1..2":  "v1_2",  // embedded ".." neutralized (acceptable)
+		"..":            "_",   // bare traversal segment neutralized
+		"../etc":        "_-etc", // "/" → "-", ".." → "_"
+		"a/b":           "a-b", // path separator stripped
+		"하나은행":      "하나은행", // normal name preserved
+		"v1..2":         "v1_2", // embedded ".." neutralized (acceptable)
 	}
 	for in, want := range cases {
 		if got := sanitizeFilename(in); got != want {
@@ -77,8 +77,8 @@ func TestExportVault_PlacesSharedAndPrivate(t *testing.T) {
 	shared := model.Meeting{MeetingID: "m-1", UserID: "u1", Title: "ROSA 리뷰", Date: d, Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true, Insights: `[{"type":"risk","text":"x"}]`}
 	priv := model.Meeting{MeetingID: "m-2", UserID: "u1", Title: "개인 메모", Date: d, Status: model.StatusDone}
 	repo := &mockVaultRepo{
-		owned:    []model.Meeting{shared, priv},
-		full:     map[string]*model.Meeting{"m-1": &shared, "m-2": &priv},
+		owned: []model.Meeting{shared, priv},
+		full:  map[string]*model.Meeting{"m-1": &shared, "m-2": &priv},
 		accounts: map[string]*model.Account{"acc-1": {AccountID: "acc-1", Name: "하나은행"}},
 	}
 	svc := newVaultServiceWithRepo(repo)
@@ -127,7 +127,7 @@ func TestExportVault_IncludesDocuments(t *testing.T) {
 		accounts:    map[string]*model.Account{"acc-1": {AccountID: "acc-1", Name: "하나은행"}},
 		memberships: []model.AccountMember{{AccountID: "acc-1", UserID: "u1"}},
 		documents: map[string][]model.AccountDocument{
-			model.PrefixUser + "u1":       {personalNote},
+			model.PrefixUser + "u1":    {personalNote},
 			model.PrefixAccount + "acc-1": {accountNote, slide},
 		},
 	}

@@ -608,34 +608,34 @@ func (r *ResearchRepository) cleanupResearchShares(ctx context.Context, research
 			return
 		}
 
-		for _, item := range result.Items {
-			sharedToID := ""
-			if v, ok := item["sharedToId"].(*types.AttributeValueMemberS); ok {
-				sharedToID = v.Value
-			}
+	for _, item := range result.Items {
+		sharedToID := ""
+		if v, ok := item["sharedToId"].(*types.AttributeValueMemberS); ok {
+			sharedToID = v.Value
+		}
+		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(r.tableName),
+			Key:       map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]},
+		}); err != nil {
+			log.Printf("warn: failed to delete share record for research %s: %v", researchId, err)
+		}
+		if sharedToID != "" {
 			if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 				TableName: aws.String(r.tableName),
-				Key:       map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]},
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+					"SK": &types.AttributeValueMemberS{Value: "SHARED#" + researchId},
+				},
 			}); err != nil {
-				log.Printf("warn: failed to delete share record for research %s: %v", researchId, err)
-			}
-			if sharedToID != "" {
-				if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-					TableName: aws.String(r.tableName),
-					Key: map[string]types.AttributeValue{
-						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
-						"SK": &types.AttributeValueMemberS{Value: "SHARED#" + researchId},
-					},
-				}); err != nil {
-					log.Printf("warn: failed to delete recipient share record for user %s research %s: %v", sharedToID, researchId, err)
-				}
+				log.Printf("warn: failed to delete recipient share record for user %s research %s: %v", sharedToID, researchId, err)
 			}
 		}
+	}
 
-		lastKey = result.LastEvaluatedKey
-		if lastKey == nil {
-			break
-		}
+	lastKey = result.LastEvaluatedKey
+	if lastKey == nil {
+		break
+	}
 	}
 }
 
