@@ -20,7 +20,7 @@ const labels = nav.NAV_GROUPS.map(g => [g.name, g.items.map(i => i.label)]);
 test('menu groups follow the agreed order', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(labels)), [
     ['', ['Home', 'Assistant']],
-    ['업무', ['Meetings', 'Accounts', 'Projects', 'Docs']],
+    ['업무', ['Meetings', 'Accounts', 'Projects', 'Docs', 'SA 활동']],
     ['지식', ['Library', 'Deep Research', 'News & Updates', 'Custom Dictionary']],
   ]);
   assert.equal(nav.SETTINGS_ITEM.href, '/settings');
@@ -47,6 +47,7 @@ test('other items match their path exactly', () => {
   assert.equal(nav.isNavActive('/', '/', null), true);
   assert.equal(nav.isNavActive('/', '/accounts', null), false);
   assert.equal(nav.isNavActive('/dictionary', '/dictionary', null), true);
+  assert.equal(nav.isNavActive('/performance', '/performance', null), true);
 });
 
 test('Home and Meetings have distinct destinations and active states', () => {

@@ -18,6 +18,7 @@ const pathLabels: Record<string, string> = {
   '/accounts': 'Accounts',
   '/docs': 'Docs',
   '/billing': 'Billing',
+  '/performance': 'SA 활동',
 };
 
 interface DesktopHeaderProps {

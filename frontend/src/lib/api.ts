@@ -13,6 +13,7 @@ import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountS
 import type { AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
+import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -189,6 +190,32 @@ export const calendarApi = {
     if (query.limit) params.set('limit', String(query.limit));
     return apiFetch<CalendarSourcePage>(`/api/calendar/sources?${params}`, { ...options, cache: 'no-store' });
   },
+};
+
+// Owner-only SA performance routes; every call reads the caller's own rows.
+export const performanceApi = {
+  missed: (period: PerformancePeriod, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const params = new URLSearchParams({ period });
+    return apiFetch<PerformanceMissedList>(`/api/performance/missed?${params}`, { ...options, cache: 'no-store' });
+  },
+  goals: (year: number, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const params = new URLSearchParams({ year: String(year) });
+    return apiFetch<PerformanceGoals>(`/api/performance/goals?${params}`, { ...options, cache: 'no-store' });
+  },
+  putGoals: (year: number, text: string, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const params = new URLSearchParams({ year: String(year) });
+    return apiFetch<PerformanceGoals>(`/api/performance/goals?${params}`, {
+      ...options, method: 'PUT', cache: 'no-store', body: JSON.stringify({ text }),
+    });
+  },
+  mappings: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<PerformanceMappingList>('/api/performance/mappings', { ...options, cache: 'no-store' }),
+  putMapping: (sfdcAccountId: string, accountId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<AccountMapping>(`/api/performance/mappings/${encodeURIComponent(sfdcAccountId)}`, {
+      ...options, method: 'PUT', cache: 'no-store', body: JSON.stringify({ accountId }),
+    }),
+  sources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<PerformanceSourceList>('/api/performance/sources', { ...options, cache: 'no-store' }),
 };
 
 export const api = {
