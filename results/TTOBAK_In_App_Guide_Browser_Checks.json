@@ -1,5 +1,5 @@
 {
-  "mode": "production-static-export",
+  "mode": "production-static-export-with-proposed-cloudfront-headers",
   "checks": [
     {
       "name": "1440: profile provides guide entry",
@@ -58,11 +58,19 @@
       "passed": true
     },
     {
+      "name": "1440: entry 0 survives responsive breakpoint",
+      "passed": true
+    },
+    {
       "name": "1440: entry 0 preserves route",
       "passed": true
     },
     {
       "name": "1440: entry 0 Escape restores focus",
+      "passed": true
+    },
+    {
+      "name": "1440: entry 1 survives responsive breakpoint",
       "passed": true
     },
     {
@@ -222,10 +230,17 @@
       "passed": true
     }
   ],
-  "date": "2026-11-10",
-  "baseRevision": "add6281e130d2eecab784ff289e84af15753f598",
-  "fixtureScope": "Synthetic Cognito/API data; external network blocked",
-  "assets": {
+  "baseRevision": "21182051683e7831a21974d78b34d3bc8a91fcc8",
+  "fixtureOrigin": "https://guide.test",
+  "responseHeaders": {
+    "X-Frame-Options": "SAMEORIGIN",
+    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'; frame-ancestors 'self'; object-src 'none'"
+  },
+  "negativeChecks": [
+    "DENY and frame-ancestors none reject the embedded manual",
+    "Responsive ancestor hides the reader before the body-portal fix"
+  ],
+  "assetHashes": {
     "favicon.svg": "af0638f836b54089f277b5a8f3adf19d39edb4dcfe4d7fbcc62a6379c145bef6",
     "guide.js": "3857b91840408569b0aa492f7553cc5d0d1271b87cfd9f15dfbb9700897b354a",
     "index.html": "aa88f859963d8b981dd22cc8425ec9e9a299ca811223518614fe41baaf83a5e8",

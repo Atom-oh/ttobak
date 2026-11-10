@@ -311,7 +311,7 @@ describe('FrontendStack Billing behaviors', () => {
     const sameOrigin = Object.values(resources).filter(r => r.Type === 'AWS::CloudFront::ResponseHeadersPolicy'
       && r.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig?.FrameOptions?.FrameOption === 'SAMEORIGIN');
     expect(sameOrigin).toHaveLength(2);
-    expect(behaviors.filter(b => sameOrigin.includes(resourceOf(b.ResponseHeadersPolicyId)))
+    expect(behaviors.filter(b => b.ResponseHeadersPolicyId && sameOrigin.includes(resourceOf(b.ResponseHeadersPolicyId)))
       .map(b => b.PathPattern).sort()).toEqual(['/billing-app/*', '/user-guide/*']);
     expect(behaviors.filter(b => JSON.stringify(b.ResponseHeadersPolicyId)
       === JSON.stringify(behavior('/billing-app/*').ResponseHeadersPolicyId)).map(b => b.PathPattern))

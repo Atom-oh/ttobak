@@ -28,6 +28,8 @@ the same verified public assets under `public/user-guide/`; `predev` and
 `prebuild` run it automatically. The build downloads the pinned screenshot
 archive; for offline builds set `TTOBAK_GUIDE_SCREENSHOT_ARCHIVE` to a local
 copy, which must pass the same archive and image hash checks.
+Deploy FrontendStack's `/user-guide/*` framing behavior before publishing
+the embedded reader; the default application headers intentionally reject frames.
 Conditional Billing/admin controls depend on configuration and permissions;
 these screenshots do not establish production or native macOS acceptance.
 

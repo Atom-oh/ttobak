@@ -5,11 +5,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-10 |
-| Scope | In-app manual entry points, embedded reading and screenshot enlargement |
+| Scope | In-app entry points, embedded reading, screenshot enlargement and CloudFront framing |
 | Reviewer | Codex inline review using the installed content-review-agent rubric |
 | Score | **88.5/90** |
 | Verdict | **PASS**, exceeding the mandatory pre-deployment score of 85 |
-| Visual evidence | Local Python Playwright/Chromium, including the production export |
+| Visual evidence | Local Python Playwright/Chromium, production export with proposed CloudFront headers |
 
 The rubric's Playwright MCP category remains exempt because that server's Chrome
 distribution was unavailable in this environment. Local browser checks are
@@ -26,33 +26,50 @@ recertify every guide statement against later application changes.
 
 The inherited category scores remain unchanged: all categories have full marks
 except Duplication/Gaps, 3.5/5. The existing Account overview/People image
-duplication remains one accepted warning. There are no new Critical or Warning
-findings in the reviewed change.
+duplication remains one accepted warning. There are no unresolved new Critical
+or Warning findings in the corrected change.
 
 The fixed rubric deducts one quarter of the applicable category per located
 defect, sums before rounding to 0.5 with midpoint deductions rounded up, and
-keeps Critical findings separate. No new deduction is justified by the evidence.
+keeps Critical findings separate. No new deduction is justified by the corrected
+implementation and evidence. The initial static-only review missed CloudFront's
+framing denial. Required independent CI review identified that deployment
+blocker; this revision replaces the earlier acceptance claim with header-aware
+checks. It also fixes the responsive-ancestor issue reported by that review.
 
 ## Evidence
 
 - Desktop sidebar, header help, mobile menu and profile open the same manual
   without changing the route or unmounting the current workspace.
-- At 1440x1000, 768x1024 and 390x844, 55 browser assertions pass against both
-  development and the production static export. Checks cover search, theme,
+- At 1440x1000, 768x1024 and 390x844, 57 browser assertions pass against the
+  production static export with proposed CloudFront response headers. The
+  public-origin fixture avoids loopback address-space restrictions introduced
+  by intercepted HTML responses. Checks cover search, theme,
   screenshot loading, viewport fit, close/focus return, Escape and preservation
-  of the mobile menu beneath the reader. Page-error lists are empty.
+  of the mobile menu beneath the reader. The reader stays visible when either
+  desktop opener's ancestor becomes hidden after a mobile breakpoint crossing.
+  Page-error lists are empty.
 - Embedded screenshots open inside the reader, retain their original pixel
   width, allow scrolling and return focus on close. Escape dismisses the image
   viewer while preserving the manual. Standalone screenshot links are unchanged.
 - The opaque-origin iframe cannot read app DOM or storage. It grants scripts
-  and printing, without same-origin access, popups, top navigation or native IPC.
+  and printing, without same-origin access, popups or top navigation. The change
+  adds no native capability.
+- The existing distribution serves `/user-guide/*` from its private S3 origin,
+  with `SAMEORIGIN` and `frame-ancestors 'self'`. Its dedicated CSP permits only
+  local scripts/styles/images and no connections or form submissions. CDK
+  assertions retain default application `DENY`/`frame-ancestors 'none'`, constrain
+  the manual policy to exactly one path, and preserve the existing Billing
+  exception. No origin, IAM grant, security group or secret value is added.
+  A negative browser check reproduces the old headers' empty reader.
 - The production export contains exactly the 40 public allowlisted assets.
   The four source assets are byte-identical to their repository sources; all
   image bytes retain the reviewed archive identities. Internal documentation,
   manifests and review reports are excluded.
 - Online packaging passes. An invalid offline archive fails, preserves all
   previous generated asset bytes and leaves no temporary staging directory.
-- Frontend: 665 unit tests pass, lint has zero errors, and production build
+- Frontend: all 694 unit tests pass after the latest base integration.
+  Lint has zero errors, and production build
   passes without development authentication. Fifteen lint warnings are in
   existing files. Documentation packaging/media tests (18), publication tests
   (8), documentation validation and JavaScript syntax checks pass.
@@ -72,3 +89,9 @@ Frontend workflow source triggers now include the guide and its packager,
 ensuring manual updates rebuild the bundled copy. Existing review, test,
 publication ordering, runtime configuration preservation and deployment gates
 remain intact.
+
+Deploy the reviewed FrontendStack framing behavior before the frontend assets.
+Wait for CloudFront propagation, verify the live manual headers and retained
+application framing denial, and then publish through the existing frontend
+workflow. Latest-head independent review and infrastructure synth/tests remain
+required release gates. A local static-server pass alone is not acceptance.
