@@ -241,7 +241,7 @@ func (repo *SpecReqTaskRepository) SpecReqTaskRowCursor(userID string, limit int
 
 // UpdateSpecReqTask writes the mutable fields of row when the stored version
 // equals expectedVersion, then bumps the version by one. A terminal state (see
-// specReqTaskTerminal) also caps the row TTL at max(now + 14 days, occurrence end + 45 days), never extending it. It sets updatedAt from
+// specReqTaskTerminal) without a specReqId also caps the row TTL at max(now + 14 days, occurrence end + 45 days), never extending it. It sets updatedAt from
 // the repository clock and moves stateChangedAt only when row.State differs from
 // row.PreviousState (the state the caller read). Empty optional fields are removed.
 func (repo *SpecReqTaskRepository) UpdateSpecReqTask(ctx context.Context, row SpecReqTaskRow, expectedVersion int64) error {
@@ -255,10 +255,10 @@ func (repo *SpecReqTaskRepository) UpdateSpecReqTask(ctx context.Context, row Sp
 	if row.State != row.PreviousState {
 		update = update.Set(expression.Name("stateChangedAt"), expression.Value(now))
 	}
-	// A terminal row expires at min(existing TTL, max(now + 14 days, occurrence end
+	// A terminal row without a linked SpecReq expires at min(existing TTL, max(now + 14 days, occurrence end
 	// + 45 days)), so it survives while its occurrence is in the matching horizon. row.ExpiresAt is
 	// the value the caller read; the version condition below guarantees it is current.
-	if specReqTaskTerminal(row) {
+	if specReqTaskTerminal(row) && row.SpecReqID == "" {
 		cap := now.Add(specReqTerminalRetention).Unix()
 		if horizon := row.OccurrenceEndsAt.Add(specReqHorizonRetention).Unix(); horizon > cap {
 			cap = horizon
