@@ -35,16 +35,43 @@ class FakeElement {
   }
 }
 
-function loadPage(lang) {
+class FakeGrip extends FakeElement {
+  constructor() {
+    super('div');
+    this.handlers = {};
+    this.captured = null;
+  }
+  addEventListener(type, handler) { this.handlers[type] = handler; }
+  setPointerCapture(id) { this.captured = id; }
+  fire(type, e = {}) {
+    this.handlers[type]({ button: 0, pointerId: 1, preventDefault() {}, stopPropagation() {}, ...e });
+  }
+}
+
+function loadPage(lang, { tauriWindow = true } = {}) {
   const box = new FakeElement('div');
+  const grip = new FakeGrip();
   const properties = {};
   const listeners = [];
+  const sizes = [];
+  const frames = [];
+  const rootClasses = new Set();
   const document = {
-    documentElement: { lang: '', style: { setProperty: (k, v) => { properties[k] = v; } } },
-    getElementById: (id) => (id === 'captions' ? box : null),
+    documentElement: {
+      lang: '',
+      style: { setProperty: (k, v) => { properties[k] = v; } },
+      classList: { add: (c) => rootClasses.add(c), remove: (c) => rootClasses.delete(c) },
+    },
+    getElementById: (id) => (id === 'captions' ? box : id === 'grip' ? grip : null),
     createElement: (tag) => new FakeElement(tag),
   };
+  class LogicalSize {
+    constructor(width, height) { this.type = 'Logical'; this.width = width; this.height = height; }
+  }
   const window = {
+    innerWidth: 800,
+    innerHeight: 160,
+    requestAnimationFrame: (cb) => { frames.push(cb); return frames.length; },
     __TAURI__: {
       event: {
         listen: (event, handler, options) => {
@@ -54,13 +81,22 @@ function loadPage(lang) {
       },
     },
   };
+  if (tauriWindow) {
+    window.__TAURI__.window = {
+      LogicalSize,
+      getCurrentWindow: () => ({
+        setSize: (size) => { sizes.push(size); return Promise.resolve(); },
+      }),
+    };
+  }
   const context = { window, document, location: { search: `?lang=${lang}` }, URLSearchParams, Map, Set, Array, Object };
   for (const source of scripts) vm.runInNewContext(source, context);
   const emit = (event, payload) => {
     for (const l of listeners) if (l.event === event) l.handler({ event, payload });
   };
   const lines = () => box.children.map((c) => c.textContent);
-  return { listeners, emit, lines, properties };
+  const runFrames = () => { for (const cb of frames.splice(0)) cb(); };
+  return { listeners, emit, lines, properties, grip, sizes, runFrames, rootClasses, frames, context };
 }
 
 const entry = (lang, id, text, isFinal, order = 0) => ({ lang, kind: 'entry', id, order, text, isFinal });
@@ -121,4 +157,53 @@ test('shows at most three lines, newest last', () => {
   const page = loadPage('en');
   for (let i = 0; i < 5; i++) page.emit('caption-update', entry('en', `u${i}`, `Line ${i}`, true, i));
   assert.deepEqual(page.lines(), ['Line 2', 'Line 3', 'Line 4']);
+});
+
+test('resize size is the start size plus the delta, clamped to 320x80', () => {
+  const { context } = loadPage('en');
+  const size = (...a) => JSON.parse(JSON.stringify(context.captionResizeSize(...a)));
+  assert.deepEqual(size(800, 160, 40.4, -20.6), { width: 840, height: 139 });
+  assert.deepEqual(size(400, 100, -500, -500), { width: 320, height: 80 });
+  assert.deepEqual(size(800, 160, NaN, Infinity), { width: 800, height: 160 });
+  assert.deepEqual(size(undefined, null, 0, 0), { width: 320, height: 80 });
+});
+
+test('the grip resizes the window once per animation frame', () => {
+  const page = loadPage('en');
+  page.grip.fire('pointerdown', { screenX: 100, screenY: 100 });
+  assert.equal(page.grip.captured, 1);
+  assert.ok(page.rootClasses.has('resizing'));
+  page.grip.fire('pointermove', { screenX: 110, screenY: 105 });
+  page.grip.fire('pointermove', { screenX: 150, screenY: 130 });
+  assert.equal(page.frames.length, 1, 'one frame per burst of moves');
+  page.runFrames();
+  assert.deepEqual(page.sizes.map((s) => [s.type, s.width, s.height]), [['Logical', 850, 190]]);
+  page.grip.fire('pointermove', { screenX: -900, screenY: -900 });
+  page.runFrames();
+  assert.deepEqual([page.sizes[1].width, page.sizes[1].height], [320, 80]);
+  page.grip.fire('pointerup');
+  assert.ok(!page.rootClasses.has('resizing'));
+  page.grip.fire('pointermove', { screenX: 300, screenY: 300 });
+  page.runFrames();
+  assert.equal(page.sizes.length, 2, 'no resize after release');
+  assert.deepEqual(page.lines(), ['Live captions will appear here.'], 'captions are untouched');
+});
+
+test('the grip ignores non-primary buttons and works without the window API', () => {
+  const page = loadPage('en');
+  page.grip.fire('pointerdown', { button: 2, screenX: 0, screenY: 0 });
+  page.grip.fire('pointermove', { screenX: 50, screenY: 50 });
+  page.runFrames();
+  assert.equal(page.sizes.length, 0);
+  const bare = loadPage('en', { tauriWindow: false });
+  assert.deepEqual(Object.keys(bare.grip.handlers), []);
+  assert.deepEqual(bare.lines(), ['Live captions will appear here.']);
+});
+
+test('page chrome is a drag handle and a non-drag grip, with no text', () => {
+  assert.match(html, /<div id="move" class="chrome" data-tauri-drag-region aria-hidden="true">⠿<\/div>/);
+  assert.match(html, /<div id="grip" class="chrome" data-tauri-drag-region="false"/);
+  assert.match(html, /<body data-tauri-drag-region="deep">/);
+  assert.match(html, /html:hover \.chrome/);
+  assert.doesNotMatch(html, /console\.|fetch\(|XMLHttpRequest|innerHTML/);
 });

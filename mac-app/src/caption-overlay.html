@@ -21,16 +21,77 @@
         user-select: none;
         cursor: default;
       }
-      #captions {
+      /* The frame's padding reserves the strips the hover chrome sits in,
+         so the move handle and resize grip never cover caption text. */
+      #frame {
         box-sizing: border-box;
         height: 100%;
-        padding: 8px 16px;
+        padding: 14px 18px 6px;
+        display: flex;
+        background: var(--bg);
+      }
+      #captions {
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
         display: flex;
         flex-direction: column;
         justify-content: flex-end;
         align-items: center;
         overflow: hidden;
-        background: var(--bg);
+      }
+      /* Hover chrome: shown only while the pointer is over the window (or a
+         resize is in progress), so a projected view shows only subtitles. */
+      .chrome {
+        position: fixed;
+        opacity: 0;
+        transition: opacity 180ms ease-out;
+        pointer-events: none;
+      }
+      html:hover .chrome,
+      html.resizing .chrome {
+        opacity: 1;
+      }
+      html:hover #move,
+      html:hover #grip,
+      html.resizing #grip {
+        pointer-events: auto;
+      }
+      #outline {
+        inset: 0;
+        border: 1px dashed rgba(255, 255, 255, 0.7);
+      }
+      #move {
+        top: 2px;
+        left: 50%;
+        width: 40px;
+        height: 10px;
+        margin-left: -20px;
+        border-radius: 5px;
+        background: rgba(0, 0, 0, 0.55);
+        color: rgba(255, 255, 255, 0.9);
+        font: 9px/10px system-ui, sans-serif;
+        letter-spacing: 2px;
+        text-align: center;
+        overflow: hidden;
+        cursor: move;
+      }
+      #grip {
+        right: 2px;
+        bottom: 2px;
+        width: 14px;
+        height: 14px;
+        cursor: nwse-resize;
+        background: linear-gradient(
+          135deg,
+          transparent 0 45%,
+          rgba(255, 255, 255, 0.85) 45% 52%,
+          transparent 52% 64%,
+          rgba(255, 255, 255, 0.85) 64% 71%,
+          transparent 71% 83%,
+          rgba(255, 255, 255, 0.85) 83% 90%,
+          transparent 90%
+        );
       }
       .line {
         max-width: 100%;
@@ -52,7 +113,22 @@
     </style>
   </head>
   <body data-tauri-drag-region="deep">
-    <div id="captions"></div>
+    <div id="frame"><div id="captions"></div></div>
+    <div id="outline" class="chrome" aria-hidden="true"></div>
+    <div id="move" class="chrome" data-tauri-drag-region aria-hidden="true">⠿</div>
+    <div id="grip" class="chrome" data-tauri-drag-region="false" aria-hidden="true"></div>
+    <script>
+      // Size for a grip drag: the starting inner size plus the pointer
+      // delta, rounded and clamped to the window minimum (320x80 points).
+      function captionResizeSize(startWidth, startHeight, dx, dy) {
+        function finite(v, fallback) {
+          return typeof v === 'number' && isFinite(v) ? v : fallback;
+        }
+        var w = Math.round(finite(startWidth, 320) + finite(dx, 0));
+        var h = Math.round(finite(startHeight, 80) + finite(dy, 0));
+        return { width: Math.max(320, w), height: Math.max(80, h) };
+      }
+    </script>
     <script>
       (function () {
         var MAX_LINES = 3;
@@ -216,6 +292,46 @@
           events.listen('caption-style', function (e) {
             if (ours(e.payload)) applyStyle(e.payload);
           }, scope);
+        }
+
+        // Resize from the bottom-right grip. tao 0.37 does not support
+        // startResizeDragging on macOS, so the page sets the size itself,
+        // at most once per animation frame. The grip is not a drag region.
+        var tauriWindow = window.__TAURI__ && window.__TAURI__.window;
+        var grip = document.getElementById('grip');
+        if (grip && tauriWindow && typeof tauriWindow.getCurrentWindow === 'function') {
+          var current = tauriWindow.getCurrentWindow();
+          var drag = null;
+          var pending = null;
+          var frame = 0;
+          var flush = function () {
+            frame = 0;
+            if (!pending) return;
+            var size = pending;
+            pending = null;
+            current.setSize(new tauriWindow.LogicalSize(size.width, size.height)).catch(function () {});
+          };
+          var end = function () {
+            if (!drag) return;
+            drag = null;
+            document.documentElement.classList.remove('resizing');
+          };
+          grip.addEventListener('pointerdown', function (e) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            drag = { x: e.screenX, y: e.screenY, w: window.innerWidth, h: window.innerHeight };
+            document.documentElement.classList.add('resizing');
+            if (grip.setPointerCapture) grip.setPointerCapture(e.pointerId);
+          });
+          grip.addEventListener('pointermove', function (e) {
+            if (!drag) return;
+            pending = captionResizeSize(drag.w, drag.h, e.screenX - drag.x, e.screenY - drag.y);
+            if (!frame) frame = window.requestAnimationFrame(flush);
+          });
+          grip.addEventListener('pointerup', end);
+          grip.addEventListener('pointercancel', end);
+          grip.addEventListener('lostpointercapture', end);
         }
       })();
     </script>

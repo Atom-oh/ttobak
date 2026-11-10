@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_capability_grants_only_listening_and_dragging() {
+    fn overlay_capability_grants_only_listening_dragging_and_sizing() {
         let cap: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/caption-overlay.json"))
                 .expect("json");
@@ -580,6 +580,7 @@ mod tests {
             [
                 "core:event:allow-listen",
                 "core:event:allow-unlisten",
+                "core:window:allow-set-size",
                 "core:window:allow-start-dragging",
             ]
         );
