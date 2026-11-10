@@ -155,6 +155,11 @@ retired. Its data moves in a one-time cutover
    placeholder-protected and without speaker labels or times, through the same
    interpreter path to client memory only (`MEETING_TRANSLATION_ENABLED`, daily
    byte budget).
+   In the Mac app only, caption overlay windows (ADR-069) translate on a separate
+   local path: the main window calls Rust, which uses the user's own AWS profile
+   (Bedrock Luna for finals, Amazon Translate for interims and fallback) and relays
+   text to bundled overlay pages. It never uses the server's `/api/translate`, so
+   server limits and cost are not involved; credentials stay in Rust.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.
