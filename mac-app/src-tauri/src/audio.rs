@@ -75,6 +75,11 @@ impl AudioRecorder {
         }
     }
 
+    /// A start has reserved the recorder but capture is not running yet.
+    pub fn is_starting(&self) -> bool {
+        self.starting
+    }
+
     pub fn snapshot(&self) -> RecordingSnapshot {
         match &self.inner {
             Some(h) => RecordingSnapshot {
@@ -1955,6 +1960,18 @@ mod tests {
             recorder.lock().begin_start().is_ok(),
             "drop must cancel the reservation"
         );
+    }
+
+    /// `control::app_busy` counts a start reservation as busy.
+    #[test]
+    fn a_start_reservation_reports_starting() {
+        let mut recorder = AudioRecorder::new();
+        assert!(!recorder.is_starting());
+        let _reservation = recorder.begin_start().unwrap();
+        assert!(recorder.is_starting());
+        assert!(!recorder.snapshot().recording);
+        recorder.cancel_start();
+        assert!(!recorder.is_starting());
     }
 
     #[test]
