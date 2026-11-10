@@ -70,6 +70,8 @@ export interface IntakeEnvironment {
   scope?: string;
   /** Test seam: the signed-in identity that goes with `api`. */
   me?: { email: string; userId: string };
+  /** Test seam: replaces the Cognito client, to observe whether a sign-in may open a browser. */
+  authFactory?: (config: ReturnType<typeof ttobakConfig>, options: { interactive: boolean }) => Pick<CognitoAuth, 'getIdToken'>;
   /** Korean prompts and progress of `setup`; never host values. */
   stderr?: (line: string) => void;
   /** Interactive answer source of `setup`; absent without a terminal. */
@@ -112,7 +114,7 @@ const USAGE = `Usage:
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
     (a synced run also runs the SpecReq task step when meetings and specreq are selected)
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
-  ttobak-mcp intake setup [--yes] [--accept-unknown-sensitivity] [--auto-ack on|off] [--skip <connector>]...
+  ttobak-mcp intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
   ttobak-mcp intake status`;
@@ -262,8 +264,9 @@ async function signIn(selection: Selection | null, environment: IntakeEnvironmen
   let me = environment.me;
   if (!dryRun && !api) {
     const config = ttobakConfig(selection, environment.env);
-    const auth = new CognitoAuth(config, { interactive: !noninteractive });
-    api = new TtobakApi(auth, config.apiUrl);
+    const auth = environment.authFactory?.(config, { interactive: !noninteractive }) ??
+      new CognitoAuth(config, { interactive: !noninteractive });
+    api = new TtobakApi(auth as CognitoAuth, config.apiUrl);
     let idToken: string;
     try { idToken = await auth.getIdToken(); } catch (error) {
       const message = error instanceof Error ? error.message : '';

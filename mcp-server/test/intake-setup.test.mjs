@@ -71,7 +71,7 @@ function fakeApi() {
   };
 }
 
-function environment(home, { api = fakeApi(), answers, launchctl } = {}) {
+function environment(home, { api = fakeApi(), answers, launchctl, auth } = {}) {
   const lines = [];
   const errors = [];
   const asked = [];
@@ -82,6 +82,7 @@ function environment(home, { api = fakeApi(), answers, launchctl } = {}) {
       TTOBAK_COGNITO_DOMAIN: 'https://auth.example.invalid', TTOBAK_CLIENT_ID: 'fixture' },
     api, scope: 'c'.repeat(32), me: { email: 'me@example.invalid', userId: 'u-me' },
     launchctl: args => runner.run(args), uid: 501, nodePath: '/opt/node/bin/node', cliPath: '/Users/x/.ttobak/server.mjs',
+    ...(auth ? { api: undefined, authFactory: (_config, options) => auth(options) } : {}),
     ...(answers ? { prompt: async question => { asked.push(question); return answers.shift() ?? ''; } } : {}),
   };
   return { env, lines, errors, asked, runner, api, last: () => JSON.parse(lines.at(-1)) };
@@ -106,14 +107,13 @@ test('setup selects known servers and verifies tools', async t => {
   const output = context.last();
   assert.equal(output.ok, true);
   for (const [name, server] of [['calendar', 'aws-outlook-mcp'], ['sfdc', 'aws-sentral-mcp'],
-    ['meetings', 'amazon-meetings-mcp'], ['specreq', 'spec-req-mcp'], ['slack', 'slack-mcp']]) {
+    ['meetings', 'amazon-meetings-mcp'], ['slack', 'slack-mcp']]) {
     assert.deepEqual(output.connectors[name], { status: 'selected', server, host: 'claude' }, name);
   }
   const stored = selection(home);
   assert.equal(stored.calendar.host, 'claude', 'claude wins over codex by default');
   assert.equal(stored.calendar.acceptUnknownSensitivity, true);
   assert.equal(stored.sfdc.server, 'aws-sentral-mcp');
-  assert.equal(stored.specreq.autoAck, true);
   assert.equal(output.dryRun.calendar.result, 'ok');
   assert.equal(output.dryRun.calendar.counts.upserts, 6);
   assert.equal(output.dryRun.sfdc.result, 'ok');
@@ -329,4 +329,75 @@ test('setup --schedule installs through the injected runner, and off removes the
   const failing = environment(home, { launchctl: { calls: [], async run(args) { this.calls.push(args); return args[0] === 'bootstrap' ? 5 : 0; } } });
   assert.equal(await runIntake(['setup', '--yes', '--schedule', 'hourly'], failing.env), 2);
   assert.equal(failing.last().code, 'SCHEDULE_FAILED');
+});
+
+test('setup selects specreq with auto-ack off', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['spec-req-mcp'] });
+  const context = environment(home);
+  assert.equal(await runIntake(['setup', '--yes'], context.env), 0, context.lines.at(-1));
+  assert.deepEqual(context.last().connectors.specreq,
+    { status: 'selected', server: 'spec-req-mcp', host: 'claude', autoAck: false });
+  assert.equal(selection(home).specreq.autoAck, false);
+  assert.ok(context.errors.some(line => line.includes('--auto-ack on')), 'stderr says how to turn it on');
+  // Turning it on stays a deliberate select; setup never accepts the flag.
+  assert.equal(await runIntake(['setup', '--yes', '--auto-ack', 'on'], context.env), 2);
+  assert.equal(context.last().code, 'INVALID_ARGUMENT');
+});
+
+test('setup removes a previously selected connector it skips', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['aws-outlook-mcp', 'aws-sentral-mcp'] });
+  const context = environment(home);
+  await selectBoth(home, context);
+  // Calendar loses consent, sfdc loses its server; slack was never selected.
+  writeHosts(home, { only: ['aws-outlook-mcp'] });
+  assert.equal(await runIntake(['setup', '--yes'], context.env), 0, context.lines.at(-1));
+  const output = context.last();
+  assert.deepEqual(output.connectors.calendar, { status: 'skipped', code: 'SENSITIVITY_UNKNOWN', removedPrevious: true });
+  assert.deepEqual(output.connectors.sfdc, { status: 'skipped', code: 'SERVER_NOT_CONFIGURED', removedPrevious: true });
+  assert.deepEqual(output.connectors.slack, { status: 'skipped', code: 'SERVER_NOT_CONFIGURED' });
+  const stored = selection(home);
+  assert.equal(stored.calendar, undefined);
+  assert.equal(stored.sfdc, undefined);
+  assert.equal(await runIntake(['run', '--noninteractive'], context.env), 2);
+  assert.equal(context.last().code, 'NOT_SELECTED', 'run matches what setup reported');
+});
+
+test('setup AUTH_EXPIRED_MIDWAY leaves the earlier selection untouched', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['aws-outlook-mcp', 'aws-sentral-mcp'] });
+  const context = environment(home);
+  await selectBoth(home, context);
+  const before = readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8');
+  writeHosts(home, { work: { FAKE_WORK_TAM_AUTH: '1' } });
+  assert.equal(await runIntake(['setup', '--yes'], context.env), 2);
+  assert.equal(context.last().code, 'AUTH_EXPIRED_MIDWAY');
+  assert.equal(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8'), before);
+});
+
+test('setup exits 2 when the first sync fails and keeps the selections; --noninteractive never opens a login', async t => {
+  const home = tempHome(t);
+  writeHosts(home, { only: ['aws-sentral-mcp'] });
+  const modes = [];
+  const auth = options => ({ async getIdToken() {
+    modes.push(options.interactive);
+    throw new Error('TTOBAK_LOGIN_REQUIRED: sign in to TTOBAK interactively first');
+  } });
+  const context = environment(home, { auth });
+  assert.equal(await runIntake(['setup', '--yes', '--noninteractive', '--schedule', 'hourly'], context.env), 2);
+  const output = context.last();
+  assert.equal(output.ok, false);
+  assert.equal(output.code, 'PARTIAL_FAILURE');
+  assert.equal(output.synced, false);
+  assert.equal(output.sync.sfdc.result, 'TTOBAK_LOGIN_REQUIRED');
+  assert.equal(output.dryRun.sfdc.result, 'ok');
+  assert.deepEqual(modes, [false], 'the first sync signs in without a browser');
+  assert.equal(selection(home).sfdc.server, 'aws-sentral-mcp', 'selections are still saved');
+  assert.equal(existsSync(plistPath(home)), false, 'no schedule after a failed first sync');
+
+  // Without --noninteractive, setup is a human command and may open the login.
+  const interactive = environment(home, { auth });
+  assert.equal(await runIntake(['setup', '--yes'], interactive.env), 2);
+  assert.deepEqual(modes, [false, true]);
 });

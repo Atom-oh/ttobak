@@ -17,7 +17,7 @@ Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
 `setup` writes Korean prompts and progress to stderr only.
 
 ```text
-intake setup [--yes] [--accept-unknown-sensitivity] [--auto-ack on|off] [--skip <connector>]...
+intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
 intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
 ```
@@ -32,22 +32,29 @@ intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
 2. Verifies each candidate exactly as `intake select` does and stores it. No
    candidate, `--skip` or a failed check marks the connector `skipped` with a
    code (`SERVER_NOT_CONFIGURED`, `SKIPPED_BY_USER`, `SCHEMA_CHANGED`, ...),
-   and setup continues. A skipped connector keeps any earlier selection.
+   and setup continues. Setup is the source of truth: a skipped connector is
+   removed from the saved selection (`removedPrevious: true`), so `intake run`
+   matches the report.
+   SpecReq is always selected with auto-ack off (`autoAck: false`); turn it
+   on deliberately with `intake select specreq ... --auto-ack on`.
 3. Calendar needs consent that private items reach the private TTOBAK
    calendar (see [Behavior](#behavior)): a yes/no question, or
    `--accept-unknown-sensitivity` with `--yes`. Otherwise it is skipped with
    `SENSITIVITY_UNKNOWN`.
 4. `AUTH_EXPIRED_MIDWAY` during a check, dry run or sync stops setup: run
-   `mwinit -o` and rerun.
+   `mwinit -o` and rerun. A stop during the checks leaves the saved selection
+   as it was before setup.
 5. Dry-runs the calendar and SFDC connectors selected now and reports the
-   counts. Then it asks whether to run the first sync (`--yes` runs it). The
-   first sync may open the TTOBAK login.
+   counts. Then it asks whether to run the first sync (`--yes` runs it).
+   Setup is a human command, so the first sync may open the TTOBAK login, even
+   with `--yes`; `--noninteractive` (implies `--yes`) never prompts or opens it.
 6. Writes the LaunchAgent only with `--schedule` or an interactive answer
    (see [Schedule](#schedule)).
 
 The JSON line is `{ok, connectors: {<name>: {status, code?, server?, host?}},
 dryRun: {<connector>: {result, counts}}, synced, schedule, sync?}`. A failed
-first sync leaves `ok: true` with `synced: false` and the codes in `sync`.
+dry run or first sync exits 2 with the run's code and `synced: false`; the
+selections stay saved and no schedule is installed.
 
 `intake run` runs the selected connectors in order, calendar (with its task
 step) then SFDC, with one shared TTOBAK sign-in. The JSON line is
@@ -300,7 +307,8 @@ written without `--schedule` or that answer. A launchctl failure is
 The arguments are fixed and contain no secrets: the absolute node executable
 that ran setup, the absolute path of the running CLI script, then
 `intake run --noninteractive`. Keep the CLI at that path (for example
-`~/.ttobak/server.mjs`); rerun setup after moving it. The plist built by
+`~/.ttobak/server.mjs`); rerun `intake setup --schedule ...` after moving or
+reinstalling the CLI. The plist built by
 `buildLaunchAgentPlist` in `mcp-server/src/intake/schedule.ts` looks like:
 
 ```xml
