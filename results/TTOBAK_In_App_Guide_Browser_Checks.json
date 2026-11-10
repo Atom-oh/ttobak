@@ -18,6 +18,10 @@
       "passed": true
     },
     {
+      "name": "1440: search Escape clears the query and keeps the manual open",
+      "passed": true
+    },
+    {
       "name": "1440: guide theme works",
       "passed": true
     },
@@ -46,7 +50,15 @@
       "passed": true
     },
     {
+      "name": "1440: unrelated close messages are ignored",
+      "passed": true
+    },
+    {
       "name": "1440: closes and restores focus",
+      "passed": true
+    },
+    {
+      "name": "1440: Escape inside the guide closes the reader and restores focus",
       "passed": true
     },
     {
@@ -130,7 +142,15 @@
       "passed": true
     },
     {
+      "name": "768: unrelated close messages are ignored",
+      "passed": true
+    },
+    {
       "name": "768: closes and restores focus",
+      "passed": true
+    },
+    {
+      "name": "768: Escape inside the guide closes the reader and restores focus",
       "passed": true
     },
     {
@@ -202,7 +222,15 @@
       "passed": true
     },
     {
+      "name": "390: unrelated close messages are ignored",
+      "passed": true
+    },
+    {
       "name": "390: closes and restores focus",
+      "passed": true
+    },
+    {
+      "name": "390: Escape inside the guide closes the reader and restores focus",
       "passed": true
     },
     {
@@ -230,7 +258,6 @@
       "passed": true
     }
   ],
-  "baseRevision": "21182051683e7831a21974d78b34d3bc8a91fcc8",
   "fixtureOrigin": "https://guide.test",
   "responseHeaders": {
     "X-Frame-Options": "SAMEORIGIN",
@@ -238,11 +265,20 @@
   },
   "negativeChecks": [
     "DENY and frame-ancestors none reject the embedded manual",
-    "Responsive ancestor hides the reader before the body-portal fix"
+    "Responsive ancestor hides the reader before the body-portal fix",
+    "Escape from guide content does not close the app reader before the scoped message bridge"
   ],
+  "date": "2026-11-10",
+  "baseRevision": "44523fbd195a9f717a1adf735ac8b6a72b5f67a4",
+  "workingTreeChanges": [
+    "frontend/src/components/layout/UserGuideButton.tsx",
+    "docs/user-guide/guide.js",
+    "frontend/scripts/update-icon-font.mjs"
+  ],
+  "fixtureScope": "Synthetic Cognito/API responses, public-origin fixture, no production login or provider calls",
   "assetHashes": {
     "favicon.svg": "af0638f836b54089f277b5a8f3adf19d39edb4dcfe4d7fbcc62a6379c145bef6",
-    "guide.js": "3857b91840408569b0aa492f7553cc5d0d1271b87cfd9f15dfbb9700897b354a",
+    "guide.js": "edf4e3b62feb62f3c30406568752070584d855089c911bbe605598f5113a6c68",
     "index.html": "aa88f859963d8b981dd22cc8425ec9e9a299ca811223518614fe41baaf83a5e8",
     "screen-account-docs.webp": "a683631eb0b803da20dbdc0cf76bea185905117efc120d185d01876934d3ab85",
     "screen-account-events.webp": "d17d8da3642831744d856a168d106faa8059c78cca7d47d465fbdfe0017dfd7f",

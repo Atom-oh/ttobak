@@ -14,7 +14,19 @@ const buttonClasses: Record<Variant, string> = {
 
 function UserGuideDialog({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const titleId = useId();
+
+  useEffect(() => {
+    const closeFromGuide = (event: MessageEvent) => {
+      if (event.source === frameRef.current?.contentWindow &&
+        event.origin === 'null' && event.data === 'ttobak-user-guide-close') {
+        onClose();
+      }
+    };
+    window.addEventListener('message', closeFromGuide);
+    return () => window.removeEventListener('message', closeFromGuide);
+  }, [onClose]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -58,6 +70,7 @@ function UserGuideDialog({ onClose }: { onClose: () => void }) {
           </button>
         </header>
         <iframe
+          ref={frameRef}
           title="TTOBAK 사용 설명서"
           src="/user-guide/index.html"
           sandbox="allow-scripts allow-modals"

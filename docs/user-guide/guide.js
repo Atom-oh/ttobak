@@ -70,7 +70,12 @@
     }
     if (event.key === 'Escape') {
       if (root.classList.contains('menu-open')) closeMenu(true);
-      else if (document.activeElement === search) { search.value = ''; renderSearch(); }
+      else if (document.activeElement === search && (search.value || window === window.top)) {
+        search.value = ''; renderSearch();
+      } else if (window !== window.top) {
+        // The isolated frame cannot dispatch keyboard events to the app dialog.
+        window.parent.postMessage('ttobak-user-guide-close', window.location.origin);
+      }
     }
     // Keep keyboard focus within the opened mobile contents and its close button.
     if (event.key === 'Tab' && mobile.matches && root.classList.contains('menu-open')) {

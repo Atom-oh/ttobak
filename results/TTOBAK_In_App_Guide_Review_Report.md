@@ -41,7 +41,7 @@ checks. It also fixes the responsive-ancestor issue reported by that review.
 
 - Desktop sidebar, header help, mobile menu and profile open the same manual
   without changing the route or unmounting the current workspace.
-- At 1440x1000, 768x1024 and 390x844, 57 browser assertions pass against the
+- At 1440x1000, 768x1024 and 390x844, 64 browser assertions pass against the
   production static export with proposed CloudFront response headers. The
   public-origin fixture avoids loopback address-space restrictions introduced
   by intercepted HTML responses. Checks cover search, theme,
@@ -49,6 +49,11 @@ checks. It also fixes the responsive-ancestor issue reported by that review.
   of the mobile menu beneath the reader. The reader stays visible when either
   desktop opener's ancestor becomes hidden after a mobile breakpoint crossing.
   Page-error lists are empty.
+- Escape inside the isolated guide closes the app reader through a single
+  close-only message. The parent accepts only the active iframe's WindowProxy,
+  its opaque origin and the exact close string. Unrelated close messages are
+  ignored. Search reset, mobile contents dismissal and screenshot dismissal
+  retain precedence over closing the reader; standalone reading is unchanged.
 - Embedded screenshots open inside the reader, retain their original pixel
   width, allow scrolling and return focus on close. Escape dismisses the image
   viewer while preserving the manual. Standalone screenshot links are unchanged.
@@ -68,11 +73,12 @@ checks. It also fixes the responsive-ancestor issue reported by that review.
   manifests and review reports are excluded.
 - Online packaging passes. An invalid offline archive fails, preserves all
   previous generated asset bytes and leaves no temporary staging directory.
-- Frontend: all 694 unit tests pass after the latest base integration.
+- Frontend: all 696 unit tests pass after the latest base integration.
   Lint has zero errors, and production build
   passes without development authentication. Fifteen lint warnings are in
   existing files. Documentation packaging/media tests (18), publication tests
   (8), documentation validation and JavaScript syntax checks pass.
+- Infrastructure synthesis, TypeScript compilation and all 335 tests pass.
 
 Browser evidence and export identities are recorded in
 `TTOBAK_In_App_Guide_Browser_Checks.json`. Tests use synthetic Cognito/API
