@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "caption-overlay",
-  "description": "The caption overlay windows (caption_overlay.rs). They load the bundled caption-overlay.html, a local origin, may only listen for caption events, start a window drag and set their own size (grip resize): no event emit and no app command.",
+  "description": "The caption overlay windows (caption_overlay.rs). They load the bundled caption-overlay.html, a local origin, may only listen for caption events, start a window drag, set their own size (grip resize) and report idle so an empty window lets clicks through (caption_overlay_idle acts only on the calling window): no event emit and no other app command.",
   "windows": [
     "caption-ko",
     "caption-en",
@@ -12,6 +12,7 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-set-size",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "allow-caption-overlay-idle"
   ]
 }
