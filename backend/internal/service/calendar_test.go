@@ -71,13 +71,21 @@ func (fake *calendarStoreFake) ListCalendarSources(_ context.Context, userID, cu
 
 type calendarAccountsFake struct {
 	denied map[string]error
-	calls  []string
+	// merge marks an account mergingInto ("merging") or mergedInto ("merged").
+	merge map[string]string
+	calls []string
 }
 
 func (fake *calendarAccountsFake) GetAccount(_ context.Context, userID, accountID string) (*model.AccountResponse, error) {
 	fake.calls = append(fake.calls, userID+"/"+accountID)
 	if err := fake.denied[accountID]; err != nil {
 		return nil, err
+	}
+	switch fake.merge[accountID] {
+	case "merging":
+		return &model.AccountResponse{MergingInto: "target"}, nil
+	case "merged":
+		return &model.AccountResponse{MergedInto: "target"}, nil
 	}
 	return &model.AccountResponse{}, nil
 }
@@ -234,7 +242,7 @@ func TestCalendarSyncNormalizesRetryAndKeepsCiphertextPrivate(test *testing.T) {
 }
 
 func TestCalendarSyncAuthorizationAndFailClosed(test *testing.T) {
-	for _, scenario := range []string{"anonymous", "invalid user", "invalid source", "inaccessible account", "missing account", "account transient", "missing key", "KMS failure", "expired receipt", "foreign receipt"} {
+	for _, scenario := range []string{"anonymous", "invalid user", "invalid source", "inaccessible account", "missing account", "account transient", "merging account", "merged account", "missing key", "KMS failure", "expired receipt", "foreign receipt"} {
 		test.Run(scenario, func(test *testing.T) {
 			svc, store, sdk, accounts := calendarFixture()
 			userID, sourceID := "owner", calendarSourceID
@@ -254,6 +262,9 @@ func TestCalendarSyncAuthorizationAndFailClosed(test *testing.T) {
 			case "account transient":
 				expected = errors.New("account lookup unavailable")
 				accounts.denied["account-1"] = expected
+			case "merging account", "merged account":
+				accounts.merge = map[string]string{"account-1": strings.TrimSuffix(scenario, " account")}
+				expected = ErrAccountMerging
 			case "missing key":
 				svc.cipher = NewCalendarCipher(sdk, "")
 				expected = ErrCalendarEncryption

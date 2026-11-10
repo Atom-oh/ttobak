@@ -115,7 +115,8 @@ func (s *NavigationCatalogService) account(ctx context.Context, user, id string)
 	if err != nil {
 		return nil, err
 	}
-	if account == nil {
+	// A merge tombstone is not listed, as in ListAccounts.
+	if account == nil || account.MergedInto != "" {
 		return nil, ErrNotFound
 	}
 	if account.AccountID != id {
