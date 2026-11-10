@@ -103,30 +103,14 @@ func (r *DynamoDBRepository) CreateAudioCropForTeam(ctx context.Context, source,
 	if err != nil {
 		return err
 	}
-	var grant []types.TransactWriteItem
 	for _, check := range checks {
 		cc, err := r.conditionCheckFor(check)
 		if err != nil {
 			return err
 		}
-		grant = append(grant, types.TransactWriteItem{ConditionCheck: cc})
-	}
-	// The team account must be open: a copy is never published into a
-	// merging or merged account. An ancestor grant path already checks the
-	// team META row, so the fence joins that check instead.
-	openItem, err := r.accountOpenCheck(team)
-	if err != nil {
-		return err
-	}
-	open := &openItem
-	items = append(items, foldOpenIntoExtra(grant, team, &open)...)
-	if open != nil {
-		items = append(items, *open)
+		items = append(items, types.TransactWriteItem{ConditionCheck: cc})
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}, singleDynamoDBAttempt)
-	if merging := mergeFenceError(err); merging != nil {
-		return merging
-	}
 	var canceled *types.TransactionCanceledException
 	if errors.As(err, &canceled) {
 		for _, reason := range canceled.CancellationReasons {

@@ -49,7 +49,7 @@ func TestMemberCropPublishesAtomicallyUnderTheLiveGrant(t *testing.T) {
 				case strings.HasSuffix(target, ".TransactWriteItems"):
 					items = body["TransactItems"].([]any)
 					if tc.unpublished {
-						return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","message":"cancelled","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]}`, nil), nil
+						return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","message":"cancelled","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]}`, nil), nil
 					}
 				}
 				return summaryHTTPResponse(200, `{}`, nil), nil
@@ -65,8 +65,8 @@ func TestMemberCropPublishesAtomicallyUnderTheLiveGrant(t *testing.T) {
 				}
 				return
 			}
-			if len(items) != 5 {
-				t.Fatalf("want source check, copy, ref, member check and team open check in one transaction, got %d", len(items))
+			if len(items) != 4 {
+				t.Fatalf("want source check, copy, ref and member check in one transaction, got %d", len(items))
 			}
 			sourceCheck := items[0].(map[string]any)["ConditionCheck"].(map[string]any)
 			names := sourceCheck["ExpressionAttributeNames"].(map[string]any)
