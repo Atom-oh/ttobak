@@ -20,6 +20,7 @@ const eventFields = {
   startDate: { type: 'string', format: 'date', description: 'All-day local start date at midnight.' },
   endDate: { type: 'string', format: 'date', description: 'All-day exclusive local end date at midnight.' },
   location: textSchema(256, false), accountId: identifierSchema,
+  organizerDomain: { type: 'string', pattern: '^[a-z0-9.-]{1,253}$', description: 'Lowercase organizer email domain only; never a name or local part.' },
 };
 const requiredEventFields = ['externalId', 'title', 'startsAt', 'endsAt', 'timeZone'];
 const syncFields = {
@@ -143,6 +144,7 @@ function eventInput(value: unknown): asserts value is RecordValue {
   exact(value, Object.keys(eventFields), requiredEventFields);
   for (const field of ['externalId', 'title']) if (!validText(value[field], 512)) invalid(field);
   if ('location' in value && !validText(value.location, 256, false)) invalid('location');
+  if ('organizerDomain' in value && (typeof value.organizerDomain !== 'string' || !/^[a-z0-9.-]{1,253}$/.test(value.organizerDomain))) invalid('organizerDomain');
   if ('accountId' in value && (typeof value.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.accountId))) invalid('accountId');
   if (!validText(value.timeZone, 128) || value.timeZone === 'Local' || /^[+-]/.test(value.timeZone)) invalid('timeZone');
   if ('isAllDay' in value && typeof value.isAllDay !== 'boolean') invalid('isAllDay');
@@ -163,7 +165,7 @@ function eventInput(value: unknown): asserts value is RecordValue {
     }
   } else if ('startDate' in value || 'endDate' in value) invalid('timed event dates');
   const payload: RecordValue = { ...value, startsAt: first.utc, endsAt: last.utc, isAllDay: value.isAllDay ?? false };
-  for (const field of ['location', 'accountId', 'startDate', 'endDate']) {
+  for (const field of ['location', 'organizerDomain', 'accountId', 'startDate', 'endDate']) {
     if (payload[field] === '') delete payload[field];
   }
   const encoded = JSON.stringify(payload) + '\n';
