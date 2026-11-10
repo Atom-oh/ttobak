@@ -18,7 +18,11 @@ import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
 import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
-import { readSidePanelPref, writeSidePanelPref } from '@/lib/recordLayoutPrefs';
+import {
+  DEFAULT_CARD_PREFS, effectiveCardPrefs, readRecordCardPrefs, readSidePanelPref, recordLayout,
+  toggleCard, writeRecordCardPrefs, writeSidePanelPref, type LayoutMenuKey, type RecordCardPrefs,
+} from '@/lib/recordLayoutPrefs';
+import { RecordLayoutMenu } from '@/components/record/RecordLayoutMenu';
 import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
@@ -196,6 +200,20 @@ function RecordPageInner() {
 
   // Desktop transcript panel collapse state
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+  // Desktop card visibility ("화면 구성"). Hidden cards stay mounted (CSS only)
+  // so notes, Q&A history and scroll state survive; read after mount.
+  const [cardPrefs, setCardPrefs] = useState<RecordCardPrefs>(DEFAULT_CARD_PREFS);
+  useEffect(() => { setCardPrefs(readRecordCardPrefs()); }, []);
+  const visibleCards = effectiveCardPrefs(cardPrefs, translationEnabled);
+  const desktopLayout = recordLayout(visibleCards, translationEnabled, isTranscriptOpen);
+  const handleLayoutToggle = (key: LayoutMenuKey, checked: boolean) => {
+    if (key === 'sidePanel') { changeSidePanel(checked); return; }
+    const next = toggleCard(visibleCards, key, checked, translationEnabled);
+    if (next === visibleCards) return;
+    if (key === 'transcript' && checked) setIsTranscriptOpen(true);
+    setCardPrefs(next);
+    writeRecordCardPrefs(next);
+  };
 
   // --- Hooks ---
   const summary = useLiveSummary({ summaryInterval });
@@ -740,14 +758,14 @@ function RecordPageInner() {
   useEffect(() => {
     if (!isTauri()) return;
     const recording = isNativeRecording || session.isRecording;
-    const phase = nativeControlPhase({ recording, step: postRecording.step, startInFlight: recordStartInFlight, importing: uploadProgress !== null, finalizing: browserFinalizing, flowBusy });
+    const phase = nativeControlPhase({ recording, step: postRecording.step, startInFlight: recordStartInFlight, importing: uploadProgress !== null, finalizing: browserFinalizing, flowBusy, pendingAudio: postRecording.hasPendingAudio });
     void reportNativeControlState({
       phase,
       ...(recording ? { source: isNativeRecording ? 'native' as const : 'browser' as const } : {}),
       meetingId: postRecording.serverMeetingId,
       error: postRecording.errorMessage,
     });
-  }, [isNativeRecording, session.isRecording, recordStartInFlight, uploadProgress, browserFinalizing, flowBusy, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
+  }, [isNativeRecording, session.isRecording, recordStartInFlight, uploadProgress, browserFinalizing, flowBusy, postRecording.hasPendingAudio, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
 
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()
@@ -1414,10 +1432,20 @@ function RecordPageInner() {
 
         {/* Desktop: Meeting title during recording */}
         {(session.isRecording || isNativeRecording) && (
-          <div className="hidden lg:block mb-4">
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight">
+          <div className="hidden lg:block relative mb-4">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight px-32">
               {meetingTitle || 'Untitled Meeting'}
             </h1>
+            {session.isRecording && (
+              <div className="absolute right-0 top-0">
+                <RecordLayoutMenu
+                  cards={visibleCards}
+                  sidePanelOpen={sidePanelOpen}
+                  translationEnabled={translationEnabled}
+                  onToggle={handleLayoutToggle}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -1598,40 +1626,51 @@ function RecordPageInner() {
           />
         </div>
 
-        {/* Desktop: Summary (hero) + Notes side by side, transcript as collapsible strip */}
+        {/* Desktop: translation, summary + notes, transcript. Visible rows share
+            a bounded column height; hidden cards stay mounted (recordLayout). */}
         {session.isRecording && (
-          <div className="hidden lg:flex lg:flex-col gap-4">
+          <div className="hidden lg:flex lg:flex-col gap-4 shrink-0" style={{ height: desktopLayout.columnHeight }}>
             {translationEnabled && (
-              <TranslationView
-                translations={session.translations}
-                targetLang={targetLang}
-                onTargetLangChange={setTargetLang}
-                isActive={!session.isPaused}
-                debugCaptions={debugCaptions}
-              />
+              <div className={desktopLayout.translationRow}>
+                <TranslationView
+                  translations={session.translations}
+                  targetLang={targetLang}
+                  onTargetLangChange={setTargetLang}
+                  isActive={!session.isPaused}
+                  debugCaptions={debugCaptions}
+                  fill
+                />
+              </div>
             )}
-            <div className="grid grid-cols-2 gap-4" style={{ height: '48vh' }}>
-              <LiveSummary
-                summary={summary.liveSummary}
-                isGenerating={summary.isGenerating}
-                wordCount={session.totalWordCount}
-                lastSummaryWordCount={summary.lastSummaryWordCount}
-                summaryInterval={summaryInterval}
-                fill
-              />
-              <LiveNotes
-                value={notes}
-                onChange={setNotes}
-                saveStatus={notesSaveStatus}
-                fill
-              />
+            <div className={desktopLayout.pairRow}>
+              <div className={desktopLayout.summaryCard}>
+                <LiveSummary
+                  summary={summary.liveSummary}
+                  isGenerating={summary.isGenerating}
+                  wordCount={session.totalWordCount}
+                  lastSummaryWordCount={summary.lastSummaryWordCount}
+                  summaryInterval={summaryInterval}
+                  fill
+                />
+              </div>
+              <div className={desktopLayout.notesCard}>
+                <LiveNotes
+                  value={notes}
+                  onChange={setNotes}
+                  saveStatus={notesSaveStatus}
+                  fill
+                />
+              </div>
             </div>
 
-            {/* Collapsible Live Transcript */}
-            <div className="bg-white dark:bg-surface-lowest rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
+            {/* Live transcript: a header strip when collapsed, a full row when expanded */}
+            <div className={`${desktopLayout.transcriptRow} flex flex-col bg-white dark:bg-surface-lowest rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden`}>
               <button
-                onClick={() => setIsTranscriptOpen(!isTranscriptOpen)}
-                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors text-left"
+                type="button"
+                onClick={() => setIsTranscriptOpen(!desktopLayout.transcriptBodyShown)}
+                disabled={!desktopLayout.transcriptCollapsible}
+                aria-expanded={desktopLayout.transcriptBodyShown}
+                className="w-full shrink-0 flex items-center gap-3 px-4 py-3 enabled:hover:bg-slate-50 dark:enabled:hover:bg-white/5 transition-colors text-left"
               >
                 <span className="material-symbols-outlined text-primary text-xl">graphic_eq</span>
                 <span className="text-sm font-semibold text-slate-900 dark:text-text-main shrink-0">실시간 자막</span>
@@ -1640,25 +1679,25 @@ function RecordPageInner() {
                     {session.totalWordCount.toLocaleString()} words
                   </span>
                 )}
-                {!isTranscriptOpen && (
+                {!desktopLayout.transcriptBodyShown && (
                   <span className="flex-1 text-sm text-slate-500 dark:text-text-secondary truncate">
                     {session.displayTranscripts.length > 0
                       ? session.displayTranscripts[session.displayTranscripts.length - 1].text
                       : '음성을 기다리는 중...'}
                   </span>
                 )}
-                <span className="material-symbols-outlined text-slate-400 dark:text-text-muted ml-auto shrink-0">
-                  {isTranscriptOpen ? 'expand_less' : 'expand_more'}
-                </span>
+                {desktopLayout.transcriptCollapsible && (
+                  <span className="material-symbols-outlined text-slate-400 dark:text-text-muted ml-auto shrink-0">
+                    {desktopLayout.transcriptBodyShown ? 'expand_less' : 'expand_more'}
+                  </span>
+                )}
               </button>
-              {isTranscriptOpen && (
-                <div className="border-t border-slate-100 dark:border-white/5" style={{ height: '38vh' }}>
-                  <LiveTranscript
-                    transcripts={session.displayTranscripts}
-                    wordCount={session.totalWordCount}
-                  />
-                </div>
-              )}
+              <div className={desktopLayout.transcriptBodyShown ? 'flex-1 min-h-0 border-t border-slate-100 dark:border-white/5' : 'hidden'}>
+                <LiveTranscript
+                  transcripts={session.displayTranscripts}
+                  wordCount={session.totalWordCount}
+                />
+              </div>
             </div>
           </div>
         )}

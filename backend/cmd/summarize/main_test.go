@@ -103,3 +103,22 @@ func TestHandleNoSpeechMarksWithoutSummarizing(t *testing.T) {
 		t.Fatalf("replaced transcript: handled=%v err=%v", handled, err)
 	}
 }
+
+func TestSummaryRequestedDispatchesEnglishTarget(t *testing.T) {
+	original := processSummaryRequested
+	t.Cleanup(func() { processSummaryRequested = original })
+	var got []model.SummaryRequested
+	processSummaryRequested = func(_ context.Context, event model.SummaryRequested) error {
+		got = append(got, event)
+		return nil
+	}
+	for _, detail := range []string{`{"meetingId":"m","runId":"r","target":"en"}`, `{"meetingId":"m","runId":"r"}`} {
+		raw := `{"source":"ttobak.analysis","detail-type":"SummaryRequested","detail":` + detail + `}`
+		if err := Handler(context.Background(), []byte(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 2 || got[0].Target != model.SummaryTargetEnglish || got[1].Target != "" || got[0].RunID != "r" {
+		t.Fatalf("dispatch lost the target: %+v", got)
+	}
+}

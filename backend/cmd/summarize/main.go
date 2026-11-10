@@ -314,6 +314,11 @@ func assignSegmentIDs(segs []TranscriptSegmentOut) {
 	}
 }
 
+// processSummaryRequested is a variable so dispatch tests avoid AWS clients.
+var processSummaryRequested = func(ctx context.Context, event model.SummaryRequested) error {
+	return resummaryService.Process(ctx, event)
+}
+
 // Handler processes EventBridge events: S3 transcript uploads and custom AllPartsTranscribed events
 func Handler(ctx context.Context, raw json.RawMessage) error {
 	// Two-phase dispatch: detect event type first, then route
@@ -339,7 +344,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return fmt.Errorf("decode summary request")
 		}
-		return resummaryService.Process(ctx, event.Detail)
+		// Detail.Target selects the Korean ("") or English ("en") run; an
+		// unknown target is rejected as invalid input by the service.
+		return processSummaryRequested(ctx, event.Detail)
 	}
 
 	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "ActionItemsRequested" {
