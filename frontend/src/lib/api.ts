@@ -12,6 +12,7 @@ import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTea
 import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
 import type { AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
+import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
 
@@ -216,6 +217,23 @@ export const performanceApi = {
     }),
   sources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     apiFetch<PerformanceSourceList>('/api/performance/sources', { ...options, cache: 'no-store' }),
+};
+
+type PrivateRequest = { signal?: AbortSignal; expectedUserId?: string };
+
+export const specReqTaskApi = {
+  list: (query: { cursor?: string; limit?: number } = {}, options?: PrivateRequest) => {
+    const params = new URLSearchParams();
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.limit) params.set('limit', String(query.limit));
+    return apiFetch<SpecReqTaskPage>(`/api/specreq-tasks?${params}`, { ...options, cache: 'no-store' });
+  },
+  get: (eventId: string, options?: PrivateRequest) =>
+    apiFetch<SpecReqTaskView>(`/api/specreq-tasks/${encodeURIComponent(eventId)}`, { ...options, cache: 'no-store' }),
+  transition: (eventId: string, change: SpecReqTaskChange & { version: number }, options?: PrivateRequest) =>
+    apiFetch<SpecReqTaskView>(`/api/specreq-tasks/${encodeURIComponent(eventId)}/transitions`, {
+      ...options, method: 'POST', body: JSON.stringify(change), cache: 'no-store',
+    }),
 };
 
 export const api = {

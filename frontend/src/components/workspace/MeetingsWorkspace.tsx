@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { MeetingList } from '@/components/MeetingList';
@@ -9,6 +10,7 @@ import { SkeletonCard } from '@/components/ui/Skeleton';
 import { accountApi, meetingsApi } from '@/lib/api';
 import { getIdToken } from '@/lib/auth';
 import { useProcessingRefresh, useUploadSeed, withUploadSeed } from '@/lib/postUploadRefresh';
+import { parseTaskHighlight } from '@/types/specreqTask';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 import { PrivateUpcomingMeetings } from './UpcomingMeetings';
 
@@ -52,6 +54,11 @@ export function useWorkspaceAccounts(userId: string) {
     setAttempt(previous => previous + 1);
   };
   return { accounts, isLoading, error, retry };
+}
+
+function MeetingsUpcoming() {
+  const highlight = parseTaskHighlight(useSearchParams().get('task'));
+  return <PrivateUpcomingMeetings highlight={highlight} />;
 }
 
 export function WorkspaceActions() {
@@ -170,7 +177,7 @@ function MeetingsContent({ userId }: { userId: string }) {
           </div>
           <WorkspaceActions />
         </div>
-        <PrivateUpcomingMeetings />
+        <Suspense fallback={<SkeletonCard />}><MeetingsUpcoming /></Suspense>
         <Suspense fallback={<SkeletonCard />}>
           <MeetingList
             meetings={meetings} isLoading={isFetching}

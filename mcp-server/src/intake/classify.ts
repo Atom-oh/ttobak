@@ -1,4 +1,6 @@
-// Deterministic classification of one occurrence into a task state.
+// Deterministic classification of one occurrence into a task state. Only a
+// customer meeting (at least one attendee or organizer outside @amazon.com)
+// produces a task; addresses never leave this process.
 
 export type MemberView = { userId: string; email: string; role: string };
 
@@ -24,6 +26,7 @@ export function classifyOccurrence(input: {
   if (input.isPrivate) return { kind: 'skip' };
   const me = input.me.trim().toLowerCase();
   const attendees = [...new Set(input.attendees.map(a => a.trim().toLowerCase()))].filter(a => a && a !== me);
+  if (!attendees.some(a => !a.endsWith('@amazon.com'))) return { kind: 'skip' };
   if (!input.accountId) {
     return attendees.some(a => input.anyAccountSaEmails.has(a))
       ? { kind: 'task', state: 'needs_account' } : { kind: 'skip' };

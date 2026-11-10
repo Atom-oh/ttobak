@@ -273,7 +273,7 @@ is its caller.
   skips an unchanged `sourceHash` and publishes `TermsRequested` (triggers: end
   of summarize analyses, preserved human content, re-summary; non-fatal). The
   summarize dispatch runs it within min(300 s, deadline-30 s): at most three
-  90 s calls (Sonnet default, 3000 tokens, thinking off, strict JSON), then the
+  90 s calls (Sonnet default, 8192 output tokens since 2026-11-10 (3000 truncated large documents), thinking off via the model's accepted setting, strict JSON), then the
   filters, `MigrateLegacyDictionary` for the owner and the merger. As for manual
   v2 writes, migration runs first and a failure fails the run before any key is
   reserved or row written, so an automatic row never claims an observed
