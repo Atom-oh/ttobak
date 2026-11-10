@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { UserGuideButton } from '@/components/layout/UserGuideButton';
 
 const pathLabels: Record<string, string> = {
   '/': 'Home',
@@ -174,9 +175,7 @@ export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopH
         </button>
 
         {/* Help */}
-        <button className="p-2 text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary transition-colors">
-          <span className="material-symbols-outlined">help_outline</span>
-        </button>
+        <UserGuideButton variant="header" />
       </div>
     </header>
   );

@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
+import { UserGuideButton } from '@/components/layout/UserGuideButton';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -82,6 +83,7 @@ export default function ProfilePage() {
             <span className="material-symbols-outlined text-slate-400 text-lg">chevron_right</span>
           </Link>
           <BillingInsightButton variant="profile" />
+          <UserGuideButton variant="profile" />
         </div>
 
         {/* Logout */}
