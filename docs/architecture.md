@@ -420,8 +420,8 @@ Account merge (ADR-072) is a resumable summarize-worker job: the owner starts it
 from the web dialog (preview, explicit unmoved-items acceptance, then
 `POST /merge`) and the page polls `GET /merge` until `done` or `failed`. A merging
 Account is fenced (writes return 409 `ACCOUNT_MERGING`) and the web page turns
-read-only; after the merge the source Account is a tombstone whose page redirects
-to the target.
+read-only; after the merge the source Account is a read-only tombstone whose page
+keeps its unmoved categories and links to the target.
 
 The authenticated `/api/meetings/{id}/reading` route bounds JSON before Lambda
 serialization. Notes, summary and action sections use metadata views; transcript
