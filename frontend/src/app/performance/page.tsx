@@ -27,7 +27,7 @@ function Spinner() {
 // Owner-only SA activity page: every request reads the caller's own rows and
 // the page has no share control (ADR-068).
 export default function PerformancePage() {
-  const { isLoading, isAuthenticated, user } = useAuth();
+  const { isLoading, isAuthenticated, user, membershipRevision } = useAuth();
   const router = useRouter();
   const userId = user?.userId ?? '';
   const [period, setPeriod] = useState<PerformancePeriod>('week');
@@ -47,13 +47,13 @@ export default function PerformancePage() {
   useEffect(() => {
     if (!userId) return;
     let active = true;
-    const key = `${reloadKey}:${accountsAttempt}`;
+    const key = `${membershipRevision}:${reloadKey}:${accountsAttempt}`;
     // A failed list is an error state with a retry, never an empty account list.
     accountApi.list({ expectedUserId: userId })
       .then(result => { if (active) setAccountsResult(Array.isArray(result?.accounts) ? { userId, key, accounts: result.accounts } : { userId, key, error: true }); })
       .catch(() => { if (active) setAccountsResult({ userId, key, error: true }); });
     return () => { active = false; };
-  }, [userId, reloadKey, accountsAttempt]);
+  }, [userId, membershipRevision, reloadKey, accountsAttempt]);
 
   useEffect(() => {
     if (!userId) return;
@@ -83,7 +83,7 @@ export default function PerformancePage() {
   const ownMappings = mappingsResult?.key.startsWith(`${userId}:`) ? mappingsResult : null;
   const mappings = ownMappings?.data ?? null;
   const mappingsError = ownMappings?.key === `${userId}:${reloadKey}` ? ownMappings.error ?? null : null;
-  const accountList = useMemo(() => accountListState(accountsResult, userId, `${reloadKey}:${accountsAttempt}`), [accountsResult, userId, reloadKey, accountsAttempt]);
+  const accountList = useMemo(() => accountListState(accountsResult, userId, `${membershipRevision}:${reloadKey}:${accountsAttempt}`), [accountsResult, userId, membershipRevision, reloadKey, accountsAttempt]);
   const accounts = accountList.accounts;
   const accountNames = useMemo(() => accountList.status === 'error' ? null : new Map(accounts.map(account => [account.accountId, account.name])), [accountList.status, accounts]);
   const retryAccounts = () => setAccountsAttempt(attempt => attempt + 1);
