@@ -376,11 +376,18 @@ func TestConnectorWriteErrorMapsMergeFence(t *testing.T) {
 	if err := connectorReplayError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) {
 		t.Fatalf("replay plain cancellation=%v, want ErrConditionFailed", err)
 	}
-	// The replay-only probe follows a consistent read that found no receipt.
-	if err := connectorProbeError(cancelled(marked)); !errors.Is(err, ErrConnectorReceiptMissing) || errors.Is(err, ErrAccountMerging) {
+	// A probe fence trip re-reads the receipt before reporting it missing.
+	none := func() (string, bool, error) { return "", false, nil }
+	if _, err := connectorProbeError(cancelled(marked), none); !errors.Is(err, ErrConnectorReceiptMissing) || errors.Is(err, ErrAccountMerging) {
 		t.Fatalf("probe fence trip=%v, want ErrConnectorReceiptMissing", err)
 	}
-	if err := connectorProbeError(cancelled(nil)); !errors.Is(err, ErrConditionFailed) {
-		t.Fatalf("probe plain cancellation=%v, want ErrConditionFailed", err)
+	committed := func() (string, bool, error) { return "", true, ErrConnectorReplayAccountMerging }
+	if _, err := connectorProbeError(cancelled(marked), committed); !errors.Is(err, ErrConnectorReplayAccountMerging) {
+		t.Fatalf("probe with a late receipt=%v, want ErrConnectorReplayAccountMerging", err)
+	}
+	reads := 0
+	counted := func() (string, bool, error) { reads++; return "", false, nil }
+	if _, err := connectorProbeError(cancelled(nil), counted); !errors.Is(err, ErrConditionFailed) || reads != 0 {
+		t.Fatalf("probe plain cancellation=%v reads=%d, want ErrConditionFailed without a re-read", err, reads)
 	}
 }
