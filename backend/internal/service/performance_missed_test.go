@@ -2,7 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,6 +283,7 @@ type missedCalendarFake struct {
 	queries []model.CalendarQuery
 	users   []string
 	sources *model.CalendarSourcePage
+	endless bool // every page has a next cursor
 }
 
 func (fake *missedCalendarFake) ListEvents(_ context.Context, userID string, query model.CalendarQuery) (*model.CalendarEventPage, error) {
@@ -288,6 +293,11 @@ func (fake *missedCalendarFake) ListEvents(_ context.Context, userID string, que
 		return nil, ErrInvalidInput
 	}
 	page := &model.CalendarEventPage{Events: []model.CalendarEvent{}}
+	if fake.endless {
+		cursor := "more"
+		page.NextCursor = &cursor
+		return page, nil
+	}
 	matched := 0
 	skip := 0
 	if query.Cursor != "" {
@@ -319,27 +329,84 @@ func (fake *missedCalendarFake) ListSources(_ context.Context, userID, _ string,
 	return fake.sources, nil
 }
 
+// missedMeetingsFake mirrors ListMeetingsForAccounts' stages: tab "all" reads
+// owned -> shared -> team, tab "shared" reads shared -> team. Owned items are
+// !IsShared, shared items carry SharedBy, team items have neither. Each call
+// returns one stage page; the cursor names the next stage like the real one.
 type missedMeetingsFake struct {
 	meetings   []model.MeetingListItem
+	pageSize   int
+	endless    bool // the owned stage never ends and stays recent
+	recent     time.Time
 	selections [][]string
+	tabs       []string
 	users      []string
+}
+
+func missedMeetingCursor(stage string, offset int) *string {
+	raw, _ := json.Marshal(map[string]any{"stage": stage, "offset": offset})
+	cursor := meetingFilterCursorPrefix + base64.RawURLEncoding.EncodeToString(raw)
+	return &cursor
 }
 
 func (fake *missedMeetingsFake) ListMeetingsForAccounts(_ context.Context, userID, tab, encoded string, accountIDs []string, _ int32, _ ...string) (*model.MeetingListResponse, error) {
 	fake.users = append(fake.users, userID)
+	fake.tabs = append(fake.tabs, tab)
 	fake.selections = append(fake.selections, append([]string(nil), accountIDs...))
-	if tab != "all" || encoded != "" {
+	stage, offset := "owned", 0
+	if tab == "shared" {
+		stage = "shared"
+	} else if tab != "all" {
 		return nil, ErrInvalidInput
+	}
+	if encoded != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(encoded, meetingFilterCursorPrefix))
+		var cursor struct {
+			Stage  string `json:"stage"`
+			Offset int    `json:"offset"`
+		}
+		if err != nil || json.Unmarshal(raw, &cursor) != nil {
+			return nil, ErrInvalidInput
+		}
+		stage, offset = cursor.Stage, cursor.Offset
+	}
+	response := &model.MeetingListResponse{Meetings: []model.MeetingListItem{}}
+	if fake.endless && stage == "owned" {
+		response.Meetings = append(response.Meetings, model.MeetingListItem{
+			MeetingID: fmt.Sprintf("m-%d", offset), AccountID: accountIDs[0], Date: fake.recent.Format(time.RFC3339),
+		})
+		response.NextCursor = missedMeetingCursor("owned", offset+1)
+		return response, nil
 	}
 	selected := map[string]bool{}
 	for _, id := range accountIDs {
 		selected[id] = true
 	}
-	response := &model.MeetingListResponse{Meetings: []model.MeetingListItem{}}
+	var items []model.MeetingListItem
 	for _, meeting := range fake.meetings {
-		if selected[meeting.AccountID] {
-			response.Meetings = append(response.Meetings, meeting)
+		kind := "owned"
+		if meeting.IsShared && meeting.SharedBy != nil {
+			kind = "shared"
+		} else if meeting.IsShared {
+			kind = "team"
 		}
+		if kind == stage && selected[meeting.AccountID] {
+			items = append(items, meeting)
+		}
+	}
+	size := fake.pageSize
+	if size == 0 {
+		size = 100
+	}
+	end := min(offset+size, len(items))
+	response.Meetings = append(response.Meetings, items[min(offset, end):end]...)
+	switch {
+	case end < len(items):
+		response.NextCursor = missedMeetingCursor(stage, end)
+	case stage == "owned":
+		response.NextCursor = missedMeetingCursor("shared", 0)
+	case stage == "shared":
+		response.NextCursor = missedMeetingCursor("team", 0)
 	}
 	return response, nil
 }
@@ -420,9 +487,14 @@ func TestListMissedJoinsOnlyCurrentlyReadableAccounts(test *testing.T) {
 	if list.UnmappedCount != 3 {
 		test.Fatalf("unmapped: %d", list.UnmappedCount)
 	}
-	if len(meetings.selections) != 1 || len(meetings.selections[0]) != 2 ||
-		meetings.selections[0][0] != "acct-1" || meetings.selections[0][1] != "acct-3" {
-		test.Fatalf("meeting selection: %v", meetings.selections)
+	// One owned read (tab all) and one shared read; neither enters the team stage.
+	if len(meetings.selections) != 2 || meetings.tabs[0] != "all" || meetings.tabs[1] != "shared" {
+		test.Fatalf("meeting reads: %v %v", meetings.tabs, meetings.selections)
+	}
+	for _, selection := range meetings.selections {
+		if len(selection) != 2 || selection[0] != "acct-1" || selection[1] != "acct-3" {
+			test.Fatalf("meeting selection: %v", meetings.selections)
+		}
 	}
 	for _, user := range append(calendar.users, meetings.users...) {
 		if user != "owner" {
@@ -492,5 +564,155 @@ func TestListMissedRejectsBadInput(test *testing.T) {
 	}
 	if _, err := svc.ListMissed(test.Context(), "bad user", "week"); !errors.Is(err, ErrForbidden) {
 		test.Fatalf("bad user: %v", err)
+	}
+}
+
+func TestTitleMatchRequiresTokenBoundary(test *testing.T) {
+	loc := missedSeoul(test)
+	period := Period{From: missedAt(loc, 3, 1, 0), To: missedAt(loc, 3, 31, 0)}
+	accounts := []MissedAccount{{ID: "acct-sk", Name: "SK"}, {ID: "acct-lg", Name: "LG"}, {ID: "acct-g", Name: "글로벡스"}}
+	at := missedAt(loc, 3, 10, 10)
+	cases := map[string]string{
+		"Weekly task review": "",
+		"SK 주간 미팅":           "acct-sk",
+		"Algorithm study":    "",
+		"[LG] kickoff":       "acct-lg",
+		"sk/lg joint":        "",
+		"글로벡스 리뷰":            "acct-g",
+		"신글로벡스 리뷰":           "",
+	}
+	for title, want := range cases {
+		events := []model.CalendarEvent{{EventID: "ev", Title: title, OrganizerDomain: "amazon.com", StartsAt: at}}
+		touchpoints, unmapped := CalendarTouchpoints(period, events, accounts)
+		got := ""
+		if len(touchpoints) == 1 {
+			got = touchpoints[0].AccountID
+		}
+		if got != want || (want == "") != (unmapped == 1) {
+			test.Fatalf("%q: got %q (%d unmapped), want %q", title, got, unmapped, want)
+		}
+	}
+	if !containsToken("sk sk", "sk") || containsToken("tasks", "sk") || containsToken("", "sk") || containsToken("sk", "") {
+		test.Fatal("containsToken edge cases")
+	}
+}
+
+func TestLoggingGapComparesSameSFDCAccountWhenKnown(test *testing.T) {
+	loc := missedSeoul(test)
+	period := Period{From: missedAt(loc, 3, 1, 0), To: missedAt(loc, 3, 31, 0)}
+	// S1 and S2 both map to acct-1; the only task is on S1.
+	base := MissedInputs{
+		Mappings: map[string]string{"S1": "acct-1", "S2": "acct-1"},
+		Touchpoints: []Touchpoint{
+			{AccountID: "acct-1", SFDCAccountID: "S1", Kind: TouchpointSFDC, RefID: "T1", At: missedAt(loc, 3, 10, 0)},
+		},
+	}
+	withTouch := func(touch Touchpoint) []MissedItem {
+		inputs := base
+		inputs.Touchpoints = append(append([]Touchpoint(nil), base.Touchpoints...), touch)
+		return missedKinds(ComputeMissed(period, inputs, missedConfig), MissedKindLoggingGap)
+	}
+	// A touchpoint that names S2 is not covered by a task on S1.
+	gaps := withTouch(Touchpoint{AccountID: "acct-1", SFDCAccountID: "S2", Kind: TouchpointMeeting, RefID: "m-s2", At: missedAt(loc, 3, 10, 9)})
+	if len(gaps) != 1 || gaps[0].SFDCAccountID != "S2" || gaps[0].RefID != "m-s2" {
+		test.Fatalf("named S2: %+v", gaps)
+	}
+	// A touchpoint that names S1 is covered.
+	if gaps := withTouch(Touchpoint{AccountID: "acct-1", SFDCAccountID: "S1", Kind: TouchpointMeeting, RefID: "m-s1", At: missedAt(loc, 3, 10, 9)}); len(gaps) != 0 {
+		test.Fatalf("named S1: %+v", gaps)
+	}
+	// A touchpoint that knows only the account is covered by a task on any mapped SFDC account.
+	if gaps := withTouch(Touchpoint{AccountID: "acct-1", Kind: TouchpointCalendar, RefID: "ev", At: missedAt(loc, 3, 10, 9)}); len(gaps) != 0 {
+		test.Fatalf("account only: %+v", gaps)
+	}
+	// A named SFDC account that does not map to the touchpoint's account is not a gap.
+	if gaps := withTouch(Touchpoint{AccountID: "acct-1", SFDCAccountID: "S9", Kind: TouchpointMeeting, RefID: "m-s9", At: missedAt(loc, 3, 10, 9)}); len(gaps) != 0 {
+		test.Fatalf("unmapped SFDC: %+v", gaps)
+	}
+}
+
+func missedWiredService(test *testing.T, calendar PerformanceCalendarReader, meetings PerformanceMeetingLister) *PerformanceService {
+	test.Helper()
+	store := &missedTaskStore{performanceStoreFake: &performanceStoreFake{
+		assignments: map[string][]model.SFDCAssignment{"owner": {{SFDCAccountID: "S1", Name: "Acme", Role: "REGISTRY"}}},
+		mappings:    map[string][]model.AccountMapping{"owner": {{SFDCAccountID: "S1", AccountID: "acct-1"}}},
+	}}
+	svc := NewPerformanceService(store, &performanceCandidatesFake{candidates: []NamedCandidate{{Kind: "account", ID: "acct-1", Name: "Acme"}}})
+	svc.now = func() time.Time { return time.Date(2026, 11, 10, 9, 0, 0, 0, missedSeoul(test)) }
+	if calendar != nil || meetings != nil {
+		svc.SetMissedSources(calendar, meetings)
+	}
+	return svc
+}
+
+func TestListMissedRequiresWiredSources(test *testing.T) {
+	cases := map[string]*PerformanceService{
+		"none":     missedWiredService(test, nil, nil),
+		"calendar": missedWiredService(test, nil, &missedMeetingsFake{}),
+		"meetings": missedWiredService(test, &missedCalendarFake{}, nil),
+	}
+	for name, svc := range cases {
+		if _, err := svc.ListMissed(test.Context(), "owner", "week"); !errors.Is(err, ErrPerformanceSourcesUnavailable) {
+			test.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := missedWiredService(test, &missedCalendarFake{}, &missedMeetingsFake{}).ListMissed(test.Context(), "owner", "week"); err != nil {
+		test.Fatalf("wired: %v", err)
+	}
+}
+
+func TestListMissedReadBounds(test *testing.T) {
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, missedSeoul(test))
+	calendar := &missedCalendarFake{endless: true}
+	if _, err := missedWiredService(test, calendar, &missedMeetingsFake{}).ListMissed(test.Context(), "owner", "week"); !errors.Is(err, ErrPerformanceReadBound) {
+		test.Fatalf("calendar bound: %v", err)
+	}
+	if len(calendar.queries) != performanceMissedCalendarMaxPages {
+		test.Fatalf("calendar pages: %d", len(calendar.queries))
+	}
+	meetings := &missedMeetingsFake{endless: true, recent: now.Add(-time.Hour)}
+	if _, err := missedWiredService(test, &missedCalendarFake{}, meetings).ListMissed(test.Context(), "owner", "week"); !errors.Is(err, ErrPerformanceReadBound) {
+		test.Fatalf("meeting bound: %v", err)
+	}
+	if len(meetings.tabs) != performanceMissedMeetingMaxPages {
+		test.Fatalf("meeting pages: %d", len(meetings.tabs))
+	}
+}
+
+func TestMissedMeetingReadStopsAtLookbackAndSkipsTeam(test *testing.T) {
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, missedSeoul(test))
+	lookback := now.AddDate(0, 0, -64)
+	owner := "owner@example.com"
+	meetings := &missedMeetingsFake{pageSize: 1, meetings: []model.MeetingListItem{
+		// Owned, newest first as the GSI1 query returns them.
+		{MeetingID: "own-1", AccountID: "acct-1", Date: now.Add(-time.Hour).Format(time.RFC3339)},
+		{MeetingID: "own-2", AccountID: "acct-1", Date: now.AddDate(0, 0, -10).Format(time.RFC3339)},
+		{MeetingID: "own-old", AccountID: "acct-1", Date: now.AddDate(0, 0, -100).Format(time.RFC3339)},
+		{MeetingID: "own-older", AccountID: "acct-1", Date: now.AddDate(0, 0, -200).Format(time.RFC3339)},
+		{MeetingID: "own-oldest", AccountID: "acct-1", Date: now.AddDate(0, 0, -300).Format(time.RFC3339)},
+		// Share rows are unordered and read in full.
+		{MeetingID: "shared-old", AccountID: "acct-1", Date: now.AddDate(0, 0, -90).Format(time.RFC3339), IsShared: true, SharedBy: &owner},
+		{MeetingID: "shared-new", AccountID: "acct-1", Date: now.AddDate(0, 0, -5).Format(time.RFC3339), IsShared: true, SharedBy: &owner},
+		// Team-stream items must never be read.
+		{MeetingID: "team-1", AccountID: "acct-1", Date: now.Add(-2 * time.Hour).Format(time.RFC3339), IsShared: true},
+		{MeetingID: "team-2", AccountID: "acct-1", Date: now.Add(-3 * time.Hour).Format(time.RFC3339), IsShared: true},
+	}}
+	svc := missedWiredService(test, &missedCalendarFake{}, meetings)
+	touchpoints, err := svc.missedMeetingTouchpoints(test.Context(), "owner", map[string]bool{"acct-1": true}, lookback, now)
+	if err != nil {
+		test.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, touch := range touchpoints {
+		got[touch.RefID] = true
+	}
+	if len(got) != 3 || !got["own-1"] || !got["own-2"] || !got["shared-new"] {
+		test.Fatalf("touchpoints: %+v", touchpoints)
+	}
+	// Owned: three pages, stopping at the first meeting older than the lookback.
+	// Shared: two pages, stopping when the cursor reaches the team stage.
+	want := []string{"all", "all", "all", "shared", "shared"}
+	if strings.Join(meetings.tabs, ",") != strings.Join(want, ",") {
+		test.Fatalf("reads: %v", meetings.tabs)
 	}
 }

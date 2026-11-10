@@ -154,8 +154,10 @@ mappings always win over automatic ones. Unmapped assignments are listed with
 Missed items (`backend/internal/service/performance_missed.go`) are computed at
 read time from the caller's own SFDC rows, calendar events (`CalendarService`,
 decrypted, owner only) and meetings linked to an account that the caller owns or
-received through a share row (`MeetingService.ListMeetingsForAccounts`;
-account-team stream items are excluded). Every SFDC mapping, manual or
+received through a share row (`MeetingService.ListMeetingsForAccounts`). The
+owned read (tab `all`) stays in the owned stage, which is newest first, and
+stops at the first meeting older than the lookback. The shared read (tab
+`shared`) reads share rows in full. Neither read enters the account-team stage. Every SFDC mapping, manual or
 automatic, is rechecked against the caller's currently readable accounts;
 account names, aliases and domains come only from those accounts.
 
@@ -163,11 +165,16 @@ account names, aliases and domains come only from those accounts.
   calendar quarter, `year` January 1 through now. The evaluated end is capped
   at now.
 - A calendar event is attributed by its own readable account link, else a
-  unique organizer-domain match (exact or subdomain; `amazon.com` and
-  `amazon.co.kr` never match), else a title containing exactly one account's
-  name or alias. A task maps through its SFDC account.
+  unique organizer-domain match (exact or a parent domain containing a dot;
+  `amazon.com` and `amazon.co.kr` never match), else a title containing exactly
+  one account's name or alias as a whole token sequence. Boundaries are the
+  string edges or a rune that is neither a letter nor a digit, so `SK` does not
+  match "task". A task maps through its SFDC account.
 - `logging_gap`: a calendar or meeting touchpoint in the period, on an account
-  with an SFDC mapping, with no SFDC task on that account within ±3 Seoul days.
+  with an SFDC mapping, with no SFDC task within ±3 Seoul days. A touchpoint
+  that names its SFDC account needs a task on that same SFDC account. A calendar
+  or meeting touchpoint knows only the Account, so a task on any SFDC account
+  mapped to it closes the gap.
 - `silent_customer`: an assigned account (any role) with a readable mapping
   whose last touchpoint is more than 60 days before the period end. With no
   touchpoint in the lookback window, `at` is empty and `daysSince` is `-1`.
@@ -175,7 +182,8 @@ account names, aliases and domains come only from those accounts.
   in-period calendar events that match no account. They are never guessed.
 - At most 500 items, newest `at` first. The calendar read is bounded to 200
   pages and the meeting read to 50; exceeding a bound fails the request rather
-  than returning partial results. `sourceFreshness` lists `sfdc-assignments`,
+  than returning partial results. An API without the calendar and meeting
+  readers wired also fails with `500`. `sourceFreshness` lists `sfdc-assignments`,
   `sfdc-tasks` and `calendar` (the latest completed calendar source).
 
 Residency: rows use default table encryption without envelope sealing (an

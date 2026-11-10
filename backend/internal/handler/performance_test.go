@@ -198,8 +198,46 @@ func performanceErrorCode(test *testing.T, response *httptest.ResponseRecorder) 
 	return body.Error.Code
 }
 
+// performanceHTTPCalendar and performanceHTTPMeetings stand in for the owner's
+// calendar and meeting readers. endless makes every page continue.
+type performanceHTTPCalendar struct{ endless bool }
+
+func (fake performanceHTTPCalendar) ListEvents(context.Context, string, model.CalendarQuery) (*model.CalendarEventPage, error) {
+	page := &model.CalendarEventPage{Events: []model.CalendarEvent{}}
+	if fake.endless {
+		cursor := "more"
+		page.NextCursor = &cursor
+	}
+	return page, nil
+}
+
+func (performanceHTTPCalendar) ListSources(context.Context, string, string, int32) (*model.CalendarSourcePage, error) {
+	return &model.CalendarSourcePage{Sources: []model.CalendarSourceStatus{}}, nil
+}
+
+type performanceHTTPMeetings struct{}
+
+func (performanceHTTPMeetings) ListMeetingsForAccounts(context.Context, string, string, string, []string, int32, ...string) (*model.MeetingListResponse, error) {
+	return &model.MeetingListResponse{Meetings: []model.MeetingListItem{}}, nil
+}
+
 func newPerformanceHTTPService(store *performanceMemoryStore, readable performanceHTTPAccounts) *service.PerformanceService {
-	return service.NewPerformanceService(store, readable)
+	svc := service.NewPerformanceService(store, readable)
+	svc.SetMissedSources(performanceHTTPCalendar{}, performanceHTTPMeetings{})
+	return svc
+}
+
+func TestMissedFailsClosed(test *testing.T) {
+	unwired := service.NewPerformanceService(newPerformanceMemoryStore(), nil)
+	bounded := service.NewPerformanceService(newPerformanceMemoryStore(), nil)
+	bounded.SetMissedSources(performanceHTTPCalendar{endless: true}, performanceHTTPMeetings{})
+	for name, api := range map[string]*service.PerformanceService{"unwired": unwired, "read bound": bounded} {
+		response := performanceHTTPDo(api, "user-a", http.MethodGet, "/api/performance/missed?period=week", "")
+		if response.Code != http.StatusInternalServerError || performanceErrorCode(test, response) != model.ErrCodeInternalError ||
+			strings.Contains(response.Body.String(), "items") {
+			test.Fatalf("%s: %d %s", name, response.Code, response.Body.String())
+		}
+	}
 }
 
 func TestSyncRejectsUnknownFields(test *testing.T) {

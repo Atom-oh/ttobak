@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ttobak/backend/internal/model"
@@ -34,6 +37,10 @@ const (
 	performanceMissedLocation         = "Asia/Seoul"
 )
 
+// ErrPerformanceSourcesUnavailable reports that the calendar or meeting reader
+// is not wired. SFDC data alone would invent silent customers.
+var ErrPerformanceSourcesUnavailable = errors.New("performance missed sources are not configured")
+
 // ErrPerformanceReadBound reports that a source exceeded the missed-item read
 // bound. Partial data would invent silent customers, so the request fails.
 var ErrPerformanceReadBound = errors.New("performance source exceeds read bound")
@@ -54,12 +61,15 @@ type MissedConfig struct {
 	GapDays    int
 }
 
-// Touchpoint is one contact with an attributed account.
+// Touchpoint is one contact with an attributed account. SFDCAccountID is set
+// when the source names the SFDC account (always for SFDC tasks); calendar and
+// meeting touchpoints know only the TTOBAK account.
 type Touchpoint struct {
-	AccountID string
-	Kind      string
-	RefID     string
-	At        time.Time
+	AccountID     string
+	SFDCAccountID string
+	Kind          string
+	RefID         string
+	At            time.Time
 }
 
 // MissedItem is the wire item.
@@ -126,10 +136,19 @@ func ComputeMissed(p Period, in MissedInputs, cfg MissedConfig) []MissedItem {
 			sfdcByAccount[accountID] = sfdcID
 		}
 	}
+	// Task days are kept per account and per SFDC account. A touchpoint that
+	// names its SFDC account needs a task on that same SFDC account. One that
+	// knows only the TTOBAK account (calendar, meeting) is satisfied by a task
+	// on any SFDC account mapped to it, because no finer attribution exists.
 	taskDays := make(map[string][]int)
+	sfdcTaskDays := make(map[string][]int)
 	for _, touch := range in.Touchpoints {
 		if touch.Kind == TouchpointSFDC {
-			taskDays[touch.AccountID] = append(taskDays[touch.AccountID], missedDay(touch.At, loc))
+			day := missedDay(touch.At, loc)
+			taskDays[touch.AccountID] = append(taskDays[touch.AccountID], day)
+			if touch.SFDCAccountID != "" {
+				sfdcTaskDays[touch.SFDCAccountID] = append(sfdcTaskDays[touch.SFDCAccountID], day)
+			}
 		}
 	}
 	type ranked struct {
@@ -142,12 +161,17 @@ func ComputeMissed(p Period, in MissedInputs, cfg MissedConfig) []MissedItem {
 			continue
 		}
 		sfdcID, mapped := sfdcByAccount[touch.AccountID]
+		candidates := taskDays[touch.AccountID]
+		if touch.SFDCAccountID != "" {
+			sfdcID, mapped = touch.SFDCAccountID, in.Mappings[touch.SFDCAccountID] == touch.AccountID
+			candidates = sfdcTaskDays[touch.SFDCAccountID]
+		}
 		if !mapped {
 			continue
 		}
 		day := missedDay(touch.At, loc)
 		logged := false
-		for _, taskDay := range taskDays[touch.AccountID] {
+		for _, taskDay := range candidates {
 			if taskDay >= day-cfg.GapDays && taskDay <= day+cfg.GapDays {
 				logged = true
 				break
@@ -279,7 +303,8 @@ func CalendarTouchpoints(p Period, events []model.CalendarEvent, accounts []Miss
 		}
 		if domain := strings.ToLower(event.OrganizerDomain); accountID == "" && domain != "" && !performanceInternalDomain(domain) {
 			matched := make(map[string]bool)
-			for candidate := domain; candidate != ""; {
+			// Walk parent domains, but never a bare suffix with no dot.
+			for candidate := domain; strings.Contains(candidate, "."); {
 				for id := range domains[candidate] {
 					matched[id] = true
 				}
@@ -295,7 +320,7 @@ func CalendarTouchpoints(p Period, events []model.CalendarEvent, accounts []Miss
 			title := NormalizePersonName(event.Title)
 			matched := make(map[string]bool)
 			for _, candidate := range labels {
-				if strings.Contains(title, candidate.folded) {
+				if containsToken(title, candidate.folded) {
 					matched[candidate.id] = true
 				}
 			}
@@ -310,6 +335,35 @@ func CalendarTouchpoints(p Period, events []model.CalendarEvent, accounts []Miss
 		touchpoints = append(touchpoints, Touchpoint{AccountID: accountID, Kind: TouchpointCalendar, RefID: event.EventID, At: event.StartsAt})
 	}
 	return touchpoints, unmapped
+}
+
+func performanceWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// containsToken reports whether token occurs in text as a whole token
+// sequence: each occurrence must start at the beginning of text or after a
+// rune that is not a letter or digit, and end at the end of text or before
+// one. Both inputs are already folded. "sk" does not match "task"; Korean
+// labels follow the same rule.
+func containsToken(text, token string) bool {
+	if token == "" {
+		return false
+	}
+	for offset := 0; offset < len(text); {
+		index := strings.Index(text[offset:], token)
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(token)
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if (start == 0 || !performanceWordRune(before)) && (end == len(text) || !performanceWordRune(after)) {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(text[start:])
+		offset = start + size
+	}
+	return false
 }
 
 // SFDCTouchpoints attributes tasks through the readable mappings. A task with
@@ -335,7 +389,7 @@ func SFDCTouchpoints(p Period, tasks []model.SFDCTask, mappings map[string]strin
 			}
 			continue
 		}
-		touchpoints = append(touchpoints, Touchpoint{AccountID: accountID, Kind: TouchpointSFDC, RefID: task.TaskID, At: at})
+		touchpoints = append(touchpoints, Touchpoint{AccountID: accountID, SFDCAccountID: task.SFDCAccountID, Kind: TouchpointSFDC, RefID: task.TaskID, At: at})
 	}
 	return touchpoints, unmapped
 }
@@ -353,8 +407,8 @@ type PerformanceMeetingLister interface {
 	ListMeetingsForAccounts(ctx context.Context, userID, tab, encoded string, accountIDs []string, limit int32, joinedAccountIDs ...string) (*model.MeetingListResponse, error)
 }
 
-// SetMissedSources wires the calendar and meeting readers. Without them the
-// missed list uses SFDC data only.
+// SetMissedSources wires the calendar and meeting readers. Without them
+// ListMissed fails with ErrPerformanceSourcesUnavailable.
 func (svc *PerformanceService) SetMissedSources(calendar PerformanceCalendarReader, meetings PerformanceMeetingLister) {
 	svc.calendar, svc.meetings = calendar, meetings
 }
@@ -371,6 +425,9 @@ func (svc *PerformanceService) ListMissed(ctx context.Context, userID, period st
 	}
 	if !performancePeriods[period] {
 		return nil, ErrInvalidInput
+	}
+	if svc.calendar == nil || svc.meetings == nil {
+		return nil, ErrPerformanceSourcesUnavailable
 	}
 	loc, err := time.LoadLocation(performanceMissedLocation)
 	if err != nil {
@@ -472,7 +529,7 @@ func (svc *PerformanceService) missedReadableAccounts(ctx context.Context, userI
 // missedCalendarEvents pages the owner's events in contiguous windows of at
 // most the calendar query limit.
 func (svc *PerformanceService) missedCalendarEvents(ctx context.Context, userID string, from, to time.Time) ([]model.CalendarEvent, error) {
-	if svc.calendar == nil || !to.After(from) {
+	if !to.After(from) {
 		return nil, nil
 	}
 	seen := make(map[string]bool)
@@ -509,11 +566,42 @@ func (svc *PerformanceService) missedCalendarEvents(ctx context.Context, userID 
 	return events, nil
 }
 
+// meetingCursorStage peeks at the stage of a cursor that
+// ListMeetingsForAccounts itself produced: owned, shared or team. It is used
+// only to stop reading early; the service revalidates any cursor it receives.
+func meetingCursorStage(encoded string) string {
+	if !strings.HasPrefix(encoded, meetingFilterCursorPrefix) {
+		return ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(encoded, meetingFilterCursorPrefix))
+	if err != nil {
+		return ""
+	}
+	var cursor struct {
+		Stage string `json:"stage"`
+	}
+	if json.Unmarshal(raw, &cursor) != nil {
+		return ""
+	}
+	return cursor.Stage
+}
+
 // missedMeetingTouchpoints lists meetings linked to the mapped readable
-// accounts that the owner owns or that were shared to the owner. Account-team
-// stream items (shared, with no share row) are excluded.
+// accounts that the owner owns or that were shared to the owner through a
+// share row. ListMeetingsForAccounts has no date bound, so it reads two
+// narrowed streams:
+//   - owned: tab "all" while its cursor stays in the owned stage. That stage is
+//     the owner's GSI1 query (GSI1SK = date, ScanIndexForward false), newest
+//     first, so reading stops at the first meeting older than the lookback.
+//   - shared: tab "shared" while its cursor stays in the shared stage. Share
+//     rows are not date ordered, so that stage is read in full; it holds only
+//     shares addressed to the owner.
+//
+// Neither read enters the account-team stage, and team items (shared with no
+// share row) are dropped if a final page carries them. A genuine bound hit
+// still fails closed.
 func (svc *PerformanceService) missedMeetingTouchpoints(ctx context.Context, userID string, accounts map[string]bool, from, to time.Time) ([]Touchpoint, error) {
-	if svc.meetings == nil || len(accounts) == 0 {
+	if len(accounts) == 0 {
 		return nil, nil
 	}
 	ids := make([]string, 0, len(accounts))
@@ -524,33 +612,50 @@ func (svc *PerformanceService) missedMeetingTouchpoints(ctx context.Context, use
 	var touchpoints []Touchpoint
 	seen := make(map[string]bool)
 	pages := 0
-	for offset := 0; offset < len(ids); offset += performanceMissedMeetingChunk {
-		chunk := ids[offset:min(offset+performanceMissedMeetingChunk, len(ids))]
+	read := func(chunk []string, tab, stage string) error {
 		cursor := ""
 		for {
 			pages++
 			if pages > performanceMissedMeetingMaxPages {
-				return nil, fmt.Errorf("meetings: %w", ErrPerformanceReadBound)
+				return fmt.Errorf("meetings: %w", ErrPerformanceReadBound)
 			}
-			page, err := svc.meetings.ListMeetingsForAccounts(ctx, userID, "all", cursor, chunk, 100)
+			page, err := svc.meetings.ListMeetingsForAccounts(ctx, userID, tab, cursor, chunk, 100)
 			if err != nil {
-				return nil, err
+				return err
 			}
+			older := false
 			for _, meeting := range page.Meetings {
-				if !accounts[meeting.AccountID] || seen[meeting.MeetingID] || meeting.IsShared && meeting.SharedBy == nil {
+				owned := !meeting.IsShared
+				if stage == "owned" && !owned || stage == "shared" && meeting.SharedBy == nil {
 					continue
 				}
 				at, err := time.Parse(time.RFC3339, meeting.Date)
-				if err != nil || at.Before(from) || at.After(to) {
+				if err != nil {
+					continue
+				}
+				if at.Before(from) {
+					older = older || owned
+					continue
+				}
+				if !accounts[meeting.AccountID] || seen[meeting.MeetingID] || at.After(to) {
 					continue
 				}
 				seen[meeting.MeetingID] = true
 				touchpoints = append(touchpoints, Touchpoint{AccountID: meeting.AccountID, Kind: TouchpointMeeting, RefID: meeting.MeetingID, At: at})
 			}
-			if page.NextCursor == nil || *page.NextCursor == "" {
-				break
+			if older || page.NextCursor == nil || *page.NextCursor == "" || meetingCursorStage(*page.NextCursor) != stage {
+				return nil
 			}
 			cursor = *page.NextCursor
+		}
+	}
+	for offset := 0; offset < len(ids); offset += performanceMissedMeetingChunk {
+		chunk := ids[offset:min(offset+performanceMissedMeetingChunk, len(ids))]
+		if err := read(chunk, "all", "owned"); err != nil {
+			return nil, err
+		}
+		if err := read(chunk, "shared", "shared"); err != nil {
+			return nil, err
 		}
 	}
 	return touchpoints, nil
