@@ -615,17 +615,22 @@ period control (this week / quarter / this year, default this week) drives
   customers, each newest `at` first. A meeting touchpoint links to
   `/meeting/{id}`; calendar gaps and silent customers link to `/accounts/{id}`.
   Account names come from the readable account list. If that list fails, the
-  items render with a notice and a neutral placeholder name, never the raw ID,
-  and the mapping queue shows an error with a retry instead of "no accounts".
-  A positive `unmappedCount` is shown as an excluded count, never guessed.
-  A notice states that calendar-based gaps cover only events from the Seoul
-  date of `calendarCoverageStart` on, or that no calendar events were collected.
+  items render with a notice, a neutral placeholder name (never the raw ID) and
+  a retry, and the mapping queue shows the same error and retry above its list
+  or empty message. A period change also retries a failed account list, and a
+  failed missed read shows a retry. A positive `unmappedCount` is shown as an
+  excluded count, never guessed; the notice says only SFDC-account activity can
+  be fixed in the queue. A notice states that calendar-based gaps cover only
+  events from the Seoul date of `calendarCoverageStart` on, or that no calendar
+  events were collected.
 - Mapping queue (`MappingQueue`): unmapped SFDC assignments, each with a plain
   account select (hierarchy paths from `lib/accountTree.ts`) and a connect
-  button; an assignment whose mapped account is no longer readable shows that
-  reason. Below them, automatic mappings preselect their account with a confirm
-  button (saving makes the mapping manual) that becomes "change" when another
-  account is selected. Manual mappings are not listed. `403` reads as "cannot read this account", `404` as "not your
+  button. An assignment whose mapped account is no longer readable (the API's
+  `reason:"unreadable"`, or an account absent from the loaded readable list)
+  is listed with that reason. Below them, automatic mappings preselect their
+  account with a confirm button (saving makes the mapping manual) that becomes
+  "change" when another account is selected. Manual mappings are not listed.
+  `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
 - Source freshness: one line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or

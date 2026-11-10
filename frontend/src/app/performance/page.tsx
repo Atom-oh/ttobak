@@ -86,6 +86,7 @@ export default function PerformancePage() {
   const accountList = useMemo(() => accountListState(accountsResult, userId, `${reloadKey}:${accountsAttempt}`), [accountsResult, userId, reloadKey, accountsAttempt]);
   const accounts = accountList.accounts;
   const accountNames = useMemo(() => accountList.status === 'error' ? null : new Map(accounts.map(account => [account.accountId, account.name])), [accountList.status, accounts]);
+  const retryAccounts = () => setAccountsAttempt(attempt => attempt + 1);
 
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center"><Spinner /></div>;
@@ -113,7 +114,11 @@ export default function PerformancePage() {
             <div role="group" aria-label="기간" className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-white/10 dark:bg-surface-lowest">
               {PERFORMANCE_PERIODS.map(option => (
                 <button key={option.value} type="button" aria-pressed={period === option.value}
-                  onClick={() => setPeriod(option.value)}
+                  onClick={() => {
+                    setPeriod(option.value);
+                    // A period change also retries a failed account list.
+                    if (accountList.status === 'error') setAccountsAttempt(attempt => attempt + 1);
+                  }}
                   className={`rounded-md px-3 py-1.5 text-sm font-semibold ${period === option.value
                     ? 'bg-white text-primary shadow-sm dark:bg-surface-high'
                     : 'text-slate-600 hover:text-slate-900 dark:text-text-muted dark:hover:text-text-main'}`}>
@@ -131,8 +136,12 @@ export default function PerformancePage() {
 
           <section className={cardClass} aria-labelledby="perf-missed">
             <h3 id="perf-missed" className={`${headingClass} mb-4`}>놓친 항목 · {periodLabel(period)}</h3>
-            {missedError ? <p role="alert" className="text-sm text-red-600 dark:text-red-400">{missedError}</p>
-              : missed && accountList.status !== 'loading' ? <MissedList list={missed} accountNames={accountNames} />
+            {missedError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-600 dark:text-red-400">
+                <span>{missedError}</span>
+                <button type="button" onClick={() => setReloadKey(key => key + 1)} className="font-semibold text-primary hover:underline">다시 불러오기</button>
+              </div>
+            ) : missed && accountList.status !== 'loading' ? <MissedList list={missed} accountNames={accountNames} onRetryAccounts={retryAccounts} />
                 : <div className="flex justify-center py-8"><Spinner /></div>}
           </section>
 
@@ -141,7 +150,7 @@ export default function PerformancePage() {
             <p className="mt-1 mb-3 text-sm text-slate-500 dark:text-text-muted">연결되지 않은 SFDC 계정은 추정하지 않습니다. 직접 연결한 매핑이 자동 매핑보다 우선합니다.</p>
             {mappingsError ? <p role="alert" className="text-sm text-red-600 dark:text-red-400">{mappingsError}</p>
               : mappings ? <MappingQueue items={mappings} accounts={accounts} accountsStatus={accountList.status}
-                onRetryAccounts={() => setAccountsAttempt(attempt => attempt + 1)} userId={userId} onSaved={() => setReloadKey(key => key + 1)} />
+                onRetryAccounts={retryAccounts} userId={userId} onSaved={() => setReloadKey(key => key + 1)} />
                 : <div className="flex justify-center py-8"><Spinner /></div>}
           </section>
 

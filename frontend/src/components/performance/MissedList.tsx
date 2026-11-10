@@ -40,15 +40,21 @@ function MissedGroup({ title, icon, empty, items, accountNames }: {
 
 /**
  * Section B: logging gaps and silent customers. Unmapped data is counted, never
- * guessed. `accountNames` is null when the account list failed to load.
+ * guessed. `accountNames` is null when the account list failed to load;
+ * `onRetryAccounts` reloads it.
  */
-export function MissedList({ list, accountNames }: { list: PerformanceMissedList; accountNames: Map<string, string> | null }) {
+export function MissedList({ list, accountNames, onRetryAccounts }: {
+  list: PerformanceMissedList;
+  accountNames: Map<string, string> | null;
+  onRetryAccounts: () => void;
+}) {
   const groups = useMemo(() => groupMissedItems(list.items), [list.items]);
   return (
     <div className="space-y-6">
       {!accountNames && (
         <p role="status" className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-white/5 dark:text-text-muted">
-          어카운트 목록을 불러오지 못해 이름 없이 표시합니다. 각 항목을 눌러 어카운트를 확인하세요.
+          어카운트 목록을 불러오지 못해 이름 없이 표시합니다. 각 항목을 눌러 어카운트를 확인하세요.{' '}
+          <button type="button" onClick={onRetryAccounts} className="font-semibold text-primary hover:underline">다시 불러오기</button>
         </p>
       )}
       <p role="note" className="text-xs text-slate-500 dark:text-text-muted">{calendarCoverageNotice(list.calendarCoverageStart)}</p>
@@ -60,7 +66,7 @@ export function MissedList({ list, accountNames }: { list: PerformanceMissedList
       </div>
       {list.unmappedCount > 0 && (
         <p className="text-xs text-slate-500 dark:text-text-muted">
-          어카운트에 연결되지 않은 활동·일정 {list.unmappedCount.toLocaleString()}건은 추정하지 않고 목록에서 제외했습니다. 아래 매핑 대기열에서 SFDC 계정을 연결하세요.
+          어카운트에 연결되지 않은 활동·일정 {list.unmappedCount.toLocaleString()}건은 추정하지 않고 목록에서 제외했습니다. 담당 SFDC 계정의 활동은 아래 매핑 대기열에서 그 계정을 연결하면 포함됩니다. SFDC 계정이 없는 활동과 어카운트를 찾지 못한 캘린더 일정은 대기열에 나타나지 않습니다.
         </p>
       )}
     </div>

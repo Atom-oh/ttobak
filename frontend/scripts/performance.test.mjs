@@ -89,6 +89,19 @@ test('unmapped assignments are the mapping queue', () => {
   assert.deepEqual(plain(queue.map(item => item.sfdcAccountId)), ['002', '003']);
 });
 
+test('a mapping to an account outside the readable list is queued as unmapped', () => {
+  const items = [
+    { sfdcAccountId: '001', name: 'A', role: 'SA', mapped: true, accountId: 'a', manual: true },
+    { sfdcAccountId: '002', name: 'B', role: 'SA', mapped: true, accountId: 'gone', manual: true },
+    { sfdcAccountId: '003', name: 'C', role: 'SA', mapped: false, manual: false },
+  ];
+  const ids = readable => plain(perf.unmappedAssignments(items, readable).map(item => item.sfdcAccountId));
+  assert.deepEqual(ids(new Set(['a'])), ['002', '003']);
+  assert.deepEqual(ids(null), ['003'], 'nothing is judged before the account list loads');
+  assert.equal(perf.mappingTargetUnreadable(items[1], new Set(['a'])), true);
+  assert.equal(perf.mappingTargetUnreadable(items[2], new Set()), false);
+});
+
 test('mapping queue lists unmapped and automatic mappings with the unreadable reason', () => {
   const items = [
     { sfdcAccountId: '001', name: 'A', role: 'SA', mapped: true, accountId: 'a', manual: true },
@@ -101,6 +114,11 @@ test('mapping queue lists unmapped and automatic mappings with the unreadable re
   assert.deepEqual(plain(groups.automatic.map(item => item.sfdcAccountId)), ['002'], 'manual mappings are settled');
   assert.match(perf.mappingReasonText(items[2]), /읽을 수 없어/);
   assert.equal(perf.mappingReasonText(items[3]), null);
+  const readable = new Set(['a']);
+  const judged = perf.mappingQueueGroups(items, readable);
+  assert.deepEqual(plain(judged.unmapped.map(item => item.sfdcAccountId)), ['002', '003', '004'], 'an automatic mapping to an unreadable account is unmapped');
+  assert.deepEqual(plain(judged.automatic), []);
+  assert.match(perf.mappingReasonText(items[1], readable), /읽을 수 없어/);
 });
 
 test('calendar coverage notice names the Seoul start date', () => {
