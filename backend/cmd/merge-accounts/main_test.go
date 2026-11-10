@@ -32,6 +32,7 @@ type fakeSvc struct {
 	final       *model.AccountMergeJob
 	processErr  error
 	owners      []string
+	exactOwners []string
 	jobs        *fakeJobs
 }
 
@@ -53,6 +54,7 @@ func (f *fakeSvc) Start(_ context.Context, requester, from string, req *model.St
 }
 func (f *fakeSvc) ProcessAccountMergeRequested(ctx context.Context, e model.AccountMergeRequested, deadline time.Time) error {
 	f.calls = append(f.calls, "process")
+	f.exactOwners = append(f.exactOwners, service.MergeWorkerOwner(ctx))
 	if lc, ok := lambdacontext.FromContext(ctx); ok {
 		f.owners = append(f.owners, lc.AwsRequestID)
 	}
@@ -71,6 +73,7 @@ type fakeJobs struct {
 	job      *model.AccountMergeJob
 	claims   []string
 	released int
+	failed   []string
 	claimErr error
 	log      *[]string
 }
@@ -85,6 +88,11 @@ func (f *fakeJobs) ClaimMergeLease(_ context.Context, source, owner string, _ ti
 	f.claims = append(f.claims, owner)
 	*f.log = append(*f.log, "claim")
 	return &model.AccountMergeJob{SourceAccountID: source, TargetAccountID: "tgt", RequesterUserID: "owner-1", State: model.MergeStateRunning, LeaseOwner: owner}, nil
+}
+func (f *fakeJobs) FailMergeJob(_ context.Context, _ *model.AccountMergeJob, code string) error {
+	f.failed = append(f.failed, code)
+	*f.log = append(*f.log, "fail:"+code)
+	return nil
 }
 func (f *fakeJobs) ReleaseMergeLease(context.Context, *model.AccountMergeJob) error {
 	f.released++
@@ -301,9 +309,15 @@ func TestMergeCLIApplyRewritesUserRowsUnderLeaseThenRunsWorker(t *testing.T) {
 	if got := strings.Join(h.svc.calls, ","); got != "start,process,process" {
 		t.Fatalf("calls %s", got)
 	}
-	// The scan runs under the CLI's lease, which is released before the worker runs.
-	if got := strings.Join(h.log, ","); got != "claim,release" || h.jobs.claims[0] != cliOwner {
+	// The scan lease is never released before the worker runs: the worker
+	// claims as exactly the CLI owner and continues from it.
+	if got := strings.Join(h.log, ","); got != "claim" || h.jobs.claims[0] != cliOwner {
 		t.Fatalf("lease log %q owners %v", got, h.jobs.claims)
+	}
+	for _, owner := range h.svc.exactOwners {
+		if owner != cliOwner {
+			t.Errorf("worker must claim as the CLI owner, got %q", owner)
+		}
 	}
 	for _, owner := range h.svc.owners {
 		if !strings.HasPrefix(owner, cliOwner) {
@@ -357,8 +371,9 @@ func TestMergeCLIScanErrorsKeepWorkerStopped(t *testing.T) {
 	if !errors.Is(err, errScanIncomplete) || errorCode(err) != "SCAN_INCOMPLETE" {
 		t.Fatalf("got %v", err)
 	}
-	if res.UserRows["errors"] != 1 || strings.Contains(strings.Join(h.svc.calls, ","), "process") || h.jobs.released != 1 {
-		t.Fatalf("worker ran after a failed scan or the lease stayed held: %+v calls=%v released=%d", res, h.svc.calls, h.jobs.released)
+	if res.UserRows["errors"] != 1 || strings.Contains(strings.Join(h.svc.calls, ","), "process") || h.jobs.released != 0 ||
+		strings.Join(h.jobs.failed, ",") != scanIncompleteCode {
+		t.Fatalf("a failed scan must fail the job, not release it, and not run the worker: %+v calls=%v released=%d failed=%v", res, h.svc.calls, h.jobs.released, h.jobs.failed)
 	}
 }
 
@@ -369,8 +384,8 @@ func TestMergeCLIChangedRowsAreSkippedAndFenceAbortsScan(t *testing.T) {
 	o.Apply = true
 	res, err := run(context.Background(), h.d, o)
 	if errorCode(err) != "SCAN_INCOMPLETE" || res.UserRows["specreqTasksSkipped"] != 1 || res.UserRows["errors"] != 0 ||
-		h.jobs.released != scanApplyPasses || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
-		t.Fatalf("a row still skipped after every pass must stop before the worker: %+v / %v released=%d calls=%v", res, err, h.jobs.released, h.svc.calls)
+		h.jobs.released != 0 || len(h.jobs.claims) != 1 || strings.Join(h.jobs.failed, ",") != scanIncompleteCode || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
+		t.Fatalf("a row still skipped after every pass must fail the job under one held lease: %+v / %v released=%d claims=%d failed=%v calls=%v", res, err, h.jobs.released, len(h.jobs.claims), h.jobs.failed, h.svc.calls)
 	}
 
 	// A row skipped once is picked up by the next pass and the worker runs.
@@ -384,7 +399,7 @@ func TestMergeCLIChangedRowsAreSkippedAndFenceAbortsScan(t *testing.T) {
 	h = newHarness()
 	h.users.fence = repository.ErrMergeFenceLost
 	res, err = run(context.Background(), h.d, o)
-	if errorCode(err) != "FENCE_LOST" || h.jobs.released != 1 || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
+	if errorCode(err) != "FENCE_LOST" || h.jobs.released != 1 || len(h.jobs.failed) != 0 || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
 		t.Fatalf("lost fence must abort before the worker: %v released=%d calls=%v", err, h.jobs.released, h.svc.calls)
 	}
 }

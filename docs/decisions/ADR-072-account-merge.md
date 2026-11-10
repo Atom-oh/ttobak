@@ -103,8 +103,12 @@ link-only meeting moves with the meeting writer, which writes no target
 invocation that starts or resumes the job, before it finishes; `-verify` is the
 read-only post-merge count. Rows a concurrent edit made the scan skip are re-scanned,
 and the worker is not started while any remain. A calendar move bumps the row's
-`shareVersion` so an in-flight sync cannot restore A, and calendar sync refuses an
-event that names a merging or merged account. The CLI decrypts and re-seals calendar
+`shareVersion`, so a sync that read the row before the move fails and re-reads it.
+Accepted residual window: a sync authorized before the merge started that reads the
+row after the move can still write A back; `-verify` reports such rows. A scan that
+leaves rows behind fails the job with `SCAN_INCOMPLETE`, a persisted barrier no
+worker delivery processes, and the CLI holds the job lease from the scan through its
+in-process worker, so no delivery finishes the job in between. The CLI decrypts and re-seals calendar
 payloads in the operator's process with the operator host's existing KMS grant. A
 merge started from the web runs no user-partition scan, so its CLI-only rows stay
 on A's tombstone unless an operator runs the CLI before the job finishes; this is

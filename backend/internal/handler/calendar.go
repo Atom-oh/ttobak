@@ -242,8 +242,6 @@ func writeCalendarError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusForbidden, model.ErrCodeForbidden, "Calendar access denied")
 	case errors.Is(err, service.ErrNotFound):
 		writeError(writer, http.StatusNotFound, model.ErrCodeNotFound, "Calendar resource not found")
-	case errors.Is(err, service.ErrAccountMerging):
-		writeError(writer, http.StatusConflict, model.ErrCodeAccountMerging, "An event names an account that is merging or merged")
 	case errors.Is(err, repository.ErrConditionFailed):
 		writeError(writer, http.StatusConflict, model.ErrCodeConflict, "Calendar revision or batch conflict")
 	case errors.Is(err, service.ErrCalendarEncryption):

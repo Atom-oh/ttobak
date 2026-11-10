@@ -145,11 +145,6 @@ func (svc *CalendarService) authorizeCalendarAccounts(ctx context.Context, userI
 		if account == nil {
 			return ErrForbidden
 		}
-		// A merge tombstone stays readable, but new event links must not
-		// name it (or undo a merge move); the merge fence code applies.
-		if account.MergingInto != "" || account.MergedInto != "" {
-			return ErrAccountMerging
-		}
 	}
 	return nil
 }

@@ -71,7 +71,6 @@ func (fake *calendarStoreFake) ListCalendarSources(_ context.Context, userID, cu
 
 type calendarAccountsFake struct {
 	denied map[string]error
-	merged map[string]bool
 	calls  []string
 }
 
@@ -80,20 +79,7 @@ func (fake *calendarAccountsFake) GetAccount(_ context.Context, userID, accountI
 	if err := fake.denied[accountID]; err != nil {
 		return nil, err
 	}
-	if fake.merged[accountID] {
-		return &model.AccountResponse{AccountID: accountID, MergedInto: "target"}, nil
-	}
 	return &model.AccountResponse{}, nil
-}
-
-// A sync must not name a merge tombstone, or an in-flight batch could undo a
-// merge move of the event's account link.
-func TestCalendarSyncRefusesMergedAccount(test *testing.T) {
-	svc, store, _, accounts := calendarFixture()
-	accounts.merged = map[string]bool{"account-1": true}
-	if _, err := svc.Sync(context.Background(), "owner", calendarSourceID, calendarRequest()); !errors.Is(err, ErrAccountMerging) || len(store.batches) != 0 {
-		test.Fatalf("sync naming a merged account = %v, batches=%d; want ErrAccountMerging and no write", err, len(store.batches))
-	}
 }
 
 func calendarFixture() (*CalendarService, *calendarStoreFake, *calendarKMSFake, *calendarAccountsFake) {

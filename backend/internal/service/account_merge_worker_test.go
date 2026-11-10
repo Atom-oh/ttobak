@@ -432,6 +432,18 @@ func TestWorkerIDsUniquePerCall(t *testing.T) {
 	}
 }
 
+// The operator CLI continues from its own lease by claiming as exactly its owner.
+func TestWorkerIDHonorsExplicitOwner(t *testing.T) {
+	s := &AccountMergeService{}
+	ctx := WithMergeWorkerOwner(context.Background(), "cli-host-1")
+	if got := s.workerID(ctx); got != "cli-host-1" || MergeWorkerOwner(ctx) != "cli-host-1" {
+		t.Fatalf("workerID = %q, want the explicit owner", got)
+	}
+	if got := s.workerID(context.Background()); got == "" || got == "cli-host-1" {
+		t.Fatalf("workerID without an owner = %q, want a random ID", got)
+	}
+}
+
 func TestStartPublishesAccountMergeRequested(t *testing.T) {
 	repo, jobs, svc := startFixture()
 	var got []model.AccountMergeRequested
