@@ -39,3 +39,24 @@ test('a stored note shows the toggle; stale notes are flagged', () => {
   assert.deepEqual(view({ status: 'succeeded', content: 'x', stale: true }, false), { showToggle: true, action: null, badge: 'stale' });
   assert.deepEqual(view({ status: 'succeeded', content: 'x', stale: false }, true), { showToggle: true, action: 'regenerate', badge: null });
 });
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+
+test('summary controls drop the sharing-safe label and the note-language select', () => {
+  const controls = read('../src/components/meeting/ResummaryControls.tsx');
+  assert.ok(!controls.includes('공유용'));
+  assert.ok(!controls.includes('noteLanguages'));
+  assert.ok(!controls.includes('이 언어로 다시 생성'));
+  assert.ok(!read('../src/app/meeting/[id]/MeetingDetailClient.tsx').includes('onNoteLanguageChange'));
+});
+
+test('the summary card offers English generation, badges and a Korean/English toggle', () => {
+  const card = read('../src/components/meeting/AISummaryCard.tsx');
+  for (const label of ['영문 회의록 생성', '영문 회의록 다시 생성', '영문 회의록 생성 중', '영문 회의록 생성 실패', '원본이 바뀌었어요', '한국어', 'English']) {
+    assert.ok(card.includes(label), label);
+  }
+});
+
+test('linked meetings are navigation only', () => {
+  assert.ok(!read('../src/components/meeting/LinkMeetingsModal.tsx').includes('컨텍스트'));
+});
