@@ -103,6 +103,15 @@ required CI and branch protection, and confirm the base and predecessor PR state
 The user has authorized merge when those conditions are met. A later review-only
 or no-merge instruction overrides that authorization.
 
+## Review size pre-check
+
+The Claude Code hook `.claude/hooks/review-size-check.sh` blocks `gh pr create` and
+`git push` when the diff the specialist review would receive exceeds its limits.
+Run it by hand with `python3 scripts/pr-review/check_review_size.py --base origin/main`.
+It mirrors CI: merge-base diff, `role-input-scope.json` exclusions from the base
+revision, and the limits imported from `scripts/pr-review/role_review.py`. Split an
+oversized change into stacked PRs. The hook never blocks on checker or git errors.
+
 ## Local validation
 
 ```bash
