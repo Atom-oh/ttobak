@@ -198,15 +198,11 @@ struct Clients {
 
 /// Credentials for exactly one named profile from the shared config and
 /// credentials files (static keys, SSO, `credential_process`, assume-role).
-///
-/// The SDK default chain is deliberately not used: it reads environment
-/// variables (`AWS_ACCESS_KEY_ID`, web identity, container and instance
-/// metadata) before the profile, so an app launched from a terminal with
-/// exported keys would bill and send meeting text to that identity while the
-/// settings name another profile. A profile that itself sets
-/// `credential_source` still follows that explicit choice.
-// `ProfileFiles` is a deprecated alias of `aws_runtime`'s `EnvConfigFiles`,
-// which aws-config does not otherwise re-export; `files` is only set by tests.
+/// Not the SDK default chain: it reads environment variables first, so an app
+/// started from a terminal with exported keys would bill (and send meeting
+/// text to) that identity while the settings name another profile.
+// `ProfileFiles` is a deprecated alias that aws-config still requires here;
+// `files` is only set by tests.
 #[allow(deprecated)]
 pub fn profile_credentials(
     profile: &str,
@@ -242,8 +238,7 @@ pub fn needs_confirmation(
 const CONFIRM_ALLOW: &str = "허용";
 const CONFIRM_CANCEL: &str = "취소";
 
-/// Body of the native confirmation. Profile names and regions are validated
-/// to plain ASCII before this is shown.
+/// Body of the native confirmation (profile and region are validated ASCII).
 pub fn confirmation_message(profile: &str, region: &str) -> String {
     format!(
         "TTOBAK이 AWS 프로필 '{profile}' (리전 {region})으로 자막을 번역하려고 합니다. \
@@ -251,10 +246,9 @@ pub fn confirmation_message(profile: &str, region: &str) -> String {
     )
 }
 
-/// Shows the confirmation as a sheet on the main window, raised from Rust
-/// so the page cannot draw or answer it. Never blocks a thread: the sheet is
-/// started on the main thread and its future is awaited on the async
-/// runtime. Resolves `false` for 취소, a closed window or any failure.
+/// Shows the confirmation as a sheet on the main window, raised from Rust so
+/// the page cannot draw or answer it. The sheet starts on the main thread and
+/// is awaited on the async runtime, so no thread blocks. `false` unless 허용.
 #[cfg(target_os = "macos")]
 async fn confirm_aws_change(app: &AppHandle, profile: &str, region: &str) -> bool {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -291,8 +285,7 @@ async fn confirm_aws_change(_app: &AppHandle, _profile: &str, _region: &str) -> 
 
 /// Managed state: current settings, the settings file, cached AWS clients
 /// keyed by `(profile, region)` and the request limiter. Without a settings
-/// file (the config directory could not be resolved) every caption command
-/// returns `unavailable`; recording and upload are unaffected.
+/// file every caption command returns `unavailable`.
 pub struct CaptionState {
     settings: Mutex<CaptionSettings>,
     path: Option<PathBuf>,
@@ -471,10 +464,8 @@ fn apply_settings(
 }
 
 /// Saves the profile, region and extra language. Choosing or changing the
-/// AWS profile or region first asks the user in a native dialog (the remote
-/// page must not silently switch which account is billed); declining leaves
-/// the settings unchanged and returns `confirmation-declined`. A call made
-/// while another change is still running (its dialog open) is rejected.
+/// profile or region first asks natively (the remote page must not silently
+/// switch the billed account); declining returns `confirmation-declined`.
 #[tauri::command]
 pub async fn caption_settings_set(
     app: AppHandle,
@@ -726,7 +717,6 @@ mod tests {
             "TTOBAK이 AWS 프로필 'work' (리전 ap-northeast-2)으로 자막을 번역하려고 합니다. \
              이 계정에 요금이 청구될 수 있어요. 허용할까요?"
         );
-        assert!(m.contains("요금이 청구될 수 있어요"));
     }
 
     #[test]
@@ -738,10 +728,8 @@ mod tests {
         assert!(state.begin_change().is_some(), "free again");
     }
 
-    /// The provider resolves the named profile from the given files. That it
-    /// never consults environment credentials is a property of
-    /// `ProfileFileCredentialsProvider` (the default chain is not used), not
-    /// something this test can show without mutating the process environment.
+    /// Resolves the named profile. Ignoring environment credentials is a
+    /// property of the provider type; testing it would mutate the process env.
     #[tokio::test]
     #[allow(deprecated)]
     async fn profile_credentials_use_the_named_profile() {

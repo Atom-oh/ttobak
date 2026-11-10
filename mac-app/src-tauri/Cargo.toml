@@ -52,9 +52,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFString", "CFDictionary", "CFArray", "CFNumber", "CFBase"] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "block2", "objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardware"] }
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
-# Native confirmation sheet for caption AWS profile changes, driven from Rust
-# only (caption_translate.rs). Not tauri-plugin-dialog: that plugin injects
-# window.alert/confirm overrides into every page and registers page commands.
+# Caption profile confirmation sheet from Rust only (caption_translate.rs);
+# tauri-plugin-dialog would inject alert/confirm overrides and page commands.
 rfd = { version = "0.17", default-features = false }
 
 [features]

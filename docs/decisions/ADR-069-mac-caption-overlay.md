@@ -79,35 +79,29 @@ server's `/api/translate`, so server limits, cost and configuration are not
 involved and that path and the in-page translation tab are unchanged. There is no
 fallback to the server when the profile is missing. Credentials are resolved and
 held in Rust only; only profile names cross IPC. They come only from the selected
-profile in the shared config and credentials files (`profile_credentials`, an
-explicit `ProfileFileCredentialsProvider`: static keys, SSO, `credential_process`
-and role chains), never from the SDK default chain. That chain reads environment
-variables first, so an app started from a terminal with exported keys would have
-billed, and sent meeting text to, an identity other than the one the settings
-name. Expired credentials, missing
+profile (`profile_credentials`: static keys, SSO, `credential_process`, roles),
+never from the SDK default chain, which reads environment variables first and
+would bill an exported terminal identity instead of the named profile. Expired credentials, missing
 model access, a missing profile, rate limiting, timeout and rejected output
 return distinct fixed error codes; an expired-credential failure drops the cached
 client so the next call after `mwinit` uses fresh credentials without a restart.
 Caption text is never logged, only codes and byte lengths.
 
 **Profile confirmation.** The remote origin can call all three translation
-commands, and a compromised or injected page script must not silently switch which
-AWS account is billed and receives meeting text. So `caption_settings_set` shows a
-native macOS sheet on the main window, raised from Rust, before it chooses or
-changes the profile or region (`needs_confirmation`): title "TTOBAK", a Korean
-message naming the profile and region and warning that the account may be charged,
-buttons Allow and Cancel (in Korean). Clearing the profile, or changing only the extra language,
-asks nothing. Cancel (or a failure to show the sheet) leaves the settings unchanged
-and returns `confirmation-declined`; a second call while one is running returns
-`invalid-input` instead of stacking sheets. The sheet uses `rfd` directly, not
-`tauri-plugin-dialog`, because that plugin injects `window.alert`/`window.confirm`
-overrides into every page and registers page-callable dialog commands; no
-capability grants a `dialog:` permission (`no_capability_grants_dialog_permissions`).
-The command waits on the sheet asynchronously and holds no lock meanwhile.
+commands, and a compromised page must not silently switch which AWS account is
+billed and receives meeting text. Before `caption_settings_set` chooses or changes
+the profile or region (`needs_confirmation`), Rust shows a native sheet on the main
+window titled "TTOBAK" whose Korean text names the profile and region and warns of
+charges, with Allow and Cancel buttons. Clearing the profile or changing only the
+extra language asks nothing. Cancel, or a sheet that cannot be shown, keeps the
+settings and returns `confirmation-declined`; a call while another runs returns
+`invalid-input`. The command awaits the sheet without holding a lock. The sheet
+uses `rfd` directly: `tauri-plugin-dialog` would inject `window.alert`/`confirm`
+overrides and page-callable commands into every page. No capability grants a
+`dialog:` permission (`no_capability_grants_updater_permissions`).
 
-**Startup without a config directory.** If the app config directory cannot be
-resolved, captions disable themselves: every caption command returns
-`unavailable`, and recording, upload and the other features keep working, as the
+**Startup without a config directory.** Captions then disable themselves (every
+caption command returns `unavailable`); recording and upload keep working, as the
 control channel and meeting detection already fail open.
 
 **Remote origin command set.** The remote `default` capability gains exactly
@@ -157,11 +151,10 @@ other must stay aligned; change both together.
 
 - Overlay translation depends on the user's local AWS configuration and Bedrock
   access to the Luna model; there is no server fallback.
-- Accepted exposure: once the user confirms a profile and region, the remote page
-  can spend on that profile within the fixed model, the per-request size limits and
-  the per-minute request and byte ceilings, without asking again, and can read the
-  local profile names. The confirmation guards which account is used, not how much
-  of it the page uses within those limits.
+- Accepted exposure: after confirmation the remote page can spend on that profile
+  within the fixed model, size limits and per-minute request and byte ceilings
+  without asking again, and can read local profile names. The confirmation guards
+  which account is used, not how much within those limits.
 - The expired-credential message names `mwinit` for internal users.
 - Accepted limit: the Tauri event ACL has no per-event-name scope, so the overlay
   page, which may listen, could listen to other broadcast events such as

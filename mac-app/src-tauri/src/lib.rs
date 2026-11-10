@@ -287,7 +287,8 @@ mod command_acl_tests {
     }
 
     /// Updates run through the plugin's Rust API only (update.rs); no window,
-    /// least of all the remote SPA, may call the plugin's commands.
+    /// least of all the remote SPA, may call the plugin's commands. Nor may any
+    /// window open dialogs: the caption profile confirmation is raised from Rust.
     #[test]
     fn no_capability_grants_updater_permissions() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
@@ -305,7 +306,7 @@ mod command_acl_tests {
                     .or_else(|| permission["identifier"].as_str())
                     .unwrap_or_default();
                 assert!(
-                    !id.starts_with("updater:"),
+                    !id.starts_with("updater:") && !id.starts_with("dialog:"),
                     "{} grants {id}",
                     path.display()
                 );
@@ -318,32 +319,6 @@ mod command_acl_tests {
         );
         let default = include_str!("../capabilities/default.json");
         assert!(!default.contains("updater:"));
-    }
-
-    /// The caption profile confirmation is raised from Rust; no window may
-    /// open (or answer) dialogs itself through a `dialog:` permission.
-    #[test]
-    fn no_capability_grants_dialog_permissions() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
-        let mut checked = 0;
-        for entry in std::fs::read_dir(&dir).expect("capabilities dir") {
-            let path = entry.expect("entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).expect("read");
-            let capability: serde_json::Value = serde_json::from_str(&text).expect("json");
-            for permission in capability["permissions"].as_array().expect("permissions") {
-                let id = permission
-                    .as_str()
-                    .or_else(|| permission["identifier"].as_str())
-                    .unwrap_or_default();
-                assert!(!id.starts_with("dialog:"), "{} grants {id}", path.display());
-            }
-            assert!(!text.contains("dialog:"), "{}", path.display());
-            checked += 1;
-        }
-        assert!(checked >= 3);
     }
 }
 
