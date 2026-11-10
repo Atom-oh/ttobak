@@ -100,6 +100,38 @@ asynchronous, not a deletion SLA. No source-delete endpoint is implemented.
 Repository code and synthetic fixtures do not certify deployed/provider
 acceptance or the Calendar 5 persisted integration.
 
+## SpecReq tasks
+
+Private per-occurrence task rows for calendar events, implemented in
+`backend/internal/handler/specreq_task.go` and
+`backend/internal/service/specreq_task.go` (rules in `specreq_task_rules.go`),
+with wire types in `backend/internal/model/specreq_task.go`. They use the verified
+caller identity only, are not delegated connector operations (`api.specReqTask.list`,
+`.get`, `.create`, `.transition` are all `delegationAllowed: false`) and are
+absent from generic and private HTTP MCP tools.
+
+| Route | Request | Success |
+|---|---|---|
+| `GET /api/specreq-tasks` | Optional `limit` 1-20, `cursor` (at most 4096 bytes) | `200` `{tasks:[...],nextCursor?}` |
+| `GET /api/specreq-tasks/{eventId}` | `eventId` is 64 lowercase hex | `200` task view |
+| `POST /api/specreq-tasks` | JSON `sourceId`, `externalId`, `state`; optional `accountId`, `path`, `counterpartUserId` | `201` task view |
+| `POST /api/specreq-tasks/{eventId}/transitions` | JSON `op`, `version`; optional fields per `op` (transition table: `op` names in `model/specreq_task.go`, rules in `specreq_task_rules.go`) | `200` task view |
+
+A task view holds the task fields (`eventId`, `sourceId`, `accountId`, `path`,
+`state`, `counterpartUserId`, `specReqId`, `specReqTitle`, `specReqStatus`,
+`failureCode`, occurrence and state timestamps, `version`) plus an optional
+`event` summary joined from the calendar row. `accountId` is omitted when the
+caller can no longer read that Account. Transitions are conditioned on `version`.
+Bodies are limited to 4 KiB; unknown fields, trailing data and unsupported query
+parameters are rejected, and `eventId` must match `^[0-9a-f]{64}$`.
+
+Privacy: rows never hold attendee addresses, mail, Slack data or SpecReq bodies;
+`specReqTitle` is stored encrypted. All responses use `Cache-Control: no-store`.
+Errors use `{error:{code,message}}`: `400 BAD_REQUEST` (also `413` for oversized
+bodies), `401`, `403 FORBIDDEN`, `404 NOT_FOUND`, `409 CONFLICT` for a version or
+duplicate conflict, `503 INTERNAL_ERROR` when encryption is unavailable, and
+`500 INTERNAL_ERROR` otherwise.
+
 ## Transport and authentication
 
 Use the CloudFront application domain with `/api`. The Go entry point is Lambda,
@@ -1762,6 +1794,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/calendar/sources/{sourceId}/sync` | `calendarHandler.Sync` |
 | GET | `/api/calendar/sources` | `calendarHandler.ListSources` |
 | GET | `/api/calendar/events` | `calendarHandler.ListEvents` |
+| GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
+| GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
+| POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
+| POST | `/api/specreq-tasks/{eventId}/transitions` | `specReqTaskHandler.Transition` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |

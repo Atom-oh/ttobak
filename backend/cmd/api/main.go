@@ -102,6 +102,13 @@ func init() {
 		accountService,
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
+	calendarRepo := repository.NewCalendarRepository(dynamoClient, tableName)
+	specReqTaskHandler := handler.NewSpecReqTaskHandler(service.NewSpecReqTaskService(
+		repository.NewSpecReqTaskRepository(dynamoClient, tableName),
+		calendarRepo,
+		service.NewCalendarCipher(kmsClient, os.Getenv("KMS_KEY_ID")),
+		accountService,
+	))
 	// Reuse the same cold-start Cognito client for AddMember's PendingShare
 	// invited-check (see AccountService.SetCognitoAdminAPI).
 	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
@@ -329,6 +336,10 @@ func init() {
 		r.Post("/api/calendar/sources/{sourceId}/sync", calendarHandler.Sync)
 		r.Get("/api/calendar/sources", calendarHandler.ListSources)
 		r.Get("/api/calendar/events", calendarHandler.ListEvents)
+		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
+		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
+		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
+		r.Post("/api/specreq-tasks/{eventId}/transitions", specReqTaskHandler.Transition)
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)
