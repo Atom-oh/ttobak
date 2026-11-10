@@ -17,7 +17,7 @@
     section,
     title: section.querySelector('h2').textContent,
     text: section.textContent.replace(/\s+/g, ' ').trim(),
-    searchable: normalize(`${section.dataset.keywords || ''} ${section.textContent}`),
+    searchable: normalize(`${section.dataset.keywords || ''} ${section.textContent} ${navLinks.find(link => link.hash === `#${section.id}`)?.textContent || ''}`),
   }));
   const setTheme = value => {
     root.dataset.theme = value;
