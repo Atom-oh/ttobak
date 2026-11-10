@@ -38,6 +38,7 @@
     "ttobak:billingWebSearchGatewayTool": "ttobak-web-search-tool___WebSearch",
     "ttobak:autoTermsMode": "personal",
     "ttobak:newsTermsMode": "on",
+    "ttobak:newsTermsSources": "all",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
