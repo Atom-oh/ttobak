@@ -492,3 +492,145 @@ test('identity mismatch stops SpecReq step', async t => {
   const ok = await specreqSession(t, home, { FAKE_WORK_TAM: 'Me' });
   assert.equal(await resolveMe(ok.session, 'ME@amazon.com'), 'me');
 });
+
+// ---- Slack draft and notification queue ----
+const SLACK_USER = 'U0ABCDE12';
+const SLACK_CHANNEL = 'D0ZYXWV98';
+const PREVIOUS_TEXT = 'PREVIOUS-DRAFT-CANARY-77c1';
+const SLACK_SCOPE = 'a'.repeat(32);
+const EVENT_A = 'b'.repeat(64);
+const EVENT_B = 'c'.repeat(64);
+
+function fakeSlack({ drafts = [], failList = false, users = [{ id: SLACK_USER, email: 'them@amazon.com' }], replaced = false } = {}) {
+  const calls = [];
+  const json = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
+  return {
+    calls,
+    session: {
+      async call(name, args) {
+        calls.push({ name, args });
+        if (name === 'lookup_user') return json({ users });
+        if (name === 'open_dm_channel') return json({ channel: { id: SLACK_CHANNEL } });
+        if (name === 'list_drafts') {
+          if (failList) throw new Error('boom');
+          return json({ drafts });
+        }
+        if (name === 'post_draft') return json(replaced ? { ok: true, replacedExisting: true, previousText: PREVIOUS_TEXT } : { ok: true });
+        throw new Error('unexpected tool');
+      },
+    },
+  };
+}
+
+test('existing draft in channel is never overwritten', async () => {
+  const { prepareDraft } = await import('../dist/intake/slack-draft.js');
+  const slack = fakeSlack({ drafts: [{ channel: SLACK_CHANNEL, text: PREVIOUS_TEXT }] });
+  assert.equal(await prepareDraft(slack.session, 'them@amazon.com', 'hello'), 'kept_existing');
+  assert.ok(!slack.calls.some(call => call.name === 'post_draft'));
+  const other = fakeSlack({ drafts: [{ channel: 'C0OTHER123', text: 'x' }] });
+  assert.equal(await prepareDraft(other.session, 'them@amazon.com', 'hello'), 'drafted');
+  assert.deepEqual(other.calls.at(-1), { name: 'post_draft', args: { channel: SLACK_CHANNEL, text: 'hello' } });
+  assert.deepEqual(other.calls[0], { name: 'lookup_user', args: { query: 'them@amazon.com' } });
+  assert.deepEqual(other.calls[1], { name: 'open_dm_channel', args: { userIds: [SLACK_USER] } });
+});
+
+test('list_drafts failure skips post_draft', async () => {
+  const { prepareDraft } = await import('../dist/intake/slack-draft.js');
+  const slack = fakeSlack({ failList: true });
+  assert.equal(await prepareDraft(slack.session, 'them@amazon.com', 'hello'), 'failed');
+  assert.ok(!slack.calls.some(call => call.name === 'post_draft'));
+});
+
+test('lookup needs exactly one valid user ID', async () => {
+  const { prepareDraft } = await import('../dist/intake/slack-draft.js');
+  for (const users of [[], [{ id: 'U0ABCDE12' }, { id: 'U0ABCDE13' }], [{ id: 'bad id' }]]) {
+    const slack = fakeSlack({ users });
+    assert.equal(await prepareDraft(slack.session, 'them@amazon.com', 'hello'), 'no_user');
+    assert.deepEqual(slack.calls.map(call => call.name), ['lookup_user']);
+  }
+});
+
+test('slack template renders the contract fixture', async () => {
+  const { renderSlackRequest, SLACK_REQUEST_TEMPLATE } = await import('../dist/intake/slack-draft.js');
+  const fixture = JSON.parse(readFileSync(new URL('../../contracts/specreq/slack-request-v1.json', import.meta.url), 'utf8'));
+  assert.equal(SLACK_REQUEST_TEMPLATE, fixture.template);
+  assert.equal(renderSlackRequest(fixture.input), fixture.expected);
+  const long = renderSlackRequest({ accountName: 'a'.repeat(5000), meetingTitle: 'b'.repeat(5000), localDateTime: 'c'.repeat(5000), myName: '{me}'.repeat(5000) });
+  assert.ok(long.length <= 2000);
+  assert.ok(renderSlackRequest({ accountName: '{title}', meetingTitle: 'T', localDateTime: 'W', myName: 'M' }).includes('{title} 관련'));
+});
+
+test('notice is enqueued once per task and state', async t => {
+  const { enqueueNotice, NOTICE_COPY } = await import('../dist/intake/notify.js');
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  const home = tempHome(t);
+  const store = new IntakeStore(home);
+  const notice = { eventId: EVENT_A, state: 'acked', title: NOTICE_COPY.acked.title, body: NOTICE_COPY.acked.body };
+  assert.equal(enqueueNotice(store, SLACK_SCOPE, notice, NOW), true);
+  assert.equal(enqueueNotice(store, SLACK_SCOPE, notice, NOW), false);
+  assert.equal(enqueueNotice(store, SLACK_SCOPE, { ...notice, state: 'ack_failed' }, NOW), true);
+  assert.equal(enqueueNotice(store, SLACK_SCOPE, { ...notice, eventId: EVENT_B, title: 't'.repeat(500), body: 'b'.repeat(900) }, NOW), true);
+  const lines = readFileSync(join(home, '.ttobak', 'intake', 'notify.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(lines.length, 3);
+  assert.deepEqual(lines[0], { v: 1, key: `${EVENT_A}:acked`, state: 'acked', title: notice.title, body: notice.body,
+    path: `/meetings?task=${EVENT_A}`, createdAt: NOW.toISOString() });
+  assert.equal(lines[2].title.length, 120);
+  assert.equal(lines[2].body.length, 400);
+});
+
+test('queue file is 0600 and rejects a symlink', async t => {
+  const { enqueueNotice } = await import('../dist/intake/notify.js');
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  const { statSync, symlinkSync, mkdirSync } = await import('node:fs');
+  const home = tempHome(t);
+  const store = new IntakeStore(home);
+  const base = { eventId: EVENT_A, state: 'ack_needed', title: 't', body: 'b' };
+  enqueueNotice(store, SLACK_SCOPE, base, NOW);
+  assert.equal(statSync(join(home, '.ttobak', 'intake', 'notify.jsonl')).mode & 0o777, 0o600);
+  assert.throws(() => store.append('a\nb', 'notify.jsonl'), error => error.code === 'STORE_INVALID');
+  assert.throws(() => store.append('x'.repeat(4097), 'notify.jsonl'), error => error.code === 'STORE_INVALID');
+
+  const other = tempHome(t);
+  const target = join(other, 'target.txt');
+  writeFileSync(target, 'keep\n');
+  mkdirSync(join(other, '.ttobak', 'intake'), { recursive: true });
+  symlinkSync(target, join(other, '.ttobak', 'intake', 'notify.jsonl'));
+  assert.throws(() => enqueueNotice(new IntakeStore(other), SLACK_SCOPE, base, NOW), error => error.code === 'STORE_INVALID');
+  assert.equal(readFileSync(target, 'utf8'), 'keep\n');
+});
+
+test('queue over 256 KiB is rewritten with entries younger than 7 days', async t => {
+  const { enqueueNotice } = await import('../dist/intake/notify.js');
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  const home = tempHome(t);
+  const store = new IntakeStore(home);
+  const old = new Date(NOW.getTime() - 8 * 24 * 3600 * 1000);
+  for (let index = 0; index < 700; index++) {
+    const eventId = index.toString(16).padStart(64, '0');
+    enqueueNotice(store, SLACK_SCOPE, { eventId, state: 'acked', title: 't', body: 'b'.repeat(400) }, old);
+  }
+  enqueueNotice(store, SLACK_SCOPE, { eventId: EVENT_A, state: 'acked', title: 't', body: 'new' }, NOW);
+  const lines = readFileSync(join(home, '.ttobak', 'intake', 'notify.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).key, `${EVENT_A}:acked`);
+});
+
+test('no Slack ID or previous draft text reaches any file', async t => {
+  const { draftOnce, draftEntry } = await import('../dist/intake/slack-draft.js');
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  const home = tempHome(t);
+  const store = new IntakeStore(home);
+  const slack = fakeSlack({ replaced: true });
+  let replaced = 0;
+  assert.equal(await draftOnce(store, SLACK_SCOPE, EVENT_A, slack.session, 'them@amazon.com', 'hello', { onReplaced: n => { replaced += n; } }), 'drafted');
+  assert.equal(replaced, 1);
+  assert.equal(draftEntry(store, SLACK_SCOPE, EVENT_A).outcome, 'drafted');
+  // One attempt per task: a second call returns the record without calling Slack.
+  const before = slack.calls.length;
+  assert.equal(await draftOnce(store, SLACK_SCOPE, EVENT_A, slack.session, 'them@amazon.com', 'hello'), 'drafted');
+  assert.equal(slack.calls.length, before);
+  for (const file of allFiles(home)) {
+    const content = readFileSync(file, 'utf8');
+    for (const canary of [SLACK_USER, SLACK_CHANNEL, PREVIOUS_TEXT, 'them@amazon.com']) assert.ok(!content.includes(canary), `${canary} in ${file}`);
+  }
+});
