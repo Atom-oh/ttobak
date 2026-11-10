@@ -490,7 +490,9 @@ are added next to the personal one, which stays the only layer a user owns.
   remove that source's observations, its `sources` references on the term and
   auto terms left without observations in the old Account. Today only meeting
   deletion sweeps an Account. FU4 is required before `accountTermsMode`,
-  `kbTermsMode` or `researchTermsMode` is turned on. FU5: promote and demote
+  `kbTermsMode` or `researchTermsMode` is turned on. Those two flags also
+  accept `personal` (2026-11-09): Personal-layer writes only, which FU4 does not
+  gate. FU5: promote and demote
   terms between Personal and Account (spec section 4.5); not implemented. FU6:
   a vocabulary rows-by-layer metric (spec section 4.6); not implemented.
 
