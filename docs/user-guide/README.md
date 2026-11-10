@@ -14,6 +14,14 @@ current-chapter links, mobile navigation, light/dark themes, copyable question
 examples and complete print/PDF output. No JavaScript is required to read the
 manual or follow its anchors. Search leaves all printable chapters intact.
 
+The application also bundles the same public asset allowlist under
+`/user-guide/`. Shared desktop/mobile/profile actions open it in a sandboxed
+in-page reader, including in the Mac WebView. Embedded original-size screenshot
+links open an image dialog inside the reader; standalone links retain their
+new-tab behavior. `frontend` development and production hooks run
+`npm run guide:build`; an optional `TTOBAK_GUIDE_SCREENSHOT_ARCHIVE` local cache
+must pass the same media identity checks.
+
 The 2026-11-10 UI correction replaces the simplified menu illustrations with
 36 actual frontend screenshots captured at revision
 `0d9f1075169ba8d4692036dc98360b6514ef3b44`. The app DOM, icons and CSS are

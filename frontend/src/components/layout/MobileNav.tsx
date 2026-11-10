@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
+import { UserGuideButton } from '@/components/layout/UserGuideButton';
 import { NAV_GROUPS, SETTINGS_ITEM } from '@/lib/navigation';
 
 const navItems = [
@@ -75,6 +76,7 @@ function MenuSheet({ onClose }: { onClose: () => void }) {
         <BillingInsightButton variant="sheet" groupLabel={<SheetGroupLabel name="고객 분석" />} />
         <div className="flex flex-wrap gap-1.5">
           <SheetLink {...SETTINGS_ITEM} onNavigate={onClose} />
+          <UserGuideButton variant="sheet" />
         </div>
       </div>
     </>

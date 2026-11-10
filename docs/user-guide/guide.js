@@ -123,6 +123,36 @@
   const print = document.getElementById('print');
   print.hidden = false;
   print.addEventListener('click', () => window.print());
+  // Embedded readers (including the Mac WebView) need no new browser window.
+  if (window !== window.top) {
+    document.querySelectorAll('.screen-example a').forEach(link => {
+      link.addEventListener('click', event => {
+        event.preventDefault();
+        const original = link.closest('figure').querySelector('img');
+        const viewer = document.createElement('dialog');
+        viewer.className = 'screen-viewer';
+        viewer.setAttribute('aria-label', '화면 크게 보기');
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.textContent = '화면 닫기';
+        const area = document.createElement('div');
+        const image = document.createElement('img');
+        image.src = original.src;
+        image.alt = original.alt;
+        area.append(image);
+        viewer.append(close, area);
+        const dismiss = () => { viewer.close(); viewer.remove(); link.focus(); };
+        close.addEventListener('click', dismiss);
+        viewer.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
+        viewer.addEventListener('keydown', event => {
+          if (event.key === 'Escape') event.stopPropagation();
+        });
+        document.body.append(viewer);
+        viewer.showModal();
+        close.focus();
+      });
+    });
+  }
   for (const button of document.querySelectorAll('[data-copy]')) {
     button.hidden = false;
     button.addEventListener('click', async () => {

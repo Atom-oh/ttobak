@@ -22,6 +22,12 @@ The [product guide](https://www.atomai.click/ttobak/) is published from
 `docs/user-guide`; see its [authoring and packaging notes](../docs/user-guide/README.md).
 The guide includes actual frontend screenshots of the menus, Account tabs,
 sharing controls, settings and mobile layouts, using fictional example data.
+The sidebar, header help action, mobile menu and profile open this manual in an
+in-page dialog without leaving the current task. `npm run guide:build` packages
+the same verified public assets under `public/user-guide/`; `predev` and
+`prebuild` run it automatically. The build downloads the pinned screenshot
+archive; for offline builds set `TTOBAK_GUIDE_SCREENSHOT_ARCHIVE` to a local
+copy, which must pass the same archive and image hash checks.
 Conditional Billing/admin controls depend on configuration and permissions;
 these screenshots do not establish production or native macOS acceptance.
 
