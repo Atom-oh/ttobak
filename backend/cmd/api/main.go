@@ -427,6 +427,8 @@ func init() {
 		r.Get("/api/meetings/{meetingId}/action-items", actionItemsHandler.Get)
 		r.Get("/api/meetings/{meetingId}/resummary", resummaryHandler.Get)
 		r.Post("/api/meetings/{meetingId}/resummary", resummaryHandler.Request)
+		r.Get("/api/meetings/{meetingId}/notes/en", resummaryHandler.GetEnglish)
+		r.Post("/api/meetings/{meetingId}/notes/en", resummaryHandler.RequestEnglish)
 		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text/status", attachmentTextHandler.Status)
 		r.Post("/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry", attachmentTextHandler.Retry)
 		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text", attachmentTextHandler.Read)

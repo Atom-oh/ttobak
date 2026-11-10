@@ -369,6 +369,11 @@ These modules do not activate a scheduler, change legacy news results or establi
 production acceptance. Infrastructure wiring and consumer rollout remain separate
 delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).
 
+The English meeting note is an independent derivative: `SummaryRequested` with
+target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
+state, regenerates from the transcript, notes and verified documents (never the
+Korean note) and writes only `contentEn` fields (ADR-070).
+
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to
 the same summarize Lambda. Run/source/prior-item checks publish items and success
