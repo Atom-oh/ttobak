@@ -214,6 +214,7 @@ function detailFixture({ viewer, account = {}, transferOwner = async () => ({}) 
     '@/components/FieldInsightsSection': { FieldInsightsSection: empty },
     '@/components/workspace/UpcomingMeetings': { PrivateUpcomingMeetings: empty },
     '@/components/AccountParentEditor': { AccountParentEditor: empty },
+    '@/components/account/AccountSchedule': { AccountSchedule: () => null },
     '@/components/AccountBillingTab': { AccountBillingTab: empty },
     '@/components/AccountContacts': { AccountContacts: empty },
     '@/components/AccountEvents': { AccountEvents: empty },
