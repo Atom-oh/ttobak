@@ -205,7 +205,9 @@ test('an unlisted saved region stays available as an option', () => {
   const select = html.match(/<select[^>]*id="caption-region"[^>]*>(.*?)<\/select>/)?.[1];
   assert.match(select, /<option value="ca-central-1" selected="">ca-central-1<\/option>/);
   assert.equal(select.match(/<option /g).length, overlay.CAPTION_REGIONS.length + 1);
-  assert.deepEqual([...overlay.captionRegionOptions('us-west-2')], [...overlay.CAPTION_REGIONS]);
+  assert.deepEqual([...overlay.CAPTION_REGIONS], ['ap-northeast-2', 'us-east-1']);
+  assert.deepEqual([...overlay.captionRegionOptions('us-east-1')], ['ap-northeast-2', 'us-east-1']);
+  assert.deepEqual([...overlay.captionRegionOptions('us-west-2')], ['ap-northeast-2', 'us-east-1', 'us-west-2']);
 });
 
 test('a declined profile change has its own message and re-reads settings', () => {

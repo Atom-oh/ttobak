@@ -61,11 +61,13 @@ export type CaptionErrorCode =
 /** Largest caption push, in UTF-8 bytes; matches `MAX_TEXT_BYTES` in caption_overlay.rs. */
 export const MAX_PUSH_TEXT_BYTES = 4000;
 
-/** Regions offered for caption translation. A convenience list only: the Mac app validates the region format. */
-export const CAPTION_REGIONS = [
-  'us-east-1', 'us-east-2', 'us-west-2', 'ap-northeast-1', 'ap-northeast-2',
-  'ap-southeast-1', 'ap-southeast-2', 'eu-central-1', 'eu-west-1', 'eu-west-2',
-] as const;
+/**
+ * Regions offered for caption translation (the Mac app validates the region
+ * format). The model is a global inference profile, so the region only picks
+ * the request endpoint and the Amazon Translate region; ap-northeast-2 is the
+ * Mac app's default.
+ */
+export const CAPTION_REGIONS = ['ap-northeast-2', 'us-east-1'] as const;
 
 /** Region choices, keeping a saved region that is not listed so it is never lost. */
 export function captionRegionOptions(saved: string): string[] {
