@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-11-10 |
 | Iteration | 3: complete enterprise product manual |
-| Scope | All 28 chapters: every primary menu, account tabs, contacts/people, documents/library, research/news/Tech, dictionary, billing, settings/admin, devices, security and recovery |
+| Scope | All primary menus and conditional settings; 28 valid chapter entries with concise operations/security/terms previews |
 | Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
 | Scale | 90 points: Playwright MCP unavailable, so the rubric's 10-point MCP visual category is exempt |
@@ -80,6 +80,7 @@ No located content defect remains; fresh latest-head review is required.
 |---|---|---|
 | Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
 | Current menu workflows | INCLUDED | All 28 chapters, including conditional Billing and Mac-only settings |
+| Operations/security/terms detail | PARTIAL | Complete appendices follow with the source-evidence PR |
 | Internal source inventory | PARTIAL | Full path/model/walkthrough evidence follows in the evidence PR |
 | Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
 | Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
@@ -89,8 +90,8 @@ No located content defect remains; fresh latest-head review is required.
 
 1. Public illustrations contain generic menu labels. Public assets never contain
    the internal fictional walkthrough evidence archive.
-2. The full product manual is now included. Its expanded internal source inventory
-   follows separately under the existing 95,000-byte AI review limit. Source
+2. All menu workflows are included. Detailed operations/security/terms appendices
+   and the internal source inventory follow under the 95,000-byte review limit. Source
    configuration and local inspection are not production/native acceptance.
 
 ## Revision checklist and next steps
