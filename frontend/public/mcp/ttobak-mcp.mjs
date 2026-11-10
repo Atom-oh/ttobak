@@ -29026,7 +29026,8 @@ var init_tasks = __esm({
               continue;
             }
             if (task.state === "ack_failed" && request2.resolverLogin !== this.myLogin) continue;
-            if (request2.stateId === task.specReqStatus && (!request2.title || request2.title === task.specReqTitle)) continue;
+            const promotes = task.path === "theirs" && task.state === "acked" && request2.stateId === "COMPLETED" || task.state === "ack_failed" && confirmed;
+            if (!promotes && request2.stateId === task.specReqStatus && (!request2.title || request2.title === task.specReqTitle)) continue;
             const next = await this.transition(task, (current) => current.specReqId === request2.requestId && current.state !== "closed" && (current.state !== "ack_failed" || request2.resolverLogin === this.myLogin) ? {
               op: "refreshSpecReq",
               specReqId: request2.requestId,

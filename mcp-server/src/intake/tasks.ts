@@ -726,7 +726,10 @@ class TaskRun {
         }
         // An observed status promotes ack_failed to acked, so it is sent only for a request I resolve.
         if (task.state === 'ack_failed' && request.resolverLogin !== this.myLogin) continue;
-        if (request.stateId === task.specReqStatus && (!request.title || request.title === task.specReqTitle)) continue;
+        // An unchanged read still goes out while the rules would move the state (acked -> resolved, ack_failed -> acked).
+        const promotes = (task.path === 'theirs' && task.state === 'acked' && request.stateId === 'COMPLETED')
+          || (task.state === 'ack_failed' && confirmed);
+        if (!promotes && request.stateId === task.specReqStatus && (!request.title || request.title === task.specReqTitle)) continue;
         const next = await this.transition(task, current => current.specReqId === request.requestId && current.state !== 'closed'
           && (current.state !== 'ack_failed' || request.resolverLogin === this.myLogin)
           ? { op: 'refreshSpecReq', specReqId: request.requestId, specReqStatus: request.stateId,

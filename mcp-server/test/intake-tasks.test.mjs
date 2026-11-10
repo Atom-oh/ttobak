@@ -1311,3 +1311,21 @@ test('unknown attendees stay pending, then are skipped after three reads', async
   assert.ok(!after.calls.includes('get_meeting'));
   assert.equal(other.calls.filter(call => call[0] === 'create').length, 0);
 });
+
+test('a task stored with COMPLETED still moves to resolved on a later run', async t => {
+  for (const start of ['acked', 'ack_failed']) {
+    const { run } = await taskHome(t);
+    const seed = [linkedTask(0, { specReqId: RID, state: start, specReqTitle: 'Design review',
+      specReqStatus: start === 'acked' ? 'COMPLETED' : 'NEXT_UP',
+      ...(start === 'ack_failed' ? { failureCode: 'ACK_UNCONFIRMED' } : {}) })];
+    const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+    const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+      FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest({ stateId: 'COMPLETED' }) }) };
+    await run(api, [occurrence()], work);
+    if (start === 'ack_failed') {
+      assert.deepEqual([api.tasks.get(seed[0].eventId).state, api.tasks.get(seed[0].eventId).specReqStatus], ['acked', 'COMPLETED']);
+      await run(api, [occurrence()], work);
+    }
+    assert.equal(api.tasks.get(seed[0].eventId).state, 'resolved', start);
+  }
+});
