@@ -214,15 +214,30 @@ function queryInput(args: RecordValue, events: boolean): CalendarPageQuery | Cal
   return { ...args } as CalendarPageQuery | CalendarEventQuery;
 }
 
+/** Validates a sync request exactly as the MCP tool does; used by the local intake runner. */
+export function validateCalendarSync(args: Record<string, unknown>): { sourceId: string; body: CalendarSyncRequest } {
+  return syncInput(args);
+}
+
+/** Validates a sync receipt against its request; returns the new revision. */
+export function validateCalendarReceipt(value: unknown, input: CalendarSyncRequest): number {
+  if (!record(value) || value.error || value.batchId !== input.batchId.toLowerCase() ||
+      !Number.isSafeInteger(value.revision) || value.revision !== input.expectedRevision + 1 ||
+      value.completed !== input.complete ||
+      value.upserted !== input.mutations.filter(mutation => mutation.op === 'upsert').length ||
+      value.removed !== input.mutations.filter(mutation => mutation.op === 'remove').length) {
+    throw new Error('INVALID_CALENDAR_RESPONSE: invalid receipt or page');
+  }
+  return value.revision as number;
+}
+
 function calendarResult(value: unknown, kind: 'sync' | 'events' | 'sources', input?: CalendarSyncRequest): CallToolResult {
   const invalidResponse = () => { throw new Error('INVALID_CALENDAR_RESPONSE: invalid receipt or page'); };
   if (!record(value) || value.error) invalidResponse();
   const result = value as RecordValue;
   if (kind === 'sync') {
-    if (!input || result.batchId !== input.batchId.toLowerCase() || !Number.isSafeInteger(result.revision) ||
-        result.revision !== input.expectedRevision + 1 || result.completed !== input.complete ||
-        result.upserted !== input.mutations.filter(mutation => mutation.op === 'upsert').length ||
-        result.removed !== input.mutations.filter(mutation => mutation.op === 'remove').length) invalidResponse();
+    if (!input) invalidResponse();
+    validateCalendarReceipt(value, input!);
   } else {
     const entries = result[kind];
     if (!Array.isArray(entries) || entries.length > (kind === 'events' ? 50 : 20) ||
