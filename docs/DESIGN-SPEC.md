@@ -124,7 +124,7 @@ hidden on any failure. The Mac app's own update UI is native, not the SPA: the
 TTOBAK app menu has a check-for-updates item (a manual check reports up-to-date or
 failure by notification, and opens the popup when an update exists) that becomes an
 update-available item with the version once an update is known. The small local popup
-(`update-prompt.html`, ADR-071) has Update and Later buttons, shows a static
+(`update-prompt.html`, ADR-073) has Update and Later buttons, shows a static
 downloading status (not progress) after Update, stays open until install succeeds, and
 asks the user to retry after the recording when work is in progress. Copy is Korean; see
 `update.rs` and the page for exact strings. No popup appears while recording, finalizing or
