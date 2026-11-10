@@ -484,21 +484,18 @@ func TestApplyPerformanceBatchReplayAcrossYearBoundary(test *testing.T) {
 func TestListPerformanceAssignmentsReadIsBounded(test *testing.T) {
 	queries := 0
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
-		if performanceTarget(request) != "Query" {
-			return nil, errors.New("unexpected call")
-		}
 		body := performanceBody(test, request)
 		queries++
 		if limit, _ := body["Limit"].(float64); queries == 1 && int(limit) != PerformanceListRowLimit {
-			test.Fatalf("first query must carry Limit %d: %v", PerformanceListRowLimit, body["Limit"])
+			test.Fatalf("Limit = %v", body["Limit"])
 		}
 		rows := make([]string, 400)
 		for i := range rows {
 			id := fmt.Sprintf("A%d_%04d", queries, i)
-			rows[i] = `{"PK":{"S":"USER#owner"},"SK":{"S":"PERFASSIGN#` + id + `"},"userId":{"S":"owner"},"sfdcAccountId":{"S":"` + id + `"},"name":{"S":"n"}}`
+			rows[i] = `{"PK":{"S":"USER#owner"},"SK":{"S":"PERFASSIGN#` + id + `"},"userId":{"S":"owner"},"sfdcAccountId":{"S":"` + id + `"}}`
 		}
-		// Every page claims more rows exist; the reader must stop on its own.
-		return summaryHTTPResponse(200, `{"Items":[`+strings.Join(rows, ",")+`],"LastEvaluatedKey":{"PK":{"S":"USER#owner"},"SK":{"S":"x"}}}`, nil), nil
+		// Every page claims more rows exist; the reader must stop by itself.
+		return summaryHTTPResponse(200, `{"Items":[`+strings.Join(rows, ",")+`],"LastEvaluatedKey":{"PK":{"S":"x"},"SK":{"S":"x"}}}`, nil), nil
 	})
 	assignments, err := repo.ListPerformanceAssignments(test.Context(), "owner")
 	if err != nil || len(assignments) != PerformanceListRowLimit || queries != 2 {

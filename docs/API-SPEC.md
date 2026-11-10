@@ -128,11 +128,10 @@ most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
 lowercase); `expectedRevision` is the source's current revision (zero when new).
 
 - Assignment upsert (`sfdc-assignments` only): `sfdcAccountId`, `name` (at most
-  200 bytes) and `role` (at most 64 bytes). An owner stores at most 500
-  assignments: a batch whose upserts would raise the stored count (current plus
-  new IDs minus removes) above 500 returns `400 INVALID_INPUT`. Updates of
-  existing IDs and removes are always accepted. The count is read before the
-  write, so concurrent batches may overshoot by at most 20 rows each.
+  200 bytes) and `role` (at most 64 bytes). An owner keeps at most 500
+  assignments: a batch raising the stored count above 500 (current plus new IDs
+  minus removes) returns `400 INVALID_INPUT`; updates and removes always pass.
+  The check is read-then-write, so concurrent batches may overshoot by 20 each.
 - Task upsert (`sfdc-tasks` only): `taskId`, optional `sfdcAccountId` (an
   accountless task is kept and stays unmapped), `activityDate`, `type`,
   `subject` (at most 300 bytes), `status`, optional `specReqId`. Type and
@@ -142,10 +141,9 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
 - Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
   or task ID.
 
-The mappings list reads at most 501 assignment rows and 501 mapping rows (no
-cursor) and returns the first 500 assignments. Worst case is 500 items of about
-0.5 KiB each (200-byte name), so under 256 KiB. Rows beyond the cap are never
-returned; `truncated` tells the client to remove stale assignments.
+The mappings list reads at most 501 assignment and 501 mapping rows (no cursor)
+and returns the first 500 assignments; worst case is 500 items of about 0.5 KiB
+(under 256 KiB). Rows beyond the cap are never returned.
 
 IDs match `[A-Za-z0-9_-]{1,64}`. The service hashes the normalized request
 (SHA-256 of its canonical JSON); an identical batch replays its receipt within

@@ -19,9 +19,8 @@ import (
 // caller's own USER# partition and takes no other user identifier.
 
 const (
-	// MaxPerformanceAssignments caps stored sfdc-assignments rows per owner and
-	// the items one mapping list returns. repository.PerformanceListRowLimit
-	// must stay one larger so overflow is detectable.
+	// MaxPerformanceAssignments caps assignments per owner and mapping list
+	// items; repository.PerformanceListRowLimit must be one larger.
 	MaxPerformanceAssignments = 500
 	performanceMaxMutations   = 20
 	performanceMaxNameBytes   = 200
@@ -113,12 +112,10 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 	return svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, digest)
 }
 
-// checkAssignmentCap rejects a batch that would take the owner's stored
-// assignment count over MaxPerformanceAssignments: current rows, plus new IDs,
-// minus removed IDs. Updates of existing IDs and removes always pass. The
-// count is read before the write and is not atomic with it, so concurrent
-// batches can overshoot, but each adds at most performanceMaxMutations rows and
-// the read side is bounded independently, so the overshoot is small and harmless.
+// checkAssignmentCap rejects a batch that takes the stored count (current plus
+// new IDs minus removes) over MaxPerformanceAssignments. Updates and removes
+// always pass. Read-then-write is not atomic; concurrent batches overshoot by
+// at most performanceMaxMutations each, and reads are bounded independently.
 func (svc *PerformanceService) checkAssignmentCap(ctx context.Context, userID string, req model.PerformanceSyncRequest) error {
 	current, err := svc.store.ListPerformanceAssignments(ctx, userID)
 	if err != nil {
