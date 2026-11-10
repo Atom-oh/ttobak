@@ -76,8 +76,9 @@ type backfillOptions struct {
 // backfill passes every listed key to mapper. A mapper error is counted and
 // the run continues; listing errors stop it. After each newly queued request
 // it waits interval (apply mode spacing).
-func backfill(ctx context.Context, list keyLister, mapper sourceMapper, opts backfillOptions) (backfillResult, error) {
-	var result backfillResult
+func backfill(ctx context.Context, list keyLister, mapper sourceMapper, opts backfillOptions) (result backfillResult, err error) {
+	// Every exit reports the requests already published.
+	defer func() { result.Queued = opts.queued() }()
 	for _, prefix := range backfillPrefixes {
 		cursor := ""
 		for pages := 0; ; pages++ {
@@ -90,7 +91,6 @@ func backfill(ctx context.Context, list keyLister, mapper sourceMapper, opts bac
 			}
 			for _, key := range keys {
 				if opts.limit > 0 && result.Scanned >= opts.limit {
-					result.Queued = opts.queued()
 					return result, nil
 				}
 				result.Scanned++
@@ -101,7 +101,6 @@ func backfill(ctx context.Context, list keyLister, mapper sourceMapper, opts bac
 				}
 				if opts.queued() > before && opts.interval > 0 {
 					if err := opts.sleep(ctx, opts.interval); err != nil {
-						result.Queued = opts.queued()
 						return result, err
 					}
 				}
@@ -112,7 +111,6 @@ func backfill(ctx context.Context, list keyLister, mapper sourceMapper, opts bac
 			cursor = next
 		}
 	}
-	result.Queued = opts.queued()
 	return result, nil
 }
 

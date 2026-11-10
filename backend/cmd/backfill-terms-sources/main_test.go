@@ -167,11 +167,21 @@ func TestBackfillOptions(t *testing.T) {
 
 func TestBackfillStopsOnListError(t *testing.T) {
 	errList := errors.New("list failed")
-	list := func(context.Context, string, string) ([]string, string, error) { return nil, "", errList }
-	_, err := backfill(context.Background(), list, func(context.Context, string, string) error { return nil },
-		backfillOptions{bucket: testBucket, queued: func() int { return 0 }})
+	// kb/ lists one key; shared/research/ fails after it was published.
+	list := func(_ context.Context, prefix, _ string) ([]string, string, error) {
+		if prefix == "kb/" {
+			return []string{"kb/a/1"}, "", nil
+		}
+		return nil, "", errList
+	}
+	n := 0
+	got, err := backfill(context.Background(), list, func(context.Context, string, string) error { n++; return nil },
+		backfillOptions{bucket: testBucket, queued: func() int { return n }})
 	if !errors.Is(err, errList) {
 		t.Fatalf("err = %v, want list error", err)
+	}
+	if got.Queued != 1 || got.Scanned != 1 {
+		t.Fatalf("a listing error must still report published requests: %+v", got)
 	}
 }
 
