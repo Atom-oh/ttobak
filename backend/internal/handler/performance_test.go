@@ -331,8 +331,8 @@ func TestPerformanceRoutesAreOwnerScoped(test *testing.T) {
 	reads := map[string]string{
 		"/api/performance/mappings":           `{"items":[]}`,
 		"/api/performance/goals?year=" + year: `{"year":` + year + `,"text":"","updatedAt":""}`,
-		"/api/performance/missed?period=week": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}]}`,
-		"/api/performance/missed?period=year": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}]}`,
+		"/api/performance/missed?period=week": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}],"calendarCoverageStart":""}`,
+		"/api/performance/missed?period=year": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}],"calendarCoverageStart":""}`,
 	}
 	for target, expected := range reads {
 		response := performanceHTTPDo(api, "user-b", http.MethodGet, target, "")

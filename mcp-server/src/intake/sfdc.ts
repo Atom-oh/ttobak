@@ -298,9 +298,13 @@ export interface SfdcSource {
 /** Follows `cursor` pages to the end; a capped, cursorless or short read fails. */
 async function readAll(source: SfdcSource, tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>[]> {
   const records: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
   let after: string | undefined;
   for (let index = 0; index < MAX_PAGES; index++) {
     const page = parsePage(await source.call(tool, { ...args, limit: PAGE_LIMIT, ...(after ? { after } : {}) }), tool);
+    for (const { id } of page.records) {
+      if (typeof id === 'string' && seen.size === seen.add(id).size) throw parseFailed(`${tool} repeated a record ID`);
+    }
     records.push(...page.records);
     if (!page.hasNextPage) {
       if (records.length < page.totalCount) throw parseFailed(`${tool} result is incomplete`);

@@ -161,8 +161,12 @@ type PerformanceSourceFreshness struct {
 	LastCompletedAt string `json:"lastCompletedAt,omitempty"`
 }
 
+// CalendarCoverageStart is the earliest start (RFC3339 UTC) among the calendar
+// events read for the request, or empty when none were read. Calendar-derived
+// gaps cover only events from that time on.
 type PerformanceMissedList struct {
-	Items           []PerformanceMissedItem      `json:"items"`
-	UnmappedCount   int                          `json:"unmappedCount"`
-	SourceFreshness []PerformanceSourceFreshness `json:"sourceFreshness"`
+	Items                 []PerformanceMissedItem      `json:"items"`
+	UnmappedCount         int                          `json:"unmappedCount"`
+	SourceFreshness       []PerformanceSourceFreshness `json:"sourceFreshness"`
+	CalendarCoverageStart string                       `json:"calendarCoverageStart"`
 }
