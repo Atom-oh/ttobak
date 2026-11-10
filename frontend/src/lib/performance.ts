@@ -24,6 +24,8 @@ export interface PerformanceMissedList {
   items: PerformanceMissedItem[];
   unmappedCount: number;
   sourceFreshness: PerformanceSourceFreshness[];
+  /** Earliest start (RFC3339 UTC) among the calendar events read; empty when none. */
+  calendarCoverageStart?: string;
 }
 
 export interface PerformanceGoals {
@@ -39,6 +41,8 @@ export interface PerformanceMappingItem {
   mapped: boolean;
   accountId?: string;
   manual: boolean;
+  /** 'unreadable' when the stored target can no longer be read; accountId is then absent. */
+  reason?: 'unreadable' | string;
   updatedAt?: string;
 }
 
@@ -147,6 +151,30 @@ export function utf8ByteLength(text: string): number {
 
 export function unmappedAssignments(items: PerformanceMappingItem[]): PerformanceMappingItem[] {
   return items.filter(item => !item.mapped);
+}
+
+/**
+ * The mapping queue: unmapped assignments to connect, and automatic mappings
+ * the owner can confirm (saving the same account makes it manual) or correct.
+ * Manual mappings are settled and not listed.
+ */
+export function mappingQueueGroups(items: PerformanceMappingItem[]) {
+  return {
+    unmapped: unmappedAssignments(items),
+    automatic: items.filter(item => item.mapped && !item.manual && !!item.accountId),
+  };
+}
+
+export function mappingReasonText(item: PerformanceMappingItem): string | null {
+  if (item.reason === 'unreadable') return '연결했던 어카운트를 더 이상 읽을 수 없어 매핑이 해제되었습니다. 다시 연결하세요.';
+  return null;
+}
+
+/** Notice that calendar-based gaps only cover retained calendar events. */
+export function calendarCoverageNotice(start: string | undefined): string {
+  const date = seoulParts(start)?.date;
+  if (!date) return '수집된 캘린더 일정이 없어 캘린더 기반 로깅 누락은 표시되지 않습니다.';
+  return `캘린더 기반 로깅 누락은 ${date} 이후 일정만 확인합니다.`;
 }
 
 export type AccountListResult<T> = { userId: string; key: string | number; accounts?: T[]; error?: boolean };

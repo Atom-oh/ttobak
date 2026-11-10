@@ -118,6 +118,9 @@ type PerformanceSourceList struct {
 }
 
 // PerformanceMappingItem is one assignment joined with its mapping, if any.
+// Manual tells a manual mapping from an automatic one. A mapping whose target
+// the owner can no longer read is reported unmapped with Reason "unreadable"
+// and no AccountID.
 type PerformanceMappingItem struct {
 	SFDCAccountID string `json:"sfdcAccountId"`
 	Name          string `json:"name"`
@@ -125,8 +128,13 @@ type PerformanceMappingItem struct {
 	Mapped        bool   `json:"mapped"`
 	AccountID     string `json:"accountId,omitempty"`
 	Manual        bool   `json:"manual"`
+	Reason        string `json:"reason,omitempty"`
 	UpdatedAt     string `json:"updatedAt,omitempty"`
 }
+
+// PerformanceMappingUnreadable is the Reason of a mapping whose target account
+// the owner can no longer read.
+const PerformanceMappingUnreadable = "unreadable"
 
 type PerformanceMappingList struct {
 	Items []PerformanceMappingItem `json:"items"`
@@ -161,8 +169,12 @@ type PerformanceSourceFreshness struct {
 	LastCompletedAt string `json:"lastCompletedAt,omitempty"`
 }
 
+// CalendarCoverageStart is the earliest start (RFC3339 UTC) among the calendar
+// events read for the request, or empty when none were read. Calendar-derived
+// gaps cover only events from that time on.
 type PerformanceMissedList struct {
-	Items           []PerformanceMissedItem      `json:"items"`
-	UnmappedCount   int                          `json:"unmappedCount"`
-	SourceFreshness []PerformanceSourceFreshness `json:"sourceFreshness"`
+	Items                 []PerformanceMissedItem      `json:"items"`
+	UnmappedCount         int                          `json:"unmappedCount"`
+	SourceFreshness       []PerformanceSourceFreshness `json:"sourceFreshness"`
+	CalendarCoverageStart string                       `json:"calendarCoverageStart"`
 }

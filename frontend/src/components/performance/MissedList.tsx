@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useMemo } from 'react';
-import { groupMissedItems, missedItemDetail, missedItemHref, missedItemTitle, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
+import { calendarCoverageNotice, groupMissedItems, missedItemDetail, missedItemHref, missedItemTitle, type PerformanceMissedItem, type PerformanceMissedList } from '@/lib/performance';
 
 function MissedGroup({ title, icon, empty, items, accountNames }: {
   title: string;
@@ -51,6 +51,7 @@ export function MissedList({ list, accountNames }: { list: PerformanceMissedList
           어카운트 목록을 불러오지 못해 이름 없이 표시합니다. 각 항목을 눌러 어카운트를 확인하세요.
         </p>
       )}
+      <p role="note" className="text-xs text-slate-500 dark:text-text-muted">{calendarCoverageNotice(list.calendarCoverageStart)}</p>
       <div className="grid gap-6 md:grid-cols-2">
         <MissedGroup title="SFDC 로깅 누락" icon="edit_note" empty="이 기간에 로깅 누락이 없습니다."
           items={groups.loggingGaps} accountNames={accountNames} />

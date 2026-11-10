@@ -618,9 +618,14 @@ period control (this week / quarter / this year, default this week) drives
   items render with a notice and a neutral placeholder name, never the raw ID,
   and the mapping queue shows an error with a retry instead of "no accounts".
   A positive `unmappedCount` is shown as an excluded count, never guessed.
+  A notice states that calendar-based gaps cover only events from the Seoul
+  date of `calendarCoverageStart` on, or that no calendar events were collected.
 - Mapping queue (`MappingQueue`): unmapped SFDC assignments, each with a plain
   account select (hierarchy paths from `lib/accountTree.ts`) and a connect
-  button. `403` reads as "cannot read this account", `404` as "not your
+  button; an assignment whose mapped account is no longer readable shows that
+  reason. Below them, automatic mappings preselect their account with a confirm
+  button (saving makes the mapping manual) that becomes "change" when another
+  account is selected. Manual mappings are not listed. `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
 - Source freshness: one line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or

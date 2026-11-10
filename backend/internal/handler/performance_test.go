@@ -150,6 +150,16 @@ func (readable performanceHTTPAccounts) GetAccount(_ context.Context, userID, ac
 	return &model.AccountResponse{}, nil
 }
 
+func (readable performanceHTTPAccounts) ListReadableAccountCandidates(_ context.Context, userID string) ([]service.NamedCandidate, error) {
+	var candidates []service.NamedCandidate
+	for key, ok := range readable {
+		if accountID, found := strings.CutPrefix(key, userID+"/"); ok && found {
+			candidates = append(candidates, service.NamedCandidate{Kind: "account", ID: accountID})
+		}
+	}
+	return candidates, nil
+}
+
 func performanceHTTPRouter(api PerformanceAPI, userID string) http.Handler {
 	handler := NewPerformanceHandler(api)
 	router := chi.NewRouter()
@@ -331,8 +341,8 @@ func TestPerformanceRoutesAreOwnerScoped(test *testing.T) {
 	reads := map[string]string{
 		"/api/performance/mappings":           `{"items":[]}`,
 		"/api/performance/goals?year=" + year: `{"year":` + year + `,"text":"","updatedAt":""}`,
-		"/api/performance/missed?period=week": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}]}`,
-		"/api/performance/missed?period=year": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}]}`,
+		"/api/performance/missed?period=week": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}],"calendarCoverageStart":""}`,
+		"/api/performance/missed?period=year": `{"items":[],"unmappedCount":0,"sourceFreshness":[{"source":"sfdc-assignments"},{"source":"sfdc-tasks"},{"source":"calendar"}],"calendarCoverageStart":""}`,
 	}
 	for target, expected := range reads {
 		response := performanceHTTPDo(api, "user-b", http.MethodGet, target, "")

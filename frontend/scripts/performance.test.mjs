@@ -89,6 +89,26 @@ test('unmapped assignments are the mapping queue', () => {
   assert.deepEqual(plain(queue.map(item => item.sfdcAccountId)), ['002', '003']);
 });
 
+test('mapping queue lists unmapped and automatic mappings with the unreadable reason', () => {
+  const items = [
+    { sfdcAccountId: '001', name: 'A', role: 'SA', mapped: true, accountId: 'a', manual: true },
+    { sfdcAccountId: '002', name: 'B', role: 'SA', mapped: true, accountId: 'b', manual: false },
+    { sfdcAccountId: '003', name: 'C', role: 'SA', mapped: false, manual: true, reason: 'unreadable' },
+    { sfdcAccountId: '004', name: 'D', role: 'SA', mapped: false, manual: false },
+  ];
+  const groups = perf.mappingQueueGroups(items);
+  assert.deepEqual(plain(groups.unmapped.map(item => item.sfdcAccountId)), ['003', '004']);
+  assert.deepEqual(plain(groups.automatic.map(item => item.sfdcAccountId)), ['002'], 'manual mappings are settled');
+  assert.match(perf.mappingReasonText(items[2]), /읽을 수 없어/);
+  assert.equal(perf.mappingReasonText(items[3]), null);
+});
+
+test('calendar coverage notice names the Seoul start date', () => {
+  assert.equal(perf.calendarCoverageNotice('2026-08-11T23:30:00Z'), '캘린더 기반 로깅 누락은 2026-08-12 이후 일정만 확인합니다.');
+  assert.match(perf.calendarCoverageNotice(''), /캘린더 일정이 없어/);
+  assert.match(perf.calendarCoverageNotice(undefined), /캘린더 일정이 없어/);
+});
+
 test('account list state separates loading, failure and a real empty list', () => {
   assert.deepEqual(plain(perf.accountListState(null, 'u1', 0)), { status: 'loading', accounts: [] });
   assert.deepEqual(plain(perf.accountListState({ userId: 'u1', key: 0, error: true }, 'u1', 0)), { status: 'error', accounts: [] });

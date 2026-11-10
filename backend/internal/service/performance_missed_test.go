@@ -516,6 +516,10 @@ func TestListMissedJoinsOnlyCurrentlyReadableAccounts(test *testing.T) {
 		freshness[model.PerformanceSourceSFDCAssignments] != "" || freshness["calendar"] != "2026-11-08T02:00:00Z" {
 		test.Fatalf("freshness: %+v", list.SourceFreshness)
 	}
+	// Coverage is the earliest event read; the future event is never read.
+	if want := now.Add(-25 * time.Hour).UTC().Format(time.RFC3339); list.CalendarCoverageStart != want {
+		test.Fatalf("calendar coverage: %q, want %q", list.CalendarCoverageStart, want)
+	}
 }
 
 func TestListMissedSilentCustomerAndCalendarChunks(test *testing.T) {
@@ -556,6 +560,24 @@ func TestListMissedSilentCustomerAndCalendarChunks(test *testing.T) {
 	}
 	if store.taskFrom != "2025-12-29" || store.taskTo != "2026-11-13" {
 		test.Fatalf("task window: %s..%s", store.taskFrom, store.taskTo)
+	}
+	if list.CalendarCoverageStart != "" {
+		test.Fatalf("no calendar events must give an empty coverage start: %q", list.CalendarCoverageStart)
+	}
+}
+
+func TestCalendarCoverageStartIsEarliestEvent(test *testing.T) {
+	seoul := missedSeoul(test)
+	events := []model.CalendarEvent{
+		{EventID: "b", StartsAt: time.Date(2026, 9, 3, 10, 0, 0, 0, seoul)},
+		{EventID: "a", StartsAt: time.Date(2026, 8, 12, 8, 30, 0, 0, seoul)},
+		{EventID: "c", StartsAt: time.Date(2026, 11, 1, 9, 0, 0, 0, seoul)},
+	}
+	if got := calendarCoverageStart(events); got != "2026-08-11T23:30:00Z" {
+		test.Fatalf("coverage: %q", got)
+	}
+	if got := calendarCoverageStart(nil); got != "" {
+		test.Fatalf("empty coverage: %q", got)
 	}
 }
 
