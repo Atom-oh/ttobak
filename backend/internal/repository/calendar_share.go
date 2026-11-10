@@ -19,6 +19,8 @@ import (
 
 var (
 	ErrCalendarEventNotFound = errors.New("calendar event not found")
+	// ErrCalendarShareGroupTooLarge reports one meetingKey group that did not end within the bounded read.
+	ErrCalendarShareGroupTooLarge = errors.New("calendar share group exceeds the bounded read")
 	// ErrCalendarShareStateChanged reports that an event's share state changed after a sync
 	// batch read it (SetCalendarShareState won); the caller may recompute and retry.
 	ErrCalendarShareStateChanged = errors.New("calendar share state changed")
@@ -27,6 +29,7 @@ var (
 const (
 	calendarShareStateShared = "shared"
 	calendarShareStateVeto   = "veto"
+	calendarShareQueryPage   = 100
 	calendarShareMaxEmail    = 320
 	calendarMaxTransactItems = 100
 	// calendarMaxVetoMembers bounds one veto row's set, keeping its exact-set condition
@@ -59,6 +62,15 @@ type CalendarShareRow struct {
 	// VetoEventIDs holds "{sourceId}#{eventId}" of every event of this user that vetoes the
 	// key; the repository maintains it and the row exists while the set is non-empty.
 	VetoEventIDs []string `dynamodbav:"vetoEventIds,stringset,omitempty"`
+}
+
+// CalendarSharePage groups rows by meetingKey; a page never splits a group.
+// GroupCursors[i] resumes the same query right after Groups[i], so a caller can trim a
+// page at a group boundary.
+type CalendarSharePage struct {
+	Groups       [][]CalendarShareRow
+	GroupCursors []string
+	NextCursor   *string
 }
 
 // CalendarOverrideRow is a manual sharing mode: PK USER#{userId}, SK CALOVERRIDE#{sourceId}#{scopeKey}.
@@ -623,6 +635,149 @@ func calendarFencedConditionError(err error, fenced map[int]bool) error {
 		}
 	}
 	return nil
+}
+
+func validCalendarShareRow(row CalendarShareRow, accountID string, now int64) bool {
+	if row.PK != model.PrefixAccount+accountID || row.AccountID != accountID || !calendarStorageID.MatchString(row.MeetingKey) ||
+		!calendarStorageID.MatchString(row.UserID) || uuid.Validate(row.SourceID) != nil || !calendarStorageID.MatchString(row.EventID) ||
+		row.SK != model.CalendarShareSortKey(row.StartsAt, row.MeetingKey, row.UserID) || !validCalendarWindow(row.StartsAt, row.EndsAt) ||
+		row.ExpiresAt != row.EndsAt.Add(90*24*time.Hour).Unix() || row.ExpiresAt <= now {
+		return false
+	}
+	switch row.State {
+	case calendarShareStateShared:
+		return row.Ciphertext != ""
+	case calendarShareStateVeto:
+		return row.Ciphertext == "" && validCalendarVetoSet(row.VetoEventIDs)
+	}
+	return false
+}
+
+// ListCalendarShareRows reads share rows overlapping the window, grouped by meetingKey.
+// Groups are contiguous in the sort key; a page always ends after a complete group, so a
+// veto row is never separated from the shared rows it hides, and a page resumed from a cursor
+// skips the rest of the cursor's group. A single group larger than the limit is returned
+// whole; a group that does not end within five queries is an error.
+func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accountID string, query model.CalendarQuery) (*CalendarSharePage, error) {
+	limit, err := calendarQueryLimit(accountID, query.Limit)
+	if err != nil || !validCalendarWindow(query.From, query.To) || query.AccountID != "" && query.AccountID != accountID {
+		return nil, ErrInvalidCalendarQuery
+	}
+	scope := calendarCursor{Version: 1, Kind: "shares", From: query.From.UTC().Format(time.RFC3339Nano),
+		To: query.To.UTC().Format(time.RFC3339Nano), AccountID: accountID, Limit: limit}
+	lower := model.PrefixCalendarShare + query.From.Add(-calendarMaxWindow).UTC().Format("2006-01-02T15:04:05.000000000Z")
+	upper := model.PrefixCalendarShare + query.To.UTC().Format("2006-01-02T15:04:05.000000000Z")
+	startKey, err := decodeCalendarCursor(query.Cursor, scope, lower, upper)
+	if err != nil {
+		return nil, err
+	}
+	// A page never begins with a partial group: rows after the cursor that share its
+	// meetingKey prefix were added after the previous page returned that group, or the
+	// cursor points into a group, so they are skipped rather than returned without their veto.
+	var skipPrefix string
+	if cursorSK, ok := startKey["SK"].(*types.AttributeValueMemberS); ok {
+		skipPrefix = cursorSK.Value[:strings.LastIndex(cursorSK.Value, "#")+1]
+	}
+	keyCondition := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").Between(expression.Value(lower), expression.Value(upper)))
+	built, err := expression.NewBuilder().WithKeyCondition(keyCondition).Build()
+	if err != nil {
+		return nil, err
+	}
+	page := &CalendarSharePage{Groups: make([][]CalendarShareRow, 0)}
+	now := repo.now().Unix()
+	kept := 0
+	var groupPrefix, groupLastSK, completeSK string
+	var group []CalendarShareRow
+	var groupSKs []string
+	complete := func() {
+		if groupPrefix == "" {
+			return
+		}
+		for _, row := range group {
+			if row.StartsAt.Before(query.To) && row.EndsAt.After(query.From) {
+				page.Groups = append(page.Groups, group)
+				groupSKs = append(groupSKs, groupLastSK)
+				kept += len(group)
+				break
+			}
+		}
+		completeSK, groupPrefix, group = groupLastSK, "", nil
+	}
+	finish := func() error {
+		for _, sortKey := range groupSKs {
+			cursor, err := encodeCalendarCursor(scope, accountShareKey(accountID, sortKey), lower, upper)
+			if err != nil || cursor == nil {
+				return ErrInvalidCalendarCursor
+			}
+			page.GroupCursors = append(page.GroupCursors, *cursor)
+		}
+		return nil
+	}
+	cursorAt := func(sortKey string) error {
+		page.NextCursor, err = encodeCalendarCursor(scope, accountShareKey(accountID, sortKey), lower, upper)
+		if err != nil {
+			return err
+		}
+		return finish()
+	}
+	for pageNumber := 0; pageNumber < 5; pageNumber++ {
+		result, err := repo.client.Query(ctx, &dynamodb.QueryInput{
+			TableName: aws.String(repo.tableName), KeyConditionExpression: built.KeyCondition(),
+			ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
+			ConsistentRead: aws.Bool(true), ScanIndexForward: aws.Bool(true), Limit: aws.Int32(calendarShareQueryPage), ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query calendar shares: %w", err)
+		}
+		for _, item := range result.Items {
+			sortKey, ok := item["SK"].(*types.AttributeValueMemberS)
+			if !ok || sortKey.Value < lower || sortKey.Value > upper {
+				continue
+			}
+			prefix := sortKey.Value[:strings.LastIndex(sortKey.Value, "#")+1]
+			if skipPrefix != "" {
+				if prefix == skipPrefix {
+					continue
+				}
+				skipPrefix = ""
+			}
+			if groupPrefix != "" && prefix != groupPrefix {
+				complete()
+				if kept >= int(limit) {
+					return calendarSharePageOrError(page, cursorAt(completeSK))
+				}
+			}
+			groupPrefix, groupLastSK = prefix, sortKey.Value
+			var row CalendarShareRow
+			if attributevalue.UnmarshalMap(item, &row) == nil && validCalendarShareRow(row, accountID, now) {
+				group = append(group, row)
+			}
+		}
+		startKey = result.LastEvaluatedKey
+		if len(startKey) == 0 {
+			complete()
+			return calendarSharePageOrError(page, finish())
+		}
+	}
+	switch {
+	case completeSK != "":
+		return calendarSharePageOrError(page, cursorAt(completeSK))
+	case groupPrefix != "":
+		return nil, ErrCalendarShareGroupTooLarge
+	}
+	page.NextCursor, err = encodeCalendarCursor(scope, startKey, lower, upper)
+	if err != nil {
+		return nil, err
+	}
+	return calendarSharePageOrError(page, finish())
+}
+
+func calendarSharePageOrError(page *CalendarSharePage, err error) (*CalendarSharePage, error) {
+	if err != nil {
+		return nil, err
+	}
+	return page, nil
 }
 
 func validCalendarOverrideScope(userID, sourceID, scopeKey string) bool {

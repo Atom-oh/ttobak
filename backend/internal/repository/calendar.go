@@ -668,10 +668,22 @@ func decodeCalendarCursor(encoded string, scope calendarCursor, lower, upper str
 	}
 	expected := scope
 	expected.LastPK, expected.LastSK = cursor.LastPK, cursor.LastSK
-	if cursor != expected || cursor.LastPK != model.PrefixUser+scope.UserID || cursor.LastSK < lower || cursor.LastSK >= upper {
+	partition := calendarCursorPartition(scope)
+	if cursor != expected || cursor.LastPK != partition || cursor.LastSK < lower || cursor.LastSK >= upper {
 		return nil, ErrInvalidCalendarCursor
 	}
-	return calendarKey(scope.UserID, cursor.LastSK), nil
+	return map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: partition},
+		"SK": &types.AttributeValueMemberS{Value: cursor.LastSK},
+	}, nil
+}
+
+// calendarCursorPartition binds share cursors to the account partition and all others to the caller.
+func calendarCursorPartition(scope calendarCursor) string {
+	if scope.Kind == "shares" {
+		return model.PrefixAccount + scope.AccountID
+	}
+	return model.PrefixUser + scope.UserID
 }
 
 func encodeCalendarCursor(scope calendarCursor, key map[string]types.AttributeValue, lower, upper string) (*string, error) {
