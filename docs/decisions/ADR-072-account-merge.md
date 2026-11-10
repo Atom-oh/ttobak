@@ -104,9 +104,10 @@ invocation that starts or resumes the job, before it finishes; `-verify` is the
 read-only post-merge count. Skipped rows are re-scanned; the CLI holds the job lease
 from the scan through its in-process worker, and a scan that leaves rows behind fails
 the job with `SCAN_INCOMPLETE`, which no delivery processes. A calendar move bumps
-`shareVersion`, defeating a sync that read the row before it; calendar sync does not
-yet check merge state, so a later sync naming A can write it back (an accepted gap
-`-verify` reports). The CLI re-seals calendar payloads with the operator host's
+`shareVersion`, defeating a sync that read the row before it, and calendar sync
+refuses an event naming a merging or merged account; a sync authorized before the
+start that reads the row after the move remains an accepted narrow window that
+`-verify` reports. The CLI re-seals calendar payloads with the operator host's
 existing KMS grant and its dry run prints the preview's `newAudience`. A merge
 started on the web runs no user-partition scan, so its CLI-only rows stay on A's
 tombstone unless an operator runs the CLI before it finishes (an accepted v1 limit).
