@@ -99,7 +99,7 @@ var (
 	errInvalidMaxPages  = errors.New("-max-pages must be > 0")
 	errNoProgress       = errors.New("merge worker made no progress; the job lease may be held elsewhere")
 	errVerifyReadOnly   = errors.New("-verify is read-only and excludes -apply and -status")
-	errScanIncomplete   = errors.New("user row scan reported errors; worker not started")
+	errScanIncomplete   = errors.New("user row scan left rows behind; worker not started")
 )
 
 func validateOptions(o options) error {
@@ -176,6 +176,9 @@ type result struct {
 	UserRows              map[string]int `json:"userRows,omitempty"`
 	UnmovedPresent        []string       `json:"unmovedPresent,omitempty"`
 	RequiresAcceptUnmoved bool           `json:"requiresAcceptUnmoved,omitempty"`
+	// NewAudience is ADR-072's disclosure: target members absent from the
+	// source and whether the target has ancestors. Tell members before -apply.
+	NewAudience *model.MergeAudience `json:"newAudience,omitempty"`
 }
 
 // run executes one invocation. The result is always returned so the caller
@@ -216,6 +219,8 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 			return res, err
 		}
 		res.Counts, res.RequiresAcceptUnmoved = preview.Counts, preview.RequiresAcceptUnmoved
+		audience := preview.NewAudience
+		res.NewAudience = &audience
 		for _, u := range preview.Unmoved {
 			if u.Present {
 				res.UnmovedPresent = append(res.UnmovedPresent, u.Category)
@@ -236,12 +241,14 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 	}
 	res.State, res.Step = dto.State, dto.Step
 	if o.ScanUsers {
-		counts, err := d.scanApply(ctx, o)
+		counts, err := d.scanUntilSettled(ctx, o)
 		res.UserRows = counts
 		if err != nil {
 			return res, err
 		}
-		if counts["errors"] > 0 {
+		// The worker finalizes the job and a merged source refuses Start, so
+		// a row left behind now could never be moved by a rerun.
+		if counts["errors"] > 0 || skippedRows(counts) > 0 {
 			return res, errScanIncomplete
 		}
 	}
@@ -254,6 +261,45 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 		err = errors.New("merge job failed")
 	}
 	return res, err
+}
+
+// scanApplyPasses bounds the re-scans that pick up rows a concurrent edit
+// made the CLI skip (its version condition failed).
+const scanApplyPasses = 3
+
+// scanUntilSettled re-scans while rows were skipped and nothing failed. Moved
+// counts accumulate across passes; skip counts come from the last pass.
+func (d deps) scanUntilSettled(ctx context.Context, o options) (map[string]int, error) {
+	total := map[string]int{}
+	for pass := 0; pass < scanApplyPasses; pass++ {
+		counts, err := d.scanApply(ctx, o)
+		for key := range total {
+			if strings.HasSuffix(key, "Skipped") {
+				delete(total, key)
+			}
+		}
+		for key, n := range counts {
+			if strings.HasSuffix(key, "Moved") || strings.HasPrefix(key, "errors") || strings.HasSuffix(key, "Skipped") {
+				total[key] += n
+			} else {
+				total[key] = n
+			}
+		}
+		if err != nil || total["errors"] > 0 || skippedRows(counts) == 0 {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+func skippedRows(counts map[string]int) int {
+	n := 0
+	for key, v := range counts {
+		if strings.HasSuffix(key, "Skipped") {
+			n += v
+		}
+	}
+	return n
 }
 
 // scanApply holds the job lease for the scan, so the meeting writer's fence

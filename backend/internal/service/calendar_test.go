@@ -90,6 +90,16 @@ func (fake *calendarAccountsFake) GetAccount(_ context.Context, userID, accountI
 	return &model.AccountResponse{}, nil
 }
 
+// A sync must not name a merge tombstone, or an in-flight batch could undo a
+// merge move of the event's account link.
+func TestCalendarSyncRefusesMergedAccount(test *testing.T) {
+	svc, store, _, accounts := calendarFixture()
+	accounts.merge = map[string]string{"account-1": "merged"}
+	if _, err := svc.Sync(context.Background(), "owner", calendarSourceID, calendarRequest()); !errors.Is(err, ErrAccountMerging) || len(store.batches) != 0 {
+		test.Fatalf("sync naming a merged account = %v, batches=%d; want ErrAccountMerging and no write", err, len(store.batches))
+	}
+}
+
 func calendarFixture() (*CalendarService, *calendarStoreFake, *calendarKMSFake, *calendarAccountsFake) {
 	store := &calendarStoreFake{}
 	sdk := &calendarKMSFake{}
