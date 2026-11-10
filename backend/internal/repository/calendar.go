@@ -97,7 +97,7 @@ type CalendarWriteMutation struct {
 	// never lands. Expected is required for every mutation that can change share state: one
 	// carrying Share or PreviousShareKey (else ErrInvalidCalendarBatch), and an
 	// upsert of an event whose stored row holds a share or veto (it would vacate it; else
-	// ErrInvalidCalendarBatch). nil is accepted only for an upsert without share fields of
+	// the retryable ErrCalendarShareStateChanged). nil is accepted only for an upsert without share fields of
 	// an absent or never-shared event, and for a remove, which retires the event together
 	// with every share row it holds whatever their state.
 	Expected *CalendarRowVersion
@@ -199,7 +199,7 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 				return nil, ErrCalendarShareStateChanged
 			}
 		case mutation.Op == "upsert" && calendarRowHoldsShare(old):
-			return nil, ErrInvalidCalendarBatch
+			return nil, ErrCalendarShareStateChanged
 		}
 		olds[index] = old
 		intents[index], err = newCalendarShareIntent(userID, mutation.EventID, old, []*CalendarShareRow{mutation.Share}, mutation.PreviousShareKey)

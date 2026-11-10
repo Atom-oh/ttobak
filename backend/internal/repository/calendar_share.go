@@ -227,7 +227,10 @@ type calendarShareOwner struct {
 	// endsAt and expiresAt are a veto row's window end and TTL: the latest of its members'.
 	endsAt    time.Time
 	expiresAt int64
-	valid     bool
+	// window holds the stored endsAt and pendingShareExpiresAt values (nil: absent) that
+	// every veto row update pins, so a concurrent writer cannot shrink an extension.
+	window map[string]types.AttributeValue
+	valid  bool
 }
 
 func (repo *CalendarRepository) readCalendarShareOwner(ctx context.Context, userID string, key ShareKey) (*calendarShareOwner, error) {
@@ -248,7 +251,8 @@ func (repo *CalendarRepository) readCalendarShareOwner(ctx context.Context, user
 		return &calendarShareOwner{}, nil
 	}
 	return &calendarShareOwner{sourceID: row.SourceID, eventID: row.EventID, state: row.State, vetoes: row.VetoEventIDs,
-		endsAt: row.EndsAt, expiresAt: row.ExpiresAt, valid: true}, nil
+		endsAt: row.EndsAt, expiresAt: row.ExpiresAt, valid: true, window: map[string]types.AttributeValue{
+			"endsAt": result.Item["endsAt"], "pendingShareExpiresAt": result.Item["pendingShareExpiresAt"]}}, nil
 }
 
 // calendarSharedOwnerCondition requires a shared row to still belong to the owner as read.
@@ -266,6 +270,23 @@ func calendarVetoSetCondition(userID string, members []string) expression.Condit
 		And(set.Size().Equal(expression.Value(len(members))))
 	for _, member := range members {
 		condition = condition.And(expression.Contains(set, member))
+	}
+	return condition
+}
+
+// calendarVetoWindowCondition requires a veto row's window as read.
+func calendarVetoWindowCondition(owner *calendarShareOwner) expression.ConditionBuilder {
+	var condition expression.ConditionBuilder
+	for index, name := range []string{"endsAt", "pendingShareExpiresAt"} {
+		part := expression.AttributeNotExists(expression.Name(name))
+		if value := owner.window[name]; value != nil {
+			part = expression.Name(name).Equal(expression.Value(value))
+		}
+		if index == 0 {
+			condition = part
+		} else {
+			condition = condition.And(part)
+		}
 	}
 	return condition
 }
@@ -289,7 +310,7 @@ func calendarStringSet(values []string) expression.ValueBuilder {
 //   - Invalid row: a veto claimant returns ErrCalendarCorruptData; otherwise it is left alone.
 //   - Every veto write spans the latest endsAt and TTL of the row as read and its veto
 //     claimants, so the row outlives every member; an unchanged set whose window grows
-//     is extended under the set as read.
+//     is extended under the set as read. Veto row updates pin the window as read.
 //
 // It returns the operations and, per intent, whether its desired share row is held.
 func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, sourceID string, intents []calendarShareIntent) ([]types.TransactWriteItem, [][]bool, error) {
@@ -478,7 +499,7 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 			case len(leavers) == 0 && len(joiners) == 0:
 				if expiresAt != owner.expiresAt || !endsAt.Equal(owner.endsAt) {
 					update := extend(expression.UpdateBuilder{})
-					err = conditional(key, &update, calendarVetoSetCondition(userID, owner.vetoes))
+					err = conditional(key, &update, calendarVetoSetCondition(userID, owner.vetoes).And(calendarVetoWindowCondition(owner)))
 				}
 			case len(joiners) > 0 && len(leavers) > 0:
 				// DynamoDB rejects an UpdateExpression that names one path in two actions,
@@ -495,10 +516,10 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 				}
 				final = append(final, joiners...)
 				update := extend(expression.Set(set, calendarStringSet(final)))
-				err = conditional(key, &update, calendarVetoSetCondition(userID, owner.vetoes))
+				err = conditional(key, &update, calendarVetoSetCondition(userID, owner.vetoes).And(calendarVetoWindowCondition(owner)))
 			case len(owner.vetoes)-len(leavers)+len(joiners) > 0:
 				condition := expression.Name("userId").Equal(expression.Value(userID)).
-					And(expression.Name("state").Equal(expression.Value(calendarShareStateVeto)))
+					And(expression.Name("state").Equal(expression.Value(calendarShareStateVeto))).And(calendarVetoWindowCondition(owner))
 				var update expression.UpdateBuilder
 				if len(joiners) > 0 {
 					update = extend(expression.Add(set, calendarStringSet(joiners)))

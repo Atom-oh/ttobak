@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -1003,8 +1004,8 @@ func TestApplyBatchNilExpectedNeverChangesShareState(test *testing.T) {
 		{"previous key only", nil, func(batch *CalendarWriteBatch) {
 			batch.Mutations[0].PreviousShareKey = calendarTestShareKey(plain, "acc_1", "mk")
 		}, ErrInvalidCalendarBatch},
-		{"plain upsert of a shared event", &shared, nil, ErrInvalidCalendarBatch},
-		{"plain upsert of a vetoed event", &vetoed, nil, ErrInvalidCalendarBatch},
+		{"plain upsert of a shared event", &shared, nil, ErrCalendarShareStateChanged},
+		{"plain upsert of a vetoed event", &vetoed, nil, ErrCalendarShareStateChanged},
 		{"plain upsert of a new event", nil, nil, nil},
 		{"plain upsert of a never-shared event", &plain, nil, nil},
 		{"remove of a shared event", &shared, func(batch *CalendarWriteBatch) {
@@ -1122,6 +1123,44 @@ func TestApplyBatchVetoWindowCoversLatestMember(test *testing.T) {
 			}
 		})
 	}
+	test.Run("racing extension fails on a stale window", func(test *testing.T) {
+		shareID, shareItem := calendarTestVetoRow(test, "event-9")
+		items := map[string]map[string]types.AttributeValue{shareID: shareItem}
+		var repo *CalendarRepository
+		first := vetoBatch("event-1", later.Add(time.Hour))
+		raced := false
+		mock := &calendarSDKMock{}
+		mock.get = func(input *dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) {
+			item := items[calendarTestString(test, input.Key, "PK")+"|"+calendarTestString(test, input.Key, "SK")]
+			if calendarTestString(test, input.Key, "PK") == "ACCOUNT#acc_1" && !raced {
+				raced = true // first commits between this read and its write
+				if _, err := repo.ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, first); err != nil {
+					test.Fatal(err)
+				}
+			}
+			return &dynamodb.GetItemOutput{Item: item}, nil
+		}
+		mock.transact = func(input *dynamodb.TransactWriteItemsInput) (*dynamodb.TransactWriteItemsOutput, error) {
+			for index, operation := range input.TransactItems {
+				if update := operation.Update; update != nil && calendarTestString(test, update.Key, "PK") == "ACCOUNT#acc_1" {
+					condition := calendarTestExpression(update.ConditionExpression, update.ExpressionAttributeNames, update.ExpressionAttributeValues)
+					if !strings.Contains(condition, "endsAt = "+calendarTestString(test, items[shareID], "endsAt")) || !strings.Contains(condition, "pendingShareExpiresAt = ") {
+						return nil, calendarTestCancel(len(input.TransactItems), index)
+					}
+					stored := maps.Clone(items[shareID])
+					stored["endsAt"] = &types.AttributeValueMemberS{Value: later.Add(time.Hour).Format(time.RFC3339Nano)}
+					items[shareID] = stored
+				}
+			}
+			return &dynamodb.TransactWriteItemsOutput{}, nil
+		}
+		repo = calendarTestRepo(test, mock)
+		first = calendarTestObserved(test, mock, first)
+		second := calendarTestObserved(test, mock, vetoBatch("event-2", later))
+		if _, err := repo.ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, second); !errors.Is(err, ErrCalendarShareStateChanged) {
+			test.Fatalf("stale extension: %v", err)
+		}
+	})
 	test.Run("new row spans every claimant", func(test *testing.T) {
 		batch := vetoBatch("event-1", calendarTestRow().EndsAt)
 		second := vetoBatch("event-2", later)
