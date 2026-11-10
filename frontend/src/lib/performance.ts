@@ -25,7 +25,7 @@ export interface PerformanceMissedList {
   unmappedCount: number;
   sourceFreshness: PerformanceSourceFreshness[];
   /** Earliest start (RFC3339 UTC) among the calendar events read; empty when none. */
-  calendarCoverageStart?: string;
+  calendarCoverageStart: string;
 }
 
 export interface PerformanceGoals {
@@ -46,6 +46,8 @@ export interface PerformanceMappingItem {
 
 export interface PerformanceMappingList {
   items: PerformanceMappingItem[];
+  /** True when more than 500 assignments exist and only the first 500 are listed. */
+  truncated: boolean;
 }
 
 export interface AccountMapping {

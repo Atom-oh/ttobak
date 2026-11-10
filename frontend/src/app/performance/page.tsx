@@ -10,7 +10,7 @@ import { MissedList } from '@/components/performance/MissedList';
 import { accountApi, performanceApi } from '@/lib/api';
 import {
   accountListState, describeFreshness, PERFORMANCE_PERIODS, periodLabel, type AccountListResult,
-  type PerformanceMappingItem, type PerformanceMissedList, type PerformancePeriod,
+  type PerformanceMappingList, type PerformanceMissedList, type PerformancePeriod,
 } from '@/lib/performance';
 import type { AccountSummary } from '@/types/meeting';
 
@@ -35,7 +35,7 @@ export default function PerformancePage() {
   // Results are tagged with the request that produced them, so a period
   // change or reload shows the spinner without resetting state in an effect.
   const [missedResult, setMissedResult] = useState<{ key: string; data?: PerformanceMissedList; error?: string } | null>(null);
-  const [mappingsResult, setMappingsResult] = useState<{ key: string; data?: PerformanceMappingItem[]; error?: string } | null>(null);
+  const [mappingsResult, setMappingsResult] = useState<{ key: string; data?: PerformanceMappingList; error?: string } | null>(null);
   const [accountsResult, setAccountsResult] = useState<AccountListResult<AccountSummary> | null>(null);
   const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [year] = useState(seoulYear);
@@ -70,7 +70,7 @@ export default function PerformancePage() {
     const controller = new AbortController();
     const key = `${userId}:${reloadKey}`;
     performanceApi.mappings({ signal: controller.signal, expectedUserId: userId })
-      .then(result => setMappingsResult({ key, data: result.items }))
+      .then(result => setMappingsResult({ key, data: result }))
       .catch(() => { if (!controller.signal.aborted) setMappingsResult({ key, error: 'SFDC 매핑 목록을 불러오지 못했습니다.' }); });
     return () => controller.abort();
   }, [userId, reloadKey]);
@@ -154,7 +154,7 @@ export default function PerformancePage() {
                 <button type="button" onClick={() => setReloadKey(key => key + 1)} className="font-semibold text-primary hover:underline">다시 불러오기</button>
               </div>
             )
-              : mappings ? <MappingQueue items={mappings} accounts={accounts} accountsStatus={accountList.status}
+              : mappings ? <MappingQueue items={mappings.items} truncated={mappings.truncated} accounts={accounts} accountsStatus={accountList.status}
                 onRetryAccounts={retryAccounts} userId={userId} onSaved={() => setReloadKey(key => key + 1)} />
                 : <div className="flex justify-center py-8"><Spinner /></div>}
           </section>
