@@ -82,6 +82,10 @@ ten-minute foreground scheduling with no overlap. No host is selected;
 executable/path templates require user testing. Provider tokens, checkpoints and
 mailbox mappings stay local. Never copy browser tokens or Outlook passwords.
 
+`ttobak-mcp intake` is a built-in reader for a local `aws-outlook-mcp`
+(ADR-065). It reads host MCP configuration by reference and syncs with this
+contract; see the [local MCP intake runbook](../docs/runbooks/local-mcp-intake.md).
+
 Sync accepts `sourceId`, `batchId`, `expectedRevision`, `windowStart`, `windowEnd`,
 `complete`, and at most 20 explicit `mutations`. Stable occurrence IDs preserve
 identity across reschedules; cancellations and newly private items require
