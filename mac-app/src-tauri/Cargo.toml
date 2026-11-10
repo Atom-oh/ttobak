@@ -46,5 +46,8 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "block2", "objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardware"] }
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

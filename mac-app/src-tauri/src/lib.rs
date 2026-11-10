@@ -31,6 +31,7 @@ mod control;
 mod control_proto;
 mod error;
 mod input_select;
+mod intake_notify;
 mod leftover;
 pub mod meet_mute;
 mod meeting;
@@ -751,6 +752,8 @@ pub fn run() {
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());
+            // SpecReq task notices from the local intake runner (ADR-065).
+            intake_notify::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             sleep::start(app.handle().clone());
             // Adopt any leftover temp WAVs from a previous run (crash, force
@@ -816,6 +819,18 @@ pub fn run() {
             // capture stop at this point is better to just wait out
             // (process exit is already in motion; nothing else needs this
             // thread) than to abandon and lose the tail of the recording.
+            // The notification plugin has no desktop click callback, so a
+            // recent notice opens on the next dock reopen or main-window focus.
+            match &event {
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => intake_notify::open_pending(app_handle),
+                tauri::RunEvent::WindowEvent {
+                    label,
+                    event: tauri::WindowEvent::Focused(true),
+                    ..
+                } if label == "main" => intake_notify::open_pending(app_handle),
+                _ => {}
+            }
             if let tauri::RunEvent::Exit = event {
                 let state = app_handle.state::<RecorderState>();
                 let handle = {
