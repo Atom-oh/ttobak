@@ -29,7 +29,7 @@ const LLM_TIMEOUT: Duration = Duration::from_secs(6);
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[cfg(test)]
-const ERROR_CODES: [&str; 11] = [
+const ERROR_CODES: [&str; 12] = [
     "profile-missing",
     "credentials-expired",
     "model-access",
@@ -39,6 +39,7 @@ const ERROR_CODES: [&str; 11] = [
     "timeout",
     "aws-error",
     "save-failed",
+    "window-error",
     "confirmation-declined",
     "unavailable",
 ];
@@ -62,6 +63,7 @@ impl CaptionError {
             "invalid-output" => "The translation result was rejected.",
             "timeout" => "The translation request timed out.",
             "save-failed" => "Caption settings could not be saved.",
+            "window-error" => "The caption window could not be updated.",
             "confirmation-declined" => "The AWS profile change was cancelled.",
             "unavailable" => "Captions are unavailable on this Mac.",
             _ => "The AWS translation request failed.",
@@ -147,6 +149,23 @@ impl ByteBudget {
 /// Input bytes a request sends: the text plus every context entry.
 pub fn request_bytes(text: &str, context: &[String]) -> usize {
     text.len() + context.iter().map(String::len).sum::<usize>()
+}
+
+/// Rejects a translation into `target` unless its overlay window is open
+/// (`is_open` is asked about the window label).
+pub fn require_open_window(
+    target: &str,
+    is_open: impl Fn(&str) -> bool,
+) -> Result<(), CaptionError> {
+    let label = caption_model::window_label(target)
+        .ok_or_else(|| CaptionError::invalid("Unsupported language."))?;
+    if is_open(label) {
+        Ok(())
+    } else {
+        Err(CaptionError::invalid(
+            "Open the caption window for this language first.",
+        ))
+    }
 }
 
 /// Maps an AWS error code and message to one of the page-facing codes.
@@ -436,6 +455,12 @@ impl CaptionState {
         Ok(next)
     }
 
+    /// Writes the current settings (used for throttled layout saves).
+    pub fn persist(&self) -> Result<(), CaptionError> {
+        let guard = self.settings.lock();
+        self.write(&guard)
+    }
+
     fn write(&self, settings: &CaptionSettings) -> Result<(), CaptionError> {
         let path = self
             .path
@@ -608,6 +633,7 @@ async fn run_translate(
 
 #[tauri::command]
 pub async fn caption_translate(
+    app: AppHandle,
     state: State<'_, CaptionState>,
     text: String,
     source_lang: String,
@@ -619,6 +645,9 @@ pub async fn caption_translate(
     if !state.rate.lock().allow(Instant::now()) {
         return Err(CaptionError::from_code("rate-limited"));
     }
+    require_open_window(&target_lang, |label| {
+        app.get_webview_window(label).is_some()
+    })?;
     let context = check_input(&text, &source_lang, &target_lang, &context)?;
     if !state
         .budget
@@ -735,6 +764,22 @@ mod tests {
             9
         );
         assert_eq!(request_bytes("x", &[]), 1);
+    }
+
+    #[test]
+    fn translation_needs_the_target_window_open() {
+        let open = |label: &str| label == "caption-en";
+        assert!(require_open_window("en", open).is_ok());
+        let err = require_open_window("ko", open).unwrap_err();
+        assert_eq!(err.code, "invalid-input");
+        let m = err.message.to_lowercase();
+        for bad in ["not found", "not allowed", "unknown command"] {
+            assert!(!m.contains(bad), "{m}");
+        }
+        assert_eq!(
+            require_open_window("fr", |_| true).unwrap_err().code,
+            "invalid-input"
+        );
     }
 
     #[test]

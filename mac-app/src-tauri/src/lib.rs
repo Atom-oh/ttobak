@@ -29,6 +29,7 @@
 mod audio;
 mod aws_profiles;
 mod caption_model;
+mod caption_overlay;
 mod caption_translate;
 mod control;
 mod control_proto;
@@ -779,6 +780,7 @@ pub fn run() {
         .on_menu_event(|app, event| update::on_menu_event(app, &event.id().0))
         .manage(control::ControlState::default())
         .manage(Arc::new(meeting_detect::MeetingState::default()))
+        .manage(caption_overlay::OverlayState::default())
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
@@ -810,6 +812,10 @@ pub fn run() {
             caption_translate::caption_settings_get,
             caption_translate::caption_settings_set,
             caption_translate::caption_translate,
+            caption_overlay::caption_overlay_open,
+            caption_overlay::caption_overlay_close,
+            caption_overlay::caption_overlay_set_style,
+            caption_overlay::caption_overlay_push,
         ])
         .setup(|app| {
             // Caption translation; failure only disables it.
@@ -873,6 +879,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // Caption overlays float above everything with no close control,
+            // so they close with the main window (their saved `open` flags
+            // are kept for the next launch).
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = &event {
+                if caption_overlay::closes_overlays(label, event) {
+                    caption_overlay::destroy_all(app_handle);
+                }
+            }
             // Best-effort finalize on a GRACEFUL quit (window closed, Cmd+Q,
             // app.exit()). This only helps that path — a SIGKILL (Activity
             // Monitor "Force Quit", `kill -9`) tears the process down

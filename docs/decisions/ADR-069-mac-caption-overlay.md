@@ -1,8 +1,8 @@
 # ADR-069: Mac caption overlay windows
 
-- Status: Accepted for implementation; not verified on a projector or over a
-  full-screen slideshow or against a real AWS account. The manual verification
-  record arrives with the overlay PR (2/4).
+- Status: Accepted for implementation; partly observed in a local test build (see the verification record); not verified on a projector or over a full-screen slideshow
+  (see the verification record); the only real AWS call recorded is one
+  `caption_translate` round in that local session.
 - Decision date: 2026-11-10.
 - Numbering: ADR-069 because ADR-066 is reserved by the account-shared
   calendar work and ADR-068 is SA performance data residency.
@@ -15,9 +15,9 @@
   profile confirmation; 2/4: overlay windows, page and capability, open-window
   check; 3/4: record-page
   bridge and panel; 4/4: layout menu and remaining docs. Parts of later PRs do not
-  exist before they land: the windows, event routing, transparency, window level
-  and overlay capability sections describe 2/4, and window reopen on the record
-  page describes 3/4.
+  exist before they land: the windows, event routing, idle display, transparency,
+  window level, overlay capability and mouse sections describe 2/4, and window
+  reopen on the record page describes 3/4.
 
 ## Context
 
@@ -48,6 +48,16 @@ one window, but in Tauri 2.12 a JavaScript listener registered with the default
 target (`Any`) receives every emit. Each page therefore listens with a target scoped
 to its own window (`{kind: 'WebviewWindow', label: 'caption-<lang>'}`), and both
 payloads carry `lang`; the page drops any payload for another language.
+
+**Idle and failure display.** A failed translation pushes that entry's id with empty
+text, which removes its line, so expired credentials mid-sentence never leave a stale
+draft on the projector. Text longer than the 4,000-byte push cap is cut to its tail
+on a UTF-8 character boundary before pushing (`MAX_PUSH_TEXT_BYTES`). Skipped filler
+finals push nothing. Once an id is shown as final, later drafts for it are dropped
+because commands can emit out of order. A transparent overlay still takes clicks meant for
+the windows under it, so a `clear` push orders the window out, and a non-empty entry
+or a preview orders it back in without making it key, so focus stays with the
+slideshow.
 
 **Transparency.** `tauri.conf.json` sets `macOSPrivateApi: true` and Cargo enables
 the `macos-private-api` feature of `tauri`; windows are built `transparent`. This
@@ -123,6 +133,14 @@ codes are listed in `mac-app/CLAUDE.md`.
 `core:event:allow-listen`, `allow-unlisten`, `core:window:allow-start-dragging`
 and `core:window:allow-set-size` only. No event emit and no app command.
 
+**Mouse move and resize.** Hovering an overlay shows a dashed outline, a top-centre
+move handle and a bottom-right resize grip, all hidden again when the pointer leaves,
+so a projected view shows only subtitles; the chrome sits in reserved padding and
+never covers text. tao 0.37 returns `NotSupported` for `drag_resize_window` on macOS,
+so the grip resizes the window from the page with `setSize(LogicalSize)` once per
+animation frame, clamped to 320x80; the resulting `Resized` event saves the layout. The page is a local origin, holds no
+token and makes no network call.
+
 **Recognition language.** The third recognition language is opt-in per session;
 the default stays `ko-KR,en-US` on web, mobile and Mac. The record page option
 adds `zh-CN` or `ja-JP` (`liveLanguageOptions`, threaded through `sttManager`),
@@ -165,4 +183,29 @@ other must stay aligned; change both together.
 
 ## Manual verification record
 
-The verification record arrives with the overlay PR (2/4), whose windows it checks.
+Recorded 2026-11-10. The owner ran a local test build (the app pointed at a
+local dev server) on a laptop with an external display; rows marked "observed"
+come from that single session. Nothing was run on a projector, over a full-screen
+slideshow or in a Zoom share. Go is not installed locally, so `go vet` was
+not run for the comment-only change in `translate.go` (delivered in PR 1/4). Unit tests in the Rust
+modules and the frontend scripts are separate from this checklist.
+
+| Check | Result |
+|---|---|
+| Overlay stays above a full-screen PowerPoint slideshow on an external display | not run |
+| Overlay stays above a full-screen Keynote slideshow on an external display | not run |
+| Transparent background and text outline render correctly | not run |
+| Zoom full-screen share shows the overlay | not run |
+| Zoom single-window share does not show the overlay | not run |
+| Expired credentials show the error, then `mwinit`, then retry succeeds without restart | not run |
+| Missing model access and missing profile show their own messages | not run |
+| Chinese and Japanese speakers with the third language on (recognition, source labels, original-vs-translation windows) | not run |
+| Saved layout and style restored after app restart | not run |
+| Two windows open: each shows only its own language | observed by the owner, local test build, 2026-11-10 |
+| Two windows open: a style change applies only to its own window | not run |
+| Three windows (ko, en, zh) open with the third language on: each shows its own language | observed by the owner, local test build, 2026-11-10 |
+| Hover chrome appears, the move handle drags and the resize grip resizes | observed by the owner, local test build, 2026-11-10 |
+| Overlay becomes invisible after a recording stops | observed by the owner, local test build, 2026-11-10 |
+| Display unplugged: window reopens visible on the primary display | not run |
+| Changing the profile or region shows the native confirmation above the main window; Cancel keeps the saved values and Allow applies them | not run |
+| Overlay translation on a real account | `caption_translate` returned an Amazon Translate interim and a Luna final for ko to zh once, 2026-11-10; latency not measured |
