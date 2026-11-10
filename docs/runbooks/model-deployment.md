@@ -193,7 +193,9 @@ https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inferen
 Uploaded-image classification and analysis use `BEDROCK_IMAGE_MODEL_ID` =
 `global.openai.gpt-6.1-terra`, with the existing us-west-2 runtime. Legacy news
 uses `SUMMARIZE_MODEL_ID` = `global.openai.gpt-6-luna`; structured publication
-uses the same `FINAL_MODEL_ID` in the stack region. These settings are independent
+uses the same `FINAL_MODEL_ID` in the stack region. Their exact OpenAI grants
+include the source-region `project/default` required by the Bedrock model card.
+These settings are independent
 of meeting-summary and translation presets. Technical-source crawling retains
 its Sonnet setting.
 

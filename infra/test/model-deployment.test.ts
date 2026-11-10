@@ -96,11 +96,13 @@ describe('model deployment wiring', () => {
       arn(':bedrock:us-west-2:111111111111:inference-profile/global.openai.gpt-6.1-terra'),
       arn(':bedrock:us-west-2::foundation-model/openai.gpt-6.1-terra'),
       arn(':bedrock:::foundation-model/openai.gpt-6.1-terra'),
+      arn(':bedrock:us-west-2:111111111111:project/default'),
     ]);
     expect(grants.find(s => s.Sid === 'InvokeNewsSummaryModel').Resource).toEqual([
       arn(':bedrock:ap-northeast-2:111111111111:inference-profile/global.openai.gpt-6-luna'),
       arn(':bedrock:ap-northeast-2::foundation-model/openai.gpt-6-luna'),
       arn(':bedrock:::foundation-model/openai.gpt-6-luna'),
+      arn(':bedrock:ap-northeast-2:111111111111:project/default'),
     ]);
   });
 

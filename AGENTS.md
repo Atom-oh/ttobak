@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: bea183c6d565 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 9a150bbb6bd5 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -41,9 +41,9 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 | MCP | TypeScript stdio/HTTP adapter of authenticated APIs | `mcp-server/src/`, `mcp-server/package.json` |
 
 Model IDs are function configuration. Go uses `BEDROCK_MODEL_ID` for auxiliary
-Opus and `BEDROCK_SONNET_MODEL_ID` for refinement. Final notes select GPT-6.1 Sol
+Opus and `BEDROCK_SONNET_MODEL_ID` for refinement. Notes select GPT-6.1 Sol
 through `BEDROCK_SUMMARY_MODEL_ID`, with bounded continuation and strict completion
-before publication. Images: GPT-6.1 Terra; news: GPT-6 Luna; QA/simulator: Sonnet 5.5; Go: Haiku 5.5. Verify `backend/internal/service/bedrock.go` and
+before publication. Images: GPT-6.1 Terra; news: GPT-6 Luna; QA/simulator: Sonnet 5.5; small Go: Haiku 5.5. Verify `backend/internal/service/bedrock.go` and
 `infra/lib/gateway-stack.ts`. QA detection uses Haiku 5.5; translation uses Amazon
 Translate. CI reviewer aliases are separate configuration.
 

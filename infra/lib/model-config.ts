@@ -4,13 +4,15 @@ import { Construct } from 'constructs';
 export const IMAGE_MODEL_ID = 'global.openai.gpt-6.1-terra';
 export const NEWS_MODEL_ID = 'global.openai.gpt-6-luna';
 
-/** Exact global/profile ARNs observed with GetInferenceProfile. */
+/** Exact profile/model ARNs plus the documented OpenAI default-project grant. */
 export function extractionModelResources(partition: string, account: string, region: string, profile: string): string[] {
   const model = profile.slice('global.'.length);
   return [
     `arn:${partition}:bedrock:${region}:${account}:inference-profile/${profile}`,
     `arn:${partition}:bedrock:${region}::foundation-model/${model}`,
     `arn:${partition}:bedrock:::foundation-model/${model}`,
+    ...(profile.startsWith('global.openai.')
+      ? [`arn:${partition}:bedrock:${region}:${account}:project/default`] : []),
   ];
 }
 

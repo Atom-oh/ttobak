@@ -34,9 +34,10 @@ comparison was introduced.
 
 Applied the loaded Ops Security Audit procedure to the changed IaC. No new mandate
 violation was found. The new image grant permits only InvokeModel on the exact
-Terra global foundation model, us-west-2 foundation model and invocation profile.
+Terra global foundation model, us-west-2 foundation model, invocation profile
+and account/region `project/default` required by the official model card.
 The shared crawler grant similarly scopes Luna to the stack region. The structured
-worker adds the same three Luna resources and retains its exact outgoing Opus
+worker adds the three Luna model/profile resources and its default project and retains its exact outgoing Opus
 resources for running invocations and rollback. Existing image Claude permissions
 and shared technical-source crawler grants remain; none is a runtime fallback.
 No model grant uses a wildcard model name, wildcard principal or unconditioned
