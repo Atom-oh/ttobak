@@ -68,13 +68,16 @@ so no deduction applies. Informational scope boundaries do not count as defects.
 
 ## Critical and warning issues
 
-None outstanding.
+The independent review found mixed upload-path instructions. This revision
+separates immediate audio-only new-meeting upload from the existing-meeting queue,
+formats and 500MB check, verified against both components. It removes standalone flow-arrow cells; restored simulation limits
+follow with the operations revision. No located content defect remains; obtain fresh latest-head CI review.
 
 ## Source-omission cross-check
 
 | Source section | Status | Note |
 |---|---|---|
-| Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
+| Existing 16 guide workflows | PARTIAL | Rewritten first ten chapters; remaining workflows delivered by the next PR |
 | Source inventory / current menus | PARTIAL | Remaining customer/organization chapters are delivered by the next PR |
 | Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
 | Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
