@@ -150,6 +150,16 @@ test('failed job shows a plain Korean reason and retry resumes the same target',
   for (const code of ['REQUESTER_REVOKED', 'MERGE_CONFLICT', 'STEP_FAILED', 'DISPATCH_FAILED']) assert.match(errors[code], /[가-힣]/);
 });
 
+test('an aborted job stops polling and offers no retry', async () => {
+  const page = dialogFixture({ resume: true, status: async () => job({ state: 'aborted', abortedAt: '2026-01-02T00:00:00Z' }) });
+  await page.settle();
+  const { ACCOUNT_MERGE_COPY: copy } = page.exports;
+  assert.equal(page.live().length, 0, 'no polling after abort');
+  assert.ok(page.text().includes(copy.aborted));
+  assert.equal(page.button(copy.retry), undefined);
+  assert.match(copy.cliOnlyTitle, /CLI/);
+});
+
 test('a stalled running job offers retry; a fresh one does not', async () => {
   const stale = dialogFixture({ resume: true, status: async () => job({ updatedAt: new Date(Date.now() - 3600_000).toISOString() }) });
   await stale.settle();

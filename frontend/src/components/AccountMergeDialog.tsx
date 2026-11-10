@@ -24,7 +24,7 @@ export const ACCOUNT_MERGE_COPY = {
   unverifiable: '확인할 수 없음',
   present: '있음',
   absent: '없음',
-  cliOnlyTitle: 'CLI에서만 옮길 수 있는 항목',
+  cliOnlyTitle: '병합이 끝난 뒤 운영자가 CLI로 옮겨야 하는 항목',
   audienceTitle: '새로 접근할 수 있게 되는 사람',
   audienceMembers: (n: number) => `대상 어카운트의 멤버 ${n}명이 이 어카운트의 내용을 새로 볼 수 있습니다.`,
   audienceNoMembers: '대상 어카운트에만 있는 멤버는 없습니다.',
@@ -42,6 +42,7 @@ export const ACCOUNT_MERGE_COPY = {
   done: '병합이 끝났습니다.',
   openTarget: '대상 어카운트로 이동',
   failedTitle: '병합이 중단되었습니다.',
+  aborted: '운영자가 병합을 취소했습니다. 이미 옮겨진 항목은 대상 어카운트에 남아 있습니다.',
   retry: '다시 시도',
   retrying: '다시 시작하는 중…',
   conflict: '어카운트가 변경되었거나 이미 병합이 진행 중입니다. 새로고침 후 다시 시도하세요.',
@@ -314,6 +315,7 @@ export function AccountMergeDialog({ accountId, userId, resume = false, onClose,
                   className="rounded-lg bg-primary px-4 py-2 font-semibold text-white">{ACCOUNT_MERGE_COPY.openTarget}</button>
               </>
             )}
+            {job.state === 'aborted' && <p role="status">{ACCOUNT_MERGE_COPY.aborted}</p>}
             {job.state === 'failed' && (
               <>
                 <p role="alert" className="font-semibold">{ACCOUNT_MERGE_COPY.failedTitle}</p>
