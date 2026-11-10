@@ -32,9 +32,10 @@ read as 7-day `calendar_view` requests.
 
 - **Identity.** `meetingId` (per occurrence) is the `externalId`. One
   `sourceId` is kept per selected server name.
-- **Content.** The title, times, all-day dates and location go to TTOBAK.
-  Locations have join URLs and passcodes removed. Organizer, attendees, body,
-  categories and response are dropped.
+- **Content.** The title, times, all-day dates, location and the organizer's
+  lowercase email domain (`organizerDomain`) go to TTOBAK. Locations have join
+  URLs and passcodes removed. The organizer's name and email local part,
+  attendees, body, categories and response are dropped.
 - **Exclusions.** Items flagged `Private` or `Confidential` are excluded, and
   removed if they were tracked. Events longer than 93 days are skipped. Real
   runs fail with `SENSITIVITY_UNKNOWN` when any item lacks a sensitivity flag,
@@ -57,6 +58,21 @@ read as 7-day `calendar_view` requests.
     (another run holds `calendar.lock`) and `TTOBAK_*`. A lock whose process
     is gone is replaced by one run at a time; if the PID was reused by an
     unrelated process, delete `~/.ttobak/intake/calendar.lock` by hand.
+
+## Deploy order and rollback
+
+- Deploy the API before any runner that sends `organizerDomain`. The calendar
+  request decoder is strict, so an older API rejects such batches with 400 and
+  every calendar run fails until the API is updated.
+- Rolling the API back below this release after a calendar sync breaks reading
+  the newly sealed events: older readers decode the sealed plaintext strictly
+  and report `organizerDomain` as corrupt data, so `GET /api/calendar/events`
+  returns 500 for pages holding those events. Reading recovers only after a
+  re-sync rewrites them without the field (an older runner, and only within
+  the intake window), after they expire, or after the API is redeployed at or
+  above this release, whose sealed decoder tolerates unknown fields.
+- Re-running `intake calendar` backfills `organizerDomain` only for events in
+  the intake window (past 7 days through the next 30), not the full year.
 
 ## SpecReq task step
 
@@ -240,6 +256,14 @@ only and makes no TTOBAK calls. It holds `sfdc.lock`.
   4xx/409 handling and `complete:true` follow the calendar rules above. The
   receipt must carry revision+1 and matching counts. `--reconcile` adopts the
   revisions of `GET /api/performance/sources` and resends every current row.
+- **Stale server assignments.** On `--reconcile`, and whenever the local
+  assignments ledger is fresh (a new Mac, a deleted `~/.ttobak/intake`, or a new
+  `sourceId` after selecting another server name), the runner also reads
+  `GET /api/performance/mappings` and keeps only its SFDC account IDs. Every
+  server assignment absent from the current snapshot is sent as a `remove`, so a
+  lost ledger cannot leave false silent customers. Tasks are not listed; they
+  keep their `pendingShareExpiresAt` TTL. A malformed listing fails with
+  `TTOBAK_UNAVAILABLE` before any batch is built.
 
 Acceptance on the Mac is pending: run `intake sfdc --dry-run`, compare the
 counts with AWSentral, then run `intake sfdc` and re-run to confirm empty
