@@ -41,6 +41,14 @@
         "pass": true
       },
       {
+        "name": "4k final chapter navigation remains active",
+        "pass": true
+      },
+      {
+        "name": "legacy flow arrows do not occupy grid cells",
+        "pass": true
+      },
+      {
         "name": "keyboard shortcut focuses search",
         "pass": true
       },
@@ -157,7 +165,7 @@
   },
   "assets": {
     "favicon.svg": "af0638f836b54089f277b5a8f3adf19d39edb4dcfe4d7fbcc62a6379c145bef6",
-    "guide.js": "33b1bffeea0046d7aab1abc208a0898c1f004674e90750585ae106bd3ffa7463",
+    "guide.js": "06aacbdd4fdf5583ed59bd44f8a1aa2e822e1fad4050356859eefe23a8151d6c",
     "index.html": "3d73c74ce16f0b365b1da6fe577cac87a43f64e81be8d6fce37fdea1dc110696",
     "screen-accounts.svg": "e3dd3f63af0fd42e05d2c2123b49dad1aa1c967bf9df88b61f421032041ba459",
     "screen-assistant.svg": "0b5695d2207843433a49c3e571ed2ddfbde874563b4327d7d39130c52c42fbe5",
@@ -167,6 +175,6 @@
     "screen-research.svg": "61a761ad2080f79895ba87a941cff400ed8a4d0af56d2e15847d880086ca1698",
     "screen-settings.svg": "ec5daabc2a724ec4fa2d2a3d4d2c87cfa97b32d28d925c08c81ad30df97748d2",
     "screen-upload.svg": "8ebdba1d01cbbb8054a2162e5cd1b73e7f180b5546b8f0655a1dbdd4eb74a3f7",
-    "style.css": "b4a883c3d20180261fc9b97592cd248c86f464c6ac18c7b12ca0bb6da2c4f726"
+    "style.css": "7782c44748ab378a92e77de987e8aaa6afaf4a97eeaccccf4e89e07d064392cd"
   }
 }

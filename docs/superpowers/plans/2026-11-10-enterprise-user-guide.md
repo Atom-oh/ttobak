@@ -72,5 +72,5 @@ Task 4: foundation #750, meeting workflows #751, complete manual #752; source
 evidence now prepared. Binary inputs were replaced with reviewable SVG diagrams
 after initial rejection. Required latest-head reviews and publication are pending.
 
-Final reader verification: 34 browser checks passed after wording corrections and
+Final reader verification: 36 browser checks passed after wording corrections and
 menu-label search indexing. The evidence JSON binds all twelve public asset hashes.
