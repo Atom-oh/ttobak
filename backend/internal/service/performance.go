@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -84,7 +85,17 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 		return nil, ErrInvalidInput
 	}
 	sum := sha256.Sum256(encoded)
-	return svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, hex.EncodeToString(sum[:]))
+	receipt, err := svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, hex.EncodeToString(sum[:]))
+	if err != nil {
+		return nil, err
+	}
+	if source == model.PerformanceSourceSFDCAssignments && normalized.Complete && !receipt.Replayed {
+		// The sync is committed; an auto-mapping failure must not undo it.
+		if err := svc.autoMapAssignments(ctx, userID); err != nil {
+			log.Printf("performance auto mapping failed: %v", err)
+		}
+	}
+	return receipt, nil
 }
 
 func (svc *PerformanceService) normalizePerformanceRequest(source string, request model.PerformanceSyncRequest) (model.PerformanceSyncRequest, error) {

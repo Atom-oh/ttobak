@@ -335,6 +335,7 @@ func performanceRetryReceipt(saved *performanceBatchReceipt, digest string) (*mo
 		return nil, ErrConditionFailed
 	}
 	receipt := saved.Receipt
+	receipt.Replayed = true
 	return &receipt, nil
 }
 

@@ -106,7 +106,9 @@ func TestApplyPerformanceBatchReceiptReplay(test *testing.T) {
 		test.Fatal("receipt must expire")
 	}
 	again, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, performanceTaskRequest(0), performanceTestDigest)
-	if err != nil || *again != *first {
+	replayed := *first
+	replayed.Replayed = true
+	if err != nil || *again != replayed || first.Replayed {
 		test.Fatalf("identical retry must return the saved receipt: %+v %v", again, err)
 	}
 	_, err = repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, performanceTaskRequest(0), strings.Repeat("b", 64))
