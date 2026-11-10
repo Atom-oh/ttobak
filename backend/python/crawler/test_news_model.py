@@ -14,7 +14,7 @@ def count_request():
     return {"modelId": FINAL_MODEL_ID, "input": {"converse": {
         "messages": [{"role": "user", "content": [{"text": "공개 기사 요약"}]}],
         "system": [{"text": "Use the source."}],
-        "additionalModelRequestFields": {"thinking": {"type": "disabled"}},
+        "additionalModelRequestFields": {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}},
     }}}
 
 

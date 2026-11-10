@@ -117,8 +117,8 @@ only and makes no TTOBAK calls. It holds `sfdc.lock`.
   example Partner L14 sellers) are not SFDC accounts and are dropped. Tasks
   are the owner's (`ownerId`) with `activityDate` from January 1 of the
   previous year through one year after today. Both follow `cursor` pages of 500, at most 20 pages each.
-  A capped, cursorless, short (`totalCount`) or malformed page fails with
-  `PARSE_FAILED`; a changed schema with `SCHEMA_CHANGED`. Every read finishes
+  A capped, cursorless, short (`totalCount`) or malformed page, or a record ID
+  repeated across pages, fails with `PARSE_FAILED`; a changed schema with `SCHEMA_CHANGED`. Every read finishes
   before any batch is built, so `AUTH_EXPIRED_MIDWAY` never leaves a partial
   snapshot.
 - **Content.** Tasks send only `taskId`, `sfdcAccountId` (empty when the task
