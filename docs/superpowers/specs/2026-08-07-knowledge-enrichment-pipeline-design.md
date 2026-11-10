@@ -284,7 +284,7 @@ parts of the presentation work. Do not classify all of this proposal as either
 shipped or missing based on one component.
 
 Relevant decisions: [ADR-004](../../decisions/ADR-004-crawler-insights-for-sa-knowledge-base.md),
-[ADR-005](../../decisions/ADR-005-live-stt-translation-and-dictionary.md),
+[ADR-008](../../decisions/ADR-008-custom-dictionary-for-stt-accuracy.md),
 [ADR-010](../../decisions/ADR-010-insights-obsidian-style-markdown-rendering.md),
 [ADR-011](../../decisions/ADR-011-interactive-deep-research.md),
 [ADR-021](../../decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md),

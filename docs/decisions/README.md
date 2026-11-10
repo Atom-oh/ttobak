@@ -13,10 +13,12 @@ decision changes; version control keeps the earlier text.
 ## Consolidation in progress (2026-11-11)
 
 The earlier one-record-per-decision set (ADR-001 to ADR-073) is being merged
-into topic records. Until it finishes, numbers not listed below still name
-their original record. A retired number is reused only after every reference
-to it has been rewritten.
+into topic records. A record rewritten in place keeps its number and is
+listed below with its new scope; other numbers still name their original
+record. A retired number is reused only after every reference to it has been
+rewritten.
 
-| Former record | Now in |
+| Record | Change |
 |---|---|
-| ADR-008 Per-user dictionaries for speech recognition | [ADR-005](ADR-005-live-stt-translation-and-dictionary.md) |
+| [ADR-005](ADR-005-speech-languages-and-live-translation.md) | Rewritten as speech languages and live translation; was Korean and English detection in Transcribe |
+| [ADR-008](ADR-008-custom-dictionary-for-stt-accuracy.md) | Rewritten in place as the dictionary record; was per-user dictionaries |

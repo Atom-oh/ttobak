@@ -148,7 +148,7 @@ retired. Its data moves in a one-time cutover
    are translated only after an explicit opt-in (fast path); finals use the
    validated high-quality interpreter with frozen source context and Amazon
    Translate fallback, and the API applies per-user hourly request limits
-   (ADR-005). Interpretation failures
+   (ADR-005 amendments). Interpretation failures
    do not stop capture. This path does not change batch transcription or saved notes.
    Live translations are not persisted. Readers can translate final AI notes or
    the selected transcript on demand: one `MeetingReadingService` page goes,
@@ -390,7 +390,7 @@ the same summarize Lambda. Run/source/prior-item checks publish items and succes
 together, preserving unchanged IDs/completion and prior results on failure.
 An empty array alone never establishes successful analysis.
 
-Automatic dictionary term extraction (ADR-005) has its own
+Automatic dictionary term extraction (ADR-008) has its own
 MEETING#/ANALYSIS#terms state. The end of summary analyses, a preserved-human-content
 summary and a saved-source re-summary call a non-fatal Enqueue, which publishes
 TermsRequested to the same summarize Lambda only when `AUTO_TERMS_MODE=personal`

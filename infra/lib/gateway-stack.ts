@@ -178,7 +178,7 @@ export function transcriptCorrectionEnvironment(scope: Construct): Record<string
  * KB-document, research-report and daily news term extraction for the
  * summarize Lambda (layered dictionary 4.2). CDK context `ttobak:kbTermsMode` and
  * `ttobak:researchTermsMode` (off|personal|on; personal never writes an Account,
- * ADR-005: Account-layer cleanup on unlink), `ttobak:newsTermsMode` (off|on), all default off, plus
+ * ADR-008 FU4), `ttobak:newsTermsMode` (off|on), all default off, plus
  * `ttobak:newsTermsSources` (global|all, default global); invalid values fail
  * synth.
  */

@@ -657,7 +657,7 @@ included (`LEGACY_DELETE_KEY`). KO/EN badges show in use, preparing,
 the page polls every 10 seconds only during a build.
 
 The recording page calls the dictionary GET once (a builder poll opportunity) but
-sends no vocabulary on live streams: no API names one yet (ADR-005).
+sends no vocabulary on live streams: no API names one yet (ADR-008 rollout check 5).
 `lib/liveVocabulary.ts` would send at most one name per `LanguageOptions`
 language; with a name, a vocabulary BadRequest before the first stream event
 retries once without it, and any vocabulary rejection drops it for the recording

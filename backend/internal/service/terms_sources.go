@@ -38,7 +38,7 @@ const (
 	SourceTermsModeOn  = "on"
 	// SourceTermsModePersonal (KB and research only) extracts into the
 	// owner's Personal layer and never an Account: Account cleanup on unlink
-	// (ADR-005: Account-layer cleanup on unlink) does not exist yet.
+	// (ADR-008 FU4) does not exist yet.
 	SourceTermsModePersonal = "personal"
 
 	// termsSourceMaxBytes caps the text one source sends, as the meeting path
