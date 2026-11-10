@@ -327,17 +327,43 @@ func validateInterpretation(source, output, sourceLang, targetLang string) error
 		return nil
 	}
 	share := float64(hangul) / float64(letters)
+	// A source made only of Latin names, identifiers or acronyms may come back
+	// unchanged in any target.
+	kept := isLatinOnly(source) && tokensAppearIn(trimmed, source)
+	han, kana := hanKanaCounts(trimmed)
 	switch targetLang {
 	case "ko":
-		if share < 0.3 && !(isLatinOnly(source) && tokensAppearIn(trimmed, source)) {
+		if share < 0.3 && !kept {
 			return fmt.Errorf("%w: not Korean", errInvalidInterpretation)
 		}
 	case "en":
-		if share > 0.1 {
+		if share > 0.1 || float64(han+kana)/float64(letters) > 0.1 {
 			return fmt.Errorf("%w: not English", errInvalidInterpretation)
+		}
+	case "ja":
+		if share > 0.1 || (han+kana == 0 && !kept) {
+			return fmt.Errorf("%w: not the target language", errInvalidInterpretation)
+		}
+	case "zh":
+		if share > 0.1 || (han == 0 && !kept) {
+			return fmt.Errorf("%w: not the target language", errInvalidInterpretation)
 		}
 	}
 	return nil
+}
+
+// hanKanaCounts counts Han and Japanese kana letters in text.
+func hanKanaCounts(text string) (han, kana int) {
+	for _, r := range text {
+		switch {
+		case !unicode.IsLetter(r):
+		case unicode.Is(unicode.Han, r):
+			han++
+		case unicode.In(r, unicode.Hiragana, unicode.Katakana):
+			kana++
+		}
+	}
+	return han, kana
 }
 
 func hangulShare(text string) (hangul, letters int) {

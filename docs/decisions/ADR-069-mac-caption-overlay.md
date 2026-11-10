@@ -190,9 +190,10 @@ other must stay aligned; change both together.
 - `mac-app/src-tauri/Cargo.lock` stays git-ignored (existing policy), so the AWS
   SDK crates resolve at build time.
 - Mac changes have no CI coverage.
-- Known gap: an echoed English final passes validation for ja and zh targets. The
-  server validator has the same gap, so change `interpreter.rs` and `translate.go`
-  together.
+- Closed gap: an echoed English final used to pass validation for ja and zh
+  targets in both validators. `interpreter.rs` and `translate.go` now require Han
+  (zh) or kana/Han (ja) output, and at most a 0.1 Han/kana share for en, except a
+  few words that all occur in a Latin-only source. Keep changing both together.
 
 ## Manual verification record
 
