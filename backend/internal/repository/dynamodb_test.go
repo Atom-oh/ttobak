@@ -419,7 +419,7 @@ func TestSiblingSizeCondition(t *testing.T) {
 		_, ok := siblingSizeCondition(
 			map[string]bool{
 				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
-				"content": true, "notes": true, "liveSummary": true, "actionItems": true,
+				"content": true, "notes": true, "liveSummary": true, "actionItems": true, "contentEn": true,
 			},
 			map[string]inlineFieldSize{})
 		if ok {
