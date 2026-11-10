@@ -327,6 +327,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
 | Custom TermsRequested, ttobak.analysis | summarize, automatic term extraction only |
 | Custom PeopleResolveRequested, ttobak.analysis | summarize, account people resolution only |
+| Custom AccountMergeRequested, ttobak.analysis | summarize, account merge worker only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
 | S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-062; skips checkpoints) |
@@ -744,9 +745,37 @@ API function depends on the rule, so the consumer exists before publishers.
 The API role's existing `events:PutEvents` grant covers publication.
 
 The resolver opens sealed account contacts, so summarize receives `KMS_KEY_ID`
-and its role gains `kms:Decrypt` on the encryption key, never encrypt or data
-key generation. The existing table grant covers the link, mention and run rows.
-The post-summary pass runs inline with its own 30-second bound.
+and its role gains `kms:Decrypt` on the encryption key. The existing table grant
+covers the link, mention and run rows. The post-summary pass runs inline with its
+own 30-second bound.
+
+## Account merge worker delivery
+
+Rule `ttobak-account-merge-requested` routes default-bus `ttobak.analysis` events
+with detail-type `AccountMergeRequested` (`{sourceAccountId}`) to the summarize
+Lambda (ADR-072). The API publishes one after starting or resuming a job; the
+worker claims a five-minute job lease under a per-invocation ID, runs the job's
+steps in `model.MergeSteps` order, saves step, cursor and counts after every
+bounded mover call, and three minutes before its deadline releases the lease and
+publishes the next event itself. A job leased elsewhere or no longer running is a
+no-op. Each mover call is bounded in size (members 200; children, projects and
+research reports 25; contacts and events 500; meetings 50 per call) and in time:
+it ends 30 seconds before the invocation deadline and within the lease TTL less
+30 seconds, and reaching that bound hands off like the deadline does. Retryable
+failures retry up to four attempts, then fail the job (`MERGE_CONFLICT` or
+`STEP_FAILED`); a non-terminal error releases the lease best effort. A running
+job with an absent or expired lease (a crashed or timed-out worker) is handed to
+a new event when the owner calls start again; a live lease is a 409.
+Delivery expires after one hour, with three retry attempts and the SSE-SQS
+`ttobak-account-merge-dlq` (seven-day retention, redrive denied), scoped to the
+exact rule ARN; `PipelineFailures` watches the DLQ (`AccountMerge`). The API
+function depends on the rule, so the consumer deploys with or before the start
+route. Both roles' existing `events:PutEvents` grants on the default bus cover
+publication, including the people resolve request for the target after finish.
+
+The contacts and events steps re-seal moved rows with the target's binding, so
+the summarize role also gains `kms:GenerateDataKey` on the encryption key (AIStack;
+never `kms:Encrypt` or `kms:ReEncrypt*`). Deploy AIStack before GatewayStack.
 
 ## Summary privacy writer activation
 

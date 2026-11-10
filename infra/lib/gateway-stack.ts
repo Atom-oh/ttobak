@@ -563,7 +563,8 @@ export class GatewayStack extends cdk.Stack {
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         // The resummary worker re-fences inherited members; match the API flag.
         ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
-        // The people resolver opens sealed account contacts (decrypt only).
+        // The people resolver opens sealed account contacts; the account merge
+        // worker also re-seals moved contacts and events with data keys.
         KMS_KEY_ID: props.kmsKeyId || '',
         ...autoTermsEnvironment(this),
         ...transcriptCorrectionEnvironment(this),
@@ -1284,6 +1285,27 @@ export class GatewayStack extends cdk.Stack {
     }));
     pipelineFailures.watchQueue('PeopleResolve', peopleResolveDlq);
 
+    // Account merge jobs run in summarize invocations. Each run holds a
+    // lease, stops three minutes before its deadline and republishes, so an
+    // event is only the hand-off; the job row carries the progress.
+    const accountMergeDlq = new sqs.Queue(this, 'AccountMergeDlq', {
+      queueName: 'ttobak-account-merge-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const accountMergeRule = new events.Rule(this, 'AccountMergeRequestedRule', {
+      ruleName: 'ttobak-account-merge-requested',
+      description: 'Run the requested account merge job from its saved step',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['AccountMergeRequested'] },
+    });
+    accountMergeRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.hours(1),
+      retryAttempts: 3,
+      deadLetterQueue: accountMergeDlq,
+    }));
+    pipelineFailures.watchQueue('AccountMerge', accountMergeDlq);
+
     // KB documents and research reports as term sources (layered dictionary
     // 4.2). The KB bucket already sends S3 events to EventBridge; summarize
     // maps kb/{uid}/... and shared/research/{id}.md to TermsSourceRequested
@@ -1346,7 +1368,7 @@ export class GatewayStack extends cdk.Stack {
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
-    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, peopleResolveRule, this.qaFunction);
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, peopleResolveRule, accountMergeRule, this.qaFunction);
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like

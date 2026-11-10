@@ -169,6 +169,8 @@ func init() {
 	accountHandler := handler.NewAccountHandler(accountService, uploadService)
 	accountMergeService := service.NewAccountMergeService(repo, accountService)
 	accountMergeService.SetJobRepo(repo)
+	// Start and resume hand the job to the summarize worker (GatewayStack rule).
+	accountMergeService.SetMergePublisher(service.AccountMergePublisher(ebClient))
 	accountMergeHandler := handler.NewAccountMergeHandler(accountMergeService)
 	// Speaker map and contact changes queue a people resolve run in the
 	// summarize worker (best-effort); the people panel reads metadata only.
@@ -363,6 +365,8 @@ func init() {
 		r.Post("/api/accounts/{accountId}/owner-invitation", accountHandler.ResendOwnerInvitation)
 		r.Post("/api/accounts/{accountId}/owner-transfer", accountHandler.TransferOwner)
 		r.Get("/api/accounts/{accountId}/merge-preview", accountMergeHandler.Preview)
+		r.Post("/api/accounts/{accountId}/merge", accountMergeHandler.Start)
+		r.Get("/api/accounts/{accountId}/merge", accountMergeHandler.Status)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Get("/api/accounts/{accountId}/reading", accountReadingHandler.Get)
 		r.Get("/api/accounts/{accountId}/contacts", accountContactsHandler.List)

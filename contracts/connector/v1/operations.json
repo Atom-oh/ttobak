@@ -33,6 +33,8 @@
     ["api.account.transferOwner", "ttobak-api-bridge", ["read", "share"], false, "POST", "/api/accounts/{accountId}/owner-transfer"],
     ["api.account.getAccount", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}"],
     ["api.accountMerge.preview", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/merge-preview"],
+    ["api.accountMerge.start", "ttobak-api-bridge", ["read", "share", "write"], false, "POST", "/api/accounts/{accountId}/merge"],
+    ["api.accountMerge.status", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/merge"],
     ["api.accountReading.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/accounts/{accountId}/reading"],
     ["api.accountContacts.list", "ttobak-api-bridge", ["read"], true, "GET", "/api/accounts/{accountId}/contacts"],
     ["api.accountContacts.create", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/accounts/{accountId}/contacts"],

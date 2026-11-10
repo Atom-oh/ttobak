@@ -75,3 +75,21 @@ func TestDispatch_PeopleResolveRequested(t *testing.T) {
 		t.Fatalf("decoded %+v", got)
 	}
 }
+
+func TestDispatch_AccountMergeRequested(t *testing.T) {
+	restore := processAccountMergeRequested
+	t.Cleanup(func() { processAccountMergeRequested = restore })
+	sentinel := errors.New("merge worker reached")
+	var got model.AccountMergeRequested
+	processAccountMergeRequested = func(_ context.Context, e model.AccountMergeRequested) error {
+		got = e
+		return sentinel
+	}
+	raw := json.RawMessage(`{"source":"ttobak.analysis","detail-type":"AccountMergeRequested","detail":{"sourceAccountId":"a1"}}`)
+	if err := Handler(context.Background(), raw); !errors.Is(err, sentinel) {
+		t.Fatalf("not routed: %v", err)
+	}
+	if got != (model.AccountMergeRequested{SourceAccountID: "a1"}) {
+		t.Fatalf("decoded %+v", got)
+	}
+}

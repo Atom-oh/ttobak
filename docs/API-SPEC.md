@@ -1314,6 +1314,35 @@ target direct member; 404 missing Account; 409 `MERGE_INELIGIBLE` with the reaso
 (tombstone or merge in progress, target inside the source subtree, hierarchy too deep
 or large). The connector inventory disables delegation.
 
+`POST /api/accounts/{accountId}/merge` starts merging the path Account into
+`intoAccountId` (ADR-072). Body `{"intoAccountId","acceptUnmoved"}` is capped at
+1,024 bytes with unknown fields rejected, and the email must be verified. It
+re-checks the preview's eligibility rules, requires `acceptUnmoved: true` when any
+unmoved category is present (billing always is), and rejects a merge whose source
+and target contacts together exceed 10,000 before anything moves. One transaction
+writes the `MERGE#job` row (state `running`, step `members`), sets the source META
+`mergingInto`, increments the target's `incomingMerges`, and rechecks ownership,
+target membership, both Accounts' open state and the target's ancestor chain. A
+`running` job for the same target whose worker lease is absent or expired is handed
+to a new worker event (202; a live lease is 409 `MERGE_RUNNING`). A
+`failed` job for the same target restarts from its saved step (the source stays
+fenced after a failure; nothing is rolled back). After the write the API publishes
+`AccountMergeRequested` for the summarize worker; when that publication fails the
+job is marked `failed` with `DISPATCH_FAILED` (restart resumes it) and the call
+returns 500. Responses: 202 with the job view;
+400 invalid body or unaccepted unmoved data; 403 unverified email, non-owner or
+non-member; 404 missing Account; 409 `MERGE_RUNNING`, `CONTACT_INDEX_TOO_LARGE`,
+`MERGE_INELIGIBLE` with the reason, or `CONFLICT` when an Account changed (or a
+concurrent transaction conflicted) during the start.
+
+`GET /api/accounts/{accountId}/merge` returns the job view to a direct member of the
+source or of the job's target: `fromAccountId`, `intoAccountId`, `state`
+(`running`, `failed`, `done`), `step`, `errorCode` (`REQUESTER_REVOKED`,
+`CONTACT_INDEX_TOO_LARGE`, `MERGE_CONFLICT`, `STEP_FAILED` or `DISPATCH_FAILED`), `counts` keyed
+`{step}.{moved|skipped|resumed|unreadable|keptSeparate}`, `startedAt`, `updatedAt`
+and `finishedAt`. Lease and cursor state are not exposed. 404 when a source member
+asks and no job exists; 403 otherwise. Both routes disable connector delegation.
+
 Account writes are fenced while an Account merges (ADR-072). Writers that check the
 Account META row also require `mergingInto` and `mergedInto` to be absent in the same
 transaction: member add and removal, owner transfer, parent changes (child and new
@@ -1967,6 +1996,8 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/owner-invitation` | `accountHandler.ResendOwnerInvitation` |
 | POST | `/api/accounts/{accountId}/owner-transfer` | `accountHandler.TransferOwner` |
 | GET | `/api/accounts/{accountId}/merge-preview` | `accountMergeHandler.Preview` |
+| POST | `/api/accounts/{accountId}/merge` | `accountMergeHandler.Start` |
+| GET | `/api/accounts/{accountId}/merge` | `accountMergeHandler.Status` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
 | GET | `/api/accounts/{accountId}/reading` | `accountReadingHandler.Get` |
 | GET | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.List` |

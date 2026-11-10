@@ -96,11 +96,13 @@ describe('AiStack', () => {
     expect(otherReads).toHaveLength(0);
   });
 
-  test('summarize may decrypt but never seal with the encryption key', () => {
+  test('summarize may open and re-seal with data keys of the encryption key only', () => {
     const kms = statementsOf('TtobakSummarizeRole').filter(statement => JSON.stringify(statement.Action).includes('kms:'));
-    expect(kms).toHaveLength(1);
-    expect(kms[0].Action).toEqual('kms:Decrypt');
-    expect(JSON.stringify(kms[0].Resource)).toContain('TtobakEncryptionKey');
+    const actions = kms.flatMap(statement => [statement.Action].flat()).sort();
+    expect(actions).toEqual(['kms:Decrypt', 'kms:GenerateDataKey']);
+    for (const statement of kms) {
+      expect(JSON.stringify(statement.Resource)).toContain('TtobakEncryptionKey');
+    }
   });
 
   test('API role can write and delete vocab/ table files', () => {

@@ -57,6 +57,9 @@ var (
 	resolveMeetingPeople          = func(context.Context, *model.Meeting) {}
 	processPeopleResolveRequested = func(context.Context, model.PeopleResolveRequested) error { return nil }
 
+	// AccountMergeRequested worker: one bounded run of the source's merge job.
+	processAccountMergeRequested = func(context.Context, model.AccountMergeRequested) error { return nil }
+
 	// KB/research term sources: Object Created on the KB bucket is mapped to
 	// TermsSourceRequested, which runs in its own invocation.
 	termsSourceBucket  string
@@ -187,7 +190,8 @@ func init() {
 	}
 
 	// The people resolver reads meeting metadata and opens sealed contacts,
-	// so only its own repository view carries the decrypt-only record sealer.
+	// and the account merge worker re-seals moved contacts and events, so
+	// only this repository view carries the record sealer.
 	peopleRepo := repo.MetadataView()
 	if sealer := sealing.NewEnvelope(kms.NewFromConfig(cfg), os.Getenv("KMS_KEY_ID")); sealer != nil {
 		peopleRepo.SetRecordSealer(sealer)
@@ -215,6 +219,22 @@ func init() {
 	}
 
 	// KB export service — gracefully skips if not configured
+	// The merge worker re-seals moved contacts and events with the target's
+	// binding, so it uses the sealing repository view.
+	mergeService := service.NewAccountMergeService(peopleRepo, nil)
+	mergeService.SetJobRepo(peopleRepo)
+	mergeService.SetMoverRepo(peopleRepo)
+	mergeService.SetWorkerRepo(peopleRepo)
+	mergeService.SetMergePublisher(service.AccountMergePublisher(ebClient))
+	mergeService.SetPeopleResolvePublisher(service.PeopleResolvePublisher(ebClient))
+	processAccountMergeRequested = func(ctx context.Context, event model.AccountMergeRequested) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadline = time.Now().Add(15 * time.Minute)
+		}
+		return mergeService.ProcessAccountMergeRequested(ctx, event, deadline)
+	}
+
 	kbID := os.Getenv("KB_ID")
 	dataSourceID := os.Getenv("DATA_SOURCE_ID")
 	var bedrockAgentClient *bedrockagent.Client
@@ -379,6 +399,18 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			return fmt.Errorf("decode people resolve event")
 		}
 		return processPeopleResolveRequested(ctx, event.Detail)
+	}
+
+	// Account merge jobs run in their own invocations; each run continues
+	// from the job's saved step.
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "AccountMergeRequested" {
+		var event struct {
+			Detail model.AccountMergeRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode account merge event")
+		}
+		return processAccountMergeRequested(ctx, event.Detail)
 	}
 
 	// KB/research term extraction likewise runs in its own invocation.
