@@ -51,6 +51,10 @@ type accountOverviewRepo interface {
 	ListAccountLinks(ctx context.Context, accountID, cursor string, limit int32) ([]model.AccountLink, *string, error)
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	GetAccountContact(ctx context.Context, account, id string) (*model.AccountContact, error)
+	ListPeopleLinksByTarget(ctx context.Context, accountID, toKind, afterSK string, maxRows int) ([]model.PeopleLink, string, error)
+	ListPeopleLinksToTarget(ctx context.Context, accountID, toKind, toID string, maxRows int) ([]model.PeopleLink, bool, error)
+	ListPeopleLinksForMeeting(ctx context.Context, accountID, meetingID string, maxRows int) ([]model.PeopleLink, bool, error)
+	GetUserByID(ctx context.Context, userID string) (*model.User, error)
 }
 
 // accountOverviewNews is implemented by AccountNewsService.
@@ -616,6 +620,9 @@ func (s *AccountOverviewService) Flow(ctx context.Context, userID, accountID str
 		return nil, err
 	}
 	out.Unassigned = unassigned
+	if err := s.flowPeople(ctx, userID, accountID, member, out, reads); err != nil {
+		return nil, err
+	}
 	out.Truncated = truncated || unassignedTruncated || reads.truncated
 	if err := fitFlow(out); err != nil {
 		return nil, err
@@ -901,9 +908,9 @@ func (s *AccountOverviewService) flowUnassigned(ctx context.Context, accountID s
 	return row, truncated, nil
 }
 
-// fitFlow drops trailing items from the longest column until the encoded
-// response fits MaxAccountFlowBytes, then trailing rows; any trim sets
-// Truncated.
+// fitFlow drops item people first, then trailing items from the longest
+// column until the encoded response fits MaxAccountFlowBytes, then trailing
+// rows; any trim sets Truncated.
 func fitFlow(flow *model.AccountFlow) error {
 	for {
 		raw, err := json.Marshal(flow)
@@ -914,6 +921,9 @@ func fitFlow(flow *model.AccountFlow) error {
 			return nil
 		}
 		flow.Truncated = true
+		if trimFlowPeople(flow) {
+			continue
+		}
 		var longest *[]model.FlowItem
 		var history *[]model.ProjectStageChange
 		size := 0
@@ -963,6 +973,9 @@ const (
 	// maxGraphContactReads bounds the distinct attendee contacts read (each a
 	// GetItem plus a KMS decrypt); more attendees set Truncated.
 	maxGraphContactReads = 200
+	// maxGraphPeopleRows bounds the people edge rows read (targets of kind
+	// member, contact and account, then each project node).
+	maxGraphPeopleRows = 1000
 	// MaxAccountGraphBytes bounds the encoded graph response.
 	MaxAccountGraphBytes = 64 * 1024
 )
@@ -1001,11 +1014,13 @@ func (b *graphBuilder) node(kind, id, label string) bool {
 func (b *graphBuilder) hasNode(kind, id string) bool { return b.nodes[graphNodeID(kind, id)] }
 
 // edge adds an edge between two present nodes.
-func (b *graphBuilder) edge(from, to, kind, origin string) {
+func (b *graphBuilder) edge(from, to, kind, origin string) { b.roleEdge(from, to, kind, origin, "") }
+
+func (b *graphBuilder) roleEdge(from, to, kind, origin, role string) {
 	if !b.nodes[from] || !b.nodes[to] {
 		return
 	}
-	key := from + "\x00" + to + "\x00" + kind
+	key := from + "\x00" + to + "\x00" + kind + "\x00" + role
 	if b.edges[key] {
 		return
 	}
@@ -1014,15 +1029,16 @@ func (b *graphBuilder) edge(from, to, kind, origin string) {
 		return
 	}
 	b.edges[key] = true
-	b.g.Edges = append(b.g.Edges, model.GraphEdge{From: from, To: to, Kind: kind, Origin: origin})
+	b.g.Edges = append(b.g.Edges, model.GraphEdge{From: from, To: to, Kind: kind, Origin: origin, Role: role})
 }
 
 // Graph returns the account's relationship graph: the account, projects that
 // still list it, meetings currently published to it, its newest events,
-// revalidated LINK# rows, direct members and event attendees that reference
-// an existing contact. Volume never fails the call; bounds set Truncated.
+// revalidated LINK# rows, event attendees that reference an existing contact
+// and people edges of present meetings. Volume never fails the call; bounds
+// set Truncated.
 func (s *AccountOverviewService) Graph(ctx context.Context, userID, accountID string) (*model.AccountGraph, error) {
-	account, _, err := s.authorizeAccount(ctx, accountID, userID)
+	account, member, err := s.authorizeAccount(ctx, accountID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -1033,7 +1049,10 @@ func (s *AccountOverviewService) Graph(ctx context.Context, userID, accountID st
 	b.node(model.GraphNodeAccount, accountID, account.Name)
 
 	steps := []func(context.Context, string, *graphBuilder, *overviewReads) error{
-		s.graphProjects, s.graphMeetings, s.graphEvents, s.graphLinks, s.graphMembers,
+		s.graphProjects, s.graphMeetings, s.graphEvents, s.graphLinks,
+		func(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
+			return s.graphPeople(ctx, userID, accountID, member, b, reads)
+		},
 	}
 	for _, step := range steps {
 		if err := step(ctx, accountID, b, reads); err != nil {
@@ -1173,28 +1192,9 @@ func (s *AccountOverviewService) graphEvent(ctx context.Context, accountID strin
 		if !validContactID(attendee.ContactID) {
 			continue
 		}
-		contact, seen := b.contacts[attendee.ContactID]
-		if !seen {
-			// Never read a contact whose node could not be added, and bound
-			// the distinct contacts read per call.
-			if len(b.g.Nodes) >= maxGraphNodes || b.contactReads >= maxGraphContactReads {
-				b.g.Truncated = true
-				continue
-			}
-			b.contactReads++
-			var err error
-			contact, err = s.repo.GetAccountContact(ctx, accountID, attendee.ContactID)
-			if graphRowUnreadable(err, repository.ErrContactUnreadable) {
-				// One unopenable contact is skipped, not fatal.
-				contact, err, b.g.Truncated = nil, nil, true
-			}
-			if err != nil {
-				return false, err
-			}
-			if contact != nil && contact.ContactID != attendee.ContactID {
-				contact = nil
-			}
-			b.contacts[attendee.ContactID] = contact
+		contact, err := s.graphContact(ctx, accountID, attendee.ContactID, b)
+		if err != nil {
+			return false, err
 		}
 		if contact == nil {
 			continue
@@ -1204,6 +1204,34 @@ func (s *AccountOverviewService) graphEvent(ctx context.Context, accountID strin
 		}
 	}
 	return true, nil
+}
+
+// graphContact reads an existing contact once per call, or nil. It never
+// reads a contact whose node could not be added, and bounds the distinct
+// contacts read per call (attendees and people edges together).
+func (s *AccountOverviewService) graphContact(ctx context.Context, accountID, id string, b *graphBuilder) (*model.AccountContact, error) {
+	contact, seen := b.contacts[id]
+	if seen {
+		return contact, nil
+	}
+	if len(b.g.Nodes) >= maxGraphNodes || b.contactReads >= maxGraphContactReads {
+		b.g.Truncated = true
+		return nil, nil
+	}
+	b.contactReads++
+	contact, err := s.repo.GetAccountContact(ctx, accountID, id)
+	if graphRowUnreadable(err, repository.ErrContactUnreadable) {
+		// One unopenable contact is skipped, not fatal.
+		contact, err, b.g.Truncated = nil, nil, true
+	}
+	if err != nil {
+		return nil, err
+	}
+	if contact != nil && contact.ContactID != id {
+		contact = nil
+	}
+	b.contacts[id] = contact
+	return contact, nil
 }
 
 func (s *AccountOverviewService) graphEvents(ctx context.Context, accountID string, b *graphBuilder, reads *overviewReads) error {
@@ -1422,33 +1450,6 @@ func (s *AccountOverviewService) graphLinkToCheck(ctx context.Context, accountID
 		return meeting != nil, err
 	}
 	return false, nil
-}
-
-// graphMembers adds the account's direct members, labelled by email (as the
-// account detail route shows) and role.
-func (s *AccountOverviewService) graphMembers(ctx context.Context, accountID string, b *graphBuilder, _ *overviewReads) error {
-	members, err := s.repo.ListAccountMembers(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	accountNode := graphNodeID(model.GraphNodeAccount, accountID)
-	for _, m := range members {
-		if m.AccountID != accountID || m.PK != model.PrefixAccount+accountID || m.SK != model.PrefixMember+m.UserID || !validLinkPlainID(m.UserID) {
-			continue
-		}
-		name := m.Email
-		if name == "" {
-			name = m.UserID
-		}
-		if m.Role != "" {
-			name += " (" + m.Role + ")"
-		}
-		if !b.node(model.GraphNodeMember, m.UserID, name) {
-			return nil
-		}
-		b.edge(graphNodeID(model.GraphNodeMember, m.UserID), accountNode, model.GraphEdgeMemberOf, "")
-	}
-	return nil
 }
 
 // fitGraph drops the newest nodes (never the account node) with their edges

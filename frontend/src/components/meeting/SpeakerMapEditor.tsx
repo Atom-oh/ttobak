@@ -3,7 +3,9 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { getSpeakerColor } from '@/lib/speakerColors';
 import { accountApi } from '@/lib/api';
-import { suggestionScope, visibleSuggestions, type SpeakerSuggestions } from '@/lib/contactSuggestions';
+import { bindingsToSave, suggestionScope, visibleSuggestions, type SpeakerPick, type SpeakerSuggestions } from '@/lib/contactSuggestions';
+import { SPEAKER_BIND_FAILED, SPEAKER_BINDINGS_HEADING, SPEAKER_UNBIND_LABEL, meetingLinkId } from '@/lib/accountPeople';
+import type { MeetingPeopleEdges, PeopleLink } from '@/types/meeting';
 
 interface SpeakerMapEditorProps {
   transcription?: { speaker: string }[];
@@ -18,6 +20,10 @@ interface SpeakerMapEditorProps {
   accountId?: string;
   userId?: string;
   membershipRevision?: number;
+  /** Speaker-to-person binding needs the owner, the meeting and an account publication (ADR-065). */
+  meetingOwnerId?: string;
+  meetingId?: string;
+  sharedToAccount?: boolean;
 }
 
 const UNMAPPED_PATTERN = /^(spk_\d+|화자[A-Z])$/;
@@ -28,7 +34,7 @@ function speakerSortKey(label: string): number {
   return 2000;
 }
 
-export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave, sttProvider, audioPartCount, onRediarize, accountId, userId, membershipRevision = 0 }: SpeakerMapEditorProps) {
+export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave, sttProvider, audioPartCount, onRediarize, accountId, userId, membershipRevision = 0, meetingOwnerId, meetingId, sharedToAccount }: SpeakerMapEditorProps) {
   const speakers = useMemo(() => {
     const labels = new Set<string>();
     transcription?.forEach((seg) => {
@@ -60,6 +66,41 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
   const suggestionController = useRef<AbortController | null>(null);
   const scope = suggestionScope(accountId || '', userId || '', membershipRevision);
   const suggestions = visibleSuggestions(loadedSuggestions, scope);
+  const [picks, setPicks] = useState<SpeakerPick[]>([]);
+  const [bindNotice, setBindNotice] = useState('');
+  const [edges, setEdges] = useState<{ scope: string; value: MeetingPeopleEdges } | null>(null);
+  const [edgesRevision, setEdgesRevision] = useState(0);
+  const [unbinding, setUnbinding] = useState('');
+  const linkId = meetingOwnerId && meetingId ? meetingLinkId(meetingOwnerId, meetingId) : '';
+  const bindingActive = !!(accountId && userId && sharedToAccount && linkId);
+  const edgesScope = JSON.stringify([scope, linkId]);
+  const speakerEdges = bindingActive && edges?.scope === edgesScope
+    ? edges.value.edges.filter((edge) => edge.role === 'speaker' && edges.value.labels[`${edge.toKind}:${edge.toId}`]) : [];
+
+  useEffect(() => {
+    if (!isOpen || !bindingActive || !accountId || !userId) return;
+    const active = new AbortController();
+    accountApi.people.edges(accountId, linkId, { signal: active.signal, expectedUserId: userId })
+      .then((value) => { if (!active.signal.aborted) setEdges({ scope: edgesScope, value }); })
+      // Existing bindings are optional context; free-text names keep working.
+      .catch(() => { if (!active.signal.aborted) setEdges(null); });
+    return () => active.abort();
+  }, [isOpen, bindingActive, accountId, userId, linkId, edgesScope, edgesRevision]);
+
+  const unbind = async (edge: PeopleLink) => {
+    if (!accountId || !userId || unbinding) return;
+    const key = `${edge.toKind}:${edge.toId}:${edge.sourceRef || ''}`;
+    setUnbinding(key);
+    setBindNotice('');
+    try {
+      await accountApi.people.unbind(accountId, { meetingId: edge.meetingId, toKind: edge.toKind, toId: edge.toId, role: edge.role }, { expectedUserId: userId });
+    } catch {
+      setBindNotice(SPEAKER_BIND_FAILED);
+    } finally {
+      setUnbinding('');
+      setEdgesRevision((value) => value + 1);
+    }
+  };
 
   useEffect(() => {
     if (!isOpen || !accountId || !userId) return;
@@ -140,8 +181,19 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
     if (Object.keys(filtered).length === 0) return;
     setSaving(true);
     setSaveError(null);
+    setBindNotice('');
     try {
       await onSave(filtered);
+      // Names are saved; binding is best-effort on top of the free text.
+      const bindings = bindingActive && accountId && userId ? bindingsToSave(filtered, picks) : [];
+      if (bindings.length > 0) {
+        const results = await Promise.allSettled(bindings.map((pick) => accountApi.people.bind(accountId!, {
+          meetingId: linkId, toKind: pick.kind, toId: pick.id, role: 'speaker', sourceRef: pick.label,
+        }, { expectedUserId: userId })));
+        if (results.some((result) => result.status === 'rejected')) setBindNotice(SPEAKER_BIND_FAILED);
+        setEdgesRevision((value) => value + 1);
+      }
+      setPicks([]);
       setIsOpen(false);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : '화자 이름을 저장하지 못했습니다. 다시 시도해 주세요.');
@@ -156,6 +208,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
       : 'bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10'
     }`}>
       {saveError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-400">{saveError}</p>}
+      {bindNotice && <p role="status" className="mb-3 text-sm text-text-secondary">{bindNotice}</p>}
       <button
         onClick={() => { if (isOpen) setLoadedSuggestions(null); setIsOpen(!isOpen); }}
         className="flex items-center gap-2 w-full text-left"
@@ -200,7 +253,13 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
               {(suggestions.members.length > 0 || suggestions.contacts.length > 0) && <select aria-label={`${label} 추천 이름`} value="" onChange={(e) => {
                 const [kind, index] = e.target.value.split(':');
                 const candidate = kind === 'team' ? suggestions.members[Number(index)] : suggestions.contacts[Number(index)];
-                if (candidate?.name) setMapping((old) => ({ ...old, [label]: candidate.name }));
+                if (!candidate?.name) return;
+                setMapping((old) => ({ ...old, [label]: candidate.name }));
+                const pick: SpeakerPick | null = kind === 'team' && 'userId' in candidate
+                  ? { label, kind: 'member', id: candidate.userId, name: candidate.name.trim() }
+                  : kind === 'contact' && 'contactId' in candidate
+                    ? { label, kind: 'contact', id: candidate.contactId, name: candidate.name.trim() } : null;
+                if (pick) setPicks((old) => [...old, pick]);
               }} className="max-w-40 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-white/10 dark:bg-slate-900">
                 <option value="">추천 선택</option>
                 {suggestions.members.length > 0 && <optgroup label="Account 팀">{suggestions.members.map((member, index) => <option key={member.userId} value={`team:${index}`} disabled={Array.from(member.name).length > 100 || /\p{Cc}/u.test(member.name)}>{member.name} · {member.role} · {member.email}</option>)}</optgroup>}
@@ -208,6 +267,21 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
               </select>}
             </div>
           ))}
+          {speakerEdges.length > 0 && <div className="rounded-lg border border-border-subtle p-3">
+            <p className="mb-2 text-xs font-semibold text-text-secondary">{SPEAKER_BINDINGS_HEADING}</p>
+            <ul className="space-y-1">
+              {speakerEdges.map((edge) => {
+                const key = `${edge.toKind}:${edge.toId}:${edge.sourceRef || ''}`;
+                return <li key={key} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-mono text-text-secondary">{edge.sourceRef || ''}</span>
+                  <span className="text-text-secondary">→</span>
+                  <span className="min-w-0 break-all text-text-main">{edges!.value.labels[`${edge.toKind}:${edge.toId}`]}</span>
+                  <button type="button" disabled={!!unbinding} onClick={() => void unbind(edge)}
+                    className="ml-auto text-primary disabled:opacity-40">{SPEAKER_UNBIND_LABEL}</button>
+                </li>;
+              })}
+            </ul>
+          </div>}
           {suggestions.teamCursor && <button type="button" disabled={!!moreLoading} onClick={() => void loadMoreTeam()} className="mr-3 text-xs text-primary disabled:opacity-40">계정 팀 더 보기</button>}
           {suggestions.nextCursor && <button type="button" disabled={!!moreLoading} onClick={() => void loadMoreSuggestions()} className="text-xs text-primary disabled:opacity-40">고객 연락처 더 보기</button>}
           <button

@@ -22,11 +22,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	"github.com/ttobak/backend/internal/duration"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/sealing"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -48,6 +50,12 @@ var (
 	// Automatic news→meeting links (design G8) for a meeting published to
 	// its account; best-effort, bounded by autoNewsLinkTimeout.
 	linkAccountNews = func(context.Context, *model.Meeting) {}
+
+	// Deterministic people resolution for a meeting published to its account
+	// (inline after the summary, bounded by peopleResolveTimeout), and the
+	// PeopleResolveRequested worker for speaker map and contact changes.
+	resolveMeetingPeople          = func(context.Context, *model.Meeting) {}
+	processPeopleResolveRequested = func(context.Context, model.PeopleResolveRequested) error { return nil }
 
 	// KB/research term sources: Object Created on the KB bucket is mapped to
 	// TermsSourceRequested, which runs in its own invocation.
@@ -176,6 +184,34 @@ func init() {
 		} else if result.Candidates > 0 {
 			log.Printf("account news links: meeting=%s %s", meeting.MeetingID, result)
 		}
+	}
+
+	// The people resolver reads meeting metadata and opens sealed contacts,
+	// so only its own repository view carries the decrypt-only record sealer.
+	peopleRepo := repo.MetadataView()
+	if sealer := sealing.NewEnvelope(kms.NewFromConfig(cfg), os.Getenv("KMS_KEY_ID")); sealer != nil {
+		peopleRepo.SetRecordSealer(sealer)
+	}
+	peopleService := service.NewAccountPeopleService(peopleRepo)
+	resolveMeetingPeople = func(ctx context.Context, meeting *model.Meeting) {
+		ctx, cancel := context.WithTimeout(ctx, peopleResolveTimeout)
+		defer cancel()
+		result, err := peopleService.ResolveMeeting(ctx, meeting.UserID, meeting.MeetingID, service.PeopleRunOptions{})
+		// Meeting ID, counts and a code only: never names, mentions or contacts.
+		if err != nil {
+			log.Printf("account people resolve failed (non-fatal): meeting=%s code=%s %s", meeting.MeetingID, service.PeopleRunErrorCode(err), result)
+		} else {
+			log.Printf("account people resolve: meeting=%s %s", meeting.MeetingID, result)
+		}
+	}
+	processPeopleResolveRequested = func(ctx context.Context, event model.PeopleResolveRequested) error {
+		result, err := peopleService.ProcessPeopleResolveRequested(ctx, event)
+		if err != nil {
+			log.Printf("people resolve request failed: meeting=%s code=%s %s", event.MeetingID, service.PeopleRunErrorCode(err), result)
+			return err
+		}
+		log.Printf("people resolve request: meeting=%s reason=%s %s", event.MeetingID, event.Reason, result)
+		return nil
 	}
 
 	// KB export service — gracefully skips if not configured
@@ -325,6 +361,17 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			return fmt.Errorf("decode terms event: %w", err)
 		}
 		return processTermsRequested(ctx, event.Detail)
+	}
+
+	// People resolution for speaker map and contact changes (spec E3).
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "PeopleResolveRequested" {
+		var event struct {
+			Detail model.PeopleResolveRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode people resolve event")
+		}
+		return processPeopleResolveRequested(ctx, event.Detail)
 	}
 
 	// KB/research term extraction likewise runs in its own invocation.
@@ -691,16 +738,20 @@ func generateClaimedSummary(ctx context.Context, meeting *model.Meeting, priorCo
 	return errors.Join(err, repo.ReleaseSummaryRetryClaim(cleanup, meeting.UserID, meeting.MeetingID, meeting.SummarizeRetryClaimedAt))
 }
 
-const autoNewsLinkTimeout = 20 * time.Second
+const (
+	autoNewsLinkTimeout  = 20 * time.Second
+	peopleResolveTimeout = 30 * time.Second
+)
 
 // finishSummaryAnalysis ends the post-summary analysis sequence: it queues term
 // extraction and, for a meeting published to its account, adds automatic news
-// links. Both run before the privacy early return. It reports whether the
+// links and resolves its people edges. All run before the privacy early return. It reports whether the
 // legacy KB export should run.
 func finishSummaryAnalysis(ctx context.Context, userID, meetingID string, current *model.Meeting) bool {
 	enqueueTerms(ctx, userID, meetingID, "summary")
 	if current != nil && current.SharedToAccount && current.AccountID != "" {
 		linkAccountNews(ctx, current)
+		resolveMeetingPeople(ctx, current)
 	}
 	return !repository.SummaryPrivacyWritesEnabled()
 }

@@ -88,7 +88,8 @@ jobs:
                      (path ~ /(^|\/)node_modules\//) ||
                      (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
                      (path ~ /(^|\/)(dist|out|build)\//) ||
-                     (path ~ /\.terraform\.lock\.hcl$/)
+                     (path ~ /\.terraform\.lock\.hcl$/) ||
+                     (path == "frontend/public/mcp/ttobak-mcp.mjs")
             }
             !skip
           ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt

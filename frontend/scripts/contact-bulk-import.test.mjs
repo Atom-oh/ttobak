@@ -14,6 +14,9 @@ function compile(path, context) {
   vm.runInNewContext(outputText, { exports, ...context });
   return exports;
 }
+function loadImport() {
+  return compile('../src/lib/contactImport.ts', { require: name => name === './contactFields.json' ? req('../src/lib/contactFields.json') : req(name), TextDecoder, Uint8Array, DOMException });
+}
 function load() {
   const contactImport = compile('../src/lib/contactImport.ts', { require: name => name === './contactFields.json' ? req('../src/lib/contactFields.json') : req(name), TextDecoder, Uint8Array, DOMException });
   return compile('../src/lib/contactBulkImport.ts', { require: name => name === './contactImport' ? contactImport : req(name), DOMException });
@@ -368,6 +371,71 @@ test('runBulkImport creates accounts, adds new people, fills same people, drops 
     ['update', 'hana', 'h1', '010-1111-2222', 'r'], ['create', 'hana', '최하나'], ['create', 'new1', '이신규'],
   ].map(c => JSON.stringify(c)).sort());
   assert.deepEqual([0, 1, 2, 3].map(i => results[i].status), ['filled', 'created', 'dropped', 'created']);
+});
+
+test('runBulkImport requests people linking for every account with saved rows and reports failures', async () => {
+  const { groupByCompany, runBulkImport } = load();
+  const contacts = [
+    { name: '김하나', company: '하나은행', email: 'kim@hanabank.com' },
+    { name: '이신규', company: '신규상사', email: 'lee@new.co.kr' },
+  ];
+  const groups = groupByCompany(contacts, accounts);
+  const resolves = [];
+  const failed = [];
+  const store = { hana: [], new1: [{ contactId: 'n1', revision: 'r', name: '이신규', company: '신규상사', email: 'lee@new.co.kr' }] };
+  const api = {
+    createAccount: async () => 'new1',
+    listContacts: async (id) => ({ contacts: store[id] || [] }),
+    createContact: async (id, c) => ({ ...c, contactId: `${id}-${c.name}`, revision: 'r' }),
+    updateContact: async () => assert.fail('unchanged rows are not written'),
+    requestPeopleResolve: async (id) => { resolves.push(id); if (id === 'new1') throw Object.assign(new Error('down'), { status: 503 }); },
+  };
+  const results = plain(await runBulkImport(contacts, groups, { 'c:신규상사': { action: 'new', name: '신규상사' } }, api,
+    { onPeopleResolveFailed: (id) => failed.push(id) }));
+  assert.deepEqual(resolves.sort(), ['hana', 'new1'], 'an account whose rows were already saved is resolved too');
+  assert.deepEqual(failed, ['new1'], 'a failed request is reported, not swallowed');
+  assert.deepEqual([0, 1].map(i => results[i].status), ['created', 'unchanged']);
+});
+
+test('runBulkImport reports resolved accounts and neither outcome when an account listing fails', async () => {
+  const { groupByCompany, runBulkImport } = load();
+  const contacts = [{ name: '김하나', company: '하나은행', email: 'kim@hanabank.com' }, { name: '최에스', company: 'SK텔레콤', email: 'choi@sktelecom.com' }];
+  const groups = groupByCompany(contacts, accounts);
+  const resolved = [];
+  const failed = [];
+  const api = {
+    createAccount: async () => assert.fail('no new account'),
+    listContacts: async (id) => { if (id === 'sk') throw Object.assign(new Error('down'), { status: 503 }); return { contacts: [] }; },
+    createContact: async (id, c) => ({ ...c, contactId: `${id}-1`, revision: 'r' }),
+    updateContact: async () => assert.fail('no updates'),
+    requestPeopleResolve: async () => ({ accepted: true }),
+  };
+  await runBulkImport(contacts, groups, {}, api, { onPeopleResolved: (id) => resolved.push(id), onPeopleResolveFailed: (id) => failed.push(id) });
+  assert.deepEqual(resolved, ['hana']);
+  assert.deepEqual(failed, [], 'a failed listing is not a resolve outcome, so an earlier failure stays listed');
+});
+
+test('runBulkImport resolves accounts of rows saved by an earlier run and never after an abort', async () => {
+  const { groupByCompany, runBulkImport } = load();
+  const contacts = [{ name: '김하나', company: '하나은행', email: 'kim@hanabank.com' }];
+  const groups = groupByCompany(contacts, accounts);
+  const resolves = [];
+  const api = {
+    createAccount: async () => assert.fail('no new account'),
+    listContacts: async () => assert.fail('skipped rows are not listed again'),
+    createContact: async () => assert.fail('skipped rows are not sent again'),
+    updateContact: async () => assert.fail('skipped rows are not sent again'),
+    requestPeopleResolve: async (id) => { resolves.push(id); },
+  };
+  await runBulkImport(contacts, groups, { [groups[0].key]: { action: 'account', accountId: 'hana' } }, api, { skipRows: new Set([0]) });
+  assert.deepEqual(resolves, ['hana']);
+  const aborted = new AbortController();
+  aborted.abort();
+  const { requestPeopleResolve } = loadImport();
+  let calls = 0;
+  assert.equal(await requestPeopleResolve(async () => { calls++; }, aborted.signal), true);
+  assert.equal(calls, 0, 'no request after an abort');
+  assert.equal(await requestPeopleResolve(async () => { throw new Error('down'); }), false);
 });
 
 test('runBulkImport stops on access denial and records other failures per row', async () => {

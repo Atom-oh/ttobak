@@ -328,7 +328,21 @@ cards (choosing a direct account first). Server truncation flags show a partial-
 needs and stall details render as plain text. Every link or news-source mutation
 reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A collapsed
 **relationship graph** renders the graph route client-side with Mermaid under
-`securityLevel: 'strict'`; labels are stripped of directives and backticks. The
+`securityLevel: 'strict'`; labels are stripped of directives and backticks.
+Person edges carry the Korean role label (dotted when auto), and a note gives
+the direct member count because only connected members are drawn.
+
+A **people** panel follows the flow (ADR-065, `components/account/AccountPeople.tsx`,
+copy in `src/lib/accountPeople.ts`). It lists resolved members and contacts with
+meeting counts and a role summary, then unresolved names with their meeting
+count. "Link" opens a member/contact picker fed by the speaker-team and
+contact loaders and resolves the whole group; "not a person" ignores the text
+account-wide. Lists page with "more", reload after each action and show a
+"more remain" note when a resolve leaves rows. In a meeting published to an
+account, choosing a speaker-name suggestion also binds that label to the member
+or contact after the names save, but only while the saved name still equals the
+picked name. A failed binding shows a non-blocking notice and keeps the free
+text; existing speaker bindings are listed with unbind. The
 **KB** tab pages each kind (upload, meeting, news, tech) with the real index state,
 the uploader (a departed member shows as a former member), download for direct
 members and untag for the uploader or an owner.

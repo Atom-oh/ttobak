@@ -393,6 +393,14 @@ reads revalidate membership and every endpoint, apply fixed bounds and report
 truncation instead of guessing. Account KB uploads gain a `KBREF#` row at presign;
 QA retrieval scope is unchanged.
 
+Account people edges (ADR-065) bind meeting participants, speakers, assignees and
+insight entities to members, contacts, sub-accounts and projects with a
+deterministic resolver (no model call). Summarize runs it inline after summary
+publication; speaker map and contact changes publish `PeopleResolveRequested` to
+the same Lambda, and `backend/cmd/backfill-account-people` replays older meetings.
+Runs hold a per-meeting lease that fences their writes. The people panel, graph
+and flow read the rows back with read-time revalidation.
+
 The authenticated `/api/meetings/{id}/reading` route bounds JSON before Lambda
 serialization. Notes, summary and action sections use metadata views; transcript
 reads hydrate only the authorized chosen source and eligible segments. Every page
