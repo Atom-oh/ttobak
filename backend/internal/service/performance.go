@@ -116,10 +116,19 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 	if err != nil {
 		return nil, err
 	}
-	if source == model.PerformanceSourceSFDCAssignments && normalized.Complete && !receipt.Replayed {
-		// The sync is committed; an auto-mapping failure must not undo it.
-		if err := svc.autoMapAssignments(ctx, userID, removedAssignmentIDs(normalized)); err != nil {
-			log.Printf("performance auto mapping failed: %v", err)
+	if source == model.PerformanceSourceSFDCAssignments && !receipt.Replayed {
+		// The sync is committed; mapping failures must not undo it. Removals are
+		// deleted post-commit (not inside the batch transaction, which would need
+		// a repository change) for every batch, complete or not, so an assignment
+		// removed in a non-final batch cannot orphan its automatic mapping. The
+		// delete is conditional on manual = false and never touches manual rows.
+		if err := svc.deleteRemovedAutoMappings(ctx, userID, removedAssignmentIDs(normalized)); err != nil {
+			log.Printf("performance removed mapping cleanup failed: %v", err)
+		}
+		if normalized.Complete {
+			if err := svc.autoMapAssignments(ctx, userID, nil); err != nil {
+				log.Printf("performance auto mapping failed: %v", err)
+			}
 		}
 	}
 	return receipt, nil

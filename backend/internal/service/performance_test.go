@@ -99,7 +99,19 @@ func (fake *performanceStoreFake) PutAccountMapping(_ context.Context, userID st
 
 func (fake *performanceStoreFake) DeleteAccountMappingIfAutomatic(_ context.Context, userID, sfdcAccountID string) error {
 	fake.deleted = append(fake.deleted, sfdcAccountID)
-	return fake.deleteErr
+	if fake.deleteErr != nil {
+		return fake.deleteErr
+	}
+	kept := fake.mappings[userID][:0:0]
+	for _, mapping := range fake.mappings[userID] {
+		if mapping.SFDCAccountID != sfdcAccountID || mapping.Manual {
+			kept = append(kept, mapping)
+		}
+	}
+	if fake.mappings != nil {
+		fake.mappings[userID] = kept
+	}
+	return nil
 }
 
 func (fake *performanceStoreFake) GetPerformanceGoals(_ context.Context, userID string, year int) (*model.PerformanceGoals, error) {
