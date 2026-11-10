@@ -214,13 +214,24 @@ func (r *DynamoDBRepository) PutMergedMember(ctx context.Context, job *model.Acc
 		TableName: aws.String(r.tableName), Item: item,
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 	}}
-	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: append([]types.TransactWriteItem{put}, checks...)}); err != nil {
+	// The copied user must still be a source member when the grant commits, so
+	// a stale enumeration can never grant a removed user target membership.
+	source, err := r.noteCondition(model.PrefixAccount+job.SourceAccountID, model.PrefixMember+member.UserID, expression.AttributeExists(expression.Name("PK")))
+	if err != nil {
+		return err
+	}
+	sourceIndex := 1 + len(checks)
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: append(append([]types.TransactWriteItem{put}, checks...), source)}); err != nil {
 		moverFailed, fence := classifyMergeFence(err)
 		if fence != nil {
 			return fence
 		}
 		if moverFailed {
 			return nil
+		}
+		var cancelled *types.TransactionCanceledException
+		if errors.As(err, &cancelled) && sourceIndex < len(cancelled.CancellationReasons) && aws.ToString(cancelled.CancellationReasons[sourceIndex].Code) == "ConditionalCheckFailed" {
+			return fmt.Errorf("source member %s is gone: %w", member.UserID, ErrConditionFailed)
 		}
 		return fmt.Errorf("put merged member: %w", err)
 	}

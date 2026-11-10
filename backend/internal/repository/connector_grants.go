@@ -150,14 +150,19 @@ func connectorReplayError(err error) error {
 	return mapped
 }
 
-// connectorProbeError maps a failed replay-only probe. A consistent read has
-// already shown no receipt, so a merge fence trip still means no receipt.
-func connectorProbeError(err error) error {
+// connectorProbeError maps a failed replay-only probe. On a merge fence trip
+// the receipt is read again consistently, because a same-key create may have
+// committed after the first read: a receipt found now takes the replay path.
+func connectorProbeError[T any](err error, reread func() (T, bool, error)) (T, error) {
+	var empty T
 	mapped := connectorWriteError(err)
-	if errors.Is(mapped, ErrAccountMerging) {
-		return ErrConnectorReceiptMissing
+	if !errors.Is(mapped, ErrAccountMerging) {
+		return empty, mapped
 	}
-	return mapped
+	if receipt, found, readErr := reread(); found || readErr != nil {
+		return receipt, readErr
+	}
+	return empty, ErrConnectorReceiptMissing
 }
 
 func connectorWriteError(err error) error {

@@ -240,11 +240,14 @@ func (r *DynamoDBRepository) ListAccountMembers(ctx context.Context, accountID s
 	if err != nil {
 		return nil, fmt.Errorf("build members query: %w", err)
 	}
+	// Membership is canonical authorization state: read it consistently so a
+	// just-committed add or removal is never missed (account merge relies on it).
 	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("query members: %w", err)
