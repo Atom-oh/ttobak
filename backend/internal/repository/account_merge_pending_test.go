@@ -176,3 +176,48 @@ func TestMaterializePendingAccountGrantPreReadErrorLeavesRow(t *testing.T) {
 		t.Fatalf("resolved=%v err=%v, want error", resolved, err)
 	}
 }
+
+// An invitee who already holds the membership has a dead row even while the
+// account is mid-merge: the Put failure is evaluated before the META fence.
+func TestMaterializePendingAccountGrantExistingMemberDuringMergeDropsRow(t *testing.T) {
+	deleted := false
+	repo := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
+		switch {
+		case strings.HasSuffix(target, ".GetItem"):
+			return 200, `{"Item":{"PK":{"S":"ACCOUNT#a"},"SK":{"S":"META"},"accountId":{"S":"a"},"mergingInto":{"S":"b"}}}`
+		case strings.HasSuffix(target, ".TransactWriteItems"):
+			return 400, projectCancellation(4, 1, 3) // membership Put and META fence failed
+		case strings.HasSuffix(target, ".DeleteItem"):
+			deleted = true
+			if body["ConditionExpression"] == nil {
+				t.Fatal("row deletion must stay version conditioned")
+			}
+			return 200, "{}"
+		}
+		t.Fatalf("unexpected operation %s", target)
+		return 500, "{}"
+	})
+	resolved, err := repo.MaterializePendingAccountGrant(context.Background(), mergePendingFixture(), "u", "invitee@example.com")
+	if err != nil || !resolved || !deleted {
+		t.Fatalf("resolved=%v deleted=%v err=%v", resolved, deleted, err)
+	}
+}
+
+// An inviter check that fails alongside the META fence may be the merge moving
+// members, so the row is kept for a later redirected attempt.
+func TestMaterializePendingAccountGrantInviterAndFenceFailureKeepsRow(t *testing.T) {
+	repo := projectInviteWire(t, func(target string, _ map[string]any) (int, string) {
+		switch {
+		case strings.HasSuffix(target, ".GetItem"):
+			return 200, `{"Item":{"PK":{"S":"ACCOUNT#a"},"SK":{"S":"META"},"accountId":{"S":"a"},"mergingInto":{"S":"b"}}}`
+		case strings.HasSuffix(target, ".TransactWriteItems"):
+			return 400, projectCancellation(4, 0, 3)
+		}
+		t.Fatalf("row must be kept while the merge is in flight, got %s", target)
+		return 500, "{}"
+	})
+	resolved, err := repo.MaterializePendingAccountGrant(context.Background(), mergePendingFixture(), "u", "invitee@example.com")
+	if err != nil || resolved {
+		t.Fatalf("resolved=%v err=%v, want false,nil", resolved, err)
+	}
+}
