@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"os"
 	"strings"
@@ -15,30 +14,6 @@ var ErrSummaryReadRestricted = errors.New("owner sharing-safe regeneration requi
 
 const SummaryPrivacyCutoffEnv = "SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF"
 const SummaryPrivacyReaderEnv = "SUMMARY_PRIVACY_READER_ENABLED"
-
-func linkedSummaryContext(sources []model.LinkedSummarySource) string {
-	if len(sources) == 0 {
-		return ""
-	}
-	var text strings.Builder
-	text.WriteString("이전 연관 회의의 승인된 요약입니다. 현재 회의의 발언과 별도 참고 자료로 취급하세요:\n\n")
-	for _, source := range sources {
-		title, content, items := []rune(source.Title), []rune(source.Content), []rune(source.ActionItems)
-		text.WriteString("## " + string(title[:min(len(title), 256)]) + "\n")
-		text.WriteString(string(content[:min(len(content), 2000)]) + "\n")
-		text.WriteString(string(items[:min(len(items), 1000)]) + "\n\n")
-	}
-	return text.String()
-}
-
-func bindLinkedSummarySources(ctx context.Context, repo interface {
-	BindLinkedSummarySources(context.Context, *model.SummarySnapshot) error
-}, snapshot *model.SummarySnapshot) error {
-	if repository.SummaryPrivacyWritesEnabled() {
-		return repo.BindLinkedSummarySources(ctx, snapshot)
-	}
-	return nil
-}
 
 // Publishing a meeting to an account team shares its current summary and
 // derived content with every member who can read it (ADR-049 2026-11-06

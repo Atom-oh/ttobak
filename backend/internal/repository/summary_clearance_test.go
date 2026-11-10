@@ -395,7 +395,10 @@ func TestContentWritesInvalidateStoredClearanceAcrossWriterRollback(t *testing.T
 				metadata := wire.meeting(t)
 				// Metadata-only readers must reject old derived rows without
 				// fetching content or permitting the old generation to replay.
-				fencedPublication := flag == "1" && (path == "batch summary" || path == "resummary")
+				// With the writer on, a human edit of a safe note keeps safe provenance
+				// under a fresh generation bound to the new content.
+				fencedPublication := flag == "1" && (path == "batch summary" || path == "resummary" ||
+					path == "partial content" || path == "conditional content" || path == "live summary")
 				if metadata.SummaryPrivacy.SafeMetadata() != fencedPublication || metadata.SummaryGeneration() == "generation-old" ||
 					metadata.InsightsRevision != "" || metadata.AuthorizationRevision != 8 {
 					t.Fatalf("stale clearance survived %s: privacy=%+v insight=%q revision=%d",

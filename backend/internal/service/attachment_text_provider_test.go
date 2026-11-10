@@ -96,7 +96,7 @@ func TestSummaryUsesDocumentProvenanceThroughActualModelRequest(t *testing.T) {
 	request, content, writes, err := invokeNoteSourceFixture(t, meeting,
 		`{"content":[{"type":"text","text":"문서 근거 [DOC:a:0] [TS:12]\n\n회의 발언 [TS:12]"}],"stop_reason":"end_turn"}`,
 		func(s *BedrockService) (string, error) {
-			return s.generateSummarySnapshot(context.Background(), meeting, attachments, "", true)
+			return s.generateSummarySnapshot(context.Background(), meeting, attachments, "", true, model.NoteLanguageKorean)
 		})
 	if err != nil {
 		t.Fatal(err)

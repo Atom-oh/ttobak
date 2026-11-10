@@ -1,36 +1,10 @@
 package repository
 
 import (
-	"context"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
 )
-
-func TestSharingSafeSnapshotNeverReadsPrivatePredecessors(t *testing.T) {
-	fields := make(map[string]model.SummaryValue)
-	for _, field := range summaryPrivacyFields {
-		fields[field] = model.SummaryValue{}
-	}
-	for _, published := range []bool{false, true} {
-		snapshot := &model.SummarySnapshot{
-			Meeting: &model.Meeting{
-				UserID: "owner", MeetingID: "meeting", LinkedMeetingIDs: []string{"private"},
-				SharedToAccount: published,
-			},
-			SharingSafe: !published,
-			Checks:      []model.SummaryCheck{{PK: "USER#owner", SK: "MEETING#meeting", Exists: true, Fields: fields}},
-		}
-		// A nil client fails the test if the helper attempts any predecessor
-		// or grant read in either sharing-safe or account-published mode.
-		if err := NewDynamoDBRepository(nil, "synthetic").BindLinkedSummarySources(context.Background(), snapshot); err != nil {
-			t.Fatal(err)
-		}
-		if len(snapshot.LinkedSources) != 0 || len(snapshot.Checks) != 1 {
-			t.Fatal("private predecessor became a sharing-safe dependency")
-		}
-	}
-}
 
 func TestSummaryPrivacyPublicationCannotDeclassifyConsumedPrivateSource(t *testing.T) {
 	snapshot := &model.SummarySnapshot{
@@ -51,5 +25,37 @@ func TestSummaryPrivacyPublicationCannotDeclassifyConsumedPrivateSource(t *testi
 	result = summaryPublicationPrivacy(snapshot, "ordinary rewrite")
 	if result.State != model.SummaryPrivacyUnknown {
 		t.Fatal("ordinary rewrite made unknown legacy derivation safe")
+	}
+}
+
+func TestEditedSummaryPrivacyState(t *testing.T) {
+	stamped := func(state, content string, mutate func(*model.Meeting)) *model.Meeting {
+		meeting := &model.Meeting{Content: content}
+		privacyStamp(meeting, state, "generation")
+		if mutate != nil {
+			mutate(meeting)
+		}
+		return meeting
+	}
+	tests := []struct {
+		name   string
+		parent *model.Meeting
+		want   string
+	}{
+		{"nil provenance without derivatives", &model.Meeting{}, model.SummaryPrivacySafe},
+		{"nil provenance with action items", &model.Meeting{ActionItems: `[{"id":"a"}]`}, model.SummaryPrivacyUnknown},
+		{"nil provenance with legacy content", &model.Meeting{Content: "legacy note"}, model.SummaryPrivacyUnknown},
+		{"nil provenance with live summary", &model.Meeting{LiveSummary: "draft"}, model.SummaryPrivacyUnknown},
+		{"safe with matching hash", stamped(model.SummaryPrivacySafe, "note", nil), model.SummaryPrivacySafe},
+		{"unknown stays unknown", stamped(model.SummaryPrivacyUnknown, "note", nil), model.SummaryPrivacyUnknown},
+		{"private stays private", stamped(model.SummaryPrivacyPrivate, "note", nil), model.SummaryPrivacyPrivate},
+		{"safe with hash mismatch", stamped(model.SummaryPrivacySafe, "note", func(m *model.Meeting) { m.Content = "changed" }), model.SummaryPrivacyUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := editedSummaryPrivacyState(test.parent); got != test.want {
+				t.Fatalf("state = %s, want %s", got, test.want)
+			}
+		})
 	}
 }

@@ -92,7 +92,7 @@ membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
-Private linked meetings require independent publication or a separate grant;
+Linked meetings are navigation only and never note evidence (ADR-070);
 mutations remain direct-only. Billing read/upload access also follows ancestor
 membership, with an atomic path/grant confirmation (ADR-060).
 
@@ -515,8 +515,7 @@ and preserves infrastructure-owned runtime config. See the
 Summary-sharing privacy is staged across the Go readers/writers and Python QA.
 Protected account views retain raw parent-owned source and invalidate derived
 history when scope changes. Activated writers snapshot parent authorization/link
-state before predecessor reads, pin predecessor bytes through publication, fence
-every new grant, and stamp new memberships. Owner-confirmed regeneration uses
+state, fence every new grant, and stamp new memberships. Owner-confirmed regeneration uses
 current own sources and atomically clears prior model outputs; later derivatives,
 simulator claims and insight copies fence the captured generation. The canonical
 index worker retains immutable revision-checked publication; activated summarizers

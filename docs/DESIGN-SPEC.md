@@ -542,13 +542,14 @@ Failures retain that draft and expose retry. Editing preserves canonical
 attachment/transcript citation IDs; signed URLs and page anchors are display
 targets only. Ordinary links and literal citation text keep their identity.
 
-The same panel shows editors a note-language select (automatic, Korean,
-English). A change saves `noteLanguage` through the meeting update and then
-offers a regenerate-in-this-language action, which sends the existing empty
-re-summary request. The select is
-disabled while a batch summary or re-summary is running, because a mid-run change
-discards that run as `SOURCE_CHANGED`. Save failures show an inline alert and
-keep the previous value.
+The same panel still shows editors a note-language select (automatic, Korean,
+English). It saves `noteLanguage` through the meeting update. After a successful
+change the UI still offers a regenerate button, which runs the standard re-summary
+and produces a Korean note, because `noteLanguage` no longer affects generation
+(ADR-070). The select is disabled while saving, locked, or while a batch summary
+or re-summary is pending or running, because a mid-run change discards that run as
+`SOURCE_CHANGED`. Save failures show an inline alert and keep the previous value.
+Both the select and the regenerate button are slated for removal.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
