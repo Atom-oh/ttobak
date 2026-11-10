@@ -22,6 +22,10 @@ const (
 	// mergeSubtreeMaxAccounts bounds the breadth-first walk of A's subtree.
 	mergeSubtreeMaxAccounts = 2000
 	mergePreviewPageSize    = 100
+
+	// Sort-key prefixes of the account partition rows counted by key only.
+	mergeContactPrefix = "CONTACT#"
+	mergeEventPrefix   = "EVENT#"
 )
 
 // accountMergeRepo lists the repository reads merge eligibility and preview
@@ -29,14 +33,10 @@ const (
 type accountMergeRepo interface {
 	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
-	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	ListChildAccountIDsPage(ctx context.Context, parentID, cursor string, limit int32) ([]string, *string, error)
 	ListMeetingRefsForAccountPage(ctx context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error)
 	GetMeetingPublication(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error)
-	ListProjectRefsForAccount(ctx context.Context, accountID string) ([]model.ProjectRef, error)
-	ListResearchRefsForAccount(ctx context.Context, accountID string) ([]model.ResearchRef, error)
-	ListAccountContacts(ctx context.Context, account string, limit int, after string) ([]model.AccountContact, string, error)
-	ListAccountEvents(ctx context.Context, account, fromKey, toKey string, descending bool, limit int, afterSK string) ([]model.AccountEvent, string, error)
+	ListAccountPartitionKeys(ctx context.Context, accountID, prefix string, limit int) ([]string, bool, error)
 	AccountPartitionHasPrefix(ctx context.Context, accountID, prefix string) (bool, error)
 }
 
@@ -208,52 +208,42 @@ func (s *AccountMergeService) Preview(ctx context.Context, requesterID, fromID, 
 		return nil, err
 	}
 	counts := map[string]int{}
-	fromMembers, err := s.repo.ListAccountMembers(ctx, fromID)
+	fromKeys, fromOver, err := s.repo.ListAccountPartitionKeys(ctx, fromID, model.PrefixMember, mergePreviewCountCap)
 	if err != nil {
 		return nil, err
 	}
-	fromUsers := map[string]bool{}
-	for _, m := range fromMembers {
-		if m.UserID != "" {
-			fromUsers[m.UserID] = true
+	intoKeys, intoOver, err := s.repo.ListAccountPartitionKeys(ctx, intoID, model.PrefixMember, mergePreviewCountCap)
+	if err != nil {
+		return nil, err
+	}
+	counts["members"] = cappedCount(len(fromKeys), fromOver)
+	audience := model.MergeAudience{IntoHasAncestors: len(subjects.IntoAncestors) > 0}
+	if fromOver || intoOver {
+		audience.IntoMembersNotInFrom = -1
+	} else {
+		fromUsers := make(map[string]bool, len(fromKeys))
+		for _, sk := range fromKeys {
+			fromUsers[sk] = true
 		}
-	}
-	counts["members"] = len(fromUsers)
-	intoMembers, err := s.repo.ListAccountMembers(ctx, intoID)
-	if err != nil {
-		return nil, err
-	}
-	newcomers := map[string]bool{}
-	for _, m := range intoMembers {
-		if m.UserID != "" && !fromUsers[m.UserID] {
-			newcomers[m.UserID] = true
+		for _, sk := range intoKeys {
+			if !fromUsers[sk] {
+				audience.IntoMembersNotInFrom++
+			}
 		}
 	}
 	counts["children"] = subjects.DirectChildren
 	if counts["meetings"], err = s.countBoundMeetings(ctx, fromID); err != nil {
 		return nil, err
 	}
-	projects, err := s.repo.ListProjectRefsForAccount(ctx, fromID)
-	if err != nil {
-		return nil, err
-	}
-	counts["projects"] = len(projects)
-	research, err := s.repo.ListResearchRefsForAccount(ctx, fromID)
-	if err != nil {
-		return nil, err
-	}
-	counts["research"] = len(research)
-	if counts["contacts"], err = countCapped(func(after string) (int, string, error) {
-		page, next, err := s.repo.ListAccountContacts(ctx, fromID, mergePreviewPageSize, after)
-		return len(page), next, err
-	}); err != nil {
-		return nil, err
-	}
-	if counts["events"], err = countCapped(func(after string) (int, string, error) {
-		page, next, err := s.repo.ListAccountEvents(ctx, fromID, flowEventKeyLow, flowEventKeyHigh, false, mergePreviewPageSize, after)
-		return len(page), next, err
-	}); err != nil {
-		return nil, err
+	for category, prefix := range map[string]string{
+		"projects": model.PrefixProjectRef, "research": model.PrefixResearchRef,
+		"contacts": mergeContactPrefix, "events": mergeEventPrefix,
+	} {
+		keys, over, err := s.repo.ListAccountPartitionKeys(ctx, fromID, prefix, mergePreviewCountCap)
+		if err != nil {
+			return nil, err
+		}
+		counts[category] = cappedCount(len(keys), over)
 	}
 	unmoved, err := s.unmovedCategories(ctx, fromID)
 	if err != nil {
@@ -266,27 +256,17 @@ func (s *AccountMergeService) Preview(ctx context.Context, requesterID, fromID, 
 	return &model.AccountMergePreview{
 		FromAccountID: fromID, IntoAccountID: intoID, Counts: counts, Unmoved: unmoved,
 		CLIOnly:               append([]string(nil), model.MergeCLIOnlyCategories...),
-		NewAudience:           model.MergeAudience{IntoMembersNotInFrom: len(newcomers), IntoHasAncestors: len(subjects.IntoAncestors) > 0},
+		NewAudience:           audience,
 		RequiresAcceptUnmoved: requires,
 	}, nil
 }
 
-// countCapped pages a listing and reports -1 once it exceeds the preview cap.
-func countCapped(page func(after string) (int, string, error)) (int, error) {
-	total, after := 0, ""
-	for {
-		n, next, err := page(after)
-		if err != nil {
-			return 0, err
-		}
-		if total += n; total > mergePreviewCountCap {
-			return -1, nil
-		}
-		if next == "" {
-			return total, nil
-		}
-		after = next
+// cappedCount reports -1 when a keys-only read stopped at the preview cap.
+func cappedCount(n int, exceeded bool) int {
+	if exceeded {
+		return -1
 	}
+	return n
 }
 
 // countBoundMeetings counts meeting refs whose meeting is still published to
@@ -331,11 +311,12 @@ func (s *AccountMergeService) unmovedCategories(ctx context.Context, accountID s
 		"kb":             {model.PrefixAccountKBRef},
 		"documents":      {model.PrefixDoc},
 		"calendarShares": {model.PrefixCalendarShare},
-		"dictionary":     {model.PrefixDictTerm, model.PrefixVocab},
+		"dictionary":     {model.PrefixDictTerm, model.PrefixDictObs},
 	}
 	out := make([]model.MergeUnmovedCategory, 0, len(model.MergeUnmovedCategories))
 	for _, category := range model.MergeUnmovedCategories {
-		present := category == "billing"
+		unverifiable := category == "billing"
+		present := unverifiable
 		for _, prefix := range probes[category] {
 			found, err := s.repo.AccountPartitionHasPrefix(ctx, accountID, prefix)
 			if err != nil {
@@ -343,7 +324,7 @@ func (s *AccountMergeService) unmovedCategories(ctx context.Context, accountID s
 			}
 			present = present || found
 		}
-		out = append(out, model.MergeUnmovedCategory{Category: category, Present: present})
+		out = append(out, model.MergeUnmovedCategory{Category: category, Present: present, Unverifiable: unverifiable})
 	}
 	return out, nil
 }

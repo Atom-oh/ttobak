@@ -38,3 +38,36 @@ func TestAccountPartitionHasPrefixIsSingleConsistentProbe(t *testing.T) {
 		}
 	}
 }
+
+func TestListAccountPartitionKeysIsKeysOnlyPagedAndCapped(t *testing.T) {
+	calls := 0
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		calls++
+		if !strings.HasSuffix(target, ".Query") || body["ConsistentRead"] != true || body["Select"] != nil {
+			t.Fatalf("unexpected query: %s %#v", target, body)
+		}
+		names := wireValues(body)
+		if !names["name:SK"] || names["name:title"] || !names["value:CONTACT#"] {
+			t.Fatalf("not a keys-only prefix query: %#v", body)
+		}
+		if calls == 1 {
+			return `{"Items":[{"SK":{"S":"CONTACT#a"}},{"SK":{"S":"CONTACT#b"}}],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"CONTACT#b"}}}`
+		}
+		if body["ExclusiveStartKey"] == nil {
+			t.Fatal("second page lost its start key")
+		}
+		return `{"Items":[{"SK":{"S":"CONTACT#c"}}]}`
+	})
+	keys, over, err := repo.ListAccountPartitionKeys(context.Background(), "acc", "CONTACT#", 3)
+	if err != nil || over || len(keys) != 3 || calls != 2 {
+		t.Fatalf("keys=%v over=%v err=%v calls=%d", keys, over, err, calls)
+	}
+	calls = 0
+	keys, over, err = repo.ListAccountPartitionKeys(context.Background(), "acc", "CONTACT#", 2)
+	if err != nil || !over || len(keys) != 2 {
+		t.Fatalf("cap: keys=%v over=%v err=%v", keys, over, err)
+	}
+	if _, _, err := repo.ListAccountPartitionKeys(context.Background(), "acc", "CONTACT#", 0); err == nil {
+		t.Fatal("accepted zero limit")
+	}
+}

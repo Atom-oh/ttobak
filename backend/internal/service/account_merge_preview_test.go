@@ -54,13 +54,6 @@ func (f *fakeMergeRepo) GetAccount(_ context.Context, id string) (*model.Account
 func (f *fakeMergeRepo) GetMember(_ context.Context, account, user string) (*model.AccountMember, error) {
 	return f.members[account][user], nil
 }
-func (f *fakeMergeRepo) ListAccountMembers(_ context.Context, account string) ([]model.AccountMember, error) {
-	var out []model.AccountMember
-	for _, m := range f.members[account] {
-		out = append(out, *m)
-	}
-	return out, nil
-}
 func (f *fakeMergeRepo) ListChildAccountIDsPage(_ context.Context, parent, cursor string, limit int32) ([]string, *string, error) {
 	ids := f.children[parent]
 	start := 0
@@ -88,28 +81,33 @@ func (f *fakeMergeRepo) ListMeetingRefsForAccountPage(_ context.Context, account
 func (f *fakeMergeRepo) GetMeetingPublication(_ context.Context, owner, id string) (*model.Meeting, error) {
 	return f.meetings[owner+"/"+id], nil
 }
-func (f *fakeMergeRepo) ListProjectRefsForAccount(_ context.Context, a string) ([]model.ProjectRef, error) {
-	return make([]model.ProjectRef, f.projects[a]), nil
-}
-func (f *fakeMergeRepo) ListResearchRefsForAccount(_ context.Context, a string) ([]model.ResearchRef, error) {
-	return make([]model.ResearchRef, f.research[a]), nil
-}
-func pageOf(total int, after string) (int, string) {
-	start := 0
-	fmt.Sscanf(after, "%d", &start)
-	end := min(start+mergePreviewPageSize, total)
-	if end < total {
-		return end - start, fmt.Sprint(end)
+func (f *fakeMergeRepo) ListAccountPartitionKeys(_ context.Context, a, prefix string, limit int) ([]string, bool, error) {
+	var keys []string
+	switch prefix {
+	case model.PrefixMember:
+		for user := range f.members[a] {
+			keys = append(keys, prefix+user)
+		}
+	case model.PrefixProjectRef:
+		keys = synthKeys(prefix, f.projects[a])
+	case model.PrefixResearchRef:
+		keys = synthKeys(prefix, f.research[a])
+	case mergeContactPrefix:
+		keys = synthKeys(prefix, f.contacts[a])
+	case mergeEventPrefix:
+		keys = synthKeys(prefix, f.events[a])
 	}
-	return end - start, ""
+	if len(keys) > limit {
+		return keys[:limit], true, nil
+	}
+	return keys, false, nil
 }
-func (f *fakeMergeRepo) ListAccountContacts(_ context.Context, a string, _ int, after string) ([]model.AccountContact, string, error) {
-	n, next := pageOf(f.contacts[a], after)
-	return make([]model.AccountContact, n), next, nil
-}
-func (f *fakeMergeRepo) ListAccountEvents(_ context.Context, a, _, _ string, _ bool, _ int, after string) ([]model.AccountEvent, string, error) {
-	n, next := pageOf(f.events[a], after)
-	return make([]model.AccountEvent, n), next, nil
+func synthKeys(prefix string, n int) []string {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("%s%d", prefix, i)
+	}
+	return keys
 }
 func (f *fakeMergeRepo) AccountPartitionHasPrefix(_ context.Context, a, prefix string) (bool, error) {
 	return f.prefixes[a+"|"+prefix], nil
@@ -241,7 +239,7 @@ func TestAccountMergePreviewCounts(t *testing.T) {
 	repo.meetingRefs["a"] = append(repo.meetingRefs["a"], model.MeetingRef{AccountID: "a", MeetingID: "gone", OwnerUserID: "o"})
 	repo.projects["a"], repo.research["a"], repo.contacts["a"], repo.events["a"] = 2, 1, 250, 7
 	repo.prefixes["a|"+model.PrefixAccountKBRef] = true
-	repo.prefixes["a|"+model.PrefixVocab] = true
+	repo.prefixes["a|"+model.PrefixDictObs] = true
 
 	got, err := svc.Preview(context.Background(), "u1", "a", "b")
 	if err != nil {
@@ -255,6 +253,9 @@ func TestAccountMergePreviewCounts(t *testing.T) {
 	var order []string
 	for _, u := range got.Unmoved {
 		present[u.Category], order = u.Present, append(order, u.Category)
+		if (u.Category == "billing") != u.Unverifiable {
+			t.Fatalf("unverifiable flag on %s", u.Category)
+		}
 	}
 	if !reflect.DeepEqual(order, []string{"newsSources", "kb", "documents", "calendarShares", "dictionary", "billing"}) ||
 		present["newsSources"] || !present["kb"] || present["documents"] || present["calendarShares"] || !present["dictionary"] || !present["billing"] {

@@ -47,7 +47,10 @@ change of meeting owners or S3 object locations.
 - **Unmoved categories.** News sources, KB references, documents, calendar share
   rows, dictionary layers and billing stay on A. The preview lists them, and start
   requires `acceptUnmoved: true` when any is present. Billing data lives outside the
-  main table, so the preview always reports it present.
+  main table and no cheap probe exists, so the preview lists it as `unverifiable`, always
+  present, and `requiresAcceptUnmoved` is therefore always true until a probe exists.
+  The dictionary probe checks `DICTTERM#`/`DICTOBS#` under the account (`VOCAB#` rows
+  live under users).
 - **Tombstone.** A stays readable: its MEMBER rows remain so unmoved categories open
   through direct links, `GetAccount` reports `mergedInto`, and A leaves account lists.
 - **CLI-only data.** SpecReq task rows, calendar event rows and link-only meetings
@@ -56,8 +59,8 @@ change of meeting owners or S3 object locations.
 
 ## Consequences
 
-The preview is read-only and bounded: contacts and events count to 10,000 (then
-`-1`), meeting references revalidate up to 2,000 (then `-1`), and the response is a
+The preview is read-only and bounded: members, projects, research, contacts and events
+count by sort key only (no row reads or decryption) to 10,000 (then `-1`), meeting references revalidate up to 2,000 (then `-1`), and the response is a
 fixed shape. Its route is authenticated and non-delegable. Later changes add the
 start route, worker and fence; none is active until each is deployed and accepted.
 

@@ -1305,8 +1305,9 @@ merging the path Account into `into` (ADR-072). The requester must own the sourc
 (MEMBER role and META owner) and be a direct member of the target. Response:
 `fromAccountId`, `intoAccountId`, `counts` (`members`, `meetings`, `projects`,
 `research`, `contacts`, `events`, `children`; `-1` when a bounded read cap is
-exceeded), `unmoved` (`newsSources`, `kb`, `documents`, `calendarShares`,
-`dictionary`, `billing`, each with `present`), `cliOnly`, `newAudience`
+exceeded; members, projects, research, contacts and events are counted by sort key only,
+without reading or decrypting rows, up to 10,000), `unmoved` (`newsSources`, `kb`, `documents`, `calendarShares`,
+`dictionary`, `billing`, each with `present`; `billing` also carries `unverifiable: true` because its data is outside the main table and is always reported present, so `requiresAcceptUnmoved` is always true), `cliOnly`, `newAudience`
 (`intoMembersNotInFrom`, `intoHasAncestors`) and `requiresAcceptUnmoved`. Errors:
 400 missing `into`, same or malformed IDs; 403 requester is not the source Owner or a
 target direct member; 404 missing Account; 409 `MERGE_INELIGIBLE` with the reason

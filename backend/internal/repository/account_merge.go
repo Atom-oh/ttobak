@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -32,4 +33,43 @@ func (r *DynamoDBRepository) AccountPartitionHasPrefix(ctx context.Context, acco
 		return false, fmt.Errorf("probe account partition: %w", err)
 	}
 	return len(out.Items) > 0, nil
+}
+
+// ListAccountPartitionKeys returns the sort keys under prefix in the account
+// partition with a keys-only projection, so no row content is read or decrypted.
+// It reads at most limit+1 keys and reports exceeded when more than limit exist.
+func (r *DynamoDBRepository) ListAccountPartitionKeys(ctx context.Context, accountID, prefix string, limit int) ([]string, bool, error) {
+	if accountID == "" || prefix == "" || limit < 1 || strings.ContainsAny(accountID, "#") {
+		return nil, false, fmt.Errorf("invalid account partition key listing")
+	}
+	key := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(prefix))
+	expr, err := expression.NewBuilder().WithKeyCondition(key).WithProjection(expression.NamesList(expression.Name("SK"))).Build()
+	if err != nil {
+		return nil, false, err
+	}
+	var keys []string
+	var start map[string]types.AttributeValue
+	for {
+		out, err := r.client.Query(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true),
+			KeyConditionExpression: expr.KeyCondition(), ProjectionExpression: expr.Projection(),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ExclusiveStartKey: start})
+		if err != nil {
+			return nil, false, fmt.Errorf("list account partition keys: %w", err)
+		}
+		for _, item := range out.Items {
+			sk, ok := item["SK"].(*types.AttributeValueMemberS)
+			if !ok {
+				return nil, false, fmt.Errorf("account partition key row without sort key")
+			}
+			if len(keys) == limit {
+				return keys, true, nil
+			}
+			keys = append(keys, sk.Value)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			return keys, false, nil
+		}
+		start = out.LastEvaluatedKey
+	}
 }

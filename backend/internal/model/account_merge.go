@@ -63,6 +63,9 @@ var (
 type MergeUnmovedCategory struct {
 	Category string `json:"category"`
 	Present  bool   `json:"present"`
+	// Unverifiable marks a category the API cannot probe; it is reported
+	// present so the caller must accept it.
+	Unverifiable bool `json:"unverifiable,omitempty"`
 }
 
 // MergeAudience describes who gains access to the source's moved content.
