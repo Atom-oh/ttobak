@@ -27,13 +27,16 @@ function clip(value: unknown, maxChars: number): string {
   return Array.from(text).slice(0, maxChars).join('');
 }
 
+/** Slack control characters, so a title cannot inject a mention such as <!here>. */
+const escapeSlack = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 /** Fills the template in one pass (inserted values are never re-expanded). */
 export function renderSlackRequest(fields: SlackRequestFields): string {
   const values: Record<string, string> = {
-    account: clip(fields.accountName, 200),
-    title: clip(fields.meetingTitle, 300),
-    when: clip(fields.localDateTime, 64),
-    me: clip(fields.myName, 100),
+    account: escapeSlack(clip(fields.accountName, 200)),
+    title: escapeSlack(clip(fields.meetingTitle, 300)),
+    when: escapeSlack(clip(fields.localDateTime, 64)),
+    me: escapeSlack(clip(fields.myName, 100)),
   };
   const text = SLACK_REQUEST_TEMPLATE.replace(/\{(account|title|when|me)\}/g, (_match, key: string) => values[key]);
   return Array.from(text).slice(0, SLACK_TEXT_MAX_CHARS).join('');
@@ -54,44 +57,53 @@ export interface PrepareDraftOptions {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
 
-function listOf(payload: unknown, keys: string[]): unknown[] {
-  if (Array.isArray(payload)) return payload;
-  if (isRecord(payload)) {
-    for (const key of keys) if (Array.isArray(payload[key])) return payload[key] as unknown[];
-    return [payload];
-  }
-  return [];
+const channelOf = (value: unknown): string =>
+  typeof value === 'string' ? value : isRecord(value) && typeof value.id === 'string' ? value.id : '';
+
+/** Channel IDs a draft entry names; empty when its channel is not recognizable. */
+function draftChannels(draft: unknown): string[] {
+  if (!isRecord(draft)) return [];
+  const direct = [draft.channel, draft.channelId, draft.channel_id].map(channelOf).filter(Boolean);
+  const nested = Array.isArray(draft.destinations)
+    ? draft.destinations.map(item => isRecord(item) ? channelOf(item.channel_id) || channelOf(item.channel) : '').filter(Boolean)
+    : [];
+  return [...direct, ...nested];
 }
 
-function idOf(value: unknown, keys: string[]): string {
-  if (typeof value === 'string') return value;
-  if (isRecord(value)) {
-    for (const key of keys) {
-      const found = value[key];
-      if (typeof found === 'string') return found;
-      if (isRecord(found) && typeof found.id === 'string') return found.id;
-    }
-  }
-  return '';
+/** The single verified, human, matching user ID, or '' (also for several matches). */
+function matchUser(payload: unknown, email: string): string {
+  const wanted = email.trim().toLowerCase();
+  const candidates = Array.isArray(payload) ? payload : [payload];
+  const matches = candidates.filter(user => isRecord(user) && typeof user.email === 'string'
+    && user.email.trim().toLowerCase() === wanted);
+  if (matches.length !== 1) return '';
+  const user = matches[0] as Record<string, unknown>;
+  const id = typeof user.id === 'string' ? user.id : '';
+  return USER_ID.test(id) && user.isBot === false && user.deleted === false ? id : '';
 }
 
 /** Saves `text` as an unsent draft in the DM with `counterpartEmail`, never overwriting an existing draft. */
 export async function prepareDraft(session: Caller, counterpartEmail: string, text: string,
   options: PrepareDraftOptions = {}): Promise<DraftOutcome> {
   try {
-    const users = listOf(resultJson(await session.call('lookup_user', { query: counterpartEmail }), 'lookup_user'),
-      ['users', 'members', 'results']);
-    const ids = new Set(users.map(user => idOf(user, ['id', 'userId', 'user_id'])).filter(id => USER_ID.test(id)));
-    if (ids.size !== 1) return 'no_user';
-    const [userId] = [...ids];
+    const userId = matchUser(resultJson(await session.call('lookup_user', { query: counterpartEmail }), 'lookup_user'),
+      counterpartEmail);
+    if (!userId) return 'no_user';
 
-    const channel = idOf(resultJson(await session.call('open_dm_channel', { userIds: [userId] }), 'open_dm_channel'),
-      ['channel', 'channelId', 'channel_id', 'id']);
+    const channel = channelOf((resultJson(await session.call('open_dm_channel', { userIds: userId }),
+      'open_dm_channel') as Record<string, unknown> | null)?.channel);
     if (!CHANNEL_ID.test(channel)) return 'failed';
 
-    const drafts = listOf(resultJson(await session.call('list_drafts', {}), 'list_drafts'), ['drafts', 'results'])
-      .filter(draft => isRecord(draft) && Object.keys(draft).length > 0);
-    if (drafts.some(draft => idOf(draft, ['channel', 'channelId', 'channel_id']) === channel)) return 'kept_existing';
+    // Fail closed: only a recognized list shape is trusted, and any draft whose channel is
+    // not recognized counts as possibly this DM.
+    const listed = resultJson(await session.call('list_drafts', {}), 'list_drafts');
+    const drafts = Array.isArray(listed) ? listed : isRecord(listed) && Array.isArray(listed.drafts) ? listed.drafts : null;
+    if (!drafts) return 'failed';
+    if (isRecord(listed) && listed.total !== undefined && listed.total !== drafts.length) return 'failed';
+    for (const draft of drafts) {
+      const channels = draftChannels(draft);
+      if (channels.length === 0 || channels.includes(channel)) return 'kept_existing';
+    }
 
     const posted = await session.call('post_draft', { channel, text });
     try {
@@ -109,6 +121,7 @@ export interface DraftEntry {
   outcome: DraftOutcome | 'attempting';
 }
 
+const ENTRY_OUTCOMES: readonly string[] = ['attempting', 'drafted', 'kept_existing', 'no_user', 'failed'];
 const SCOPE_PATTERN = /^[0-9a-f]{32}$/;
 const EVENT_ID_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -122,7 +135,11 @@ export function draftEntry(store: IntakeStore, scope: string, eventId: string): 
   const ledger = store.read<Record<string, DraftEntry>>(...ledgerPath(scope));
   if (ledger === null) return null;
   if (!isRecord(ledger)) throw new IntakeError('STORE_INVALID', 'draft ledger is malformed');
-  return Object.hasOwn(ledger, eventId) ? ledger[eventId] : null;
+  if (!Object.hasOwn(ledger, eventId)) return null;
+  const entry = ledger[eventId] as unknown;
+  // A malformed entry still means an attempt was made: report it as failed, never retry.
+  if (!isRecord(entry) || !ENTRY_OUTCOMES.includes(entry.outcome as string)) return { at: '', outcome: 'failed' };
+  return entry as unknown as DraftEntry;
 }
 
 /**

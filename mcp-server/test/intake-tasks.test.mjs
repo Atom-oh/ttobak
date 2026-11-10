@@ -501,7 +501,7 @@ const SLACK_SCOPE = 'a'.repeat(32);
 const EVENT_A = 'b'.repeat(64);
 const EVENT_B = 'c'.repeat(64);
 
-function fakeSlack({ drafts = [], failList = false, users = [{ id: SLACK_USER, email: 'them@amazon.com' }], replaced = false } = {}) {
+function fakeSlack({ drafts = [], failList = false, user = {}, listed, replaced = false } = {}) {
   const calls = [];
   const json = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
   return {
@@ -509,11 +509,17 @@ function fakeSlack({ drafts = [], failList = false, users = [{ id: SLACK_USER, e
     session: {
       async call(name, args) {
         calls.push({ name, args });
-        if (name === 'lookup_user') return json({ users });
-        if (name === 'open_dm_channel') return json({ channel: { id: SLACK_CHANNEL } });
+        if (name === 'lookup_user') {
+          return json({ id: SLACK_USER, name: 'them', email: args.query, isBot: false, deleted: false, ...user });
+        }
+        if (name === 'open_dm_channel') {
+          // Mirrors the real schema: userIds is a string, no other properties.
+          if (typeof args.userIds !== 'string' || Object.keys(args).length !== 1) throw new Error('schema');
+          return json({ channel: { id: SLACK_CHANNEL } });
+        }
         if (name === 'list_drafts') {
           if (failList) throw new Error('boom');
-          return json({ drafts });
+          return json(listed !== undefined ? listed : { drafts, total: drafts.length });
         }
         if (name === 'post_draft') return json(replaced ? { ok: true, replacedExisting: true, previousText: PREVIOUS_TEXT } : { ok: true });
         throw new Error('unexpected tool');
@@ -531,7 +537,7 @@ test('existing draft in channel is never overwritten', async () => {
   assert.equal(await prepareDraft(other.session, 'them@amazon.com', 'hello'), 'drafted');
   assert.deepEqual(other.calls.at(-1), { name: 'post_draft', args: { channel: SLACK_CHANNEL, text: 'hello' } });
   assert.deepEqual(other.calls[0], { name: 'lookup_user', args: { query: 'them@amazon.com' } });
-  assert.deepEqual(other.calls[1], { name: 'open_dm_channel', args: { userIds: [SLACK_USER] } });
+  assert.deepEqual(other.calls[1], { name: 'open_dm_channel', args: { userIds: SLACK_USER } });
 });
 
 test('list_drafts failure skips post_draft', async () => {
@@ -541,13 +547,47 @@ test('list_drafts failure skips post_draft', async () => {
   assert.ok(!slack.calls.some(call => call.name === 'post_draft'));
 });
 
-test('lookup needs exactly one valid user ID', async () => {
+test('lookup requires a single matching human, active user', async () => {
   const { prepareDraft } = await import('../dist/intake/slack-draft.js');
-  for (const users of [[], [{ id: 'U0ABCDE12' }, { id: 'U0ABCDE13' }], [{ id: 'bad id' }]]) {
-    const slack = fakeSlack({ users });
-    assert.equal(await prepareDraft(slack.session, 'them@amazon.com', 'hello'), 'no_user');
+  const bad = [{ id: 'bad id' }, { isBot: true }, { deleted: true }, { isBot: undefined }, { email: 'other@amazon.com' }];
+  for (const user of bad) {
+    const slack = fakeSlack({ user });
+    assert.equal(await prepareDraft(slack.session, 'Them@Amazon.com', 'hello'), 'no_user', JSON.stringify(user));
     assert.deepEqual(slack.calls.map(call => call.name), ['lookup_user']);
   }
+  const ok = fakeSlack({ user: { email: ' THEM@amazon.com ' } });
+  assert.equal(await prepareDraft(ok.session, 'them@amazon.com', 'hello'), 'drafted');
+  const array = { content: [{ type: 'text', text: JSON.stringify([
+    { id: 'U0AAAAAA1', email: 'a@amazon.com', isBot: false, deleted: false }, { id: 'U0AAAAAA2', email: 'a@amazon.com', isBot: false, deleted: false }]) }] };
+  const { prepareDraft: again } = await import('../dist/intake/slack-draft.js');
+  assert.equal(await again({ call: async () => array }, 'a@amazon.com', 'x'), 'no_user');
+});
+
+test('draft list that is not understood never posts', async () => {
+  const { prepareDraft } = await import('../dist/intake/slack-draft.js');
+  const cases = [
+    ['unknown wrapper', { items: [] }, 'failed'],
+    ['total mismatch', { drafts: [], total: 1 }, 'failed'],
+    ['channel in unknown field', { drafts: [{ conversation: SLACK_CHANNEL, text: 'x' }], total: 1 }, 'kept_existing'],
+    ['nested destination', { drafts: [{ destinations: [{ channel_id: SLACK_CHANNEL }] }], total: 1 }, 'kept_existing'],
+    ['one unrecognized among others', { drafts: [{ channel: 'C0OTHER123' }, { weird: true }], total: 2 }, 'kept_existing'],
+    ['null', null, 'failed'],
+  ];
+  for (const [name, listed, expected] of cases) {
+    const slack = fakeSlack({ listed });
+    assert.equal(await prepareDraft(slack.session, 'them@amazon.com', 'hello'), expected, name);
+    assert.ok(!slack.calls.some(call => call.name === 'post_draft'), name);
+  }
+});
+
+test('draft ledger entry with an unknown outcome counts as attempted', async t => {
+  const { draftOnce } = await import('../dist/intake/slack-draft.js');
+  const { IntakeStore } = await import('../dist/intake/store.js');
+  const store = new IntakeStore(tempHome(t));
+  store.write({ [EVENT_A]: { at: 'x', outcome: 'weird' } }, 'slack', SLACK_SCOPE, 'drafts.json');
+  const slack = fakeSlack();
+  assert.equal(await draftOnce(store, SLACK_SCOPE, EVENT_A, slack.session, 'them@amazon.com', 'hello'), 'failed');
+  assert.equal(slack.calls.length, 0);
 });
 
 test('slack template renders the contract fixture', async () => {
@@ -557,6 +597,8 @@ test('slack template renders the contract fixture', async () => {
   assert.equal(renderSlackRequest(fixture.input), fixture.expected);
   const long = renderSlackRequest({ accountName: 'a'.repeat(5000), meetingTitle: 'b'.repeat(5000), localDateTime: 'c'.repeat(5000), myName: '{me}'.repeat(5000) });
   assert.ok(long.length <= 2000);
+  const escaped = renderSlackRequest({ accountName: 'A&B', meetingTitle: '<!here> x', localDateTime: 'W', myName: 'M' });
+  assert.ok(escaped.includes('&lt;!here&gt; x') && escaped.includes('A&amp;B') && !escaped.includes('<!here>'));
   assert.ok(renderSlackRequest({ accountName: '{title}', meetingTitle: 'T', localDateTime: 'W', myName: 'M' }).includes('{title} 관련'));
 });
 
