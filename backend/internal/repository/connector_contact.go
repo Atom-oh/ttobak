@@ -114,7 +114,7 @@ func (r *DynamoDBRepository) CreateConnectorContact(ctx context.Context, in Conn
 			ClientRequestToken: aws.String(uuid.NewString()), TransactItems: append(slices.Clone(checks), missing),
 		}, func(o *dynamodb.Options) { o.RetryMaxAttempts = 1 })
 		if err != nil {
-			return empty, connectorProbeError(err)
+			return connectorProbeError(err, replay)
 		}
 		return empty, ErrConnectorReceiptMissing
 	}
