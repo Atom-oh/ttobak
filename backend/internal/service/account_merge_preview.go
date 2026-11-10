@@ -43,8 +43,12 @@ type accountMergeRepo interface {
 // AccountMergeService authorizes and previews merging one account into another.
 type AccountMergeService struct {
 	repo     accountMergeRepo
+	mover    accountMergeMoverRepo
 	accounts *AccountService
 }
+
+// SetMoverRepo wires the job-fenced writers merge movers use.
+func (s *AccountMergeService) SetMoverRepo(mover accountMergeMoverRepo) { s.mover = mover }
 
 func NewAccountMergeService(repo accountMergeRepo, accounts *AccountService) *AccountMergeService {
 	return &AccountMergeService{repo: repo, accounts: accounts}
