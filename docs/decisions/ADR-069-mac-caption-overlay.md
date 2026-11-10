@@ -61,7 +61,11 @@ slideshow. Ordering out alone left cases where an empty window kept swallowing
 clicks (for example when failed translations removed every line), so the page also
 reports each idle/active change through `caption_overlay_idle`, which sets only the
 calling overlay window to ignore the pointer while it shows no caption; `clear` sets
-it in Rust before emitting. An idle window cannot be dragged or hovered, which is
+it in Rust before emitting. Pushes to one window are serialised by a per-window
+async lock (`PushLanes`), so one push's event, pass-through and visibility change are
+all posted before the next push for that window starts; without it a concurrent entry
+and clear could interleave and leave a hidden window with fresh text or a shown, empty
+one. Different windows do not wait for each other. An idle window cannot be dragged or hovered, which is
 acceptable because it is invisible; windows are never closed automatically, so the
 user's layout choice survives.
 
@@ -94,9 +98,18 @@ the selected profile (`profile_credentials`: static keys, SSO, `credential_proce
 roles), never from the SDK default credentials chain, which reads environment
 variables first and would bill an exported terminal identity instead of the named
 profile. Other SDK settings are still loaded by `aws_config::defaults` and can come
-from the environment or the shared config files. Expired credentials, missing
-model access, a missing profile, rate limiting, timeout and rejected output
-return distinct fixed error codes; an expired-credential failure drops the cached
+from the environment or the shared config files, with one exception: the
+vendored `aws-sdk-bedrockruntime` (1.154) switches to bearer auth when
+`AWS_BEARER_TOKEN_BEDROCK` is set, which would bill that Bedrock API key's
+account for a user who launched the app from a shell exporting it, so
+`bedrock_config` pins the Bedrock client's auth preference to SigV4 and the
+selected profile always signs (Amazon Translate has no bearer option). Expired
+credentials, missing model access, a missing profile, rate limiting, timeout and
+rejected output return distinct fixed error codes. Upstream throttling (Bedrock
+`ThrottlingException` and `ServiceQuotaExceededException`, Amazon Translate
+`TooManyRequestsException`) maps to `rate-limited` like the local ceilings; a
+throttled final still falls back to Amazon Translate, and only that call's
+failure reaches the page; an expired-credential failure drops the cached
 client so the next call after `mwinit` uses fresh credentials without a restart.
 Caption text is never logged, only codes and byte lengths.
 
@@ -113,7 +126,11 @@ window titled "TTOBAK" whose Korean text names the profile and region and warns 
 charges, with Allow and Cancel buttons. Clearing the profile or changing only the
 extra language asks nothing. Cancel, or a sheet that cannot be shown, keeps the
 settings and returns `confirmation-declined`; a call while another runs returns
-`invalid-input`. The sheet
+`invalid-input`. For 30 seconds after a decline, a change that needs confirmation
+returns `confirmation-cooldown` without showing a sheet (`ConfirmCooldown`), so a
+compromised page cannot wear the user down with repeated prompts; changes that need
+no confirmation are unaffected. It is a separate code because the user cancelled
+nothing on that call. The sheet
 uses `rfd` directly: `tauri-plugin-dialog` would inject `window.alert`/`confirm`
 overrides and page-callable commands into every page. No capability grants a
 `dialog:` permission (`no_capability_grants_updater_permissions`).
@@ -190,6 +207,12 @@ other must stay aligned; change both together.
 - `mac-app/src-tauri/Cargo.lock` stays git-ignored (existing policy), so the AWS
   SDK crates resolve at build time.
 - Mac changes have no CI coverage.
+- A declined confirmation blocks further account changes for 30 seconds, so a
+  user who cancels by mistake waits before choosing again.
+- Throttling by the user's own account reads as `rate-limited`, the same message as
+  the local per-minute ceilings; the page cannot tell them apart.
+- Push ordering per window is posting order to the main thread; it is unit-tested
+  with a stand-in for the window calls, not observed in the app.
 - Known gap: an echoed English final passes validation for ja and zh targets. The
   server validator has the same gap, so change `interpreter.rs` and `translate.go`
   together.
