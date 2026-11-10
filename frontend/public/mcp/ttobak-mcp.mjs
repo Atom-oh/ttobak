@@ -23894,6 +23894,10 @@ function identifier(value, name) {
   }
   return encodeURIComponent(value);
 }
+function taskEventId(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new Error("eventId must be 64 lowercase hex characters.");
+  return value;
+}
 function documentsPath(accountId) {
   return accountId === void 0 ? "/api/documents" : `/api/accounts/${identifier(accountId, "accountId")}/documents`;
 }
@@ -23989,6 +23993,24 @@ var init_api2 = __esm({
       async listCalendarEvents(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
         return this.request("GET", `/api/calendar/events?${query}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async listSpecReqTasks(cursor) {
+        const query = new URLSearchParams();
+        if (cursor !== void 0) query.set("cursor", cursor);
+        return this.request("GET", `/api/specreq-tasks${query.size ? "?" + query : ""}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async getSpecReqTask(eventId) {
+        return this.request("GET", `/api/specreq-tasks/${taskEventId(eventId)}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async createSpecReqTask(body) {
+        return this.request("POST", "/api/specreq-tasks", body, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async transitionSpecReqTask(eventId, body) {
+        return this.request("POST", `/api/specreq-tasks/${taskEventId(eventId)}/transitions`, body, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async listAccountProjects(accountId) {
+        const result = await this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/projects`);
+        return (result?.projects ?? []).flatMap((project) => typeof project?.projectId === "string" ? [{ projectId: project.projectId, ...typeof project.sfdcOpptyId === "string" && project.sfdcOpptyId ? { sfdcOpptyId: project.sfdcOpptyId } : {} }] : []);
       }
       async calendarSyncStatus(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
@@ -25445,6 +25467,47 @@ var init_calendar2 = __esm({
     UNTITLED = "(\uC81C\uBAA9 \uC5C6\uC74C)";
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
+  }
+});
+
+// src/intake/connectors.ts
+function isTaskConnector(value) {
+  return typeof value === "string" && TASK_CONNECTORS.includes(value);
+}
+function allowedToolNames(connector) {
+  return CONNECTOR_TOOLS[connector].map((tool) => tool.name);
+}
+var TASK_CONNECTORS, CONNECTOR_TOOLS;
+var init_connectors = __esm({
+  "src/intake/connectors.ts"() {
+    "use strict";
+    TASK_CONNECTORS = ["meetings", "specreq", "slack"];
+    CONNECTOR_TOOLS = {
+      meetings: [
+        { name: "list_meetings", properties: ["startTime", "endTime", "userEmail"] },
+        { name: "get_meeting", properties: ["meetingId", "getMaster", "userEmail"] }
+      ],
+      specreq: [
+        { name: "check_user_is_tam", properties: [] },
+        { name: "search_requests_advanced", properties: [
+          "resolverId",
+          "requesterId",
+          "stateId",
+          "au_ca_gte",
+          "pageSize",
+          "fields_json",
+          "lastEvaluatedIndex_json"
+        ] },
+        { name: "get_request", properties: ["request_id"] },
+        { name: "acknowledge_request", properties: ["request_id"] }
+      ],
+      slack: [
+        { name: "lookup_user", properties: ["query"] },
+        { name: "open_dm_channel", properties: ["userIds"] },
+        { name: "list_drafts", properties: [] },
+        { name: "post_draft", properties: ["channel", "text"] }
+      ]
+    };
   }
 });
 
@@ -27323,16 +27386,18 @@ var init_mcp_client = __esm({
     MAX_STDERR_BYTES = 16 * 1024;
     AUTH_PATTERN = /midway|mwinit|cookie|unauthori[sz]ed|\b401\b|\b403\b|expired|sign[ -]?in|authenticat/i;
     McpSession = class _McpSession {
-      constructor(client, transport, stderr, callTimeoutMs) {
+      constructor(client, transport, stderr, callTimeoutMs, allowedTools) {
         this.client = client;
         this.transport = transport;
         this.stderr = stderr;
         this.callTimeoutMs = callTimeoutMs;
+        this.allowedTools = allowedTools;
       }
       client;
       transport;
       stderr;
       callTimeoutMs;
+      allowedTools;
       static async open(spec, serverName, options) {
         const env = { PATH: options.pathDirs.join(":"), ...spec.env };
         const transport = new StdioClientTransport({
@@ -27356,7 +27421,13 @@ var init_mcp_client = __esm({
           if (AUTH_PATTERN.test(stderr)) throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${serverName} reported an authentication failure`);
           throw new IntakeError("SERVER_START_FAILED", `${serverName} did not start`);
         }
-        return new _McpSession(client, transport, () => stderr, options.callTimeoutMs ?? 12e4);
+        return new _McpSession(
+          client,
+          transport,
+          () => stderr,
+          options.callTimeoutMs ?? 12e4,
+          new Set(options.allowedTools)
+        );
       }
       async requireTool(expectation) {
         const tools = [];
@@ -27375,6 +27446,7 @@ var init_mcp_client = __esm({
         return tool;
       }
       async call(name, args) {
+        if (!this.allowedTools.has(name)) throw new IntakeError("INVALID_ARGUMENT", "tool is not on the allowlist");
         let result;
         try {
           result = await this.client.callTool({ name, arguments: args }, void 0, { timeout: this.callTimeoutMs });
@@ -27608,7 +27680,8 @@ var run_exports = {};
 __export(run_exports, {
   accountScope: () => accountScope,
   defaultEnvironment: () => defaultEnvironment,
-  runIntake: () => runIntake
+  runIntake: () => runIntake,
+  tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
 import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
@@ -27620,6 +27693,14 @@ function tokenSubject(idToken) {
   try {
     const payload = JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8"));
     if (typeof payload.sub === "string" && payload.sub) return payload.sub;
+  } catch {
+  }
+  throw new IntakeError("TTOBAK_LOGIN_REQUIRED", "the signed-in identity could not be read");
+}
+function tokenEmail(idToken) {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8"));
+    if (typeof payload.email === "string" && payload.email.trim()) return payload.email.trim().toLowerCase();
   } catch {
   }
   throw new IntakeError("TTOBAK_LOGIN_REQUIRED", "the signed-in identity could not be read");
@@ -27654,7 +27735,7 @@ function definedTtobakEnv(env) {
 }
 async function openCalendarSession(environment, host, server, pathDirs) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [CALENDAR_TOOL.name] });
   try {
     await session.requireTool(CALENDAR_TOOL);
   } catch (error3) {
@@ -27663,8 +27744,41 @@ async function openCalendarSession(environment, host, server, pathDirs) {
   }
   return session;
 }
+async function selectTaskConnector(connector, args, environment, store) {
+  const options = flags(args, connector === "specreq" ? { "--host": "value", "--server": "value", "--auto-ack": "value" } : { "--host": "value", "--server": "value" });
+  const host = options["--host"];
+  const server = options["--server"];
+  if (!HOSTS.includes(host) || typeof server !== "string") throw new IntakeError("INVALID_ARGUMENT", "--host and --server are required");
+  const autoAckValue = options["--auto-ack"] ?? "on";
+  if (autoAckValue !== "on" && autoAckValue !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
+  const pathDirs = parsePathList(environment.env.PATH);
+  const spec = resolveServer(environment.home, host, server, pathDirs);
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
+  try {
+    for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+  } finally {
+    await session.close();
+  }
+  const previous = store.read("selection.json") ?? { version: 1 };
+  const base = { host, server, pathDirs, selectedAt: environment.now().toISOString() };
+  const next = {
+    ...previous,
+    version: 1,
+    [connector]: connector === "specreq" ? { ...base, autoAck: autoAckValue === "on" } : base
+  };
+  store.write(next, "selection.json");
+  return {
+    ok: true,
+    connector,
+    host,
+    server,
+    pathDirectories: pathDirs.length,
+    ...connector === "specreq" ? { autoAck: autoAckValue === "on" } : {}
+  };
+}
 async function select(args, environment, store) {
-  if (args[0] !== "calendar") throw new IntakeError("INVALID_ARGUMENT", "only the calendar connector exists");
+  if (isTaskConnector(args[0])) return selectTaskConnector(args[0], args.slice(1), environment, store);
+  if (args[0] !== "calendar") throw new IntakeError("INVALID_ARGUMENT", "connector must be calendar, meetings, specreq or slack");
   const options = flags(args.slice(1), { "--host": "value", "--server": "value", "--accept-unknown-sensitivity": "flag" });
   const host = options["--host"];
   const server = options["--server"];
@@ -27675,6 +27789,7 @@ async function select(args, environment, store) {
   const previous = store.read("selection.json");
   const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID4();
   const selection = {
+    ...previous ?? {},
     version: 1,
     calendar: {
       host,
@@ -27783,9 +27898,14 @@ async function runIntake(args, environment) {
     else if (command === "calendar") output = await calendar(rest, environment, store);
     else if (command === "status" && rest.length === 0) {
       const selection = store.read("selection.json");
+      const listed = {};
+      for (const id of ["calendar", "meetings", "specreq", "slack"]) {
+        const entry2 = selection?.[id];
+        if (entry2) listed[id] = { host: entry2.host, server: entry2.server };
+      }
       output = {
         ok: true,
-        selection: selection?.calendar ? { calendar: { host: selection.calendar.host, server: selection.calendar.server } } : {},
+        selection: listed,
         status: store.read("status.json") ?? {}
       };
     } else {
@@ -27817,6 +27937,7 @@ var init_run = __esm({
     init_api2();
     init_auth();
     init_calendar2();
+    init_connectors();
     init_errors4();
     init_hosts();
     init_mcp_client();
@@ -27824,6 +27945,7 @@ var init_run = __esm({
     USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
+  ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
   ttobak-mcp intake status`;
   }
