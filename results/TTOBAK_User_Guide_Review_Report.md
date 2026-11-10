@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-10 |
-| Iteration | 2: meeting workflows and chat/model selection |
-| Scope | 28 chapter navigation; complete start, Home, chat/model, recording/upload, meeting review, calendar, follow-up and simulation workflows |
+| Iteration | 3: complete enterprise product manual |
+| Scope | All 28 chapters: every primary menu, account tabs, contacts/people, documents/library, research/news/Tech, dictionary, billing, settings/admin, devices, security and recovery |
 | Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
 | Scale | 90 points: Playwright MCP unavailable, so the rubric's 10-point MCP visual category is exempt |
@@ -75,7 +75,8 @@ None outstanding.
 | Source section | Status | Note |
 |---|---|---|
 | Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
-| Source inventory / current menus | PARTIAL | Remaining customer/organization chapters are delivered by the next PR |
+| Current menu workflows | INCLUDED | All 28 chapters, including conditional Billing and Mac-only settings |
+| Internal source inventory | PARTIAL | Full path/model/walkthrough evidence follows in the evidence PR |
 | Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
 | Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
 | Production and native acceptance | OMITTED deliberately | No production login, customer records or macOS capture was performed |
@@ -84,14 +85,15 @@ None outstanding.
 
 1. Public illustrations contain generic menu labels. Public assets never contain
    the internal fictional walkthrough evidence archive.
-2. This delivery completes meeting and chat workflows. It does not claim that the final
-   enterprise content expansion is complete. The subsequent content PRs preserve
-   the existing 95,000-byte AI review limit and are checked independently.
+2. The full product manual is now included. Its expanded internal source inventory
+   follows separately under the existing 95,000-byte AI review limit. Source
+   configuration and local inspection are not production/native acceptance.
 
 ## Revision checklist and next steps
 
 - [x] Resolve browser defects and publication-boundary failures.
 - [x] Inspect all eight public illustration assets.
 - [x] Record review scale, limitations and source omissions honestly.
-- [ ] Obtain required latest-head CI review before merging these workflows.
-- [ ] Complete and re-review the dependent 28-chapter content expansion.
+- [ ] Obtain required latest-head CI review before merging the complete manual.
+- [x] Complete and re-review the 28-chapter content expansion.
+- [ ] Add the full internal source/walkthrough evidence inventory.

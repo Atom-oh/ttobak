@@ -74,7 +74,7 @@ review and the independent existing CI review pipeline.
 
 Task 1: source inspection and 26-route fictional walkthrough complete.
 Task 2: full manuscript and navigation implementation complete in scratch;
-staged content delivery remains in progress.
+meeting workflows delivered in PR #751; full operations content now included.
 Task 3: foundation checks passed (9 docs cases, 30 browser checks, 90/90 rubric).
 Task 4: foundation PR #750 open; binary illustrations replaced with reviewable SVG
 diagrams after input rejection. Latest-head CI review pending.
