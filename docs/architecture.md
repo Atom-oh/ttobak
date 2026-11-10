@@ -92,7 +92,7 @@ membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
-Private linked meetings require independent publication or a separate grant;
+Linked meetings are navigation only and never note evidence (ADR-070);
 mutations remain direct-only. Billing read/upload access also follows ancestor
 membership, with an atomic path/grant confirmation (ADR-060).
 
@@ -155,6 +155,11 @@ retired. Its data moves in a one-time cutover
    placeholder-protected and without speaker labels or times, through the same
    interpreter path to client memory only (`MEETING_TRANSLATION_ENABLED`, daily
    byte budget).
+   In the Mac app only, caption overlay windows (ADR-069) translate on a separate
+   local path: the main window calls Rust, which uses the user's own AWS profile
+   (Bedrock Luna for finals, Amazon Translate for interims and fallback) and relays
+   text to bundled overlay pages. It never uses the server's `/api/translate`, so
+   server limits and cost are not involved; credentials stay in Rust.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.
@@ -369,6 +374,16 @@ These modules do not activate a scheduler, change legacy news results or establi
 production acceptance. Infrastructure wiring and consumer rollout remain separate
 delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).
 
+The English meeting note is an independent derivative: `SummaryRequested` with
+target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
+state, regenerates from the transcript, notes, verified documents and image
+analyses (never the Korean note) and writes only `contentEn` fields (ADR-070).
+During rollout, a summarize Lambda that predates the English path treats a
+target `en` event as Korean, finds a run-ID mismatch on `ANALYSIS#summary` and
+does nothing; the English row then expires to `INTERRUPTED`, which is retryable.
+Rolling back after English notes exist leaves Korean size guards ignoring
+`contentEn`, so a large item can fail with DynamoDB's clean item-size rejection.
+
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to
 the same summarize Lambda. Run/source/prior-item checks publish items and success
@@ -419,6 +434,13 @@ file bytes. Remote hosting and OAuth client acceptance remain separate from code
 readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
 Stdio alone can record the Mac microphone through a local ffmpeg child and upload
 the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
+The local intake runner (ADR-065) appends SpecReq task notices to
+`~/.ttobak/intake/notify.jsonl`. The Mac app polls that file every 60 seconds
+(`mac-app/src-tauri/src/intake_notify.rs`), validates each line, dedupes on `key`
+in its own seen store and posts a desktop notification. The file is read only
+when it is a private regular file of at most 1 MiB. Notifications are
+informational and never navigate the app; the task strip on the meetings page
+shows the task.
 
 The private connector transport signs verified request identities and exact arguments,
 then invokes private API and QA consumers through service IAM. Atomic current client
@@ -503,8 +525,7 @@ and preserves infrastructure-owned runtime config. See the
 Summary-sharing privacy is staged across the Go readers/writers and Python QA.
 Protected account views retain raw parent-owned source and invalidate derived
 history when scope changes. Activated writers snapshot parent authorization/link
-state before predecessor reads, pin predecessor bytes through publication, fence
-every new grant, and stamp new memberships. Owner-confirmed regeneration uses
+state, fence every new grant, and stamp new memberships. Owner-confirmed regeneration uses
 current own sources and atomically clears prior model outputs; later derivatives,
 simulator claims and insight copies fence the captured generation. The canonical
 index worker retains immutable revision-checked publication; activated summarizers

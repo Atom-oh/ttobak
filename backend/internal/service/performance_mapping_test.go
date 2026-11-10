@@ -136,13 +136,16 @@ func TestAutoMappingRemovesStaleAutomatic(test *testing.T) {
 		model.AccountMapping{SFDCAccountID: "S2", AccountID: "a2"},
 		model.AccountMapping{SFDCAccountID: "S9", AccountID: "a9"},
 	)
-	// S1 is now ambiguous, S2 has no readable match, S9 is no longer assigned.
+	// S1 is now ambiguous, S2 has no readable match, S9 is unassigned by this
+	// sync (mappings are read by key, so the removal names S9).
 	accounts := &performanceCandidatesFake{candidates: []NamedCandidate{{ID: "a1", Name: "Acme"}, {ID: "a3", Name: "acme"}}}
 	svc := performanceTestService(store, accounts)
-	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, performanceAssignmentSync(true)); err != nil {
+	sync := performanceAssignmentSync(true)
+	sync.Mutations = append(sync.Mutations, model.PerformanceMutation{Op: "remove", ExternalID: "S9"})
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, sync); err != nil {
 		test.Fatal(err)
 	}
-	if len(store.deleted) != 3 || store.deleted[0] != "S1" || store.deleted[1] != "S2" || store.deleted[2] != "S9" || len(store.put) != 0 {
+	if len(store.deleted) != 3 || store.deleted[0] != "S9" || store.deleted[1] != "S1" || store.deleted[2] != "S2" || len(store.put) != 0 {
 		test.Fatalf("deleted %v put %v", store.deleted, store.put)
 	}
 }
@@ -170,5 +173,46 @@ func TestAutoMappingSkipsUnchangedAutomatic(test *testing.T) {
 	}
 	if len(store.put) != 0 || len(store.deleted) != 0 {
 		test.Fatalf("put %v deleted %v", store.put, store.deleted)
+	}
+}
+
+func removalSync(complete bool) model.PerformanceSyncRequest {
+	return model.PerformanceSyncRequest{BatchID: performanceServiceBatch, Complete: complete, Mutations: []model.PerformanceMutation{
+		{Op: "remove", ExternalID: "S9"},
+	}}
+}
+
+func TestRemovalInNonFinalBatchDeletesAutomaticMapping(test *testing.T) {
+	store := staleMappingStore(model.AccountMapping{SFDCAccountID: "S9", AccountID: "a9"})
+	accounts := &performanceCandidatesFake{}
+	svc := performanceTestService(store, accounts)
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, removalSync(false)); err != nil {
+		test.Fatal(err)
+	}
+	if got, _ := store.GetAccountMappings(test.Context(), "owner", []string{"S9"}); len(got) != 0 {
+		test.Fatalf("automatic mapping survived: %v", got)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != "S9" || accounts.calls != 0 {
+		test.Fatalf("deleted %v mapping pass calls %d", store.deleted, accounts.calls)
+	}
+	// A failed delete is logged and never fails the committed sync.
+	store.deleteErr = errors.New("boom")
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, removalSync(false)); err != nil {
+		test.Fatalf("delete failure must not fail the sync: %v", err)
+	}
+}
+
+func TestRemovalKeepsManualMapping(test *testing.T) {
+	// The fake mirrors the store's manual = false delete condition.
+	store := staleMappingStore(model.AccountMapping{SFDCAccountID: "S9", AccountID: "a9", Manual: true})
+	svc := performanceTestService(store, &performanceCandidatesFake{})
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, removalSync(true)); err != nil {
+		test.Fatal(err)
+	}
+	if len(store.put) != 0 {
+		test.Fatalf("put %v", store.put)
+	}
+	if got, _ := store.GetAccountMappings(test.Context(), "owner", []string{"S9"}); !got["S9"].Manual {
+		test.Fatalf("manual mapping lost: %v", got)
 	}
 }

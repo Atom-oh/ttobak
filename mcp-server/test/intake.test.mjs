@@ -443,19 +443,37 @@ function writeSentral(home, mode = 'ok') {
     'aws-sentral-mcp': { command: process.execPath, args: [SENTRAL], env: { FAKE_SENTRAL_MODE: mode, TOKEN: CANARY } } } }));
 }
 
-function performanceApi({ fail = [], revisions = {} } = {}) {
+function performanceApi({ fail = [], revisions = {}, assignments = [] } = {}) {
   const calls = [];
+  const mappingReads = [];
   const revision = { 'sfdc-assignments': 0, 'sfdc-tasks': 0, ...revisions };
+  const held = new Map(assignments.map(id => [id, { sfdcAccountId: id, name: 'Server only', role: 'REGISTRY' }]));
   return {
     calls,
+    mappingReads,
+    held,
     async performanceSources() {
       return { sources: Object.entries(revision).map(([source, value]) => ({ source, revision: value })) };
+    },
+    async performanceMappings() {
+      mappingReads.push(revision['sfdc-assignments']);
+      return { items: [...held.values()].map(item => ({ ...item, mapped: false, manual: false })), truncated: false };
     },
     async syncPerformance(source, body) {
       calls.push({ source, body: structuredClone(body) });
       const failure = fail.shift();
       if (failure) throw failure;
       assert.equal(body.expectedRevision, revision[source]);
+      if (source === 'sfdc-assignments') {
+        const next = new Map(held);
+        for (const mutation of body.mutations) {
+          if (mutation.op === 'remove') next.delete(mutation.externalId);
+          else next.set(mutation.assignment.sfdcAccountId, mutation.assignment);
+        }
+        if (next.size > 500 && next.size > held.size) throw new ApiResponseError('HTTP 400', 400, 'BAD_REQUEST');
+        held.clear();
+        for (const [id, row] of next) held.set(id, row);
+      }
       revision[source] = body.expectedRevision + 1;
       return { revision: revision[source], completed: body.complete,
         upserted: body.mutations.filter(m => m.op === 'upsert').length,
@@ -567,6 +585,72 @@ test('sfdc snapshot removes vanished assignments', async t => {
     registry: [registryRecord('001XX0000000A1AAA', 'Alpha'), registryRecord('001XX0000000C1AAA', 'Gamma')], tasks: [] }) });
   assert.equal(third.counts.assignments.upserts, 1);
   assert.equal(third.counts.tasks.removals, 1);
+});
+
+test('sfdc fresh ledger removes server assignments missing from snapshot', async t => {
+  const api = performanceApi({ revisions: { 'sfdc-assignments': 4, 'sfdc-tasks': 2 },
+    assignments: ['001XX0000000A1AAA', '001XX0000000Z9AAA'] });
+  const store = new IntakeStore(tempHome(t));
+  const base = { store, api, sourceId: SFDC_SOURCE_ID, scope: SCOPE_A, now: NOW, dryRun: false };
+  const data = sentralData({ registry: [registryRecord('001XX0000000A1AAA', 'Alpha')], tasks: [] });
+  const first = await runSfdc({ ...base, source: data });
+  assert.equal(api.mappingReads.length, 1);
+  assert.equal(first.counts.assignments.removals, 1);
+  const assignments = api.calls.find(call => call.source === 'sfdc-assignments');
+  assert.equal(assignments.body.expectedRevision, 4);
+  assert.deepEqual(assignments.body.mutations.filter(m => m.op === 'remove'), [{ op: 'remove', externalId: '001XX0000000Z9AAA' }]);
+  assert.deepEqual([...api.held.keys()], ['001XX0000000A1AAA']);
+  assert.deepEqual(api.calls.find(call => call.source === 'sfdc-tasks').body.mutations, []);
+
+  await runSfdc({ ...base, source: data });
+  assert.equal(api.mappingReads.length, 1);
+
+  api.held.set('001XX0000000Y8AAA', { sfdcAccountId: '001XX0000000Y8AAA', name: 'Elsewhere', role: 'activity' });
+  const reconciled = await runSfdc({ ...base, source: data, reconcile: true });
+  assert.equal(api.mappingReads.length, 2);
+  assert.equal(reconciled.counts.assignments.removals, 1);
+  assert.deepEqual([...api.held.keys()], ['001XX0000000A1AAA']);
+
+  for (const [listing, code] of [[{ items: [{ sfdcAccountId: '../x' }], truncated: false }, 'TTOBAK_UNAVAILABLE'],
+    [{ items: [], truncated: true }, 'ASSIGNMENT_CAP_EXCEEDED']]) {
+    const broken = performanceApi();
+    broken.performanceMappings = async () => listing;
+    await assert.rejects(runSfdc({ ...base, store: new IntakeStore(tempHome(t)), api: broken, source: data }),
+      error => error.code === code);
+    assert.equal(broken.calls.length, 0);
+  }
+});
+
+const sfdcId = index => `001XX${String(index).padStart(10, '0')}AAA`;
+const registryRange = (from, to) => Array.from({ length: to - from }, (_, i) => registryRecord(sfdcId(from + i), `N${from + i}`));
+
+test('sfdc delivers assignment removals before additions', async t => {
+  // At the cap; 30 additions sort before 30 removals.
+  const api = performanceApi({ assignments: registryRange(100, 600).map(record => record.nodeId) });
+  const registry = [...registryRange(0, 30), ...registryRange(100, 570)];
+  const result = await runSfdc({ store: new IntakeStore(tempHome(t)), api, source: sentralData({ registry, tasks: [] }),
+    sourceId: SFDC_SOURCE_ID, scope: SCOPE_A, now: NOW, dryRun: false });
+  assert.equal(result.counts.assignments.removals, 30);
+  assert.equal(api.held.size, 500);
+  const ops = api.calls.filter(call => call.source === 'sfdc-assignments').flatMap(call => call.body.mutations.map(m => m.op));
+  assert.equal(ops.lastIndexOf('remove'), 29);
+});
+
+test('sfdc fails closed when assignments exceed the cap', async t => {
+  const api = performanceApi();
+  await assert.rejects(runSfdc({ store: new IntakeStore(tempHome(t)), api,
+    source: sentralData({ registry: registryRange(0, 500), tasks: [taskRecord('00TXX00000000T1AAA', sfdcId(900), 'Extra')] }), sourceId: SFDC_SOURCE_ID, scope: SCOPE_A,
+    now: NOW, dryRun: false }), error => error.code === 'ASSIGNMENT_CAP_EXCEEDED' && error.message.includes('501'));
+  assert.equal(api.calls.length, 0);
+});
+
+test('sfdc reconcile reads revisions after every pending retry', async t => {
+  const api = performanceApi({ fail: [null, new Error('socket hang up')] });
+  const base = { store: new IntakeStore(tempHome(t)), api, sourceId: SFDC_SOURCE_ID, scope: SCOPE_A, now: NOW, dryRun: false,
+    source: sentralData({ registry: [registryRecord('001XX0000000A1AAA', 'Alpha')], tasks: [taskRecord('00TXX00000000T1AAA', null, '')] }) };
+  await assert.rejects(runSfdc(base), error => error.code === 'TTOBAK_UNAVAILABLE');
+  const result = await runSfdc({ ...base, reconcile: true });
+  assert.deepEqual(result.revisions, { 'sfdc-assignments': 2, 'sfdc-tasks': 2 });
 });
 
 test('sfdc overlapping task pages fail closed', async t => {

@@ -68,21 +68,37 @@ line adds `tasks: {result, counts, failures?}`; `status.json` keeps the same
 under `tasks`. `failures` maps a step to a code, and any failure makes the
 result `TASKS_PARTIAL` while independent steps still run.
 
+**Who "me" is.** The SpecReq login (`check_user_is_tam` → `employee_login`)
+is the authoritative Amazon identity; the TTOBAK sign-in email may be any
+address (for example a personal one). Me is the TTOBAK token `sub` plus the
+addresses {TTOBAK email, `<login>@amazon.com`}, lowercased. My account
+membership and role are matched by TTOBAK user ID, never by email; I am
+excluded from attendees by both addresses and never become a counterpart; the
+meetings provider gets `<login>@amazon.com`; requester/resolver checks and the
+Slack request signature use the login. The first confirmed login is recorded in
+`tasks/<scope>/identity.json` (scope = deployment + TTOBAK user).
+`intake select specreq` prints the detected `login` (or `identityError`), never
+an email.
+
 Steps per run (see `mcp-server/src/intake/tasks.ts`):
 
 1. `load`: every task page (at most 50 pages, 1,000 tasks) and the window's
    TTOBAK events. Past the cap, `failures.load` is `PARSE_FAILED` and
-   `counts.skipped` is 3: `specreq`, `mine`, `theirs` and `refresh` do not run
-   (a hidden row could make a link ambiguous), while `close`, `classify`,
-   `drafts` and `notices` still run.
+   `counts.skipped` is 3: `mine`, `theirs` and `refresh` do not run (a hidden
+   row could make a link ambiguous), while `close`, the read-only `specreq`
+   identity check, `classify`, `drafts` and `notices` still run.
 2. `close`: tasks of removed occurrences are closed.
-3. `classify`: new occurrences and `needs_*` tasks with an account. One
+3. `specreq`: `check_user_is_tam` returns my login; it must equal the login
+   recorded for this TTOBAK account (recorded on the first success). It runs
+   before `classify` (also past the task cap) because classification needs my
+   Amazon address. If SpecReq is unreachable, `classify` uses the recorded
+   login; on a mismatch, only the TTOBAK email.
+4. `classify`: new occurrences and `needs_*` tasks with an account. One
    `list_meetings`, at most 25 `get_meeting`, then the deterministic classifier.
    Only a customer meeting creates a task: at least one attendee or the
    organizer must be outside `@amazon.com`. An internal-only meeting, a list
    over its cap, an unknown attendee list or a private meeting creates no task
    (not even `needs_account`). Addresses stay in memory.
-4. `specreq`: `check_user_is_tam` must equal the signed-in `@amazon.com` alias.
 5. `mine` and `theirs`: exact linking by opportunity, date range and
    requester; for theirs, the single acknowledge (auto-ack on) or an
    `ack_needed` notice (off). Unsynced ack ledger entries are written to
@@ -102,16 +118,19 @@ and resends only if the change is still valid, so a web pick is never
 overwritten (`counts.conflicts`).
 
 Local task state: `tasks/<scope>/seen.json` (evaluated, pending, closing,
-last-refreshed and first-waited occurrence IDs), `specreq/<scope>/ack-ledger.json` (permanent, one entry per
+last-refreshed and first-waited occurrence IDs), `tasks/<scope>/identity.json`
+(the recorded SpecReq login), `specreq/<scope>/ack-ledger.json` (permanent, one entry per
 request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 (outcomes and keys only).
 
 ### Recovery
 
-- `IDENTITY_MISMATCH` (`failures.specreq`): the SpecReq server is signed in as
-  someone other than the TTOBAK user, or TTOBAK's email is not
-  `@amazon.com`. No SpecReq step runs. Fix the provider login or sign in to
-  TTOBAK with the matching account, then rerun.
+- `IDENTITY_MISMATCH` (`failures.specreq`): SpecReq returned no valid login,
+  or a login other than the one recorded for this TTOBAK account (an Amazon
+  account switch). No SpecReq linking, acknowledge or refresh runs. Sign the
+  SpecReq server back in as the recorded login; if the switch is intended,
+  delete `~/.ttobak/intake/tasks/<scope>/identity.json` and rerun. A non-Amazon
+  TTOBAK email is not a mismatch.
 - `ack_failed` on a task (`ACK_REJECTED` or `ACK_UNCONFIRMED`): the runner will
   not acknowledge that request again. Acknowledge it in SpecReq by hand; a
   later run reads `WORKING` and moves the task to `acked`. Never edit or delete
@@ -175,6 +194,32 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 4. Confirm `status` and the log hold codes and counts only.
 5. Record the date and results in ADR-065's status line.
 
+### Mac notification acceptance
+
+The Mac app (`intake_notify.rs`) polls `~/.ttobak/intake/notify.jsonl` at launch
+and every 60 seconds. It reads the file only when it is a regular, non-symlink
+file owned by you, not writable by others, and at most 1 MiB. It skips malformed
+or partial lines, `v` other than 1, keys or paths that do not match the 64-hex
+event ID, entries older than 24 hours or more than 5 minutes ahead, and over-long
+text. It dedupes on `key` in `intake-notified.json` (app data directory, 0600,
+pruned after 48 hours) and posts at most 5 per cycle. Notification delivery has
+not been verified on a Mac; ADR-061 found app notifications unreliable for the
+meeting prompt. Check by hand with the packaged app running:
+
+1. Append one synthetic line with a fresh 64-hex ID and a current `createdAt`
+   (the format is in the header of `mcp-server/src/intake/notify.ts`) and keep the file at
+   mode 0600. Within about a minute exactly one notification appears. Append the
+   same line again: no second notification.
+2. Clicking the notification only activates the app; it does not navigate. The
+   task is on the meetings page's task strip.
+3. Make the file a symlink: nothing posts and the log says the queue is
+   unreadable. `chmod 666` it: nothing posts and the log says it was ignored.
+4. Record the observed behaviour (delivered or not, whether the click activates
+   the app) in ADR-065's status line.
+
+Notifications are informational: the app never navigates because of one, so it
+cannot discard unsaved input. The task strip on the meetings page shows the task.
+
 ## Schedule (after acceptance)
 
 Install a LaunchAgent at `~/Library/LaunchAgents/click.atomai.ttobak.intake.plist`.
@@ -200,7 +245,8 @@ It runs every 10 minutes, and its arguments are fixed and contain no secrets:
 Load it with `launchctl bootstrap gui/$(id -u) <plist>`, and remove it with
 `launchctl bootout gui/$(id -u)/click.atomai.ttobak.intake`. The log holds
 codes and counts only. Delete `~/.ttobak/intake/` to forget the local ledger.
-The TTOBAK copies stay until removed in TTOBAK.
+Calendar copies stay until removed in TTOBAK; SFDC assignments are reconciled
+(see below).
 
 ## SFDC connector
 
@@ -240,6 +286,13 @@ only and makes no TTOBAK calls. It holds `sfdc.lock`.
   4xx/409 handling and `complete:true` follow the calendar rules above. The
   receipt must carry revision+1 and matching counts. `--reconcile` adopts the
   revisions of `GET /api/performance/sources` and resends every current row.
+- **Stale assignments.** On `--reconcile` or a fresh assignments ledger (new
+  Mac, deleted state, new `sourceId`), the SFDC IDs of
+  `GET /api/performance/mappings` absent from the snapshot are removed; tasks
+  keep their TTL. A malformed listing fails with `TTOBAK_UNAVAILABLE`, a
+  truncated one with `ASSIGNMENT_CAP_EXCEEDED`.
+- **Cap.** Removals precede upserts, so no batch exceeds the 500-assignment
+  cap; a larger snapshot fails with `ASSIGNMENT_CAP_EXCEEDED` before sending.
 
 Acceptance on the Mac is pending: run `intake sfdc --dry-run`, compare the
 counts with AWSentral, then run `intake sfdc` and re-run to confirm empty

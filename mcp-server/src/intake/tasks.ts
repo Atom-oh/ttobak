@@ -79,6 +79,7 @@ export interface TaskRunOptions {
   /** Selected connectors whose session could not be opened, with the code. */
   unavailable?: Partial<Record<TaskConnectorId, IntakeCode>>;
   calendar: { upserted: OutlookItem[] };
+  /** The TTOBAK sign-in: token `sub` and email (any domain). The Amazon identity comes from SpecReq. */
   me: { email: string; userId: string };
 }
 
@@ -156,9 +157,21 @@ const alias = (email: string | undefined): string | null => {
   return match ? match[1] : null;
 };
 
-function seenPath(scope: string): string[] {
+function seenPath(scope: string, file = 'seen.json'): string[] {
   if (!/^[0-9a-f]{32}$/.test(scope)) throw new IntakeError('INVALID_ARGUMENT', 'task scope is invalid');
-  return ['tasks', scope, 'seen.json'];
+  return ['tasks', scope, file];
+}
+
+/** The SpecReq login first confirmed for this TTOBAK account; a later different login is an account switch. */
+interface IdentityState { version: 1; login: string; recordedAt: string }
+
+function loadIdentity(store: IntakeStore, scope: string): IdentityState | null {
+  const raw = store.read<IdentityState>(...seenPath(scope, 'identity.json'));
+  if (raw === null) return null;
+  if (raw.version !== 1 || typeof raw.login !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.login)) {
+    throw new IntakeError('STORE_INVALID', 'task identity state is malformed');
+  }
+  return raw;
 }
 
 function loadSeen(store: IntakeStore, scope: string): SeenState {
@@ -187,7 +200,10 @@ class TaskRun {
   readonly events = new Map<string, { accountId?: string; title: string; startsAt: string; endsAt: string }>();
   private readonly accounts = new Map<string, AccountInfo | null>();
   private seen!: SeenState;
+  /** My SpecReq login, confirmed this run. */
   private myLogin = '';
+  /** The recorded login, used for addresses only when this run could not reach SpecReq. */
+  private fallbackLogin = '';
   private opptyAccounts: Map<string, Set<string>> | null = null;
   /** False when the task list exceeded its cap: `tasks` is then a prefix of the rows. */
   private complete = true;
@@ -215,18 +231,13 @@ class TaskRun {
       return this.result();
     }
     await this.step('close', () => this.close());
+    // The identity comes first: classification and the meetings provider need my Amazon address.
+    await this.step('specreq', () => this.identity());
     await this.step('classify', () => this.classify());
-    let specreqReady = false;
     if (!this.complete) {
       // A partial list could hide a competing task, so linking and ack fail closed.
       this.counts.skipped = 3;
-    } else await this.step('specreq', async () => {
-      const session = this.options.sessions.specreq;
-      if (!session) throw new IntakeError(this.options.unavailable?.specreq ?? 'NOT_SELECTED');
-      this.myLogin = await resolveMe(session, this.options.me.email);
-      specreqReady = true;
-    });
-    if (specreqReady) {
+    } else if (this.myLogin) {
       await this.step('mine', () => this.linkMine());
       await this.step('theirs', () => this.theirs());
       await this.step('refresh', () => this.refresh());
@@ -251,6 +262,48 @@ class TaskRun {
 
   private async step(name: TaskStep, body: () => Promise<void>): Promise<void> {
     try { await body(); } catch (error) { this.fail(name, error); }
+  }
+
+  /**
+   * Confirms my SpecReq login. The first confirmed login is recorded for this
+   * TTOBAK account; a different login later (an Amazon account switch) fails.
+   */
+  private async identity(): Promise<void> {
+    const { store, scope, now } = this.options;
+    const recorded = loadIdentity(store, scope);
+    const session = this.options.sessions.specreq;
+    if (!session) {
+      this.fallbackLogin = recorded?.login ?? '';
+      throw new IntakeError(this.options.unavailable?.specreq ?? 'NOT_SELECTED');
+    }
+    let login: string;
+    try { login = await resolveMe(session); } catch (error) {
+      this.fallbackLogin = recorded?.login ?? '';
+      throw error;
+    }
+    if (recorded && recorded.login !== login) {
+      throw new IntakeError('IDENTITY_MISMATCH', 'the SpecReq login differs from the one recorded for this TTOBAK account');
+    }
+    if (!recorded) store.write({ version: 1, login, recordedAt: now.toISOString() } satisfies IdentityState,
+      ...seenPath(scope, 'identity.json'));
+    this.myLogin = login;
+  }
+
+  private amazonLogin(): string {
+    return this.myLogin || this.fallbackLogin || alias(this.options.me.email) || '';
+  }
+
+  /** Every address I may attend with, lowercased and deduplicated. */
+  private myEmails(): string[] {
+    const login = this.amazonLogin();
+    return [...new Set([this.options.me.email.trim().toLowerCase(), ...(login ? [`${login}@amazon.com`] : [])]
+      .filter(Boolean))];
+  }
+
+  /** The address the meetings provider expects; the TTOBAK email only when no Amazon login is known. */
+  private meetingsEmail(): string {
+    const login = this.amazonLogin();
+    return login ? `${login}@amazon.com` : this.options.me.email;
   }
 
   /** Records this sync's new occurrences first, so a failed step retries them next run. */
@@ -411,7 +464,10 @@ class TaskRun {
     const emails = new Set<string>();
     for (const account of mine) {
       const info = await this.account(account.accountId as string);
-      for (const member of info?.members ?? []) if (member.role === 'SA' || member.role === 'SSA') emails.add(member.email);
+      for (const member of info?.members ?? []) {
+        if (member.userId === this.options.me.userId) continue;
+        if (member.role === 'SA' || member.role === 'SSA') emails.add(member.email);
+      }
     }
     return emails;
   }
@@ -451,7 +507,7 @@ class TaskRun {
 
     const window = syncWindow(now, zone);
     const list = parseMeetingList(resultJson(await session.call('list_meetings', { startTime: window.start.toISOString(),
-      endTime: window.end.toISOString(), userEmail: me.email }), 'list_meetings'));
+      endTime: window.end.toISOString(), userEmail: this.meetingsEmail() }), 'list_meetings'));
     // A truncated list could hide a second candidate: no task for any occurrence this run.
     if (list === null) throw new IntakeError('PARSE_FAILED', 'list_meetings exceeds its cap');
 
@@ -465,7 +521,7 @@ class TaskRun {
         if (reads >= GET_MEETING_MAX) break;
         reads++;
         const attendees = parseAttendees(resultJson(await session.call('get_meeting', { meetingId: joined.meetingId,
-          getMaster: false, userEmail: me.email }), 'get_meeting'));
+          getMaster: false, userEmail: this.meetingsEmail() }), 'get_meeting'));
         if (!attendees) {
           // Unknown (no privacy flag or over the cap): retried, then skipped after a bounded number of reads.
           if (candidate.task) continue;
@@ -489,7 +545,7 @@ class TaskRun {
             if (saEmails === null) continue; // unknown: no guess
             anyAccountSaEmails = saEmails;
           }
-          classification = classifyOccurrence({ me: me.email, accountId, attendees: attendees.addresses, members,
+          classification = classifyOccurrence({ me: { userId: me.userId, emails: this.myEmails() }, accountId, attendees: attendees.addresses, members,
             anyAccountSaEmails, isPrivate: attendees.isPrivate });
           if (classification.kind === 'task' && classification.counterpartUserId === me.userId) classification = { kind: 'skip' };
         }
@@ -759,7 +815,7 @@ class TaskRun {
   }
 
   private async drafts(outcomes: Map<string, DraftOutcome>): Promise<void> {
-    const { store, scope, sessions, me } = this.options;
+    const { store, scope, sessions } = this.options;
     const due = this.allTasks().filter(task => task.state === 'request_needed' && task.path === 'theirs'
       && task.counterpartUserId && task.accountId && !draftEntry(store, scope, task.eventId));
     if (!due.length) return;
@@ -781,7 +837,7 @@ class TaskRun {
         }
         attempts++;
         const text = renderSlackRequest({ accountName: info.name, meetingTitle: task.event?.title ?? '',
-          localDateTime: this.localWhen(task), myName: alias(me.email) ?? '' });
+          localDateTime: this.localWhen(task), myName: this.amazonLogin() });
         const outcome = await draftOnce(store, scope, task.eventId, session, email, text, { now: () => this.options.now });
         outcomes.set(task.eventId, outcome);
         if (outcome === 'drafted') this.counts.drafted++;

@@ -120,7 +120,7 @@ runner collects and syncs.
 | `GET /api/performance/sources` | none | `{sources:[{source,revision,lastAttemptAt?,lastCompletedAt?}]}`, one entry per source; never-synced sources report revision 0 |
 | `GET /api/performance/goals?year=YYYY` | `year` within previous/current/next year | `{year,text,updatedAt}`; empty text when unset |
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
-| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}]}` sorted by SFDC ID |
+| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
 
@@ -130,7 +130,10 @@ most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
 lowercase); `expectedRevision` is the source's current revision (zero when new).
 
 - Assignment upsert (`sfdc-assignments` only): `sfdcAccountId`, `name` (at most
-  200 bytes) and `role` (at most 64 bytes).
+  200 bytes) and `role` (at most 64 bytes). An owner keeps at most 500
+  assignments: a batch raising the stored count above 500 (current plus new IDs
+  minus removes) returns `400 BAD_REQUEST`; updates and removes always pass.
+  The check is read-then-write, so concurrent batches may overshoot by 20 each.
 - Task upsert (`sfdc-tasks` only): `taskId`, optional `sfdcAccountId` (an
   accountless task is kept and stays unmapped), `activityDate`, `type`,
   `subject` (at most 300 bytes), `status`, optional `specReqId`. Type and
@@ -139,6 +142,10 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
   Descriptions and comments are not accepted.
 - Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
   or task ID.
+
+The mappings list reads at most 501 assignment rows (no cursor), returns the
+first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
+retained mapping rows never hide a mapping.
 
 IDs match `[A-Za-z0-9_-]{1,64}`. The service hashes the normalized request
 (SHA-256 of its canonical JSON); an identical batch replays its receipt within
@@ -624,9 +631,9 @@ other value, including case variants, returns 400 `BAD_REQUEST`. An explicit `""
 returns the meeting to automatic; an omitted field preserves the stored value,
 and an unchanged value is not written. It cannot be combined with an
 `expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
-(`""` for legacy rows). Batch and saved-source summaries map it to a fixed prompt
-directive (`noteLanguageDirective`); automatic keeps the historical "Korean unless
-the transcript is entirely English" rule. Both summary captures pin the field in
+(`""` for legacy rows). The field is stored and accepted but no longer
+affects generation: Korean final notes always use the Korean directive
+(`noteLanguageDirective`, ADR-070). Both summary captures still pin the field in
 their source conditions, so a change during a run fails that run with
 `SOURCE_CHANGED` and keeps the prior summary.
 
@@ -1983,6 +1990,8 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/meetings/{meetingId}/action-items` | `actionItemsHandler.Get` |
 | GET | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Get` |
 | POST | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Request` |
+| GET | `/api/meetings/{meetingId}/notes/en` | `resummaryHandler.GetEnglish` |
+| POST | `/api/meetings/{meetingId}/notes/en` | `resummaryHandler.RequestEnglish` |
 | GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/status` | `attachmentTextHandler.Status` |
 | POST | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry` | `attachmentTextHandler.Retry` |
 | GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text` | `attachmentTextHandler.Read` |
@@ -2323,6 +2332,8 @@ Deployment prerequisites and runtime acceptance are recorded in
 | --- | --- | --- |
 | GET | `/api/meetings/{meetingId}/resummary` | Current meeting readers; small status response |
 | POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; owner-only `{sharingSafe:true}` with activated privacy writers; `202` with status |
+| GET | `/api/meetings/{meetingId}/notes/en` | Current meeting readers; `200` English note and status |
+| POST | `/api/meetings/{meetingId}/notes/en` | Owner/edit; empty body or `{}` only; `202` with status |
 
 Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?, sharingSafe?}`.
 Both routes reject query strings with 400. POST accepts no caller source fields
@@ -2333,8 +2344,10 @@ persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
 saved summary text.
 
 The explicit owner `sharingSafe` mode uses the selected saved transcript, saved
-notes and verified current DOCUMENT extraction. It excludes predecessor and prior
-generated/image/preview evidence. Mode is persisted and pinned through delivery.
+notes, verified current DOCUMENT extraction and the owner's own image analyses.
+It excludes prior generated and preview evidence; no mode reads linked
+predecessors (ADR-070). It is the owner-only reset; ordinary human edits keep
+`safe` provenance and need no reset. Mode is persisted and pinned through delivery.
 Success atomically publishes safe provenance, resets tasks/insights/tags/sentiment/
 live draft, and deletes action-analysis and simulator state. Source/edit-grant CAS
 preserves concurrent human edits; failures retain old content and provenance.
@@ -2349,9 +2362,8 @@ server draft meeting ID. A browser-only `meeting_<epoch ms>` ID is still accepte
 without a meeting check during the frontend rollout; remove that allowance once the
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
-verified document extraction, and writes notes in the meeting's stored
-`noteLanguage`; the POST body never selects a language. Change the language
-through the meeting update first, then request a re-summary. It does not rerun STT or refinement and does not
+verified document extraction, and writes Korean notes; the POST body never selects a language and the stored `noteLanguage`
+does not change it (ADR-070). It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;
@@ -2360,6 +2372,37 @@ return 413 and publish failures return 503. After a 202, source conflicts and
 output limits are reported through failed status; oversized output uses
 `OUTPUT_TOO_LARGE`. Raw source/model text is
 never included in error responses.
+
+### English meeting note
+
+`GET`/`POST /api/meetings/{meetingId}/notes/en` manage a second, English-only note
+(`contentEn`) beside the Korean note. Both routes are authenticated, reject query
+strings with 400, and POST caps its body at 1 KiB and rejects any field (no
+`sharingSafe`, text or language). Errors and limits match re-summary: 403, 404,
+`409 MEETING_BUSY`, `409 NO_SUMMARY_SOURCE`, `409 SOURCE_NOT_READY`, 413, 503.
+POST returns `409 SHARING_REGEN_REQUIRED` while the meeting is read-restricted
+(its Korean note awaits the owner's regeneration); that restriction does not
+block GET.
+
+The run uses the same `SummaryRequested` event with target `en` and its own
+`ANALYSIS#summaryEn` state, so it neither blocks nor is blocked by a Korean run.
+It requires a `done` meeting and the same sources as re-summary (selected
+transcript, saved notes, verified DOCUMENT text, image analyses). It never reads
+the Korean note or a prior English note, and writes only `contentEn` with its
+source hash and `contentEnGeneratedAt`: tasks, insights, tags, sentiment, live
+draft, privacy provenance and simulator/action state are untouched. Failures keep
+the previous English note; an oversized result fails as `OUTPUT_TOO_LARGE`.
+
+`GET` returns `200` with the status fields of the re-summary response plus
+`content` (omitted until a note exists), `generatedAt` (RFC3339) and `stale`.
+`stale` is true when the transcript selection or revision, saved notes or
+verified documents changed since generation (or the source hash was never
+stored); it is not set by Korean note or live-draft edits. Freshness is checked
+after the caller's access: authorization and not-found outcomes remain errors,
+while any other freshness-capture failure (for example more than 20 attachments
+or the check bound) still returns `200` with the stored content and
+`stale: true`, never a fresh guess. Meeting detail adds only
+`hasEnglishNote` (presence of the note); it never inlines `contentEn`.
 
 State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
 requester's edit grant, source fields, attachment inventory and object ETags.
