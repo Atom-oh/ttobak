@@ -3,6 +3,8 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -319,5 +321,57 @@ func TestCalendarHTTPSyncAcceptsSharingFields(test *testing.T) {
 	response = calendarHTTPRequest(api, "owner", http.MethodPost, "/api/calendar/sources/"+calendarHTTPSource+"/sync", alias)
 	if response.Code != http.StatusBadRequest || api.calls != 0 {
 		test.Fatalf("alias reached service: status=%d calls=%d", response.Code, api.calls)
+	}
+}
+
+type calendarMemoryStore struct {
+	service.CalendarStore
+	rows []repository.CalendarEventRow
+}
+
+func (store *calendarMemoryStore) ApplyCalendarBatch(_ context.Context, userID, sourceID string, batch repository.CalendarWriteBatch) (*model.CalendarSyncReceipt, error) {
+	for _, mutation := range batch.Mutations {
+		row := *mutation.Event
+		row.PK, row.SK = model.PrefixUser+userID, model.CalendarEventSortKey(sourceID, row.EventID)
+		store.rows = append(store.rows, row)
+	}
+	return &batch.Receipt, nil
+}
+
+func (*calendarMemoryStore) GetCalendarBatchReceipt(context.Context, string, string, string) (*repository.CalendarBatchReceipt, error) {
+	return nil, nil
+}
+
+func (store *calendarMemoryStore) ListCalendarEventRows(context.Context, string, model.CalendarQuery) (*repository.CalendarRowPage, error) {
+	return &repository.CalendarRowPage{Rows: store.rows, RowCursors: make([]string, len(store.rows))}, nil
+}
+
+func TestCalendarHTTPOrganizerDomainRoundTrips(test *testing.T) {
+	block, _ := aes.NewCipher(make([]byte, 32))
+	gcm, _ := cipher.NewGCM(block)
+	store := &calendarMemoryStore{}
+	handler := NewCalendarHandler(service.NewCalendarService(store,
+		service.NewCalendarCipher(persistedCalendarKMS{cipher: gcm}, "synthetic-calendar-key"), persistedCalendarAccounts{}))
+	router := chi.NewRouter()
+	router.Post("/sync/{sourceId}", handler.Sync)
+	router.Get("/events", handler.ListEvents)
+	do := func(method, target, body string) *httptest.ResponseRecorder {
+		response, request := httptest.NewRecorder(), httptest.NewRequest(method, target, strings.NewReader(body))
+		router.ServeHTTP(response, request.WithContext(context.WithValue(request.Context(), middleware.UserIDKey, "owner")))
+		return response
+	}
+	sync := func(domain string) int {
+		event := `{"externalId":"x","title":"T","startsAt":"2026-11-08T00:00:00Z","endsAt":"2026-11-08T01:00:00Z","timeZone":"UTC","organizerDomain":"` + domain + `"}`
+		return do(http.MethodPost, "/sync/"+calendarHTTPSource, strings.Replace(calendarHTTPBody, `"mutations":[]`, `"mutations":[{"op":"upsert","event":`+event+`}]`, 1)).Code
+	}
+	if code := sync("Example.com"); code != http.StatusBadRequest || len(store.rows) != 0 {
+		test.Fatalf("invalid organizerDomain accepted: %d", code)
+	}
+	if code := sync("example.com"); code != http.StatusOK || len(store.rows) != 1 {
+		test.Fatalf("organizerDomain rejected: %d", code)
+	}
+	response := do(http.MethodGet, "/events?from=2026-11-07T00:00:00Z&to=2026-11-14T00:00:00Z", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"organizerDomain":"example.com"`) {
+		test.Fatalf("organizerDomain not returned: %d %s", response.Code, response.Body.String())
 	}
 }

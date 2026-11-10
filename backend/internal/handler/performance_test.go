@@ -125,6 +125,13 @@ func (store *performanceMemoryStore) PutAccountMapping(_ context.Context, userID
 	return nil
 }
 
+func (store *performanceMemoryStore) DeleteAccountMappingIfAutomatic(_ context.Context, userID, sfdcAccountID string) error {
+	if mapping, found := store.mappings[userID][sfdcAccountID]; found && !mapping.Manual {
+		delete(store.mappings[userID], sfdcAccountID)
+	}
+	return nil
+}
+
 func (store *performanceMemoryStore) GetPerformanceGoals(_ context.Context, userID string, year int) (*model.PerformanceGoals, error) {
 	goals, found := store.goals[userID]
 	if !found || goals.Year != year {

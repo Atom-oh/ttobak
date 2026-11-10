@@ -119,7 +119,9 @@ func TestApplyPerformanceBatchReceiptReplay(test *testing.T) {
 		test.Fatal("receipt must expire")
 	}
 	again, err := repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, performanceTaskRequest(0), performanceTestDigest)
-	if err != nil || *again != *first {
+	replayed := *first
+	replayed.Replayed = true
+	if err != nil || *again != replayed || first.Replayed {
 		test.Fatalf("identical retry must return the saved receipt: %+v %v", again, err)
 	}
 	_, err = repo.ApplyPerformanceBatch(test.Context(), "owner", model.PerformanceSourceSFDCTasks, performanceTaskRequest(0), strings.Repeat("b", 64))
@@ -402,6 +404,36 @@ func TestListPerformanceSourcesOwnerRows(test *testing.T) {
 	}
 }
 
+func TestDeleteAccountMappingIfAutomatic(test *testing.T) {
+	var body map[string]any
+	var target string
+	reject := false
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		target = performanceTarget(request)
+		body = performanceBody(test, request)
+		if reject {
+			return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"x"}`, nil), nil
+		}
+		return summaryHTTPResponse(200, `{}`, nil), nil
+	})
+	if err := repo.DeleteAccountMappingIfAutomatic(test.Context(), "owner", "A1"); err != nil {
+		test.Fatal(err)
+	}
+	key := body["Key"].(map[string]any)
+	condition := analysisCondition(test, body)
+	if target != "DeleteItem" || key["SK"].(map[string]any)["S"] != "PERFMAP#A1" ||
+		!strings.Contains(condition, "manual") || !strings.Contains(condition, `{"BOOL":false}`) {
+		test.Fatalf("target %s key %v condition %s", target, key, condition)
+	}
+	reject = true
+	if err := repo.DeleteAccountMappingIfAutomatic(test.Context(), "owner", "A1"); err != nil {
+		test.Fatalf("a manual row is a no-op: %v", err)
+	}
+	if err := repo.DeleteAccountMappingIfAutomatic(test.Context(), "bad user", "A1"); !errors.Is(err, ErrInvalidPerformanceInput) {
+		test.Fatalf("bad user: %v", err)
+	}
+}
+
 func TestPerformanceRejectsAlreadyExpiredWrites(test *testing.T) {
 	pinPerformanceNow(test)
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
@@ -472,8 +504,13 @@ func TestApplyPerformanceBatchReplayAcrossYearBoundary(test *testing.T) {
 	}
 	at(2027, time.January, 2)
 	again, err := apply(request)
-	if err != nil || *again != *first || writes != 1 {
+	if err != nil || !again.Replayed || writes != 1 {
 		test.Fatalf("replay must return the stored receipt without a write: %v writes=%d", err, writes)
+	}
+	replayed := *again
+	replayed.Replayed = false
+	if replayed != *first {
+		test.Fatalf("replayed receipt differs: %+v vs %+v", replayed, *first)
 	}
 	request.BatchID = "11111111-2222-4333-8444-555555555555"
 	if _, err = apply(request); !errors.Is(err, ErrInvalidPerformanceBatch) || writes != 1 {
