@@ -106,6 +106,14 @@ func applySpecReqTransition(current model.SpecReqTask, change model.SpecReqTaskT
 	if err := validateSpecReqTransitionFields(change); err != nil {
 		return model.SpecReqTask{}, err
 	}
+	switch change.Op {
+	case model.SpecReqOpLinkSpecReq, model.SpecReqOpRecordAck, model.SpecReqOpRefreshSpecReq:
+		// A linked SpecReq is pinned: another ID would inherit the previous
+		// request's title and status.
+		if current.SpecReqID != "" && change.SpecReqID != "" && change.SpecReqID != current.SpecReqID {
+			return model.SpecReqTask{}, ErrConflict
+		}
+	}
 	next := current
 	needsPick := current.State == model.SpecReqStateNeedsAccount || current.State == model.SpecReqStateNeedsOwner
 	switch change.Op {
@@ -177,16 +185,17 @@ func applySpecReqTransition(current model.SpecReqTask, change model.SpecReqTaskT
 		if current.SpecReqID == "" || current.State == model.SpecReqStateClosed {
 			return model.SpecReqTask{}, ErrConflict
 		}
-		if change.SpecReqID != "" && change.SpecReqID != current.SpecReqID {
+		// Promotion needs a freshly observed status, never the stored one.
+		if change.SpecReqStatus == "" {
 			return model.SpecReqTask{}, ErrInvalidInput
 		}
 		setSpecReqFields(&next, change)
 		if current.Path == model.SpecReqPathTheirs {
 			switch {
-			case current.State == model.SpecReqStateAcked && next.SpecReqStatus == model.SpecReqStatusCompleted:
+			case current.State == model.SpecReqStateAcked && change.SpecReqStatus == model.SpecReqStatusCompleted:
 				next.State = model.SpecReqStateResolved
-			case current.State == model.SpecReqStateAckFailed && (next.SpecReqStatus == model.SpecReqStatusWorking ||
-				next.SpecReqStatus == model.SpecReqStatusWaiting || next.SpecReqStatus == model.SpecReqStatusCompleted):
+			case current.State == model.SpecReqStateAckFailed && (change.SpecReqStatus == model.SpecReqStatusWorking ||
+				change.SpecReqStatus == model.SpecReqStatusWaiting || change.SpecReqStatus == model.SpecReqStatusCompleted):
 				next.State, next.FailureCode = model.SpecReqStateAcked, ""
 			}
 		}
