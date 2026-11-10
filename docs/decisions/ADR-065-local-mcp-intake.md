@@ -68,6 +68,10 @@ configuration.
 - **Scheduling** uses a user-installed launchd LaunchAgent that runs
   `intake calendar --noninteractive`. Background runs never open a browser
   login.
+- **Setup (amendment, 2026-11-10).** `intake setup` may install that
+  LaunchAgent itself, now running `intake run --noninteractive`, only with an
+  explicit `--schedule` or an interactive yes. It probes only the known server
+  names above and still needs explicit calendar sensitivity consent.
 
 ## Consequences
 
