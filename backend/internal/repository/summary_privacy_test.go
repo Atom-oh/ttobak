@@ -27,3 +27,35 @@ func TestSummaryPrivacyPublicationCannotDeclassifyConsumedPrivateSource(t *testi
 		t.Fatal("ordinary rewrite made unknown legacy derivation safe")
 	}
 }
+
+func TestEditedSummaryPrivacyState(t *testing.T) {
+	stamped := func(state, content string, mutate func(*model.Meeting)) *model.Meeting {
+		meeting := &model.Meeting{Content: content}
+		privacyStamp(meeting, state, "generation")
+		if mutate != nil {
+			mutate(meeting)
+		}
+		return meeting
+	}
+	tests := []struct {
+		name   string
+		parent *model.Meeting
+		want   string
+	}{
+		{"nil provenance without derivatives", &model.Meeting{}, model.SummaryPrivacySafe},
+		{"nil provenance with action items", &model.Meeting{ActionItems: `[{"id":"a"}]`}, model.SummaryPrivacyUnknown},
+		{"nil provenance with legacy content", &model.Meeting{Content: "legacy note"}, model.SummaryPrivacyUnknown},
+		{"nil provenance with live summary", &model.Meeting{LiveSummary: "draft"}, model.SummaryPrivacyUnknown},
+		{"safe with matching hash", stamped(model.SummaryPrivacySafe, "note", nil), model.SummaryPrivacySafe},
+		{"unknown stays unknown", stamped(model.SummaryPrivacyUnknown, "note", nil), model.SummaryPrivacyUnknown},
+		{"private stays private", stamped(model.SummaryPrivacyPrivate, "note", nil), model.SummaryPrivacyPrivate},
+		{"safe with hash mismatch", stamped(model.SummaryPrivacySafe, "note", func(m *model.Meeting) { m.Content = "changed" }), model.SummaryPrivacyUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := editedSummaryPrivacyState(test.parent); got != test.want {
+				t.Fatalf("state = %s, want %s", got, test.want)
+			}
+		})
+	}
+}

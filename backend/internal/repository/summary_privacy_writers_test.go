@@ -448,3 +448,66 @@ func TestMemberSimulatorClaimFencesPublicationAndGrant(t *testing.T) {
 		}
 	}
 }
+
+// editWriteStoredPrivacy performs an IfMatch write and returns the stored
+// summaryPrivacy state and inheritedState from the UpdateItem body.
+func editWriteStoredPrivacy(t *testing.T, parent *model.Meeting, fields map[string]interface{}) (string, string) {
+	t.Helper()
+	privacyWriterEnabled(t)
+	var state, inherited string
+	var wrote bool
+	repo := privacyWriterWire(t, privacyParentRows(parent), func(target string, body map[string]any) (int, string) {
+		if strings.HasSuffix(target, ".UpdateItem") {
+			privacy := privacyWriterSetValue(t, body, "summaryPrivacy")["M"].(map[string]any)
+			state = privacy["state"].(map[string]any)["S"].(string)
+			if value, ok := privacy["inheritedState"]; ok {
+				inherited = value.(map[string]any)["S"].(string)
+			}
+			wrote = true
+		}
+		return 200, `{}`
+	})
+	match := map[string]interface{}{}
+	for field := range fields {
+		match[field] = map[string]interface{}{"content": parent.Content, "liveSummary": parent.LiveSummary}[field]
+	}
+	if err := repo.UpdateMeetingFieldsIfMatch(context.Background(), "owner", "meeting", match, fields); err != nil {
+		t.Fatal(err)
+	}
+	if !wrote {
+		t.Fatal("no UpdateItem observed")
+	}
+	return state, inherited
+}
+
+func TestLiveSummaryFirstWriteStampsSafe(t *testing.T) {
+	state, inherited := editWriteStoredPrivacy(t, privacyParent(), map[string]interface{}{"liveSummary": "draft"})
+	if state != model.SummaryPrivacySafe || inherited != "" {
+		t.Fatalf("first live draft stored %q/%q, want safe with no inherited state", state, inherited)
+	}
+}
+
+func TestOwnerEditKeepsSafe(t *testing.T) {
+	parent := privacyParent()
+	parent.Content = "old note"
+	privacyStamp(parent, model.SummaryPrivacySafe, "before")
+	state, inherited := editWriteStoredPrivacy(t, parent, map[string]interface{}{"content": "edited note"})
+	if state != model.SummaryPrivacySafe || inherited != "" {
+		t.Fatalf("owner edit stored %q/%q, want safe", state, inherited)
+	}
+}
+
+func TestOwnerEditKeepsUnknownSticky(t *testing.T) {
+	parent := privacyParent()
+	parent.Content = "legacy note"
+	state, inherited := editWriteStoredPrivacy(t, parent, map[string]interface{}{"content": "edited note"})
+	if state != model.SummaryPrivacyUnknown || inherited != model.SummaryPrivacyUnknown {
+		t.Fatalf("legacy edit stored %q/%q, want unknown/unknown", state, inherited)
+	}
+	parent.Content = "legacy note"
+	privacyStamp(parent, model.SummaryPrivacyPrivate, "before")
+	state, _ = editWriteStoredPrivacy(t, parent, map[string]interface{}{"content": "edited note"})
+	if state != model.SummaryPrivacyPrivate {
+		t.Fatalf("private edit stored %q", state)
+	}
+}

@@ -188,6 +188,18 @@ func summaryPublicationPrivacy(snapshot *model.SummarySnapshot, content string) 
 	return result
 }
 
+// editedSummaryPrivacyState is the state kept when an owner/editor writes
+// content or liveSummary. A human edit preserves safe; private and unknown
+// stay sticky. A row with no provenance and no generated derivatives has
+// nothing that could have consumed private sources, so its first write is
+// safe. Nil provenance with any existing derivative stays unknown.
+func editedSummaryPrivacyState(parent *model.Meeting) string {
+	if parent.SummaryPrivacy == nil && !parent.HasSummaryDerivatives() {
+		return model.SummaryPrivacySafe
+	}
+	return parent.SummaryPrivacyState()
+}
+
 func summaryPrivacyRevisionUpdate(update expression.UpdateBuilder) expression.UpdateBuilder {
 	return update.Add(expression.Name("authorizationRevision"), expression.Value(1))
 }
