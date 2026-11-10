@@ -337,6 +337,7 @@ pub async fn caption_overlay_open(
     state: State<'_, CaptionState>,
     lang: String,
 ) -> Result<WindowLayout, CaptionError> {
+    state.require_available()?;
     let settings = state.snapshot();
     let label = gated_label(&settings, &lang)?;
     let saved = settings.windows.get(&lang).cloned().unwrap_or_default();
@@ -395,6 +396,7 @@ pub async fn caption_overlay_close(
     state: State<'_, CaptionState>,
     lang: String,
 ) -> Result<(), CaptionError> {
+    state.require_available()?;
     let label = caption_model::window_label(&lang)
         .ok_or_else(|| CaptionError::invalid("Unsupported caption language."))?;
     if let Some(window) = app.get_webview_window(label) {
@@ -412,6 +414,7 @@ pub async fn caption_overlay_set_style(
     lang: String,
     style: CaptionStyle,
 ) -> Result<(), CaptionError> {
+    state.require_available()?;
     let label = gated_label(&state.snapshot(), &lang)?;
     caption_model::validate_style(&style).map_err(|e| CaptionError::invalid(&e))?;
     let mut gated = Ok(label);
@@ -449,6 +452,7 @@ pub async fn caption_overlay_push(
     text: String,
     is_final: bool,
 ) -> Result<(), CaptionError> {
+    state.require_available()?;
     let label = gated_label(&state.snapshot(), &lang)?;
     check_push(&kind, &id, &text)?;
     if app.get_webview_window(label).is_none() {

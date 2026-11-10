@@ -6,6 +6,8 @@
 
 use crate::caption_model::{self, CaptionSettings, FONTS, LANGS};
 use crate::interpreter::{self, LLM_MAX_BYTES, MAX_CONTEXT, MAX_TEXT_BYTES, MODEL_ID};
+use aws_config::profile::ProfileFileCredentialsProvider;
+use aws_config::provider_config::ProviderConfig;
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_bedrockruntime::error::{DisplayErrorContext, ProvideErrorMetadata};
 use aws_sdk_bedrockruntime::primitives::Blob;
@@ -13,6 +15,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 
@@ -26,7 +29,7 @@ const LLM_TIMEOUT: Duration = Duration::from_secs(6);
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[cfg(test)]
-const ERROR_CODES: [&str; 10] = [
+const ERROR_CODES: [&str; 12] = [
     "profile-missing",
     "credentials-expired",
     "model-access",
@@ -37,6 +40,8 @@ const ERROR_CODES: [&str; 10] = [
     "aws-error",
     "save-failed",
     "window-error",
+    "confirmation-declined",
+    "unavailable",
 ];
 
 /// Error returned to the page. Messages are short, fixed English strings: no
@@ -59,6 +64,8 @@ impl CaptionError {
             "timeout" => "The translation request timed out.",
             "save-failed" => "Caption settings could not be saved.",
             "window-error" => "The caption window could not be updated.",
+            "confirmation-declined" => "The AWS profile change was cancelled.",
+            "unavailable" => "Captions are unavailable on this Mac.",
             _ => "The AWS translation request failed.",
         };
         Self {
@@ -251,14 +258,110 @@ struct Clients {
     translate: aws_sdk_translate::Client,
 }
 
+/// Credentials from exactly one named profile (static keys, SSO,
+/// `credential_process`, roles), not the SDK default chain, which reads
+/// environment variables first and would bill an exported terminal identity.
+// `ProfileFiles` is a deprecated alias that aws-config still requires here;
+// `files` is only set by tests.
+#[allow(deprecated)]
+pub fn profile_credentials(
+    profile: &str,
+    region: &str,
+    files: Option<aws_config::profile::profile_file::ProfileFiles>,
+) -> ProfileFileCredentialsProvider {
+    let config =
+        ProviderConfig::without_region().with_region(Some(Region::new(region.to_string())));
+    let mut builder = ProfileFileCredentialsProvider::builder()
+        .configure(&config)
+        .profile_name(profile);
+    if let Some(files) = files {
+        builder = builder.profile_files(files);
+    }
+    builder.build()
+}
+
+/// Whether a profile or region change needs native confirmation: never when
+/// clearing the profile, always when choosing or changing either.
+pub fn needs_confirmation(
+    old_profile: Option<&str>,
+    old_region: &str,
+    new_profile: Option<&str>,
+    new_region: &str,
+) -> bool {
+    match new_profile {
+        None => false,
+        Some(next) => old_profile != Some(next) || old_region != new_region,
+    }
+}
+
+const CONFIRM_ALLOW: &str = "허용";
+const CONFIRM_CANCEL: &str = "취소";
+
+/// Body of the native confirmation (profile and region are validated ASCII).
+pub fn confirmation_message(profile: &str, region: &str) -> String {
+    format!(
+        "TTOBAK이 AWS 프로필 '{profile}' (리전 {region})으로 자막을 번역하려고 합니다. \
+         이 계정에 요금이 청구될 수 있어요. 허용할까요?"
+    )
+}
+
+/// Shows the confirmation as a sheet on the main window, raised from Rust so
+/// the page cannot draw or answer it. The sheet starts on the main thread and
+/// is awaited on the async runtime, so no thread blocks. `false` unless 허용.
+#[cfg(target_os = "macos")]
+async fn confirm_aws_change(app: &AppHandle, profile: &str, region: &str) -> bool {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let message = confirmation_message(profile, region);
+    let handle = app.clone();
+    let posted = app.run_on_main_thread(move || {
+        let mut dialog = rfd::AsyncMessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("TTOBAK")
+            .set_description(message)
+            .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                CONFIRM_ALLOW.to_string(),
+                CONFIRM_CANCEL.to_string(),
+            ));
+        if let Some(window) = handle.get_webview_window("main") {
+            dialog = dialog.set_parent(&window);
+        }
+        let shown = dialog.show();
+        tauri::async_runtime::spawn(async move {
+            let _ = tx.send(shown.await);
+        });
+    });
+    if posted.is_err() {
+        return false;
+    }
+    matches!(rx.await, Ok(rfd::MessageDialogResult::Custom(label)) if label == CONFIRM_ALLOW)
+}
+
+/// No native dialog off macOS, so a change that needs one is declined.
+#[cfg(not(target_os = "macos"))]
+async fn confirm_aws_change(_app: &AppHandle, _profile: &str, _region: &str) -> bool {
+    false
+}
+
 /// Managed state: current settings, the settings file, cached AWS clients
-/// keyed by `(profile, region)` and the request and byte limiters.
+/// keyed by `(profile, region)` and the request and byte limiters. Without a
+/// settings file every caption command returns `unavailable`.
 pub struct CaptionState {
     settings: Mutex<CaptionSettings>,
-    path: PathBuf,
+    path: Option<PathBuf>,
     clients: Mutex<HashMap<(String, String), Clients>>,
     rate: Mutex<RateCeiling>,
     budget: Mutex<ByteBudget>,
+    /// Set while `caption_settings_set` runs.
+    changing: AtomicBool,
+}
+
+/// Clears `CaptionState::changing` when a settings change ends.
+struct ChangeGuard<'a>(&'a AtomicBool);
+
+impl Drop for ChangeGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl CaptionState {
@@ -271,13 +374,40 @@ impl CaptionState {
         } else {
             CaptionSettings::default()
         };
+        Self::with_path(settings, Some(path))
+    }
+
+    /// State whose commands all return `unavailable`.
+    pub fn unavailable() -> Self {
+        Self::with_path(CaptionSettings::default(), None)
+    }
+
+    fn with_path(settings: CaptionSettings, path: Option<PathBuf>) -> Self {
         Self {
             settings: Mutex::new(settings),
             path,
             clients: Mutex::new(HashMap::new()),
             rate: Mutex::new(RateCeiling::new(RATE_PER_MINUTE)),
             budget: Mutex::new(ByteBudget::new(BYTES_PER_MINUTE)),
+            changing: AtomicBool::new(false),
         }
+    }
+
+    /// Fails with `unavailable` when there is no settings file.
+    pub fn require_available(&self) -> Result<(), CaptionError> {
+        if self.path.is_some() {
+            Ok(())
+        } else {
+            Err(CaptionError::from_code("unavailable"))
+        }
+    }
+
+    /// Starts a settings change, or `None` while another runs.
+    fn begin_change(&self) -> Option<ChangeGuard<'_>> {
+        self.changing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| ChangeGuard(&self.changing))
     }
 
     async fn clients(&self, profile: &str, region: &str) -> Clients {
@@ -288,6 +418,7 @@ impl CaptionState {
         let config = aws_config::defaults(BehaviorVersion::latest())
             .profile_name(profile)
             .region(Region::new(region.to_string()))
+            .credentials_provider(profile_credentials(profile, region, None))
             .load()
             .await;
         let built = Clients {
@@ -331,10 +462,14 @@ impl CaptionState {
     }
 
     fn write(&self, settings: &CaptionSettings) -> Result<(), CaptionError> {
-        if let Some(dir) = self.path.parent() {
+        let path = self
+            .path
+            .as_ref()
+            .ok_or_else(|| CaptionError::from_code("unavailable"))?;
+        if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        caption_model::save(&self.path, settings).map_err(|e| {
+        caption_model::save(path, settings).map_err(|e| {
             log::warn!("caption settings save failed: {:?}", e.kind());
             CaptionError::from_code("save-failed")
         })
@@ -366,7 +501,8 @@ pub struct TranslateResult {
 pub async fn caption_settings_get(
     state: State<'_, CaptionState>,
 ) -> Result<SettingsView, CaptionError> {
-    let settings = state.settings.lock().clone();
+    state.require_available()?;
+    let settings = state.snapshot();
     Ok(SettingsView {
         settings,
         profiles: crate::aws_profiles::list(),
@@ -393,16 +529,43 @@ fn apply_settings(
     Ok(next)
 }
 
+/// Saves the profile, region and extra language. Choosing or changing the
+/// profile or region first asks natively (the remote page must not silently
+/// switch the billed account); declining returns `confirmation-declined`.
 #[tauri::command]
 pub async fn caption_settings_set(
+    app: AppHandle,
     state: State<'_, CaptionState>,
     profile: Option<String>,
     region: String,
     extra_language: Option<String>,
 ) -> Result<CaptionSettings, CaptionError> {
+    state.require_available()?;
     if let Some(p) = &profile {
         if !crate::aws_profiles::list().contains(p) {
             return Err(CaptionError::from_code("profile-missing"));
+        }
+    }
+    let _change = state
+        .begin_change()
+        .ok_or_else(|| CaptionError::invalid("Another caption settings change is in progress."))?;
+    let current = state.snapshot();
+    let mut candidate = current.clone();
+    candidate.profile = profile.clone();
+    candidate.region = region.clone();
+    candidate.extra_language = extra_language.clone();
+    // Never ask about values that would be rejected anyway.
+    caption_model::validate_settings(&candidate).map_err(|e| CaptionError::invalid(&e))?;
+    if let Some(next) = profile.as_deref() {
+        if needs_confirmation(
+            current.profile.as_deref(),
+            &current.region,
+            Some(next),
+            &region,
+        ) && !confirm_aws_change(&app, next, &region).await
+        {
+            log::info!("caption AWS profile change declined");
+            return Err(CaptionError::from_code("confirmation-declined"));
         }
     }
     apply_settings(&state, profile, region, extra_language)
@@ -478,6 +641,7 @@ pub async fn caption_translate(
     is_final: bool,
     context: Vec<String>,
 ) -> Result<TranslateResult, CaptionError> {
+    state.require_available()?;
     if !state.rate.lock().allow(Instant::now()) {
         return Err(CaptionError::from_code("rate-limited"));
     }
@@ -541,11 +705,18 @@ pub async fn caption_translate(
     }
 }
 
-/// Registers the managed state once the app config directory is known.
-pub fn manage(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let path = app.path().app_config_dir()?.join("caption-overlay.json");
-    app.manage(CaptionState::new(path));
-    Ok(())
+/// Registers the managed state. Without an app config directory captions
+/// disable themselves (every command returns `unavailable`) and the rest of
+/// the app keeps working.
+pub fn manage(app: &tauri::App) {
+    let state = match app.path().app_config_dir() {
+        Ok(dir) => CaptionState::new(dir.join("caption-overlay.json")),
+        Err(e) => {
+            log::warn!("captions unavailable: {e}");
+            CaptionState::unavailable()
+        }
+    };
+    app.manage(state);
 }
 
 #[cfg(test)]
@@ -621,6 +792,80 @@ mod tests {
         let state = CaptionState::new(blocker.join("caption-overlay.json"));
         let err = apply_settings(&state, None, "us-east-1".into(), None).unwrap_err();
         assert_eq!(err.code, "save-failed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unavailable_state_rejects_every_change() {
+        let state = CaptionState::unavailable();
+        assert_eq!(state.require_available().unwrap_err().code, "unavailable");
+        let err = apply_settings(&state, None, "us-east-1".into(), None).unwrap_err();
+        assert_eq!(err.code, "unavailable");
+        assert_eq!(state.snapshot(), CaptionSettings::default());
+    }
+
+    #[test]
+    fn confirmation_rules() {
+        type Case<'a> = (Option<&'a str>, &'a str, Option<&'a str>, &'a str, bool);
+        let cases: [Case; 8] = [
+            (None, "us-east-1", Some("work"), "us-east-1", true),
+            (Some("work"), "us-east-1", Some("work"), "us-east-1", false),
+            (Some("work"), "us-east-1", Some("home"), "us-east-1", true),
+            (Some("work"), "us-east-1", Some("work"), "us-west-2", true),
+            (Some("work"), "us-east-1", None, "us-east-1", false),
+            (Some("work"), "us-east-1", None, "us-west-2", false),
+            (None, "us-east-1", None, "us-west-2", false),
+            (None, "us-east-1", None, "us-east-1", false),
+        ];
+        for (old_p, old_r, new_p, new_r, want) in cases {
+            assert_eq!(
+                needs_confirmation(old_p, old_r, new_p, new_r),
+                want,
+                "{old_p:?} {old_r} -> {new_p:?} {new_r}"
+            );
+        }
+    }
+
+    #[test]
+    fn confirmation_names_profile_and_region() {
+        let m = confirmation_message("work", "ap-northeast-2");
+        assert!(m.starts_with("TTOBAK이 AWS 프로필 'work' (리전 ap-northeast-2)"));
+        assert!(m.ends_with("요금이 청구될 수 있어요. 허용할까요?"));
+    }
+
+    #[test]
+    fn only_one_settings_change_runs_at_a_time() {
+        let state = CaptionState::unavailable();
+        let first = state.begin_change().expect("first");
+        assert!(state.begin_change().is_none(), "second while first runs");
+        drop(first);
+        assert!(state.begin_change().is_some(), "free again");
+    }
+
+    /// Resolves the named profile. Ignoring environment credentials is a
+    /// property of the provider type; testing it would mutate the process env.
+    #[tokio::test]
+    #[allow(deprecated)]
+    async fn profile_credentials_use_the_named_profile() {
+        use aws_config::profile::profile_file::{ProfileFileKind, ProfileFiles};
+        use aws_sdk_translate::config::ProvideCredentials;
+        let dir = std::env::temp_dir().join(format!("caption_creds_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("credentials");
+        std::fs::write(
+            &file,
+            "[default]\naws_access_key_id = AKIDDEFAULT\naws_secret_access_key = d\n\n\
+             [work]\naws_access_key_id = AKIDWORK\naws_secret_access_key = w\n",
+        )
+        .unwrap();
+        let files = ProfileFiles::builder()
+            .with_file(ProfileFileKind::Credentials, &file)
+            .build();
+        let creds = profile_credentials("work", "us-east-1", Some(files))
+            .provide_credentials()
+            .await
+            .expect("credentials");
+        assert_eq!(creds.access_key_id(), "AKIDWORK");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
