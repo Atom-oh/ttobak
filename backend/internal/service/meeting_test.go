@@ -1622,6 +1622,23 @@ func TestMaterializePendingShares_SkipsWhenInviterNoLongerAccountMember(t *testi
 	}
 }
 
+func TestMaterializePendingShares_RedirectedInviteHintsMergeTarget(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.accounts["acc-src"] = &model.Account{AccountID: "acc-src", Name: "Source", MergedInto: "acc-dst"}
+	repo.members["acc-src|owner-1"] = &model.AccountMember{AccountID: "acc-src", UserID: "owner-1", Role: model.RoleOwner}
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindAccount,
+		AccountID: "acc-src", Role: model.RoleSSA, InvitedByUserID: "owner-1",
+		SK: model.PrefixPendingAccount + "acc-src", InvitedCognitoSub: "invitee-1",
+		TTL: time.Now().Add(time.Hour).Unix(),
+	})
+	joined := svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com", true)
+	if len(joined) != 1 || joined[0] != "acc-dst" {
+		t.Fatalf("joined=%v, want the merge target", joined)
+	}
+}
+
 func TestMaterializePendingShares_AllowsInviterWhoRemainsMemberAfterDemotion(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)

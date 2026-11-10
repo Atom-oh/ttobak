@@ -51,7 +51,10 @@ func (r *DynamoDBRepository) ListAccountPartitionKeys(ctx context.Context, accou
 	var keys []string
 	var start map[string]types.AttributeValue
 	for {
+		// Never read more than the limit+1 keys needed to detect overflow.
+		pageLimit := int32(min(limit+1-len(keys), 1000))
 		out, err := r.client.Query(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true),
+			Limit:                  aws.Int32(pageLimit),
 			KeyConditionExpression: expr.KeyCondition(), ProjectionExpression: expr.Projection(),
 			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ExclusiveStartKey: start})
 		if err != nil {
