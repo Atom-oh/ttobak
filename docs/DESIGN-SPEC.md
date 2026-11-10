@@ -188,7 +188,9 @@ Korean translation (`TranslationView`). `translationSourceLanguage` labels `zh` 
 Mac app caption windows (ADR-069) are separate from this card. In the Mac app only,
 the record page shows `CaptionOverlayPanel` (state from `useCaptionOverlay`, wired in
 `record/page.tsx`): an AWS profile select (from the local profile names), a region
-input, and a third-language select (none, Japanese, Chinese; disabled while recording,
+select (`ap-northeast-2`, the default, and `us-east-1`; a saved region outside that list
+stays as an extra option; the model is a global inference profile, so the region only
+picks the request endpoint and the Amazon Translate region), and a third-language select (none, Japanese, Chinese; disabled while recording,
 with a note that recognition language changes only before recording). Each allowed
 language (Korean, English, the extra language) has an open/close toggle, disabled until
 a profile is chosen. Each open window gets a style editor: font, size (16-160), font and
@@ -197,7 +199,9 @@ panel, never on the projected window. Hovering a caption window shows a dashed
 outline, a grip-glyph move handle at the top centre and a diagonal resize grip at the
 bottom-right corner (minimum 320x80); they fade out within about 200 ms when the
 pointer leaves, and the whole window stays draggable. A note says Zoom shows the overlay only when the
-whole screen is shared, not a single window. Failures show a Korean message
+whole screen is shared, not a single window. Choosing or changing the profile or region raises a
+native Mac confirmation; if the user cancels, the panel shows a Korean "change cancelled" message
+and re-reads the saved settings so the selects show them again. Failures show a Korean message
 (`captionErrorMessage`) with a retry button that also resets once-only error reporting.
 A failed translation removes that line from the window (an empty-text push), so no stale
 draft stays projected; a translation longer than the 4,000-byte push cap shows its end. The panel renders nothing outside the Mac app or when the app
