@@ -35,6 +35,8 @@ func eventError(w http.ResponseWriter, err error) {
 		writeError(w, 403, model.ErrCodeForbidden, "Access denied")
 	case errors.Is(err, service.ErrNotFound):
 		writeError(w, 404, model.ErrCodeNotFound, "Event not found")
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, service.ErrEventConflict):
 		writeError(w, 409, model.ErrCodeConflict, "Event changed; reload and retry")
 	case errors.Is(err, service.ErrEventsUnavailable):

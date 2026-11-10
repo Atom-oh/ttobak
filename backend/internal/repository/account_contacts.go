@@ -263,7 +263,11 @@ func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, u
 	check := func(sk string) types.TransactWriteItem {
 		return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: contactKey(account, sk), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}}
 	}
-	items := []types.TransactWriteItem{check(model.SKAccountMeta), check(model.PrefixMember + user)}
+	open, err := r.accountOpenCheck(account)
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{open, check(model.PrefixMember + user)}
 	nextRevision := ""
 	if op == "delete" || op == "update" {
 		condition := expression.AttributeExists(expression.Name("PK")).And(expression.Name("revision").Equal(expression.Value(c.Revision)))
@@ -298,6 +302,9 @@ func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, u
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return classifyContactTransaction(err)
 	}
 	if op == "update" {

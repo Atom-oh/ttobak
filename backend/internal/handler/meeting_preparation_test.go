@@ -60,13 +60,25 @@ func TestCreateMeetingPreparationInitialWrite(t *testing.T) {
 							return preparationWireResponse(200, `{"Item":{"accountId":{"S":"account"},"userId":{"S":"owner"},"role":{"S":"SA"}}}`), nil
 						}
 						return preparationWireResponse(200, `{}`), nil
-					case "DynamoDB_20120810.PutItem":
+					case "DynamoDB_20120810.PutItem", "DynamoDB_20120810.TransactWriteItems":
 						puts++
-						var input struct{ Item map[string]map[string]any }
+						var input struct {
+							Item          map[string]map[string]any
+							TransactItems []struct {
+								Put *struct{ Item map[string]map[string]any }
+							}
+						}
 						if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 							t.Fatal(err)
 						}
 						item = input.Item
+						if len(input.TransactItems) > 0 {
+							// An account classification also carries the account's open check.
+							if input.TransactItems[0].Put == nil || len(input.TransactItems) != 2 {
+								t.Fatalf("want meeting put plus open check: %+v", input.TransactItems)
+							}
+							item = input.TransactItems[0].Put.Item
+						}
 						return preparationWireResponse(200, `{}`), nil
 					default:
 						t.Fatalf("unexpected operation: %s", r.Header.Get("X-Amz-Target"))

@@ -42,11 +42,11 @@ func (r *DynamoDBRepository) TransferAccountOwner(ctx context.Context, accountID
 			Remove(expression.Name("initialOwnerEmail")).
 			Remove(expression.Name("initialOwnerInvitationPending")),
 		exists.And(expression.Name("ownerUserId").Equal(expression.Value(currentOwnerID))).
-			And(expression.AttributeNotExists(expression.Name("mergingInto"))).
-			And(expression.AttributeNotExists(expression.Name("mergedInto"))))
+			And(accountOpenCondition()))
 	if err != nil {
 		return err
 	}
+	returnStoredRow(meta)
 	target, err := r.ownerTransferUpdate(accountID, model.PrefixMember+targetUserID,
 		expression.Set(expression.Name("role"), expression.Value(model.RoleOwner)),
 		exists.And(expression.Name("userId").Equal(expression.Value(targetUserID))).

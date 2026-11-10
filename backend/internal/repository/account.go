@@ -133,13 +133,23 @@ func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.Accoun
 	if err != nil {
 		return err
 	}
-	input := &dynamodb.PutItemInput{
+	// The same transaction requires the account to be open, so a member add
+	// cannot land on a merging or merged account.
+	open, err := r.accountOpenCheck(member.AccountID)
+	if err != nil {
+		return err
+	}
+	put := types.TransactWriteItem{Put: &types.Put{
 		TableName: aws.String(r.tableName), Item: item,
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
-	}
-	if _, err := r.client.PutItem(ctx, input); err != nil {
-		var rejected *types.ConditionalCheckFailedException
-		if errors.As(err, &rejected) {
+	}}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{put, open}}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
+		var cancelled *types.TransactionCanceledException
+		if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) > 0 &&
+			aws.ToString(cancelled.CancellationReasons[0].Code) == "ConditionalCheckFailed" {
 			return ErrConditionFailed
 		}
 		return fmt.Errorf("put member: %w", err)
@@ -165,10 +175,11 @@ func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, ownerI
 		return errors.New("delete member requires an owner distinct from the target")
 	}
 	meta, err := r.hierarchyCheck(accountID, model.SKAccountMeta,
-		expression.Name("ownerUserId").Equal(expression.Value(ownerID)))
+		expression.Name("ownerUserId").Equal(expression.Value(ownerID)).And(accountOpenCondition()))
 	if err != nil {
 		return err
 	}
+	returnStoredRow(meta)
 	owner, err := r.hierarchyCheck(accountID, model.PrefixMember+ownerID,
 		expression.Name("role").Equal(expression.Value(model.RoleOwner)))
 	if err != nil {

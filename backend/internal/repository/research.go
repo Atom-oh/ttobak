@@ -329,6 +329,12 @@ func (r *ResearchRepository) LinkAccountTransactional(ctx context.Context, resea
 	if err != nil {
 		return fmt.Errorf("build update expression: %w", err)
 	}
+	// The account must stay open: linking into a merging account would race
+	// the merge's research mover.
+	open, err := metaOpenCheck(r.tableName, accountID)
+	if err != nil {
+		return err
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
@@ -350,9 +356,13 @@ func (r *ResearchRepository) LinkAccountTransactional(ctx context.Context, resea
 					Item:      refItem,
 				},
 			},
+			open,
 		},
 	})
 	if err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return mapTransactionCanceledError(err, researchId, "link")
 	}
 	return nil

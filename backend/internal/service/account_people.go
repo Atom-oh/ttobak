@@ -190,6 +190,13 @@ func (s *AccountPeopleService) resolveMeeting(ctx context.Context, ownerID, meet
 			total.Busy = true
 			return total, nil
 		}
+		if errors.Is(err, ErrAccountMerging) {
+			// The account is merging or merged: stop quietly, a retry would
+			// fail the same way and the merge target resolves its own links.
+			s.release(ctx, run, mentionSKs, opt)
+			total.Skipped++
+			return total, nil
+		}
 		if err != nil {
 			s.release(ctx, run, mentionSKs, opt)
 			return total, err
@@ -406,6 +413,11 @@ func (s *AccountPeopleService) ResolveAccount(ctx context.Context, accountID str
 		}
 		res, err := s.resolveAccountPass(ctx, accountID, since, maxMeetings, opt)
 		total.pass(res)
+		if errors.Is(err, ErrAccountMerging) {
+			s.release(ctx, run, nil, opt)
+			total.Skipped++
+			return total, nil
+		}
 		if err != nil {
 			s.release(ctx, run, nil, opt)
 			return total, err

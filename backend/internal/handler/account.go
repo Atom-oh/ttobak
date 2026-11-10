@@ -115,6 +115,8 @@ func (h *AccountHandler) TransferOwner(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.accountService.TransferOwner(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "accountId"), &req)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		case errors.Is(err, service.ErrOwnerTransferConflict):
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Account ownership or membership changed; reload and retry")
 		case errors.Is(err, service.ErrOwnerTransferUnavailable):
@@ -175,8 +177,16 @@ func (h *AccountHandler) UpdateAccountParent(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// writeAccountMerging is the shared 409 for a write rejected by the merge
+// fence: the account is merging into another account or already merged.
+func writeAccountMerging(w http.ResponseWriter) {
+	writeError(w, http.StatusConflict, model.ErrCodeAccountMerging, "Account is merging into another account or already merged")
+}
+
 func writeAccountHierarchyError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid account name or parent hierarchy")
 	case errors.Is(err, service.ErrForbidden):
@@ -270,6 +280,8 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "유효한 이메일 주소를 입력하세요.")
 		case errors.Is(err, service.ErrInvitationRejected):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "초대할 수 없는 이메일입니다. 허용된 이메일 도메인을 확인하세요.")
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		case errors.Is(err, service.ErrInvitationNotPending):
 			writeError(w, http.StatusConflict, model.ErrCodeBadRequest, "이미 가입한 사용자에게는 초대 메일을 재발송할 수 없습니다.")
 		case errors.Is(err, service.ErrInvitationRateLimited):
@@ -324,7 +336,7 @@ func (h *AccountHandler) RevokePendingMember(w http.ResponseWriter, r *http.Requ
 		case errors.Is(err, service.ErrPendingAlreadyClaimed):
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "This invite was already claimed -- remove the user from Members instead")
 		case errors.Is(err, service.ErrAccountMerging):
-			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Account is merging or merged")
+			writeAccountMerging(w)
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
@@ -387,6 +399,8 @@ func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "The owner cannot be removed")
 		case errors.Is(err, service.ErrConflict):
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "The member changed concurrently; reload and retry")
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		case errors.Is(err, service.ErrAmbiguousShareBlocksRemoval):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "This member holds an untagged share that may be a direct grant or a legacy account-share; pass ?force=true to remove anyway (the share will be left untouched and reported in the response)")
 		default:

@@ -139,6 +139,9 @@ func connectorWriteError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if merging := mergeFenceError(err); merging != nil {
+		return merging
+	}
 	var cancelled *types.TransactionCanceledException
 	if errors.As(err, &cancelled) {
 		for _, reason := range cancelled.CancellationReasons {

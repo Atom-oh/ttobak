@@ -420,6 +420,9 @@ const (
 	// ErrCodeMergeIneligible marks an account merge that cannot start for a
 	// structural reason named in the message.
 	ErrCodeMergeIneligible = "MERGE_INELIGIBLE"
+	// ErrCodeAccountMerging marks a write rejected because the account is
+	// merging into another account or already merged (HTTP 409).
+	ErrCodeAccountMerging = "ACCOUNT_MERGING"
 )
 
 // AskQuestionRequest represents the request body for asking a question about a meeting

@@ -41,7 +41,12 @@ func TestActorAccountWritesPinActorMembership(t *testing.T) {
 				if key := check["Key"].(map[string]any)["SK"].(map[string]any)["S"]; key != "MEMBER#member" {
 					t.Fatalf("membership fence pinned %v, want the actor", key)
 				}
-				update := ops[1].(map[string]any)["Update"].(map[string]any)
+				// The target account META open check rides between the
+				// membership fence and the meeting update.
+				if open := ops[1].(map[string]any)["ConditionCheck"].(map[string]any); open["Key"].(map[string]any)["SK"].(map[string]any)["S"] != "META" {
+					t.Fatalf("second item is not the account open check: %v", open)
+				}
+				update := ops[2].(map[string]any)["Update"].(map[string]any)
 				if pk := update["Key"].(map[string]any)["PK"].(map[string]any)["S"]; pk != "USER#owner" {
 					t.Fatalf("write targeted %v, want the creator partition", pk)
 				}
@@ -286,7 +291,14 @@ func TestActorAccountWritesPinMembershipWithPrivacyWritersOff(t *testing.T) {
 				case strings.HasSuffix(target, ".GetItem") && tc.member:
 					return summaryHTTPResponse(200, `{"Item":`+memberRow+`}`, nil), nil
 				case strings.HasSuffix(target, ".TransactWriteItems"):
-					check = body["TransactItems"].([]any)[0].(map[string]any)["ConditionCheck"].(map[string]any)
+					// Only the membership fence matters here; the target account
+					// META open check is covered by TestAccountWritesCarryMergeFence.
+					for _, entry := range body["TransactItems"].([]any) {
+						if cc, ok := entry.(map[string]any)["ConditionCheck"].(map[string]any); ok &&
+							strings.HasPrefix(cc["Key"].(map[string]any)["SK"].(map[string]any)["S"].(string), "MEMBER#") {
+							check = cc
+						}
+					}
 				}
 				return summaryHTTPResponse(200, `{}`, nil), nil
 			})

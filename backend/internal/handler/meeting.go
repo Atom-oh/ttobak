@@ -80,6 +80,8 @@ func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		case errors.Is(err, repository.ErrConditionFailed):
 			// A concurrent unpublish/move or membership change; reload and retry.
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Meeting changed; reload before saving")
@@ -249,6 +251,8 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		model.MeetingPreparation{Notes: req.Notes, AccountID: req.AccountID, Category: req.MeetingCategory})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
 		case errors.Is(err, service.ErrForbidden):

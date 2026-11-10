@@ -170,6 +170,9 @@ func (r *DynamoDBRepository) putPeopleLink(ctx context.Context, l *model.PeopleL
 		items, roles = append(items, lease), append(roles, "lease")
 	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return classifyAccountLinkPut(err, roles)
 	}
 	return nil
@@ -273,6 +276,9 @@ func (r *DynamoDBRepository) deletePeopleLink(ctx context.Context, accountID, ac
 		items = append(items, lease)
 	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		if fence != nil && leaseCheckFailed(err, len(items)-1) {
 			return fmt.Errorf("%w: %w", ErrConditionFailed, ErrPeopleRunLeaseLost)
 		}
@@ -545,6 +551,10 @@ func (r *DynamoDBRepository) ReplaceUnresolvedMentions(ctx context.Context, acco
 	if err != nil {
 		return err
 	}
+	open, err := r.accountOpenCheck(accountID)
+	if err != nil {
+		return err
+	}
 	pk := model.PrefixAccount + accountID
 	keep := map[string]bool{}
 	var writes []types.TransactWriteItem
@@ -575,8 +585,11 @@ func (r *DynamoDBRepository) ReplaceUnresolvedMentions(ctx context.Context, acco
 		writes = append(writes, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: accountNewsKey(pk, sk)}})
 	}
 	for start := 0; start < len(writes); start += peopleMentionTxWrites {
-		chunk := append(append([]types.TransactWriteItem(nil), writes[start:min(start+peopleMentionTxWrites, len(writes))]...), lease)
+		chunk := append(append([]types.TransactWriteItem(nil), writes[start:min(start+peopleMentionTxWrites, len(writes))]...), open, lease)
 		if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: chunk}); err != nil {
+			if merging := mergeFenceError(err); merging != nil {
+				return merging
+			}
 			if leaseCheckFailed(err, len(chunk)-1) {
 				return fmt.Errorf("%w: %w", ErrConditionFailed, ErrPeopleRunLeaseLost)
 			}

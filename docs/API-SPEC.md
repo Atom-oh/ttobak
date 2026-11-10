@@ -1314,6 +1314,16 @@ target direct member; 404 missing Account; 409 `MERGE_INELIGIBLE` with the reaso
 (tombstone or merge in progress, target inside the source subtree, hierarchy too deep
 or large). The connector inventory disables delegation.
 
+Account writes are fenced while an Account merges (ADR-072). Writers that check the
+Account META row also require `mergingInto` and `mergedInto` to be absent in the same
+transaction: member add and removal, owner transfer, parent changes (child and new
+parent), contact and event writes, link create and delete, project and research
+linking, and meeting classification or publication into the Account (a write that
+only names the stored Account reads it first and stays bound to it). Notes and other
+meeting writes carry no Account check. A rejected write returns 409 `ACCOUNT_MERGING`
+instead of the generic conflict. A pending Account grant for a merging Account stays
+queued and is redirected to the merge target after the merge finishes.
+
 Optional parentAccountId requires the creator's current membership in the parent
 before mail and transactionally before creation. Parent updates require child ownership
 and new-parent membership; the required field uses an empty string to detach,

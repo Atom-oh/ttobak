@@ -76,6 +76,14 @@ func TestAccountLinkClearsInternalCategory(t *testing.T) {
 	for name, value := range map[string]any{"link": "account", "unlink": ""} {
 		t.Run(name, func(t *testing.T) {
 			repo := privacyWriterWire(t, nil, func(_ string, body map[string]any) (int, string) {
+				// A classification also carries the target account's open check.
+				if items, ok := body["TransactItems"].([]any); ok {
+					for _, item := range items {
+						if update, ok := item.(map[string]any)["Update"].(map[string]any); ok {
+							body = update
+						}
+					}
+				}
 				category := expressionName(body, "meetingCategory")
 				remove := regexp.MustCompile(`(?s)REMOVE\s+(.*)`).FindStringSubmatch(body["UpdateExpression"].(string))
 				removed := category != "" && len(remove) == 2 && strings.Contains(remove[1], category)
