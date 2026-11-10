@@ -1,4 +1,4 @@
-# ADR-068: Mac app distribution and in-app updates
+# ADR-071: Mac app distribution and in-app updates
 
 - Status: Accepted (2026-11-10); implementation pending owner acceptance (key
   setup, first release, teammate Mac).

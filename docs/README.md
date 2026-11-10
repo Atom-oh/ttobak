@@ -28,7 +28,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Local MCP intake](runbooks/local-mcp-intake.md) | `ttobak-mcp intake` calendar runner over a local `aws-outlook-mcp`, meeting SpecReq task step, acceptance and LaunchAgent template | `mcp-server/src/intake/`, ADR-065, `test/intake.test.mjs`, `test/intake-tasks.test.mjs` |
 | [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-046, ADR-061, ADR-069 |
 | [Mac app release](runbooks/mac-app-release.md) | Updater key setup, one-command tagged release, verification, resume, restore and key loss | ADR-067, `mac-app/scripts/release.sh`, `install.sh`, `release_manifest.py`, `scripts/publish-frontend.sh` |
-| [Mac distribution and updates](decisions/ADR-068-mac-app-distribution-and-updates.md) | Self-signed certificate, curl installer, Tauri updater, busy guard; Developer ID triggers | `mac-app/src-tauri/src/update*.rs`, `tauri.conf.json`, `frontend/src/components/MacAppInstall.tsx` |
+| [Mac distribution and updates](decisions/ADR-071-mac-app-distribution-and-updates.md) | Self-signed certificate, curl installer, Tauri updater, busy guard; Developer ID triggers | `mac-app/src-tauri/src/update*.rs`, `tauri.conf.json`, `frontend/src/components/MacAppInstall.tsx` |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
