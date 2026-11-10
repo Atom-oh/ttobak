@@ -15,6 +15,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -35,9 +36,11 @@ const BUSY_RECHECK: Duration = Duration::from_secs(30);
 const CHECK_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Outer bound on a whole check, in case a request stalls past its timeout.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
-/// Bound on the archive download, so a stalled transfer cannot leave the
-/// install flag set forever.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// The archive download aborts after this long without a received chunk
+/// (or response), so a stalled transfer cannot leave the install flag set
+/// forever. Like `upload.rs`, this measures stalled progress, not total
+/// duration: a slow but progressing download is never cut off.
+const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 const UP_TO_DATE_PREFIX: &str = "최신 버전입니다";
 const CHECK_FAILED: &str = "업데이트를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
@@ -75,6 +78,9 @@ pub struct UpdateState {
     declined: Mutex<Option<String>>,
     settings_path: Mutex<Option<PathBuf>>,
     installing: AtomicBool,
+    /// A version installed with its restart deferred (the app became busy).
+    /// The running binary is still older, so checks must not re-offer it.
+    installed: Mutex<Option<String>>,
     /// A manual check from the menu is running; repeated clicks are ignored.
     checking: AtomicBool,
     menu_item: Mutex<Option<MenuItem<Wry>>>,
@@ -150,6 +156,59 @@ pub fn outcome_for<E: std::fmt::Display>(
                 Reaction::Nothing
             };
             (CheckOutcome::Available { version, notes }, reaction)
+        }
+    }
+}
+
+/// Notice for a manual check while an installed update awaits a restart.
+pub fn restart_pending_notice(version: &str) -> String {
+    format!("v{version} 업데이트가 설치되었습니다. 앱을 다시 시작하면 적용됩니다.")
+}
+
+/// The version checks compare against: an installed-but-not-restarted
+/// update counts as current, so it is never offered again.
+pub fn effective_current<'a>(running: &'a str, installed: Option<&'a str>) -> &'a str {
+    match installed {
+        Some(v) if is_newer(running, v) => v,
+        _ => running,
+    }
+}
+
+/// When a transfer last made progress; the download's chunk callback ticks it.
+#[derive(Clone)]
+pub struct ProgressClock(Arc<Mutex<tokio::time::Instant>>);
+
+impl ProgressClock {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(tokio::time::Instant::now())))
+    }
+
+    pub fn tick(&self) {
+        *self.0.lock() = tokio::time::Instant::now();
+    }
+
+    fn last(&self) -> tokio::time::Instant {
+        *self.0.lock()
+    }
+}
+
+/// `fut`, or `Err` once `clock` records no progress for `stall`. Total
+/// duration is unbounded while progress continues.
+pub async fn stall_bounded<T, E: std::fmt::Display>(
+    stall: Duration,
+    clock: &ProgressClock,
+    fut: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+    tokio::pin!(fut);
+    loop {
+        let deadline = clock.last() + stall;
+        tokio::select! {
+            result = &mut fut => return result.map_err(|e| e.to_string()),
+            () = tokio::time::sleep_until(deadline) => {
+                if clock.last() + stall <= tokio::time::Instant::now() {
+                    return Err(format!("stalled: no progress for {}s", stall.as_secs()));
+                }
+            }
         }
     }
 }
@@ -234,7 +293,13 @@ pub async fn check_now(app: &AppHandle, manual: bool) -> CheckOutcome {
     if let Err(e) = &result {
         log::warn!("update check failed: {e}");
     }
-    let found = result.as_ref().ok().cloned().flatten();
+    // The builder's request timeout is copied into `Update.timeout` and would
+    // become a total-duration bound on the archive download; that transfer is
+    // bounded by stalled progress in `install` instead.
+    let found = result.as_ref().ok().cloned().flatten().map(|mut u| {
+        u.timeout = None;
+        u
+    });
     let summary = result.map(|u| {
         u.map(|u| {
             let notes = u.body.unwrap_or_default();
@@ -243,7 +308,16 @@ pub async fn check_now(app: &AppHandle, manual: bool) -> CheckOutcome {
     });
     let state = app.state::<UpdateState>();
     let declined = state.declined.lock().clone();
-    let (outcome, reaction) = outcome_for(manual, summary, CURRENT_VERSION, declined.as_deref());
+    let installed = state.installed.lock().clone();
+    let current = effective_current(CURRENT_VERSION, installed.as_deref());
+    let (outcome, mut reaction) = outcome_for(manual, summary, current, declined.as_deref());
+    if let (Some(version), CheckOutcome::UpToDate, Reaction::Notice(_)) =
+        (installed.as_deref(), &outcome, &reaction)
+    {
+        if current == version {
+            reaction = Reaction::Notice(restart_pending_notice(version));
+        }
+    }
     match outcome {
         CheckOutcome::Available { .. } => *state.available.lock() = found,
         CheckOutcome::UpToDate => *state.available.lock() = None,
@@ -285,9 +359,15 @@ pub async fn install(app: &AppHandle) -> Result<(), InstallError> {
     }
     let _installing = FlagGuard(&state.installing);
     // `download` verifies the signature against the configured pubkey.
-    let bytes = bounded(DOWNLOAD_TIMEOUT, update.download(|_, _| {}, || {}))
-        .await
-        .map_err(InstallError::Download)?;
+    let clock = ProgressClock::new();
+    let progress = clock.clone();
+    let bytes = stall_bounded(
+        DOWNLOAD_STALL_TIMEOUT,
+        &clock,
+        update.download(move |_, _| progress.tick(), || {}),
+    )
+    .await
+    .map_err(InstallError::Download)?;
     if crate::control::app_busy(app) {
         log::info!(
             "update v{} downloaded but the app became busy; not installing",
@@ -304,12 +384,18 @@ pub async fn install(app: &AppHandle) -> Result<(), InstallError> {
             "update v{} installed; restart deferred while busy",
             update.version
         );
+        *state.installed.lock() = Some(update.version.clone());
         *state.available.lock() = None;
         refresh_menu(app);
         return Ok(());
     }
     log::info!("update v{} installed; restarting", update.version);
     app.restart();
+}
+
+/// True while an install (download, verify, install) is running.
+pub fn installing(app: &AppHandle) -> bool {
+    app.state::<UpdateState>().installing.load(Ordering::SeqCst)
 }
 
 /// Stores the available version as declined (persisted in `update.json`).
@@ -491,6 +577,62 @@ mod tests {
             outcome_for(false, result, "0.1.0", None),
             (CheckOutcome::Failed, Reaction::Nothing)
         );
+    }
+
+    #[tokio::test]
+    async fn stall_bounded_aborts_only_without_progress() {
+        let stall = Duration::from_millis(40);
+        let clock = ProgressClock::new();
+        let stalled = std::future::pending::<Result<(), String>>();
+        let result = stall_bounded(stall, &clock, stalled).await;
+        assert_eq!(result, Err("stalled: no progress for 0s".to_owned()));
+
+        // Progress every 10 ms for 200 ms (5x the stall bound) completes.
+        let clock = ProgressClock::new();
+        let ticker = clock.clone();
+        let slow_but_steady = async move {
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                ticker.tick();
+            }
+            Ok::<_, String>(42)
+        };
+        assert_eq!(stall_bounded(stall, &clock, slow_but_steady).await, Ok(42));
+
+        // Progress that stops part-way aborts.
+        let clock = ProgressClock::new();
+        let ticker = clock.clone();
+        let stops = async move {
+            for _ in 0..3 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                ticker.tick();
+            }
+            std::future::pending::<()>().await;
+            Ok::<(), String>(())
+        };
+        assert!(stall_bounded(stall, &clock, stops).await.is_err());
+
+        let clock = ProgressClock::new();
+        let err = stall_bounded(stall, &clock, async { Err::<(), _>("boom") }).await;
+        assert_eq!(err, Err("boom".to_owned()));
+    }
+
+    /// An installed-but-not-restarted version is never re-offered.
+    #[test]
+    fn deferred_install_is_not_reoffered() {
+        let current = effective_current("0.1.0", Some("0.2.0"));
+        assert_eq!(current, "0.2.0");
+        assert_eq!(
+            outcome_for(false, available("0.2.0"), current, None),
+            (CheckOutcome::UpToDate, Reaction::Nothing)
+        );
+        assert_eq!(
+            outcome_for(false, available("0.3.0"), current, None).1,
+            Reaction::Offer
+        );
+        assert_eq!(effective_current("0.1.0", None), "0.1.0");
+        assert_eq!(effective_current("0.2.0", Some("0.1.0")), "0.2.0");
+        assert!(restart_pending_notice("0.2.0").contains("v0.2.0"));
     }
 
     fn available(v: &str) -> Result<Option<(String, String)>, String> {

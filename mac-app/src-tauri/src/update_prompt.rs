@@ -40,11 +40,38 @@ pub fn centered_x(screen_x: f64, screen_width: f64) -> f64 {
     screen_x + ((screen_width - WIDTH) / 2.0).max(0.0)
 }
 
-/// Opens the popup for `version`. An already-open popup is focused and left
-/// alone: closing and rebuilding under the same label races the async close
-/// and could drop the window mid-download.
+/// The version an open popup shows (its `version` query value).
+pub fn shown_version(url: &tauri::Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(k, _)| k == "version")
+        .map(|(_, v)| v.into_owned())
+}
+
+/// Whether an open popup should be reloaded to show `version`: only when it
+/// shows another version and no install is running (a reload mid-install
+/// would lose the install reply).
+pub fn needs_refresh(shown: Option<&str>, version: &str, installing: bool) -> bool {
+    !installing && shown != Some(version)
+}
+
+/// Opens the popup for `version`. An already-open popup is focused, and
+/// reloaded in place if it shows another version; it is never closed and
+/// rebuilt, since that races the async close under the same label and could
+/// drop the window mid-download.
 pub fn offer(app: &AppHandle, version: &str, notes: &str) {
     if let Some(w) = app.get_webview_window(WINDOW_LABEL) {
+        if let Ok(mut url) = w.url() {
+            let shown = shown_version(&url);
+            let installing = crate::update::installing(app);
+            if needs_refresh(shown.as_deref(), version, installing) {
+                let page = page_url(version, notes);
+                let query = page.split_once('?').map(|(_, q)| q.to_owned());
+                url.set_query(query.as_deref());
+                if let Err(e) = w.navigate(url) {
+                    log::warn!("could not refresh the update prompt: {e}");
+                }
+            }
+        }
         let _ = w.show();
         let _ = w.set_focus();
         return;
@@ -160,6 +187,17 @@ mod tests {
         let url = page_url("0.3.0", &notes);
         let encoded = url.split("notes=").nth(1).expect("notes");
         assert_eq!(encoded, "%EA%B0%80".repeat(500));
+    }
+
+    #[test]
+    fn an_open_popup_refreshes_only_for_another_version_when_idle() {
+        let url = tauri::Url::parse(&format!("tauri://localhost/{}", page_url("0.2.0", "a&b")))
+            .expect("url");
+        assert_eq!(shown_version(&url).as_deref(), Some("0.2.0"));
+        assert!(!needs_refresh(Some("0.2.0"), "0.2.0", false));
+        assert!(needs_refresh(Some("0.2.0"), "0.3.0", false));
+        assert!(!needs_refresh(Some("0.2.0"), "0.3.0", true));
+        assert!(needs_refresh(None, "0.3.0", false));
     }
 
     #[test]
