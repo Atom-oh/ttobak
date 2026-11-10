@@ -49,7 +49,7 @@ use CSS variants.
 | Area | Current responsibilities / code pointers |
 |---|---|
 | Authentication | auth/LoginForm, ForgotPasswordForm, AuthProvider: login, NEW_PASSWORD_REQUIRED, reset; no self-signup |
-| App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route. Menu groups come from `lib/navigation.ts`: Assistant on top; Work (Meetings, Accounts, Projects, Docs); Knowledge (Library `/kb`, Deep Research `/insights?tab=research`, News & Updates `/insights`, Custom Dictionary `/dictionary`); Customer Analytics (Billing); Settings. Mobile keeps five bottom tabs; the Knowledge tab opens the grouped menu sheet. `/files` redirects to `/kb?source=meeting` (Library's meeting-attachment source). layout/BillingInsightButton is the Customer Analytics › Billing item (sidebar, menu sheet and profile menu, only with runtime `billingInsight: true`): it opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure. With runtime `billingService: true` the same entry is a plain link to `/billing`, which hosts the Billing dashboard in a same-origin iframe (`/billing-app/index.html`, `upload.html` for `?view=upload`) and gives it tokens through `window.ttobakBilling` (`lib/billingBridge.ts`) |
+| App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route. Menu groups come from `lib/navigation.ts`: Assistant on top; Work (Meetings, Accounts, Projects, Docs, SA Activity `/performance`); Knowledge (Library `/kb`, Deep Research `/insights?tab=research`, News & Updates `/insights`, Custom Dictionary `/dictionary`); Customer Analytics (Billing); Settings. Mobile keeps five bottom tabs; the Knowledge tab opens the grouped menu sheet. `/files` redirects to `/kb?source=meeting` (Library's meeting-attachment source). layout/BillingInsightButton is the Customer Analytics › Billing item (sidebar, menu sheet and profile menu, only with runtime `billingInsight: true`): it opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure. With runtime `billingService: true` the same entry is a plain link to `/billing`, which hosts the Billing dashboard in a same-origin iframe (`/billing-app/index.html`, `upload.html` for `?view=upload`) and gives it tokens through `window.ttobakBilling` (`lib/billingBridge.ts`) |
 | Meeting list | MeetingList: owned/shared/team streams, search, account selection, category filter and opaque pagination. The grouped view shows account and unassigned groups in first-seen order, then one Internal section with Team / 1:1 / Training / Other subgroups (`lib/meetingCategory.ts`) |
 | Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner, record/RecordingLinkControls: customer and project links stay editable during browser and native recording; they apply to an existing draft immediately, otherwise when the meeting is created at save (`lib/recordingLinks.ts`). Keeping a recording on the device stores its pending project additions and removals as deltas; a restore applies them to the meeting's current `projectIds` (links made elsewhere meanwhile stay), runs them before upload and then clears them from the copy. A project whose link or unlink request is still in flight is saved as possibly changed. After an audio upload completes (recording or file), the page returns home with an uploaded-meeting reconciliation hint; transcription and notes continue on the server. Meeting cards badge `transcribing`/`summarizing` and `error`. The home list refreshes the current filtered first page every 15 s while a listed meeting is processing or the uploaded meeting has not appeared with a post-recording status, only while visible and for at most 30 minutes (`lib/meetingStatus.ts`). An initially missing uploaded meeting is admitted when it appears; a stale recording status is shown as transcribing while reconciling. Processing meetings on later loaded pages still need manual reload. |
 | Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links. AccountSection gives the creator a meeting-category control; an internal meeting hides account linking, and Internal is disabled while an account is linked |
@@ -649,6 +649,40 @@ sends no vocabulary on live streams: no API names one yet (ADR-008 item 5).
 language; with a name, a vocabulary BadRequest before the first stream event
 retries once without it, and any vocabulary rejection drops it for the recording
 and shows an informational "recognizing without the custom dictionary" line.
+
+## SA activity
+
+`/performance` (`app/performance/page.tsx`, `components/performance/`, pure
+helpers and wire types in `lib/performance.ts`, client `performanceApi` in
+`lib/api.ts`) is the owner's own page: every request reads only the caller's
+rows ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)) and there is
+no share control. The Work menu entry is SA Activity. A segmented
+period control (this week / quarter / this year, default this week) drives
+`GET /api/performance/missed`. Sections, in order:
+
+- Scorecard placeholder card: the AI scorecard arrives with plan 2; for now it
+  holds `GoalsEditor`, the current Asia/Seoul year's goals with a UTF-8 byte
+  counter that disables saving above 8,000 bytes. The editor stays read-only
+  until the GET succeeds (unset goals are a 200 with empty text); a failed load
+  shows an error and a retry, so a save never overwrites unseen goals.
+- What I missed (`MissedList`): two groups, SFDC logging gaps and silent
+  customers, each newest `at` first. A meeting touchpoint links to
+  `/meeting/{id}`; calendar gaps and silent customers link to `/accounts/{id}`.
+  Account names come from the readable account list. If that list fails, the
+  items render with a notice, a neutral placeholder name (never the raw ID) and
+  a retry, and the mapping queue shows the same error and retry above its list
+  or empty message. A period change also retries a failed account list, and a
+  failed missed read or mapping-list read shows a retry. A calendar-coverage note states the earliest calendar event read (`calendarCoverageStart`, or that no events were read) and qualifies the logging-gap empty state. A positive `unmappedCount` is shown as an
+  excluded count, never guessed; the notice says only SFDC-account activity can
+  be fixed in the queue.
+- Mapping queue (`MappingQueue`): unmapped SFDC assignments, plus mapped ones
+  whose account is not in the loaded readable account list (shown with that
+  reason; nothing is judged until the list loads), each with a plain account
+  select (hierarchy paths from `lib/accountTree.ts`) and a connect button. `403` reads as "cannot read this account", `404` as "not your
+  assigned SFDC account"; a saved mapping reloads the queue and the missed list.
+- Source freshness: one line per `sourceFreshness` entry, "last collected" in
+  Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or
+  `ttobak-mcp intake calendar`.
 
 ## Verification
 
