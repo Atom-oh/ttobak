@@ -13,6 +13,16 @@ export const MAX_RESULT_BYTES = 4 * 1024 * 1024;
 const MAX_STDERR_BYTES = 16 * 1024;
 const AUTH_PATTERN = /midway|mwinit|cookie|unauthori[sz]ed|\b401\b|\b403\b|expired|sign[ -]?in|authenticat/i;
 
+/**
+ * The server answered the call with a tool-level error (`isError`), as opposed
+ * to a timeout, transport failure or crash. The code stays SOURCE_ERROR.
+ */
+export class ToolResultError extends IntakeError {
+  constructor(detail: string) {
+    super('SOURCE_ERROR', detail);
+  }
+}
+
 export interface McpSessionOptions {
   startTimeoutMs?: number;
   callTimeoutMs?: number;
@@ -89,7 +99,7 @@ export class McpSession {
       if (AUTH_PATTERN.test(text) || AUTH_PATTERN.test(this.stderr())) {
         throw new IntakeError('AUTH_EXPIRED_MIDWAY', `${name} reported an authentication failure`);
       }
-      throw new IntakeError('SOURCE_ERROR', `${name} returned an error`);
+      throw new ToolResultError(`${name} returned an error`);
     }
     return result;
   }

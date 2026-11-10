@@ -15214,11 +15214,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants3);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -15235,10 +15235,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants3);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -15299,8 +15299,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants3) {
-        this.code = optimizeExpr(this.code, names, constants3);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -15329,12 +15329,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants3))
+          if (n.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -15387,12 +15387,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a2;
-        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants3);
-        if (!(super.optimizeNames(names, constants3) || this.else))
+        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants3);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -15415,10 +15415,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants3);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -15454,10 +15454,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants3);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -15499,11 +15499,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a2, _b;
-        super.optimizeNames(names, constants3);
-        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants3);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
+        super.optimizeNames(names, constants4);
+        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -15804,7 +15804,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants3) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -15819,14 +15819,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants3[n.str];
+        const c = constants4[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -27375,7 +27375,7 @@ function resultJson(result, tool) {
   }
   throw new IntakeError("PARSE_FAILED", `${tool} did not return JSON`);
 }
-var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, McpSession;
+var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, ToolResultError, McpSession;
 var init_mcp_client = __esm({
   "src/intake/mcp-client.ts"() {
     "use strict";
@@ -27385,6 +27385,11 @@ var init_mcp_client = __esm({
     MAX_RESULT_BYTES2 = 4 * 1024 * 1024;
     MAX_STDERR_BYTES = 16 * 1024;
     AUTH_PATTERN = /midway|mwinit|cookie|unauthori[sz]ed|\b401\b|\b403\b|expired|sign[ -]?in|authenticat/i;
+    ToolResultError = class extends IntakeError {
+      constructor(detail) {
+        super("SOURCE_ERROR", detail);
+      }
+    };
     McpSession = class _McpSession {
       constructor(client, transport, stderr, callTimeoutMs, allowedTools) {
         this.client = client;
@@ -27463,7 +27468,7 @@ var init_mcp_client = __esm({
           if (AUTH_PATTERN.test(text2) || AUTH_PATTERN.test(this.stderr())) {
             throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${name} reported an authentication failure`);
           }
-          throw new IntakeError("SOURCE_ERROR", `${name} returned an error`);
+          throw new ToolResultError(`${name} returned an error`);
         }
         return result;
       }
@@ -27481,6 +27486,8 @@ var init_mcp_client = __esm({
 import {
   chmodSync as chmodSync2,
   closeSync as closeSync2,
+  constants as constants3,
+  fstatSync as fstatSync2,
   fsyncSync as fsyncSync2,
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync4,
@@ -27560,12 +27567,13 @@ function alive(pid) {
     return error3.code === "EPERM";
   }
 }
-var MAX_STATE_BYTES, IntakeStore, EMPTY_LOCK_GRACE_MS, ABANDONED_BREAK_MS;
+var MAX_STATE_BYTES, MAX_APPEND_LINE_BYTES, IntakeStore, EMPTY_LOCK_GRACE_MS, ABANDONED_BREAK_MS;
 var init_store = __esm({
   "src/intake/store.ts"() {
     "use strict";
     init_errors4();
     MAX_STATE_BYTES = 16 * 1024 * 1024;
+    MAX_APPEND_LINE_BYTES = 4 * 1024;
     IntakeStore = class {
       directory;
       constructor(home) {
@@ -27610,10 +27618,13 @@ var init_store = __esm({
         }
       }
       write(value, ...relative) {
+        this.writeText(JSON.stringify(value, null, 2) + "\n", ...relative);
+      }
+      /** Atomically replaces a file with `data` (0600, fsync, rename). */
+      writeText(data, ...relative) {
         const path2 = this.path(relative);
         this.ensureDirectory(this.directory);
         for (let index = 1; index < relative.length; index++) this.ensureDirectory(this.path(relative.slice(0, index)));
-        const data = JSON.stringify(value, null, 2) + "\n";
         if (Buffer.byteLength(data) > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state too large");
         const temporary = `${path2}.${randomBytes3(6).toString("hex")}.tmp`;
         const descriptor = openSync2(temporary, "wx", 384);
@@ -27631,6 +27642,67 @@ var init_store = __esm({
           } catch {
           }
           throw error3;
+        }
+      }
+      /** The raw text of a state file, or null when absent. Same owner/type checks as `read`. */
+      readText(...relative) {
+        const path2 = this.path(relative);
+        let stat;
+        try {
+          stat = lstatSync3(path2);
+        } catch (error3) {
+          if (error3.code === "ENOENT") return null;
+          throw new IntakeError("STORE_INVALID", "state file unreadable");
+        }
+        const uid = process.getuid?.();
+        if (!stat.isFile() || stat.isSymbolicLink() || uid !== void 0 && stat.uid !== uid || stat.size > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state file rejected");
+        try {
+          return readFileSync6(path2, "utf8");
+        } catch {
+          throw new IntakeError("STORE_INVALID", "state file unreadable");
+        }
+      }
+      /**
+       * Appends one line (plus a newline) to a state file: O_APPEND|O_CREAT, 0600,
+       * never following a symlink. The line must be at most 4 KiB and hold no CR/LF.
+       */
+      append(line, ...relative) {
+        if (typeof line !== "string" || /[\r\n]/.test(line) || Buffer.byteLength(line) > MAX_APPEND_LINE_BYTES) {
+          throw new IntakeError("STORE_INVALID", "append line rejected");
+        }
+        const path2 = this.path(relative);
+        this.ensureDirectory(this.directory);
+        for (let index = 1; index < relative.length; index++) this.ensureDirectory(this.path(relative.slice(0, index)));
+        const uid = process.getuid?.();
+        const check2 = (stat) => {
+          if (!stat.isFile() || stat.isSymbolicLink?.() || uid !== void 0 && stat.uid !== uid || stat.size > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state file rejected");
+        };
+        try {
+          check2(lstatSync3(path2));
+        } catch (error3) {
+          if (error3 instanceof IntakeError) throw error3;
+          if (error3.code !== "ENOENT") throw new IntakeError("STORE_INVALID", "state file unreadable");
+        }
+        let descriptor;
+        try {
+          descriptor = openSync2(path2, constants3.O_APPEND | constants3.O_CREAT | constants3.O_WRONLY | constants3.O_NOFOLLOW, 384);
+        } catch {
+          throw new IntakeError("STORE_INVALID", "state file rejected");
+        }
+        try {
+          check2(fstatSync2(descriptor));
+          writeSync(descriptor, line + "\n");
+          fsyncSync2(descriptor);
+        } finally {
+          closeSync2(descriptor);
+        }
+      }
+      /** Size in bytes of a state file, or 0 when absent. */
+      size(...relative) {
+        try {
+          return lstatSync3(this.path(relative)).size;
+        } catch {
+          return 0;
         }
       }
       /**
