@@ -28,7 +28,7 @@ class PublicGuideTests(unittest.TestCase):
         (self.source / 'favicon.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (self.source / 'private.md').write_text('Must never be published.')
         for name in ('home', 'assistant', 'accounts', 'meeting', 'upload', 'library', 'research', 'settings'):
-            (self.source / f'screen-{name}.webp').write_bytes(b'reviewed fictional screen fixture')
+            (self.source / f'screen-{name}.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (self.source / 'unreviewed.webp').write_bytes(b'Unreviewed image.')
         self.source_patch = patch.object(guide, 'SOURCE', self.source)
         self.source_patch.start()
@@ -68,12 +68,12 @@ class PublicGuideTests(unittest.TestCase):
 
     def test_reviewed_screen_reference_is_published(self):
         (self.source / 'index.html').write_text(
-            self.html.replace('</body>', '<img src="screen-home.webp" alt="Fictional example"></body>')
+            self.html.replace('</body>', '<img src="screen-home.svg" alt="Fictional example"></body>')
         )
         guide.build(self.output)
         self.assertEqual(
-            (self.source / 'screen-home.webp').read_bytes(),
-            (self.output / 'screen-home.webp').read_bytes(),
+            (self.source / 'screen-home.svg').read_bytes(),
+            (self.output / 'screen-home.svg').read_bytes(),
         )
 
     def test_unreviewed_image_reference_is_rejected(self):
@@ -85,7 +85,7 @@ class PublicGuideTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_symlinked_reviewed_image_is_not_published(self):
-        asset = self.source / 'screen-home.webp'
+        asset = self.source / 'screen-home.svg'
         asset.unlink()
         asset.symlink_to(self.source / 'private.md')
         with self.assertRaises(ValueError):

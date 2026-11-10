@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-11-10 |
 | Iteration | 1: navigation and publication foundation |
-| Scope | Existing 16 workflows, new responsive guide UI, eight fictional screenshots, explicit public asset boundary |
+| Scope | Existing 16 workflows, new responsive guide UI, eight fictional menu illustrations, explicit public asset boundary |
 | Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
 | Scale | 90 points: Playwright MCP unavailable, so the rubric's 10-point MCP visual category is exempt |
@@ -46,10 +46,10 @@ so no deduction applies. Informational scope boundaries do not count as defects.
 
 ## Evidence and revisions
 
-- Eight raster screens were inspected visually for customer data, credentials,
-  account IDs, internal URLs and layout. They contain fictional customer/meeting
-  fixtures and a clearly synthetic guide user. Notion fields are empty; no tokens
-  were captured. Captions identify local fictional UI and link to full resolution.
+- Eight text-reviewable SVG menu illustrations were checked against local UI
+  walkthroughs. Captions explicitly distinguish diagrams from illustrations. They
+  contain no customer records, credentials, internal URLs or remote resources.
+  Local raster walkthrough evidence remains private and outside the public artifact.
 - The application walkthrough opened 26 local routes: 19 primary/detail routes and
   seven Account tab selections. API responses were fictional; non-loopback HTTP
   and external WebSocket construction were blocked. This was not live acceptance.
@@ -76,14 +76,14 @@ None outstanding.
 |---|---|---|
 | Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
 | Source inventory / current menus | PARTIAL | Full 28-chapter expansion is delivered by dependent content PRs |
-| Fictional UI orientation | INCLUDED | Eight reviewed local raster examples |
+| Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
 | Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
 | Production and native acceptance | OMITTED deliberately | No production login, customer records or macOS capture was performed |
 
 ## Informational boundaries
 
-1. Fictional fixture email/identity values are deliberate placeholders, not real
-   customer contact data. Public assets never contain the internal evidence archive.
+1. Public illustrations contain generic menu labels. Public assets never contain
+   the internal fictional walkthrough evidence archive.
 2. This first delivery establishes the guide UI. It does not claim that the final
    enterprise content expansion is complete. The subsequent content PRs preserve
    the existing 95,000-byte AI review limit and are checked independently.
@@ -91,7 +91,7 @@ None outstanding.
 ## Revision checklist and next steps
 
 - [x] Resolve browser defects and publication-boundary failures.
-- [x] Inspect all eight public screenshot assets.
+- [x] Inspect all eight public illustration assets.
 - [x] Record review scale, limitations and source omissions honestly.
 - [ ] Obtain required latest-head CI review before merging this foundation.
 - [ ] Complete and re-review the dependent 28-chapter content expansion.

@@ -13,9 +13,9 @@ SOURCE = ROOT / 'docs/user-guide'
 # must never enter the public artifact, even when present beside the guide.
 ASSETS = (
     'index.html', 'style.css', 'guide.js', 'favicon.svg',
-    'screen-home.webp', 'screen-assistant.webp', 'screen-accounts.webp',
-    'screen-meeting.webp', 'screen-upload.webp', 'screen-library.webp',
-    'screen-research.webp', 'screen-settings.webp',
+    'screen-home.svg', 'screen-assistant.svg', 'screen-accounts.svg',
+    'screen-meeting.svg', 'screen-upload.svg', 'screen-library.svg',
+    'screen-research.svg', 'screen-settings.svg',
 )
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'none'; connect-src 'none'")

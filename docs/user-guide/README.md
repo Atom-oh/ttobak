@@ -58,7 +58,7 @@ Do not imply universal pricing coverage, arbitrary manual requirement entry,
 editor access to owner-only simulation, automatic sharing through classification,
 or that upload/preview/indexing alone proves AI source acceptance.
 
-The 2026-11-10 navigation foundation adds 28 chapter entry points, reviewed local
-fictional screenshots, body search, themes and mobile contents. Detailed workflow
+The 2026-11-10 navigation foundation preserves 16 chapter entry points, reviewed
+menu illustrations, body search, themes and mobile contents. Detailed workflow
 chapters are delivered by the dependent content PRs. Internal plans, evidence and
 review reports are excluded from the public asset allowlist.
