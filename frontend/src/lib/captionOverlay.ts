@@ -56,6 +56,7 @@ export type CaptionErrorCode =
   | 'save-failed'
   | 'window-error'
   | 'confirmation-declined'
+  | 'confirmation-cooldown'
   | 'unavailable';
 
 /** Largest caption push, in UTF-8 bytes; matches `MAX_TEXT_BYTES` in caption_overlay.rs. */
@@ -198,6 +199,8 @@ export function captionErrorMessage(code: string): string {
       return '번역 요청이 너무 많아 잠시 멈췄어요.';
     case 'confirmation-declined':
       return 'AWS 프로필 변경을 취소했어요.';
+    case 'confirmation-cooldown':
+      return '잠시 후 다시 시도해 주세요.';
     case 'unavailable':
       return '이 Mac에서는 자막 창을 사용할 수 없어요.';
     default:
