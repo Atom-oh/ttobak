@@ -126,3 +126,22 @@ func TestSummaryRetryDoesNotGenerateAfterSameStatusClaimTakeover(t *testing.T) {
 		t.Fatal("claim takeover not isolated", err)
 	}
 }
+
+func TestRetryPassesNoLinkedContext(t *testing.T) {
+	old := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing,
+		SummaryRetryPending: true, LinkedMeetingIDs: []string{"prev"}}
+	current := *old
+	current.SummarizeRetryClaimedAt = "owned-claim"
+	store := &retryStoreFixture{current: &current, claimed: true}
+	called := false
+	handled, err := resumeSummaryRetry(context.Background(), old, store, func(_ context.Context, _ *model.Meeting, prior string) error {
+		called = true
+		if prior != "" {
+			t.Fatalf("priorContext = %q, want empty", prior)
+		}
+		return nil
+	})
+	if !handled || err != nil || !called {
+		t.Fatal(handled, err, called)
+	}
+}

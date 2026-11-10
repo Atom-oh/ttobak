@@ -164,7 +164,7 @@ func TestSharingSafeResummaryExcludesOldDerivationAndRetainsConcurrentNotes(t *t
 	}
 }
 
-func TestSharingSafePreparationAllowsOnlyVerifiedDocuments(t *testing.T) {
+func TestSharingSafePreparationKeepsImagesAndOnlyVerifiedDocuments(t *testing.T) {
 	s, _, _ := newResummaryFixture(t)
 	snapshot := &model.SummarySnapshot{Meeting: &model.Meeting{UserID: "owner", MeetingID: "meeting",
 		Status: model.StatusDone, Notes: "own note", Content: "PRIVATE_GENERATED"},
@@ -178,9 +178,15 @@ func TestSharingSafePreparationAllowsOnlyVerifiedDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Content != "" || len(attachments) != 1 || !attachments[0].SummaryOmitted ||
-		attachments[0].ProcessedContent != "" || attachments[0].Description != "" || attachments[0].ExtractedText != nil {
-		t.Fatalf("legacy attachment derivation entered safe evidence: %+v", attachments)
+	if m.Content != "" || len(attachments) != 2 {
+		t.Fatalf("unexpected prepared sources: %+v", attachments)
+	}
+	if attachments[0].ProcessedContent != "PRIVATE_IMAGE" || attachments[0].Description != "PRIVATE_DESCRIPTION" {
+		t.Fatalf("user image analysis dropped: %+v", attachments[0])
+	}
+	if !attachments[1].SummaryOmitted || attachments[1].ProcessedContent != "" ||
+		attachments[1].Description != "" || attachments[1].ExtractedText != nil {
+		t.Fatalf("legacy document derivation entered safe evidence: %+v", attachments[1])
 	}
 }
 func TestResummaryOwnerEditAuthorizationAndDuplicateRequest(t *testing.T) {

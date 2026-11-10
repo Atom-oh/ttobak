@@ -205,42 +205,6 @@ func TestAccountPublicationFencesCanonicalMembershipAndParent(t *testing.T) {
 	}
 }
 
-func TestBatchLinkedPublicationPinsPredecessorBytesAndAuthorizationRevision(t *testing.T) {
-	privacyWriterEnabled(t)
-	parent := privacyParent()
-	parent.LinkedMeetingIDs, parent.TranscriptA = []string{"predecessor"}, "own raw transcript"
-	source := &model.Meeting{PK: "USER#owner", SK: "MEETING#predecessor", UserID: "owner",
-		MeetingID: "predecessor", Title: "before", Content: "PRIVATE_SOURCE", ActionItems: "[]"}
-	rows := map[string]interface{}{"USER#owner/MEETING#meeting": parent, "USER#owner/MEETING#predecessor": source}
-	repo := privacyWriterWire(t, rows, func(_ string, body map[string]any) (int, string) {
-		ops := body["TransactItems"].([]any)
-		if len(ops) != 2 {
-			t.Fatal("linked predecessor is not part of publication transaction")
-		}
-		meeting := ops[0].(map[string]any)["Update"].(map[string]any)
-		if !strings.Contains(analysisCondition(t, meeting), "authorizationRevision") {
-			t.Fatal("a grant created during generation would not invalidate publication")
-		}
-		check := ops[1].(map[string]any)["ConditionCheck"].(map[string]any)
-		privacyWriterFences(t, analysisCondition(t, check), "predecessor changed during generation was not pinned: %s", []string{"userId", "title", "before", "content", "PRIVATE_SOURCE", "actionItems", "summaryPrivacy"})
-		return 400, projectCancellation(2, 1)
-	})
-	snapshot, err := repo.CaptureMeetingSummary(context.Background(), "owner", "meeting")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.BindLinkedSummarySources(context.Background(), snapshot); err != nil || len(snapshot.LinkedSources) != 1 {
-		t.Fatalf("pre-model source binding failed: %+v %v", snapshot.LinkedSources, err)
-	}
-	source.Content = "edited while model was running"
-	if err := repo.SaveMeetingSummary(context.Background(), snapshot, "late private summary", ""); !errors.Is(err, ErrConditionFailed) {
-		t.Fatalf("late linked generation published: %v", err)
-	}
-	if parent.Content != "" {
-		t.Fatal("conflict altered current parent content")
-	}
-}
-
 func TestDerivativePublicationRejectsResetWithSameContent(t *testing.T) {
 	privacyWriterEnabled(t)
 	parent := privacyParent()

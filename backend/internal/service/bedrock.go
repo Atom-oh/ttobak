@@ -293,8 +293,8 @@ const (
 // or get the model to comply anyway.
 //
 // This matters beyond the current meeting: priorContext (this function's
-// first argument) can carry another, owner-linked meeting's content
-// (buildLinkedMeetingContext) that a non-owner collaborator on THIS meeting
+// first argument) once carried another, owner-linked meeting's content
+// (the removed buildLinkedMeetingContext) that a non-owner collaborator on THIS meeting
 // does not have read access to. Such a collaborator (they'd need edit
 // permission to have written liveSummary in the first place -- but the
 // exfiltration is visible to any read-permission collaborator, including
@@ -309,9 +309,8 @@ const (
 // represented in the prompt -- only to people who can read the CURRENT
 // meeting's resulting summary.
 //
-// Active writers bind parent ACL/publication/links and authorized predecessor
-// bytes, retain private ancestry and CAS-fence grant/source races. Legacy callers
-// keep buildLinkedMeetingContext's share gate. Formatting grants no authority or declassification.
+// Production callers pass an empty priorContext: linked predecessor meetings
+// are never generation evidence. Formatting grants no authority or declassification.
 //
 // Write-time size is capped in UpdateMeeting; the rune cap here is a second
 // line for legacy oversized values.
@@ -737,14 +736,8 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 		}
 		return meeting.Content, ErrSummaryHumanContentPreserved
 	}
-	if err := bindLinkedSummarySources(ctx, s.repo, snapshot); err != nil {
-		return "", err
-	}
-	if repository.SummaryPrivacyWritesEnabled() {
-		// Check claims/human content before predecessor/model evidence;
-		// legacy arguments grant no source authority.
-		priorContext = linkedSummaryContext(snapshot.LinkedSources)
-	}
+	// Linked predecessor meetings are navigation only: no predecessor content
+	// is read or folded into the prompt, so generated notes keep safe provenance.
 	conflict := func(cause error) (string, error) {
 		if !errors.Is(cause, repository.ErrConditionFailed) {
 			return "", cause

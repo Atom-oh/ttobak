@@ -51,7 +51,13 @@ func summarizeNoteSourceResponse(t *testing.T, meeting *model.Meeting, modelResp
 
 func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse string, invoke func(*BedrockService) (string, error)) (request ClaudeRequest, content string, writes int, err error) {
 	t.Helper()
-	item := map[string]map[string]string{}
+	return invokeObservedNoteSourceFixture(t, meeting, modelResponse, nil, invoke)
+}
+
+// observe, when set, receives every DynamoDB operation target and raw body.
+func invokeObservedNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse string, observe func(target, body string), invoke func(*BedrockService) (string, error)) (request ClaudeRequest, content string, writes int, err error) {
+	t.Helper()
+	item := map[string]interface{}{}
 	for name, value := range map[string]string{
 		"PK": "USER#" + meeting.UserID, "SK": "MEETING#" + meeting.MeetingID,
 		"meetingId": meeting.MeetingID, "userId": meeting.UserID,
@@ -61,6 +67,9 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 		"noteLanguage": meeting.NoteLanguage, "status": string(meeting.Status),
 	} {
 		item[name] = map[string]string{"S": value}
+	}
+	if len(meeting.LinkedMeetingIDs) > 0 {
+		item["linkedMeetingIds"] = map[string][]string{"SS": meeting.LinkedMeetingIDs}
 	}
 	body, err := json.Marshal(map[string]interface{}{"Item": item})
 	if err != nil {
@@ -76,6 +85,11 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 	db := dynamodb.New(dynamodb.Options{
 		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{},
 		HTTPClient: noteSourceHTTPClient(func(req *http.Request) (*http.Response, error) {
+			if observe != nil {
+				raw, _ := io.ReadAll(req.Body)
+				req.Body = io.NopCloser(strings.NewReader(string(raw)))
+				observe(req.Header.Get("X-Amz-Target"), string(raw))
+			}
 			switch req.Header.Get("X-Amz-Target") {
 			case "DynamoDB_20120810.GetItem":
 				return response(string(body)), nil
