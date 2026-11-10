@@ -31,9 +31,12 @@ function loadModule(path, dependencies = {}, globals = {}) {
 
 const liveTranslation = loadModule('lib/liveTranslation.ts');
 const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation });
+const layoutPrefs = loadModule('lib/recordLayoutPrefs.ts');
 const { CaptionOverlayPanel } = loadModule('components/record/CaptionOverlayPanel.tsx', {
+  'react': React,
   'react/jsx-runtime': jsxRuntime,
   '@/lib/captionOverlay': overlay,
+  '@/lib/recordLayoutPrefs': layoutPrefs,
 });
 
 const style = {
@@ -65,11 +68,49 @@ function props({ profile = 'dev', extraLanguage = null, windows = {}, ...overrid
   };
 }
 
-const render = (p) => renderToStaticMarkup(React.createElement(CaptionOverlayPanel, p));
+// Details are collapsed by default; tests that inspect them expand explicitly.
+const render = (p) => renderToStaticMarkup(React.createElement(CaptionOverlayPanel, { defaultExpanded: true, ...p }));
+const renderCollapsed = (p) => renderToStaticMarkup(React.createElement(CaptionOverlayPanel, p));
 const buttonTag = (html, id) => html.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`))?.[0];
 
 test('renders nothing outside the Mac app', () => {
   assert.equal(render(props({ supported: false, view: null })), '');
+});
+
+test('collapsed panel is one compact row with toggles and a settings button', () => {
+  const html = renderCollapsed(props());
+  assert.ok(html.includes('자막 창'));
+  assert.ok(buttonTag(html, 'caption-ko'));
+  assert.ok(buttonTag(html, 'caption-en'));
+  const toggle = html.match(/<button[^>]*aria-controls="[^"]*"[^>]*>/)?.[0];
+  assert.ok(toggle, 'disclosure button');
+  assert.match(toggle, /type="button"/);
+  assert.match(toggle, /aria-expanded="false"/);
+  assert.ok(html.includes('설정'));
+  assert.ok(!html.includes('id="caption-profile"'));
+  assert.ok(!html.includes('id="caption-region"'));
+  assert.ok(!html.includes('id="caption-extra-language"'));
+  assert.ok(!html.includes('Zoom에서는'));
+  assert.ok(!html.includes('인식 언어는 녹음을 시작하기 전에만'));
+});
+
+test('expanded panel reveals the details and links the disclosure to them', () => {
+  const html = render(props());
+  const toggle = html.match(/<button[^>]*aria-controls="[^"]*"[^>]*>/)?.[0];
+  assert.match(toggle, /aria-expanded="true"/);
+  const controls = toggle.match(/aria-controls="([^"]*)"/)[1];
+  assert.ok(html.includes(`id="${controls}"`), 'details container id');
+  assert.ok(html.includes('id="caption-profile"'));
+  assert.ok(html.includes('Zoom에서는 창이 아니라 전체 화면을 공유해야 자막이 함께 보여요.'));
+  assert.ok(buttonTag(html, 'caption-ko'));
+});
+
+test('collapsed panel keeps the error line and the profile-missing note', () => {
+  const html = renderCollapsed(props({ profile: null, error: 'credentials-expired' }));
+  assert.ok(html.includes('AWS 프로필을 먼저 선택해 주세요.'));
+  assert.ok(html.includes('자격 증명이 만료됐어요. 터미널에서 mwinit을 실행한 뒤 다시 시도해 주세요.'));
+  assert.ok(html.includes('다시 시도'));
+  assert.ok(!html.includes('id="caption-profile"'));
 });
 
 test('disables window toggles without a profile', () => {
