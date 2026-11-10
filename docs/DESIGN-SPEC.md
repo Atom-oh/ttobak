@@ -507,11 +507,13 @@ attachment/transcript citation IDs; signed URLs and page anchors are display
 targets only. Ordinary links and literal citation text keep their identity.
 
 The same panel still shows editors a note-language select (automatic, Korean,
-English). It only saves `noteLanguage` through the meeting update; final notes are
-always Korean (ADR-070), so a change does not offer or trigger regeneration. The
-select is disabled while a batch summary or re-summary is running, because a
-mid-run change discards that run as `SOURCE_CHANGED`. Save failures show an inline
-alert and keep the previous value. The control is slated for removal.
+English). It saves `noteLanguage` through the meeting update. After a successful
+change the UI still offers a regenerate button, which runs the standard re-summary
+and produces a Korean note, because `noteLanguage` no longer affects generation
+(ADR-070). The select is disabled while saving, locked, or while a batch summary
+or re-summary is pending or running, because a mid-run change discards that run as
+`SOURCE_CHANGED`. Save failures show an inline alert and keep the previous value.
+Both the select and the regenerate button are slated for removal.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
