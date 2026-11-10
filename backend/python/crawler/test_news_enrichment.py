@@ -275,11 +275,28 @@ class TestSynthesis(unittest.TestCase):
         args = client.converse.call_args.kwargs
         self.assertEqual(args["inferenceConfig"]["maxTokens"], 6000)
         self.assertNotIn("temperature", args["inferenceConfig"])
-        self.assertEqual(args["additionalModelRequestFields"], {"thinking": {"type": "disabled"}})
+        # Opus 5.5 rejects disabled thinking (Bedrock ValidationException).
+        self.assertEqual(args["additionalModelRequestFields"],
+                         {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}})
         value = json.loads(args["messages"][0]["content"][0]["text"])
         self.assertEqual(value["sources"][0]["url"], valid_body().final_url)
         self.assertEqual(value["sources"][0]["body"], valid_body().body)
         self.assertTrue(args["system"])
+
+    def test_reasoning_blocks_are_skipped_but_text_is_required(self):
+        client = mock.Mock()
+        reasoning = {"reasoningContent": {"reasoningText": {"text": "", "signature": "sig"}}}
+        response = bedrock_response()
+        response["output"]["message"]["content"].insert(0, reasoning)
+        client.converse.return_value = response
+        result, _ = enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
+        self.assertTrue(result)
+        only_reasoning = bedrock_response()
+        only_reasoning["output"]["message"]["content"] = [reasoning]
+        client.converse.return_value = only_reasoning
+        client.converse.side_effect = None
+        with self.assertRaises(enrichment.QualityRejected):
+            enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
 
     def test_repair_uses_same_complete_bodies_and_accumulates_tokens(self):
         client = mock.Mock()
