@@ -284,7 +284,7 @@ bash release script with a Python manifest helper, Next.js 16 / React 19.
 ### Task 7: Documentation
 
 **Files:**
-- Create: `docs/decisions/ADR-067-mac-app-distribution-and-updates.md` (use the next free
+- Create: `docs/decisions/ADR-068-mac-app-distribution-and-updates.md` (use the next free
   number at implementation time; ADR-066 is the account-shared calendar),
   `docs/runbooks/mac-app-release.md`
 - Modify: `docs/README.md` (index), `docs/DESIGN-SPEC.md` (popup, menu, Settings section),
