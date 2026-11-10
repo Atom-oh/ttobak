@@ -1209,3 +1209,54 @@ test('a task stored with COMPLETED still moves to resolved on a later run', asyn
     assert.equal(api.tasks.get(seed[0].eventId).state, 'resolved', start);
   }
 });
+
+test('past the task list cap, classification and notices run but linking and ack are skipped', async t => {
+  const { TASK_LIST_MAX_PAGES } = await import('../dist/intake/tasks.js');
+  assert.equal(TASK_LIST_MAX_PAGES, 50);
+  const { run } = await taskHome(t);
+  const closedRow = index => ({ eventId: (index + 1).toString(16).padStart(64, '0'), sourceId: 'other', state: 'closed',
+    occurrenceStartsAt: '2026-11-01T00:00:00Z', occurrenceEndsAt: '2026-11-01T01:00:00Z',
+    createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]), FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) };
+  const exact = await fakeTaskApi({ seed: Array.from({ length: 999 }, (_, index) => closedRow(index)),
+    eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const full = await run(exact, [occurrence()], work);
+  assert.equal(full.output.tasks.counts.skipped, 0, '1,000 tasks fit');
+  assert.ok(full.calls.includes('search_requests_advanced'));
+
+  const { run: overRun, queue } = await taskHome(t);
+  const api = await fakeTaskApi({ seed: Array.from({ length: 1001 }, (_, index) => closedRow(index)),
+    eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  const over = await overRun(api, [occurrence()], work);
+  assert.equal(over.output.tasks.result, 'TASKS_PARTIAL');
+  assert.deepEqual(over.output.tasks.failures, { load: 'PARSE_FAILED' });
+  assert.equal(over.output.tasks.counts.skipped, 3);
+  assert.equal(over.output.tasks.counts.created, 1, 'a new occurrence is still classified');
+  assert.equal(api.calls.filter(call => call[0] === 'listTasks').length, 50);
+  assert.ok(!over.calls.includes('check_user_is_tam') && !over.calls.includes('search_requests_advanced')
+    && !over.calls.includes('get_request') && !over.calls.includes('acknowledge_request'));
+  assert.equal(transitions(api).length, 0);
+  assert.deepEqual(queue().map(line => line.state), ['request_needed'], 'notices still run');
+});
+
+test('past the task list cap a removed occurrence still closes its unloaded task', async t => {
+  const { run } = await taskHome(t);
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  await run(api, [occurrence()], work);
+  const [created] = api.tasks.values();
+  // Push the occurrence's task past the cap.
+  const rows = [...api.tasks.entries()];
+  api.tasks.clear();
+  for (let index = 0; index < 1000; index++) {
+    const eventId = (index + 1).toString(16).padStart(64, '0');
+    api.tasks.set(eventId, { eventId, sourceId: 'other', state: 'closed', occurrenceStartsAt: '2026-11-01T00:00:00Z',
+      occurrenceEndsAt: '2026-11-01T01:00:00Z', createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 });
+  }
+  for (const [eventId, row] of rows) api.tasks.set(eventId, row);
+  const second = await run(api, [occurrence({ isCanceled: true })], work);
+  assert.equal(second.output.tasks.counts.closed, 1);
+  assert.equal(api.tasks.get(created.eventId).state, 'closed');
+});

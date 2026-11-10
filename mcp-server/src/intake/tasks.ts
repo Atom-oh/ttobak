@@ -21,7 +21,8 @@ import { acknowledgeOnce, linkRequests, readRequest, resolveAck, resolveMe, sear
   type LinkTask, type SpecReqSummary } from './specreq.js';
 import type { IntakeStore } from './store.js';
 
-export const TASK_LIST_MAX_PAGES = 10;
+/** 50 pages of 20: 1,000 tasks. Beyond it linking and ack fail closed; classification still runs. */
+export const TASK_LIST_MAX_PAGES = 50;
 export const EVENT_LIST_MAX_PAGES = 40;
 export const GET_MEETING_MAX = 25;
 export const REFRESH_MAX = 25;
@@ -53,6 +54,8 @@ export interface TaskCounts {
   notices: number;
   /** Transitions dropped after one re-read showed the task had changed (usually a web pick). */
   conflicts: number;
+  /** SpecReq sub-steps (mine, theirs, refresh) skipped because the task list exceeded its cap. */
+  skipped: number;
 }
 
 export interface TaskRunResult {
@@ -101,6 +104,8 @@ interface SeenState {
   refreshed: Record<string, string>;
   /** Consecutive unknown attendee reads per pending occurrence. */
   unknown: Record<string, number>;
+  /** Ledger occurrences at the last task step (eventId -> endsAt); a later absence is a removal. */
+  tracked?: Record<string, string>;
 }
 
 interface AccountInfo { name: string; members: MemberView[] }
@@ -161,13 +166,15 @@ function loadSeen(store: IntakeStore, scope: string): SeenState {
   }
   raw.refreshed ??= {};
   raw.unknown ??= {};
-  if (!record(raw.refreshed) || !record(raw.unknown)) throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
+  if (!record(raw.refreshed) || !record(raw.unknown) || (raw.tracked !== undefined && !record(raw.tracked))) {
+    throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
+  }
   return raw;
 }
 
 class TaskRun {
   readonly counts: TaskCounts = { tasks: 0, created: 0, classified: 0, closed: 0, linked: 0, acked: 0, ackFailed: 0,
-    ackNeeded: 0, refreshed: 0, drafted: 0, notices: 0, conflicts: 0 };
+    ackNeeded: 0, refreshed: 0, drafted: 0, notices: 0, conflicts: 0, skipped: 0 };
   readonly failures: Partial<Record<TaskStep, IntakeCode>> = {};
   readonly tasks = new Map<string, TaskView>();
   /** Cloud events in the sync window: eventId -> account and timing. */
@@ -176,6 +183,8 @@ class TaskRun {
   private seen!: SeenState;
   private myLogin = '';
   private opptyAccounts: Map<string, Set<string>> | null = null;
+  /** False when the task list exceeded its cap: `tasks` is then a prefix of the rows. */
+  private complete = true;
   /** Tasks this run already linked, acknowledged or refreshed. */
   private readonly touched = new Set<string>();
 
@@ -202,7 +211,10 @@ class TaskRun {
     await this.step('close', () => this.close());
     await this.step('classify', () => this.classify());
     let specreqReady = false;
-    await this.step('specreq', async () => {
+    if (!this.complete) {
+      // A partial list could hide a competing task, so linking and ack fail closed.
+      this.counts.skipped = 3;
+    } else await this.step('specreq', async () => {
       const session = this.options.sessions.specreq;
       if (!session) throw new IntakeError(this.options.unavailable?.specreq ?? 'NOT_SELECTED');
       this.myLogin = await resolveMe(session, this.options.me.email);
@@ -243,12 +255,19 @@ class TaskRun {
     }
     // Occurrences a run synced without reaching this step (crash, no identity) are still evaluated.
     const window = syncWindow(now, zone);
+    const tracked: Record<string, string> = {};
     for (const [externalId, entry] of Object.entries(loadState(store, sourceId, scope).ledger)) {
       const eventId = calendarEventId(sourceId, externalId);
+      tracked[eventId] = entry.endsAt;
       if (new Date(entry.endsAt) > window.start && new Date(entry.startsAt) < window.end && !this.seen.seen[eventId]) {
         this.seen.pending[eventId] = externalId;
       }
     }
+    // Removed since the last task step (replayed batch, skipped step), even for a row past the list cap.
+    for (const [eventId, endsAt] of Object.entries(this.seen.tracked ?? {})) {
+      if (!tracked[eventId] && new Date(endsAt) > window.start) this.seen.closing[eventId] ??= now.toISOString();
+    }
+    this.seen.tracked = tracked;
     this.saveSeen();
   }
 
@@ -258,7 +277,11 @@ class TaskRun {
     const { api, now, zone } = this.options;
     let cursor: string | undefined;
     for (let page = 0; ; page++) {
-      if (page === TASK_LIST_MAX_PAGES) throw new IntakeError('PARSE_FAILED', `task list exceeds ${TASK_LIST_MAX_PAGES} pages`);
+      if (page === TASK_LIST_MAX_PAGES) {
+        this.complete = false;
+        this.fail('load', new IntakeError('PARSE_FAILED', `task list exceeds ${TASK_LIST_MAX_PAGES} pages`));
+        break;
+      }
       const result = await api.listSpecReqTasks(cursor) as { tasks?: unknown; nextCursor?: unknown } | null;
       if (!result || !Array.isArray(result.tasks)) throw new IntakeError('PARSE_FAILED', 'task list has an unexpected shape');
       for (const raw of result.tasks) {
@@ -319,19 +342,25 @@ class TaskRun {
   private async close(): Promise<void> {
     // Derived from state, so removals from a replayed batch or a skipped task step still close:
     // an open task of this source in the window whose occurrence the synced ledger no longer tracks.
-    const { sourceId, store, scope, now, zone } = this.options;
+    const { sourceId, now, zone } = this.options;
     const window = syncWindow(now, zone);
-    const tracked = new Set(Object.keys(loadState(store, sourceId, scope).ledger).map(id => calendarEventId(sourceId, id)));
     for (const task of this.tasks.values()) {
-      if (task.sourceId === sourceId && task.state !== 'closed' && !tracked.has(task.eventId)
+      if (task.sourceId === sourceId && task.state !== 'closed' && !this.seen.tracked?.[task.eventId]
         && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
         this.seen.closing[task.eventId] ??= now.toISOString();
       }
     }
     let failure: unknown;
     for (const eventId of Object.keys(this.seen.closing)) {
-      const task = this.tasks.get(eventId);
       try {
+        // Still synced to TTOBAK: not removed, whatever the local ledger says.
+        if (this.events.has(eventId)) {
+          delete this.seen.closing[eventId];
+          continue;
+        }
+        // Past the list cap a row may exist without being loaded.
+        const task = this.tasks.get(eventId) ?? (this.complete ? undefined
+          : parseTask(await this.options.api.getSpecReqTask(eventId)));
         if (task && task.state !== 'closed') {
           if (await this.transition(task, current => current.state === 'closed' ? null : { op: 'close' })) this.counts.closed++;
         }
@@ -650,7 +679,8 @@ class TaskRun {
             this.counts.linked++;
           }
           this.touched.add(eventId);
-          // The task row is the cross-device record: an attempted or finished ack is never repeated.
+          // A recorded attempt (row state or failure code) is not repeated. The ack ledger that guards
+          // the call itself is device-local, so another device may still attempt once before the row records it.
           if (['acked', 'ack_failed', 'resolved'].includes(task.state) || task.failureCode) continue;
           if (!this.options.selection.autoAck) {
             if (enqueueNotice(this.options.store, this.options.scope, { eventId, state: 'ack_needed',

@@ -27,8 +27,10 @@ class PublicGuideTests(unittest.TestCase):
         (self.source / 'guide.js').write_text('"use strict";')
         (self.source / 'favicon.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (self.source / 'private.md').write_text('Must never be published.')
-        for name in ('home', 'assistant', 'accounts', 'meeting', 'upload', 'library', 'research', 'settings'):
-            (self.source / f'screen-{name}.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+        self.media = {name: b'Verified screenshot fixture' for name in guide.SCREENSHOT_NAMES}
+        self.media_patch = patch.object(guide, 'read_screenshots', return_value=self.media)
+        self.media_patch.start()
+        self.addCleanup(self.media_patch.stop)
         (self.source / 'unreviewed.webp').write_bytes(b'Unreviewed image.')
         self.source_patch = patch.object(guide, 'SOURCE', self.source)
         self.source_patch.start()
@@ -38,7 +40,8 @@ class PublicGuideTests(unittest.TestCase):
         guide.build(self.output)
         self.assertEqual({p.name for p in self.output.iterdir()}, set(guide.ASSETS))
         for name in guide.ASSETS:
-            self.assertEqual((self.source / name).read_bytes(), (self.output / name).read_bytes())
+            expected = self.media[name] if name in self.media else (self.source / name).read_bytes()
+            self.assertEqual(expected, (self.output / name).read_bytes())
 
     def test_invalid_documents_never_create_public_output(self):
         bad_documents = [
@@ -68,12 +71,12 @@ class PublicGuideTests(unittest.TestCase):
 
     def test_reviewed_screen_reference_is_published(self):
         (self.source / 'index.html').write_text(
-            self.html.replace('</body>', '<img src="screen-home.svg" alt="Fictional example"></body>')
+            self.html.replace('</body>', '<img src="screen-home.webp" alt="Actual UI with example data"></body>')
         )
         guide.build(self.output)
         self.assertEqual(
-            (self.source / 'screen-home.svg').read_bytes(),
-            (self.output / 'screen-home.svg').read_bytes(),
+            self.media['screen-home.webp'],
+            (self.output / 'screen-home.webp').read_bytes(),
         )
 
     def test_unreviewed_image_reference_is_rejected(self):
@@ -84,13 +87,12 @@ class PublicGuideTests(unittest.TestCase):
             guide.build(self.output)
         self.assertFalse(self.output.exists())
 
-    def test_symlinked_reviewed_image_is_not_published(self):
-        asset = self.source / 'screen-home.svg'
-        asset.unlink()
+    def test_local_image_override_cannot_replace_verified_media(self):
+        asset = self.source / 'screen-home.webp'
         asset.symlink_to(self.source / 'private.md')
-        with self.assertRaises(ValueError):
-            guide.build(self.output)
-        self.assertFalse(self.output.exists())
+        guide.build(self.output)
+        self.assertEqual((self.output / 'screen-home.webp').read_bytes(),
+                         self.media['screen-home.webp'])
 
     def test_existing_destination_is_preserved(self):
         self.output.mkdir()
