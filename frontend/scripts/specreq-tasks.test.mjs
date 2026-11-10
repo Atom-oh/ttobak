@@ -156,6 +156,11 @@ test('hook loads every page, replaces on transition and reloads on 409', async c
   await assert.rejects(() => probe.result().transition(id('b'), { op: 'close' }));
   harness.render(Probe);
   assert.equal(probe.result().byEventId.get(id('b')).version, 5, 'reloaded after the conflict');
+  api.get = async () => { throw new Error('offline'); };
+  const failed = await probe.result().transition(id('b'), { op: 'close' }).catch(error => error);
+  const { changeErrorMessage, SPECREQ_ACTION_COPY } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
+  assert.equal(changeErrorMessage(failed), SPECREQ_ACTION_COPY.loadFailed, 'a failed reload never claims the latest state');
+  assert.equal(changeErrorMessage({ status: 409 }), SPECREQ_ACTION_COPY.conflict);
 });
 
 test('task API uses private no-store requests', async () => {
@@ -214,7 +219,7 @@ test('actions per state', () => {
   const cases = [
     [{ state: 'request_needed', path: 'theirs' }, ['copy', 'sent']],
     [{ state: 'needs_account' }, ['account']],
-    [{ state: 'needs_owner', accountId: 'acct-1' }, ['owner'], [{ userId: 'u1', role: 'SA' }]],
+    [{ state: 'needs_owner', accountId: 'acct-1' }, ['owner'], [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }]],
     [{ state: 'issue_needed', path: 'mine' }, ['link']],
     [{ state: 'issue_needed', path: 'theirs' }, []],
     [{ state: 'requested', path: 'theirs' }, ['link']],
@@ -268,14 +273,16 @@ test('request_needed explains an unresolved account', () => {
 test('owner picker excludes me, AM roles and pending members', () => {
   const { ownerCandidates } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
   const members = [
-    { userId: 'me', role: 'SA' }, { userId: 'u1', role: 'SA', email: 'a@example.test' }, { userId: 'u2', role: 'SSA' },
+    { userId: 'me', role: 'SA', email: 'me@amazon.com' }, { userId: 'u1', role: 'SA', email: 'A@Amazon.com' },
+    { userId: 'u2', role: 'SSA', email: 'b@amazon.com' }, { userId: 'u7', role: 'SA', email: 'a@example.test' },
+    { userId: 'u8', role: 'SA' }, { userId: 'u9', role: 'SA', email: '@amazon.com' },
     { userId: 'u3', role: 'AM' }, { userId: 'u4', role: 'TAM' }, { userId: 'u5', role: 'SA Manager' },
     { email: 'pending@example.test', role: 'SA', pending: true }, { userId: 'u6', role: 'SA', pending: true },
   ];
   assert.deepEqual(Array.from(ownerCandidates(members, 'me'), member => member.userId), ['u1', 'u2']);
   const output = view({ task: task(id('a'), 'needs_owner', { accountId: 'acct-1' }), members });
   assert.match(output, /value="u1"/);
-  assert.doesNotMatch(output, /value="(me|u3|u4|u5|u6)"/);
+  assert.doesNotMatch(output, /value="(me|u3|u4|u5|u6|u7|u8|u9)"/);
 });
 
 test('transition sends the current version', async context => {
@@ -355,7 +362,7 @@ test('needs_account on an account without an invited SA explains why it waits', 
   const none = view({ task: row, members: [{ userId: 'me', role: 'SA' }, { userId: 'u3', role: 'AM' }, { userId: 'u6', role: 'SA', pending: true }] });
   assert.ok(none.includes(copy.accountNoSa));
   assert.ok(!none.includes(copy.accountWaiting));
-  const some = view({ task: row, members: [{ userId: 'u1', role: 'SA' }] });
+  const some = view({ task: row, members: [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }] });
   assert.ok(some.includes(copy.accountWaiting) && !some.includes(copy.accountNoSa));
   assert.ok(view({ task: row, members: null }).includes(copy.accountWaiting), 'members still loading');
   assert.ok(!view({ task: row, members: [], message: copy.loadFailed }).includes(copy.accountNoSa), 'a failed read is not "no SA"');

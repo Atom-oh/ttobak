@@ -61,8 +61,10 @@ export function taskActionKinds(task: Pick<SpecReqTaskView, 'state' | 'path'>): 
 
 /** Direct SA/SSA members with a user ID, excluding me, AM roles and pending invitations. */
 export function ownerCandidates(members: AccountMember[], myUserId: string): AccountMember[] {
+  // The backend counterpart rule: an @amazon.com member address.
+  const amazon = (email?: string) => { const value = (email ?? '').trim().toLowerCase(); return value.length > 11 && value.endsWith('@amazon.com'); };
   return members.filter(member => !member.pending && !!member.userId && member.userId !== myUserId
-    && OWNER_ROLES.includes(member.role));
+    && OWNER_ROLES.includes(member.role) && amazon(member.email));
 }
 
 export interface SpecReqActionsViewProps {
@@ -153,6 +155,12 @@ function statusOf(error: unknown): number | undefined {
   return error && typeof error === 'object' && 'status' in error ? Number(error.status) : undefined;
 }
 
+/** A 409 says the latest state was reloaded only when the reload succeeded. */
+export function changeErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'reloadFailed' in error && error.reloadFailed) return SPECREQ_ACTION_COPY.loadFailed;
+  return statusOf(error) === 409 ? SPECREQ_ACTION_COPY.conflict : SPECREQ_ACTION_COPY.failed;
+}
+
 export interface SpecReqTaskActionsProps {
   task: SpecReqTaskView;
   transition: (eventId: string, change: SpecReqTaskChange) => Promise<unknown>;
@@ -202,7 +210,7 @@ export function SpecReqTaskActions({ task, transition }: SpecReqTaskActionsProps
     setPending(true);
     setMessage(undefined);
     try { await transition(task.eventId, next); } catch (error) {
-      setMessage(statusOf(error) === 409 ? SPECREQ_ACTION_COPY.conflict : SPECREQ_ACTION_COPY.failed);
+      setMessage(changeErrorMessage(error));
     } finally { setPending(false); }
   };
   const copy = async () => {
