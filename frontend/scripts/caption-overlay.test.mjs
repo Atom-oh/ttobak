@@ -222,10 +222,11 @@ test('wrappers invoke the Mac commands with camelCase arguments', async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(invoked[2][1])), { text: 'hi', sourceLang: 'en', targetLang: 'ko', isFinal: false, context: ['x'] });
 });
 
-test('preview decision: automatic reopen at mount stays hidden', () => {
+test('preview decision: automatic reopen at mount stays hidden unless arranging', () => {
   const { captionPreviewAction: act } = fixture().overlay;
+  assert.equal(act('mount-reopen', false, false), 'clear');
+  assert.equal(act('mount-reopen', false, true), 'preview');
   for (const expanded of [false, true]) {
-    assert.equal(act('mount-reopen', false, expanded), 'clear');
     assert.equal(act('mount-reopen', true, expanded), 'none');
   }
 });

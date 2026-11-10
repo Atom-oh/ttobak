@@ -168,6 +168,9 @@ export function captionPreviewAction(
   if (isRecording) return 'none';
   switch (event) {
     case 'mount-reopen':
+      // Reopened at launch: stay hidden unless the user left the settings
+      // section expanded, which means they are still arranging.
+      return expanded ? 'preview' : 'clear';
     case 'settings-collapse':
       return 'clear';
     case 'settings-expand':
