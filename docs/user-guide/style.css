@@ -11,3 +11,4 @@
 .scope-note{font-size:11px;color:var(--muted);background:var(--code);border-radius:7px;padding:14px 16px;line-height:1.85}.scope-note p{margin:5px 0 0}.scope-note strong{font-size:11px}
 
 .search-input{position:relative}@media(min-width:761px){#menu-toggle{display:none}}
+.screen-mobile{max-width:390px;margin-left:auto;margin-right:auto}

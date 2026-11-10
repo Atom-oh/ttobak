@@ -79,7 +79,7 @@ type termsModel interface {
 
 // InvokeTermsModel uses the existing Bedrock path; it requires complete text.
 func (s *BedrockService) InvokeTermsModel(ctx context.Context, request ClaudeRequest, modelID string) (string, int, int, error) {
-	body, err := s.invokeClaudeResponseBody(ctx, request, modelID)
+	body, err := s.invokeClaudeResponseBody(ctx, termsRequestFor(request, modelID), modelID)
 	if err != nil {
 		return "", 0, 0, err
 	}
@@ -92,7 +92,28 @@ func (s *BedrockService) InvokeTermsModel(ctx context.Context, request ClaudeReq
 	return text, usage.Usage.InputTokens, usage.Usage.OutputTokens, nil
 }
 
-// buildTermsRequest marshals the input as data, with thinking disabled.
+// termsRequestFor returns request with the thinking setting modelID accepts
+// for "no reasoning before the answer": Claude Sonnet 5.5 rejects
+// {"type":"disabled"} and takes {"type":"between_tools"} instead; Claude
+// Opus 5.5 and Fable models cannot turn thinking off, so the field is omitted
+// (decodeClaudeTextResponse ignores thinking blocks); other models keep
+// disabled. The caller's request is not modified.
+func termsRequestFor(request ClaudeRequest, modelID string) ClaudeRequest {
+	name := modelID
+	if i := strings.LastIndex(name, "anthropic."); i >= 0 {
+		name = name[i+len("anthropic."):]
+	}
+	switch {
+	case name == "claude-sonnet-5-5":
+		request.Thinking = &ClaudeThinking{Type: "between_tools"}
+	case name == "claude-opus-5-5" || strings.HasPrefix(name, "claude-fable-") || strings.HasPrefix(name, "claude-mythos-"):
+		request.Thinking = nil
+	}
+	return request
+}
+
+// buildTermsRequest marshals the input as data, with thinking disabled;
+// termsRequestFor adapts that setting to the model at invocation.
 func buildTermsRequest(input termsCallInput) (ClaudeRequest, error) {
 	body, err := json.Marshal(input)
 	if err != nil {

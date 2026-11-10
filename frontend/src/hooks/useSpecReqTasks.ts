@@ -90,7 +90,10 @@ export function useSpecReqTasks({ accountId, highlight }: { accountId?: string; 
       return next;
     } catch (error) {
       if (statusOf(error) === 409 && !controller.signal.aborted) {
-        try { replace(await specReqTaskApi.get(eventId, options), scopeKey); } catch { /* keep the stale row; the caller sees the 409 */ }
+        try { replace(await specReqTaskApi.get(eventId, options), scopeKey); } catch {
+          // The row shown is stale; the caller must not claim the latest state was loaded.
+          throw Object.assign(new Error('Task changed and could not be reloaded'), { status: 409, reloadFailed: true });
+        }
       }
       throw error;
     }
