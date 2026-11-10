@@ -146,9 +146,28 @@ func (s *AccountMergeService) pause(ctx context.Context, d time.Duration) error 
 	}
 }
 
+type mergeWorkerOwnerKey struct{}
+
+// WithMergeWorkerOwner makes the merge worker claim the job lease as exactly
+// owner. The operator CLI uses it to continue from its own scan lease without
+// releasing it, so no other delivery can take the job in between.
+func WithMergeWorkerOwner(ctx context.Context, owner string) context.Context {
+	return context.WithValue(ctx, mergeWorkerOwnerKey{}, owner)
+}
+
+// MergeWorkerOwner returns the owner set by WithMergeWorkerOwner, or "".
+func MergeWorkerOwner(ctx context.Context) string {
+	owner, _ := ctx.Value(mergeWorkerOwnerKey{}).(string)
+	return owner
+}
+
 // workerID is unique per call: the Lambda request ID (when present) plus a
-// random suffix, so two deliveries never share a lease owner.
+// random suffix, so two deliveries never share a lease owner. An explicit
+// owner from WithMergeWorkerOwner takes precedence.
 func (s *AccountMergeService) workerID(ctx context.Context) string {
+	if owner := MergeWorkerOwner(ctx); owner != "" {
+		return owner
+	}
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	id := hex.EncodeToString(b[:])

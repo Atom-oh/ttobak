@@ -51,16 +51,18 @@ Each rewrite is one transaction with the merge fence checks (running job, CLI le
 source owner, requester membership of the target, open target) and is conditioned on
 `accountId` still naming A and on the row state the scan read. A lost fence stops
 the scan. A changed row is counted as `Skipped` and the scan runs again, up to three
-passes; rows still skipped after that stop the run with `SCAN_INCOMPLETE` before the
-worker starts (the worker finalizes the job, after which a merged source refuses
-Start and no rerun could move them). A calendar move also bumps the row's
-`shareVersion`, so a sync that read the row before the move fails and re-reads it,
-and a sync naming a merging or merged account is refused with 409
-`ACCOUNT_MERGING`. Any other
+passes. The CLI holds the job lease from the scan through its in-process worker. If
+rows remain skipped or any row fails, it marks the job `failed` with
+`SCAN_INCOMPLETE` instead of releasing the lease, so no worker delivery can finish
+the job over rows left behind; rerun the step 2 command to restart it from its
+saved step. A calendar move also bumps the row's `shareVersion`, so a sync that read
+the row before the move fails and re-reads it. A sync authorized before the start
+that reads the row after the move can still write A back (an accepted narrow
+window): `-verify` reports such rows. Any other
 failure is counted in `errors` and by reason in `errors.decrypt`, `errors.payload`,
-`errors.encrypt` or `errors.write`; the CLI then releases its lease and does not
-start the worker, so nothing finishes while rows are left behind. The scan reads
-eventually consistent; a stale read only skips or defers a row.
+`errors.encrypt` or `errors.write`, and fails the job the same way. The scan reads
+eventually consistent, so a row committed just before the start can be missed; the
+worker is not started while any observed row remains, and `-verify` reports the rest.
 
 ## 1. Preview (dry run)
 

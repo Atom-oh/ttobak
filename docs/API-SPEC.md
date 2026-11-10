@@ -31,7 +31,7 @@ additionally requires safe JavaScript revisions, with input maximum
 `Number.MAX_SAFE_INTEGER - 1`. Window and event intervals use RFC3339 instants,
 have positive duration and are at most 93 elapsed days. An upsert whose
 `accountId` names a merging or merged account rejects the batch with 409
-`ACCOUNT_MERGING` (ADR-072).
+`ACCOUNT_MERGING` (ADR-072); reads still return events on a merge tombstone.
 
 Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
