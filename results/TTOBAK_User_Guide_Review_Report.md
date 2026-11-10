@@ -10,15 +10,15 @@
 | Reviewer | Codex inline rubric review; independent latest-head CI review remains required |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
 | Scale | 90 points: Playwright MCP cannot launch its missing Chrome distribution; its 10-point category is exempt |
-| Current score | **90 / 90** |
+| Current score | **88.5 / 90** |
 | Verdict | **PASS**, including the loaded plugin's mandatory score >=85 before publication |
 
 Local Python Playwright/Chromium provided real browser evidence separately;
 it is not represented as a Playwright MCP session. No subagent was started.
 Scoring starts each category at full marks: each located defect deducts one
 quarter of its category, summed and rounded once to the nearest 0.5, midpoints
-up. No unresolved defect was found after revision; informational limitations
-do not deduct points.
+up. One accepted figure-duplication warning is scored below. Informational
+limitations do not deduct points; no Critical finding remains.
 
 ## Quality gate result
 
@@ -37,8 +37,8 @@ do not deduct points.
 | Data accuracy / references | 5/5 | 0 | 0 | 0 |
 | Legal compliance | 5/5 | 0 | 0 | 0 |
 | Message clarity | 5/5 | 0 | 0 | 0 |
-| Duplication / gaps | 5/5 | 0 | 0 | 0 |
-| **Total** | **90/90** | **0** | **0** | **2** |
+| Duplication / gaps | 3.5/5 | 0 | 1 | 0 |
+| **Total** | **88.5/90** | **0** | **1** | **2** |
 
 ## Evidence and corrected findings
 
@@ -73,6 +73,18 @@ do not deduct points.
   syntax validation passed. Archive/image identity, dimensions, inventory,
   bounded fetches and rejection-before-output are covered. The media gate was
   implemented only after its new tests failed against the original packager.
+
+## Accepted warning
+
+The Account overview and People chapters reuse the same captured viewport.
+`screen-account-overview.webp` and `screen-people.webp` have SHA-256
+`e8d8b1e61d044568cf084ed955d18a6df097d909d32c607f11f0dd43545e6526`. The actual related-person area is visible near
+its bottom, and the People caption explicitly says it is within the Account
+overview. This preserves genuine UI context but repeats pixels instead of
+providing a focused second view. Retain the image archive unchanged and accept
+this visual redundancy: one Duplication/Gaps warning deducts 1.5 points from
+5, leaving 3.5/5 and a final 88.5/90, above the mandatory 85 deployment gate.
+All 36 captures remain real app output; they are not 36 unique pixel views.
 
 ## Publication boundary
 

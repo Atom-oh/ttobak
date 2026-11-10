@@ -1,5 +1,8 @@
 # User Guide Media Content Review
 
+Status: historical stage-one review record; see `TTOBAK_User_Guide_Review_Report.md`
+for the final 36-figure review and accepted duplication warning.
+
 Date: 2026-11-10. Scope: 36 actual app UI captures and the first eight figure replacements.
 Mandatory AWS Content Plugin rubric: **PASS, 90/90**, with its unavailable Playwright
 MCP category exempt. Review was inline; separate local Python Playwright validated
