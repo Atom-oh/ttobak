@@ -35,6 +35,8 @@ func projectIDFromRequest(w http.ResponseWriter, r *http.Request) (string, bool)
 
 func writeProjectError(w http.ResponseWriter, err error, forbiddenMessage string) {
 	switch {
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, service.ErrClientUpgradeRequired):
 		writeError(w, http.StatusConflict, "CLIENT_UPGRADE_REQUIRED", "화면을 새로고침한 뒤 가입 대기 초대를 다시 요청하세요")
 	case errors.Is(err, service.ErrInvitationsPaused), errors.Is(err, repository.ErrProjectInvitationsPaused):

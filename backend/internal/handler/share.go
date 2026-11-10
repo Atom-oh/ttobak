@@ -144,6 +144,8 @@ func (h *ShareHandler) ShareToAccount(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		case writeSummaryGrantError(w, err):
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())

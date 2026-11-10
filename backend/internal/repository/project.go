@@ -474,6 +474,12 @@ func (r *DynamoDBRepository) ProjectAccountLinkTransactional(ctx context.Context
 	if err != nil {
 		return fmt.Errorf("build project account link expression: %w", err)
 	}
+	// The account must stay open: linking into a merging account would race
+	// the merge's project mover.
+	open, err := r.accountOpenCheck(accountID)
+	if err != nil {
+		return err
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Update: &types.Update{
@@ -488,9 +494,13 @@ func (r *DynamoDBRepository) ProjectAccountLinkTransactional(ctx context.Context
 				ExpressionAttributeValues: updateExpr.Values(),
 			}},
 			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
+			open,
 		},
 	})
 	if err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return mapProjectTransactionCanceledError(err, projectID, "project", "link project account")
 	}
 	return nil

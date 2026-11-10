@@ -257,7 +257,11 @@ func (r *DynamoDBRepository) WriteAccountEvent(ctx context.Context, account, use
 	check := func(sk string) types.TransactWriteItem {
 		return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: table, Key: contactKey(account, sk), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}}
 	}
-	items := []types.TransactWriteItem{check(model.SKAccountMeta), check(model.PrefixMember + user)}
+	open, err := r.accountOpenCheck(account)
+	if err != nil {
+		return err
+	}
+	items := []types.TransactWriteItem{open, check(model.PrefixMember + user)}
 	refSK := eventRefPrefix + e.EventID
 	refAt := func(sk string) (expression.Expression, error) {
 		return expression.NewBuilder().WithCondition(expression.Name("eventSK").Equal(expression.Value(sk))).Build()
@@ -325,6 +329,9 @@ func (r *DynamoDBRepository) WriteAccountEvent(ctx context.Context, account, use
 		return errors.New("invalid event operation")
 	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return classifyEventTransaction(err, 2)
 	}
 	return nil

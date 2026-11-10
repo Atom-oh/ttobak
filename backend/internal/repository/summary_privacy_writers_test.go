@@ -192,9 +192,9 @@ func TestAccountPublicationFencesCanonicalMembershipAndParent(t *testing.T) {
 			t.Fatal("canonical publication must fence membership atomically")
 		}
 		ops := body["TransactItems"].([]any)
-		member := ops[0].(map[string]any)["ConditionCheck"].(map[string]any)
+		member := wireMemberCheck(ops)
 		privacyWriterFences(t, analysisCondition(t, member), "missing canonical membership identity %s", []string{"addedAt", "summaryPrivacyVersion", "accountId", "userId"})
-		meeting := ops[1].(map[string]any)["Update"].(map[string]any)
+		meeting := wireUpdateOp(ops)
 		privacyWriterFences(t, analysisCondition(t, meeting), "missing parent publication fence %s", []string{"authorizationRevision", "summaryPrivacy", "content", "linkedMeetingIds", "sharedToAccount"})
 		return 400, projectCancellation(2, 0)
 	})
@@ -313,11 +313,12 @@ func TestNewMembershipStampAndRoleUpdateDoNotGrandfatherReaddedMembers(t *testin
 	member := &model.AccountMember{PK: "ACCOUNT#account", SK: "MEMBER#reader", AccountID: "account", UserID: "reader",
 		AddedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}
 	repo := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
-		if strings.HasSuffix(target, ".PutItem") {
-			item := body["Item"].(map[string]any)
+		if strings.HasSuffix(target, ".TransactWriteItems") {
+			put := body["TransactItems"].([]any)[0].(map[string]any)["Put"].(map[string]any)
+			item := put["Item"].(map[string]any)
 			if item["summaryPrivacyVersion"].(map[string]any)["N"] != "1" ||
 				item["addedAt"].(map[string]any)["S"] == member.AddedAt.Format(time.RFC3339Nano) ||
-				!strings.Contains(body["ConditionExpression"].(string), "attribute_not_exists") {
+				!strings.Contains(put["ConditionExpression"].(string), "attribute_not_exists") {
 				t.Fatal("new/re-added membership retained old eligibility")
 			}
 		} else {

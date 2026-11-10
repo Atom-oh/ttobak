@@ -132,6 +132,9 @@ func (r *DynamoDBRepository) PutAccountLink(ctx context.Context, l *model.Accoun
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
+		if merging := mergeFenceError(err); merging != nil {
+			return merging
+		}
 		return classifyAccountLinkPut(err, roles)
 	}
 	return nil
@@ -165,22 +168,22 @@ func meetingPublishedCheck(accountID, meetingLinkID string) (map[string]types.At
 	return accountNewsKey(model.PrefixUser+owner, model.PrefixMeeting+meeting), cond, true
 }
 
-// accountLinkAccessChecks pins the account META row and, when actorID is set,
-// the actor's direct MEMBER# row, like the other account-partition writers.
+// accountLinkAccessChecks pins the open account META row (not merging or
+// merged) and, when actorID is set, the actor's direct MEMBER# row, like the
+// other account-partition writers.
 func (r *DynamoDBRepository) accountLinkAccessChecks(accountID, actorID string) ([]types.TransactWriteItem, error) {
-	exists, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	open, err := r.accountOpenCheck(accountID)
 	if err != nil {
 		return nil, err
 	}
-	pk := model.PrefixAccount + accountID
-	sks := []string{model.SKAccountMeta}
+	items := []types.TransactWriteItem{open}
 	if actorID != "" {
-		sks = append(sks, model.PrefixMember+actorID)
-	}
-	items := make([]types.TransactWriteItem, 0, len(sks))
-	for _, sk := range sks {
+		exists, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+		if err != nil {
+			return nil, err
+		}
 		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName),
-			Key: accountNewsKey(pk, sk), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}})
+			Key: accountNewsKey(model.PrefixAccount+accountID, model.PrefixMember+actorID), ConditionExpression: exists.Condition(), ExpressionAttributeNames: exists.Names()}})
 	}
 	return items, nil
 }
@@ -293,6 +296,9 @@ func (r *DynamoDBRepository) DeleteAccountLink(ctx context.Context, accountID, a
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
+	}
+	if merging := mergeFenceError(err); merging != nil {
+		return merging
 	}
 	return classifyAccountLinkDelete(err, len(items), firstAccess)
 }

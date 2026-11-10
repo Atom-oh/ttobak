@@ -34,6 +34,8 @@ func contactError(w http.ResponseWriter, err error) {
 		writeError(w, 403, model.ErrCodeForbidden, "Access denied")
 	case errors.Is(err, service.ErrNotFound):
 		writeError(w, 404, model.ErrCodeNotFound, "Contact not found")
+	case errors.Is(err, service.ErrAccountMerging):
+		writeAccountMerging(w)
 	case errors.Is(err, service.ErrContactConflict):
 		writeError(w, 409, model.ErrCodeConflict, "Contact changed; reload and retry")
 	case errors.Is(err, service.ErrContactsUnavailable):

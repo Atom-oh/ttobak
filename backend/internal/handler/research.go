@@ -131,6 +131,10 @@ func (h *ResearchHandler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
+		if errors.Is(err, service.ErrAccountMerging) {
+			writeAccountMerging(w)
+			return
+		}
 		log.Printf("failed to link research %s to account %s: %v", researchID, req.AccountID, err)
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return

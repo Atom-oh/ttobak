@@ -54,6 +54,9 @@ func (r *DynamoDBRepository) hierarchyCheck(accountID, sk string, condition expr
 	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 		TableName: aws.String(r.tableName), Key: accountHierarchyKey(accountID, sk),
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+		// The stored row lets writeAccountHierarchy tell a merge fence from
+		// any other failed condition.
+		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
 	}}, nil
 }
 
@@ -84,8 +87,14 @@ func (r *DynamoDBRepository) hierarchyParentChecks(childID, userID, parentID str
 		return nil, err
 	}
 	items := []types.TransactWriteItem{member}
-	for _, ancestor := range ancestors {
-		check, err := r.hierarchyCheck(ancestor.AccountID, model.SKAccountMeta, exists.And(accountParentCondition(ancestor.ParentAccountID)))
+	for i, ancestor := range ancestors {
+		condition := exists.And(accountParentCondition(ancestor.ParentAccountID))
+		if i == 0 {
+			// The new parent must stay open: a merging or merged account
+			// gains no children while its subtree is being moved.
+			condition = condition.And(accountOpenCondition())
+		}
+		check, err := r.hierarchyCheck(ancestor.AccountID, model.SKAccountMeta, condition)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +119,8 @@ func (r *DynamoDBRepository) UpdateAccountParent(ctx context.Context, accountID,
 	}
 	exists := expression.AttributeExists(expression.Name("PK"))
 	condition := exists.And(accountParentCondition(expectedParentID)).
-		And(expression.Name("ownerUserId").Equal(expression.Value(requesterID)))
+		And(expression.Name("ownerUserId").Equal(expression.Value(requesterID))).
+		And(accountOpenCondition())
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
 	if err != nil {
 		return fmt.Errorf("build account parent update: %w", err)
@@ -125,6 +135,7 @@ func (r *DynamoDBRepository) UpdateAccountParent(ctx context.Context, accountID,
 			TableName: aws.String(r.tableName), Key: accountHierarchyKey(accountID, model.SKAccountMeta),
 			UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
 			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
 		}},
 		ownerCheck,
 	}
@@ -189,6 +200,9 @@ func (r *DynamoDBRepository) writeAccountHierarchy(ctx context.Context, items []
 	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
+	}
+	if merging := mergeFenceError(err); merging != nil {
+		return fmt.Errorf("account hierarchy transaction: %w", merging)
 	}
 	var canceled *types.TransactionCanceledException
 	// TransactWriteItems may deserialize an unmodeled service error into

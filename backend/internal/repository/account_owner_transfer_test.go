@@ -140,14 +140,19 @@ func TestPutMemberIsCreateOnlyWithPrivacyWriterOff(t *testing.T) {
 	sent := false
 	r := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
 		sent = true
-		cond, _ := body["ConditionExpression"].(string)
-		for alias, name := range body["ExpressionAttributeNames"].(map[string]any) {
+		items, _ := body["TransactItems"].([]any)
+		if !strings.HasSuffix(target, ".TransactWriteItems") || len(items) != 2 {
+			t.Fatalf("target=%s items=%d, want a two-item transaction", target, len(items))
+		}
+		put, _ := items[0].(map[string]any)["Put"].(map[string]any)
+		cond, _ := put["ConditionExpression"].(string)
+		for alias, name := range put["ExpressionAttributeNames"].(map[string]any) {
 			cond = strings.ReplaceAll(cond, alias, name.(string))
 		}
-		if !strings.HasSuffix(target, ".PutItem") || !strings.Contains(cond, "attribute_not_exists (PK)") {
-			t.Fatalf("target=%s condition=%q, want create-only PutItem", target, cond)
+		if !strings.Contains(cond, "attribute_not_exists (PK)") {
+			t.Fatalf("condition=%q, want create-only Put", cond)
 		}
-		return 400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
 	})
 	err := r.PutMember(context.Background(), &model.AccountMember{PK: "ACCOUNT#a", SK: "MEMBER#u", AccountID: "a", UserID: "u", Role: model.RoleAM})
 	if !sent || !errors.Is(err, ErrConditionFailed) {

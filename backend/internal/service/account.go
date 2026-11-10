@@ -24,7 +24,7 @@ var (
 	ErrMemberExists = errors.New("member already exists")
 	// ErrAccountMerging means the account is the source of an in-flight or
 	// finished merge and rejects this mutation (HTTP 409).
-	ErrAccountMerging = errors.New("account is merging or merged")
+	ErrAccountMerging = repository.ErrAccountMerging
 	ErrAmbiguousAlias = errors.New("alias maps to multiple accounts")
 	ErrLoopGuard      = errors.New("document originated from ttobak (loop guard)")
 	// ErrAmbiguousShareBlocksRemoval is returned by RemoveMember when the

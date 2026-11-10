@@ -1095,6 +1095,30 @@ func (r *DynamoDBRepository) updateMeetingFieldsChecked(ctx context.Context, use
 			}
 		}
 	}
+	// Assigning an account or publishing to one also requires that account to
+	// stay open (not merging or merged), committed with the meeting write.
+	var accountOpen *types.TransactWriteItem
+	fenceAccount, _ := fields["accountId"].(string)
+	if publish, _ := fields["sharedToAccount"].(bool); publish && fenceAccount == "" {
+		stored, err := r.storedMeetingAccountID(ctx, userID, meetingID)
+		if err != nil {
+			return err
+		}
+		if stored != "" {
+			fenceAccount = stored
+			// The fence names the account observed here, so the write must
+			// still target it.
+			condition = condition.And(expression.Name("accountId").Equal(expression.Value(stored)))
+		}
+	}
+	if fenceAccount != "" {
+		item, err := r.accountOpenCheck(fenceAccount)
+		if err != nil {
+			return err
+		}
+		accountOpen = &item
+		extra = foldOpenIntoExtra(extra, fenceAccount, &accountOpen)
+	}
 	for _, variant := range []string{"A", "B"} {
 		if _, written := fields["transcript"+variant]; written {
 			fields["transcriptRevision"+variant] = uuid.NewString()
@@ -1295,10 +1319,13 @@ func (r *DynamoDBRepository) updateMeetingFieldsChecked(ctx context.Context, use
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
 		}
-		if accountMembership != nil || len(extra) > 0 {
+		if accountMembership != nil || accountOpen != nil || len(extra) > 0 {
 			var items []types.TransactWriteItem
 			if accountMembership != nil {
 				items = append(items, types.TransactWriteItem{ConditionCheck: accountMembership})
+			}
+			if accountOpen != nil {
+				items = append(items, *accountOpen)
 			}
 			items = append(items, types.TransactWriteItem{Update: &types.Update{TableName: input.TableName, Key: input.Key, UpdateExpression: input.UpdateExpression,
 				ConditionExpression: input.ConditionExpression, ExpressionAttributeNames: input.ExpressionAttributeNames,
@@ -1306,6 +1333,9 @@ func (r *DynamoDBRepository) updateMeetingFieldsChecked(ctx context.Context, use
 			_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 				TransactItems: append(items, extra...),
 			}, noSummaryRetries)
+			if merging := mergeFenceError(err); merging != nil {
+				return merging
+			}
 			if isConditionalCheckFailedTransaction(err) {
 				return ErrConditionFailed
 			}

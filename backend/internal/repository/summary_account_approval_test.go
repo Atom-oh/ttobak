@@ -37,10 +37,10 @@ func TestOwnerAccountPublicationPreservesCompletedOutputAndFencesApproval(t *tes
 					t.Fatal("approval and membership must publish atomically")
 				}
 				ops := body["TransactItems"].([]any)
-				member := ops[0].(map[string]any)["ConditionCheck"].(map[string]any)
+				member := wireMemberCheck(ops)
 				privacyWriterFences(t, analysisCondition(t, member), "missing membership %s",
 					[]string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"})
-				update := ops[1].(map[string]any)["Update"].(map[string]any)
+				update := wireUpdateOp(ops)
 				privacyWriterFences(t, analysisCondition(t, update), "missing current-output fence %s",
 					[]string{"content", "summaryPrivacy", "summaryAccountApproval", "actionItems", "insights", "liveSummary", "sharedToAccount"})
 				approval := transactionSetValue(t, update, "summaryAccountApproval").(map[string]any)["M"].(map[string]any)
@@ -122,6 +122,7 @@ func TestAccountAudienceUpdatesInvalidateApprovalDuringWriterRollback(t *testing
 	for _, field := range []string{"accountId", "sharedToAccount"} {
 		t.Run(field, func(t *testing.T) {
 			repo := privacyWriterWire(t, nil, func(_ string, body map[string]any) (int, string) {
+				body = wireMeetingWrite(body)
 				names := body["ExpressionAttributeNames"].(map[string]any)
 				remove := regexp.MustCompile(`(?s)REMOVE\s+(.*)`).FindStringSubmatch(body["UpdateExpression"].(string))
 				found := false
@@ -154,7 +155,7 @@ func TestOwnerApprovalGivesLegacyInsightsFreshIdentityWithoutResettingSummary(t 
 	rows := privacyParentRows(parent)
 	rows["ACCOUNT#account/MEMBER#owner"] = &model.AccountMember{AccountID: "account", UserID: "owner"}
 	repo := privacyWriterWire(t, rows, func(_ string, body map[string]any) (int, string) {
-		update := body["TransactItems"].([]any)[1].(map[string]any)["Update"].(map[string]any)
+		update := wireUpdateOp(body["TransactItems"].([]any))
 		revision := transactionSetValue(t, update, "insightsRevision").(map[string]any)["S"].(string)
 		if revision == "" {
 			t.Fatal("legacy approval can revive stale unidentified Insight rows")
