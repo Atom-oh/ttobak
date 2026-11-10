@@ -177,8 +177,8 @@ func TestApplySpecReqTransition_RejectsInvalidInput(t *testing.T) {
 			model.SpecReqTaskTransition{Op: "refreshSpecReq", SpecReqTitle: strings.Repeat("a", 513)}},
 		{"invalid utf8 title", model.SpecReqTask{State: "issued", Path: "mine", SpecReqID: testSRReq},
 			model.SpecReqTaskTransition{Op: "refreshSpecReq", SpecReqTitle: "\xff"}},
-		{"refresh other id", model.SpecReqTask{State: "issued", Path: "mine", SpecReqID: testSRReq},
-			model.SpecReqTaskTransition{Op: "refreshSpecReq", SpecReqID: "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee"}},
+		{"refresh without status", model.SpecReqTask{State: "ack_failed", Path: "theirs", SpecReqID: testSRReq, SpecReqStatus: "WORKING", FailureCode: "ACK_REJECTED"},
+			model.SpecReqTaskTransition{Op: "refreshSpecReq"}},
 		{"bad account", model.SpecReqTask{State: "needs_account"}, model.SpecReqTaskTransition{Op: "pickAccount", AccountID: "a b"}},
 		{"pickAccount empty", model.SpecReqTask{State: "needs_account"}, model.SpecReqTaskTransition{Op: "pickAccount"}},
 		{"pickOwner empty", needsOwner, model.SpecReqTaskTransition{Op: "pickOwner"}},
@@ -258,5 +258,42 @@ func TestValidateSpecReqCreate(t *testing.T) {
 		if err := validateSpecReqCreate(req); !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("%s: got %v, want ErrInvalidInput", name, err)
 		}
+	}
+}
+
+func TestApplySpecReqTransition_PinsLinkedSpecReq(t *testing.T) {
+	const other = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	requested := model.SpecReqTask{State: "requested", Path: "theirs", CounterpartUserID: "u2"}
+	linked, err := applySpecReqTransition(requested, model.SpecReqTaskTransition{Op: "linkSpecReq", SpecReqID: testSRReq, SpecReqTitle: "t", SpecReqStatus: "WORKING"})
+	if err != nil {
+		t.Fatalf("link A: %v", err)
+	}
+	// Same ID stays idempotent.
+	if _, err := applySpecReqTransition(linked, model.SpecReqTaskTransition{Op: "linkSpecReq", SpecReqID: testSRReq}); err != nil {
+		t.Fatalf("relink same id: %v", err)
+	}
+	for _, change := range []model.SpecReqTaskTransition{
+		{Op: "linkSpecReq", SpecReqID: other},
+		{Op: "recordAck", State: "acked", SpecReqID: other},
+		{Op: "refreshSpecReq", SpecReqID: other, SpecReqStatus: "COMPLETED"},
+	} {
+		if _, err := applySpecReqTransition(linked, change); !errors.Is(err, ErrConflict) {
+			t.Errorf("%s with another id: got %v, want ErrConflict", change.Op, err)
+		}
+	}
+}
+
+func TestApplySpecReqTransition_RefreshPromotesOnObservedStatusOnly(t *testing.T) {
+	failed := model.SpecReqTask{State: "ack_failed", Path: "theirs", SpecReqID: testSRReq, SpecReqStatus: "WORKING", FailureCode: "ACK_REJECTED"}
+	if _, err := applySpecReqTransition(failed, model.SpecReqTaskTransition{Op: "refreshSpecReq"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("empty status: got %v, want ErrInvalidInput", err)
+	}
+	// A stale stored WORKING must not promote when the observed status is PENDING.
+	got, err := applySpecReqTransition(failed, model.SpecReqTaskTransition{Op: "refreshSpecReq", SpecReqStatus: "PENDING"})
+	if err != nil {
+		t.Fatalf("refresh pending: %v", err)
+	}
+	if got.State != "ack_failed" || got.FailureCode != "ACK_REJECTED" {
+		t.Fatalf("promoted on stale status: state=%q code=%q", got.State, got.FailureCode)
 	}
 }
