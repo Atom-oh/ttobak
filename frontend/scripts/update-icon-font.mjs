@@ -32,6 +32,7 @@ async function readSources(directory) {
 // rendered as icons (API wire values). Keep this list short and explicit; a
 // literal used as an icon must not be listed here.
 export const NON_ICON_LITERALS = new Set([
+  'task', // `?task=` query parameter name (components/workspace/MeetingsWorkspace.tsx)
   'event', // account link / flow item kind (lib/accountOverview.ts, types/meeting.ts)
 ]);
 
