@@ -52,7 +52,9 @@ const env = (name, fallback) => JSON.parse(process.env[name] || fallback);
 
 function requestData(id) {
   const map = env('FAKE_WORK_REQUESTS', 'null');
-  const data = map ? map[id] ?? null : env('FAKE_WORK_REQUEST', 'null');
+  let data = map ? map[id] ?? null : env('FAKE_WORK_REQUEST', 'null');
+  // FAKE_WORK_REQUEST_ECHO=1 serves FAKE_WORK_REQUEST under any requested ID.
+  if (data && process.env.FAKE_WORK_REQUEST_ECHO) data = { ...data, requestId: id };
   return data && acknowledged.has(id) ? { ...data, stateId: 'WORKING' } : data;
 }
 

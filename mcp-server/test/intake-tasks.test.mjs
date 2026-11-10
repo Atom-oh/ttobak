@@ -850,10 +850,10 @@ async function taskHome(t, { autoAck = 'on' } = {}) {
     const file = join(home, '.ttobak', 'intake', 'notify.jsonl');
     return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
   };
-  const run = async (api, items, work) => {
+  const run = async (api, items, work, overrides = {}) => {
     writeTaskHosts(home, items, work);
     const before = log().length;
-    const code = await runIntake(['calendar', '--noninteractive'], taskEnvironment(home, lines, api));
+    const code = await runIntake(['calendar', '--noninteractive'], { ...taskEnvironment(home, lines, api), ...overrides });
     const output = JSON.parse(lines.at(-1));
     return { code, output, calls: log().slice(before) };
   };
@@ -1069,6 +1069,50 @@ test('an occurrence synced while TTOBAK tasks were unavailable is evaluated next
   assert.deepEqual(first.output.tasks.failures, { load: 'TTOBAK_UNAVAILABLE' });
   api.listSpecReqTasks = list;
   // The calendar has nothing new, but the pending occurrence is still evaluated.
+  const second = await run(api, [occurrence()], work);
+  assert.equal(second.output.counts.upserts, 0);
+  assert.equal(second.output.tasks.counts.created, 1);
+});
+
+const linkedTask = (index, over = {}) => ({ eventId: (index + 1).toString(16).padStart(64, '0'), sourceId: 'other',
+  accountId: 'acct-1', path: 'theirs', state: 'acked', counterpartUserId: 'u-alice',
+  specReqId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, specReqStatus: 'WORKING',
+  occurrenceStartsAt: '2026-11-12T03:00:00Z', occurrenceEndsAt: '2026-11-12T04:00:00Z',
+  createdAt: '2026-11-09T00:00:00Z', stateChangedAt: '2026-11-09T00:00:00Z', version: 1, ...over });
+
+test('refresh rotates its budget so every linked task is read across runs', async t => {
+  const { run } = await taskHome(t);
+  const seed = Array.from({ length: 30 }, (_, index) => linkedTask(index));
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const args = join(tempHome(t), 'args.log');
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])), FAKE_WORK_REQUEST_ECHO: '1',
+    FAKE_WORK_REQUEST: JSON.stringify(theirsRequest({ stateId: 'WORKING' })), FAKE_WORK_ARGS: args };
+  await run(api, [occurrence()], work);
+  await run(api, [occurrence()], work);
+  const read = readFileSync(args, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .filter(call => call.name === 'get_request').map(call => call.args.request_id);
+  assert.equal(read.length, 50);
+  assert.equal(new Set(read).size, 30);
+});
+
+test('a task row that records an ack attempt is never acknowledged again', async t => {
+  const { run, log } = await taskHome(t);
+  // Attempted on another device: no local ledger entry, but the row carries the failure.
+  const seed = [linkedTask(0, { specReqId: RID, state: 'ack_failed', failureCode: 'ACK_UNCONFIRMED', specReqStatus: 'NEXT_UP' })];
+  const api = await fakeTaskApi({ seed, eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) },
+    projects: { 'acct-1': [{ projectId: 'p1', sfdcOpptyId: '006A' }] } });
+  await run(api, [occurrence()], { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])),
+    FAKE_WORK_SEARCH_THEIRS: JSON.stringify([theirsRequest()]), FAKE_WORK_REQUESTS: JSON.stringify({ [RID]: theirsRequest() }) });
+  assert.ok(!log().includes('acknowledge_request'));
+  assert.equal(transitions(api, 'recordAck').length, 0);
+});
+
+test('an occurrence synced by a run that skipped the task step is evaluated later', async t => {
+  const { run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const first = await run(api, [occurrence()], work, { me: undefined });
+  assert.equal(first.output.tasks.result, 'TTOBAK_LOGIN_REQUIRED');
   const second = await run(api, [occurrence()], work);
   assert.equal(second.output.counts.upserts, 0);
   assert.equal(second.output.tasks.counts.created, 1);

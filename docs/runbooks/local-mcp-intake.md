@@ -79,7 +79,7 @@ Steps per run (see `mcp-server/src/intake/tasks.ts`):
    requester; for theirs, the single acknowledge (auto-ack on) or an
    `ack_needed` notice (off). Unsynced ack ledger entries are written to
    TTOBAK first, decided by `get_request`, never by a second acknowledge.
-6. `refresh`: at most 25 linked tasks re-read with `get_request`.
+6. `refresh`: at most 25 linked tasks, least recently refreshed first, re-read with `get_request`.
 7. `drafts`: one unsent Slack draft per `request_needed` task.
 8. `notices`: one line per (task, state) in `~/.ttobak/intake/notify.jsonl`.
 
@@ -87,7 +87,7 @@ Every transition sends the last seen `version`. A 409 re-reads the task once
 and resends only if the change is still valid, so a web pick is never
 overwritten (`counts.conflicts`).
 
-Local task state: `tasks/<scope>/seen.json` (evaluated, pending and closing
+Local task state: `tasks/<scope>/seen.json` (evaluated, pending, closing and last-refreshed
 occurrence IDs), `specreq/<scope>/ack-ledger.json` (permanent, one entry per
 request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 (outcomes and keys only).

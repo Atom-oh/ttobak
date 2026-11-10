@@ -8,7 +8,7 @@
 import { ApiResponseError, type SpecReqTaskState, type SpecReqTransitionBody, type TtobakApi } from '../api.js';
 import { joinMeeting, parseAttendees, parseMeetingList } from './attendees.js';
 import { ackEntry, loadAckLedger, markSynced, type AckLedgerRef } from './ack-ledger.js';
-import { syncWindow, type OutlookItem } from './calendar.js';
+import { loadState, syncWindow, type OutlookItem } from './calendar.js';
 import { classifyOccurrence, type Classification, type MemberView } from './classify.js';
 import type { TaskConnectorId } from './connectors.js';
 import { IntakeError, type IntakeCode } from './errors.js';
@@ -95,6 +95,8 @@ interface SeenState {
   pending: Record<string, string>;
   /** Removed occurrences whose task is still to close. */
   closing: Record<string, string>;
+  /** Last `get_request` refresh per task, so the refresh budget rotates. */
+  refreshed: Record<string, string>;
 }
 
 interface AccountInfo { name: string; members: MemberView[] }
@@ -148,11 +150,13 @@ function seenPath(scope: string): string[] {
 
 function loadSeen(store: IntakeStore, scope: string): SeenState {
   const raw = store.read<SeenState>(...seenPath(scope));
-  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {} };
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {} };
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (raw.version !== 1 || !record(raw.seen) || !record(raw.pending) || !record(raw.closing)) {
     throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   }
+  raw.refreshed ??= {};
+  if (!record(raw.refreshed)) throw new IntakeError('STORE_INVALID', 'task seen state is malformed');
   return raw;
 }
 
@@ -207,8 +211,10 @@ class TaskRun {
     const drafts = new Map<string, DraftOutcome>();
     await this.step('drafts', () => this.drafts(drafts));
     await this.step('notices', () => this.notices(drafts));
-    this.seen.seen = Object.fromEntries(Object.entries(this.seen.seen)
+    const recent = (map: Record<string, string>) => Object.fromEntries(Object.entries(map)
       .filter(([, at]) => this.options.now.getTime() - Date.parse(at) < SEEN_RETENTION_MS));
+    this.seen.seen = recent(this.seen.seen);
+    this.seen.refreshed = recent(this.seen.refreshed);
     try { this.saveSeen(); } catch (error) { this.fail('classify', error); }
     return this.result();
   }
@@ -224,10 +230,18 @@ class TaskRun {
 
   /** Records this sync's new and removed occurrences first, so a failed step retries them next run. */
   private register(): void {
-    const { sourceId, calendar, now } = this.options;
+    const { sourceId, calendar, now, store, scope, zone } = this.options;
     for (const item of calendar.upserted) {
       const eventId = calendarEventId(sourceId, item.meetingId);
       if (!this.seen.seen[eventId]) this.seen.pending[eventId] = item.meetingId;
+    }
+    // Occurrences a run synced without reaching this step (crash, no identity) are still evaluated.
+    const window = syncWindow(now, zone);
+    for (const [externalId, entry] of Object.entries(loadState(store, sourceId, scope).ledger)) {
+      const eventId = calendarEventId(sourceId, externalId);
+      if (new Date(entry.endsAt) > window.start && new Date(entry.startsAt) < window.end && !this.seen.seen[eventId]) {
+        this.seen.pending[eventId] = externalId;
+      }
     }
     for (const externalId of calendar.removedExternalIds) {
       const eventId = calendarEventId(sourceId, externalId);
@@ -614,6 +628,8 @@ class TaskRun {
             this.counts.linked++;
           }
           this.touched.add(eventId);
+          // The task row is the cross-device record: an attempted or finished ack is never repeated.
+          if (['acked', 'ack_failed', 'resolved'].includes(task.state) || task.failureCode) continue;
           if (!this.options.selection.autoAck) {
             if (enqueueNotice(this.options.store, this.options.scope, { eventId, state: 'ack_needed',
               title: NOTICE_COPY.ack_needed.title, body: NOTICE_COPY.ack_needed.body }, this.options.now)) {
@@ -634,13 +650,16 @@ class TaskRun {
     const session = this.options.sessions.specreq!;
     const open = this.allTasks().filter(task => task.specReqId && !this.touched.has(task.eventId)
       && task.state !== 'closed' && task.state !== 'resolved'
-      && !(task.path === 'mine' && ['COMPLETED', 'CANCELLED'].includes(task.specReqStatus ?? '')))
-      .sort((first, second) => first.stateChangedAt < second.stateChangedAt ? -1 : 1)
-      .slice(0, REFRESH_MAX);
+      && task.specReqStatus !== 'CANCELLED' && !(task.path === 'mine' && task.specReqStatus === 'COMPLETED'))
+      .map(task => ({ task, at: this.seen.refreshed[task.eventId] ?? '' }))
+      .sort((first, second) => first.at < second.at ? -1 : first.at > second.at ? 1
+        : first.task.stateChangedAt < second.task.stateChangedAt ? -1 : 1)
+      .slice(0, REFRESH_MAX).map(item => item.task);
     let failure: unknown;
     for (const task of open) {
       try {
         const request = await readRequest(session, task.specReqId!);
+        this.seen.refreshed[task.eventId] = this.options.now.toISOString();
         const confirmed = request.resolverLogin === this.myLogin && ACK_CONFIRMED.includes(request.stateId);
         // Auto-ack off: the user acknowledged in SpecReq; a later read moves the task to acked.
         if (task.path === 'theirs' && ['request_needed', 'requested'].includes(task.state) && confirmed
@@ -676,7 +695,7 @@ class TaskRun {
   private async drafts(outcomes: Map<string, DraftOutcome>): Promise<void> {
     const { store, scope, sessions, me } = this.options;
     const due = this.allTasks().filter(task => task.state === 'request_needed' && task.path === 'theirs'
-      && task.counterpartUserId && task.accountId && !draftEntry(store, scope, task.eventId)).slice(0, DRAFTS_MAX);
+      && task.counterpartUserId && task.accountId && !draftEntry(store, scope, task.eventId));
     if (!due.length) return;
     const session = sessions.slack;
     if (!session) {
@@ -684,7 +703,9 @@ class TaskRun {
       return;
     }
     let failure: unknown;
+    let attempts = 0;
     for (const task of due) {
+      if (attempts >= DRAFTS_MAX) break;
       try {
         const info = await this.account(task.accountId!);
         const email = info?.members.find(member => member.userId === task.counterpartUserId)?.email;
@@ -692,6 +713,7 @@ class TaskRun {
           outcomes.set(task.eventId, 'no_user');
           continue;
         }
+        attempts++;
         const text = renderSlackRequest({ accountName: info.name, meetingTitle: task.event?.title ?? '',
           localDateTime: this.localWhen(task), myName: alias(me.email) ?? '' });
         const outcome = await draftOnce(store, scope, task.eventId, session, email, text, { now: () => this.options.now });
@@ -712,7 +734,8 @@ class TaskRun {
       if (state === 'request_needed') {
         const outcome = outcomes.get(task.eventId) ?? draftEntry(store, scope, task.eventId)?.outcome;
         // Wait for the draft attempt while the selected Slack server is down.
-        if (!outcome && this.options.unavailable?.slack) continue;
+        // Announce only after the draft attempt while Slack is selected.
+        if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) continue;
         const copy = NOTICE_COPY.request_needed;
         title = copy.title;
         body = outcome === 'drafted' ? copy.drafted : outcome === 'kept_existing' ? copy.kept_existing : copy.copy;
