@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "TTOBAK Mac App — system audio and microphone capture for desktop meetings"
 authors = ["TTOBAK"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.90"
 
 [lib]
 name = "ttobak_mac_lib"
@@ -49,8 +49,6 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFString", "CFDictionary", "CFArray", "CFNumber", "CFBase"] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "block2", "objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardware"] }
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
-# NSAlert for manual update-check results (update.rs).
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSResponder"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

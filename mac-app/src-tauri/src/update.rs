@@ -31,6 +31,13 @@ const SETTINGS_FILE: &str = "update.json";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const BUSY_RECHECK: Duration = Duration::from_secs(30);
+/// Per-request timeout of the manifest check (the plugin default is none).
+const CHECK_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Outer bound on a whole check, in case a request stalls past its timeout.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+/// Bound on the archive download, so a stalled transfer cannot leave the
+/// install flag set forever.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const UP_TO_DATE_PREFIX: &str = "최신 버전입니다";
 const CHECK_FAILED: &str = "업데이트를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
@@ -45,7 +52,7 @@ pub enum CheckOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reaction {
     Nothing,
-    /// A native message (manual checks only).
+    /// A notification (manual checks only).
     Notice(String),
     /// Open the update popup (automatic checks: only once idle).
     Offer,
@@ -69,6 +76,8 @@ pub struct UpdateState {
     declined: Mutex<Option<String>>,
     settings_path: Mutex<Option<PathBuf>>,
     installing: AtomicBool,
+    /// A manual check from the menu is running; repeated clicks are ignored.
+    checking: AtomicBool,
     menu_item: Mutex<Option<MenuItem<Wry>>>,
 }
 
@@ -146,6 +155,17 @@ pub fn outcome_for<E: std::fmt::Display>(
     }
 }
 
+/// `fut`, or `Err` once `limit` elapses first.
+pub async fn bounded<T, E: std::fmt::Display>(
+    limit: Duration,
+    fut: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(result) => result.map_err(|e| e.to_string()),
+        Err(_) => Err(format!("timed out after {}s", limit.as_secs())),
+    }
+}
+
 fn configured(app: &AppHandle) -> bool {
     pubkey_configured(
         app.config()
@@ -202,11 +222,11 @@ async fn offer_when_idle(app: &AppHandle, deadline: tokio::time::Instant) {
 }
 
 /// Checks the endpoint once. A manual check reports up-to-date/failure with a
-/// native message and opens the popup for any available update.
+/// notification and opens the popup for any available update.
 pub async fn check_now(app: &AppHandle, manual: bool) -> CheckOutcome {
     let result = if configured(app) {
-        match app.updater() {
-            Ok(updater) => updater.check().await.map_err(|e| e.to_string()),
+        match app.updater_builder().timeout(CHECK_REQUEST_TIMEOUT).build() {
+            Ok(updater) => bounded(CHECK_TIMEOUT, updater.check()).await,
             Err(e) => Err(e.to_string()),
         }
     } else {
@@ -242,10 +262,10 @@ pub async fn check_now(app: &AppHandle, manual: bool) -> CheckOutcome {
     outcome
 }
 
-/// Clears the `installing` flag however `install` returns.
-struct InstallingGuard<'a>(&'a AtomicBool);
+/// Clears an in-flight flag however its owner returns.
+struct FlagGuard<'a>(&'a AtomicBool);
 
-impl Drop for InstallingGuard<'_> {
+impl Drop for FlagGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
@@ -265,12 +285,11 @@ pub async fn install(app: &AppHandle) -> Result<(), InstallError> {
     if crate::control::app_busy(app) || state.installing.swap(true, Ordering::SeqCst) {
         return Err(InstallError::Busy);
     }
-    let _installing = InstallingGuard(&state.installing);
+    let _installing = FlagGuard(&state.installing);
     // `download` verifies the signature against the configured pubkey.
-    let bytes = update
-        .download(|_, _| {}, || {})
+    let bytes = bounded(DOWNLOAD_TIMEOUT, update.download(|_, _| {}, || {}))
         .await
-        .map_err(|e| InstallError::Download(e.to_string()))?;
+        .map_err(InstallError::Download)?;
     if crate::control::app_busy(app) {
         log::info!(
             "update v{} downloaded but the app became busy; not installing",
@@ -349,38 +368,35 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
     match app.state::<UpdateState>().pending() {
         Some((version, notes)) => crate::update_prompt::offer(app, &version, &notes),
         None => {
+            if app
+                .state::<UpdateState>()
+                .checking
+                .swap(true, Ordering::SeqCst)
+            {
+                return;
+            }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
+                let state = app.state::<UpdateState>();
+                let _checking = FlagGuard(&state.checking);
                 check_now(&app, true).await;
             });
         }
     }
 }
 
-/// A native alert with `message` (manual check results).
+/// Posts `message` as a notification (manual check results). Never modal,
+/// so it cannot stall the main thread during a recording.
 fn show_notice(app: &AppHandle, message: &str) {
-    #[cfg(target_os = "macos")]
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("TTOBAK")
+        .body(message)
+        .show()
     {
-        let message = message.to_owned();
-        let shown = app.run_on_main_thread(move || {
-            use objc2::MainThreadMarker;
-            use objc2_app_kit::NSAlert;
-            use objc2_foundation::NSString;
-            let Some(mtm) = MainThreadMarker::new() else {
-                return;
-            };
-            let alert = NSAlert::new(mtm);
-            alert.setMessageText(&NSString::from_str(&message));
-            alert.runModal();
-        });
-        if let Err(e) = shown {
-            log::warn!("could not show update notice: {e}");
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        log::info!("{message}");
+        log::warn!("could not show update notice: {e}");
     }
 }
 
@@ -456,6 +472,28 @@ mod tests {
         assert_eq!(release.version.to_string(), "0.2.0");
         assert!(release.download_url("darwin-aarch64").is_ok());
         assert!(release.download_url("darwin-x86_64").is_err());
+    }
+
+    #[tokio::test]
+    async fn bounded_times_out_a_stalled_future() {
+        let stalled = std::future::pending::<Result<(), String>>();
+        let result = bounded(Duration::from_millis(20), stalled).await;
+        assert_eq!(result, Err("timed out after 0s".to_owned()));
+        let ok = bounded(Duration::from_secs(1), async { Ok::<_, String>(7) }).await;
+        assert_eq!(ok, Ok(7));
+        let err = bounded(Duration::from_secs(1), async { Err::<(), _>("boom") }).await;
+        assert_eq!(err, Err("boom".to_owned()));
+    }
+
+    /// A timed-out check maps to the same silent/explicit `Failed` as any error.
+    #[tokio::test]
+    async fn timed_out_check_is_failed() {
+        let stalled = std::future::pending::<Result<Option<(String, String)>, String>>();
+        let result = bounded(Duration::from_millis(10), stalled).await;
+        assert_eq!(
+            outcome_for(false, result, "0.1.0", None),
+            (CheckOutcome::Failed, Reaction::Nothing)
+        );
     }
 
     fn available(v: &str) -> Result<Option<(String, String)>, String> {

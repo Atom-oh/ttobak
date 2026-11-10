@@ -582,7 +582,7 @@ mod mac {
                 Silence::Open
             };
             let meet_silence = observe_meet(zoom, now_ms, trusted, &muted, &mut meet, || {
-                if !browsers_checked.is_some_and(|checked| checked.elapsed() < BROWSER_REFRESH) {
+                if browsers_checked.is_none_or(|checked| checked.elapsed() >= BROWSER_REFRESH) {
                     // Keep the last browsers using audio: a left Meet page is
                     // still read after the browser releases its audio.
                     let fresh = (sources.browser_pids)();
