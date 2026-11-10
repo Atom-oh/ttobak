@@ -53,6 +53,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Account relationship links, signals and KB references](decisions/ADR-064-account-relationship-links.md) | Typed account links with manual/auto origin and read-time revalidation, account news sources, KB refs, bounded overview reads; QA retrieval unchanged | `backend/internal/service/account_links.go`, `account_overview.go`, `account_kb.go`, `account_news.go` |
 | [Account people edges](decisions/ADR-067-account-people-edges.md) | Deterministic member/contact/entity resolution into role-keyed `LINK#meeting#` edges; manual wins, mention review, leased runs | `backend/internal/service/account_people*.go`, `backend/cmd/backfill-account-people` |
 | [SA performance data residency](decisions/ADR-068-sa-performance-data-residency.md) | Owner-private `PERF*` field table, default-encryption exception, per-row retention (year+2 TTL for dated rows), organizer-domain calendar counterpart | `backend/internal/model/performance.go`, `backend/internal/repository/performance.go` |
+| [Shareable-by-default note provenance](decisions/ADR-070-shareable-default-note-provenance.md) | No linked-predecessor evidence, human edits keep `safe` provenance, first live draft safe, own image analyses safe, Korean-only final notes, owner-only sharing-safe reset | `backend/internal/repository/summary_privacy.go`, `backend/internal/service/bedrock.go` |
 
 ## Feature workflows
 
