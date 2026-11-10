@@ -11,6 +11,7 @@ import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type TaskConnectorI
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson } from './mcp-client.js';
+import { resolveMe } from './specreq.js';
 import { IntakeStore } from './store.js';
 import { runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
 
@@ -143,8 +144,13 @@ async function selectTaskConnector(connector: TaskConnectorId, args: string[], e
   const pathDirs = parsePathList(environment.env.PATH);
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
+  // SpecReq: show the detected login (a name, never an email) so the user can confirm the Amazon identity.
+  let identity: { login: string } | { identityError: IntakeCode } | undefined;
   try {
     for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+    if (connector === 'specreq') {
+      try { identity = { login: await resolveMe(session) }; } catch (error) { identity = { identityError: intakeCode(error) }; }
+    }
   } finally {
     await session.close();
   }
@@ -154,7 +160,7 @@ async function selectTaskConnector(connector: TaskConnectorId, args: string[], e
     [connector]: connector === 'specreq' ? { ...base, autoAck: autoAckValue === 'on' } : base };
   store.write(next, 'selection.json');
   return { ok: true, connector, host, server, pathDirectories: pathDirs.length,
-    ...(connector === 'specreq' ? { autoAck: autoAckValue === 'on' } : {}) };
+    ...(connector === 'specreq' ? { autoAck: autoAckValue === 'on', ...identity } : {}) };
 }
 
 async function select(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
