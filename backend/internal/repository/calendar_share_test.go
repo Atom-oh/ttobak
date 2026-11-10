@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -318,6 +320,526 @@ func TestApplyBatchRejectsMalformedShare(test *testing.T) {
 				test.Fatalf("malformed share reached storage: %v", err)
 			}
 		})
+	}
+}
+
+func calendarTestShareItem(test *testing.T, accountID, meetingKey, userID, state string, startsAt time.Time) map[string]types.AttributeValue {
+	test.Helper()
+	row := calendarTestRow()
+	row.UserID, row.EventID = userID, "event-"+meetingKey+"-"+userID
+	row.StartsAt, row.EndsAt = startsAt, startsAt.Add(time.Hour)
+	row.ExpiresAt = row.EndsAt.Add(90 * 24 * time.Hour).Unix()
+	share := calendarTestShare(row, accountID, meetingKey, state)
+	share.PK, share.SK = "ACCOUNT#"+accountID, model.CalendarShareSortKey(startsAt, meetingKey, userID)
+	if state == "veto" {
+		share.VetoEventIDs = []string{share.SourceID + "#" + share.EventID}
+	}
+	return calendarTestItem(test, share)
+}
+
+func TestListShareRowsKeepsGroupsWhole(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	items := []map[string]types.AttributeValue{
+		calendarTestShareItem(test, "acc_1", "mk1", "u1", "shared", start),
+		calendarTestShareItem(test, "acc_1", "mk1", "u2", "veto", start),
+		calendarTestShareItem(test, "acc_1", "mk2", "u1", "shared", start),
+	}
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 2}
+	for _, pageSize := range []int{1, 2, 3} {
+		test.Run(fmt.Sprintf("dynamodb page %d", pageSize), func(test *testing.T) {
+			mock := &calendarSDKMock{query: func(input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+				keyCondition := calendarTestExpression(input.KeyConditionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
+				if !strings.Contains(keyCondition, "ACCOUNT#acc_1") || !strings.Contains(keyCondition, "CALSHARE#") || !aws.ToBool(input.ConsistentRead) {
+					test.Fatalf("share query escaped the account partition: %s", keyCondition)
+				}
+				offset := 0
+				if input.ExclusiveStartKey != nil {
+					last := calendarTestString(test, input.ExclusiveStartKey, "SK")
+					for offset < len(items) && calendarTestString(test, items[offset], "SK") <= last {
+						offset++
+					}
+				}
+				end := min(offset+pageSize, len(items))
+				output := &dynamodb.QueryOutput{Items: items[offset:end]}
+				if end < len(items) {
+					output.LastEvaluatedKey = map[string]types.AttributeValue{"PK": items[end-1]["PK"], "SK": items[end-1]["SK"]}
+				}
+				return output, nil
+			}, transactGet: calendarTestShareGets(test, &items)}
+			repo := calendarTestRepo(test, mock)
+			page, err := repo.ListCalendarShareRows(context.Background(), "acc_1", query)
+			if err != nil {
+				test.Fatal(err)
+			}
+			if len(page.Groups) != 1 || len(page.Groups[0]) != 2 || page.Groups[0][0].UserID != "u1" || page.Groups[0][1].State != "veto" || page.NextCursor == nil {
+				test.Fatalf("group mk1 must be returned whole with a cursor: %+v", page)
+			}
+			if len(page.GroupCursors) != 1 || page.GroupCursors[0] != *page.NextCursor {
+				test.Fatalf("each group needs a resume cursor: %v", page.GroupCursors)
+			}
+			next := query
+			next.Cursor = *page.NextCursor
+			second, err := repo.ListCalendarShareRows(context.Background(), "acc_1", next)
+			if err != nil || len(second.Groups) != 1 || second.Groups[0][0].MeetingKey != "mk2" || len(second.Groups[0]) != 1 || second.NextCursor != nil {
+				test.Fatalf("cursor must resume after mk1: %+v %v", second, err)
+			}
+			if len(second.GroupCursors) != 1 || second.GroupCursors[0] == "" {
+				test.Fatalf("last group cursor missing: %v", second.GroupCursors)
+			}
+			trimmed := query
+			trimmed.Cursor = second.GroupCursors[0]
+			if rest, err := repo.ListCalendarShareRows(context.Background(), "acc_1", trimmed); err != nil || len(rest.Groups) != 0 {
+				test.Fatalf("a group cursor must resume after its group: %+v %v", rest, err)
+			}
+			if _, err := repo.ListCalendarShareRows(context.Background(), "acc_2", next); !errors.Is(err, ErrInvalidCalendarCursor) {
+				test.Fatalf("cursor accepted another account: %v", err)
+			}
+		})
+	}
+}
+
+// calendarTestShareQuery serves *items in sort-key order, resuming after ExclusiveStartKey.
+func calendarTestShareQuery(test *testing.T, items *[]map[string]types.AttributeValue) *calendarSDKMock {
+	return &calendarSDKMock{query: func(input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+		var output []map[string]types.AttributeValue
+		for _, item := range *items {
+			if input.ExclusiveStartKey == nil || calendarTestString(test, item, "SK") > calendarTestString(test, input.ExclusiveStartKey, "SK") {
+				output = append(output, item)
+			}
+		}
+		return &dynamodb.QueryOutput{Items: output}, nil
+	}, transactGet: calendarTestShareGets(test, items)}
+}
+
+// calendarTestShareGets serves a TransactGetItems snapshot from *items by exact PK and SK.
+func calendarTestShareGets(test *testing.T, items *[]map[string]types.AttributeValue) func(*dynamodb.TransactGetItemsInput) (*dynamodb.TransactGetItemsOutput, error) {
+	return func(input *dynamodb.TransactGetItemsInput) (*dynamodb.TransactGetItemsOutput, error) {
+		output := &dynamodb.TransactGetItemsOutput{Responses: make([]types.ItemResponse, len(input.TransactItems))}
+		for index, get := range input.TransactItems {
+			if len(get.Get.Key) != 2 {
+				test.Fatalf("a snapshot must read by exact key: %v", get.Get.Key)
+			}
+			partition, sortKey := calendarTestString(test, get.Get.Key, "PK"), calendarTestString(test, get.Get.Key, "SK")
+			for _, item := range *items {
+				if calendarTestString(test, item, "PK") == partition && calendarTestString(test, item, "SK") == sortKey {
+					output.Responses[index].Item = item
+				}
+			}
+		}
+		return output, nil
+	}
+}
+
+func TestListShareRowsCursorNeverSplitsGroupAddedLater(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	items := []map[string]types.AttributeValue{
+		calendarTestShareItem(test, "acc_1", "mk1", "u1", "shared", start),
+		calendarTestShareItem(test, "acc_1", "mk1", "u2", "veto", start),
+		calendarTestShareItem(test, "acc_1", "mk2", "u1", "shared", start),
+	}
+	repo := calendarTestRepo(test, calendarTestShareQuery(test, &items))
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 1}
+	page, err := repo.ListCalendarShareRows(context.Background(), "acc_1", query)
+	if err != nil || len(page.Groups) != 1 || len(page.Groups[0]) != 2 || page.NextCursor == nil {
+		test.Fatalf("first page must end after mk1: %+v %v", page, err)
+	}
+	// u3 shares mk1 after the first page; its row sorts after the cursor (u2's veto).
+	items = slices.Insert(items, 2, calendarTestShareItem(test, "acc_1", "mk1", "u3", "shared", start))
+	next := query
+	next.Cursor = *page.NextCursor
+	second, err := repo.ListCalendarShareRows(context.Background(), "acc_1", next)
+	if err != nil || len(second.Groups) != 1 || len(second.Groups[0]) != 1 || second.Groups[0][0].MeetingKey != "mk2" {
+		test.Fatalf("next page must not return mk1 without its veto: %+v %v", second, err)
+	}
+}
+
+func TestListShareRowsCursorInsideGroupSkipsRestOfGroup(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	items := []map[string]types.AttributeValue{
+		calendarTestShareItem(test, "acc_1", "mk1", "u1", "shared", start),
+		calendarTestShareItem(test, "acc_1", "mk1", "u2", "veto", start),
+		calendarTestShareItem(test, "acc_1", "mk1", "u3", "shared", start),
+		calendarTestShareItem(test, "acc_1", "mk2", "u1", "shared", start),
+	}
+	repo := calendarTestRepo(test, calendarTestShareQuery(test, &items))
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 10}
+	scope := calendarCursor{Version: 1, Kind: "shares", From: query.From.UTC().Format(time.RFC3339Nano),
+		To: query.To.UTC().Format(time.RFC3339Nano), AccountID: "acc_1", Limit: 10}
+	lower := model.PrefixCalendarShare + query.From.Add(-calendarMaxWindow).UTC().Format("2006-01-02T15:04:05.000000000Z")
+	upper := model.PrefixCalendarShare + query.To.UTC().Format("2006-01-02T15:04:05.000000000Z")
+	// A crafted cursor after mk1/u1 would otherwise resume at u2's veto and return mk1 partially.
+	cursor, err := encodeCalendarCursor(scope, accountShareKey("acc_1", calendarTestString(test, items[0], "SK")), lower, upper)
+	if err != nil || cursor == nil {
+		test.Fatalf("encode cursor: %v", err)
+	}
+	query.Cursor = *cursor
+	page, err := repo.ListCalendarShareRows(context.Background(), "acc_1", query)
+	if err != nil || len(page.Groups) != 1 || len(page.Groups[0]) != 1 || page.Groups[0][0].MeetingKey != "mk2" || page.NextCursor != nil {
+		test.Fatalf("a cursor inside mk1 must skip the rest of mk1: %+v %v", page, err)
+	}
+}
+
+// calendarTestShareScope returns the cursor scope and key range ListCalendarShareRows uses.
+func calendarTestShareScope(query model.CalendarQuery, accountID string, limit int32) (calendarCursor, string, string) {
+	scope := calendarCursor{Version: 1, Kind: "shares", From: query.From.UTC().Format(time.RFC3339Nano),
+		To: query.To.UTC().Format(time.RFC3339Nano), AccountID: accountID, Limit: limit}
+	lower := model.PrefixCalendarShare + query.From.Add(-calendarMaxWindow).UTC().Format("2006-01-02T15:04:05.000000000Z")
+	upper := model.PrefixCalendarShare + query.To.UTC().Format("2006-01-02T15:04:05.000000000Z")
+	return scope, lower, upper
+}
+
+// calendarTestRawCursor encodes a cursor without encodeCalendarCursor's validation, as a caller could.
+func calendarTestRawCursor(test *testing.T, scope calendarCursor, lastPK, lastSK string) string {
+	test.Helper()
+	scope.LastPK, scope.LastSK = lastPK, lastSK
+	data, err := json.Marshal(scope)
+	if err != nil {
+		test.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+// calendarTestShareTable serves Query pages of pageSize and TransactGetItems snapshots from
+// the same items; afterQuery and beforeSnapshot let a test change rows between calls.
+type calendarTestShareTable struct {
+	items          []map[string]types.AttributeValue
+	pageSize       int
+	queries        int
+	snapshots      int
+	afterQuery     func(call int)
+	beforeSnapshot func()
+	snapshotErr    error
+}
+
+func (table *calendarTestShareTable) mock(test *testing.T) *calendarSDKMock {
+	gets := calendarTestShareGets(test, &table.items)
+	return &calendarSDKMock{
+		query: func(input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+			table.queries++
+			offset := 0
+			if input.ExclusiveStartKey != nil {
+				last := calendarTestString(test, input.ExclusiveStartKey, "SK")
+				for offset < len(table.items) && calendarTestString(test, table.items[offset], "SK") <= last {
+					offset++
+				}
+			}
+			end := min(offset+table.pageSize, len(table.items))
+			output := &dynamodb.QueryOutput{Items: slices.Clone(table.items[offset:end])}
+			if end < len(table.items) {
+				output.LastEvaluatedKey = map[string]types.AttributeValue{"PK": table.items[end-1]["PK"], "SK": table.items[end-1]["SK"]}
+			}
+			if table.afterQuery != nil {
+				table.afterQuery(table.queries)
+			}
+			return output, nil
+		},
+		transactGet: func(input *dynamodb.TransactGetItemsInput) (*dynamodb.TransactGetItemsOutput, error) {
+			table.snapshots++
+			if table.beforeSnapshot != nil {
+				table.beforeSnapshot()
+				table.beforeSnapshot = nil
+			}
+			if table.snapshotErr != nil {
+				return nil, table.snapshotErr
+			}
+			return gets(input)
+		},
+	}
+}
+
+// calendarTestGroupSummary renders groups as "meetingKey:user/state,..." for comparison.
+func calendarTestGroupSummary(groups [][]CalendarShareRow) []string {
+	summary := make([]string, 0, len(groups))
+	for _, group := range groups {
+		members := make([]string, 0, len(group))
+		for _, row := range group {
+			members = append(members, row.UserID+"/"+row.State)
+		}
+		summary = append(summary, group[0].MeetingKey+":"+strings.Join(members, ","))
+	}
+	return summary
+}
+
+// calendarTestShareFixture is mk1 (u1 shared, u2 veto, u3 shared) followed by mk2 (u1 shared).
+func calendarTestShareFixture(test *testing.T, start time.Time) []map[string]types.AttributeValue {
+	return []map[string]types.AttributeValue{
+		calendarTestShareItem(test, "acc_1", "mk1", "u1", "shared", start),
+		calendarTestShareItem(test, "acc_1", "mk1", "u2", "veto", start),
+		calendarTestShareItem(test, "acc_1", "mk1", "u3", "shared", start),
+		calendarTestShareItem(test, "acc_1", "mk2", "u1", "shared", start),
+	}
+}
+
+func TestListShareRowsRejectsMalformedCursorSortKey(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	stamp := start.UTC().Format("2006-01-02T15:04:05.000000000Z")
+	veto := model.CalendarShareSortKey(start, "mk1", "u2")
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 10}
+	scope, lower, upper := calendarTestShareScope(query, "acc_1", 10)
+	if crafted := veto + "#x"; crafted < lower || crafted >= upper {
+		test.Fatalf("the reviewed crafted key must pass the range check: %s", crafted)
+	}
+	otherAccount, _, _ := calendarTestShareScope(query, "acc_2", 10)
+	otherKind := scope
+	otherKind.Kind = "events"
+	cases := []struct {
+		name   string
+		scope  calendarCursor
+		lastPK string
+		lastSK string
+	}{
+		{"extra segment after veto", scope, "ACCOUNT#acc_1", veto + "#x"},
+		{"empty trailing segment", scope, "ACCOUNT#acc_1", veto + "#"},
+		{"missing user segment", scope, "ACCOUNT#acc_1", model.PrefixCalendarShare + stamp + "#mk1"},
+		{"empty meeting key", scope, "ACCOUNT#acc_1", model.PrefixCalendarShare + stamp + "##u2"},
+		{"empty user", scope, "ACCOUNT#acc_1", model.PrefixCalendarShare + stamp + "#mk1#"},
+		{"invalid identifier", scope, "ACCOUNT#acc_1", model.PrefixCalendarShare + stamp + "#mk1#u 2"},
+		{"missing timestamp delimiter", scope, "ACCOUNT#acc_1", model.PrefixCalendarShare + stamp + "mk1#u2"},
+		{"non-canonical timestamp", scope, "ACCOUNT#acc_1", model.PrefixCalendarShare + start.Format(time.RFC3339) + "#mk1#u2"},
+		{"event row kind", scope, "ACCOUNT#acc_1", model.PrefixCalendarTime + stamp + "#" + calendarTestSource + "#event-1"},
+		{"other partition", scope, "ACCOUNT#acc_2", veto},
+		{"other account scope", otherAccount, "ACCOUNT#acc_2", veto},
+		{"other cursor kind", otherKind, "ACCOUNT#acc_1", veto},
+	}
+	for _, testCase := range cases {
+		test.Run(testCase.name, func(test *testing.T) {
+			calls := 0
+			mock := &calendarSDKMock{query: func(*dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+				calls++
+				return &dynamodb.QueryOutput{}, nil
+			}}
+			next := query
+			next.Cursor = calendarTestRawCursor(test, testCase.scope, testCase.lastPK, testCase.lastSK)
+			page, err := calendarTestRepo(test, mock).ListCalendarShareRows(context.Background(), "acc_1", next)
+			if !errors.Is(err, ErrInvalidCalendarCursor) || page != nil || calls != 0 {
+				test.Fatalf("cursor %q must be rejected before any read: %+v %v calls=%d", testCase.lastSK, page, err, calls)
+			}
+			if testCase.scope == scope && testCase.lastPK == "ACCOUNT#acc_1" {
+				if _, err := encodeCalendarCursor(scope, accountShareKey("acc_1", testCase.lastSK), lower, upper); !errors.Is(err, ErrInvalidCalendarCursor) {
+					test.Fatalf("a malformed share key must not encode as a cursor: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestListShareRowsResumesAtEveryCursorPosition(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	items := calendarTestShareFixture(test, start)
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 10}
+	scope, lower, upper := calendarTestShareScope(query, "acc_1", 10)
+	whole := []string{"mk1:u1/shared,u2/veto,u3/shared", "mk2:u1/shared"}
+	cases := []struct {
+		name   string
+		lastSK string
+		want   []string
+	}{
+		{"no cursor", "", whole},
+		{"group before mk1", model.CalendarShareSortKey(start, "mk0", "u9"), whole},
+		{"after u1", model.CalendarShareSortKey(start, "mk1", "u1"), whole[1:]},
+		{"after u2 veto", model.CalendarShareSortKey(start, "mk1", "u2"), whole[1:]},
+		{"between u2 and u3", model.CalendarShareSortKey(start, "mk1", "u2a"), whole[1:]},
+		{"after u3, the last row of mk1", model.CalendarShareSortKey(start, "mk1", "u3"), whole[1:]},
+		{"group sorting after mk1", model.CalendarShareSortKey(start, "mk1a", "u1"), whole[1:]},
+		{"after mk2", model.CalendarShareSortKey(start, "mk2", "u1"), nil},
+	}
+	for _, pageSize := range []int{1, 100} {
+		for _, testCase := range cases {
+			test.Run(fmt.Sprintf("%s/dynamodb page %d", testCase.name, pageSize), func(test *testing.T) {
+				table := &calendarTestShareTable{items: items, pageSize: pageSize}
+				repo := calendarTestRepo(test, table.mock(test))
+				next := query
+				if testCase.lastSK != "" {
+					cursor, err := encodeCalendarCursor(scope, accountShareKey("acc_1", testCase.lastSK), lower, upper)
+					if err != nil || cursor == nil {
+						test.Fatalf("a well-formed share key must encode: %v", err)
+					}
+					next.Cursor = *cursor
+				}
+				page, err := repo.ListCalendarShareRows(context.Background(), "acc_1", next)
+				if err != nil {
+					test.Fatal(err)
+				}
+				if got := calendarTestGroupSummary(page.Groups); !slices.Equal(got, testCase.want) || page.NextCursor != nil {
+					test.Fatalf("resume from %q: got %v next=%v, want %v", testCase.lastSK, got, page.NextCursor, testCase.want)
+				}
+			})
+		}
+	}
+}
+
+func TestListShareRowsQueryBudgetNeverSplitsGroup(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	items := []map[string]types.AttributeValue{calendarTestShareItem(test, "acc_1", "mk0", "u1", "shared", start)}
+	for _, userID := range []string{"u1", "u2", "u3", "u4"} {
+		items = append(items, calendarTestShareItem(test, "acc_1", "mk1", userID, "shared", start))
+	}
+	items = append(items, calendarTestShareItem(test, "acc_1", "mk1", "u5", "veto", start),
+		calendarTestShareItem(test, "acc_1", "mk2", "u1", "shared", start))
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 10}
+	table := &calendarTestShareTable{items: items, pageSize: 1}
+	repo := calendarTestRepo(test, table.mock(test))
+	// Five one-row DynamoDB pages end inside mk1, before its veto row.
+	first, err := repo.ListCalendarShareRows(context.Background(), "acc_1", query)
+	if err != nil || table.queries != 5 || table.snapshots != 1 || first.NextCursor == nil {
+		test.Fatalf("the query budget must end the page with a cursor: %+v %v queries=%d snapshots=%d", first, err, table.queries, table.snapshots)
+	}
+	if got := calendarTestGroupSummary(first.Groups); !slices.Equal(got, []string{"mk0:u1/shared"}) {
+		test.Fatalf("a group cut by the query budget must not be returned without its veto: %v", got)
+	}
+	next := query
+	next.Cursor = *first.NextCursor
+	table.pageSize = 2
+	second, err := repo.ListCalendarShareRows(context.Background(), "acc_1", next)
+	if err != nil || second.NextCursor != nil {
+		test.Fatalf("the next page must resume at the start of mk1: %+v %v", second, err)
+	}
+	want := []string{"mk1:u1/shared,u2/shared,u3/shared,u4/shared,u5/veto", "mk2:u1/shared"}
+	if got := calendarTestGroupSummary(second.Groups); !slices.Equal(got, want) {
+		test.Fatalf("mk1 must be returned whole with its veto: %v", got)
+	}
+	// A group that does not end within five queries is refused rather than returned in part.
+	table.pageSize, table.snapshots = 1, 0
+	if page, err := repo.ListCalendarShareRows(context.Background(), "acc_1", next); !errors.Is(err, ErrCalendarShareGroupTooLarge) || page != nil || table.snapshots != 0 {
+		test.Fatalf("an unbounded group must be refused: %+v %v snapshots=%d", page, err, table.snapshots)
+	}
+}
+
+func TestListShareRowsSnapshotsEveryGroup(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	original := func() []map[string]types.AttributeValue {
+		return []map[string]types.AttributeValue{
+			calendarTestShareItem(test, "acc_1", "mk1", "uA", "shared", start),
+			calendarTestShareItem(test, "acc_1", "mk1", "uB", "veto", start),
+			calendarTestShareItem(test, "acc_1", "mk2", "u1", "shared", start),
+		}
+	}
+	// The reviewed interleaving: A shared to veto and B veto to shared; a veto exists throughout.
+	flip := func(table *calendarTestShareTable) {
+		table.items[0] = calendarTestShareItem(test, "acc_1", "mk1", "uA", "veto", start)
+		table.items[1] = calendarTestShareItem(test, "acc_1", "mk1", "uB", "shared", start)
+	}
+	flipped := []string{"mk1:uA/veto,uB/shared", "mk2:u1/shared"}
+	cases := []struct {
+		name            string
+		pageSize        int
+		afterFirstQuery func(*calendarTestShareTable)
+		beforeSnapshot  func(*calendarTestShareTable)
+		want            []string
+	}{
+		{"unchanged spanning group", 1, nil, nil, []string{"mk1:uA/shared,uB/veto", "mk2:u1/shared"}},
+		{"flip between query 1 and query 2", 1, flip, nil, flipped},
+		{"flip before the snapshot of a spanning group", 1, nil, flip, flipped},
+		{"flip before the snapshot of a single-query group", 100, nil, flip, flipped},
+		{"row deleted before the snapshot", 1, nil, func(table *calendarTestShareTable) {
+			table.items = slices.Delete(table.items, 0, 1)
+		}, []string{"mk1:uB/veto", "mk2:u1/shared"}},
+		{"group deleted before the snapshot", 1, nil, func(table *calendarTestShareTable) {
+			table.items = slices.Delete(table.items, 0, 2)
+		}, []string{"mk2:u1/shared"}},
+	}
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 10}
+	for _, testCase := range cases {
+		test.Run(testCase.name, func(test *testing.T) {
+			table := &calendarTestShareTable{items: original(), pageSize: testCase.pageSize}
+			if testCase.afterFirstQuery != nil {
+				table.afterQuery = func(call int) {
+					if call == 1 {
+						testCase.afterFirstQuery(table)
+					}
+				}
+			}
+			if testCase.beforeSnapshot != nil {
+				table.beforeSnapshot = func() { testCase.beforeSnapshot(table) }
+			}
+			page, err := calendarTestRepo(test, table.mock(test)).ListCalendarShareRows(context.Background(), "acc_1", query)
+			if err != nil {
+				test.Fatal(err)
+			}
+			if got := calendarTestGroupSummary(page.Groups); !slices.Equal(got, testCase.want) || table.snapshots != 1 {
+				test.Fatalf("groups must come from one snapshot: got %v snapshots=%d, want %v", got, table.snapshots, testCase.want)
+			}
+			if len(page.GroupCursors) != len(page.Groups) || page.NextCursor != nil {
+				test.Fatalf("each published group needs its cursor: %v next=%v", page.GroupCursors, page.NextCursor)
+			}
+		})
+	}
+}
+
+func TestListShareRowsSnapshotBounds(test *testing.T) {
+	start := calendarTestNow.Add(time.Hour)
+	members := func(meetingKey string, count int) []map[string]types.AttributeValue {
+		items := make([]map[string]types.AttributeValue, 0, count)
+		for index := range count {
+			items = append(items, calendarTestShareItem(test, "acc_1", meetingKey, fmt.Sprintf("u%03d", index), "shared", start))
+		}
+		return items
+	}
+	snapshotFailure := errors.New("transaction conflict")
+	cases := []struct {
+		name          string
+		items         []map[string]types.AttributeValue
+		snapshotErr   error
+		wantErr       error
+		wantSizes     []int
+		wantSnapshots int
+	}{
+		{"spanning group at the transaction limit", members("mk1", 100), nil, nil, []int{100}, 1},
+		{"spanning group beyond the transaction limit", members("mk1", 101), nil, ErrCalendarShareGroupTooLarge, nil, 0},
+		{"whole groups packed into two snapshots", append(members("mk1", 49), members("mk2", 60)...), nil, nil, []int{49, 60}, 2},
+		{"snapshot failure is surfaced", members("mk1", 3), snapshotFailure, snapshotFailure, nil, 1},
+	}
+	query := model.CalendarQuery{From: calendarTestNow, To: calendarTestNow.Add(24 * time.Hour), Limit: 50}
+	for _, testCase := range cases {
+		test.Run(testCase.name, func(test *testing.T) {
+			table := &calendarTestShareTable{items: testCase.items, pageSize: 60, snapshotErr: testCase.snapshotErr}
+			page, err := calendarTestRepo(test, table.mock(test)).ListCalendarShareRows(context.Background(), "acc_1", query)
+			if table.snapshots != testCase.wantSnapshots {
+				test.Fatalf("snapshots=%d, want %d", table.snapshots, testCase.wantSnapshots)
+			}
+			if testCase.wantErr != nil {
+				if !errors.Is(err, testCase.wantErr) || page != nil {
+					test.Fatalf("want %v, got %+v %v", testCase.wantErr, page, err)
+				}
+				return
+			}
+			if err != nil {
+				test.Fatal(err)
+			}
+			sizes := make([]int, 0, len(page.Groups))
+			for _, group := range page.Groups {
+				sizes = append(sizes, len(group))
+			}
+			if !slices.Equal(sizes, testCase.wantSizes) {
+				test.Fatalf("group sizes %v, want %v", sizes, testCase.wantSizes)
+			}
+		})
+	}
+}
+
+func TestListShareRowsOverlap(test *testing.T) {
+	from := calendarTestNow
+	ongoing := calendarTestShareItem(test, "acc_1", "mk1", "u1", "shared", from.Add(-3*24*time.Hour))
+	ongoing["endsAt"] = calendarTestItem(test, map[string]any{"v": from.Add(time.Hour)})["v"]
+	ongoing["pendingShareExpiresAt"] = &types.AttributeValueMemberN{Value: fmt.Sprint(from.Add(time.Hour + 90*24*time.Hour).Unix())}
+	ended := calendarTestShareItem(test, "acc_1", "mk0", "u1", "shared", from.Add(-4*24*time.Hour))
+	expired := calendarTestShareItem(test, "acc_1", "mk2", "u1", "shared", from.Add(time.Hour))
+	expired["pendingShareExpiresAt"] = &types.AttributeValueMemberN{Value: fmt.Sprint(calendarTestNow.Unix())}
+	forged := calendarTestShareItem(test, "acc_2", "mk3", "u1", "shared", from.Add(2*time.Hour))
+	stored := []map[string]types.AttributeValue{ended, ongoing, expired, forged}
+	mock := &calendarSDKMock{transactGet: calendarTestShareGets(test, &stored), query: func(input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+		keyCondition := calendarTestExpression(input.KeyConditionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
+		for _, expected := range []string{"CALSHARE#2026-08-06T12:00:00.000000000Z", "CALSHARE#2026-11-08T12:00:00.000000000Z"} {
+			if !strings.Contains(keyCondition, expected) {
+				test.Errorf("overlap bounds missing %s: %s", expected, keyCondition)
+			}
+		}
+		return &dynamodb.QueryOutput{Items: stored}, nil
+	}}
+	page, err := calendarTestRepo(test, mock).ListCalendarShareRows(context.Background(), "acc_1",
+		model.CalendarQuery{From: from, To: from.Add(24 * time.Hour)})
+	if err != nil || len(page.Groups) != 1 || page.Groups[0][0].MeetingKey != "mk1" || page.NextCursor != nil {
+		test.Fatalf("only the ongoing share should be returned: %+v %v", page, err)
 	}
 }
 
@@ -1054,6 +1576,10 @@ func TestApplyBatchVetoJoinsExistingForeignVeto(test *testing.T) {
 					if !strings.Contains(fields, "ADD vetoEventIds ["+calendarTestSource+"#event-1]") || strings.Contains(fields, "DELETE") {
 						test.Fatalf("joiner must ADD itself: %s", fields)
 					}
+					condition := calendarTestExpression(operation.Update.ConditionExpression, operation.Update.ExpressionAttributeNames, operation.Update.ExpressionAttributeValues)
+					if !strings.Contains(condition, fmt.Sprintf("size (vetoEventIds) <= %d", calendarMaxVetoMembers-1)) {
+						test.Fatalf("a join must fence the set bound against concurrent joins: %s", condition)
+					}
 					adds++
 				}
 				if operation.Put != nil && calendarTestString(test, operation.Put.Item, "PK") == "ACCOUNT#acc_1" {
@@ -1524,7 +2050,14 @@ func TestApplyBatchVetoSetIsBounded(test *testing.T) {
 	if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch)); !errors.Is(err, ErrInvalidCalendarBatch) || calls != 0 {
 		test.Fatalf("a veto set beyond the bound must be refused: %v calls=%d", err, calls)
 	}
-	if validCalendarVetoSet(append(slices.Clone(members), calendarTestSource+"#event-x")) {
+	tokens := make([]string, len(members))
+	for index, member := range members {
+		tokens[index] = calendarVetoToken(calendarTestSource, member)
+	}
+	if !validCalendarVetoSet(tokens) {
+		test.Fatal("a veto set at the bound must be valid")
+	}
+	if validCalendarVetoSet(append(tokens, calendarTestSource+"#event-x")) {
 		test.Fatal("an oversized stored veto set must be invalid")
 	}
 }
