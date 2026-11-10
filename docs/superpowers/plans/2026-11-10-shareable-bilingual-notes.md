@@ -1,8 +1,10 @@
 # Shareable-by-default and Bilingual Notes Implementation Plan
 
+Status: Historical implementation plan (2026-11-10); deployment acceptance is recorded separately.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Generated meeting notes are shareable (safe provenance) by default, final notes are always Korean, and owners/editors can generate an independent English note shown with a 한국어 | English toggle.
+**Goal:** Generated meeting notes are shareable (safe provenance) by default, final notes are always Korean, and owners/editors can generate an independent English note shown with a Korean/English toggle.
 
 **Architecture:** Three stacked PRs (95 KB review cap). PR 1 changes provenance rules and generation inputs in Go. PR 2 adds an English-note run (`ANALYSIS#summaryEn`) that reuses the saved-source resummary pipeline with a `target` and publishes only `contentEn*` fields. PR 3 changes the meeting page.
 
@@ -18,7 +20,7 @@
 - `safe` provenance survives owner/editor `content`/`liveSummary` edits; `private`/`unknown` stay sticky.
 - Only the owner may run the derivative-clearing sharing-safe reset (`RequestSharingSafe`), unchanged.
 - No new unauthenticated route, no infra/EventBridge rule change (reuse detail-type `SummaryRequested`).
-- UI copy is Korean; repo docs are concise English. Remove the words "공유용 회의록" from the UI.
+- UI copy is Korean (written in code, not in docs); repo docs are concise English. Remove the "sharing-safe notes" wording from the UI.
 - Go tests: `(cd backend && /usr/local/go/bin/go test ./... -count=1)` includes `cmd/*`.
 
 ## Review Focus
@@ -182,29 +184,29 @@
 - Modify: `frontend/src/lib/api.ts` (`getEnglishNote`, `requestEnglishNote`), `frontend/src/types/meeting.ts` (`EnglishNote` type, `MeetingDetail.hasEnglishNote?: boolean`)
 
 **Interfaces:**
-- Produces: `export function englishNoteView(note: EnglishNote | null, canEdit: boolean): { showToggle: boolean; action: 'generate' | 'regenerate' | 'retry' | null; badge: '생성 중' | '생성 실패' | '원문 변경됨' | null }`
+- Produces: `export function englishNoteView(note: EnglishNote | null, canEdit: boolean): { showToggle: boolean; action: 'generate' | 'regenerate' | 'retry' | null; badge: 'generating' | 'failed' | 'stale' | null }`
 
 - [ ] **Step 1: Write failing tests** (`node:test`, transpile pattern of `scripts/meeting-status.test.mjs`):
   - no note, editor → `{ showToggle:false, action:'generate', badge:null }`; no note, reader → action `null`.
-  - status `running` → badge `생성 중`, action `null`.
-  - status `failed`, editor → badge `생성 실패`, action `retry`.
-  - content present, `stale:true`, editor → toggle, badge `원문 변경됨`, action `regenerate`; reader → toggle, badge `원문 변경됨`, action `null`.
+  - status `running` → badge `generating`, action `null`.
+  - status `failed`, editor → badge `failed`, action `retry`.
+  - content present, `stale:true`, editor → toggle, badge `stale`, action `regenerate`; reader → toggle, badge `stale`, action `null`.
 - [ ] **Step 2: Run** `(cd frontend && node --test scripts/english-note.test.mjs)` — FAIL. **Step 3: Implement.** **Step 4:** PASS.
 - [ ] **Step 5: Commit** `feat(web): add English note view state`
 
 ### Task 9: Meeting page toggle and control cleanup
 
 **Files:**
-- Modify: `frontend/src/components/meeting/AISummaryCard.tsx` (한국어 | English segmented toggle; English view is read-only `MarkdownRenderer` with the same `resolveCitation`), `frontend/src/components/meeting/ResummaryControls.tsx`, `frontend/src/app/meeting/[id]/MeetingDetailClient.tsx`, `frontend/src/hooks/useResummary.ts` (poll English status while running, same interval), `docs/DESIGN-SPEC.md`
-- Test: extend `frontend/scripts/english-note.test.mjs` with a source-text assertion that `ResummaryControls.tsx` no longer contains `공유용 회의록` or the `noteLanguages` selector
+- Modify: `frontend/src/components/meeting/AISummaryCard.tsx` (Korean/English segmented toggle; badge keys map to Korean labels for generating, failed and source-changed; English view is read-only `MarkdownRenderer` with the same `resolveCitation`), `frontend/src/components/meeting/ResummaryControls.tsx`, `frontend/src/app/meeting/[id]/MeetingDetailClient.tsx`, `frontend/src/hooks/useResummary.ts` (poll English status while running, same interval), `docs/DESIGN-SPEC.md`
+- Test: extend `frontend/scripts/english-note.test.mjs` with a source-text assertion that `ResummaryControls.tsx` no longer contains the sharing-safe notes label or the `noteLanguages` selector
 
-- [ ] **Step 1: Write failing assertions** (source text): no `공유용 회의록`, no `회의록 언어` select; `AISummaryCard.tsx` contains `영문 회의록 생성`.
+- [ ] **Step 1: Write failing assertions** (source text): no sharing-safe notes label, no note-language select; `AISummaryCard.tsx` contains the Korean "generate English notes" action label.
 - [ ] **Step 2: Run** — FAIL.
 - [ ] **Step 3: Implement.**
-  - Remove the language select and "이 언어로 다시 생성".
-  - Sharing-safe button becomes "회의록 다시 생성" for owners only when `summarySharing.requiresRegeneration`, with copy: "이 회의록은 이전 방식으로 만들어져 개별 공유를 할 수 없습니다. 다시 생성하면 액션 아이템과 인사이트도 새로 만들어집니다."
+  - Remove the language select and its "regenerate in this language" button.
+  - Sharing-safe button becomes a plain Korean "regenerate notes" action for owners only when `summarySharing.requiresRegeneration`, with Korean copy saying: this note was made the old way and cannot be shared individually; regenerating also recreates action items and insights.
   - Toggle shows when `englishNoteView(...).showToggle`; selected tab persists per meeting in component state only.
-  - Linked-meeting UI copy that promises carried-over context is changed to plain "연결된 회의" navigation wording (grep `맥락` in `frontend/src/components/meeting/`).
+  - Linked-meeting UI copy that promises carried-over context is changed to plain "linked meetings" navigation wording (grep the Korean word for "context" in `frontend/src/components/meeting/`).
 - [ ] **Step 4: Run** `(cd frontend && npm run lint && npm run test:unit && npm run build)` — PASS.
 - [ ] **Step 5:** Update `docs/DESIGN-SPEC.md` meeting-notes section; `python3 scripts/docs/check_docs.py`.
 - [ ] **Step 6: Commit** `feat(web): show Korean/English notes and drop sharing-safe wording`; open PR 3.

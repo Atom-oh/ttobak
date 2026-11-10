@@ -1,13 +1,13 @@
 # Shareable-by-default and bilingual meeting notes
 
-Date: 2026-11-10. Status: proposed design (not yet approved).
+Date: 2026-11-10. Status: Historical design record, approved by the user on 2026-11-10.
 
 ## Intent
 
 Users think about meeting notes in two states only: not shared (private) or
 shared with an account team. Today a third, hidden state exists: generated notes
 can be "private" or "unknown" under ADR-049, and the owner must run a separate
-"공유용 회의록 재생성" (sharing-safe regeneration) before an account or email
+the sharing-safe regeneration action before an account or email
 share is allowed. That step should disappear for normal use.
 
 Separately, Korean notes sometimes read ambiguously, or with a different meaning
@@ -27,7 +27,7 @@ transcript.
    text, not translated from the Korean note.
 4. The English note is stored alongside the Korean note. Everyone who can read
    the meeting's notes (owner, editors, email-share recipients, account members)
-   can switch between 한국어 and English on the meeting page.
+   can switch between Korean and English on the meeting page.
 5. The English note is shareable under the same rules as the Korean note.
 
 ## Non-goals
@@ -66,8 +66,8 @@ transcript.
   owner approve current output for one account, and the 2026-11-06 ADR-049
   amendment shows published summaries to every member. The remaining gate is
   direct-email and pending grants, which still require `CanCreateGrant`
-  (safe provenance). `ResummaryControls.tsx` tells users "개별 초대에 공유하려면
-  공유용 회의록이 필요합니다".
+  (safe provenance). `ResummaryControls.tsx` tells users that individual invitations need
+  sharing-safe notes.
 - The first live-summary write on a new meeting stamps `unknown` (nil
   provenance maps to `unknown` in `UpdateMeetingFieldsIfMatch`), and batch
   publication keeps that sticky state. So most live-recorded meetings cannot be
@@ -106,8 +106,8 @@ transcript.
   account selection or an email share succeeds without a regeneration step.
 - Existing private/unknown rows keep their sticky state and remain blocked for
   new grants. The owner keeps a regeneration action for them, relabeled as an
-  ordinary "회의록 다시 생성" with a short explanation that the old note cannot
-  be shared as is. The separate "공유용" concept and wording leave the UI.
+  ordinary "regenerate notes" action with a short explanation that the old note cannot
+  be shared as is. The separate "sharing-safe" concept and wording leave the UI.
 
 - Who may reset an existing private/unknown row (decided by the designer; the
   user can override): only the owner, through the existing derivative-clearing
@@ -154,7 +154,7 @@ sticky. A new ADR records this and the predecessor removal; ADR-049 gains a
 
 ### English note
 
-- Trigger: an owner or editor presses "영문 회의록 생성" on a done meeting with
+- Trigger: an owner or editor presses the "generate English notes" action on a done meeting with
   a usable transcript. Not generated automatically.
 - Source: selected transcript (A/B per existing selection), saved notes,
   verified current DOCUMENT extraction and the same image analyses the Korean
@@ -179,8 +179,8 @@ sticky. A new ADR records this and the predecessor removal; ADR-049 gains a
 
 ### Meeting page
 
-- A 한국어 | English segmented toggle appears above the final note when an
-  English note exists; otherwise only the "영문 회의록 생성" action shows (for
+- A Korean/English segmented toggle appears above the final note when an
+  English note exists; otherwise only the "generate English notes" action shows (for
   owner/editor). Recipients without edit rights see the toggle only when an
   English note exists.
 - Status: generating, failed (with retry), outdated.
