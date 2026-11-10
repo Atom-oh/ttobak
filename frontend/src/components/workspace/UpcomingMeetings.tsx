@@ -4,6 +4,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import type { CalendarEvent, CalendarSourceStatus } from '@/types/calendar';
 import { useCalendarEvents, useCalendarWindow } from '@/hooks/useCalendarEvents';
+import { useSpecReqTasks, type SpecReqTasksState } from '@/hooks/useSpecReqTasks';
+import type { SpecReqTaskView } from '@/types/specreqTask';
+import { SpecReqStateBadge, SpecReqTasks, type SpecReqTasksProps } from '@/components/workspace/SpecReqTasks';
 
 export interface UpcomingMeetingsProps {
   events: CalendarEvent[];
@@ -20,13 +23,24 @@ export interface UpcomingMeetingsProps {
   isLoadingSources?: boolean;
   eventsError?: boolean;
   sourcesError?: boolean;
+  accountId?: string;
+  tasks?: SpecReqTaskView[];
+  tasksState?: SpecReqTasksState;
+  tasksPartial?: boolean;
+  onRetryTasks?: () => void;
+  onTransitionTask?: SpecReqTasksProps['onTransition'];
+  highlight?: string;
 }
 
-export function PrivateUpcomingMeetings({ accountId, onAccessLost }: { accountId?: string; onAccessLost?: () => void }) {
+export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight }: {
+  accountId?: string; onAccessLost?: () => void; highlight?: string;
+}) {
   const { now, window } = useCalendarWindow();
   const calendar = useCalendarEvents({ ...window, accountId, onAccessLost });
+  const specReq = useSpecReqTasks({ accountId, highlight });
   return <UpcomingMeetings {...calendar} now={now} window={window} onRetry={calendar.retry}
-    onLoadMore={calendar.loadMore} onLoadMoreSources={calendar.loadMoreSources} />;
+    onLoadMore={calendar.loadMore} onLoadMoreSources={calendar.loadMoreSources}
+    accountId={accountId} tasks={specReq.tasks} tasksState={specReq.state} tasksPartial={specReq.partial} onRetryTasks={specReq.retry} onTransitionTask={specReq.transition} highlight={highlight} />;
 }
 
 function localTime(value: string): string {
@@ -44,12 +58,13 @@ function completionStatus(source: CalendarSourceStatus, now: number, from: numbe
   return { current, stale, covered };
 }
 
-function EventCard({ event, now, warning }: { event: CalendarEvent; now: number; warning: boolean }) {
+function EventCard({ event, now, warning, task }: { event: CalendarEvent; now: number; warning: boolean; task?: SpecReqTaskView }) {
   return (
     <article className="min-w-0 rounded-xl border border-border-subtle bg-surface p-4">
       <div className="flex flex-wrap items-center gap-2 text-xs text-primary">
         <span>{event.isAllDay ? '종일' : Date.parse(event.startsAt) <= now ? '진행 중' : '예정'}</span>
         {warning && <span className="text-text-muted">동기화 상태 확인 필요</span>}
+        {task && <SpecReqStateBadge state={task.state} />}
       </div>
       <h3 className="mt-2 break-words font-semibold text-text-main">{event.title}</h3>
       <p className="mt-2 text-sm text-text-secondary">
@@ -88,7 +103,7 @@ function AgendaEvents({ events, label, renderEvent }: {
 
 export function UpcomingMeetings({ events, sources, state, onRetry, now, window: queryWindow,
   nextCursor, sourcesNextCursor, onLoadMore, onLoadMoreSources, isLoadingMore, isLoadingSources,
-  eventsError, sourcesError }: UpcomingMeetingsProps) {
+  eventsError, sourcesError, accountId, tasks, tasksState, tasksPartial, onRetryTasks, onTransitionTask, highlight }: UpcomingMeetingsProps) {
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     if (now || state !== 'ready') return;
@@ -107,13 +122,15 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
   const timed = visible.filter(event => !event.isAllDay);
   const allDay = visible.filter(event => event.isAllDay);
   const displayWindow = queryWindow ? `${queryWindow.from}:${queryWindow.to}` : 'rolling';
+  const taskByEvent = new Map((tasks ?? []).map(task => [task.eventId, task]));
   const renderEvent = (event: CalendarEvent) => {
     const status = statuses.get(event.sourceId);
-    return <EventCard key={event.eventId} event={event} now={timestamp} warning={!status || !status.current || status.stale || !status.covered} />;
+    return <EventCard key={event.eventId} event={event} now={timestamp} warning={!status || !status.current || status.stale || !status.covered} task={taskByEvent.get(event.eventId)} />;
   };
 
   return (
     <section className="min-w-0 space-y-5" aria-label="내 Outlook 일정">
+      {tasks && <SpecReqTasks tasks={tasks} state={tasksState} partial={tasksPartial} accountId={accountId} highlight={highlight} onRetry={onRetryTasks} onTransition={onTransitionTask} />}
       <div className="overflow-hidden rounded-2xl border border-primary/20 bg-surface shadow-sm">
         <div className="p-5 sm:p-6">
           <p className="mb-4 text-xs font-semibold text-primary">내 Outlook 일정</p>
