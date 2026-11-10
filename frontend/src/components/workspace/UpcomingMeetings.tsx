@@ -26,6 +26,7 @@ export interface UpcomingMeetingsProps {
   accountId?: string;
   tasks?: SpecReqTaskView[];
   tasksState?: SpecReqTasksState;
+  tasksPartial?: boolean;
   onRetryTasks?: () => void;
   onTransitionTask?: SpecReqTasksProps['onTransition'];
   highlight?: string;
@@ -39,7 +40,7 @@ export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight }: 
   const specReq = useSpecReqTasks({ accountId, highlight });
   return <UpcomingMeetings {...calendar} now={now} window={window} onRetry={calendar.retry}
     onLoadMore={calendar.loadMore} onLoadMoreSources={calendar.loadMoreSources}
-    accountId={accountId} tasks={specReq.tasks} tasksState={specReq.state} onRetryTasks={specReq.retry} onTransitionTask={specReq.transition} highlight={highlight} />;
+    accountId={accountId} tasks={specReq.tasks} tasksState={specReq.state} tasksPartial={specReq.partial} onRetryTasks={specReq.retry} onTransitionTask={specReq.transition} highlight={highlight} />;
 }
 
 function localTime(value: string): string {
@@ -102,7 +103,7 @@ function AgendaEvents({ events, label, renderEvent }: {
 
 export function UpcomingMeetings({ events, sources, state, onRetry, now, window: queryWindow,
   nextCursor, sourcesNextCursor, onLoadMore, onLoadMoreSources, isLoadingMore, isLoadingSources,
-  eventsError, sourcesError, accountId, tasks, tasksState, onRetryTasks, onTransitionTask, highlight }: UpcomingMeetingsProps) {
+  eventsError, sourcesError, accountId, tasks, tasksState, tasksPartial, onRetryTasks, onTransitionTask, highlight }: UpcomingMeetingsProps) {
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     if (now || state !== 'ready') return;
@@ -129,7 +130,7 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
 
   return (
     <section className="min-w-0 space-y-5" aria-label="내 Outlook 일정">
-      {tasks && <SpecReqTasks tasks={tasks} state={tasksState} accountId={accountId} highlight={highlight} onRetry={onRetryTasks} onTransition={onTransitionTask} />}
+      {tasks && <SpecReqTasks tasks={tasks} state={tasksState} partial={tasksPartial} accountId={accountId} highlight={highlight} onRetry={onRetryTasks} onTransition={onTransitionTask} />}
       <div className="overflow-hidden rounded-2xl border border-primary/20 bg-surface shadow-sm">
         <div className="p-5 sm:p-6">
           <p className="mb-4 text-xs font-semibold text-primary">내 Outlook 일정</p>

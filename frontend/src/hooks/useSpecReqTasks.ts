@@ -7,7 +7,8 @@ import { parseTaskHighlight, type SpecReqTaskChange, type SpecReqTaskView } from
 
 export type SpecReqTasksState = 'loading' | 'ready' | 'unavailable' | 'error';
 
-const MAX_PAGES = 10;
+/** 50 pages of 20: 1,000 tasks, the runner's cap. */
+export const MAX_PAGES = 50;
 const PAGE_SIZE = 20;
 
 function statusOf(error: unknown): number | undefined {
@@ -25,7 +26,7 @@ export function useSpecReqTasks({ accountId, highlight }: { accountId?: string; 
   const userId = isAuthenticated ? user?.userId : undefined;
   const [attempt, setAttempt] = useState(0);
   const key = `${userId ?? ''}:${membershipRevision}:${attempt}`;
-  const [result, setResult] = useState<{ key: string; tasks: SpecReqTaskView[]; state: SpecReqTasksState } | null>(null);
+  const [result, setResult] = useState<{ key: string; tasks: SpecReqTaskView[]; state: SpecReqTasksState; partial: boolean } | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const keyRef = useRef(key);
   keyRef.current = key;
@@ -36,8 +37,8 @@ export function useSpecReqTasks({ accountId, highlight }: { accountId?: string; 
     const controller = new AbortController();
     controllerRef.current = controller;
     const options = { signal: controller.signal, expectedUserId: userId };
-    const finish = (tasks: SpecReqTaskView[], state: SpecReqTasksState) => {
-      if (!controller.signal.aborted) setResult({ key, tasks, state });
+    const finish = (tasks: SpecReqTaskView[], state: SpecReqTasksState, partial = false) => {
+      if (!controller.signal.aborted) setResult({ key, tasks, state, partial });
     };
     void (async () => {
       try {
@@ -55,7 +56,8 @@ export function useSpecReqTasks({ accountId, highlight }: { accountId?: string; 
             if ([401, 403].includes(statusOf(error) ?? 0)) throw error;
           }
         }
-        finish(merge(tasks), 'ready');
+        // A cursor left after the last page means some tasks are not shown.
+        finish(merge(tasks), 'ready', !!cursor);
       } catch (error) {
         if (controller.signal.aborted) return;
         finish([], [404, 501, 503].includes(statusOf(error) ?? 0) ? 'unavailable' : 'error');
@@ -95,7 +97,7 @@ export function useSpecReqTasks({ accountId, highlight }: { accountId?: string; 
   }, [userId, key, replace]);
 
   return {
-    tasks, byEventId, state: current?.state ?? 'loading' as SpecReqTasksState,
+    tasks, byEventId, state: current?.state ?? 'loading' as SpecReqTasksState, partial: current?.partial ?? false,
     transition, retry: () => { if (userId) setAttempt(previous => previous + 1); },
   };
 }

@@ -301,3 +301,62 @@ test('transition sends the current version', async context => {
   await probe.result().transition(id('a'), { op: 'linkSpecReq', specReqId: '11111111-2222-4333-8444-555555555555' });
   assert.deepEqual(sent.map(change => [change.op, change.version]), [['markRequested', 4], ['linkSpecReq', 5]]);
 });
+
+test('hook flags a partial list when the page cap leaves a cursor, and the strip says so', async context => {
+  const harness = accountComponentHarness();
+  context.after(() => harness.unmount());
+  let pages = 0;
+  const api = {
+    list: async query => {
+      pages++;
+      const page = Number(query.cursor ?? 0);
+      return { tasks: [task(page.toString(16).padStart(64, '0'), 'issue_needed')], nextCursor: String(page + 1) };
+    },
+    get: async () => { throw new Error('unused'); },
+    transition: async () => { throw new Error('unused'); },
+  };
+  const auth = { isAuthenticated: true, user: { userId: 'owner' }, membershipRevision: 0 };
+  const load = loader({ react: harness.react, '@/components/auth/AuthProvider': { useAuth: () => auth }, '@/lib/api': { specReqTaskApi: api } });
+  const hook = load('@/hooks/useSpecReqTasks');
+  assert.equal(hook.MAX_PAGES, 50);
+  const probe = hookProbe(hook.useSpecReqTasks);
+  harness.render(probe.Probe);
+  await settle();
+  harness.render(probe.Probe);
+  assert.equal(pages, 50);
+  assert.equal(probe.result().state, 'ready');
+  assert.equal(probe.result().partial, true);
+  assert.equal(probe.result().tasks.length, 50);
+
+  const copy = loader({ react: React, 'react/jsx-runtime': jsxRuntime, '@/components/workspace/SpecReqTaskActions': {} })(
+    '@/components/workspace/SpecReqTasks').SPECREQ_TASK_COPY;
+  const rows = [task(id('a'), 'issue_needed')];
+  assert.ok(markup({ tasks: rows, tasksState: 'ready', tasksPartial: true }).includes(copy.partial));
+  assert.ok(!markup({ tasks: rows, tasksState: 'ready' }).includes(copy.partial));
+});
+
+test('a complete list is not partial', async context => {
+  const harness = accountComponentHarness();
+  context.after(() => harness.unmount());
+  const api = { list: async () => ({ tasks: [task(id('a'), 'issue_needed')], nextCursor: null }),
+    get: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); } };
+  const auth = { isAuthenticated: true, user: { userId: 'owner' }, membershipRevision: 0 };
+  const load = loader({ react: harness.react, '@/components/auth/AuthProvider': { useAuth: () => auth }, '@/lib/api': { specReqTaskApi: api } });
+  const probe = hookProbe(load('@/hooks/useSpecReqTasks').useSpecReqTasks);
+  harness.render(probe.Probe);
+  await settle();
+  harness.render(probe.Probe);
+  assert.equal(probe.result().partial, false);
+});
+
+test('needs_account on an account without an invited SA explains why it waits', () => {
+  const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
+  const row = task(id('a'), 'needs_account', { accountId: 'acct-1' });
+  const none = view({ task: row, members: [{ userId: 'me', role: 'SA' }, { userId: 'u3', role: 'AM' }, { userId: 'u6', role: 'SA', pending: true }] });
+  assert.ok(none.includes(copy.accountNoSa));
+  assert.ok(!none.includes(copy.accountWaiting));
+  const some = view({ task: row, members: [{ userId: 'u1', role: 'SA' }] });
+  assert.ok(some.includes(copy.accountWaiting) && !some.includes(copy.accountNoSa));
+  assert.ok(view({ task: row, members: null }).includes(copy.accountWaiting), 'members still loading');
+  assert.ok(!view({ task: row, members: [], message: copy.loadFailed }).includes(copy.accountNoSa), 'a failed read is not "no SA"');
+});

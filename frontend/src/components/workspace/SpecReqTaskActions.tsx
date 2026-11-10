@@ -17,6 +17,7 @@ export const SPECREQ_ACTION_COPY = {
   accountPlaceholder: '어카운트를 고르세요',
   accountSubmit: '어카운트 지정',
   accountWaiting: '어카운트를 지정했습니다. 담당자 확인을 기다리는 중입니다.',
+  accountNoSa: '이 어카운트에는 초대된 SA/SSA 멤버가 없어 담당자를 정할 수 없습니다. 어카운트에 SA를 초대하거나 다른 어카운트를 고르세요.',
   ownerLabel: '담당 SA 선택',
   ownerPlaceholder: '담당자를 고르세요',
   ownerSubmit: '담당자 지정',
@@ -109,7 +110,9 @@ export function SpecReqActionsView({
       </div>}
       {copyNote && <p role="status" className="text-xs text-text-secondary">{copyNote}</p>}
       {kinds.includes('pickAccount') && <div className="space-y-2">
-        {task.accountId && <p className="text-xs text-text-secondary">{copy.accountWaiting}</p>}
+        {task.accountId && <p className="text-xs text-text-secondary">
+          {members && owners.length === 0 && !message ? copy.accountNoSa : copy.accountWaiting}
+        </p>}
         <div className="flex flex-wrap gap-2">
           <select aria-label={copy.accountLabel} value={account} onChange={event => setAccount(event.target.value)} className={fieldClass}>
             <option value="">{copy.accountPlaceholder}</option>
@@ -165,7 +168,8 @@ export function SpecReqTaskActions({ task, transition }: SpecReqTaskActionsProps
   const [slackText, setSlackText] = useState<string>();
   const [copyNote, setCopyNote] = useState<string>();
   const needsAccounts = task.state === 'needs_account' || task.state === 'request_needed';
-  const needsMembers = task.state === 'needs_owner' && !!task.accountId;
+  // needs_account with an account: members tell whether anyone can own the task.
+  const needsMembers = (task.state === 'needs_owner' || task.state === 'needs_account') && !!task.accountId;
 
   useEffect(() => {
     if (!needsAccounts || !userId) return;
