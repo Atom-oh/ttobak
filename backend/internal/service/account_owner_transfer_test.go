@@ -1,0 +1,155 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	idp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+	ct "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
+)
+
+type transferRepo struct {
+	*mockAccountRepo
+	calls int
+	err   error
+}
+
+func (r *transferRepo) TransferAccountOwner(_ context.Context, id, from, to string, _ time.Time) error {
+	r.calls++
+	if r.err != nil {
+		return r.err
+	}
+	r.accounts[id].OwnerUserID = to
+	r.accounts[id].InitialOwnerEmail = ""
+	r.members[memberKey(id, to)].Role = model.RoleOwner
+	r.members[memberKey(id, from)].Role = model.RoleSA
+	return nil
+}
+
+func confirmedUser(status ct.UserStatusType, enabled bool) func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+	return func(_ context.Context, in *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+		if aws.ToString(in.UserPoolId) != "pool" || aws.ToString(in.Username) != "target" {
+			return nil, fmt.Errorf("unexpected lookup %v", in)
+		}
+		return &idp.AdminGetUserOutput{Enabled: enabled, UserStatus: status}, nil
+	}
+}
+
+func newTransferFixture() (*AccountService, *transferRepo, *fakeCognitoAdminAPI) {
+	r := &transferRepo{mockAccountRepo: newMockAccountRepo()}
+	r.accounts["acc"] = &model.Account{AccountID: "acc", OwnerUserID: "owner", InitialOwnerEmail: "owner@example.com"}
+	r.members[memberKey("acc", "owner")] = &model.AccountMember{AccountID: "acc", UserID: "owner", Email: "owner@example.com", Role: model.RoleOwner}
+	r.members[memberKey("acc", "target")] = &model.AccountMember{AccountID: "acc", UserID: "target", Email: "t@example.com", Role: model.RoleSA}
+	r.members[memberKey("acc", "am")] = &model.AccountMember{AccountID: "acc", UserID: "am", Role: model.RoleAM}
+	c := &fakeCognitoAdminAPI{adminGetUserFn: confirmedUser(ct.UserStatusTypeConfirmed, true)}
+	s := newAccountServiceWithRepo(r)
+	s.SetCognitoAdminAPI(c, "pool")
+	return s, r, c
+}
+
+func TestTransferOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name, requester, account, target string
+		setup                            func(*AccountService, *transferRepo, *fakeCognitoAdminAPI)
+		want                             error
+		calls                            int
+	}{
+		{name: "meta owner differs", requester: "owner", account: "acc", target: "target", want: ErrForbidden,
+			setup: func(_ *AccountService, r *transferRepo, _ *fakeCognitoAdminAPI) {
+				r.accounts["acc"].OwnerUserID = "other"
+			}},
+		{name: "requester is AM", requester: "am", account: "acc", target: "target", want: ErrForbidden},
+		{name: "target is requester", requester: "owner", account: "acc", target: "owner", want: ErrInvalidInput},
+		{name: "target not a member", requester: "owner", account: "acc", target: "stranger", want: ErrNotFound},
+		{name: "missing account", requester: "owner", account: "missing", target: "target", want: ErrNotFound},
+		{name: "empty target", requester: "owner", account: "acc", target: "", want: ErrInvalidInput},
+		{name: "invalid account id", requester: "owner", account: "a/b", target: "target", want: ErrInvalidInput},
+		{name: "invalid target id", requester: "owner", account: "acc", target: "t#1", want: ErrInvalidInput},
+		{name: "cognito disabled", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = confirmedUser(ct.UserStatusTypeConfirmed, false)
+			}},
+		{name: "cognito not confirmed", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = confirmedUser(ct.UserStatusTypeForceChangePassword, true)
+			}},
+		{name: "cognito user not found", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+					return nil, &ct.UserNotFoundException{}
+				}
+			}},
+		{name: "cognito lookup error", requester: "owner", account: "acc", target: "target", want: ErrOwnerTransferUnavailable,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+					return nil, errors.New("throttled")
+				}
+			}},
+		{name: "cognito unwired", requester: "owner", account: "acc", target: "target", want: ErrOwnerTransferUnavailable,
+			setup: func(s *AccountService, _ *transferRepo, _ *fakeCognitoAdminAPI) { s.SetCognitoAdminAPI(nil, "") }},
+		{name: "repo condition failed", requester: "owner", account: "acc", target: "target", want: ErrOwnerTransferConflict, calls: 1,
+			setup: func(_ *AccountService, r *transferRepo, _ *fakeCognitoAdminAPI) {
+				r.err = fmt.Errorf("transaction: %w", repository.ErrConditionFailed)
+			}},
+		{name: "success", requester: "owner", account: "acc", target: "target", calls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, r, c := newTransferFixture()
+			if tc.setup != nil {
+				tc.setup(s, r, c)
+			}
+			got, err := s.TransferOwner(context.Background(), tc.requester, tc.account, &model.TransferOwnerRequest{TargetUserID: tc.target})
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if r.calls != tc.calls {
+				t.Fatalf("repo calls = %d, want %d", r.calls, tc.calls)
+			}
+			if tc.want == nil {
+				want := model.TransferOwnerResponse{AccountID: "acc", OwnerUserID: "target", PreviousOwnerUserID: "owner", PreviousOwnerRole: model.RoleSA}
+				if got == nil || *got != want {
+					t.Fatalf("response = %+v, want %+v", got, want)
+				}
+			} else if got != nil {
+				t.Fatalf("unexpected response %+v", got)
+			}
+		})
+	}
+	if _, err := newTransferFixtureService().TransferOwner(context.Background(), "owner", "acc", nil); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("nil request = %v", err)
+	}
+}
+
+func newTransferFixtureService() *AccountService { s, _, _ := newTransferFixture(); return s }
+
+func TestTransferOwnerRepoWithoutCapabilityIsUnavailable(t *testing.T) {
+	r := newMockAccountRepo()
+	s := newAccountServiceWithRepo(r)
+	if _, err := s.TransferOwner(context.Background(), "owner", "acc", &model.TransferOwnerRequest{TargetUserID: "target"}); !errors.Is(err, ErrOwnerTransferUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTransferOwnerThenGenericRoutesStillOwnerFree(t *testing.T) {
+	s, _, _ := newTransferFixture()
+	ctx := context.Background()
+	if _, err := s.TransferOwner(ctx, "owner", "acc", &model.TransferOwnerRequest{TargetUserID: "target"}); err != nil {
+		t.Fatal(err)
+	}
+	// The new Owner is the requester from here on; the previous Owner is SA.
+	if _, err := s.UpdateMemberRole(ctx, "target", "acc", "owner", &model.UpdateMemberRequest{Role: model.RoleOwner}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("assign owner role = %v", err)
+	}
+	if _, err := s.UpdateMemberRole(ctx, "owner", "acc", "target", &model.UpdateMemberRequest{Role: model.RoleSA}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("change new owner role = %v", err)
+	}
+	if _, err := s.ResendOwnerInvitation(ctx, "target", "acc"); !errors.Is(err, ErrInvitationUnavailable) {
+		t.Fatalf("resend after transfer = %v", err)
+	}
+}

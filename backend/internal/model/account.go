@@ -98,6 +98,18 @@ type UpdateAccountParentResponse struct {
 	ParentAccountID string `json:"parentAccountId,omitempty"`
 }
 
+// TransferOwnerRequest names the existing member who becomes the account Owner.
+type TransferOwnerRequest struct {
+	TargetUserID string `json:"targetUserId"`
+}
+
+type TransferOwnerResponse struct {
+	AccountID           string `json:"accountId"`
+	OwnerUserID         string `json:"ownerUserId"`
+	PreviousOwnerUserID string `json:"previousOwnerUserId"`
+	PreviousOwnerRole   string `json:"previousOwnerRole"`
+}
+
 type AddMemberRequest struct {
 	Email            string `json:"email"`
 	Role             string `json:"role"`

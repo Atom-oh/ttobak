@@ -1275,6 +1275,17 @@ allowlist and shared hourly counter. Confirmed users return 409; identity or
 delivery dependency failures return 503. Non-members gain no Account read access.
 The operation's connector inventory disables delegation (ADR-055).
 
+`POST /api/accounts/{accountId}/owner-transfer` requires verified email and a body
+`{"targetUserId"}` capped at 1,024 bytes with unknown fields rejected. Only the
+current Owner (both the MEMBER role and META `ownerUserId`) may transfer, to an
+existing direct non-owner member whom Cognito `AdminGetUser` reports Enabled and
+CONFIRMED. The previous Owner becomes SA in one three-item transaction that also
+clears the initial-owner invitation fields. Responses: 200 with `accountId`,
+`ownerUserId`, `previousOwnerUserId`, `previousOwnerRole`; 400 invalid or self
+target, pending or disabled identity; 403 non-owner; 404 missing account or
+non-member target; 409 concurrent change; 503 Cognito unwired or lookup failure.
+It is the only path that grants Owner; its connector inventory disables delegation.
+
 Optional parentAccountId requires the creator's current membership in the parent
 before mail and transactionally before creation. Parent updates require child ownership
 and new-parent membership; the required field uses an empty string to detach,
@@ -1913,6 +1924,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
 | POST | `/api/accounts/{accountId}/owner-invitation` | `accountHandler.ResendOwnerInvitation` |
+| POST | `/api/accounts/{accountId}/owner-transfer` | `accountHandler.TransferOwner` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
 | GET | `/api/accounts/{accountId}/reading` | `accountReadingHandler.Get` |
 | GET | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.List` |
