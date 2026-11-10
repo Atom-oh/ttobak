@@ -25,8 +25,13 @@ func TestPutMergedMemberShapeAndFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := fenceItems(t, calls[0])
-	if len(items) != 1+mergeFenceCheckCount {
-		t.Fatalf("want %d items, got %d", 1+mergeFenceCheckCount, len(items))
+	if len(items) != 2+mergeFenceCheckCount {
+		t.Fatalf("want %d items, got %d", 2+mergeFenceCheckCount, len(items))
+	}
+	src := items[1+mergeFenceCheckCount]
+	key := src["Key"].(map[string]any)
+	if key["PK"].(map[string]any)["S"] != "ACCOUNT#src" || key["SK"].(map[string]any)["S"] != "MEMBER#u1" || !strings.Contains(resolvedCondition(src), "attribute_exists") {
+		t.Errorf("source member check wrong: %v %s", key, resolvedCondition(src))
 	}
 	put := items[0]
 	if c := resolvedCondition(put); !strings.Contains(c, "attribute_not_exists") {
@@ -79,11 +84,12 @@ func TestPutMergedMemberOutcomes(t *testing.T) {
 		{name: "requester left target", idx: 4, want: ErrMergeFenceLost},
 		{name: "target started merging", idx: 5, mark: true, want: ErrAccountMerging},
 		{name: "target absent", idx: 5, want: ErrMergeFenceLost},
+		{name: "source member removed", idx: 1 + mergeFenceCheckCount, want: ErrConditionFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []fenceRequest
-			r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 400, cancelledAt(1+mergeFenceCheckCount, tc.idx, tc.mark) })
+			r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 400, cancelledAt(2+mergeFenceCheckCount, tc.idx, tc.mark) })
 			err := r.PutMergedMember(context.Background(), mergeRowsJob(), mergedMember())
 			if tc.ok {
 				if err != nil {
@@ -113,5 +119,17 @@ func TestPutMergedMemberRejectsInvalidInput(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Errorf("invalid input must not reach DynamoDB, got %d calls", len(calls))
+	}
+}
+
+// The merge mover enumerates source members; the read must be consistent.
+func TestListAccountMembersReadsConsistently(t *testing.T) {
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 200, `{"Items":[]}` })
+	if _, err := r.ListAccountMembers(context.Background(), "src"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].body["ConsistentRead"] != true {
+		t.Fatalf("members query must set ConsistentRead: %+v", calls)
 	}
 }
