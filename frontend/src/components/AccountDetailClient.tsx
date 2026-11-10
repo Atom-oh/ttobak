@@ -13,6 +13,7 @@ import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { PrivateUpcomingMeetings } from '@/components/workspace/UpcomingMeetings';
 import { AccountParentEditor } from '@/components/AccountParentEditor';
+import { AccountMergeDialog, ACCOUNT_MERGE_COPY, accountWriteErrorMessage } from '@/components/AccountMergeDialog';
 import { AccountBillingTab } from '@/components/AccountBillingTab';
 import { AccountContacts } from '@/components/AccountContacts';
 import { AccountEvents } from '@/components/AccountEvents';
@@ -148,7 +149,16 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [accountResult, setAccountResult] = useState<{ scope: typeof readScope; account: Account } | null>(null);
   const account = accountResult?.scope === readScope ? accountResult.account : null;
-  const { canEdit, isOwner } = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
+  const caps = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
+  // A merging or merged Account is read-only (ADR-072); the owner keeps the merge controls.
+  const mergeFenced = !!account && (!!account.mergingInto || !!account.mergedInto);
+  const canEdit = caps.canEdit && !mergeFenced;
+  const isOwner = caps.isOwner && !mergeFenced;
+  const mergeOwner = caps.isOwner;
+  const mergedInto = account?.accountId === accountId ? account.mergedInto : undefined;
+  useEffect(() => {
+    if (mergedInto) router.replace(`/accounts/${encodeURIComponent(mergedInto)}`);
+  }, [mergedInto, router]);
   const parentUpdateScope = useMemo(() => ({ accountId, isOwner, active: true }), [accountId, isOwner]);
   useLayoutEffect(() => {
     parentUpdateScope.active = true;
@@ -314,6 +324,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const retryFlow = flowState.retry;
   const retryPeople = peopleState.retry;
   const [linksRevision, setLinksRevision] = useState(0);
+  const [mergeOpen, setMergeOpen] = useState(false);
   // Event rows show their existing project links. One bounded scan of the
   // account's links (not one call per row); the links panel is the complete view.
   const loadEventLinks = useCallback(async (signal: AbortSignal) => {
@@ -396,7 +407,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
         if (isCurrent() && plan.error) setError(plan.error);
       }
     } catch (err) {
-      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to add member');
+      if (isCurrent()) setError(accountWriteErrorMessage(err, 'Failed to add member'));
     } finally {
       if (isCurrent()) setInviting(false);
     }
@@ -420,7 +431,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
         setPendingNoticeAccountId(myAccountId);
       }
     } catch (err) {
-      if (isCurrent()) setError(err instanceof Error ? err.message : 'Owner 초대 메일을 다시 요청하지 못했습니다.');
+      if (isCurrent()) setError(accountWriteErrorMessage(err, 'Owner 초대 메일을 다시 요청하지 못했습니다.'));
     } finally {
       if (isCurrent()) setInviting(false);
     }
@@ -440,7 +451,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       setPendingNoticeAccountId(null);
     } catch (err) {
       if (mounted.current && inviteGeneration.current === generation) {
-        setError(err instanceof Error ? err.message : 'Failed to revoke pending invite');
+        setError(accountWriteErrorMessage(err, 'Failed to revoke pending invite'));
       }
     }
   };
@@ -454,7 +465,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       if (!isCurrent()) return;
       await currentFetchAll.current();
     } catch (err) {
-      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to update role');
+      if (isCurrent()) setError(accountWriteErrorMessage(err, 'Failed to update role'));
     }
   };
 
@@ -485,7 +496,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       // real direct grant -- offer to retry with force instead of leaving
       // the owner stuck, since force is the only way to actually remove
       // someone in that state (see API-SPEC.md's "Remove Member" note).
-      const message = err instanceof Error ? err.message : 'Failed to remove member';
+      const message = accountWriteErrorMessage(err, 'Failed to remove member');
       if (message.includes('force=true')) {
         if (canAct() && await confirmDialog(`${message}\n\nRemove anyway? The share will be left untouched and reported.`)) {
           try {
@@ -494,7 +505,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
             await currentFetchAll.current();
             showWarnings(result, true);
           } catch (retryErr) {
-            if (isCurrent()) setError(retryErr instanceof Error ? retryErr.message : 'Failed to remove member');
+            if (isCurrent()) setError(accountWriteErrorMessage(retryErr, 'Failed to remove member'));
           }
         }
         return;
@@ -517,8 +528,9 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       await currentFetchAll.current();
     } catch (err) {
       if (!isCurrent()) return;
-      setError((err as { status?: number })?.status === 409 ? OWNER_TRANSFER_COPY.conflict
-        : err instanceof Error ? err.message : OWNER_TRANSFER_COPY.failed);
+      setError((err as { code?: string })?.code === 'ACCOUNT_MERGING' ? ACCOUNT_MERGE_COPY.merging
+        : (err as { status?: number })?.status === 409 ? OWNER_TRANSFER_COPY.conflict
+        : accountWriteErrorMessage(err, OWNER_TRANSFER_COPY.failed));
     }
   };
 
@@ -531,7 +543,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       });
       if (isCurrent()) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
     } catch (err) {
-      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to create note');
+      if (isCurrent()) setError(accountWriteErrorMessage(err, 'Failed to create note'));
     }
   };
 
@@ -555,7 +567,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
       });
       if (isCurrent()) router.push(`/accounts/${encodeURIComponent(accountId)}/docs/${encodeURIComponent(created.docId)}`);
     } catch (err) {
-      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to upload slide');
+      if (isCurrent()) setError(accountWriteErrorMessage(err, 'Failed to upload slide'));
     } finally {
       if (isCurrent()) setUploadingSlide(false);
     }
@@ -597,8 +609,16 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
           <div role="status" aria-label="어카운트 불러오는 중" className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
           </div>
+        ) : mergedInto ? (
+          <p role="status" className="py-8 text-sm text-text-secondary">{ACCOUNT_MERGE_COPY.redirecting}</p>
         ) : account && (
           <>
+            {account.mergingInto && (
+              <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
+                <span>{ACCOUNT_MERGE_COPY.mergingBanner}</span>
+                {mergeOwner && <button type="button" onClick={() => setMergeOpen(true)} className="font-semibold underline">{ACCOUNT_MERGE_COPY.viewProgress}</button>}
+              </div>
+            )}
             <div className="flex items-center gap-3 mb-6">
               <span className="material-symbols-outlined text-primary text-3xl">corporate_fare</span>
               <div className="min-w-0">
@@ -664,6 +684,14 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                       <AccountLinksPanel accountId={accountId} userId={user.userId} projectNames={projectNames}
                         revision={linksRevision} onChanged={refreshOverview} onAccessLost={onAccessLost} />
                     </>
+                  )}
+
+                  {mergeOwner && !mergeFenced && (
+                    <div className="mb-6">
+                      <button type="button" onClick={() => setMergeOpen(true)} className="text-sm text-primary hover:underline">
+                        {ACCOUNT_MERGE_COPY.action}
+                      </button>
+                    </div>
                   )}
 
                   {/* Members */}
@@ -918,6 +946,11 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
               )}
             </div>
           </>
+        )}
+        {mergeOpen && mergeOwner && user?.userId && (
+          <AccountMergeDialog accountId={accountId} userId={user.userId} resume={!!account?.mergingInto}
+            onClose={() => { setMergeOpen(false); void currentFetchAll.current(); }}
+            onFinished={into => { setMergeOpen(false); router.replace(`/accounts/${encodeURIComponent(into)}`); }} />
         )}
       </div>
   );

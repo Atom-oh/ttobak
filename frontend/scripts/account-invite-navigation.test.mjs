@@ -67,6 +67,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
     '@/components/workspace/UpcomingMeetings': { PrivateUpcomingMeetings: () => { throw new Error('Calendar must not mount on overview'); } },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
+    '@/components/AccountMergeDialog': { AccountMergeDialog: emptyComponent, ACCOUNT_MERGE_COPY: {}, accountWriteErrorMessage: (err, fallback) => err instanceof Error ? err.message : fallback },
     '@/components/AccountBillingTab': { AccountBillingTab: emptyComponent },
     '@/components/AccountContacts': { AccountContacts: emptyComponent },
     '@/components/AccountEvents': { AccountEvents: emptyComponent },

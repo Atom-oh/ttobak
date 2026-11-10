@@ -968,6 +968,14 @@ export const accountApi = {
     invalidatingAccountList(api.delete<{ removed: boolean; cleanupFailedForMeetings: string[]; ambiguousUntaggedMeetingIDs: string[] } | undefined>(
       `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}${force ? '?force=true' : ''}`)),
   // Owner-only; the previous owner stays a member with `previousOwnerRole` (SA).
+  mergePreview: (id: string, intoId: string, expectedUserId: string, signal?: AbortSignal) =>
+    api.get<import('@/types/meeting').AccountMergePreview>(
+      `/api/accounts/${encodeURIComponent(id)}/merge-preview?into=${encodeURIComponent(intoId)}`, { expectedUserId, signal }),
+  startMerge: (id: string, data: { intoAccountId: string; acceptUnmoved: boolean }, expectedUserId: string) =>
+    invalidatingAccountList(api.post<import('@/types/meeting').AccountMergeJob>(
+      `/api/accounts/${encodeURIComponent(id)}/merge`, data, { expectedUserId })),
+  mergeStatus: (id: string, expectedUserId: string, signal?: AbortSignal) =>
+    api.get<import('@/types/meeting').AccountMergeJob>(`/api/accounts/${encodeURIComponent(id)}/merge`, { expectedUserId, signal }),
   transferOwner: (id: string, targetUserId: string, expectedUserId: string) =>
     invalidatingAccountList(api.post<{ accountId: string; ownerUserId: string; previousOwnerUserId: string; previousOwnerRole: string }>(
       `/api/accounts/${encodeURIComponent(id)}/owner-transfer`, { targetUserId }, { expectedUserId })),

@@ -603,8 +603,35 @@ export interface Account {
   ownerUserId: string;
   // Initial invitation hint; resend verifies the current Cognito status.
   ownerInvitationPending?: boolean;
+  /** Set while this Account merges into another; writes are fenced. */
+  mergingInto?: string;
+  /** Set on the tombstone left after a merge finished. */
+  mergedInto?: string;
   members: AccountMember[];
   createdAt: string;
+}
+
+export interface AccountMergePreview {
+  fromAccountId: string;
+  intoAccountId: string;
+  /** Per-category counts; -1 means the bounded read cap was exceeded. */
+  counts: Record<string, number>;
+  unmoved: { category: string; present: boolean; unverifiable?: boolean }[];
+  cliOnly: string[];
+  newAudience: { intoMembersNotInFrom: number; intoHasAncestors: boolean };
+  requiresAcceptUnmoved: boolean;
+}
+
+export interface AccountMergeJob {
+  fromAccountId: string;
+  intoAccountId: string;
+  state: 'running' | 'failed' | 'done';
+  step: string;
+  errorCode?: string;
+  counts: Record<string, number>;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt?: string;
 }
 
 export interface AccountCreationRequest {
