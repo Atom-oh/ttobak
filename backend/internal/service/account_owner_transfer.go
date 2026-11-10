@@ -46,7 +46,12 @@ func (s *AccountService) requireConfirmedUser(ctx context.Context, userID string
 	if out == nil || !out.Enabled || out.UserStatus != cognitotypes.UserStatusTypeConfirmed {
 		return ErrInvalidInput
 	}
-	return nil
+	for _, attribute := range out.UserAttributes {
+		if aws.ToString(attribute.Name) == "sub" && aws.ToString(attribute.Value) == userID {
+			return nil
+		}
+	}
+	return ErrInvalidInput
 }
 
 // TransferOwner moves ownership to an existing, confirmed direct member. The

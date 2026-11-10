@@ -119,8 +119,14 @@ func (h *AccountHandler) TransferOwner(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Account ownership or membership changed; reload and retry")
 		case errors.Is(err, service.ErrOwnerTransferUnavailable):
 			writeError(w, http.StatusServiceUnavailable, model.ErrCodeInternalError, "Owner transfer is unavailable; try again later")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid owner transfer target")
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the account owner can transfer ownership")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account or member not found")
 		default:
-			writeAccountHierarchyError(w, err)
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Owner transfer failed")
 		}
 		return
 	}

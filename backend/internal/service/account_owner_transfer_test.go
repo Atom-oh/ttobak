@@ -37,7 +37,9 @@ func confirmedUser(status ct.UserStatusType, enabled bool) func(context.Context,
 		if aws.ToString(in.UserPoolId) != "pool" || aws.ToString(in.Username) != "target" {
 			return nil, fmt.Errorf("unexpected lookup %v", in)
 		}
-		return &idp.AdminGetUserOutput{Enabled: enabled, UserStatus: status}, nil
+		return &idp.AdminGetUserOutput{Enabled: enabled, UserStatus: status, UserAttributes: []ct.AttributeType{
+			{Name: aws.String("sub"), Value: aws.String("target")},
+		}}, nil
 	}
 }
 
@@ -78,6 +80,27 @@ func TestTransferOwner(t *testing.T) {
 		{name: "cognito not confirmed", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
 			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
 				c.adminGetUserFn = confirmedUser(ct.UserStatusTypeForceChangePassword, true)
+			}},
+		{name: "cognito sub mismatch", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+					return &idp.AdminGetUserOutput{Enabled: true, UserStatus: ct.UserStatusTypeConfirmed, UserAttributes: []ct.AttributeType{
+						{Name: aws.String("sub"), Value: aws.String("someone-else")},
+					}}, nil
+				}
+			}},
+		{name: "cognito sub missing", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
+			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {
+				c.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+					return &idp.AdminGetUserOutput{Enabled: true, UserStatus: ct.UserStatusTypeConfirmed}, nil
+				}
+			}},
+		{name: "meta owner but member role not owner", requester: "owner", account: "acc", target: "target", want: ErrForbidden,
+			setup: func(_ *AccountService, r *transferRepo, c *fakeCognitoAdminAPI) {
+				r.members[memberKey("acc", "owner")].Role = model.RoleSA
+				c.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+					return nil, errors.New("cognito must not be called")
+				}
 			}},
 		{name: "cognito user not found", requester: "owner", account: "acc", target: "target", want: ErrInvalidInput,
 			setup: func(_ *AccountService, _ *transferRepo, c *fakeCognitoAdminAPI) {

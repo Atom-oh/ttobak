@@ -123,8 +123,8 @@ func (r transferHandlerRepo) TransferAccountOwner(context.Context, string, strin
 }
 
 func TestTransferOwnerHandler(t *testing.T) {
-	post := func(h *AccountHandler, body string, verified bool) *httptest.ResponseRecorder {
-		req := withChiParam(withUserEmailCtx(httptest.NewRequest(http.MethodPost, "/api/accounts/acc/owner-transfer", strings.NewReader(body)), "owner", "o@example.com"), "accountId", "acc")
+	post := func(h *AccountHandler, user, body string, verified bool) *httptest.ResponseRecorder {
+		req := withChiParam(withUserEmailCtx(httptest.NewRequest(http.MethodPost, "/api/accounts/acc/owner-transfer", strings.NewReader(body)), user, "o@example.com"), "accountId", "acc")
 		req = req.WithContext(context.WithValue(req.Context(), middleware.UserEmailVerifiedKey, verified))
 		out := httptest.NewRecorder()
 		h.TransferOwner(out, req)
@@ -135,6 +135,7 @@ func TestTransferOwnerHandler(t *testing.T) {
 		base.accounts["acc"] = &model.Account{AccountID: "acc", OwnerUserID: "owner"}
 		base.members[acctMemberKey("acc", "owner")] = &model.AccountMember{AccountID: "acc", UserID: "owner", Role: model.RoleOwner}
 		base.members[acctMemberKey("acc", "colleague-sub")] = &model.AccountMember{AccountID: "acc", UserID: "colleague-sub", Role: model.RoleSA}
+		base.members[acctMemberKey("acc", "member")] = &model.AccountMember{AccountID: "acc", UserID: "member", Role: model.RoleSA}
 		svc := service.NewAccountServiceForTest(transferHandlerRepo{base, repoErr})
 		if wired {
 			svc.SetCognitoAdminAPI(creationCognito{&stubCognitoAdminAPI{}}, "pool")
@@ -155,12 +156,18 @@ func TestTransferOwnerHandler(t *testing.T) {
 		{"trailing value", build(nil, true), good + ` {}`, true, http.StatusBadRequest, model.ErrCodeBadRequest},
 		{"oversized", build(nil, true), good + strings.Repeat(" ", 2048), true, http.StatusBadRequest, model.ErrCodeBadRequest},
 		{"self transfer", build(nil, true), `{"targetUserId":"owner"}`, true, http.StatusBadRequest, model.ErrCodeBadRequest},
+		{"non-owner requester", build(nil, true), good, true, http.StatusForbidden, model.ErrCodeForbidden},
+		{"target not a member", build(nil, true), `{"targetUserId":"nobody"}`, true, http.StatusNotFound, model.ErrCodeNotFound},
 		{"conflict", build(fmt.Errorf("tx: %w", repository.ErrConditionFailed), true), good, true, http.StatusConflict, model.ErrCodeConflict},
 		{"cognito unwired", build(nil, false), good, true, http.StatusServiceUnavailable, model.ErrCodeInternalError},
 		{"success", build(nil, true), good, true, http.StatusOK, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := post(tc.h, tc.body, tc.verified)
+			user := "owner"
+			if tc.name == "non-owner requester" {
+				user = "member"
+			}
+			out := post(tc.h, user, tc.body, tc.verified)
 			if out.Code != tc.want {
 				t.Fatalf("status=%d want %d: %s", out.Code, tc.want, out.Body)
 			}
