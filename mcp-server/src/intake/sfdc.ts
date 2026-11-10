@@ -404,23 +404,6 @@ async function serverRevisions(api: TtobakApi): Promise<Record<PerformanceSource
   return result;
 }
 
-/** SFDC account IDs of the assignments the server holds; every other field is ignored. */
-async function serverAssignmentIds(api: TtobakApi): Promise<string[]> {
-  let value: unknown;
-  try { value = await api.performanceMappings(); } catch (error) {
-    if (deliveryFailure(error).kind === 'login') throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
-    throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance assignments could not be read');
-  }
-  const items = record(value) && Array.isArray(value.items) ? value.items : null;
-  if (!items) throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance assignments have an unexpected shape');
-  return items.map(item => {
-    if (!record(item) || typeof item.sfdcAccountId !== 'string' || !ID.test(item.sfdcAccountId)) {
-      throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance assignments have an unexpected shape');
-    }
-    return item.sfdcAccountId;
-  });
-}
-
 async function deliver(api: TtobakApi, store: IntakeStore, state: SfdcState, plan: SourcePlan): Promise<void> {
   const groups = batches(plan.mutations);
   if (!groups.length) groups.push([]);
@@ -476,11 +459,6 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
         state.revision = remote[state.source];
         // After a reconcile every current row is resent; tracked IDs stay so vanished rows are still removed.
         if (options.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map(id => [id, '']));
-        // A fresh or reconciled assignments ledger also tracks every assignment the server holds, so
-        // rows absent from this snapshot are removed. Tasks keep their TTL and are not listed.
-        if (state.source === 'sfdc-assignments') {
-          for (const id of await serverAssignmentIds(options.api)) if (!Object.hasOwn(state.ledger, id)) state.ledger[id] = '';
-        }
         state.reconcileRequired = false;
         store.write(state, ...statePath(state));
       }

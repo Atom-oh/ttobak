@@ -41,8 +41,6 @@ export interface PerformanceMappingItem {
   mapped: boolean;
   accountId?: string;
   manual: boolean;
-  /** 'unreadable' when the stored target can no longer be read; accountId is then absent. */
-  reason?: 'unreadable' | string;
   updatedAt?: string;
 }
 
@@ -160,26 +158,6 @@ export function mappingTargetUnreadable(item: PerformanceMappingItem, readable: 
 /** The mapping queue: unmapped assignments and mappings whose account is not readable. */
 export function unmappedAssignments(items: PerformanceMappingItem[], readable: ReadonlySet<string> | null = null): PerformanceMappingItem[] {
   return items.filter(item => !item.mapped || mappingTargetUnreadable(item, readable));
-}
-
-/**
- * The mapping queue: unmapped assignments to connect, and automatic mappings
- * the owner can confirm (saving the same account makes it manual) or correct.
- * Manual mappings are settled and not listed.
- */
-export function mappingQueueGroups(items: PerformanceMappingItem[], readable: ReadonlySet<string> | null = null) {
-  return {
-    unmapped: unmappedAssignments(items, readable),
-    automatic: items.filter(item => item.mapped && !item.manual && !!item.accountId && !mappingTargetUnreadable(item, readable)),
-  };
-}
-
-/** Why an assignment is queued: the API's `unreadable` reason or an account absent from the loaded list. */
-export function mappingReasonText(item: PerformanceMappingItem, readable: ReadonlySet<string> | null = null): string | null {
-  if (item.reason === 'unreadable' || mappingTargetUnreadable(item, readable)) {
-    return '연결했던 어카운트를 더 이상 읽을 수 없어 매핑되지 않은 것으로 봅니다. 다시 연결하세요.';
-  }
-  return null;
 }
 
 /** Notice that calendar-based gaps only cover retained calendar events. */

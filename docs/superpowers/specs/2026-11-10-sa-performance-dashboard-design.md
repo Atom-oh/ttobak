@@ -1,6 +1,6 @@
 # SA performance dashboard design
 
-- Status: historical design record; approved by the owner on 2026-11-10.
+- Status: historical design record (2026-11-10); draft for owner approval.
 - Date: 2026-11-10.
 - Roadmap: project 4 of the account ontology roadmap ("my year, how I work").
   It depends on project 3, the local Mac intake
@@ -247,7 +247,7 @@ The owner decided these during design:
 - Slack is stored as counts and permalinks only, the same rule as mail.
 - A period selector, with weekly collection as the minimum cadence.
 - The opportunity amount band is optional and off unless the owner enables it.
-- Default thresholds (fixed defaults in plan 1; user-tunable in plan 2):
+- Default thresholds (all user-tunable):
   - silent customer: 60 days;
   - growing usage: at least 20% month-over-month on a 3-month trend;
   - logging-gap matching window: ±3 days;

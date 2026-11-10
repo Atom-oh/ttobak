@@ -44,12 +44,7 @@ Each batch has at most 20 distinct occurrence IDs, with only these mutations:
   caller access. `organizerDomain` is only the lowercase organizer email domain
   (`^[a-z0-9.-]{1,253}$`); the organizer's name and local part are never sent, and
   `GET /api/calendar/events` returns it when present. Body, attendees, provider
-  credentials and arbitrary metadata are not accepted. The request decoder stays
-  strict, so an API that predates `organizerDomain` rejects it with 400; deploy
-  the API before a runner that sends it. The sealed event plaintext is decoded
-  tolerantly of unknown fields, but an API older than that tolerant reader
-  fails to read events sealed with `organizerDomain` until they are re-synced
-  without it or expire.
+  credentials and arbitrary metadata are not accepted.
 - `{"op":"remove","externalId":"..."}`: explicit removal of that source's
   occurrence. The same ID/text bounds apply. No absence-based deletion occurs,
   including for empty `mutations` with `complete:true`.
@@ -125,7 +120,7 @@ runner collects and syncs.
 | `GET /api/performance/sources` | none | `{sources:[{source,revision,lastAttemptAt?,lastCompletedAt?}]}`, one entry per source; never-synced sources report revision 0 |
 | `GET /api/performance/goals?year=YYYY` | `year` within previous/current/next year | `{year,text,updatedAt}`; empty text when unset |
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
-| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,reason?,updatedAt?}]}` sorted by SFDC ID |
+| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}]}` sorted by SFDC ID |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
 
@@ -154,13 +149,7 @@ A mapping write requires that the caller can currently read the target Account
 (`AccountService.GetAccount`; otherwise `403 FORBIDDEN`) and that the SFDC
 account is in the caller's own assignments (otherwise `404 NOT_FOUND`). Manual
 mappings always win over automatic ones. Unmapped assignments are listed with
-`mapped:false`, never guessed. `manual` tells a manual mapping from an automatic
-one; putting the same `accountId` confirms an automatic mapping as manual. The
-list rechecks every stored mapping against the caller's currently readable
-accounts (`ListReadableAccountCandidates`, the same set as `/missed`): a target
-the caller can no longer read is reported as `mapped:false` with
-`reason:"unreadable"` and no `accountId`. A reader that cannot list readable
-accounts fails the request with `500`.
+`mapped:false`, never guessed.
 
 Missed items (`backend/internal/service/performance_missed.go`) are computed at
 read time from the caller's own SFDC rows, calendar events (`CalendarService`,

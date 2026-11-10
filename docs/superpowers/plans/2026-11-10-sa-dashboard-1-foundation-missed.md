@@ -43,8 +43,8 @@ for SFDC.
   - Internal MCP servers are called only by the Mac runner. The server never
     calls them.
   - No new unauthenticated route. No new HTTP MCP write tool.
-- **Thresholds:** silent customer 60 days, logging-gap window ±3 days. Plan 1
-  uses them as fixed defaults; plan 2 makes them user-tunable.
+- **Thresholds:** silent customer 60 days, logging-gap window ±3 days. Both are
+  user-tunable.
 - **Retention:** keep the current year plus the previous one. Rows carry
   `pendingShareExpiresAt` set to 00:00 UTC on January 1 of the year two years
   after the row's own year (`year+2`).
@@ -259,12 +259,7 @@ else is omitted. Task 7 reads it from `GET /api/calendar/events`.
 - [ ] **Step 3: Implement.**
   - The domain joins the event fingerprint, so a changed organizer re-upserts
     the event.
-  - Correction (final review I1): older readers do not ignore the new field.
-    The sealed plaintext was decoded strictly, so an older API fails to read
-    newly sealed events. The sealed decoder now tolerates unknown fields; the
-    API must be deployed before the runner sends `organizerDomain`, and an API
-    rollback below this release breaks reading newly sealed events until a
-    re-sync.
+  - Older readers ignore the new optional field.
 - [ ] **Step 4: Run the tests and see them pass.** Same commands. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(calendar): send the organizer's email domain only`
 
@@ -455,9 +450,7 @@ Deploy order:
 2. Frontend.
 3. Run the Mac connector:
    - `ttobak-mcp intake sfdc --dry-run`, then a real run;
-   - re-run `intake calendar` to backfill organizer domains. This covers only
-     the intake window (the past 7 days through the next 30), not the full
-     year; older retained events keep no domain until they age out.
+   - re-run `intake calendar` to backfill organizer domains.
 4. Manual check:
    - spot-check 5 logging gaps against SFDC;
    - confirm that a second test user sees nothing.

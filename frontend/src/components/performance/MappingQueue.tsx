@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { ApiError, performanceApi } from '@/lib/api';
 import { buildAccountTree, flattenAccountTree } from '@/lib/accountTree';
-import { mappingQueueGroups, mappingReasonText, type PerformanceMappingItem } from '@/lib/performance';
+import { mappingTargetUnreadable, unmappedAssignments, type PerformanceMappingItem } from '@/lib/performance';
 import type { AccountSummary } from '@/types/meeting';
 
 function mappingError(error: unknown): string {
@@ -20,18 +20,15 @@ function placeholder(status: AccountsStatus, hasOptions: boolean): string {
   return hasOptions ? 'TTOBAK 어카운트 선택' : '연결할 어카운트가 없습니다';
 }
 
-function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: {
+function MappingRow({ item, unreadable, options, accountsStatus, userId, onSaved }: {
   item: PerformanceMappingItem;
-  reason: string | null;
+  unreadable: boolean;
   options: { accountId: string; path: string }[];
   accountsStatus: AccountsStatus;
   userId: string;
   onSaved: () => void;
 }) {
-  // An automatic mapping starts on its current account: saving it unchanged confirms it as manual.
-  // An unreadable one starts empty, like any unmapped assignment.
-  const current = item.mapped && !item.manual && !reason ? item.accountId ?? '' : '';
-  const [accountId, setAccountId] = useState(current);
+  const [accountId, setAccountId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectId = `mapping-${item.sfdcAccountId}`;
@@ -64,10 +61,10 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: 
         </select>
         <button type="button" onClick={save} disabled={saving || accountsStatus !== 'ready' || !accountId}
           className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-40">
-          {saving ? '저장 중…' : !current ? '연결' : accountId === current ? '확인' : '변경'}
+          {saving ? '저장 중…' : '연결'}
         </button>
       </div>
-      {reason && <p className="text-xs text-amber-700 dark:text-amber-400">{reason}</p>}
+      {unreadable && <p className="text-xs text-amber-700 dark:text-amber-400">연결했던 어카운트를 읽을 수 없어 매핑되지 않은 것으로 봅니다. 다시 연결하세요.</p>}
       {error && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{error}</p>}
     </li>
   );
@@ -75,9 +72,8 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: 
 
 /**
  * SFDC accounts assigned to the owner with no readable TTOBAK Account mapping,
- * including mappings whose account is not readable, then automatic mappings
- * the owner can confirm or correct. A manual mapping always wins and is not
- * listed.
+ * including mappings whose account is not in the loaded readable list. A
+ * manual mapping always wins.
  */
 export function MappingQueue({ items, accounts, accountsStatus, onRetryAccounts, userId, onSaved }: {
   items: PerformanceMappingItem[];
@@ -90,13 +86,9 @@ export function MappingQueue({ items, accounts, accountsStatus, onRetryAccounts,
   // Readability is judged only against a loaded list; a failed list judges nothing.
   const readable = useMemo(() => accountsStatus === 'ready' ? new Set(accounts.map(account => account.accountId)) : null,
     [accounts, accountsStatus]);
-  const groups = useMemo(() => mappingQueueGroups(items, readable), [items, readable]);
+  const queue = useMemo(() => unmappedAssignments(items, readable), [items, readable]);
   const options = useMemo(() => flattenAccountTree(buildAccountTree(accounts))
     .map(({ node, path }) => ({ accountId: node.accountId, path })), [accounts]);
-  const row = (item: PerformanceMappingItem) => (
-    <MappingRow key={`${item.sfdcAccountId}:${item.accountId ?? ''}:${item.manual}`} item={item} reason={mappingReasonText(item, readable)}
-      options={options} accountsStatus={accountsStatus} userId={userId} onSaved={onSaved} />
-  );
 
   return (
     <div className="space-y-2">
@@ -106,17 +98,12 @@ export function MappingQueue({ items, accounts, accountsStatus, onRetryAccounts,
           <button type="button" onClick={onRetryAccounts} className="font-semibold text-primary hover:underline">다시 불러오기</button>
         </div>
       )}
-      {groups.unmapped.length > 0 && (
-        <ul className="divide-y divide-slate-100 dark:divide-white/5">{groups.unmapped.map(row)}</ul>
-      )}
-      {groups.automatic.length > 0 && (
-        <div className="pt-2">
-          <h4 className="text-sm font-semibold text-slate-700 dark:text-text-secondary">자동 매핑 확인</h4>
-          <p className="mt-1 text-xs text-slate-500 dark:text-text-muted">이름이 일치해 자동으로 연결된 계정입니다. 맞으면 확인하고, 다르면 다른 어카운트로 변경하세요.</p>
-          <ul className="divide-y divide-slate-100 dark:divide-white/5">{groups.automatic.map(row)}</ul>
-        </div>
-      )}
-      {!groups.unmapped.length && !groups.automatic.length && (
+      {queue.length ? (
+        <ul className="divide-y divide-slate-100 dark:divide-white/5">
+          {queue.map(item => <MappingRow key={item.sfdcAccountId} item={item} unreadable={mappingTargetUnreadable(item, readable)}
+            options={options} accountsStatus={accountsStatus} userId={userId} onSaved={onSaved} />)}
+        </ul>
+      ) : (
         <p className="rounded-lg bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:bg-white/5 dark:text-text-muted">
           {readable ? '매핑을 기다리는 SFDC 계정이 없습니다.' : '연결되지 않은 SFDC 계정이 없습니다. 기존 매핑의 어카운트는 어카운트 목록을 불러온 뒤 확인합니다.'}
         </p>
