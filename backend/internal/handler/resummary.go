@@ -119,7 +119,7 @@ func writeResummary(w http.ResponseWriter, status int, result *service.Resummary
 	case err == nil:
 		writeJSON(w, status, result)
 	case errors.Is(err, service.ErrSummaryReadRestricted):
-		writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "소유자가 공유용 회의록을 먼저 재생성해야 합니다.")
+		writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "이 회의록은 이전 방식으로 만들어졌습니다. 소유자가 회의록을 먼저 다시 생성해야 합니다.")
 	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, 400, model.ErrCodeBadRequest, "Invalid re-summary request")
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, repository.ErrSummaryAccess):
