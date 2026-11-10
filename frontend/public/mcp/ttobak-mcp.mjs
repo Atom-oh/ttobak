@@ -14399,7 +14399,7 @@ var init_protocol = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+            await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error3) {
@@ -14416,7 +14416,7 @@ var init_protocol = __esm({
        */
       request(request2, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           const earlyReject = (error3) => {
             reject(error3);
           };
@@ -14494,7 +14494,7 @@ var init_protocol = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve3(parseResult.data);
+                resolve4(parseResult.data);
               }
             } catch (error3) {
               reject(error3);
@@ -14756,12 +14756,12 @@ var init_protocol = __esm({
           }
         } catch {
         }
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve3, interval2);
+          const timeoutId = setTimeout(resolve4, interval2);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -17788,7 +17788,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve3.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -17815,7 +17815,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve3(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -18645,7 +18645,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve3(baseURI, relativeURI, options) {
+    function resolve4(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -19014,7 +19014,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve3,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -22241,7 +22241,7 @@ import { request } from "https";
 import { pipeline } from "stream";
 async function fetch(uri, requestOptions, data) {
   let responseTimeout;
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const req = request(uri, {
       method: "GET",
       ...requestOptions
@@ -22267,7 +22267,7 @@ async function fetch(uri, requestOptions, data) {
       if (responseTimeout)
         clearTimeout(responseTimeout);
       if (err == null) {
-        resolve3(data2);
+        resolve4(data2);
         return;
       }
       req.socket?.emit("agentRemove");
@@ -24499,7 +24499,7 @@ var init_api2 = __esm({
         this.requireLocalFiles();
         const url2 = new URL2(uploadUrl);
         if (url2.protocol !== "https:" || url2.username || url2.password) throw new Error("Invalid upload URL");
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           const source = createReadStream(filePath);
           const req = httpsRequest2(
             {
@@ -24517,7 +24517,7 @@ var init_api2 = __esm({
               if (!ok) source.destroy();
               res.resume();
               res.on("end", () => {
-                if (ok) resolve3();
+                if (ok) resolve4();
                 else if (status >= 400 && status < 500) reject(new UploadRejectedError(`Audio upload to S3 rejected: HTTP ${status}`));
                 else reject(new Error(`Audio upload to S3 failed with HTTP ${status}; the object may still have been stored`));
               });
@@ -24537,7 +24537,7 @@ var init_api2 = __esm({
       async putBytes(uploadUrl, data, contentType) {
         const url2 = new URL2(uploadUrl);
         if (url2.protocol !== "https:" || url2.username || url2.password) throw new Error("Invalid upload URL");
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           const req = httpsRequest2(
             {
               hostname: url2.hostname,
@@ -24552,7 +24552,7 @@ var init_api2 = __esm({
               res.resume();
               res.on("end", () => {
                 if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-                  resolve3();
+                  resolve4();
                 } else {
                   reject(new Error(`File upload to S3 failed: HTTP ${res.statusCode}`));
                 }
@@ -24583,7 +24583,7 @@ var init_api2 = __esm({
         if (url2.origin !== new URL2(this.baseUrl).origin) throw new Error("API origin cannot change");
         maxResponseBytes ??= this.options.maxResponseBytes;
         const data = body ? JSON.stringify(body) : void 0;
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           const req = httpsRequest2(
             {
               hostname: url2.hostname,
@@ -24630,7 +24630,7 @@ var init_api2 = __esm({
                 try {
                   const bytes = Buffer.concat(chunks, received);
                   const response = strictUtf8 ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : bytes.toString("utf8");
-                  resolve3(parseApiResponse(res.statusCode || 0, response));
+                  resolve4(parseApiResponse(res.statusCode || 0, response));
                 } catch (error3) {
                   reject(error3);
                 }
@@ -24690,7 +24690,7 @@ function requestAuthJson2(url2, body) {
   if (url2.protocol !== "https:" || url2.username || url2.password || url2.hash) {
     return Promise.reject(new Error("Authentication endpoint must use HTTPS"));
   }
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     let settled = false;
     let timer;
     const data = body?.toString();
@@ -24699,7 +24699,7 @@ function requestAuthJson2(url2, body) {
       settled = true;
       clearTimeout(timer);
       if (error3) reject(error3);
-      else resolve3(value);
+      else resolve4(value);
     };
     const req = httpsRequest3(url2, {
       method: body ? "POST" : "GET",
@@ -24963,8 +24963,8 @@ var init_auth = __esm({
           let listening = false;
           let timer;
           let resolveCode, rejectCode;
-          const code = new Promise((resolve3, reject) => {
-            resolveCode = resolve3;
+          const code = new Promise((resolve4, reject) => {
+            resolveCode = resolve4;
             rejectCode = reject;
           });
           void code.catch(() => {
@@ -26839,12 +26839,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve3, reject) {
+        return new Promise(function(resolve4, reject) {
           isexe(path2, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve3(is);
+              resolve4(is);
             }
           });
         });
@@ -26910,27 +26910,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i) => new Promise((resolve3, reject) => {
+      const step = (i) => new Promise((resolve4, reject) => {
         if (i === pathEnv.length)
-          return opt.all && found.length ? resolve3(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve4(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path2.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve3(subStep(p, i, 0));
+        resolve4(subStep(p, i, 0));
       });
-      const subStep = (p, i, ii) => new Promise((resolve3, reject) => {
+      const subStep = (p, i, ii) => new Promise((resolve4, reject) => {
         if (ii === pathExt.length)
-          return resolve3(step(i + 1));
+          return resolve4(step(i + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve3(p + ext);
+              return resolve4(p + ext);
           }
-          return resolve3(subStep(p, i, ii + 1));
+          return resolve4(subStep(p, i, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -27297,7 +27297,7 @@ var init_stdio2 = __esm({
         if (this._process) {
           throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
         }
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           this._process = (0, import_cross_spawn.default)(this._serverParams.command, this._serverParams.args ?? [], {
             // merge default env with server env because mcp server needs some env vars
             env: {
@@ -27314,7 +27314,7 @@ var init_stdio2 = __esm({
             this.onerror?.(error3);
           });
           this._process.on("spawn", () => {
-            resolve3();
+            resolve4();
           });
           this._process.on("close", (_code) => {
             this._process = void 0;
@@ -27379,22 +27379,22 @@ var init_stdio2 = __esm({
         if (this._process) {
           const processToClose = this._process;
           this._process = void 0;
-          const closePromise = new Promise((resolve3) => {
+          const closePromise = new Promise((resolve4) => {
             processToClose.once("close", () => {
-              resolve3();
+              resolve4();
             });
           });
           try {
             processToClose.stdin?.end();
           } catch {
           }
-          await Promise.race([closePromise, new Promise((resolve3) => setTimeout(resolve3, 2e3).unref())]);
+          await Promise.race([closePromise, new Promise((resolve4) => setTimeout(resolve4, 2e3).unref())]);
           if (processToClose.exitCode === null) {
             try {
               processToClose.kill("SIGTERM");
             } catch {
             }
-            await Promise.race([closePromise, new Promise((resolve3) => setTimeout(resolve3, 2e3).unref())]);
+            await Promise.race([closePromise, new Promise((resolve4) => setTimeout(resolve4, 2e3).unref())]);
           }
           if (processToClose.exitCode === null) {
             try {
@@ -27406,15 +27406,15 @@ var init_stdio2 = __esm({
         this._readBuffer.clear();
       }
       send(message) {
-        return new Promise((resolve3) => {
+        return new Promise((resolve4) => {
           if (!this._process?.stdin) {
             throw new Error("Not connected");
           }
           const json2 = serializeMessage(message);
           if (this._process.stdin.write(json2)) {
-            resolve3();
+            resolve4();
           } else {
-            this._process.stdin.once("drain", resolve3);
+            this._process.stdin.once("drain", resolve4);
           }
         });
       }
@@ -27547,7 +27547,7 @@ var init_mcp_client = __esm({
 // src/intake/schedule.ts
 import { execFile as execFile3 } from "node:child_process";
 import { chmodSync as chmodSync2, mkdirSync as mkdirSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join6 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join6, resolve } from "node:path";
 function parseSchedule(value) {
   if (value === "off" || value === "hourly") return { kind: value };
   const match = /^(daily|twice-daily)@(.+)$/.exec(value);
@@ -27603,20 +27603,33 @@ async function applySchedule(schedule, target) {
     return;
   }
   const plist = buildLaunchAgentPlist(schedule, target.nodePath, target.cliPath, target.home);
+  const temporary = `${path2}.${process.pid}.tmp`;
   try {
     mkdirSync4(join6(target.home, "Library", "LaunchAgents"), { recursive: true });
     mkdirSync4(join6(target.home, "Library", "Logs", "ttobak"), { recursive: true, mode: 448 });
-    const temporary = `${path2}.${process.pid}.tmp`;
     writeFileSync4(temporary, plist, { mode: 420 });
     chmodSync2(temporary, 420);
     renameSync3(temporary, path2);
   } catch {
+    rmSync2(temporary, { force: true });
     throw new IntakeError("SCHEDULE_FAILED", "the LaunchAgent plist could not be written");
   }
   await target.launchctl(["bootout", service]);
   if (await target.launchctl(["bootstrap", `gui/${target.uid}`, path2]) !== 0) {
     throw new IntakeError("SCHEDULE_FAILED", "launchctl bootstrap failed");
   }
+}
+async function installSchedule(schedule, environment) {
+  const uid = environment.uid ?? process.getuid?.();
+  if (uid === void 0) throw new IntakeError("SCHEDULE_FAILED", "no user ID for launchctl");
+  await applySchedule(schedule, {
+    home: environment.home,
+    uid,
+    nodePath: environment.nodePath ?? process.execPath,
+    cliPath: environment.cliPath ?? (process.argv[1] ? resolve(process.argv[1]) : ""),
+    launchctl: environment.launchctl ?? defaultLaunchctl
+  });
+  return scheduleLabel(schedule);
 }
 var LAUNCH_AGENT_LABEL, TIME, defaultLaunchctl;
 var init_schedule = __esm({
@@ -27625,14 +27638,14 @@ var init_schedule = __esm({
     init_errors4();
     LAUNCH_AGENT_LABEL = "click.atomai.ttobak.intake";
     TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
-    defaultLaunchctl = (args) => new Promise((resolve3) => {
+    defaultLaunchctl = (args) => new Promise((resolve4) => {
       if (process.platform !== "darwin") {
-        resolve3(127);
+        resolve4(127);
         return;
       }
       execFile3("/bin/launchctl", args, { timeout: 3e4 }, (error3) => {
         const code = error3?.code;
-        resolve3(error3 ? typeof code === "number" ? code : 1 : 0);
+        resolve4(error3 ? typeof code === "number" ? code : 1 : 0);
       });
     });
   }
@@ -29721,7 +29734,7 @@ __export(setup_exports, {
   setup: () => setup
 });
 import { rmSync as rmSync3 } from "node:fs";
-import { join as join8, resolve } from "node:path";
+import { join as join8, resolve as resolve2 } from "node:path";
 function parseArgs(args) {
   const options = { yes: false, noninteractive: false, acceptUnknownSensitivity: false, skip: /* @__PURE__ */ new Set() };
   const seen = /* @__PURE__ */ new Set();
@@ -29773,10 +29786,11 @@ async function setup(args, environment, store) {
     if (code === "AUTH_EXPIRED_MIDWAY") say("Midway \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD130\uBBF8\uB110\uC5D0\uC11C `mwinit -o`\uB97C \uC2E4\uD589\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.");
     return { ok: false, code, message, connectors, dryRun, synced, schedule, ...sync ? { sync } : {} };
   };
-  const before = store.read("selection.json");
+  const before = store.readText("selection.json");
+  const previous = before === null ? null : store.read("selection.json");
   const restore = () => {
     try {
-      if (before) store.write(before, "selection.json");
+      if (before !== null) store.writeText(before, "selection.json");
       else rmSync3(join8(store.directory, "selection.json"), { force: true });
     } catch {
     }
@@ -29797,8 +29811,11 @@ async function setup(args, environment, store) {
       continue;
     }
     let accept = false;
+    let consentReused = false;
     if (connector === "calendar") {
-      accept = options.acceptUnknownSensitivity || !options.yes && yes(await question("\uCE98\uB9B0\uB354 \uC6D0\uBCF8\uC740 \uBE44\uACF5\uAC1C \uD45C\uC2DC\uB97C \uC54C\uB824\uC8FC\uC9C0 \uC54A\uC544 \uBE44\uACF5\uAC1C \uC77C\uC815\uB3C4 TTOBAK \uAC1C\uC778 \uCE98\uB9B0\uB354\uB85C \uB4E4\uC5B4\uAC11\uB2C8\uB2E4. \uB3D9\uC758\uD560\uAE4C\uC694? [y/N]"));
+      consentReused = !options.acceptUnknownSensitivity && previous?.calendar?.server === server && previous.calendar.acceptUnknownSensitivity === true;
+      if (consentReused) say(`${label}: \uC774\uC804\uC5D0 \uB3D9\uC758\uD55C \uBE44\uACF5\uAC1C \uC77C\uC815 \uD3EC\uD568 \uC124\uC815\uC744 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD569\uB2C8\uB2E4.`);
+      accept = options.acceptUnknownSensitivity || consentReused || !options.yes && yes(await question("\uCE98\uB9B0\uB354 \uC6D0\uBCF8\uC740 \uBE44\uACF5\uAC1C \uD45C\uC2DC\uB97C \uC54C\uB824\uC8FC\uC9C0 \uC54A\uC544 \uBE44\uACF5\uAC1C \uC77C\uC815\uB3C4 TTOBAK \uAC1C\uC778 \uCE98\uB9B0\uB354\uB85C \uB4E4\uC5B4\uAC11\uB2C8\uB2E4. \uB3D9\uC758\uD560\uAE4C\uC694? [y/N]"));
       if (!accept) {
         connectors[connector] = { status: "skipped", code: "SENSITIVITY_UNKNOWN" };
         say(`${label}: \uBE44\uACF5\uAC1C \uC77C\uC815 \uD3EC\uD568\uC5D0 \uB3D9\uC758\uD558\uC9C0 \uC54A\uC544 \uAC74\uB108\uB701\uB2C8\uB2E4 (--accept-unknown-sensitivity \uD544\uC694).`);
@@ -29818,7 +29835,13 @@ async function setup(args, environment, store) {
         acceptUnknownSensitivity: accept,
         identityAuthFatal: true
       }, environment, store);
-      connectors[connector] = { status: "selected", server, host, ...connector === "specreq" ? { autoAck: false } : {} };
+      connectors[connector] = {
+        status: "selected",
+        server,
+        host,
+        ...connector === "specreq" ? { autoAck: false } : {},
+        ...consentReused ? { consentReused: true } : {}
+      };
       say(`${label}: ${host}\uC758 ${server} \uD655\uC778 \uC644\uB8CC`);
       if (connector === "specreq") {
         say("SpecReq \uC790\uB3D9 \uC218\uB77D(auto-ack)\uC740 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4. \uCF1C\uB824\uBA74 `intake select specreq --host <host> --server spec-req-mcp --auto-ack on`\uC744 \uC2E4\uD589\uD558\uC138\uC694.");
@@ -29838,10 +29861,11 @@ async function setup(args, environment, store) {
     const next = { ...saved };
     for (const connector of ORDER) {
       const entry2 = connectors[connector];
-      if (entry2?.status === "skipped" && next[connector]) {
-        delete next[connector];
-        connectors[connector] = { ...entry2, removedPrevious: true };
-        say(`${LABELS[connector]}: \uC774\uC804 \uC120\uD0DD\uC744 \uC81C\uAC70\uD588\uC2B5\uB2C8\uB2E4.`);
+      const stored = next[connector];
+      if (entry2?.status === "skipped" && stored) {
+        next[connector] = { ...stored, disabled: true };
+        connectors[connector] = { ...entry2, disabled: true };
+        say(`${LABELS[connector]}: \uC774\uC804 \uC120\uD0DD\uC744 \uBE44\uD65C\uC131\uD654\uD588\uC2B5\uB2C8\uB2E4 (\uC6D0\uBCF8 ID\uC640 \uAE30\uB85D\uC740 \uC720\uC9C0).`);
       }
     }
     store.write(next, "selection.json");
@@ -29878,22 +29902,17 @@ async function setup(args, environment, store) {
     }
   }
   if (wanted) {
-    const uid = environment.uid ?? process.getuid?.();
-    const cliPath = environment.cliPath ?? (process.argv[1] ? resolve(process.argv[1]) : "");
-    if (uid === void 0) return stop("SCHEDULE_FAILED", "no user ID for launchctl");
+    if (wanted.kind !== "off" && !selected.length) say("\uACBD\uACE0: \uC218\uC9D1\uD560 \uCE98\uB9B0\uB354/SFDC \uC120\uD0DD\uC774 \uC5C6\uC5B4 \uC608\uC57D \uC2E4\uD589\uC740 NOT_SELECTED\uB85C \uB05D\uB0A9\uB2C8\uB2E4.");
+    const cliPath = environment.cliPath ?? process.argv[1] ?? "";
+    if (wanted.kind !== "off" && !resolve2(cliPath).startsWith(join8(environment.home, ".ttobak") + "/")) {
+      say("\uACBD\uACE0: CLI\uAC00 ~/.ttobak \uBC16\uC5D0 \uC788\uC2B5\uB2C8\uB2E4. CLI\uB97C \uC62E\uAE30\uAC70\uB098 \uB2E4\uC2DC \uC124\uCE58\uD558\uBA74 `intake setup --schedule ...`\uC744 \uB2E4\uC2DC \uC2E4\uD589\uD558\uC138\uC694.");
+    }
     try {
-      await applySchedule(wanted, {
-        home: environment.home,
-        uid,
-        nodePath: environment.nodePath ?? process.execPath,
-        cliPath,
-        launchctl: environment.launchctl ?? defaultLaunchctl
-      });
+      schedule = await installSchedule(wanted, environment);
     } catch (error3) {
       say("\uC790\uB3D9 \uC218\uC9D1 \uC77C\uC815\uC744 \uC124\uC815\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
       return stop(intakeCode(error3), error3 instanceof IntakeError ? error3.message : "schedule failed");
     }
-    schedule = scheduleLabel(wanted);
     say(wanted.kind === "off" ? "\uC790\uB3D9 \uC218\uC9D1 \uC77C\uC815\uC744 \uC81C\uAC70\uD588\uC2B5\uB2C8\uB2E4." : `\uC790\uB3D9 \uC218\uC9D1 \uC77C\uC815\uC744 \uC124\uC815\uD588\uC2B5\uB2C8\uB2E4: ${schedule}`);
   }
   return { ok: true, connectors, dryRun, synced, schedule, ...sync ? { sync } : {} };
@@ -29932,6 +29951,7 @@ __export(run_exports, {
   accountScope: () => accountScope,
   calendarRun: () => calendarRun,
   defaultEnvironment: () => defaultEnvironment,
+  enabled: () => enabled,
   runConnectors: () => runConnectors,
   runIntake: () => runIntake,
   selectConnector: () => selectConnector,
@@ -29939,9 +29959,12 @@ __export(run_exports, {
   tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
-import { resolve as resolve2 } from "node:path";
+import { resolve as resolve3 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
+function enabled(entry2) {
+  return entry2 && !entry2.disabled ? entry2 : void 0;
+}
 function accountScope(apiUrl, subject) {
   return createHash7("sha256").update(`${apiUrl.replace(/\/+$/, "")}
 ${subject}`).digest("hex").slice(0, 32);
@@ -30138,7 +30161,7 @@ async function openTaskSessions(environment, selection) {
   const sessions = {};
   const unavailable = {};
   for (const connector of ["meetings", "specreq", "slack"]) {
-    const selected = selection[connector];
+    const selected = enabled(selection[connector]);
     if (!selected) continue;
     let session;
     try {
@@ -30170,8 +30193,8 @@ async function calendar(args, environment, store) {
 async function calendarRun(options, environment, store, signedIn) {
   const { dryRun } = options;
   const selection = store.read("selection.json");
-  const selected = selection?.calendar;
-  if (!selected) throw new IntakeError("NOT_SELECTED", 'run "intake select calendar" first');
+  const selected = enabled(selection?.calendar);
+  if (!selection || !selected) throw new IntakeError("NOT_SELECTED", 'run "intake select calendar" first');
   const release = store.lock("calendar");
   const startedAt = environment.now();
   let session;
@@ -30207,7 +30230,8 @@ async function calendarRun(options, environment, store, signedIn) {
     };
     store.write(status, "status.json");
     let tasks;
-    if (!dryRun && selection.meetings && selection.specreq && api && scope) {
+    const specreq = enabled(selection.specreq);
+    if (!dryRun && enabled(selection.meetings) && specreq && api && scope) {
       const ranAt = environment.now();
       if (!me) tasks = { result: "TTOBAK_LOGIN_REQUIRED" };
       else {
@@ -30220,7 +30244,7 @@ async function calendarRun(options, environment, store, signedIn) {
             zone: environment.zone,
             now: ranAt,
             sourceId: selected.sourceId,
-            selection: { autoAck: selection.specreq.autoAck !== false },
+            selection: { autoAck: specreq.autoAck !== false },
             sessions: opened.sessions,
             unavailable: opened.unavailable,
             me,
@@ -30280,7 +30304,7 @@ async function sfdc(args, environment, store) {
 async function sfdcRun(options, environment, store, signedIn) {
   const { dryRun } = options;
   const selection = store.read("selection.json");
-  const selected = selection?.sfdc;
+  const selected = enabled(selection?.sfdc);
   if (!selected) throw new IntakeError("NOT_SELECTED", 'run "intake select sfdc" first');
   const release = store.lock("sfdc");
   const startedAt = environment.now();
@@ -30337,8 +30361,8 @@ async function sfdcRun(options, environment, store, signedIn) {
 }
 async function runConnectors(options, environment, store) {
   const selection = store.read("selection.json");
-  const wanted = options.only ?? SYNC_CONNECTORS.filter((id) => selection?.[id]);
-  const missing = wanted.find((id) => !selection?.[id]);
+  const wanted = options.only ?? SYNC_CONNECTORS.filter((id) => enabled(selection?.[id]));
+  const missing = wanted.find((id) => !enabled(selection?.[id]));
   if (!wanted.length || missing) throw new IntakeError("NOT_SELECTED", `run "intake select ${missing ?? "calendar"}" or "intake setup" first`);
   let pending;
   const signedIn = () => pending ??= signIn(selection, environment, options.dryRun, options.noninteractive);
@@ -30349,6 +30373,11 @@ async function runConnectors(options, environment, store) {
       const run2 = id === "calendar" ? calendarRun(options, environment, store, signedIn) : sfdcRun(options, environment, store, signedIn);
       const { ok: _ok, connector: _connector, dryRun: _dryRun, ...rest } = await run2;
       results[id] = { result: "ok", ...rest };
+      const tasks = "tasks" in rest ? rest.tasks : void 0;
+      if (tasks && (tasks.result === "AUTH_EXPIRED_MIDWAY" || Object.values(tasks.failures ?? {}).includes("AUTH_EXPIRED_MIDWAY"))) {
+        code = "AUTH_EXPIRED_MIDWAY";
+        break;
+      }
     } catch (error3) {
       const failure2 = intakeCode(error3);
       results[id] = { result: failure2 };
@@ -30389,7 +30418,9 @@ async function runIntake(args, environment) {
     } else if (command === "select") output = await select(rest, environment, store);
     else if (command === "calendar") output = await calendar(rest, environment, store);
     else if (command === "sfdc") output = await sfdc(rest, environment, store);
-    else if (command === "run" || command === "setup") {
+    else if (command === "schedule" && rest.length === 1) {
+      output = { ok: true, schedule: await installSchedule(parseSchedule(rest[0]), environment) };
+    } else if (command === "run" || command === "setup") {
       const result = command === "run" ? await run(rest, environment, store) : await (await Promise.resolve().then(() => (init_setup(), setup_exports))).setup(rest, environment, store);
       environment.stdout(JSON.stringify(result));
       return result.ok ? 0 : 2;
@@ -30398,7 +30429,7 @@ async function runIntake(args, environment) {
       const listed = {};
       for (const id of ["calendar", "sfdc", "meetings", "specreq", "slack"]) {
         const entry2 = selection?.[id];
-        if (entry2) listed[id] = { host: entry2.host, server: entry2.server };
+        if (entry2) listed[id] = { host: entry2.host, server: entry2.server, ...entry2.disabled ? { disabled: true } : {} };
       }
       output = {
         ok: true,
@@ -30430,7 +30461,7 @@ function defaultEnvironment() {
     launchctl: defaultLaunchctl,
     ...process.getuid ? { uid: process.getuid() } : {},
     nodePath: process.execPath,
-    ...process.argv[1] ? { cliPath: resolve2(process.argv[1]) } : {}
+    ...process.argv[1] ? { cliPath: resolve3(process.argv[1]) } : {}
   };
 }
 async function terminalPrompt(question) {
@@ -30468,6 +30499,7 @@ var init_run = __esm({
   ttobak-mcp intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+  ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake status`;
     SYNC_CONNECTORS = ["calendar", "sfdc"];
   }
@@ -31200,12 +31232,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve3();
+        resolve4();
       } else {
-        this._stdout.once("drain", resolve3);
+        this._stdout.once("drain", resolve4);
       }
     });
   }
@@ -31274,7 +31306,7 @@ function requestAuthJson(url2, body) {
   if (url2.protocol !== "https:" || url2.username || url2.password || url2.hash) {
     return Promise.reject(new Error("Authentication endpoint must use HTTPS"));
   }
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     let settled = false;
     let timer;
     const data = body?.toString();
@@ -31283,7 +31315,7 @@ function requestAuthJson(url2, body) {
       settled = true;
       clearTimeout(timer);
       if (error3) reject(error3);
-      else resolve3(value);
+      else resolve4(value);
     };
     const req = httpsRequest(url2, {
       method: body ? "POST" : "GET",
@@ -31662,8 +31694,8 @@ var CognitoAuth = class {
       let listening = false;
       let timer;
       let resolveCode, rejectCode;
-      const code = new Promise((resolve3, reject) => {
-        resolveCode = resolve3;
+      const code = new Promise((resolve4, reject) => {
+        resolveCode = resolve4;
         rejectCode = reject;
       });
       void code.catch(() => {
@@ -32308,16 +32340,16 @@ var Recorder = class {
         pidSaved = e;
       }
     }
-    active.exited = new Promise((resolve3) => {
+    active.exited = new Promise((resolve4) => {
       child.on("error", (err) => {
         active.stderr += `
 ${err.message}`;
         active.exitCode = -1;
-        resolve3(-1);
+        resolve4(-1);
       });
       child.on("exit", (code) => {
         active.exitCode = code;
-        resolve3(code);
+        resolve4(code);
       });
     });
     child.stderr?.on("data", (chunk) => {
@@ -32327,7 +32359,7 @@ ${err.message}`;
     });
     const early = await Promise.race([
       active.exited.then(() => true),
-      new Promise((resolve3) => setTimeout(() => resolve3(false), this.startupGraceMs))
+      new Promise((resolve4) => setTimeout(() => resolve4(false), this.startupGraceMs))
     ]);
     if (early) {
       rmSync(info.file, { force: true });
@@ -32505,18 +32537,18 @@ ${err.message}`;
   async waitExit(active, ms) {
     return Promise.race([
       active.exited.then(() => true),
-      new Promise((resolve3) => setTimeout(() => resolve3(false), ms))
+      new Promise((resolve4) => setTimeout(() => resolve4(false), ms))
     ]);
   }
   run(args) {
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const child = spawn(this.ffmpegPath, args, { stdio: ["ignore", "ignore", "pipe"] });
       let stderr = "";
       child.stderr?.on("data", (chunk) => {
         stderr = (stderr + chunk.toString()).slice(-64 * 1024);
       });
       child.on("error", (err) => reject(new Error(`${err.message}. Install ffmpeg (brew install ffmpeg) or set TTOBAK_FFMPEG.`)));
-      child.on("close", (code) => resolve3({ code, stderr }));
+      child.on("close", (code) => resolve4({ code, stderr }));
     });
   }
   /** Reads a sidecar as a finalized recording, or null when it is not one. */
@@ -32609,7 +32641,7 @@ function sendAppRequest(request2, options = {}) {
   const socketPath = options.socketPath ?? defaultAppSocketPath();
   const id = randomUUID2();
   const line = JSON.stringify({ v: 1, id, ...request2 }) + "\n";
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const socket = createConnection(socketPath);
     const chunks = [];
     let size = 0;
@@ -32661,7 +32693,7 @@ function sendAppRequest(request2, options = {}) {
         return;
       }
       const error3 = reply.error;
-      resolve3({
+      resolve4({
         ok: reply.ok,
         data: reply.data && typeof reply.data === "object" ? reply.data : void 0,
         error: reply.ok ? void 0 : {
@@ -33751,7 +33783,7 @@ async function serveStdio(server, recorder, options = {}) {
       return;
     }
     exiting = true;
-    const grace = new Promise((resolve3) => setTimeout(resolve3, graceMs).unref());
+    const grace = new Promise((resolve4) => setTimeout(resolve4, graceMs).unref());
     void Promise.race([settleRecordingWork(), grace]).then(() => recorder.shutdown()).catch((err) => console.error("Recorder shutdown failed:", err instanceof Error ? err.message : err)).finally(() => exit(0));
   };
   if (options.signals ?? true) {
