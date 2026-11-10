@@ -63,25 +63,27 @@ so no deduction applies. Informational scope boundaries do not count as defects.
 - Nine documentation unit checks passed, including seven public-packager cases.
   Reviewed image references are copied; unreviewed images and symlinks are rejected.
   Local-only CSP, anchor integrity and existing-output preservation remain checked.
-- The final artifact contains 139 validated anchors and 12 explicit public assets.
-  All 30 reader checks passed; structured evidence is recorded in
+- The final artifact contains 141 validated anchors and 12 explicit public assets.
+  All reader checks passed; structured evidence is recorded in
   `results/TTOBAK_User_Guide_Browser_Checks.json` and is not published.
 - `check_docs.py` and JavaScript syntax validation passed. No runtime application,
   AWS configuration or workflow/review-gate code changed.
 
-## Critical and warning issues
+## Independent review revisions and remaining issues
 
 The independent review found mixed upload paths, an inaccurate connector-screen
 description, overstated Library status visibility and dropped operational limits.
 This revision separates the upload paths, corrects AI connection permissions and
 Library list capabilities, and restores sharing/project/simulation limits.
-No located content defect remains; fresh latest-head review is required.
+Reader fixes also guard IME composition, keep search results below the sticky
+header and force readable no-JavaScript dark-preference printing. Fresh
+latest-head review remains required.
 
 ## Source-omission cross-check
 
 | Source section | Status | Note |
 |---|---|---|
-| Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
+| Original workflow coverage | INCLUDED | Rewritten manual retains verified operational limits |
 | Current menu workflows | INCLUDED | All 28 chapters, including conditional Billing and Mac-only settings |
 | Internal source inventory | INCLUDED | Verified menu/component/service paths, model defaults and walkthrough limits |
 | Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |

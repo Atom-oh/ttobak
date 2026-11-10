@@ -81,7 +81,7 @@ Submenus were cross-checked against their components, not inferred from names.
 | 3. Chats | Assistant, meeting QA, live QA, research chat, external MCP | `frontend/src/app/chat/page.tsx`; `frontend/src/components/QAPanel.tsx`; `frontend/src/components/LiveQAPanel.tsx`; `frontend/src/components/ResearchChat.tsx`; `backend/python/qa/handler.py` |
 | 4. Models | Source-configured defaults, STT vs notes, retrieval, stale-source checks | `infra/lib/model-config.ts`; `infra/lib/gateway-stack.ts`; `backend/internal/service/bedrock.go`; `backend/python/research-agent/agent.py`; `backend/python/sim/handler.py` |
 | 5. Recording | Preparation, live captions, notes, opt-in, final processing, backup | `frontend/src/app/record/`; `frontend/src/components/record/`; `frontend/src/hooks/useRecordingSession.ts` |
-| 6. Upload | Queue, completion, 500MB UI limit, extraction vs preview, crop | `frontend/src/components/AudioUploader.tsx`; `frontend/src/lib/upload.ts`; `frontend/src/app/meeting/[id]/MeetingDetailClient.tsx` |
+| 6. Upload | Immediate audio-only new meeting; existing meeting queue/completion/500MB check; extraction/preview, crop | `frontend/src/components/AudioUploader.tsx`; `frontend/src/lib/upload.ts`; `frontend/src/app/meeting/[id]/MeetingDetailClient.tsx` |
 | 7. Meetings | Listing, summary/notes, speakers, saved-source resummary, translation | `frontend/src/app/meeting/[id]/MeetingDetailClient.tsx`; `frontend/src/components/meeting/MeetingNotesEditor.tsx`; `frontend/src/components/meeting/MeetingTranslation.tsx`; `backend/internal/service/resummary.go`; `backend/internal/service/meeting_translation.go` |
 | 8. Calendar | Personal Outlook intake, source status, stable identities, cancellation | `frontend/src/components/workspace/UpcomingMeetings.tsx`; `backend/internal/service/calendar.go`; `docs/runbooks/local-outlook-calendar-sync.md`; `docs/runbooks/local-mcp-intake.md`; `mcp-server/src/intake/` |
 | 9. Follow-up | Meeting preparation, action item run state, human checkbox retention | `frontend/src/hooks/useActionItems.ts`; `backend/internal/service/action_analysis.go`; `backend/internal/service/action_analysis_events.go`; `docs/features/sa-meeting-workflow.md` |
@@ -113,7 +113,8 @@ implementation, not inferred from those decisions alone.
   model. The manual does not promise a universal fixed model.
 - The paginated notes/transcript translation flow: `global.openai.gpt-6-luna`.
   This describes `MeetingTranslation` / `MeetingTranslationService`; it is not a
-  claim that every older or unrelated translation path uses that model.
+  claim that every older or unrelated translation path uses that model. A page
+  that fails the structure-preservation check can fall back to Amazon Translate.
 - Go refinement and auxiliary steps: Sonnet 5.5 / Opus 5.5 configuration.
 - QA/Assistant: Sonnet 5.5, with Haiku 5.5 detection configuration.
 - Research: Opus 5.5 defaults for all three modes and chat; modes change workflow
@@ -142,7 +143,7 @@ unreviewed image even if present in the source directory, symlink rejection, CSP
 remote/path references, missing/duplicate anchors and preservation of existing
 output directories. Browser checks cover 1920/3840 desktop, tablet, 390/360 mobile,
 body search, empty results, inert search input text, keyboard shortcut/drawer,
-active chapter, theme persistence, no-JavaScript reading and full A4 printing.
+active chapter, theme persistence, no-JavaScript reading and full A4 printing, including no-JavaScript readers with a dark OS preference.
 
 Re-run repository checks:
 
