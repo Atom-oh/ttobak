@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-10 |
-| Iteration | 3: complete enterprise product manual |
-| Scope | All primary menus and conditional settings; 28 valid chapter entries with concise operations/security/terms previews |
+| Iteration | 4: complete manual and source evidence |
+| Scope | All 28 chapters: every primary menu, account tabs, contacts/people, documents/library, research/news/Tech, dictionary, billing, settings/admin, devices, security and recovery |
 | Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
 | Scale | 90 points: Playwright MCP unavailable, so the rubric's 10-point MCP visual category is exempt |
@@ -43,6 +43,7 @@ Scoring follows the fixed rubric: deductions require a located, quoted defect;
 each defect costs one quarter of its category, summed then rounded once to the
 nearest 0.5 with midpoints up. No unresolved defect was identified after revision,
 so no deduction applies. Informational scope boundaries do not count as defects.
+Content quality and latest-head CI/publication are separate gates.
 
 ## Evidence and revisions
 
@@ -63,26 +64,36 @@ so no deduction applies. Informational scope boundaries do not count as defects.
 - Nine documentation unit checks passed, including seven public-packager cases.
   Reviewed image references are copied; unreviewed images and symlinks are rejected.
   Local-only CSP, anchor integrity and existing-output preservation remain checked.
+- The final artifact contains 141 validated anchors and 12 explicit public assets.
+  All 36 reader checks passed; structured evidence is recorded in
+  `results/TTOBAK_User_Guide_Browser_Checks.json` and is not published.
 - `check_docs.py` and JavaScript syntax validation passed. No runtime application,
   AWS configuration or workflow/review-gate code changed.
 
-## Critical and warning issues
+## Independent CI review revisions and remaining issues
 
 The independent review found mixed upload paths, an inaccurate connector-screen
 description, overstated Library status visibility and dropped operational limits.
 This revision separates the upload paths, corrects AI connection permissions and
 Library list capabilities, and restores sharing/project/simulation limits.
-Dictionary aliases, all-mode research approval and Docs editor structures also
-match source. Fresh latest-head review is required.
+Existing-meeting instructions distinguish the immediate attachment gallery from
+the queued audio/document uploader; password recovery guidance is restored.
+Project creation fields, Docs type badges and older Mac microphone behavior
+were checked against the current UI and corrected.
+Reader fixes also guard IME composition, keep search results below the sticky
+header and force readable no-JavaScript dark-preference printing. Fresh
+latest-head review remains required. Notes-only conflict checks, normalized
+dictionary aliases, all-mode research approval and Docs editor structures match source.
+Navigation labels are searchable; legacy flow arrows no longer occupy grid cells.
+The last chapter remains active on 4K screens where fragment scrolling is clamped.
 
 ## Source-omission cross-check
 
 | Source section | Status | Note |
 |---|---|---|
-| Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
+| Original workflow coverage | INCLUDED | Rewritten manual retains verified operational limits |
 | Current menu workflows | INCLUDED | All 28 chapters, including conditional Billing and Mac-only settings |
-| Operations/security/terms detail | PARTIAL | Complete appendices follow with the source-evidence PR |
-| Internal source inventory | PARTIAL | Full path/model/walkthrough evidence follows in the evidence PR |
+| Internal source inventory | INCLUDED | Verified menu/component/service paths, model defaults and walkthrough limits |
 | Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
 | Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
 | Production and native acceptance | OMITTED deliberately | No production login, customer records or macOS capture was performed |
@@ -91,8 +102,8 @@ match source. Fresh latest-head review is required.
 
 1. Public illustrations contain generic menu labels. Public assets never contain
    the internal fictional walkthrough evidence archive.
-2. All menu workflows are included. Detailed operations/security/terms appendices
-   and the internal source inventory follow under the 95,000-byte review limit. Source
+2. The full product manual and internal source inventory are included. Four
+   dependent PRs preserve the existing 95,000-byte review limit. Source
    configuration and local inspection are not production/native acceptance.
 
 ## Revision checklist and next steps
@@ -102,4 +113,5 @@ match source. Fresh latest-head review is required.
 - [x] Record review scale, limitations and source omissions honestly.
 - [ ] Obtain required latest-head CI review before merging the complete manual.
 - [x] Complete and re-review the 28-chapter content expansion.
-- [ ] Add the full internal source/walkthrough evidence inventory.
+- [x] Add the full internal source/walkthrough evidence inventory.
+- [ ] Confirm latest-main Pages publication and public interactions.

@@ -24,3 +24,5 @@ The [product guide](https://www.atomai.click/ttobak/) is published from
 See [recording and upload workflows](https://www.atomai.click/ttobak/#record) for meeting capture.
 
 Use the [Accounts](https://www.atomai.click/ttobak/#accounts) and [Settings](https://www.atomai.click/ttobak/#settings) chapters for team setup.
+
+For rollout, read the guide’s [data boundaries](https://www.atomai.click/ttobak/#security) and [troubleshooting](https://www.atomai.click/ttobak/#troubleshooting) chapters.
