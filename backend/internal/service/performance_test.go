@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -311,7 +312,8 @@ func TestPerformanceListMappingsMarksUnmapped(test *testing.T) {
 		assignments: map[string][]model.SFDCAssignment{"owner": {{SFDCAccountID: "B2", Name: "Beta"}, {SFDCAccountID: "A1", Name: "Alpha", Role: "REGISTRY"}}},
 		mappings:    map[string][]model.AccountMapping{"owner": {{SFDCAccountID: "A1", AccountID: "acct-1", Manual: true}, {SFDCAccountID: "Z9", AccountID: "acct-9"}}},
 	}
-	list, err := performanceTestService(store, nil).ListMappings(test.Context(), "owner")
+	accounts := &performanceCandidatesFake{candidates: []NamedCandidate{{ID: "acct-1", Name: "Alpha"}}}
+	list, err := performanceTestService(store, accounts).ListMappings(test.Context(), "owner")
 	if err != nil || len(list.Items) != 2 {
 		test.Fatalf("mappings: %+v %v", list, err)
 	}
@@ -319,6 +321,49 @@ func TestPerformanceListMappingsMarksUnmapped(test *testing.T) {
 	if first.SFDCAccountID != "A1" || !first.Mapped || first.AccountID != "acct-1" || !first.Manual || first.Role != "REGISTRY" ||
 		second.SFDCAccountID != "B2" || second.Mapped || second.AccountID != "" {
 		test.Fatalf("assignments must be joined and sorted, unmapped kept: %+v", list.Items)
+	}
+}
+
+func TestListMappingsHidesUnreadableTarget(test *testing.T) {
+	store := &performanceStoreFake{
+		assignments: map[string][]model.SFDCAssignment{"owner": {
+			{SFDCAccountID: "A1", Name: "Alpha"}, {SFDCAccountID: "B2", Name: "Beta"}, {SFDCAccountID: "C3", Name: "Gamma"},
+		}},
+		mappings: map[string][]model.AccountMapping{"owner": {
+			{SFDCAccountID: "A1", AccountID: "acct-gone", Manual: true},
+			{SFDCAccountID: "B2", AccountID: "acct-2"},
+			{SFDCAccountID: "C3", AccountID: "acct-revoked"},
+		}},
+	}
+	accounts := &performanceCandidatesFake{candidates: []NamedCandidate{{ID: "acct-2", Name: "Beta"}}}
+	list, err := performanceTestService(store, accounts).ListMappings(test.Context(), "owner")
+	if err != nil || len(list.Items) != 3 {
+		test.Fatalf("mappings: %+v %v", list, err)
+	}
+	gone, auto, revoked := list.Items[0], list.Items[1], list.Items[2]
+	if gone.Mapped || gone.AccountID != "" || gone.Reason != model.PerformanceMappingUnreadable || !gone.Manual {
+		test.Fatalf("an unreadable manual target must be unmapped without its account ID: %+v", gone)
+	}
+	if !auto.Mapped || auto.AccountID != "acct-2" || auto.Manual || auto.Reason != "" {
+		test.Fatalf("a readable automatic mapping must be reported as automatic: %+v", auto)
+	}
+	if revoked.Mapped || revoked.AccountID != "" || revoked.Reason != model.PerformanceMappingUnreadable || revoked.Manual {
+		test.Fatalf("an unreadable automatic target must be unmapped: %+v", revoked)
+	}
+	encoded, _ := json.Marshal(list)
+	if strings.Contains(string(encoded), "acct-gone") || strings.Contains(string(encoded), "acct-revoked") {
+		test.Fatalf("an unreadable account ID leaked: %s", encoded)
+	}
+	if _, err := performanceTestService(store, nil).ListMappings(test.Context(), "owner"); !errors.Is(err, ErrPerformanceSourcesUnavailable) {
+		test.Fatalf("a reader without candidates must fail closed: %v", err)
+	}
+	failing := &performanceCandidatesFake{err: errors.New("dynamo down")}
+	if _, err := performanceTestService(store, failing).ListMappings(test.Context(), "owner"); err == nil {
+		test.Fatal("a readable-account failure must surface")
+	}
+	empty := &performanceStoreFake{assignments: store.assignments}
+	if list, err := performanceTestService(empty, nil).ListMappings(test.Context(), "owner"); err != nil || len(list.Items) != 3 {
+		test.Fatalf("assignments without mappings need no account read: %+v %v", list, err)
 	}
 }
 
@@ -417,7 +462,8 @@ func TestListMappingsFindsMappingBeyondOrphans(test *testing.T) {
 		assignments: map[string][]model.SFDCAssignment{"owner": {{SFDCAccountID: "B0001"}, {SFDCAccountID: "B0000"}}},
 		mappings:    map[string][]model.AccountMapping{"owner": mappings},
 	}
-	list, err := performanceTestService(store, nil).ListMappings(test.Context(), "owner")
+	accounts := &performanceCandidatesFake{candidates: []NamedCandidate{{ID: "acct-1"}, {ID: "acct-2"}}}
+	list, err := performanceTestService(store, accounts).ListMappings(test.Context(), "owner")
 	if err != nil || len(list.Items) != 2 || !list.Items[0].Mapped || !list.Items[1].Mapped || list.Items[1].AccountID != "acct-2" {
 		test.Fatalf("assigned accounts must be mapped: %+v %v", list, err)
 	}
