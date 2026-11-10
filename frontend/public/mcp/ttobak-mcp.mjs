@@ -15214,11 +15214,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants3);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -15235,10 +15235,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants3);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -15299,8 +15299,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants3) {
-        this.code = optimizeExpr(this.code, names, constants3);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -15329,12 +15329,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants3))
+          if (n.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -15387,12 +15387,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a2;
-        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants3);
-        if (!(super.optimizeNames(names, constants3) || this.else))
+        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants3);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -15415,10 +15415,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants3);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -15454,10 +15454,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants3);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -15499,11 +15499,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a2, _b;
-        super.optimizeNames(names, constants3);
-        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants3);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
+        super.optimizeNames(names, constants4);
+        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -15804,7 +15804,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants3) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -15819,14 +15819,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants3[n.str];
+        const c = constants4[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -23894,6 +23894,10 @@ function identifier(value, name) {
   }
   return encodeURIComponent(value);
 }
+function taskEventId(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new Error("eventId must be 64 lowercase hex characters.");
+  return value;
+}
 function documentsPath(accountId) {
   return accountId === void 0 ? "/api/documents" : `/api/accounts/${identifier(accountId, "accountId")}/documents`;
 }
@@ -23989,6 +23993,24 @@ var init_api2 = __esm({
       async listCalendarEvents(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
         return this.request("GET", `/api/calendar/events?${query}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async listSpecReqTasks(cursor) {
+        const query = new URLSearchParams();
+        if (cursor !== void 0) query.set("cursor", cursor);
+        return this.request("GET", `/api/specreq-tasks${query.size ? "?" + query : ""}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async getSpecReqTask(eventId) {
+        return this.request("GET", `/api/specreq-tasks/${taskEventId(eventId)}`, void 0, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async createSpecReqTask(body) {
+        return this.request("POST", "/api/specreq-tasks", body, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async transitionSpecReqTask(eventId, body) {
+        return this.request("POST", `/api/specreq-tasks/${taskEventId(eventId)}/transitions`, body, MAX_CALENDAR_API_BYTES, false, true);
+      }
+      async listAccountProjects(accountId) {
+        const result = await this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/projects`);
+        return (result?.projects ?? []).flatMap((project) => typeof project?.projectId === "string" ? [{ projectId: project.projectId, ...typeof project.sfdcOpptyId === "string" && project.sfdcOpptyId ? { sfdcOpptyId: project.sfdcOpptyId } : {} }] : []);
       }
       async calendarSyncStatus(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
@@ -25445,6 +25467,47 @@ var init_calendar2 = __esm({
     UNTITLED = "(\uC81C\uBAA9 \uC5C6\uC74C)";
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
+  }
+});
+
+// src/intake/connectors.ts
+function isTaskConnector(value) {
+  return typeof value === "string" && TASK_CONNECTORS.includes(value);
+}
+function allowedToolNames(connector) {
+  return CONNECTOR_TOOLS[connector].map((tool) => tool.name);
+}
+var TASK_CONNECTORS, CONNECTOR_TOOLS;
+var init_connectors = __esm({
+  "src/intake/connectors.ts"() {
+    "use strict";
+    TASK_CONNECTORS = ["meetings", "specreq", "slack"];
+    CONNECTOR_TOOLS = {
+      meetings: [
+        { name: "list_meetings", properties: ["startTime", "endTime", "userEmail"] },
+        { name: "get_meeting", properties: ["meetingId", "getMaster", "userEmail"] }
+      ],
+      specreq: [
+        { name: "check_user_is_tam", properties: [] },
+        { name: "search_requests_advanced", properties: [
+          "resolverId",
+          "requesterId",
+          "stateId",
+          "au_ca_gte",
+          "pageSize",
+          "fields_json",
+          "lastEvaluatedIndex_json"
+        ] },
+        { name: "get_request", properties: ["request_id"] },
+        { name: "acknowledge_request", properties: ["request_id"] }
+      ],
+      slack: [
+        { name: "lookup_user", properties: ["query"] },
+        { name: "open_dm_channel", properties: ["userIds"] },
+        { name: "list_drafts", properties: [] },
+        { name: "post_draft", properties: ["channel", "text"] }
+      ]
+    };
   }
 });
 
@@ -27312,7 +27375,7 @@ function resultJson(result, tool) {
   }
   throw new IntakeError("PARSE_FAILED", `${tool} did not return JSON`);
 }
-var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, McpSession;
+var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, ToolResultError, McpSession;
 var init_mcp_client = __esm({
   "src/intake/mcp-client.ts"() {
     "use strict";
@@ -27322,17 +27385,24 @@ var init_mcp_client = __esm({
     MAX_RESULT_BYTES2 = 4 * 1024 * 1024;
     MAX_STDERR_BYTES = 16 * 1024;
     AUTH_PATTERN = /midway|mwinit|cookie|unauthori[sz]ed|\b401\b|\b403\b|expired|sign[ -]?in|authenticat/i;
+    ToolResultError = class extends IntakeError {
+      constructor(detail) {
+        super("SOURCE_ERROR", detail);
+      }
+    };
     McpSession = class _McpSession {
-      constructor(client, transport, stderr, callTimeoutMs) {
+      constructor(client, transport, stderr, callTimeoutMs, allowedTools) {
         this.client = client;
         this.transport = transport;
         this.stderr = stderr;
         this.callTimeoutMs = callTimeoutMs;
+        this.allowedTools = allowedTools;
       }
       client;
       transport;
       stderr;
       callTimeoutMs;
+      allowedTools;
       static async open(spec, serverName, options) {
         const env = { PATH: options.pathDirs.join(":"), ...spec.env };
         const transport = new StdioClientTransport({
@@ -27356,7 +27426,13 @@ var init_mcp_client = __esm({
           if (AUTH_PATTERN.test(stderr)) throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${serverName} reported an authentication failure`);
           throw new IntakeError("SERVER_START_FAILED", `${serverName} did not start`);
         }
-        return new _McpSession(client, transport, () => stderr, options.callTimeoutMs ?? 12e4);
+        return new _McpSession(
+          client,
+          transport,
+          () => stderr,
+          options.callTimeoutMs ?? 12e4,
+          new Set(options.allowedTools)
+        );
       }
       async requireTool(expectation) {
         const tools = [];
@@ -27375,6 +27451,7 @@ var init_mcp_client = __esm({
         return tool;
       }
       async call(name, args) {
+        if (!this.allowedTools.has(name)) throw new IntakeError("INVALID_ARGUMENT", "tool is not on the allowlist");
         let result;
         try {
           result = await this.client.callTool({ name, arguments: args }, void 0, { timeout: this.callTimeoutMs });
@@ -27391,7 +27468,7 @@ var init_mcp_client = __esm({
           if (AUTH_PATTERN.test(text2) || AUTH_PATTERN.test(this.stderr())) {
             throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${name} reported an authentication failure`);
           }
-          throw new IntakeError("SOURCE_ERROR", `${name} returned an error`);
+          throw new ToolResultError(`${name} returned an error`);
         }
         return result;
       }
@@ -27409,6 +27486,8 @@ var init_mcp_client = __esm({
 import {
   chmodSync as chmodSync2,
   closeSync as closeSync2,
+  constants as constants3,
+  fstatSync as fstatSync2,
   fsyncSync as fsyncSync2,
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync4,
@@ -27488,12 +27567,13 @@ function alive(pid) {
     return error3.code === "EPERM";
   }
 }
-var MAX_STATE_BYTES, IntakeStore, EMPTY_LOCK_GRACE_MS, ABANDONED_BREAK_MS;
+var MAX_STATE_BYTES, MAX_APPEND_LINE_BYTES, IntakeStore, EMPTY_LOCK_GRACE_MS, ABANDONED_BREAK_MS;
 var init_store = __esm({
   "src/intake/store.ts"() {
     "use strict";
     init_errors4();
     MAX_STATE_BYTES = 16 * 1024 * 1024;
+    MAX_APPEND_LINE_BYTES = 4 * 1024;
     IntakeStore = class {
       directory;
       constructor(home) {
@@ -27538,10 +27618,13 @@ var init_store = __esm({
         }
       }
       write(value, ...relative) {
+        this.writeText(JSON.stringify(value, null, 2) + "\n", ...relative);
+      }
+      /** Atomically replaces a file with `data` (0600, fsync, rename). */
+      writeText(data, ...relative) {
         const path2 = this.path(relative);
         this.ensureDirectory(this.directory);
         for (let index = 1; index < relative.length; index++) this.ensureDirectory(this.path(relative.slice(0, index)));
-        const data = JSON.stringify(value, null, 2) + "\n";
         if (Buffer.byteLength(data) > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state too large");
         const temporary = `${path2}.${randomBytes3(6).toString("hex")}.tmp`;
         const descriptor = openSync2(temporary, "wx", 384);
@@ -27559,6 +27642,67 @@ var init_store = __esm({
           } catch {
           }
           throw error3;
+        }
+      }
+      /** The raw text of a state file, or null when absent. Same owner/type checks as `read`. */
+      readText(...relative) {
+        const path2 = this.path(relative);
+        let stat;
+        try {
+          stat = lstatSync3(path2);
+        } catch (error3) {
+          if (error3.code === "ENOENT") return null;
+          throw new IntakeError("STORE_INVALID", "state file unreadable");
+        }
+        const uid = process.getuid?.();
+        if (!stat.isFile() || stat.isSymbolicLink() || uid !== void 0 && stat.uid !== uid || stat.size > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state file rejected");
+        try {
+          return readFileSync6(path2, "utf8");
+        } catch {
+          throw new IntakeError("STORE_INVALID", "state file unreadable");
+        }
+      }
+      /**
+       * Appends one line (plus a newline) to a state file: O_APPEND|O_CREAT, 0600,
+       * never following a symlink. The line must be at most 4 KiB and hold no CR/LF.
+       */
+      append(line, ...relative) {
+        if (typeof line !== "string" || /[\r\n]/.test(line) || Buffer.byteLength(line) > MAX_APPEND_LINE_BYTES) {
+          throw new IntakeError("STORE_INVALID", "append line rejected");
+        }
+        const path2 = this.path(relative);
+        this.ensureDirectory(this.directory);
+        for (let index = 1; index < relative.length; index++) this.ensureDirectory(this.path(relative.slice(0, index)));
+        const uid = process.getuid?.();
+        const check2 = (stat) => {
+          if (!stat.isFile() || stat.isSymbolicLink?.() || uid !== void 0 && stat.uid !== uid || stat.size > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state file rejected");
+        };
+        try {
+          check2(lstatSync3(path2));
+        } catch (error3) {
+          if (error3 instanceof IntakeError) throw error3;
+          if (error3.code !== "ENOENT") throw new IntakeError("STORE_INVALID", "state file unreadable");
+        }
+        let descriptor;
+        try {
+          descriptor = openSync2(path2, constants3.O_APPEND | constants3.O_CREAT | constants3.O_WRONLY | constants3.O_NOFOLLOW, 384);
+        } catch {
+          throw new IntakeError("STORE_INVALID", "state file rejected");
+        }
+        try {
+          check2(fstatSync2(descriptor));
+          writeSync(descriptor, line + "\n");
+          fsyncSync2(descriptor);
+        } finally {
+          closeSync2(descriptor);
+        }
+      }
+      /** Size in bytes of a state file, or 0 when absent. */
+      size(...relative) {
+        try {
+          return lstatSync3(this.path(relative)).size;
+        } catch {
+          return 0;
         }
       }
       /**
@@ -27608,7 +27752,8 @@ var run_exports = {};
 __export(run_exports, {
   accountScope: () => accountScope,
   defaultEnvironment: () => defaultEnvironment,
-  runIntake: () => runIntake
+  runIntake: () => runIntake,
+  tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
 import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
@@ -27620,6 +27765,14 @@ function tokenSubject(idToken) {
   try {
     const payload = JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8"));
     if (typeof payload.sub === "string" && payload.sub) return payload.sub;
+  } catch {
+  }
+  throw new IntakeError("TTOBAK_LOGIN_REQUIRED", "the signed-in identity could not be read");
+}
+function tokenEmail(idToken) {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8"));
+    if (typeof payload.email === "string" && payload.email.trim()) return payload.email.trim().toLowerCase();
   } catch {
   }
   throw new IntakeError("TTOBAK_LOGIN_REQUIRED", "the signed-in identity could not be read");
@@ -27654,7 +27807,7 @@ function definedTtobakEnv(env) {
 }
 async function openCalendarSession(environment, host, server, pathDirs) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [CALENDAR_TOOL.name] });
   try {
     await session.requireTool(CALENDAR_TOOL);
   } catch (error3) {
@@ -27663,8 +27816,41 @@ async function openCalendarSession(environment, host, server, pathDirs) {
   }
   return session;
 }
+async function selectTaskConnector(connector, args, environment, store) {
+  const options = flags(args, connector === "specreq" ? { "--host": "value", "--server": "value", "--auto-ack": "value" } : { "--host": "value", "--server": "value" });
+  const host = options["--host"];
+  const server = options["--server"];
+  if (!HOSTS.includes(host) || typeof server !== "string") throw new IntakeError("INVALID_ARGUMENT", "--host and --server are required");
+  const autoAckValue = options["--auto-ack"] ?? "on";
+  if (autoAckValue !== "on" && autoAckValue !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
+  const pathDirs = parsePathList(environment.env.PATH);
+  const spec = resolveServer(environment.home, host, server, pathDirs);
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
+  try {
+    for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+  } finally {
+    await session.close();
+  }
+  const previous = store.read("selection.json") ?? { version: 1 };
+  const base = { host, server, pathDirs, selectedAt: environment.now().toISOString() };
+  const next = {
+    ...previous,
+    version: 1,
+    [connector]: connector === "specreq" ? { ...base, autoAck: autoAckValue === "on" } : base
+  };
+  store.write(next, "selection.json");
+  return {
+    ok: true,
+    connector,
+    host,
+    server,
+    pathDirectories: pathDirs.length,
+    ...connector === "specreq" ? { autoAck: autoAckValue === "on" } : {}
+  };
+}
 async function select(args, environment, store) {
-  if (args[0] !== "calendar") throw new IntakeError("INVALID_ARGUMENT", "only the calendar connector exists");
+  if (isTaskConnector(args[0])) return selectTaskConnector(args[0], args.slice(1), environment, store);
+  if (args[0] !== "calendar") throw new IntakeError("INVALID_ARGUMENT", "connector must be calendar, meetings, specreq or slack");
   const options = flags(args.slice(1), { "--host": "value", "--server": "value", "--accept-unknown-sensitivity": "flag" });
   const host = options["--host"];
   const server = options["--server"];
@@ -27675,6 +27861,7 @@ async function select(args, environment, store) {
   const previous = store.read("selection.json");
   const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID4();
   const selection = {
+    ...previous ?? {},
     version: 1,
     calendar: {
       host,
@@ -27783,9 +27970,14 @@ async function runIntake(args, environment) {
     else if (command === "calendar") output = await calendar(rest, environment, store);
     else if (command === "status" && rest.length === 0) {
       const selection = store.read("selection.json");
+      const listed = {};
+      for (const id of ["calendar", "meetings", "specreq", "slack"]) {
+        const entry2 = selection?.[id];
+        if (entry2) listed[id] = { host: entry2.host, server: entry2.server };
+      }
       output = {
         ok: true,
-        selection: selection?.calendar ? { calendar: { host: selection.calendar.host, server: selection.calendar.server } } : {},
+        selection: listed,
         status: store.read("status.json") ?? {}
       };
     } else {
@@ -27817,6 +28009,7 @@ var init_run = __esm({
     init_api2();
     init_auth();
     init_calendar2();
+    init_connectors();
     init_errors4();
     init_hosts();
     init_mcp_client();
@@ -27824,6 +28017,7 @@ var init_run = __esm({
     USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
+  ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
   ttobak-mcp intake status`;
   }
