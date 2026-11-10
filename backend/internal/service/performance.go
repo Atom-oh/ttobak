@@ -47,6 +47,7 @@ type PerformanceStore interface {
 	ReplayPerformanceBatch(ctx context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error)
 	ListPerformanceSources(ctx context.Context, userID string) ([]model.PerformanceSourceStatus, error)
 	ListPerformanceAssignments(ctx context.Context, userID string) ([]model.SFDCAssignment, error)
+	ListPerformanceTasks(ctx context.Context, userID string, from, to string) ([]model.SFDCTask, error)
 	// GetAccountMappings returns the mappings for exactly the given SFDC IDs.
 	GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error)
 	PutAccountMapping(ctx context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error
@@ -64,7 +65,10 @@ type PerformanceAccountReader interface {
 type PerformanceService struct {
 	store    PerformanceStore
 	accounts PerformanceAccountReader
-	now      func() time.Time
+	calendar PerformanceCalendarReader
+	meetings PerformanceMeetingLister
+	// now is the clock; tests replace it.
+	now func() time.Time
 }
 
 func NewPerformanceService(store PerformanceStore, accounts PerformanceAccountReader) *PerformanceService {
@@ -393,16 +397,4 @@ func (svc *PerformanceService) PutMapping(ctx context.Context, userID, sfdcAccou
 		return nil, err
 	}
 	return &mapping, nil
-}
-
-// ListMissed returns the owner's missed items for a period. The rules are not
-// implemented yet, so the list is always empty.
-func (svc *PerformanceService) ListMissed(_ context.Context, userID, period string) (*model.PerformanceMissedList, error) {
-	if !performanceUserPattern.MatchString(userID) {
-		return nil, ErrForbidden
-	}
-	if period != "" && !performancePeriods[period] {
-		return nil, ErrInvalidInput
-	}
-	return &model.PerformanceMissedList{Items: []model.PerformanceMissedItem{}}, nil
 }
