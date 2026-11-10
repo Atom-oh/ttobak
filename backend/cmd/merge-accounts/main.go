@@ -81,6 +81,9 @@ const (
 	// leaseTTL and leaseRenewAfter govern the CLI-held lease during the scan.
 	leaseTTL        = 5 * time.Minute
 	leaseRenewAfter = time.Minute
+	// rowMoveTimeout bounds one row's decrypt, re-seal and write, well inside
+	// leaseTTL minus leaseRenewAfter.
+	rowMoveTimeout = 30 * time.Second
 )
 
 var accountID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -245,6 +248,10 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 		counts, err := d.scanApply(ctx, o)
 		res.UserRows = counts
 		if err != nil {
+			// Report the persisted state (failed/SCAN_INCOMPLETE), not Start's.
+			if job, getErr := d.jobs.GetAccountMergeJob(ctx, o.From); getErr == nil && job != nil {
+				res.State, res.Step, res.ErrorCode = job.State, job.Step, job.ErrorCode
+			}
 			return res, err
 		}
 		// The worker finalizes the job and a merged source refuses Start, so
@@ -443,15 +450,15 @@ func (d deps) scanSegment(ctx context.Context, o options, lease *cliLease, segme
 func (d deps) handleRow(ctx context.Context, o options, lease *cliLease, row repository.MergeUserRow, add func(string, int)) error {
 	var (
 		kind string
-		move func() error
+		move func(context.Context) error
 	)
 	switch row.Kind {
 	case repository.MergeUserRowSpecReqTask:
 		kind = "specreqTasks"
-		move = func() error { return d.users.MoveSpecReqTaskRowForMerge(ctx, lease.current(), row) }
+		move = func(ctx context.Context) error { return d.users.MoveSpecReqTaskRowForMerge(ctx, lease.current(), row) }
 	case repository.MergeUserRowCalendar:
 		kind = "calendarEvents"
-		move = func() error { return d.moveCalendarEvent(ctx, o, lease.current(), row) }
+		move = func(ctx context.Context) error { return d.moveCalendarEvent(ctx, o, lease.current(), row) }
 	case repository.MergeUserRowMeeting:
 		if row.SharedToAccount {
 			// Published meetings move in the worker's meetings step.
@@ -459,7 +466,7 @@ func (d deps) handleRow(ctx context.Context, o options, lease *cliLease, row rep
 			return nil
 		}
 		kind = "linkOnlyMeetings"
-		move = func() error {
+		move = func(ctx context.Context) error {
 			return d.users.MoveMeetingForAccountMerge(ctx, lease.current(), row.UserID, row.MeetingID, repository.MeetingRefForMergeRow(o.From, row))
 		}
 	default:
@@ -470,7 +477,14 @@ func (d deps) handleRow(ctx context.Context, o options, lease *cliLease, row rep
 		add(kind, 1)
 		return nil
 	}
-	err := move()
+	// Renew before every row and bound the row's work, so a slow page (KMS
+	// throttling, a dense segment) never outlives the lease mid-page.
+	if err := lease.renew(ctx); err != nil {
+		return err
+	}
+	rowCtx, cancel := context.WithTimeout(ctx, rowMoveTimeout)
+	err := move(rowCtx)
+	cancel()
 	switch {
 	case err == nil:
 		add(kind+"Moved", 1)
