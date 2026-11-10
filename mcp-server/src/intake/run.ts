@@ -66,6 +66,15 @@ function tokenSubject(idToken: string): string {
   throw new IntakeError('TTOBAK_LOGIN_REQUIRED', 'the signed-in identity could not be read');
 }
 
+/** The lowercased `email` claim of an ID token the auth client already verified. */
+export function tokenEmail(idToken: string): string {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as { email?: unknown };
+    if (typeof payload.email === 'string' && payload.email.trim()) return payload.email.trim().toLowerCase();
+  } catch { /* falls through */ }
+  throw new IntakeError('TTOBAK_LOGIN_REQUIRED', 'the signed-in identity could not be read');
+}
+
 const USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]

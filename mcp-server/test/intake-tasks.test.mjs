@@ -101,3 +101,51 @@ test('selection never stores host command, args or env', async t => {
   assert.ok(!outputs.includes(CANARY));
   assert.ok(!outputs.includes(FIXTURE));
 });
+
+test('calendarEventId matches Go vectors', async () => {
+  const { calendarEventId } = await import('../dist/intake/event-id.js');
+  // Produced by TestCalendarEventIDVectors in backend/internal/service/calendar_test.go.
+  assert.equal(calendarEventId('source-1', 'event-1'), '72d7d2e4b17347a51f4b59d2e99398890170d1eaef4681437adc3ba9a1660645');
+  assert.equal(calendarEventId('source-1', 'a<b>&c'), 'b3848d80ea020156e5e4bcd6cd2f5d1a312ff458c82b3d7afe393a08f2de4530');
+  assert.equal(calendarEventId('source-1', 'line\u2028para\u2029end'), '2b841269015688eccb45b0e102aaf1f68037061d11eab44853ffbd6ecdb42f14');
+});
+
+test('tokenEmail lowercases the verified claim and requires one', async () => {
+  const { tokenEmail } = await import('../dist/intake/run.js');
+  const token = claims => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
+  assert.equal(tokenEmail(token({ email: ' Me@Amazon.com ' })), 'me@amazon.com');
+  assert.throws(() => tokenEmail(token({ sub: 'x' })), error => error.code === 'TTOBAK_LOGIN_REQUIRED');
+  assert.throws(() => tokenEmail('garbage'), error => error.code === 'TTOBAK_LOGIN_REQUIRED');
+});
+
+test('task client methods send exact paths and bodies', async () => {
+  const { TtobakApi } = await import('../dist/api.js');
+  const { MAX_CALENDAR_API_BYTES: MAX } = await import('../dist/calendar.js');
+  const api = new TtobakApi({ getIdToken: async () => 'token' }, 'https://example.invalid');
+  const seen = [];
+  api.request = async (...args) => {
+    seen.push(args);
+    return args[1].endsWith('/projects') ? { projects: [{ projectId: 'p1', name: 'n', sfdcOpptyId: '006X' }, { projectId: 'p2', name: 'm' }] } : {};
+  };
+  const id = 'a'.repeat(64);
+  const create = { sourceId: 's', externalId: 'e', state: 'issue_needed', accountId: 'acct-1', path: 'mine' };
+  const transition = { op: 'pickOwner', version: 3, counterpartUserId: 'u2' };
+  await api.listSpecReqTasks();
+  await api.listSpecReqTasks('a+b');
+  await api.getSpecReqTask(id);
+  await api.createSpecReqTask(create);
+  await api.transitionSpecReqTask(id, transition);
+  const projects = await api.listAccountProjects('acct-1');
+  assert.deepEqual(seen.slice(0, 5), [
+    ['GET', '/api/specreq-tasks', undefined, MAX, false, true],
+    ['GET', '/api/specreq-tasks?cursor=a%2Bb', undefined, MAX, false, true],
+    ['GET', `/api/specreq-tasks/${id}`, undefined, MAX, false, true],
+    ['POST', '/api/specreq-tasks', create, MAX, false, true],
+    ['POST', `/api/specreq-tasks/${id}/transitions`, transition, MAX, false, true],
+  ]);
+  assert.deepEqual(seen[5], ['GET', '/api/accounts/acct-1/projects']);
+  assert.deepEqual(projects, [{ projectId: 'p1', sfdcOpptyId: '006X' }, { projectId: 'p2' }]);
+  await assert.rejects(api.getSpecReqTask('../x'));
+  await assert.rejects(api.transitionSpecReqTask('A'.repeat(64), transition));
+  await assert.rejects(api.listAccountProjects('../x'));
+});
