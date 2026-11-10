@@ -204,6 +204,24 @@ func (repo *SpecReqTaskRepository) ListSpecReqTasks(ctx context.Context, userID,
 	return rows, next, nil
 }
 
+// SpecReqTaskRowCursor returns the continuation cursor that resumes a task list
+// of the given page size immediately after row. It performs no I/O.
+func (repo *SpecReqTaskRepository) SpecReqTaskRowCursor(userID string, limit int32, row SpecReqTaskRow) (string, error) {
+	if !calendarStorageID.MatchString(userID) || limit < 1 || limit > specReqTaskMaxLimit || !specReqTaskRowValid(row, userID) {
+		return "", ErrInvalidSpecReqTask
+	}
+	scope := calendarCursor{Version: 1, Kind: specReqTaskCursorKind, UserID: userID, Limit: limit}
+	lower, upper := model.PrefixSpecReqTask, model.PrefixSpecReqTask+"~"
+	key := map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: row.PK}, "SK": &types.AttributeValueMemberS{Value: row.SK},
+	}
+	cursor, err := encodeCalendarCursor(scope, key, lower, upper)
+	if err != nil || cursor == nil {
+		return "", ErrInvalidSpecReqCursor
+	}
+	return *cursor, nil
+}
+
 // UpdateSpecReqTask writes the mutable fields of row when the stored version
 // equals expectedVersion, then bumps the version by one. It sets updatedAt from
 // the repository clock and moves stateChangedAt only when row.State differs from
