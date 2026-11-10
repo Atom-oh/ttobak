@@ -27484,6 +27484,333 @@ var init_mcp_client = __esm({
   }
 });
 
+// src/intake/ack-ledger.ts
+function ledgerPath(scope) {
+  if (!SCOPE_PATTERN2.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "ack ledger scope is invalid");
+  return ["specreq", scope, "ack-ledger.json"];
+}
+function requireRequestId(requestId) {
+  if (typeof requestId !== "string" || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  }
+  return requestId.toLowerCase();
+}
+function validEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry2 = value;
+  return typeof entry2.eventId === "string" && EVENT_ID_PATTERN.test(entry2.eventId) && typeof entry2.attemptedAt === "string" && Number.isFinite(Date.parse(entry2.attemptedAt)) && OUTCOMES.includes(entry2.outcome) && typeof entry2.cloudSynced === "boolean";
+}
+function loadAckLedger(store, scope) {
+  const raw = store.read(...ledgerPath(scope));
+  if (raw === null) return { version: 1, entries: {} };
+  const ledger = raw;
+  if (!raw || typeof raw !== "object" || ledger.version !== 1 || !ledger.entries || typeof ledger.entries !== "object" || Array.isArray(ledger.entries)) {
+    throw new IntakeError("STORE_INVALID", "ack ledger is malformed");
+  }
+  for (const [requestId, entry2] of Object.entries(ledger.entries)) {
+    if (!LEDGER_KEY_PATTERN.test(requestId) || !validEntry(entry2)) {
+      throw new IntakeError("STORE_INVALID", "ack ledger entry is malformed");
+    }
+  }
+  return ledger;
+}
+function save(store, scope, ledger) {
+  store.write(ledger, ...ledgerPath(scope));
+}
+function beginAck(store, scope, requestId, eventId, now = /* @__PURE__ */ new Date()) {
+  const key = requireRequestId(requestId);
+  if (typeof eventId !== "string" || !EVENT_ID_PATTERN.test(eventId)) {
+    throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
+  }
+  const ledger = loadAckLedger(store, scope);
+  if (Object.hasOwn(ledger.entries, key)) {
+    throw new IntakeError("STORE_INVALID", "an acknowledge attempt is already recorded for this request");
+  }
+  ledger.entries[key] = { eventId, attemptedAt: now.toISOString(), outcome: "pending", cloudSynced: false };
+  save(store, scope, ledger);
+}
+function ackEntry(store, scope, requestId) {
+  const key = requireRequestId(requestId);
+  const ledger = loadAckLedger(store, scope);
+  return Object.hasOwn(ledger.entries, key) ? ledger.entries[key] : null;
+}
+function update(store, scope, requestId, change) {
+  const key = requireRequestId(requestId);
+  const ledger = loadAckLedger(store, scope);
+  if (!Object.hasOwn(ledger.entries, key)) {
+    throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
+  }
+  ledger.entries[key] = change(ledger.entries[key]);
+  save(store, scope, ledger);
+}
+function finishAck(store, scope, requestId, outcome) {
+  if (!["ok", "rejected", "unknown"].includes(outcome)) {
+    throw new IntakeError("INVALID_ARGUMENT", "ack outcome is invalid");
+  }
+  update(store, scope, requestId, (entry2) => ({
+    ...entry2,
+    outcome,
+    cloudSynced: entry2.outcome === outcome ? entry2.cloudSynced : false
+  }));
+}
+function markSynced(store, scope, requestId) {
+  update(store, scope, requestId, (entry2) => ({ ...entry2, cloudSynced: true }));
+}
+var REQUEST_ID_PATTERN, SCOPE_PATTERN2, EVENT_ID_PATTERN, OUTCOMES, LEDGER_KEY_PATTERN;
+var init_ack_ledger = __esm({
+  "src/intake/ack-ledger.ts"() {
+    "use strict";
+    init_errors4();
+    REQUEST_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    SCOPE_PATTERN2 = /^[0-9a-f]{32}$/;
+    EVENT_ID_PATTERN = /^[0-9a-f]{64}$/;
+    OUTCOMES = ["pending", "ok", "rejected", "unknown"];
+    LEDGER_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  }
+});
+
+// src/intake/specreq.ts
+function clipUtf8(value, maxBytes) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  let out = "";
+  let bytes = 0;
+  for (const character of value) {
+    const size = Buffer.byteLength(character);
+    if (bytes + size > maxBytes) break;
+    out += character;
+    bytes += size;
+  }
+  return out;
+}
+function parseSummary(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  if (typeof r.requestId !== "string" || !REQUEST_ID_PATTERN.test(r.requestId)) return null;
+  if (!STATES.includes(r.stateId)) return null;
+  if (Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length > MAX_RANGES) return null;
+  const ranges = Array.isArray(r.meetingDateRanges) ? r.meetingDateRanges.filter((range) => typeof range === "string") : [];
+  return {
+    requestId: r.requestId.toLowerCase(),
+    title: typeof r.title === "string" ? clipUtf8(r.title, TITLE_MAX_BYTES) : "",
+    stateId: r.stateId,
+    requesterLogin: login(r.requesterLogin),
+    resolverLogin: login(r.resolverLogin),
+    salesforceId: typeof r.salesforceId === "string" ? r.salesforceId.trim() : "",
+    meetingDateRanges: ranges,
+    createdAt: typeof r.createdAt === "number" && Number.isFinite(r.createdAt) ? r.createdAt : Number.NaN
+  };
+}
+function envelope(payload, tool) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
+  }
+  const p = payload;
+  if (p.success !== true || !p.data || typeof p.data !== "object" || Array.isArray(p.data)) {
+    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
+  }
+  return p.data;
+}
+function parseSearch(payload) {
+  const data = envelope(payload, "search_requests_advanced");
+  if (!Array.isArray(data.results) || data.results.length > SEARCH_PAGE_SIZE) {
+    throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned an unexpected shape");
+  }
+  const requests = data.results.map(parseSummary).filter((item) => item !== null);
+  const dropped = data.results.length - requests.length;
+  if (dropped > 0) throw new IntakeError("PARSE_FAILED", `search_requests_advanced returned ${dropped} malformed records`);
+  const cursor = data.lastEvaluatedIndex;
+  let next = null;
+  if (typeof cursor === "string" && cursor) next = cursor;
+  else if (Array.isArray(cursor) ? cursor.length > 0 : cursor && typeof cursor === "object") next = JSON.stringify(cursor);
+  return { requests, next };
+}
+function parseRequest(payload) {
+  const summary = parseSummary(envelope(payload, "get_request"));
+  if (!summary) throw new IntakeError("PARSE_FAILED", "get_request returned an unexpected shape");
+  return summary;
+}
+async function searchRequests(session, filter) {
+  const requests = [];
+  let next = null;
+  for (let page2 = 0; page2 < SEARCH_MAX_PAGES; page2++) {
+    const result = await session.call("search_requests_advanced", {
+      ...filter,
+      pageSize: SEARCH_PAGE_SIZE,
+      fields_json: JSON.stringify(SEARCH_FIELDS),
+      ...next ? { lastEvaluatedIndex_json: next } : {}
+    });
+    const parsed = parseSearch(resultJson(result, "search_requests_advanced"));
+    if (parsed.requests.length === SEARCH_PAGE_SIZE && !parsed.next) {
+      throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned a full page without a cursor");
+    }
+    requests.push(...parsed.requests);
+    next = parsed.next;
+    if (!next) return requests;
+  }
+  throw new IntakeError("PARSE_FAILED", `search_requests_advanced exceeds ${SEARCH_MAX_PAGES} pages`);
+}
+function realDate(value) {
+  const time3 = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(time3) && new Date(time3).toISOString().slice(0, 10) === value;
+}
+function localDate2(instant2, zone) {
+  const time3 = Date.parse(instant2);
+  if (!Number.isFinite(time3)) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(time3));
+    const part = (type) => parts.find((item) => item.type === type)?.value ?? "";
+    const date4 = `${part("year")}-${part("month")}-${part("day")}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(date4) ? date4 : null;
+  } catch {
+    return null;
+  }
+}
+function meetingInRanges(startsAt, zone, ranges) {
+  const date4 = localDate2(startsAt, zone);
+  if (!date4 || !Array.isArray(ranges)) return false;
+  return ranges.some((range) => {
+    if (typeof range !== "string") return false;
+    const match = DATE_RANGE.exec(range);
+    if (!match || !realDate(match[1]) || !realDate(match[2]) || match[1] > match[2]) return false;
+    return match[1] <= date4 && date4 <= match[2];
+  });
+}
+function matches(request2, task, opptyAccounts, rule) {
+  if (!task.accountId || !request2.salesforceId || !opptyAccounts.get(request2.salesforceId)?.has(task.accountId)) return false;
+  if (!meetingInRanges(task.occurrenceStartsAt, rule.zone, request2.meetingDateRanges)) return false;
+  const me = login(rule.me);
+  if (!me) return false;
+  if (rule.path === "mine") {
+    if (login(request2.requesterLogin) !== me) return false;
+    const created = Date.parse(task.createdAt);
+    const ends = Date.parse(task.occurrenceEndsAt);
+    return Number.isFinite(created) && Number.isFinite(ends) && request2.createdAt >= created && request2.createdAt < ends + 7 * DAY_MS;
+  }
+  const counterpart = login(rule.counterpartLogin(task));
+  return counterpart !== "" && login(request2.requesterLogin) === counterpart && login(request2.resolverLogin) === me;
+}
+function linkRequests(requests, tasks, opptyAccounts, rule) {
+  const own = tasks.filter((task) => task.path === rule.path);
+  const linkedTo = /* @__PURE__ */ new Map();
+  for (const task of tasks) {
+    if (!task.specReqId) continue;
+    const id = task.specReqId.toLowerCase();
+    linkedTo.set(id, [...linkedTo.get(id) ?? [], task]);
+  }
+  const pairs = [];
+  for (const request2 of requests) {
+    const linked = linkedTo.get(request2.requestId.toLowerCase());
+    const candidates = !linked ? own.filter((task) => !task.specReqId && UNLINKED_STATES[rule.path].includes(task.state)) : linked.length === 1 && linked[0].path === rule.path && LINKED_STATES[rule.path].includes(linked[0].state) ? linked : [];
+    for (const task of candidates) {
+      if (matches(request2, task, opptyAccounts, rule)) pairs.push([request2.requestId, task.eventId]);
+    }
+  }
+  const count = (values) => values.reduce(
+    (map2, value) => map2.set(value, (map2.get(value) ?? 0) + 1),
+    /* @__PURE__ */ new Map()
+  );
+  const perRequest = count(pairs.map(([requestId]) => requestId));
+  const perTask = count(pairs.map(([, eventId]) => eventId));
+  const out = /* @__PURE__ */ new Map();
+  for (const [requestId, eventId] of pairs) {
+    if (perRequest.get(requestId) === 1 && perTask.get(eventId) === 1) out.set(requestId, eventId);
+  }
+  return out;
+}
+async function resolveMe(session) {
+  const payload = resultJson(await session.call("check_user_is_tam", {}), "check_user_is_tam");
+  const data = payload && typeof payload === "object" && payload.success !== false ? payload.data : null;
+  const employee = data && typeof data === "object" ? login(data.employee_login) : "";
+  if (!LOGIN_PATTERN.test(employee)) throw new IntakeError("IDENTITY_MISMATCH", "SpecReq returned no valid login");
+  return employee;
+}
+async function readRequest(session, requestId) {
+  const request2 = parseRequest(resultJson(await session.call("get_request", { request_id: requestId }), "get_request"));
+  if (request2.requestId !== requestId) throw new IntakeError("PARSE_FAILED", "get_request returned another request");
+  return request2;
+}
+function ackSucceeded(result) {
+  let payload;
+  try {
+    payload = resultJson(result, "acknowledge_request");
+  } catch {
+    return "unknown";
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "unknown";
+  const success2 = payload.success;
+  return success2 === true ? "ok" : success2 === false ? "rejected" : "unknown";
+}
+async function acknowledgeOnce(session, ledger, request2, me) {
+  const requestId = typeof request2.requestId === "string" ? request2.requestId.toLowerCase() : "";
+  if (!REQUEST_ID_PATTERN.test(requestId)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  const now = () => ledger.now?.() ?? /* @__PURE__ */ new Date();
+  const existing = ackEntry(ledger.store, ledger.scope, requestId);
+  if (existing) return existing.outcome === "pending" ? "unknown" : existing.outcome;
+  const myLogin = login(me);
+  const current = await readRequest(session, requestId);
+  if (!myLogin || current.stateId !== "NEXT_UP" || current.resolverLogin !== myLogin) return "not_eligible";
+  beginAck(ledger.store, ledger.scope, requestId, request2.eventId, now());
+  let outcome;
+  try {
+    outcome = ackSucceeded(await session.call("acknowledge_request", { request_id: requestId }));
+  } catch (error3) {
+    outcome = error3 instanceof ToolResultError ? "rejected" : "unknown";
+  }
+  finishAck(ledger.store, ledger.scope, requestId, outcome);
+  return outcome;
+}
+async function resolveAck(session, ledger, requestId, me) {
+  const id = typeof requestId === "string" ? requestId.toLowerCase() : "";
+  if (!REQUEST_ID_PATTERN.test(id)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  const entry2 = ackEntry(ledger.store, ledger.scope, id);
+  if (!entry2) throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
+  if (entry2.outcome === "ok") return { state: "acked" };
+  const current = await readRequest(session, id);
+  const myLogin = login(me);
+  if (myLogin && current.resolverLogin === myLogin && ACK_CONFIRMED.includes(current.stateId)) {
+    finishAck(ledger.store, ledger.scope, id, "ok");
+    return { state: "acked" };
+  }
+  return { state: "ack_failed", failureCode: entry2.outcome === "rejected" ? "ACK_REJECTED" : "ACK_UNCONFIRMED" };
+}
+var SEARCH_FIELDS, SEARCH_PAGE_SIZE, SEARCH_MAX_PAGES, STATES, TITLE_MAX_BYTES, MAX_RANGES, LOGIN_PATTERN, ACK_CONFIRMED, DAY_MS, login, DATE_RANGE, UNLINKED_STATES, LINKED_STATES;
+var init_specreq = __esm({
+  "src/intake/specreq.ts"() {
+    "use strict";
+    init_mcp_client();
+    init_errors4();
+    init_ack_ledger();
+    SEARCH_FIELDS = [
+      "requestId",
+      "title",
+      "stateId",
+      "requesterLogin",
+      "resolverLogin",
+      "salesforceId",
+      "meetingDateRanges",
+      "createdAt"
+    ];
+    SEARCH_PAGE_SIZE = 50;
+    SEARCH_MAX_PAGES = 4;
+    STATES = ["PENDING", "NEXT_UP", "WORKING", "WAITING", "COMPLETED", "CANCELLED"];
+    TITLE_MAX_BYTES = 512;
+    MAX_RANGES = 50;
+    LOGIN_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+    ACK_CONFIRMED = ["WORKING", "WAITING", "COMPLETED"];
+    DAY_MS = 24 * 60 * 60 * 1e3;
+    login = (value) => typeof value === "string" ? value.trim().toLowerCase() : "";
+    DATE_RANGE = /^(\d{4}-\d{2}-\d{2}) - (\d{4}-\d{2}-\d{2})$/;
+    UNLINKED_STATES = {
+      mine: ["issue_needed"],
+      theirs: ["request_needed", "requested"]
+    };
+    LINKED_STATES = {
+      mine: [],
+      theirs: ["request_needed", "requested", "ack_failed"]
+    };
+  }
+});
+
 // src/intake/store.ts
 import {
   chmodSync as chmodSync2,
@@ -27811,105 +28138,22 @@ var init_attendees = __esm({
   }
 });
 
-// src/intake/ack-ledger.ts
-function ledgerPath(scope) {
-  if (!SCOPE_PATTERN2.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "ack ledger scope is invalid");
-  return ["specreq", scope, "ack-ledger.json"];
-}
-function requireRequestId(requestId) {
-  if (typeof requestId !== "string" || !REQUEST_ID_PATTERN.test(requestId)) {
-    throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
-  }
-  return requestId.toLowerCase();
-}
-function validEntry(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry2 = value;
-  return typeof entry2.eventId === "string" && EVENT_ID_PATTERN.test(entry2.eventId) && typeof entry2.attemptedAt === "string" && Number.isFinite(Date.parse(entry2.attemptedAt)) && OUTCOMES.includes(entry2.outcome) && typeof entry2.cloudSynced === "boolean";
-}
-function loadAckLedger(store, scope) {
-  const raw = store.read(...ledgerPath(scope));
-  if (raw === null) return { version: 1, entries: {} };
-  const ledger = raw;
-  if (!raw || typeof raw !== "object" || ledger.version !== 1 || !ledger.entries || typeof ledger.entries !== "object" || Array.isArray(ledger.entries)) {
-    throw new IntakeError("STORE_INVALID", "ack ledger is malformed");
-  }
-  for (const [requestId, entry2] of Object.entries(ledger.entries)) {
-    if (!LEDGER_KEY_PATTERN.test(requestId) || !validEntry(entry2)) {
-      throw new IntakeError("STORE_INVALID", "ack ledger entry is malformed");
-    }
-  }
-  return ledger;
-}
-function save(store, scope, ledger) {
-  store.write(ledger, ...ledgerPath(scope));
-}
-function beginAck(store, scope, requestId, eventId, now = /* @__PURE__ */ new Date()) {
-  const key = requireRequestId(requestId);
-  if (typeof eventId !== "string" || !EVENT_ID_PATTERN.test(eventId)) {
-    throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
-  }
-  const ledger = loadAckLedger(store, scope);
-  if (Object.hasOwn(ledger.entries, key)) {
-    throw new IntakeError("STORE_INVALID", "an acknowledge attempt is already recorded for this request");
-  }
-  ledger.entries[key] = { eventId, attemptedAt: now.toISOString(), outcome: "pending", cloudSynced: false };
-  save(store, scope, ledger);
-}
-function ackEntry(store, scope, requestId) {
-  const key = requireRequestId(requestId);
-  const ledger = loadAckLedger(store, scope);
-  return Object.hasOwn(ledger.entries, key) ? ledger.entries[key] : null;
-}
-function update(store, scope, requestId, change) {
-  const key = requireRequestId(requestId);
-  const ledger = loadAckLedger(store, scope);
-  if (!Object.hasOwn(ledger.entries, key)) {
-    throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
-  }
-  ledger.entries[key] = change(ledger.entries[key]);
-  save(store, scope, ledger);
-}
-function finishAck(store, scope, requestId, outcome) {
-  if (!["ok", "rejected", "unknown"].includes(outcome)) {
-    throw new IntakeError("INVALID_ARGUMENT", "ack outcome is invalid");
-  }
-  update(store, scope, requestId, (entry2) => ({
-    ...entry2,
-    outcome,
-    cloudSynced: entry2.outcome === outcome ? entry2.cloudSynced : false
-  }));
-}
-function markSynced(store, scope, requestId) {
-  update(store, scope, requestId, (entry2) => ({ ...entry2, cloudSynced: true }));
-}
-var REQUEST_ID_PATTERN, SCOPE_PATTERN2, EVENT_ID_PATTERN, OUTCOMES, LEDGER_KEY_PATTERN;
-var init_ack_ledger = __esm({
-  "src/intake/ack-ledger.ts"() {
-    "use strict";
-    init_errors4();
-    REQUEST_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    SCOPE_PATTERN2 = /^[0-9a-f]{32}$/;
-    EVENT_ID_PATTERN = /^[0-9a-f]{64}$/;
-    OUTCOMES = ["pending", "ok", "rejected", "unknown"];
-    LEDGER_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-  }
-});
-
 // src/intake/classify.ts
 function classifyOccurrence(input) {
   if (input.isPrivate) return { kind: "skip" };
-  const me = input.me.trim().toLowerCase();
-  const attendees = [...new Set(input.attendees.map((a) => a.trim().toLowerCase()))].filter((a) => a && a !== me);
+  const myEmails = new Set(input.me.emails.map((e) => e.trim().toLowerCase()).filter(Boolean));
+  const myUserId = input.me.userId;
+  const isMe = (m) => myUserId !== "" && m.userId === myUserId;
+  const attendees = [...new Set(input.attendees.map((a) => a.trim().toLowerCase()))].filter((a) => a && !myEmails.has(a));
   if (!attendees.some((a) => !a.endsWith("@amazon.com"))) return { kind: "skip" };
   if (!input.accountId) {
     return attendees.some((a) => input.anyAccountSaEmails.has(a)) ? { kind: "task", state: "needs_account" } : { kind: "skip" };
   }
   const present = new Set(attendees);
   const members = input.members.map((m) => ({ ...m, email: m.email.trim().toLowerCase() }));
-  const counterparts = members.filter((m) => SA_ROLES.has(m.role) && m.userId !== "" && m.email.endsWith("@amazon.com") && present.has(m.email));
+  const counterparts = members.filter((m) => SA_ROLES.has(m.role) && m.userId !== "" && !isMe(m) && m.email.endsWith("@amazon.com") && present.has(m.email));
   if (counterparts.length === 0) return { kind: "skip" };
-  const mine = members.find((m) => m.email === me);
+  const mine = members.find(isMe);
   if (mine?.role === "SA") return { kind: "task", state: "issue_needed", path: "mine" };
   if (counterparts.length === 1) {
     return { kind: "task", state: "request_needed", path: "theirs", counterpartUserId: counterparts[0].userId };
@@ -28119,253 +28363,6 @@ var init_slack_draft = __esm({
   }
 });
 
-// src/intake/specreq.ts
-function clipUtf8(value, maxBytes) {
-  if (Buffer.byteLength(value) <= maxBytes) return value;
-  let out = "";
-  let bytes = 0;
-  for (const character of value) {
-    const size = Buffer.byteLength(character);
-    if (bytes + size > maxBytes) break;
-    out += character;
-    bytes += size;
-  }
-  return out;
-}
-function parseSummary(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const r = raw;
-  if (typeof r.requestId !== "string" || !REQUEST_ID_PATTERN.test(r.requestId)) return null;
-  if (!STATES.includes(r.stateId)) return null;
-  if (Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length > MAX_RANGES) return null;
-  const ranges = Array.isArray(r.meetingDateRanges) ? r.meetingDateRanges.filter((range) => typeof range === "string") : [];
-  return {
-    requestId: r.requestId.toLowerCase(),
-    title: typeof r.title === "string" ? clipUtf8(r.title, TITLE_MAX_BYTES) : "",
-    stateId: r.stateId,
-    requesterLogin: login(r.requesterLogin),
-    resolverLogin: login(r.resolverLogin),
-    salesforceId: typeof r.salesforceId === "string" ? r.salesforceId.trim() : "",
-    meetingDateRanges: ranges,
-    createdAt: typeof r.createdAt === "number" && Number.isFinite(r.createdAt) ? r.createdAt : Number.NaN
-  };
-}
-function envelope(payload, tool) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
-  }
-  const p = payload;
-  if (p.success !== true || !p.data || typeof p.data !== "object" || Array.isArray(p.data)) {
-    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
-  }
-  return p.data;
-}
-function parseSearch(payload) {
-  const data = envelope(payload, "search_requests_advanced");
-  if (!Array.isArray(data.results) || data.results.length > SEARCH_PAGE_SIZE) {
-    throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned an unexpected shape");
-  }
-  const requests = data.results.map(parseSummary).filter((item) => item !== null);
-  const dropped = data.results.length - requests.length;
-  if (dropped > 0) throw new IntakeError("PARSE_FAILED", `search_requests_advanced returned ${dropped} malformed records`);
-  const cursor = data.lastEvaluatedIndex;
-  let next = null;
-  if (typeof cursor === "string" && cursor) next = cursor;
-  else if (Array.isArray(cursor) ? cursor.length > 0 : cursor && typeof cursor === "object") next = JSON.stringify(cursor);
-  return { requests, next };
-}
-function parseRequest(payload) {
-  const summary = parseSummary(envelope(payload, "get_request"));
-  if (!summary) throw new IntakeError("PARSE_FAILED", "get_request returned an unexpected shape");
-  return summary;
-}
-async function searchRequests(session, filter) {
-  const requests = [];
-  let next = null;
-  for (let page2 = 0; page2 < SEARCH_MAX_PAGES; page2++) {
-    const result = await session.call("search_requests_advanced", {
-      ...filter,
-      pageSize: SEARCH_PAGE_SIZE,
-      fields_json: JSON.stringify(SEARCH_FIELDS),
-      ...next ? { lastEvaluatedIndex_json: next } : {}
-    });
-    const parsed = parseSearch(resultJson(result, "search_requests_advanced"));
-    if (parsed.requests.length === SEARCH_PAGE_SIZE && !parsed.next) {
-      throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned a full page without a cursor");
-    }
-    requests.push(...parsed.requests);
-    next = parsed.next;
-    if (!next) return requests;
-  }
-  throw new IntakeError("PARSE_FAILED", `search_requests_advanced exceeds ${SEARCH_MAX_PAGES} pages`);
-}
-function realDate(value) {
-  const time3 = Date.parse(`${value}T00:00:00Z`);
-  return Number.isFinite(time3) && new Date(time3).toISOString().slice(0, 10) === value;
-}
-function localDate2(instant2, zone) {
-  const time3 = Date.parse(instant2);
-  if (!Number.isFinite(time3)) return null;
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(time3));
-    const part = (type) => parts.find((item) => item.type === type)?.value ?? "";
-    const date4 = `${part("year")}-${part("month")}-${part("day")}`;
-    return /^\d{4}-\d{2}-\d{2}$/.test(date4) ? date4 : null;
-  } catch {
-    return null;
-  }
-}
-function meetingInRanges(startsAt, zone, ranges) {
-  const date4 = localDate2(startsAt, zone);
-  if (!date4 || !Array.isArray(ranges)) return false;
-  return ranges.some((range) => {
-    if (typeof range !== "string") return false;
-    const match = DATE_RANGE.exec(range);
-    if (!match || !realDate(match[1]) || !realDate(match[2]) || match[1] > match[2]) return false;
-    return match[1] <= date4 && date4 <= match[2];
-  });
-}
-function matches(request2, task, opptyAccounts, rule) {
-  if (!task.accountId || !request2.salesforceId || !opptyAccounts.get(request2.salesforceId)?.has(task.accountId)) return false;
-  if (!meetingInRanges(task.occurrenceStartsAt, rule.zone, request2.meetingDateRanges)) return false;
-  const me = login(rule.me);
-  if (!me) return false;
-  if (rule.path === "mine") {
-    if (login(request2.requesterLogin) !== me) return false;
-    const created = Date.parse(task.createdAt);
-    const ends = Date.parse(task.occurrenceEndsAt);
-    return Number.isFinite(created) && Number.isFinite(ends) && request2.createdAt >= created && request2.createdAt < ends + 7 * DAY_MS;
-  }
-  const counterpart = login(rule.counterpartLogin(task));
-  return counterpart !== "" && login(request2.requesterLogin) === counterpart && login(request2.resolverLogin) === me;
-}
-function linkRequests(requests, tasks, opptyAccounts, rule) {
-  const own = tasks.filter((task) => task.path === rule.path);
-  const linkedTo = /* @__PURE__ */ new Map();
-  for (const task of tasks) {
-    if (!task.specReqId) continue;
-    const id = task.specReqId.toLowerCase();
-    linkedTo.set(id, [...linkedTo.get(id) ?? [], task]);
-  }
-  const pairs = [];
-  for (const request2 of requests) {
-    const linked = linkedTo.get(request2.requestId.toLowerCase());
-    const candidates = !linked ? own.filter((task) => !task.specReqId && UNLINKED_STATES[rule.path].includes(task.state)) : linked.length === 1 && linked[0].path === rule.path && LINKED_STATES[rule.path].includes(linked[0].state) ? linked : [];
-    for (const task of candidates) {
-      if (matches(request2, task, opptyAccounts, rule)) pairs.push([request2.requestId, task.eventId]);
-    }
-  }
-  const count = (values) => values.reduce(
-    (map2, value) => map2.set(value, (map2.get(value) ?? 0) + 1),
-    /* @__PURE__ */ new Map()
-  );
-  const perRequest = count(pairs.map(([requestId]) => requestId));
-  const perTask = count(pairs.map(([, eventId]) => eventId));
-  const out = /* @__PURE__ */ new Map();
-  for (const [requestId, eventId] of pairs) {
-    if (perRequest.get(requestId) === 1 && perTask.get(eventId) === 1) out.set(requestId, eventId);
-  }
-  return out;
-}
-async function resolveMe(session, email3) {
-  const normalized = typeof email3 === "string" ? email3.trim().toLowerCase() : "";
-  const match = /^([^@\s]+)@amazon\.com$/.exec(normalized);
-  if (!match) throw new IntakeError("IDENTITY_MISMATCH", "the signed-in email is not an @amazon.com address");
-  const payload = resultJson(await session.call("check_user_is_tam", {}), "check_user_is_tam");
-  const data = payload && typeof payload === "object" && payload.success !== false ? payload.data : null;
-  const employee = data && typeof data === "object" ? login(data.employee_login) : "";
-  if (!LOGIN_PATTERN.test(employee) || employee !== match[1]) {
-    throw new IntakeError("IDENTITY_MISMATCH", "the SpecReq login differs from the signed-in identity");
-  }
-  return employee;
-}
-async function readRequest(session, requestId) {
-  const request2 = parseRequest(resultJson(await session.call("get_request", { request_id: requestId }), "get_request"));
-  if (request2.requestId !== requestId) throw new IntakeError("PARSE_FAILED", "get_request returned another request");
-  return request2;
-}
-function ackSucceeded(result) {
-  let payload;
-  try {
-    payload = resultJson(result, "acknowledge_request");
-  } catch {
-    return "unknown";
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "unknown";
-  const success2 = payload.success;
-  return success2 === true ? "ok" : success2 === false ? "rejected" : "unknown";
-}
-async function acknowledgeOnce(session, ledger, request2, me) {
-  const requestId = typeof request2.requestId === "string" ? request2.requestId.toLowerCase() : "";
-  if (!REQUEST_ID_PATTERN.test(requestId)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
-  const now = () => ledger.now?.() ?? /* @__PURE__ */ new Date();
-  const existing = ackEntry(ledger.store, ledger.scope, requestId);
-  if (existing) return existing.outcome === "pending" ? "unknown" : existing.outcome;
-  const myLogin = login(me);
-  const current = await readRequest(session, requestId);
-  if (!myLogin || current.stateId !== "NEXT_UP" || current.resolverLogin !== myLogin) return "not_eligible";
-  beginAck(ledger.store, ledger.scope, requestId, request2.eventId, now());
-  let outcome;
-  try {
-    outcome = ackSucceeded(await session.call("acknowledge_request", { request_id: requestId }));
-  } catch (error3) {
-    outcome = error3 instanceof ToolResultError ? "rejected" : "unknown";
-  }
-  finishAck(ledger.store, ledger.scope, requestId, outcome);
-  return outcome;
-}
-async function resolveAck(session, ledger, requestId, me) {
-  const id = typeof requestId === "string" ? requestId.toLowerCase() : "";
-  if (!REQUEST_ID_PATTERN.test(id)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
-  const entry2 = ackEntry(ledger.store, ledger.scope, id);
-  if (!entry2) throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
-  if (entry2.outcome === "ok") return { state: "acked" };
-  const current = await readRequest(session, id);
-  const myLogin = login(me);
-  if (myLogin && current.resolverLogin === myLogin && ACK_CONFIRMED.includes(current.stateId)) {
-    finishAck(ledger.store, ledger.scope, id, "ok");
-    return { state: "acked" };
-  }
-  return { state: "ack_failed", failureCode: entry2.outcome === "rejected" ? "ACK_REJECTED" : "ACK_UNCONFIRMED" };
-}
-var SEARCH_FIELDS, SEARCH_PAGE_SIZE, SEARCH_MAX_PAGES, STATES, TITLE_MAX_BYTES, MAX_RANGES, LOGIN_PATTERN, ACK_CONFIRMED, DAY_MS, login, DATE_RANGE, UNLINKED_STATES, LINKED_STATES;
-var init_specreq = __esm({
-  "src/intake/specreq.ts"() {
-    "use strict";
-    init_mcp_client();
-    init_errors4();
-    init_ack_ledger();
-    SEARCH_FIELDS = [
-      "requestId",
-      "title",
-      "stateId",
-      "requesterLogin",
-      "resolverLogin",
-      "salesforceId",
-      "meetingDateRanges",
-      "createdAt"
-    ];
-    SEARCH_PAGE_SIZE = 50;
-    SEARCH_MAX_PAGES = 4;
-    STATES = ["PENDING", "NEXT_UP", "WORKING", "WAITING", "COMPLETED", "CANCELLED"];
-    TITLE_MAX_BYTES = 512;
-    MAX_RANGES = 50;
-    LOGIN_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-    ACK_CONFIRMED = ["WORKING", "WAITING", "COMPLETED"];
-    DAY_MS = 24 * 60 * 60 * 1e3;
-    login = (value) => typeof value === "string" ? value.trim().toLowerCase() : "";
-    DATE_RANGE = /^(\d{4}-\d{2}-\d{2}) - (\d{4}-\d{2}-\d{2})$/;
-    UNLINKED_STATES = {
-      mine: ["issue_needed"],
-      theirs: ["request_needed", "requested"]
-    };
-    LINKED_STATES = {
-      mine: [],
-      theirs: ["request_needed", "requested", "ack_failed"]
-    };
-  }
-});
-
 // src/intake/tasks.ts
 function parseTask(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new IntakeError("PARSE_FAILED", "task is not an object");
@@ -28403,9 +28400,17 @@ function apiCode(error3) {
   const message = error3 instanceof Error ? error3.message : "";
   return message.startsWith("TTOBAK_LOGIN_REQUIRED") ? "TTOBAK_LOGIN_REQUIRED" : "TTOBAK_UNAVAILABLE";
 }
-function seenPath(scope) {
+function seenPath(scope, file2 = "seen.json") {
   if (!/^[0-9a-f]{32}$/.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "task scope is invalid");
-  return ["tasks", scope, "seen.json"];
+  return ["tasks", scope, file2];
+}
+function loadIdentity(store, scope) {
+  const raw = store.read(...seenPath(scope, "identity.json"));
+  if (raw === null) return null;
+  if (raw.version !== 1 || typeof raw.login !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.login)) {
+    throw new IntakeError("STORE_INVALID", "task identity state is malformed");
+  }
+  return raw;
 }
 function loadSeen(store, scope) {
   const raw = store.read(...seenPath(scope));
@@ -28498,7 +28503,10 @@ var init_tasks = __esm({
       events = /* @__PURE__ */ new Map();
       accounts = /* @__PURE__ */ new Map();
       seen;
+      /** My SpecReq login, confirmed this run. */
       myLogin = "";
+      /** The recorded login, used for addresses only when this run could not reach SpecReq. */
+      fallbackLogin = "";
       opptyAccounts = null;
       /** False when the task list exceeded its cap: `tasks` is then a prefix of the rows. */
       complete = true;
@@ -28521,17 +28529,11 @@ var init_tasks = __esm({
           return this.result();
         }
         await this.step("close", () => this.close());
+        await this.step("specreq", () => this.identity());
         await this.step("classify", () => this.classify());
-        let specreqReady = false;
         if (!this.complete) {
           this.counts.skipped = 3;
-        } else await this.step("specreq", async () => {
-          const session = this.options.sessions.specreq;
-          if (!session) throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
-          this.myLogin = await resolveMe(session, this.options.me.email);
-          specreqReady = true;
-        });
-        if (specreqReady) {
+        } else if (this.myLogin) {
           await this.step("mine", () => this.linkMine());
           await this.step("theirs", () => this.theirs());
           await this.step("refresh", () => this.refresh());
@@ -28561,6 +28563,47 @@ var init_tasks = __esm({
         } catch (error3) {
           this.fail(name, error3);
         }
+      }
+      /**
+       * Confirms my SpecReq login. The first confirmed login is recorded for this
+       * TTOBAK account; a different login later (an Amazon account switch) fails.
+       */
+      async identity() {
+        const { store, scope, now } = this.options;
+        const recorded = loadIdentity(store, scope);
+        const session = this.options.sessions.specreq;
+        if (!session) {
+          this.fallbackLogin = recorded?.login ?? "";
+          throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
+        }
+        let login2;
+        try {
+          login2 = await resolveMe(session);
+        } catch (error3) {
+          this.fallbackLogin = recorded?.login ?? "";
+          throw error3;
+        }
+        if (recorded && recorded.login !== login2) {
+          throw new IntakeError("IDENTITY_MISMATCH", "the SpecReq login differs from the one recorded for this TTOBAK account");
+        }
+        if (!recorded) store.write(
+          { version: 1, login: login2, recordedAt: now.toISOString() },
+          ...seenPath(scope, "identity.json")
+        );
+        this.myLogin = login2;
+      }
+      amazonLogin() {
+        return this.myLogin || this.fallbackLogin || alias(this.options.me.email) || "";
+      }
+      /** Every address I may attend with, lowercased and deduplicated. */
+      myEmails() {
+        const login2 = this.amazonLogin();
+        return [...new Set([this.options.me.email.trim().toLowerCase(), ...login2 ? [`${login2}@amazon.com`] : []].filter(Boolean))];
+      }
+      /** The address the meetings provider expects; the TTOBAK email only when no Amazon login is known. */
+      meetingsEmail() {
+        const login2 = this.amazonLogin();
+        return login2 ? `${login2}@amazon.com` : this.options.me.email;
       }
       /** Records this sync's new occurrences first, so a failed step retries them next run. */
       register() {
@@ -28710,7 +28753,10 @@ var init_tasks = __esm({
         const emails = /* @__PURE__ */ new Set();
         for (const account of mine) {
           const info = await this.account(account.accountId);
-          for (const member of info?.members ?? []) if (member.role === "SA" || member.role === "SSA") emails.add(member.email);
+          for (const member of info?.members ?? []) {
+            if (member.userId === this.options.me.userId) continue;
+            if (member.role === "SA" || member.role === "SSA") emails.add(member.email);
+          }
         }
         return emails;
       }
@@ -28751,7 +28797,7 @@ var init_tasks = __esm({
         const list = parseMeetingList(resultJson(await session.call("list_meetings", {
           startTime: window.start.toISOString(),
           endTime: window.end.toISOString(),
-          userEmail: me.email
+          userEmail: this.meetingsEmail()
         }), "list_meetings"));
         if (list === null) throw new IntakeError("PARSE_FAILED", "list_meetings exceeds its cap");
         let saEmails;
@@ -28766,7 +28812,7 @@ var init_tasks = __esm({
             const attendees = parseAttendees(resultJson(await session.call("get_meeting", {
               meetingId: joined.meetingId,
               getMaster: false,
-              userEmail: me.email
+              userEmail: this.meetingsEmail()
             }), "get_meeting"));
             if (!attendees) {
               if (candidate.task) continue;
@@ -28791,7 +28837,7 @@ var init_tasks = __esm({
                 anyAccountSaEmails = saEmails;
               }
               classification = classifyOccurrence({
-                me: me.email,
+                me: { userId: me.userId, emails: this.myEmails() },
                 accountId,
                 attendees: attendees.addresses,
                 members,
@@ -29061,7 +29107,7 @@ var init_tasks = __esm({
         }
       }
       async drafts(outcomes) {
-        const { store, scope, sessions, me } = this.options;
+        const { store, scope, sessions } = this.options;
         const due = this.allTasks().filter((task) => task.state === "request_needed" && task.path === "theirs" && task.counterpartUserId && task.accountId && !draftEntry(store, scope, task.eventId));
         if (!due.length) return;
         const session = sessions.slack;
@@ -29085,7 +29131,7 @@ var init_tasks = __esm({
               accountName: info.name,
               meetingTitle: task.event?.title ?? "",
               localDateTime: this.localWhen(task),
-              myName: alias(me.email) ?? ""
+              myName: this.amazonLogin()
             });
             const outcome = await draftOnce(store, scope, task.eventId, session, email3, text2, { now: () => this.options.now });
             outcomes.set(task.eventId, outcome);
@@ -29205,8 +29251,16 @@ async function selectTaskConnector(connector, args, environment, store) {
   const pathDirs = parsePathList(environment.env.PATH);
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
+  let identity;
   try {
     for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+    if (connector === "specreq") {
+      try {
+        identity = { login: await resolveMe(session) };
+      } catch (error3) {
+        identity = { identityError: intakeCode(error3) };
+      }
+    }
   } finally {
     await session.close();
   }
@@ -29224,7 +29278,7 @@ async function selectTaskConnector(connector, args, environment, store) {
     host,
     server,
     pathDirectories: pathDirs.length,
-    ...connector === "specreq" ? { autoAck: autoAckValue === "on" } : {}
+    ...connector === "specreq" ? { autoAck: autoAckValue === "on", ...identity } : {}
   };
 }
 async function select(args, environment, store) {
@@ -29459,6 +29513,7 @@ var init_run = __esm({
     init_errors4();
     init_hosts();
     init_mcp_client();
+    init_specreq();
     init_store();
     init_tasks();
     USAGE = `Usage:
