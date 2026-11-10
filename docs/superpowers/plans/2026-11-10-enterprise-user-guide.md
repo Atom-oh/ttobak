@@ -25,14 +25,6 @@ fixtures; no application behavior changes.
 - Keep the full guide readable/printable without JavaScript.
 - Apply the installed content-review rubric before deployment.
 
-## Review focus
-
-- Newly added/conditional menus must not silently disappear from the guide.
-- Sharing and hierarchy must not imply broader access than the current grants.
-- Upload, preview, extraction and search readiness must remain distinct.
-- Search must find body text and preserve the printable content.
-- Mobile layout, keyboard focus and images must not hide necessary instructions.
-
 ## Tasks
 
 ### 1. Inventory and walkthrough
