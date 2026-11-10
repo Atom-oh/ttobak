@@ -675,3 +675,22 @@ test('detects zh and ja', () => {
   assert.equal(translationSourceLanguage('안녕 你好'), 'ko');
   assert.equal(translationSourceLanguage('hello'), 'en');
 });
+
+test('bilingual view shows the original for zh sources and keeps ko/en layout', () => {
+  const entry = (id, original, translated, sourceLang, targetLang) => ({
+    id, order: 0, original, translated, sourceLang, targetLang,
+    timestamp: '2026-10-11T09:00:00Z', isFinal: true, status: 'complete',
+  });
+  // The sr-only live log repeats translations; count only the visible caption list.
+  const count = (html, text) => html.slice(0, html.indexOf('role="log"')).split(text).length - 1;
+  const render = (translations) => renderView(
+    { translationModule: loadModule('lib/liveTranslation.ts'), entries: new Map() },
+    { translations },
+  );
+  const zh = render([entry('zh', '你好世界', '안녕하세요 세계', 'zh', 'ko')]);
+  assert.equal(count(zh, '你好世界'), 1);
+  assert.equal(count(zh, '안녕하세요 세계'), 1);
+  const ko = render([entry('ko', '다음 주 배포', 'Deploy next week', 'ko', 'en')]);
+  assert.equal(count(ko, '다음 주 배포'), 1);
+  assert.equal(count(ko, 'Deploy next week'), 1);
+});
