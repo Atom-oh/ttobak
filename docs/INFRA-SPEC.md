@@ -666,7 +666,7 @@ source can still qualify a term; `ttobak:newsTermsMode=off` stops news terms
 immediately. `ttobak:kbTermsMode` and
 `ttobak:researchTermsMode` may use `personal`; `on` (Account writes) waits for
 ADR-008 FU4 (Account-layer cleanup on unlink). `infra/cdk.json` sets
-`ttobak:kbTermsMode` to `personal`.
+`ttobak:kbTermsMode` and `ttobak:researchTermsMode` to `personal`.
 
 ### Dictionary layer metrics
 
