@@ -131,6 +131,7 @@ func TestApplyPerformanceBatchReceiptReplay(test *testing.T) {
 }
 
 func TestApplyPerformanceBatchAmbiguousErrorReturnsStoredReceipt(test *testing.T) {
+	pinPerformanceNow(test)
 	var stored map[string]any
 	gets, transactions := 0, 0
 	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
