@@ -21,8 +21,12 @@
 <div class="layout">
 <aside class="sidebar" id="contents" aria-label="제품 가이드 목차">
 <div class="search-box"><label for="search">가이드 검색</label><div class="search-input"><input id="search" type="search" placeholder="메뉴, 권한, 모델, 오류 검색" disabled><kbd aria-hidden="true">⌘ K</kbd></div><p id="search-status" class="search-status" role="status" aria-live="polite">메뉴별로 읽거나 전체 문서를 검색하세요.</p></div>
-<nav id="chapter-nav" aria-label="사용자 가이드">
-<a href="#start">01 시작하기</a><a href="#record">02 실시간 녹음</a><a href="#upload">03 파일로 미팅 만들기</a><a href="#meeting">04 회의록 검토와 편집</a><a href="#simulation">05 비용·사이징 시뮬레이션</a><a href="#qa">06 Q&amp;A와 Assistant</a><a href="#sharing">07 공유와 권한</a><a href="#accounts">08 Accounts · 고객 관리</a><a href="#projects">09 Projects · 프로젝트</a><a href="#documents">10 Documents · 개인 문서</a><a href="#knowledge">11 Files · Knowledge Base</a><a href="#research">12 Insights · 리서치</a><a href="#followup">13 미팅 준비와 후속 업무</a><a href="#settings">14 설정과 연동</a><a href="#devices">15 모바일과 Mac</a><a href="#troubleshooting">16 문제 해결</a>
+<nav id="chapter-nav" aria-label="전체 가이드">
+<div class="nav-group"><p>시작과 핵심 개념</p><a href="#start">01 시작하기</a><a href="#home">02 Home · 업무 시작 화면</a><a href="#qa">03 어떤 챗을 사용하나요?</a><a href="#models">04 AI 모델과 처리 원리</a></div>
+<div class="nav-group"><p>미팅과 후속 업무</p><a href="#record">05 실시간 녹음</a><a href="#upload">06 파일 업로드</a><a href="#meeting">07 Meetings · 회의록 작업</a><a href="#calendar">08 개인 캘린더</a><a href="#followup">09 준비 · 액션 아이템 · 후속 업무</a><a href="#simulation">10 비용·사이징 시뮬레이션</a></div>
+<div class="nav-group"><p>고객과 협업</p><a href="#accounts">11 Accounts · 고객 작업 공간</a><a href="#contacts">12 연락처 · 일괄 가져오기</a><a href="#people">13 사람 연결 · 관계 · 시그널</a><a href="#projects">14 Projects · 프로젝트</a><a href="#sharing">15 공유와 권한</a></div>
+<div class="nav-group"><p>문서와 지식</p><a href="#documents">16 Docs · 개인 문서</a><a href="#knowledge">17 Library · 파일과 검색</a><a href="#research">18 Deep Research</a><a href="#news">19 News &amp; Updates</a><a href="#dictionary">20 Custom Dictionary</a></div>
+<div class="nav-group"><p>설정과 조직 운영</p><a href="#billing">21 Billing · 비용 분석</a><a href="#settings">22 Settings · 설정과 연동</a><a href="#admin">23 사용자 초대 · 관리자</a><a href="#devices">24 모바일 · Mac · Profile</a><a href="#security">25 데이터와 보안 경계</a><a href="#workflows">26 팀 도입과 업무 시나리오</a><a href="#troubleshooting">27 문제 해결</a><a href="#glossary">28 용어 · 범위 · 업데이트 기준</a></div>
 </nav>
 <p class="sidebar-note">가상 데이터로 만든 공개 가이드입니다.<br>제품 화면의 실제 메뉴명을 사용합니다.</p>
 </aside>
@@ -30,72 +34,135 @@
 <div class="hero" id="top">
 <p class="eyebrow">TTOBAK DOCUMENTATION / PRODUCT &amp; OPERATIONS</p>
 <h1>회의의 기록을<br><span>다음 업무의 근거로.</span></h1>
-<p class="lead">또박의 주요 사용 흐름을 이해하고, 올바른 자료와 권한으로 AI를 사용하세요. 처음 녹음하는 사용자부터 고객·프로젝트 담당자와 관리자까지 함께 보는 제품 가이드입니다.</p>
-<div class="hero-meta"><span>16개 장</span><span>사용 절차 + 동작 원리</span><span>권한 · AI · 문제 해결</span></div>
+<p class="lead">또박의 모든 메뉴를 이해하고, 올바른 자료와 권한으로 AI를 사용하세요. 처음 녹음하는 사용자부터 고객·프로젝트 담당자와 관리자까지 함께 보는 제품 가이드입니다.</p>
+<div class="hero-meta"><span>28개 장</span><span>사용 절차 + 동작 원리</span><span>권한 · AI · 문제 해결</span></div>
 <div class="quick-links"><a class="primary-link" href="#start">처음 사용하는 순서 →</a><a href="#qa">질문에 맞는 챗 찾기 →</a><a href="#troubleshooting">문제 해결 →</a></div>
 <div class="scope-note"><strong>작성 기준: 2026-11-10</strong><p>현재 소스의 화면·처리 흐름·기본 모델 설정을 확인했습니다. 기능의 운영 활성화, 조직 정책, 로그인 계정의 권한에 따라 보이는 항목이 달라집니다. 아래 그림은 로컬 앱의 메뉴를 확인해 만든 설명용 안내도입니다. 실제 화면 캡처나 고객·운영 데이터가 아닙니다.</p></div>
 </div>
 <div id="search-results" class="search-results" hidden aria-label="가이드 검색 결과"></div>
 
-<section id="start" class="chapter"><p class="eyebrow">01 / START</p><h2>처음 사용하는 경우</h2>
-<ol><li>관리자가 초대한 이메일과 임시 비밀번호로 로그인합니다. 처음 로그인하면 새 비밀번호를 설정합니다. 직접 회원가입하는 화면은 없습니다.</li><li>왼쪽 메뉴의 <strong>New Meeting → 실시간 녹음</strong>을 선택합니다. 기존 녹음이 있으면 <strong>음성 파일 업로드</strong>를 선택합니다.</li><li>제목·미팅 배경을 입력하고 녹음하거나 파일을 올립니다. 녹음이 끝나면 업로드와 처리가 완료될 때까지 상태를 확인합니다.</li><li><strong>Meetings</strong>에서 미팅을 열고 요약, 녹취, 내 메모와 액션 아이템을 검토합니다.</li><li>내용을 저장한 다음 필요한 사람에게 공유하거나 개인 후속 문서를 만듭니다.</li></ol>
-<p>비밀번호를 잊었다면 로그인 화면의 비밀번호 찾기를 이용합니다. 초대를 받지 못했거나 계정이 비활성화되었다면 관리자에게 문의하세요.</p>
-<div class="table-wrap"><table><caption>어디서 무엇을 하나요?</caption><thead><tr><th scope="col">메뉴</th><th scope="col">하는 일</th></tr></thead><tbody><tr><td>Meetings</td><td>미팅 찾기, 회의록 확인, 공유와 후속 업무</td></tr><tr><td>Accounts / Projects</td><td>고객·조직과 프로젝트별로 협업 자료 연결</td></tr><tr><td>Documents</td><td>개인 문서 작성, PDF·슬라이드 보관, 문서 공유</td></tr><tr><td>Assistant</td><td>접근 가능한 자료에 대해 대화형 질문</td></tr><tr><td>Files / Knowledge Base</td><td>첨부 파일과 검색용 지식 자료 확인</td></tr><tr><td>Insights</td><td>수집 자료 탐색과 새 리서치</td></tr><tr><td>Settings</td><td>연동, 사전, 수집 소스와 관리자 기능</td></tr></tbody></table></div>
+<section id="start" class="chapter" data-keywords="로그인 초대 비밀번호 빠른 시작 onboarding">
+<p class="eyebrow">01 / GETTING STARTED</p><h2>시작하기</h2>
+<p class="lead">또박은 녹음·문서·고객 맥락을 연결해 회의록과 다음 행동을 만드는 업무 공간입니다. 처음에는 하나의 가상 미팅으로 녹음부터 검토·공유까지의 흐름을 익히세요.</p>
+<h3 id="start-login">로그인과 첫 사용</h3>
+<ol class="steps"><li><strong>조직 관리자의 사용자 초대를 받습니다.</strong> 초대된 이메일과 임시 비밀번호로 로그인하고, 처음 로그인할 때 새 비밀번호를 설정합니다. 직접 가입으로 조직에 들어가는 흐름은 제공하지 않습니다.</li><li><strong>로그인 이메일과 조직의 이용 정책을 확인합니다.</strong> 이메일 확인 안내가 나오면 완료합니다. 공유 초대의 대상 이메일과 현재 로그인 계정이 다르면 자료가 보이지 않을 수 있습니다.</li><li><strong>Home에서 업무를 시작합니다.</strong> 새 녹음은 <em>New Meeting → 실시간 녹음</em>, 기존 자료는 <em>음성 파일 업로드</em>로 시작합니다.</li><li><strong>완료된 미팅을 검토합니다.</strong> 전사·요약 처리 후 Meetings에서 미팅을 엽니다. 제목, 고객 분류, 회의록, 화자, 액션 아이템을 실제 내용과 대조합니다.</li><li><strong>검토한 내용만 필요한 범위에 공유합니다.</strong> 고객 연결, 프로젝트 연결, 공유의 차이를 먼저 확인합니다. 외부로 전달할 문서는 개인 Docs에 초안을 만들고 사람이 검토합니다.</li></ol>
+<div class="callout"><strong>처음 10분에 확인할 것</strong><p>마이크 입력 · 로그인 계정 · 고객 선택 · 저장 완료 상태 · 공유 범위. 녹음 자체와 AI 처리의 완료 상태는 별개입니다.</p></div>
+<h3 id="start-map">메뉴를 업무 목적에 맞게 선택하세요</h3>
+<div class="table-wrap"><table><caption>제품 전체 메뉴 지도</caption><thead><tr><th>업무 목적</th><th>화면</th><th>여기서 하는 일</th></tr></thead><tbody>
+<tr><td>오늘 할 일을 찾기</td><td>Home</td><td>다가오는 개인 미팅, 최근 미팅, 고객 관련 인사이트 확인</td></tr><tr><td>자료에 질문하기</td><td>Assistant</td><td>접근 가능한 미팅과 지식 자료를 대상으로 질문</td></tr><tr><td>회의 내용을 검토하기</td><td>Meetings</td><td>회의록·녹취·내 메모·첨부·Q&amp;A·액션 아이템</td></tr><tr><td>고객별로 일하기</td><td>Accounts</td><td>고객 개요, 멤버, 연락처, 공동 일정, 문서와 관계</td></tr><tr><td>과제별로 모으기</td><td>Projects</td><td>여러 고객과 미팅·리서치를 하나의 프로젝트로 연결</td></tr><tr><td>내 결과물을 작성하기</td><td>Docs</td><td>개인 Markdown 문서와 PDF·슬라이드 관리</td></tr><tr><td>AI가 참고할 자료 관리</td><td>Library</td><td>직접 업로드 파일과 미팅 첨부, 검색 준비 상태 확인</td></tr><tr><td>새로운 주제 조사</td><td>Deep Research</td><td>리서치 범위·목차를 정하고 근거가 있는 보고서 작성</td></tr><tr><td>변화를 따라가기</td><td>News &amp; Updates</td><td>수집한 뉴스·업데이트와 출처 확인</td></tr><tr><td>전문 용어를 맞추기</td><td>Custom Dictionary</td><td>개인·고객·공통 용어와 음성 인식 사전 상태 관리</td></tr><tr><td>비용 분석</td><td>Billing · 조건부 표시</td><td>활성화된 비용 분석 서비스나 companion으로 이동</td></tr><tr><td>내 환경·조직 설정</td><td>Settings</td><td>프로필, 연동, 연락처 가져오기, 소스와 관리자 기능</td></tr>
+</tbody></table></div>
+<h3 id="start-objects">미팅·문서·고객·프로젝트는 서로 다른 객체입니다</h3>
+<p><strong>미팅</strong>은 하나의 대화와 그 근거를 보관합니다. <strong>Docs</strong>는 내가 작성하거나 업로드한 문서입니다. <strong>Account</strong>는 고객·조직의 공동 업무 공간이고, <strong>Project</strong>는 하나의 과제나 기회를 묶습니다. 같은 이름이 붙어 있어도 각각의 접근 권한과 공유 상태를 확인해야 합니다.</p>
+<p class="related">다음 읽기: <a href="#record">첫 녹음</a> · <a href="#sharing">공유와 권한</a> · <a href="#workflows">팀 도입</a></p>
 </section>
 
-<section id="record" class="chapter"><p class="eyebrow">02 / RECORD</p><h2>실시간 녹음하기</h2>
-<ol><li><strong>New Meeting → 실시간 녹음</strong>에서 제목과 미팅 배경을 입력합니다. 준비 문서가 있다면 불러옵니다.</li><li>입력 소스를 선택합니다. <strong>Mic</strong>는 마이크를 녹음합니다. <strong>Tab Audio</strong>가 보이면 녹음 시작 때 공유할 브라우저 탭을 선택하고 오디오 공유를 허용합니다. 마이크 입력이 필요한 경우 브라우저 권한도 허용합니다.</li><li>실시간 자막 엔진 등 필요한 옵션을 확인한 다음 녹음 버튼을 누릅니다. 엔진 선택은 녹음 전에 마칩니다.</li><li>진행 중에는 자막과 실시간 요약을 참고하고 <strong>내 노트</strong>에 결정 사항·숫자·담당자를 적습니다. 저장 상태가 실패라면 입력 내용이 서버에 저장되었다고 가정하지 마세요.</li><li>번역이 필요하면 <strong>번역</strong>을 켜고 언어를 선택합니다. <strong>50w / 100w / 200w / 500w</strong>는 실시간 요약의 단어 수 간격이며 시간 단위가 아닙니다.</li><li>녹음을 종료하고 화면의 업로드·처리 상태를 확인합니다. 완료된 회의록은 미팅 상세에서 다시 검토합니다.</li></ol>
-<div class="note">실시간 자막과 녹음 후의 최종 녹취는 다를 수 있습니다. 자막이 멈췄다고 녹음도 중단되었다고 단정하지 말고, 녹음 상태와 복구 안내를 먼저 확인하세요.</div>
-<p>다른 앱에서 나오는 소리가 브라우저 마이크에 자동으로 포함되는 것은 아닙니다. 시스템 오디오가 필요한 Mac 사용자는 <a href="#devices">Mac 녹음 안내</a>도 확인하세요.</p>
+<section id="home" class="chapter" data-keywords="홈 대시보드 최근 upcoming filter 고객 선택">
+<p class="eyebrow">02 / HOME</p><h2>Home · 업무 시작 화면</h2><p class="lead">Home은 최근 진행 상황을 빠르게 파악하는 화면입니다. 모든 미팅을 관리하는 Meetings와 달리, 다음 업무로 이동하는 시작점으로 사용합니다.</p>
+<p class="path">화면 경로 <code>/</code> · 로그인 후 Home</p>
+<figure class="screen-example"><a href="screen-home.svg" target="_blank" rel="noopener" aria-label="Home의 개인 일정·고객 인사이트·최근 미팅 영역 화면 크게 보기"><img src="screen-home.svg" width="1440" height="1080" loading="lazy" alt="메뉴 이해를 위한 Home의 개인 일정·고객 인사이트·최근 미팅 영역"></a><figcaption>Home의 개인 일정·고객 인사이트·최근 미팅 영역. <strong>설명용 안내도</strong>이며 실제 앱 캡처가 아닙니다. <a href="screen-home.svg" target="_blank" rel="noopener">화면 크게 보기 ↗</a></figcaption></figure>
+<h3 id="home-use">화면을 읽고 이동하는 순서</h3><ol class="steps"><li>다가오는 개인 미팅의 일정과 고객 분류를 확인합니다. 가져온 캘린더 일정이 없으면 안내되는 상태와 동기화 여부를 먼저 봅니다.</li><li>최근 미팅에서 처리 중인 항목과 완료된 항목을 구분합니다. 완료된 미팅을 선택해 회의록 작업 공간으로 이동합니다.</li><li>고객을 선택할 수 있는 영역에서는 관심 있는 Account를 고릅니다. 선택은 업무 맥락을 좁히는 필터이며 새로운 공유 권한을 만들지 않습니다.</li><li>고객 관련 인사이트를 확인한 뒤 원래 미팅·자료를 열어 근거를 검토합니다.</li><li>새 미팅을 만들거나 Meetings로 이동해 더 오래된 기록을 찾습니다.</li></ol>
+<h3 id="home-principle">왜 목록마다 상태가 다를 수 있나요?</h3><p>최근 미팅, 고객 목록과 개인 캘린더는 별도의 데이터 요청입니다. 한 영역에서 오류가 나도 다른 영역이 정상일 수 있습니다. 실패한 영역의 <em>다시 시도</em>를 사용하세요. 일부 미팅만 보이는 최근 목록을 전체 보관함으로 해석하지 마세요.</p>
+<p>업로드 직후의 미팅은 완료된 요약이 없어도 목록에 나타날 수 있습니다. 처리 상태를 갱신하는 동안 화면에 표시되는 기록과 AI 결과의 준비 상태가 다르기 때문입니다.</p>
+<div class="callout"><strong>성공 확인</strong><p>원하는 미팅을 열 수 있고 현재 처리 상태를 이해했다면 정상입니다. Home에 일정이 보인다고 녹음이 자동 시작되거나 고객 멤버에게 일정이 공유되는 것은 아닙니다.</p></div>
+<p class="related"><a href="#calendar">개인 캘린더</a> · <a href="#meeting">전체 미팅 찾기</a></p>
 </section>
 
-<section id="upload" class="chapter"><p class="eyebrow">03 / UPLOAD</p><h2>녹음 파일로 미팅 만들기 · 문서 추가하기</h2>
-<figure class="screen-example"><a href="screen-upload.svg" target="_blank" rel="noopener" aria-label="음성 파일 업로드의 제목과 파일 선택 영역 화면 크게 보기"><img src="screen-upload.svg" width="1440" height="1080" loading="lazy" alt="메뉴 이해를 위한 음성 파일 업로드의 제목과 파일 선택 영역"></a><figcaption>음성 파일 업로드의 제목과 파일 선택 영역. <strong>설명용 안내도</strong>이며 실제 앱 캡처가 아닙니다. <a href="screen-upload.svg" target="_blank" rel="noopener">화면 크게 보기 ↗</a></figcaption></figure>
-<h3>기존 녹음으로 새 미팅 만들기</h3>
-<ol><li><strong>New Meeting → 음성 파일 업로드</strong>를 엽니다.</li><li>제목을 입력하고 <strong>음성 파일을 선택하세요 (여러 개 가능)</strong>를 눌러 오디오를 선택합니다. 이 화면은 음성 파일 전용이며 PDF·문서·이미지는 받지 않습니다.</li><li>선택하면 미팅 생성과 업로드가 시작됩니다. 여러 오디오를 선택하면 업로드 순서대로 하나의 미팅에 합쳐 처리합니다.</li><li>진행 상태를 확인하고 완료된 미팅에서 녹취와 요약을 검토합니다.</li></ol>
-<p>새 미팅의 오디오 선택 화면은 MP3, WAV, M4A, WEBM, OGG, FLAC, AAC, MP4, CAF 등의 음성 파일을 받습니다. 파일을 선택하는 버튼을 사용하세요.</p>
-<h3>이미 있는 미팅에 문서·이미지·오디오 추가하기</h3>
-<ol><li>기존 미팅 상세를 열고 처리가 완료되었는지 확인합니다.</li><li>오디오 재생 영역 아래의 <strong>파일 추가 (오디오·문서)</strong>를 누릅니다. 오디오가 없는 완료·오류 미팅에서는 업로더가 바로 표시될 수 있습니다. 업로드 권한이 있는 미팅에서 사용합니다.</li><li>이 업로더에서 파일을 선택하거나 끌어 놓고 파일별 상태를 확인해 업로드합니다.</li><li>문서는 업로드 후 별도의 텍스트 추출·검색 등록 상태와 실제 내용을 확인합니다.</li></ol>
-<p><strong>기존 미팅의 파일 추가 업로더</strong>는 파일당 최대 <strong>500MB</strong>를 검사합니다. 오디오는 MP3, WAV, M4A, WEBM, OGG, FLAC, AAC, MP4, 문서는 PDF, PPT/PPTX, DOC/DOCX, TXT, MD, CSV, XLS/XLSX를 선택할 수 있으며 이미지도 받습니다. 다른 업로드 화면에는 별도 형식·크기 제한이 있을 수 있습니다.</p>
-<p>미팅 없이 PDF·슬라이드를 개인 문서로 보관하려면 <a href="#documents">Documents</a>의 업로드 기능을 사용하세요.</p>
-<div class="note">파일 선택·업로드 성공은 내용 추출이나 AI 검색 반영의 성공을 뜻하지 않습니다. 암호화·손상·스캔 문서나 큰 자료는 본문 추출에 실패하거나 일부만 처리될 수 있습니다. 문서의 처리 상태와 실제 추출 내용을 확인하세요.</div>
-</section>
-
-<section id="meeting" class="chapter"><p class="eyebrow">04 / REVIEW</p><h2>회의록 검토·수정하기</h2>
-<figure class="screen-example"><a href="screen-meeting.svg" target="_blank" rel="noopener" aria-label="미팅 상세의 요약·액션 아이템·저장 자료 재요약·참조 패널 화면 크게 보기"><img src="screen-meeting.svg" width="1440" height="1080" loading="lazy" alt="메뉴 이해를 위한 미팅 상세의 요약·액션 아이템·저장 자료 재요약·참조 패널"></a><figcaption>미팅 상세의 요약·액션 아이템·저장 자료 재요약·참조 패널. <strong>설명용 안내도</strong>이며 실제 앱 캡처가 아닙니다. <a href="screen-meeting.svg" target="_blank" rel="noopener">화면 크게 보기 ↗</a></figcaption></figure>
-<ol><li><strong>Meetings</strong>에서 해당 미팅을 엽니다. 처리 중이면 완료 또는 오류 상태를 먼저 확인합니다.</li><li><strong>요약</strong>에서 결정 사항·금액·수량·담당자·기한을 확인합니다. 근거 링크와 오디오·녹취를 함께 살펴보세요.</li><li><strong>녹취</strong>에서 잘못 인식된 내용을 고치고 저장합니다. A/B 등 원문 선택 기능이 보이면 실제로 사용할 녹취를 선택합니다. 화자 이름은 화자 편집 기능으로 확인·정리합니다.</li><li><strong>내 메모</strong>에는 직접 확인한 내용을 적고 저장 상태를 확인합니다. 사람이 작성한 메모와 실제 발언은 서로 다른 근거입니다.</li><li><strong>액션 아이템</strong>의 담당자·기한을 검토하고 완료한 작업의 체크박스를 표시합니다. 추출 실패는 할 일이 없다는 뜻이 아니므로 상태를 확인하고 제공되는 재시도를 이용합니다.</li></ol>
-<h3>자료를 수정한 뒤 요약도 갱신하려면</h3><p>편집 중인 내용을 먼저 저장하고 <strong>저장 자료로 다시 요약</strong>을 누릅니다. 저장된 메모, 선택한 녹취와 사용 가능한 추출 첨부 자료로 요약합니다. 음성을 다시 전사하는 기능은 아닙니다. <strong>요약 상태 확인</strong>으로 진행 상황을 보고 완료되면 <strong>새 요약 불러오기</strong>를 누릅니다.</p>
-<p>실패하면 이전 요약이 유지됩니다. 작업 중 자료나 편집 권한이 바뀌면 새 결과가 적용되지 않을 수 있습니다. 화면의 오류를 해결한 뒤 다시 요청하세요. 일부만 추출된 문서가 있다면 요약의 자료 범위도 확인합니다.</p>
-</section>
-
-<section id="simulation" class="chapter"><p class="eyebrow">05 / SIMULATION · BETA</p><h2>비용·사이징 시뮬레이션</h2>
-<p class="lead">회의에서 나온 수치를 확인하고, 비교할 아키텍처 대안을 2~3개 적으면 비용 비교 보고서와 실행 코드를 생성하는 기능입니다.</p>
-<div class="flow" aria-label="시뮬레이션 순서"><span>완료된 미팅</span><b>→</b><span>요구사항 추출</span><b>→</b><span>수치·대안 확인</span><b>→</b><span>실행·검증</span></div>
-<h3>실행 전에 확인할 것</h3><p><strong>처리가 완료된 본인 소유 미팅</strong>에서 실행합니다. 공유받은 미팅에서 카드가 보이더라도 실행 권한은 소유자에게 있습니다. 선택된 녹취에 요청량·저장량 등 정량 정보가 있어야 유용한 요구사항을 추출할 수 있습니다. 녹취가 전혀 없을 때는 저장된 회의록 본문을 대신 사용하며, 이 경우 녹취 근거 링크가 없을 수 있습니다. 내 메모에 숫자를 추가하는 것만으로 추출 입력이 갱신된다고 가정하지 마세요.</p>
-<h3>버튼을 누르는 순서</h3><ol><li>미팅 상세 아래쪽의 <strong>비용·사이징 시뮬레이션 (베타)</strong>에서 <strong>시뮬레이션 실행</strong>을 누릅니다. 이 첫 버튼은 요구사항 추출 단계이며 아직 계산을 시작하지 않습니다.</li><li>추출된 값 옆의 <strong>녹취록에서 확인</strong>으로 근거를 확인합니다. 숫자가 다르면 해당 입력란을 고칩니다. 별표가 붙은 필수 항목은 비워둘 수 없습니다.</li><li><strong>비교할 아키텍처 대안</strong>의 이름을 두 개 이상 입력합니다. 설명은 선택 사항이지만 실제 차이가 드러나게 적는 편이 좋습니다. 세 번째는 <strong>+ 대안 추가</strong>로 넣습니다.</li><li><strong>실행</strong>을 누릅니다. 화면은 1~3분 소요를 안내하지만 실제 시간은 달라질 수 있습니다. 처리 중 다른 작업을 할 수 있으며 같은 미팅에서 동시에 새 실행을 시작할 수는 없습니다.</li><li>완료되면 보고서의 입력값·가정·단가 기준 시각을 확인하고, 차트가 있으면 함께 검토합니다. <strong>실행된 코드 보기</strong>에서 계산식을 확인합니다.</li></ol>
-<h3>숫자는 이렇게 입력하세요</h3><p>아래는 <strong>가상 입력 예시</strong>입니다. 실제로 추출되어 화면에 나타난 항목만 수정할 수 있으며, 모든 행이 항상 나타나는 것은 아닙니다. 숫자에는 쉼표나 단위를 붙이지 마세요.</p>
-<div class="table-wrap"><table><caption>요구사항 입력 예시</caption><thead><tr><th scope="col">항목</th><th scope="col">입력 예</th><th scope="col">뜻</th></tr></thead><tbody><tr><td>월간 활성 사용자</td><td><code>10000</code></td><td>한 달 동안 사용하는 사용자 수</td></tr><tr><td>평균 초당 요청 수(TPS)</td><td><code>10</code></td><td>평균 트래픽. 피크 값과 구분</td></tr><tr><td>피크 초당 요청 수(TPS)</td><td><code>100</code></td><td>가장 바쁜 시점의 요청량</td></tr><tr><td>일간 데이터량(GB)</td><td><code>20</code></td><td>하루 기준 데이터량</td></tr><tr><td>총 저장 데이터량(GB)</td><td><code>500</code></td><td>전체 저장량. 일간 증가량과 구분</td></tr><tr><td>평균 요청 페이로드(KB)</td><td><code>10</code></td><td>요청 한 건의 평균 크기</td></tr><tr><td>목표 응답 지연(ms)</td><td><code>200</code></td><td>응답 지연 목표. 달성을 검증하는 부하 시험은 아님</td></tr><tr><td>가용성 SLO(%)</td><td><code>99.9</code></td><td>90~100 범위. 0.999로 입력하지 않음</td></tr><tr><td>데이터 보존 기간(일)</td><td><code>30</code></td><td>보관할 일수</td></tr><tr><td>리전</td><td><code>ap-northeast-2</code></td><td>서울. 리전 문자열은 아래 제한 참조</td></tr></tbody></table></div>
-<p>리전 입력은 <code>ap-northeast-2</code>, <code>us-east-1</code>, <code>us-west-2</code>, <code>eu-west-1</code>, <code>ap-northeast-1</code>을 허용합니다. 다만 <strong>입력한 리전에 맞춰 모든 단가가 조회되는 것은 아닙니다.</strong> 현재 여러 서비스의 조회 기준이 서울로 고정되어 있어 타 리전 견적으로 사용해서는 안 됩니다.</p>
-<h3>대안은 어떻게 적나요?</h3><div class="example"><p><strong>대안 1 이름:</strong> 기본 서버리스<br><strong>설명:</strong> Lambda와 API Gateway로 요청 처리. DynamoDB 저장, S3 파일 보관.</p><p><strong>대안 2 이름:</strong> 정적 콘텐츠 CDN 분리<br><strong>설명:</strong> 동적 요청은 Lambda와 API Gateway. 정적 파일은 S3와 CloudFront로 전달.</p></div>
-<p>위 예시는 비교 의도를 전달하는 작성 예시이며 절감 효과를 보장하지 않습니다. 캐시 적중률·실행 시간 등 빠진 가정이 있으면 결과에서 반드시 확인하세요. 대안 이름은 짧게, 설명에는 서비스 구성과 달라지는 조건을 적습니다. 코드·스크립트나 긴 지시문은 넣지 마세요.</p>
-<h3>결과를 어디까지 믿을 수 있나요?</h3><div class="note"><strong>베타 추정치이며 확정 견적이나 성능 시험 결과가 아닙니다.</strong> 현재 단가 조회 범위는 Lambda, API Gateway, DynamoDB, S3, CloudFront입니다. EC2·RDS·EKS 등 다른 서비스를 이름에 적는다고 검증된 견적을 만들 수 있는 것은 아닙니다. 지원 서비스도 전체 과금 항목·계층·지역을 빠짐없이 반영한다고 보장하지 않습니다.</div>
-<p>보고서의 기간·통화·단가 단위, 트래픽 가정, 누락 비용을 확인하세요. 할인·세금·지원 비용 등이 반영되었다고 가정하지 마세요. 단가 기준 시각은 조회 시각이며 견적의 유효기간이나 정확성을 보증하지 않습니다. 고객에게 제시하기 전에 담당자가 공식 견적 도구와 실제 요구사항으로 재검증해야 합니다.</p>
-<h3>막히는 경우</h3><dl><dt>추출된 요구사항이 없어요</dt><dd>현재 화면에는 새 요구사항 행을 직접 추가하는 기능이 없습니다. “직접 입력” 안내가 있어도 입력 행이 없으면 이 화면만으로 진행할 수 없습니다. 요구사항이 최소 한 개는 필요합니다. 정량 정보가 실제로 포함된 다른 완료 미팅을 사용하거나 관리자에게 문의하세요. 실제 발언이 아닌 숫자를 녹취에 꾸며 넣지는 마세요.</dd><dt>실행 버튼이 비활성화되어 있어요</dt><dd>대안 이름을 최소 두 개 입력했는지, 별표 항목을 모두 채웠는지 확인합니다. 입력 후 서버 오류가 나면 단위·쉼표·값의 범위도 확인하세요.</dd><dt>Access denied / Meeting not found가 나와요</dt><dd>본인이 소유한 미팅인지 확인합니다. 공유받은 미팅이면 소유자에게 실행을 요청하세요.</dd><dt>오래 실행 중이에요</dt><dd>미팅을 다시 열어 상태를 확인합니다. 약 20분 이상 중단된 작업은 상태 조회 시 오류로 정리될 수 있습니다. 계속 실행 중이라면 중복 실행 대신 관리자에게 미팅 식별 정보와 오류 시각을 전달하세요.</dd><dt>실패했거나 조건을 바꾸고 싶어요</dt><dd>실패 시 <strong>다시 시도</strong>, 완료 시 <strong>다시 실행</strong>은 요구사항을 다시 추출합니다. 이전 대안 입력과 결과를 그대로 보존하는 이력 기능은 아니므로 필요한 보고서·코드를 먼저 보관하세요.</dd></dl>
-</section>
-
-<section id="qa" class="chapter"><p class="eyebrow">06 / ASK</p><h2>Q&amp;A와 Assistant 사용하기</h2>
+<section id="qa" class="chapter" data-keywords="Assistant 챗 ChatGPT Claude Codex Kiro Q&A 질문 research assistant 대화 근거 웹 검색">
+<p class="eyebrow">03 / CHAT ROUTING</p><h2>어떤 챗을 사용하나요?</h2><p class="lead">질문의 범위에 따라 대화 화면을 선택하세요. 또박의 Assistant, 미팅 Q&amp;A, Research Assistant와 외부 MCP 클라이언트는 역할과 자료 범위가 다릅니다.</p>
 <figure class="screen-example"><a href="screen-assistant.svg" target="_blank" rel="noopener" aria-label="Assistant의 새 대화·대화 이력·질문 입력 영역 화면 크게 보기"><img src="screen-assistant.svg" width="1440" height="1080" loading="lazy" alt="메뉴 이해를 위한 Assistant의 새 대화·대화 이력·질문 입력 영역"></a><figcaption>Assistant의 새 대화·대화 이력·질문 입력 영역. <strong>설명용 안내도</strong>이며 실제 앱 캡처가 아닙니다. <a href="screen-assistant.svg" target="_blank" rel="noopener">화면 크게 보기 ↗</a></figcaption></figure>
-<p>미팅 화면의 Q&amp;A는 현재 미팅에 관해 질문할 때, 왼쪽 <strong>Assistant</strong>는 접근 가능한 자료를 대화로 찾을 때 사용합니다. 질문은 기간·대상·원하는 결과를 구체적으로 적으세요.</p><div class="example">“이번 미팅에서 결정된 일과 아직 검토 중인 일을 나누고, 근거를 알려줘.”<br>“이번 주 미팅의 미완료 액션 아이템을 담당자별로 정리해줘.”<br>“이 문서에서 비용 산정에 사용한 가정과 빠진 정보를 찾아줘.”</div>
-<ol><li>질문을 입력하고 전송합니다. 진행 중이거나 연결이 끊겼다면 상태를 확인합니다.</li><li>답변의 출처를 열어 원문·날짜·접근 권한을 확인합니다. 답변이 보인다는 사실만으로 내용의 최신성이 보장되지 않습니다.</li><li>업무에 사용할 내용은 검토한 뒤 메모나 문서에 저장합니다. 새 문서를 만들도록 요청했다면 실제 생성 결과도 확인합니다.</li></ol>
-<p>검색 등록 상태, 문서 추출 상태와 배포된 기능에 따라 찾을 수 있는 자료가 달라집니다. 첨부 파일이 보인다고 그 본문이 모두 Q&amp;A 근거로 사용된다고 가정하지 마세요.</p>
-<div class="note">수동 질문도 필요에 따라 외부 웹 검색을 사용할 수 있습니다. 자동·선제 Q&amp;A의 검색 옵션을 꺼도 모든 수동 질문의 외부 검색을 차단하는 것은 아닙니다. 외부 전송이 허용되지 않는 고객 정보가 포함된 질문은 조직의 자료 취급 기준을 따르세요.</div>
+<h3 id="qa-choose">질문별 챗 선택표</h3>
+<div class="table-wrap"><table><caption>어디에 질문해야 하나요?</caption><thead><tr><th>하려는 일</th><th>선택할 챗</th><th>맥락과 결과</th></tr></thead><tbody>
+<tr><td>“이번 주 미팅에서 미완료 할 일을 모아줘”</td><td>Assistant · <code>/chat</code></td><td>현재 접근 가능한 자료를 찾아 답변. 특정 미팅 하나에 한정되지 않음</td></tr><tr><td>“이 미팅에서 결정한 일정은?”</td><td>미팅 상세 → Q&amp;A</td><td>해당 미팅 맥락과 이용 가능한 근거를 중심으로 질문</td></tr><tr><td>“방금 나온 기술이 뭔지 확인해줘”</td><td>녹음 화면 → Q&amp;A</td><td>라이브 대화 맥락으로 질문. 최종 배치 전사와 다를 수 있음</td></tr><tr><td>“이 리서치의 2장을 보완해줘”</td><td>Deep Research → Research Assistant</td><td>해당 리서치의 계획·진행·보고서 맥락에서 후속 질문</td></tr><tr><td>“Claude/Codex에서 또박 자료를 가져와 작업하고 싶어”</td><td>Settings → Developer Tools / MCP 연결</td><td>외부 호스트가 또박의 허용된 도구를 호출. 외부 챗의 모델·승인 정책을 함께 따름</td></tr>
+</tbody></table></div>
+<h3 id="qa-assistant">Assistant 사용 절차</h3><ol class="steps"><li>왼쪽의 <strong>Assistant</strong>를 열고 새 대화를 시작하거나 이전 세션을 선택합니다.</li><li>고객명, 기간, 미팅 제목과 필요한 결과 형식을 질문에 넣습니다. 범위가 좁을수록 결과를 확인하기 쉽습니다.</li><li>답변에 표시되는 출처와 도구 배지를 확인합니다. <em>회의록 검색</em>, <em>KB 검색</em>, <em>AWS Docs</em>, <em>웹 검색</em> 등 사용된 근거의 종류를 구분합니다.</li><li>원본을 열어 사실을 확인하고 후속 질문으로 범위를 좁힙니다. 답변에 근거가 없으면 추측인지 명확히 물어보세요.</li></ol>
+<div class="prompt"><div class="prompt-label">그대로 응용할 수 있는 질문</div><pre id="prompt-assistant">최근 2주간 한빛 커머스 미팅에서 논의한 전환 과제를 정리해줘.
+확정된 결정, 제안, 미해결 질문을 구분하고 출처를 함께 표시해줘.
+접근 가능한 근거가 없으면 없다고 말해줘.</pre><button type="button" data-copy="prompt-assistant" hidden>예시 복사</button></div>
+<h3 id="qa-meeting">미팅 Q&amp;A와 답변 저장</h3><p>미팅 상세의 Q&amp;A에서 질문하고, <em>참조</em> 탭에서 자료를 확인합니다. 탭을 바꿀 때 대화를 유지하도록 두 패널을 숨겨 전환하지만, 화면을 떠난 뒤에도 모든 임시 대화·초안이 저장된다는 뜻은 아닙니다. 필요한 결과는 명시적으로 저장하세요.</p><p><em>내 메모에 추가</em>는 답변을 내 메모 초안에 넣는 동작입니다. 이후 메모의 저장 상태를 확인해야 합니다. AI의 문장을 추가했다는 사실과 저장·검토가 완료됐다는 사실을 구분하세요.</p>
+<h3 id="qa-web">왜 답변이 달라지거나 시간이 걸리나요?</h3><p>AI는 질문에 필요한 검색·읽기 도구를 선택하고 현재 권한이 있는 근거를 가져온 뒤 답변합니다. 원문이 변경되거나 공유가 철회되면 과거에 읽은 자료라도 현재 사용할 수 없습니다. 캐시와 이전 대화가 최신 권한을 대신하지 않습니다.</p><p>자료 검색, 모델 생성과 스트리밍은 별도 단계입니다. 화면에 답변 일부가 보이면 완료 표시까지 기다립니다. 시간 초과는 “근거 없음”이나 빈 답변의 정상 완료와 다릅니다.</p>
+<div class="callout caution"><strong>웹 검색의 데이터 경계</strong><p>수동 Q&amp;A도 외부 검색을 사용할 수 있습니다. 녹음 중의 선제 검색은 별도 사용자 선택으로 켭니다. 선제 검색을 껐다는 사실만으로 모든 수동 질문의 외부 검색이 차단되는 것은 아닙니다. 조직 정책에 맞게 질문 내용을 정하세요.</p></div>
+<p class="related"><a href="#models">각 챗의 모델</a> · <a href="#research">Research Assistant</a> · <a href="#settings">외부 챗 연결</a></p>
 </section>
 
-<section id="sharing" class="chapter"><p class="eyebrow">07 / SHARE</p><h2>공유와 권한 이해하기</h2>
-<ol><li>미팅의 공유 버튼을 엽니다.</li><li>동료를 검색하거나, 제공되는 이메일 초대 기능으로 수신자를 지정합니다.</li><li>미팅에서는 읽기 또는 편집 권한을 선택하고 공유합니다.</li><li>공유 목록에서 실제 수신자와 권한을 확인합니다. 대기 중인 초대는 이미 접근 가능한 사용자와 다릅니다.</li></ol>
-<p>읽기 권한은 열람용이고 편집 권한은 제공되는 편집 기능을 사용할 수 있게 합니다. 소유자 전용 작업까지 허용하지는 않습니다. 대기 초대는 이메일 확인과 계정 준비가 필요하며 만료될 수 있습니다. 등록되지 않은 사용자에게 공유 초대를 보냈다고 서비스 계정 생성이 자동으로 완료되는 것은 아닙니다.</p>
-<div class="table-wrap"><table><caption>공유 방식별 차이</caption><thead><tr><th scope="col">방식</th><th scope="col">알아둘 점</th></tr></thead><tbody><tr><td>미팅 직접 공유</td><td>수신자별 읽기·편집 권한. 실행·관리 권한은 기능별로 다름</td></tr><tr><td>문서 이메일 공유</td><td>원본을 참조하는 읽기 전용 공유</td></tr><tr><td>문서를 Account에 공유</td><td>파일을 복사하는 방식. 원본 변경의 자동 동기화를 가정하지 않음</td></tr><tr><td>문서 공개 링크</td><td>링크를 가진 사람이 로그인 없이 접근 가능. 일반 내부 공유와 다름</td></tr><tr><td>미팅의 고객 분류·프로젝트 연결</td><td>연결만으로 전체 미팅의 열람 권한이 자동 부여된다고 가정하지 않음</td></tr></tbody></table></div>
-<p>공유를 취소할 때는 대상과 결과를 확인하세요. 이미 다운로드하거나 복사한 자료를 회수하는 기능은 아닙니다.</p>
+<section id="models" class="chapter" data-keywords="GPT Sol Luna Terra Opus Sonnet Haiku whisper Transcribe Bedrock 모델 AI 구조 원리 RAG">
+<p class="eyebrow">04 / AI &amp; MECHANISMS</p><h2>AI 모델과 처리 원리</h2><p class="lead">또박은 하나의 챗 모델로 모든 일을 처리하지 않습니다. 음성 인식, 화자 분리, 회의록 작성, 검색 답변, 번역과 리서치를 각각의 목적에 맞는 처리 단계로 나눕니다.</p>
+<div class="flow" role="img" aria-label="입력 자료를 보관하고 전사·추출한 뒤 권한과 최신성을 확인해 AI 결과를 만들고 사람이 검토·저장·공유하는 흐름"><div><b>01</b><strong>입력 · 보관</strong><span>음성 / 문서 / 메모</span></div><span class="flow-arrow" aria-hidden="true">→</span><div><b>02</b><strong>전사 · 추출</strong><span>텍스트와 화자 · 본문</span></div><span class="flow-arrow" aria-hidden="true">→</span><div><b>03</b><strong>근거 확인 · AI</strong><span>권한 / 최신성 / 목적</span></div><span class="flow-arrow" aria-hidden="true">→</span><div><b>04</b><strong>검토 · 저장</strong><span>사람의 확인 / 공유</span></div></div>
+<h3 id="models-table">기능별 기본 모델</h3>
+<div class="table-wrap"><table><caption>2026-11-10 저장소 설정 기준 — 운영 배포를 실시간 조회한 표가 아닙니다</caption><thead><tr><th>기능</th><th>기본 구성</th><th>담당하는 일</th></tr></thead><tbody>
+<tr><td>최종 회의록</td><td>GPT-6.1 Sol</td><td>전사·검증된 자료로 최종 회의록 작성. 배포 preset/환경 설정으로 교체 가능</td></tr><tr><td>회의록·녹취 번역</td><td>GPT-6 Luna</td><td>요청한 한국어/영어 읽기 페이지를 번역. 결과를 원문에 자동 저장하지 않음</td></tr><tr><td>전사 텍스트 정리·보조 작업</td><td>Claude Sonnet 5.5 / Opus 5.5</td><td>서비스가 선택한 보조·정리 경로 수행. 최종 회의록 모델과 구분</td></tr><tr><td>Assistant / 미팅 Q&amp;A</td><td>Claude Sonnet 5.5</td><td>현재 근거와 도구 결과를 사용해 답변</td></tr><tr><td>Q&amp;A 경량 감지</td><td>Claude Haiku 5.5</td><td>질문·대화 감지 등의 작은 판단 단계</td></tr><tr><td>Deep Research / Research Assistant</td><td>Claude Opus 5.5</td><td>조사 계획, 다중 소스 조사, 보고서와 후속 대화</td></tr><tr><td>이미지 처리</td><td>Claude Opus 4.8</td><td>업로드 이미지 분석 경로</td></tr><tr><td>시뮬레이션</td><td>Claude Sonnet 5.5</td><td>제한된 수치 조건을 바탕으로 시뮬레이션 구성</td></tr><tr><td>뉴스 요약</td><td>Claude Sonnet 5.5</td><td>수집한 문서를 요약·정리하는 경로</td></tr><tr><td>실시간 음성 / 최종 배치 전사</td><td>Amazon Transcribe / faster-whisper</td><td>말을 텍스트로 변환. 배치 화자 분리는 pyannote 경로와 별도 결합</td></tr>
+</tbody></table></div>
+<p>표는 코드와 인프라의 기본 설정입니다. 회의록은 <code>standard</code>, <code>terra</code>, <code>sonnet</code> 같은 배포 preset과 명시적 설정으로 달라질 수 있고, 번역도 별도 설정입니다. 외부 Claude·Codex·ChatGPT 호스트로 MCP를 사용할 때는 <strong>그 호스트가 선택한 모델</strong>이 대화를 수행합니다. 또박의 Q&amp;A 모델과 동일하다고 가정하지 마세요.</p>
+<h3 id="models-stt">음성 인식과 회의록 작성이 나뉜 이유</h3><p>음성 인식은 실제 발화와 시간·화자 정보를 최대한 보존하는 일입니다. 회의록은 이를 결정사항·주제·할 일 중심으로 재구성하는 일입니다. 분리해야 “말하지 않은 내용을 매끄럽게 만들기”와 “발화의 근거를 확인하기”를 구분할 수 있습니다.</p><p>화자 라벨은 음향 기반 정보가 우선이고, 텍스트 정리 모델이 이름을 마음대로 새로 확정하는 구조가 아닙니다. 그래서 잘못된 화자나 누락은 원음·녹취와 대조하고 화자 매핑 또는 재처리를 사용해야 합니다.</p>
+<h3 id="models-rag">검색 답변은 어떤 순서로 만들어지나요?</h3><ol class="steps"><li>질문과 선택한 화면의 맥락을 읽습니다.</li><li>허용된 검색·읽기 도구로 후보 자료를 찾습니다.</li><li>현재 사용자에게 읽기 권한이 있는지, 현재 원문과 맞는지 확인합니다.</li><li>확인된 본문과 도구 결과를 모델에 전달합니다.</li><li>답변·출처를 보여주고, 사용자가 최종 결과를 확인합니다.</li></ol><p>이 방식은 검색 증강 생성(RAG)이라고 부릅니다. 검색 등록된 파일이 있다는 사실만으로 매 질문마다 그 파일을 실제 읽었다는 뜻은 아닙니다. 답변의 출처와 실제 내용이 함께 맞아야 합니다.</p>
+<h3 id="models-guard">왜 이전 결과를 남기고 실패를 표시하나요?</h3><p>재요약·액션 아이템 처리 중 네트워크나 모델 오류가 나면 이전 정상 결과를 보존하는 경로가 있습니다. 성공한 새 결과만 현재 자료와 편집 상태를 확인한 뒤 게시합니다. 빈 결과·오류·진행 중을 구분해야 잘못된 결과가 사용자 작업을 덮어쓰는 일을 줄일 수 있습니다.</p>
+<details class="source-note"><summary>모델 설정의 확인 근거</summary><p><code>infra/lib/model-config.ts</code>, <code>infra/lib/gateway-stack.ts</code>, <code>backend/internal/service/bedrock.go</code>, <code>backend/python/qa/handler.py</code>, <code>backend/python/research-agent/agent.py</code>, <code>backend/python/sim/handler.py</code>, <code>backend/python/crawler/news_crawler.py</code>.</p></details>
+</section>
+
+<section id="record" class="chapter" data-keywords="New Meeting 녹음 마이크 화면 모바일 라이브 전사 화자 녹취 선제 검색 복구">
+<p class="eyebrow">05 / LIVE RECORDING</p><h2>실시간 녹음</h2><p class="lead">대화 중에는 안전하게 녹음하고 맥락을 기록하세요. 라이브 자막과 질문은 보조 기능이며, 녹음 종료 후의 최종 전사·회의록과 별도로 이해해야 합니다.</p><p class="path">New Meeting → 실시간 녹음 · <code>/record</code></p>
+<h3 id="record-prepare">녹음 전 준비</h3><ul><li>조직 정책과 참석자의 녹음 동의를 확인합니다.</li><li>마이크 권한을 허용하고 실제 사용할 입력 장치를 확인합니다. Mac의 다른 앱 소리는 <a href="#devices">Mac 앱</a> 경로를 이용합니다.</li><li>제목, 관련 고객, 미팅 유형과 배경을 입력합니다. 배경은 사전 정보이며 실제 발화의 증거를 대신하지 않습니다.</li><li>참석자·용어를 확인합니다. 자동으로 확정되지 않는 화자 이름은 나중에 매핑합니다.</li><li>네트워크와 저장 공간을 확인합니다. 모바일은 화면 잠금·백그라운드 제약이 더 큽니다.</li></ul>
+<h3 id="record-procedure">녹음부터 완료까지</h3><ol class="steps"><li><strong>녹음 시작</strong>을 누르고 녹음 상태와 입력 반응을 확인합니다. 라이브 자막이 나오기만 기다리지 말고 실제 녹음이 진행 중인지 봅니다.</li><li>내 메모에 결정사항·질문을 간단히 적습니다. Q&amp;A는 별도 패널에서 이용합니다.</li><li>선제 검색이 필요한 경우 해당 선택을 켭니다. 대화에서 감지한 질문을 외부 검색에 사용할 수 있다는 점을 조직 정책과 비교합니다.</li><li>종료할 때 정지·완료 흐름을 사용합니다. 업로드가 확인될 때까지 화면을 임의로 닫거나 녹음 파일을 삭제하지 않습니다.</li><li>Meetings에서 업로드·전사·회의록 생성 상태를 확인하고, 완료 후 회의록과 화자를 검토합니다.</li></ol>
+<h3 id="record-why">라이브 자막과 최종 녹취가 다른 이유</h3><p>라이브 자막은 낮은 지연으로 대화를 따라가는 경로입니다. 최종 처리는 저장된 음성을 다시 처리하며 화자 분리·텍스트 정리와 요약을 수행합니다. 중간 자막의 문장 경계·화자·오탈자가 최종 결과와 다를 수 있습니다. 라이브 자막만으로 정확한 회의록이 확정됐다고 보지 마세요.</p>
+<h3 id="record-recovery">녹음 중 문제가 생겼을 때</h3><p>자막이나 Q&amp;A가 실패해도 녹음은 별도로 계속할 수 있습니다. 화면에 녹음 중단·정체 안내가 보이면 안내된 복구·오디오 재개 버튼을 사용합니다. 브라우저 오디오는 사용자 동작이 필요한 경우가 있어 버튼을 직접 눌러야 합니다.</p><p>브라우저에는 녹음 복구와 로컬 백업 경로가 있습니다. 복구 안내가 보이면 남은 자료를 확인한 뒤 이어서 업로드합니다. 브라우저 데이터 삭제·시크릿 창 종료·다른 기기로 이동하기 전에 백업이 어디에 있는지 확인하세요. 복구 가능성을 데이터 보존 보증으로 해석하지 마세요.</p>
+<div class="callout success"><strong>완료 판단</strong><p>녹음 중지 → 오디오 업로드 확인 → 전사 완료 → 회의록 생성 완료를 각각 확인합니다. 가장 마지막 단계 뒤에도 사람이 실제 발화와 결과를 검토해야 합니다.</p></div>
+<p class="related"><a href="#meeting">회의록 검토</a> · <a href="#devices">모바일·Mac</a> · <a href="#troubleshooting">녹음 문제 해결</a></p>
+</section>
+
+<section id="upload" class="chapter" data-keywords="파일 음성 mp3 m4a wav PDF PPT 업로드 대기열 여러 파일 오디오 자르기 crop">
+<p class="eyebrow">06 / UPLOAD</p><h2>파일로 미팅 만들기</h2><p class="lead">이미 녹음한 음성이나 참고 문서가 있으면 업로드로 미팅을 만들 수 있습니다. 파일을 담은 상태, 업로드 완료, 텍스트 추출 완료와 AI 결과 완료를 구분하세요.</p><p class="path">New Meeting → 음성 파일 업로드 · <code>/record?mode=upload</code></p>
+<figure class="screen-example"><a href="screen-upload.svg" target="_blank" rel="noopener" aria-label="음성 파일 업로드의 제목과 파일 선택 영역 화면 크게 보기"><img src="screen-upload.svg" width="1440" height="1080" loading="lazy" alt="메뉴 이해를 위한 음성 파일 업로드의 제목과 파일 선택 영역"></a><figcaption>음성 파일 업로드의 제목과 파일 선택 영역. <strong>설명용 안내도</strong>이며 실제 앱 캡처가 아닙니다. <a href="screen-upload.svg" target="_blank" rel="noopener">화면 크게 보기 ↗</a></figcaption></figure>
+<h3 id="upload-procedure">자료를 모아 올리는 순서</h3><ol class="steps"><li>업로드 화면에서 제목·미팅 배경·고객을 설정합니다. 기존 미팅을 보완하려는지 새 기록을 만들려는지 확인합니다.</li><li>지원되는 음성·문서 파일을 선택하거나 끌어 넣습니다. 여러 파일을 담은 경우 대기열의 파일명과 종류를 확인합니다.</li><li>필요한 파일을 모두 담은 뒤 화면의 <em>완료</em> 동작으로 업로드를 시작합니다. 파일 선택 자체로 전체 업로드가 확정되는 것은 아닙니다.</li><li>각 파일의 오류를 확인합니다. 일부 파일만 실패하면 성공한 자료와 실패한 자료를 나눠 파악합니다.</li><li>Meetings에서 처리 상태를 확인합니다. 문서만 올렸거나 첨부 추출이 실패했다면 음성 전사와 같은 결과를 기대하지 마세요.</li></ol>
+<h3 id="upload-formats">지원 형식과 제한</h3><p>업로드 화면이 안내하는 음성 형식과 PDF·PPT·문서 형식을 사용합니다. 이 화면의 개별 파일 크기 검사는 <strong>최대 500MB</strong>입니다. 다른 도구·MCP·Library 업로드는 자체 제한이 있으므로 이 수치를 모든 경로에 적용하지 마세요.</p><p>손상되거나 암호가 걸린 파일, 지원되지 않는 내부 인코딩은 확장자가 맞아도 처리에 실패할 수 있습니다. 파일을 원래 프로그램에서 열어 확인하고 필요하면 지원 형식으로 다시 저장합니다. 민감한 내용의 변환은 조직에서 승인한 도구로 수행하세요.</p>
+<h3 id="upload-stages">왜 파일이 보이는데 회의록이 없나요?</h3><div class="table-wrap"><table><caption>업로드 후의 서로 다른 준비 단계</caption><thead><tr><th>상태</th><th>의미</th><th>다음 확인</th></tr></thead><tbody><tr><td>업로드 완료</td><td>파일이 저장됨</td><td>전사 또는 문서 추출 상태</td></tr><tr><td>미리보기 생성</td><td>화면에서 문서를 볼 수 있음</td><td>AI가 사용할 본문 추출 여부</td></tr><tr><td>본문 추출 완료</td><td>텍스트를 얻음</td><td>현재 파일에 맞는 결과인지, 부분 추출인지</td></tr><tr><td>검색 준비</td><td>검색 경로에 등록됨</td><td>질문에서 실제 자료를 참조했는지</td></tr><tr><td>회의록 생성 완료</td><td>현재 근거로 결과를 게시함</td><td>사람의 검토와 저장·공유</td></tr></tbody></table></div>
+<h3 id="upload-crop">필요한 음성 구간만 다시 처리할 때</h3><p>미팅의 오디오 자르기 기능이 보이면 시작·종료 시간을 확인한 뒤 대상 구간을 선택합니다. 처리 중에는 상태가 바뀔 수 있으므로 완료 후 실제 선택 구간과 결과를 다시 확인합니다. 원본 보존·현재 작업 상태와 재처리 대상은 해당 화면의 안내를 따릅니다.</p>
+<p class="related"><a href="#knowledge">파일 검색 준비</a> · <a href="#meeting">재처리와 회의록</a></p>
+</section>
+
+<section id="meeting" class="chapter" data-keywords="Meetings 요약 회의록 notes 내 메모 전사 녹취 화자 A/B 비교 saved 재요약 원문 번역 편집 참조 audio speaker">
+<p class="eyebrow">07 / MEETINGS</p><h2>Meetings · 회의록 작업 공간</h2><p class="lead">미팅 상세는 기록을 검토하고 업무에 사용할 결과를 확정하는 공간입니다. 생성된 회의록과 내가 작성한 메모, 근거인 녹취·첨부를 서로 구분해 사용합니다.</p><p class="path">Meetings · <code>/meetings</code> → 미팅 선택</p>
+<figure class="screen-example"><a href="screen-meeting.svg" target="_blank" rel="noopener" aria-label="미팅 상세의 요약·액션 아이템·저장 자료 재요약·참조 패널 화면 크게 보기"><img src="screen-meeting.svg" width="1440" height="1080" loading="lazy" alt="메뉴 이해를 위한 미팅 상세의 요약·액션 아이템·저장 자료 재요약·참조 패널"></a><figcaption>미팅 상세의 요약·액션 아이템·저장 자료 재요약·참조 패널. <strong>설명용 안내도</strong>이며 실제 앱 캡처가 아닙니다. <a href="screen-meeting.svg" target="_blank" rel="noopener">화면 크게 보기 ↗</a></figcaption></figure>
+<h3 id="meeting-find">목록에서 미팅 찾기</h3><ol class="steps"><li>전체·공유받은 미팅 등 표시된 목록 탭을 선택합니다.</li><li>제목 검색과 고객 필터를 사용해 대상 미팅을 좁힙니다. 필터가 남아 있으면 기대한 미팅이 숨겨질 수 있습니다.</li><li>처리 중·오류·완료 상태를 확인합니다. 최근 업로드한 미팅은 AI 결과가 준비되기 전에 나타날 수 있습니다.</li><li>추가 목록 버튼이 있으면 더 불러옵니다. 첫 화면에 없다는 이유로 기록이 삭제됐다고 판단하지 마세요.</li></ol>
+<h3 id="meeting-parts">미팅 상세의 영역별 역할</h3><div class="table-wrap"><table><caption>어디를 편집하고 무엇을 확인하나요?</caption><thead><tr><th>영역</th><th>역할</th><th>작업 기준</th></tr></thead><tbody><tr><td>제목·고객·유형</td><td>분류와 업무 맥락</td><td>실제 미팅과 연결된 대상인지 확인</td></tr><tr><td>회의록·요약</td><td>AI가 정리한 결과</td><td>결정·제안·추측을 구분해 검토</td></tr><tr><td>녹취·화자</td><td>발화 근거</td><td>원음·시간·화자 매핑과 대조</td></tr><tr><td>내 메모</td><td>사용자가 만든 별도 문서</td><td>참조를 선택해 초안을 보완하고 저장</td></tr><tr><td>첨부·참조</td><td>원문·문서·질문 결과</td><td>추출 상태·출처와 현재 접근 확인</td></tr><tr><td>Q&amp;A</td><td>미팅 맥락의 질문</td><td>답변 출처를 열어 확인</td></tr><tr><td>액션 아이템</td><td>다음 할 일</td><td>담당·기한·완료 여부를 사람이 점검</td></tr></tbody></table></div>
+<h3 id="meeting-review">권장 검토 절차</h3><ol class="steps"><li>회의록에 적힌 결정을 녹취·첨부와 대조합니다. 합의되지 않은 제안을 결정사항으로 바꾸지 않습니다.</li><li>화자를 확인하고 잘못 연결된 이름을 수정합니다. 실제 음향 분리 문제는 참석자 수·재분리 기능과 함께 확인합니다.</li><li>녹취 A/B 비교가 제공되면 원하는 근거를 비교·선택합니다. 선택한 편집 내용이 저장됐는지 확인합니다.</li><li>내 메모에 필요한 회의록·녹취·첨부·참조를 추가하고 내용과 출처를 점검합니다.</li><li>저장 상태를 확인하고, 다른 사용자의 변경이 있으면 최신 버전과 비교합니다.</li><li>현재 원문으로 결과를 다시 만들 필요가 있으면 <strong>저장 자료로 다시 요약</strong>을 사용합니다.</li></ol>
+<h3 id="meeting-resummary">저장 자료로 다시 요약</h3><p>재요약은 저장된 원문·검증된 자료를 기준으로 새 회의록을 만드는 작업입니다. 다시 음성 인식을 실행하는 것과 다릅니다. 출력 언어 선택이 보이면 자동·한국어·English 중 필요한 값을 선택하고 실행합니다.</p><p>진행 중에는 입력 자료와 편집 상태를 확인합니다. 재요약 중 누군가 내용을 바꾸면 오래된 결과를 현재 내용에 그대로 게시하지 않는 보호 경로가 있습니다. 성공 후 <em>새 요약 불러오기</em>를 사용해 결과를 확인하고, 내 메모가 자동으로 같은 내용이 됐다고 가정하지 마세요.</p>
+<div class="callout"><strong>왜 내 메모를 별도로 보존하나요?</strong><p>AI 결과를 다시 생성해도 사용자의 업무 판단과 작성 내용이 함께 덮어써지면 안 되기 때문입니다. 생성 결과를 참고해 내 메모를 갱신하되 사람이 선택·저장하는 흐름을 유지합니다.</p></div>
+<h3 id="meeting-translation">회의록·녹취 번역</h3><p>번역 언어를 한국어·영어로 선택하면 현재 읽기 페이지를 번역합니다. 긴 자료는 다음 페이지를 이어서 번역합니다. 번역은 화면 내 임시 결과이며 원문을 자동 수정하거나 영구 문서로 저장하지 않습니다. 필요한 번역문은 검토 후 별도 문서로 보관하세요.</p><p>원문이 바뀌면 이전 번역을 그대로 이어 읽을 수 없을 수 있습니다. 처음부터 다시 번역합니다. 기능 비활성화·사용 한도·오류는 각각의 안내를 따르세요.</p>
+<h3 id="meeting-collaboration">편집 충돌을 만났을 때</h3><p>변경할 권한과 최신 내용이 일치해야 저장됩니다. 충돌·권한 변경 오류가 나면 내 초안을 별도 보관하고 최신 내용을 불러온 뒤 필요한 차이만 반영합니다. 새로고침 전에 저장하지 않은 초안이 있는지 확인하세요.</p>
+<p class="related"><a href="#followup">액션 아이템과 후속 문서</a> · <a href="#sharing">원문·요약 공유의 차이</a></p>
+</section>
+
+<section id="calendar" class="chapter" data-keywords="Outlook calendar 캘린더 개인 일정 upcoming sourceId sync 취소 누락 종일 stale expired">
+<p class="eyebrow">08 / PRIVATE CALENDAR</p><h2>개인 캘린더와 다가오는 미팅</h2><p class="lead">개인 캘린더에서 가져온 일정은 나의 미팅 준비를 돕습니다. Account의 공동 일정과는 저장·권한·동기화 경로가 다릅니다.</p>
+<h3 id="calendar-private">개인 일정이 보이기까지</h3><ol class="steps"><li>조직에서 승인한 로컬 Outlook 읽기 도구와 또박 stdio MCP 연결을 준비합니다.</li><li>캘린더 동기화 절차에 따라 사용자·메일함·대상 캘린더의 범위를 정합니다. 임의의 다른 사용자나 캘린더와 같은 동기화 상태를 재사용하지 않습니다.</li><li>가상 일정으로 읽기·반복 일정·이동·취소·비공개 처리와 재전송을 확인한 뒤 실제 일정 동기화를 사용합니다.</li><li>Home 또는 고객 화면의 다가오는 개인 미팅에서 제목·시간·최종 동기화 상태를 확인합니다.</li></ol>
+<h3 id="calendar-contract">동기화의 원리</h3><p>동일한 반복 일정도 각각의 발생 건을 구분하는 원본 식별자로 저장합니다. 제목이나 현재 시작 시각을 식별자로 사용하면 일정 이동 때 중복이 생길 수 있습니다. 이미 보낸 요청의 결과가 불확실하면 같은 요청을 다시 확인하는 방식으로 중복을 줄입니다.</p><p>일정이 읽기 결과에 없다는 것만으로 삭제하지 않습니다. 권한 변경, 읽기 범위 이동, 누락된 페이지와 실제 취소를 구별해야 하기 때문입니다. 추적한 발생 건의 확인된 취소·제외가 있을 때만 제거합니다. 자료를 다 읽고 변경을 확인한 뒤의 완료 상태와 마지막 시도 시각도 별도로 취급합니다.</p>
+<h3 id="calendar-states">빈 일정·실패·오래된 동기화를 구분하세요</h3><div class="table-wrap"><table><caption>개인 캘린더 상태를 읽는 기준</caption><thead><tr><th>상황</th><th>가능한 의미</th><th>할 일</th></tr></thead><tbody><tr><td>일정 없음</td><td>해당 범위에 없음, 아직 동기화 전</td><td>연결과 조회 범위 확인</td></tr><tr><td>최근 동기화 완료</td><td>확인한 범위의 변경을 반영</td><td>현재 시간·시간대 확인</td></tr><tr><td>최근 시도 실패</td><td>토큰·네트워크·충돌 등 문제</td><td>이전 정상 일정과 실패 시각을 분리해 판단</td></tr><tr><td>일정이 이동·취소됐는데 남음</td><td>삭제 근거를 아직 확인하지 못했을 수 있음</td><td>원본과 동기화 경로를 점검</td></tr></tbody></table></div>
+<div class="callout caution"><strong>비공개 일정과 예약 녹음</strong><p>원본 도구가 비공개 표시를 전달하는지 먼저 확인해야 합니다. “읽기 전용”은 “민감한 일정을 자동 제외”한다는 뜻이 아닙니다. 일정이 보이는 것만으로 녹음이나 고객 공유가 자동 실행되지는 않습니다. 로컬 intake 도구의 자동화 기능은 설치 버전과 별도 수용 검증을 확인하세요.</p></div>
+<p class="related"><a href="#accounts">고객 공동 일정</a> · <a href="#settings">MCP 연결</a></p>
+<h3 id="calendar-intake">로컬 MCP로 Outlook을 연결하는 절차</h3><p>현재 소스에는 <code>ttobak-mcp intake</code> 명령줄 수집기가 있습니다. Mac Settings 안에서 수집 서버를 선택하는 UI는 아직 제공되지 않습니다. 지원되는 로컬 Outlook reader와 TTOBAK stdio 어댑터를 준비하고 각각 로그인해야 합니다. 아래 명령은 어댑터 설치가 끝난 컴퓨터에서 실행하는 예시입니다.</p>
+<ol class="steps"><li>로컬 호스트의 MCP 설정에 승인된 Outlook reader가 있는지 확인합니다. reader의 읽기 권한·실행 파일·인증 갱신을 확인합니다.</li><li><code>node ~/.ttobak/server.mjs intake hosts</code>로 지원 호스트에서 발견한 서버 이름·전송 방식·활성 상태를 확인합니다. 이 명령은 설정의 비밀값을 표시하지 않습니다.</li><li><code>node ~/.ttobak/server.mjs intake select calendar --host claude --server aws-outlook-mcp</code>처럼 실제 호스트·서버를 선택합니다. <code>claude</code>, <code>codex</code>, <code>kiro</code>는 MCP 설정을 읽는 호스트이며 캘린더 내용을 이해하는 필수 대화 모델을 뜻하지 않습니다.</li><li><code>node ~/.ttobak/server.mjs intake calendar --dry-run</code>으로 최근 7일·다음 30일의 계획과 건수를 확인합니다. dry run은 TTOBAK에 일정을 쓰지 않습니다. 제목 미리보기를 추가하는 옵션은 로컬 화면에도 민감한 일정 제목이 나타날 수 있으므로 필요한 경우만 사용합니다.</li><li>공개·비공개·반복 일정·이동·취소·종일 일정을 가상 자료로 검증한 뒤 <code>node ~/.ttobak/server.mjs intake calendar</code>를 실행합니다. 최초 TTOBAK 로그인이 필요하면 대화형 인증을 완료합니다.</li><li><code>node ~/.ttobak/server.mjs intake status</code>와 Home·Meetings에서 결과를 비교합니다. 같은 작업을 다시 실행했을 때 중복 변경이 없는지 확인합니다.</li><li>본인 컴퓨터에서 읽기·재시도·제외 정책이 검증된 뒤에만 반복 실행을 설정합니다. 이 가이드는 사용자의 Mac에서 제공자 검증이나 무인 스케줄 설치가 끝났다고 보증하지 않습니다.</li></ol>
+<div class="callout caution"><strong>비공개 일정 식별을 먼저 검증</strong><p>현재 reader가 비공개 일정을 숨기거나 민감도 표시를 반환한다고 가정할 수 없습니다. 민감도가 없으면 기본 수집은 <code>SENSITIVITY_UNKNOWN</code>으로 중단될 수 있습니다. 민감도 미확인 허용 옵션을 켜면 비공개 일정도 개인 TTOBAK 캘린더로 들어올 수 있습니다. 단순 오류 해결을 위해 켜지 말고 조직의 제외 정책과 실제 reader 동작을 먼저 확인합니다.</p></div>
+<p>409 충돌은 서버 버전과 로컬 상태를 조정해야 하는 상황입니다. 화면·지원 안내를 확인하고 재조정 후 실행합니다. 중간 인증 만료·서버 스키마 변경·다른 작업 실행 중 등의 오류는 각각 원인을 해결한 뒤 재시도합니다. 날짜 범위에서 사라진 일정은 자동 삭제 근거로 사용하지 않습니다.</p>
+</section>
+
+<section id="followup" class="chapter" data-keywords="액션 아이템 action items 할일 체크 재시도 사전 준비 후속 follow up SA next meeting 제안">
+<p class="eyebrow">09 / PREPARE &amp; FOLLOW UP</p><h2>미팅 준비 · 액션 아이템 · 후속 업무</h2><p class="lead">기록을 만든 뒤에는 검토한 사실을 다음 미팅과 담당자의 작업으로 연결하세요. AI가 추출한 할 일은 사람의 확인을 거쳐 사용합니다.</p>
+<h3 id="followup-prepare">다음 미팅 준비</h3><ol class="steps"><li>관련 고객과 이전 미팅·프로젝트·리서치를 확인합니다.</li><li>새 미팅의 배경·준비 자료에 핵심 질문과 참고할 내용을 작성합니다.</li><li>출처가 있는 기존 자료만 선택해 내 메모 초안을 보완합니다. 근거가 없는 예상 발화를 실제 대화처럼 넣지 않습니다.</li><li>미팅 시작 전 참석자·고객 분류·기록할 목표를 확인합니다.</li></ol>
+<h3 id="followup-actions">액션 아이템 확인과 완료 표시</h3><ol class="steps"><li>미팅 상세의 액션 아이템 카드에서 처리 상태를 확인합니다.</li><li>각 항목의 내용·담당자·기한을 실제 합의와 비교합니다. 제안·가능성·확정된 할 일을 구별합니다.</li><li>실제로 완료한 항목만 완료로 표시합니다. 동시에 다른 사람이 바꾼 상태가 있다면 최신 값을 다시 확인합니다.</li><li>추출 실패·중단 상태가 보이면 권한이 있는 사용자가 재시도합니다. 이전 항목이 남아 있다면 새 추출이 성공한 결과인지 확인합니다.</li></ol>
+<h3 id="followup-empty">“할 일 없음”과 “처리 실패”의 차이</h3><p>정상 완료된 빈 결과만 할 일이 없다는 의미입니다. 아직 실행하지 않음, 실행 중, 실패·중단은 다릅니다. 실패한 작업 때문에 기존 할 일과 사람이 완료한 상태를 무조건 없애지 않는 보호 경로가 있습니다.</p>
+<h3 id="followup-doc">개인 후속 문서 만들기</h3><p>미팅의 후속 업무 영역에서 개인 Docs 초안을 만듭니다. 후속 메일, 다음 미팅 준비, 제안 개요 등 필요한 목적에 맞춰 검토합니다. 관련 Project로 연결할 수 있어도 전체 미팅의 읽기 권한은 별도로 확인됩니다.</p><p>초안 생성은 이메일 발송이나 고객 공유의 완료가 아닙니다. 약속, 수치, 날짜와 민감한 정보를 검토하고 저장·공유·발송을 각각 확인하세요.</p>
+<div class="prompt"><div class="prompt-label">후속 문서를 검토할 질문</div><pre id="prompt-followup">이 미팅을 기준으로 후속 메일 초안을 작성해줘.
+확정한 사항과 검토할 사항을 나누고, 담당자·기한이 불명확하면 확인 필요로 표시해줘.
+아직 합의하지 않은 일정이나 비용을 확정한 것처럼 쓰지 말아줘.</pre><button type="button" data-copy="prompt-followup" hidden>예시 복사</button></div>
+<p class="related"><a href="#documents">개인 문서</a> · <a href="#projects">프로젝트 연결</a></p>
+</section>
+
+<section id="simulation" class="chapter" data-keywords="시뮬레이션 simulation 비용 sizing 조건 추출 옵션 실행 sandbox charts 그래프 pricing 견적">
+<p class="eyebrow">10 / SIMULATION</p><h2>비용·사이징 시뮬레이션</h2><p class="lead">회의에서 나온 수치 조건으로 대안을 비교합니다. 결과는 검토용 계산이며 공식 견적이나 성능 보증을 대신하지 않습니다.</p><p class="path">미팅 상세 → 시뮬레이션 카드 · 사용 가능한 소유자 기능</p>
+<h3 id="simulation-procedure">조건 확인부터 실행까지</h3><ol class="steps"><li>미팅의 녹취와 전사 상태를 확인합니다. 수치 조건의 근거가 있어야 합니다.</li><li>시뮬레이션 카드에서 조건 추출을 시작합니다. 처리 중에는 완료 상태를 기다립니다.</li><li>추출된 요구사항·범위·단위와 제공된 옵션을 검토합니다. 거래량과 동시 사용자 수, 월 비용과 시간당 비용을 혼동하지 않습니다.</li><li>화면이 제공하는 선택·수정 범위에서 조건을 확정하고 실행합니다. 임의의 새로운 요구사항 입력 기능이 있다고 가정하지 마세요.</li><li>완료 후 차트·표·사용 조건을 함께 읽습니다. 비교 가능한 기준인지와 누락된 비용 항목을 확인합니다.</li></ol>
+<h3 id="simulation-why">왜 추출과 실행을 나누나요?</h3><p>자연어 녹취에서 조건을 얻는 과정과 수치 계산을 실행하는 과정의 위험이 다르기 때문입니다. 전사는 조건 추출에 사용하고, 허용된 수치 구조만 코드 생성에 전달하는 경로를 사용합니다. 모델이 만든 코드의 실행은 별도의 제한된 환경에서 이루어집니다.</p><p>한 미팅의 실행 상태를 구분해 오래된 실행 결과가 새 결과를 덮어쓰지 않도록 보호합니다. 진행 중 결과와 이전 완료 결과의 시각·실행 상태를 확인하세요.</p>
+<h3 id="simulation-read">계산 결과를 읽는 체크리스트</h3><ul><li>입력 조건: 시간 범위, 사용자 수, 요청량, 저장량, 데이터 전송 등 어떤 값이 실제 사용됐는가?</li><li>단위: MB와 MiB, 초와 시간, 월과 일, 동시성과 누적량을 일관되게 비교했는가?</li><li>요금 범위: 계산 코드가 지원하는 서비스·리전·항목이 무엇인가? 모든 서비스의 최신 요금을 포괄한다고 해석하지 않는다.</li><li>제외 비용: 할인·약정·세금·환율·운영비·추가 네트워크 비용 등의 반영 여부를 별도로 확인한다.</li><li>성능: 계산상의 예상 용량과 실제 부하 테스트 결과를 구분한다.</li></ul>
+<div class="callout caution"><strong>실행 실패·결과가 없을 때</strong><p>추출 실패, 실행 실패, 아직 생성되지 않은 결과를 구분합니다. 동일 버튼을 반복 누르기 전에 현재 실행 상태를 확인하세요. 지원 범위를 벗어난 서비스는 별도 가격 도구와 실측으로 검토합니다.</p></div>
+<p class="related"><a href="#billing">실제 비용 분석과의 차이</a> · <a href="#models">시뮬레이션 AI</a></p>
 </section>
 
 <section id="accounts" class="chapter"><p class="eyebrow">08 / ACCOUNTS</p><h2>고객·조직별로 정리하기</h2>
@@ -104,9 +171,30 @@
 <p>기존 구성원은 구성원 추가와 허용된 역할 변경을 할 수 있지만 <strong>owner</strong> 역할을 지정할 수는 없습니다. 구성원 제거·대기 초대 취소·상위 Account 변경은 소유자 작업입니다. 상하위 Account 관계만으로 서로의 자료 접근 권한이 상속되지는 않습니다.</p>
 </section>
 
+<section class="chapter" id="contacts" data-keywords="연락처 명함 리멤버 Remember CSV Excel 엑셀 일괄 가져오기 매핑 중복 전화번호">
+<p class="eyebrow">12 / CONTACTS</p>
+<h2>연락처 · 명함과 일괄 가져오기</h2>
+<p class="lead">고객 연락처는 외부 담당자를 관리하는 주소록입니다. 서비스 사용자 초대와 구분하고, 가져오기 미리보기에서 고객 배정과 중복을 먼저 확인합니다.</p>
+<p class="path">Accounts → 고객 개요 → 연락처 · Settings → 연락처 가져오기</p><h3 id="contacts-manual">한 명씩 등록하기</h3><p>고객의 직접 멤버로 개요 화면에서 연락처 추가를 엽니다.</p>
+</section>
+
+<section class="chapter" id="people" data-keywords="사람 인물 그래프 연락처 mention 언급 resolve 관계 signals 시그널 flow 흐름">
+<p class="eyebrow">13 / PEOPLE &amp; SIGNALS</p>
+<h2>사람 · 관계 · 시그널 · 흐름</h2>
+<p class="lead">흩어진 이름과 고객 업무 단서를 정리하는 화면입니다. 참석한 사람, 대화에서 언급된 사람, 연락처로 확인된 사람을 같은 의미로 취급하지 않습니다.</p>
+<p class="path">Accounts → 고객 개요 → 사람·관계·시그널·흐름 영역</p><h3 id="people-resolve">미확인 언급을 실제 인물에 연결하기</h3><p>고객에서 연결된 사람과 미해결 언급 목록을 확인합니다.</p>
+</section>
+
 <section id="projects" class="chapter"><p class="eyebrow">09 / PROJECTS</p><h2>프로젝트 중심으로 협업하기</h2>
 <ol><li><strong>Projects</strong>에서 이름을 입력해 생성합니다. SFDC Opportunity ID·URL·Stage는 필요한 경우 채웁니다.</li><li>프로젝트 상세에서 직접 구성원을 추가하거나 <strong>Linked Accounts</strong>로 고객·조직을 연결합니다.</li><li>관련 미팅과 리서치를 연결하고 상세 화면에서 확인합니다.</li><li>프로젝트를 삭제해야 한다면 먼저 연결 관계를 확인·정리합니다. 연결 자료가 남아 있으면 삭제가 거부될 수 있습니다.</li></ol>
 <p>프로젝트 소유자, 직접 구성원과 연결된 Account의 구성원이 프로젝트에 접근할 수 있습니다. Account 연결을 끊으면 그 경로로 접근하던 구성원이 권한을 잃을 수 있습니다. 프로젝트에 표시되는 미팅도 전체 내용은 별도의 미팅 권한을 확인합니다.</p>
+</section>
+
+<section id="sharing" class="chapter"><p class="eyebrow">07 / SHARE</p><h2>공유와 권한 이해하기</h2>
+<ol><li>미팅의 공유 버튼을 엽니다.</li><li>동료를 검색하거나, 제공되는 이메일 초대 기능으로 수신자를 지정합니다.</li><li>미팅에서는 읽기 또는 편집 권한을 선택하고 공유합니다.</li><li>공유 목록에서 실제 수신자와 권한을 확인합니다. 대기 중인 초대는 이미 접근 가능한 사용자와 다릅니다.</li></ol>
+<p>읽기 권한은 열람용이고 편집 권한은 제공되는 편집 기능을 사용할 수 있게 합니다. 소유자 전용 작업까지 허용하지는 않습니다. 대기 초대는 이메일 확인과 계정 준비가 필요하며 만료될 수 있습니다. 등록되지 않은 사용자에게 공유 초대를 보냈다고 서비스 계정 생성이 자동으로 완료되는 것은 아닙니다.</p>
+<div class="table-wrap"><table><caption>공유 방식별 차이</caption><thead><tr><th scope="col">방식</th><th scope="col">알아둘 점</th></tr></thead><tbody><tr><td>미팅 직접 공유</td><td>수신자별 읽기·편집 권한. 실행·관리 권한은 기능별로 다름</td></tr><tr><td>문서 이메일 공유</td><td>원본을 참조하는 읽기 전용 공유</td></tr><tr><td>문서를 Account에 공유</td><td>파일을 복사하는 방식. 원본 변경의 자동 동기화를 가정하지 않음</td></tr><tr><td>문서 공개 링크</td><td>링크를 가진 사람이 로그인 없이 접근 가능. 일반 내부 공유와 다름</td></tr><tr><td>미팅의 고객 분류·프로젝트 연결</td><td>연결만으로 전체 미팅의 열람 권한이 자동 부여된다고 가정하지 않음</td></tr></tbody></table></div>
+<p>공유를 취소할 때는 대상과 결과를 확인하세요. 이미 다운로드하거나 복사한 자료를 회수하는 기능은 아닙니다.</p>
 </section>
 
 <section id="documents" class="chapter"><p class="eyebrow">10 / DOCUMENTS</p><h2>개인 문서 작성·보관·공유하기</h2>
@@ -129,9 +217,25 @@
 <p>리서치 대화는 Enter가 줄바꿈으로 동작할 수 있으므로 전송 버튼을 확인하세요. 생성 또는 처리 시작에 실패했다는 표시가 있으면 결과가 만들어졌다고 가정하지 말고 재시도합니다.</p>
 </section>
 
-<section id="followup" class="chapter"><p class="eyebrow">13 / FOLLOW-UP</p><h2>미팅 준비 → 검토 → 후속 문서</h2>
-<ol><li><strong>미팅 전:</strong> 녹음 화면의 준비 영역에서 고객 배경·질문·확인할 가설을 정리합니다. <strong>개인 준비 문서로 보관</strong>하고 다음에 불러올 수 있습니다.</li><li><strong>미팅 중:</strong> 들은 사실과 자신의 해석을 구분해 메모합니다. 수치에는 단위와 기준 기간, 후속 작업에는 담당자·기한을 적습니다.</li><li><strong>미팅 후:</strong> 요약·녹취·메모·액션을 검토하고 저장합니다. Field Insight는 이전 추출 결과일 수 있으므로 현재 원문과 대조합니다.</li><li><strong>고객·프로젝트 후속 연결:</strong> <strong>개인 후속 문서 만들기</strong>를 눌러 저장된 요약·메모·액션을 문서로 모읍니다. 편집 중인 내용이 있으면 먼저 저장해야 합니다.</li><li>필요한 프로젝트를 선택해 연결하고 <strong>다음 미팅 준비</strong>로 이어갑니다.</li></ol>
-<p>후속 문서는 개인 문서로 저장되며 자동으로 고객에게 발송되거나 공유되지 않습니다. 다시 만들면 새 사본이 생길 수 있으므로 사용할 문서를 확인하세요.</p>
+<section class="chapter" id="news" data-keywords="News Updates 뉴스 인사이트 크롤러 crawler 소스 필터 읽음 북마크 최신 수집 외부 출처">
+<p class="eyebrow">19 / NEWS &amp; UPDATES</p>
+<h2>News &amp; Updates · 수집된 변화 읽기</h2>
+<p class="lead">외부 소스에서 수집한 뉴스·업데이트를 정리해 봅니다. 수집·요약 시점이 있으므로 실시간 전체 웹이나 변경 없는 공식 원문으로 취급하지 않습니다.</p>
+<p class="path">News &amp; Updates · <code>/insights</code></p><h3 id="news-use">뉴스를 업무에 활용하기</h3><p>News &amp; Updates에서 뉴스 탭과 리서치 탭을 구분합니다.</p>
+</section>
+
+<section class="chapter" id="dictionary" data-keywords="Custom Dictionary 사전 용어 displayAs heardAs 표기 발음 별칭 개인 고객 공통 자동 제안 삭제 유지 vocabulary READY BUILDING">
+<p class="eyebrow">20 / CUSTOM DICTIONARY</p>
+<h2>Custom Dictionary · 조직의 말을 정확하게</h2>
+<p class="lead">제품명·고객명·약어의 표기와 들리는 형태를 관리합니다. 사전에 저장하는 일과 실시간 음성 인식용 어휘가 준비되는 일을 구분합니다.</p>
+<p class="path">Custom Dictionary · <code>/dictionary</code> · Settings → 내 사전</p><h3 id="dictionary-layers">사전 범위 선택</h3><p>올바른 범위와 목록 필터를 선택합니다. 자동 제안과 이미 활성화된 용어를 구분합니다.</p>
+</section>
+
+<section class="chapter" id="billing" data-keywords="Billing 비용 빌링 AWS cost 계정 기간 통화 단위 데이터 동기화 인사이트">
+<p class="eyebrow">21 / BILLING</p>
+<h2>Billing · 비용 데이터를 해석하기</h2>
+<p class="lead">환경에서 활성화된 비용 분석을 엽니다. 미팅의 비용 추정·시뮬레이션과 실제 수집된 비용 데이터는 다른 근거입니다.</p>
+<p class="path">고객 분석 → Billing · <code>/billing</code> 또는 별도 비용 서비스 · 고객 상세 → Billing</p><h3 id="billing-open">비용 화면 열기</h3><p>사이드바·모바일 메뉴 또는 프로필에 Billing 진입이 표시되는지 확인합니다. 기능이 꺼진 환경에서는 보이지 않을 수 있습니다.</p>
 </section>
 
 <section id="settings" class="chapter"><p class="eyebrow">14 / SETTINGS</p><h2>설정과 연동</h2>
@@ -144,15 +248,40 @@
 <p>테마는 메뉴의 <strong>Light Mode / Dark Mode</strong>로 바꿀 수 있으며 프로필 영역에서 로그아웃합니다.</p>
 </section>
 
+<section class="chapter" id="admin" data-keywords="관리자 Admin 사용자 초대 disable 활성 비활성 삭제 마지막 관리자 이메일 검증 셀프 가입 세션">
+<p class="eyebrow">23 / ADMINISTRATION</p>
+<h2>관리자 · 사용자와 서비스 운영</h2>
+<p class="lead">사용자 관리 권한과 고객 Owner 권한은 별개입니다. 앱에 들어올 수 있는 계정과 자료에 접근할 수 있는 멤버십을 따로 운영합니다.</p>
+<p class="path">Settings → 사용자 초대 / 사용자 관리 · 관리자 계정 전용</p><h3 id="admin-invite">사용자 초대·가입 지원</h3><p>관리자 계정으로 Settings의 사용자 관리 영역을 엽니다.</p>
+</section>
+
 <section id="devices" class="chapter"><p class="eyebrow">15 / DEVICES</p><h2>모바일과 Mac에서 녹음하기</h2>
 <h3>모바일 브라우저</h3><p>녹음 시작 시 마이크 권한을 허용합니다. 통화·다른 앱·화면 잠금 등으로 입력이 방해받을 수 있으므로 중요한 녹음은 상태를 자주 확인하세요. 소리나 자막 복구 버튼이 표시되면 직접 탭합니다. 자막 실패와 녹음 실패를 구분하고, 업로드가 완료되기 전 페이지를 닫지 마세요.</p>
 <h3>Mac 앱</h3><p>조직에서 제공한 앱을 실행하고 사용할 입력에 필요한 macOS 권한을 허용합니다. <strong>System</strong>은 Zoom·Teams 등의 시스템 오디오를 캡처하지만 현재 화면 안내대로 <strong>본인 마이크는 별도로 포함하지 않습니다.</strong> 본인 발언까지 필요한 녹음인지 먼저 확인하세요. 권한을 바꾼 뒤에는 앱 재시작이 필요할 수 있습니다. 녹음 종료 후 업로드 완료 상태를 확인합니다.</p>
 <p>미전송 녹음 복구 목록이 나타나면 파일과 녹음 시점을 확인한 뒤 업로드를 선택합니다. 남은 녹음 파일은 같은 macOS 사용자 기준으로 찾으며 또박 로그인 계정별로 분리되지 않습니다. 공용 Mac이나 계정을 바꾼 경우 특히 본인 자료인지 확인하세요. 실패한 파일을 업로드 확인 전에 지우지 마세요.</p>
 </section>
 
+<section class="chapter" id="security" data-keywords="보안 개인정보 모델 데이터 외부 검색 권한 저장 보존 삭제 암호 토큰 공개 링크 읽기 CloudFront JWT">
+<p class="eyebrow">25 / SECURITY &amp; DATA</p>
+<h2>보안 · AI 데이터 경계</h2>
+<p class="lead">AI가 답할 수 있는 자료는 현재 접근 가능한 근거여야 합니다. 사용자는 공유 범위와 외부 전달을 확인하고, 관리자는 인증·설정·보존 정책을 실제 환경에서 검증합니다.</p><h3 id="security-boundaries">사용자가 확인할 네 가지 경계</h3><p>일반 QA 질문도 필요에 따라 외부 검색을 사용할 수 있습니다. 실시간 자동 QA의 웹 검색 옵션을 껐다는 이유로 사용자가 직접 한 모든 질문의 외부 검색이 차단됐다고 해석하지 않습니다. 회의에서 유래한 표현이 검색어에 포함될 수 있으므로 민감한 내부 내용이 있는 질문은 조직의 허용 범위를 확인합니다.</p>
+</section>
+
+<section class="chapter" id="workflows" data-keywords="업무 시나리오 워크플로우 AM SSA 고객 성공 영업 기술 검토 회의 전 중 후 온보딩 의사결정">
+<p class="eyebrow">26 / WORKFLOWS</p>
+<h2>업무별 권장 흐름</h2>
+<p class="lead">메뉴를 개별 기능으로만 쓰지 않고 회의 전 준비, 회의 중 기록, 회의 후 검증·공유로 연결합니다. 아래 이름과 업무는 모두 가상의 예시입니다.</p><h3 id="workflow-meeting">고객 미팅을 다음 실행으로 연결</h3><p><strong>회의 전:</strong> Accounts에서 한빛커머스의 최근 미팅·사람·일정을 확인하고 Library의 제품 자료를 준비합니다.</p>
+</section>
+
 <section id="troubleshooting" class="chapter"><p class="eyebrow">16 / HELP</p><h2>문제 해결</h2>
 <dl><dt>마이크가 안 보여요 / 소리가 안 들어와요</dt><dd>브라우저·운영체제 권한과 선택한 마이크를 확인합니다. 다른 앱이 마이크를 점유하는지 확인하고 화면의 복구 버튼을 사용합니다. 녹음 중에는 저장 상태 확인 없이 새로고침하지 마세요.</dd><dt>업로드는 됐는데 요약이 없어요</dt><dd>업로드와 전사·요약은 별도 단계입니다. 미팅의 처리 상태와 오류를 확인합니다. 파일 처리 실패를 빈 요약의 정상 완료로 해석하지 마세요.</dd><dt>문서가 보이는데 AI가 읽지 못해요</dt><dd>문서의 본문 추출·검색 등록 상태, 지원 형식, 현재 권한을 확인합니다. 미리보기 생성과 AI 본문 사용은 서로 다른 기능입니다.</dd><dt>수정 내용이 요약에 반영되지 않아요</dt><dd>먼저 저장 상태를 확인하고 <strong>저장 자료로 다시 요약</strong>을 사용합니다. 성공 후 <strong>새 요약 불러오기</strong>로 확인합니다. 재요약 중 원문이 바뀌었다면 최신 상태로 다시 요청합니다.</dd><dt>공유받은 자료가 안 열려요</dt><dd>초대받은 이메일로 로그인했는지, 초대가 완료되었는지 확인합니다. 소유자에게 현재 공유 상태를 확인하도록 요청하세요. 고객·프로젝트 연결만으로 미팅 전체 읽기 권한이 생기는 것은 아닙니다.</dd><dt>다운로드 링크가 만료됐어요</dt><dd>로그인 상태와 권한을 확인하고 원래 문서·미팅을 다시 열어 새 다운로드 주소를 받습니다.</dd><dt>저장 충돌이나 권한 변경 오류가 나요</dt><dd>편집 중인 내용을 안전하게 별도로 보관하고 최신 내용을 불러옵니다. 다른 사용자의 변경과 비교한 뒤 필요한 수정만 다시 저장하세요.</dd><dt>계속 실패하면 무엇을 전달하나요?</dt><dd>메뉴·실행 단계·발생 시각·오류 문구·미팅 또는 문서 식별 정보를 조직의 지원 담당자에게 전달합니다. 비밀번호·연동 토큰·실제 고객 내용을 공개 이슈에 올리지 마세요.</dd></dl>
 <p>시뮬레이션 관련 오류는 <a href="#simulation">시뮬레이션 상세 안내</a>에서 먼저 확인하세요.</p>
+</section>
+
+<section class="chapter" id="glossary" data-keywords="용어 glossary STT RAG CAS KB MCP source grounding lease cursor 소유자 원본 색인">
+<p class="eyebrow">28 / GLOSSARY</p>
+<h2>용어와 가이드 읽는 법</h2>
+<p class="lead">화면에 보이는 결과를 판단하는 데 필요한 용어를 정리합니다. 구현 용어를 외우기보다 각 단계가 무엇을 보증하는지 이해하면 됩니다.</p><h3 id="guide-basis">이 가이드의 기준과 범위</h3><p>2026년 11월 10일 TTOBAK 소스 기준 메뉴·구현을 확인했습니다. 기본 모델 표는 그 시점의 설정이며 운영자가 변경할 수 있습니다. 환경별 기능 활성화·권한·데이터 준비에 따라 메뉴와 동작이 달라질 수 있습니다.</p>
 </section>
 <footer class="site-footer"><p><strong>TTOBAK Product Guide</strong> · 2026.11</p><p>기록 → 근거 → 실행. 정확한 범위와 확인 가능한 결과로 협업합니다.</p><a href="#top">맨 위로 ↑</a></footer>
 </main>
