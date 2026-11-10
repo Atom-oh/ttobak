@@ -1,0 +1,136 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import vm from 'node:vm';
+import ts from 'typescript';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import * as jsxRuntime from 'react/jsx-runtime';
+
+function loadModule(path, dependencies = {}, globals = {}) {
+  const source = readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      jsx: ts.JsxEmit.ReactJSX,
+    },
+  });
+  const exports = {};
+  vm.runInNewContext(outputText, {
+    exports,
+    require: (name) => {
+      assert.ok(name in dependencies, `Unexpected dependency: ${name}`);
+      return dependencies[name];
+    },
+    setTimeout, clearTimeout, AbortController, TextEncoder, Date, Promise,
+    ...globals,
+  });
+  return exports;
+}
+
+const liveTranslation = loadModule('lib/liveTranslation.ts');
+const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation });
+const { CaptionOverlayPanel } = loadModule('components/record/CaptionOverlayPanel.tsx', {
+  'react/jsx-runtime': jsxRuntime,
+  '@/lib/captionOverlay': overlay,
+});
+
+const style = {
+  fontFamily: 'Apple SD Gothic Neo', fontSize: 48, fontColor: '#FFFFFF',
+  outlineColor: '#000000', outlineWidth: 3, backgroundOpacity: 0.4,
+};
+
+function props({ profile = 'dev', extraLanguage = null, windows = {}, ...overrides } = {}) {
+  const noop = () => {};
+  return {
+    supported: true,
+    view: {
+      settings: { profile, region: 'us-east-1', extraLanguage, windows },
+      profiles: ['dev', 'prod'],
+      fonts: ['Apple SD Gothic Neo', 'Helvetica Neue'],
+    },
+    error: null,
+    openLangs: [],
+    extraLanguage: undefined,
+    onSegment: noop,
+    setProfile: noop,
+    setRegion: noop,
+    setExtraLanguage: noop,
+    toggleWindow: noop,
+    updateStyle: noop,
+    retry: noop,
+    isRecording: false,
+    ...overrides,
+  };
+}
+
+const render = (p) => renderToStaticMarkup(React.createElement(CaptionOverlayPanel, p));
+const buttonTag = (html, id) => html.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`))?.[0];
+
+test('renders nothing outside the Mac app', () => {
+  assert.equal(render(props({ supported: false, view: null })), '');
+});
+
+test('disables window toggles without a profile', () => {
+  const html = render(props({ profile: null }));
+  for (const lang of ['ko', 'en']) {
+    const tag = buttonTag(html, `caption-${lang}`);
+    assert.ok(tag, `toggle for ${lang}`);
+    assert.match(tag, /disabled=""/);
+  }
+  assert.ok(html.includes('AWS 프로필을 먼저 선택해 주세요.'));
+
+  const ready = render(props({ profile: 'dev' }));
+  assert.doesNotMatch(buttonTag(ready, 'caption-ko'), /disabled=""/);
+  assert.ok(!ready.includes('AWS 프로필을 먼저 선택해 주세요.'));
+});
+
+test('offers only one third language', () => {
+  const zh = render(props({ extraLanguage: 'zh' }));
+  assert.ok(buttonTag(zh, 'caption-zh'));
+  assert.ok(!zh.includes('caption-ja'));
+  for (const label of ['없음', '日本語', '中文']) assert.ok(zh.includes(label), label);
+
+  const none = render(props());
+  assert.ok(!none.includes('caption-ja'));
+  assert.ok(!none.includes('caption-zh'));
+});
+
+test('locks the recognition language while recording', () => {
+  const html = render(props({ isRecording: true }));
+  const select = html.match(/<select[^>]*id="caption-extra-language"[^>]*>/)?.[0];
+  assert.ok(select);
+  assert.match(select, /disabled=""/);
+  assert.ok(html.includes('인식 언어는 녹음을 시작하기 전에만 바꿀 수 있어요.'));
+});
+
+test('shows a style editor for each open window', () => {
+  const html = render(props({
+    openLangs: ['ko'],
+    windows: { ko: { open: true, style, x: null, y: null, width: 900, height: 180 } },
+  }));
+  assert.ok(html.includes('id="caption-ko-font"'));
+  assert.ok(html.includes('Helvetica Neue'));
+  assert.match(html, /id="caption-ko-size"[^>]*min="16"[^>]*max="160"|min="16"[^>]*max="160"[^>]*id="caption-ko-size"/);
+  assert.ok(html.includes('id="caption-ko-font-color"'));
+  assert.ok(html.includes('id="caption-ko-outline-color"'));
+  assert.ok(html.includes('id="caption-ko-outline-width"'));
+  assert.ok(html.includes('id="caption-ko-background"'));
+  assert.ok(html.includes('40%'));
+  assert.ok(!html.includes('id="caption-en-font"'));
+});
+
+test('shows the Zoom notice', () => {
+  assert.ok(render(props()).includes('Zoom에서는 창이 아니라 전체 화면을 공유해야 자막이 함께 보여요.'));
+});
+
+test('shows the mwinit message', () => {
+  const html = render(props({ error: 'credentials-expired' }));
+  assert.ok(html.includes('자격 증명이 만료됐어요. 터미널에서 mwinit을 실행한 뒤 다시 시도해 주세요.'));
+  assert.ok(html.includes('다시 시도'));
+
+  const unloaded = render(props({ view: null, error: 'window-error' }));
+  assert.ok(unloaded.includes('자막 번역에 실패했어요. 잠시 후 다시 시도해 주세요.'));
+  assert.ok(unloaded.includes('다시 시도'));
+});

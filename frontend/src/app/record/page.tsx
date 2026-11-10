@@ -17,6 +17,8 @@ import { resetProactiveClaims } from '@/lib/proactiveSearch';
 import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
+import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
+import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
@@ -188,7 +190,18 @@ function RecordPageInner() {
   // --- Hooks ---
   const summary = useLiveSummary({ summaryInterval });
 
+  // Mac caption windows. Their hook reads the session's recording state, so
+  // it runs after useRecordingSession; the session reaches it through this
+  // ref, read only when a recording starts or a segment arrives.
+  const captionLinkRef = useRef<Pick<CaptionOverlayState, 'extraLanguage' | 'onSegment'> | null>(null);
+  const getCaptionExtraLanguage = useCallback(() => captionLinkRef.current?.extraLanguage, []);
+  const forwardCaptionSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
+    captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
+  }, []);
+
   const session = useRecordingSession({
+    getExtraLanguage: getCaptionExtraLanguage,
+    onSegment: forwardCaptionSegment,
     targetLang,
     translationEnabled,
     interimTranslation,
@@ -215,6 +228,12 @@ function RecordPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   });
+
+  const captions = useCaptionOverlay({ isRecording: session.isRecording || isNativeRecording });
+  const { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment } = captions;
+  useEffect(() => {
+    captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
+  }, [captionExtraLanguage, captionOnSegment]);
 
   const postRecording = usePostRecording({
     meetingTitle,
@@ -1104,6 +1123,7 @@ function RecordPageInner() {
               현재 브라우저 인식은 한국어 기준입니다. 한·영 자동 인식은 AWS Streaming 연결이 필요합니다.
             </p>
           )}
+          <CaptionOverlayPanel {...captions} isRecording={session.isRecording || isNativeRecording} />
         </div>
       )}
 

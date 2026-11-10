@@ -99,6 +99,11 @@ export function translateCaption(
   return invoke<CaptionTranslateResult>('caption_translate', { text, sourceLang, targetLang, isFinal, context });
 }
 
+/** Caption windows allowed by the settings: ko and en, plus at most one of ja/zh. */
+export function captionLanguages(extraLanguage: CaptionSettings['extraLanguage']): CaptionLang[] {
+  return extraLanguage ? ['ko', 'en', extraLanguage] : ['ko', 'en'];
+}
+
 export function captionErrorMessage(code: string): string {
   switch (code) {
     case 'credentials-expired':
