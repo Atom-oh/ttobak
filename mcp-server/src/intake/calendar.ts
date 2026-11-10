@@ -29,6 +29,8 @@ export interface OutlookItem {
   isCanceled?: boolean;
   isAllDay?: boolean;
   sensitivity?: string;
+  /** Only the email is kept; the organizer's name never leaves the parser. */
+  organizer?: { email?: string };
 }
 
 export interface CalendarEvent {
@@ -41,6 +43,8 @@ export interface CalendarEvent {
   startDate?: string;
   endDate?: string;
   location?: string;
+  /** Lowercase organizer email domain; never the name or local part. */
+  organizerDomain?: string;
 }
 
 export interface LedgerEntry { fp: string; startsAt: string; endsAt: string }
@@ -154,6 +158,9 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
         !optionalType(value, 'isAllDay', 'boolean') || !optionalType(value, 'sensitivity', 'string')) {
       throw new IntakeError('PARSE_FAILED', 'calendar item has unexpected field types');
     }
+    const organizer = value.organizer;
+    const email = organizer && typeof organizer === 'object' && !Array.isArray(organizer)
+      ? (organizer as Record<string, unknown>).email : undefined;
     return {
       meetingId: value.meetingId, start: value.start, end: value.end,
       ...(typeof value.subject === 'string' ? { subject: value.subject } : {}),
@@ -161,6 +168,7 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
       ...(typeof value.isCanceled === 'boolean' ? { isCanceled: value.isCanceled } : {}),
       ...(typeof value.isAllDay === 'boolean' ? { isAllDay: value.isAllDay } : {}),
       ...(typeof value.sensitivity === 'string' ? { sensitivity: value.sensitivity } : {}),
+      ...(typeof email === 'string' ? { organizer: { email } } : {}),
     };
   });
 }
@@ -186,6 +194,15 @@ export function sanitizeLocation(location: string | undefined): string | undefin
   }
   const joined = truncateBytes(parts.join('; '), 256).trim();
   return joined || undefined;
+}
+
+/** The lowercase domain after the last `@`, or undefined when absent or malformed. */
+export function organizerDomain(email: string | undefined): string | undefined {
+  if (typeof email !== 'string') return undefined;
+  const at = email.lastIndexOf('@');
+  if (at < 0) return undefined;
+  const domain = email.slice(at + 1).trim().toLowerCase();
+  return /^[a-z0-9.-]{1,253}$/.test(domain) ? domain : undefined;
 }
 
 function excludedSensitivity(item: OutlookItem): boolean {
@@ -216,6 +233,8 @@ export function toEvent(item: OutlookItem, zone: string): CalendarEvent | null {
   }
   const location = sanitizeLocation(item.location);
   if (location) event.location = location;
+  const domain = organizerDomain(item.organizer?.email);
+  if (domain) event.organizerDomain = domain;
   return event;
 }
 

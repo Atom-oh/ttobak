@@ -131,6 +131,25 @@ function item(id, start, end, extra = {}) {
   return { meetingId: id, subject: `t-${id}`, start, end, isCanceled: false, isAllDay: false, ...extra };
 }
 
+test('calendar sends organizer domain only', () => {
+  const window = syncWindow(NOW, ZONE);
+  const base = item('org', '2026-11-10T10:00:00+09:00', '2026-11-10T11:00:00+09:00');
+  const plan = planCalendar([{ ...base, organizer: { name: 'Alice Kim', email: 'Alice@Example.COM' } }], {}, window, ZONE);
+  const event = plan.mutations[0].event;
+  assert.equal(event.organizerDomain, 'example.com');
+  const wire = JSON.stringify(plan) ;
+  assert.ok(!/alice/i.test(wire) && !wire.includes('@'));
+  const other = planCalendar([{ ...base, organizer: { email: 'a@other.org' } }], {}, window, ZONE);
+  assert.notEqual(other.set.org.fp, plan.set.org.fp);
+  for (const email of [undefined, 'nodomain', 'a@', 'a@b c', 'a@exa mple.com', 42]) {
+    const bad = planCalendar([{ ...base, organizer: { email } }], {}, window, ZONE);
+    assert.equal(bad.counts.upserts, 1);
+    assert.equal('organizerDomain' in bad.mutations[0].event, false);
+  }
+  const none = planCalendar([{ ...base, organizer: 'x' }], {}, window, ZONE);
+  assert.equal('organizerDomain' in none.mutations[0].event, false);
+});
+
 test('calendar planning: window, exclusions, explicit removals only, sanitized locations', () => {
   const window = syncWindow(NOW, ZONE);
   assert.equal(window.start.toISOString(), '2026-11-01T15:00:00.000Z');
