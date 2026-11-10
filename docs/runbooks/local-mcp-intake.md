@@ -189,21 +189,21 @@ meeting prompt. Check by hand with the packaged app running:
    (the format is in the header of `mcp-server/src/intake/notify.ts`) and keep the file at
    mode 0600. Within about a minute exactly one notification appears. Append the
    same line again: no second notification.
-2. Click it. macOS may only activate the app. Then switch to another app and
-   back, or click the dock icon, within 10 minutes: TTOBAK should load
+2. Click it. macOS may only activate the app. Then click the Dock icon (reopen)
+   within 10 minutes while TTOBAK is idle: it should load
    `/meetings?task=<id>` once. After 10 minutes it should not navigate.
 3. Make the file a symlink: nothing posts and the log says the queue is
    unreadable. `chmod 666` it: nothing posts and the log says it was ignored.
 4. Record the observed behaviour (delivered or not, whether the click activates
-   the app, which reopen or focus path navigated) in ADR-065's status line.
+   the app, whether the Dock click navigated) in ADR-065's status line.
 
-Any focus of the main window inside the 10-minute window navigates it, even if
-you were already on another page. It navigates only when the native recorder
-is idle and the TTOBAK page last reported phase `idle` (not recording, starting
-or in a post-recording or upload step); a missing or unknown state counts as
-busy, so the target is kept until it expires after 10 minutes. The record page
-is the only page that reports state. Only the latest notice of a burst is
-openable.
+A notice opens only on a Dock click (reopen), never on window focus, and only
+when the native recorder is idle, the TTOBAK record page last reported phase
+`idle` (not recording, starting, importing a file or in a post-recording or
+upload step) and no MCP control request is pending. A missing or unknown state
+counts as busy, so the target is kept until it expires after 10 minutes. The
+record page is the only page that reports state. Only the latest notice of a
+burst is openable.
 
 ## Schedule (after acceptance)
 

@@ -38,6 +38,11 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_CONNECTIONS: usize = 8;
 
 impl ControlState {
+    /// True while a control request awaits the SPA's reply.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.lock().is_empty()
+    }
+
     /// Last state the SPA reported via `control_report_state`, if any.
     pub fn spa_state(&self) -> Option<Value> {
         self.last_state.lock().clone()

@@ -297,23 +297,27 @@ fn main_window_base(app: &AppHandle) -> Option<Url> {
 /// Pure navigation guard: the native recorder must be idle and the SPA must
 /// have reported phase `idle` (not recording, starting or in a post-recording
 /// step). A missing or unrecognised state is treated as busy.
-fn may_navigate(native_recording: bool, spa: Option<&Value>) -> bool {
+fn may_navigate(native_recording: bool, spa: Option<&Value>, control_pending: bool) -> bool {
     !native_recording
+        && !control_pending
         && spa
             .and_then(|v| v.get("phase"))
             .and_then(Value::as_str)
             .is_some_and(|p| p == "idle")
 }
 
-/// Called on `RunEvent::Reopen` and main-window `Focused(true)`: navigates the
-/// main window to the pending notice once, if it has not expired.
+/// Called on `RunEvent::Reopen` (an explicit Dock click) only: navigates the
+/// main window to the pending notice once, if it has not expired and the app
+/// is idle. Focus events never navigate (programmatic focus, such as an MCP
+/// start, would reload the SPA before it sees the request).
 pub fn open_pending(app: &AppHandle) {
     let Some(target) = app.try_state::<Arc<OpenTarget>>() else {
         return;
     };
-    // Reloading the SPA mid-recording, or during the stop/upload tail, would
-    // lose live-caption state and unsaved text. Navigate only when the native
-    // recorder is idle AND the SPA reports `idle`; unknown state fails closed.
+    // Reloading the SPA mid-recording, during the stop/upload tail or an
+    // import would lose live-caption state and unsaved text. Navigate only
+    // when the native recorder is idle, the SPA reports `idle`, and no control
+    // request is pending; unknown state fails closed.
     let native_recording = app
         .try_state::<crate::RecorderState>()
         .map(|s| s.recorder.lock().snapshot().recording)
@@ -321,7 +325,10 @@ pub fn open_pending(app: &AppHandle) {
     let spa = app
         .try_state::<crate::control::ControlState>()
         .and_then(|c| c.spa_state());
-    let blocked = !may_navigate(native_recording, spa.as_ref());
+    let pending = app
+        .try_state::<crate::control::ControlState>()
+        .is_some_and(|c| c.has_pending());
+    let blocked = !may_navigate(native_recording, spa.as_ref(), pending);
     let Some(path) = target.take(SystemTime::now(), blocked) else {
         return;
     };
@@ -621,18 +628,31 @@ mod tests {
     #[test]
     fn navigation_guard_fails_closed() {
         let idle = serde_json::json!({"phase": "idle"});
-        assert!(may_navigate(false, Some(&idle)));
+        assert!(may_navigate(false, Some(&idle), false));
         let browser = serde_json::json!({"phase": "recording", "source": "browser"});
-        assert!(!may_navigate(false, Some(&browser)), "browser recording");
+        assert!(
+            !may_navigate(false, Some(&browser), false),
+            "browser recording"
+        );
         // Native stop tail: recorder handle gone, SPA still finalizing/uploading.
         let tail = serde_json::json!({"phase": "uploading"});
-        assert!(!may_navigate(false, Some(&tail)), "stop/upload tail");
+        assert!(!may_navigate(false, Some(&tail), false), "stop/upload tail");
         let starting = serde_json::json!({"phase": "starting"});
-        assert!(!may_navigate(false, Some(&starting)));
-        assert!(!may_navigate(true, Some(&idle)), "native recording");
-        assert!(!may_navigate(false, None), "unknown state");
-        assert!(!may_navigate(false, Some(&serde_json::json!({}))));
-        assert!(!may_navigate(false, Some(&serde_json::json!({"phase": 1}))));
+        assert!(!may_navigate(false, Some(&starting), false));
+        assert!(!may_navigate(true, Some(&idle), false), "native recording");
+        assert!(!may_navigate(false, None, false), "unknown state");
+        let importing = serde_json::json!({"phase": "importing"});
+        assert!(!may_navigate(false, Some(&importing), false), "import");
+        assert!(
+            !may_navigate(false, Some(&idle), true),
+            "pending control request"
+        );
+        assert!(!may_navigate(false, Some(&serde_json::json!({})), false));
+        assert!(!may_navigate(
+            false,
+            Some(&serde_json::json!({"phase": 1})),
+            false
+        ));
     }
 
     #[test]

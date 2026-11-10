@@ -710,14 +710,14 @@ function RecordPageInner() {
   useEffect(() => {
     if (!isTauri()) return;
     const recording = isNativeRecording || session.isRecording;
-    const phase = recording ? 'recording' : (postRecording.step ?? (recordStartInFlight ? 'starting' : 'idle'));
+    const phase = recording ? 'recording' : (postRecording.step ?? (recordStartInFlight ? 'starting' : uploadProgress !== null ? 'importing' : 'idle'));
     void reportNativeControlState({
       phase,
       ...(recording ? { source: isNativeRecording ? 'native' as const : 'browser' as const } : {}),
       meetingId: postRecording.serverMeetingId,
       error: postRecording.errorMessage,
     });
-  }, [isNativeRecording, session.isRecording, recordStartInFlight, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
+  }, [isNativeRecording, session.isRecording, recordStartInFlight, uploadProgress, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
 
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()
