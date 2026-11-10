@@ -497,3 +497,66 @@ func TestSourceMissingObjectIsNotFound(t *testing.T) {
 		t.Fatal("a throttled HeadObject must be retried")
 	}
 }
+
+// personal mode (ADR-008 FU4 not yet implemented): a linked research report or
+// account-tagged KB object writes only the owner's Personal layer, never an
+// Account, and the source is still re-read before merging.
+func TestProcessSourcePersonalModeNeverWritesAccounts(t *testing.T) {
+	cfg := termsOn
+	cfg.KBMode, cfg.ResearchMode = SourceTermsModePersonal, SourceTermsModePersonal
+	env := newSourceTestEnv(cfg)
+	env.store.research["r1"] = &model.Research{ResearchID: "r1", UserID: "owner", Status: model.StatusDone,
+		S3Key: "shared/research/r1.md", AccountIDs: []string{"a1"}}
+	env.put("shared/research/r1.md", sourceTestText, nil)
+	env.put(sourceTestKBKey, sourceTestText, map[string]string{"account-id": "a1"})
+	env.members["a1"] = []string{"owner", "u2"}
+	env.llm.outputs = []string{sourceTestOutput, sourceTestOutput}
+
+	for _, ev := range []model.TermsSourceRequested{
+		{Kind: "research", Ref: "r1", OwnerID: "owner", AccountIDs: []string{"a1"}},
+		{Kind: "kb", Ref: sourceTestKBKey, OwnerID: "owner", AccountIDs: []string{"a1"}},
+	} {
+		if err := env.svc.ProcessSource(context.Background(), ev); err != nil {
+			t.Fatalf("%s: %v", ev.Kind, err)
+		}
+	}
+	if _, ok := env.dict["ACCOUNT#a1"]; ok {
+		t.Fatal("personal mode must never write an Account layer")
+	}
+	got, ok := env.term("USER#owner", "AlphaGrid")
+	if !ok || got.State != model.TermStateActive || len(got.Sources) != 2 {
+		t.Fatalf("both sources must reach the owner's Personal layer: %+v ok=%v", got, ok)
+	}
+	for _, id := range env.refreshed {
+		if id != "owner" {
+			t.Fatalf("only the owner's vocabulary refreshes: %v", env.refreshed)
+		}
+	}
+
+	// A report trashed during the run is still rejected in personal mode.
+	env2 := newSourceTestEnv(cfg)
+	env2.store.research["r2"] = &model.Research{ResearchID: "r2", UserID: "owner", Status: model.StatusDone, S3Key: "shared/research/r2.md"}
+	env2.put("shared/research/r2.md", sourceTestText, nil)
+	env2.llm.outputs = []string{sourceTestOutput}
+	env2.llm.onCall = func() { env2.store.research["r2"].TrashedAt = "2026-11-09T00:00:00Z" }
+	_ = env2.svc.ProcessSource(context.Background(), model.TermsSourceRequested{Kind: "research", Ref: "r2", OwnerID: "owner"})
+	if _, ok := env2.term("USER#owner", "AlphaGrid"); ok {
+		t.Fatal("the source re-read must still guard personal-mode merges")
+	}
+}
+
+func TestTermsSourcePersonalModeFromEnv(t *testing.T) {
+	t.Setenv("KB_TERMS_MODE", " personal ")
+	t.Setenv("RESEARCH_TERMS_MODE", "personal")
+	t.Setenv("NEWS_TERMS_MODE", "personal")
+	cfg := TermsConfigFromEnv()
+	if cfg.KBMode != SourceTermsModePersonal || cfg.ResearchMode != SourceTermsModePersonal {
+		t.Fatalf("personal source modes: %q/%q", cfg.KBMode, cfg.ResearchMode)
+	}
+	if cfg.NewsMode != SourceTermsModeOff {
+		t.Fatalf("news has no personal mode: %q", cfg.NewsMode)
+	}
+	if !cfg.SourceEnabled(model.DictSourceKB, "owner") || !cfg.SourceEnabled(model.DictSourceResearch, "owner") {
+		t.Fatal("personal mode enables the source")
+	}
+}
