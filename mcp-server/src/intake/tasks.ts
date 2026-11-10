@@ -692,7 +692,10 @@ class TaskRun {
           if (next) this.counts.acked++;
           continue;
         }
-        if (request.stateId === task.specReqStatus && (!request.title || request.title === task.specReqTitle)) continue;
+        // An unchanged read still goes out while the rules would move the state (acked -> resolved, ack_failed -> acked).
+        const promotes = (task.path === 'theirs' && task.state === 'acked' && request.stateId === 'COMPLETED')
+          || (task.state === 'ack_failed' && confirmed);
+        if (!promotes && request.stateId === task.specReqStatus && (!request.title || request.title === task.specReqTitle)) continue;
         // The backend promotes ack_failed to acked on a confirmed state; only my own resolution may do that.
         const mayRefresh = (current: TaskView) => current.state !== 'ack_failed' || request.resolverLogin === this.myLogin;
         if (!mayRefresh(task)) continue;
