@@ -151,15 +151,27 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
 
   const settings = view?.settings;
 
+  // A declined native confirmation changed nothing: re-read the saved values
+  // so the selects show them again.
+  const saveFailed = (err: unknown) => {
+    const code = errorCode(err);
+    setError(code);
+    if (code !== 'confirmation-declined') return;
+    getCaptionSettings().then((next) => {
+      extraRef.current = next.settings.extraLanguage;
+      setView(next);
+    }, () => {});
+  };
+
   const setProfile = (profile: string | null) => {
     if (!settings || profile === settings.profile) return;
-    save(profile, settings.region, settings.extraLanguage).catch((err) => setError(errorCode(err)));
+    save(profile, settings.region, settings.extraLanguage).catch(saveFailed);
   };
 
   const setRegion = (region: string) => {
     const trimmed = region.trim();
     if (!settings || trimmed === settings.region) return;
-    save(settings.profile, trimmed, settings.extraLanguage).catch((err) => setError(errorCode(err)));
+    save(settings.profile, trimmed, settings.extraLanguage).catch(saveFailed);
   };
 
   const setExtraLanguage = (next: CaptionSettings['extraLanguage']) => {

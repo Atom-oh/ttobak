@@ -44,12 +44,12 @@ const style = {
   outlineColor: '#000000', outlineWidth: 3, backgroundOpacity: 0.4,
 };
 
-function props({ profile = 'dev', extraLanguage = null, windows = {}, ...overrides } = {}) {
+function props({ profile = 'dev', region = 'us-east-1', extraLanguage = null, windows = {}, ...overrides } = {}) {
   const noop = () => {};
   return {
     supported: true,
     view: {
-      settings: { profile, region: 'us-east-1', extraLanguage, windows },
+      settings: { profile, region, extraLanguage, windows },
       profiles: ['dev', 'prod'],
       fonts: ['Apple SD Gothic Neo', 'Helvetica Neue'],
     },
@@ -189,4 +189,33 @@ test('reopens only allowed saved-open windows', () => {
   assert.deepEqual(reopen(settings('ja', {})), []);
   assert.deepEqual(reopen(null), []);
   assert.deepEqual(reopen(undefined), []);
+});
+
+test('region is a select with the saved region selected', () => {
+  const html = render(props({ region: 'ap-northeast-2' }));
+  const select = html.match(/<select[^>]*id="caption-region"[^>]*>(.*?)<\/select>/)?.[1];
+  assert.ok(select, 'region select');
+  assert.ok(!/<input[^>]*id="caption-region"/.test(html));
+  assert.match(select, /<option value="ap-northeast-2" selected="">ap-northeast-2<\/option>/);
+  assert.equal(select.match(/<option /g).length, overlay.CAPTION_REGIONS.length);
+});
+
+test('an unlisted saved region stays available as an option', () => {
+  const html = render(props({ region: 'ca-central-1' }));
+  const select = html.match(/<select[^>]*id="caption-region"[^>]*>(.*?)<\/select>/)?.[1];
+  assert.match(select, /<option value="ca-central-1" selected="">ca-central-1<\/option>/);
+  assert.equal(select.match(/<option /g).length, overlay.CAPTION_REGIONS.length + 1);
+  assert.deepEqual([...overlay.CAPTION_REGIONS], ['ap-northeast-2', 'us-east-1']);
+  assert.deepEqual([...overlay.captionRegionOptions('us-east-1')], ['ap-northeast-2', 'us-east-1']);
+  assert.deepEqual([...overlay.captionRegionOptions('us-west-2')], ['ap-northeast-2', 'us-east-1', 'us-west-2']);
+});
+
+test('a declined profile change has its own message and re-reads settings', () => {
+  assert.equal(overlay.captionErrorMessage('confirmation-declined'), 'AWS 프로필 변경을 취소했어요.');
+  const hook = readFileSync(new URL('../src/hooks/useCaptionOverlay.ts', import.meta.url), 'utf8');
+  const handler = hook.slice(hook.indexOf('const saveFailed'), hook.indexOf('const setProfile'));
+  assert.match(handler, /'confirmation-declined'/);
+  assert.match(handler, /getCaptionSettings\(\)/);
+  assert.match(hook, /save\(profile, settings\.region, settings\.extraLanguage\)\.catch\(saveFailed\)/);
+  assert.match(hook, /save\(settings\.profile, trimmed, settings\.extraLanguage\)\.catch\(saveFailed\)/);
 });

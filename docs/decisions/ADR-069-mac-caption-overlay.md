@@ -9,6 +9,11 @@
   capture), ADR-061 (floating prompt window pattern).
 - Design: the working design and plan documents were not merged; this ADR is
   the durable decision.
+- Delivery: four stacked PRs. 1/4: caption model, profile discovery, interpreter,
+  the three translation commands and the profile confirmation; 2/4: overlay
+  windows, page and capability, byte budget, open-window check; 3/4: record-page
+  bridge and panel; 4/4: layout menu and remaining docs. Parts of later PRs do not
+  exist before they land.
 
 ## Context
 
@@ -45,7 +50,10 @@ text, which removes its line, so expired credentials mid-sentence never leave a 
 draft on the projector. Text longer than the 4,000-byte push cap is cut to its tail
 on a UTF-8 character boundary before pushing (`MAX_PUSH_TEXT_BYTES`). Skipped filler
 finals push nothing. Once an id is shown as final, later drafts for it are dropped
-because commands can emit out of order.
+because commands can emit out of order. A transparent overlay still takes clicks meant for
+the windows under it, so a `clear` push orders the window out, and a non-empty entry
+or a preview orders it back in without making it key, so focus stays with the
+slideshow.
 
 **Transparency.** `tauri.conf.json` sets `macOSPrivateApi: true` and Cargo enables
 the `macos-private-api` feature of `tauri`; windows are built `transparent`. This
@@ -71,11 +79,31 @@ LLM failure other than expired credentials or missing model access use Amazon Tr
 server's `/api/translate`, so server limits, cost and configuration are not
 involved and that path and the in-page translation tab are unchanged. There is no
 fallback to the server when the profile is missing. Credentials are resolved and
-held in Rust only; only profile names cross IPC. Expired credentials, missing
+held in Rust only; only profile names cross IPC. They come only from the selected
+profile (`profile_credentials`: static keys, SSO, `credential_process`, roles),
+never from the SDK default chain, which reads environment variables first and
+would bill an exported terminal identity instead of the named profile. Expired credentials, missing
 model access, a missing profile, rate limiting, timeout and rejected output
 return distinct fixed error codes; an expired-credential failure drops the cached
 client so the next call after `mwinit` uses fresh credentials without a restart.
 Caption text is never logged, only codes and byte lengths.
+
+**Profile confirmation.** The remote origin can call all three translation
+commands, and a compromised page must not silently switch which AWS account is
+billed and receives meeting text. Before `caption_settings_set` chooses or changes
+the profile or region (`needs_confirmation`), Rust shows a native sheet on the main
+window titled "TTOBAK" whose Korean text names the profile and region and warns of
+charges, with Allow and Cancel buttons. Clearing the profile or changing only the
+extra language asks nothing. Cancel, or a sheet that cannot be shown, keeps the
+settings and returns `confirmation-declined`; a call while another runs returns
+`invalid-input`. The sheet
+uses `rfd` directly: `tauri-plugin-dialog` would inject `window.alert`/`confirm`
+overrides and page-callable commands into every page. No capability grants a
+`dialog:` permission (`no_capability_grants_updater_permissions`).
+
+**Startup without a config directory.** Captions then disable themselves (every
+caption command returns `unavailable`); recording and upload keep working, as the
+control channel and meeting detection already fail open.
 
 **Remote origin command set.** The remote `default` capability gains exactly
 seven commands (also listed in `build.rs` COMMANDS; `command_acl_tests` enforces
@@ -92,7 +120,8 @@ minute across all callers so a misbehaving page cannot run up the user's bill.
 `caption_translate` also rejects a target language whose overlay window is not open;
 the record page starts an engine only after its window opened and stops it before
 closing the window. None of the commands reads
-arbitrary files, reaches an arbitrary network address or exposes tokens.
+arbitrary files, reaches an arbitrary network address or exposes tokens. Error
+codes are listed in `mac-app/CLAUDE.md`.
 
 **Overlay capability.** The overlay windows get `capabilities/caption-overlay.json`:
 `core:event:allow-listen`, `allow-unlisten`, `core:window:allow-start-dragging`
@@ -121,6 +150,10 @@ other must stay aligned; change both together.
 
 - Overlay translation depends on the user's local AWS configuration and Bedrock
   access to the Luna model; there is no server fallback.
+- Accepted exposure: after confirmation the remote page can spend on that profile
+  within the fixed model, size limits and per-minute request and byte ceilings
+  without asking again, and can read local profile names. The confirmation guards
+  which account is used, not how much within those limits.
 - The expired-credential message names `mwinit` for internal users.
 - Accepted limit: the Tauri event ACL has no per-event-name scope, so the overlay
   page, which may listen, could listen to other broadcast events such as
@@ -165,4 +198,5 @@ modules and the frontend scripts are separate from this checklist.
 | Hover chrome appears, the move handle drags and the resize grip resizes | observed by the owner, local test build, 2026-11-10 |
 | Overlay becomes invisible after a recording stops | observed by the owner, local test build, 2026-11-10 |
 | Display unplugged: window reopens visible on the primary display | not run |
+| Changing the profile or region shows the native confirmation above the main window; Cancel keeps the saved values and Allow applies them | not run |
 | Overlay translation on a real account | `caption_translate` returned an Amazon Translate interim and a Luna final for ko to zh once, 2026-11-10; latency not measured |

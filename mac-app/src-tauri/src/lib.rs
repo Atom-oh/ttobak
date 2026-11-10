@@ -288,7 +288,8 @@ mod command_acl_tests {
     }
 
     /// Updates run through the plugin's Rust API only (update.rs); no window,
-    /// least of all the remote SPA, may call the plugin's commands.
+    /// least of all the remote SPA, may call the plugin's commands. Nor may any
+    /// window open dialogs: the caption profile confirmation is raised from Rust.
     #[test]
     fn no_capability_grants_updater_permissions() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
@@ -306,7 +307,7 @@ mod command_acl_tests {
                     .or_else(|| permission["identifier"].as_str())
                     .unwrap_or_default();
                 assert!(
-                    !id.starts_with("updater:"),
+                    !id.starts_with("updater:") && !id.starts_with("dialog:"),
                     "{} grants {id}",
                     path.display()
                 );
@@ -816,7 +817,8 @@ pub fn run() {
             caption_overlay::caption_overlay_push,
         ])
         .setup(|app| {
-            caption_translate::manage(app)?;
+            // Caption translation; failure only disables it.
+            caption_translate::manage(app);
             // MCP control channel (ADR-046); failure only disables it.
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
