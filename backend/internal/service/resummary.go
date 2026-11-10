@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -750,14 +751,29 @@ func (s *ResummaryService) GetEnglish(ctx context.Context, userID, meetingID str
 	// Freshness is requester-independent: capture as the owner, after the
 	// caller's own access was checked above.
 	snapshot, err := s.repo.CaptureResummary(ctx, meeting.UserID, meetingID, meeting.UserID)
-	if err != nil {
+	if englishFreshnessFatal(err) {
 		return nil, err
+	}
+	if err != nil {
+		// Freshness is advisory: a capture that exceeds its bounds (too many
+		// attachments or checks) or fails transiently must not hide a note
+		// the caller may read. Report it stale rather than fresh.
+		log.Printf("english note freshness capture failed for meeting %s: %v", meetingID, err)
+		result.Stale = true
+		return result, nil
 	}
 	if snapshot == nil {
 		return nil, ErrNotFound
 	}
 	result.Stale = meeting.ContentEnSourceHash == "" || englishSourceHash(snapshot) != meeting.ContentEnSourceHash
 	return result, nil
+}
+
+// englishFreshnessFatal reports capture errors that must still fail an
+// English read: authorization and not-found outcomes. Anything else only
+// degrades freshness.
+func englishFreshnessFatal(err error) bool {
+	return errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) || errors.Is(err, repository.ErrSummaryAccess)
 }
 
 func englishGenerationCode(work context.Context, err error) string {
