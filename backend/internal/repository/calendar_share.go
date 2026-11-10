@@ -578,6 +578,8 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 				var update expression.UpdateBuilder
 				if len(joiners) > 0 {
 					update = extend(expression.Add(set, calendarStringSet(joiners)))
+					// A concurrent join can grow the set after it was read; fence the bound.
+					condition = condition.And(set.Size().LessThanEqual(expression.Value(calendarMaxVetoMembers - len(joiners))))
 				}
 				if len(leavers) > 0 {
 					update = extend(expression.Delete(set, calendarStringSet(leavers)))

@@ -1216,6 +1216,10 @@ func TestApplyBatchVetoJoinsExistingForeignVeto(test *testing.T) {
 					if !strings.Contains(fields, "ADD vetoEventIds ["+calendarTestSource+"#event-1]") || strings.Contains(fields, "DELETE") {
 						test.Fatalf("joiner must ADD itself: %s", fields)
 					}
+					condition := calendarTestExpression(operation.Update.ConditionExpression, operation.Update.ExpressionAttributeNames, operation.Update.ExpressionAttributeValues)
+					if !strings.Contains(condition, fmt.Sprintf("size (vetoEventIds) <= %d", calendarMaxVetoMembers-1)) {
+						test.Fatalf("a join must fence the set bound against concurrent joins: %s", condition)
+					}
 					adds++
 				}
 				if operation.Put != nil && calendarTestString(test, operation.Put.Item, "PK") == "ACCOUNT#acc_1" {
@@ -1686,7 +1690,14 @@ func TestApplyBatchVetoSetIsBounded(test *testing.T) {
 	if _, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch)); !errors.Is(err, ErrInvalidCalendarBatch) || calls != 0 {
 		test.Fatalf("a veto set beyond the bound must be refused: %v calls=%d", err, calls)
 	}
-	if validCalendarVetoSet(append(slices.Clone(members), calendarTestSource+"#event-x")) {
+	tokens := make([]string, len(members))
+	for index, member := range members {
+		tokens[index] = calendarVetoToken(calendarTestSource, member)
+	}
+	if !validCalendarVetoSet(tokens) {
+		test.Fatal("a veto set at the bound must be valid")
+	}
+	if validCalendarVetoSet(append(tokens, calendarTestSource+"#event-x")) {
 		test.Fatal("an oversized stored veto set must be invalid")
 	}
 }
