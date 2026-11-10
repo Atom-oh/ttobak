@@ -8,6 +8,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { IntegrationSettings } from '@/components/IntegrationSettings';
 import { CrawlerSettings } from '@/components/CrawlerSettings';
 import { McpGuide } from '@/components/McpGuide';
+import { MacAppInstall } from '@/components/MacAppInstall';
 import { InviteUser } from '@/components/InviteUser';
 import { UserManagement } from '@/components/UserManagement';
 import { ConnectorSettings } from '@/components/ConnectorSettings';
@@ -71,6 +72,14 @@ export default function SettingsPage() {
                 <p className="text-sm text-slate-400 dark:text-text-muted">{user?.email}</p>
               </div>
             </div>
+          </section>
+
+          {/* Mac App Section */}
+          <section id="mac-app" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+            <h3 className="section-header mb-4">
+              Mac 앱
+            </h3>
+            <MacAppInstall />
           </section>
 
           {/* Integrations Section */}
