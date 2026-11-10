@@ -493,3 +493,61 @@ test('an ambiguous update reserves newly filled identifiers before later rows', 
   assert.equal(creates, 0, 'a later email-only row must not duplicate an ambiguously updated contact');
   assert.deepEqual(plain(Object.values(results).map(result => result.status)), ['failed', 'failed']);
 });
+
+const fuzzyAccounts = [
+  { accountId: 'bank', name: '하나은행', aliases: [], domains: [] },
+  { accountId: 'ti', name: '하나금융티아이', aliases: [], domains: [] },
+  { accountId: 'card', name: '하나카드', aliases: [], domains: [] },
+  { accountId: 'dom', name: 'Acme Korea', aliases: [], domains: ['acme.test'] },
+];
+const decide = (company, accountList = fuzzyAccounts, email) => {
+  const { groupByCompany, defaultDecision } = load();
+  const [group] = groupByCompany([{ name: 'A', company, email }], accountList);
+  return { group: plain(group), decision: plain(defaultDecision(group)) };
+};
+
+test('normalization strips the KEB brand prefix and legal forms', () => {
+  const { normalizeCompany } = load();
+  assert.equal(normalizeCompany('KEB 하나은행'), '하나은행');
+  assert.equal(normalizeCompany('KEB하나은행'), '하나은행');
+  assert.equal(normalizeCompany('주식회사 하나은행'), '하나은행');
+  assert.equal(normalizeCompany('Kebab House'), 'kebabhouse');
+});
+
+test('a fuzzy name that contains one account name is preselected as a suggestion', () => {
+  const { group, decision } = decide('하나은행 강남지점');
+  assert.equal(group.match.kind, 'similar');
+  assert.equal(group.suggestedAccountId, 'bank');
+  assert.deepEqual(decision, { action: 'account', accountId: 'bank' });
+});
+
+test('high similarity alone is a strong suggestion', () => {
+  const { decision } = decide('하나금융티아이㈜x', [{ accountId: 'ti', name: '하나금융티아이x', aliases: [], domains: [] }]);
+  assert.deepEqual(decision, { action: 'account', accountId: 'ti' });
+});
+
+test('a unique domain match is preselected; exact behavior is unchanged', () => {
+  assert.deepEqual(decide('Totally Different', fuzzyAccounts, 'k@acme.test').decision, { action: 'account', accountId: 'dom' });
+  const exact = decide('하나카드');
+  assert.equal(exact.group.match.kind, 'exact');
+  assert.equal(exact.group.suggestedAccountId, undefined);
+});
+
+test('ambiguous or weak fuzzy matches stay dropped', () => {
+  assert.deepEqual(decide('하나').decision, { action: 'drop' });
+  const twoStrong = decide('하나은행하나카드', fuzzyAccounts);
+  assert.equal(twoStrong.group.suggestedAccountId, undefined);
+  assert.deepEqual(twoStrong.decision, { action: 'drop' });
+  assert.deepEqual(decide('하나금융TI').decision, { action: 'drop' }, 'weak similarity is a candidate, not a suggestion');
+  assert.equal(decide('하나금융TI').group.match.kind, 'similar');
+});
+
+test('non-direct accounts are never preselected and are flagged', () => {
+  const list = fuzzyAccounts.map(a => a.accountId === 'bank' ? { ...a, direct: false } : a);
+  const exact = decide('하나은행', list);
+  assert.deepEqual(exact.decision, { action: 'drop' });
+  assert.deepEqual(exact.group.nonDirect, ['bank']);
+  const fuzzy = decide('하나은행 강남지점', list);
+  assert.deepEqual(fuzzy.decision, { action: 'drop' });
+  assert.deepEqual(fuzzy.group.nonDirect, ['bank']);
+});
