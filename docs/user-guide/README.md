@@ -17,17 +17,23 @@ manual or follow its anchors. Search leaves all printable chapters intact.
 Preview from the repository root:
 
 ```bash
-python3 -m http.server 8080 --bind 127.0.0.1 --directory docs/user-guide
+python3 scripts/docs/build_user_guide.py --output /tmp/ttobak-guide-preview
+python3 -m http.server 8080 --bind 127.0.0.1 --directory /tmp/ttobak-guide-preview
 ```
 
-Only files explicitly named in `scripts/docs/build_user_guide.py` enter the
-public artifact: HTML, CSS, JavaScript, a local SVG favicon and eight reviewed
-SVG menu illustrations. README, plans, source inventories and review reports are never
-copied. A local-only CSP disables API connections and remote scripts/assets.
-The illustrations are simplified, text-reviewable menu diagrams derived from
-local UI inspection. Captions explicitly distinguish them from screenshots.
-Local raster walkthrough captures remain internal evidence. No production
-account, customer records, credentials or private meeting data were accessed.
+Only the explicit `scripts/docs/build_user_guide.py` allowlist is published:
+HTML, CSS, JavaScript, favicon and 36 actual lossless UI screenshots. Eight
+figures are replaced here; additional chapter figures follow in the dependent
+update. Captured source is `0d9f1075169ba8d4692036dc98360b6514ef3b44`,
+with unchanged frontend UI and fictional read-only data. No production data.
+
+Images are the documentation-only `guide-ui-2026-11-10` Release's `guide-ui.zip`.
+The manifest pins its public asset API URL, bounded size/SHA-256 and each image
+identity/dimension. Credential-free octet-stream fetches or an offline
+`--screenshot-archive` cache use identical checks before output exists. Published
+bytes must not be replaced. Serve packaged output; no images exist in source.
+Only local verified images reach readers; the self-only CSP and review gates
+remain. Internal manifests, reports and references are not published.
 
 The repository Pages API reports `https://www.atomai.click/ttobak/` as its publication URL (verified 2026-11-10).
 
@@ -140,7 +146,7 @@ vendor packages. Empty costs and unavailable conditional data are not a claim
 that a production dataset was connected. Mac-only controls were source-inspected;
 no macOS capture or Outlook provider acceptance was performed on this Linux host.
 
-Publication-boundary tests cover the reviewed illustrations, rejection of an
+Publication-boundary tests cover verified media and rejection of an
 unreviewed image even if present in the source directory, symlink rejection, CSP,
 remote/path references, missing/duplicate anchors and preservation of existing
 output directories. Browser checks cover 1920/3840 desktop, tablet, 390/360 mobile,
