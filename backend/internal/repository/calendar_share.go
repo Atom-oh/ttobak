@@ -517,18 +517,3 @@ func calendarFencedConditionError(err error, fenced map[int]bool) error {
 	}
 	return nil
 }
-
-// GetCalendarEventRow reads one event row consistently; nil when absent.
-func (repo *CalendarRepository) GetCalendarEventRow(ctx context.Context, userID, sourceID, eventID string) (*CalendarEventRow, error) {
-	if !calendarStorageID.MatchString(userID) || uuid.Validate(sourceID) != nil || !calendarStorageID.MatchString(eventID) {
-		return nil, ErrInvalidCalendarQuery
-	}
-	row, err := repo.getCalendarEventRow(ctx, userID, sourceID, eventID)
-	if err != nil || row == nil {
-		return nil, err
-	}
-	if !validCalendarEventIdentity(row, userID, sourceID, eventID) {
-		return nil, ErrCalendarCorruptData
-	}
-	return row, nil
-}

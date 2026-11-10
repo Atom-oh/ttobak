@@ -909,26 +909,16 @@ func TestApplyBatchSharedClaimantReplacesOnlyEmptiedVeto(test *testing.T) {
 	}
 }
 
-func TestGetCalendarEventRowChecksIdentity(test *testing.T) {
+// Identity and absence checks live in TestGetCalendarEventRow_IdentityChecked; this
+// pins that the share state written by the share planner survives the read.
+func TestGetCalendarEventRowReturnsShareFields(test *testing.T) {
 	stored := calendarTestRow()
 	stored.ShareAccountID, stored.MeetingKey, stored.ShareState = "acc_1", "mk", "shared"
 	items := map[string]map[string]types.AttributeValue{stored.PK + "|" + stored.SK: calendarTestItem(test, stored)}
 	repo := calendarTestRepo(test, &calendarSDKMock{get: calendarTestStore(test, items)})
 	row, err := repo.GetCalendarEventRow(context.Background(), "owner", calendarTestSource, "event-1")
-	if err != nil || row == nil || row.MeetingKey != "mk" || row.ShareState != "shared" {
+	if err != nil || row == nil || row.ShareAccountID != "acc_1" || row.MeetingKey != "mk" || row.ShareState != "shared" {
 		test.Fatalf("stored row: %+v %v", row, err)
-	}
-	if row, err := repo.GetCalendarEventRow(context.Background(), "owner", calendarTestSource, "event-2"); err != nil || row != nil {
-		test.Fatalf("absent row must be nil: %+v %v", row, err)
-	}
-	if _, err := repo.GetCalendarEventRow(context.Background(), "owner", "not-a-uuid", "event-1"); !errors.Is(err, ErrInvalidCalendarQuery) {
-		test.Fatalf("invalid scope: %v", err)
-	}
-	forged := stored
-	forged.UserID = "other"
-	items[stored.PK+"|"+stored.SK] = calendarTestItem(test, forged)
-	if _, err := repo.GetCalendarEventRow(context.Background(), "owner", calendarTestSource, "event-1"); !errors.Is(err, ErrCalendarCorruptData) {
-		test.Fatalf("foreign identity must be corrupt: %v", err)
 	}
 }
 
