@@ -28,6 +28,10 @@ type performanceStoreFake struct {
 	applyErr     error
 	receipts     map[string]storedPerformanceReceipt
 	keepReceipts bool
+	putErr       error
+	deleted      []string
+	deleteErr    error
+	replay       bool
 }
 
 type storedPerformanceReceipt struct {
@@ -55,7 +59,7 @@ func (fake *performanceStoreFake) ApplyPerformanceBatch(_ context.Context, userI
 	if fake.applyErr != nil {
 		return nil, fake.applyErr
 	}
-	receipt := model.PerformanceSyncReceipt{Revision: req.ExpectedRevision + 1, Completed: req.Complete, Upserted: len(req.Mutations)}
+	receipt := model.PerformanceSyncReceipt{Revision: req.ExpectedRevision + 1, Completed: req.Complete, Upserted: len(req.Mutations), Replayed: fake.replay}
 	if fake.keepReceipts {
 		if fake.receipts == nil {
 			fake.receipts = make(map[string]storedPerformanceReceipt)
@@ -90,6 +94,23 @@ func (fake *performanceStoreFake) GetAccountMappings(_ context.Context, userID s
 func (fake *performanceStoreFake) PutAccountMapping(_ context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error {
 	fake.put = append(fake.put, mapping)
 	fake.putManual = append(fake.putManual, onlyIfNotManual)
+	return fake.putErr
+}
+
+func (fake *performanceStoreFake) DeleteAccountMappingIfAutomatic(_ context.Context, userID, sfdcAccountID string) error {
+	fake.deleted = append(fake.deleted, sfdcAccountID)
+	if fake.deleteErr != nil {
+		return fake.deleteErr
+	}
+	kept := fake.mappings[userID][:0:0]
+	for _, mapping := range fake.mappings[userID] {
+		if mapping.SFDCAccountID != sfdcAccountID || mapping.Manual {
+			kept = append(kept, mapping)
+		}
+	}
+	if fake.mappings != nil {
+		fake.mappings[userID] = kept
+	}
 	return nil
 }
 
