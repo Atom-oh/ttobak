@@ -77,6 +77,10 @@ func (fake *performanceStoreFake) ListPerformanceAssignments(_ context.Context, 
 	return fake.assignments[userID], nil
 }
 
+func (fake *performanceStoreFake) ListPerformanceTasks(context.Context, string, string, string) ([]model.SFDCTask, error) {
+	return nil, nil
+}
+
 func (fake *performanceStoreFake) GetAccountMappings(_ context.Context, userID string, ids []string) (map[string]model.AccountMapping, error) {
 	want := map[string]bool{}
 	for _, id := range ids {
@@ -350,17 +354,6 @@ func TestPerformanceSourcesListsEveryKnownSource(test *testing.T) {
 	if err != nil || len(list.Sources) != 2 || list.Sources[0].Source != model.PerformanceSourceSFDCAssignments ||
 		list.Sources[0].Revision != 0 || list.Sources[1].Revision != 4 {
 		test.Fatalf("sources: %+v %v", list, err)
-	}
-}
-
-func TestPerformanceMissedPlaceholder(test *testing.T) {
-	svc := performanceTestService(&performanceStoreFake{}, nil)
-	list, err := svc.ListMissed(test.Context(), "owner", "week")
-	if err != nil || list.Items == nil || len(list.Items) != 0 {
-		test.Fatalf("missed: %+v %v", list, err)
-	}
-	if _, err := svc.ListMissed(test.Context(), "owner", "month"); !errors.Is(err, ErrInvalidInput) {
-		test.Fatalf("bad period: %v", err)
 	}
 }
 
