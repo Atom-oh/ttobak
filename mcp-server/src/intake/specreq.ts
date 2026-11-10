@@ -278,7 +278,7 @@ export async function resolveMe(session: McpSession, email: string): Promise<str
   return employee;
 }
 
-async function readRequest(session: McpSession, requestId: string): Promise<SpecReqSummary> {
+export async function readRequest(session: McpSession, requestId: string): Promise<SpecReqSummary> {
   const request = parseRequest(resultJson(await session.call('get_request', { request_id: requestId }), 'get_request'));
   if (request.requestId !== requestId) throw new IntakeError('PARSE_FAILED', 'get_request returned another request');
   return request;

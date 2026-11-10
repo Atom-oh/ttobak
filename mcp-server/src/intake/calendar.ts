@@ -347,6 +347,10 @@ export interface CalendarRunResult {
   counts: CalendarCounts;
   revision: number | null;
   preview?: Plan['preview'];
+  /** Synced runs only: the occurrences this run upserted (first item per ID). */
+  upserted?: OutlookItem[];
+  /** Synced runs only: the occurrences this run removed. */
+  removedExternalIds?: string[];
 }
 
 function emptyState(sourceId: string, scope: string): CalendarState {
@@ -491,5 +495,7 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   }
   state.ledger = pruneLedger(state.ledger, now);
   store.write(state, ...statePath(state));
-  return { counts: plan.counts, revision: state.revision };
+  const upserted = new Map<string, OutlookItem>();
+  for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
+  return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()], removedExternalIds: [...plan.remove] };
 }
