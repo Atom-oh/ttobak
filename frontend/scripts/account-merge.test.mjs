@@ -160,6 +160,22 @@ test('an aborted job stops polling and offers no retry', async () => {
   assert.match(copy.cliOnlyTitle, /CLI/);
 });
 
+test('SCAN_INCOMPLETE needs the operator CLI and offers no web retry', async () => {
+  const page = dialogFixture({ resume: true, status: async () => job({ state: 'failed', errorCode: 'SCAN_INCOMPLETE' }) });
+  await page.settle();
+  const { ACCOUNT_MERGE_COPY: copy, ACCOUNT_MERGE_ERROR_COPY: errors } = page.exports;
+  assert.ok(page.text().includes(errors.SCAN_INCOMPLETE));
+  assert.equal(page.button(copy.retry), undefined);
+});
+
+test('a capped audience count is shown as unknown, never as no new members', async () => {
+  const page = dialogFixture({ previewFn: async () => ({ ...preview, newAudience: { intoMembersNotInFrom: -1, intoHasAncestors: false } }) });
+  await page.pickAndPreview();
+  const { ACCOUNT_MERGE_COPY: copy } = page.exports;
+  assert.ok(page.text().includes(copy.audienceUnknown));
+  assert.ok(!page.text().includes(copy.audienceNoMembers));
+});
+
 test('a stalled running job offers retry; a fresh one does not', async () => {
   const stale = dialogFixture({ resume: true, status: async () => job({ updatedAt: new Date(Date.now() - 3600_000).toISOString() }) });
   await stale.settle();

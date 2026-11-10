@@ -28,6 +28,7 @@ export const ACCOUNT_MERGE_COPY = {
   audienceTitle: '새로 접근할 수 있게 되는 사람',
   audienceMembers: (n: number) => `대상 어카운트의 멤버 ${n}명이 이 어카운트의 내용을 새로 볼 수 있습니다.`,
   audienceNoMembers: '대상 어카운트에만 있는 멤버는 없습니다.',
+  audienceUnknown: '멤버가 너무 많아 새로 볼 수 있게 되는 멤버 수를 확인하지 못했습니다.',
   audienceAncestors: '대상 어카운트의 상위 어카운트 멤버도 내용을 볼 수 있습니다.',
   acceptUnmoved: '옮겨지지 않는 항목을 확인했습니다',
   start: '병합 시작',
@@ -89,7 +90,10 @@ export const ACCOUNT_MERGE_ERROR_COPY: Record<string, string> = {
   MERGE_CONFLICT: '병합 중 데이터가 동시에 변경되었습니다. 다시 시도해 주세요.',
   STEP_FAILED: '병합 단계 중 하나가 실패했습니다. 다시 시도하면 중단된 단계부터 이어서 진행합니다.',
   DISPATCH_FAILED: '병합 작업을 시작하지 못했습니다. 다시 시도해 주세요.',
+  SCAN_INCOMPLETE: '사용자 행 이동이 끝나지 않았습니다. 운영자가 병합 CLI(-scan-users)로 다시 시작해야 하며, 여기서는 다시 시도할 수 없습니다.',
 };
+/** Failed codes only the operator CLI may resume (web retry would skip its scan). */
+const OPERATOR_ONLY_CODES = new Set(['SCAN_INCOMPLETE']);
 export const ACCOUNT_MERGE_UNKNOWN_ERROR = '알 수 없는 오류로 병합이 중단되었습니다. 다시 시도해 주세요.';
 
 /** Errors a merge makes writes return; maps the fenced-write code to plain Korean. */
@@ -176,6 +180,7 @@ export function AccountMergeDialog({ accountId, userId, resume = false, onClose,
 
   const choose = (id: string) => {
     action.current++;
+    setPreviewing(false);
     setTargetId(id);
     setPreview(null);
     setAccepted(false);
@@ -278,9 +283,11 @@ export function AccountMergeDialog({ accountId, userId, resume = false, onClose,
                 </section>
                 <section>
                   <h4 className="mb-1 font-semibold">{ACCOUNT_MERGE_COPY.audienceTitle}</h4>
-                  <p>{preview.newAudience.intoMembersNotInFrom > 0
-                    ? ACCOUNT_MERGE_COPY.audienceMembers(preview.newAudience.intoMembersNotInFrom)
-                    : ACCOUNT_MERGE_COPY.audienceNoMembers}</p>
+                  <p>{preview.newAudience.intoMembersNotInFrom < 0
+                    ? ACCOUNT_MERGE_COPY.audienceUnknown
+                    : preview.newAudience.intoMembersNotInFrom > 0
+                      ? ACCOUNT_MERGE_COPY.audienceMembers(preview.newAudience.intoMembersNotInFrom)
+                      : ACCOUNT_MERGE_COPY.audienceNoMembers}</p>
                   {preview.newAudience.intoHasAncestors && <p>{ACCOUNT_MERGE_COPY.audienceAncestors}</p>}
                 </section>
                 {preview.requiresAcceptUnmoved && (
@@ -322,7 +329,7 @@ export function AccountMergeDialog({ accountId, userId, resume = false, onClose,
                 <p>{ACCOUNT_MERGE_ERROR_COPY[job.errorCode ?? ''] ?? ACCOUNT_MERGE_UNKNOWN_ERROR}</p>
               </>
             )}
-            {(job.state === 'failed' || stalled) && (
+            {(job.state === 'failed' || stalled) && !OPERATOR_ONLY_CODES.has(job.errorCode ?? '') && (
               <button type="button" disabled={starting} onClick={retry}
                 className="rounded-lg bg-primary px-4 py-2 font-semibold text-white disabled:opacity-50">
                 {starting ? ACCOUNT_MERGE_COPY.retrying : ACCOUNT_MERGE_COPY.retry}
