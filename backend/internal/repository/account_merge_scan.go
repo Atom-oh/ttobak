@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -48,6 +47,9 @@ type MergeUserRow struct {
 	Ciphertext     string
 	Revision       int64
 	ShareAccountID string
+	ShareState     string
+	MeetingKey     string
+	ShareVersion   int64
 
 	// Meeting fields.
 	MeetingID       string
@@ -76,6 +78,9 @@ type mergeUserRowItem struct {
 	Revision        int64     `dynamodbav:"revision"`
 	Version         int64     `dynamodbav:"version"`
 	ShareAccountID  string    `dynamodbav:"shareAccountId"`
+	ShareState      string    `dynamodbav:"shareState"`
+	MeetingKey      string    `dynamodbav:"meetingKey"`
+	ShareVersion    int64     `dynamodbav:"shareVersion"`
 	MeetingID       string    `dynamodbav:"meetingId"`
 	SharedToAccount bool      `dynamodbav:"sharedToAccount"`
 	Date            time.Time `dynamodbav:"date"`
@@ -84,7 +89,8 @@ type mergeUserRowItem struct {
 
 // ScanMergeUserRowsPage reads one page of the operator scan for SRTASK#,
 // CALEVENT# and MEETING# rows in user partitions whose accountId is
-// accountID. It is the single-segment form of ScanMergeUserRowsSegmentPage.
+// accountID. Reads are eventually consistent: every rewrite is conditioned on
+// the observed row, so a stale read only skips or defers a row. It is the single-segment form of ScanMergeUserRowsSegmentPage.
 func (r *DynamoDBRepository) ScanMergeUserRowsPage(ctx context.Context, accountID, cursor string) (*MergeUserRowsPage, error) {
 	return r.ScanMergeUserRowsSegmentPage(ctx, accountID, 0, 1, cursor)
 }
@@ -111,12 +117,12 @@ func (r *DynamoDBRepository) ScanMergeUserRowsSegmentPage(ctx context.Context, a
 		And(expression.Or(sk.BeginsWith(model.PrefixSpecReqTask), sk.BeginsWith(model.PrefixCalendarEvent), sk.BeginsWith(model.PrefixMeeting)))
 	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"), expression.Name("userId"), expression.Name("accountId"),
 		expression.Name("eventId"), expression.Name("sourceId"), expression.Name("ciphertext"), expression.Name("revision"), expression.Name("version"),
-		expression.Name("shareAccountId"), expression.Name("meetingId"), expression.Name("sharedToAccount"), expression.Name("date"), expression.Name("title"))
+		expression.Name("shareAccountId"), expression.Name("shareState"), expression.Name("meetingKey"), expression.Name("shareVersion"), expression.Name("meetingId"), expression.Name("sharedToAccount"), expression.Name("date"), expression.Name("title"))
 	expr, err := expression.NewBuilder().WithFilter(filter).WithProjection(projection).Build()
 	if err != nil {
 		return nil, err
 	}
-	input := &dynamodb.ScanInput{TableName: aws.String(r.tableName), Limit: aws.Int32(mergeScanLimit), ConsistentRead: aws.Bool(true), ExclusiveStartKey: start,
+	input := &dynamodb.ScanInput{TableName: aws.String(r.tableName), Limit: aws.Int32(mergeScanLimit), ExclusiveStartKey: start,
 		FilterExpression: expr.Filter(), ProjectionExpression: expr.Projection(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}
 	if segments > 1 {
 		input.Segment, input.TotalSegments = aws.Int32(int32(segment)), aws.Int32(int32(segments))
@@ -169,6 +175,7 @@ func classifyMergeUserRow(accountID string, item mergeUserRowItem) (MergeUserRow
 	case strings.HasPrefix(item.SK, model.PrefixCalendarEvent):
 		row.Kind, row.EventID, row.SourceID = MergeUserRowCalendar, item.EventID, item.SourceID
 		row.Ciphertext, row.Revision, row.ShareAccountID = item.Ciphertext, item.Revision, item.ShareAccountID
+		row.ShareState, row.MeetingKey, row.ShareVersion = item.ShareState, item.MeetingKey, item.ShareVersion
 		return row, mergeUserRowID.MatchString(row.EventID) && mergeUserRowID.MatchString(row.SourceID) &&
 			item.SK == model.CalendarEventSortKey(row.SourceID, row.EventID) && row.Ciphertext != "" && row.Revision > 0
 	case strings.HasPrefix(item.SK, model.PrefixMeeting):
@@ -188,63 +195,83 @@ func MeetingRefForMergeRow(accountID string, row MergeUserRow) *model.MeetingRef
 		EntityType: model.EntityTypeMeetingRef}
 }
 
-// MoveSpecReqTaskRowForMerge re-points a scanned SpecReq task from the source
-// account to the target. The update is conditioned on accountId still naming
-// the source and on the observed version, which it increments so a task
-// runner holding an older copy cannot write it back. A row changed or moved
-// since the scan returns ErrConditionFailed.
-func (r *DynamoDBRepository) MoveSpecReqTaskRowForMerge(ctx context.Context, fromID, toID string, row MergeUserRow) error {
-	if !validMergeAccountID(fromID) || !validMergeAccountID(toID) || fromID == toID || row.Kind != MergeUserRowSpecReqTask ||
-		row.PK != model.PrefixUser+row.UserID || row.SK != model.SpecReqTaskSortKey(row.EventID) {
+// MoveSpecReqTaskRowForMerge re-points a scanned SpecReq task from the job's
+// source account to its target under the merge fence. The update is
+// conditioned on accountId still naming the source and on the observed
+// version, which it increments so a task runner holding an older copy cannot
+// write it back. A row changed or moved since the scan returns
+// ErrConditionFailed; a lost fence returns ErrMergeFenceLost and a target that
+// started merging ErrAccountMerging.
+func (r *DynamoDBRepository) MoveSpecReqTaskRowForMerge(ctx context.Context, job *model.AccountMergeJob, row MergeUserRow) error {
+	if !validMergeJob(job) || row.Kind != MergeUserRowSpecReqTask || row.PK != model.PrefixUser+row.UserID || row.SK != model.SpecReqTaskSortKey(row.EventID) {
 		return fmt.Errorf("invalid merge task move")
 	}
-	update := expression.Set(expression.Name("accountId"), expression.Value(toID)).Add(expression.Name("version"), expression.Value(1))
-	cond := expression.AttributeExists(expression.Name("PK")).And(expression.Name("accountId").Equal(expression.Value(fromID))).
+	update := expression.Set(expression.Name("accountId"), expression.Value(job.TargetAccountID)).Add(expression.Name("version"), expression.Value(1))
+	cond := expression.AttributeExists(expression.Name("PK")).And(expression.Name("accountId").Equal(expression.Value(job.SourceAccountID))).
 		And(expression.Name("version").Equal(expression.Value(row.Version)))
-	return r.updateMergeUserRow(ctx, row, update, cond)
+	return r.updateMergeUserRow(ctx, job, row, update, cond)
 }
 
 // MoveCalendarEventRowForMerge re-points a scanned calendar event from the
-// source account to the target and replaces its sealed payload with
-// ciphertext, which the caller built from the payload with the same account
-// replacement. shareAccountId moves only when it names the source. The update
-// is conditioned on accountId, revision, the observed ciphertext and the
-// observed share account, so a concurrent calendar sync or share change
-// returns ErrConditionFailed and nothing is written.
-func (r *DynamoDBRepository) MoveCalendarEventRowForMerge(ctx context.Context, fromID, toID string, row MergeUserRow, ciphertext string) error {
-	if !validMergeAccountID(fromID) || !validMergeAccountID(toID) || fromID == toID || row.Kind != MergeUserRowCalendar || ciphertext == "" ||
+// job's source account to its target under the merge fence and replaces its
+// sealed payload with ciphertext, which the caller built from the payload with
+// the same account replacement. shareAccountId is never written: CALSHARE#
+// rows stay on the source (an unmoved category), so the event keeps naming the
+// account that holds its share row. The update is conditioned on accountId,
+// revision, the observed ciphertext and the observed share fields
+// (shareAccountId, shareState, meetingKey, shareVersion), so a concurrent
+// calendar sync or share change returns ErrConditionFailed and nothing is
+// written.
+func (r *DynamoDBRepository) MoveCalendarEventRowForMerge(ctx context.Context, job *model.AccountMergeJob, row MergeUserRow, ciphertext string) error {
+	if !validMergeJob(job) || row.Kind != MergeUserRowCalendar || ciphertext == "" ||
 		row.PK != model.PrefixUser+row.UserID || row.SK != model.CalendarEventSortKey(row.SourceID, row.EventID) {
 		return fmt.Errorf("invalid merge calendar move")
 	}
-	update := expression.Set(expression.Name("accountId"), expression.Value(toID)).Set(expression.Name("ciphertext"), expression.Value(ciphertext))
-	cond := expression.AttributeExists(expression.Name("PK")).And(expression.Name("accountId").Equal(expression.Value(fromID))).
+	update := expression.Set(expression.Name("accountId"), expression.Value(job.TargetAccountID)).Set(expression.Name("ciphertext"), expression.Value(ciphertext))
+	cond := expression.AttributeExists(expression.Name("PK")).And(expression.Name("accountId").Equal(expression.Value(job.SourceAccountID))).
 		And(expression.Name("revision").Equal(expression.Value(row.Revision))).
 		And(expression.Name("ciphertext").Equal(expression.Value(row.Ciphertext)))
-	if row.ShareAccountID == "" {
-		cond = cond.And(expression.AttributeNotExists(expression.Name("shareAccountId")))
-	} else {
-		cond = cond.And(expression.Name("shareAccountId").Equal(expression.Value(row.ShareAccountID)))
-		if row.ShareAccountID == fromID {
-			update = update.Set(expression.Name("shareAccountId"), expression.Value(toID))
+	pin := func(name, value string) {
+		if value == "" {
+			cond = cond.And(expression.AttributeNotExists(expression.Name(name)))
+		} else {
+			cond = cond.And(expression.Name(name).Equal(expression.Value(value)))
 		}
 	}
-	return r.updateMergeUserRow(ctx, row, update, cond)
+	pin("shareAccountId", row.ShareAccountID)
+	pin("shareState", row.ShareState)
+	pin("meetingKey", row.MeetingKey)
+	if row.ShareVersion == 0 {
+		cond = cond.And(expression.AttributeNotExists(expression.Name("shareVersion")))
+	} else {
+		cond = cond.And(expression.Name("shareVersion").Equal(expression.Value(row.ShareVersion)))
+	}
+	return r.updateMergeUserRow(ctx, job, row, update, cond)
 }
 
-func (r *DynamoDBRepository) updateMergeUserRow(ctx context.Context, row MergeUserRow, update expression.UpdateBuilder, cond expression.ConditionBuilder) error {
+// updateMergeUserRow applies update to the scanned row in one transaction with
+// the merge fence checks, so a lost lease or a revoked requester writes nothing.
+func (r *DynamoDBRepository) updateMergeUserRow(ctx context.Context, job *model.AccountMergeJob, row MergeUserRow, update expression.UpdateBuilder, cond expression.ConditionBuilder) error {
+	fence, err := r.mergeFenceChecks(job)
+	if err != nil {
+		return err
+	}
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
 	if err != nil {
 		return fmt.Errorf("build merge user row update: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{TableName: aws.String(r.tableName),
+	item := types.TransactWriteItem{Update: &types.Update{TableName: aws.String(r.tableName),
 		Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: row.PK}, "SK": &types.AttributeValueMemberS{Value: row.SK}},
 		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
-		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()})
-	var failed *types.ConditionalCheckFailedException
-	if errors.As(err, &failed) {
-		return fmt.Errorf("merge user row: %w", ErrConditionFailed)
-	}
-	if err != nil {
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: append([]types.TransactWriteItem{item}, fence...)}); err != nil {
+		moverFailed, fenceErr := classifyMergeFence(err)
+		if fenceErr != nil {
+			return fenceErr
+		}
+		if moverFailed {
+			return fmt.Errorf("merge user row: %w: %w", ErrConditionFailed, err)
+		}
 		return fmt.Errorf("merge user row: %w", err)
 	}
 	return nil

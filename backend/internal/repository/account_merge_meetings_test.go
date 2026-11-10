@@ -171,6 +171,15 @@ func TestMoveMeetingKeepsLinkOnlyUnpublished(t *testing.T) {
 			if strings.Contains(update, "sharedToAccount") || strings.Contains(update, "summaryAccountApproval") {
 				t.Fatalf("link-only move must not publish or approve: %q", update)
 			}
+			// No target reference for a meeting the target does not publish.
+			if len(items) != 1+mergeFenceCheckCount {
+				t.Fatalf("link-only move wrote %d items, want the update and fence checks only", len(items))
+			}
+			for _, it := range items {
+				if _, put := it["Item"]; put {
+					t.Fatalf("link-only move wrote a target reference")
+				}
+			}
 			cond := resolvedExpression(items[0], "ConditionExpression")
 			want := "attribute_not_exists (sharedToAccount)"
 			if len(extra) == 2 {

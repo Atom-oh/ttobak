@@ -88,6 +88,21 @@ A's reference is deleted last, in its own fenced write, instead of in the move
 transaction: a meeting already on B whose A reference remains is a run interrupted
 after its move, and a rerun finishes it without moving it again (counted as resumed).
 
+### Amendment: CLI-only rows
+
+`merge-accounts -scan-users` rewrites the user-partition rows the worker cannot reach,
+under the CLI-held job lease, each in one transaction with the merge fence checks.
+SpecReq tasks and calendar events change `accountId` A to B (events also replace A in
+the sealed payload's candidate account IDs, then pass the reader's payload
+normalization). Calendar `shareAccountId`, share state and meeting key are never
+rewritten, and each is pinned in the update condition: `CALSHARE#` rows stay on A (an
+unmoved category), so repointing the share account would orphan them and break
+unshare. This deliberately departs from the design's rewrite of `shareAccountId`. A
+link-only meeting moves with the meeting writer, which writes no target
+`MEETINGREF#` row for an unpublished meeting. The scan must run inside the `-apply`
+invocation that starts or resumes the job, before it finishes; `-verify` is the
+read-only post-merge count.
+
 ## Consequences
 
 The preview is read-only and bounded: members, projects, research, contacts and events

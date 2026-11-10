@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -92,16 +93,17 @@ func (f *fakeJobs) ReleaseMergeLease(context.Context, *model.AccountMergeJob) er
 }
 
 type fakeUsers struct {
-	mu       sync.Mutex
-	rows     []repository.MergeUserRow // returned for segment 0 only
-	invalid  int
-	segments map[int]bool
-	moves    []string
-	cipher   string
-	refs     []*model.MeetingRef
-	failTask error
-	fence    error
-	log      *[]string
+	mu        sync.Mutex
+	rows      []repository.MergeUserRow // returned for segment 0 only
+	invalid   int
+	segments  map[int]bool
+	moves     []string
+	cipher    string
+	refs      []*model.MeetingRef
+	failTask  error
+	fence     error
+	fenceTask error
+	log       *[]string
 }
 
 func (f *fakeUsers) ScanMergeUserRowsSegmentPage(_ context.Context, account string, segment, segments int, cursor string) (*repository.MergeUserRowsPage, error) {
@@ -122,16 +124,25 @@ func (f *fakeUsers) ScanMergeUserRowsSegmentPage(_ context.Context, account stri
 	}
 	return &repository.MergeUserRowsPage{Rows: f.rows[1:]}, nil
 }
-func (f *fakeUsers) MoveSpecReqTaskRowForMerge(_ context.Context, from, to string, row repository.MergeUserRow) error {
+func (f *fakeUsers) MoveSpecReqTaskRowForMerge(_ context.Context, job *model.AccountMergeJob, row repository.MergeUserRow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.moves = append(f.moves, "task:"+from+">"+to)
+	if job == nil || job.LeaseOwner != cliOwner {
+		return errors.New("task moved without the CLI lease")
+	}
+	f.moves = append(f.moves, "task:"+job.SourceAccountID+">"+job.TargetAccountID)
+	if f.fenceTask != nil {
+		return f.fenceTask
+	}
 	return f.failTask
 }
-func (f *fakeUsers) MoveCalendarEventRowForMerge(_ context.Context, from, to string, row repository.MergeUserRow, ciphertext string) error {
+func (f *fakeUsers) MoveCalendarEventRowForMerge(_ context.Context, job *model.AccountMergeJob, row repository.MergeUserRow, ciphertext string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.moves = append(f.moves, "event:"+from+">"+to)
+	if job == nil || job.LeaseOwner != cliOwner {
+		return errors.New("event moved without the CLI lease")
+	}
+	f.moves = append(f.moves, "event:"+job.SourceAccountID+">"+job.TargetAccountID)
 	f.cipher = ciphertext
 	return nil
 }
@@ -172,16 +183,25 @@ func newHarness() *harness {
 		preview: &model.AccountMergePreview{Counts: map[string]int{"meetings": 5}, RequiresAcceptUnmoved: true,
 			Unmoved: []model.MergeUnmovedCategory{{Category: "kb", Present: true}, {Category: "documents"}}}}
 	h.jobs.job = &model.AccountMergeJob{SourceAccountID: "src", TargetAccountID: "tgt", State: model.MergeStateRunning, Step: "members", UpdatedAt: time.Unix(100, 0)}
-	payload := `{"externalId":"x","title":"t","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-11-01T01:00:00Z","timeZone":"UTC","accountId":"src","shareAccountId":"src","candidateAccountIds":["src","other","tgt"]}`
+	payload := `{"externalId":"x","title":"t","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-11-01T01:00:00Z","timeZone":"UTC","accountId":"src","shareAccountId":"shared","candidateAccountIds":["src","other","tgt"]}`
 	h.users = &fakeUsers{log: &h.log, rows: []repository.MergeUserRow{
 		{Kind: repository.MergeUserRowSpecReqTask, PK: "USER#u1", SK: "SRTASK#e1", UserID: "u1", EventID: "e1", Version: 2},
-		{Kind: repository.MergeUserRowCalendar, PK: "USER#u1", SK: "CALEVENT#s1#e2", UserID: "u1", SourceID: "s1", EventID: "e2", Ciphertext: "sealed:" + payload, Revision: 4, ShareAccountID: "src"},
+		{Kind: repository.MergeUserRowCalendar, PK: "USER#u1", SK: "CALEVENT#s1#e2", UserID: "u1", SourceID: "s1", EventID: "e2", Ciphertext: "sealed:" + payload, Revision: 4, ShareAccountID: "shared"},
 		{Kind: repository.MergeUserRowMeeting, PK: "USER#u2", SK: "MEETING#m1", UserID: "u2", MeetingID: "m1", Date: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
 		{Kind: repository.MergeUserRowMeeting, PK: "USER#u2", SK: "MEETING#m2", UserID: "u2", MeetingID: "m2", SharedToAccount: true},
 	}}
-	h.d = deps{svc: h.svc, jobs: h.jobs, users: h.users, cipher: fakeCipher{}, owner: cliOwner,
+	h.d = deps{svc: h.svc, jobs: h.jobs, members: members{"tgt:owner-1": true}, users: h.users, cipher: fakeCipher{}, owner: cliOwner,
 		now: func() time.Time { return time.Unix(1000, 0) }, pause: func(context.Context, time.Duration) error { return nil }}
 	return h
+}
+
+type members map[string]bool
+
+func (m members) GetMember(_ context.Context, account, user string) (*model.AccountMember, error) {
+	if m[account+":"+user] {
+		return &model.AccountMember{AccountID: account, UserID: user}, nil
+	}
+	return nil, nil
 }
 
 func opts() options {
@@ -298,7 +318,7 @@ func TestMergeCLIApplyRewritesUserRowsUnderLeaseThenRunsWorker(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(h.users.cipher, "sealed:")), &event); err != nil {
 		t.Fatal(err)
 	}
-	if event.AccountID != "tgt" || event.ShareAccountID != "tgt" || strings.Join(event.CandidateAccountIDs, ",") != "tgt,other" {
+	if event.AccountID != "tgt" || event.ShareAccountID != "shared" || strings.Join(event.CandidateAccountIDs, ",") != "other,tgt" {
 		t.Errorf("event payload not rewritten: %+v", event)
 	}
 	if res.State != model.MergeStateDone || res.Counts["members.moved"] != 3 || res.UserRows["specreqTasksMoved"] != 1 ||
@@ -406,25 +426,114 @@ func (s *stuckSvc) ProcessAccountMergeRequested(context.Context, model.AccountMe
 	return nil
 }
 
-func TestRewriteCalendarPayload(t *testing.T) {
-	base := `{"externalId":"x","title":"a <b> & c","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-11-01T01:00:00Z","timeZone":"UTC","accountId":"src"}`
-	out, err := rewriteCalendarPayload([]byte(base), "src", "tgt")
-	if err != nil {
-		t.Fatal(err)
+func calendarPayload(account, share string, candidates ...string) string {
+	extra := ""
+	if share != "" {
+		extra += `,"shareAccountId":"` + share + `"`
 	}
-	if !strings.Contains(string(out), `"accountId":"tgt"`) || !strings.Contains(string(out), "a <b> & c") {
-		t.Errorf("payload %s", out)
+	if len(candidates) > 0 {
+		extra += `,"candidateAccountIds":["` + strings.Join(candidates, `","`) + `"]`
+	}
+	return `{"externalId":"x","title":"a <b> & c","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-11-01T01:00:00Z","timeZone":"UTC","accountId":"` + account + `"` + extra + `}`
+}
+
+func TestRewriteCalendarPayload(t *testing.T) {
+	cases := []struct {
+		name, payload, share string
+		candidates           []string
+	}{
+		{"account only", calendarPayload("src", ""), "", nil},
+		// shareAccountId stays A (its CALSHARE# row stays on A); candidate A becomes B.
+		{"share A, candidates [B]", calendarPayload("src", "src", "tgt"), "src", []string{"tgt"}},
+		// Replacing candidate A with B would equal the share account: dropped.
+		{"share B, candidates [A]", calendarPayload("src", "tgt", "src"), "tgt", nil},
+		{"candidates deduplicated", calendarPayload("src", "", "src", "tgt", "other"), "", []string{"tgt", "other"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := rewriteCalendarPayload([]byte(tc.payload), "src", "tgt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event model.CalendarEventInput
+			if err := json.Unmarshal(out, &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.AccountID != "tgt" || event.ShareAccountID != tc.share || !strings.Contains(string(out), "a <b> & c") {
+				t.Fatalf("payload %s", out)
+			}
+			got := append([]string(nil), event.CandidateAccountIDs...)
+			want := append([]string(nil), tc.candidates...)
+			sort.Strings(got)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("candidates %v, want %v", got, want)
+			}
+			// The result passes the stored-payload normalization the reader applies.
+			if _, err := service.NormalizeCalendarPayload(event); err != nil {
+				t.Errorf("reader would reject the rewritten payload: %v", err)
+			}
+		})
 	}
 	for name, payload := range map[string]string{
-		"other account":  strings.Replace(base, `"accountId":"src"`, `"accountId":"zzz"`, 1),
-		"no account":     strings.Replace(base, `,"accountId":"src"`, "", 1),
-		"unknown field":  strings.Replace(base, `"accountId":"src"`, `"accountId":"src","extra":1`, 1),
-		"trailing value": base + ` {}`,
+		"other account":  calendarPayload("zzz", ""),
+		"no account":     strings.Replace(calendarPayload("src", ""), `,"accountId":"src"`, "", 1),
+		"unknown field":  strings.Replace(calendarPayload("src", ""), `"accountId":"src"`, `"accountId":"src","extra":1`, 1),
+		"trailing value": calendarPayload("src", "") + ` {}`,
 		"not json":       "nope",
 	} {
 		if _, err := rewriteCalendarPayload([]byte(payload), "src", "tgt"); err == nil {
 			t.Errorf("%s accepted", name)
 		}
+	}
+}
+
+func TestMergeCLIVerifyIsReadOnlyAndChecksTargetMembership(t *testing.T) {
+	h := newHarness()
+	o := opts()
+	o.Verify = true
+	res, err := run(context.Background(), h.d, o)
+	if err != nil || res.Mode != "verify" || res.UserRows["specreqTasks"] != 1 || res.UserRows["linkOnlyMeetings"] != 1 {
+		t.Fatalf("verify %+v / %v", res, err)
+	}
+	if len(h.svc.calls) != 0 || len(h.users.moves) != 0 || len(h.jobs.claims) != 0 {
+		t.Fatalf("verify wrote or previewed: %v %v", h.svc.calls, h.users.moves)
+	}
+	o.Requester = "stranger"
+	if _, err := run(context.Background(), h.d, o); errorCode(err) != "FORBIDDEN" {
+		t.Fatalf("non-member verify: %v", err)
+	}
+	o.Requester, o.Apply = "owner-1", true
+	if _, err := run(context.Background(), h.d, o); errorCode(err) != "INVALID_INPUT" {
+		t.Fatalf("verify with apply: %v", err)
+	}
+}
+
+func TestMergeCLICountsScanErrorsByReason(t *testing.T) {
+	h := newHarness()
+	h.d.cipher = brokenCipher{}
+	o := opts()
+	o.Apply = true
+	res, _ := run(context.Background(), h.d, o)
+	if res.UserRows["errors"] != 1 || res.UserRows["errors.decrypt"] != 1 {
+		t.Fatalf("errors by reason: %v", res.UserRows)
+	}
+}
+
+type brokenCipher struct{ fakeCipher }
+
+func (brokenCipher) Decrypt(context.Context, string, string, string, string) ([]byte, error) {
+	return nil, errors.New("kms")
+}
+
+func TestMergeCLIFenceLostOnTaskAbortsScan(t *testing.T) {
+	h := newHarness()
+	h.users.fenceTask = repository.ErrMergeFenceLost
+	o := opts()
+	o.Apply = true
+	_, err := run(context.Background(), h.d, o)
+	if errorCode(err) != "FENCE_LOST" || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
+		t.Fatalf("got %v calls %v", err, h.svc.calls)
 	}
 }
 

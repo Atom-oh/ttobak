@@ -9,6 +9,10 @@
 // -status prints the source's job state, step, error code and counts to a
 // direct member of the source or target, as GET /api/accounts/{id}/merge.
 //
+// -verify is a read-only scan for after the merge: it skips the preview (a
+// merged source is ineligible) and counts rows still naming -from. The
+// requester must be a direct member of -into.
+//
 // -apply defaults to false: a dry run prints the merge preview counts and,
 // with -scan-users, the counts of user-partition rows the CLI would rewrite.
 // Nothing is written, not even a lease. With -apply the CLI starts the job
@@ -85,6 +89,7 @@ type options struct {
 	From, Into, Requester string
 	Apply, AcceptUnmoved  bool
 	ScanUsers, Status     bool
+	Verify                bool
 	MaxPages              int
 }
 
@@ -93,6 +98,7 @@ var (
 	errRequesterNeeded  = errors.New("-requester is required")
 	errInvalidMaxPages  = errors.New("-max-pages must be > 0")
 	errNoProgress       = errors.New("merge worker made no progress; the job lease may be held elsewhere")
+	errVerifyReadOnly   = errors.New("-verify is read-only and excludes -apply and -status")
 	errScanIncomplete   = errors.New("user row scan reported errors; worker not started")
 )
 
@@ -111,6 +117,9 @@ func validateOptions(o options) error {
 	if o.MaxPages <= 0 {
 		return errInvalidMaxPages
 	}
+	if o.Verify && (o.Apply || o.Status) {
+		return errVerifyReadOnly
+	}
 	return nil
 }
 
@@ -122,6 +131,10 @@ type mergeService interface {
 	ProcessAccountMergeRequested(ctx context.Context, e model.AccountMergeRequested, deadline time.Time) error
 }
 
+type memberReader interface {
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+}
+
 type jobStore interface {
 	GetAccountMergeJob(ctx context.Context, sourceID string) (*model.AccountMergeJob, error)
 	ClaimMergeLease(ctx context.Context, sourceID, owner string, now time.Time, ttl time.Duration) (*model.AccountMergeJob, error)
@@ -130,8 +143,8 @@ type jobStore interface {
 
 type userRowStore interface {
 	ScanMergeUserRowsSegmentPage(ctx context.Context, accountID string, segment, segments int, cursor string) (*repository.MergeUserRowsPage, error)
-	MoveSpecReqTaskRowForMerge(ctx context.Context, fromID, toID string, row repository.MergeUserRow) error
-	MoveCalendarEventRowForMerge(ctx context.Context, fromID, toID string, row repository.MergeUserRow, ciphertext string) error
+	MoveSpecReqTaskRowForMerge(ctx context.Context, job *model.AccountMergeJob, row repository.MergeUserRow) error
+	MoveCalendarEventRowForMerge(ctx context.Context, job *model.AccountMergeJob, row repository.MergeUserRow, ciphertext string) error
 	MoveMeetingForAccountMerge(ctx context.Context, job *model.AccountMergeJob, ownerID, meetingID string, ref *model.MeetingRef) error
 }
 
@@ -141,10 +154,11 @@ type payloadCipher interface {
 }
 
 type deps struct {
-	svc    mergeService
-	jobs   jobStore
-	users  userRowStore
-	cipher payloadCipher
+	svc     mergeService
+	jobs    jobStore
+	members memberReader
+	users   userRowStore
+	cipher  payloadCipher
 	// owner is the lease owner, cli-<host>-<pid>.
 	owner string
 	now   func() time.Time
@@ -179,6 +193,22 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 		}
 		res.Into, res.State, res.Step, res.ErrorCode, res.Counts = dto.IntoAccountID, dto.State, dto.Step, dto.ErrorCode, dto.Counts
 		return res, nil
+	}
+	if o.Verify {
+		// Read-only check that the CLI-only rows no longer name the source.
+		// It skips Preview, which refuses a merged source, and requires only
+		// that the requester is a direct member of the target.
+		res.Mode = "verify"
+		member, err := d.members.GetMember(ctx, o.Into, o.Requester)
+		if err != nil {
+			return res, err
+		}
+		if member == nil || member.UserID != o.Requester {
+			return res, service.ErrForbidden
+		}
+		counts, err := d.scanUserRows(ctx, o, nil)
+		res.UserRows = counts
+		return res, err
 	}
 	if !o.Apply {
 		preview, err := d.svc.Preview(ctx, o.Requester, o.From, o.Into)
@@ -350,10 +380,10 @@ func (d deps) handleRow(ctx context.Context, o options, lease *cliLease, row rep
 	switch row.Kind {
 	case repository.MergeUserRowSpecReqTask:
 		kind = "specreqTasks"
-		move = func() error { return d.users.MoveSpecReqTaskRowForMerge(ctx, o.From, o.Into, row) }
+		move = func() error { return d.users.MoveSpecReqTaskRowForMerge(ctx, lease.current(), row) }
 	case repository.MergeUserRowCalendar:
 		kind = "calendarEvents"
-		move = func() error { return d.moveCalendarEvent(ctx, o, row) }
+		move = func() error { return d.moveCalendarEvent(ctx, o, lease.current(), row) }
 	case repository.MergeUserRowMeeting:
 		if row.SharedToAccount {
 			// Published meetings move in the worker's meetings step.
@@ -385,30 +415,58 @@ func (d deps) handleRow(ctx context.Context, o options, lease *cliLease, row rep
 		add(kind+"Skipped", 1)
 	default:
 		add("errors", 1)
+		add("errors."+failureReason(err), 1)
 	}
 	return nil
 }
 
-func (d deps) moveCalendarEvent(ctx context.Context, o options, row repository.MergeUserRow) error {
+// reasonError tags a row failure with a fixed reason for the error counts.
+type reasonError struct {
+	reason string
+	err    error
+}
+
+func (e *reasonError) Error() string { return e.reason + ": " + e.err.Error() }
+func (e *reasonError) Unwrap() error { return e.err }
+
+func tagReason(reason string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &reasonError{reason: reason, err: err}
+}
+
+func failureReason(err error) string {
+	var tagged *reasonError
+	if errors.As(err, &tagged) {
+		return tagged.reason
+	}
+	return "write"
+}
+
+func (d deps) moveCalendarEvent(ctx context.Context, o options, job *model.AccountMergeJob, row repository.MergeUserRow) error {
 	plaintext, err := d.cipher.Decrypt(ctx, row.UserID, row.SourceID, row.EventID, row.Ciphertext)
 	if err != nil {
-		return err
+		return tagReason("decrypt", err)
 	}
 	rewritten, err := rewriteCalendarPayload(plaintext, o.From, o.Into)
 	if err != nil {
-		return err
+		return tagReason("payload", err)
 	}
 	sealed, err := d.cipher.Encrypt(ctx, row.UserID, row.SourceID, row.EventID, rewritten)
 	if err != nil {
-		return err
+		return tagReason("encrypt", err)
 	}
-	return d.users.MoveCalendarEventRowForMerge(ctx, o.From, o.Into, row, sealed)
+	return d.users.MoveCalendarEventRowForMerge(ctx, job, row, sealed)
 }
 
 // rewriteCalendarPayload replaces the source account ID with the target in a
-// decrypted calendar event payload: accountId, shareAccountId and each
-// candidate account ID (deduplicated when the target is already a candidate).
-// A payload that does not name the source as its account is rejected.
+// decrypted calendar event payload: accountId and each candidate account ID.
+// shareAccountId and its evidence are left as stored (the share row stays on
+// the source). Candidates are deduplicated and drop the share account, then
+// the result goes through the service's stored-payload normalization and size
+// cap, so a payload that reads would reject is never produced. A payload that
+// does not name the source as its account is rejected.
 func rewriteCalendarPayload(plaintext []byte, from, to string) ([]byte, error) {
 	var event model.CalendarEventInput
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
@@ -417,11 +475,8 @@ func rewriteCalendarPayload(plaintext []byte, from, to string) ([]byte, error) {
 		return nil, errors.New("calendar payload does not match the source account")
 	}
 	event.AccountID = to
-	if event.ShareAccountID == from {
-		event.ShareAccountID = to
-	}
 	if len(event.CandidateAccountIDs) > 0 {
-		seen := map[string]bool{}
+		seen := map[string]bool{event.ShareAccountID: true}
 		candidates := make([]string, 0, len(event.CandidateAccountIDs))
 		for _, id := range event.CandidateAccountIDs {
 			if id == from {
@@ -434,13 +489,7 @@ func rewriteCalendarPayload(plaintext []byte, from, to string) ([]byte, error) {
 		}
 		event.CandidateAccountIDs = candidates
 	}
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(event); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
+	return service.NormalizeCalendarPayload(event)
 }
 
 // drive runs the merge worker in-process until the job leaves the running
@@ -488,7 +537,7 @@ func errorCode(err error) string {
 		return "FORBIDDEN"
 	case errors.Is(err, service.ErrNotFound):
 		return "NOT_FOUND"
-	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, errFromIntoRequired), errors.Is(err, errRequesterNeeded), errors.Is(err, errInvalidMaxPages):
+	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, errFromIntoRequired), errors.Is(err, errRequesterNeeded), errors.Is(err, errInvalidMaxPages), errors.Is(err, errVerifyReadOnly):
 		return "INVALID_INPUT"
 	case errors.Is(err, service.ErrAccountMergeIneligible):
 		return "INELIGIBLE"
@@ -532,6 +581,7 @@ func main() {
 	flag.BoolVar(&o.AcceptUnmoved, "accept-unmoved", false, "accept the categories v1 leaves on the source")
 	flag.BoolVar(&o.ScanUsers, "scan-users", false, "also rewrite SpecReq tasks, calendar events and link-only meetings")
 	flag.BoolVar(&o.Status, "status", false, "print the source's merge job state and counts (needs -from and -requester only)")
+	flag.BoolVar(&o.Verify, "verify", false, "read-only: count CLI-only rows still naming -from; needs -from, -into and -requester (a direct member of -into); usable after the merge is done")
 	flag.IntVar(&o.MaxPages, "max-pages", defaultMaxPages, "page limit per user scan segment")
 	flag.Parse()
 	if err := validateOptions(o); err != nil {
@@ -569,7 +619,7 @@ func main() {
 	svc.SetMergePublisher(func(context.Context, model.AccountMergeRequested) error { return nil })
 	svc.SetPeopleResolvePublisher(service.PeopleResolvePublisher(eventbridge.NewFromConfig(cfg)))
 	host, _ := os.Hostname()
-	d := deps{svc: svc, jobs: repo, users: repo, cipher: service.NewCalendarCipher(kmsClient, keyID),
+	d := deps{svc: svc, jobs: repo, members: repo, users: repo, cipher: service.NewCalendarCipher(kmsClient, keyID),
 		owner: leaseOwner(host, os.Getpid()), now: time.Now, pause: pause}
 	res, err := run(ctx, d, o)
 	res.ErrorCode = firstNonEmpty(res.ErrorCode, errorCode(err))

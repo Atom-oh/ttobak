@@ -291,6 +291,17 @@ func marshalCalendarPayload(event model.CalendarEventInput) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+// NormalizeCalendarPayload runs the stored-payload validation (the same
+// normalization reads apply, so a payload it accepts can be read back) and
+// returns the canonical JSON, capped at the 4,096-byte payload limit.
+func NormalizeCalendarPayload(event model.CalendarEventInput) ([]byte, error) {
+	normalized, err := normalizeCalendarEvent(event)
+	if err != nil {
+		return nil, err
+	}
+	return marshalCalendarPayload(normalized)
+}
+
 func calendarMutationExternalID(mutation model.CalendarMutation) string {
 	if mutation.Event != nil {
 		return mutation.Event.ExternalID

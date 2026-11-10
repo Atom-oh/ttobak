@@ -21,7 +21,8 @@ is). Output is JSON counts and job state only. Errors print a code only.
 | `-requester` | Required user ID of the requester; same authorization as the API |
 | `-apply` | Write. Without it the CLI prints preview counts and writes nothing, not even a lease |
 | `-accept-unmoved` | Accept the categories v1 leaves on A |
-| `-scan-users` | Also count (dry run) or rewrite the CLI-only rows below |
+| `-scan-users` | Also count (dry run) or rewrite the CLI-only rows below; with `-apply` it runs inside the same invocation that starts or resumes the job |
+| `-verify` | Read-only count of CLI-only rows still naming `-from`; skips the preview, so it works after the merge is done; the requester must be a direct member of `-into` |
 | `-max-pages` | Page limit per scan segment, default 100000 |
 | `-status` | Print the job state and counts; needs only `-from` and `-requester` |
 
@@ -31,22 +32,29 @@ rows are sealed. The CLI host needs DynamoDB, KMS (encrypt and decrypt under the
 application key) and EventBridge `PutEvents` for the people resolve request. Run it
 from `backend/` on a host that already holds those grants; do not widen IAM for it.
 
-`-scan-users` reads user partitions with a bounded four-segment table scan, so run
+`-scan-users` reads user partitions with a bounded four-segment, eventually consistent table scan, so run
 it off peak and one merge at a time. It handles three kinds of rows:
 
 - SpecReq tasks (`SRTASK#`): `accountId` A to B.
-- Calendar events (`CALEVENT#`): `accountId`, and `shareAccountId` when it names A,
-  on the row and inside the sealed payload together, with A replaced by B in the
-  payload's candidate account IDs. Calendar share rows (`CALSHARE#`) stay on A (an
-  unmoved category).
+- Calendar events (`CALEVENT#`): `accountId` on the row and inside the sealed
+  payload together, with A replaced by B in the payload's candidate account IDs
+  (duplicates and the share account are dropped, and the payload must pass the same
+  normalization and size cap readers apply). `shareAccountId`, share state and
+  meeting key are not rewritten and must be unchanged since the scan: calendar share
+  rows (`CALSHARE#`) stay on A (an unmoved category), so repointing would orphan
+  them (ADR-072 amendment).
 - Link-only meetings: moved with the merge's dedicated meeting writer, which never
   publishes. Published meetings are counted as `publishedMeetings` and move in the
   worker's meetings step.
 
-Each rewrite is conditioned on `accountId` still naming A (and on the row version or
-revision the scan read). A changed row is counted as `Skipped`: rerun to pick it up.
-Any other failure is counted in `errors`; the CLI then releases its lease and does
-not start the worker, so nothing finishes while rows are left behind.
+Each rewrite is one transaction with the merge fence checks (running job, CLI lease,
+source owner, requester membership of the target, open target) and is conditioned on
+`accountId` still naming A and on the row state the scan read. A lost fence stops
+the scan. A changed row is counted as `Skipped`: rerun to pick it up. Any other
+failure is counted in `errors` and by reason in `errors.decrypt`, `errors.payload`,
+`errors.encrypt` or `errors.write`; the CLI then releases its lease and does not
+start the worker, so nothing finishes while rows are left behind. The scan reads
+eventually consistent; a stale read only skips or defers a row.
 
 ## 1. Preview (dry run)
 
@@ -84,11 +92,12 @@ Start codes: `JOB_RUNNING` (a worker holds a live lease, wait and check status),
 `NO_PROGRESS` (the worker loop saw no progress for about ten minutes, usually a
 lease held by another worker), `SCAN_INCOMPLETE` (see above).
 
-Starting through the API instead leaves the user-partition rows unmoved; run the
-CLI with `-scan-users -apply` for the same pair afterwards only while the job is
-still `running` or `failed`, because the meeting writer needs the running job's
-fence. SpecReq tasks and calendar events carry no fence and can still be rewritten after
-the job is done, but their rows keep naming A until then.
+`-scan-users` must run in the same `-apply` invocation that starts or resumes the
+job, because the meeting writer needs the running job's lease and fence; it cannot
+run after the job is `done`. A merge started through the API leaves these rows
+unmoved: if its job is still `running` (lease expired) or `failed`, rerun this
+command with `-scan-users`, which takes over the job. Once it is `done`, the rows
+named above cannot be rewritten by this tool; `-verify` reports them.
 
 ## 3. Status
 
@@ -111,6 +120,8 @@ it to expire, then rerun the step 2 command (add `-scan-users` only if the scan 
 not complete). Start hands a `running` job whose lease expired to this process and
 the saved step and cursor continue. A live lease returns `JOB_RUNNING`: do not force
 it. Every mover is idempotent, so a repeated step moves nothing twice.
+
+Rerunning with `-scan-users` repeats the scan; rows already moved no longer match.
 
 A `failed` job restarts the same way from its saved step; the source stays fenced
 after a failure and nothing is rolled back. `DISPATCH_FAILED`, `MERGE_CONFLICT` and
@@ -145,10 +156,15 @@ After `state` is `done`:
 - Source META carries `mergedInto` B and no `mergingInto`; the target's
   `incomingMerges` is back to its prior value. `GET /api/accounts/{sourceId}` reports
   `mergedInto`, and the account list no longer shows A.
-- Run `-scan-users` without `-apply` for the same pair. `specreqTasks`,
-  `calendarEvents` and `linkOnlyMeetings` should be 0. A nonzero
-  `publishedMeetings` means published meetings are still on A (their `MEETINGREF#`
-  row was missing); report them, because the worker will not move them.
+- Run the read-only check for the same pair as a direct member of the target:
+  `go run ./cmd/merge-accounts -from SOURCE_ID -into TARGET_ID -requester USER_ID
+  -scan-users -verify`. It skips the preview (a merged source is ineligible) and
+  counts rows with `accountId` still A: `specreqTasks`, `calendarEvents` and
+  `linkOnlyMeetings` should be 0. A nonzero `publishedMeetings` means published
+  meetings are still on A (their `MEETINGREF#` row was missing); report them, because
+  the worker will not move them. Nonzero task or event counts after `done` mean the
+  scan did not run in the apply invocation; they cannot be fixed afterwards by this
+  tool and are reported.
 - `counts` should show `members`, `contacts`, `events` and `meetings` moved or
   skipped with `unreadable` and `keptSeparate` reviewed.
 - In the web app as a target member, open the account: moved meetings, contacts and
@@ -158,4 +174,4 @@ After `state` is `done`:
   links on A stay on the tombstone (ADR-072).
 
 There is no undo. Do not delete the tombstone, the job row or the `MERGE#` mapping
-rows: a resume or a later `-scan-users` run depends on them.
+rows: a resume or a later `-verify` run depends on them.
