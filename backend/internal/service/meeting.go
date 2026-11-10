@@ -1496,7 +1496,7 @@ func (s *MeetingService) materializeListedPendingShares(ctx context.Context, use
 			continue
 		}
 		if p.Kind == model.PendingShareKindAccount {
-			joinedAccountIDs = append(joinedAccountIDs, p.AccountID)
+			joinedAccountIDs = append(joinedAccountIDs, s.joinedAccountHint(ctx, p.AccountID))
 		}
 		// Nothing left to do here: materializeOne's transactional
 		// primitives already deleted the pending row as part of their own
@@ -1509,6 +1509,24 @@ func (s *MeetingService) materializeListedPendingShares(ctx context.Context, use
 		// prevent.
 	}
 	return joinedAccountIDs
+}
+
+// joinedAccountHint names the account a resolved invitation joined: a merged
+// source redirects the grant one hop to its target, so the discovery hint
+// follows it. The hint only widens discovery; on a read failure it stays the
+// invited account, which current membership checks then filter.
+func (s *MeetingService) joinedAccountHint(ctx context.Context, accountID string) string {
+	reader, ok := s.repo.(interface {
+		GetAccount(context.Context, string) (*model.Account, error)
+	})
+	if !ok {
+		return accountID
+	}
+	account, err := reader.GetAccount(ctx, accountID)
+	if err != nil || account == nil || account.MergedInto == "" {
+		return accountID
+	}
+	return account.MergedInto
 }
 
 // materializeOne atomically re-verifies one queued grant's inviter (still
