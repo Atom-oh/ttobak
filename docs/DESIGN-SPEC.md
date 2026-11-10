@@ -601,7 +601,7 @@ and shows an informational "recognizing without the custom dictionary" line.
 `/performance` (`app/performance/page.tsx`, `components/performance/`, pure
 helpers and wire types in `lib/performance.ts`, client `performanceApi` in
 `lib/api.ts`) is the owner's own page: every request reads only the caller's
-rows ([ADR-066](decisions/ADR-066-sa-performance-data-residency.md)) and there is
+rows ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)) and there is
 no share control. The Work menu entry is SA Activity. A segmented
 period control (this week / quarter / this year, default this week) drives
 `GET /api/performance/missed`. Sections, in order:
