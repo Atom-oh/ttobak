@@ -47,9 +47,10 @@ Each batch has at most 20 distinct occurrence IDs, with only these mutations:
   credentials and arbitrary metadata are not accepted. The request decoder stays
   strict, so an API that predates `organizerDomain` rejects it with 400; deploy
   the API before a runner that sends it. The sealed event plaintext is decoded
-  tolerantly of unknown fields, but an API older than that tolerant reader
-  fails to read events sealed with `organizerDomain` until they are re-synced
-  without it or expire.
+  tolerantly of unknown fields. An API that predates `organizerDomain` decodes it
+  strictly without that field and fails to read events sealed with it until they
+  are re-synced without it or expire; a strict reader that already declares the
+  field reads them.
 - `{"op":"remove","externalId":"..."}`: explicit removal of that source's
   occurrence. The same ID/text bounds apply. No absence-based deletion occurs,
   including for empty `mutations` with `complete:true`.
