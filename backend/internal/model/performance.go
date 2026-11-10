@@ -140,10 +140,33 @@ type PerformanceMappingInput struct {
 	AccountID string `json:"accountId"`
 }
 
-// PerformanceMissedItem is defined by the missed-item rules; the list is
-// empty until those rules exist.
-type PerformanceMissedItem struct{}
+// PerformanceMissedItem is one logging gap or silent customer. RefKind and
+// RefID name the touchpoint (calendar event, meeting or SFDC task) behind it.
+// At is RFC3339 UTC. DaysSince counts Seoul calendar days from At to the
+// evaluated period end; a silent customer with no touchpoint in the lookback
+// window has an empty At and DaysSince -1.
+type PerformanceMissedItem struct {
+	Kind          string `json:"kind"`
+	AccountID     string `json:"accountId"`
+	SFDCAccountID string `json:"sfdcAccountId,omitempty"`
+	RefKind       string `json:"refKind,omitempty"`
+	RefID         string `json:"refId,omitempty"`
+	At            string `json:"at,omitempty"`
+	DaysSince     int    `json:"daysSince"`
+}
 
+// PerformanceSourceFreshness reports when a source last completed a sync.
+type PerformanceSourceFreshness struct {
+	Source          string `json:"source"`
+	LastCompletedAt string `json:"lastCompletedAt,omitempty"`
+}
+
+// CalendarCoverageStart is the earliest start (RFC3339 UTC) among the calendar
+// events read for the request, or empty when none were read. Calendar-derived
+// gaps cover only events from that time on.
 type PerformanceMissedList struct {
-	Items []PerformanceMissedItem `json:"items"`
+	Items                 []PerformanceMissedItem      `json:"items"`
+	UnmappedCount         int                          `json:"unmappedCount"`
+	SourceFreshness       []PerformanceSourceFreshness `json:"sourceFreshness"`
+	CalendarCoverageStart string                       `json:"calendarCoverageStart"`
 }
