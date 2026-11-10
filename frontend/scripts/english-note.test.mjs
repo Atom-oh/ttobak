@@ -69,3 +69,20 @@ test('English note status loads on every authenticated visit, not only when a no
   assert.ok(hook.includes('shouldLoadEnglishNote(enabled)'));
   assert.ok(!hook.includes('hasNote'));
 });
+
+test('English request errors and run failures have Korean messages', () => {
+  const { englishRequestErrors, englishFailures } = load();
+  for (const code of ['MEETING_BUSY', 'SOURCE_NOT_READY', 'NO_SUMMARY_SOURCE', 'SHARING_REGEN_REQUIRED', 'SUMMARY_TOO_LARGE', 'SUMMARY_UNAVAILABLE', 'CONFLICT', 'FORBIDDEN']) {
+    assert.match(englishRequestErrors[code] ?? '', /[가-힣]/, code);
+  }
+  for (const code of ['INVALID_OUTPUT', 'PROVIDER_FAILED', 'PERSISTENCE_FAILED', 'OUTPUT_TOO_LARGE', 'SOURCE_CHANGED', 'INTERRUPTED', 'PUBLISH_FAILED', 'TIMEOUT', 'ACCESS_REVOKED', 'SOURCE_MISSING', 'SOURCE_TOO_LARGE', 'SOURCE_UNAVAILABLE', 'SOURCE_NOT_READY', 'NO_SUMMARY_SOURCE']) {
+    assert.match(englishFailures[code] ?? '', /[가-힣]/, code);
+  }
+});
+
+test('switching meetings clears an aborted request flag and error', () => {
+  const hook = read('../src/hooks/useEnglishNote.ts');
+  const effect = hook.slice(hook.indexOf('alive.current = true;'), hook.indexOf('}, [meetingId]);'));
+  assert.ok(effect.includes('setRequesting(false)'), 'meetingId effect must reset requesting');
+  assert.ok(effect.includes('setError(null)'), 'meetingId effect must reset error');
+});

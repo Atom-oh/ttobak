@@ -2,24 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, meetingsApi } from '@/lib/api';
-import { shouldLoadEnglishNote } from '@/lib/englishNote';
+import { englishRequestErrors, shouldLoadEnglishNote } from '@/lib/englishNote';
 import type { EnglishNote } from '@/types/meeting';
-
-const requestErrors: Record<string, string> = {
-  MEETING_BUSY: '다른 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요.',
-  SOURCE_NOT_READY: '첨부 문서의 텍스트 추출을 먼저 완료해 주세요.',
-  NO_SUMMARY_SOURCE: '영문 회의록을 만들 저장 자료가 없습니다.',
-  SHARING_REGEN_REQUIRED: '회의록을 먼저 다시 생성해 주세요.',
-  OUTPUT_TOO_LARGE: '생성된 영문 회의록이 저장 한도를 초과했습니다.',
-};
-export const englishFailures: Record<string, string> = {
-  ...requestErrors,
-  PUBLISH_FAILED: '영문 회의록 작업을 전달하지 못했습니다.',
-  INTERRUPTED: '영문 회의록 작업이 완료되기 전에 중단되었습니다.',
-  SOURCE_CHANGED: '저장된 자료가 변경되어 결과를 적용하지 않았습니다.',
-  ACCESS_REVOKED: '요청자의 편집 권한이 변경되어 결과를 적용하지 않았습니다.',
-  TIMEOUT: '영문 회의록 처리 시간이 초과되었습니다.',
-};
 
 /**
  * Reads the English note state on every visit (a run may be pending or failed
@@ -37,6 +21,9 @@ export function useEnglishNote({ meetingId, enabled }: { meetingId: string; enab
   const shouldLoad = shouldLoadEnglishNote(enabled);
   useEffect(() => {
     alive.current = true;
+    // A request aborted by the previous meeting skips its own reset, so the
+    // flag and message must not carry over to this meeting.
+    setRequesting(false); setError(null);
     return () => { alive.current = false; requestRef.current?.abort(); mutationRef.current?.abort(); };
   }, [meetingId]);
   const refresh = useCallback(async () => {
@@ -73,7 +60,7 @@ export function useEnglishNote({ meetingId, enabled }: { meetingId: string; enab
       }
     } catch (cause) {
       if (!controller.signal.aborted && alive.current) {
-        setError(cause instanceof ApiError ? requestErrors[cause.code] ?? '영문 회의록을 요청하지 못했습니다.' : '영문 회의록을 요청하지 못했습니다.');
+        setError(cause instanceof ApiError ? englishRequestErrors[cause.code] ?? '영문 회의록을 요청하지 못했습니다.' : '영문 회의록을 요청하지 못했습니다.');
         reconcile = cause instanceof ApiError && cause.code === 'MEETING_BUSY';
       }
     } finally {

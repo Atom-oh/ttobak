@@ -7,8 +7,7 @@ import { markdownLinkRenderer } from '@/lib/markdownHtml';
 import TurndownService from 'turndown';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 import { bindMeetingCitations, restoreMeetingCitations } from '@/lib/meetingCitations';
-import { englishFailures } from '@/hooks/useEnglishNote';
-import type { EnglishNoteView } from '@/lib/englishNote';
+import { englishFailures, type EnglishNoteView } from '@/lib/englishNote';
 import type { EnglishNote } from '@/types/meeting';
 import { TranslationControls, TranslationStatus, useMeetingTranslation } from './MeetingTranslation';
 
