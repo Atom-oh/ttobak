@@ -167,6 +167,7 @@ func init() {
 	healthHandler := handler.NewHealthHandler()
 	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
 	accountHandler := handler.NewAccountHandler(accountService, uploadService)
+	accountMergeHandler := handler.NewAccountMergeHandler(service.NewAccountMergeService(repo, accountService))
 	// Speaker map and contact changes queue a people resolve run in the
 	// summarize worker (best-effort); the people panel reads metadata only.
 	peopleResolvePublisher := service.PeopleResolvePublisher(ebClient)
@@ -359,6 +360,7 @@ func init() {
 		r.Post("/api/accounts", accountHandler.CreateAccount)
 		r.Post("/api/accounts/{accountId}/owner-invitation", accountHandler.ResendOwnerInvitation)
 		r.Post("/api/accounts/{accountId}/owner-transfer", accountHandler.TransferOwner)
+		r.Get("/api/accounts/{accountId}/merge-preview", accountMergeHandler.Preview)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Get("/api/accounts/{accountId}/reading", accountReadingHandler.Get)
 		r.Get("/api/accounts/{accountId}/contacts", accountContactsHandler.List)

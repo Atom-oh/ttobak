@@ -1300,6 +1300,20 @@ target, pending, disabled or unverified identity; 403 non-owner; 404 missing acc
 non-member target; 409 concurrent change; 503 Cognito unwired or lookup failure.
 It is the only path that grants Owner; its connector inventory disables delegation.
 
+`GET /api/accounts/{accountId}/merge-preview?into={id}` is a read-only inventory of
+merging the path Account into `into` (ADR-072). The requester must own the source
+(MEMBER role and META owner) and be a direct member of the target. Response:
+`fromAccountId`, `intoAccountId`, `counts` (`members`, `meetings`, `projects`,
+`research`, `contacts`, `events`, `children`; `-1` when a bounded read cap is
+exceeded; members, projects, research, contacts and events are counted by sort key only,
+without reading or decrypting rows, up to 10,000), `unmoved` (`newsSources`, `kb`, `documents`, `calendarShares`,
+`dictionary`, `billing`, each with `present`; `billing` also carries `unverifiable: true` because its data is outside the main table and is always reported present, so `requiresAcceptUnmoved` is always true), `cliOnly`, `newAudience`
+(`intoMembersNotInFrom`, `intoHasAncestors`) and `requiresAcceptUnmoved`. Errors:
+400 missing `into`, same or malformed IDs; 403 requester is not the source Owner or a
+target direct member; 404 missing Account; 409 `MERGE_INELIGIBLE` with the reason
+(tombstone or merge in progress, target inside the source subtree, hierarchy too deep
+or large). The connector inventory disables delegation.
+
 Optional parentAccountId requires the creator's current membership in the parent
 before mail and transactionally before creation. Parent updates require child ownership
 and new-parent membership; the required field uses an empty string to detach,
@@ -1942,6 +1956,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
 | POST | `/api/accounts/{accountId}/owner-invitation` | `accountHandler.ResendOwnerInvitation` |
 | POST | `/api/accounts/{accountId}/owner-transfer` | `accountHandler.TransferOwner` |
+| GET | `/api/accounts/{accountId}/merge-preview` | `accountMergeHandler.Preview` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
 | GET | `/api/accounts/{accountId}/reading` | `accountReadingHandler.Get` |
 | GET | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.List` |
