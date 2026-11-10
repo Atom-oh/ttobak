@@ -1193,6 +1193,10 @@ func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID strin
 		CreatedAt: now, UpdatedAt: now, EntityType: entityType,
 	}
 	if err := s.repo.PutAccountDocument(ctx, doc); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			// The account row is gone; a merging account is ErrAccountMerging.
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	dto := toDocumentDTO(doc)

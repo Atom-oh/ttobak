@@ -166,6 +166,16 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 			return r.ReplaceUnresolvedMentions(ctx, "acct", "o:m1", []model.UnresolvedMention{row}, nil,
 				&model.PeopleRun{AccountID: "acct", Scope: "o:m1", LeaseToken: "tok"})
 		}},
+		{"member role", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
+			return r.UpdateMemberRole(ctx, "acct", "u2", model.RoleSA)
+		}},
+		{"account document", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
+			return r.PutAccountDocument(ctx, &model.AccountDocument{PK: "ACCOUNT#acct", SK: "DOC#d1", AccountID: "acct", DocID: "d1"})
+		}},
+		{"account KB ref", "acct", ErrConditionFailed, func(r *DynamoDBRepository) error {
+			key := "kb/u/1_a.pdf"
+			return r.PutAccountKBRef(ctx, &model.AccountKBRef{AccountID: "acct", RefID: model.AccountKBRefID(key), S3Key: key, UploadedBy: "u"})
+		}},
 		{"meeting create", "acct", nil, func(r *DynamoDBRepository) error {
 			_, err := r.CreateMeeting(ctx, "u", "t", time.Unix(1700000000, 0), nil, "", model.MeetingPreparation{AccountID: "acct"})
 			return err
@@ -391,3 +401,19 @@ func TestConnectorWriteErrorMapsMergeFence(t *testing.T) {
 		t.Fatalf("probe plain cancellation=%v reads=%d, want ErrConditionFailed without a re-read", err, reads)
 	}
 }
+
+// A personal document write names no account and carries no fence.
+func TestPersonalDocumentWriteCarriesNoMergeFence(t *testing.T) {
+	var calls []fenceRequest
+	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) { return 200, `{}` })
+	if err := r.PutAccountDocument(context.Background(), &model.AccountDocument{PK: "USER#u", SK: "DOC#d1", DocID: "d1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].target != "PutItem" {
+		t.Fatalf("calls=%+v, want one PutItem", calls)
+	}
+	if err := r.PutAccountDocument(context.Background(), &model.AccountDocument{PK: "USER#u", SK: "DOC#d2", AccountID: "acct"}); err == nil {
+		t.Fatal("an account document outside its account partition must be rejected")
+	}
+}
+

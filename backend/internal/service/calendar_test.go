@@ -71,7 +71,9 @@ func (fake *calendarStoreFake) ListCalendarSources(_ context.Context, userID, cu
 
 type calendarAccountsFake struct {
 	denied map[string]error
-	calls  []string
+	// merge marks an account mergingInto ("merging") or mergedInto ("merged").
+	merge map[string]string
+	calls []string
 }
 
 func (fake *calendarAccountsFake) GetAccount(_ context.Context, userID, accountID string) (*model.AccountResponse, error) {
@@ -79,7 +81,23 @@ func (fake *calendarAccountsFake) GetAccount(_ context.Context, userID, accountI
 	if err := fake.denied[accountID]; err != nil {
 		return nil, err
 	}
+	switch fake.merge[accountID] {
+	case "merging":
+		return &model.AccountResponse{MergingInto: "target"}, nil
+	case "merged":
+		return &model.AccountResponse{MergedInto: "target"}, nil
+	}
 	return &model.AccountResponse{}, nil
+}
+
+// A sync must not name a merge tombstone, or an in-flight batch could undo a
+// merge move of the event's account link.
+func TestCalendarSyncRefusesMergedAccount(test *testing.T) {
+	svc, store, _, accounts := calendarFixture()
+	accounts.merge = map[string]string{"account-1": "merged"}
+	if _, err := svc.Sync(context.Background(), "owner", calendarSourceID, calendarRequest()); !errors.Is(err, ErrAccountMerging) || len(store.batches) != 0 {
+		test.Fatalf("sync naming a merged account = %v, batches=%d; want ErrAccountMerging and no write", err, len(store.batches))
+	}
 }
 
 func calendarFixture() (*CalendarService, *calendarStoreFake, *calendarKMSFake, *calendarAccountsFake) {
@@ -234,7 +252,7 @@ func TestCalendarSyncNormalizesRetryAndKeepsCiphertextPrivate(test *testing.T) {
 }
 
 func TestCalendarSyncAuthorizationAndFailClosed(test *testing.T) {
-	for _, scenario := range []string{"anonymous", "invalid user", "invalid source", "inaccessible account", "missing account", "account transient", "missing key", "KMS failure", "expired receipt", "foreign receipt"} {
+	for _, scenario := range []string{"anonymous", "invalid user", "invalid source", "inaccessible account", "missing account", "account transient", "merging account", "merged account", "missing key", "KMS failure", "expired receipt", "foreign receipt"} {
 		test.Run(scenario, func(test *testing.T) {
 			svc, store, sdk, accounts := calendarFixture()
 			userID, sourceID := "owner", calendarSourceID
@@ -254,6 +272,9 @@ func TestCalendarSyncAuthorizationAndFailClosed(test *testing.T) {
 			case "account transient":
 				expected = errors.New("account lookup unavailable")
 				accounts.denied["account-1"] = expected
+			case "merging account", "merged account":
+				accounts.merge = map[string]string{"account-1": strings.TrimSuffix(scenario, " account")}
+				expected = ErrAccountMerging
 			case "missing key":
 				svc.cipher = NewCalendarCipher(sdk, "")
 				expected = ErrCalendarEncryption
@@ -376,7 +397,7 @@ func calendarStoredEvents(test *testing.T, svc *CalendarService, store *calendar
 }
 
 func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) {
-	for _, scenario := range []string{"owner", "other member", "revoked unfiltered", "missing unfiltered", "revoked filtered", "transient unfiltered", "transient filtered", "ciphertext moved", "missing key", "anonymous", "corrupt plaintext"} {
+	for _, scenario := range []string{"owner", "other member", "revoked unfiltered", "missing unfiltered", "revoked filtered", "transient unfiltered", "transient filtered", "merged unfiltered", "merging filtered", "ciphertext moved", "missing key", "anonymous", "corrupt plaintext"} {
 		test.Run(scenario, func(test *testing.T) {
 			svc, store, sdk, accounts := calendarFixture()
 			calendarStoredEvents(test, svc, store, calendarRequest())
@@ -400,6 +421,10 @@ func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) 
 				if scenario == "transient filtered" {
 					query.AccountID = "account-1"
 				}
+			case "merged unfiltered":
+				accounts.merge = map[string]string{"account-1": "merged"}
+			case "merging filtered":
+				accounts.merge, query.AccountID = map[string]string{"account-1": "merging"}, "account-1"
 			case "ciphertext moved":
 				store.rows.Rows[0].EventID = strings.Repeat("b", 64)
 				store.rows.Rows[0].SK = model.CalendarEventSortKey(calendarSourceID, store.rows.Rows[0].EventID)
@@ -427,6 +452,9 @@ func TestCalendarEventReadsEnforceOwnerAndCurrentAccountAccess(test *testing.T) 
 			}
 			if (scenario == "revoked unfiltered" || scenario == "missing unfiltered") && page.Events[0].AccountID != "" {
 				test.Fatal("revoked classification remained visible")
+			}
+			if strings.HasPrefix(scenario, "merg") && page.Events[0].AccountID != "account-1" {
+				test.Fatal("an event on a merging or merged account must keep its label in reads")
 			}
 			if store.rows.Rows[0].AccountID != "account-1" {
 				test.Fatal("read mutated stored personal classification")

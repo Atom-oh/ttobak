@@ -25,6 +25,14 @@ func (mergingAccountRepo) DeleteMember(context.Context, string, string, string) 
 	return repository.ErrAccountMerging
 }
 
+func (mergingAccountRepo) UpdateMemberRole(context.Context, string, string, string) error {
+	return repository.ErrAccountMerging
+}
+
+func (mergingAccountRepo) PutAccountDocument(context.Context, *model.AccountDocument) error {
+	return repository.ErrAccountMerging
+}
+
 func requireAccountMerging(t *testing.T, name string, w *httptest.ResponseRecorder) {
 	t.Helper()
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), model.ErrCodeAccountMerging) {
@@ -45,6 +53,18 @@ func TestAccountMergingMapsTo409ForMembers(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.AddMember(w, add)
 	requireAccountMerging(t, "add member", w)
+
+	role := httptest.NewRequest(http.MethodPut, "/api/accounts/acc/members/tam", strings.NewReader(`{"role":"SSA"}`))
+	role = withChiParam(withChiParam(withUserEmailCtx(role, "owner", "o@x.com"), "accountId", "acc"), "userId", "tam")
+	w = httptest.NewRecorder()
+	h.UpdateMemberRole(w, role)
+	requireAccountMerging(t, "update member role", w)
+
+	doc := httptest.NewRequest(http.MethodPost, "/api/accounts/acc/documents", strings.NewReader(`{"title":"t","markdown":"m"}`))
+	doc = withChiParam(withUserEmailCtx(doc, "owner", "o@x.com"), "accountId", "acc")
+	w = httptest.NewRecorder()
+	h.PutDocument(w, doc)
+	requireAccountMerging(t, "account document", w)
 
 	remove := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc/members/tam", nil)
 	remove = withChiParam(withChiParam(withUserEmailCtx(remove, "owner", "o@x.com"), "accountId", "acc"), "userId", "tam")
@@ -96,6 +116,7 @@ func TestAccountMergingMapsTo409ForNewsAndPeople(t *testing.T) {
 		"news":            accountNewsError,
 		"people":          accountPeopleError,
 		"insights delete": writeInsightsDeleteError,
+		"document share":  func(w http.ResponseWriter, err error) { writeDocumentServiceError(w, err, "") },
 	} {
 		w := httptest.NewRecorder()
 		write(w, fmt.Errorf("wrapped: %w", service.ErrAccountMerging))

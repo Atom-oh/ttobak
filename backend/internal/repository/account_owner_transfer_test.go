@@ -83,7 +83,7 @@ func TestTransferAccountOwnerRejectsSelfTransfer(t *testing.T) {
 }
 
 func TestGenericMemberWritersFenceOwnerRow(t *testing.T) {
-	for _, op := range []string{"UpdateItem"} {
+	for _, op := range []string{"TransactWriteItems"} {
 		t.Run(op, func(t *testing.T) {
 			sent := false
 			r := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
@@ -91,11 +91,12 @@ func TestGenericMemberWritersFenceOwnerRow(t *testing.T) {
 					t.Fatalf("unexpected request %s", target)
 				}
 				sent = true
-				cond := body["ConditionExpression"].(string)
-				for alias, name := range body["ExpressionAttributeNames"].(map[string]any) {
+				update := body["TransactItems"].([]any)[0].(map[string]any)["Update"].(map[string]any)
+				cond := update["ConditionExpression"].(string)
+				for alias, name := range update["ExpressionAttributeNames"].(map[string]any) {
 					cond = strings.ReplaceAll(cond, alias, name.(string))
 				}
-				for alias, value := range body["ExpressionAttributeValues"].(map[string]any) {
+				for alias, value := range update["ExpressionAttributeValues"].(map[string]any) {
 					cond = strings.ReplaceAll(cond, alias, `"`+value.(map[string]any)["S"].(string)+`"`)
 				}
 				for _, want := range []string{"attribute_exists (PK)", `role <> "owner"`} {
@@ -103,7 +104,7 @@ func TestGenericMemberWritersFenceOwnerRow(t *testing.T) {
 						t.Errorf("condition %q missing %q", cond, want)
 					}
 				}
-				return 400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
+				return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
 			})
 			err := r.UpdateMemberRole(context.Background(), "a", "u", "AM")
 			if !sent || !errors.Is(err, ErrConditionFailed) {

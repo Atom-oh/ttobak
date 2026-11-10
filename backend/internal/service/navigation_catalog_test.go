@@ -280,6 +280,12 @@ func TestAccountCatalogRechecksMembershipAndContinuationIdentity(t *testing.T) {
 		value["accounts"].([]interface{})[0].(map[string]interface{})["accountId"] != "account-b" {
 		t.Fatal("stale GSI candidates granted account access")
 	}
+	// A merge tombstone is skipped like ListAccounts skips it.
+	r.accounts["account-b"].MergedInto = "account-c"
+	value = navigationPage(t, s, "accounts", nil)
+	if listed, _ := value["accounts"].([]interface{}); len(listed) != 0 {
+		t.Fatal("a merged account was listed in the navigation catalog")
+	}
 }
 
 func TestProjectCatalogRejectsConcurrentMetadataAndGrantChanges(t *testing.T) {

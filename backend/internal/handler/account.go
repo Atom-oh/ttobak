@@ -370,6 +370,8 @@ func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role ("+strings.Join(model.AssignableRoles, "/")+") or target is the owner")
 		case errors.Is(err, service.ErrConflict):
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "The member changed concurrently; reload and retry")
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
@@ -582,6 +584,8 @@ func (h *AccountHandler) PutDocument(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document originated from TTOBAK (loop guard)")
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "title and markdown required (<=300KB)")
+		case errors.Is(err, service.ErrAccountMerging):
+			writeAccountMerging(w)
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}

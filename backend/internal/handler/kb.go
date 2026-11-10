@@ -59,6 +59,10 @@ func (h *KBHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Not a member of this account")
 			return
 		}
+		if errors.Is(err, service.ErrAccountMerging) {
+			writeAccountMerging(w)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
 	}

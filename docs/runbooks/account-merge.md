@@ -60,9 +60,10 @@ payload) blocks the merge until fixed; v1 has no per-row skip. The scan is event
 start can be missed; `-verify` reports it.
 
 A calendar move bumps the row's `shareVersion`, so a sync that read the row before
-the move fails and re-reads it. At this revision calendar sync does not check merge
-state, so a later sync that still classifies an event to A can write A back; repeat
-`-verify` after syncs.
+the move fails and re-reads it, and a sync naming a merging or merged account is
+refused with 409 `ACCOUNT_MERGING`. A sync authorized before the start that reads
+the row after the move can still write A back (an accepted narrow window);
+`-verify` reports such rows.
 
 ## 1. Preview (dry run)
 

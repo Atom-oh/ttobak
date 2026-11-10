@@ -313,8 +313,11 @@ func TestNewMembershipStampAndRoleUpdateDoNotGrandfatherReaddedMembers(t *testin
 	member := &model.AccountMember{PK: "ACCOUNT#account", SK: "MEMBER#reader", AccountID: "account", UserID: "reader",
 		AddedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}
 	repo := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
-		if strings.HasSuffix(target, ".TransactWriteItems") {
-			put := body["TransactItems"].([]any)[0].(map[string]any)["Put"].(map[string]any)
+		first := map[string]any{}
+		if items, ok := body["TransactItems"].([]any); ok {
+			first = items[0].(map[string]any)
+		}
+		if put, ok := first["Put"].(map[string]any); ok {
 			item := put["Item"].(map[string]any)
 			if item["summaryPrivacyVersion"].(map[string]any)["N"] != "1" ||
 				item["addedAt"].(map[string]any)["S"] == member.AddedAt.Format(time.RFC3339Nano) ||
@@ -322,7 +325,11 @@ func TestNewMembershipStampAndRoleUpdateDoNotGrandfatherReaddedMembers(t *testin
 				t.Fatal("new/re-added membership retained old eligibility")
 			}
 		} else {
-			names := body["ExpressionAttributeNames"].(map[string]any)
+			update, _ := first["Update"].(map[string]any)
+			names, _ := update["ExpressionAttributeNames"].(map[string]any)
+			if update == nil {
+				t.Fatalf("role update must be a fenced transaction: %s", target)
+			}
 			for _, name := range names {
 				if name == "addedAt" || name == "summaryPrivacyVersion" {
 					t.Fatal("role update rewrote server-minted membership provenance")

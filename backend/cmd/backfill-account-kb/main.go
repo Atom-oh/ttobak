@@ -61,6 +61,8 @@ type backfillResult struct {
 	Existing int `json:"existing"`
 	Untagged int `json:"untagged"`
 	Skipped  int `json:"skipped"`
+	// Merging counts objects whose account is merging or merged; no ref is written.
+	Merging int `json:"merging"`
 	// AfterCutoff counts tagged objects modified at or after -before.
 	AfterCutoff int `json:"afterCutoff"`
 }
@@ -141,6 +143,10 @@ func backfill(ctx context.Context, objects backfillObjects, repo backfillReposit
 					result.Untagged++
 					continue
 				}
+				if errors.Is(err, repository.ErrAccountMerging) {
+					result.Merging++
+					continue
+				}
 				if errors.Is(err, repository.ErrConditionFailed) {
 					result.Existing++
 					continue
@@ -196,7 +202,7 @@ func main() {
 	if *dryRun {
 		mode = "DRY RUN"
 	}
-	fmt.Printf("[%s] scanned=%d tagged=%d written=%d existing=%d untagged=%d after_cutoff=%d skipped=%d\n", mode, result.Scanned, result.Tagged, result.Written, result.Existing, result.Untagged, result.AfterCutoff, result.Skipped)
+	fmt.Printf("[%s] scanned=%d tagged=%d written=%d existing=%d untagged=%d merging=%d after_cutoff=%d skipped=%d\n", mode, result.Scanned, result.Tagged, result.Written, result.Existing, result.Untagged, result.Merging, result.AfterCutoff, result.Skipped)
 	if err != nil {
 		// Errors may embed object keys; print only that the run stopped.
 		fmt.Fprintln(os.Stderr, "ERROR: backfill stopped before completion; a rerun skips existing and untagged refs")

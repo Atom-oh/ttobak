@@ -89,7 +89,7 @@ func (svc *CalendarService) Sync(ctx context.Context, userID, sourceID string, r
 			accountIDs[mutation.Event.AccountID] = true
 		}
 	}
-	if err := svc.authorizeCalendarAccounts(ctx, userID, accountIDs); err != nil {
+	if err := svc.authorizeCalendarAccounts(ctx, userID, accountIDs, true); err != nil {
 		return nil, err
 	}
 	acceptedAt := svc.now().UTC()
@@ -124,13 +124,16 @@ func (svc *CalendarService) Sync(ctx context.Context, userID, sourceID string, r
 		}
 		batch.Mutations = append(batch.Mutations, write)
 	}
-	if err := svc.authorizeCalendarAccounts(ctx, userID, accountIDs); err != nil {
+	if err := svc.authorizeCalendarAccounts(ctx, userID, accountIDs, true); err != nil {
 		return nil, err
 	}
 	return svc.store.ApplyCalendarBatch(ctx, userID, normalizedSource, batch)
 }
 
-func (svc *CalendarService) authorizeCalendarAccounts(ctx context.Context, userID string, accountIDs map[string]bool) error {
+// authorizeCalendarAccounts requires access to every account. rejectMerged is
+// set on sync writes only: a merging or merged account takes no new
+// classification, while reads keep listing events already classified to it.
+func (svc *CalendarService) authorizeCalendarAccounts(ctx context.Context, userID string, accountIDs map[string]bool, rejectMerged bool) error {
 	for accountID := range accountIDs {
 		if svc.accounts == nil {
 			return ErrForbidden
@@ -144,6 +147,11 @@ func (svc *CalendarService) authorizeCalendarAccounts(ctx context.Context, userI
 		}
 		if account == nil {
 			return ErrForbidden
+		}
+		// A merging or merged account takes no new classifications; the
+		// merge CLI moves existing calendar rows (ADR-072).
+		if rejectMerged && (account.MergingInto != "" || account.MergedInto != "") {
+			return ErrAccountMerging
 		}
 	}
 	return nil
@@ -328,7 +336,7 @@ func (svc *CalendarService) ListEvents(ctx context.Context, userID string, query
 		query.Limit = 50
 	}
 	if query.AccountID != "" {
-		if err := svc.authorizeCalendarAccounts(ctx, userID, map[string]bool{query.AccountID: true}); err != nil {
+		if err := svc.authorizeCalendarAccounts(ctx, userID, map[string]bool{query.AccountID: true}, false); err != nil {
 			return nil, err
 		}
 	}
@@ -358,7 +366,7 @@ func (svc *CalendarService) ListEvents(ctx context.Context, userID string, query
 		if _, checked := access[event.AccountID]; checked {
 			continue
 		}
-		err := svc.authorizeCalendarAccounts(ctx, userID, map[string]bool{event.AccountID: true})
+		err := svc.authorizeCalendarAccounts(ctx, userID, map[string]bool{event.AccountID: true}, false)
 		if err != nil && !errors.Is(err, ErrForbidden) {
 			return nil, err
 		}
