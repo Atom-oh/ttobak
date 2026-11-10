@@ -352,7 +352,10 @@ the session; a generic skill cannot invent another approval loop.
 
 Update only affected current references: API handlers to `docs/API-SPEC.md`, CDK to
 `docs/INFRA-SPEC.md`, UI to `docs/DESIGN-SPEC.md`, cross-component changes to
-`docs/architecture.md`, durable decisions to ADRs. Keep historical records labeled
+`docs/architecture.md`, durable decisions to ADRs. ADRs are at most 30 topic
+records (`docs/decisions/README.md`): put a new decision into the record that owns
+its topic and rewrite the affected rules in place, without dated amendments or a
+new numbered file per decision. Keep historical records labeled
 and link successors rather than restating abandoned plans as rules. Use paths and
 symbols instead of fragile line numbers or copied implementation blocks.
 

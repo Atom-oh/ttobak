@@ -71,10 +71,10 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 
 ## Decisions and history
 
-`decisions/ADR-*.md` preserve decision dates, rationale, consequences, and explicit
-successors. An accepted decision can have a historical implementation detail that
-has since changed. Follow its current-state/supersession notes and verify code.
-The latest ADR number alone does not override unrelated decisions.
+`decisions/ADR-*.md` are topic records of the rules in force today; see the
+[decision index](decisions/README.md) for the rules on changing them and for
+where retired numbers went. Records are rewritten in place rather than amended,
+so verify a statement against code before relying on it.
 
 `superpowers/plans/`, `superpowers/specs/`, `.kiro/specs/`, `research/`, benchmark
 reports, `AUDIO-REVIEW.md`, `CODE-REVIEW.md`, `review/TRI-MODEL-REVIEW.md`, and

@@ -135,7 +135,7 @@ export function useRecordingSession({
     getRuntimeConfig().then(async (cfg) => {
       if (cancelled) return;
       if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
-        // The dictionary GET is a vocabulary poll/flip opportunity (ADR-008).
+        // The dictionary GET is a vocabulary poll/flip opportunity (ADR-005).
         // No response names a vocabulary for live streams until acceptance
         // item 5, so live captions send none and the vocabulary retry is inert.
         import('@/lib/api').then(({ dictionaryApi }) => dictionaryApi.get()).catch(() => {});

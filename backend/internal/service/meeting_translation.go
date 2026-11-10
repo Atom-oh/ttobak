@@ -18,7 +18,7 @@ import (
 )
 
 // On-demand translation of one MeetingReadingService page of AI notes or the
-// selected transcript (ADR-005 2026-10-18 amendment). Nothing is persisted.
+// selected transcript (ADR-005). Nothing is persisted.
 const (
 	MeetingTranslationBucket          = "meeting-translate"
 	MeetingTranslationWindow          = 24 * time.Hour

@@ -29,7 +29,7 @@ const (
 	// vocabSlotGrace delays deleting a demoted (or emptied) vocabulary for
 	// streams and jobs that started with it; deletion waits this long after the
 	// flip. The demoted slot stays the next build target and may be rebuilt in
-	// place during the window (ADR-008 amendment).
+	// place during the window (ADR-005).
 	vocabSlotGrace   = 24 * time.Hour
 	vocabObjectDir   = "vocab/"
 	vocabNamePrefix  = "ttobak-vocab-"
@@ -45,7 +45,7 @@ const (
 
 // vocabBuildLanguages are the languages EnsureVocabularies builds. en-US is
 // deferred until a consumer exists: batch uses ko-KR only and no response
-// carries a name for live streams (ADR-008 amendment). Its table rules stay.
+// carries a name for live streams (ADR-005). Its table rules stay.
 var vocabBuildLanguages = []string{model.VocabLangKo}
 
 // VocabularyObjectAPI is the S3 surface the builder uses for table files.
@@ -332,7 +332,7 @@ func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, s
 	}
 	// An emptied language stops advertising at once, before any claimed build
 	// is advanced: the claim (submitted or not) is dropped, so a pending
-	// result is never flipped or served (ADR-008 amendment).
+	// result is never flipped or served (ADR-005).
 	if plan.empty {
 		return s.emptyVocabularyStep(ctx, userID, st, now)
 	}

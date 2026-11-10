@@ -30,7 +30,7 @@ to remove current fallback/reconnect behavior.
 
 ## Current evidence and limits
 
-[ADR-005](decisions/ADR-005-multi-language-auto-detection-for-stt.md) records the current
+[ADR-005](decisions/ADR-005-live-stt-translation-and-dictionary.md) records the current
 split. Both browser and native paths in [sttManager.ts](../frontend/src/lib/sttManager.ts)
 enable Korean/English detection through
 [transcribeStreamingClient.ts](../frontend/src/lib/transcribeStreamingClient.ts).

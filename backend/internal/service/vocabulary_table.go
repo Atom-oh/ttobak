@@ -14,7 +14,7 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-// Transcribe custom vocabulary table rules (ADR-008 amendment). The table file
+// Transcribe custom vocabulary table rules (ADR-005). The table file
 // has four columns; SoundsLike and IPA stay empty.
 const (
 	VocabTSVHeader = "Phrase\tSoundsLike\tIPA\tDisplayAs\n"

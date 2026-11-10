@@ -498,7 +498,7 @@ func TestSourceMissingObjectIsNotFound(t *testing.T) {
 	}
 }
 
-// personal mode (ADR-008 FU4 not yet implemented): a linked research report or
+// personal mode (ADR-005: Account-layer cleanup on unlink, not yet implemented): a linked research report or
 // account-tagged KB object writes only the owner's Personal layer, never an
 // Account, and the source is still re-read before merging.
 func TestProcessSourcePersonalModeNeverWritesAccounts(t *testing.T) {

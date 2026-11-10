@@ -1,7 +1,7 @@
 # Layered Dictionary (Common · Account · Personal) — Design
 
-> Status: historical design record (implemented; current behavior is ADR-008, amendment 2026-10-26). Was: draft for review. Date: 2026-10-26. Author: Junseok Oh, with Claude.
-> Extends ADR-008 (custom dictionary for STT accuracy). Builds on automatic
+> Status: historical design record (implemented; current behavior is ADR-005, amendment 2026-10-26). Was: draft for review. Date: 2026-10-26. Author: Junseok Oh, with Claude.
+> Extends ADR-005 (custom dictionary for STT accuracy). Builds on automatic
 > personal terms, enabled in production on 2026-10-26 (PR #478).
 
 ## 1. Why
@@ -34,9 +34,9 @@ Goals
   substitution is fixed even when recognition biasing was not enough.
 
 Non-goals
-- Replacing the personal dictionary (ADR-008 rejected an organisation-only
+- Replacing the personal dictionary (ADR-005 rejected an organisation-only
   dictionary as insufficiently personalised; layers add to it).
-- Live-stream vocabulary changes beyond what ADR-008 already covers.
+- Live-stream vocabulary changes beyond what ADR-005 already covers.
 
 Anti-goals
 - One Account's terms visible to a non-member (UI, API, MCP) or used to correct
@@ -47,11 +47,11 @@ Anti-goals
 ## 3. Current facts
 
 - Terms: `DICTTERM#{termKey}` under `USER#`; `ACCOUNT#` partition is reserved
-  in ADR-008 but unused. Auto terms: confidence ≥ 0.85, 300 auto terms per user,
+  in ADR-005 but unused. Auto terms: confidence ≥ 0.85, 300 auto terms per user,
   500 active manual terms per scope.
 - Vocabulary: one personal ko-KR Transcribe vocabulary per user (A/B slots,
   version-guarded state row); 1,500 rows / 48 KiB table limit enforced in
-  `vocabulary_table.go`; account-wide Transcribe quota 100 vocabularies (ADR-008
+  `vocabulary_table.go`; account-wide Transcribe quota 100 vocabularies (ADR-005
   rollout note). A batch job takes exactly one vocabulary name.
 - Whisper: `INITIAL_PROMPT`, now capped at 300 runes (PR #478).
 - Meetings carry `accountId`. Research carries `accountIds`. KB objects live
@@ -70,7 +70,7 @@ Anti-goals
 | Account | `ACCOUNT#{id}` | KB/research/meeting extraction for that Account; members (manual) | members of the Account |
 | Personal | `USER#{id}` | as today | the user |
 
-Same row shape and `termKey` as ADR-008 (`origin`, `state`, `version`,
+Same row shape and `termKey` as ADR-005 (`origin`, `state`, `version`,
 tombstones, `userEditedAt`). New field `sources` (bounded list of
 `{kind: meeting|kb|research|news, ref, at}`) replaces meeting-only
 observations, so every term shows where it came from. Caps per layer:
@@ -81,7 +81,7 @@ keeps `updatedBy`/`updatedAt`, deletes stay tombstones, and the last 20 changes
 per term are kept in an audit list so a bad edit can be traced and restored.
 
 Writes to `ACCOUNT#` require membership (ConditionCheck on the membership
-item), as ADR-008 anticipated. Automatic writes into an Account come only from
+item), as ADR-005 anticipated. Automatic writes into an Account come only from
 content already linked to that Account.
 
 ### 4.2 Sources and jobs

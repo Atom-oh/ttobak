@@ -301,7 +301,7 @@ existing assets-bucket read/write grant covers vocab/ table writes, deletes and
 the caller-credential file read by Create/UpdateVocabulary. The transcribe role
 keeps `GetVocabulary` on `*` for batch jobs. GatewayStack does not set
 `VOCAB_REBUILD_MIN_INTERVAL` yet, so the API uses its 10m default. Operator
-checks before rollout (vocabulary quota, default 100 per account) are in ADR-008.
+checks before rollout (vocabulary quota, default 100 per account) are in ADR-005.
 
 The Go API also depends on the transcribe Lambda so recovered-copy event guards
 are installed before the recovery producer changes.
@@ -629,7 +629,7 @@ receives these variables. With the default `off`, Enqueue returns `DISABLED`
 before any read, write or publish, so the rule stays idle. Set `personal` only in
 a deployment after one with `off` has delivered the rule and summarize code. Before
 merging, the worker migrates the owner's legacy dictionary blob through the
-summarize role's existing table grant. See ADR-008.
+summarize role's existing table grant. See ADR-005.
 
 KB documents and research reports are term sources too (layered dictionary).
 Rule `ttobak-terms-source-object` sends KB-bucket `Object Created` events for
@@ -648,7 +648,7 @@ nothing is published from the agent. The summarize role gains only
 from CDK context `ttobak:kbTermsMode` and `ttobak:researchTermsMode`; invalid
 values fail synth, and with `off` the mapper and worker log `outcome=DISABLED`
 and do nothing else. `personal` extracts as `on` does but merges only into the
-owner's Personal layer, never an Account, so it needs no ADR-008 FU4 cleanup; the
+owner's Personal layer, never an Account, so it needs no Account-layer cleanup on unlink (ADR-005); the
 source is still re-read before the merge. A source processed under `personal`
 keeps its run row, so switching to `on` later does not re-merge unchanged content
 into Accounts. The source flags are independent of `AUTO_TERMS_MODE` and
@@ -676,17 +676,17 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 (`TRANSCRIPT_CORRECTION_MODE`).
 
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
-ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
+ADR-005). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
 crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
-searched, non-synthetic source (ADR-008 amendment, 2026-11-09). Invalid values
+searched, non-synthetic source (ADR-005, 2026-11-09). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global
 source can still qualify a term; `ttobak:newsTermsMode=off` stops news terms
 immediately. `ttobak:kbTermsMode` and
 `ttobak:researchTermsMode` may use `personal`; `on` (Account writes) waits for
-ADR-008 FU4 (Account-layer cleanup on unlink). `infra/cdk.json` sets
+ADR-005 (Account-layer cleanup on unlink). `infra/cdk.json` sets
 `ttobak:kbTermsMode` and `ttobak:researchTermsMode` to `personal`.
 
 ### Dictionary layer metrics

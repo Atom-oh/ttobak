@@ -1,6 +1,6 @@
 # Layered Dictionary Implementation Plan
 
-> Status: historical implementation record. The current behavior is ADR-008 (amendment 2026-10-26).
+> Status: historical implementation record. The current behavior is ADR-005 (amendment 2026-10-26).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,13 +10,13 @@
 
 **Tech Stack:** Go (backend Lambdas), Python (research agent, crawler), AWS CDK TypeScript (infra), Next.js (frontend), DynamoDB single table `ttobak-main`, EventBridge, Amazon Transcribe, Bedrock.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-layered-dictionary-design.md` (decisions L1–L4 in §6). ADR-008 is the parent decision record.
+**Spec:** `docs/superpowers/specs/2026-10-26-layered-dictionary-design.md` (decisions L1–L4 in §6). ADR-005 is the parent decision record.
 
 **Base:** start from `main` after PR #478 is merged (it adds `joinWhisperPrompt`, `TermsAnalysisService.SetVocabularyRefresher`, the summarize vocabulary builder). Rebase this branch onto it before Task 1.
 
 ## Global Constraints
 
-- Partitions: Common `DICT#COMMON`; Account `ACCOUNT#{accountId}`; Personal `USER#{userId}`. Term SK stays `DICTTERM#{termKey}`; `termKey` rules unchanged (ADR-008).
+- Partitions: Common `DICT#COMMON`; Account `ACCOUNT#{accountId}`; Personal `USER#{userId}`. Term SK stays `DICTTERM#{termKey}`; `termKey` rules unchanged (ADR-005).
 - Caps: 300 auto terms per scope (`MaxAutoTermsPerScope`), 500 manual per scope (`MaxManualTermsPerScope`), 10 observations per term; Common audit keeps the last 20 changes per term.
 - Vocabulary: one personal ko-KR vocabulary per user; table ≤ `VocabMaxRows` (1500) and `VocabMaxBytes` (48 KiB), cut at whole terms in layer order: Personal manual → Account → Personal auto → Common.
 - Whisper prompt ≤ `whisperPromptMaxRunes` (300), order: Personal manual → meeting's Account → Common → Personal auto.
@@ -236,15 +236,15 @@
 ### Task 12: Observability and docs
 
 **Files:**
-- Modify: `infra/lib/pipeline-failures.ts`, `docs/decisions/ADR-008-custom-dictionary-for-stt-accuracy.md` (new amendment), `docs/INFRA-SPEC.md`, `docs/API-SPEC.md`
+- Modify: `infra/lib/pipeline-failures.ts`, `docs/decisions/ADR-005-live-stt-translation-and-dictionary.md` (new amendment), `docs/INFRA-SPEC.md`, `docs/API-SPEC.md`
 - Test: `infra/test/pipeline-failures.test.ts`
 
 **Interfaces:**
-- Produces: metric filters on summarize logs for `terms run: .* layer=(personal|account|common)` and `terms source: .* outcome=`; alarm `TermsSourcesSilent` when a source's trigger ran but produced 0 runs for 7 days; ADR-008 amendment "2026-10-26: layered dictionary" summarising L1–L4 and caps.
+- Produces: metric filters on summarize logs for `terms run: .* layer=(personal|account|common)` and `terms source: .* outcome=`; alarm `TermsSourcesSilent` when a source's trigger ran but produced 0 runs for 7 days; ADR-005 amendment "2026-10-26: layered dictionary" summarising L1–L4 and caps.
 
 - [ ] **Step 1: Write failing infra test** for the alarm and metric filters.
 - [ ] **Step 2–4:** `npx jest test/pipeline-failures.test.ts` FAIL → implement → PASS; `python3 scripts/docs/check_docs.py` clean.
-- [ ] **Step 5: Commit** `feat(obs): dictionary layer metrics; docs: ADR-008 amendment`.
+- [ ] **Step 5: Commit** `feat(obs): dictionary layer metrics; docs: ADR-005 amendment`.
 
 ## Rollout (after all tasks, each a separate deploy with user approval)
 

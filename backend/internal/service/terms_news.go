@@ -27,7 +27,7 @@ import (
 // NEWS_TERMS_SOURCES=all every searched, non-synthetic source is eligible:
 // the owner's choice (2026-11-09) so public news terms reach every user's
 // recognition vocabulary; the two-source threshold still applies (it counts
-// sources, not people: an accepted risk recorded in ADR-008). The only
+// sources, not people: an accepted risk recorded in ADR-005). The only
 // evidence on a term is the public document hash, the
 // writer is model.DictNewsActor, creations and evictions are audited (R14),
 // and user-edited Common terms are left alone by the merge rules. Logs carry

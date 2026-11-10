@@ -2,7 +2,7 @@
 
 /**
  * READY vocabulary names by Transcribe language code. No API supplies these
- * yet (ADR-008 item 5), so callers pass none and every helper below is inert.
+ * yet (ADR-005), so callers pass none and every helper below is inert.
  */
 export type LiveVocabularyNames = Partial<Record<'ko-KR' | 'en-US', string>>;
 
