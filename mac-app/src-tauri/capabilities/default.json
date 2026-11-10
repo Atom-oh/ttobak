@@ -27,6 +27,9 @@
     "allow-meeting-detection-get",
     "allow-meeting-detection-set-enabled",
     "allow-meeting-detection-respond",
-    "allow-meeting-prompt-choose"
+    "allow-meeting-prompt-choose",
+    "allow-caption-settings-get",
+    "allow-caption-settings-set",
+    "allow-caption-translate"
   ]
 }

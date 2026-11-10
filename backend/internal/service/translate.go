@@ -222,6 +222,7 @@ type interpreterInput struct {
 const interpreterMarkupRule = " current_segment may contain several lines: translate each line separately, " +
 	"keep exactly the same number of lines in the same order, and copy every token of the form ⟦L1⟧ unchanged."
 
+// Mirrored in mac-app/src-tauri/src/interpreter.rs; keep aligned.
 func interpreterSystemPrompt(sourceLang, targetLang string) string {
 	source := "the source language"
 	if name, ok := translateLanguageNames[sourceLang]; ok {

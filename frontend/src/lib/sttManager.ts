@@ -12,7 +12,7 @@ import { TranscribeFallbackClient, type TranscribeCallbacks } from './transcribe
 import { TranscribeStreamingSession } from './transcribeStreamingClient';
 import { translateApi } from './api';
 import { hasMobileMicConflictRisk } from './device';
-import { LiveTranslation } from './liveTranslation';
+import { LiveTranslation, liveLanguageOptions, type ExtraLiveLanguage } from './liveTranslation';
 import type { LiveVocabularyNames } from './liveVocabulary';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
@@ -31,6 +31,10 @@ export interface SttManagerConfig {
   /** Also translate partial captions (billed per revision); off by default. */
   interimTranslation?: boolean;
   transcribeStreamingConfig?: TranscribeStreamingConfig;
+  /** Optional third recognition language; absent keeps 'ko-KR,en-US'. */
+  extraLanguage?: ExtraLiveLanguage;
+  /** Per-segment hook fired for every transcript result (interim and final). */
+  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
   onProviderChange?: (provider: LiveSttProvider) => void;
   /**
    * Fired the moment a stall is FIRST detected, before the automatic
@@ -388,6 +392,7 @@ export class SttManager {
       const segmentId = `${streamId}:${resultId ?? segmentIndex}`;
       this.config.callbacks.onTranscript(text, isFinal);
       this.translation.update(segmentId, text, isFinal, languageCode);
+      this.config.onSegment?.(segmentId, text, isFinal, languageCode);
       if (isFinal) segmentIndex++;
     };
   }
@@ -420,7 +425,7 @@ export class SttManager {
       identityPoolId: tsConfig.identityPoolId,
       userPoolId: tsConfig.userPoolId,
       multiLanguage: true,
-      languageOptions: 'ko-KR,en-US',
+      languageOptions: liveLanguageOptions(this.config.extraLanguage),
       preferredLanguage: 'ko-KR',
       vocabularies: this.vocabularyDisabled ? undefined : tsConfig.vocabularies,
       onVocabularyFallback: () => this.handleVocabularyFallback(session),
@@ -554,7 +559,7 @@ export class SttManager {
       identityPoolId: tsConfig.identityPoolId,
       userPoolId: tsConfig.userPoolId,
       multiLanguage: true,
-      languageOptions: 'ko-KR,en-US',
+      languageOptions: liveLanguageOptions(this.config.extraLanguage),
       preferredLanguage: 'ko-KR',
       vocabularies: this.vocabularyDisabled ? undefined : tsConfig.vocabularies,
       onVocabularyFallback: () => this.handleVocabularyFallback(session),
