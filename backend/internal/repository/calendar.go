@@ -672,6 +672,12 @@ func decodeCalendarCursor(encoded string, scope calendarCursor, lower, upper str
 	if cursor != expected || cursor.LastPK != partition || cursor.LastSK < lower || cursor.LastSK >= upper {
 		return nil, ErrInvalidCalendarCursor
 	}
+	// Share pages group rows by sort-key prefix, so a share cursor must be an exact share row key.
+	if scope.Kind == "shares" {
+		if _, wellFormed := calendarShareGroupPrefix(cursor.LastSK); !wellFormed {
+			return nil, ErrInvalidCalendarCursor
+		}
+	}
 	return map[string]types.AttributeValue{
 		"PK": &types.AttributeValueMemberS{Value: partition},
 		"SK": &types.AttributeValueMemberS{Value: cursor.LastSK},

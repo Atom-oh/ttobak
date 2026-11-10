@@ -64,7 +64,8 @@ type CalendarShareRow struct {
 	VetoEventIDs []string `dynamodbav:"vetoEventIds,stringset,omitempty"`
 }
 
-// CalendarSharePage groups rows by meetingKey; a page never splits a group.
+// CalendarSharePage groups rows by (startsAt, meetingKey), the sort-key prefix; a page never
+// splits a group.
 // GroupCursors[i] resumes the same query right after Groups[i], so a caller can trim a
 // page at a group boundary.
 type CalendarSharePage struct {
@@ -108,6 +109,29 @@ func validCalendarShareKey(key ShareKey, userID string) bool {
 	}
 	meetingKey := strings.TrimSuffix(strings.TrimPrefix(rest[stamp:], "#"), "#"+userID)
 	return calendarStorageID.MatchString(meetingKey) && key.SK == model.CalendarShareSortKey(startsAt, meetingKey, userID)
+}
+
+// calendarShareGroupPrefix parses a share sort key with the writer's grammar,
+// CALSHARE#{startsAt}#{meetingKey}#{userId}, and returns its group prefix
+// CALSHARE#{startsAt}#{meetingKey}#. A key that does not round-trip through
+// model.CalendarShareSortKey is rejected. Because neither ID may contain "#", every
+// well-formed key of another group sorts entirely before or after a group's rows.
+func calendarShareGroupPrefix(sortKey string) (string, bool) {
+	const layout = "2006-01-02T15:04:05.000000000Z"
+	rest, found := strings.CutPrefix(sortKey, model.PrefixCalendarShare)
+	if !found || len(rest) <= len(layout) || rest[len(layout)] != '#' {
+		return "", false
+	}
+	startsAt, err := time.Parse(layout, rest[:len(layout)])
+	if err != nil {
+		return "", false
+	}
+	parts := strings.Split(rest[len(layout)+1:], "#")
+	if len(parts) != 2 || !calendarStorageID.MatchString(parts[0]) || !calendarStorageID.MatchString(parts[1]) ||
+		sortKey != model.CalendarShareSortKey(startsAt, parts[0], parts[1]) {
+		return "", false
+	}
+	return sortKey[:len(sortKey)-len(parts[1])], true
 }
 
 // validCalendarShareInput checks a caller-supplied share row against the event it belongs to.
@@ -655,11 +679,13 @@ func validCalendarShareRow(row CalendarShareRow, accountID string, now int64) bo
 	return false
 }
 
-// ListCalendarShareRows reads share rows overlapping the window, grouped by meetingKey.
-// Groups are contiguous in the sort key; a page always ends after a complete group, so a
-// veto row is never separated from the shared rows it hides, and a page resumed from a cursor
-// skips the rest of the cursor's group. A single group larger than the limit is returned
-// whole; a group that does not end within five queries is an error.
+// ListCalendarShareRows reads share rows overlapping the window, grouped by (startsAt,
+// meetingKey). Groups are contiguous in the sort key; a page always ends after a complete
+// group, so a veto row is never separated from the shared rows it hides, and a page resumed
+// from a cursor skips the rest of the cursor's group. Cursor and row sort keys are parsed
+// with the writer's grammar; a malformed cursor is invalid and a malformed row is ignored, so
+// neither can open a new group inside an existing one. A single group larger than the limit
+// is returned whole; a group that does not end within five queries is an error.
 func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accountID string, query model.CalendarQuery) (*CalendarSharePage, error) {
 	limit, err := calendarQueryLimit(accountID, query.Limit)
 	if err != nil || !validCalendarWindow(query.From, query.To) || query.AccountID != "" && query.AccountID != accountID {
@@ -673,12 +699,16 @@ func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accou
 	if err != nil {
 		return nil, err
 	}
-	// A page never begins with a partial group: rows after the cursor that share its
-	// meetingKey prefix were added after the previous page returned that group, or the
-	// cursor points into a group, so they are skipped rather than returned without their veto.
+	// A page never begins with a partial group: rows after the cursor in its parsed group
+	// were added after the previous page returned that group, or the cursor points into a
+	// group, so they are skipped rather than returned without their veto.
 	var skipPrefix string
 	if cursorSK, ok := startKey["SK"].(*types.AttributeValueMemberS); ok {
-		skipPrefix = cursorSK.Value[:strings.LastIndex(cursorSK.Value, "#")+1]
+		prefix, wellFormed := calendarShareGroupPrefix(cursorSK.Value)
+		if !wellFormed {
+			return nil, ErrInvalidCalendarCursor
+		}
+		skipPrefix = prefix
 	}
 	keyCondition := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
 		And(expression.Key("SK").Between(expression.Value(lower), expression.Value(upper)))
@@ -737,7 +767,10 @@ func (repo *CalendarRepository) ListCalendarShareRows(ctx context.Context, accou
 			if !ok || sortKey.Value < lower || sortKey.Value > upper {
 				continue
 			}
-			prefix := sortKey.Value[:strings.LastIndex(sortKey.Value, "#")+1]
+			prefix, wellFormed := calendarShareGroupPrefix(sortKey.Value)
+			if !wellFormed {
+				continue
+			}
 			if skipPrefix != "" {
 				if prefix == skipPrefix {
 					continue
