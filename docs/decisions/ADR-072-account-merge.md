@@ -66,6 +66,6 @@ start route, worker and fence; none is active until each is deployed and accepte
 
 ## Evidence
 
-- [Preview service](../../backend/internal/service/account_merge_preview.go) and
-  [handler](../../backend/internal/handler/account_merge.go), with their tests.
+- Preview service (`backend/internal/service/account_merge_preview.go`) and
+  handler (`backend/internal/handler/account_merge.go`), with their tests.
 - Route contract: [API-SPEC](../API-SPEC.md) Accounts section.
