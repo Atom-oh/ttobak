@@ -136,10 +136,13 @@ func TestAutoMappingRemovesStaleAutomatic(test *testing.T) {
 		model.AccountMapping{SFDCAccountID: "S2", AccountID: "a2"},
 		model.AccountMapping{SFDCAccountID: "S9", AccountID: "a9"},
 	)
-	// S1 is now ambiguous, S2 has no readable match, S9 is no longer assigned.
+	// S1 is now ambiguous, S2 has no readable match, S9 is unassigned by this
+	// sync (mappings are read by key, so the removal names S9).
 	accounts := &performanceCandidatesFake{candidates: []NamedCandidate{{ID: "a1", Name: "Acme"}, {ID: "a3", Name: "acme"}}}
 	svc := performanceTestService(store, accounts)
-	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, performanceAssignmentSync(true)); err != nil {
+	sync := performanceAssignmentSync(true)
+	sync.Mutations = append(sync.Mutations, model.PerformanceMutation{Op: "remove", ExternalID: "S9"})
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, sync); err != nil {
 		test.Fatal(err)
 	}
 	if len(store.deleted) != 3 || store.deleted[0] != "S1" || store.deleted[1] != "S2" || store.deleted[2] != "S9" || len(store.put) != 0 {

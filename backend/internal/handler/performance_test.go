@@ -41,6 +41,18 @@ func newPerformanceMemoryStore() *performanceMemoryStore {
 	}
 }
 
+func (store *performanceMemoryStore) ReplayPerformanceBatch(_ context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error) {
+	saved, found := store.batches[userID+"|"+source+"|"+batchID]
+	if !found {
+		return nil, nil
+	}
+	if saved.digest != digest {
+		return nil, repository.ErrConditionFailed
+	}
+	receipt := saved.receipt
+	return &receipt, nil
+}
+
 func (store *performanceMemoryStore) ApplyPerformanceBatch(_ context.Context, userID, source string, req model.PerformanceSyncRequest, digest string) (*model.PerformanceSyncReceipt, error) {
 	key := userID + "|" + source + "|" + req.BatchID
 	if saved, found := store.batches[key]; found {
@@ -95,10 +107,12 @@ func (store *performanceMemoryStore) ListPerformanceAssignments(_ context.Contex
 	return out, nil
 }
 
-func (store *performanceMemoryStore) ListAccountMappings(_ context.Context, userID string) ([]model.AccountMapping, error) {
-	var out []model.AccountMapping
-	for _, mapping := range store.mappings[userID] {
-		out = append(out, mapping)
+func (store *performanceMemoryStore) GetAccountMappings(_ context.Context, userID string, ids []string) (map[string]model.AccountMapping, error) {
+	out := map[string]model.AccountMapping{}
+	for _, id := range ids {
+		if mapping, ok := store.mappings[userID][id]; ok {
+			out[id] = mapping
+		}
 	}
 	return out, nil
 }
@@ -281,7 +295,7 @@ func TestPerformanceRoutesAreOwnerScoped(test *testing.T) {
 		test.Fatalf("owner mappings: %s", owner.Body.String())
 	}
 	reads := map[string]string{
-		"/api/performance/mappings":           `{"items":[]}`,
+		"/api/performance/mappings":           `{"items":[],"truncated":false}`,
 		"/api/performance/goals?year=" + year: `{"year":` + year + `,"text":"","updatedAt":""}`,
 		"/api/performance/missed?period=week": `{"items":[]}`,
 		"/api/performance/missed?period=year": `{"items":[]}`,

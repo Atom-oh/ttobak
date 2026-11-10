@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,21 +15,40 @@ import (
 const performanceServiceBatch = "90ec2d25-a32e-43a5-96a9-e203859b7d19"
 
 type performanceStoreFake struct {
-	applied     int
-	digests     []string
-	requests    []model.PerformanceSyncRequest
-	sources     []string
-	assignments map[string][]model.SFDCAssignment
-	mappings    map[string][]model.AccountMapping
-	statuses    map[string][]model.PerformanceSourceStatus
-	goals       map[string]*model.PerformanceGoals
-	put         []model.AccountMapping
-	putManual   []bool
-	applyErr    error
-	putErr      error
-	deleted     []string
-	deleteErr   error
-	replay      bool
+	applied      int
+	digests      []string
+	requests     []model.PerformanceSyncRequest
+	sources      []string
+	assignments  map[string][]model.SFDCAssignment
+	mappings     map[string][]model.AccountMapping
+	statuses     map[string][]model.PerformanceSourceStatus
+	goals        map[string]*model.PerformanceGoals
+	put          []model.AccountMapping
+	putManual    []bool
+	applyErr     error
+	receipts     map[string]storedPerformanceReceipt
+	keepReceipts bool
+	putErr       error
+	deleted      []string
+	deleteErr    error
+	replay       bool
+}
+
+type storedPerformanceReceipt struct {
+	digest  string
+	receipt model.PerformanceSyncReceipt
+}
+
+func (fake *performanceStoreFake) ReplayPerformanceBatch(_ context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error) {
+	saved, ok := fake.receipts[userID+"/"+source+"/"+batchID]
+	if !ok {
+		return nil, nil
+	}
+	if saved.digest != digest {
+		return nil, repository.ErrConditionFailed
+	}
+	receipt := saved.receipt
+	return &receipt, nil
 }
 
 func (fake *performanceStoreFake) ApplyPerformanceBatch(_ context.Context, userID, source string, req model.PerformanceSyncRequest, digest string) (*model.PerformanceSyncReceipt, error) {
@@ -39,7 +59,14 @@ func (fake *performanceStoreFake) ApplyPerformanceBatch(_ context.Context, userI
 	if fake.applyErr != nil {
 		return nil, fake.applyErr
 	}
-	return &model.PerformanceSyncReceipt{Revision: req.ExpectedRevision + 1, Completed: req.Complete, Upserted: len(req.Mutations), Replayed: fake.replay}, nil
+	receipt := model.PerformanceSyncReceipt{Revision: req.ExpectedRevision + 1, Completed: req.Complete, Upserted: len(req.Mutations), Replayed: fake.replay}
+	if fake.keepReceipts {
+		if fake.receipts == nil {
+			fake.receipts = make(map[string]storedPerformanceReceipt)
+		}
+		fake.receipts[userID+"/"+source+"/"+req.BatchID] = storedPerformanceReceipt{digest: digest, receipt: receipt}
+	}
+	return &receipt, nil
 }
 
 func (fake *performanceStoreFake) ListPerformanceSources(_ context.Context, userID string) ([]model.PerformanceSourceStatus, error) {
@@ -50,8 +77,18 @@ func (fake *performanceStoreFake) ListPerformanceAssignments(_ context.Context, 
 	return fake.assignments[userID], nil
 }
 
-func (fake *performanceStoreFake) ListAccountMappings(_ context.Context, userID string) ([]model.AccountMapping, error) {
-	return fake.mappings[userID], nil
+func (fake *performanceStoreFake) GetAccountMappings(_ context.Context, userID string, ids []string) (map[string]model.AccountMapping, error) {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[string]model.AccountMapping{}
+	for _, mapping := range fake.mappings[userID] {
+		if want[mapping.SFDCAccountID] {
+			out[mapping.SFDCAccountID] = mapping
+		}
+	}
+	return out, nil
 }
 
 func (fake *performanceStoreFake) PutAccountMapping(_ context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error {
@@ -133,6 +170,32 @@ func TestPerformanceSyncReplayConflictPropagates(test *testing.T) {
 	svc := performanceTestService(store, nil)
 	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCTasks, performanceTaskSync("2026-03-04")); !errors.Is(err, repository.ErrConditionFailed) {
 		test.Fatalf("conflict must keep the sentinel: %v", err)
+	}
+}
+
+func TestSyncReplayAcrossYearBoundary(test *testing.T) {
+	store := &performanceStoreFake{keepReceipts: true}
+	svc := performanceTestService(store, nil)
+	svc.now = func() time.Time { return time.Date(2026, 12, 30, 9, 0, 0, 0, time.UTC) }
+	request := performanceTaskSync("2025-06-01")
+	first, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCTasks, request)
+	if err != nil {
+		test.Fatalf("apply in window: %v", err)
+	}
+	svc.now = func() time.Time { return time.Date(2027, 1, 2, 9, 0, 0, 0, time.UTC) }
+	replay, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCTasks, request)
+	if err != nil || *replay != *first || store.applied != 1 {
+		test.Fatalf("identical replay must return the stored receipt: %v %+v applied=%d", err, replay, store.applied)
+	}
+	fresh := performanceTaskSync("2025-06-01")
+	fresh.BatchID = "11111111-2222-4333-8444-555555555555"
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCTasks, fresh); !errors.Is(err, ErrInvalidInput) || store.applied != 1 {
+		test.Fatalf("new batch outside window must be invalid: %v", err)
+	}
+	changed := performanceTaskSync("2025-06-01")
+	changed.Mutations[0].Task.Subject = "Changed"
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCTasks, changed); !errors.Is(err, repository.ErrConditionFailed) {
+		test.Fatalf("digest mismatch must conflict: %v", err)
 	}
 }
 
@@ -286,5 +349,71 @@ func TestPerformanceMissedPlaceholder(test *testing.T) {
 	}
 	if _, err := svc.ListMissed(test.Context(), "owner", "month"); !errors.Is(err, ErrInvalidInput) {
 		test.Fatalf("bad period: %v", err)
+	}
+}
+
+func performanceAssignmentRows(n int) []model.SFDCAssignment {
+	rows := make([]model.SFDCAssignment, n)
+	for i := range rows {
+		rows[i] = model.SFDCAssignment{SFDCAccountID: fmt.Sprintf("A%04d", i), Name: "n"}
+	}
+	return rows
+}
+
+func TestSyncRejectsAssignmentsOverCap(test *testing.T) {
+	up := func(id string) model.PerformanceMutation {
+		return model.PerformanceMutation{Op: "upsert", Assignment: &model.SFDCAssignment{SFDCAccountID: id, Name: "n"}}
+	}
+	rm := func(id string) model.PerformanceMutation {
+		return model.PerformanceMutation{Op: "remove", ExternalID: id}
+	}
+	const max = MaxPerformanceAssignments
+	for _, tc := range []struct {
+		name   string
+		stored int
+		muts   []model.PerformanceMutation
+		ok     bool
+	}{
+		{"new at cap", max, []model.PerformanceMutation{up("NEW")}, false},
+		{"new below cap", max - 1, []model.PerformanceMutation{up("NEW")}, true},
+		{"update at cap", max, []model.PerformanceMutation{up("A0001")}, true},
+		{"remove offsets new", max, []model.PerformanceMutation{rm("A0001"), up("NEW")}, true},
+		{"unknown remove offsets nothing", max, []model.PerformanceMutation{rm("GONE"), up("NEW")}, false},
+		{"remove while over cap", max + 5, []model.PerformanceMutation{rm("A0001")}, true},
+	} {
+		store := &performanceStoreFake{assignments: map[string][]model.SFDCAssignment{"owner": performanceAssignmentRows(tc.stored)}}
+		request := model.PerformanceSyncRequest{BatchID: performanceServiceBatch, Complete: true, Mutations: tc.muts}
+		_, err := performanceTestService(store, nil).Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, request)
+		if tc.ok != (err == nil) || !tc.ok && (!errors.Is(err, ErrInvalidInput) || store.applied != 0) {
+			test.Fatalf("%s: err=%v applied=%d", tc.name, err, store.applied)
+		}
+	}
+}
+
+func TestListMappingsBoundedAndTruncated(test *testing.T) {
+	for _, n := range []int{MaxPerformanceAssignments, MaxPerformanceAssignments + 50} {
+		rows := performanceAssignmentRows(n)
+		rows[0], rows[n-1] = rows[n-1], rows[0]
+		store := &performanceStoreFake{assignments: map[string][]model.SFDCAssignment{"owner": rows}}
+		list, err := performanceTestService(store, nil).ListMappings(test.Context(), "owner")
+		if err != nil || len(list.Items) != MaxPerformanceAssignments || list.Truncated != (n > MaxPerformanceAssignments) || list.Items[0].SFDCAccountID != "A0000" {
+			test.Fatalf("n=%d: items=%d truncated=%v err=%v", n, len(list.Items), list.Truncated, err)
+		}
+	}
+}
+
+func TestListMappingsFindsMappingBeyondOrphans(test *testing.T) {
+	mappings := make([]model.AccountMapping, 0, 602)
+	for i := 0; i < 600; i++ {
+		mappings = append(mappings, model.AccountMapping{SFDCAccountID: fmt.Sprintf("A%04d", i), AccountID: "orphan", Manual: true})
+	}
+	mappings = append(mappings, model.AccountMapping{SFDCAccountID: "B0000", AccountID: "acct-1"}, model.AccountMapping{SFDCAccountID: "B0001", AccountID: "acct-2"})
+	store := &performanceStoreFake{
+		assignments: map[string][]model.SFDCAssignment{"owner": {{SFDCAccountID: "B0001"}, {SFDCAccountID: "B0000"}}},
+		mappings:    map[string][]model.AccountMapping{"owner": mappings},
+	}
+	list, err := performanceTestService(store, nil).ListMappings(test.Context(), "owner")
+	if err != nil || len(list.Items) != 2 || !list.Items[0].Mapped || !list.Items[1].Mapped || list.Items[1].AccountID != "acct-2" {
+		test.Fatalf("assigned accounts must be mapped: %+v %v", list, err)
 	}
 }

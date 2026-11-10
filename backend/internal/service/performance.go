@@ -20,12 +20,15 @@ import (
 // caller's own USER# partition and takes no other user identifier.
 
 const (
-	performanceMaxMutations  = 20
-	performanceMaxNameBytes  = 200
-	performanceMaxSubject    = 300
-	performanceMaxLabelBytes = 64
-	performanceDateLayout    = "2006-01-02"
-	performanceMaxRevision   = 1<<62 - 1
+	// MaxPerformanceAssignments caps assignments per owner and mapping list
+	// items; repository.PerformanceListRowLimit must be one larger.
+	MaxPerformanceAssignments = 500
+	performanceMaxMutations   = 20
+	performanceMaxNameBytes   = 200
+	performanceMaxSubject     = 300
+	performanceMaxLabelBytes  = 64
+	performanceDateLayout     = "2006-01-02"
+	performanceMaxRevision    = 1<<62 - 1
 )
 
 var (
@@ -38,9 +41,14 @@ var (
 
 type PerformanceStore interface {
 	ApplyPerformanceBatch(ctx context.Context, userID, source string, req model.PerformanceSyncRequest, digest string) (*model.PerformanceSyncReceipt, error)
+	// ReplayPerformanceBatch returns the stored receipt for an identical,
+	// already-applied batch, nil when none exists, or ErrConditionFailed when
+	// the batch ID was reused with a different digest.
+	ReplayPerformanceBatch(ctx context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error)
 	ListPerformanceSources(ctx context.Context, userID string) ([]model.PerformanceSourceStatus, error)
 	ListPerformanceAssignments(ctx context.Context, userID string) ([]model.SFDCAssignment, error)
-	ListAccountMappings(ctx context.Context, userID string) ([]model.AccountMapping, error)
+	// GetAccountMappings returns the mappings for exactly the given SFDC IDs.
+	GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error)
 	PutAccountMapping(ctx context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error
 	DeleteAccountMappingIfAutomatic(ctx context.Context, userID, sfdcAccountID string) error
 	GetPerformanceGoals(ctx context.Context, userID string, year int) (*model.PerformanceGoals, error)
@@ -86,17 +94,65 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 		return nil, ErrInvalidInput
 	}
 	sum := sha256.Sum256(encoded)
-	receipt, err := svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, hex.EncodeToString(sum[:]))
+	digest := hex.EncodeToString(sum[:])
+	// Replay first: the activity window depends on the clock, and an identical
+	// retry of an applied batch must return its receipt after a year boundary.
+	replayed, err := svc.store.ReplayPerformanceBatch(ctx, userID, source, normalized.BatchID, digest)
+	if err != nil {
+		return nil, err
+	}
+	if replayed != nil {
+		return replayed, nil
+	}
+	if err := svc.checkPerformanceActivityWindow(normalized); err != nil {
+		return nil, err
+	}
+	if source == model.PerformanceSourceSFDCAssignments {
+		if err := svc.checkAssignmentCap(ctx, userID, normalized); err != nil {
+			return nil, err
+		}
+	}
+	receipt, err := svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, digest)
 	if err != nil {
 		return nil, err
 	}
 	if source == model.PerformanceSourceSFDCAssignments && normalized.Complete && !receipt.Replayed {
 		// The sync is committed; an auto-mapping failure must not undo it.
-		if err := svc.autoMapAssignments(ctx, userID); err != nil {
+		if err := svc.autoMapAssignments(ctx, userID, removedAssignmentIDs(normalized)); err != nil {
 			log.Printf("performance auto mapping failed: %v", err)
 		}
 	}
 	return receipt, nil
+}
+
+// checkAssignmentCap rejects a batch that takes the stored count (current plus
+// new IDs minus removes) over MaxPerformanceAssignments. Updates and removes
+// always pass. Read-then-write is not atomic; concurrent batches overshoot by
+// at most performanceMaxMutations each, and reads are bounded independently.
+func (svc *PerformanceService) checkAssignmentCap(ctx context.Context, userID string, req model.PerformanceSyncRequest) error {
+	current, err := svc.store.ListPerformanceAssignments(ctx, userID)
+	if err != nil {
+		return err
+	}
+	stored := make(map[string]bool, len(current))
+	for _, assignment := range current {
+		stored[assignment.SFDCAccountID] = true
+	}
+	count := len(stored)
+	for _, mutation := range req.Mutations {
+		switch {
+		case mutation.Op == "remove" && stored[mutation.ExternalID]:
+			delete(stored, mutation.ExternalID)
+			count--
+		case mutation.Op == "upsert" && mutation.Assignment != nil && !stored[mutation.Assignment.SFDCAccountID]:
+			stored[mutation.Assignment.SFDCAccountID] = true
+			count++
+		}
+	}
+	if count > MaxPerformanceAssignments && count > len(current) {
+		return ErrInvalidInput
+	}
+	return nil
 }
 
 func (svc *PerformanceService) normalizePerformanceRequest(source string, request model.PerformanceSyncRequest) (model.PerformanceSyncRequest, error) {
@@ -112,7 +168,6 @@ func (svc *PerformanceService) normalizePerformanceRequest(source string, reques
 		BatchID: batchID, ExpectedRevision: request.ExpectedRevision, Complete: request.Complete,
 		Mutations: make([]model.PerformanceMutation, 0, len(request.Mutations)),
 	}
-	earliest, latest := svc.performanceActivityWindow()
 	for _, mutation := range request.Mutations {
 		switch mutation.Op {
 		case "remove":
@@ -124,7 +179,7 @@ func (svc *PerformanceService) normalizePerformanceRequest(source string, reques
 			if mutation.ExternalID != "" {
 				return model.PerformanceSyncRequest{}, ErrInvalidInput
 			}
-			next, err := normalizePerformanceUpsert(source, mutation, earliest, latest)
+			next, err := normalizePerformanceUpsert(source, mutation)
 			if err != nil {
 				return model.PerformanceSyncRequest{}, err
 			}
@@ -144,7 +199,19 @@ func (svc *PerformanceService) performanceActivityWindow() (string, string) {
 	return earliest.Format(performanceDateLayout), now.AddDate(1, 0, 0).Format(performanceDateLayout)
 }
 
-func normalizePerformanceUpsert(source string, mutation model.PerformanceMutation, earliest, latest string) (model.PerformanceMutation, error) {
+// checkPerformanceActivityWindow applies the clock-dependent activity-date
+// window to a normalized batch. It runs only for batches not yet applied.
+func (svc *PerformanceService) checkPerformanceActivityWindow(req model.PerformanceSyncRequest) error {
+	earliest, latest := svc.performanceActivityWindow()
+	for _, mutation := range req.Mutations {
+		if mutation.Task != nil && (mutation.Task.ActivityDate < earliest || mutation.Task.ActivityDate > latest) {
+			return ErrInvalidInput
+		}
+	}
+	return nil
+}
+
+func normalizePerformanceUpsert(source string, mutation model.PerformanceMutation) (model.PerformanceMutation, error) {
 	switch source {
 	case model.PerformanceSourceSFDCAssignments:
 		assignment := mutation.Assignment
@@ -164,8 +231,7 @@ func normalizePerformanceUpsert(source string, mutation model.PerformanceMutatio
 			return model.PerformanceMutation{}, ErrInvalidInput
 		}
 		date, err := time.Parse(performanceDateLayout, task.ActivityDate)
-		if err != nil || date.Format(performanceDateLayout) != task.ActivityDate ||
-			task.ActivityDate < earliest || task.ActivityDate > latest {
+		if err != nil || date.Format(performanceDateLayout) != task.ActivityDate {
 			return model.PerformanceMutation{}, ErrInvalidInput
 		}
 		copied := *task
@@ -240,8 +306,9 @@ func (svc *PerformanceService) PutGoals(ctx context.Context, userID string, year
 	return &goals, nil
 }
 
-// ListMappings returns every assignment with its mapping; assignments without
-// one are reported with mapped=false and never guessed.
+// ListMappings returns up to MaxPerformanceAssignments assignments (lowest SFDC
+// IDs first) with their mappings, and truncated=true when more exist.
+// Assignments without a mapping are reported with mapped=false, never guessed.
 func (svc *PerformanceService) ListMappings(ctx context.Context, userID string) (*model.PerformanceMappingList, error) {
 	if !performanceUserPattern.MatchString(userID) {
 		return nil, ErrForbidden
@@ -250,15 +317,20 @@ func (svc *PerformanceService) ListMappings(ctx context.Context, userID string) 
 	if err != nil {
 		return nil, err
 	}
-	mappings, err := svc.store.ListAccountMappings(ctx, userID)
+	sort.Slice(assignments, func(i, j int) bool { return assignments[i].SFDCAccountID < assignments[j].SFDCAccountID })
+	truncated := len(assignments) > MaxPerformanceAssignments
+	if truncated {
+		assignments = assignments[:MaxPerformanceAssignments]
+	}
+	ids := make([]string, len(assignments))
+	for i, assignment := range assignments {
+		ids[i] = assignment.SFDCAccountID
+	}
+	bySFDC, err := svc.store.GetAccountMappings(ctx, userID, ids)
 	if err != nil {
 		return nil, err
 	}
-	bySFDC := make(map[string]model.AccountMapping, len(mappings))
-	for _, mapping := range mappings {
-		bySFDC[mapping.SFDCAccountID] = mapping
-	}
-	list := &model.PerformanceMappingList{Items: make([]model.PerformanceMappingItem, 0, len(assignments))}
+	list := &model.PerformanceMappingList{Items: make([]model.PerformanceMappingItem, 0, len(assignments)), Truncated: truncated}
 	for _, assignment := range assignments {
 		item := model.PerformanceMappingItem{SFDCAccountID: assignment.SFDCAccountID, Name: assignment.Name, Role: assignment.Role}
 		if mapping, found := bySFDC[assignment.SFDCAccountID]; found && mapping.AccountID != "" {

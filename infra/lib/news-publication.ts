@@ -12,6 +12,7 @@ import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
+import { NEWS_MODEL_ID, extractionModelResources } from './model-config';
 
 interface NewsPublicationProps {
   table: dynamodb.ITable;
@@ -63,11 +64,13 @@ export class NewsPublication extends Construct {
       NEWS_PIPELINE_MODE: mode.valueAsString,
       NEWS_CANARY_SOURCE_ID: canary.valueAsString,
       NEWS_LEGACY_WRITES: props.legacyWrites,
-      // Official AmazonBedrockFoundationModels Global on-demand Opus 5.5 price,
-      // Seoul, effective 2026-09-01; verified 2026-11-05. No cache/batch discount.
-      NEWS_INPUT_USD_PER_MTOK: '4',
-      NEWS_OUTPUT_USD_PER_MTOK: '20',
-      NEWS_PRICE_VERIFIED_ON: '2026-11-05',
+      // Luna global on-demand rates, verified 2026-11-10: input 0.10,
+      // cache write 0.125, cache read 0.01, output 0.50 USD/million.
+      // Charge all input at the highest rate instead of claiming cache discounts.
+      // The existing 100,000-input-token cap stays below long-context pricing.
+      NEWS_INPUT_USD_PER_MTOK: '0.125',
+      NEWS_OUTPUT_USD_PER_MTOK: '0.50',
+      NEWS_PRICE_VERIFIED_ON: '2026-11-10',
       NEWS_RUN_LIMIT_USD: '2',
       NEWS_MONTH_LIMIT_USD: '25',
     };
@@ -98,7 +101,7 @@ export class NewsPublication extends Construct {
       WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl,
     });
     const worker = makeFunction('Worker', 'news_runtime.worker_handler', 840, 2, {
-      FINAL_MODEL_ID: 'global.anthropic.claude-opus-5-5',
+      FINAL_MODEL_ID: NEWS_MODEL_ID,
       NEWS_ARTIFACT_BUCKET: props.artifactBucket.bucketName,
       KB_BUCKET_NAME: props.kbBucket.bucketName,
     });
@@ -139,13 +142,12 @@ export class NewsPublication extends Construct {
     }));
     worker.role.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'],
-      // get-inference-profile verified these two model resources plus the
-      // Seoul invocation profile on 2026-11-05. No other model is granted.
-      // Input is bounded locally; no token-count API or Mantle grant is used.
+      // Exact global/profile resources verified on 2026-11-10. Retain the
+      // outgoing grant while old Lambda versions can still be running.
+      // Runtime requests use Luna exclusively; there is no model fallback.
       resources: [
-        `arn:${cdk.Aws.PARTITION}:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-opus-5-5`,
-        `arn:${cdk.Aws.PARTITION}:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-opus-5-5`,
-        `arn:${cdk.Aws.PARTITION}:bedrock:::foundation-model/anthropic.claude-opus-5-5`,
+        ...extractionModelResources(cdk.Aws.PARTITION, cdk.Aws.ACCOUNT_ID, cdk.Aws.REGION, NEWS_MODEL_ID),
+        ...extractionModelResources(cdk.Aws.PARTITION, cdk.Aws.ACCOUNT_ID, cdk.Aws.REGION, 'global.anthropic.claude-opus-5-5'),
       ],
     }));
 
@@ -175,7 +177,7 @@ export class NewsPublication extends Construct {
     const candidates = new sfn.Map(this, 'PublishCandidates', {
       itemsPath: '$.candidates', resultPath: '$.outcomes',
       // One reservation at a time lets settled cost free the conservative
-      // $1.30 maximum before the next candidate uses the $2 run allowance.
+      // per-candidate maximum before the next candidate uses the $2 run allowance.
       maxConcurrency: 1,
     }).itemProcessor(work);
     const compact = new sfn.Pass(this, 'PrepareFinalization', {

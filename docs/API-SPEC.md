@@ -120,7 +120,7 @@ runner collects and syncs.
 | `GET /api/performance/sources` | none | `{sources:[{source,revision,lastAttemptAt?,lastCompletedAt?}]}`, one entry per source; never-synced sources report revision 0 |
 | `GET /api/performance/goals?year=YYYY` | `year` within previous/current/next year | `{year,text,updatedAt}`; empty text when unset |
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
-| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}]}` sorted by SFDC ID |
+| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week`, `quarter` or `year` | `{items:[]}` until the missed-item rules are implemented |
 
@@ -130,7 +130,10 @@ most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
 lowercase); `expectedRevision` is the source's current revision (zero when new).
 
 - Assignment upsert (`sfdc-assignments` only): `sfdcAccountId`, `name` (at most
-  200 bytes) and `role` (at most 64 bytes).
+  200 bytes) and `role` (at most 64 bytes). An owner keeps at most 500
+  assignments: a batch raising the stored count above 500 (current plus new IDs
+  minus removes) returns `400 BAD_REQUEST`; updates and removes always pass.
+  The check is read-then-write, so concurrent batches may overshoot by 20 each.
 - Task upsert (`sfdc-tasks` only): `taskId`, optional `sfdcAccountId` (an
   accountless task is kept and stays unmapped), `activityDate`, `type`,
   `subject` (at most 300 bytes), `status`, optional `specReqId`. Type and
@@ -139,6 +142,10 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
   Descriptions and comments are not accepted.
 - Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
   or task ID.
+
+The mappings list reads at most 501 assignment rows (no cursor), returns the
+first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
+retained mapping rows never hide a mapping.
 
 IDs match `[A-Za-z0-9_-]{1,64}`. The service hashes the normalized request
 (SHA-256 of its canonical JSON); an identical batch replays its receipt within
