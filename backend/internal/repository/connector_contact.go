@@ -95,7 +95,7 @@ func (r *DynamoDBRepository) CreateConnectorContact(ctx context.Context, in Conn
 		}
 		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{ClientRequestToken: aws.String(uuid.NewString()), TransactItems: append(slices.Clone(checks), cc, rc)}, func(o *dynamodb.Options) { o.RetryMaxAttempts = 1 })
 		if err != nil {
-			return empty, true, connectorWriteError(err)
+			return empty, true, connectorReplayError(err)
 		}
 		return ConnectorContactReceipt{ContactID: contactID, Replayed: true}, true, nil
 	}
@@ -114,7 +114,7 @@ func (r *DynamoDBRepository) CreateConnectorContact(ctx context.Context, in Conn
 			ClientRequestToken: aws.String(uuid.NewString()), TransactItems: append(slices.Clone(checks), missing),
 		}, func(o *dynamodb.Options) { o.RetryMaxAttempts = 1 })
 		if err != nil {
-			return empty, connectorWriteError(err)
+			return empty, connectorProbeError(err)
 		}
 		return empty, ErrConnectorReceiptMissing
 	}

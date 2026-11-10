@@ -301,7 +301,10 @@ retry with the same key and bytes stays idempotent. Responses are
 `CONNECTOR_CONFLICT` (same key with different bytes, or a replayed contact that
 changed or disappeared), 503 `CONTACTS_UNAVAILABLE` (no key; nothing written)
 and 503 `CONNECTOR_WRITE_UNCONFIRMED` (outcome unknown; retry the same key and
-bytes). `?replay=1` never creates: it returns an existing receipt or 404
+bytes). A first create on a merging or merged account returns 409
+`ACCOUNT_MERGING` (nothing written); a replay whose receipt exists on such an
+account returns 409 `CONNECTOR_REPLAY_ACCOUNT_MERGING` (created before the merge
+began; do not recreate). `?replay=1` never creates: it returns an existing receipt or 404
 `RECEIPT_NOT_FOUND`.
 No OAuth issuance or IAM invocation permission is installed by the consumer code.
 
@@ -1220,7 +1223,10 @@ are `{eventId, replayed?}` (200); 400 `BAD_REQUEST`, 403 `CAPABILITY_DENIED`,
 404 `RECEIPT_NOT_FOUND` (replay probe only), 409 `CONNECTOR_CONFLICT` (same key
 with different bytes, or the replayed event moved, changed or disappeared), 503
 `EVENTS_UNAVAILABLE` (no key; nothing written) and 503
-`CONNECTOR_WRITE_UNCONFIRMED` (retry the same key and bytes). A membership,
+`CONNECTOR_WRITE_UNCONFIRMED` (retry the same key and bytes). A merging or
+merged account returns 409 `ACCOUNT_MERGING` for a first create and 409
+`CONNECTOR_REPLAY_ACCOUNT_MERGING` for a replay whose receipt exists; the replay
+probe still returns 404 when no receipt exists. A membership,
 policy or approval change between the pre-checks and the transaction also
 surfaces as 409. Attendee contact IDs are resolved only after membership and
 approval checks and only for a fresh create, so a replay returns its receipt
