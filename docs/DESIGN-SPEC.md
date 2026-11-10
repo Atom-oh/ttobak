@@ -620,11 +620,17 @@ period control (this week / quarter / this year, default this week) drives
   or empty message. A period change also retries a failed account list, and a
   failed missed read or mapping-list read shows a retry. A calendar-coverage note states the earliest calendar event read (`calendarCoverageStart`, or that no events were read) and qualifies the logging-gap empty state. A positive `unmappedCount` is shown as an
   excluded count, never guessed; the notice says only SFDC-account activity can
-  be fixed in the queue.
-- Mapping queue (`MappingQueue`): unmapped SFDC assignments, plus mapped ones
-  whose account is not in the loaded readable account list (shown with that
-  reason; nothing is judged until the list loads), each with a plain account
-  select (hierarchy paths from `lib/accountTree.ts`) and a connect button. `403` reads as "cannot read this account", `404` as "not your
+  be fixed in the queue. A notice states that calendar-based gaps cover only
+  events from the Seoul date of `calendarCoverageStart` on, or that no calendar
+  events were collected.
+- Mapping queue (`MappingQueue`): unmapped SFDC assignments, each with a plain
+  account select (hierarchy paths from `lib/accountTree.ts`) and a connect
+  button. An assignment whose mapped account is no longer readable (the API's
+  `reason:"unreadable"`, or an account absent from the loaded readable list)
+  is listed with that reason. Below them, automatic mappings preselect their
+  account with a confirm button (saving makes the mapping manual) that becomes
+  "change" when another account is selected. Manual mappings are not listed.
+  `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
 - Source freshness: one line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or
