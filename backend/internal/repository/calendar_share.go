@@ -20,7 +20,7 @@ import (
 var (
 	ErrCalendarEventNotFound = errors.New("calendar event not found")
 	// ErrCalendarShareStateChanged reports that an event's share state changed after a sync
-	// batch read it; the caller may recompute and retry.
+	// batch read it (SetCalendarShareState won); the caller may recompute and retry.
 	ErrCalendarShareStateChanged = errors.New("calendar share state changed")
 )
 
@@ -29,6 +29,9 @@ const (
 	calendarShareStateVeto   = "veto"
 	calendarShareMaxEmail    = 320
 	calendarMaxTransactItems = 100
+	// calendarMaxVetoMembers bounds one veto row's set, keeping its exact-set condition
+	// within DynamoDB expression limits.
+	calendarMaxVetoMembers = 50
 )
 
 // ShareKey identifies one account share row (PK ACCOUNT#{AccountID}).
@@ -56,6 +59,17 @@ type CalendarShareRow struct {
 	// VetoEventIDs holds "{sourceId}#{eventId}" of every event of this user that vetoes the
 	// key; the repository maintains it and the row exists while the set is non-empty.
 	VetoEventIDs []string `dynamodbav:"vetoEventIds,stringset,omitempty"`
+}
+
+// CalendarOverrideRow is a manual sharing mode: PK USER#{userId}, SK CALOVERRIDE#{sourceId}#{scopeKey}.
+type CalendarOverrideRow struct {
+	PK        string `dynamodbav:"PK"`
+	SK        string `dynamodbav:"SK"`
+	UserID    string `dynamodbav:"userId"`
+	SourceID  string `dynamodbav:"sourceId"`
+	ScopeKey  string `dynamodbav:"scopeKey"`
+	Mode      string `dynamodbav:"mode"`
+	AccountID string `dynamodbav:"accountId,omitempty"`
 }
 
 func accountShareKey(accountID, sortKey string) map[string]types.AttributeValue {
@@ -109,14 +123,22 @@ func validCalendarShareMutation(userID, sourceID string, mutation CalendarWriteM
 		return false
 	}
 	// Share fields are share intent: they require the caller-observed row version.
-	if mutation.Expected == nil && (mutation.Share != nil || mutation.PreviousShareKey != nil) {
+	if mutation.Expected == nil && (mutation.Share != nil || mutation.ExtraVeto != nil || mutation.PreviousShareKey != nil) {
 		return false
 	}
 	if mutation.Op != "upsert" {
-		return mutation.Share == nil
+		return mutation.Share == nil && mutation.ExtraVeto == nil
 	}
 	row := mutation.Event
 	if row.SeriesKey != "" && !calendarStorageID.MatchString(row.SeriesKey) {
+		return false
+	}
+	if mutation.ExtraVeto == nil {
+		if row.ExtraVetoAccountID != "" || row.ExtraVetoMeetingKey != "" {
+			return false
+		}
+	} else if !validCalendarExtraVeto(mutation.Share, mutation.ExtraVeto, userID, sourceID, mutation.EventID, row.StartsAt, row.EndsAt, row.ExpiresAt) ||
+		row.ExtraVetoAccountID != mutation.ExtraVeto.AccountID || row.ExtraVetoMeetingKey != mutation.ExtraVeto.MeetingKey {
 		return false
 	}
 	if mutation.Share == nil {
@@ -127,7 +149,14 @@ func validCalendarShareMutation(userID, sourceID string, mutation CalendarWriteM
 		row.ShareAccountID == share.AccountID && row.MeetingKey == share.MeetingKey && row.ShareState == share.State
 }
 
-// storedCalendarShareKeys returns the share key an existing event row currently owns.
+// validCalendarExtraVeto requires a second veto, in another account, next to a veto share.
+func validCalendarExtraVeto(share, extra *CalendarShareRow, userID, sourceID, eventID string, startsAt, endsAt time.Time, expiresAt int64) bool {
+	return share != nil && share.State == calendarShareStateVeto && extra.State == calendarShareStateVeto &&
+		extra.AccountID != share.AccountID && validCalendarShareInput(extra, userID, sourceID, eventID, startsAt, endsAt, expiresAt)
+}
+
+// storedCalendarShareKeys returns the share keys an existing event row currently owns
+// (its share or veto, and an extra veto).
 func storedCalendarShareKeys(old *CalendarEventRow, userID string) ([]ShareKey, error) {
 	if old == nil {
 		return nil, nil
@@ -140,12 +169,20 @@ func storedCalendarShareKeys(old *CalendarEventRow, userID string) ([]ShareKey, 
 		}
 		keys = append(keys, ShareKey{AccountID: old.ShareAccountID, SK: model.CalendarShareSortKey(old.StartsAt, old.MeetingKey, userID)})
 	}
+	if old.ExtraVetoAccountID != "" || old.ExtraVetoMeetingKey != "" {
+		if old.ShareState != calendarShareStateVeto || old.ExtraVetoAccountID == old.ShareAccountID ||
+			!calendarStorageID.MatchString(old.ExtraVetoAccountID) || !calendarStorageID.MatchString(old.ExtraVetoMeetingKey) {
+			return nil, ErrCalendarCorruptData
+		}
+		keys = append(keys, ShareKey{AccountID: old.ExtraVetoAccountID, SK: model.CalendarShareSortKey(old.StartsAt, old.ExtraVetoMeetingKey, userID)})
+	}
 	return keys, nil
 }
 
 // calendarRowHoldsShare reports whether a stored event row records a share or veto.
 func calendarRowHoldsShare(old *CalendarEventRow) bool {
-	return old != nil && (old.ShareState != "" || old.ShareAccountID != "" || old.MeetingKey != "")
+	return old != nil && (old.ShareState != "" || old.ShareAccountID != "" || old.MeetingKey != "" ||
+		old.ExtraVetoAccountID != "" || old.ExtraVetoMeetingKey != "")
 }
 
 // calendarShareClaim is one share or veto row an event wants to hold.
@@ -154,7 +191,7 @@ type calendarShareClaim struct {
 	key ShareKey
 }
 
-// calendarShareIntent is one event's desired share keys and the keys it may vacate.
+// calendarShareIntent is one event's desired share keys (at most two) and the keys it may vacate.
 type calendarShareIntent struct {
 	eventID  string
 	desired  []calendarShareClaim
@@ -205,7 +242,7 @@ func calendarIntentGranted(intent calendarShareIntent, granted []bool, share *Ca
 func calendarVetoToken(sourceID, eventID string) string { return sourceID + "#" + eventID }
 
 func validCalendarVetoSet(tokens []string) bool {
-	if len(tokens) == 0 {
+	if len(tokens) == 0 || len(tokens) > calendarMaxVetoMembers {
 		return false
 	}
 	for _, token := range tokens {
@@ -420,6 +457,9 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 				sharedClaimants = append(sharedClaimants, ref)
 			}
 		}
+		if len(vetoClaimants) > calendarMaxVetoMembers {
+			return nil, nil, ErrInvalidCalendarBatch
+		}
 		vetoRefs = vetoClaimants
 		var vetoTokens []string
 		for _, ref := range vetoClaimants {
@@ -485,6 +525,9 @@ func (repo *CalendarRepository) planCalendarShares(ctx context.Context, userID, 
 				}
 			}
 			grantVetoes()
+			if len(owner.vetoes)-len(leavers)+len(joiners) > calendarMaxVetoMembers {
+				return nil, nil, ErrInvalidCalendarBatch
+			}
 			set := expression.Name("vetoEventIds")
 			// A claimant whose window ends later than the row's extends it (TTL drift).
 			endsAt, expiresAt := vetoWindow(vetoClaimants, owner)
@@ -580,4 +623,199 @@ func calendarFencedConditionError(err error, fenced map[int]bool) error {
 		}
 	}
 	return nil
+}
+
+func validCalendarOverrideScope(userID, sourceID, scopeKey string) bool {
+	return calendarStorageID.MatchString(userID) && uuid.Validate(sourceID) == nil && calendarStorageID.MatchString(scopeKey)
+}
+
+func validCalendarOverrideMode(mode, accountID string) bool {
+	switch mode {
+	case "account":
+		return calendarStorageID.MatchString(accountID)
+	case "hidden":
+		return accountID == ""
+	}
+	return false
+}
+
+func (repo *CalendarRepository) GetCalendarOverride(ctx context.Context, userID, sourceID, scopeKey string) (*CalendarOverrideRow, error) {
+	if !validCalendarOverrideScope(userID, sourceID, scopeKey) {
+		return nil, ErrInvalidCalendarQuery
+	}
+	sortKey := model.CalendarOverrideSortKey(sourceID, scopeKey)
+	item, err := repo.calendarGet(ctx, userID, sortKey)
+	if err != nil || len(item) == 0 {
+		return nil, err
+	}
+	var row CalendarOverrideRow
+	if attributevalue.UnmarshalMap(item, &row) != nil || row.PK != model.PrefixUser+userID || row.SK != sortKey ||
+		row.UserID != userID || row.SourceID != sourceID || row.ScopeKey != scopeKey || !validCalendarOverrideMode(row.Mode, row.AccountID) {
+		return nil, ErrCalendarCorruptData
+	}
+	return &row, nil
+}
+
+func (repo *CalendarRepository) PutCalendarOverride(ctx context.Context, userID, sourceID, scopeKey string, override CalendarOverrideRow) error {
+	if !validCalendarOverrideScope(userID, sourceID, scopeKey) || !validCalendarOverrideMode(override.Mode, override.AccountID) {
+		return ErrInvalidCalendarBatch
+	}
+	row := CalendarOverrideRow{PK: model.PrefixUser + userID, SK: model.CalendarOverrideSortKey(sourceID, scopeKey),
+		UserID: userID, SourceID: sourceID, ScopeKey: scopeKey, Mode: override.Mode, AccountID: override.AccountID}
+	put, err := repo.calendarPut(row, expression.AttributeNotExists(expression.Name("PK")).Or(calendarScopeCondition(userID, sourceID)))
+	if err != nil {
+		return err
+	}
+	return repo.calendarTransact(ctx, []types.TransactWriteItem{{Put: put}})
+}
+
+func (repo *CalendarRepository) DeleteCalendarOverride(ctx context.Context, userID, sourceID, scopeKey string) error {
+	if !validCalendarOverrideScope(userID, sourceID, scopeKey) {
+		return ErrInvalidCalendarBatch
+	}
+	condition := expression.AttributeNotExists(expression.Name("PK")).Or(calendarScopeCondition(userID, sourceID))
+	built, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return err
+	}
+	return repo.calendarTransact(ctx, []types.TransactWriteItem{{Delete: &types.Delete{
+		TableName: aws.String(repo.tableName), Key: calendarKey(userID, model.CalendarOverrideSortKey(sourceID, scopeKey)),
+		ConditionExpression: built.Condition(), ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
+	}}})
+}
+
+// CalendarShareChange is one occurrence's requested share state for SetCalendarShareState.
+type CalendarShareChange struct {
+	// Expected is the event row version the caller planned from; a different stored
+	// version returns ErrCalendarShareStateChanged before any write.
+	Expected CalendarRowVersion
+	// Share is the share or veto row; nil clears sharing.
+	Share *CalendarShareRow
+	// ExtraVeto is a second veto in another account; it requires Share to be a veto.
+	ExtraVeto *CalendarShareRow
+	// Previous is a share key the caller saw granted; it is deleted unless still desired.
+	Previous *ShareKey
+}
+
+// SetCalendarShareState changes one occurrence's share in a single transaction: the event row's
+// share fields (fenced on its current revision and share version, which it increments) plus the
+// share puts and stale share deletes. A key owned by another event of the caller is not taken by
+// a share (the event then records no share); a veto converts a shared row or joins a veto row's
+// set (ErrCalendarShareStateChanged if it cannot be held). A changed event row returns
+// ErrConditionFailed; a changed share row or a version other than change.Expected returns
+// ErrCalendarShareStateChanged.
+func (repo *CalendarRepository) SetCalendarShareState(ctx context.Context, userID, sourceID, eventID string, change CalendarShareChange) error {
+	share, extra, previous := change.Share, change.ExtraVeto, change.Previous
+	if !calendarStorageID.MatchString(userID) || uuid.Validate(sourceID) != nil || !calendarStorageID.MatchString(eventID) ||
+		previous != nil && !validCalendarShareKey(*previous, userID) {
+		return ErrInvalidCalendarBatch
+	}
+	old, err := repo.getCalendarEventRow(ctx, userID, sourceID, eventID)
+	if err != nil {
+		return err
+	}
+	if old == nil {
+		return ErrCalendarEventNotFound
+	}
+	if !validCalendarEventIdentity(old, userID, sourceID, eventID) {
+		return ErrCalendarCorruptData
+	}
+	if change.Expected != CalendarRowVersionOf(old) {
+		return ErrCalendarShareStateChanged
+	}
+	if share != nil && !validCalendarShareInput(share, userID, sourceID, eventID, old.StartsAt, old.EndsAt, old.ExpiresAt) ||
+		extra != nil && !validCalendarExtraVeto(share, extra, userID, sourceID, eventID, old.StartsAt, old.EndsAt, old.ExpiresAt) {
+		return ErrInvalidCalendarBatch
+	}
+	intent, err := newCalendarShareIntent(userID, eventID, old, []*CalendarShareRow{share, extra}, previous)
+	if err != nil {
+		return err
+	}
+	shareOperations, granted, err := repo.planCalendarShares(ctx, userID, sourceID, []calendarShareIntent{intent})
+	if err != nil {
+		return err
+	}
+	shareHeld := calendarIntentGranted(intent, granted[0], share)
+	extraHeld := calendarIntentGranted(intent, granted[0], extra)
+	if share != nil && share.State == calendarShareStateVeto && !shareHeld || extra != nil && !extraHeld {
+		return ErrCalendarShareStateChanged // a requested veto could not be written
+	}
+	update := expression.Set(expression.Name("shareVersion"), expression.Value(old.ShareVersion+1))
+	if share != nil && shareHeld {
+		update = update.Set(expression.Name("shareAccountId"), expression.Value(share.AccountID)).
+			Set(expression.Name("meetingKey"), expression.Value(share.MeetingKey)).
+			Set(expression.Name("shareState"), expression.Value(share.State))
+	} else {
+		update = update.Remove(expression.Name("shareAccountId")).Remove(expression.Name("meetingKey")).Remove(expression.Name("shareState"))
+	}
+	if extra != nil {
+		update = update.Set(expression.Name("extraVetoAccountId"), expression.Value(extra.AccountID)).
+			Set(expression.Name("extraVetoMeetingKey"), expression.Value(extra.MeetingKey))
+	} else {
+		update = update.Remove(expression.Name("extraVetoAccountId")).Remove(expression.Name("extraVetoMeetingKey"))
+	}
+	condition := expression.AttributeExists(expression.Name("PK")).
+		And(calendarScopeCondition(userID, sourceID)).
+		And(expression.Name("eventId").Equal(expression.Value(eventID))).
+		And(expression.Name("revision").Equal(expression.Value(old.Revision))).
+		And(calendarShareVersionCondition(old))
+	built, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return err
+	}
+	operations := []types.TransactWriteItem{{Update: &types.Update{
+		TableName: aws.String(repo.tableName), Key: calendarKey(userID, model.CalendarEventSortKey(sourceID, eventID)),
+		UpdateExpression: built.Update(), ConditionExpression: built.Condition(),
+		ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
+	}}}
+	fenced := make(map[int]bool)
+	for index := range shareOperations {
+		fenced[len(operations)+index] = true
+	}
+	return repo.calendarTransactFenced(ctx, append(operations, shareOperations...), fenced)
+}
+
+// calendarTransactFenced is calendarTransact with share-fence error mapping: a failed first
+// operation is ErrConditionFailed, a failed fenced operation ErrCalendarShareStateChanged.
+func (repo *CalendarRepository) calendarTransactFenced(ctx context.Context, operations []types.TransactWriteItem, fenced map[int]bool) error {
+	if len(operations) > calendarMaxTransactItems {
+		return ErrInvalidCalendarBatch
+	}
+	_, err := repo.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: operations},
+		func(options *dynamodb.Options) { options.Retryer = aws.NopRetryer{} })
+	if err == nil {
+		return nil
+	}
+	if mapped := calendarFencedConditionError(err, fenced); mapped != nil {
+		return mapped
+	}
+	return fmt.Errorf("calendar transaction: %w", err)
+}
+
+// calendarTransact sends one non-retried transaction and maps condition failures.
+func (repo *CalendarRepository) calendarTransact(ctx context.Context, operations []types.TransactWriteItem) error {
+	if len(operations) > calendarMaxTransactItems {
+		return ErrInvalidCalendarBatch
+	}
+	_, err := repo.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: operations},
+		func(options *dynamodb.Options) { options.Retryer = aws.NopRetryer{} })
+	if err == nil {
+		return nil
+	}
+	if calendarConditionFailed(err) {
+		return errors.Join(ErrConditionFailed, err)
+	}
+	return fmt.Errorf("calendar transaction: %w", err)
+}
+
+func calendarConditionFailed(err error) bool {
+	var cancellation *types.TransactionCanceledException
+	if errors.As(err, &cancellation) {
+		for _, reason := range cancellation.CancellationReasons {
+			if aws.ToString(reason.Code) == "ConditionalCheckFailed" {
+				return true
+			}
+		}
+	}
+	return false
 }

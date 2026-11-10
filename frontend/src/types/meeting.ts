@@ -166,6 +166,12 @@ export interface ResummaryStatus {
   resultHash?: string;
   sharingSafe?: boolean;
 }
+/** GET /api/meetings/{id}/notes/en: status fields of the re-summary response plus the English note. */
+export interface EnglishNote extends Omit<ResummaryStatus, 'sharingSafe'> {
+  content?: string;
+  generatedAt?: string;
+  stale: boolean;
+}
 export interface SummaryReadingPage {
   meetingId: string;
   source: 'summary';
@@ -317,6 +323,8 @@ export interface MeetingDetail extends Meeting {
   selectedTranscript?: 'A' | 'B' | null;
   /** Generated-note language: '' automatic, 'ko' Korean, 'en' English. */
   noteLanguage?: NoteLanguage;
+  /** An English note exists; its text is fetched separately. */
+  hasEnglishNote?: boolean;
   audioKey?: string;
   audioKeys?: string[];
   audioPartCount?: number;

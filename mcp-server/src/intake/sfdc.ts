@@ -23,6 +23,8 @@ export const SFDC_TOOLS: readonly ToolExpectation[] = [SFDC_PERSONAL_TOOL, SFDC_
 export const ACTIVITY_ROLE = 'activity';
 const SOURCES: readonly PerformanceSource[] = ['sfdc-assignments', 'sfdc-tasks'];
 const PAGE_LIMIT = 500;
+/** Backend `MaxPerformanceAssignments`. */
+const MAX_ASSIGNMENTS = 500;
 const MAX_PAGES = 20;
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const ALIAS = /^[A-Za-z0-9._-]{1,64}$/;
@@ -239,7 +241,9 @@ function planSource(rows: Map<string, SFDCAssignment | SFDCTask>, key: 'assignme
   }
   const external = (mutation: Mutation) => mutation.op === 'remove' ? mutation.externalId
     : 'assignment' in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId;
-  mutations.sort((first, second) => external(first) < external(second) ? -1 : external(first) > external(second) ? 1 : 0);
+  // Removals go first so no intermediate batch raises the stored count above the server's cap.
+  const rank = (mutation: Mutation) => `${mutation.op === 'remove' ? 0 : 1}${external(mutation)}`;
+  mutations.sort((first, second) => rank(first) < rank(second) ? -1 : rank(first) > rank(second) ? 1 : 0);
   const plan: SourcePlan = { mutations, set: Object.fromEntries(set), remove };
   return { plan, upserts: set.length, removals: remove.length, unchanged };
 }
@@ -411,8 +415,12 @@ async function serverAssignmentIds(api: TtobakApi): Promise<string[]> {
     if (deliveryFailure(error).kind === 'login') throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
     throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance assignments could not be read');
   }
-  const items = record(value) && Array.isArray(value.items) ? value.items : null;
-  if (!items) throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance assignments have an unexpected shape');
+  if (!record(value) || !Array.isArray(value.items) || typeof value.truncated !== 'boolean') {
+    throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance assignments have an unexpected shape');
+  }
+  const items: unknown[] = value.items;
+  // A partial listing cannot prove absence; nothing is removed from it.
+  if (value.truncated) throw new IntakeError('ASSIGNMENT_CAP_EXCEEDED', `server holds more than ${items.length} assignments`);
   return items.map(item => {
     if (!record(item) || typeof item.sfdcAccountId !== 'string' || !ID.test(item.sfdcAccountId)) {
       throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance assignments have an unexpected shape');
@@ -468,16 +476,16 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
     if (states.some(state => state.reconcileRequired) && !options.reconcile) {
       throw new IntakeError('TTOBAK_CONFLICT', 'source revision conflict; run with --reconcile');
     }
+    // Pending batches resolve before revisions are read.
+    for (const state of states) if (state.pending) await send(options.api, store, state);
     let remote: Record<PerformanceSource, number> | undefined;
     for (const state of states) {
-      if (state.pending) await send(options.api, store, state);
       if (options.reconcile || state.revision === null) {
         remote ??= await serverRevisions(options.api);
         state.revision = remote[state.source];
         // After a reconcile every current row is resent; tracked IDs stay so vanished rows are still removed.
         if (options.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map(id => [id, '']));
-        // A fresh or reconciled assignments ledger also tracks every assignment the server holds, so
-        // rows absent from this snapshot are removed. Tasks keep their TTL and are not listed.
+        // Server assignments absent from this snapshot are removed; tasks keep their TTL.
         if (state.source === 'sfdc-assignments') {
           for (const id of await serverAssignmentIds(options.api)) if (!Object.hasOwn(state.ledger, id)) state.ledger[id] = '';
         }
@@ -501,6 +509,10 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
   const plan = planSfdc(registry, tasks, { 'sfdc-assignments': assignmentState.ledger, 'sfdc-tasks': taskState.ledger }, now);
   const revisions = () => ({ 'sfdc-assignments': assignmentState.revision, 'sfdc-tasks': taskState.revision });
   if (dryRun) return { counts: plan.counts, revisions: revisions() };
+  // The server rejects growth past this cap, so an oversized snapshot could never converge.
+  if (plan.counts.assignments.fetched > MAX_ASSIGNMENTS) {
+    throw new IntakeError('ASSIGNMENT_CAP_EXCEEDED', `${plan.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
+  }
 
   await deliver(options.api!, store, assignmentState, plan.assignments);
   await deliver(options.api!, store, taskState, plan.tasks);

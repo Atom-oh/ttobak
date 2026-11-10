@@ -3,6 +3,7 @@ package repository
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -545,5 +546,56 @@ func TestApplyPerformanceBatchReplayAcrossYearBoundary(test *testing.T) {
 	request.BatchID = "11111111-2222-4333-8444-555555555555"
 	if _, err = apply(request); !errors.Is(err, ErrInvalidPerformanceBatch) || writes != 1 {
 		test.Fatalf("new expired batch must be rejected: %v writes=%d", err, writes)
+	}
+}
+
+func TestListPerformanceAssignmentsReadIsBounded(test *testing.T) {
+	queries := 0
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		body := performanceBody(test, request)
+		queries++
+		if limit, _ := body["Limit"].(float64); queries == 1 && int(limit) != PerformanceListRowLimit {
+			test.Fatalf("Limit = %v", body["Limit"])
+		}
+		rows := make([]string, 400)
+		for i := range rows {
+			id := fmt.Sprintf("A%d_%04d", queries, i)
+			rows[i] = `{"PK":{"S":"USER#owner"},"SK":{"S":"PERFASSIGN#` + id + `"},"userId":{"S":"owner"},"sfdcAccountId":{"S":"` + id + `"}}`
+		}
+		// Every page claims more rows exist; the reader must stop by itself.
+		return summaryHTTPResponse(200, `{"Items":[`+strings.Join(rows, ",")+`],"LastEvaluatedKey":{"PK":{"S":"x"},"SK":{"S":"x"}}}`, nil), nil
+	})
+	assignments, err := repo.ListPerformanceAssignments(test.Context(), "owner")
+	if err != nil || len(assignments) != PerformanceListRowLimit || queries != 2 {
+		test.Fatalf("assignments=%d queries=%d err=%v", len(assignments), queries, err)
+	}
+}
+
+func TestGetAccountMappingsChunksAndRetries(test *testing.T) {
+	defer func(previous time.Duration) { batchReadBackoff = previous }(batchReadBackoff)
+	batchReadBackoff = time.Millisecond
+	ids := make([]string, 0, 150)
+	rows := map[batchWireKey]map[string]any{}
+	for i := 0; i < 150; i++ {
+		id := fmt.Sprintf("A%04d", i)
+		ids = append(ids, id)
+		if i%2 == 0 {
+			rows[batchWireKey{"USER#owner", "PERFMAP#" + id}] = map[string]any{"PK": map[string]any{"S": "USER#owner"}, "SK": map[string]any{"S": "PERFMAP#" + id},
+				"userId": map[string]any{"S": "owner"}, "sfdcAccountId": map[string]any{"S": id}, "accountId": map[string]any{"S": "acct"}}
+		}
+	}
+	wire := &batchWire{rows: rows, unprocessed: func(n int, keys []batchWireKey) []batchWireKey {
+		if n == 0 {
+			return keys[:3]
+		}
+		return nil
+	}}
+	got, err := wire.repo(test).GetAccountMappings(test.Context(), "owner", ids)
+	if err != nil || len(got) != 75 || got["A0000"].AccountID != "acct" || len(wire.requests) != 3 {
+		test.Fatalf("mappings=%d requests=%d err=%v", len(got), len(wire.requests), err)
+	}
+	always := &batchWire{rows: rows, unprocessed: func(_ int, keys []batchWireKey) []batchWireKey { return keys[:1] }}
+	if got, err := always.repo(test).GetAccountMappings(test.Context(), "owner", ids[:2]); err == nil || got != nil {
+		test.Fatalf("persistent unprocessed keys must fail without partial data: %v %v", got, err)
 	}
 }

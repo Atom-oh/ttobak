@@ -10,6 +10,7 @@ import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import { NewsPublication } from './news-publication';
+import { NEWS_MODEL_ID } from './model-config';
 
 export interface CrawlerStackProps extends cdk.StackProps {
   crawlerRole: iam.IRole;
@@ -72,7 +73,7 @@ export class CrawlerStack extends cdk.Stack {
       handler: 'news_crawler.handler',
       code: lambda.Code.fromAsset('../backend/python/crawler'),
       role: props.crawlerRole as iam.Role,
-      environment: { ...commonEnv, NEWS_LEGACY_WRITES: legacyWrites.valueAsString },
+      environment: { ...commonEnv, SUMMARIZE_MODEL_ID: NEWS_MODEL_ID, NEWS_LEGACY_WRITES: legacyWrites.valueAsString },
       timeout: cdk.Duration.minutes(14),
       memorySize: 512,
       // The app-wide `useCdkManagedLogGroup` feature flag makes CDK create an

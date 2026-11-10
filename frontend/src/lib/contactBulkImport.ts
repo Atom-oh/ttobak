@@ -2,7 +2,12 @@ import type { AccountContact, ContactInput } from '@/types/meeting';
 import { CONTACT_FIELDS, isContactAccessDenied, requestPeopleResolve, type ContactField } from './contactImport';
 
 /** An account the user can add contacts to, with its matching names. */
-export interface MatchAccount { accountId: string; name: string; aliases: string[]; domains: string[] }
+export interface MatchAccount {
+  accountId: string; name: string; aliases: string[]; domains: string[];
+  /** False for an ancestor/descendant the user can read but is not a direct member of; contacts cannot be added there. Absent means direct. */
+  direct?: boolean;
+}
+const isDirect = (account?: MatchAccount) => !!account && account.direct !== false;
 
 export type AccountMatch =
   | { kind: 'exact'; accountId: string }
@@ -13,9 +18,15 @@ export type AccountMatch =
 const PUBLIC_DOMAINS = new Set(['gmail.com', 'naver.com', 'daum.net', 'hanmail.net', 'kakao.com', 'nate.com', 'hotmail.com', 'outlook.com', 'live.com', 'yahoo.com', 'icloud.com', 'me.com', 'msn.com', 'korea.com']);
 const LEGAL_FORMS = /\(주\)|\(유\)|\(사\)|\(재\)|㈜|주식회사|유한회사|유한책임회사|사단법인|재단법인|\b(?:co|corp|corporation|inc|incorporated|ltd|limited|llc|plc|gmbh|company)\b\.?/gi;
 
-/** Company name reduced for comparison: no legal form, case, spaces or punctuation. */
+// Brand prefixes dropped before comparison ("KEB 하나은행" is the 하나은행 account). Keep this list small.
+const BRAND_PREFIX = /^keb\s*(?=[가-힣])/;
+
+/**
+ * Company name reduced for comparison: no legal form ((주), 주식회사, ㈜, Co., Ltd. ...),
+ * no "KEB " brand prefix, no case, spaces or punctuation.
+ */
 export function normalizeCompany(value?: string): string {
-  return (value || '').normalize('NFKC').toLowerCase().replace(LEGAL_FORMS, ' ').replace(/[\s.,·・&'"()[\]{}\-_/\\]+/g, '');
+  return (value || '').normalize('NFKC').toLowerCase().replace(LEGAL_FORMS, ' ').trim().replace(BRAND_PREFIX, '').replace(/[\s.,·・&'"()[\]{}\-_/\\]+/g, '');
 }
 
 /** Lowercase company domain of an email, or '' for personal mail and malformed values. */
@@ -89,8 +100,31 @@ function matchAccountDomains(company: string | undefined, domains: string[], acc
   return scored.length ? { kind: 'similar', candidates: scored.map((s) => s.accountId) } : { kind: 'none' };
 }
 
-/** Rows grouped by company, so a choice applies to everyone at that company. */
-export interface CompanyGroup { key: string; company: string; domain: string; rows: number[]; match: AccountMatch }
+// A fuzzy match is preselected only on strong evidence: one name contains the other
+// (at least this many characters), or the similarity reaches the threshold.
+const MIN_CONTAINED_LENGTH = 2;
+const STRONG_SIMILARITY = 0.8;
+
+/** Accounts with strong name or domain evidence for a company that did not match exactly. */
+function strongCandidates(company: string | undefined, domains: string[], accounts: MatchAccount[]): string[] {
+  const key = normalizeCompany(company);
+  return accounts.filter((account) => {
+    if (domains.some((domain) => account.domains.some((accountDomain) => domainMatches(domain, normalizeDomain(accountDomain))))) return true;
+    if (!key) return false;
+    return [account.name, ...account.aliases].map(normalizeCompany).filter(Boolean).some((name) => {
+      const short = name.length <= key.length ? name : key;
+      const long = name.length <= key.length ? key : name;
+      return (short.length >= MIN_CONTAINED_LENGTH && long.includes(short)) || nameSimilarity(key, name) >= STRONG_SIMILARITY;
+    });
+  }).map((account) => account.accountId);
+}
+
+/**
+ * Rows grouped by company, so a choice applies to everyone at that company.
+ * suggestedAccountId is a preselected fuzzy match the user can change; nonDirect lists
+ * matched accounts the user may read but cannot add contacts to (not a direct member).
+ */
+export interface CompanyGroup { key: string; company: string; domain: string; rows: number[]; match: AccountMatch; suggestedAccountId?: string; nonDirect?: string[] }
 
 export function groupByCompany(contacts: ContactInput[], accounts: MatchAccount[]): CompanyGroup[] {
   const groups = new Map<string, CompanyGroup>();
@@ -107,9 +141,25 @@ export function groupByCompany(contacts: ContactInput[], accounts: MatchAccount[
     }
     groups.set(key, { key, company: contact.company?.trim() || '', domain, rows: [row], match: { kind: 'none' } });
   });
+  const byId = new Map(accounts.map((account) => [account.accountId, account]));
   for (const group of groups.values()) {
     const domains = [...new Set(group.rows.map((row) => companyDomain(contacts[row].email)).filter(Boolean))];
-    group.match = group.key === 'none' ? { kind: 'none' } : matchAccountDomains(group.company, domains, accounts);
+    if (group.key === 'none') { group.match = { kind: 'none' }; continue; }
+    let match = matchAccountDomains(group.company, domains, accounts);
+    const nonDirect = new Set<string>();
+    if (match.kind === 'exact' && !isDirect(byId.get(match.accountId))) {
+      // Never auto-import into an account the user cannot write to.
+      nonDirect.add(match.accountId);
+      match = { kind: 'similar', candidates: [match.accountId] };
+    } else if (match.kind !== 'exact') {
+      const strong = strongCandidates(group.company, domains, accounts);
+      // Ambiguity (2+ strong candidates, direct or not) and non-direct targets stay undecided.
+      if (strong.length === 1 && isDirect(byId.get(strong[0]))) group.suggestedAccountId = strong[0];
+      if (match.kind === 'none' && strong.length === 1) match = { kind: 'similar', candidates: strong };
+    }
+    if (match.kind === 'similar') match.candidates.filter((id) => !isDirect(byId.get(id))).forEach((id) => nonDirect.add(id));
+    if (nonDirect.size) group.nonDirect = [...nonDirect];
+    group.match = match;
   }
   const order = { similar: 0, none: 1, exact: 2 } as const;
   return [...groups.values()].sort((a, b) => order[a.match.kind] - order[b.match.kind] || b.rows.length - a.rows.length);
@@ -120,9 +170,11 @@ export type GroupDecision =
   | { action: 'new'; name: string }
   | { action: 'drop' };
 
-/** Exact matches import into their account; everything else waits for a choice and drops by default. */
+/** Exact and strongly suggested matches preselect their account; everything else waits for a choice and drops by default. */
 export function defaultDecision(group: CompanyGroup): GroupDecision {
-  return group.match.kind === 'exact' ? { action: 'account', accountId: group.match.accountId } : { action: 'drop' };
+  if (group.match.kind === 'exact') return { action: 'account', accountId: group.match.accountId };
+  if (group.suggestedAccountId) return { action: 'account', accountId: group.suggestedAccountId };
+  return { action: 'drop' };
 }
 
 const emailKey = (value?: string) => (value || '').trim().toLowerCase();

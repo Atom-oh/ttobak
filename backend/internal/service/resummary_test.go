@@ -33,12 +33,19 @@ type resummaryTestRepo struct {
 	reads                                  []string
 	revoked                                bool
 	bindingError, completeError, failError error
+	enState                                *model.ResummaryState
+	enQueues, enFails, enCompletes         int
+	enCompleteError                        error
+	captureError                           error
 }
 
 func (r *resummaryTestRepo) CaptureResummary(_ context.Context, owner, mid, requester string) (*model.SummarySnapshot, error) {
 	r.captures++
 	if r.revoked {
 		return nil, repository.ErrSummaryAccess
+	}
+	if r.captureError != nil {
+		return nil, r.captureError
 	}
 	m := r.meetings[meetingKey(owner, mid)]
 	if m == nil {
@@ -164,7 +171,7 @@ func TestSharingSafeResummaryExcludesOldDerivationAndRetainsConcurrentNotes(t *t
 	}
 }
 
-func TestSharingSafePreparationAllowsOnlyVerifiedDocuments(t *testing.T) {
+func TestSharingSafePreparationKeepsImagesAndOnlyVerifiedDocuments(t *testing.T) {
 	s, _, _ := newResummaryFixture(t)
 	snapshot := &model.SummarySnapshot{Meeting: &model.Meeting{UserID: "owner", MeetingID: "meeting",
 		Status: model.StatusDone, Notes: "own note", Content: "PRIVATE_GENERATED"},
@@ -178,9 +185,15 @@ func TestSharingSafePreparationAllowsOnlyVerifiedDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Content != "" || len(attachments) != 1 || !attachments[0].SummaryOmitted ||
-		attachments[0].ProcessedContent != "" || attachments[0].Description != "" || attachments[0].ExtractedText != nil {
-		t.Fatalf("legacy attachment derivation entered safe evidence: %+v", attachments)
+	if m.Content != "" || len(attachments) != 2 {
+		t.Fatalf("unexpected prepared sources: %+v", attachments)
+	}
+	if attachments[0].ProcessedContent != "PRIVATE_IMAGE" || attachments[0].Description != "PRIVATE_DESCRIPTION" {
+		t.Fatalf("user image analysis dropped: %+v", attachments[0])
+	}
+	if !attachments[1].SummaryOmitted || attachments[1].ProcessedContent != "" ||
+		attachments[1].Description != "" || attachments[1].ExtractedText != nil {
+		t.Fatalf("legacy document derivation entered safe evidence: %+v", attachments[1])
 	}
 }
 func TestResummaryOwnerEditAuthorizationAndDuplicateRequest(t *testing.T) {
@@ -649,5 +662,377 @@ func TestSharingSafeCompletionTaskBounds(t *testing.T) {
 				t.Fatal("unexpected model calls or prior task mutation")
 			}
 		})
+	}
+}
+
+// GenerateEnglishNote lets one function back both generator methods in tests.
+func (f resummaryGenerateFunc) GenerateEnglishNote(ctx context.Context, m *model.Meeting, a []model.Attachment) (string, error) {
+	return f(ctx, m, a)
+}
+
+func (r *resummaryTestRepo) GetEnglishSummary(context.Context, string) (*model.ResummaryState, error) {
+	if r.enState == nil {
+		return nil, nil
+	}
+	copy := *r.enState
+	return &copy, nil
+}
+func (r *resummaryTestRepo) QueueEnglishSummary(_ context.Context, _ *model.SummarySnapshot, prior, next *model.ResummaryState) error {
+	if !reflect.DeepEqual(prior, r.enState) || next.SharingSafe {
+		return repository.ErrConditionFailed
+	}
+	r.enQueues++
+	copy := *next
+	r.enState = &copy
+	return nil
+}
+func (r *resummaryTestRepo) StartEnglishSummary(_ context.Context, _ *model.SummarySnapshot, state *model.ResummaryState, _ time.Time, lease int64) error {
+	if r.enState == nil || r.enState.RunID != state.RunID || r.enState.Status != model.AnalysisQueued {
+		return repository.ErrConditionFailed
+	}
+	r.enState.Status = model.AnalysisRunning
+	r.enState.LeaseUntil = lease
+	return nil
+}
+func (r *resummaryTestRepo) FailEnglishSummary(_ context.Context, _ string, state *model.ResummaryState, code string, _ time.Time) error {
+	r.enFails++
+	if r.enState == nil || r.enState.RunID != state.RunID || r.enState.Status != state.Status || r.enState.LeaseUntil != state.LeaseUntil {
+		return repository.ErrConditionFailed
+	}
+	r.enState.Status = model.AnalysisFailed
+	r.enState.ErrorCode = code
+	r.enState.LeaseUntil = 0
+	return nil
+}
+func (r *resummaryTestRepo) CompleteEnglishSummary(_ context.Context, snapshot *model.SummarySnapshot, state *model.ResummaryState, content, sourceHash string, now time.Time) error {
+	r.enCompletes++
+	if r.enCompleteError != nil {
+		return r.enCompleteError
+	}
+	if r.enState.RunID != state.RunID || r.enState.Status != model.AnalysisRunning || r.enState.LeaseUntil != state.LeaseUntil {
+		return repository.ErrConditionFailed
+	}
+	m := r.meetings[meetingKey(state.OwnerID, snapshot.Meeting.MeetingID)]
+	m.ContentEn, m.ContentEnSourceHash, m.ContentEnGeneratedAt = content, sourceHash, now.Format(time.RFC3339Nano)
+	r.enState.Status = model.AnalysisSucceeded
+	r.enState.LeaseUntil = 0
+	return nil
+}
+
+func newEnglishFixture(t *testing.T, generate resummaryGenerateFunc) (*ResummaryService, *resummaryTestRepo, *[]model.SummaryRequested) {
+	t.Helper()
+	s, repo, _ := newResummaryFixture(t)
+	s.generator = generate
+	var published []model.SummaryRequested
+	s.publish = func(_ context.Context, event model.SummaryRequested) error {
+		published = append(published, event)
+		return nil
+	}
+	return s, repo, &published
+}
+
+func englishOK(context.Context, *model.Meeting, []model.Attachment) (string, error) {
+	return "# Meeting Notes\n\nEnglish overview.", nil
+}
+
+func TestEnglishRunExcludesKoreanContent(t *testing.T) {
+	var seen *model.Meeting
+	s, repo, published := newEnglishFixture(t, func(_ context.Context, m *model.Meeting, a []model.Attachment) (string, error) {
+		copy := *m
+		seen = &copy
+		return "# Meeting Notes\n\nEnglish overview.", nil
+	})
+	s.SetTermsEnqueuer(func(context.Context, string, string) { t.Fatal("English runs must not enqueue terms") })
+	m := repo.meetings[meetingKey("owner", "meeting")]
+	m.Content, m.LiveSummary, m.ActionItems, m.Insights, m.Sentiment = "KOREAN-NOTE", "LIVE-DRAFT", "TASKS", "INSIGHTS", "SENTIMENT"
+	m.Tags, m.LinkedMeetingIDs = []string{"TAG"}, []string{"PREDECESSOR"}
+	m.ContentEn = "PRIOR-ENGLISH"
+	status, err := s.RequestEnglish(context.Background(), "owner", "meeting")
+	if err != nil || status.Status != model.AnalysisQueued || status.SharingSafe {
+		t.Fatalf("%+v %v", status, err)
+	}
+	if len(*published) != 1 || (*published)[0].Target != model.SummaryTargetEnglish || (*published)[0].RunID != status.RunID {
+		t.Fatalf("English request not published with its target: %+v", *published)
+	}
+	if repo.queues != 0 || repo.state != nil {
+		t.Fatal("English request touched the Korean run state")
+	}
+	snapshot, err := repo.CaptureResummary(context.Background(), "owner", "meeting", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Attachments = []model.Attachment{
+		{AttachmentID: "image", Type: model.AttachTypePhoto, ProcessedContent: "IMAGE-ANALYSIS", Description: "IMAGE-DESCRIPTION"},
+		{AttachmentID: "document", Type: model.AttachTypeDocument, ProcessedContent: "OLD-PREVIEW", Description: "OLD-DESCRIPTION", OriginalKey: "files/owner/meeting/unready.pdf"},
+	}
+	prepared, attachments, _, err := s.prepareFor(context.Background(), snapshot, model.SummaryTargetEnglish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Content != "" || prepared.LiveSummary != "" || prepared.ActionItems != "" || prepared.Insights != "" || prepared.Sentiment != "" ||
+		len(prepared.Tags) != 0 || len(prepared.LinkedMeetingIDs) != 0 || prepared.ContentEn != "" {
+		t.Fatalf("English evidence carried generated content: %+v", prepared)
+	}
+	if prepared.Notes != "saved memo" || prepared.TranscriptB != "resolved transcriptB" {
+		t.Fatalf("English evidence lost own sources: %+v", prepared)
+	}
+	if attachments[0].ProcessedContent != "IMAGE-ANALYSIS" || attachments[0].Description != "IMAGE-DESCRIPTION" {
+		t.Fatalf("image analysis dropped: %+v", attachments[0])
+	}
+	if attachments[1].ProcessedContent != "" || attachments[1].Description != "" || !attachments[1].SummaryOmitted {
+		t.Fatalf("legacy document derivative entered English evidence: %+v", attachments[1])
+	}
+	if err := s.Process(context.Background(), (*published)[0]); err != nil {
+		t.Fatal(err)
+	}
+	if seen == nil || seen.Content != "" || seen.LiveSummary != "" || seen.ContentEn != "" || len(seen.LinkedMeetingIDs) != 0 || seen.Notes != "saved memo" {
+		t.Fatalf("generator received Korean/English generated content: %+v", seen)
+	}
+	if repo.enState.Status != model.AnalysisSucceeded || m.ContentEn != "# Meeting Notes\n\nEnglish overview." || m.Content != "KOREAN-NOTE" || repo.completes != 0 {
+		t.Fatalf("English publication wrong: state=%+v contentEn=%q content=%q", repo.enState, m.ContentEn, m.Content)
+	}
+	fresh, _ := repo.CaptureResummary(context.Background(), "owner", "meeting", "owner")
+	if m.ContentEnSourceHash != englishSourceHash(fresh) || m.ContentEnSourceHash == "" {
+		t.Fatal("published English note did not record its source hash")
+	}
+}
+
+func TestEnglishRunEditorAllowed(t *testing.T) {
+	s, repo, published := newEnglishFixture(t, englishOK)
+	repo.shares[shareKey("editor", "meeting")] = &model.Share{MeetingID: "meeting", OwnerID: "owner", Permission: model.PermissionEdit}
+	status, err := s.RequestEnglish(context.Background(), "editor", "meeting")
+	if err != nil || status.Status != model.AnalysisQueued || repo.enState.RequestedBy != "editor" {
+		t.Fatalf("%+v %v", status, err)
+	}
+	again, err := s.RequestEnglish(context.Background(), "owner", "meeting")
+	if err != nil || again.RunID != status.RunID || repo.enQueues != 1 || len(*published) != 1 {
+		t.Fatal("duplicate English run")
+	}
+}
+
+func TestEnglishRunReaderForbidden(t *testing.T) {
+	s, repo, _ := newEnglishFixture(t, englishOK)
+	repo.shares[shareKey("reader", "meeting")] = &model.Share{MeetingID: "meeting", OwnerID: "owner", Permission: model.PermissionRead}
+	if _, err := s.RequestEnglish(context.Background(), "reader", "meeting"); !errors.Is(err, ErrForbidden) {
+		t.Fatal(err)
+	}
+	if repo.enQueues != 0 || repo.captures != 0 {
+		t.Fatal("reader started English work")
+	}
+	// Readers can still see the English note and its status.
+	repo.meetings[meetingKey("owner", "meeting")].ContentEn = "English body"
+	note, err := s.GetEnglish(context.Background(), "reader", "meeting")
+	if err != nil || note.Content != "English body" {
+		t.Fatalf("%+v %v", note, err)
+	}
+	if _, err := s.GetEnglish(context.Background(), "stranger", "meeting"); err == nil {
+		t.Fatal("stranger read the English note")
+	}
+}
+
+func TestEnglishRunRequiresDoneMeetingAndSource(t *testing.T) {
+	s, repo, _ := newEnglishFixture(t, englishOK)
+	m := repo.meetings[meetingKey("owner", "meeting")]
+	m.Status = model.StatusError
+	if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); !errors.Is(err, ErrResummaryBusy) {
+		t.Fatalf("non-done meeting accepted: %v", err)
+	}
+	m.Status = model.StatusDone
+	m.TranscriptA, m.TranscriptB, m.Notes, m.Content = "", "", "", "KOREAN-ONLY"
+	if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); !errors.Is(err, ErrResummaryNoSource) {
+		t.Fatalf("Korean note counted as English source: %v", err)
+	}
+	if repo.enQueues != 0 {
+		t.Fatal("invalid source queued")
+	}
+}
+
+func TestEnglishRunFailureRetainsPrevious(t *testing.T) {
+	providerErr := errors.New("provider down")
+	s, repo, published := newEnglishFixture(t, func(context.Context, *model.Meeting, []model.Attachment) (string, error) {
+		return "", providerErr
+	})
+	m := repo.meetings[meetingKey("owner", "meeting")]
+	m.ContentEn, m.ContentEnSourceHash = "previous English", "old-hash"
+	if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Process(context.Background(), (*published)[0]); err != nil {
+		t.Fatal(err)
+	}
+	if repo.enCompletes != 0 || repo.enFails != 1 || repo.enState.Status != model.AnalysisFailed || repo.enState.ErrorCode != model.AnalysisProviderFailed {
+		t.Fatalf("provider failure not recorded: completes=%d fails=%d state=%+v", repo.enCompletes, repo.enFails, repo.enState)
+	}
+	if m.ContentEn != "previous English" || m.ContentEnSourceHash != "old-hash" {
+		t.Fatal("failure changed the previous English note")
+	}
+}
+
+func TestEnglishCompletionFailuresAreRecorded(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"budget", repository.ErrSummaryLimit, "OUTPUT_TOO_LARGE"},
+		{"item size", errors.Join(repository.ErrSummaryLimit, errors.New("ValidationException: Item size has exceeded the maximum allowed size")), "OUTPUT_TOO_LARGE"},
+		{"source changed", repository.ErrConditionFailed, model.AnalysisSourceChanged},
+		{"other", errors.New("throttled"), model.AnalysisPersistenceFail},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, repo, published := newEnglishFixture(t, englishOK)
+			m := repo.meetings[meetingKey("owner", "meeting")]
+			m.ContentEn = "previous English"
+			if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); err != nil {
+				t.Fatal(err)
+			}
+			repo.enCompleteError = c.err
+			err := s.Process(context.Background(), (*published)[0])
+			if !errors.Is(err, c.err) {
+				t.Fatalf("completion error swallowed: %v", err)
+			}
+			if repo.enState.Status != model.AnalysisFailed || repo.enState.ErrorCode != c.code || m.ContentEn != "previous English" {
+				t.Fatalf("state=%+v contentEn=%q", repo.enState, m.ContentEn)
+			}
+		})
+	}
+}
+
+func TestEnglishRunSourceChangeMidRunIsRetryable(t *testing.T) {
+	var repo *resummaryTestRepo
+	s, r, published := newEnglishFixture(t, func(context.Context, *model.Meeting, []model.Attachment) (string, error) {
+		repo.meetings[meetingKey("owner", "meeting")].Status = model.StatusSummarizing
+		return "English", nil
+	})
+	repo = r
+	if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Process(context.Background(), (*published)[0]); err != nil {
+		t.Fatal(err)
+	}
+	if r.enCompletes != 0 || r.enState.Status != model.AnalysisFailed || r.enState.ErrorCode != model.AnalysisSourceChanged {
+		t.Fatalf("mid-run status change not recorded as source change: %+v", r.enState)
+	}
+	// A Korean content change alone does not invalidate a queued English run.
+	r.meetings[meetingKey("owner", "meeting")].Status = model.StatusDone
+	s.generator = resummaryGenerateFunc(func(context.Context, *model.Meeting, []model.Attachment) (string, error) {
+		r.meetings[meetingKey("owner", "meeting")].Content = "concurrent Korean edit"
+		return "English", nil
+	})
+	if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Process(context.Background(), (*published)[1]); err != nil {
+		t.Fatal(err)
+	}
+	if r.enState.Status != model.AnalysisSucceeded {
+		t.Fatalf("Korean edit failed the English run: %+v", r.enState)
+	}
+}
+
+func TestEnglishStaleWhenTranscriptChanges(t *testing.T) {
+	s, repo, published := newEnglishFixture(t, englishOK)
+	if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Process(context.Background(), (*published)[0]); err != nil {
+		t.Fatal(err)
+	}
+	note, err := s.GetEnglish(context.Background(), "owner", "meeting")
+	if err != nil || note.Stale || note.Content == "" || note.GeneratedAt == "" || note.Status != model.AnalysisSucceeded {
+		t.Fatalf("fresh note: %+v %v", note, err)
+	}
+	m := repo.meetings[meetingKey("owner", "meeting")]
+	m.Content = "edited Korean note"
+	if note, err = s.GetEnglish(context.Background(), "owner", "meeting"); err != nil || note.Stale {
+		t.Fatalf("Korean-only change marked English stale: %+v %v", note, err)
+	}
+	m.TranscriptB = "s3://bucket/transcripts/meeting/transcriptB.v2.txt"
+	if note, err = s.GetEnglish(context.Background(), "owner", "meeting"); err != nil || !note.Stale {
+		t.Fatalf("transcript change not stale: %+v %v", note, err)
+	}
+	repo.revoked = true
+	if _, err = s.GetEnglish(context.Background(), "owner", "meeting"); err == nil {
+		t.Fatal("failed freshness capture guessed a stale flag")
+	}
+	repo.revoked = false
+	m.ContentEn = ""
+	if note, err = s.GetEnglish(context.Background(), "owner", "meeting"); err != nil || note.Stale || note.Content != "" {
+		t.Fatalf("absent note: %+v %v", note, err)
+	}
+}
+
+// A freshness capture that fails for a non-authorization reason (too many
+// attachments/checks, a transient read error) must not hide a stored English
+// note: the reader still gets the content, flagged stale.
+func TestEnglishReadableWhenFreshnessCaptureFails(t *testing.T) {
+	for name, captureErr := range map[string]error{
+		"limit":     repository.ErrSummaryLimit,
+		"transient": errors.New("dynamodb unavailable"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, repo, published := newEnglishFixture(t, englishOK)
+			if _, err := s.RequestEnglish(context.Background(), "owner", "meeting"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Process(context.Background(), (*published)[0]); err != nil {
+				t.Fatal(err)
+			}
+			repo.shares[shareKey("reader", "meeting")] = &model.Share{MeetingID: "meeting", OwnerID: "owner", Permission: model.PermissionRead}
+			repo.captureError = captureErr
+			note, err := s.GetEnglish(context.Background(), "reader", "meeting")
+			if err != nil {
+				t.Fatalf("capture failure hid the English note: %v", err)
+			}
+			if note.Content == "" || !note.Stale || note.Status != model.AnalysisSucceeded {
+				t.Fatalf("want stored content flagged stale: %+v", note)
+			}
+			if _, err := s.GetEnglish(context.Background(), "stranger", "meeting"); err == nil {
+				t.Fatal("capture failure bypassed the access check")
+			}
+		})
+	}
+}
+
+func TestKoreanAndEnglishRunsIndependent(t *testing.T) {
+	s, repo, published := newEnglishFixture(t, englishOK)
+	korean, err := s.Request(context.Background(), "owner", "meeting")
+	if err != nil || !repo.state.Pending() {
+		t.Fatal(korean, err)
+	}
+	english, err := s.RequestEnglish(context.Background(), "owner", "meeting")
+	if err != nil || english.Status != model.AnalysisQueued || english.RunID == korean.RunID {
+		t.Fatalf("pending Korean run blocked English: %+v %v", english, err)
+	}
+	status, err := s.Get(context.Background(), "owner", "meeting")
+	if err != nil || status.RunID != korean.RunID {
+		t.Fatal("English request replaced the Korean run")
+	}
+	repo.state = nil
+	again, err := s.Request(context.Background(), "owner", "meeting")
+	if err != nil || again.Status != model.AnalysisQueued || again.RunID == english.RunID {
+		t.Fatalf("pending English run blocked Korean: %+v %v", again, err)
+	}
+	if len(*published) != 3 || (*published)[0].Target != "" || (*published)[1].Target != model.SummaryTargetEnglish || (*published)[2].Target != "" {
+		t.Fatalf("targets: %+v", *published)
+	}
+	// A Korean event never runs the English row and vice versa.
+	if err := s.Process(context.Background(), model.SummaryRequested{MeetingID: "meeting", RunID: english.RunID}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.enState.Status != model.AnalysisQueued {
+		t.Fatal("Korean dispatch consumed the English run")
+	}
+}
+
+func TestSummaryRequestedUnknownTargetRejected(t *testing.T) {
+	s, repo, _ := newEnglishFixture(t, englishOK)
+	if err := s.Process(context.Background(), model.SummaryRequested{MeetingID: "meeting", RunID: "run", Target: "fr"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	if repo.captures != 0 {
+		t.Fatal("unknown target did work")
 	}
 }

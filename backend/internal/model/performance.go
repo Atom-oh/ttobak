@@ -138,6 +138,8 @@ const PerformanceMappingUnreadable = "unreadable"
 
 type PerformanceMappingList struct {
 	Items []PerformanceMappingItem `json:"items"`
+	// Truncated is true when more assignments exist than Items holds.
+	Truncated bool `json:"truncated"`
 }
 
 type PerformanceGoalsInput struct {

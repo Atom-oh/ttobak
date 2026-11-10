@@ -165,7 +165,11 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 const resummaryMaxCaptureChecks = 96
 
 func (r *DynamoDBRepository) GetResummary(ctx context.Context, meetingID string) (*model.ResummaryState, error) {
-	row, err := r.summaryRow(ctx, model.PrefixMeeting+meetingID, model.ResummarySK)
+	return r.getSummaryState(ctx, meetingID, model.ResummarySK)
+}
+
+func (r *DynamoDBRepository) getSummaryState(ctx context.Context, meetingID, sk string) (*model.ResummaryState, error) {
+	row, err := r.summaryRow(ctx, model.PrefixMeeting+meetingID, sk)
 	if err != nil || len(row) == 0 {
 		return nil, err
 	}
@@ -190,8 +194,11 @@ func summaryRunCondition(state *model.ResummaryState) expression.ConditionBuilde
 	return condition
 }
 func (r *DynamoDBRepository) summaryChecks(snapshot *model.SummarySnapshot, start int) ([]types.TransactWriteItem, error) {
+	return r.conditionChecks(snapshot.Checks[start:])
+}
+func (r *DynamoDBRepository) conditionChecks(checks []model.SummaryCheck) ([]types.TransactWriteItem, error) {
 	var items []types.TransactWriteItem
-	for _, check := range snapshot.Checks[start:] {
+	for _, check := range checks {
 		expr, err := expression.NewBuilder().WithCondition(summaryCondition(check)).Build()
 		if err != nil {
 			return nil, err
@@ -240,6 +247,11 @@ func (r *DynamoDBRepository) QueueResummary(ctx context.Context, snapshot *model
 	if !validResummaryWrite(snapshot, next) {
 		return ErrConditionFailed
 	}
+	return r.queueSummaryState(ctx, snapshot.Meeting.MeetingID, model.ResummarySK, snapshot.Checks, prior, next)
+}
+
+// queueSummaryState claims the run row sk under the given source fences.
+func (r *DynamoDBRepository) queueSummaryState(ctx context.Context, meetingID, sk string, fences []model.SummaryCheck, prior, next *model.ResummaryState) error {
 	condition := expression.AttributeNotExists(expression.Name("PK"))
 	if prior != nil {
 		condition = summaryRunCondition(prior)
@@ -258,11 +270,11 @@ func (r *DynamoDBRepository) QueueResummary(ctx context.Context, snapshot *model
 		Set(expression.Name("errorCode"), expression.Value("")).
 		Set(expression.Name("resultHash"), expression.Value("")).
 		Set(expression.Name("entityType"), expression.Value("SUMMARY_ANALYSIS"))
-	op, err := analysisUpdate(r.tableName, summaryKey(snapshot.Meeting.MeetingID), update, condition)
+	op, err := analysisUpdate(r.tableName, summaryStateKey(meetingID, sk), update, condition)
 	if err != nil {
 		return err
 	}
-	checks, err := r.summaryChecks(snapshot, 0)
+	checks, err := r.conditionChecks(fences)
 	if err != nil {
 		return err
 	}
@@ -273,14 +285,19 @@ func (r *DynamoDBRepository) StartResummary(ctx context.Context, snapshot *model
 	if !validResummaryWrite(snapshot, state) {
 		return ErrConditionFailed
 	}
+	return r.startSummaryState(ctx, snapshot.Meeting.MeetingID, model.ResummarySK, snapshot.Checks, state, now, lease)
+}
+
+// startSummaryState moves the queued run row sk to running under the fences.
+func (r *DynamoDBRepository) startSummaryState(ctx context.Context, meetingID, sk string, fences []model.SummaryCheck, state *model.ResummaryState, now time.Time, lease int64) error {
 	condition := summaryRunCondition(state).And(expression.Name("leaseUntil").GreaterThan(expression.Value(now.UnixMilli())))
 	update := expression.Set(expression.Name("status"), expression.Value(model.AnalysisRunning)).
 		Set(expression.Name("leaseUntil"), expression.Value(lease)).Set(expression.Name("updatedAt"), expression.Value(now))
-	op, err := analysisUpdate(r.tableName, summaryKey(snapshot.Meeting.MeetingID), update, condition)
+	op, err := analysisUpdate(r.tableName, summaryStateKey(meetingID, sk), update, condition)
 	if err != nil {
 		return err
 	}
-	checks, err := r.summaryChecks(snapshot, 0)
+	checks, err := r.conditionChecks(fences)
 	if err != nil {
 		return err
 	}
@@ -288,13 +305,18 @@ func (r *DynamoDBRepository) StartResummary(ctx context.Context, snapshot *model
 	return summaryWriteError(err)
 }
 func (r *DynamoDBRepository) FailResummary(ctx context.Context, meetingID string, state *model.ResummaryState, code string, now time.Time) error {
+	return r.failSummaryState(ctx, meetingID, model.ResummarySK, state, code, now)
+}
+
+// failSummaryState records a failure on the run row sk; results are untouched.
+func (r *DynamoDBRepository) failSummaryState(ctx context.Context, meetingID, sk string, state *model.ResummaryState, code string, now time.Time) error {
 	if state == nil {
 		return ErrConditionFailed
 	}
 	update := expression.Set(expression.Name("status"), expression.Value(model.AnalysisFailed)).
 		Set(expression.Name("errorCode"), expression.Value(code)).
 		Set(expression.Name("leaseUntil"), expression.Value(int64(0))).Set(expression.Name("updatedAt"), expression.Value(now))
-	op, err := analysisUpdate(r.tableName, summaryKey(meetingID), update, summaryRunCondition(state))
+	op, err := analysisUpdate(r.tableName, summaryStateKey(meetingID, sk), update, summaryRunCondition(state))
 	if err != nil {
 		return err
 	}
@@ -343,7 +365,7 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 		if err != nil {
 			return err
 		}
-		if len(body) <= 300*1024 {
+		if len(body) <= summaryInlineBudget {
 			break
 		}
 		pick, text := "", ""
@@ -418,8 +440,15 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 }
 
 func summaryKey(meetingID string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
+	return summaryStateKey(meetingID, model.ResummarySK)
+}
+
+func englishSummaryKey(meetingID string) map[string]types.AttributeValue {
+	return summaryStateKey(meetingID, model.EnglishSummarySK)
+}
+
+func summaryStateKey(meetingID, sk string) map[string]types.AttributeValue {
+	return summaryRowKey(model.PrefixMeeting+meetingID, sk)
 }
 
 func summaryCheckSK(check *types.ConditionCheck) (string, bool) {

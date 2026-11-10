@@ -24,14 +24,51 @@ func summaryAttachmentSnapshot(content string, attachments []model.Attachment) s
 	return string(body)
 }
 
+// attachmentNoticeCopy is the deterministic coverage-notice wording for one
+// note language. Korean is the historical byte-identical text.
+type attachmentNoticeCopy struct {
+	heading, changedEvidence, unverifiable, sizeOmitted, notIncluded, excerpted, partial string
+}
+
+var (
+	koreanAttachmentNotice = attachmentNoticeCopy{
+		heading:         "\n\n### 첨부 근거 범위\n",
+		changedEvidence: "- %s: 변경된 첨부 근거를 제외했습니다.",
+		unverifiable:    "- %s: 검증할 수 없는 문서 근거를 제외했습니다. 추출 상태 또는 인용을 확인한 뒤 다시 요약하세요.",
+		sizeOmitted:     "- %s: 크기 제한으로 문서 본문을 제공하지 못했습니다.",
+		notIncluded:     "- %s: 문서 본문은 이 요약에 반영되지 않았습니다. 추출 상태 확인 후 다시 요약하세요.",
+		excerpted:       "- %s: 크기 제한에 따라 문서 본문의 일부 발췌만 반영했습니다.",
+		partial:         "- %s: 부분 추출된 문서 근거를 반영했습니다.",
+	}
+	englishAttachmentNotice = attachmentNoticeCopy{
+		heading:         "\n\n### Attachment evidence coverage\n",
+		changedEvidence: "- %s: Changed attachment evidence was excluded.",
+		unverifiable:    "- %s: Unverifiable document evidence was excluded. Check the extraction status or citations, then regenerate the notes.",
+		sizeOmitted:     "- %s: The document text could not be provided because of size limits.",
+		notIncluded:     "- %s: The document text is not reflected in these notes. Check the extraction status, then regenerate the notes.",
+		excerpted:       "- %s: Only an excerpt of the document text was used because of size limits.",
+		partial:         "- %s: Partially extracted document evidence was used.",
+	}
+)
+
 // Append a deterministic coverage notice: model output cannot silently claim
 // unprovided document text was incorporated into this saved summary.
 func summaryAttachmentNotice(attachments []model.Attachment) string {
+	return summaryAttachmentNoticeFor(attachments, model.NoteLanguageKorean)
+}
+
+// summaryAttachmentNoticeFor renders the coverage notice in the note's
+// language; anything other than English keeps the Korean wording.
+func summaryAttachmentNoticeFor(attachments []model.Attachment, language string) string {
+	text := koreanAttachmentNotice
+	if language == model.NoteLanguageEnglish {
+		text = englishAttachmentNotice
+	}
 	var notes []string
 	for _, att := range attachments {
 		name := sanitizeMarkdownText(att.FileName)
 		if att.SummaryOmitted && att.Type != model.AttachTypeDocument {
-			notes = append(notes, fmt.Sprintf("- %s: 변경된 첨부 근거를 제외했습니다.", name))
+			notes = append(notes, fmt.Sprintf(text.changedEvidence, name))
 			continue
 		}
 		if att.Type != model.AttachTypeDocument || att.Status != model.AttachStatusDone {
@@ -39,21 +76,21 @@ func summaryAttachmentNotice(attachments []model.Attachment) string {
 		}
 		switch {
 		case att.SummaryOmitted:
-			notes = append(notes, fmt.Sprintf("- %s: 검증할 수 없는 문서 근거를 제외했습니다. 추출 상태 또는 인용을 확인한 뒤 다시 요약하세요.", name))
+			notes = append(notes, fmt.Sprintf(text.unverifiable, name))
 		case att.ExtractedText == nil && att.SummaryExcerpted:
-			notes = append(notes, fmt.Sprintf("- %s: 크기 제한으로 문서 본문을 제공하지 못했습니다.", name))
+			notes = append(notes, fmt.Sprintf(text.sizeOmitted, name))
 		case att.ExtractedText == nil:
-			notes = append(notes, fmt.Sprintf("- %s: 문서 본문은 이 요약에 반영되지 않았습니다. 추출 상태 확인 후 다시 요약하세요.", name))
+			notes = append(notes, fmt.Sprintf(text.notIncluded, name))
 		case att.SummaryExcerpted:
-			notes = append(notes, fmt.Sprintf("- %s: 크기 제한에 따라 문서 본문의 일부 발췌만 반영했습니다.", name))
+			notes = append(notes, fmt.Sprintf(text.excerpted, name))
 		case !att.ExtractedText.Complete:
-			notes = append(notes, fmt.Sprintf("- %s: 부분 추출된 문서 근거를 반영했습니다.", name))
+			notes = append(notes, fmt.Sprintf(text.partial, name))
 		}
 	}
 	if len(notes) == 0 {
 		return ""
 	}
-	return "\n\n### 첨부 근거 범위\n" + strings.Join(notes, "\n")
+	return text.heading + strings.Join(notes, "\n")
 }
 
 // Resolve only model-selected unit indexes that exist in supplied document

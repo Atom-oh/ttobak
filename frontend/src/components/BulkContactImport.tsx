@@ -10,17 +10,30 @@ import type { ContactInput } from '@/types/meeting';
 const fieldLabel = Object.fromEntries(CONTACT_FIELDS) as Record<ContactField, string>;
 const statusLabel: Record<BulkRowResult['status'], string> = { created: '추가', filled: '빈 칸 보강', unchanged: '변경 없음', dropped: '드랍', invalid: '이름 없음', failed: '실패 또는 저장 여부 확인 필요' };
 
-/** Loads the accounts the user directly belongs to, with names, aliases and domains for matching. */
+/**
+ * Loads the accounts the user can read, with names, aliases and domains for matching.
+ * Contact writes require direct membership, so ancestor/descendant accounts reached only
+ * through the hierarchy (the unscoped list) are marked direct: false and never preselected.
+ */
 async function loadMatchAccounts(userId: string, signal: AbortSignal): Promise<MatchAccount[]> {
-  const { accounts } = await accountApi.list({ scope: 'direct', expectedUserId: userId });
-  const direct = accounts.filter((a) => !a.inheritedFromAccountId);
+  const { accounts: directList } = await accountApi.list({ scope: 'direct', expectedUserId: userId });
+  const directIds = new Set(directList.filter((a) => !a.inheritedFromAccountId).map((a) => a.accountId));
+  let readable = directList;
+  try {
+    readable = (await accountApi.list({ expectedUserId: userId })).accounts;
+  } catch (err) {
+    // Hierarchy matches are an extra; direct accounts alone still work.
+    if (isContactAccessDenied(err)) throw err;
+  }
+  const targets = [...new Map([...directList, ...readable].map((a) => [a.accountId, a])).values()]
+    .filter((a) => directIds.has(a.accountId) || a.inheritedFromAccountId);
   const out: MatchAccount[] = [];
   let next = 0;
   const worker = async () => {
-    while (next < direct.length && !signal.aborted) {
-      const summary = direct[next++];
+    while (next < targets.length && !signal.aborted) {
+      const summary = targets[next++];
       const detail = await accountApi.get(summary.accountId, { signal, expectedUserId: userId });
-      out.push({ accountId: summary.accountId, name: detail.name || summary.name, aliases: detail.aliases || [], domains: detail.domains || [] });
+      out.push({ accountId: summary.accountId, name: detail.name || summary.name, aliases: detail.aliases || [], domains: detail.domains || [], direct: directIds.has(summary.accountId) });
     }
   };
   await Promise.all(Array.from({ length: 6 }, worker));
@@ -54,6 +67,7 @@ export function BulkContactImport({ userId }: { userId: string }) {
   const contacts = useMemo<ContactInput[]>(() => table.slice(1).map((row) => contactFromRow(row, mapping)), [table, mapping]);
   const groups = useMemo<CompanyGroup[]>(() => accounts ? groupByCompany(contacts, accounts) : [], [contacts, accounts]);
   const accountName = (id: string) => accounts?.find((a) => a.accountId === id)?.name || id;
+  const isNonDirect = (id: string) => accounts?.find((a) => a.accountId === id)?.direct === false;
   const decisionOf = (group: CompanyGroup) => decisions[group.key] ?? defaultDecision(group);
   const groupLocked = (group: CompanyGroup) => group.rows.some((row) => !!results[row]?.accountId);
   const skipRow = (row: number) => {
@@ -196,8 +210,9 @@ export function BulkContactImport({ userId }: { userId: string }) {
       }} className="rounded border border-slate-200 bg-white p-1.5 text-sm dark:border-white/10 dark:bg-slate-900">
         <option value="drop">드랍 (가져오지 않음)</option>
         <option value="new">새 고객사로 추가</option>
-        {candidates.length > 0 && <optgroup label="비슷한 고객사">{candidates.map((id) => <option key={id} value={`a:${id}`}>{accountName(id)}</option>)}</optgroup>}
-        <optgroup label="다른 고객사 선택">{(accounts || []).filter((a) => !candidates.includes(a.accountId)).map((a) => <option key={a.accountId} value={`a:${a.accountId}`}>{a.name}</option>)}</optgroup>
+        {candidates.some((id) => !isNonDirect(id)) && <optgroup label="비슷한 고객사">{candidates.filter((id) => !isNonDirect(id)).map((id) => <option key={id} value={`a:${id}`}>{accountName(id)}</option>)}</optgroup>}
+        <optgroup label="다른 고객사 선택">{(accounts || []).filter((a) => a.direct !== false && !candidates.includes(a.accountId)).map((a) => <option key={a.accountId} value={`a:${a.accountId}`}>{a.name}</option>)}</optgroup>
+        {(accounts || []).some((a) => a.direct === false) && <optgroup label="상위/하위 고객사 — 직접 멤버만 추가 가능">{(accounts || []).filter((a) => a.direct === false).map((a) => <option key={a.accountId} value={`a:${a.accountId}`} disabled>{a.name}</option>)}</optgroup>}
       </select>
       {decision.action === 'new' && <input aria-label={`${groupTitle(g)} 새 고객사 이름`} value={decision.name} disabled={busy || locked} maxLength={200}
         onChange={(e) => { if (!locked) setDecision(g.key, { action: 'new', name: e.target.value }); }}
@@ -256,7 +271,9 @@ export function BulkContactImport({ userId }: { userId: string }) {
         <h4 className="text-sm font-semibold">확인이 필요한 회사 {pending.length}곳</h4>
         <p className="text-xs text-slate-500">고르지 않은 회사는 드랍됩니다.</p>
         <ul className="mt-2 space-y-2">{pending.map((g) => <li key={g.key} className="rounded border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-500/30 dark:bg-amber-500/5">
-          <div className="text-sm font-semibold">{groupTitle(g)} <span className="font-normal text-slate-500">· {g.match.kind === 'similar' ? '비슷한 고객사가 있습니다' : '일치하는 고객사가 없습니다'}</span></div>
+          <div className="text-sm font-semibold">{groupTitle(g)} <span className="font-normal text-slate-500">· {g.suggestedAccountId ? '이름이 비슷한 고객사를 추천합니다' : g.match.kind === 'similar' ? '비슷한 고객사가 있습니다' : '일치하는 고객사가 없습니다'}</span>
+            {g.suggestedAccountId && <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">추천: {accountName(g.suggestedAccountId)}</span>}
+            {g.nonDirect?.map((id) => <span key={id} className="ml-1 text-xs text-amber-700">{accountName(id)}: 상위/하위 고객사 — 직접 멤버만 추가 가능</span>)}</div>
           {decisionControl(g)}
           {people(g)}
         </li>)}</ul>

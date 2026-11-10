@@ -456,7 +456,20 @@ func (svc *PerformanceService) ListMissed(ctx context.Context, userID, period st
 	for _, account := range accounts {
 		readable[account.ID] = true
 	}
-	stored, err := svc.store.ListAccountMappings(ctx, userID)
+	assignments, err := svc.store.ListPerformanceAssignments(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(assignments))
+	seenIDs := make(map[string]bool, len(assignments))
+	for _, assignment := range assignments {
+		if assignment.SFDCAccountID != "" && !seenIDs[assignment.SFDCAccountID] {
+			seenIDs[assignment.SFDCAccountID] = true
+			ids = append(ids, assignment.SFDCAccountID)
+		}
+	}
+	sort.Strings(ids)
+	stored, err := svc.store.GetAccountMappings(ctx, userID, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -468,10 +481,6 @@ func (svc *PerformanceService) ListMissed(ctx context.Context, userID, period st
 			mappings[mapping.SFDCAccountID] = mapping.AccountID
 			mappedAccounts[mapping.AccountID] = true
 		}
-	}
-	assignments, err := svc.store.ListPerformanceAssignments(ctx, userID)
-	if err != nil {
-		return nil, err
 	}
 	tasks, err := svc.store.ListPerformanceTasks(ctx, userID, lookback.Format(performanceDateLayout),
 		p.To.AddDate(0, 0, cfg.GapDays).Format(performanceDateLayout))
