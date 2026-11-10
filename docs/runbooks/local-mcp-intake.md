@@ -192,7 +192,10 @@ meeting prompt. Check by hand with the packaged app running:
    the app, which reopen or focus path navigated) in ADR-065's status line.
 
 Any focus of the main window inside the 10-minute window navigates it, even if
-you were already on another page.
+you were already on another page. It never navigates while a recording is
+running; the target is kept and a later focus after the recording stops can
+still open it until the 10 minutes pass. Only the latest notice of a burst is
+openable.
 
 ## Schedule (after acceptance)
 

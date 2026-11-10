@@ -235,10 +235,19 @@ impl OpenTarget {
     }
 
     /// Returns the path once if it is still inside the window, and clears it.
-    pub fn take(&self, now: SystemTime) -> Option<String> {
-        let (path, at) = self.slot.lock().take()?;
-        let age = now.duration_since(at).unwrap_or_default();
-        (age <= OPEN_WINDOW).then_some(path)
+    /// While `blocked` (a recording is running) the target is kept, still
+    /// bounded by its expiry, so a later focus can open it.
+    pub fn take(&self, now: SystemTime, blocked: bool) -> Option<String> {
+        let mut slot = self.slot.lock();
+        let (_, at) = slot.as_ref()?;
+        if now.duration_since(*at).unwrap_or_default() > OPEN_WINDOW {
+            *slot = None;
+            return None;
+        }
+        if blocked {
+            return None;
+        }
+        slot.take().map(|(path, _)| path)
     }
 }
 
@@ -275,7 +284,13 @@ pub fn open_pending(app: &AppHandle) {
     let Some(target) = app.try_state::<Arc<OpenTarget>>() else {
         return;
     };
-    let Some(path) = target.take(SystemTime::now()) else {
+    // Reloading the SPA mid-recording would lose live-caption state and
+    // unsaved text, so a notice never navigates while recording.
+    let recording = app
+        .try_state::<crate::RecorderState>()
+        .map(|s| s.recorder.lock().snapshot().recording)
+        .unwrap_or(false);
+    let Some(path) = target.take(SystemTime::now(), recording) else {
         return;
     };
     let Some(url) = main_window_base(app).and_then(|b| target_url(&b, &path)) else {
@@ -307,7 +322,7 @@ fn read_queue(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let file = match std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
     {
         Ok(f) => f,
@@ -510,7 +525,14 @@ mod tests {
 
     #[test]
     fn seen_store_posts_once_and_prunes() {
-        let dir = std::env::temp_dir().join(format!("ttobak-seen-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "ttobak-seen-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let file = dir.join("intake-notified.json");
         let mut store = SeenStore::load(file.clone());
         let q = format!("{}\n{}\n", good("acked"), good("acked"));
@@ -543,11 +565,23 @@ mod tests {
         let t = OpenTarget::default();
         let p = format!("/meetings?task={ID}");
         t.set(&p, at(NOW));
-        assert_eq!(t.take(at(NOW + 599)), Some(p.clone()));
-        assert_eq!(t.take(at(NOW + 600)), None, "consumed");
+        assert_eq!(t.take(at(NOW + 599), false), Some(p.clone()));
+        assert_eq!(t.take(at(NOW + 600), false), None, "consumed");
         t.set(&p, at(NOW));
-        assert_eq!(t.take(at(NOW + 601)), None, "expired");
-        assert_eq!(t.take(at(NOW)), None, "expiry also clears");
+        assert_eq!(t.take(at(NOW + 601), false), None, "expired");
+        assert_eq!(t.take(at(NOW), false), None, "expiry also clears");
+    }
+
+    #[test]
+    fn open_target_is_kept_while_recording() {
+        let t = OpenTarget::default();
+        let p = format!("/meetings?task={ID}");
+        t.set(&p, at(NOW));
+        assert_eq!(t.take(at(NOW + 60), true), None, "blocked");
+        assert_eq!(t.take(at(NOW + 120), false), Some(p.clone()), "kept");
+        t.set(&p, at(NOW));
+        assert_eq!(t.take(at(NOW + 601), true), None);
+        assert_eq!(t.take(at(NOW + 602), false), None, "expired while blocked");
     }
 
     #[test]
