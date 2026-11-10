@@ -36,8 +36,11 @@ func eventCreateFailure(err error) connector.InvokeResult {
 		status, code = 400, "BAD_REQUEST"
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, connector.ErrCapabilityDenied), errors.Is(err, repository.ErrEventAccess):
 		status, code = 403, "CAPABILITY_DENIED"
+	case errors.Is(err, repository.ErrConnectorReplayAccountMerging):
+		// The receipt exists: the event was created before the merge began.
+		status, code, message = 409, model.ErrCodeReplayAccountMerging, "The event was created before the account began merging; do not recreate it"
 	case errors.Is(err, service.ErrAccountMerging):
-		// The fence rejected the write before any row changed: definitive.
+		// The fence rejected a first create before any row changed: definitive.
 		status, code, message = 409, model.ErrCodeAccountMerging, "Account is merging into another account or already merged"
 	case errors.Is(err, repository.ErrConnectorReceiptMissing):
 		status, code = 404, "RECEIPT_NOT_FOUND"
