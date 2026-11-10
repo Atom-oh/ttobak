@@ -46,7 +46,8 @@ type PerformanceStore interface {
 	ReplayPerformanceBatch(ctx context.Context, userID, source, batchID, digest string) (*model.PerformanceSyncReceipt, error)
 	ListPerformanceSources(ctx context.Context, userID string) ([]model.PerformanceSourceStatus, error)
 	ListPerformanceAssignments(ctx context.Context, userID string) ([]model.SFDCAssignment, error)
-	ListAccountMappings(ctx context.Context, userID string) ([]model.AccountMapping, error)
+	// GetAccountMappings returns the mappings for exactly the given SFDC IDs.
+	GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error)
 	PutAccountMapping(ctx context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error
 	GetPerformanceGoals(ctx context.Context, userID string, year int) (*model.PerformanceGoals, error)
 	PutPerformanceGoals(ctx context.Context, userID string, goals model.PerformanceGoals) error
@@ -304,18 +305,18 @@ func (svc *PerformanceService) ListMappings(ctx context.Context, userID string) 
 	if err != nil {
 		return nil, err
 	}
-	mappings, err := svc.store.ListAccountMappings(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].SFDCAccountID < assignments[j].SFDCAccountID })
 	truncated := len(assignments) > MaxPerformanceAssignments
 	if truncated {
 		assignments = assignments[:MaxPerformanceAssignments]
 	}
-	bySFDC := make(map[string]model.AccountMapping, len(mappings))
-	for _, mapping := range mappings {
-		bySFDC[mapping.SFDCAccountID] = mapping
+	ids := make([]string, len(assignments))
+	for i, assignment := range assignments {
+		ids[i] = assignment.SFDCAccountID
+	}
+	bySFDC, err := svc.store.GetAccountMappings(ctx, userID, ids)
+	if err != nil {
+		return nil, err
 	}
 	list := &model.PerformanceMappingList{Items: make([]model.PerformanceMappingItem, 0, len(assignments)), Truncated: truncated}
 	for _, assignment := range assignments {

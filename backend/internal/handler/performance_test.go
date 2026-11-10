@@ -107,10 +107,12 @@ func (store *performanceMemoryStore) ListPerformanceAssignments(_ context.Contex
 	return out, nil
 }
 
-func (store *performanceMemoryStore) ListAccountMappings(_ context.Context, userID string) ([]model.AccountMapping, error) {
-	var out []model.AccountMapping
-	for _, mapping := range store.mappings[userID] {
-		out = append(out, mapping)
+func (store *performanceMemoryStore) GetAccountMappings(_ context.Context, userID string, ids []string) (map[string]model.AccountMapping, error) {
+	out := map[string]model.AccountMapping{}
+	for _, id := range ids {
+		if mapping, ok := store.mappings[userID][id]; ok {
+			out[id] = mapping
+		}
 	}
 	return out, nil
 }

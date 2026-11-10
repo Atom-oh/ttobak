@@ -130,7 +130,7 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
 - Assignment upsert (`sfdc-assignments` only): `sfdcAccountId`, `name` (at most
   200 bytes) and `role` (at most 64 bytes). An owner keeps at most 500
   assignments: a batch raising the stored count above 500 (current plus new IDs
-  minus removes) returns `400 INVALID_INPUT`; updates and removes always pass.
+  minus removes) returns `400 BAD_REQUEST`; updates and removes always pass.
   The check is read-then-write, so concurrent batches may overshoot by 20 each.
 - Task upsert (`sfdc-tasks` only): `taskId`, optional `sfdcAccountId` (an
   accountless task is kept and stays unmapped), `activityDate`, `type`,
@@ -141,9 +141,9 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
 - Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
   or task ID.
 
-The mappings list reads at most 501 assignment and 501 mapping rows (no cursor)
-and returns the first 500 assignments; worst case is 500 items of about 0.5 KiB
-(under 256 KiB). Rows beyond the cap are never returned.
+The mappings list reads at most 501 assignment rows (no cursor), returns the
+first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
+retained mapping rows never hide a mapping.
 
 IDs match `[A-Za-z0-9_-]{1,64}`. The service hashes the normalized request
 (SHA-256 of its canonical JSON); an identical batch replays its receipt within

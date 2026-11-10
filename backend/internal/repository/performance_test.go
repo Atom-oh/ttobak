@@ -502,3 +502,32 @@ func TestListPerformanceAssignmentsReadIsBounded(test *testing.T) {
 		test.Fatalf("assignments=%d queries=%d err=%v", len(assignments), queries, err)
 	}
 }
+
+func TestGetAccountMappingsChunksAndRetries(test *testing.T) {
+	defer func(previous time.Duration) { batchReadBackoff = previous }(batchReadBackoff)
+	batchReadBackoff = time.Millisecond
+	ids := make([]string, 0, 150)
+	rows := map[batchWireKey]map[string]any{}
+	for i := 0; i < 150; i++ {
+		id := fmt.Sprintf("A%04d", i)
+		ids = append(ids, id)
+		if i%2 == 0 {
+			rows[batchWireKey{"USER#owner", "PERFMAP#" + id}] = map[string]any{"PK": map[string]any{"S": "USER#owner"}, "SK": map[string]any{"S": "PERFMAP#" + id},
+				"userId": map[string]any{"S": "owner"}, "sfdcAccountId": map[string]any{"S": id}, "accountId": map[string]any{"S": "acct"}}
+		}
+	}
+	wire := &batchWire{rows: rows, unprocessed: func(n int, keys []batchWireKey) []batchWireKey {
+		if n == 0 {
+			return keys[:3]
+		}
+		return nil
+	}}
+	got, err := wire.repo(test).GetAccountMappings(test.Context(), "owner", ids)
+	if err != nil || len(got) != 75 || got["A0000"].AccountID != "acct" || len(wire.requests) != 3 {
+		test.Fatalf("mappings=%d requests=%d err=%v", len(got), len(wire.requests), err)
+	}
+	always := &batchWire{rows: rows, unprocessed: func(_ int, keys []batchWireKey) []batchWireKey { return keys[:1] }}
+	if got, err := always.repo(test).GetAccountMappings(test.Context(), "owner", ids[:2]); err == nil || got != nil {
+		test.Fatalf("persistent unprocessed keys must fail without partial data: %v %v", got, err)
+	}
+}

@@ -470,20 +470,33 @@ func (r *DynamoDBRepository) ListPerformanceAssignments(ctx context.Context, use
 	return assignments, nil
 }
 
-// ListAccountMappings returns at most PerformanceListRowLimit rows.
-func (r *DynamoDBRepository) ListAccountMappings(ctx context.Context, userID string) ([]model.AccountMapping, error) {
-	items, err := r.queryPerformanceRows(ctx, userID, model.PrefixPerformanceMapping, PerformanceListRowLimit)
+// GetAccountMappings reads the mapping rows for the given SFDC account IDs by
+// key (consistent BatchGetItem, 100 keys per chunk, bounded UnprocessedKeys
+// retries). Missing rows are absent from the result; an incomplete read is an
+// error, never partial data.
+func (r *DynamoDBRepository) GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error) {
+	if !performanceUserID.MatchString(userID) {
+		return nil, ErrInvalidPerformanceInput
+	}
+	keys := make([]batchRowKey, 0, len(sfdcAccountIDs))
+	for _, id := range sfdcAccountIDs {
+		if !performanceExternal.MatchString(id) {
+			return nil, ErrInvalidPerformanceInput
+		}
+		keys = append(keys, batchRowKey{PK: model.PrefixUser + userID, SK: model.PerformanceMappingSortKey(id)})
+	}
+	mappings := make(map[string]model.AccountMapping, len(keys))
+	err := r.batchGetConsistent(ctx, keys, nil, func(key batchRowKey, item map[string]types.AttributeValue) error {
+		var row performanceMappingRow
+		if err := attributevalue.UnmarshalMap(item, &row); err != nil || row.UserID != userID ||
+			row.SK != model.PerformanceMappingSortKey(row.SFDCAccountID) {
+			return fmt.Errorf("invalid account mapping row")
+		}
+		mappings[row.SFDCAccountID] = row.AccountMapping
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	mappings := make([]model.AccountMapping, 0, len(items))
-	for _, item := range items {
-		var row performanceMappingRow
-		if attributevalue.UnmarshalMap(item, &row) != nil || row.PK != model.PrefixUser+userID || row.UserID != userID ||
-			row.SK != model.PerformanceMappingSortKey(row.SFDCAccountID) {
-			continue
-		}
-		mappings = append(mappings, row.AccountMapping)
 	}
 	return mappings, nil
 }

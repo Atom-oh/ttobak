@@ -73,8 +73,18 @@ func (fake *performanceStoreFake) ListPerformanceAssignments(_ context.Context, 
 	return fake.assignments[userID], nil
 }
 
-func (fake *performanceStoreFake) ListAccountMappings(_ context.Context, userID string) ([]model.AccountMapping, error) {
-	return fake.mappings[userID], nil
+func (fake *performanceStoreFake) GetAccountMappings(_ context.Context, userID string, ids []string) (map[string]model.AccountMapping, error) {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[string]model.AccountMapping{}
+	for _, mapping := range fake.mappings[userID] {
+		if want[mapping.SFDCAccountID] {
+			out[mapping.SFDCAccountID] = mapping
+		}
+	}
+	return out, nil
 }
 
 func (fake *performanceStoreFake) PutAccountMapping(_ context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error {
@@ -345,7 +355,9 @@ func TestSyncRejectsAssignmentsOverCap(test *testing.T) {
 	up := func(id string) model.PerformanceMutation {
 		return model.PerformanceMutation{Op: "upsert", Assignment: &model.SFDCAssignment{SFDCAccountID: id, Name: "n"}}
 	}
-	rm := func(id string) model.PerformanceMutation { return model.PerformanceMutation{Op: "remove", ExternalID: id} }
+	rm := func(id string) model.PerformanceMutation {
+		return model.PerformanceMutation{Op: "remove", ExternalID: id}
+	}
 	const max = MaxPerformanceAssignments
 	for _, tc := range []struct {
 		name   string
@@ -378,5 +390,21 @@ func TestListMappingsBoundedAndTruncated(test *testing.T) {
 		if err != nil || len(list.Items) != MaxPerformanceAssignments || list.Truncated != (n > MaxPerformanceAssignments) || list.Items[0].SFDCAccountID != "A0000" {
 			test.Fatalf("n=%d: items=%d truncated=%v err=%v", n, len(list.Items), list.Truncated, err)
 		}
+	}
+}
+
+func TestListMappingsFindsMappingBeyondOrphans(test *testing.T) {
+	mappings := make([]model.AccountMapping, 0, 602)
+	for i := 0; i < 600; i++ {
+		mappings = append(mappings, model.AccountMapping{SFDCAccountID: fmt.Sprintf("A%04d", i), AccountID: "orphan", Manual: true})
+	}
+	mappings = append(mappings, model.AccountMapping{SFDCAccountID: "B0000", AccountID: "acct-1"}, model.AccountMapping{SFDCAccountID: "B0001", AccountID: "acct-2"})
+	store := &performanceStoreFake{
+		assignments: map[string][]model.SFDCAssignment{"owner": {{SFDCAccountID: "B0001"}, {SFDCAccountID: "B0000"}}},
+		mappings:    map[string][]model.AccountMapping{"owner": mappings},
+	}
+	list, err := performanceTestService(store, nil).ListMappings(test.Context(), "owner")
+	if err != nil || len(list.Items) != 2 || !list.Items[0].Mapped || !list.Items[1].Mapped || list.Items[1].AccountID != "acct-2" {
+		test.Fatalf("assigned accounts must be mapped: %+v %v", list, err)
 	}
 }
