@@ -58,7 +58,7 @@ function markup(props = {}) {
   const load = loader({
     react: React, 'react/jsx-runtime': jsxRuntime,
     'next/link': { default: ({ children, ...attributes }) => React.createElement('a', attributes, children) },
-    '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {},
+    '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {}, '@/components/workspace/SpecReqTaskActions': {},
   });
   const { UpcomingMeetings } = load('@/components/workspace/UpcomingMeetings');
   return renderToStaticMarkup(React.createElement(UpcomingMeetings, {
@@ -180,4 +180,105 @@ test('task API uses private no-store requests', async () => {
   assert.match(requests[2].url, /\/transitions$/);
   assert.equal(requests[2].options.method, 'POST');
   assert.deepEqual(JSON.parse(requests[2].options.body), { op: 'close', version: 3 });
+});
+
+const actionsLoad = () => loader({
+  react: React, 'react/jsx-runtime': jsxRuntime,
+  '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId: 'me' } }) },
+  '@/lib/api': { accountApi: {} },
+});
+
+test('slack copy renders the contract fixture', () => {
+  const fixture = JSON.parse(readFileSync(new URL('../../contracts/specreq/slack-request-v1.json', import.meta.url), 'utf8'));
+  const { SLACK_REQUEST_TEMPLATE, renderSlackRequest, formatSlackDateTime } = loader({})('@/lib/slackRequest');
+  assert.equal(SLACK_REQUEST_TEMPLATE, fixture.template);
+  assert.equal(renderSlackRequest(fixture.input), fixture.expected);
+  assert.equal(renderSlackRequest({ ...fixture.input, meetingTitle: '{me} {account}\nline' }).includes('{me} {account} line'), true, 'values are not re-expanded');
+  assert.equal(formatSlackDateTime('2026-11-12T05:00:00Z', 'Asia/Seoul'), fixture.input.localDateTime);
+  assert.equal(formatSlackDateTime('not a date', 'Asia/Seoul'), '');
+});
+
+function view(extra) {
+  const { SpecReqActionsView } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
+  return renderToStaticMarkup(React.createElement(SpecReqActionsView, {
+    task: task(id('a'), 'issue_needed'), myName: 'Me', accounts: [{ accountId: 'acct-1', name: 'Acme', role: 'SA' }],
+    members: null, myUserId: 'me', pending: false, onCopy() {}, onChange() {}, ...extra,
+  }));
+}
+
+test('actions per state', () => {
+  const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
+  const labels = {
+    copy: copy.copySlack, sent: copy.markRequested, account: copy.accountSubmit, owner: copy.ownerSubmit, link: copy.linkSubmit,
+  };
+  const cases = [
+    [{ state: 'request_needed', path: 'theirs' }, ['copy', 'sent']],
+    [{ state: 'needs_account' }, ['account']],
+    [{ state: 'needs_owner', accountId: 'acct-1' }, ['owner'], [{ userId: 'u1', role: 'SA' }]],
+    [{ state: 'issue_needed', path: 'mine' }, ['link']],
+    [{ state: 'issue_needed', path: 'theirs' }, []],
+    [{ state: 'requested', path: 'theirs' }, ['link']],
+    [{ state: 'requested', path: 'mine' }, []],
+    [{ state: 'issued', path: 'mine' }, []], [{ state: 'acked', path: 'theirs' }, []],
+    [{ state: 'ack_failed', path: 'theirs' }, []], [{ state: 'resolved', path: 'mine' }, []], [{ state: 'closed' }, []],
+  ];
+  for (const [fields, wanted, members] of cases) {
+    const output = view({ task: task(id('a'), fields.state, fields), members: members ?? null, slackText: 'text' });
+    for (const [name, label] of Object.entries(labels)) {
+      assert.equal(output.includes(label), wanted.includes(name), `${fields.state}/${fields.path}: ${name}`);
+    }
+  }
+  assert.doesNotMatch(view({ task: task(id('a'), 'needs_account') }), new RegExp(copy.accountWaiting));
+  assert.match(view({ task: task(id('a'), 'needs_account', { accountId: 'acct-1' }) }), new RegExp(copy.accountWaiting));
+  assert.match(view({ pending: true, task: task(id('a'), 'request_needed', { path: 'theirs' }), slackText: 'text' }),
+    /<button[^>]*disabled=""[^>]*>[^<]*요청 보냄/, 'buttons disable while pending');
+  assert.match(view({ message: copy.conflict }), /role="alert"[^>]*>다른 곳에서/);
+});
+
+test('SpecReq link is a noopener new-tab link to the pinned ID', () => {
+  const specReqId = '11111111-2222-4333-8444-555555555555';
+  const output = view({ task: task(id('a'), 'requested', { path: 'theirs', specReqId }) });
+  assert.match(output, /<a href="[^"]*11111111-2222-4333-8444-555555555555" target="_blank" rel="noopener noreferrer"/);
+  assert.doesNotMatch(view({ task: task(id('a'), 'requested', { path: 'theirs', specReqId: 'javascript:alert(1)' }) }), /<a /);
+  const { parseSpecReqId } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
+  assert.equal(parseSpecReqId(` ${specReqId.toUpperCase()} `), specReqId);
+  assert.equal(parseSpecReqId('00000000-0000-0000-0000-000000000000'), undefined);
+  assert.equal(parseSpecReqId('nope'), undefined);
+});
+
+test('owner picker excludes me, AM roles and pending members', () => {
+  const { ownerCandidates } = actionsLoad()('@/components/workspace/SpecReqTaskActions');
+  const members = [
+    { userId: 'me', role: 'SA' }, { userId: 'u1', role: 'SA', email: 'a@example.test' }, { userId: 'u2', role: 'SSA' },
+    { userId: 'u3', role: 'AM' }, { userId: 'u4', role: 'TAM' }, { userId: 'u5', role: 'SA Manager' },
+    { email: 'pending@example.test', role: 'SA', pending: true }, { userId: 'u6', role: 'SA', pending: true },
+  ];
+  assert.deepEqual(Array.from(ownerCandidates(members, 'me'), member => member.userId), ['u1', 'u2']);
+  const output = view({ task: task(id('a'), 'needs_owner', { accountId: 'acct-1' }), members });
+  assert.match(output, /value="u1"/);
+  assert.doesNotMatch(output, /value="(me|u3|u4|u5|u6)"/);
+});
+
+test('transition sends the current version', async context => {
+  const harness = accountComponentHarness();
+  context.after(() => harness.unmount());
+  const sent = [];
+  const api = {
+    list: async () => ({ tasks: [task(id('a'), 'request_needed', { path: 'theirs', version: 4 })], nextCursor: null }),
+    get: async () => { throw new Error('unused'); },
+    transition: async (eventId, change) => {
+      sent.push(change);
+      return task(eventId, change.op === 'markRequested' ? 'requested' : 'request_needed', { path: 'theirs', version: change.version + 1 });
+    },
+  };
+  const auth = { isAuthenticated: true, user: { userId: 'owner' }, membershipRevision: 0 };
+  const load = loader({ react: harness.react, '@/components/auth/AuthProvider': { useAuth: () => auth }, '@/lib/api': { specReqTaskApi: api } });
+  const probe = hookProbe(load('@/hooks/useSpecReqTasks').useSpecReqTasks);
+  harness.render(probe.Probe);
+  await settle();
+  harness.render(probe.Probe);
+  await probe.result().transition(id('a'), { op: 'markRequested' });
+  harness.render(probe.Probe);
+  await probe.result().transition(id('a'), { op: 'linkSpecReq', specReqId: '11111111-2222-4333-8444-555555555555' });
+  assert.deepEqual(sent.map(change => [change.op, change.version]), [['markRequested', 4], ['linkSpecReq', 5]]);
 });

@@ -650,3 +650,29 @@ Follow-up documents are private snapshots built from bounded saved note/summary
 reads and current action items. Creating a document does not publish it to a team.
 Project linking and account sharing remain explicit operations with server-side
 permissions. Owner-only association controls are hidden from shared viewers.
+
+## SpecReq task strip
+
+The workspace upcoming-meetings view and the Account page show a private
+"SpecReq tasks" strip above the events (`SpecReqTasks`, `useSpecReqTasks`; copy in
+`SPECREQ_TASK_COPY` and `SPECREQ_ACTION_COPY`). It uses the existing tokens from
+`globals.css` (`surface`, `border-subtle`, `primary`, `text-*`). Rows list open
+tasks for the signed-in user only; closed, resolved and issued tasks are hidden, a
+valid `?task=` event ID highlights its row, and an unavailable API hides the strip.
+
+`SpecReqTaskActions` offers one action set per state, each sending the loaded
+row `version`; buttons disable while a transition is pending, and a 409 reloads the
+row and shows reload copy.
+
+| State / path | Actions |
+|---|---|
+| `request_needed` | Copy the Slack request (also shown in a read-only field) and "I sent it" (`markRequested`). |
+| `needs_account` | Account picker over my accounts (`pickAccount`); waiting copy once an account is set. |
+| `needs_owner` | Owner picker over the account's direct `SA`/`SSA` members with a user ID, excluding me and pending members (`pickOwner`). |
+| mine `issue_needed`, theirs `requested` | SpecReq ID input accepting a UUID (`linkSpecReq`). |
+
+A linked SpecReq opens in a new tab with `rel="noopener noreferrer"`. The Slack
+request text is built in the browser from cloud fields only (account name, event
+title and time in the event zone, my display name) with `renderSlackRequest`; its
+`SLACK_REQUEST_TEMPLATE` mirrors the runner's and `contracts/specreq/slack-request-v1.json`.
+The web copy does not escape Slack control characters because the user pastes it.

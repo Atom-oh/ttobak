@@ -454,7 +454,7 @@ function markup(props = {}) {
   const load = loader({
     react: React, 'react/jsx-runtime': jsxRuntime,
     'next/link': { default: ({ children, ...attributes }) => React.createElement('a', attributes, children) },
-    '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {},
+    '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {}, '@/components/workspace/SpecReqTaskActions': {},
   });
   const { UpcomingMeetings } = load('@/components/workspace/UpcomingMeetings');
   return renderToStaticMarkup(React.createElement(UpcomingMeetings, {

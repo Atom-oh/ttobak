@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { SpecReqTaskActions } from '@/components/workspace/SpecReqTaskActions';
 import {
   SPECREQ_TERMINAL_STATES, parseTaskHighlight,
-  type SpecReqTaskState, type SpecReqTaskView,
+  type SpecReqTaskChange, type SpecReqTaskState, type SpecReqTaskView,
 } from '@/types/specreqTask';
 
 export const SPECREQ_TASK_COPY = {
@@ -52,7 +53,9 @@ export function SpecReqStateBadge({ state }: { state: string }) {
   </span>;
 }
 
-function TaskRow({ task, highlighted }: { task: SpecReqTaskView; highlighted: boolean }) {
+function TaskRow({ task, highlighted, onTransition }: {
+  task: SpecReqTaskView; highlighted: boolean; onTransition?: SpecReqTasksProps['onTransition'];
+}) {
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (highlighted) ref.current?.scrollIntoView?.({ block: 'center' });
@@ -73,6 +76,7 @@ function TaskRow({ task, highlighted }: { task: SpecReqTaskView; highlighted: bo
       {(task.specReqTitle || task.specReqStatus) && <p className="mt-1 break-words text-xs text-text-secondary">
         {SPECREQ_TASK_COPY.specReqPrefix}{task.specReqTitle ? `: ${task.specReqTitle}` : ''}{task.specReqStatus ? ` (${task.specReqStatus})` : ''}
       </p>}
+      {onTransition && <SpecReqTaskActions task={task} transition={onTransition} />}
     </li>
   );
 }
@@ -83,9 +87,10 @@ export interface SpecReqTasksProps {
   accountId?: string;
   highlight?: string;
   onRetry?: () => void;
+  onTransition?: (eventId: string, change: SpecReqTaskChange) => Promise<unknown>;
 }
 
-export function SpecReqTasks({ tasks, state = 'ready', accountId, highlight, onRetry }: SpecReqTasksProps) {
+export function SpecReqTasks({ tasks, state = 'ready', accountId, highlight, onRetry, onTransition }: SpecReqTasksProps) {
   if (state === 'unavailable') return null;
   const wanted = parseTaskHighlight(highlight);
   const open = openSpecReqTasks(tasks, accountId);
@@ -100,7 +105,7 @@ export function SpecReqTasks({ tasks, state = 'ready', accountId, highlight, onR
           className="mt-2 rounded-lg border border-border-subtle px-3 py-2 text-primary focus-visible:outline-2 focus-visible:outline-primary">{SPECREQ_TASK_COPY.retry}</button></div>}
       </div>}
       {state === 'ready' && (open.length
-        ? <ul className="mt-3 space-y-2">{open.map(task => <TaskRow key={task.eventId} task={task} highlighted={task.eventId === wanted} />)}</ul>
+        ? <ul className="mt-3 space-y-2">{open.map(task => <TaskRow key={task.eventId} task={task} highlighted={task.eventId === wanted} onTransition={onTransition} />)}</ul>
         : <p className="mt-3 text-sm text-text-secondary">{SPECREQ_TASK_COPY.empty}</p>)}
     </section>
   );
