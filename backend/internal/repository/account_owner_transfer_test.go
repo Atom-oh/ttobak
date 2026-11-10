@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ttobak/backend/internal/model"
 )
 
 func hierarchyUpdateText(op *hierarchyWireOperation) string {
@@ -37,7 +39,7 @@ func TestTransferAccountOwnerTransaction(t *testing.T) {
 		}
 		requireHierarchyCondition(t, meta, "attribute_exists(PK)", `ownerUserId = "u-old"`)
 		update := hierarchyUpdateText(meta)
-		for _, want := range []string{`ownerUserId = "u-new"`, "updatedAt", "REMOVE", "initialOwnerEmail", "initialOwnerInvitationPending"} {
+		for _, want := range []string{`ownerUserId = "u-new"`, "updatedAt", `originalOwnerUserId = if_not_exists(originalOwnerUserId, "u-old")`, "REMOVE", "initialOwnerEmail", "initialOwnerInvitationPending"} {
 			if !strings.Contains(update, want) {
 				t.Errorf("META update %q missing %q", update, want)
 			}
@@ -77,5 +79,78 @@ func TestTransferAccountOwnerRejectsSelfTransfer(t *testing.T) {
 	r := hierarchyWireRepo(t, func([]hierarchyWireItem) { t.Fatal("must not send a transaction") }, 200, `{}`)
 	if err := r.TransferAccountOwner(context.Background(), "a", "u-1", "u-1", time.Now()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestGenericMemberWritersFenceOwnerRow(t *testing.T) {
+	for _, op := range []string{"UpdateItem"} {
+		t.Run(op, func(t *testing.T) {
+			sent := false
+			r := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
+				if !strings.HasSuffix(target, "."+op) {
+					t.Fatalf("unexpected request %s", target)
+				}
+				sent = true
+				cond := body["ConditionExpression"].(string)
+				for alias, name := range body["ExpressionAttributeNames"].(map[string]any) {
+					cond = strings.ReplaceAll(cond, alias, name.(string))
+				}
+				for alias, value := range body["ExpressionAttributeValues"].(map[string]any) {
+					cond = strings.ReplaceAll(cond, alias, `"`+value.(map[string]any)["S"].(string)+`"`)
+				}
+				for _, want := range []string{"attribute_exists (PK)", `role <> "owner"`} {
+					if !strings.Contains(cond, want) {
+						t.Errorf("condition %q missing %q", cond, want)
+					}
+				}
+				return 400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
+			})
+			err := r.UpdateMemberRole(context.Background(), "a", "u", "AM")
+			if !sent || !errors.Is(err, ErrConditionFailed) {
+				t.Fatalf("sent=%v err=%v, want ErrConditionFailed", sent, err)
+			}
+		})
+	}
+}
+
+func TestDeleteMemberFencesTargetAndRequesterOwnership(t *testing.T) {
+	called := false
+	r := hierarchyWireRepo(t, func(items []hierarchyWireItem) {
+		called = true
+		if len(items) != 3 || items[0].ConditionCheck == nil || items[1].ConditionCheck == nil || items[2].Delete == nil {
+			t.Fatalf("want META check, owner check, delete: %+v", items)
+		}
+		if items[0].ConditionCheck.Key["SK"]["S"] != "META" || items[1].ConditionCheck.Key["SK"]["S"] != "MEMBER#u-owner" || items[2].Delete.Key["SK"]["S"] != "MEMBER#u" {
+			t.Fatalf("wrong keys: %+v", items)
+		}
+		requireHierarchyCondition(t, items[0].ConditionCheck, `ownerUserId = "u-owner"`)
+		requireHierarchyCondition(t, items[1].ConditionCheck, `role = "owner"`)
+		requireHierarchyCondition(t, items[2].Delete, "attribute_exists(PK)", `role <> "owner"`)
+	}, 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]}`)
+	if err := r.DeleteMember(context.Background(), "a", "u-owner", "u"); !called || !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("called=%v err=%v, want ErrConditionFailed", called, err)
+	}
+	if err := r.DeleteMember(context.Background(), "a", "u", "u"); err == nil {
+		t.Fatal("owner removing itself must be rejected before any request")
+	}
+}
+
+func TestPutMemberIsCreateOnlyWithPrivacyWriterOff(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "0")
+	sent := false
+	r := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
+		sent = true
+		cond, _ := body["ConditionExpression"].(string)
+		for alias, name := range body["ExpressionAttributeNames"].(map[string]any) {
+			cond = strings.ReplaceAll(cond, alias, name.(string))
+		}
+		if !strings.HasSuffix(target, ".PutItem") || !strings.Contains(cond, "attribute_not_exists (PK)") {
+			t.Fatalf("target=%s condition=%q, want create-only PutItem", target, cond)
+		}
+		return 400, `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
+	})
+	err := r.PutMember(context.Background(), &model.AccountMember{PK: "ACCOUNT#a", SK: "MEMBER#u", AccountID: "a", UserID: "u", Role: model.RoleAM})
+	if !sent || !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("sent=%v err=%v, want ErrConditionFailed", sent, err)
 	}
 }

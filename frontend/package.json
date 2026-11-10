@@ -3,15 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "npm run guide:build",
     "dev": "next dev",
-    "prebuild": "npm run icons:check && npm run billing:build",
+    "prebuild": "npm run icons:check && npm run billing:build && npm run guide:build",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "test:unit": "node --test 'scripts/*.test.mjs'",
     "icons:check": "node scripts/update-icon-font.mjs --check",
     "icons:update": "node scripts/update-icon-font.mjs",
-    "billing:build": "node scripts/build-billing-app.mjs"
+    "billing:build": "node scripts/build-billing-app.mjs",
+    "guide:build": "node scripts/build-user-guide.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-transcribe-streaming": "^3.1027.0",

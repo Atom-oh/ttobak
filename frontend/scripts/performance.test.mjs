@@ -115,6 +115,25 @@ test('a mapping to an account outside the readable list is queued as unmapped', 
   assert.equal(perf.mappingTargetUnreadable(items[2], new Set()), false);
 });
 
+test('mapping queue lists unmapped and automatic mappings with the unreadable reason', () => {
+  const items = [
+    { sfdcAccountId: '001', name: 'A', role: 'SA', mapped: true, accountId: 'a', manual: true },
+    { sfdcAccountId: '002', name: 'B', role: 'SA', mapped: true, accountId: 'b', manual: false },
+    { sfdcAccountId: '003', name: 'C', role: 'SA', mapped: false, manual: true, reason: 'unreadable' },
+    { sfdcAccountId: '004', name: 'D', role: 'SA', mapped: false, manual: false },
+  ];
+  const groups = perf.mappingQueueGroups(items);
+  assert.deepEqual(plain(groups.unmapped.map(item => item.sfdcAccountId)), ['003', '004']);
+  assert.deepEqual(plain(groups.automatic.map(item => item.sfdcAccountId)), ['002'], 'manual mappings are settled');
+  assert.match(perf.mappingReasonText(items[2]), /읽을 수 없어/);
+  assert.equal(perf.mappingReasonText(items[3]), null);
+  const readable = new Set(['a']);
+  const judged = perf.mappingQueueGroups(items, readable);
+  assert.deepEqual(plain(judged.unmapped.map(item => item.sfdcAccountId)), ['002', '003', '004'], 'an automatic mapping to an unreadable account is unmapped');
+  assert.deepEqual(plain(judged.automatic), []);
+  assert.match(perf.mappingReasonText(items[1], readable), /읽을 수 없어/);
+});
+
 test('account list state separates loading, failure and a real empty list', () => {
   assert.deepEqual(plain(perf.accountListState(null, 'u1', 0)), { status: 'loading', accounts: [] });
   assert.deepEqual(plain(perf.accountListState({ userId: 'u1', key: 0, error: true }, 'u1', 0)), { status: 'error', accounts: [] });
@@ -138,4 +157,12 @@ test('goals stay read-only until a successful load', () => {
   assert.deepEqual(plain(perf.goalsEditorControls({ status: 'ready', dirty: true, tooLong: false })), { editable: true, canSave: true });
   assert.deepEqual(plain(perf.goalsEditorControls({ status: 'ready', dirty: true, tooLong: true })), { editable: true, canSave: false });
   assert.deepEqual(plain(perf.goalsEditorControls({ status: 'saving', dirty: true, tooLong: false })), { editable: false, canSave: false });
+});
+
+test('missed list at the server cap never shows a clean empty state', () => {
+  const full = { items: Array.from({ length: 500 }, () => ({ kind: 'logging_gap' })) };
+  assert.equal(perf.missedListMayBeCapped(full), true);
+  assert.equal(perf.missedListMayBeCapped({ items: [] }), false);
+  assert.match(perf.missedGroupEmptyText('연락이 끊긴 고객이 없습니다.', true), /표시 한도\(500건\)/);
+  assert.equal(perf.missedGroupEmptyText('연락이 끊긴 고객이 없습니다.', false), '연락이 끊긴 고객이 없습니다.');
 });

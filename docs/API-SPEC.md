@@ -44,7 +44,12 @@ Each batch has at most 20 distinct occurrence IDs, with only these mutations:
   caller access. `organizerDomain` is only the lowercase organizer email domain
   (`^[a-z0-9.-]{1,253}$`); the organizer's name and local part are never sent, and
   `GET /api/calendar/events` returns it when present. Body, attendees, provider
-  credentials and arbitrary metadata are not accepted.
+  credentials and arbitrary metadata are not accepted. The request decoder stays
+  strict, so an API that predates `organizerDomain` rejects it with 400; deploy
+  the API before a runner that sends it. The sealed event plaintext is decoded
+  tolerantly of unknown fields, but an API older than that tolerant reader
+  fails to read events sealed with `organizerDomain` until they are re-synced
+  without it or expire.
 - `{"op":"remove","externalId":"..."}`: explicit removal of that source's
   occurrence. The same ID/text bounds apply. No absence-based deletion occurs,
   including for empty `mutations` with `complete:true`.
@@ -120,7 +125,7 @@ runner collects and syncs.
 | `GET /api/performance/sources` | none | `{sources:[{source,revision,lastAttemptAt?,lastCompletedAt?}]}`, one entry per source; never-synced sources report revision 0 |
 | `GET /api/performance/goals?year=YYYY` | `year` within previous/current/next year | `{year,text,updatedAt}`; empty text when unset |
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
-| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
+| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,reason?,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
 
@@ -156,7 +161,13 @@ A mapping write requires that the caller can currently read the target Account
 (`AccountService.GetAccount`; otherwise `403 FORBIDDEN`) and that the SFDC
 account is in the caller's own assignments (otherwise `404 NOT_FOUND`). Manual
 mappings always win over automatic ones. Unmapped assignments are listed with
-`mapped:false`, never guessed.
+`mapped:false`, never guessed. `manual` tells a manual mapping from an automatic
+one; putting the same `accountId` confirms an automatic mapping as manual. The
+list rechecks every stored mapping against the caller's currently readable
+accounts (`ListReadableAccountCandidates`, the same set as `/missed`): a target
+the caller can no longer read is reported as `mapped:false` with
+`reason:"unreadable"` and no `accountId`. A reader that cannot list readable
+accounts fails the request with `500`.
 
 Missed items (`backend/internal/service/performance_missed.go`) are computed at
 read time from the caller's own SFDC rows, calendar events (`CalendarService`,
@@ -1278,11 +1289,13 @@ The operation's connector inventory disables delegation (ADR-055).
 `POST /api/accounts/{accountId}/owner-transfer` requires verified email and a body
 `{"targetUserId"}` capped at 1,024 bytes with unknown fields rejected. Only the
 current Owner (both the MEMBER role and META `ownerUserId`) may transfer, to an
-existing direct non-owner member whom Cognito `AdminGetUser` reports Enabled and
-CONFIRMED. The previous Owner becomes SA in one three-item transaction that also
-clears the initial-owner invitation fields. Responses: 200 with `accountId`,
+existing direct non-owner member whom Cognito `AdminGetUser` reports Enabled,
+CONFIRMED and `email_verified`. The previous Owner becomes SA in one three-item transaction that also
+clears the initial-owner invitation fields and records `originalOwnerUserId` for
+creation receipts. Member role updates and removals that race a transfer onto the
+new Owner return 409. Responses: 200 with `accountId`,
 `ownerUserId`, `previousOwnerUserId`, `previousOwnerRole`; 400 invalid or self
-target, pending or disabled identity; 403 non-owner; 404 missing account or
+target, pending, disabled or unverified identity; 403 non-owner; 404 missing account or
 non-member target; 409 concurrent change; 503 Cognito unwired or lookup failure.
 It is the only path that grants Owner; its connector inventory disables delegation.
 

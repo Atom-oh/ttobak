@@ -37,6 +37,8 @@ func (r *DynamoDBRepository) TransferAccountOwner(ctx context.Context, accountID
 	meta, err := r.ownerTransferUpdate(accountID, model.SKAccountMeta,
 		expression.Set(expression.Name("ownerUserId"), expression.Value(targetUserID)).
 			Set(expression.Name("updatedAt"), expression.Value(now)).
+			// Creation receipts replay the original owner, never a later one (ADR-055).
+			Set(expression.Name("originalOwnerUserId"), expression.IfNotExists(expression.Name("originalOwnerUserId"), expression.Value(currentOwnerID))).
 			Remove(expression.Name("initialOwnerEmail")).
 			Remove(expression.Name("initialOwnerInvitationPending")),
 		exists.And(expression.Name("ownerUserId").Equal(expression.Value(currentOwnerID))))

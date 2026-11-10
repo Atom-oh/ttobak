@@ -18,14 +18,20 @@ UpdateMemberRole and pending-share materialization stay owner-free.
   concurrent transfer fails closed.
 - **Target identity:** the target must be an existing direct non-owner member
   (not self). Cognito `AdminGetUser` must report the same `sub`, Enabled and
-  CONFIRMED with a verified email; the repository cannot distinguish pending or
-  disabled invitees. UserNotFound, disabled, unconfirmed or sub-mismatch targets
-  are 400; an unverified email is 403. 503 is returned only for an unwired
+  CONFIRMED with `email_verified` `"true"`; the repository cannot distinguish
+  pending or disabled invitees. UserNotFound, disabled, unconfirmed, unverified
+  (false or absent) or sub-mismatch targets are 400. 503 is returned only for an unwired
   Cognito client or a lookup error other than not-found, never a fallback.
 - **Previous Owner:** becomes SA, retaining access without Owner-only powers.
 - **Initial-owner designation:** the same transaction clears `initialOwnerEmail`
   and `initialOwnerInvitationPending`, so ADR-055 resend cannot re-target a
-  transferred Account.
+  transferred Account. It also sets `originalOwnerUserId` once
+  (`if_not_exists`), so ADR-055 creation receipts keep replaying the original Owner.
+- **Owner-fenced member writers:** generic role-update and removal writes condition
+  on `role <> owner`, removal also on the requester still being Owner (META and
+  MEMBER), and AddMember's put is always create-only. A writer that interleaves
+  with a transfer returns 409 (or member-exists) instead of overwriting or
+  deleting the new Owner row.
 - **One transaction:** META, target MEMBER and previous-owner MEMBER change
   together; any condition failure writes nothing and returns 409.
 - **Non-delegable:** delegation is

@@ -322,6 +322,10 @@ func (svc *PerformanceService) PutGoals(ctx context.Context, userID string, year
 // ListMappings returns up to MaxPerformanceAssignments assignments (lowest SFDC
 // IDs first) with their mappings, and truncated=true when more exist.
 // Assignments without a mapping are reported with mapped=false, never guessed.
+// Every stored mapping, manual or automatic, is rechecked against the owner's
+// currently readable accounts, the same set /missed uses; an unreadable target
+// is reported unmapped with reason "unreadable" and its account ID is not
+// returned.
 func (svc *PerformanceService) ListMappings(ctx context.Context, userID string) (*model.PerformanceMappingList, error) {
 	if !performanceUserPattern.MatchString(userID) {
 		return nil, ErrForbidden
@@ -343,11 +347,26 @@ func (svc *PerformanceService) ListMappings(ctx context.Context, userID string) 
 	if err != nil {
 		return nil, err
 	}
+	needsCheck := false
+	for _, mapping := range bySFDC {
+		needsCheck = needsCheck || mapping.AccountID != ""
+	}
+	var readable map[string]bool
+	if needsCheck {
+		if readable, err = svc.readablePerformanceAccounts(ctx, userID); err != nil {
+			return nil, err
+		}
+	}
 	list := &model.PerformanceMappingList{Items: make([]model.PerformanceMappingItem, 0, len(assignments)), Truncated: truncated}
 	for _, assignment := range assignments {
 		item := model.PerformanceMappingItem{SFDCAccountID: assignment.SFDCAccountID, Name: assignment.Name, Role: assignment.Role}
 		if mapping, found := bySFDC[assignment.SFDCAccountID]; found && mapping.AccountID != "" {
-			item.Mapped, item.AccountID, item.Manual, item.UpdatedAt = true, mapping.AccountID, mapping.Manual, mapping.UpdatedAt
+			item.Manual, item.UpdatedAt = mapping.Manual, mapping.UpdatedAt
+			if readable[mapping.AccountID] {
+				item.Mapped, item.AccountID = true, mapping.AccountID
+			} else {
+				item.Reason = model.PerformanceMappingUnreadable
+			}
 		}
 		list.Items = append(list.Items, item)
 	}

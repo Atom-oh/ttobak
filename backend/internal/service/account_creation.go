@@ -150,15 +150,20 @@ func (s *AccountService) creationReceipt(ctx context.Context, requesterID string
 		}
 		return nil, err
 	}
-	members := []model.AccountMemberDTO{{UserID: account.OwnerUserID, Email: account.InitialOwnerEmail, Role: model.RoleOwner}}
-	if member != nil && requesterID != account.OwnerUserID {
+	// A transferred account keeps its creation-time owner in originalOwnerUserId.
+	ownerID := account.OwnerUserID
+	if account.OriginalOwnerUserID != "" {
+		ownerID = account.OriginalOwnerUserID
+	}
+	members := []model.AccountMemberDTO{{UserID: ownerID, Email: account.InitialOwnerEmail, Role: model.RoleOwner}}
+	if member != nil && requesterID != ownerID {
 		members = append(members, model.AccountMemberDTO{UserID: requesterID, Email: member.Email, Role: member.Role})
 	}
 	return &model.AccountCreationResponse{
 		AccountResponse: model.AccountResponse{
 			AccountID: account.AccountID, ParentAccountID: req.ParentAccountID, Name: req.Name,
 			Aliases: req.Aliases, Domains: req.Domains, Industry: req.Industry,
-			OwnerUserID: account.OwnerUserID, Members: members, CreatedAt: account.CreatedAt,
+			OwnerUserID: ownerID, Members: members, CreatedAt: account.CreatedAt,
 			OwnerInvitationPending: pending,
 		},
 		CreatorMember: member != nil, OwnerInvitationRequested: invited,

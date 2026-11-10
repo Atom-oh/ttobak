@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from '../dist/intake/toml.js';
 import { listHosts, resolveServer, resolveCommand, hostTtobakEndpoints } from '../dist/intake/hosts.js';
-import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent }
+import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent, parseOutlookItems }
   from '../dist/intake/calendar.js';
 import { IntakeStore } from '../dist/intake/store.js';
 import { SFDC_TOOLS, parseAssignments, parseTasks, runSfdc } from '../dist/intake/sfdc.js';
@@ -149,6 +149,37 @@ test('calendar sends organizer domain only', () => {
   }
   const none = planCalendar([{ ...base, organizer: 'x' }], {}, window, ZONE);
   assert.equal('organizerDomain' in none.mutations[0].event, false);
+});
+
+test('calendar organizer name and local part never leave the parser', async t => {
+  const local = 'canary.local-7f3a9c';
+  const raw = request => {
+    const [month, day, year] = request.start_date.split('-');
+    return { meetings: [{
+      meetingId: `org-${year}${month}${day}`, subject: 'Quarterly review', sensitivity: 'Normal',
+      start: `${year}-${month}-${day}T10:00:00+09:00`, end: `${year}-${month}-${day}T11:00:00+09:00`,
+      isCanceled: false, isAllDay: false,
+      organizer: { name: CANARY, email: `${local}@Customer.Example.COM`, address: `${local}@customer.example.com` },
+      attendees: [{ name: CANARY, email: `${local}@customer.example.com` }], body: CANARY,
+    }] };
+  };
+  const parsed = parseOutlookItems(raw({ start_date: '11-10-2026' }));
+  assert.deepEqual(parsed[0].organizer, { email: `${local}@Customer.Example.COM` }, 'the name is dropped at parse time');
+  const event = toEvent(parsed[0], ZONE);
+  assert.equal(event.organizerDomain, 'customer.example.com');
+  assert.ok(!JSON.stringify(event).includes(local) && !JSON.stringify(event).includes(CANARY));
+
+  const home = tempHome(t);
+  const api = fakeApi();
+  await runCalendar({ store: new IntakeStore(home), api, source: source(raw), sourceId: SOURCE_ID, scope: SCOPE_A,
+    zone: ZONE, now: NOW, dryRun: false });
+  assert.ok(api.calls.length >= 1 && api.calls[0].mutations.length > 0);
+  for (const mutation of api.calls.flatMap(call => call.mutations)) {
+    assert.equal(mutation.event.organizerDomain, 'customer.example.com');
+  }
+  const outputs = JSON.stringify(api.calls) + allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
+  for (const secret of [CANARY, local, 'canary']) assert.ok(!outputs.toLowerCase().includes(secret.toLowerCase()), secret);
+  assert.ok(!outputs.includes('@'), 'no email address reaches the batch or the state');
 });
 
 test('calendar planning: window, exclusions, explicit removals only, sanitized locations', () => {

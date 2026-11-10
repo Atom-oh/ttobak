@@ -127,16 +127,15 @@ func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.Accoun
 	if err != nil {
 		return fmt.Errorf("marshal member: %w", err)
 	}
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
+	// Always create-only: a stale duplicate add must never overwrite an existing
+	// row, in particular one that just became the Owner (ADR-071).
+	expr, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return err
 	}
-	if SummaryPrivacyWritesEnabled() {
-		expr, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
-		if err != nil {
-			return err
-		}
-		input.ConditionExpression, input.ExpressionAttributeNames = expr.Condition(), expr.Names()
+	input := &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName), Item: item,
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 	}
 	if _, err := r.client.PutItem(ctx, input); err != nil {
 		var rejected *types.ConditionalCheckFailedException
@@ -148,42 +147,53 @@ func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.Accoun
 	return nil
 }
 
-// DeleteMember requires the member item to already exist so removing a
-// non-member surfaces ErrConditionFailed (mapped to ErrNotFound in the
-// service layer) instead of silently succeeding -- same pattern as
-// DeleteAccountDocument below.
-func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, userID string) error {
-	condition := expression.AttributeExists(expression.Name("PK"))
-	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+// nonOwnerMemberCondition fences generic member writers: the Owner row can
+// change concurrently through owner transfer (ADR-071), so these writes must
+// never land on a row that is (or just became) the Owner.
+func nonOwnerMemberCondition() expression.ConditionBuilder {
+	return expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("role").NotEqual(expression.Value(model.RoleOwner)))
+}
+
+// DeleteMember removes an existing non-owner member only while ownerID is
+// still the Owner (META ownerUserId and MEMBER role), in one transaction, so a
+// removal racing an owner transfer cannot land after the requester lost
+// ownership (ADR-071). Any failed condition surfaces ErrConditionFailed (the
+// service re-reads to map not-found vs conflict).
+func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, ownerID, userID string) error {
+	if accountID == "" || ownerID == "" || userID == "" || ownerID == userID {
+		return errors.New("delete member requires an owner distinct from the target")
+	}
+	meta, err := r.hierarchyCheck(accountID, model.SKAccountMeta,
+		expression.Name("ownerUserId").Equal(expression.Value(ownerID)))
+	if err != nil {
+		return err
+	}
+	owner, err := r.hierarchyCheck(accountID, model.PrefixMember+ownerID,
+		expression.Name("role").Equal(expression.Value(model.RoleOwner)))
+	if err != nil {
+		return err
+	}
+	expr, err := expression.NewBuilder().WithCondition(nonOwnerMemberCondition()).Build()
 	if err != nil {
 		return fmt.Errorf("build delete member condition: %w", err)
 	}
-	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + userID},
-		},
-		ConditionExpression:       expr.Condition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: member %s not found", ErrConditionFailed, userID)
-		}
+	del := types.TransactWriteItem{Delete: &types.Delete{
+		TableName: aws.String(r.tableName), Key: accountHierarchyKey(accountID, model.PrefixMember+userID),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	}}
+	if err := r.writeAccountHierarchy(ctx, []types.TransactWriteItem{meta, owner, del}); err != nil {
 		return fmt.Errorf("delete member: %w", err)
 	}
 	return nil
 }
 
-// UpdateMemberRole conditionally updates a member's role, requiring the item
-// to already exist -- a concurrent RemoveMember between the service's
-// GetMember check and this call surfaces ErrConditionFailed (mapped to
-// ErrNotFound) instead of silently resurrecting a deleted membership row.
+// UpdateMemberRole conditionally updates a non-owner member's role -- a
+// concurrent RemoveMember or owner transfer between the service's GetMember
+// check and this call surfaces ErrConditionFailed instead of resurrecting a
+// deleted row or overwriting the new Owner.
 func (r *DynamoDBRepository) UpdateMemberRole(ctx context.Context, accountID, userID, role string) error {
-	condition := expression.AttributeExists(expression.Name("PK"))
+	condition := nonOwnerMemberCondition()
 	update := expression.Set(expression.Name("role"), expression.Value(role))
 	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
 	if err != nil {
@@ -203,7 +213,7 @@ func (r *DynamoDBRepository) UpdateMemberRole(ctx context.Context, accountID, us
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: member %s not found", ErrConditionFailed, userID)
+			return fmt.Errorf("%w: non-owner member %s not found", ErrConditionFailed, userID)
 		}
 		return fmt.Errorf("update member role: %w", err)
 	}
