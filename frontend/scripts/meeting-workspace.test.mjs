@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import * as React from 'react';
+import * as ReactDOM from 'react-dom';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown from 'react-markdown';
@@ -15,6 +16,7 @@ function loadWorkspace(query = '', hooks = {}, environment = {}) {
   let currentUrl = new URL(`/?${query}`, 'https://workspace.invalid');
   const dependencies = {
     react: { ...React, ...hooks },
+    'react-dom': ReactDOM,
     'react/jsx-runtime': jsxRuntime,
     'react-markdown': { default: ReactMarkdown },
     'remark-gfm': { default: remarkGfm },

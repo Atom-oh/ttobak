@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useTheme } from '@/hooks/useTheme';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
+import { UserGuideButton } from '@/components/layout/UserGuideButton';
 import { NAV_GROUPS, SETTINGS_ITEM, isNavActive } from '@/lib/navigation';
 
 function NavItem({ href, icon, label, isActive }: { href: string; icon: string; label: string; isActive: boolean }) {
@@ -45,6 +46,7 @@ function SidebarNav({ activePath, tab }: { activePath: string; tab: string | nul
       <BillingInsightButton variant="sidebar" groupLabel={<GroupLabel name="고객 분석" />} />
       <div className="flex flex-col gap-1">
         <NavItem {...SETTINGS_ITEM} isActive={activePath === SETTINGS_ITEM.href} />
+        <UserGuideButton variant="sidebar" />
       </div>
     </nav>
   );
