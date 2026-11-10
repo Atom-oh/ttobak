@@ -136,7 +136,9 @@ is unchanged and the post-merge fence never accepts a running job.
   owner and MEMBER role). One transaction conditioned on the observed job state and
   lease owner sets the job `aborted`, removes A's `mergingInto` and decrements B's
   `incomingMerges` (which must be positive). Data already moved stays on B: there is
-  no rollback. A fresh start may replace an aborted job.
+  no rollback. A fresh start may replace an aborted job; contact mapping rows name
+  their merge target, so the replacement ignores and overwrites an aborted
+  merge's rows, and the CLI refuses a renewed lease on a replaced job.
 - **More fenced writers.** Member role updates, Account document creation (including
   a personal document shared to an Account), Account KB reference creation (the KB
   upload presign) and a member's team audio-crop copy carry the open check on the
