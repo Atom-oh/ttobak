@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   captionErrorMessage,
   captionLanguages,
+  captionRegionOptions,
   type CaptionLang,
   type CaptionStyle,
 } from '@/lib/captionOverlay';
@@ -146,15 +147,16 @@ export function CaptionOverlayPanel({
               ))}
             </select>
             <label htmlFor="caption-region" className={LABEL_CLASS}>리전</label>
-            <input
-              key={settings.region}
+            <select
               id="caption-region"
-              type="text"
-              defaultValue={settings.region}
-              onBlur={(e) => setRegion(e.target.value)}
-              spellCheck={false}
-              className={`${CONTROL_CLASS} w-32`}
-            />
+              value={settings.region}
+              onChange={(e) => setRegion(e.target.value)}
+              className={CONTROL_CLASS}
+            >
+              {captionRegionOptions(settings.region).map((region) => (
+                <option key={region} value={region}>{region}</option>
+              ))}
+            </select>
             <label htmlFor="caption-extra-language" className={LABEL_CLASS}>세 번째 언어</label>
             <select
               id="caption-extra-language"

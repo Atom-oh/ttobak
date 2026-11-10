@@ -54,10 +54,24 @@ export type CaptionErrorCode =
   | 'timeout'
   | 'aws-error'
   | 'save-failed'
-  | 'window-error';
+  | 'window-error'
+  | 'confirmation-declined'
+  | 'unavailable';
 
 /** Largest caption push, in UTF-8 bytes; matches `MAX_TEXT_BYTES` in caption_overlay.rs. */
 export const MAX_PUSH_TEXT_BYTES = 4000;
+
+/** Regions offered for caption translation. A convenience list only: the Mac app validates the region format. */
+export const CAPTION_REGIONS = [
+  'us-east-1', 'us-east-2', 'us-west-2', 'ap-northeast-1', 'ap-northeast-2',
+  'ap-southeast-1', 'ap-southeast-2', 'eu-central-1', 'eu-west-1', 'eu-west-2',
+] as const;
+
+/** Region choices, keeping a saved region that is not listed so it is never lost. */
+export function captionRegionOptions(saved: string): string[] {
+  const listed: readonly string[] = CAPTION_REGIONS;
+  return !saved || listed.includes(saved) ? [...listed] : [...listed, saved];
+}
 
 function utf8Bytes(char: string): number {
   const code = char.codePointAt(0) ?? 0;
@@ -144,6 +158,10 @@ export function captionErrorMessage(code: string): string {
       return '선택한 AWS 계정에서 GPT-6 Luna 모델을 사용할 수 없어요. Bedrock 모델 접근 권한을 확인해 주세요.';
     case 'rate-limited':
       return '번역 요청이 너무 많아 잠시 멈췄어요.';
+    case 'confirmation-declined':
+      return 'AWS 프로필 변경을 취소했어요.';
+    case 'unavailable':
+      return '이 Mac에서는 자막 창을 사용할 수 없어요.';
     default:
       return '자막 번역에 실패했어요. 잠시 후 다시 시도해 주세요.';
   }
