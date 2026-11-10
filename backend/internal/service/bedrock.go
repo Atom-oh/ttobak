@@ -344,50 +344,6 @@ func FoldLiveSummary(priorContext, liveSummary string) string {
 		liveSummaryFenceStart + "\n" + liveSummary + "\n" + liveSummaryFenceEnd
 }
 
-// AnyNonOwnerShare reports whether shares contains a grant (any permission
-// level) to someone other than ownerID. Used to decide whether it's safe to
-// fold another meeting's content into this meeting's summarize prompt
-// alongside client-controlled liveSummary -- see FoldLiveSummary's
-// threat-model comment for the exfiltration path this guards against.
-//
-// Gates on ANY share, not just a currently-active edit share: only an edit
-// collaborator can ever WRITE liveSummary (UpdateMeeting's permission
-// check), but a leaked linked-meeting content only needs someone with READ
-// access to this meeting to be visible -- including a collaborator who
-// injected while they still had edit and was later demoted to read-only.
-// Demotion doesn't retroactively un-leak an already-injected liveSummary,
-// so the gate must not un-trip on demotion either.
-func AnyNonOwnerShare(shares []model.Share, ownerID string) bool {
-	for _, share := range shares {
-		if share.SharedToID != ownerID {
-			return true
-		}
-	}
-	return false
-}
-
-// HasNonOwnerCollaborator reports whether meeting has any reader/writer
-// other than its owner -- either a direct Share row (any permission level,
-// via AnyNonOwnerShare) or live account membership.
-//
-// Account membership must be checked separately from Share rows:
-// resolveSharedAccess (service/meeting.go) grants account members read
-// access to a meeting with SharedToAccount=true purely from live
-// AccountMember lookups -- a member added after the share was written gets
-// access immediately too, by that function's own design -- and AddMember
-// never backfills a Share row for meetings already shared to the account.
-// So a meeting shared to an account, with a member who joined after that
-// share, has a real non-owner reader with NO corresponding Share row at
-// all; relying on AnyNonOwnerShare alone would miss them. Conservatively
-// treating any account-shared meeting as having a collaborator (skipping
-// the per-member membership query entirely) is the cheap, fail-closed fix.
-func HasNonOwnerCollaborator(meeting *model.Meeting, shares []model.Share) bool {
-	if meeting.SharedToAccount && meeting.AccountID != "" {
-		return true
-	}
-	return AnyNonOwnerShare(shares, meeting.UserID)
-}
-
 // buildSummarizeUserPrompt assembles SummarizeTranscript's user-turn prompt:
 // the speaker-segment transcript if segments were parsed, else the plain
 // transcript, with priorContext (e.g. a persisted live summary) always
