@@ -6,7 +6,9 @@ the TTOBAK stdio adapter, `ttobak-mcp intake`. The Mac Settings UI does not
 exist yet. Acceptance on the user's Mac is pending; nothing here proves it.
 
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
-contract for one reader, `aws-outlook-mcp` `calendar_view`. The
+contract for one reader, `aws-outlook-mcp` `calendar_view`. It also matches each
+event to an account for account-shared calendars (see
+[Account matching](#account-matching)). The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
 SA performance data of [ADR-068](../decisions/ADR-068-sa-performance-data-residency.md).
 
@@ -76,8 +78,8 @@ never opens a browser; the LaunchAgent uses it.
 | Command | Effect |
 |---|---|
 | `intake hosts` | Lists servers in `~/.claude.json`, `~/.codex/config.toml` and `~/.kiro/settings/mcp.json`: name, transport, disabled, command found. Never values. |
-| `intake select calendar --host <claude\|codex\|kiro> --server <name> [--accept-unknown-sensitivity]` | Starts that server once and checks the `calendar_view` schema. It stores the reference, the current terminal's `PATH` directories and the TTOBAK endpoints: `TTOBAK_*` env first, else the four endpoint keys of the host's own `ttobak` entry (no other values are read). |
-| `intake calendar --dry-run [--preview]` | Reads the window, plans mutations and prints counts. It makes no TTOBAK calls. `--preview` also prints titles locally. |
+| `intake select calendar --host <claude\|codex\|kiro> --server <name> [--accept-unknown-sensitivity] [--own-domain <domain>]...` | Starts that server once and checks the `calendar_view` schema. It stores the reference, the current terminal's `PATH` directories and the TTOBAK endpoints: `TTOBAK_*` env first, else the four endpoint keys of the host's own `ttobak` entry (no other values are read). `--own-domain` is repeatable (default `amazon.com`, at most 20); those domains never match an account. |
+| `intake calendar --dry-run [--preview]` | Reads the window, plans mutations and prints counts. Its only TTOBAK call is the share directory read with a stored session, never a browser login; without one the directory counts as unavailable. `--preview` also prints titles locally. |
 | `intake calendar [--noninteractive] [--reconcile]` | Syncs. `--noninteractive` fails with `TTOBAK_LOGIN_REQUIRED` instead of opening a browser. `--reconcile` adopts the server revision after a 409. |
 | `intake select meetings\|specreq\|slack --host <claude\|codex\|kiro> --server <name>` | Starts that server once and checks every allowlisted tool schema. It stores only the reference and `PATH` directories; TTOBAK endpoints still come from the calendar selection or `TTOBAK_*` env. |
 | `intake select specreq ... --auto-ack on\|off` | `on` (default) lets the runner acknowledge an eligible assignment; `off` queues an `ack_needed` notice instead. |
@@ -95,14 +97,20 @@ read as 7-day `calendar_view` requests.
   lowercase email domain (`organizerDomain`) go to TTOBAK. Locations have join
   URLs and passcodes removed. The organizer's name and email local part,
   attendees, body, categories and response are dropped.
+  Recurring items also send `seriesKey`, the hex SHA-256 of `sourceId|seriesId`.
 - **Exclusions.** Items flagged `Private` or `Confidential` are excluded, and
   removed if they were tracked. Events longer than 93 days are skipped. Real
   runs fail with `SENSITIVITY_UNKNOWN` when any item lacks a sensitivity flag,
   unless the selection was made with `--accept-unknown-sensitivity`.
+- **Private.** An item with the Outlook category `Private` (any case), or
+  whose joined `get_meeting` says `isPrivate: true`, is sent with
+  `private: true` and no share fields. If it was shared, this re-sends it and
+  the server records a veto.
 - **Removals.** Only a cancelled or excluded *tracked* occurrence is removed.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
-  - Each batch (at most 20 mutations, about 60 KB or less) is journaled in
+  - Each batch (at most 12 mutations, so that share-bearing upserts stay
+    within the server's 100-item transaction, and about 60 KB or less) is journaled in
     `~/.ttobak/intake/calendar/<sourceId>/<scope>/state.json` before sending.
     `<scope>` is a digest of the TTOBAK deployment and the signed-in user, so
     a batch built for one account is never sent after signing in to another;
@@ -111,6 +119,9 @@ read as 7-day `calendar_view` requests.
   - An ambiguous failure keeps it for an identical retry on the next run.
   - A 4xx drops it. A 409 also blocks later runs until `--reconcile`.
   - The last batch of a run is `complete:true`.
+- **Counts.** Besides the plan counts: `shared`, `candidates` and `private`
+  (events in the window, sent or unchanged), `attendeesUnavailable` and
+  `directoryUnavailable` (boolean).
 - **Errors.**
   - `AUTH_EXPIRED_MIDWAY`: run `mwinit -o`.
   - Also `SERVER_START_FAILED`, `SCHEMA_CHANGED`, `PARSE_FAILED`, `LOCKED`
@@ -133,6 +144,32 @@ read as 7-day `calendar_view` requests.
   already declares `organizerDomain` still reads them.
 - Re-running `intake calendar` backfills `organizerDomain` only for events in
   the intake window (past 7 days through the next 30), not the full year.
+
+## Account matching
+
+- **Directory.** Each run reads `GET /api/calendar/share-directory` once
+  (accounts the user directly belongs to: ID, name, aliases, domains). If the
+  read fails, `directoryUnavailable` is `true` and every event keeps the share
+  fields recorded in the ledger; unchanged events are not re-sent, so no share
+  is removed because of a missing directory.
+- **Matching.** The deterministic matcher (`intake/match.ts`) compares title
+  and location with names and aliases, and attendee and organizer domains with
+  account domains, excluding own domains. Exactly one account sends
+  `shareAccountId` with `shareEvidence` (`title`, `location`, `domain`; never
+  matched text). Several accounts send up to five `candidateAccountIds`. No
+  match sends neither, which unshares a previously shared event. Fingerprints
+  cover these fields, so a match or category change re-sends the event.
+- **Meeting facts.** When the `meetings` connector is selected, each event that
+  may be shared is joined to its meeting exactly like the task step (one
+  `list_meetings` per run, then `get_meeting` with the recorded SpecReq login
+  address, else the TTOBAK email). Only the address domains and `isPrivate` are
+  kept; a payload without `isPrivate` or any attendee or organizer field is no
+  answer. Facts are cached in `calendar/<sourceId>/meeting-facts.json` by
+  `meetingId` and `meetingChangeKey`, pruned with the ledger. At most 25
+  `get_meeting` reads run per sync, and three consecutive failures stop them.
+  A lookup without an answer counts in `attendeesUnavailable` and keeps a
+  previous private flag or a previous share that rested on domain evidence.
+  Without the connector, matching uses title, location and organizer domain.
 
 ## SpecReq task step
 
@@ -235,15 +272,22 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 
 ## Acceptance on the Mac (required before scheduling)
 
-1. Sign in once interactively: `intake calendar --dry-run` does not need TTOBAK;
-   a first non-dry run without `--noninteractive` opens the TTOBAK login.
-2. `intake select calendar --host claude --server aws-outlook-mcp`, then
-   `intake calendar --dry-run`. Check that the counts are plausible.
+1. Sign in once interactively: a first non-dry run without `--noninteractive`
+   opens the TTOBAK login. `intake calendar --dry-run` never opens a login; it
+   reads the share directory only when a TTOBAK session exists, and otherwise
+   reports `directoryUnavailable: true`.
+2. `intake select calendar --host claude --server aws-outlook-mcp`, optionally
+   `intake select meetings --host claude --server amazon-meetings-mcp`, then
+   `intake calendar --dry-run`. Check that the counts are plausible, including
+   `shared`, `candidates`, `private` and `attendeesUnavailable`.
 3. Create synthetic test events and verify each case:
    - a **private** event: is it hidden by the server, or does it carry a
      sensitivity flag? Observed 2026-11-09: neither; it arrives like a public
      event. `--accept-unknown-sensitivity` therefore accepts that private
      items reach the private TTOBAK calendar;
+   - an event whose title contains an account alias, one with an attendee
+     from an account domain only, one matching two accounts, a `Private`
+     category added after sharing, and a title edited after sharing;
    - a **moved occurrence** of a recurring event keeps its `meetingId`;
    - a **cancelled occurrence** arrives with `isCanceled: true`, or disappears
      (then it stays `unresolved`);

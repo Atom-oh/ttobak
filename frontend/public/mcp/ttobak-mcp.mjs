@@ -17039,8 +17039,8 @@ var require_resolve = __commonJS({
       }
       return count;
     }
-    function getFullPath(resolver, id = "", normalize) {
-      if (normalize !== false)
+    function getFullPath(resolver, id = "", normalize2) {
+      if (normalize2 !== false)
         id = normalizeId(id);
       const p = resolver.parse(id);
       return _getFullPath(resolver, p);
@@ -18635,7 +18635,7 @@ var require_fast_uri = __commonJS({
       }
       return decodedScheme;
     }
-    function normalize(uri, options) {
+    function normalize2(uri, options) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
         normalizeString(uri, options);
@@ -19013,7 +19013,7 @@ var require_fast_uri = __commonJS({
     }
     var fastUri = {
       SCHEMES,
-      normalize,
+      normalize: normalize2,
       resolve: resolve4,
       resolveComponent,
       equal,
@@ -23443,6 +23443,7 @@ function eventInput(value) {
   if ("location" in value && !validText(value.location, 256, false)) invalid("location");
   if ("organizerDomain" in value && (typeof value.organizerDomain !== "string" || !/^[a-z0-9.-]{1,253}$/.test(value.organizerDomain))) invalid("organizerDomain");
   if ("accountId" in value && (typeof value.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.accountId))) invalid("accountId");
+  sharingInput(value);
   if (!validText(value.timeZone, 128) || value.timeZone === "Local" || /^[+-]/.test(value.timeZone)) invalid("timeZone");
   if ("isAllDay" in value && typeof value.isAllDay !== "boolean") invalid("isAllDay");
   let formatter;
@@ -23476,6 +23477,19 @@ function eventInput(value) {
   const encoded = JSON.stringify(payload) + "\n";
   const separatorBytes = Array.from(encoded).filter((character) => [8232, 8233].includes(character.charCodeAt(0))).length * 3;
   if (Buffer.byteLength(encoded) + separatorBytes > 4096) invalid("encrypted event payload byte limit");
+}
+function sharingInput(value) {
+  const share = value.shareAccountId;
+  if (share !== void 0 && (typeof share !== "string" || !IDENTIFIER.test(share))) invalid("shareAccountId");
+  const evidence = value.shareEvidence, candidates = value.candidateAccountIds;
+  if (evidence !== void 0 && (!Array.isArray(evidence) || evidence.length > 3 || evidence.some((kind) => typeof kind !== "string" || !EVIDENCE.includes(kind)) || new Set(evidence).size !== evidence.length)) invalid("shareEvidence");
+  if (candidates !== void 0 && (!Array.isArray(candidates) || candidates.length > 5 || candidates.some((id) => typeof id !== "string" || !IDENTIFIER.test(id) || id === share) || new Set(candidates).size !== candidates.length)) invalid("candidateAccountIds");
+  if (value.private !== void 0 && typeof value.private !== "boolean") invalid("private");
+  if (value.seriesKey !== void 0 && (typeof value.seriesKey !== "string" || !/^[0-9a-f]{64}$/.test(value.seriesKey))) invalid("seriesKey");
+  if (Array.isArray(evidence) && evidence.length > 0 && share === void 0) invalid("shareEvidence without shareAccountId");
+  if (value.private === true && (share !== void 0 || Array.isArray(candidates) && candidates.length > 0)) {
+    invalid("private event sharing");
+  }
 }
 function syncInput(args) {
   exact(args, Object.keys(syncFields), Object.keys(syncFields));
@@ -23575,13 +23589,14 @@ async function callCalendarTool(name, args, api) {
     return readingError("Calendar sync is unconfirmed. Retry the identical batch ID and expected revision with unchanged source and full payload. " + message);
   }
 }
-var MAX_CALENDAR_API_BYTES, MAX_RESULT_BYTES, MAX_REVISION, UUID_PATTERN, uuidSchema, timestampSchema, identifierSchema, textSchema, eventFields, requiredEventFields, syncFields, pageFields, CALENDAR_TOOLS, CALENDAR_TOOL_NAMES;
+var MAX_CALENDAR_API_BYTES, MAX_CALENDAR_DIRECTORY_BYTES, MAX_RESULT_BYTES, MAX_REVISION, UUID_PATTERN, uuidSchema, timestampSchema, identifierSchema, textSchema, eventFields, requiredEventFields, syncFields, pageFields, CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, IDENTIFIER, EVIDENCE;
 var init_calendar = __esm({
   "src/calendar.ts"() {
     "use strict";
     init_api2();
     init_reading();
     MAX_CALENDAR_API_BYTES = 14e3;
+    MAX_CALENDAR_DIRECTORY_BYTES = 64 * 1024;
     MAX_RESULT_BYTES = 32e3;
     MAX_REVISION = Number.MAX_SAFE_INTEGER - 1;
     UUID_PATTERN = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
@@ -23605,7 +23620,24 @@ var init_calendar = __esm({
       endDate: { type: "string", format: "date", description: "All-day exclusive local end date at midnight." },
       location: textSchema(256, false),
       accountId: identifierSchema,
-      organizerDomain: { type: "string", pattern: "^[a-z0-9.-]{1,253}$", description: "Lowercase organizer email domain only; never a name or local part." }
+      organizerDomain: { type: "string", pattern: "^[a-z0-9.-]{1,253}$", description: "Lowercase organizer email domain only; never a name or local part." },
+      shareAccountId: { ...identifierSchema, description: "Account to share this occurrence with; the caller must be a direct member." },
+      shareEvidence: {
+        type: "array",
+        maxItems: 3,
+        uniqueItems: true,
+        items: { enum: ["domain", "location", "title"] },
+        description: "Evidence kinds for shareAccountId, never matched text."
+      },
+      candidateAccountIds: {
+        type: "array",
+        maxItems: 5,
+        uniqueItems: true,
+        items: identifierSchema,
+        description: "Owner-only account suggestions; must not repeat shareAccountId."
+      },
+      private: { type: "boolean", description: "Never shared (Outlook Private category or private meeting); forbids shareAccountId and candidates." },
+      seriesKey: { type: "string", pattern: "^[0-9a-f]{64}$", description: "Opaque series key (64 lowercase hex)." }
     };
     requiredEventFields = ["externalId", "title", "startsAt", "endsAt", "timeZone"];
     syncFields = {
@@ -23623,7 +23655,7 @@ var init_calendar = __esm({
       mutations: {
         type: "array",
         maxItems: 20,
-        description: "At most 20 distinct occurrence IDs. Only explicit removals delete events.",
+        description: "At most 20 distinct occurrence IDs, or at most 12 when any upsert carries share fields (the server rejects transactions over 100 items with HTTP 400). Only explicit removals delete events.",
         items: { oneOf: [
           { type: "object", properties: { op: { const: "upsert" }, event: {
             type: "object",
@@ -23659,7 +23691,7 @@ var init_calendar = __esm({
     CALENDAR_TOOLS = [
       {
         name: "ttobak_sync_calendar_events",
-        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
+        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; the server rejects transactions over 100 items with HTTP 400. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
         inputSchema: { type: "object", properties: syncFields, required: Object.keys(syncFields), additionalProperties: false }
       },
@@ -23682,6 +23714,8 @@ var init_calendar = __esm({
       }
     ];
     CALENDAR_TOOL_NAMES = CALENDAR_TOOLS.map((tool) => tool.name);
+    IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
+    EVIDENCE = ["domain", "location", "title"];
   }
 });
 
@@ -24039,6 +24073,10 @@ var init_api2 = __esm({
       async listAccountProjects(accountId) {
         const result = await this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/projects`);
         return (result?.projects ?? []).flatMap((project) => typeof project?.projectId === "string" ? [{ projectId: project.projectId, ...typeof project.sfdcOpptyId === "string" && project.sfdcOpptyId ? { sfdcOpptyId: project.sfdcOpptyId } : {} }] : []);
+      }
+      /** Accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
+      async calendarShareDirectory() {
+        return this.request("GET", "/api/calendar/share-directory", void 0, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
       }
       async calendarSyncStatus(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
@@ -25095,13 +25133,13 @@ var init_auth = __esm({
 });
 
 // src/intake/batch.ts
-function batches(mutations) {
+function batches(mutations, max = MAX_BATCH) {
   const result = [];
   let current = [];
   let bytes = 0;
   for (const mutation of mutations) {
     const size = Buffer.byteLength(JSON.stringify(mutation)) + 1;
-    if (current.length && (current.length >= MAX_BATCH || bytes + size > MAX_BATCH_BYTES)) {
+    if (current.length && (current.length >= Math.min(max, MAX_BATCH) || bytes + size > MAX_BATCH_BYTES)) {
       result.push(current);
       current = [];
       bytes = 0;
@@ -25149,6 +25187,82 @@ var init_errors4 = __esm({
       }
       code;
     };
+  }
+});
+
+// src/intake/match.ts
+function normalize(s) {
+  return String(s ?? "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+function normalizeDomain(s) {
+  return normalize(s).replace(/^@+/, "").replace(/\.+$/, "");
+}
+function domainMatches(domain2, d) {
+  return domain2 === d || domain2.endsWith("." + d);
+}
+function containsTerm(text3, term) {
+  if (!text3) return false;
+  if (HANGUL.test(term)) return text3.includes(term);
+  let from = 0;
+  for (; ; ) {
+    const i = text3.indexOf(term, from);
+    if (i < 0) return false;
+    const before = [...text3.slice(0, i)].pop();
+    const after = [...text3.slice(i + term.length)][0];
+    if ((before === void 0 || !LETTER_OR_DIGIT.test(before)) && (after === void 0 || !LETTER_OR_DIGIT.test(after))) {
+      return true;
+    }
+    from = i + 1;
+  }
+}
+function buildMatcher(accounts, ownDomains2) {
+  const own = ownDomains2.map(normalizeDomain).filter(Boolean);
+  const isOwn = (d) => own.some((o) => domainMatches(d, o));
+  const compiled = accounts.map((a) => ({
+    accountId: a.accountId,
+    terms: [...new Set([a.name, ...a.aliases].map(normalize))].filter(
+      (t) => [...t].length >= MIN_TERM_POINTS
+    ),
+    domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d))
+  }));
+  return {
+    match(input) {
+      const title = normalize(input.title);
+      const location = normalize(input.location ?? "");
+      const attendees = [...new Set(input.domains.map(normalizeDomain))].filter(
+        (d) => d && !isOwn(d)
+      );
+      const hits = [];
+      for (const c of compiled) {
+        const evidence = /* @__PURE__ */ new Set();
+        if (c.terms.some((t) => containsTerm(title, t))) evidence.add("title");
+        if (c.terms.some((t) => containsTerm(location, t))) evidence.add("location");
+        if (attendees.some((d) => c.domains.some((cd) => domainMatches(d, cd)))) {
+          evidence.add("domain");
+        }
+        if (evidence.size > 0) {
+          hits.push({ accountId: c.accountId, evidence: [...evidence].sort() });
+        }
+      }
+      const ids = [...new Set(hits.map((h) => h.accountId))].sort();
+      if (ids.length === 0) return { kind: "none" };
+      if (ids.length === 1) {
+        const evidence = [...new Set(hits.filter((h) => h.accountId === ids[0]).flatMap((h) => h.evidence))].sort();
+        return { kind: "matched", accountId: ids[0], evidence };
+      }
+      return { kind: "candidate", accountIds: ids.slice(0, MAX_CANDIDATES) };
+    }
+  };
+}
+var DEFAULT_OWN_DOMAINS, MAX_CANDIDATES, MIN_TERM_POINTS, HANGUL, LETTER_OR_DIGIT;
+var init_match = __esm({
+  "src/intake/match.ts"() {
+    "use strict";
+    DEFAULT_OWN_DOMAINS = ["amazon.com"];
+    MAX_CANDIDATES = 5;
+    MIN_TERM_POINTS = 2;
+    HANGUL = new RegExp("\\p{Script=Hangul}", "u");
+    LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
   }
 });
 
@@ -25218,9 +25332,10 @@ function parseOutlookItems(payload) {
   return list.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new IntakeError("PARSE_FAILED", "calendar item is not an object");
     const value = item;
-    if (typeof value.meetingId !== "string" || !value.meetingId || typeof value.start !== "string" || typeof value.end !== "string" || !optionalType2(value, "subject", "string") || !optionalType2(value, "location", "string") || !optionalType2(value, "isCanceled", "boolean") || !optionalType2(value, "isAllDay", "boolean") || !optionalType2(value, "sensitivity", "string")) {
+    if (typeof value.meetingId !== "string" || !value.meetingId || typeof value.start !== "string" || typeof value.end !== "string" || !optionalType2(value, "subject", "string") || !optionalType2(value, "location", "string") || !optionalType2(value, "isCanceled", "boolean") || !optionalType2(value, "isAllDay", "boolean") || !optionalType2(value, "sensitivity", "string") || !optionalType2(value, "meetingChangeKey", "string") || !optionalType2(value, "seriesId", "string") || !(value.categories === void 0 || value.categories === null || Array.isArray(value.categories) && value.categories.every((category) => typeof category === "string"))) {
       throw new IntakeError("PARSE_FAILED", "calendar item has unexpected field types");
     }
+    const privateCategory = Array.isArray(value.categories) && value.categories.some((category) => category.trim().toLowerCase() === "private");
     const organizer = value.organizer;
     const email3 = organizer && typeof organizer === "object" && !Array.isArray(organizer) ? organizer.email : void 0;
     return {
@@ -25232,7 +25347,10 @@ function parseOutlookItems(payload) {
       ...typeof value.isCanceled === "boolean" ? { isCanceled: value.isCanceled } : {},
       ...typeof value.isAllDay === "boolean" ? { isAllDay: value.isAllDay } : {},
       ...typeof value.sensitivity === "string" ? { sensitivity: value.sensitivity } : {},
-      ...typeof email3 === "string" ? { organizer: { email: email3 } } : {}
+      ...typeof email3 === "string" ? { organizer: { email: email3 } } : {},
+      ...typeof value.meetingChangeKey === "string" && value.meetingChangeKey ? { meetingChangeKey: value.meetingChangeKey } : {},
+      ...typeof value.seriesId === "string" && value.seriesId ? { seriesId: value.seriesId } : {},
+      ...privateCategory ? { privateCategory: true } : {}
     };
   });
 }
@@ -25315,7 +25433,59 @@ function validEvent(event, window) {
     return false;
   }
 }
-function planCalendar(items, ledger, window, zone) {
+function sharingCandidates(items, window) {
+  const seen = /* @__PURE__ */ new Set();
+  return items.filter((item) => {
+    if (seen.has(item.meetingId)) return false;
+    const start = instantOf(item.start), end = instantOf(item.end);
+    if (!start || !end || !(end > window.start && start < window.end)) return false;
+    seen.add(item.meetingId);
+    return !item.isCanceled && !excludedSensitivity(item) && !item.privateCategory && end.getTime() - start.getTime() <= LONG_EVENT_MS;
+  });
+}
+function shareFields(event) {
+  const fields2 = {
+    ...event.shareAccountId ? { shareAccountId: event.shareAccountId } : {},
+    ...event.shareEvidence ? { shareEvidence: [...event.shareEvidence] } : {},
+    ...event.candidateAccountIds ? { candidateAccountIds: [...event.candidateAccountIds] } : {},
+    ...event.private ? { private: true } : {}
+  };
+  return Object.keys(fields2).length ? fields2 : void 0;
+}
+function applyShare(event, fields2) {
+  if (fields2?.private) {
+    event.private = true;
+    return;
+  }
+  if (fields2?.shareAccountId) {
+    event.shareAccountId = fields2.shareAccountId;
+    if (fields2.shareEvidence?.length) event.shareEvidence = [...fields2.shareEvidence].sort();
+  }
+  const candidates = (fields2?.candidateAccountIds ?? []).filter((id) => id !== fields2?.shareAccountId);
+  if (candidates.length) event.candidateAccountIds = [...new Set(candidates)].sort().slice(0, 5);
+}
+function decideSharing(event, item, previous, sharing) {
+  if (item.seriesId) event.seriesKey = createHash4("sha256").update(`${sharing.sourceId}|${item.seriesId}`).digest("hex");
+  const facts = sharing.facts.get(item.meetingId);
+  if (item.privateCategory || facts?.isPrivate || facts === null && previous?.share?.private) {
+    event.private = true;
+    return;
+  }
+  if (!sharing.matcher) {
+    applyShare(event, previous?.share);
+    return;
+  }
+  const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
+  const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
+  if (facts === null && previous?.share?.shareEvidence?.includes("domain") && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
+    applyShare(event, previous.share);
+  } else if (result.kind === "matched") {
+    applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
+  } else if (result.kind === "candidate") {
+    applyShare(event, { candidateAccountIds: result.accountIds });
+  }
+}
+function planCalendar(items, ledger, window, zone, sharing) {
   const counts = {
     fetched: 0,
     upserts: 0,
@@ -25326,7 +25496,12 @@ function planCalendar(items, ledger, window, zone) {
     skippedInvalid: 0,
     cancelledUntracked: 0,
     unresolved: 0,
-    sensitivityUnknown: 0
+    sensitivityUnknown: 0,
+    shared: 0,
+    candidates: 0,
+    private: 0,
+    attendeesUnavailable: 0,
+    directoryUnavailable: sharing ? sharing.matcher === null : false
   };
   const mutations = [];
   const set2 = {};
@@ -25366,10 +25541,15 @@ function planCalendar(items, ledger, window, zone) {
       continue;
     }
     const event = toEvent(item, zone);
+    if (event && sharing) decideSharing(event, item, ledger[item.meetingId], sharing);
+    else if (event && item.privateCategory) event.private = true;
     if (!event || !validEvent(event, window)) {
       counts.skippedInvalid++;
       continue;
     }
+    if (event.private) counts.private++;
+    if (event.shareAccountId) counts.shared++;
+    else if (event.candidateAccountIds) counts.candidates++;
     const fp = fingerprint(event);
     if (ledger[event.externalId]?.fp === fp) {
       counts.unchanged++;
@@ -25377,7 +25557,13 @@ function planCalendar(items, ledger, window, zone) {
       continue;
     }
     mutations.push({ op: "upsert", event });
-    set2[event.externalId] = { fp, startsAt: new Date(event.startsAt).toISOString(), endsAt: new Date(event.endsAt).toISOString() };
+    const share = shareFields(event);
+    set2[event.externalId] = {
+      fp,
+      startsAt: new Date(event.startsAt).toISOString(),
+      endsAt: new Date(event.endsAt).toISOString(),
+      ...share ? { share } : {}
+    };
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: "upsert" });
   }
@@ -25391,7 +25577,7 @@ function planCalendar(items, ledger, window, zone) {
   return { mutations, set: set2, remove, counts, preview };
 }
 function batches2(mutations) {
-  return batches(mutations);
+  return batches(mutations, MAX_BATCH2);
 }
 function pruneLedger(ledger, now) {
   const cutoff = now.getTime() - LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
@@ -25458,6 +25644,29 @@ async function send(api, store, state) {
   state.pending = null;
   store.write(state, ...statePath(state));
 }
+function parseDirectory(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const accounts = value.accounts;
+  if (!Array.isArray(accounts) || accounts.length > MAX_DIRECTORY_ACCOUNTS) return null;
+  const strings = (list) => Array.isArray(list) && list.length <= 100 && list.every((entry2) => typeof entry2 === "string" && entry2.length <= 256);
+  const result = [];
+  for (const entry2 of accounts) {
+    if (!entry2 || typeof entry2 !== "object" || Array.isArray(entry2)) continue;
+    const account = entry2;
+    const aliases = account.aliases ?? [], domains = account.domains ?? [];
+    if (typeof account.accountId !== "string" || !IDENTIFIER2.test(account.accountId) || typeof account.name !== "string" || account.name.length > 256 || !strings(aliases) || !strings(domains)) continue;
+    result.push({ accountId: account.accountId, name: account.name, aliases, domains });
+  }
+  return result;
+}
+async function readDirectory(api) {
+  if (!api) return null;
+  try {
+    return parseDirectory(await api.calendarShareDirectory());
+  } catch {
+    return null;
+  }
+}
 async function runCalendar(options) {
   const { store, source, sourceId, zone, now, dryRun } = options;
   if (!dryRun && !options.scope) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK account scope is required");
@@ -25477,7 +25686,15 @@ async function runCalendar(options) {
   const window = syncWindow(now, zone);
   const items = [];
   for (const request2 of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request2)));
-  const plan = planCalendar(items, state.ledger, window, zone);
+  const directory = await readDirectory(options.api);
+  const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
+  const facts = /* @__PURE__ */ new Map();
+  if (matcher && options.attendees) {
+    for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
+    options.attendees.save(now);
+  }
+  const plan = planCalendar(items, state.ledger, window, zone, { sourceId, matcher, facts });
+  plan.counts.attendeesUnavailable = options.attendees?.unavailable ?? 0;
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {
     throw new IntakeError(
@@ -25514,21 +25731,179 @@ async function runCalendar(options) {
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, MAX_BATCH2, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
     init_calendar();
     init_batch();
     init_errors4();
+    init_match();
     CALENDAR_TOOL = { name: "calendar_view", properties: ["start_date", "end_date"] };
     PAST_DAYS = 7;
     FUTURE_DAYS = 30;
     MAX_ITEMS = 5e3;
+    MAX_BATCH2 = 12;
     LEDGER_RETENTION_DAYS = 120;
     UNTITLED = "(\uC81C\uBAA9 \uC5C6\uC74C)";
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
+    IDENTIFIER2 = /^[A-Za-z0-9_-]{1,128}$/;
+    MAX_DIRECTORY_ACCOUNTS = 1e3;
+  }
+});
+
+// src/intake/attendees.ts
+function records(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === "object") {
+    const meetings = payload.meetings;
+    if (Array.isArray(meetings)) return meetings;
+  }
+  return [];
+}
+function parseMeetingList(payload) {
+  const all = records(payload);
+  if (all.length > MAX_LIST) return null;
+  const out = [];
+  for (const raw of all) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw;
+    if (typeof r.meetingId !== "string" || !r.meetingId || typeof r.subject !== "string" || typeof r.startTime !== "string" || typeof r.endTime !== "string") continue;
+    out.push({
+      meetingId: r.meetingId,
+      subject: r.subject,
+      start: r.startTime,
+      end: r.endTime,
+      isRecurring: r.isRecurring === true
+    });
+  }
+  return out;
+}
+function joinMeeting(item, list) {
+  if (typeof item.subject !== "string") return null;
+  const start = Date.parse(item.start);
+  const end = Date.parse(item.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const matches2 = list.filter((m) => m.subject === item.subject && Date.parse(m.start) === start && Date.parse(m.end) === end);
+  return matches2.length === 1 ? matches2[0] : null;
+}
+function parseAttendees(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const r = payload;
+  if (typeof r.isPrivate !== "boolean") return null;
+  const seen = /* @__PURE__ */ new Set();
+  const add = (value) => {
+    if (typeof value !== "string") return;
+    const address = value.trim().toLowerCase();
+    if (address) seen.add(address);
+  };
+  for (const key of ["requiredAttendees", "optionalAttendees"]) {
+    const list = r[key];
+    if (Array.isArray(list)) list.forEach(add);
+  }
+  add(r.organizer);
+  if (seen.size > MAX_ATTENDEES) return null;
+  return { addresses: [...seen], isPrivate: r.isPrivate };
+}
+function meetingFacts(payload) {
+  const parsed = parseAttendees(payload);
+  if (!parsed) return null;
+  const r = payload;
+  if (!Array.isArray(r.requiredAttendees) && !Array.isArray(r.optionalAttendees) && typeof r.organizer !== "string") return null;
+  const domains = /* @__PURE__ */ new Set();
+  for (const address of parsed.addresses) {
+    const domain2 = organizerDomain(address);
+    if (domain2) domains.add(domain2);
+  }
+  return { domains: [...domains].sort().slice(0, MAX_DOMAINS), isPrivate: parsed.isPrivate };
+}
+var MAX_LIST, MAX_ATTENDEES, MAX_DOMAINS, MAX_FACT_READS, MAX_FACT_FAILURES, AttendeeFacts;
+var init_attendees = __esm({
+  "src/intake/attendees.ts"() {
+    "use strict";
+    init_calendar2();
+    MAX_LIST = 5e3;
+    MAX_ATTENDEES = 500;
+    MAX_DOMAINS = 50;
+    MAX_FACT_READS = 25;
+    MAX_FACT_FAILURES = 3;
+    AttendeeFacts = class {
+      constructor(store, sourceId, reader, window) {
+        this.store = store;
+        this.sourceId = sourceId;
+        this.reader = reader;
+        this.window = window;
+        let stored = null;
+        try {
+          stored = store.read("calendar", sourceId, "meeting-facts.json");
+        } catch {
+          stored = null;
+        }
+        this.cache = stored && stored.version === 1 && stored.entries && typeof stored.entries === "object" ? stored : { version: 1, entries: {} };
+      }
+      store;
+      sourceId;
+      reader;
+      window;
+      cache;
+      list;
+      failures = 0;
+      reads = 0;
+      changed = false;
+      /** Lookups without an answer: no reader, no unique join, failed, or over the per-run budget. */
+      unavailable = 0;
+      async factsFor(item) {
+        const cached2 = this.cache.entries[item.meetingId];
+        if (item.meetingChangeKey && cached2?.changeKey === item.meetingChangeKey && Array.isArray(cached2.domains) && typeof cached2.isPrivate === "boolean") {
+          return { domains: [...cached2.domains], isPrivate: cached2.isPrivate };
+        }
+        const facts = await this.read(item);
+        if (!facts) {
+          this.unavailable++;
+          return null;
+        }
+        const end = new Date(item.end);
+        if (item.meetingChangeKey && Number.isFinite(end.getTime())) {
+          this.cache.entries[item.meetingId] = { changeKey: item.meetingChangeKey, ...facts, endsAt: end.toISOString() };
+          this.changed = true;
+        }
+        return facts;
+      }
+      async read(item) {
+        if (!this.reader || this.failures >= MAX_FACT_FAILURES || this.reads >= MAX_FACT_READS) return null;
+        if (this.list === void 0) {
+          try {
+            this.list = parseMeetingList(await this.reader.list(this.window));
+          } catch {
+            this.list = null;
+          }
+        }
+        if (!this.list) return null;
+        const joined = joinMeeting(item, this.list);
+        if (!joined) return null;
+        this.reads++;
+        let facts;
+        try {
+          facts = meetingFacts(await this.reader.get(joined.meetingId));
+        } catch {
+          facts = null;
+        }
+        if (!facts) {
+          this.failures++;
+          return null;
+        }
+        this.failures = 0;
+        return facts;
+      }
+      save(now) {
+        const pruned = pruneLedger(this.cache.entries, now);
+        if (!this.changed && Object.keys(pruned).length === Object.keys(this.cache.entries).length) return;
+        this.cache = { version: 1, entries: pruned };
+        this.store.write(this.cache, "calendar", this.sourceId, "meeting-facts.json");
+        this.changed = false;
+      }
+    };
   }
 });
 
@@ -28631,68 +29006,6 @@ var init_store = __esm({
   }
 });
 
-// src/intake/attendees.ts
-function records(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (payload && typeof payload === "object") {
-    const meetings = payload.meetings;
-    if (Array.isArray(meetings)) return meetings;
-  }
-  return [];
-}
-function parseMeetingList(payload) {
-  const all = records(payload);
-  if (all.length > MAX_LIST) return null;
-  const out = [];
-  for (const raw of all) {
-    if (!raw || typeof raw !== "object") continue;
-    const r = raw;
-    if (typeof r.meetingId !== "string" || !r.meetingId || typeof r.subject !== "string" || typeof r.startTime !== "string" || typeof r.endTime !== "string") continue;
-    out.push({
-      meetingId: r.meetingId,
-      subject: r.subject,
-      start: r.startTime,
-      end: r.endTime,
-      isRecurring: r.isRecurring === true
-    });
-  }
-  return out;
-}
-function joinMeeting(item, list) {
-  if (typeof item.subject !== "string") return null;
-  const start = Date.parse(item.start);
-  const end = Date.parse(item.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const matches2 = list.filter((m) => m.subject === item.subject && Date.parse(m.start) === start && Date.parse(m.end) === end);
-  return matches2.length === 1 ? matches2[0] : null;
-}
-function parseAttendees(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const r = payload;
-  if (typeof r.isPrivate !== "boolean") return null;
-  const seen = /* @__PURE__ */ new Set();
-  const add = (value) => {
-    if (typeof value !== "string") return;
-    const address = value.trim().toLowerCase();
-    if (address) seen.add(address);
-  };
-  for (const key of ["requiredAttendees", "optionalAttendees"]) {
-    const list = r[key];
-    if (Array.isArray(list)) list.forEach(add);
-  }
-  add(r.organizer);
-  if (seen.size > MAX_ATTENDEES) return null;
-  return { addresses: [...seen], isPrivate: r.isPrivate };
-}
-var MAX_LIST, MAX_ATTENDEES;
-var init_attendees = __esm({
-  "src/intake/attendees.ts"() {
-    "use strict";
-    MAX_LIST = 5e3;
-    MAX_ATTENDEES = 500;
-  }
-});
-
 // src/intake/classify.ts
 function classifyOccurrence(input) {
   if (input.isPrivate) return { kind: "skip" };
@@ -29959,7 +30272,7 @@ __export(run_exports, {
   tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
-import { resolve as resolve3 } from "node:path";
+import { join as join9, resolve as resolve3 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
 function enabled(entry2) {
@@ -29990,12 +30303,15 @@ function flags(args, allowed) {
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
     const kind = allowed[name];
-    if (!kind || name in result) throw new IntakeError("INVALID_ARGUMENT", `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
+    if (!kind || name in result && kind !== "list") {
+      throw new IntakeError("INVALID_ARGUMENT", `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
+    }
     if (kind === "flag") result[name] = true;
     else {
       const value = args[++index];
       if (value === void 0 || value.startsWith("--")) throw new IntakeError("INVALID_ARGUMENT", `${name} needs a value`);
-      result[name] = value;
+      if (kind === "list") result[name] = [...result[name] ?? [], value];
+      else result[name] = value;
     }
   }
   return result;
@@ -30023,6 +30339,13 @@ async function openSession(environment, host, server, pathDirs, tools) {
     throw error3;
   }
   return session;
+}
+function ownDomains(values) {
+  const domains = [...new Set((values ?? DEFAULT_OWN_DOMAINS).map((domain2) => domain2.trim().toLowerCase().replace(/^@+/, "")))];
+  if (domains.length > 20 || domains.some((domain2) => domain2.length > 253 || !OWN_DOMAIN.test(domain2))) {
+    throw new IntakeError("INVALID_ARGUMENT", "--own-domain must be a domain name");
+  }
+  return domains;
 }
 async function selectTaskConnector(connector, request2, environment, store) {
   const { host, server } = request2;
@@ -30070,7 +30393,7 @@ async function select(args, environment, store) {
   }
   const allowed = { "--host": "value", "--server": "value" };
   if (connector === "specreq") allowed["--auto-ack"] = "value";
-  if (connector === "calendar") allowed["--accept-unknown-sensitivity"] = "flag";
+  if (connector === "calendar") Object.assign(allowed, { "--accept-unknown-sensitivity": "flag", "--own-domain": "list" });
   const options = flags(args.slice(1), allowed);
   const autoAckValue = options["--auto-ack"] ?? "on";
   if (autoAckValue !== "on" && autoAckValue !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
@@ -30080,7 +30403,8 @@ async function select(args, environment, store) {
       host: options["--host"],
       server: options["--server"],
       autoAck: autoAckValue === "on",
-      acceptUnknownSensitivity: options["--accept-unknown-sensitivity"] === true
+      acceptUnknownSensitivity: options["--accept-unknown-sensitivity"] === true,
+      ...connector === "calendar" ? { ownDomains: ownDomains(options["--own-domain"]) } : {}
     },
     environment,
     store
@@ -30124,6 +30448,7 @@ async function selectConnector(connector, request2, environment, store) {
       sourceId,
       pathDirs,
       selectedAt: environment.now().toISOString(),
+      ownDomains: request2.ownDomains ?? previous?.calendar?.ownDomains ?? ownDomains(void 0),
       ...request2.acceptUnknownSensitivity ? { acceptUnknownSensitivity: true } : {}
     },
     ttobak
@@ -30156,6 +30481,44 @@ async function signIn(selection, environment, dryRun, noninteractive) {
     }
   }
   return { api, scope, me };
+}
+function directoryOnlyApi(selection, environment) {
+  try {
+    const config2 = ttobakConfig(selection, environment.env);
+    return new TtobakApi(
+      new CognitoAuth2(config2, { interactive: false, tokenDirectory: join9(environment.home, ".ttobak") }),
+      config2.apiUrl
+    );
+  } catch {
+    return void 0;
+  }
+}
+async function openMeetingFacts(environment, store, selection, scope, me, now) {
+  const selected = enabled(selection.meetings);
+  let session;
+  try {
+    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, CONNECTOR_TOOLS.meetings);
+  } catch {
+    session = void 0;
+  }
+  let login2 = "";
+  try {
+    login2 = scope ? loadIdentity(store, scope)?.login ?? "" : "";
+  } catch {
+    login2 = "";
+  }
+  const userEmail = login2 ? `${login2}@amazon.com` : me?.email ?? "";
+  const active = session;
+  const reader = active && userEmail ? {
+    list: async (window) => resultJson(await active.call("list_meetings", {
+      startTime: window.start.toISOString(),
+      endTime: window.end.toISOString(),
+      userEmail
+    }), "list_meetings"),
+    get: async (meetingId) => resultJson(await active.call("get_meeting", { meetingId, getMaster: false, userEmail }), "get_meeting")
+  } : null;
+  const sourceId = selection.calendar.sourceId;
+  return { session, facts: new AttendeeFacts(store, sourceId, reader, syncWindow(now, environment.zone)) };
 }
 async function openTaskSessions(environment, selection) {
   const sessions = {};
@@ -30198,6 +30561,7 @@ async function calendarRun(options, environment, store, signedIn) {
   const release = store.lock("calendar");
   const startedAt = environment.now();
   let session;
+  let meetings;
   let status = {};
   try {
     status = store.read("status.json") ?? {};
@@ -30205,11 +30569,18 @@ async function calendarRun(options, environment, store, signedIn) {
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
+    const runApi = api ?? (dryRun ? directoryOnlyApi(selection, environment) : void 0);
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, [CALENDAR_TOOL]);
     const active = session;
+    let attendees;
+    if (enabled(selection.meetings)) {
+      const opened = await openMeetingFacts(environment, store, selection, scope, me, startedAt);
+      meetings = opened.session;
+      attendees = opened.facts;
+    }
     const result = await runCalendar({
       store,
-      api,
+      api: runApi,
       sourceId: selected.sourceId,
       scope,
       zone: environment.zone,
@@ -30217,8 +30588,12 @@ async function calendarRun(options, environment, store, signedIn) {
       dryRun,
       reconcile: options.reconcile === true,
       acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
+      attendees,
+      ownDomains: Array.isArray(selected.ownDomains) ? selected.ownDomains : DEFAULT_OWN_DOMAINS,
       source: { view: async (request2) => resultJson(await active.call(CALENDAR_TOOL.name, request2), CALENDAR_TOOL.name) }
     });
+    await meetings?.close();
+    meetings = void 0;
     status.calendar = {
       lastRunAt: startedAt.toISOString(),
       result: "ok",
@@ -30290,6 +30665,7 @@ async function calendarRun(options, environment, store, signedIn) {
     throw error3;
   } finally {
     await session?.close();
+    await meetings?.close();
     release();
   }
 }
@@ -30472,12 +30848,13 @@ async function terminalPrompt(question) {
     reader.close();
   }
 }
-var USAGE, SYNC_CONNECTORS;
+var USAGE, OWN_DOMAIN, SYNC_CONNECTORS;
 var init_run = __esm({
   "src/intake/run.ts"() {
     "use strict";
     init_api2();
     init_auth();
+    init_attendees();
     init_calendar2();
     init_connectors();
     init_errors4();
@@ -30486,11 +30863,13 @@ var init_run = __esm({
     init_schedule();
     init_sfdc();
     init_specreq();
+    init_match();
     init_store();
     init_tasks();
     USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
+      [--own-domain <domain>]...
   ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
   ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
@@ -30501,6 +30880,7 @@ var init_run = __esm({
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake status`;
+    OWN_DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$/;
     SYNC_CONNECTORS = ["calendar", "sfdc"];
   }
 });

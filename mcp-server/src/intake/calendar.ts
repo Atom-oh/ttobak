@@ -2,20 +2,26 @@
 // normalized occurrences to the private TTOBAK calendar, following
 // docs/runbooks/local-outlook-calendar-sync.md. Only explicit cancellations and
 // exclusions of tracked occurrences become removals; absence never does.
+// Account sharing: a matcher built from the TTOBAK share directory adds the
+// matched account (with evidence kinds), candidate accounts or the `private`
+// flag to each upsert. Matched text, attendees and categories never leave the Mac.
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { TtobakApi } from '../api.js';
 import { callCalendarTool, validateCalendarReceipt, validateCalendarSync,
   type CalendarSyncRequest } from '../calendar.js';
 import { batches as splitBatches, deliveryFailure } from './batch.js';
+import type { AttendeeFacts, MeetingFacts } from './attendees.js';
 import { IntakeError } from './errors.js';
-import { resultJson } from './mcp-client.js';
+import { buildMatcher, DEFAULT_OWN_DOMAINS, type DirectoryAccount, type Matcher } from './match.js';
 import type { IntakeStore } from './store.js';
 
 export const CALENDAR_TOOL = { name: 'calendar_view', properties: ['start_date', 'end_date'] };
 export const PAST_DAYS = 7;
 export const FUTURE_DAYS = 30;
 const MAX_ITEMS = 5000;
+// The server spends up to 7 transaction items per share-bearing upsert, plus 2 (limit 100).
+const MAX_BATCH = 12;
 const LEDGER_RETENTION_DAYS = 120;
 const UNTITLED = '(제목 없음)';
 
@@ -30,6 +36,10 @@ export interface OutlookItem {
   sensitivity?: string;
   /** Only the email is kept; the organizer's name never leaves the parser. */
   organizer?: { email?: string };
+  meetingChangeKey?: string;
+  seriesId?: string;
+  /** Only whether a `Private` category exists is kept. */
+  privateCategory?: boolean;
 }
 
 export interface CalendarEvent {
@@ -44,9 +54,15 @@ export interface CalendarEvent {
   location?: string;
   /** Lowercase organizer email domain; never the name or local part. */
   organizerDomain?: string;
+  seriesKey?: string;
+  private?: boolean;
+  shareAccountId?: string;
+  shareEvidence?: string[];
+  candidateAccountIds?: string[];
 }
 
-export interface LedgerEntry { fp: string; startsAt: string; endsAt: string }
+export interface ShareFields { shareAccountId?: string; shareEvidence?: string[]; candidateAccountIds?: string[]; private?: boolean }
+export interface LedgerEntry { fp: string; startsAt: string; endsAt: string; share?: ShareFields }
 export type Ledger = Record<string, LedgerEntry>;
 
 export type Mutation = { op: 'upsert'; event: CalendarEvent } | { op: 'remove'; externalId: string };
@@ -62,6 +78,11 @@ export interface CalendarCounts {
   cancelledUntracked: number;
   unresolved: number;
   sensitivityUnknown: number;
+  shared: number;
+  candidates: number;
+  private: number;
+  attendeesUnavailable: number;
+  directoryUnavailable: boolean;
 }
 
 export interface Window { start: Date; end: Date }
@@ -154,9 +175,14 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
     if (typeof value.meetingId !== 'string' || !value.meetingId || typeof value.start !== 'string' ||
         typeof value.end !== 'string' || !optionalType(value, 'subject', 'string') ||
         !optionalType(value, 'location', 'string') || !optionalType(value, 'isCanceled', 'boolean') ||
-        !optionalType(value, 'isAllDay', 'boolean') || !optionalType(value, 'sensitivity', 'string')) {
+        !optionalType(value, 'isAllDay', 'boolean') || !optionalType(value, 'sensitivity', 'string') ||
+        !optionalType(value, 'meetingChangeKey', 'string') || !optionalType(value, 'seriesId', 'string') ||
+        !(value.categories === undefined || value.categories === null ||
+          (Array.isArray(value.categories) && value.categories.every(category => typeof category === 'string')))) {
       throw new IntakeError('PARSE_FAILED', 'calendar item has unexpected field types');
     }
+    const privateCategory = Array.isArray(value.categories) &&
+      value.categories.some(category => (category as string).trim().toLowerCase() === 'private');
     const organizer = value.organizer;
     const email = organizer && typeof organizer === 'object' && !Array.isArray(organizer)
       ? (organizer as Record<string, unknown>).email : undefined;
@@ -168,6 +194,9 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
       ...(typeof value.isAllDay === 'boolean' ? { isAllDay: value.isAllDay } : {}),
       ...(typeof value.sensitivity === 'string' ? { sensitivity: value.sensitivity } : {}),
       ...(typeof email === 'string' ? { organizer: { email } } : {}),
+      ...(typeof value.meetingChangeKey === 'string' && value.meetingChangeKey ? { meetingChangeKey: value.meetingChangeKey } : {}),
+      ...(typeof value.seriesId === 'string' && value.seriesId ? { seriesId: value.seriesId } : {}),
+      ...(privateCategory ? { privateCategory: true } : {}),
     };
   });
 }
@@ -254,6 +283,75 @@ function validEvent(event: CalendarEvent, window: Window): boolean {
   }
 }
 
+export interface PlanSharing {
+  sourceId: string;
+  /** Null when the share directory could not be read: previous share fields are kept. */
+  matcher: Matcher | null;
+  /** Meeting facts per meetingId; null when the lookup had no answer. Missing means not looked up. */
+  facts: Map<string, MeetingFacts | null>;
+}
+
+/** Items that would be upserted with a sharing decision (and so need meeting facts). */
+export function sharingCandidates(items: OutlookItem[], window: Window): OutlookItem[] {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    if (seen.has(item.meetingId)) return false;
+    const start = instantOf(item.start), end = instantOf(item.end);
+    if (!start || !end || !(end > window.start && start < window.end)) return false;
+    seen.add(item.meetingId);
+    return !item.isCanceled && !excludedSensitivity(item) && !item.privateCategory &&
+      end.getTime() - start.getTime() <= LONG_EVENT_MS;
+  });
+}
+
+function shareFields(event: CalendarEvent): ShareFields | undefined {
+  const fields: ShareFields = {
+    ...(event.shareAccountId ? { shareAccountId: event.shareAccountId } : {}),
+    ...(event.shareEvidence ? { shareEvidence: [...event.shareEvidence] } : {}),
+    ...(event.candidateAccountIds ? { candidateAccountIds: [...event.candidateAccountIds] } : {}),
+    ...(event.private ? { private: true } : {}),
+  };
+  return Object.keys(fields).length ? fields : undefined;
+}
+
+function applyShare(event: CalendarEvent, fields: ShareFields | undefined): void {
+  if (fields?.private) {
+    event.private = true;
+    return;
+  }
+  if (fields?.shareAccountId) {
+    event.shareAccountId = fields.shareAccountId;
+    if (fields.shareEvidence?.length) event.shareEvidence = [...fields.shareEvidence].sort();
+  }
+  const candidates = (fields?.candidateAccountIds ?? []).filter(id => id !== fields?.shareAccountId);
+  if (candidates.length) event.candidateAccountIds = [...new Set(candidates)].sort().slice(0, 5);
+}
+
+function decideSharing(event: CalendarEvent, item: OutlookItem, previous: LedgerEntry | undefined, sharing: PlanSharing): void {
+  if (item.seriesId) event.seriesKey = createHash('sha256').update(`${sharing.sourceId}|${item.seriesId}`).digest('hex');
+  const facts = sharing.facts.get(item.meetingId);
+  // Fail closed: a private meeting, or one that was private when its lookup now fails, is never shared.
+  if (item.privateCategory || facts?.isPrivate || (facts === null && previous?.share?.private)) {
+    event.private = true;
+    return;
+  }
+  if (!sharing.matcher) {
+    applyShare(event, previous?.share);
+    return;
+  }
+  const domains = [...(facts?.domains ?? []), ...(event.organizerDomain ? [event.organizerDomain] : [])];
+  const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
+  // A lookup without an answer must not drop a share that rested on attendee domains.
+  if (facts === null && previous?.share?.shareEvidence?.includes('domain') &&
+      !(result.kind === 'matched' && result.accountId === previous.share.shareAccountId)) {
+    applyShare(event, previous.share);
+  } else if (result.kind === 'matched') {
+    applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
+  } else if (result.kind === 'candidate') {
+    applyShare(event, { candidateAccountIds: result.accountIds });
+  }
+}
+
 export interface Plan {
   mutations: Mutation[];
   set: Ledger;
@@ -263,9 +361,11 @@ export interface Plan {
 }
 
 /** Computes the mutations for one complete read of the window. */
-export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string): Plan {
+export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string,
+  sharing?: PlanSharing): Plan {
   const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, skippedLong: 0,
-    skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0 };
+    skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0, shared: 0, candidates: 0, private: 0,
+    attendeesUnavailable: 0, directoryUnavailable: sharing ? sharing.matcher === null : false };
   const mutations: Mutation[] = [];
   const set: Ledger = {};
   const remove: string[] = [];
@@ -305,10 +405,15 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
       continue;
     }
     const event = toEvent(item, zone);
+    if (event && sharing) decideSharing(event, item, ledger[item.meetingId], sharing);
+    else if (event && item.privateCategory) event.private = true;
     if (!event || !validEvent(event, window)) {
       counts.skippedInvalid++;
       continue;
     }
+    if (event.private) counts.private++;
+    if (event.shareAccountId) counts.shared++;
+    else if (event.candidateAccountIds) counts.candidates++;
     const fp = fingerprint(event);
     if (ledger[event.externalId]?.fp === fp) {
       counts.unchanged++;
@@ -316,7 +421,9 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
       continue;
     }
     mutations.push({ op: 'upsert', event });
-    set[event.externalId] = { fp, startsAt: new Date(event.startsAt).toISOString(), endsAt: new Date(event.endsAt).toISOString() };
+    const share = shareFields(event);
+    set[event.externalId] = { fp, startsAt: new Date(event.startsAt).toISOString(), endsAt: new Date(event.endsAt).toISOString(),
+      ...(share ? { share } : {}) };
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: 'upsert' });
   }
@@ -330,12 +437,12 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   return { mutations, set, remove, counts, preview };
 }
 
-/** Splits mutations into batches of at most 20 within the request byte budget. */
+/** Splits mutations into batches of at most 12 within the request byte budget. */
 export function batches(mutations: Mutation[]): Mutation[][] {
-  return splitBatches(mutations);
+  return splitBatches(mutations, MAX_BATCH);
 }
 
-export function pruneLedger(ledger: Ledger, now: Date): Ledger {
+export function pruneLedger<T extends { endsAt: string }>(ledger: Record<string, T>, now: Date): Record<string, T> {
   const cutoff = now.getTime() - LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   return Object.fromEntries(Object.entries(ledger).filter(([, entry]) => new Date(entry.endsAt).getTime() >= cutoff));
 }
@@ -446,6 +553,36 @@ export interface CalendarRunOptions {
   reconcile?: boolean;
   /** The user confirmed the source hides or flags private items itself. */
   acceptUnknownSensitivity?: boolean;
+  /** Optional meeting facts; without them matching uses title, location and organizer domain. */
+  attendees?: AttendeeFacts;
+  ownDomains?: string[];
+}
+
+const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
+const MAX_DIRECTORY_ACCOUNTS = 1000;
+
+/** Validates the share directory; malformed entries are dropped, a malformed whole is null. */
+export function parseDirectory(value: unknown): DirectoryAccount[] | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const accounts = (value as Record<string, unknown>).accounts;
+  if (!Array.isArray(accounts) || accounts.length > MAX_DIRECTORY_ACCOUNTS) return null;
+  const strings = (list: unknown) => Array.isArray(list) && list.length <= 100 &&
+    list.every(entry => typeof entry === 'string' && entry.length <= 256);
+  const result: DirectoryAccount[] = [];
+  for (const entry of accounts) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const account = entry as Record<string, unknown>;
+    const aliases = account.aliases ?? [], domains = account.domains ?? [];
+    if (typeof account.accountId !== 'string' || !IDENTIFIER.test(account.accountId) ||
+        typeof account.name !== 'string' || account.name.length > 256 || !strings(aliases) || !strings(domains)) continue;
+    result.push({ accountId: account.accountId, name: account.name, aliases: aliases as string[], domains: domains as string[] });
+  }
+  return result;
+}
+
+async function readDirectory(api: TtobakApi | undefined): Promise<DirectoryAccount[] | null> {
+  if (!api) return null;
+  try { return parseDirectory(await api.calendarShareDirectory()); } catch { return null; }
 }
 
 export async function runCalendar(options: CalendarRunOptions): Promise<CalendarRunResult> {
@@ -468,7 +605,16 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const window = syncWindow(now, zone);
   const items: OutlookItem[] = [];
   for (const request of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request)));
-  const plan = planCalendar(items, state.ledger, window, zone);
+  // One directory read per run. Without it, events keep their previous share fields.
+  const directory = await readDirectory(options.api);
+  const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
+  const facts = new Map<string, MeetingFacts | null>();
+  if (matcher && options.attendees) {
+    for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
+    options.attendees.save(now);
+  }
+  const plan = planCalendar(items, state.ledger, window, zone, { sourceId, matcher, facts });
+  plan.counts.attendeesUnavailable = options.attendees?.unavailable ?? 0;
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {
     throw new IntakeError('SENSITIVITY_UNKNOWN',

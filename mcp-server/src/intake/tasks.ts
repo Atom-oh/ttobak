@@ -165,7 +165,7 @@ function seenPath(scope: string, file = 'seen.json'): string[] {
 /** The SpecReq login first confirmed for this TTOBAK account; a later different login is an account switch. */
 interface IdentityState { version: 1; login: string; recordedAt: string }
 
-function loadIdentity(store: IntakeStore, scope: string): IdentityState | null {
+export function loadIdentity(store: IntakeStore, scope: string): IdentityState | null {
   const raw = store.read<IdentityState>(...seenPath(scope, 'identity.json'));
   if (raw === null) return null;
   if (raw.version !== 1 || typeof raw.login !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.login)) {
