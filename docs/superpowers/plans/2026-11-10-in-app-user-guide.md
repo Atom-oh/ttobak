@@ -8,6 +8,8 @@ Status: historical implementation plan for 2026-11-10.
 
 **Architecture:** A shared guide button opens an in-page HTML dialog. Its
 isolated iframe reads the same reviewed guide assets bundled with the frontend.
+The existing CloudFront distribution has a narrowly scoped manual behavior
+whose response headers permit same-site framing.
 
 **Tech Stack:** React, Next.js static export, HTML dialog, existing Python packager.
 
@@ -29,5 +31,9 @@ Rebuilds must validate the new package before replacing previous generated outpu
 - [x] Verify all entry points, responsive dialog, dismissal, focus and guide behavior.
 - [x] Run frontend unit tests, lint, build and existing guide packaging tests.
 - [x] Record content review and browser evidence.
+- [x] Reproduce the production framing rejection and the responsive-ancestor defect.
+- [x] Add a manual-only CloudFront behavior and body portal; retain root framing denial.
+- [ ] Verify header-aware browser checks and full infrastructure synthesis/tests.
+- [ ] Update the content quality gate with the corrected deployment boundary.
 - [ ] Push a scoped PR, satisfy latest-head independent review, merge and deploy.
 - [ ] Verify published manual assets and production guide access.

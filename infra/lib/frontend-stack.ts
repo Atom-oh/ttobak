@@ -372,6 +372,21 @@ function handler(event) {
       },
     });
 
+    // The public manual is framed by the app, including its remote Mac WebView.
+    const guideHeaders = new cloudfront.ResponseHeadersPolicy(this, 'UserGuideResponseHeadersPolicy', {
+      responseHeadersPolicyName: `ttobak-user-guide-headers-${cdk.Aws.REGION}`,
+      securityHeadersBehavior: {
+        contentSecurityPolicy: {
+          contentSecurityPolicy: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'; frame-ancestors 'self'; object-src 'none'",
+          override: true,
+        },
+        contentTypeOptions: { override: true },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.SAMEORIGIN, override: true },
+        referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER, override: true },
+        strictTransportSecurity: HSTS,
+      },
+    });
+
     // Honor origin no-cache metadata for HTML/RSC/config while retaining the
     // previous optimized policy's default TTL for other public assets.
     const applicationCache = new cloudfront.CachePolicy(this, 'ApplicationCachePolicy', {
@@ -407,6 +422,15 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        '/user-guide/*': {
+          origin: s3Origin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: applicationCache,
+          responseHeadersPolicy: guideHeaders,
+          compress: true,
+        },
         '/_next/static/*': {
           origin: s3Origin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

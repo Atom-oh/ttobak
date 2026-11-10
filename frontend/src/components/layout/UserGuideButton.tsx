@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type Variant = 'sidebar' | 'header' | 'sheet' | 'profile';
 
@@ -91,7 +92,7 @@ export function UserGuideButton({ variant }: { variant: Variant }) {
         {variant !== 'header' && <span className={variant === 'profile' ? 'flex-1 text-sm font-medium text-slate-900 dark:text-white' : ''}>사용 설명서</span>}
         {variant === 'profile' && <span className="material-symbols-outlined text-slate-400 text-lg" aria-hidden="true">chevron_right</span>}
       </button>
-      {open && <UserGuideDialog onClose={close} />}
+      {open && createPortal(<UserGuideDialog onClose={close} />, document.body)}
     </>
   );
 }
