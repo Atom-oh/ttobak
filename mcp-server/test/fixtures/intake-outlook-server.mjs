@@ -24,6 +24,8 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
     process.stderr.write('Midway cookie expired; run mwinit\n');
     return { isError: true, content: [{ type: 'text', text: 'Authentication failed: run mwinit -o' }] };
   }
+  // FAKE_OUTLOOK_ITEMS replaces the generated items with a fixed list (every request).
+  if (process.env.FAKE_OUTLOOK_ITEMS) return { content: [{ type: 'text', text: process.env.FAKE_OUTLOOK_ITEMS }] };
   const [month, day, year] = String(request.params.arguments.start_date).split('-');
   const date = `${year}-${month}-${day}`;
   const items = [{

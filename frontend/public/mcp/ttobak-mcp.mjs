@@ -4662,14 +4662,14 @@ function promiseAllObject(promisesObj) {
 }
 function randomString(length = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz";
-  let str = "";
+  let str2 = "";
   for (let i = 0; i < length; i++) {
-    str += chars[Math.floor(Math.random() * chars.length)];
+    str2 += chars[Math.floor(Math.random() * chars.length)];
   }
-  return str;
+  return str2;
 }
-function esc(str) {
-  return JSON.stringify(str);
+function esc(str2) {
+  return JSON.stringify(str2);
 }
 function slugify(input) {
   return input.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/[\s_-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -4709,8 +4709,8 @@ function numKeys(data) {
   }
   return keyCount;
 }
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str2) {
+  return str2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -14905,7 +14905,7 @@ var require_code = __commonJS({
     }
     exports._ = _;
     var plus = new _Code("+");
-    function str(strs, ...args) {
+    function str2(strs, ...args) {
       const expr = [safeStringify(strs[0])];
       let i = 0;
       while (i < args.length) {
@@ -14916,7 +14916,7 @@ var require_code = __commonJS({
       optimize(expr);
       return new _Code(expr);
     }
-    exports.str = str;
+    exports.str = str2;
     function addCodeArg(code, arg) {
       if (arg instanceof _Code)
         code.push(...arg._items);
@@ -14959,7 +14959,7 @@ var require_code = __commonJS({
       return;
     }
     function strConcat(c1, c2) {
-      return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str`${c1}${c2}`;
+      return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str2`${c1}${c2}`;
     }
     exports.strConcat = strConcat;
     function interpolate(x) {
@@ -15921,22 +15921,22 @@ var require_util = __commonJS({
       return (0, codegen_1._)`${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
     }
     exports.schemaRefOrVal = schemaRefOrVal;
-    function unescapeFragment(str) {
-      return unescapeJsonPointer(decodeURIComponent(str));
+    function unescapeFragment(str2) {
+      return unescapeJsonPointer(decodeURIComponent(str2));
     }
     exports.unescapeFragment = unescapeFragment;
-    function escapeFragment(str) {
-      return encodeURIComponent(escapeJsonPointer(str));
+    function escapeFragment(str2) {
+      return encodeURIComponent(escapeJsonPointer(str2));
     }
     exports.escapeFragment = escapeFragment;
-    function escapeJsonPointer(str) {
-      if (typeof str == "number")
-        return `${str}`;
-      return str.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPointer(str2) {
+      if (typeof str2 == "number")
+        return `${str2}`;
+      return str2.replace(/~/g, "~0").replace(/\//g, "~1");
     }
     exports.escapeJsonPointer = escapeJsonPointer;
-    function unescapeJsonPointer(str) {
-      return str.replace(/~1/g, "/").replace(/~0/g, "~");
+    function unescapeJsonPointer(str2) {
+      return str2.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
     function eachItem(xs, f) {
@@ -16961,8 +16961,8 @@ var require_json_schema_traverse = __commonJS({
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
       }
     }
-    function escapeJsonPtr(str) {
-      return str.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPtr(str2) {
+      return str2.replace(/~/g, "~0").replace(/\//g, "~1");
     }
   }
 });
@@ -17598,11 +17598,11 @@ var require_validate = __commonJS({
         jsonPointer = $data;
         data = names_1.default.rootData;
       } else {
-        const matches = RELATIVE_JSON_POINTER.exec($data);
-        if (!matches)
+        const matches2 = RELATIVE_JSON_POINTER.exec($data);
+        if (!matches2)
           throw new Error(`Invalid JSON-pointer: ${$data}`);
-        const up = +matches[1];
-        jsonPointer = matches[2];
+        const up = +matches2[1];
+        jsonPointer = matches2[2];
         if (jsonPointer === "#") {
           if (up >= dataLevel)
             throw new Error(errorMsg("property/index", up));
@@ -18059,10 +18059,10 @@ var require_utils = __commonJS({
         isIPV6: true
       };
     }
-    function findToken(str, token) {
+    function findToken(str2, token) {
       let ind = 0;
-      for (let i = 0; i < str.length; i++) {
-        if (str[i] === token) ind++;
+      for (let i = 0; i < str2.length; i++) {
+        if (str2[i] === token) ind++;
       }
       return ind;
     }
@@ -18489,11 +18489,11 @@ var require_schemes = __commonJS({
         urnComponent.error = "URN can not be parsed";
         return urnComponent;
       }
-      const matches = urnComponent.path.match(URN_REG);
-      if (matches && matches[0] === urnComponent.path) {
+      const matches2 = urnComponent.path.match(URN_REG);
+      if (matches2 && matches2[0] === urnComponent.path) {
         const scheme = options.scheme || urnComponent.scheme || "urn";
-        urnComponent.nid = matches[1].toLowerCase();
-        urnComponent.nss = matches[2];
+        urnComponent.nid = matches2[1].toLowerCase();
+        urnComponent.nss = matches2[2];
         const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`;
         const schemeHandler = getSchemeHandler(urnScheme);
         urnComponent.path = void 0;
@@ -18807,8 +18807,8 @@ var require_fast_uri = __commonJS({
     var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
     var AUTHORITY_PREFIX = /^(?:[^#/:?]+:)?\/\/([^/?#]*)/;
     var AUTHORITY_INTRODUCER_REGION = /^(?:[^#/:?]+:)?([/\\\t\n\r]*)/;
-    function getParseError(parsed, matches) {
-      if (matches[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
+    function getParseError(parsed, matches2) {
+      if (matches2[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
         return 'URI path must start with "/" when authority is present.';
       }
       if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
@@ -18830,9 +18830,9 @@ var require_fast_uri = __commonJS({
     function isIPLiteral(host) {
       return host[0] === "[" && host[host.length - 1] === "]";
     }
-    function hasMalformedComponentPercentEncoding(matches) {
-      const host = matches[4];
-      return hasMalformedPercentEncoding(matches[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches[6]) || hasMalformedPercentEncoding(matches[7]) || hasMalformedPercentEncoding(matches[8]);
+    function hasMalformedComponentPercentEncoding(matches2) {
+      const host = matches2[4];
+      return hasMalformedPercentEncoding(matches2[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches2[6]) || hasMalformedPercentEncoding(matches2[7]) || hasMalformedPercentEncoding(matches2[8]);
     }
     function canonicalizeHost(parsed, options, schemeHandler, isIP) {
       if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
@@ -18889,15 +18889,15 @@ var require_fast_uri = __commonJS({
           }
         }
       }
-      const matches = uri.match(URI_PARSE);
-      if (matches) {
-        parsed.scheme = matches[1];
-        parsed.userinfo = matches[3];
-        parsed.host = matches[4];
-        parsed.port = parseInt(matches[5], 10);
-        parsed.path = matches[6] || "";
-        parsed.query = matches[7];
-        parsed.fragment = matches[8];
+      const matches2 = uri.match(URI_PARSE);
+      if (matches2) {
+        parsed.scheme = matches2[1];
+        parsed.userinfo = matches2[3];
+        parsed.host = matches2[4];
+        parsed.port = parseInt(matches2[5], 10);
+        parsed.path = matches2[6] || "";
+        parsed.query = matches2[7];
+        parsed.fragment = matches2[8];
         if (parsed.scheme !== void 0) {
           const decodedScheme = unescape(parsed.scheme);
           if (VALID_SCHEME.test(decodedScheme)) {
@@ -18907,14 +18907,14 @@ var require_fast_uri = __commonJS({
             malformedScheme = true;
           }
         }
-        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches);
+        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches2);
         if (malformedPercentEncoding) {
           parsed.error = parsed.error || "URI contains malformed percent-encoding.";
         }
         if (isNaN(parsed.port)) {
-          parsed.port = matches[5];
+          parsed.port = matches2[5];
         }
-        const parseError = getParseError(parsed, matches);
+        const parseError = getParseError(parsed, matches2);
         if (parseError !== void 0) {
           parsed.error = parsed.error || parseError;
           malformedAuthorityOrPort = true;
@@ -19076,7 +19076,7 @@ var require_core = __commonJS({
     var util_1 = require_util();
     var $dataRefSchema = require_data();
     var uri_1 = require_uri();
-    var defaultRegExp = (str, flags2) => new RegExp(str, flags2);
+    var defaultRegExp = (str2, flags2) => new RegExp(str2, flags2);
     defaultRegExp.code = "new RegExp";
     var META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
     var EXT_SCOPE_NAMES = /* @__PURE__ */ new Set([
@@ -19871,16 +19871,16 @@ var require_ucs2length = __commonJS({
   "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function ucs2length(str) {
-      const len = str.length;
+    function ucs2length(str2) {
+      const len = str2.length;
       let length = 0;
       let pos = 0;
       let value;
       while (pos < len) {
         length++;
-        value = str.charCodeAt(pos++);
+        value = str2.charCodeAt(pos++);
         if (value >= 55296 && value <= 56319 && pos < len) {
-          value = str.charCodeAt(pos);
+          value = str2.charCodeAt(pos);
           if ((value & 64512) === 56320)
             pos++;
         }
@@ -21763,13 +21763,13 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date4(str) {
-      const matches = DATE.exec(str);
-      if (!matches)
+    function date4(str2) {
+      const matches2 = DATE.exec(str2);
+      if (!matches2)
         return false;
-      const year = +matches[1];
-      const month = +matches[2];
-      const day = +matches[3];
+      const year = +matches2[1];
+      const month = +matches2[2];
+      const day = +matches2[3];
       return month >= 1 && month <= 12 && day >= 1 && day <= (month === 2 && isLeapYear(year) ? 29 : DAYS[month]);
     }
     function compareDate(d1, d2) {
@@ -21783,17 +21783,17 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str) {
-        const matches = TIME.exec(str);
-        if (!matches)
+      return function time3(str2) {
+        const matches2 = TIME.exec(str2);
+        if (!matches2)
           return false;
-        const hr = +matches[1];
-        const min = +matches[2];
-        const sec = +matches[3];
-        const tz = matches[4];
-        const tzSign = matches[5] === "-" ? -1 : 1;
-        const tzH = +(matches[6] || 0);
-        const tzM = +(matches[7] || 0);
+        const hr = +matches2[1];
+        const min = +matches2[2];
+        const sec = +matches2[3];
+        const tz = matches2[4];
+        const tzSign = matches2[5] === "-" ? -1 : 1;
+        const tzH = +(matches2[6] || 0);
+        const tzM = +(matches2[7] || 0);
         if (tzH > 23 || tzM > 59 || strictTimeZone && !tz)
           return false;
         if (hr <= 23 && min <= 59 && sec < 60)
@@ -21830,8 +21830,8 @@ var require_formats = __commonJS({
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
       const time3 = getTime(strictTimeZone);
-      return function date_time(str) {
-        const dateTime = str.split(DATE_TIME_SEPARATOR);
+      return function date_time(str2) {
+        const dateTime = str2.split(DATE_TIME_SEPARATOR);
         return dateTime.length === 2 && date4(dateTime[0]) && time3(dateTime[1]);
       };
     }
@@ -21856,13 +21856,13 @@ var require_formats = __commonJS({
     }
     var NOT_URI_FRAGMENT = /\/|:/;
     var URI = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-    function uri(str) {
-      return NOT_URI_FRAGMENT.test(str) && URI.test(str);
+    function uri(str2) {
+      return NOT_URI_FRAGMENT.test(str2) && URI.test(str2);
     }
     var BYTE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/gm;
-    function byte(str) {
+    function byte(str2) {
       BYTE.lastIndex = 0;
-      return BYTE.test(str);
+      return BYTE.test(str2);
     }
     var MIN_INT32 = -(2 ** 31);
     var MAX_INT32 = 2 ** 31 - 1;
@@ -21876,11 +21876,11 @@ var require_formats = __commonJS({
       return true;
     }
     var Z_ANCHOR = /[^\\]\\Z/;
-    function regex(str) {
-      if (Z_ANCHOR.test(str))
+    function regex(str2) {
+      if (Z_ANCHOR.test(str2))
         return false;
       try {
-        new RegExp(str);
+        new RegExp(str2);
         return true;
       } catch (e) {
         return false;
@@ -25510,7 +25510,9 @@ async function runCalendar(options) {
   }
   state.ledger = pruneLedger(state.ledger, now);
   store.write(state, ...statePath(state));
-  return { counts: plan.counts, revision: state.revision };
+  const upserted = /* @__PURE__ */ new Map();
+  for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
+  return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
 var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
 var init_calendar2 = __esm({
@@ -27607,8 +27609,8 @@ function registryRecord(value) {
     role: text(value, "assignmentSource", LABEL_BYTES)
   } };
 }
-function registryAssignments(records) {
-  const sales = records.map(registryRecord).filter((item) => item !== null);
+function registryAssignments(records2) {
+  const sales = records2.map(registryRecord).filter((item) => item !== null);
   const newest = sales.reduce((latest, item) => item.version > latest ? item.version : latest, "");
   const result = /* @__PURE__ */ new Map();
   for (const { version: version3, assignment } of sales) {
@@ -27725,7 +27727,7 @@ function planSfdc(registry3, tasks, ledgers, now) {
   };
 }
 async function readAll(source, tool, args) {
-  const records = [];
+  const records2 = [];
   const seen = /* @__PURE__ */ new Set();
   let after;
   for (let index = 0; index < MAX_PAGES; index++) {
@@ -27733,10 +27735,10 @@ async function readAll(source, tool, args) {
     for (const { id } of page2.records) {
       if (typeof id === "string" && seen.size === seen.add(id).size) throw parseFailed(`${tool} repeated a record ID`);
     }
-    records.push(...page2.records);
+    records2.push(...page2.records);
     if (!page2.hasNextPage) {
-      if (records.length < page2.totalCount) throw parseFailed(`${tool} result is incomplete`);
-      return records;
+      if (records2.length < page2.totalCount) throw parseFailed(`${tool} result is incomplete`);
+      return records2;
     }
     if (page2.cursor === after) throw parseFailed(`${tool} cursor did not advance`);
     after = page2.cursor;
@@ -28187,6 +28189,1373 @@ var init_store = __esm({
   }
 });
 
+// src/intake/attendees.ts
+function records(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === "object") {
+    const meetings = payload.meetings;
+    if (Array.isArray(meetings)) return meetings;
+  }
+  return [];
+}
+function parseMeetingList(payload) {
+  const all = records(payload);
+  if (all.length > MAX_LIST) return null;
+  const out = [];
+  for (const raw of all) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw;
+    if (typeof r.meetingId !== "string" || !r.meetingId || typeof r.subject !== "string" || typeof r.startTime !== "string" || typeof r.endTime !== "string") continue;
+    out.push({
+      meetingId: r.meetingId,
+      subject: r.subject,
+      start: r.startTime,
+      end: r.endTime,
+      isRecurring: r.isRecurring === true
+    });
+  }
+  return out;
+}
+function joinMeeting(item, list) {
+  if (typeof item.subject !== "string") return null;
+  const start = Date.parse(item.start);
+  const end = Date.parse(item.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const matches2 = list.filter((m) => m.subject === item.subject && Date.parse(m.start) === start && Date.parse(m.end) === end);
+  return matches2.length === 1 ? matches2[0] : null;
+}
+function parseAttendees(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const r = payload;
+  if (typeof r.isPrivate !== "boolean") return null;
+  const seen = /* @__PURE__ */ new Set();
+  const add = (value) => {
+    if (typeof value !== "string") return;
+    const address = value.trim().toLowerCase();
+    if (address) seen.add(address);
+  };
+  for (const key of ["requiredAttendees", "optionalAttendees"]) {
+    const list = r[key];
+    if (Array.isArray(list)) list.forEach(add);
+  }
+  add(r.organizer);
+  if (seen.size > MAX_ATTENDEES) return null;
+  return { addresses: [...seen], isPrivate: r.isPrivate };
+}
+var MAX_LIST, MAX_ATTENDEES;
+var init_attendees = __esm({
+  "src/intake/attendees.ts"() {
+    "use strict";
+    MAX_LIST = 5e3;
+    MAX_ATTENDEES = 500;
+  }
+});
+
+// src/intake/ack-ledger.ts
+function ledgerPath(scope) {
+  if (!SCOPE_PATTERN2.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "ack ledger scope is invalid");
+  return ["specreq", scope, "ack-ledger.json"];
+}
+function requireRequestId(requestId) {
+  if (typeof requestId !== "string" || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  }
+  return requestId.toLowerCase();
+}
+function validEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry2 = value;
+  return typeof entry2.eventId === "string" && EVENT_ID_PATTERN.test(entry2.eventId) && typeof entry2.attemptedAt === "string" && Number.isFinite(Date.parse(entry2.attemptedAt)) && OUTCOMES.includes(entry2.outcome) && typeof entry2.cloudSynced === "boolean";
+}
+function loadAckLedger(store, scope) {
+  const raw = store.read(...ledgerPath(scope));
+  if (raw === null) return { version: 1, entries: {} };
+  const ledger = raw;
+  if (!raw || typeof raw !== "object" || ledger.version !== 1 || !ledger.entries || typeof ledger.entries !== "object" || Array.isArray(ledger.entries)) {
+    throw new IntakeError("STORE_INVALID", "ack ledger is malformed");
+  }
+  for (const [requestId, entry2] of Object.entries(ledger.entries)) {
+    if (!LEDGER_KEY_PATTERN.test(requestId) || !validEntry(entry2)) {
+      throw new IntakeError("STORE_INVALID", "ack ledger entry is malformed");
+    }
+  }
+  return ledger;
+}
+function save(store, scope, ledger) {
+  store.write(ledger, ...ledgerPath(scope));
+}
+function beginAck(store, scope, requestId, eventId, now = /* @__PURE__ */ new Date()) {
+  const key = requireRequestId(requestId);
+  if (typeof eventId !== "string" || !EVENT_ID_PATTERN.test(eventId)) {
+    throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
+  }
+  const ledger = loadAckLedger(store, scope);
+  if (Object.hasOwn(ledger.entries, key)) {
+    throw new IntakeError("STORE_INVALID", "an acknowledge attempt is already recorded for this request");
+  }
+  ledger.entries[key] = { eventId, attemptedAt: now.toISOString(), outcome: "pending", cloudSynced: false };
+  save(store, scope, ledger);
+}
+function ackEntry(store, scope, requestId) {
+  const key = requireRequestId(requestId);
+  const ledger = loadAckLedger(store, scope);
+  return Object.hasOwn(ledger.entries, key) ? ledger.entries[key] : null;
+}
+function update(store, scope, requestId, change) {
+  const key = requireRequestId(requestId);
+  const ledger = loadAckLedger(store, scope);
+  if (!Object.hasOwn(ledger.entries, key)) {
+    throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
+  }
+  ledger.entries[key] = change(ledger.entries[key]);
+  save(store, scope, ledger);
+}
+function finishAck(store, scope, requestId, outcome) {
+  if (!["ok", "rejected", "unknown"].includes(outcome)) {
+    throw new IntakeError("INVALID_ARGUMENT", "ack outcome is invalid");
+  }
+  update(store, scope, requestId, (entry2) => ({
+    ...entry2,
+    outcome,
+    cloudSynced: entry2.outcome === outcome ? entry2.cloudSynced : false
+  }));
+}
+function markSynced(store, scope, requestId) {
+  update(store, scope, requestId, (entry2) => ({ ...entry2, cloudSynced: true }));
+}
+var REQUEST_ID_PATTERN, SCOPE_PATTERN2, EVENT_ID_PATTERN, OUTCOMES, LEDGER_KEY_PATTERN;
+var init_ack_ledger = __esm({
+  "src/intake/ack-ledger.ts"() {
+    "use strict";
+    init_errors4();
+    REQUEST_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    SCOPE_PATTERN2 = /^[0-9a-f]{32}$/;
+    EVENT_ID_PATTERN = /^[0-9a-f]{64}$/;
+    OUTCOMES = ["pending", "ok", "rejected", "unknown"];
+    LEDGER_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  }
+});
+
+// src/intake/classify.ts
+function classifyOccurrence(input) {
+  if (input.isPrivate) return { kind: "skip" };
+  const me = input.me.trim().toLowerCase();
+  const attendees = [...new Set(input.attendees.map((a) => a.trim().toLowerCase()))].filter((a) => a && a !== me);
+  if (!input.accountId) {
+    return attendees.some((a) => input.anyAccountSaEmails.has(a)) ? { kind: "task", state: "needs_account" } : { kind: "skip" };
+  }
+  const present = new Set(attendees);
+  const members = input.members.map((m) => ({ ...m, email: m.email.trim().toLowerCase() }));
+  const counterparts = members.filter((m) => SA_ROLES.has(m.role) && m.userId !== "" && m.email.endsWith("@amazon.com") && present.has(m.email));
+  if (counterparts.length === 0) return { kind: "skip" };
+  const mine = members.find((m) => m.email === me);
+  if (mine?.role === "SA") return { kind: "task", state: "issue_needed", path: "mine" };
+  if (counterparts.length === 1) {
+    return { kind: "task", state: "request_needed", path: "theirs", counterpartUserId: counterparts[0].userId };
+  }
+  return { kind: "task", state: "needs_owner" };
+}
+var SA_ROLES;
+var init_classify = __esm({
+  "src/intake/classify.ts"() {
+    "use strict";
+    SA_ROLES = /* @__PURE__ */ new Set(["SA", "SSA"]);
+  }
+});
+
+// src/intake/event-id.ts
+import { createHash as createHash6 } from "node:crypto";
+function calendarEventId(sourceId, externalId) {
+  const encoded = JSON.stringify([sourceId, externalId]).replace(/[<>&\u2028\u2029]/g, (character) => "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0"));
+  return createHash6("sha256").update(encoded, "utf8").digest("hex");
+}
+var init_event_id = __esm({
+  "src/intake/event-id.ts"() {
+    "use strict";
+  }
+});
+
+// src/intake/notify.ts
+function sentPath(scope) {
+  if (!SCOPE_PATTERN3.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "notify scope is invalid");
+  return ["notify", scope, "sent.json"];
+}
+function enqueueNotice(store, scope, notice, now = /* @__PURE__ */ new Date()) {
+  if (!EVENT_ID_PATTERN2.test(notice.eventId) || !NOTICE_STATES.includes(notice.state)) {
+    throw new IntakeError("INVALID_ARGUMENT", "notice is invalid");
+  }
+  const key = `${notice.eventId}:${notice.state}`;
+  const raw = store.read(...sentPath(scope));
+  if (raw !== null && (raw.version !== 1 || !raw.keys || typeof raw.keys !== "object" || Array.isArray(raw.keys))) {
+    throw new IntakeError("STORE_INVALID", "notify sent set is malformed");
+  }
+  const sent = raw ?? { version: 1, keys: {} };
+  if (Object.hasOwn(sent.keys, key)) return false;
+  const createdAt = now.toISOString();
+  store.append(JSON.stringify({
+    v: 1,
+    key,
+    state: notice.state,
+    title: clip(notice.title, NOTICE_TITLE_MAX),
+    body: clip(notice.body, NOTICE_BODY_MAX),
+    path: `/meetings?task=${notice.eventId}`,
+    createdAt
+  }), QUEUE_FILE);
+  sent.keys[key] = createdAt;
+  store.write(sent, ...sentPath(scope));
+  if (store.size(QUEUE_FILE) > QUEUE_MAX_BYTES) compactQueue(store, now);
+  return true;
+}
+function compactQueue(store, now) {
+  const text3 = store.readText(QUEUE_FILE);
+  if (text3 === null) return;
+  const cutoff = now.getTime() - QUEUE_RETENTION_MS;
+  const kept = text3.split("\n").filter((line) => {
+    if (!line) return false;
+    try {
+      const created = Date.parse(JSON.parse(line).createdAt ?? "");
+      return Number.isFinite(created) && created >= cutoff;
+    } catch {
+      return false;
+    }
+  });
+  store.writeText(kept.length ? kept.join("\n") + "\n" : "", QUEUE_FILE);
+}
+var NOTICE_STATES, NOTICE_COPY, NOTICE_TITLE_MAX, NOTICE_BODY_MAX, QUEUE_MAX_BYTES, QUEUE_RETENTION_MS, QUEUE_FILE, SCOPE_PATTERN3, EVENT_ID_PATTERN2, clip;
+var init_notify = __esm({
+  "src/intake/notify.ts"() {
+    "use strict";
+    init_errors4();
+    NOTICE_STATES = ["issue_needed", "request_needed", "acked", "ack_failed", "ack_needed"];
+    NOTICE_COPY = {
+      issue_needed: { title: "SpecReq \uC694\uCCAD\uC774 \uD544\uC694\uD569\uB2C8\uB2E4", body: "\uBBF8\uD305 \uD6C4\uC18D\uC73C\uB85C SpecReq \uC774\uC288 \uB4F1\uB85D\uC774 \uD544\uC694\uD55C \uAC74\uC774 \uC788\uC2B5\uB2C8\uB2E4." },
+      request_needed: {
+        title: "SpecReq \uC694\uCCAD \uBA54\uC2DC\uC9C0\uB97C \uD655\uC778\uD558\uC138\uC694",
+        drafted: "Slack\uC5D0 \uC694\uCCAD \uBA54\uC2DC\uC9C0 \uCD08\uC548\uC744 \uC800\uC7A5\uD588\uC2B5\uB2C8\uB2E4. \uD655\uC778 \uD6C4 \uC9C1\uC811 \uC804\uC1A1\uD558\uC138\uC694.",
+        kept_existing: "\uC774\uBBF8 \uC791\uC131 \uC911\uC778 Slack \uCD08\uC548\uC774 \uC788\uC5B4 \uB36E\uC5B4\uC4F0\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uAE30\uC874 \uCD08\uC548\uC744 \uD655\uC778\uD558\uC138\uC694.",
+        copy: "TTOBAK\uC5D0\uC11C \uC694\uCCAD \uBB38\uAD6C\uB97C \uBCF5\uC0AC\uD574 \uB2F4\uB2F9\uC790\uC5D0\uAC8C \uC804\uB2EC\uD558\uC138\uC694."
+      },
+      acked: { title: "SpecReq \uC694\uCCAD\uC744 \uC218\uB77D\uD588\uC2B5\uB2C8\uB2E4", body: "SpecReq \uC694\uCCAD\uC744 \uD655\uC778\uD558\uACE0 \uC218\uB77D \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4." },
+      ack_failed: { title: "SpecReq \uC218\uB77D\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4", body: "SpecReq \uC694\uCCAD \uC218\uB77D\uC774 \uC644\uB8CC\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uC9C1\uC811 \uD655\uC778\uD558\uC138\uC694." },
+      ack_needed: { title: "SpecReq \uC694\uCCAD \uC218\uB77D\uC774 \uD544\uC694\uD569\uB2C8\uB2E4", body: "\uC790\uB3D9 \uC218\uB77D\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4. SpecReq\uC5D0\uC11C \uC694\uCCAD\uC744 \uC9C1\uC811 \uC218\uB77D\uD558\uC138\uC694." }
+    };
+    NOTICE_TITLE_MAX = 120;
+    NOTICE_BODY_MAX = 400;
+    QUEUE_MAX_BYTES = 256 * 1024;
+    QUEUE_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
+    QUEUE_FILE = "notify.jsonl";
+    SCOPE_PATTERN3 = /^[0-9a-f]{32}$/;
+    EVENT_ID_PATTERN2 = /^[0-9a-f]{64}$/;
+    clip = (value, max) => Array.from(value.replace(/[\r\n]+/g, " ").trim()).slice(0, max).join("");
+  }
+});
+
+// src/intake/slack-draft.ts
+function clip2(value, maxChars) {
+  const text3 = typeof value === "string" ? value.replace(/[\r\n]+/g, " ").trim() : "";
+  return Array.from(text3).slice(0, maxChars).join("");
+}
+function renderSlackRequest(fields2) {
+  const values = {
+    account: escapeSlack(clip2(fields2.accountName, 200)),
+    title: escapeSlack(clip2(fields2.meetingTitle, 300)),
+    when: escapeSlack(clip2(fields2.localDateTime, 64)),
+    me: escapeSlack(clip2(fields2.myName, 100))
+  };
+  const text3 = SLACK_REQUEST_TEMPLATE.replace(/\{(account|title|when|me)\}/g, (_match, key) => values[key]);
+  return Array.from(text3).slice(0, SLACK_TEXT_MAX_CHARS).join("");
+}
+function draftChannels(draft) {
+  if (!isRecord(draft)) return [];
+  const direct = [draft.channel, draft.channelId, draft.channel_id].map(channelOf).filter(Boolean);
+  const nested = Array.isArray(draft.destinations) ? draft.destinations.map((item) => isRecord(item) ? channelOf(item.channel_id) || channelOf(item.channel) : "").filter(Boolean) : [];
+  return [...direct, ...nested];
+}
+function matchUser(payload, email3) {
+  const wanted = email3.trim().toLowerCase();
+  const candidates = Array.isArray(payload) ? payload : [payload];
+  const matches2 = candidates.filter((user2) => isRecord(user2) && typeof user2.email === "string" && user2.email.trim().toLowerCase() === wanted);
+  if (matches2.length !== 1) return "";
+  const user = matches2[0];
+  const id = typeof user.id === "string" ? user.id : "";
+  return USER_ID.test(id) && user.isBot === false && user.deleted === false ? id : "";
+}
+async function prepareDraft(session, counterpartEmail, text3, options = {}) {
+  try {
+    const userId = matchUser(
+      resultJson(await session.call("lookup_user", { query: counterpartEmail }), "lookup_user"),
+      counterpartEmail
+    );
+    if (!userId) return "no_user";
+    const channel = channelOf(resultJson(
+      await session.call("open_dm_channel", { userIds: userId }),
+      "open_dm_channel"
+    )?.channel);
+    if (!CHANNEL_ID.test(channel)) return "failed";
+    const listed = resultJson(await session.call("list_drafts", {}), "list_drafts");
+    const drafts = Array.isArray(listed) ? listed : isRecord(listed) && Array.isArray(listed.drafts) ? listed.drafts : null;
+    if (!drafts) return "failed";
+    if (isRecord(listed) && listed.total !== void 0 && listed.total !== drafts.length) return "failed";
+    for (const draft of drafts) {
+      const channels = draftChannels(draft);
+      if (channels.length === 0 || channels.includes(channel)) return "kept_existing";
+    }
+    const posted = await session.call("post_draft", { channel, text: text3 });
+    try {
+      const reply = resultJson(posted, "post_draft");
+      if (isRecord(reply) && reply.replacedExisting === true) options.onReplaced?.(1);
+    } catch {
+    }
+    return "drafted";
+  } catch {
+    return "failed";
+  }
+}
+function ledgerPath2(scope) {
+  if (!SCOPE_PATTERN4.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "draft ledger scope is invalid");
+  return ["slack", scope, "drafts.json"];
+}
+function draftEntry(store, scope, eventId) {
+  const ledger = store.read(...ledgerPath2(scope));
+  if (ledger === null) return null;
+  if (!isRecord(ledger)) throw new IntakeError("STORE_INVALID", "draft ledger is malformed");
+  if (!Object.hasOwn(ledger, eventId)) return null;
+  const entry2 = ledger[eventId];
+  if (!isRecord(entry2) || !ENTRY_OUTCOMES.includes(entry2.outcome)) return { at: "", outcome: "failed" };
+  return entry2;
+}
+async function draftOnce(store, scope, eventId, session, counterpartEmail, text3, options = {}) {
+  if (!EVENT_ID_PATTERN3.test(eventId)) throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
+  const existing = draftEntry(store, scope, eventId);
+  if (existing) return existing.outcome === "attempting" ? "failed" : existing.outcome;
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const save2 = (entry2) => {
+    const ledger = store.read(...ledgerPath2(scope)) ?? {};
+    ledger[eventId] = entry2;
+    store.write(ledger, ...ledgerPath2(scope));
+  };
+  save2({ at: now().toISOString(), outcome: "attempting" });
+  const outcome = await prepareDraft(session, counterpartEmail, text3, options);
+  save2({ at: now().toISOString(), outcome });
+  return outcome;
+}
+var SLACK_REQUEST_TEMPLATE, SLACK_TEXT_MAX_CHARS, escapeSlack, USER_ID, CHANNEL_ID, isRecord, channelOf, ENTRY_OUTCOMES, SCOPE_PATTERN4, EVENT_ID_PATTERN3;
+var init_slack_draft = __esm({
+  "src/intake/slack-draft.ts"() {
+    "use strict";
+    init_errors4();
+    init_mcp_client();
+    SLACK_REQUEST_TEMPLATE = '\uC548\uB155\uD558\uC138\uC694, {account} \uAD00\uB828 \uBBF8\uD305 "{title}" ({when})\uC744 \uC9C4\uD589\uD588\uC2B5\uB2C8\uB2E4. \uBBF8\uD305 \uB0B4\uC6A9\uC744 \uBC14\uD0D5\uC73C\uB85C SpecReq \uC694\uCCAD\uC744 \uBD80\uD0C1\uB4DC\uB9BD\uB2C8\uB2E4. \uAC10\uC0AC\uD569\uB2C8\uB2E4.\n- {me} \uB4DC\uB9BC';
+    SLACK_TEXT_MAX_CHARS = 2e3;
+    escapeSlack = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    USER_ID = /^[UW][A-Z0-9]{2,20}$/;
+    CHANNEL_ID = /^[CDG][A-Z0-9]{2,20}$/;
+    isRecord = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+    channelOf = (value) => typeof value === "string" ? value : isRecord(value) && typeof value.id === "string" ? value.id : "";
+    ENTRY_OUTCOMES = ["attempting", "drafted", "kept_existing", "no_user", "failed"];
+    SCOPE_PATTERN4 = /^[0-9a-f]{32}$/;
+    EVENT_ID_PATTERN3 = /^[0-9a-f]{64}$/;
+  }
+});
+
+// src/intake/specreq.ts
+function clipUtf8(value, maxBytes) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  let out = "";
+  let bytes = 0;
+  for (const character of value) {
+    const size = Buffer.byteLength(character);
+    if (bytes + size > maxBytes) break;
+    out += character;
+    bytes += size;
+  }
+  return out;
+}
+function parseSummary(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  if (typeof r.requestId !== "string" || !REQUEST_ID_PATTERN.test(r.requestId)) return null;
+  if (!STATES.includes(r.stateId)) return null;
+  if (Array.isArray(r.meetingDateRanges) && r.meetingDateRanges.length > MAX_RANGES) return null;
+  const ranges = Array.isArray(r.meetingDateRanges) ? r.meetingDateRanges.filter((range) => typeof range === "string") : [];
+  return {
+    requestId: r.requestId.toLowerCase(),
+    title: typeof r.title === "string" ? clipUtf8(r.title, TITLE_MAX_BYTES) : "",
+    stateId: r.stateId,
+    requesterLogin: login(r.requesterLogin),
+    resolverLogin: login(r.resolverLogin),
+    salesforceId: typeof r.salesforceId === "string" ? r.salesforceId.trim() : "",
+    meetingDateRanges: ranges,
+    createdAt: typeof r.createdAt === "number" && Number.isFinite(r.createdAt) ? r.createdAt : Number.NaN
+  };
+}
+function envelope(payload, tool) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
+  }
+  const p = payload;
+  if (p.success !== true || !p.data || typeof p.data !== "object" || Array.isArray(p.data)) {
+    throw new IntakeError("PARSE_FAILED", `${tool} returned an unexpected shape`);
+  }
+  return p.data;
+}
+function parseSearch(payload) {
+  const data = envelope(payload, "search_requests_advanced");
+  if (!Array.isArray(data.results) || data.results.length > SEARCH_PAGE_SIZE) {
+    throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned an unexpected shape");
+  }
+  const requests = data.results.map(parseSummary).filter((item) => item !== null);
+  const dropped = data.results.length - requests.length;
+  if (dropped > 0) throw new IntakeError("PARSE_FAILED", `search_requests_advanced returned ${dropped} malformed records`);
+  const cursor = data.lastEvaluatedIndex;
+  let next = null;
+  if (typeof cursor === "string" && cursor) next = cursor;
+  else if (Array.isArray(cursor) ? cursor.length > 0 : cursor && typeof cursor === "object") next = JSON.stringify(cursor);
+  return { requests, next };
+}
+function parseRequest(payload) {
+  const summary = parseSummary(envelope(payload, "get_request"));
+  if (!summary) throw new IntakeError("PARSE_FAILED", "get_request returned an unexpected shape");
+  return summary;
+}
+async function searchRequests(session, filter) {
+  const requests = [];
+  let next = null;
+  for (let page2 = 0; page2 < SEARCH_MAX_PAGES; page2++) {
+    const result = await session.call("search_requests_advanced", {
+      ...filter,
+      pageSize: SEARCH_PAGE_SIZE,
+      fields_json: JSON.stringify(SEARCH_FIELDS),
+      ...next ? { lastEvaluatedIndex_json: next } : {}
+    });
+    const parsed = parseSearch(resultJson(result, "search_requests_advanced"));
+    if (parsed.requests.length === SEARCH_PAGE_SIZE && !parsed.next) {
+      throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned a full page without a cursor");
+    }
+    requests.push(...parsed.requests);
+    next = parsed.next;
+    if (!next) return requests;
+  }
+  throw new IntakeError("PARSE_FAILED", `search_requests_advanced exceeds ${SEARCH_MAX_PAGES} pages`);
+}
+function realDate(value) {
+  const time3 = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(time3) && new Date(time3).toISOString().slice(0, 10) === value;
+}
+function localDate2(instant2, zone) {
+  const time3 = Date.parse(instant2);
+  if (!Number.isFinite(time3)) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(time3));
+    const part = (type) => parts.find((item) => item.type === type)?.value ?? "";
+    const date4 = `${part("year")}-${part("month")}-${part("day")}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(date4) ? date4 : null;
+  } catch {
+    return null;
+  }
+}
+function meetingInRanges(startsAt, zone, ranges) {
+  const date4 = localDate2(startsAt, zone);
+  if (!date4 || !Array.isArray(ranges)) return false;
+  return ranges.some((range) => {
+    if (typeof range !== "string") return false;
+    const match = DATE_RANGE.exec(range);
+    if (!match || !realDate(match[1]) || !realDate(match[2]) || match[1] > match[2]) return false;
+    return match[1] <= date4 && date4 <= match[2];
+  });
+}
+function matches(request2, task, opptyAccounts, rule) {
+  if (!task.accountId || !request2.salesforceId || !opptyAccounts.get(request2.salesforceId)?.has(task.accountId)) return false;
+  if (!meetingInRanges(task.occurrenceStartsAt, rule.zone, request2.meetingDateRanges)) return false;
+  const me = login(rule.me);
+  if (!me) return false;
+  if (rule.path === "mine") {
+    if (login(request2.requesterLogin) !== me) return false;
+    const created = Date.parse(task.createdAt);
+    const ends = Date.parse(task.occurrenceEndsAt);
+    return Number.isFinite(created) && Number.isFinite(ends) && request2.createdAt >= created && request2.createdAt < ends + 7 * DAY_MS;
+  }
+  const counterpart = login(rule.counterpartLogin(task));
+  return counterpart !== "" && login(request2.requesterLogin) === counterpart && login(request2.resolverLogin) === me;
+}
+function linkRequests(requests, tasks, opptyAccounts, rule) {
+  const own = tasks.filter((task) => task.path === rule.path);
+  const linkedTo = /* @__PURE__ */ new Map();
+  for (const task of tasks) {
+    if (!task.specReqId) continue;
+    const id = task.specReqId.toLowerCase();
+    linkedTo.set(id, [...linkedTo.get(id) ?? [], task]);
+  }
+  const pairs = [];
+  for (const request2 of requests) {
+    const linked = linkedTo.get(request2.requestId.toLowerCase());
+    const candidates = !linked ? own.filter((task) => !task.specReqId && UNLINKED_STATES[rule.path].includes(task.state)) : linked.length === 1 && linked[0].path === rule.path && LINKED_STATES[rule.path].includes(linked[0].state) ? linked : [];
+    for (const task of candidates) {
+      if (matches(request2, task, opptyAccounts, rule)) pairs.push([request2.requestId, task.eventId]);
+    }
+  }
+  const count = (values) => values.reduce(
+    (map2, value) => map2.set(value, (map2.get(value) ?? 0) + 1),
+    /* @__PURE__ */ new Map()
+  );
+  const perRequest = count(pairs.map(([requestId]) => requestId));
+  const perTask = count(pairs.map(([, eventId]) => eventId));
+  const out = /* @__PURE__ */ new Map();
+  for (const [requestId, eventId] of pairs) {
+    if (perRequest.get(requestId) === 1 && perTask.get(eventId) === 1) out.set(requestId, eventId);
+  }
+  return out;
+}
+async function resolveMe(session, email3) {
+  const normalized = typeof email3 === "string" ? email3.trim().toLowerCase() : "";
+  const match = /^([^@\s]+)@amazon\.com$/.exec(normalized);
+  if (!match) throw new IntakeError("IDENTITY_MISMATCH", "the signed-in email is not an @amazon.com address");
+  const payload = resultJson(await session.call("check_user_is_tam", {}), "check_user_is_tam");
+  const data = payload && typeof payload === "object" && payload.success !== false ? payload.data : null;
+  const employee = data && typeof data === "object" ? login(data.employee_login) : "";
+  if (!LOGIN_PATTERN.test(employee) || employee !== match[1]) {
+    throw new IntakeError("IDENTITY_MISMATCH", "the SpecReq login differs from the signed-in identity");
+  }
+  return employee;
+}
+async function readRequest(session, requestId) {
+  const request2 = parseRequest(resultJson(await session.call("get_request", { request_id: requestId }), "get_request"));
+  if (request2.requestId !== requestId) throw new IntakeError("PARSE_FAILED", "get_request returned another request");
+  return request2;
+}
+function ackSucceeded(result) {
+  let payload;
+  try {
+    payload = resultJson(result, "acknowledge_request");
+  } catch {
+    return "unknown";
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "unknown";
+  const success2 = payload.success;
+  return success2 === true ? "ok" : success2 === false ? "rejected" : "unknown";
+}
+async function acknowledgeOnce(session, ledger, request2, me) {
+  const requestId = typeof request2.requestId === "string" ? request2.requestId.toLowerCase() : "";
+  if (!REQUEST_ID_PATTERN.test(requestId)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  const now = () => ledger.now?.() ?? /* @__PURE__ */ new Date();
+  const existing = ackEntry(ledger.store, ledger.scope, requestId);
+  if (existing) return existing.outcome === "pending" ? "unknown" : existing.outcome;
+  const myLogin = login(me);
+  const current = await readRequest(session, requestId);
+  if (!myLogin || current.stateId !== "NEXT_UP" || current.resolverLogin !== myLogin) return "not_eligible";
+  beginAck(ledger.store, ledger.scope, requestId, request2.eventId, now());
+  let outcome;
+  try {
+    outcome = ackSucceeded(await session.call("acknowledge_request", { request_id: requestId }));
+  } catch (error3) {
+    outcome = error3 instanceof ToolResultError ? "rejected" : "unknown";
+  }
+  finishAck(ledger.store, ledger.scope, requestId, outcome);
+  return outcome;
+}
+async function resolveAck(session, ledger, requestId, me) {
+  const id = typeof requestId === "string" ? requestId.toLowerCase() : "";
+  if (!REQUEST_ID_PATTERN.test(id)) throw new IntakeError("INVALID_ARGUMENT", "SpecReq request ID is invalid");
+  const entry2 = ackEntry(ledger.store, ledger.scope, id);
+  if (!entry2) throw new IntakeError("STORE_INVALID", "no acknowledge attempt is recorded for this request");
+  if (entry2.outcome === "ok") return { state: "acked" };
+  const current = await readRequest(session, id);
+  const myLogin = login(me);
+  if (myLogin && current.resolverLogin === myLogin && ACK_CONFIRMED.includes(current.stateId)) {
+    finishAck(ledger.store, ledger.scope, id, "ok");
+    return { state: "acked" };
+  }
+  return { state: "ack_failed", failureCode: entry2.outcome === "rejected" ? "ACK_REJECTED" : "ACK_UNCONFIRMED" };
+}
+var SEARCH_FIELDS, SEARCH_PAGE_SIZE, SEARCH_MAX_PAGES, STATES, TITLE_MAX_BYTES, MAX_RANGES, LOGIN_PATTERN, ACK_CONFIRMED, DAY_MS, login, DATE_RANGE, UNLINKED_STATES, LINKED_STATES;
+var init_specreq = __esm({
+  "src/intake/specreq.ts"() {
+    "use strict";
+    init_mcp_client();
+    init_errors4();
+    init_ack_ledger();
+    SEARCH_FIELDS = [
+      "requestId",
+      "title",
+      "stateId",
+      "requesterLogin",
+      "resolverLogin",
+      "salesforceId",
+      "meetingDateRanges",
+      "createdAt"
+    ];
+    SEARCH_PAGE_SIZE = 50;
+    SEARCH_MAX_PAGES = 4;
+    STATES = ["PENDING", "NEXT_UP", "WORKING", "WAITING", "COMPLETED", "CANCELLED"];
+    TITLE_MAX_BYTES = 512;
+    MAX_RANGES = 50;
+    LOGIN_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+    ACK_CONFIRMED = ["WORKING", "WAITING", "COMPLETED"];
+    DAY_MS = 24 * 60 * 60 * 1e3;
+    login = (value) => typeof value === "string" ? value.trim().toLowerCase() : "";
+    DATE_RANGE = /^(\d{4}-\d{2}-\d{2}) - (\d{4}-\d{2}-\d{2})$/;
+    UNLINKED_STATES = {
+      mine: ["issue_needed"],
+      theirs: ["request_needed", "requested"]
+    };
+    LINKED_STATES = {
+      mine: [],
+      theirs: ["request_needed", "requested", "ack_failed"]
+    };
+  }
+});
+
+// src/intake/tasks.ts
+function parseTask(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new IntakeError("PARSE_FAILED", "task is not an object");
+  const r = value;
+  if (!str(r.eventId) || !EVENT_ID.test(r.eventId) || !str(r.sourceId) || !STATES2.includes(r.state) || !Number.isSafeInteger(r.version) || !str(r.occurrenceStartsAt) || !str(r.occurrenceEndsAt) || !str(r.createdAt)) {
+    throw new IntakeError("PARSE_FAILED", "task has unexpected fields");
+  }
+  const event = r.event && typeof r.event === "object" && !Array.isArray(r.event) ? r.event : null;
+  return {
+    eventId: r.eventId,
+    sourceId: r.sourceId,
+    state: r.state,
+    version: r.version,
+    occurrenceStartsAt: r.occurrenceStartsAt,
+    occurrenceEndsAt: r.occurrenceEndsAt,
+    createdAt: r.createdAt,
+    stateChangedAt: str(r.stateChangedAt) ? r.stateChangedAt : r.createdAt,
+    accountId: optional2(r.accountId),
+    path: optional2(r.path),
+    counterpartUserId: optional2(r.counterpartUserId),
+    specReqId: optional2(r.specReqId)?.toLowerCase(),
+    specReqTitle: optional2(r.specReqTitle),
+    specReqStatus: optional2(r.specReqStatus),
+    failureCode: optional2(r.failureCode),
+    ...event && str(event.title) && str(event.startsAt) && str(event.endsAt) ? { event: { title: event.title, startsAt: event.startsAt, endsAt: event.endsAt, isAllDay: event.isAllDay === true } } : {}
+  };
+}
+function apiCode(error3) {
+  if (error3 instanceof IntakeError) return error3.code;
+  if (error3 instanceof ApiResponseError) {
+    if (error3.status === 401) return "TTOBAK_LOGIN_REQUIRED";
+    if (error3.status === 409) return "TTOBAK_CONFLICT";
+    if (error3.status >= 400 && error3.status < 500) return "TTOBAK_REJECTED";
+  }
+  const message = error3 instanceof Error ? error3.message : "";
+  return message.startsWith("TTOBAK_LOGIN_REQUIRED") ? "TTOBAK_LOGIN_REQUIRED" : "TTOBAK_UNAVAILABLE";
+}
+function seenPath(scope) {
+  if (!/^[0-9a-f]{32}$/.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "task scope is invalid");
+  return ["tasks", scope, "seen.json"];
+}
+function loadSeen(store, scope) {
+  const raw = store.read(...seenPath(scope));
+  if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, unknown: {} };
+  const record18 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+  if (raw.version !== 1 || !record18(raw.seen) || !record18(raw.pending) || !record18(raw.closing)) {
+    throw new IntakeError("STORE_INVALID", "task seen state is malformed");
+  }
+  raw.refreshed ??= {};
+  raw.unknown ??= {};
+  if (!record18(raw.refreshed) || !record18(raw.unknown) || raw.tracked !== void 0 && !record18(raw.tracked)) {
+    throw new IntakeError("STORE_INVALID", "task seen state is malformed");
+  }
+  return raw;
+}
+async function runTasks(options) {
+  return new TaskRun(options).run();
+}
+var TASK_LIST_MAX_PAGES, EVENT_LIST_MAX_PAGES, GET_MEETING_MAX, REFRESH_MAX, OPPTY_ACCOUNTS_MAX, MEMBER_ACCOUNTS_MAX, DRAFTS_MAX, SEEN_RETENTION_MS, UNKNOWN_ATTENDEES_MAX, EVENT_ID, STATES2, NOTICED, ACK_CONFIRMED2, str, optional2, isStatus, alias, TaskRun;
+var init_tasks = __esm({
+  "src/intake/tasks.ts"() {
+    "use strict";
+    init_api2();
+    init_attendees();
+    init_ack_ledger();
+    init_calendar2();
+    init_classify();
+    init_errors4();
+    init_event_id();
+    init_mcp_client();
+    init_notify();
+    init_slack_draft();
+    init_specreq();
+    TASK_LIST_MAX_PAGES = 50;
+    EVENT_LIST_MAX_PAGES = 40;
+    GET_MEETING_MAX = 25;
+    REFRESH_MAX = 25;
+    OPPTY_ACCOUNTS_MAX = 20;
+    MEMBER_ACCOUNTS_MAX = 50;
+    DRAFTS_MAX = 10;
+    SEEN_RETENTION_MS = 120 * 24 * 60 * 60 * 1e3;
+    UNKNOWN_ATTENDEES_MAX = 3;
+    EVENT_ID = /^[0-9a-f]{64}$/;
+    STATES2 = [
+      "issue_needed",
+      "issued",
+      "request_needed",
+      "requested",
+      "acked",
+      "ack_failed",
+      "resolved",
+      "needs_account",
+      "needs_owner",
+      "closed"
+    ];
+    NOTICED = ["issue_needed", "request_needed", "acked", "ack_failed"];
+    ACK_CONFIRMED2 = ["WORKING", "WAITING", "COMPLETED"];
+    str = (value) => typeof value === "string";
+    optional2 = (value) => str(value) && value ? value : void 0;
+    isStatus = (error3, status) => error3 instanceof ApiResponseError && error3.status === status;
+    alias = (email3) => {
+      const match = /^([^@\s]+)@amazon\.com$/.exec((email3 ?? "").trim().toLowerCase());
+      return match ? match[1] : null;
+    };
+    TaskRun = class {
+      constructor(options) {
+        this.options = options;
+      }
+      options;
+      counts = {
+        tasks: 0,
+        created: 0,
+        classified: 0,
+        closed: 0,
+        linked: 0,
+        acked: 0,
+        ackFailed: 0,
+        ackNeeded: 0,
+        refreshed: 0,
+        drafted: 0,
+        notices: 0,
+        conflicts: 0,
+        skipped: 0
+      };
+      failures = {};
+      tasks = /* @__PURE__ */ new Map();
+      /** Cloud events in the sync window: eventId -> account and timing. */
+      events = /* @__PURE__ */ new Map();
+      accounts = /* @__PURE__ */ new Map();
+      seen;
+      myLogin = "";
+      opptyAccounts = null;
+      /** False when the task list exceeded its cap: `tasks` is then a prefix of the rows. */
+      complete = true;
+      /** Tasks this run already linked, acknowledged or refreshed. */
+      touched = /* @__PURE__ */ new Set();
+      fail(step, error3) {
+        this.failures[step] ??= apiCode(error3);
+      }
+      saveSeen() {
+        this.options.store.write(this.seen, ...seenPath(this.options.scope));
+      }
+      async run() {
+        const { store, scope } = this.options;
+        try {
+          this.seen = loadSeen(store, scope);
+          this.register();
+          await this.load();
+        } catch (error3) {
+          this.fail("load", error3);
+          return this.result();
+        }
+        await this.step("close", () => this.close());
+        await this.step("classify", () => this.classify());
+        let specreqReady = false;
+        if (!this.complete) {
+          this.counts.skipped = 3;
+        } else await this.step("specreq", async () => {
+          const session = this.options.sessions.specreq;
+          if (!session) throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
+          this.myLogin = await resolveMe(session, this.options.me.email);
+          specreqReady = true;
+        });
+        if (specreqReady) {
+          await this.step("mine", () => this.linkMine());
+          await this.step("theirs", () => this.theirs());
+          await this.step("refresh", () => this.refresh());
+        }
+        const drafts = /* @__PURE__ */ new Map();
+        await this.step("drafts", () => this.drafts(drafts));
+        await this.step("notices", () => this.notices(drafts));
+        const recent = (map2) => Object.fromEntries(Object.entries(map2).filter(([, at]) => this.options.now.getTime() - Date.parse(at) < SEEN_RETENTION_MS));
+        this.seen.seen = recent(this.seen.seen);
+        this.seen.refreshed = recent(this.seen.refreshed);
+        this.seen.unknown = Object.fromEntries(Object.entries(this.seen.unknown).filter(([id]) => this.seen.pending[id]));
+        try {
+          this.saveSeen();
+        } catch (error3) {
+          this.fail("classify", error3);
+        }
+        return this.result();
+      }
+      result() {
+        this.counts.tasks = this.tasks.size;
+        return { result: Object.keys(this.failures).length ? "TASKS_PARTIAL" : "ok", counts: this.counts, failures: this.failures };
+      }
+      async step(name, body) {
+        try {
+          await body();
+        } catch (error3) {
+          this.fail(name, error3);
+        }
+      }
+      /** Records this sync's new occurrences first, so a failed step retries them next run. */
+      register() {
+        const { sourceId, calendar: calendar2, now, store, scope, zone } = this.options;
+        for (const item of calendar2.upserted) {
+          const eventId = calendarEventId(sourceId, item.meetingId);
+          if (!this.seen.seen[eventId]) this.seen.pending[eventId] = item.meetingId;
+        }
+        const window = syncWindow(now, zone);
+        const tracked = {};
+        for (const [externalId, entry2] of Object.entries(loadState(store, sourceId, scope).ledger)) {
+          const eventId = calendarEventId(sourceId, externalId);
+          tracked[eventId] = entry2.endsAt;
+          if (new Date(entry2.endsAt) > window.start && new Date(entry2.startsAt) < window.end && !this.seen.seen[eventId]) {
+            this.seen.pending[eventId] = externalId;
+          }
+        }
+        for (const [eventId, endsAt] of Object.entries(this.seen.tracked ?? {})) {
+          if (!tracked[eventId] && new Date(endsAt) > window.start) this.seen.closing[eventId] ??= now.toISOString();
+        }
+        this.seen.tracked = tracked;
+        this.saveSeen();
+      }
+      // ---------- step 1: cloud tasks and window events ----------
+      async load() {
+        const { api, now, zone } = this.options;
+        let cursor;
+        for (let page2 = 0; ; page2++) {
+          if (page2 === TASK_LIST_MAX_PAGES) {
+            this.complete = false;
+            this.fail("load", new IntakeError("PARSE_FAILED", `task list exceeds ${TASK_LIST_MAX_PAGES} pages`));
+            break;
+          }
+          const result = await api.listSpecReqTasks(cursor);
+          if (!result || !Array.isArray(result.tasks)) throw new IntakeError("PARSE_FAILED", "task list has an unexpected shape");
+          for (const raw of result.tasks) {
+            const task = parseTask(raw);
+            this.tasks.set(task.eventId, task);
+          }
+          if (!str(result.nextCursor) || !result.nextCursor) break;
+          cursor = result.nextCursor;
+        }
+        const window = syncWindow(now, zone);
+        cursor = void 0;
+        for (let page2 = 0; ; page2++) {
+          if (page2 === EVENT_LIST_MAX_PAGES) throw new IntakeError("PARSE_FAILED", "calendar event list did not finish paging");
+          const result = await api.listCalendarEvents({
+            from: window.start.toISOString(),
+            to: window.end.toISOString(),
+            limit: 50,
+            ...cursor ? { cursor } : {}
+          });
+          if (!result || !Array.isArray(result.events)) throw new IntakeError("PARSE_FAILED", "calendar event list has an unexpected shape");
+          for (const raw of result.events) {
+            if (!raw || !str(raw.eventId) || !str(raw.startsAt) || !str(raw.endsAt)) continue;
+            this.events.set(raw.eventId, {
+              title: str(raw.title) ? raw.title : "",
+              startsAt: raw.startsAt,
+              endsAt: raw.endsAt,
+              ...optional2(raw.accountId) ? { accountId: raw.accountId } : {}
+            });
+          }
+          if (!str(result.nextCursor) || !result.nextCursor) break;
+          cursor = result.nextCursor;
+        }
+      }
+      /**
+       * Sends one transition with the last seen version. On 409 it re-reads the
+       * task once and sends again only if `build` still accepts the fresh row.
+       */
+      async transition(task, build) {
+        let current = task;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const change = build(current);
+          if (!change) {
+            this.counts.conflicts++;
+            return null;
+          }
+          try {
+            const next = parseTask(await this.options.api.transitionSpecReqTask(
+              current.eventId,
+              { ...change, version: current.version }
+            ));
+            this.tasks.set(next.eventId, next);
+            return next;
+          } catch (error3) {
+            if (!isStatus(error3, 409)) throw error3;
+            if (attempt === 1) break;
+            current = parseTask(await this.options.api.getSpecReqTask(current.eventId));
+            this.tasks.set(current.eventId, current);
+          }
+        }
+        this.counts.conflicts++;
+        return null;
+      }
+      // ---------- step 2: removed occurrences ----------
+      async close() {
+        const { sourceId, now, zone } = this.options;
+        const window = syncWindow(now, zone);
+        for (const task of this.tasks.values()) {
+          if (task.sourceId === sourceId && task.state !== "closed" && !this.seen.tracked?.[task.eventId] && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
+            this.seen.closing[task.eventId] ??= now.toISOString();
+          }
+        }
+        let failure2;
+        for (const eventId of Object.keys(this.seen.closing)) {
+          try {
+            if (this.events.has(eventId)) {
+              delete this.seen.closing[eventId];
+              continue;
+            }
+            const task = this.tasks.get(eventId) ?? (this.complete ? void 0 : parseTask(await this.options.api.getSpecReqTask(eventId)));
+            if (task && task.state !== "closed") {
+              if (await this.transition(task, (current) => current.state === "closed" ? null : { op: "close" })) this.counts.closed++;
+            }
+            delete this.seen.closing[eventId];
+          } catch (error3) {
+            if (isStatus(error3, 404)) delete this.seen.closing[eventId];
+            else failure2 ??= error3;
+          }
+        }
+        this.saveSeen();
+        if (failure2) throw failure2;
+      }
+      // ---------- step 3: classification ----------
+      async account(accountId) {
+        if (this.accounts.has(accountId)) return this.accounts.get(accountId);
+        if (this.accounts.size >= MEMBER_ACCOUNTS_MAX) throw new IntakeError("PARSE_FAILED", "too many accounts to read members");
+        let info = null;
+        try {
+          const raw = await this.options.api.getAccount(accountId);
+          if (!raw || !Array.isArray(raw.members)) throw new IntakeError("PARSE_FAILED", "account has an unexpected shape");
+          const members = raw.members.flatMap((member) => member && str(member.userId) && member.userId && str(member.email) && str(member.role) && member.pending !== true ? [{ userId: member.userId, email: member.email.trim().toLowerCase(), role: member.role }] : []);
+          info = { name: str(raw.name) ? raw.name : "", members };
+        } catch (error3) {
+          if (!isStatus(error3, 403) && !isStatus(error3, 404)) throw error3;
+        }
+        this.accounts.set(accountId, info);
+        return info;
+      }
+      /** SA/SSA member emails across the accounts I belong to directly; null when they cannot all be read. */
+      async saEmailsOfMyAccounts() {
+        const listed = await this.options.api.listAccounts();
+        if (!listed || !Array.isArray(listed.accounts)) throw new IntakeError("PARSE_FAILED", "account list has an unexpected shape");
+        const mine = listed.accounts.filter((account) => account && str(account.accountId) && !account.inheritedFromAccountId);
+        if (mine.length > MEMBER_ACCOUNTS_MAX) return null;
+        const emails = /* @__PURE__ */ new Set();
+        for (const account of mine) {
+          const info = await this.account(account.accountId);
+          for (const member of info?.members ?? []) if (member.role === "SA" || member.role === "SSA") emails.add(member.email);
+        }
+        return emails;
+      }
+      async classify() {
+        const { sourceId, calendar: calendar2, sessions, me, now, zone } = this.options;
+        const candidates = [];
+        const upserted = new Map(calendar2.upserted.map((item) => [calendarEventId(sourceId, item.meetingId), item]));
+        for (const [eventId, externalId] of Object.entries(this.seen.pending)) {
+          const existing = this.tasks.get(eventId);
+          if (this.seen.seen[eventId] || existing) {
+            this.seen.seen[eventId] ??= now.toISOString();
+            delete this.seen.pending[eventId];
+            continue;
+          }
+          const event = this.events.get(eventId);
+          if (!event) {
+            delete this.seen.pending[eventId];
+            continue;
+          }
+          const item = upserted.get(eventId) ?? { meetingId: externalId, subject: event.title, start: event.startsAt, end: event.endsAt };
+          candidates.push({ eventId, item, externalId });
+        }
+        for (const task of this.tasks.values()) {
+          if (task.sourceId !== sourceId || task.state !== "needs_account" && task.state !== "needs_owner" || !task.event) continue;
+          if (!(this.events.get(task.eventId)?.accountId ?? task.accountId)) continue;
+          candidates.push({
+            eventId: task.eventId,
+            task,
+            externalId: "",
+            item: { meetingId: "", subject: task.event.title, start: task.event.startsAt, end: task.event.endsAt }
+          });
+        }
+        this.saveSeen();
+        if (!candidates.length) return;
+        const session = sessions.meetings;
+        if (!session) throw new IntakeError(this.options.unavailable?.meetings ?? "NOT_SELECTED");
+        const window = syncWindow(now, zone);
+        const list = parseMeetingList(resultJson(await session.call("list_meetings", {
+          startTime: window.start.toISOString(),
+          endTime: window.end.toISOString(),
+          userEmail: me.email
+        }), "list_meetings"));
+        if (list === null) throw new IntakeError("PARSE_FAILED", "list_meetings exceeds its cap");
+        let saEmails;
+        let reads = 0;
+        let failure2;
+        for (const candidate of candidates) {
+          try {
+            const joined = joinMeeting(candidate.item, list);
+            if (!joined) continue;
+            if (reads >= GET_MEETING_MAX) break;
+            reads++;
+            const attendees = parseAttendees(resultJson(await session.call("get_meeting", {
+              meetingId: joined.meetingId,
+              getMaster: false,
+              userEmail: me.email
+            }), "get_meeting"));
+            if (!attendees) {
+              if (candidate.task) continue;
+              const count = (this.seen.unknown[candidate.eventId] ?? 0) + 1;
+              if (count < UNKNOWN_ATTENDEES_MAX) this.seen.unknown[candidate.eventId] = count;
+              else this.markSeen(candidate.eventId);
+              continue;
+            }
+            delete this.seen.unknown[candidate.eventId];
+            const accountId = this.events.get(candidate.eventId)?.accountId ?? candidate.task?.accountId ?? null;
+            let classification = { kind: "skip" };
+            if (!attendees.isPrivate) {
+              let members = [];
+              let anyAccountSaEmails = /* @__PURE__ */ new Set();
+              if (accountId) {
+                const info = await this.account(accountId);
+                if (!info) continue;
+                members = info.members;
+              } else {
+                if (saEmails === void 0) saEmails = await this.saEmailsOfMyAccounts();
+                if (saEmails === null) continue;
+                anyAccountSaEmails = saEmails;
+              }
+              classification = classifyOccurrence({
+                me: me.email,
+                accountId,
+                attendees: attendees.addresses,
+                members,
+                anyAccountSaEmails,
+                isPrivate: attendees.isPrivate
+              });
+              if (classification.kind === "task" && classification.counterpartUserId === me.userId) classification = { kind: "skip" };
+            }
+            if (candidate.task) await this.reclassify(candidate.task, accountId, classification);
+            else await this.create(candidate, accountId, classification);
+          } catch (error3) {
+            failure2 ??= error3;
+          }
+        }
+        this.saveSeen();
+        if (failure2) throw failure2;
+      }
+      markSeen(eventId) {
+        this.seen.seen[eventId] = this.options.now.toISOString();
+        delete this.seen.pending[eventId];
+        delete this.seen.unknown[eventId];
+      }
+      async create(candidate, accountId, classification) {
+        if (classification.kind === "skip") {
+          this.markSeen(candidate.eventId);
+          return;
+        }
+        try {
+          const created = parseTask(await this.options.api.createSpecReqTask({
+            sourceId: this.options.sourceId,
+            externalId: candidate.externalId,
+            state: classification.state,
+            ...classification.state !== "needs_account" && accountId ? { accountId } : {},
+            ...classification.path ? { path: classification.path } : {},
+            ...classification.counterpartUserId ? { counterpartUserId: classification.counterpartUserId } : {}
+          }));
+          this.tasks.set(created.eventId, created);
+          this.counts.created++;
+        } catch (error3) {
+          if (!isStatus(error3, 409)) throw error3;
+          this.tasks.set(candidate.eventId, parseTask(await this.options.api.getSpecReqTask(candidate.eventId)));
+        }
+        this.markSeen(candidate.eventId);
+      }
+      async reclassify(task, accountId, classification) {
+        if (classification.kind === "skip") return;
+        const same = classification.state === task.state && (classification.path ?? void 0) === task.path && classification.counterpartUserId === task.counterpartUserId && (accountId ?? void 0) === task.accountId;
+        if (same || classification.state === "needs_account" && task.state === "needs_account") return;
+        const account = accountId ?? void 0;
+        const next = await this.transition(task, (current) => {
+          if (current.state !== "needs_account" && current.state !== "needs_owner" || current.accountId !== task.accountId) return null;
+          return {
+            op: "classify",
+            state: classification.state,
+            ...account && account !== current.accountId ? { accountId: account } : {},
+            ...classification.path ? { path: classification.path } : {},
+            ...classification.counterpartUserId ? { counterpartUserId: classification.counterpartUserId } : {}
+          };
+        });
+        if (next) this.counts.classified++;
+      }
+      // ---------- steps 4-6: SpecReq ----------
+      /** SFDC opportunity ID -> candidate task accounts that link a project with it. */
+      async opportunityMap() {
+        if (this.opptyAccounts) return this.opptyAccounts;
+        const open = (task) => task.accountId && (task.path === "mine" && task.state === "issue_needed" || task.path === "theirs" && ["request_needed", "requested", "ack_failed"].includes(task.state));
+        const accountIds = [...new Set([...this.tasks.values()].filter(open).map((task) => task.accountId))];
+        if (accountIds.length > OPPTY_ACCOUNTS_MAX) throw new IntakeError("PARSE_FAILED", "too many accounts for opportunity matching");
+        const map2 = /* @__PURE__ */ new Map();
+        for (const accountId of accountIds) {
+          for (const project of await this.options.api.listAccountProjects(accountId)) {
+            if (!project.sfdcOpptyId) continue;
+            map2.set(project.sfdcOpptyId, (map2.get(project.sfdcOpptyId) ?? /* @__PURE__ */ new Set()).add(accountId));
+          }
+        }
+        this.opptyAccounts = map2;
+        return map2;
+      }
+      allTasks() {
+        return [...this.tasks.values()];
+      }
+      async linkMine() {
+        const open = this.allTasks().filter((task) => task.path === "mine" && task.state === "issue_needed" && !task.specReqId);
+        if (!open.length) return;
+        const oldest = Math.min(...open.map((task) => Date.parse(task.createdAt)).filter(Number.isFinite));
+        if (!Number.isFinite(oldest)) return;
+        const requests = await searchRequests(this.options.sessions.specreq, { requesterId: [this.myLogin], au_ca_gte: oldest });
+        const links = linkRequests(
+          requests,
+          this.allTasks(),
+          await this.opportunityMap(),
+          { path: "mine", me: this.myLogin, zone: this.options.zone, counterpartLogin: () => null }
+        );
+        const byId = new Map(requests.map((request2) => [request2.requestId, request2]));
+        let failure2;
+        for (const [requestId, eventId] of links) {
+          const task = this.tasks.get(eventId);
+          const request2 = byId.get(requestId);
+          if (!task || !request2) continue;
+          try {
+            const next = await this.transition(task, (current) => current.path === "mine" && current.state === "issue_needed" && !current.specReqId ? { op: "linkSpecReq", ...this.specReqFields(request2) } : null);
+            if (next) {
+              this.counts.linked++;
+              this.touched.add(eventId);
+            }
+          } catch (error3) {
+            failure2 ??= error3;
+          }
+        }
+        if (failure2) throw failure2;
+      }
+      specReqFields(request2) {
+        return {
+          specReqId: request2.requestId,
+          ...request2.title ? { specReqTitle: request2.title } : {},
+          specReqStatus: request2.stateId
+        };
+      }
+      counterpartLogin(task) {
+        if (!task.accountId || !task.counterpartUserId) return null;
+        const member = this.accounts.get(task.accountId)?.members.find((item) => item.userId === task.counterpartUserId);
+        return alias(member?.email);
+      }
+      ledger() {
+        return { store: this.options.store, scope: this.options.scope, now: () => this.options.now };
+      }
+      /** Writes a recorded acknowledge outcome to the task, then marks the ledger entry synced. */
+      async syncAck(requestId) {
+        const ledger = this.ledger();
+        const entry2 = ackEntry(ledger.store, ledger.scope, requestId);
+        if (!entry2 || entry2.cloudSynced) return;
+        const task = this.tasks.get(entry2.eventId);
+        if (!task) return;
+        if (task.state === "closed" || task.state === "resolved") {
+          markSynced(ledger.store, ledger.scope, requestId);
+          return;
+        }
+        const resolution = entry2.outcome === "ok" ? { state: "acked" } : await resolveAck(
+          this.options.sessions.specreq,
+          ledger,
+          requestId,
+          this.myLogin
+        );
+        if (task.state === resolution.state && (resolution.state === "acked" || task.failureCode === resolution.failureCode)) {
+          markSynced(ledger.store, ledger.scope, requestId);
+          return;
+        }
+        const next = await this.transition(task, (current) => current.path === "theirs" && ["request_needed", "requested", "ack_failed"].includes(current.state) && (!current.specReqId || current.specReqId === requestId) ? {
+          op: "recordAck",
+          specReqId: requestId,
+          state: resolution.state,
+          ...resolution.state === "ack_failed" ? { failureCode: resolution.failureCode } : {}
+        } : null);
+        this.touched.add(entry2.eventId);
+        if (next) {
+          if (resolution.state === "acked") this.counts.acked++;
+          else this.counts.ackFailed++;
+          markSynced(ledger.store, ledger.scope, requestId);
+        } else {
+          const current = this.tasks.get(entry2.eventId);
+          if (current && !["request_needed", "requested", "ack_failed"].includes(current.state)) {
+            markSynced(ledger.store, ledger.scope, requestId);
+          }
+        }
+      }
+      async theirs() {
+        const session = this.options.sessions.specreq;
+        let failure2;
+        for (const [requestId, entry2] of Object.entries(loadAckLedger(this.options.store, this.options.scope).entries)) {
+          if (entry2.cloudSynced) continue;
+          try {
+            await this.syncAck(requestId);
+          } catch (error3) {
+            failure2 ??= error3;
+          }
+        }
+        const requests = await searchRequests(session, { resolverId: [this.myLogin], stateId: ["NEXT_UP"] });
+        if (requests.length) {
+          for (const task of this.allTasks()) {
+            if (task.path === "theirs" && task.accountId && ["request_needed", "requested", "ack_failed"].includes(task.state)) {
+              await this.account(task.accountId);
+            }
+          }
+          const links = linkRequests(
+            requests,
+            this.allTasks(),
+            await this.opportunityMap(),
+            { path: "theirs", me: this.myLogin, zone: this.options.zone, counterpartLogin: (task) => this.counterpartLogin(task) }
+          );
+          const byId = new Map(requests.map((request2) => [request2.requestId, request2]));
+          for (const [requestId, eventId] of links) {
+            const request2 = byId.get(requestId);
+            try {
+              let task = this.tasks.get(eventId);
+              if (!task) continue;
+              if (!task.specReqId) {
+                task = await this.transition(task, (current) => current.path === "theirs" && !current.specReqId && ["request_needed", "requested"].includes(current.state) ? { op: "linkSpecReq", ...this.specReqFields(request2) } : null) ?? void 0;
+                if (!task) continue;
+                this.counts.linked++;
+              }
+              this.touched.add(eventId);
+              if (["acked", "ack_failed", "resolved"].includes(task.state) || task.failureCode) continue;
+              if (!this.options.selection.autoAck) {
+                if (enqueueNotice(this.options.store, this.options.scope, {
+                  eventId,
+                  state: "ack_needed",
+                  title: NOTICE_COPY.ack_needed.title,
+                  body: NOTICE_COPY.ack_needed.body
+                }, this.options.now)) {
+                  this.counts.ackNeeded++;
+                  this.counts.notices++;
+                }
+                continue;
+              }
+              const outcome = await acknowledgeOnce(session, this.ledger(), { requestId, eventId }, this.myLogin);
+              if (outcome !== "not_eligible") await this.syncAck(requestId);
+            } catch (error3) {
+              failure2 ??= error3;
+            }
+          }
+        }
+        if (failure2) throw failure2;
+      }
+      async refresh() {
+        const session = this.options.sessions.specreq;
+        const open = this.allTasks().filter((task) => task.specReqId && !this.touched.has(task.eventId) && task.state !== "closed" && task.state !== "resolved" && task.specReqStatus !== "CANCELLED" && !(task.path === "mine" && task.specReqStatus === "COMPLETED")).map((task) => ({ task, at: this.seen.refreshed[task.eventId] ?? "" })).sort((first, second) => first.at < second.at ? -1 : first.at > second.at ? 1 : first.task.stateChangedAt < second.task.stateChangedAt ? -1 : 1).slice(0, REFRESH_MAX).map((item) => item.task);
+        let failure2;
+        for (const task of open) {
+          try {
+            const request2 = await readRequest(session, task.specReqId);
+            this.seen.refreshed[task.eventId] = this.options.now.toISOString();
+            const confirmed = request2.resolverLogin === this.myLogin && ACK_CONFIRMED2.includes(request2.stateId);
+            if (task.path === "theirs" && ["request_needed", "requested"].includes(task.state) && confirmed && !ackEntry(this.options.store, this.options.scope, request2.requestId)) {
+              const next2 = await this.transition(task, (current) => current.specReqId === request2.requestId && ["request_needed", "requested"].includes(current.state) ? { op: "recordAck", specReqId: request2.requestId, state: "acked", specReqStatus: request2.stateId } : null);
+              if (next2) this.counts.acked++;
+              continue;
+            }
+            const promotes = task.path === "theirs" && task.state === "acked" && request2.stateId === "COMPLETED" || task.state === "ack_failed" && confirmed;
+            if (!promotes && request2.stateId === task.specReqStatus && (!request2.title || request2.title === task.specReqTitle)) continue;
+            const mayRefresh = (current) => current.state !== "ack_failed" || request2.resolverLogin === this.myLogin;
+            if (!mayRefresh(task)) continue;
+            const next = await this.transition(task, (current) => current.specReqId === request2.requestId && current.state !== "closed" && mayRefresh(current) ? {
+              op: "refreshSpecReq",
+              specReqId: request2.requestId,
+              specReqStatus: request2.stateId,
+              ...request2.title ? { specReqTitle: request2.title } : {}
+            } : null);
+            if (next) this.counts.refreshed++;
+          } catch (error3) {
+            failure2 ??= error3;
+          }
+        }
+        if (failure2) throw failure2;
+      }
+      // ---------- steps 7-8: drafts and notices ----------
+      localWhen(task) {
+        const start = new Date(task.event?.startsAt ?? task.occurrenceStartsAt);
+        try {
+          return new Intl.DateTimeFormat("ko-KR", {
+            timeZone: this.options.zone,
+            month: "long",
+            day: "numeric",
+            weekday: "short",
+            ...task.event?.isAllDay ? {} : { hour: "2-digit", minute: "2-digit" }
+          }).format(start);
+        } catch {
+          return start.toISOString().slice(0, 16);
+        }
+      }
+      async drafts(outcomes) {
+        const { store, scope, sessions, me } = this.options;
+        const due = this.allTasks().filter((task) => task.state === "request_needed" && task.path === "theirs" && task.counterpartUserId && task.accountId && !draftEntry(store, scope, task.eventId));
+        if (!due.length) return;
+        const session = sessions.slack;
+        if (!session) {
+          if (this.options.unavailable?.slack) throw new IntakeError(this.options.unavailable.slack);
+          return;
+        }
+        let failure2;
+        let attempts = 0;
+        for (const task of due) {
+          if (attempts >= DRAFTS_MAX) break;
+          try {
+            const info = await this.account(task.accountId);
+            const email3 = info?.members.find((member) => member.userId === task.counterpartUserId)?.email;
+            if (!info || !email3 || !alias(email3)) {
+              outcomes.set(task.eventId, "no_user");
+              continue;
+            }
+            attempts++;
+            const text3 = renderSlackRequest({
+              accountName: info.name,
+              meetingTitle: task.event?.title ?? "",
+              localDateTime: this.localWhen(task),
+              myName: alias(me.email) ?? ""
+            });
+            const outcome = await draftOnce(store, scope, task.eventId, session, email3, text3, { now: () => this.options.now });
+            outcomes.set(task.eventId, outcome);
+            if (outcome === "drafted") this.counts.drafted++;
+          } catch (error3) {
+            failure2 ??= error3;
+          }
+        }
+        if (failure2) throw failure2;
+      }
+      async notices(outcomes) {
+        const { store, scope, now } = this.options;
+        for (const task of this.allTasks()) {
+          const state = task.state;
+          if (!NOTICED.includes(state)) continue;
+          let title;
+          let body;
+          if (state === "request_needed") {
+            const outcome = outcomes.get(task.eventId) ?? draftEntry(store, scope, task.eventId)?.outcome;
+            if (!outcome && (this.options.sessions.slack || this.options.unavailable?.slack)) continue;
+            const copy = NOTICE_COPY.request_needed;
+            title = copy.title;
+            body = outcome === "drafted" ? copy.drafted : outcome === "kept_existing" ? copy.kept_existing : copy.copy;
+          } else {
+            ({ title, body } = NOTICE_COPY[state]);
+          }
+          if (enqueueNotice(store, scope, { eventId: task.eventId, state, title, body }, now)) this.counts.notices++;
+        }
+      }
+    };
+  }
+});
+
 // src/intake/run.ts
 var run_exports = {};
 __export(run_exports, {
@@ -28196,9 +29565,9 @@ __export(run_exports, {
   tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
-import { createHash as createHash6, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
 function accountScope(apiUrl, subject) {
-  return createHash6("sha256").update(`${apiUrl.replace(/\/+$/, "")}
+  return createHash7("sha256").update(`${apiUrl.replace(/\/+$/, "")}
 ${subject}`).digest("hex").slice(0, 32);
 }
 function tokenSubject(idToken) {
@@ -28342,6 +29711,7 @@ async function select(args, environment, store) {
 async function signIn(selection, environment, dryRun, noninteractive) {
   let api = environment.api;
   let scope = environment.scope;
+  let me = environment.me;
   if (!dryRun && !api) {
     const config2 = ttobakConfig(selection, environment.env);
     const auth = new CognitoAuth2(config2, { interactive: !noninteractive });
@@ -28354,9 +29724,37 @@ async function signIn(selection, environment, dryRun, noninteractive) {
       if (message.startsWith("TTOBAK_LOGIN_REQUIRED")) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
       throw error3;
     }
-    scope = accountScope(config2.apiUrl, tokenSubject(idToken));
+    const subject = tokenSubject(idToken);
+    scope = accountScope(config2.apiUrl, subject);
+    try {
+      me = { email: tokenEmail(idToken), userId: subject };
+    } catch {
+      me = void 0;
+    }
   }
-  return { api, scope };
+  return { api, scope, me };
+}
+async function openTaskSessions(environment, selection) {
+  const sessions = {};
+  const unavailable = {};
+  for (const connector of ["meetings", "specreq", "slack"]) {
+    const selected = selection[connector];
+    if (!selected) continue;
+    let session;
+    try {
+      const spec = resolveServer(environment.home, selected.host, selected.server, selected.pathDirs);
+      session = await McpSession.open(spec, selected.server, {
+        pathDirs: selected.pathDirs,
+        allowedTools: allowedToolNames(connector)
+      });
+      for (const tool of CONNECTOR_TOOLS[connector]) await session.requireTool(tool);
+      sessions[connector] = session;
+    } catch (error3) {
+      await session?.close();
+      unavailable[connector] = intakeCode(error3);
+    }
+  }
+  return { sessions, unavailable };
 }
 async function calendar(args, environment, store) {
   const options = flags(args, { "--dry-run": "flag", "--preview": "flag", "--noninteractive": "flag", "--reconcile": "flag" });
@@ -28371,7 +29769,7 @@ async function calendar(args, environment, store) {
   let status = {};
   try {
     status = store.read("status.json") ?? {};
-    let { api, scope } = await signIn(selection, environment, dryRun, options["--noninteractive"] === true);
+    let { api, scope, me } = await signIn(selection, environment, dryRun, options["--noninteractive"] === true);
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
@@ -28399,11 +29797,49 @@ async function calendar(args, environment, store) {
       ...dryRun ? status.calendar?.lastSuccessAt ? { lastSuccessAt: status.calendar.lastSuccessAt } : {} : { lastSuccessAt: startedAt.toISOString() }
     };
     store.write(status, "status.json");
+    let tasks;
+    if (!dryRun && selection.meetings && selection.specreq && api && scope) {
+      const ranAt = environment.now();
+      if (!me) tasks = { result: "TTOBAK_LOGIN_REQUIRED" };
+      else {
+        const opened = await openTaskSessions(environment, selection);
+        try {
+          const run = await runTasks({
+            store,
+            api,
+            scope,
+            zone: environment.zone,
+            now: ranAt,
+            sourceId: selected.sourceId,
+            selection: { autoAck: selection.specreq.autoAck !== false },
+            sessions: opened.sessions,
+            unavailable: opened.unavailable,
+            me,
+            calendar: { upserted: result.upserted ?? [] }
+          });
+          tasks = {
+            result: run.result,
+            counts: run.counts,
+            ...Object.keys(run.failures).length ? { failures: run.failures } : {}
+          };
+        } catch (error3) {
+          tasks = { result: intakeCode(error3) };
+        } finally {
+          for (const session2 of Object.values(opened.sessions)) await session2.close();
+        }
+      }
+      status.tasks = { lastRunAt: ranAt.toISOString(), ...tasks };
+      try {
+        store.write(status, "status.json");
+      } catch {
+      }
+    }
     return {
       ok: true,
       connector: "calendar",
       dryRun,
       counts: result.counts,
+      ...tasks ? { tasks } : {},
       ...options["--preview"] ? { preview: result.preview } : {}
     };
   } catch (error3) {
@@ -28540,12 +29976,14 @@ var init_run = __esm({
     init_mcp_client();
     init_sfdc();
     init_store();
+    init_tasks();
     USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
   ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
   ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
+    (a synced run also runs the SpecReq task step when meetings and specreq are selected)
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
   ttobak-mcp intake status`;
   }
@@ -31654,7 +33092,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
   const rec = requireRecorder(options);
   const { path: path2, size, ext, type } = api.resolveMeetingAudio(file2);
   const saved = recordingId ? rec.getSaved(recordingId) : void 0;
-  const save = (progress) => {
+  const save2 = (progress) => {
     if (recordingId) rec.saveProgress(recordingId, progress);
   };
   const message = (e) => e instanceof Error ? e.message : String(e);
@@ -31673,7 +33111,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
   const beforePut = (reason) => new Error(`${reason}. No audio was uploaded and nothing local was deleted; ` + (recordingId ? `retry ${retry} (reuses meeting ${id}).` : `meeting ${id} has no audio and can be deleted in TTOBAK; retry ${retry} creates a new meeting.`));
   if (created) {
     try {
-      save({ meetingId: id });
+      save2({ meetingId: id });
     } catch (e) {
       throw beforePut(`Could not record meeting ${id} locally: ${message(e)}`);
     }
@@ -31691,7 +33129,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
     let uploadUrl;
     try {
       ({ uploadUrl, key } = await api.presignMeetingAudio(id, ext, type));
-      save({ uploadKey: key, uploadPut: false });
+      save2({ uploadKey: key, uploadPut: false });
     } catch (e) {
       throw beforePut(message(e));
     }
@@ -31700,7 +33138,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
     } catch (e) {
       if (e instanceof UploadRejectedError) {
         try {
-          save({ uploadKey: void 0, uploadPut: void 0 });
+          save2({ uploadKey: void 0, uploadPut: void 0 });
         } catch {
         }
         throw beforePut(message(e));
@@ -31708,7 +33146,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
       throw new Error(`${message(e)}. The audio upload for meeting ${id} did not confirm, so it may be stored. Nothing local was deleted. ` + (recordingId ? `Check ${api.meetingUrl(id)}, then retry ${retry} with previousUpload "complete" or "reupload".` : `Check ${api.meetingUrl(id)}: if after a few minutes it shows no audio or transcription, delete that meeting and retry ${retry} (creates a new meeting; the file is never deleted).`));
     }
     try {
-      save({ uploadPut: true });
+      save2({ uploadPut: true });
     } catch (e) {
       warnings.push(`Could not record upload progress locally: ${message(e)}`);
     }
