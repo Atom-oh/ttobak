@@ -73,6 +73,8 @@ type NamedCandidate struct {
 	ID      string
 	Name    string
 	Aliases []string
+	// Domains is filled only by ListReadableAccountCandidates.
+	Domains []string
 }
 
 // PeopleDirectory is the candidate set for one account.

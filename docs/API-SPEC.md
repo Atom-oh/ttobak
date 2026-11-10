@@ -122,7 +122,7 @@ runner collects and syncs.
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
 | `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}]}` sorted by SFDC ID |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
-| `GET /api/performance/missed` | optional `period` = `week`, `quarter` or `year` | `{items:[]}` until the missed-item rules are implemented |
+| `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
 
 Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
 trailing data and unsupported query parameters are rejected. A sync batch has at
@@ -150,6 +150,45 @@ A mapping write requires that the caller can currently read the target Account
 account is in the caller's own assignments (otherwise `404 NOT_FOUND`). Manual
 mappings always win over automatic ones. Unmapped assignments are listed with
 `mapped:false`, never guessed.
+
+Missed items (`backend/internal/service/performance_missed.go`) are computed at
+read time from the caller's own SFDC rows, calendar events (`CalendarService`,
+decrypted, owner only) and meetings linked to an account that the caller owns or
+received through a share row (`MeetingService.ListMeetingsForAccounts`). The
+owned read (tab `all`) and the shared read (tab `shared`) each read their stage
+in full, because neither is ordered by meeting date, and filter by date in the
+service. Neither read enters the account-team stage. Every SFDC mapping, manual or
+automatic, is rechecked against the caller's currently readable accounts;
+account names, aliases and domains come only from those accounts.
+
+- Periods use `Asia/Seoul`: `week` is ISO Monday through Sunday, `quarter` the
+  calendar quarter, `year` January 1 through now. The evaluated end is capped
+  at now.
+- A calendar event is attributed by its own readable account link, else a
+  unique organizer-domain match (exact or a parent domain containing a dot;
+  `amazon.com` and `amazon.co.kr` never match), else a title containing exactly
+  one account's name or alias as a whole token sequence. Boundaries are the
+  string edges or a rune that is neither a letter nor a digit, so `SK` does not
+  match "task". A task maps through its SFDC account.
+- `logging_gap`: a calendar or meeting touchpoint in the period, on an account
+  with an SFDC mapping, with no SFDC task within ±3 Seoul days. A touchpoint
+  that names its SFDC account needs a task on that same SFDC account. A calendar
+  or meeting touchpoint knows only the Account, so a task on any SFDC account
+  mapped to it closes the gap.
+- `silent_customer`: an assigned account (any role) with a readable mapping
+  whose last touchpoint is more than 60 days before the period end. With no
+  touchpoint in the lookback window, `at` is empty and `daysSince` is `-1`.
+- `unmappedCount` counts in-period tasks without a readable mapping and
+  in-period calendar events that match no account. They are never guessed.
+- At most 500 items, newest `at` first. The calendar read is bounded to 200
+  pages and the meeting read to 200; exceeding a bound fails the request rather
+  than returning partial results. An API without the calendar and meeting
+  readers wired also fails with `500`. `sourceFreshness` lists `sfdc-assignments`,
+  `sfdc-tasks` and `calendar` (the latest completed calendar source).
+- `calendarCoverageStart` is the earliest start (RFC3339 UTC) among the calendar
+  events read for the request, or an empty string when none were read.
+  Calendar rows expire 90 days after they end and the runner re-reads only its
+  intake window, so calendar-based gaps cover only events from that time on.
 
 Residency: rows use default table encryption without envelope sealing (an
 ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
