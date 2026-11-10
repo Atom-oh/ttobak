@@ -7,7 +7,7 @@
 import type { McpSession } from './mcp-client.js';
 import { resultJson, ToolResultError } from './mcp-client.js';
 import { IntakeError } from './errors.js';
-import { beginAck, finishAck, loadAckLedger, REQUEST_ID_PATTERN, type AckLedgerRef } from './ack-ledger.js';
+import { ackEntry, beginAck, finishAck, REQUEST_ID_PATTERN, type AckLedgerRef } from './ack-ledger.js';
 
 export type SpecReqState = 'PENDING' | 'NEXT_UP' | 'WORKING' | 'WAITING' | 'COMPLETED' | 'CANCELLED';
 
@@ -51,8 +51,9 @@ function clipUtf8(value: string, maxBytes: number): string {
 const login = (value: unknown): string => typeof value === 'string' ? value.trim().toLowerCase() : '';
 
 /**
- * One request record. Without a UUID `requestId` and a known `stateId` the record
- * is dropped; any other malformed field becomes a value that can never match.
+ * One request record, or null without a UUID `requestId` and a known `stateId`
+ * (callers fail on null); any other malformed field becomes a value that can
+ * never match.
  */
 function parseSummary(raw: unknown): SpecReqSummary | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -91,10 +92,14 @@ export function parseSearch(payload: unknown): { requests: SpecReqSummary[]; nex
     throw new IntakeError('PARSE_FAILED', 'search_requests_advanced returned an unexpected shape');
   }
   const requests = data.results.map(parseSummary).filter((item): item is SpecReqSummary => item !== null);
+  // A dropped record could be a competing link candidate, so a partial page is an error.
+  const dropped = data.results.length - requests.length;
+  if (dropped > 0) throw new IntakeError('PARSE_FAILED', `search_requests_advanced returned ${dropped} malformed records`);
+  // The cursor is an opaque array such as [1791350014576]; it is sent back as JSON.
   const cursor = data.lastEvaluatedIndex;
   let next: string | null = null;
   if (typeof cursor === 'string' && cursor) next = cursor;
-  else if (cursor && typeof cursor === 'object') next = JSON.stringify(cursor);
+  else if (Array.isArray(cursor) ? cursor.length > 0 : cursor && typeof cursor === 'object') next = JSON.stringify(cursor);
   return { requests, next };
 }
 
@@ -125,6 +130,10 @@ export async function searchRequests(session: McpSession, filter: SearchFilter):
       ...(next ? { lastEvaluatedIndex_json: next } : {}),
     });
     const parsed = parseSearch(resultJson(result, 'search_requests_advanced'));
+    // A full page without a cursor cannot be told apart from a truncated result.
+    if (parsed.requests.length === SEARCH_PAGE_SIZE && !parsed.next) {
+      throw new IntakeError('PARSE_FAILED', 'search_requests_advanced returned a full page without a cursor');
+    }
     requests.push(...parsed.requests);
     next = parsed.next;
     if (!next) return requests;
@@ -292,7 +301,7 @@ export async function acknowledgeOnce(session: McpSession, ledger: AckLedgerRef,
   const requestId = typeof request.requestId === 'string' ? request.requestId.toLowerCase() : '';
   if (!REQUEST_ID_PATTERN.test(requestId)) throw new IntakeError('INVALID_ARGUMENT', 'SpecReq request ID is invalid');
   const now = () => ledger.now?.() ?? new Date();
-  const existing = loadAckLedger(ledger.store, ledger.scope, now()).entries[requestId];
+  const existing = ackEntry(ledger.store, ledger.scope, requestId);
   if (existing) return existing.outcome === 'pending' ? 'unknown' : existing.outcome;
   const myLogin = login(me);
   const current = await readRequest(session, requestId);
@@ -306,7 +315,7 @@ export async function acknowledgeOnce(session: McpSession, ledger: AckLedgerRef,
     // authentication failure may have reached the provider.
     outcome = error instanceof ToolResultError ? 'rejected' : 'unknown';
   }
-  finishAck(ledger.store, ledger.scope, requestId, outcome, now());
+  finishAck(ledger.store, ledger.scope, requestId, outcome);
   return outcome;
 }
 
@@ -321,14 +330,13 @@ export async function resolveAck(session: McpSession, ledger: AckLedgerRef, requ
   me: string): Promise<AckResolution> {
   const id = typeof requestId === 'string' ? requestId.toLowerCase() : '';
   if (!REQUEST_ID_PATTERN.test(id)) throw new IntakeError('INVALID_ARGUMENT', 'SpecReq request ID is invalid');
-  const now = () => ledger.now?.() ?? new Date();
-  const entry = loadAckLedger(ledger.store, ledger.scope, now()).entries[id];
+  const entry = ackEntry(ledger.store, ledger.scope, id);
   if (!entry) throw new IntakeError('STORE_INVALID', 'no acknowledge attempt is recorded for this request');
   if (entry.outcome === 'ok') return { state: 'acked' };
   const current = await readRequest(session, id);
   const myLogin = login(me);
   if (myLogin && current.resolverLogin === myLogin && ACK_CONFIRMED.includes(current.stateId)) {
-    finishAck(ledger.store, ledger.scope, id, 'ok', now());
+    finishAck(ledger.store, ledger.scope, id, 'ok');
     return { state: 'acked' };
   }
   return { state: 'ack_failed', failureCode: entry.outcome === 'rejected' ? 'ACK_REJECTED' : 'ACK_UNCONFIRMED' };

@@ -242,6 +242,7 @@ test('classify normalizes member emails and handles organizer-me', async () => {
 const SCOPE = 'a'.repeat(32);
 const RID = '11111111-2222-4333-8444-555555555555';
 const RID2 = '66666666-7777-4888-8999-000000000000';
+const RID_HEX = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
 const ledgerFile = home => join(home, '.ttobak', 'intake', 'specreq', SCOPE, 'ack-ledger.json');
 const request = (over = {}) => ({ requestId: RID, title: 'Design review', stateId: 'NEXT_UP', requesterLogin: 'alice',
   resolverLogin: 'me', salesforceId: '006A', meetingDateRanges: ['2026-11-12 - 2026-11-12'], createdAt: 1, ...over });
@@ -318,13 +319,19 @@ test('ack refused unless NEXT_UP and resolver is me', async t => {
   const { acknowledgeOnce } = await import('../dist/intake/specreq.js');
   const home = tempHome(t);
   const ledger = await ledgerRef(home);
-  const refused = [request({ stateId: 'WORKING' }), request({ stateId: 'PENDING' }), request({ resolverLogin: 'bob' }),
-    request({ resolverLogin: '' }), request({ requestId: RID2 }), null];
-  for (const data of refused) {
+  const refused = [
+    [request({ stateId: 'WORKING' }), 'not_eligible'],
+    [request({ stateId: 'PENDING' }), 'not_eligible'],
+    [request({ resolverLogin: 'bob' }), 'not_eligible'],
+    [request({ resolverLogin: '' }), 'not_eligible'],
+    [request({ requestId: RID2 }), 'PARSE_FAILED'],
+    [null, 'PARSE_FAILED'],
+  ];
+  for (const [data, expected] of refused) {
     const { session, calls } = await specreqSession(t, home, { FAKE_WORK_REQUEST: JSON.stringify(data) });
     const outcome = await acknowledgeOnce(session, ledger, { requestId: RID, eventId: 'e'.repeat(64) }, 'me')
       .catch(error => error.code);
-    assert.ok(outcome === 'not_eligible' || outcome === 'PARSE_FAILED', String(outcome));
+    assert.equal(outcome, expected, JSON.stringify(data));
     assert.deepEqual(calls(), ['get_request']);
     assert.ok(!existsSync(ledgerFile(home)));
   }
@@ -351,19 +358,28 @@ test('ledger is written before the ack call', async t => {
   assert.equal(statSync(ledgerFile(home)).mode & 0o777, 0o600);
 });
 
-test('ack ledger prunes entries after 120 days and rejects a malformed file', async t => {
-  const { beginAck, loadAckLedger } = await import('../dist/intake/ack-ledger.js');
+test('ack ledger keeps every entry, normalizes keys and rejects a malformed file', async t => {
+  const { beginAck, finishAck, markSynced, loadAckLedger } = await import('../dist/intake/ack-ledger.js');
   const { IntakeStore } = await import('../dist/intake/store.js');
   const home = tempHome(t);
   const store = new IntakeStore(home);
   const day = 24 * 60 * 60 * 1000;
-  beginAck(store, SCOPE, RID, 'e'.repeat(64), new Date(NOW.getTime() - 121 * day));
-  beginAck(store, SCOPE, RID2, 'e'.repeat(64), new Date(NOW.getTime() - 119 * day));
-  assert.deepEqual(Object.keys(loadAckLedger(store, SCOPE, NOW).entries), [RID2]);
-  store.write({ version: 1, entries: { [RID]: { eventId: 'x', attemptedAt: 'soon', outcome: 'ok', cloudSynced: false } } },
-    'specreq', SCOPE, 'ack-ledger.json');
-  assert.throws(() => loadAckLedger(store, SCOPE, NOW), error => error.code === 'STORE_INVALID');
-  assert.throws(() => loadAckLedger(store, 'x', NOW), error => error.code === 'INVALID_ARGUMENT');
+  beginAck(store, SCOPE, RID_HEX.toUpperCase(), 'e'.repeat(64), new Date(NOW.getTime() - 400 * day));
+  assert.throws(() => beginAck(store, SCOPE, RID_HEX, 'e'.repeat(64), NOW), error => error.code === 'STORE_INVALID');
+  finishAck(store, SCOPE, RID_HEX, 'unknown');
+  markSynced(store, SCOPE, RID_HEX.toUpperCase());
+  beginAck(store, SCOPE, RID2, 'e'.repeat(64), NOW);
+  assert.deepEqual(loadAckLedger(store, SCOPE).entries, {
+    [RID_HEX]: { eventId: 'e'.repeat(64), attemptedAt: new Date(NOW.getTime() - 400 * day).toISOString(), outcome: 'unknown',
+      cloudSynced: true },
+    [RID2]: { eventId: 'e'.repeat(64), attemptedAt: NOW.toISOString(), outcome: 'pending', cloudSynced: false },
+  });
+  const entry = { eventId: 'e'.repeat(64), attemptedAt: NOW.toISOString(), outcome: 'ok', cloudSynced: false };
+  store.write({ version: 1, entries: { [RID_HEX.toUpperCase()]: entry } }, 'specreq', SCOPE, 'ack-ledger.json');
+  assert.throws(() => loadAckLedger(store, SCOPE), error => error.code === 'STORE_INVALID');
+  store.write({ version: 1, entries: { [RID]: { ...entry, attemptedAt: 'soon' } } }, 'specreq', SCOPE, 'ack-ledger.json');
+  assert.throws(() => loadAckLedger(store, SCOPE), error => error.code === 'STORE_INVALID');
+  assert.throws(() => loadAckLedger(store, 'x'), error => error.code === 'INVALID_ARGUMENT');
 });
 
 test('search sends fixed fields and stops after four pages', async t => {
@@ -388,8 +404,19 @@ test('search sends fixed fields and stops after four pages', async t => {
   await assert.rejects(searchRequests(capped.session, { requesterId: ['me'] }), error => error.code === 'PARSE_FAILED');
   assert.equal(capped.calls().length, 4);
 
-  assert.deepEqual(parseSearch(page([request({ requestId: 'bad' }), request({ stateId: 'DONE' }), 'x'])),
-    { requests: [], next: null });
+  const full = Array.from({ length: 50 }, (_, i) => request({ requestId: `${String(i).padStart(8, '0')}-2222-4333-8444-555555555555` }));
+  const noCursor = await specreqSession(t, home, { FAKE_WORK_SEARCH: JSON.stringify([page(full)]) });
+  await assert.rejects(searchRequests(noCursor.session, { requesterId: ['me'] }), error => error.code === 'PARSE_FAILED');
+  const withCursor = await specreqSession(t, home, { FAKE_WORK_SEARCH: JSON.stringify([page(full, [1791350014576]), page([])]) });
+  assert.equal((await searchRequests(withCursor.session, { requesterId: ['me'] })).length, 50);
+  const dropped = await specreqSession(t, home, { FAKE_WORK_SEARCH: JSON.stringify([page([request(), request({ stateId: 'DONE' })])]) });
+  await assert.rejects(searchRequests(dropped.session, { requesterId: ['me'] }), error => error.code === 'PARSE_FAILED');
+
+  for (const bad of [request({ requestId: 'bad' }), request({ stateId: 'DONE' }), 'x']) {
+    assert.throws(() => parseSearch(page([request(), bad])), error => error.code === 'PARSE_FAILED');
+  }
+  assert.equal(parseSearch(page([request()], [1791350014576])).next, '[1791350014576]');
+  assert.equal(parseSearch(page([request()], [])).next, null);
   assert.throws(() => parseSearch({ success: false }), error => error.code === 'PARSE_FAILED');
   assert.equal(parseSearch(page([request({ title: 'é'.repeat(400) })])).requests[0].title.length, 256);
 });
