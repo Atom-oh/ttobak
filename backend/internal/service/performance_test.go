@@ -25,6 +25,10 @@ type performanceStoreFake struct {
 	put         []model.AccountMapping
 	putManual   []bool
 	applyErr    error
+	putErr      error
+	deleted     []string
+	deleteErr   error
+	replay      bool
 }
 
 func (fake *performanceStoreFake) ApplyPerformanceBatch(_ context.Context, userID, source string, req model.PerformanceSyncRequest, digest string) (*model.PerformanceSyncReceipt, error) {
@@ -35,7 +39,7 @@ func (fake *performanceStoreFake) ApplyPerformanceBatch(_ context.Context, userI
 	if fake.applyErr != nil {
 		return nil, fake.applyErr
 	}
-	return &model.PerformanceSyncReceipt{Revision: req.ExpectedRevision + 1, Completed: req.Complete, Upserted: len(req.Mutations)}, nil
+	return &model.PerformanceSyncReceipt{Revision: req.ExpectedRevision + 1, Completed: req.Complete, Upserted: len(req.Mutations), Replayed: fake.replay}, nil
 }
 
 func (fake *performanceStoreFake) ListPerformanceSources(_ context.Context, userID string) ([]model.PerformanceSourceStatus, error) {
@@ -53,7 +57,12 @@ func (fake *performanceStoreFake) ListAccountMappings(_ context.Context, userID 
 func (fake *performanceStoreFake) PutAccountMapping(_ context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error {
 	fake.put = append(fake.put, mapping)
 	fake.putManual = append(fake.putManual, onlyIfNotManual)
-	return nil
+	return fake.putErr
+}
+
+func (fake *performanceStoreFake) DeleteAccountMappingIfAutomatic(_ context.Context, userID, sfdcAccountID string) error {
+	fake.deleted = append(fake.deleted, sfdcAccountID)
+	return fake.deleteErr
 }
 
 func (fake *performanceStoreFake) GetPerformanceGoals(_ context.Context, userID string, year int) (*model.PerformanceGoals, error) {
