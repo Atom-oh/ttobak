@@ -41,8 +41,11 @@ func TestAccountPartitionHasPrefixIsSingleConsistentProbe(t *testing.T) {
 
 func TestListAccountPartitionKeysIsKeysOnlyPagedAndCapped(t *testing.T) {
 	calls := 0
+	var limits []float64
 	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
 		calls++
+		limit, _ := body["Limit"].(float64)
+		limits = append(limits, limit)
 		if !strings.HasSuffix(target, ".Query") || body["ConsistentRead"] != true || body["Select"] != nil {
 			t.Fatalf("unexpected query: %s %#v", target, body)
 		}
@@ -62,10 +65,17 @@ func TestListAccountPartitionKeysIsKeysOnlyPagedAndCapped(t *testing.T) {
 	if err != nil || over || len(keys) != 3 || calls != 2 {
 		t.Fatalf("keys=%v over=%v err=%v calls=%d", keys, over, err, calls)
 	}
-	calls = 0
+	// Each page reads only the keys still needed to detect overflow.
+	if len(limits) != 2 || limits[0] != 4 || limits[1] != 2 {
+		t.Fatalf("query limits=%v, want [4 2]", limits)
+	}
+	calls, limits = 0, nil
 	keys, over, err = repo.ListAccountPartitionKeys(context.Background(), "acc", "CONTACT#", 2)
 	if err != nil || !over || len(keys) != 2 {
 		t.Fatalf("cap: keys=%v over=%v err=%v", keys, over, err)
+	}
+	if len(limits) != 2 || limits[0] != 3 || limits[1] != 1 {
+		t.Fatalf("cap query limits=%v, want [3 1]", limits)
 	}
 	if _, _, err := repo.ListAccountPartitionKeys(context.Background(), "acc", "CONTACT#", 0); err == nil {
 		t.Fatal("accepted zero limit")
