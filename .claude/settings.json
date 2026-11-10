@@ -20,6 +20,15 @@
             "command": "bash .claude/hooks/secret-scan.sh"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/review-size-check.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
