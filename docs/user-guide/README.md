@@ -115,7 +115,7 @@ implementation, not inferred from those decisions alone.
   This describes `MeetingTranslation` / `MeetingTranslationService`; it is not a
   claim that every older or unrelated translation path uses that model. A page
   that fails the structure-preservation check can fall back to Amazon Translate.
-- Go refinement and auxiliary steps: Sonnet 5.5 / Opus 5.5 configuration.
+- Go refinement and auxiliary steps: Sonnet 5.5 / Opus 5.5; lightweight steps use Haiku 5.5 configuration.
 - QA/Assistant: Sonnet 5.5, with Haiku 5.5 detection configuration.
 - Research: Opus 5.5 defaults for all three modes and chat; modes change workflow
   depth, not necessarily the model family.

@@ -64,7 +64,7 @@ so no deduction applies. Informational scope boundaries do not count as defects.
   Reviewed image references are copied; unreviewed images and symlinks are rejected.
   Local-only CSP, anchor integrity and existing-output preservation remain checked.
 - The final artifact contains 141 validated anchors and 12 explicit public assets.
-  All 33 reader checks passed; structured evidence is recorded in
+  All 34 reader checks passed; structured evidence is recorded in
   `results/TTOBAK_User_Guide_Browser_Checks.json` and is not published.
 - `check_docs.py` and JavaScript syntax validation passed. No runtime application,
   AWS configuration or workflow/review-gate code changed.
@@ -77,7 +77,9 @@ This revision separates the upload paths, corrects AI connection permissions and
 Library list capabilities, and restores sharing/project/simulation limits.
 Reader fixes also guard IME composition, keep search results below the sticky
 header and force readable no-JavaScript dark-preference printing. Fresh
-latest-head review remains required.
+latest-head review remains required. Notes-only conflict checks, normalized
+dictionary aliases, all-mode research approval and Docs editor structures match source.
+Navigation labels are searchable; legacy flow cells also retain their styling.
 
 ## Source-omission cross-check
 

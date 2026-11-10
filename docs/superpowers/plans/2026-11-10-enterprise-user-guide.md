@@ -71,3 +71,6 @@ Task 3: foundation checks passed (9 docs cases, 30 browser checks, 90/90 rubric)
 Task 4: foundation #750, meeting workflows #751, complete manual #752; source
 evidence now prepared. Binary inputs were replaced with reviewable SVG diagrams
 after initial rejection. Required latest-head reviews and publication are pending.
+
+Final reader verification: 34 browser checks passed after wording corrections and
+menu-label search indexing. The evidence JSON binds all twelve public asset hashes.
