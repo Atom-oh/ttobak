@@ -285,3 +285,26 @@ func TestListSpecReqTasks_RejectsForeignRows(test *testing.T) {
 		})
 	}
 }
+
+func TestSpecReqTaskRowCursor_ResumesAfterRow(test *testing.T) {
+	var started string
+	repo := specReqTestRepo(test, &specReqSDKMock{query: func(input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+		started = input.ExclusiveStartKey["SK"].(*types.AttributeValueMemberS).Value
+		return &dynamodb.QueryOutput{}, nil
+	}})
+	row := specReqTestRow("event-1")
+	row.PK, row.SK, row.UserID, row.EntityType = "USER#owner", "SRTASK#event-1", "owner", specReqTaskEntityType
+	cursor, err := repo.SpecReqTaskRowCursor("owner", 5, row)
+	if err != nil || cursor == "" {
+		test.Fatalf("cursor: %q %v", cursor, err)
+	}
+	if _, _, err := repo.ListSpecReqTasks(context.Background(), "owner", cursor, 5); err != nil || started != "SRTASK#event-1" {
+		test.Fatalf("resume: %q %v", started, err)
+	}
+	if _, _, err := repo.ListSpecReqTasks(context.Background(), "owner", cursor, 4); !errors.Is(err, ErrInvalidSpecReqCursor) {
+		test.Fatalf("limit-changed: %v", err)
+	}
+	if _, err := repo.SpecReqTaskRowCursor("other", 5, row); !errors.Is(err, ErrInvalidSpecReqTask) {
+		test.Fatalf("foreign row: %v", err)
+	}
+}
