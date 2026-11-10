@@ -81,7 +81,18 @@ func (f *fakeSvc) ProcessAccountMergeRequested(ctx context.Context, e model.Acco
 	return f.processErr
 }
 
+// logMu guards the log shared by the job and row fakes, which the scan
+// segments call concurrently.
+var logMu sync.Mutex
+
+func appendLog(log *[]string, entry string) {
+	logMu.Lock()
+	defer logMu.Unlock()
+	*log = append(*log, entry)
+}
+
 type fakeJobs struct {
+	mu       sync.Mutex // segments claim and log concurrently
 	job      *model.AccountMergeJob
 	claims   []string
 	released int
@@ -97,18 +108,20 @@ func (f *fakeJobs) ClaimMergeLease(_ context.Context, source, owner string, _ ti
 	if f.claimErr != nil {
 		return nil, f.claimErr
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.claims = append(f.claims, owner)
-	*f.log = append(*f.log, "claim")
+	appendLog(f.log, "claim")
 	return &model.AccountMergeJob{SourceAccountID: source, TargetAccountID: "tgt", RequesterUserID: "owner-1", State: model.MergeStateRunning, LeaseOwner: owner}, nil
 }
 func (f *fakeJobs) FailMergeJob(_ context.Context, _ *model.AccountMergeJob, code string) error {
 	f.failed = append(f.failed, code)
-	*f.log = append(*f.log, "fail:"+code)
+	appendLog(f.log, "fail:"+code)
 	return nil
 }
 func (f *fakeJobs) ReleaseMergeLease(context.Context, *model.AccountMergeJob) error {
 	f.released++
-	*f.log = append(*f.log, "release")
+	appendLog(f.log, "release")
 	return nil
 }
 
@@ -152,7 +165,7 @@ func (f *fakeUsers) MoveSpecReqTaskRowForMerge(_ context.Context, job *model.Acc
 		return errors.New("task moved without the CLI lease")
 	}
 	f.moves = append(f.moves, "task:"+job.SourceAccountID+">"+job.TargetAccountID+postMergeTag(job))
-	*f.log = append(*f.log, "move")
+	appendLog(f.log, "move")
 	if f.fenceTask != nil {
 		return f.fenceTask
 	}
@@ -169,7 +182,7 @@ func (f *fakeUsers) MoveCalendarEventRowForMerge(_ context.Context, job *model.A
 		return errors.New("event moved without the CLI lease")
 	}
 	f.moves = append(f.moves, "event:"+job.SourceAccountID+">"+job.TargetAccountID+postMergeTag(job))
-	*f.log = append(*f.log, "move")
+	appendLog(f.log, "move")
 	f.cipher = ciphertext
 	return nil
 }
@@ -180,7 +193,7 @@ func (f *fakeUsers) MoveMeetingForAccountMerge(_ context.Context, job *model.Acc
 		return errors.New("meeting moved without the CLI lease")
 	}
 	f.moves = append(f.moves, "meeting:"+meetingID+postMergeTag(job))
-	*f.log = append(*f.log, "move")
+	appendLog(f.log, "move")
 	f.refs = append(f.refs, ref)
 	return f.fence
 }
@@ -433,7 +446,7 @@ func TestMergeCLIChangedRowsAreSkippedAndFenceAbortsScan(t *testing.T) {
 	h = newHarness()
 	h.users.fence = repository.ErrMergeFenceLost
 	res, err = run(context.Background(), h.d, o)
-	if errorCode(err) != "FENCE_LOST" || h.jobs.released != 1 || len(h.jobs.failed) != 0 || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
+	if errorCode(err) != "FENCE_LOST" || h.jobs.released != 0 || strings.Join(h.jobs.failed, ",") != scanIncompleteCode || strings.Contains(strings.Join(h.svc.calls, ","), "process") {
 		t.Fatalf("lost fence must abort before the worker: %v released=%d calls=%v", err, h.jobs.released, h.svc.calls)
 	}
 }

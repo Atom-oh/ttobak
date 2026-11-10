@@ -56,8 +56,10 @@ the scan. A changed row is counted as `Skipped` and the scan runs again, up to t
 passes. During a job the CLI holds the job lease from the scan through its
 in-process worker. If rows remain skipped or any row fails, it marks the job `failed`
 with `SCAN_INCOMPLETE` instead of releasing the lease, so no worker delivery can
-finish the job over rows left behind; rerun the step 2 command to restart it from its
-saved step. A post-merge run (section 7) reports the same code while rows stay
+finish the job over rows left behind (a lost fence fails it too); rerun the step 2
+command to restart it from its saved step. A row that fails on every run (decrypt or
+payload) blocks the merge until fixed, or until `-abort` (section 8); v1 has no
+per-row skip. A post-merge run (section 7) reports the same code while rows stay
 skipped. A calendar move also bumps the row's `shareVersion`, so a sync that read the
 row before the move fails and re-reads it, and a sync naming a merging or merged
 account is refused with 409 `ACCOUNT_MERGING`. A sync authorized before the start
