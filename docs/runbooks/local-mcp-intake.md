@@ -245,7 +245,8 @@ It runs every 10 minutes, and its arguments are fixed and contain no secrets:
 Load it with `launchctl bootstrap gui/$(id -u) <plist>`, and remove it with
 `launchctl bootout gui/$(id -u)/click.atomai.ttobak.intake`. The log holds
 codes and counts only. Delete `~/.ttobak/intake/` to forget the local ledger.
-The TTOBAK copies stay until removed in TTOBAK.
+Calendar copies stay until removed in TTOBAK; SFDC assignments are reconciled
+(see below).
 
 ## SFDC connector
 
@@ -285,6 +286,13 @@ only and makes no TTOBAK calls. It holds `sfdc.lock`.
   4xx/409 handling and `complete:true` follow the calendar rules above. The
   receipt must carry revision+1 and matching counts. `--reconcile` adopts the
   revisions of `GET /api/performance/sources` and resends every current row.
+- **Stale assignments.** On `--reconcile` or a fresh assignments ledger (new
+  Mac, deleted state, new `sourceId`), the SFDC IDs of
+  `GET /api/performance/mappings` absent from the snapshot are removed; tasks
+  keep their TTL. A malformed listing fails with `TTOBAK_UNAVAILABLE`, a
+  truncated one with `ASSIGNMENT_CAP_EXCEEDED`.
+- **Cap.** Removals precede upserts, so no batch exceeds the 500-assignment
+  cap; a larger snapshot fails with `ASSIGNMENT_CAP_EXCEEDED` before sending.
 
 Acceptance on the Mac is pending: run `intake sfdc --dry-run`, compare the
 counts with AWSentral, then run `intake sfdc` and re-run to confirm empty

@@ -23925,7 +23925,7 @@ function parseApiResponse(status, body) {
   }
   return parsed;
 }
-var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, ApiResponseError, TtobakApi;
+var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, ApiResponseError, TtobakApi;
 var init_api2 = __esm({
   "src/api.ts"() {
     "use strict";
@@ -23970,6 +23970,7 @@ var init_api2 = __esm({
     PROJECT_OPTIONAL_FIELDS = ["description", "sfdcOpptyId", "sfdcUrl", "stage"];
     PERFORMANCE_SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     MAX_PERFORMANCE_API_BYTES = 14e3;
+    MAX_PERFORMANCE_MAPPINGS_BYTES = 2e6;
     ApiResponseError = class extends Error {
       constructor(message, status, code) {
         super(message);
@@ -24012,6 +24013,10 @@ var init_api2 = __esm({
       /** The owner's per-source performance sync revisions. */
       async performanceSources() {
         return this.request("GET", "/api/performance/sources", void 0, MAX_PERFORMANCE_API_BYTES, false, true);
+      }
+      /** The owner's SFDC assignments; local intake reads only the IDs. */
+      async performanceMappings() {
+        return this.request("GET", "/api/performance/mappings", void 0, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
       }
       async listCalendarEvents(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
@@ -27669,7 +27674,8 @@ function planSource(rows, key, ledger) {
     remove.push(id);
   }
   const external = (mutation) => mutation.op === "remove" ? mutation.externalId : "assignment" in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId;
-  mutations.sort((first, second) => external(first) < external(second) ? -1 : external(first) > external(second) ? 1 : 0);
+  const rank = (mutation) => `${mutation.op === "remove" ? 0 : 1}${external(mutation)}`;
+  mutations.sort((first, second) => rank(first) < rank(second) ? -1 : rank(first) > rank(second) ? 1 : 0);
   const plan = { mutations, set: Object.fromEntries(set2), remove };
   return { plan, upserts: set2.length, removals: remove.length, unchanged };
 }
@@ -27812,6 +27818,26 @@ async function serverRevisions(api) {
   }
   return result;
 }
+async function serverAssignmentIds(api) {
+  let value;
+  try {
+    value = await api.performanceMappings();
+  } catch (error3) {
+    if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments could not be read");
+  }
+  if (!record17(value) || !Array.isArray(value.items) || typeof value.truncated !== "boolean") {
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
+  }
+  const items = value.items;
+  if (value.truncated) throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `server holds more than ${items.length} assignments`);
+  return items.map((item) => {
+    if (!record17(item) || typeof item.sfdcAccountId !== "string" || !ID.test(item.sfdcAccountId)) {
+      throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
+    }
+    return item.sfdcAccountId;
+  });
+}
 async function deliver(api, store, state, plan) {
   const groups = batches(plan.mutations);
   if (!groups.length) groups.push([]);
@@ -27841,13 +27867,16 @@ async function runSfdc(options) {
     if (states.some((state) => state.reconcileRequired) && !options.reconcile) {
       throw new IntakeError("TTOBAK_CONFLICT", "source revision conflict; run with --reconcile");
     }
+    for (const state of states) if (state.pending) await send2(options.api, store, state);
     let remote;
     for (const state of states) {
-      if (state.pending) await send2(options.api, store, state);
       if (options.reconcile || state.revision === null) {
         remote ??= await serverRevisions(options.api);
         state.revision = remote[state.source];
         if (options.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map((id) => [id, ""]));
+        if (state.source === "sfdc-assignments") {
+          for (const id of await serverAssignmentIds(options.api)) if (!Object.hasOwn(state.ledger, id)) state.ledger[id] = "";
+        }
         state.reconcileRequired = false;
         store.write(state, ...statePath2(state));
       }
@@ -27868,11 +27897,14 @@ async function runSfdc(options) {
   const plan = planSfdc(registry3, tasks, { "sfdc-assignments": assignmentState.ledger, "sfdc-tasks": taskState.ledger }, now);
   const revisions = () => ({ "sfdc-assignments": assignmentState.revision, "sfdc-tasks": taskState.revision });
   if (dryRun) return { counts: plan.counts, revisions: revisions() };
+  if (plan.counts.assignments.fetched > MAX_ASSIGNMENTS) {
+    throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `${plan.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
+  }
   await deliver(options.api, store, assignmentState, plan.assignments);
   await deliver(options.api, store, taskState, plan.tasks);
   return { counts: plan.counts, revisions: revisions() };
 }
-var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT, MAX_PAGES, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
+var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT, MAX_ASSIGNMENTS, MAX_PAGES, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
 var init_sfdc = __esm({
   "src/intake/sfdc.ts"() {
     "use strict";
@@ -27889,6 +27921,7 @@ var init_sfdc = __esm({
     ACTIVITY_ROLE = "activity";
     SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     PAGE_LIMIT = 500;
+    MAX_ASSIGNMENTS = 500;
     MAX_PAGES = 20;
     ID = /^[A-Za-z0-9_-]{1,64}$/;
     ALIAS = /^[A-Za-z0-9._-]{1,64}$/;

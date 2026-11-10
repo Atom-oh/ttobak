@@ -22,6 +22,7 @@ export const INTAKE_CODES = [
   'TTOBAK_UNAVAILABLE',
   'IDENTITY_MISMATCH',
   'TASKS_PARTIAL',
+  'ASSIGNMENT_CAP_EXCEEDED',
 ] as const;
 
 export type IntakeCode = typeof INTAKE_CODES[number];
