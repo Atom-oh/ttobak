@@ -1,6 +1,5 @@
 //! Pure caption overlay model: styles, window layouts, settings validation and
 //! persistence, and window placement. No Tauri imports.
-#![allow(dead_code)] // the overlay windows (caption_overlay.rs) consume the rest
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

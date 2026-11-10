@@ -22,7 +22,7 @@ const LLM_TIMEOUT: Duration = Duration::from_secs(6);
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[cfg(test)]
-const ERROR_CODES: [&str; 8] = [
+const ERROR_CODES: [&str; 10] = [
     "profile-missing",
     "credentials-expired",
     "model-access",
@@ -31,6 +31,8 @@ const ERROR_CODES: [&str; 8] = [
     "invalid-output",
     "timeout",
     "aws-error",
+    "save-failed",
+    "window-error",
 ];
 
 /// Error returned to the page. Messages are short, fixed English strings: no
@@ -51,6 +53,8 @@ impl CaptionError {
             "invalid-input" => "The translation request is invalid.",
             "invalid-output" => "The translation result was rejected.",
             "timeout" => "The translation request timed out.",
+            "save-failed" => "Caption settings could not be saved.",
+            "window-error" => "The caption window could not be updated.",
             _ => "The AWS translation request failed.",
         };
         Self {
@@ -59,7 +63,7 @@ impl CaptionError {
         }
     }
 
-    fn invalid(message: &str) -> Self {
+    pub(crate) fn invalid(message: &str) -> Self {
         Self {
             code: "invalid-input",
             message: message.to_string(),
@@ -230,6 +234,48 @@ impl CaptionState {
         };
         self.clients.lock().insert(key, built.clone());
         built
+    }
+
+    /// A copy of the current settings.
+    pub fn snapshot(&self) -> CaptionSettings {
+        self.settings.lock().clone()
+    }
+
+    /// Applies `change` to a copy of the settings, validates it, writes it
+    /// when `write` is set, then commits it. The lock is held across the
+    /// write (there is no await inside) so saves never share the fixed
+    /// temp-file name. Callers must not hold other locks the main thread
+    /// takes, and must not call this while waiting on the main thread.
+    pub fn update(
+        &self,
+        write: bool,
+        change: impl FnOnce(&mut CaptionSettings),
+    ) -> Result<CaptionSettings, CaptionError> {
+        let mut guard = self.settings.lock();
+        let mut next = guard.clone();
+        change(&mut next);
+        caption_model::validate_settings(&next).map_err(|e| CaptionError::invalid(&e))?;
+        if write {
+            self.write(&next)?;
+        }
+        *guard = next.clone();
+        Ok(next)
+    }
+
+    /// Writes the current settings (used for throttled layout saves).
+    pub fn persist(&self) -> Result<(), CaptionError> {
+        let guard = self.settings.lock();
+        self.write(&guard)
+    }
+
+    fn write(&self, settings: &CaptionSettings) -> Result<(), CaptionError> {
+        if let Some(dir) = self.path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        caption_model::save(&self.path, settings).map_err(|e| {
+            log::warn!("caption settings save failed: {:?}", e.kind());
+            CaptionError::from_code("save-failed")
+        })
     }
 
     fn drop_client(&self, profile: &str, region: &str) {

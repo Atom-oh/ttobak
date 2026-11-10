@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>TTOBAK captions</title>
+    <style>
+      :root {
+        --font: "Apple SD Gothic Neo", system-ui, sans-serif;
+        --size: 48px;
+        --color: #ffffff;
+        --stroke: 3px #000000;
+        --bg: rgba(0, 0, 0, 0.4);
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: default;
+      }
+      #captions {
+        box-sizing: border-box;
+        height: 100%;
+        padding: 8px 16px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      .line {
+        max-width: 100%;
+        margin: 0;
+        text-align: center;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-family: var(--font);
+        font-size: var(--size);
+        line-height: 1.25;
+        font-weight: 700;
+        color: var(--color);
+        -webkit-text-stroke: var(--stroke);
+        paint-order: stroke fill;
+      }
+      .line.moving {
+        transition: transform 150ms ease-out;
+      }
+    </style>
+  </head>
+  <body data-tauri-drag-region="deep">
+    <div id="captions"></div>
+    <script>
+      (function () {
+        var MAX_LINES = 3;
+        var SAMPLES = {
+          ko: '실시간 자막이 여기에 표시됩니다.',
+          en: 'Live captions will appear here.',
+          ja: 'ここにリアルタイム字幕が表示されます。',
+          zh: '实时字幕将显示在这里。'
+        };
+        var params = new URLSearchParams(location.search);
+        var lang = Object.prototype.hasOwnProperty.call(SAMPLES, params.get('lang'))
+          ? params.get('lang')
+          : 'ko';
+        document.documentElement.lang = lang;
+
+        var box = document.getElementById('captions');
+        // id -> { order, text, el }
+        var entries = new Map();
+
+        function applyStyle(s) {
+          if (!s || typeof s !== 'object') return;
+          var root = document.documentElement.style;
+          var hex = /^#[0-9A-Fa-f]{6}$/;
+          function num(v, lo, hi) {
+            return typeof v === 'number' && isFinite(v) && v >= lo && v <= hi;
+          }
+          if (typeof s.fontFamily === 'string' && s.fontFamily) {
+            var family = s.fontFamily === 'system-ui'
+              ? 'system-ui'
+              : '"' + s.fontFamily.replace(/["\\]/g, '') + '"';
+            root.setProperty('--font', family + ', system-ui, sans-serif');
+          }
+          if (num(s.fontSize, 16, 160)) root.setProperty('--size', s.fontSize + 'px');
+          if (hex.test(s.fontColor)) root.setProperty('--color', s.fontColor);
+          if (num(s.outlineWidth, 0, 12) && hex.test(s.outlineColor)) {
+            root.setProperty('--stroke', s.outlineWidth + 'px ' + s.outlineColor);
+          }
+          if (num(s.backgroundOpacity, 0, 1)) {
+            root.setProperty('--bg', 'rgba(0, 0, 0, ' + s.backgroundOpacity + ')');
+          }
+        }
+
+        function clearAll() {
+          entries.forEach(function (e) { e.el.remove(); });
+          entries.clear();
+        }
+
+        // Shows the newest MAX_LINES entries by order. When a line is added,
+        // the lines already shown slide up from their old position (FLIP);
+        // replacing a line's text does not animate.
+        function render(added) {
+          var before = new Map();
+          if (added) {
+            entries.forEach(function (e, id) {
+              if (e.el.isConnected) before.set(id, e.el.getBoundingClientRect().top);
+            });
+          }
+          var sorted = Array.from(entries.entries()).sort(function (a, b) {
+            return a[1].order - b[1].order;
+          });
+          sorted.slice(0, Math.max(0, sorted.length - MAX_LINES)).forEach(function (pair) {
+            pair[1].el.remove();
+            entries.delete(pair[0]);
+          });
+          sorted.slice(-MAX_LINES).forEach(function (pair) {
+            var e = pair[1];
+            if (e.el.textContent !== e.text) e.el.textContent = e.text;
+            box.appendChild(e.el);
+          });
+          if (!added) return;
+          before.forEach(function (top, id) {
+            var e = entries.get(id);
+            if (!e) return;
+            var dy = top - e.el.getBoundingClientRect().top;
+            if (!dy) return;
+            e.el.classList.remove('moving');
+            e.el.style.transform = 'translateY(' + dy + 'px)';
+            void e.el.offsetHeight;
+            e.el.classList.add('moving');
+            e.el.style.transform = '';
+          });
+        }
+
+        function upsert(id, order, text) {
+          var e = entries.get(id);
+          if (e) {
+            e.text = text;
+            render(false);
+            return;
+          }
+          var el = document.createElement('p');
+          el.className = 'line';
+          el.addEventListener('transitionend', function () { el.classList.remove('moving'); });
+          entries.set(id, { order: order, text: text, el: el });
+          render(true);
+        }
+
+        var previewing = false;
+        function preview() {
+          clearAll();
+          previewing = true;
+          upsert('preview', 0, SAMPLES[lang]);
+        }
+
+        // Interim and final text share one style.
+        function onUpdate(p) {
+          if (!p || typeof p !== 'object') return;
+          if (p.kind === 'clear') {
+            previewing = false;
+            clearAll();
+          } else if (p.kind === 'preview') {
+            preview();
+          } else if (p.kind === 'entry' && typeof p.id === 'string' && typeof p.text === 'string') {
+            if (previewing) {
+              previewing = false;
+              clearAll();
+            }
+            upsert(p.id, typeof p.order === 'number' ? p.order : 0, p.text);
+          }
+        }
+
+        applyStyle(window.__TTOBAK_CAPTION_STYLE__);
+        preview();
+
+        var events = window.__TAURI__ && window.__TAURI__.event;
+        if (events) {
+          events.listen('caption-update', function (e) { onUpdate(e.payload); });
+          events.listen('caption-style', function (e) { applyStyle(e.payload); });
+        }
+      })();
+    </script>
+  </body>
+</html>

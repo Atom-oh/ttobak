@@ -29,6 +29,7 @@
 mod audio;
 mod aws_profiles;
 mod caption_model;
+mod caption_overlay;
 mod caption_translate;
 mod control;
 mod control_proto;
@@ -777,6 +778,7 @@ pub fn run() {
         .on_menu_event(|app, event| update::on_menu_event(app, &event.id().0))
         .manage(control::ControlState::default())
         .manage(Arc::new(meeting_detect::MeetingState::default()))
+        .manage(caption_overlay::OverlayState::default())
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
@@ -808,6 +810,10 @@ pub fn run() {
             caption_translate::caption_settings_get,
             caption_translate::caption_settings_set,
             caption_translate::caption_translate,
+            caption_overlay::caption_overlay_open,
+            caption_overlay::caption_overlay_close,
+            caption_overlay::caption_overlay_set_style,
+            caption_overlay::caption_overlay_push,
         ])
         .setup(|app| {
             caption_translate::manage(app)?;
