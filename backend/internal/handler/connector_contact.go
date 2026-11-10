@@ -34,8 +34,12 @@ func contactCreateFailure(err error) connector.InvokeResult {
 		status, code = 400, "BAD_REQUEST"
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, connector.ErrCapabilityDenied), errors.Is(err, repository.ErrContactAccess):
 		status, code = 403, "CAPABILITY_DENIED"
+	case errors.Is(err, repository.ErrConnectorReplayAccountMerging):
+		// The receipt exists: the contact was created before the merge began.
+		body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": model.ErrCodeReplayAccountMerging, "message": "The contact was created before the account began merging; do not recreate it"}})
+		return connector.InvokeResult{StatusCode: 409, Body: string(body)}
 	case errors.Is(err, service.ErrAccountMerging):
-		// The fence rejected the write before any row changed: definitive.
+		// The fence rejected a first create before any row changed: definitive.
 		body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": model.ErrCodeAccountMerging, "message": "Account is merging into another account or already merged"}})
 		return connector.InvokeResult{StatusCode: 409, Body: string(body)}
 	case errors.Is(err, repository.ErrConnectorReceiptMissing):

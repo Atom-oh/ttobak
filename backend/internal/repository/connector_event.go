@@ -105,7 +105,7 @@ func (r *DynamoDBRepository) CreateConnectorEvent(ctx context.Context, in Connec
 		}
 		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{ClientRequestToken: aws.String(uuid.NewString()), TransactItems: append(slices.Clone(checks), ec, rc)}, once)
 		if err != nil {
-			return empty, true, connectorWriteError(err)
+			return empty, true, connectorReplayError(err)
 		}
 		return ConnectorEventReceipt{EventID: eventID, Replayed: true}, true, nil
 	}
@@ -121,7 +121,7 @@ func (r *DynamoDBRepository) CreateConnectorEvent(ctx context.Context, in Connec
 			return empty, connector.ErrCapabilityDenied
 		}
 		if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{ClientRequestToken: aws.String(uuid.NewString()), TransactItems: append(slices.Clone(checks), missing)}, once); err != nil {
-			return empty, connectorWriteError(err)
+			return empty, connectorProbeError(err)
 		}
 		return empty, ErrConnectorReceiptMissing
 	}
