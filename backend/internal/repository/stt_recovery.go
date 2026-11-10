@@ -29,7 +29,10 @@ var ErrSttNoSpeechSnapshot = errors.New("no-speech mark needs exactly one meetin
 // rows were already deleted; object cleanup must still run.
 var ErrSttDeletionPostCommit = errors.New("failed recording rows deleted; post-commit cleanup failed")
 
-var sttRecoveryEmptyFields = []string{"transcriptA", "transcriptB", "transcriptSegments", "content"}
+// sttRecoveryEmptyFields mark a meeting as never processed: any transcript
+// or generated note (Korean content or the English note) excludes it from
+// re-drive, failure marking and auto-deletion.
+var sttRecoveryEmptyFields = []string{"transcriptA", "transcriptB", "transcriptSegments", "content", "contentEn"}
 
 func emptyOrAbsent(name string) expression.ConditionBuilder {
 	return expression.AttributeNotExists(expression.Name(name)).Or(expression.Name(name).Equal(expression.Value("")))
@@ -330,17 +333,18 @@ func (r *DynamoDBRepository) ScanSttDeletionReferences(ctx context.Context) (map
 
 // sttDeletionAllowedChildren are the only MEETING# partition rows a failed
 // recording may have and still be auto-deleted.
-var sttDeletionAllowedChildren = map[string]bool{model.ActionAnalysisSK: true, model.ResummarySK: true}
+var sttDeletionAllowedChildren = map[string]bool{model.ActionAnalysisSK: true, model.ResummarySK: true, model.EnglishSummarySK: true}
 
-// meetingSingletonDeleteKeys mirrors DeleteMeeting's leading singleton deletes
-// (meeting row, action analysis, sim run, saved summary state). A drift test
-// keeps both paths aligned.
+// meetingSingletonDeleteKeys is DeleteMeeting's first-transaction singleton
+// set (meeting row, action analysis, sim run, saved and English summary
+// states), shared with the guarded failed-recording deletion.
 func meetingSingletonDeleteKeys(ownerID, meetingID string) []map[string]types.AttributeValue {
 	return []map[string]types.AttributeValue{
 		meetingRowKey(ownerID, meetingID),
 		actionAnalysisKey(meetingID),
 		{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID}, "SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun}},
 		summaryKey(meetingID),
+		englishSummaryKey(meetingID),
 	}
 }
 
@@ -359,7 +363,7 @@ func sttFailedMeetingDeleteCondition(mark model.SttFailureMark) expression.Condi
 		And(expression.AttributeNotExists(expression.Name("diarizationSpeakerHint")).Or(expression.Name("diarizationSpeakerHint").Equal(expression.Value(0)))).
 		And(expression.AttributeNotExists(expression.Name("audioCrop"))).
 		And(expression.AttributeNotExists(expression.Name("summarizeRetryClaimedAt")))
-	for _, field := range []string{"notes", "content", "transcriptA", "transcriptB", "transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "meetingCategory"} {
+	for _, field := range []string{"notes", "content", "contentEn", "transcriptA", "transcriptB", "transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "meetingCategory"} {
 		condition = condition.And(emptyOrAbsent(field))
 	}
 	for _, field := range []string{"audioKeys", "linkedMeetingIds", "participants", "speakerMap"} {
