@@ -128,6 +128,7 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
       },
       projectApi: { accountProjects: read('accountProjects', () => ({ projects: [] })) },
       meetingsApi: { list: () => { throw new Error('Private history must not be queried'); } },
+      specReqTaskApi: { list: async () => ({ tasks: [], nextCursor: null }), get: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); } },
       calendarApi: {
         events: read('calendarEvents', () => ({ events: [], nextCursor: null })),
         sources: read('calendarSources', () => ({ sources: [], nextCursor: null })),

@@ -265,7 +265,7 @@ test('icon_checker_allowlists_only_non_icon_wire_literals', () => {
   const script = read('./update-icon-font.mjs');
   const list = script.match(/NON_ICON_LITERALS = new Set\(\[([\s\S]*?)\]\)/);
   assert.ok(list, 'allowlist defined');
-  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map(match => match[1]), ['event']);
+  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map(match => match[1]), ['task', 'event']);
   assert.match(script, /catalog\.has\(value\) && !NON_ICON_LITERALS\.has\(value\)/);
   assert.equal(overview.LINK_KIND_EVENT, 'event');
   assert.match(read('../src/types/meeting.ts'), /AccountLinkKind = 'news' \| 'tech' \| 'event' \| 'meeting' \| 'project'/);
