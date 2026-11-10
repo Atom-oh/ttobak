@@ -92,6 +92,44 @@ func TestCalendarOperationsRemainNondelegable(test *testing.T) {
 	}
 }
 
+func TestSpecReqTaskOperationsRemainNondelegable(test *testing.T) {
+	for _, testCase := range []struct {
+		operation    string
+		method       string
+		path         string
+		capabilities string
+	}{
+		{"api.specReqTask.list", "GET", "/api/specreq-tasks", "read"},
+		{"api.specReqTask.get", "GET", "/api/specreq-tasks/abababababababababababababababababababababababababababababababab", "read"},
+		{"api.specReqTask.create", "POST", "/api/specreq-tasks", "read,write"},
+		{"api.specReqTask.transition", "POST", "/api/specreq-tasks/abababababababababababababababababababababababababababababababab/transitions", "read,write"},
+	} {
+		test.Run(testCase.operation, func(test *testing.T) {
+			operation, err := HTTPOperation(testCase.method, testCase.path)
+			if err != nil || operation != testCase.operation {
+				test.Fatalf("specreq-task route classification: operation=%q err=%v", operation, err)
+			}
+			rule, exists := operationRules[operation]
+			if !exists || rule.destination != "ttobak-api-bridge" || rule.capabilities != testCase.capabilities {
+				test.Fatalf("specreq-task capability classification: %+v", rule)
+			}
+			if rule.allowed {
+				test.Error("specreq-task operation marked delegable")
+			}
+			if _, err := RequiredCapabilities(operation, "ttobak-api-bridge"); !errors.Is(err, ErrCapabilityDenied) {
+				test.Errorf("specreq-task delegation accepted: %v", err)
+			}
+			principal := Principal{
+				userID: "task-owner", operation: operation, expiresAt: 200,
+				capabilities: []string{"delete", "read", "share", "write"},
+			}
+			if err := principal.Require(operation, "ttobak-api-bridge", 100); !errors.Is(err, ErrCapabilityDenied) {
+				test.Errorf("fully approved connector accessed private task: %v", err)
+			}
+		})
+	}
+}
+
 func TestCurrentGrantIntersection(t *testing.T) {
 	p := payload{Sub: "user", ClientID: "client", Capabilities: []string{"read", "write"}, ApprovalGeneration: 7, ExpiresAt: 150}
 	full := []string{"delete", "read", "share", "write"}

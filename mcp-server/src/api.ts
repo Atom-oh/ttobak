@@ -163,6 +163,40 @@ function identifier(value: string, name: string): string {
   return encodeURIComponent(value);
 }
 
+function taskEventId(value: string): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new Error('eventId must be 64 lowercase hex characters.');
+  return value;
+}
+
+export type SpecReqTaskState = 'issue_needed' | 'issued' | 'request_needed' | 'requested' | 'acked' | 'ack_failed'
+  | 'resolved' | 'needs_account' | 'needs_owner' | 'closed';
+export type SpecReqTaskOp = 'classify' | 'pickAccount' | 'pickOwner' | 'markRequested' | 'linkSpecReq' | 'recordAck'
+  | 'refreshSpecReq' | 'close';
+
+export interface CreateSpecReqTaskBody {
+  sourceId: string;
+  externalId: string;
+  state: SpecReqTaskState;
+  accountId?: string;
+  path?: 'mine' | 'theirs';
+  counterpartUserId?: string;
+}
+
+export interface SpecReqTransitionBody {
+  op: SpecReqTaskOp;
+  version: number;
+  accountId?: string;
+  counterpartUserId?: string;
+  path?: 'mine' | 'theirs';
+  state?: SpecReqTaskState;
+  specReqId?: string;
+  specReqTitle?: string;
+  specReqStatus?: string;
+  failureCode?: string;
+}
+
+export interface AccountProjectRef { projectId: string; sfdcOpptyId?: string }
+
 function documentsPath(accountId?: string): string {
   return accountId === undefined
     ? '/api/documents'
@@ -236,6 +270,32 @@ export class TtobakApi {
   async listCalendarEvents(options: CalendarEventQuery) {
     const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
     return this.request('GET', `/api/calendar/events?${query}`, undefined, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  async listSpecReqTasks(cursor?: string) {
+    const query = new URLSearchParams();
+    if (cursor !== undefined) query.set('cursor', cursor);
+    return this.request('GET', `/api/specreq-tasks${query.size ? '?' + query : ''}`, undefined, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  async getSpecReqTask(eventId: string) {
+    return this.request('GET', `/api/specreq-tasks/${taskEventId(eventId)}`, undefined, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  async createSpecReqTask(body: CreateSpecReqTaskBody) {
+    return this.request('POST', '/api/specreq-tasks', body, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  async transitionSpecReqTask(eventId: string, body: SpecReqTransitionBody) {
+    return this.request('POST', `/api/specreq-tasks/${taskEventId(eventId)}/transitions`, body, MAX_CALENDAR_API_BYTES, false, true);
+  }
+
+  async listAccountProjects(accountId: string): Promise<AccountProjectRef[]> {
+    const result = await this.request('GET', `/api/accounts/${identifier(accountId, 'accountId')}/projects`) as
+      { projects?: Array<{ projectId?: unknown; sfdcOpptyId?: unknown }> } | null;
+    return (result?.projects ?? []).flatMap(project => typeof project?.projectId === 'string'
+      ? [{ projectId: project.projectId, ...(typeof project.sfdcOpptyId === 'string' && project.sfdcOpptyId ? { sfdcOpptyId: project.sfdcOpptyId } : {}) }]
+      : []);
   }
 
   async calendarSyncStatus(options: CalendarPageQuery) {
