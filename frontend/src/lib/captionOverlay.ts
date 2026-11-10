@@ -104,6 +104,12 @@ export function captionLanguages(extraLanguage: CaptionSettings['extraLanguage']
   return extraLanguage ? ['ko', 'en', extraLanguage] : ['ko', 'en'];
 }
 
+/** Saved-open windows to reopen at launch, limited to the allowed languages. */
+export function savedOpenWindows(settings: CaptionSettings | null | undefined): CaptionLang[] {
+  if (!settings) return [];
+  return captionLanguages(settings.extraLanguage).filter((lang) => settings.windows[lang]?.open === true);
+}
+
 export function captionErrorMessage(code: string): string {
   switch (code) {
     case 'credentials-expired':

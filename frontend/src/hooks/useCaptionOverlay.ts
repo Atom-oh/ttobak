@@ -10,6 +10,7 @@ import {
   openCaptionWindow,
   setCaptionSettings,
   setCaptionStyle,
+  savedOpenWindows,
   type CaptionLang,
   type CaptionSettings,
   type CaptionSettingsView,
@@ -55,8 +56,11 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
   const controllerRef = useRef<CaptionOverlayController | null>(null);
   const openRef = useRef<CaptionLang[]>([]);
   const isRecordingRef = useRef(isRecording);
+  const extraRef = useRef<CaptionSettings['extraLanguage']>(null);
+  const reopenedRef = useRef(false);
 
   const applyLangs = useCallback((langs: CaptionLang[], extra: CaptionSettings['extraLanguage']) => {
+    extraRef.current = extra;
     const allowed = captionLanguages(extra);
     const next = allowed.filter((lang) => langs.includes(lang));
     openRef.current = next;
@@ -67,8 +71,20 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
   const applyView = useCallback((next: CaptionSettingsView) => {
     setSupported(true);
     setView(next);
-    const { windows, extraLanguage } = next.settings;
-    applyLangs(captionLanguages(extraLanguage).filter((lang) => windows[lang]?.open), extraLanguage);
+    // Saved `open` flags survive an app quit, but the windows do not; only
+    // windows this mount actually opened count as open.
+    applyLangs(openRef.current, next.settings.extraLanguage);
+    if (reopenedRef.current) return;
+    reopenedRef.current = true;
+    // Reopen last session's layout once per mount. A failure leaves that
+    // window closed and never touches the recording.
+    for (const lang of savedOpenWindows(next.settings)) {
+      openCaptionWindow(lang).then((layout) => {
+        setView((previous) => previous && setWindow(previous, lang, layout));
+        applyLangs([...openRef.current, lang], extraRef.current);
+        if (!isRecordingRef.current) controllerRef.current?.preview();
+      }, (err) => setError(errorCode(err)));
+    }
   }, [applyLangs]);
 
   const handleLoadError = useCallback((err: unknown) => {
@@ -87,6 +103,7 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
     controllerRef.current = controller;
     getCaptionSettings().then(applyView, handleLoadError);
     return () => {
+      controller.clear();
       controller.stop();
       if (controllerRef.current === controller) controllerRef.current = null;
     };
@@ -109,6 +126,7 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
   }, []);
 
   const replaceSettings = (settings: CaptionSettings) => {
+    extraRef.current = settings.extraLanguage;
     setView((previous) => (previous ? { ...previous, settings } : previous));
   };
 

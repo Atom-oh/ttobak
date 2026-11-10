@@ -134,3 +134,18 @@ test('shows the mwinit message', () => {
   assert.ok(unloaded.includes('자막 번역에 실패했어요. 잠시 후 다시 시도해 주세요.'));
   assert.ok(unloaded.includes('다시 시도'));
 });
+
+test('reopens only allowed saved-open windows', () => {
+  const layout = (open) => ({ open, style, x: null, y: null, width: 900, height: 180 });
+  const settings = (extraLanguage, windows) => ({ profile: 'dev', region: 'us-east-1', extraLanguage, windows });
+  const reopen = (s) => [...overlay.savedOpenWindows(s)];
+
+  assert.deepEqual(reopen(settings(null, { ko: layout(true), en: layout(true) })), ['ko', 'en']);
+  assert.deepEqual(reopen(settings('ja', { en: layout(false), ja: layout(true) })), ['ja']);
+  assert.deepEqual(reopen(settings('zh', { ko: layout(true), ja: layout(true) })), ['ko']);
+  assert.deepEqual(reopen(settings(null, { ja: layout(true), zh: layout(true) })), []);
+  assert.deepEqual(reopen(settings('ja', { ko: layout(false) })), []);
+  assert.deepEqual(reopen(settings('ja', {})), []);
+  assert.deepEqual(reopen(null), []);
+  assert.deepEqual(reopen(undefined), []);
+});
