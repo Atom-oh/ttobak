@@ -78,3 +78,92 @@ test('window.localStorage access that throws is tolerated', () => {
   assert.equal(mod.readSidePanelPref(), 'open');
   assert.doesNotThrow(() => mod.writeSidePanelPref('closed'));
 });
+
+const ALL_ON = { translation: true, summary: true, notes: true, transcript: true };
+
+test('card prefs default to every card shown and survive corrupt values', () => {
+  assert.deepEqual({ ...prefs.readRecordCardPrefs(memory()) }, ALL_ON);
+  assert.deepEqual({ ...prefs.readRecordCardPrefs(memory({ 'ttobak-record-cards': '{not json' })) }, ALL_ON);
+  assert.deepEqual({ ...prefs.readRecordCardPrefs(memory({ 'ttobak-record-cards': '[1,2]' })) }, ALL_ON);
+  assert.deepEqual({ ...prefs.readRecordCardPrefs(memory({ 'ttobak-record-cards': 'null' })) }, ALL_ON);
+  assert.deepEqual(
+    { ...prefs.readRecordCardPrefs(memory({ 'ttobak-record-cards': '{"summary":false,"notes":"no","bogus":false}' })) },
+    { ...ALL_ON, summary: false },
+  );
+  assert.deepEqual({ ...prefs.readRecordCardPrefs(throwing) }, ALL_ON);
+  // A stored state with no main card is not honoured.
+  assert.deepEqual(
+    { ...prefs.readRecordCardPrefs(memory({ 'ttobak-record-cards': '{"translation":false,"summary":false,"notes":false,"transcript":false}' })) },
+    ALL_ON,
+  );
+});
+
+test('card prefs write one JSON value', () => {
+  const store = memory();
+  prefs.writeRecordCardPrefs({ ...ALL_ON, notes: false }, store);
+  assert.deepEqual(JSON.parse(store.data['ttobak-record-cards']), { ...ALL_ON, notes: false });
+  assert.doesNotThrow(() => prefs.writeRecordCardPrefs(ALL_ON, throwing));
+});
+
+test('effective prefs ignore translation when it is off and never leave zero main cards', () => {
+  const onlyTranslation = { translation: true, summary: false, notes: false, transcript: false };
+  assert.deepEqual({ ...prefs.effectiveCardPrefs(onlyTranslation, true) }, onlyTranslation);
+  const fallback = prefs.effectiveCardPrefs(onlyTranslation, false);
+  assert.equal(fallback.summary && fallback.notes, true);
+  assert.equal(prefs.visibleMainCount(onlyTranslation, false), 0);
+  assert.equal(prefs.visibleMainCount(ALL_ON, false), 3);
+  assert.equal(prefs.visibleMainCount(ALL_ON, true), 4);
+});
+
+test('toggling the last visible main card is ignored', () => {
+  const one = { translation: false, summary: true, notes: false, transcript: false };
+  assert.equal(prefs.toggleCard(one, 'summary', false, true), one);
+  assert.deepEqual({ ...prefs.toggleCard(one, 'notes', true, true) }, { ...one, notes: true });
+  // Translation off: an enabled translation pref does not count as visible.
+  const hiddenTranslation = { ...one, translation: true };
+  assert.equal(prefs.toggleCard(hiddenTranslation, 'summary', false, false), hiddenTranslation);
+  assert.deepEqual({ ...prefs.toggleCard(hiddenTranslation, 'summary', false, true) }, { ...hiddenTranslation, summary: false });
+});
+
+test('menu items list translation only when enabled and lock the last card', () => {
+  const keys = (items) => [...items].map((i) => i.key);
+  assert.deepEqual(keys(prefs.layoutMenuItems(ALL_ON, true, false)), ['summary', 'notes', 'transcript', 'sidePanel']);
+  assert.deepEqual(keys(prefs.layoutMenuItems(ALL_ON, true, true)), ['translation', 'summary', 'notes', 'transcript', 'sidePanel']);
+  assert.deepEqual([...prefs.layoutMenuItems(ALL_ON, false, true)].map((i) => i.label), ['통역', '실시간 요약', '메모', '실시간 자막', 'Q&A·자료']);
+  assert.equal(prefs.layoutMenuItems(ALL_ON, false, true).at(-1).checked, false);
+  assert.ok(prefs.layoutMenuItems(ALL_ON, true, true).every((i) => !i.locked));
+  const items = prefs.layoutMenuItems({ translation: true, summary: false, notes: false, transcript: true }, true, false);
+  assert.equal(items.find((i) => i.key === 'transcript').locked, true);
+  assert.equal(items.find((i) => i.key === 'sidePanel').locked, false);
+});
+
+test('layout shares space between visible rows', () => {
+  const full = prefs.recordLayout(ALL_ON, true, false);
+  assert.equal(full.translationRow, 'flex-1 min-h-0');
+  assert.match(full.pairRow, /flex-1 min-h-0 grid grid-rows-1 grid-cols-2/);
+  assert.equal(full.summaryCard, 'min-h-0');
+  assert.equal(full.transcriptRow, 'shrink-0');
+  assert.equal(full.transcriptBodyShown, false);
+  assert.equal(full.transcriptCollapsible, true);
+
+  const noTranslation = prefs.recordLayout(ALL_ON, false, true);
+  assert.equal(noTranslation.translationRow, 'hidden');
+  assert.equal(noTranslation.transcriptRow, 'flex-1 min-h-0');
+  assert.equal(noTranslation.transcriptBodyShown, true);
+
+  const notesOnly = prefs.recordLayout({ ...ALL_ON, summary: false }, false, false);
+  assert.match(notesOnly.pairRow, /grid-cols-1/);
+  assert.equal(notesOnly.summaryCard, 'hidden');
+  assert.equal(notesOnly.notesCard, 'min-h-0');
+
+  // The transcript alone is always expanded and cannot be collapsed to a strip.
+  const transcriptOnly = prefs.recordLayout({ translation: false, summary: false, notes: false, transcript: true }, true, false);
+  assert.equal(transcriptOnly.pairRow, 'hidden');
+  assert.equal(transcriptOnly.transcriptRow, 'flex-1 min-h-0');
+  assert.equal(transcriptOnly.transcriptBodyShown, true);
+  assert.equal(transcriptOnly.transcriptCollapsible, false);
+
+  const hiddenTranscript = prefs.recordLayout({ ...ALL_ON, transcript: false }, false, true);
+  assert.equal(hiddenTranscript.transcriptRow, 'hidden');
+  assert.equal(hiddenTranscript.transcriptBodyShown, false);
+});
