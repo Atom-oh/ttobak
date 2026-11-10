@@ -29,6 +29,8 @@ local UI inspection. Captions explicitly distinguish them from screenshots.
 Local raster walkthrough captures remain internal evidence. No production
 account, customer records, credentials or private meeting data were accessed.
 
+The repository Pages API reports `https://www.atomai.click/ttobak/` as its publication URL (verified 2026-11-10).
+
 The Pages workflow validates local assets and anchors, then copies only the
 explicit public asset allowlist into its artifact. It never publishes the repository's internal
 reference archive. Enable GitHub Pages with the Actions build source. Main-branch

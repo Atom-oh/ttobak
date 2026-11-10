@@ -75,6 +75,8 @@ The independent review found mixed upload paths, an inaccurate connector-screen
 description, overstated Library status visibility and dropped operational limits.
 This revision separates the upload paths, corrects AI connection permissions and
 Library list capabilities, and restores sharing/project/simulation limits.
+Existing-meeting instructions distinguish the immediate attachment gallery from
+the queued audio/document uploader; password recovery guidance is restored.
 Reader fixes also guard IME composition, keep search results below the sticky
 header and force readable no-JavaScript dark-preference printing. Fresh
 latest-head review remains required. Notes-only conflict checks, normalized
