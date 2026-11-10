@@ -68,7 +68,11 @@ so no deduction applies. Informational scope boundaries do not count as defects.
 
 ## Critical and warning issues
 
-None outstanding.
+The independent review found mixed upload paths, an inaccurate connector-screen
+description, overstated Library status visibility and dropped operational limits.
+This revision separates the upload paths, corrects AI connection permissions and
+Library list capabilities, and restores sharing/project/simulation limits.
+No located content defect remains; fresh latest-head review is required.
 
 ## Source-omission cross-check
 
