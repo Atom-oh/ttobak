@@ -100,6 +100,69 @@ asynchronous, not a deletion SLA. No source-delete endpoint is implemented.
 Repository code and synthetic fixtures do not certify deployed/provider
 acceptance or the Calendar 5 persisted integration.
 
+## SA performance
+
+Owner-only SA performance data ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)).
+Routes are in `backend/internal/handler/performance.go`, validation in
+`backend/internal/service/performance.go`, and wire types in
+`backend/internal/model/performance.go`. Every route reads or writes only the
+verified JWT caller's own `USER#` partition; no path, query or body field names a
+user. No account-membership, admin or Billing read path reaches these rows, and
+there is no share action. They are not delegated connector operations. The
+server never calls SFDC or other internal MCP servers; only the owner's Mac
+runner collects and syncs.
+
+| Route | Request | Success |
+|---|---|---|
+| `POST /api/performance/sources/{source}/sync` | `source` is `sfdc-assignments` or `sfdc-tasks`; JSON `batchId`, `expectedRevision`, `complete`, `mutations` | `200` receipt: `revision`, `completed`, `upserted`, `removed` |
+| `GET /api/performance/sources` | none | `{sources:[{source,revision,lastAttemptAt?,lastCompletedAt?}]}`, one entry per source; never-synced sources report revision 0 |
+| `GET /api/performance/goals?year=YYYY` | `year` within previous/current/next year | `{year,text,updatedAt}`; empty text when unset |
+| `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
+| `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
+| `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
+| `GET /api/performance/missed` | optional `period` = `week`, `quarter` or `year` | `{items:[]}` until the missed-item rules are implemented |
+
+Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
+trailing data and unsupported query parameters are rejected. A sync batch has at
+most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
+lowercase); `expectedRevision` is the source's current revision (zero when new).
+
+- Assignment upsert (`sfdc-assignments` only): `sfdcAccountId`, `name` (at most
+  200 bytes) and `role` (at most 64 bytes). An owner keeps at most 500
+  assignments: a batch raising the stored count above 500 (current plus new IDs
+  minus removes) returns `400 BAD_REQUEST`; updates and removes always pass.
+  The check is read-then-write, so concurrent batches may overshoot by 20 each.
+- Task upsert (`sfdc-tasks` only): `taskId`, optional `sfdcAccountId` (an
+  accountless task is kept and stays unmapped), `activityDate`, `type`,
+  `subject` (at most 300 bytes), `status`, optional `specReqId`. Type and
+  status are at most 64 bytes. `activityDate` is a real `YYYY-MM-DD` date from
+  January 1 of the previous UTC year through one year after today.
+  Descriptions and comments are not accepted.
+- Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
+  or task ID.
+
+The mappings list reads at most 501 assignment rows (no cursor), returns the
+first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
+retained mapping rows never hide a mapping.
+
+IDs match `[A-Za-z0-9_-]{1,64}`. The service hashes the normalized request
+(SHA-256 of its canonical JSON); an identical batch replays its receipt within
+seven days, and a reused `batchId` with a different payload or a stale revision
+returns `409 CONFLICT`.
+
+A mapping write requires that the caller can currently read the target Account
+(`AccountService.GetAccount`; otherwise `403 FORBIDDEN`) and that the SFDC
+account is in the caller's own assignments (otherwise `404 NOT_FOUND`). Manual
+mappings always win over automatic ones. Unmapped assignments are listed with
+`mapped:false`, never guessed.
+
+Residency: rows use default table encryption without envelope sealing (an
+ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
+two years after their own year through `pendingShareExpiresAt`; batch receipts
+expire after seven days. Errors use `{error:{code,message}}` with `400`, `401`,
+`403`, `404`, `409`, `413` and `500`, as for the private calendar. Responses use
+`Cache-Control: private, no-store`.
+
 ## SpecReq tasks
 
 Private per-occurrence task rows for calendar events, implemented in
@@ -1794,6 +1857,13 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/calendar/sources/{sourceId}/sync` | `calendarHandler.Sync` |
 | GET | `/api/calendar/sources` | `calendarHandler.ListSources` |
 | GET | `/api/calendar/events` | `calendarHandler.ListEvents` |
+| POST | `/api/performance/sources/{source}/sync` | `performanceHandler.Sync` |
+| GET | `/api/performance/sources` | `performanceHandler.ListSources` |
+| GET | `/api/performance/goals` | `performanceHandler.GetGoals` |
+| PUT | `/api/performance/goals` | `performanceHandler.PutGoals` |
+| GET | `/api/performance/mappings` | `performanceHandler.ListMappings` |
+| PUT | `/api/performance/mappings/{sfdcAccountId}` | `performanceHandler.PutMapping` |
+| GET | `/api/performance/missed` | `performanceHandler.ListMissed` |
 | GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
