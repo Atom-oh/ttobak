@@ -6,7 +6,8 @@ English only, including templates and new ADRs. Do not generate bilingual copies
 Current references describe code/configuration at the reviewed revision. Historical
 plans, research, audits and benchmarks retain dates and explicit historical labels;
 they are not active implementation instructions. ADRs are topic records of the
-decisions in force (`decisions/README.md`); keep accepted risks and known gaps in them. Prefer source paths/symbols to copied code or line numbers.
+decisions in force (`decisions/README.md`); keep accepted risks and known gaps
+in them. Prefer source paths/symbols to copied code or line numbers.
 
 Update API, infra, UI and architecture references only where their source changes.
 Regenerate the root review extract after editing CLAUDE.md. Do not copy the entire
