@@ -14399,7 +14399,7 @@ var init_protocol = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve) => setTimeout(resolve, pollInterval));
+            await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error3) {
@@ -14416,7 +14416,7 @@ var init_protocol = __esm({
        */
       request(request2, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve3, reject) => {
           const earlyReject = (error3) => {
             reject(error3);
           };
@@ -14494,7 +14494,7 @@ var init_protocol = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve(parseResult.data);
+                resolve3(parseResult.data);
               }
             } catch (error3) {
               reject(error3);
@@ -14756,12 +14756,12 @@ var init_protocol = __esm({
           }
         } catch {
         }
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve3, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve, interval2);
+          const timeoutId = setTimeout(resolve3, interval2);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -17788,7 +17788,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve3.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -17815,7 +17815,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve3(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -18645,7 +18645,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve3(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -19014,7 +19014,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve3,
       resolveComponent,
       equal,
       serialize,
@@ -21781,10 +21781,10 @@ var require_formats = __commonJS({
         return -1;
       return 0;
     }
-    var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
+    var TIME2 = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
       return function time3(str2) {
-        const matches2 = TIME.exec(str2);
+        const matches2 = TIME2.exec(str2);
         if (!matches2)
           return false;
         const hr = +matches2[1];
@@ -21815,8 +21815,8 @@ var require_formats = __commonJS({
     function compareIsoTime(t1, t2) {
       if (!(t1 && t2))
         return void 0;
-      const a1 = TIME.exec(t1);
-      const a2 = TIME.exec(t2);
+      const a1 = TIME2.exec(t1);
+      const a2 = TIME2.exec(t2);
       if (!(a1 && a2))
         return void 0;
       t1 = a1[1] + a1[2] + a1[3];
@@ -22241,7 +22241,7 @@ import { request } from "https";
 import { pipeline } from "stream";
 async function fetch(uri, requestOptions, data) {
   let responseTimeout;
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve3, reject) => {
     const req = request(uri, {
       method: "GET",
       ...requestOptions
@@ -22267,7 +22267,7 @@ async function fetch(uri, requestOptions, data) {
       if (responseTimeout)
         clearTimeout(responseTimeout);
       if (err == null) {
-        resolve(data2);
+        resolve3(data2);
         return;
       }
       req.socket?.emit("agentRemove");
@@ -24499,7 +24499,7 @@ var init_api2 = __esm({
         this.requireLocalFiles();
         const url2 = new URL2(uploadUrl);
         if (url2.protocol !== "https:" || url2.username || url2.password) throw new Error("Invalid upload URL");
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve3, reject) => {
           const source = createReadStream(filePath);
           const req = httpsRequest2(
             {
@@ -24517,7 +24517,7 @@ var init_api2 = __esm({
               if (!ok) source.destroy();
               res.resume();
               res.on("end", () => {
-                if (ok) resolve();
+                if (ok) resolve3();
                 else if (status >= 400 && status < 500) reject(new UploadRejectedError(`Audio upload to S3 rejected: HTTP ${status}`));
                 else reject(new Error(`Audio upload to S3 failed with HTTP ${status}; the object may still have been stored`));
               });
@@ -24537,7 +24537,7 @@ var init_api2 = __esm({
       async putBytes(uploadUrl, data, contentType) {
         const url2 = new URL2(uploadUrl);
         if (url2.protocol !== "https:" || url2.username || url2.password) throw new Error("Invalid upload URL");
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve3, reject) => {
           const req = httpsRequest2(
             {
               hostname: url2.hostname,
@@ -24552,7 +24552,7 @@ var init_api2 = __esm({
               res.resume();
               res.on("end", () => {
                 if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-                  resolve();
+                  resolve3();
                 } else {
                   reject(new Error(`File upload to S3 failed: HTTP ${res.statusCode}`));
                 }
@@ -24583,7 +24583,7 @@ var init_api2 = __esm({
         if (url2.origin !== new URL2(this.baseUrl).origin) throw new Error("API origin cannot change");
         maxResponseBytes ??= this.options.maxResponseBytes;
         const data = body ? JSON.stringify(body) : void 0;
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve3, reject) => {
           const req = httpsRequest2(
             {
               hostname: url2.hostname,
@@ -24630,7 +24630,7 @@ var init_api2 = __esm({
                 try {
                   const bytes = Buffer.concat(chunks, received);
                   const response = strictUtf8 ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : bytes.toString("utf8");
-                  resolve(parseApiResponse(res.statusCode || 0, response));
+                  resolve3(parseApiResponse(res.statusCode || 0, response));
                 } catch (error3) {
                   reject(error3);
                 }
@@ -24690,7 +24690,7 @@ function requestAuthJson2(url2, body) {
   if (url2.protocol !== "https:" || url2.username || url2.password || url2.hash) {
     return Promise.reject(new Error("Authentication endpoint must use HTTPS"));
   }
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve3, reject) => {
     let settled = false;
     let timer;
     const data = body?.toString();
@@ -24699,7 +24699,7 @@ function requestAuthJson2(url2, body) {
       settled = true;
       clearTimeout(timer);
       if (error3) reject(error3);
-      else resolve(value);
+      else resolve3(value);
     };
     const req = httpsRequest3(url2, {
       method: body ? "POST" : "GET",
@@ -24963,8 +24963,8 @@ var init_auth = __esm({
           let listening = false;
           let timer;
           let resolveCode, rejectCode;
-          const code = new Promise((resolve, reject) => {
-            resolveCode = resolve;
+          const code = new Promise((resolve3, reject) => {
+            resolveCode = resolve3;
             rejectCode = reject;
           });
           void code.catch(() => {
@@ -26839,12 +26839,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve, reject) {
+        return new Promise(function(resolve3, reject) {
           isexe(path2, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve(is);
+              resolve3(is);
             }
           });
         });
@@ -26910,27 +26910,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i) => new Promise((resolve, reject) => {
+      const step = (i) => new Promise((resolve3, reject) => {
         if (i === pathEnv.length)
-          return opt.all && found.length ? resolve(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve3(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path2.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve(subStep(p, i, 0));
+        resolve3(subStep(p, i, 0));
       });
-      const subStep = (p, i, ii) => new Promise((resolve, reject) => {
+      const subStep = (p, i, ii) => new Promise((resolve3, reject) => {
         if (ii === pathExt.length)
-          return resolve(step(i + 1));
+          return resolve3(step(i + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve(p + ext);
+              return resolve3(p + ext);
           }
-          return resolve(subStep(p, i, ii + 1));
+          return resolve3(subStep(p, i, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -27297,7 +27297,7 @@ var init_stdio2 = __esm({
         if (this._process) {
           throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
         }
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve3, reject) => {
           this._process = (0, import_cross_spawn.default)(this._serverParams.command, this._serverParams.args ?? [], {
             // merge default env with server env because mcp server needs some env vars
             env: {
@@ -27314,7 +27314,7 @@ var init_stdio2 = __esm({
             this.onerror?.(error3);
           });
           this._process.on("spawn", () => {
-            resolve();
+            resolve3();
           });
           this._process.on("close", (_code) => {
             this._process = void 0;
@@ -27379,22 +27379,22 @@ var init_stdio2 = __esm({
         if (this._process) {
           const processToClose = this._process;
           this._process = void 0;
-          const closePromise = new Promise((resolve) => {
+          const closePromise = new Promise((resolve3) => {
             processToClose.once("close", () => {
-              resolve();
+              resolve3();
             });
           });
           try {
             processToClose.stdin?.end();
           } catch {
           }
-          await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
+          await Promise.race([closePromise, new Promise((resolve3) => setTimeout(resolve3, 2e3).unref())]);
           if (processToClose.exitCode === null) {
             try {
               processToClose.kill("SIGTERM");
             } catch {
             }
-            await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
+            await Promise.race([closePromise, new Promise((resolve3) => setTimeout(resolve3, 2e3).unref())]);
           }
           if (processToClose.exitCode === null) {
             try {
@@ -27406,15 +27406,15 @@ var init_stdio2 = __esm({
         this._readBuffer.clear();
       }
       send(message) {
-        return new Promise((resolve) => {
+        return new Promise((resolve3) => {
           if (!this._process?.stdin) {
             throw new Error("Not connected");
           }
           const json2 = serializeMessage(message);
           if (this._process.stdin.write(json2)) {
-            resolve();
+            resolve3();
           } else {
-            this._process.stdin.once("drain", resolve);
+            this._process.stdin.once("drain", resolve3);
           }
         });
       }
@@ -27541,6 +27541,100 @@ var init_mcp_client = __esm({
         });
       }
     };
+  }
+});
+
+// src/intake/schedule.ts
+import { execFile as execFile3 } from "node:child_process";
+import { chmodSync as chmodSync2, mkdirSync as mkdirSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join6 } from "node:path";
+function parseSchedule(value) {
+  if (value === "off" || value === "hourly") return { kind: value };
+  const match = /^(daily|twice-daily)@(.+)$/.exec(value);
+  const parts = match ? match[2].split(",") : [];
+  const times = parts.map((part) => TIME.exec(part)).map((time3) => time3 && { hour: Number(time3[1]), minute: Number(time3[2]) });
+  const expected = match?.[1] === "daily" ? 1 : 2;
+  if (!match || times.length !== expected || times.some((time3) => !time3) || new Set(parts).size !== parts.length) {
+    throw new IntakeError("INVALID_ARGUMENT", "--schedule must be off, hourly, daily@HH:MM or twice-daily@HH:MM,HH:MM");
+  }
+  return { kind: match[1], times };
+}
+function scheduleLabel(schedule) {
+  if (schedule.kind === "off" || schedule.kind === "hourly") return schedule.kind;
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${schedule.kind}@${schedule.times.map((time3) => `${pad(time3.hour)}:${pad(time3.minute)}`).join(",")}`;
+}
+function escapeXml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function absolutePath(value) {
+  if (!isAbsolute3(value) || /[\u0000-\u001f\u007f]/.test(value) || value.length > 1024) {
+    throw new IntakeError("INVALID_ARGUMENT", "the schedule needs absolute node and CLI paths");
+  }
+  return value;
+}
+function buildLaunchAgentPlist(schedule, nodePath, cliPath, home) {
+  if (schedule.kind === "off") throw new IntakeError("INVALID_ARGUMENT", "an off schedule has no plist");
+  const string3 = (value) => `<string>${escapeXml(value)}</string>`;
+  const program = [absolutePath(nodePath), absolutePath(cliPath), "intake", "run", "--noninteractive"];
+  const logs = join6(absolutePath(home), "Library", "Logs", "ttobak");
+  const when = schedule.kind === "hourly" ? "  <key>StartInterval</key><integer>3600</integer>" : `  <key>StartCalendarInterval</key><array>${schedule.times.map((time3) => `<dict><key>Hour</key><integer>${time3.hour}</integer><key>Minute</key><integer>${time3.minute}</integer></dict>`).join("")}</array>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key>${string3(LAUNCH_AGENT_LABEL)}
+  <key>ProgramArguments</key><array>${program.map(string3).join("")}</array>
+${when}
+  <key>StandardOutPath</key>${string3(join6(logs, "intake.log"))}
+  <key>StandardErrorPath</key>${string3(join6(logs, "intake.err"))}
+  <key>Nice</key><integer>10</integer>
+</dict></plist>
+`;
+}
+function launchAgentPath(home) {
+  return join6(home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
+}
+async function applySchedule(schedule, target) {
+  const path2 = launchAgentPath(target.home);
+  const service = `gui/${target.uid}/${LAUNCH_AGENT_LABEL}`;
+  if (schedule.kind === "off") {
+    await target.launchctl(["bootout", service]);
+    rmSync2(path2, { force: true });
+    return;
+  }
+  const plist = buildLaunchAgentPlist(schedule, target.nodePath, target.cliPath, target.home);
+  try {
+    mkdirSync4(join6(target.home, "Library", "LaunchAgents"), { recursive: true });
+    mkdirSync4(join6(target.home, "Library", "Logs", "ttobak"), { recursive: true, mode: 448 });
+    const temporary = `${path2}.${process.pid}.tmp`;
+    writeFileSync4(temporary, plist, { mode: 420 });
+    chmodSync2(temporary, 420);
+    renameSync3(temporary, path2);
+  } catch {
+    throw new IntakeError("SCHEDULE_FAILED", "the LaunchAgent plist could not be written");
+  }
+  await target.launchctl(["bootout", service]);
+  if (await target.launchctl(["bootstrap", `gui/${target.uid}`, path2]) !== 0) {
+    throw new IntakeError("SCHEDULE_FAILED", "launchctl bootstrap failed");
+  }
+}
+var LAUNCH_AGENT_LABEL, TIME, defaultLaunchctl;
+var init_schedule = __esm({
+  "src/intake/schedule.ts"() {
+    "use strict";
+    init_errors4();
+    LAUNCH_AGENT_LABEL = "click.atomai.ttobak.intake";
+    TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
+    defaultLaunchctl = (args) => new Promise((resolve3) => {
+      if (process.platform !== "darwin") {
+        resolve3(127);
+        return;
+      }
+      execFile3("/bin/launchctl", args, { timeout: 3e4 }, (error3) => {
+        const code = error3?.code;
+        resolve3(error3 ? typeof code === "number" ? code : 1 : 0);
+      });
+    });
   }
 });
 
@@ -28261,20 +28355,20 @@ var init_specreq = __esm({
 
 // src/intake/store.ts
 import {
-  chmodSync as chmodSync2,
+  chmodSync as chmodSync3,
   closeSync as closeSync2,
   constants as constants3,
   fstatSync as fstatSync2,
   fsyncSync as fsyncSync2,
   lstatSync as lstatSync3,
-  mkdirSync as mkdirSync4,
+  mkdirSync as mkdirSync5,
   openSync as openSync2,
   readFileSync as readFileSync6,
-  renameSync as renameSync3,
+  renameSync as renameSync4,
   unlinkSync as unlinkSync3,
   writeSync
 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 import { randomBytes as randomBytes3 } from "node:crypto";
 function createExclusive(path2, content) {
   let descriptor;
@@ -28354,11 +28448,11 @@ var init_store = __esm({
     IntakeStore = class {
       directory;
       constructor(home) {
-        this.directory = join6(home, ".ttobak", "intake");
+        this.directory = join7(home, ".ttobak", "intake");
       }
       ensureDirectory(path2) {
         try {
-          mkdirSync4(path2, { recursive: true, mode: 448 });
+          mkdirSync5(path2, { recursive: true, mode: 448 });
         } catch {
           throw new IntakeError("STORE_INVALID", "state directory could not be created");
         }
@@ -28367,7 +28461,7 @@ var init_store = __esm({
         if (!stat.isDirectory() || stat.isSymbolicLink() || uid !== void 0 && stat.uid !== uid) {
           throw new IntakeError("STORE_INVALID", "state directory has the wrong type or owner");
         }
-        if ((stat.mode & 63) !== 0) chmodSync2(path2, 448);
+        if ((stat.mode & 63) !== 0) chmodSync3(path2, 448);
       }
       path(relative) {
         for (const segment of relative) {
@@ -28375,7 +28469,7 @@ var init_store = __esm({
             throw new IntakeError("STORE_INVALID", "invalid state path");
           }
         }
-        return join6(this.directory, ...relative);
+        return join7(this.directory, ...relative);
       }
       read(...relative) {
         const path2 = this.path(relative);
@@ -28412,7 +28506,7 @@ var init_store = __esm({
           closeSync2(descriptor);
         }
         try {
-          renameSync3(temporary, path2);
+          renameSync4(temporary, path2);
         } catch (error3) {
           try {
             unlinkSync3(temporary);
@@ -29620,15 +29714,203 @@ var init_tasks = __esm({
   }
 });
 
+// src/intake/setup.ts
+var setup_exports = {};
+__export(setup_exports, {
+  DEFAULT_SERVERS: () => DEFAULT_SERVERS,
+  setup: () => setup
+});
+import { resolve } from "node:path";
+function parseArgs(args) {
+  const options = { yes: false, acceptUnknownSensitivity: false, autoAck: true, skip: /* @__PURE__ */ new Set() };
+  const seen = /* @__PURE__ */ new Set();
+  for (let index = 0; index < args.length; index++) {
+    const name = args[index];
+    if (name !== "--skip" && seen.has(name)) throw new IntakeError("INVALID_ARGUMENT", `${name} repeated`);
+    seen.add(name);
+    if (name === "--yes") options.yes = true;
+    else if (name === "--accept-unknown-sensitivity") options.acceptUnknownSensitivity = true;
+    else if (name === "--skip" || name === "--schedule" || name === "--auto-ack") {
+      const value = args[++index];
+      if (value === void 0 || value.startsWith("--")) throw new IntakeError("INVALID_ARGUMENT", `${name} needs a value`);
+      if (name === "--schedule") options.schedule = parseSchedule(value);
+      else if (name === "--auto-ack") {
+        if (value !== "on" && value !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
+        options.autoAck = value === "on";
+      } else {
+        if (!ORDER.includes(value)) throw new IntakeError("INVALID_ARGUMENT", "--skip takes a connector name");
+        options.skip.add(value);
+      }
+    } else throw new IntakeError("INVALID_ARGUMENT", `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
+  }
+  return options;
+}
+function countsLine(results) {
+  const parts = [];
+  const calendar2 = results.calendar;
+  if (calendar2) {
+    const counts = calendar2.counts;
+    parts.push(calendar2.result === "ok" ? `\uCE98\uB9B0\uB354 \uCD94\uAC00/\uBCC0\uACBD ${counts?.upserts ?? 0}\uAC74, \uC0AD\uC81C ${counts?.removals ?? 0}\uAC74` : `\uCE98\uB9B0\uB354 \uC2E4\uD328(${calendar2.result})`);
+  }
+  const sfdc2 = results.sfdc;
+  if (sfdc2) {
+    const counts = sfdc2.counts;
+    parts.push(sfdc2.result === "ok" ? `SFDC \uB2F4\uB2F9 \uACC4\uC815 ${counts?.assignments?.upserts ?? 0}\uAC74, \uD65C\uB3D9 ${counts?.tasks?.upserts ?? 0}\uAC74` : `SFDC \uC2E4\uD328(${sfdc2.result})`);
+  }
+  return parts.join(", ");
+}
+async function setup(args, environment, store) {
+  const options = parseArgs(args);
+  const ask = environment.prompt;
+  if (!options.yes && !ask) throw new IntakeError("INVALID_ARGUMENT", "interactive setup needs a terminal; pass --yes");
+  const say = (line) => environment.stderr?.(line);
+  const question = async (text3) => (await ask(text3)).trim();
+  const connectors = {};
+  let dryRun = {};
+  let synced = false;
+  let sync;
+  let schedule = "none";
+  const stop = (code, message) => {
+    if (code === "AUTH_EXPIRED_MIDWAY") say("Midway \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD130\uBBF8\uB110\uC5D0\uC11C `mwinit -o`\uB97C \uC2E4\uD589\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.");
+    return { ok: false, code, message, connectors, dryRun, synced, schedule, ...sync ? { sync } : {} };
+  };
+  const reports = listHosts(environment.home, parsePathList(environment.env.PATH));
+  for (const connector of ORDER) {
+    const label = LABELS[connector];
+    const server = DEFAULT_SERVERS[connector];
+    if (options.skip.has(connector)) {
+      connectors[connector] = { status: "skipped", code: "SKIPPED_BY_USER" };
+      say(`${label}: \uAC74\uB108\uB700 (--skip)`);
+      continue;
+    }
+    const candidates = HOSTS.filter((host2) => reports.find((report) => report.host === host2)?.servers.some((item) => item.name === server && item.transport === "stdio" && !item.disabled && item.commandFound));
+    if (!candidates.length) {
+      connectors[connector] = { status: "skipped", code: "SERVER_NOT_CONFIGURED" };
+      say(`${label}: ${server} \uC11C\uBC84\uB97C \uCC3E\uC9C0 \uBABB\uD574 \uAC74\uB108\uB701\uB2C8\uB2E4.`);
+      continue;
+    }
+    let accept = false;
+    if (connector === "calendar") {
+      accept = options.acceptUnknownSensitivity || !options.yes && yes(await question("\uCE98\uB9B0\uB354 \uC6D0\uBCF8\uC740 \uBE44\uACF5\uAC1C \uD45C\uC2DC\uB97C \uC54C\uB824\uC8FC\uC9C0 \uC54A\uC544 \uBE44\uACF5\uAC1C \uC77C\uC815\uB3C4 TTOBAK \uAC1C\uC778 \uCE98\uB9B0\uB354\uB85C \uB4E4\uC5B4\uAC11\uB2C8\uB2E4. \uB3D9\uC758\uD560\uAE4C\uC694? [y/N]"));
+      if (!accept) {
+        connectors[connector] = { status: "skipped", code: "SENSITIVITY_UNKNOWN" };
+        say(`${label}: \uBE44\uACF5\uAC1C \uC77C\uC815 \uD3EC\uD568\uC5D0 \uB3D9\uC758\uD558\uC9C0 \uC54A\uC544 \uAC74\uB108\uB701\uB2C8\uB2E4 (--accept-unknown-sensitivity \uD544\uC694).`);
+        continue;
+      }
+    }
+    let host = candidates[0];
+    if (candidates.length > 1 && !options.yes) {
+      const answer = await question(`${label}: ${server} \uC11C\uBC84\uAC00 \uC5EC\uB7EC \uD638\uC2A4\uD2B8\uC5D0 \uC788\uC2B5\uB2C8\uB2E4. ${candidates.map((item, index) => `${index + 1}) ${item}`).join(" ")} \uC911 \uBC88\uD638\uB97C \uACE0\uB974\uC138\uC694 [1]:`);
+      host = candidates[Number(answer) - 1] ?? candidates[0];
+    }
+    try {
+      await selectConnector(connector, {
+        host,
+        server,
+        autoAck: options.autoAck,
+        acceptUnknownSensitivity: accept,
+        identityAuthFatal: true
+      }, environment, store);
+      connectors[connector] = { status: "selected", server, host };
+      say(`${label}: ${host}\uC758 ${server} \uD655\uC778 \uC644\uB8CC`);
+    } catch (error3) {
+      const code = intakeCode(error3);
+      if (code === "AUTH_EXPIRED_MIDWAY") return stop(code, `${server} reported an authentication failure`);
+      connectors[connector] = { status: "skipped", code };
+      say(`${label}: ${server} \uD655\uC778 \uC2E4\uD328(${code}), \uAC74\uB108\uB701\uB2C8\uB2E4.`);
+    }
+  }
+  const selected = SYNC_CONNECTORS.filter((id) => connectors[id]?.status === "selected");
+  if (selected.length) {
+    say("\uAC00\uC838\uC62C \uD56D\uBAA9 \uC218\uB97C \uD655\uC778\uD569\uB2C8\uB2E4 (\uB4DC\uB77C\uC774\uB7F0)...");
+    const dry = await runConnectors({ dryRun: true, noninteractive: true, only: selected }, environment, store);
+    dryRun = dry.results;
+    say(`\uB4DC\uB77C\uC774\uB7F0: ${countsLine(dry.results)}`);
+    if (dry.code === "AUTH_EXPIRED_MIDWAY") return stop(dry.code, dry.message ?? "");
+    if (dry.ok && (options.yes || yes(await question("\uCCAB \uC218\uC9D1\uC744 \uC2E4\uD589\uD560\uAE4C\uC694? [y/N]")))) {
+      say("\uCCAB \uC218\uC9D1\uC744 \uC2E4\uD589\uD569\uB2C8\uB2E4...");
+      const real = await runConnectors({ dryRun: false, noninteractive: false, only: selected }, environment, store);
+      sync = real.results;
+      synced = real.ok;
+      say(`\uC218\uC9D1 \uACB0\uACFC: ${countsLine(real.results)}`);
+      if (real.code === "AUTH_EXPIRED_MIDWAY") return stop(real.code, real.message ?? "");
+    }
+  }
+  let wanted = options.schedule;
+  if (!wanted && !options.yes) {
+    const answer = await question("\uC790\uB3D9 \uC218\uC9D1 \uC77C\uC815\uC744 \uC124\uC815\uD560\uAE4C\uC694? hourly, daily@HH:MM, twice-daily@HH:MM,HH:MM \uB610\uB294 off (\uBE48 \uCE78: \uAC74\uB108\uB700):");
+    if (answer) {
+      try {
+        wanted = parseSchedule(answer);
+      } catch {
+        say("\uC77C\uC815 \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC544 \uC77C\uC815 \uC124\uC815\uC744 \uAC74\uB108\uB701\uB2C8\uB2E4.");
+      }
+    }
+  }
+  if (wanted) {
+    const uid = environment.uid ?? process.getuid?.();
+    const cliPath = environment.cliPath ?? (process.argv[1] ? resolve(process.argv[1]) : "");
+    if (uid === void 0) return stop("SCHEDULE_FAILED", "no user ID for launchctl");
+    try {
+      await applySchedule(wanted, {
+        home: environment.home,
+        uid,
+        nodePath: environment.nodePath ?? process.execPath,
+        cliPath,
+        launchctl: environment.launchctl ?? defaultLaunchctl
+      });
+    } catch (error3) {
+      say("\uC790\uB3D9 \uC218\uC9D1 \uC77C\uC815\uC744 \uC124\uC815\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      return stop(intakeCode(error3), error3 instanceof IntakeError ? error3.message : "schedule failed");
+    }
+    schedule = scheduleLabel(wanted);
+    say(wanted.kind === "off" ? "\uC790\uB3D9 \uC218\uC9D1 \uC77C\uC815\uC744 \uC81C\uAC70\uD588\uC2B5\uB2C8\uB2E4." : `\uC790\uB3D9 \uC218\uC9D1 \uC77C\uC815\uC744 \uC124\uC815\uD588\uC2B5\uB2C8\uB2E4: ${schedule}`);
+  }
+  return { ok: true, connectors, dryRun, synced, schedule, ...sync ? { sync } : {} };
+}
+var ORDER, DEFAULT_SERVERS, LABELS, yes;
+var init_setup = __esm({
+  "src/intake/setup.ts"() {
+    "use strict";
+    init_errors4();
+    init_hosts();
+    init_run();
+    init_schedule();
+    ORDER = ["calendar", "sfdc", "meetings", "specreq", "slack"];
+    DEFAULT_SERVERS = {
+      calendar: "aws-outlook-mcp",
+      sfdc: "aws-sentral-mcp",
+      meetings: "amazon-meetings-mcp",
+      specreq: "spec-req-mcp",
+      slack: "slack-mcp"
+    };
+    LABELS = {
+      calendar: "\uCE98\uB9B0\uB354",
+      sfdc: "SFDC",
+      meetings: "\uD68C\uC758",
+      specreq: "SpecReq",
+      slack: "Slack"
+    };
+    yes = (answer) => /^(y|yes|예|네|ㅇ)$/i.test(answer.trim());
+  }
+});
+
 // src/intake/run.ts
 var run_exports = {};
 __export(run_exports, {
+  SYNC_CONNECTORS: () => SYNC_CONNECTORS,
   accountScope: () => accountScope,
+  calendarRun: () => calendarRun,
   defaultEnvironment: () => defaultEnvironment,
+  runConnectors: () => runConnectors,
   runIntake: () => runIntake,
+  selectConnector: () => selectConnector,
+  sfdcRun: () => sfdcRun,
   tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
+import { resolve as resolve2 } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
 function accountScope(apiUrl, subject) {
   return createHash7("sha256").update(`${apiUrl.replace(/\/+$/, "")}
@@ -29689,13 +29971,9 @@ async function openSession(environment, host, server, pathDirs, tools) {
   }
   return session;
 }
-async function selectTaskConnector(connector, args, environment, store) {
-  const options = flags(args, connector === "specreq" ? { "--host": "value", "--server": "value", "--auto-ack": "value" } : { "--host": "value", "--server": "value" });
-  const host = options["--host"];
-  const server = options["--server"];
-  if (!HOSTS.includes(host) || typeof server !== "string") throw new IntakeError("INVALID_ARGUMENT", "--host and --server are required");
-  const autoAckValue = options["--auto-ack"] ?? "on";
-  if (autoAckValue !== "on" && autoAckValue !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
+async function selectTaskConnector(connector, request2, environment, store) {
+  const { host, server } = request2;
+  const autoAck = request2.autoAck !== false;
   const pathDirs = parsePathList(environment.env.PATH);
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: allowedToolNames(connector) });
@@ -29712,12 +29990,15 @@ async function selectTaskConnector(connector, args, environment, store) {
   } finally {
     await session.close();
   }
+  if (request2.identityAuthFatal && identity && "identityError" in identity && identity.identityError === "AUTH_EXPIRED_MIDWAY") {
+    throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${server} reported an authentication failure`);
+  }
   const previous = store.read("selection.json") ?? { version: 1 };
   const base = { host, server, pathDirs, selectedAt: environment.now().toISOString() };
   const next = {
     ...previous,
     version: 1,
-    [connector]: connector === "specreq" ? { ...base, autoAck: autoAckValue === "on" } : base
+    [connector]: connector === "specreq" ? { ...base, autoAck } : base
   };
   store.write(next, "selection.json");
   return {
@@ -29726,19 +30007,36 @@ async function selectTaskConnector(connector, args, environment, store) {
     host,
     server,
     pathDirectories: pathDirs.length,
-    ...connector === "specreq" ? { autoAck: autoAckValue === "on", ...identity } : {}
+    ...connector === "specreq" ? { autoAck, ...identity } : {}
   };
 }
 async function select(args, environment, store) {
-  if (isTaskConnector(args[0])) return selectTaskConnector(args[0], args.slice(1), environment, store);
   const connector = args[0];
-  if (connector !== "calendar" && connector !== "sfdc") {
+  if (!isTaskConnector(connector) && connector !== "calendar" && connector !== "sfdc") {
     throw new IntakeError("INVALID_ARGUMENT", "connector must be calendar, sfdc, meetings, specreq or slack");
   }
-  const options = flags(args.slice(1), connector === "calendar" ? { "--host": "value", "--server": "value", "--accept-unknown-sensitivity": "flag" } : { "--host": "value", "--server": "value" });
-  const host = options["--host"];
-  const server = options["--server"];
+  const allowed = { "--host": "value", "--server": "value" };
+  if (connector === "specreq") allowed["--auto-ack"] = "value";
+  if (connector === "calendar") allowed["--accept-unknown-sensitivity"] = "flag";
+  const options = flags(args.slice(1), allowed);
+  const autoAckValue = options["--auto-ack"] ?? "on";
+  if (autoAckValue !== "on" && autoAckValue !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
+  return selectConnector(
+    connector,
+    {
+      host: options["--host"],
+      server: options["--server"],
+      autoAck: autoAckValue === "on",
+      acceptUnknownSensitivity: options["--accept-unknown-sensitivity"] === true
+    },
+    environment,
+    store
+  );
+}
+async function selectConnector(connector, request2, environment, store) {
+  const { host, server } = request2;
   if (!HOSTS.includes(host) || typeof server !== "string") throw new IntakeError("INVALID_ARGUMENT", "--host and --server are required");
+  if (isTaskConnector(connector)) return selectTaskConnector(connector, request2, environment, store);
   const pathDirs = parsePathList(environment.env.PATH);
   const session = await openSession(
     environment,
@@ -29773,7 +30071,7 @@ async function select(args, environment, store) {
       sourceId,
       pathDirs,
       selectedAt: environment.now().toISOString(),
-      ...options["--accept-unknown-sensitivity"] ? { acceptUnknownSensitivity: true } : {}
+      ...request2.acceptUnknownSensitivity ? { acceptUnknownSensitivity: true } : {}
     },
     ttobak
   };
@@ -29832,6 +30130,15 @@ async function calendar(args, environment, store) {
   const options = flags(args, { "--dry-run": "flag", "--preview": "flag", "--noninteractive": "flag", "--reconcile": "flag" });
   const dryRun = options["--dry-run"] === true;
   if (options["--preview"] && !dryRun) throw new IntakeError("INVALID_ARGUMENT", "--preview needs --dry-run");
+  return calendarRun({
+    dryRun,
+    preview: options["--preview"] === true,
+    noninteractive: options["--noninteractive"] === true,
+    reconcile: options["--reconcile"] === true
+  }, environment, store);
+}
+async function calendarRun(options, environment, store, signedIn) {
+  const { dryRun } = options;
   const selection = store.read("selection.json");
   const selected = selection?.calendar;
   if (!selected) throw new IntakeError("NOT_SELECTED", 'run "intake select calendar" first');
@@ -29841,7 +30148,7 @@ async function calendar(args, environment, store) {
   let status = {};
   try {
     status = store.read("status.json") ?? {};
-    let { api, scope, me } = await signIn(selection, environment, dryRun, options["--noninteractive"] === true);
+    let { api, scope, me } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
@@ -29855,7 +30162,7 @@ async function calendar(args, environment, store) {
       zone: environment.zone,
       now: startedAt,
       dryRun,
-      reconcile: options["--reconcile"] === true,
+      reconcile: options.reconcile === true,
       acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
       source: { view: async (request2) => resultJson(await active.call(CALENDAR_TOOL.name, request2), CALENDAR_TOOL.name) }
     });
@@ -29876,7 +30183,7 @@ async function calendar(args, environment, store) {
       else {
         const opened = await openTaskSessions(environment, selection);
         try {
-          const run = await runTasks({
+          const run2 = await runTasks({
             store,
             api,
             scope,
@@ -29890,9 +30197,9 @@ async function calendar(args, environment, store) {
             calendar: { upserted: result.upserted ?? [] }
           });
           tasks = {
-            result: run.result,
-            counts: run.counts,
-            ...Object.keys(run.failures).length ? { failures: run.failures } : {}
+            result: run2.result,
+            counts: run2.counts,
+            ...Object.keys(run2.failures).length ? { failures: run2.failures } : {}
           };
         } catch (error3) {
           tasks = { result: intakeCode(error3) };
@@ -29912,7 +30219,7 @@ async function calendar(args, environment, store) {
       dryRun,
       counts: result.counts,
       ...tasks ? { tasks } : {},
-      ...options["--preview"] ? { preview: result.preview } : {}
+      ...options.preview ? { preview: result.preview } : {}
     };
   } catch (error3) {
     status.calendar = {
@@ -29934,7 +30241,14 @@ async function calendar(args, environment, store) {
 }
 async function sfdc(args, environment, store) {
   const options = flags(args, { "--dry-run": "flag", "--noninteractive": "flag", "--reconcile": "flag" });
-  const dryRun = options["--dry-run"] === true;
+  return sfdcRun({
+    dryRun: options["--dry-run"] === true,
+    noninteractive: options["--noninteractive"] === true,
+    reconcile: options["--reconcile"] === true
+  }, environment, store);
+}
+async function sfdcRun(options, environment, store, signedIn) {
+  const { dryRun } = options;
   const selection = store.read("selection.json");
   const selected = selection?.sfdc;
   if (!selected) throw new IntakeError("NOT_SELECTED", 'run "intake select sfdc" first');
@@ -29948,7 +30262,7 @@ async function sfdc(args, environment, store) {
   let previous;
   try {
     previous = store.read("status.json")?.sfdc;
-    let { api, scope } = await signIn(selection, environment, dryRun, options["--noninteractive"] === true);
+    let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
     const active = session;
@@ -29959,7 +30273,7 @@ async function sfdc(args, environment, store) {
       scope,
       now: startedAt,
       dryRun,
-      reconcile: options["--reconcile"] === true,
+      reconcile: options.reconcile === true,
       source: { call: async (tool, request2) => resultJson(await active.call(tool, request2), tool) }
     });
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
@@ -29991,6 +30305,50 @@ async function sfdc(args, environment, store) {
     release();
   }
 }
+async function runConnectors(options, environment, store) {
+  const selection = store.read("selection.json");
+  const wanted = options.only ?? SYNC_CONNECTORS.filter((id) => selection?.[id]);
+  const missing = wanted.find((id) => !selection?.[id]);
+  if (!wanted.length || missing) throw new IntakeError("NOT_SELECTED", `run "intake select ${missing ?? "calendar"}" or "intake setup" first`);
+  let pending;
+  const signedIn = () => pending ??= signIn(selection, environment, options.dryRun, options.noninteractive);
+  const results = {};
+  let code;
+  for (const id of SYNC_CONNECTORS.filter((item) => wanted.includes(item))) {
+    try {
+      const run2 = id === "calendar" ? calendarRun(options, environment, store, signedIn) : sfdcRun(options, environment, store, signedIn);
+      const { ok: _ok, connector: _connector, dryRun: _dryRun, ...rest } = await run2;
+      results[id] = { result: "ok", ...rest };
+    } catch (error3) {
+      const failure2 = intakeCode(error3);
+      results[id] = { result: failure2 };
+      code ??= "PARTIAL_FAILURE";
+      if (failure2 === "AUTH_EXPIRED_MIDWAY") {
+        code = failure2;
+        break;
+      }
+    }
+  }
+  return code ? {
+    ok: false,
+    code,
+    message: code === "AUTH_EXPIRED_MIDWAY" ? "run mwinit -o, then retry" : "a connector failed",
+    results
+  } : { ok: true, results };
+}
+async function run(args, environment, store) {
+  const options = flags(args, { "--dry-run": "flag", "--noninteractive": "flag", "--only": "value" });
+  let only;
+  if (typeof options["--only"] === "string") {
+    only = [...new Set(options["--only"].split(","))];
+    if (only.some((id) => !SYNC_CONNECTORS.includes(id))) throw new IntakeError("INVALID_ARGUMENT", "--only takes calendar and/or sfdc");
+  }
+  return runConnectors({
+    dryRun: options["--dry-run"] === true,
+    noninteractive: options["--noninteractive"] === true,
+    ...only ? { only } : {}
+  }, environment, store);
+}
 async function runIntake(args, environment) {
   const store = new IntakeStore(environment.home);
   try {
@@ -30001,7 +30359,11 @@ async function runIntake(args, environment) {
     } else if (command === "select") output = await select(rest, environment, store);
     else if (command === "calendar") output = await calendar(rest, environment, store);
     else if (command === "sfdc") output = await sfdc(rest, environment, store);
-    else if (command === "status" && rest.length === 0) {
+    else if (command === "run" || command === "setup") {
+      const result = command === "run" ? await run(rest, environment, store) : await (await Promise.resolve().then(() => (init_setup(), setup_exports))).setup(rest, environment, store);
+      environment.stdout(JSON.stringify(result));
+      return result.ok ? 0 : 2;
+    } else if (command === "status" && rest.length === 0) {
       const selection = store.read("selection.json");
       const listed = {};
       for (const id of ["calendar", "sfdc", "meetings", "specreq", "slack"]) {
@@ -30032,10 +30394,24 @@ function defaultEnvironment() {
     env: process.env,
     now: () => /* @__PURE__ */ new Date(),
     zone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-    stdout: (line) => process.stdout.write(line + "\n")
+    stdout: (line) => process.stdout.write(line + "\n"),
+    stderr: (line) => process.stderr.write(line + "\n"),
+    ...process.stdin.isTTY ? { prompt: terminalPrompt } : {},
+    launchctl: defaultLaunchctl,
+    ...process.getuid ? { uid: process.getuid() } : {},
+    nodePath: process.execPath,
+    ...process.argv[1] ? { cliPath: resolve2(process.argv[1]) } : {}
   };
 }
-var USAGE;
+async function terminalPrompt(question) {
+  const reader = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return await reader.question(question + " ");
+  } finally {
+    reader.close();
+  }
+}
+var USAGE, SYNC_CONNECTORS;
 var init_run = __esm({
   "src/intake/run.ts"() {
     "use strict";
@@ -30046,6 +30422,7 @@ var init_run = __esm({
     init_errors4();
     init_hosts();
     init_mcp_client();
+    init_schedule();
     init_sfdc();
     init_specreq();
     init_store();
@@ -30058,7 +30435,11 @@ var init_run = __esm({
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
     (a synced run also runs the SpecReq task step when meetings and specreq are selected)
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
+  ttobak-mcp intake setup [--yes] [--accept-unknown-sensitivity] [--auto-ack on|off] [--skip <connector>]...
+    [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
+  ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
   ttobak-mcp intake status`;
+    SYNC_CONNECTORS = ["calendar", "sfdc"];
   }
 });
 
@@ -30789,12 +31170,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve3) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve();
+        resolve3();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve3);
       }
     });
   }
@@ -30863,7 +31244,7 @@ function requestAuthJson(url2, body) {
   if (url2.protocol !== "https:" || url2.username || url2.password || url2.hash) {
     return Promise.reject(new Error("Authentication endpoint must use HTTPS"));
   }
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve3, reject) => {
     let settled = false;
     let timer;
     const data = body?.toString();
@@ -30872,7 +31253,7 @@ function requestAuthJson(url2, body) {
       settled = true;
       clearTimeout(timer);
       if (error3) reject(error3);
-      else resolve(value);
+      else resolve3(value);
     };
     const req = httpsRequest(url2, {
       method: body ? "POST" : "GET",
@@ -31251,8 +31632,8 @@ var CognitoAuth = class {
       let listening = false;
       let timer;
       let resolveCode, rejectCode;
-      const code = new Promise((resolve, reject) => {
-        resolveCode = resolve;
+      const code = new Promise((resolve3, reject) => {
+        resolveCode = resolve3;
         rejectCode = reject;
       });
       void code.catch(() => {
@@ -31897,16 +32278,16 @@ var Recorder = class {
         pidSaved = e;
       }
     }
-    active.exited = new Promise((resolve) => {
+    active.exited = new Promise((resolve3) => {
       child.on("error", (err) => {
         active.stderr += `
 ${err.message}`;
         active.exitCode = -1;
-        resolve(-1);
+        resolve3(-1);
       });
       child.on("exit", (code) => {
         active.exitCode = code;
-        resolve(code);
+        resolve3(code);
       });
     });
     child.stderr?.on("data", (chunk) => {
@@ -31916,7 +32297,7 @@ ${err.message}`;
     });
     const early = await Promise.race([
       active.exited.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), this.startupGraceMs))
+      new Promise((resolve3) => setTimeout(() => resolve3(false), this.startupGraceMs))
     ]);
     if (early) {
       rmSync(info.file, { force: true });
@@ -32094,18 +32475,18 @@ ${err.message}`;
   async waitExit(active, ms) {
     return Promise.race([
       active.exited.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), ms))
+      new Promise((resolve3) => setTimeout(() => resolve3(false), ms))
     ]);
   }
   run(args) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve3, reject) => {
       const child = spawn(this.ffmpegPath, args, { stdio: ["ignore", "ignore", "pipe"] });
       let stderr = "";
       child.stderr?.on("data", (chunk) => {
         stderr = (stderr + chunk.toString()).slice(-64 * 1024);
       });
       child.on("error", (err) => reject(new Error(`${err.message}. Install ffmpeg (brew install ffmpeg) or set TTOBAK_FFMPEG.`)));
-      child.on("close", (code) => resolve({ code, stderr }));
+      child.on("close", (code) => resolve3({ code, stderr }));
     });
   }
   /** Reads a sidecar as a finalized recording, or null when it is not one. */
@@ -32198,7 +32579,7 @@ function sendAppRequest(request2, options = {}) {
   const socketPath = options.socketPath ?? defaultAppSocketPath();
   const id = randomUUID2();
   const line = JSON.stringify({ v: 1, id, ...request2 }) + "\n";
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve3, reject) => {
     const socket = createConnection(socketPath);
     const chunks = [];
     let size = 0;
@@ -32250,7 +32631,7 @@ function sendAppRequest(request2, options = {}) {
         return;
       }
       const error3 = reply.error;
-      resolve({
+      resolve3({
         ok: reply.ok,
         data: reply.data && typeof reply.data === "object" ? reply.data : void 0,
         error: reply.ok ? void 0 : {
@@ -33340,7 +33721,7 @@ async function serveStdio(server, recorder, options = {}) {
       return;
     }
     exiting = true;
-    const grace = new Promise((resolve) => setTimeout(resolve, graceMs).unref());
+    const grace = new Promise((resolve3) => setTimeout(resolve3, graceMs).unref());
     void Promise.race([settleRecordingWork(), grace]).then(() => recorder.shutdown()).catch((err) => console.error("Recorder shutdown failed:", err instanceof Error ? err.message : err)).finally(() => exit(0));
   };
   if (options.signals ?? true) {
