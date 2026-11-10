@@ -332,7 +332,7 @@ reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A c
 Person edges carry the Korean role label (dotted when auto), and a note gives
 the direct member count because only connected members are drawn.
 
-A **people** panel follows the flow (ADR-065, `components/account/AccountPeople.tsx`,
+A **people** panel follows the flow (ADR-067, `components/account/AccountPeople.tsx`,
 copy in `src/lib/accountPeople.ts`). It lists resolved members and contacts with
 meeting counts and a role summary, then unresolved names with their meeting
 count. "Link" opens a member/contact picker fed by the speaker-team and
