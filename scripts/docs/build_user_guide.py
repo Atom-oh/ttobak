@@ -9,7 +9,14 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'docs/user-guide'
-ASSETS = ('index.html', 'style.css', 'guide.js')
+# Keep this explicit: internal reference/review files and unreviewed screens
+# must never enter the public artifact, even when present beside the guide.
+ASSETS = (
+    'index.html', 'style.css', 'guide.js', 'favicon.svg',
+    'screen-home.webp', 'screen-assistant.webp', 'screen-accounts.webp',
+    'screen-meeting.webp', 'screen-upload.webp', 'screen-library.webp',
+    'screen-research.webp', 'screen-settings.webp',
+)
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'none'; connect-src 'none'")
 

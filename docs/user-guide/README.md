@@ -19,8 +19,8 @@ Open the local server in a browser. Navigation works without JavaScript;
 JavaScript adds section search and printing. Use the browser print dialog to
 save the complete guide as PDF. Search filters navigation, never printable content.
 
-The Pages workflow validates local assets and anchors, then copies only the three
-public site files into its artifact. It never publishes the repository's internal
+The Pages workflow validates local assets and anchors, then copies only the explicit
+public asset allowlist into its artifact. It never publishes the repository's internal
 reference archive. Enable GitHub Pages with the Actions build source. Main-branch
 pushes deploy automatically after merge, including unrelated changes so that
 superseded builds always have a replacement run;
@@ -57,3 +57,8 @@ Verify content against these sources when updating:
 Do not imply universal pricing coverage, arbitrary manual requirement entry,
 editor access to owner-only simulation, automatic sharing through classification,
 or that upload/preview/indexing alone proves AI source acceptance.
+
+The 2026-11-10 navigation foundation adds 28 chapter entry points, reviewed local
+fictional screenshots, body search, themes and mobile contents. Detailed workflow
+chapters are delivered by the dependent content PRs. Internal plans, evidence and
+review reports are excluded from the public asset allowlist.
