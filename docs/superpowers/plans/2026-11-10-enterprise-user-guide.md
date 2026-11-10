@@ -37,29 +37,29 @@ fixtures; no application behavior changes.
 
 ### 1. Inventory and walkthrough
 
-- [ ] Record current menu/detail/settings coverage and consequential source facts
+- [x] Record current menu/detail/settings coverage and consequential source facts
   in `docs/user-guide/README.md`.
-- [ ] Preview each menu with fictional fixtures and record limitations.
+- [x] Preview each menu with fictional fixtures and record limitations.
 
 ### 2. Product manual and navigation
 
-- [ ] Expand `docs/user-guide/index.html` with all menu workflows, chat/model
+- [x] Expand `docs/user-guide/index.html` with all menu workflows, chat/model
   mapping, permissions, mechanisms, examples and recovery.
-- [ ] Update `style.css` and `guide.js` for desktop/mobile contents, full-text
+- [x] Update `style.css` and `guide.js` for desktop/mobile contents, full-text
   search, themes, reading position and complete printing.
-- [ ] Preserve/extend the explicit packager allowlist only for reviewed images;
+- [x] Preserve/extend the explicit packager allowlist only for reviewed images;
   test unpublished paths and symlink rejection if the boundary changes.
 
 ### 3. Verification and content gate
 
-- [ ] Run the guide packager, docs unit checks and JavaScript syntax check.
-- [ ] Check real browser layouts, keyboard/search/theme behavior, anchors,
+- [x] Run the guide packager, docs unit checks and JavaScript syntax check.
+- [x] Check real browser layouts, keyboard/search/theme behavior, anchors,
   print media, console and image readability.
-- [ ] Perform a separate rubric review and record its findings and score.
+- [x] Perform a separate rubric review and record its findings and score.
 
 ### 4. Publish and confirm
 
-- [ ] Commit/push only guide-owned paths and create a concrete PR.
+- [x] Commit/push only guide-owned paths and create a concrete PR.
 - [ ] Check current-head required CI/review and resolve substantive findings.
 - [ ] Publish through the existing Pages workflow once its delivery gates pass.
 - [ ] Confirm the public revision and guide interactions.
@@ -76,5 +76,6 @@ Task 1: source inspection and 26-route fictional walkthrough complete.
 Task 2: full manuscript and navigation implementation complete in scratch;
 meeting workflows delivered in PR #751; full operations content now included.
 Task 3: foundation checks passed (9 docs cases, 30 browser checks, 90/90 rubric).
-Task 4: foundation PR #750 open; binary illustrations replaced with reviewable SVG
-diagrams after input rejection. Latest-head CI review pending.
+Task 4: foundation #750, meeting workflows #751, complete manual #752; source
+evidence now prepared. Binary inputs were replaced with reviewable SVG diagrams
+after initial rejection. Required latest-head reviews and publication are pending.

@@ -1,0 +1,142 @@
+{
+  "date": "2026-11-10",
+  "method": "Local Python Playwright with Chromium; not Playwright MCP",
+  "scope": "Complete 28-chapter product manual at e3eda7b7; fictional local UI only",
+  "limitations": [
+    "No production login or customer data",
+    "No macOS capture or Outlook provider acceptance"
+  ],
+  "reader": {
+    "checks": [
+      {
+        "name": "28 readable chapters",
+        "pass": true
+      },
+      {
+        "name": "all local anchors resolve",
+        "pass": true
+      },
+      {
+        "name": "JavaScript search ready",
+        "pass": true
+      },
+      {
+        "name": "desktop no page overflow",
+        "pass": true
+      },
+      {
+        "name": "4k no page overflow",
+        "pass": true
+      },
+      {
+        "name": "tablet no page overflow",
+        "pass": true
+      },
+      {
+        "name": "mobile no page overflow",
+        "pass": true
+      },
+      {
+        "name": "mobile-small no page overflow",
+        "pass": true
+      },
+      {
+        "name": "keyboard shortcut focuses search",
+        "pass": true
+      },
+      {
+        "name": "body text searchable",
+        "pass": true
+      },
+      {
+        "name": "search preserves full guide",
+        "pass": true
+      },
+      {
+        "name": "query renders as text",
+        "pass": true
+      },
+      {
+        "name": "empty result explains recovery",
+        "pass": true
+      },
+      {
+        "name": "cleared result hidden",
+        "pass": true
+      },
+      {
+        "name": "dark theme selected",
+        "pass": true
+      },
+      {
+        "name": "theme persists",
+        "pass": true
+      },
+      {
+        "name": "active chapter reflected",
+        "pass": true
+      },
+      {
+        "name": "current chapter subcontents",
+        "pass": true
+      },
+      {
+        "name": "mobile contents initially collapsed",
+        "pass": true
+      },
+      {
+        "name": "mobile contents opens",
+        "pass": true
+      },
+      {
+        "name": "Escape closes and restores focus",
+        "pass": true
+      },
+      {
+        "name": "mobile chapter selection closes contents",
+        "pass": true
+      },
+      {
+        "name": "mobile search Enter exposes results",
+        "pass": true
+      },
+      {
+        "name": "all chapters printable after search",
+        "pass": true
+      },
+      {
+        "name": "print hides search/navigation",
+        "pass": true
+      },
+      {
+        "name": "all images loaded",
+        "pass": true
+      },
+      {
+        "name": "no-JavaScript contents and 28 chapters",
+        "pass": true
+      },
+      {
+        "name": "no-JavaScript complete print",
+        "pass": true
+      },
+      {
+        "name": "no console/page errors",
+        "pass": true
+      },
+      {
+        "name": "no 404 or HTTP errors",
+        "pass": true
+      }
+    ],
+    "errors": [],
+    "failedRequests": [],
+    "screens": [
+      "desktop.png",
+      "4k.png",
+      "tablet.png",
+      "mobile.png",
+      "mobile-small.png"
+    ]
+  }
+}

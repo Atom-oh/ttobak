@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-10 |
-| Iteration | 3: complete enterprise product manual |
+| Iteration | 4: complete manual and source evidence |
 | Scope | All 28 chapters: every primary menu, account tabs, contacts/people, documents/library, research/news/Tech, dictionary, billing, settings/admin, devices, security and recovery |
 | Reviewer | Codex inline, separate rubric pass; no independent content-review subagent was invoked |
 | Rubric | Installed AWS Content Plugin `agents/content-review-agent.md` |
@@ -63,6 +63,9 @@ so no deduction applies. Informational scope boundaries do not count as defects.
 - Nine documentation unit checks passed, including seven public-packager cases.
   Reviewed image references are copied; unreviewed images and symlinks are rejected.
   Local-only CSP, anchor integrity and existing-output preservation remain checked.
+- The final artifact contains 139 validated anchors and 12 explicit public assets.
+  All 30 reader checks passed; structured evidence is recorded in
+  `results/TTOBAK_User_Guide_Browser_Checks.json` and is not published.
 - `check_docs.py` and JavaScript syntax validation passed. No runtime application,
   AWS configuration or workflow/review-gate code changed.
 
@@ -76,7 +79,7 @@ None outstanding.
 |---|---|---|
 | Existing 16 guide workflows | INCLUDED | Preserved while improving navigation and visuals |
 | Current menu workflows | INCLUDED | All 28 chapters, including conditional Billing and Mac-only settings |
-| Internal source inventory | PARTIAL | Full path/model/walkthrough evidence follows in the evidence PR |
+| Internal source inventory | INCLUDED | Verified menu/component/service paths, model defaults and walkthrough limits |
 | Fictional UI orientation | INCLUDED | Eight reviewed SVG menu illustrations |
 | Mobile, search, themes, print | INCLUDED | Browser-verified navigation foundation |
 | Production and native acceptance | OMITTED deliberately | No production login, customer records or macOS capture was performed |
@@ -85,8 +88,8 @@ None outstanding.
 
 1. Public illustrations contain generic menu labels. Public assets never contain
    the internal fictional walkthrough evidence archive.
-2. The full product manual is now included. Its expanded internal source inventory
-   follows separately under the existing 95,000-byte AI review limit. Source
+2. The full product manual and internal source inventory are included. Four
+   dependent PRs preserve the existing 95,000-byte review limit. Source
    configuration and local inspection are not production/native acceptance.
 
 ## Revision checklist and next steps
@@ -96,4 +99,5 @@ None outstanding.
 - [x] Record review scale, limitations and source omissions honestly.
 - [ ] Obtain required latest-head CI review before merging the complete manual.
 - [x] Complete and re-review the 28-chapter content expansion.
-- [ ] Add the full internal source/walkthrough evidence inventory.
+- [x] Add the full internal source/walkthrough evidence inventory.
+- [ ] Confirm latest-main Pages publication and public interactions.
