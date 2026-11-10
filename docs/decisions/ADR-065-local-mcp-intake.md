@@ -3,7 +3,7 @@
 - Status: Accepted; Phase 1 (calendar runner, CLI only) implemented. Calendar
   acceptance on the user's Mac is pending (see the runbook).
 - Decision date: 2026-11-09.
-- Design: [local MCP intake design](../superpowers/specs/2026-11-09-local-mcp-intake-design.md).
+- Runbook: [local MCP intake](../runbooks/local-mcp-intake.md).
 - Related: ADR-045 (stdio-only calendar tools), ADR-046 (Mac control path).
 
 ## Context
