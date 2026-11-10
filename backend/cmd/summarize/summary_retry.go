@@ -41,7 +41,7 @@ func resumeSummaryRetry(ctx context.Context, meeting *model.Meeting, store summa
 	if current.Status != model.StatusSummarizing || !current.SummaryRetryPending || current.SummarizeRetryClaimedAt != claim {
 		return release(nil)
 	}
-	err = run(ctx, current, buildLinkedMeetingContext(ctx, current))
+	err = run(ctx, current, "")
 	if err != nil {
 		return release(err)
 	}

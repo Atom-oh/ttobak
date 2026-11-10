@@ -7,6 +7,10 @@ Partially superseded by [ADR-059](ADR-059-owner-approved-account-sharing.md):
 explicit owner Account disclosure may share current output without regeneration.
 Source provenance and direct-email/pending grant policy remain unchanged.
 
+Partially superseded by [ADR-070](ADR-070-shareable-default-note-provenance.md):
+linked predecessors are no longer note evidence, and human content/liveSummary
+edits keep `safe` provenance. Sticky `private`/`unknown` and the owner reset remain.
+
 Amended 2026-11-06 (see the amendment below): account-team publication now
 shares current derived content with every member; protected membership views
 no longer withhold it.
