@@ -139,10 +139,10 @@ func (f *fakeUsers) ScanMergeUserRowsSegmentPage(_ context.Context, account stri
 func (f *fakeUsers) MoveSpecReqTaskRowForMerge(_ context.Context, job *model.AccountMergeJob, row repository.MergeUserRow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if job == nil || job.LeaseOwner != cliOwner {
+	if job == nil || (job.LeaseOwner != cliOwner && job.PostMergeOperator == "") {
 		return errors.New("task moved without the CLI lease")
 	}
-	f.moves = append(f.moves, "task:"+job.SourceAccountID+">"+job.TargetAccountID)
+	f.moves = append(f.moves, "task:"+job.SourceAccountID+">"+job.TargetAccountID+postMergeTag(job))
 	if f.fenceTask != nil {
 		return f.fenceTask
 	}
@@ -151,22 +151,29 @@ func (f *fakeUsers) MoveSpecReqTaskRowForMerge(_ context.Context, job *model.Acc
 func (f *fakeUsers) MoveCalendarEventRowForMerge(_ context.Context, job *model.AccountMergeJob, row repository.MergeUserRow, ciphertext string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if job == nil || job.LeaseOwner != cliOwner {
+	if job == nil || (job.LeaseOwner != cliOwner && job.PostMergeOperator == "") {
 		return errors.New("event moved without the CLI lease")
 	}
-	f.moves = append(f.moves, "event:"+job.SourceAccountID+">"+job.TargetAccountID)
+	f.moves = append(f.moves, "event:"+job.SourceAccountID+">"+job.TargetAccountID+postMergeTag(job))
 	f.cipher = ciphertext
 	return nil
 }
 func (f *fakeUsers) MoveMeetingForAccountMerge(_ context.Context, job *model.AccountMergeJob, owner, meetingID string, ref *model.MeetingRef) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if job == nil || job.LeaseOwner != cliOwner {
+	if job == nil || (job.LeaseOwner != cliOwner && job.PostMergeOperator == "") {
 		return errors.New("meeting moved without the CLI lease")
 	}
-	f.moves = append(f.moves, "meeting:"+meetingID)
+	f.moves = append(f.moves, "meeting:"+meetingID+postMergeTag(job))
 	f.refs = append(f.refs, ref)
 	return f.fence
+}
+
+func postMergeTag(job *model.AccountMergeJob) string {
+	if job.PostMergeOperator == "" {
+		return ""
+	}
+	return "@" + job.PostMergeOperator
 }
 
 // fakeCipher "seals" by prefixing, so the test can read the rewritten payload.
@@ -180,11 +187,12 @@ func (fakeCipher) Encrypt(_ context.Context, _, _, _ string, plaintext []byte) (
 }
 
 type harness struct {
-	d     deps
-	svc   *fakeSvc
-	jobs  *fakeJobs
-	users *fakeUsers
-	log   []string
+	d        deps
+	accounts accounts
+	svc      *fakeSvc
+	jobs     *fakeJobs
+	users    *fakeUsers
+	log      []string
 }
 
 func newHarness() *harness {
@@ -202,12 +210,23 @@ func newHarness() *harness {
 		{Kind: repository.MergeUserRowMeeting, PK: "USER#u2", SK: "MEETING#m1", UserID: "u2", MeetingID: "m1", Date: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
 		{Kind: repository.MergeUserRowMeeting, PK: "USER#u2", SK: "MEETING#m2", UserID: "u2", MeetingID: "m2", SharedToAccount: true},
 	}}
-	h.d = deps{svc: h.svc, jobs: h.jobs, members: members{"tgt:owner-1": true}, users: h.users, cipher: fakeCipher{}, owner: cliOwner,
+	h.accounts = accounts{"src": {AccountID: "src", MergedInto: "tgt", OwnerUserID: "owner-1"}, "tgt": {AccountID: "tgt", OwnerUserID: "tgt-owner"}}
+	h.d = deps{svc: h.svc, jobs: h.jobs, members: members{"tgt:owner-1": true, "tgt:tgt-owner": true, "tgt:member": true}, accounts: h.accounts, users: h.users, cipher: fakeCipher{}, owner: cliOwner,
 		now: func() time.Time { return time.Unix(1000, 0) }, pause: func(context.Context, time.Duration) error { return nil }}
 	return h
 }
 
 type members map[string]bool
+
+type accounts map[string]*model.Account
+
+func (a accounts) GetAccount(_ context.Context, id string) (*model.Account, error) {
+	if account, ok := a[id]; ok {
+		copied := *account
+		return &copied, nil
+	}
+	return nil, nil
+}
 
 func (m members) GetMember(_ context.Context, account, user string) (*model.AccountMember, error) {
 	if m[account+":"+user] {
@@ -594,5 +613,74 @@ func TestMergeCLIAbort(t *testing.T) {
 		if _, err := run(context.Background(), h.d, bad); errorCode(err) != "INVALID_INPUT" || len(h.svc.calls) != 0 {
 			t.Errorf("%s: %v calls=%v", name, err, h.svc.calls)
 		}
+	}
+}
+
+func doneHarness() *harness {
+	h := newHarness()
+	h.jobs.job = &model.AccountMergeJob{SourceAccountID: "src", TargetAccountID: "tgt", RequesterUserID: "owner-1",
+		State: model.MergeStateDone, Step: "finish", UpdatedAt: time.Unix(100, 0)}
+	return h
+}
+
+func TestMergeCLIPostMergeMovesCLIRowsUnderThePostMergeFence(t *testing.T) {
+	for _, operator := range []string{"owner-1", "tgt-owner"} {
+		t.Run(operator, func(t *testing.T) {
+			h := doneHarness()
+			o := opts()
+			o.Apply, o.Requester = true, operator
+			res, err := run(context.Background(), h.d, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Mode != "post-merge" || res.State != model.MergeStateDone || len(h.svc.calls) != 0 || len(h.jobs.claims) != 0 || h.jobs.released != 0 {
+				t.Fatalf("post-merge must not start, drive or lease: %+v calls=%v claims=%v", res, h.svc.calls, h.jobs.claims)
+			}
+			moves := strings.Join(h.users.moves, " ")
+			for _, want := range []string{"task:src>tgt@" + operator, "event:src>tgt@" + operator, "meeting:m1@" + operator} {
+				if !strings.Contains(moves, want) {
+					t.Errorf("missing move %q in %q", want, moves)
+				}
+			}
+			if strings.Contains(moves, "meeting:m2") || res.UserRows["publishedMeetings"] != 1 {
+				t.Errorf("a published straggler must only be counted: %q %v", moves, res.UserRows)
+			}
+			if res.UserRows["linkOnlyMeetingsMoved"] != 1 || res.UserRows["specreqTasksMoved"] != 1 || res.UserRows["calendarEventsMoved"] != 1 {
+				t.Errorf("counts %v", res.UserRows)
+			}
+		})
+	}
+}
+
+func TestMergeCLIPostMergeRefusals(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*harness, *options)
+		want   string
+	}{
+		"wrong target":             {func(_ *harness, o *options) { o.Into = "other" }, "FORBIDDEN"},
+		"requester not a member":   {func(_ *harness, o *options) { o.Requester = "stranger" }, "FORBIDDEN"},
+		"member but not authority": {func(_ *harness, o *options) { o.Requester = "member" }, "FORBIDDEN"},
+		"source not tombstoned":    {func(h *harness, _ *options) { h.accounts["src"].MergedInto = "" }, "NOT_MERGED"},
+		"source merging again":     {func(h *harness, _ *options) { h.accounts["src"].MergingInto = "x" }, "NOT_MERGED"},
+		"source gone":              {func(h *harness, _ *options) { delete(h.accounts, "src") }, "NOT_MERGED"},
+		"without scan-users":       {func(_ *harness, o *options) { o.ScanUsers = false }, "MERGE_DONE"},
+		"fence lost mid scan":      {func(h *harness, _ *options) { h.users.fenceTask = repository.ErrMergeFenceLost }, "FENCE_LOST"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := doneHarness()
+			o := opts()
+			o.Apply = true
+			tc.mutate(h, &o)
+			_, err := run(context.Background(), h.d, o)
+			if errorCode(err) != tc.want {
+				t.Fatalf("got %v (%s), want %s", err, errorCode(err), tc.want)
+			}
+			if len(h.svc.calls) != 0 || len(h.jobs.claims) != 0 {
+				t.Fatalf("refused post-merge run started or leased: %v %v", h.svc.calls, h.jobs.claims)
+			}
+			if tc.want != "FENCE_LOST" && len(h.users.moves) != 0 {
+				t.Fatalf("refused post-merge run wrote: %v", h.users.moves)
+			}
+		})
 	}
 }

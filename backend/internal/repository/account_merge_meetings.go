@@ -40,6 +40,10 @@ func validMergeJob(job *model.AccountMergeJob) bool {
 // DeleteMeetingRefForMerge once the caller has finished the meeting's
 // shares and insights, so a resumed run can still find it.
 //
+// The merge CLI may also call it after the job is done with a job copy
+// carrying PostMergeOperator: the post-merge fence replaces the lease fence
+// and only a link-only meeting moves.
+//
 // A meeting no longer on the source, or a concurrent change to the
 // snapshot, returns ErrConditionFailed. A lost fence returns
 // ErrMergeFenceLost; a target that started merging returns ErrAccountMerging.
@@ -48,7 +52,7 @@ func (r *DynamoDBRepository) MoveMeetingForAccountMerge(ctx context.Context, job
 		!validMergeMeetingRef(job, meetingID, ref) {
 		return fmt.Errorf("invalid merge meeting move")
 	}
-	fence, err := r.mergeFenceChecks(job)
+	fence, err := r.userRowFenceChecks(job)
 	if err != nil {
 		return err
 	}
@@ -58,6 +62,12 @@ func (r *DynamoDBRepository) MoveMeetingForAccountMerge(ctx context.Context, job
 	}
 	if snapshot == nil || snapshot.Meeting.AccountID != job.SourceAccountID {
 		return fmt.Errorf("merge meeting: %w", ErrConditionFailed)
+	}
+	// After the job is done only link-only meetings move (the snapshot pins
+	// sharedToAccount): a published straggler needs its shares and insights
+	// moved too, which only the worker does.
+	if job.PostMergeOperator != "" && snapshot.Meeting.SharedToAccount {
+		return fmt.Errorf("merge meeting: published after merge: %w", ErrConditionFailed)
 	}
 	update := expression.Set(expression.Name("accountId"), expression.Value(job.TargetAccountID)).
 		Add(expression.Name("authorizationRevision"), expression.Value(1))
@@ -83,7 +93,7 @@ func (r *DynamoDBRepository) MoveMeetingForAccountMerge(ctx context.Context, job
 		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}})
 	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
-		moverFailed, fenceErr := classifyMergeFence(err)
+		moverFailed, fenceErr := classifyFence(err, len(fence))
 		if fenceErr != nil {
 			return fenceErr
 		}

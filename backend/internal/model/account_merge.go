@@ -49,6 +49,11 @@ type AccountMergeJob struct {
 	FinishedAt *time.Time     `dynamodbav:"finishedAt,omitempty"`
 	AbortedAt  *time.Time     `dynamodbav:"abortedAt,omitempty"`
 	EntityType string         `dynamodbav:"entityType"` // "ACCOUNT_MERGE_JOB"
+
+	// PostMergeOperator is never stored. When set on a copy of a done job, the
+	// merge CLI's user-row movers write under the post-merge fence (ADR-072)
+	// as this user instead of under the job lease.
+	PostMergeOperator string `dynamodbav:"-" json:"-"`
 }
 
 // AccountMergeContactMap records which target contact a source contact became.

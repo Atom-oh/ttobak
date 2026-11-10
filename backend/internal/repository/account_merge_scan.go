@@ -250,9 +250,10 @@ func (r *DynamoDBRepository) MoveCalendarEventRowForMerge(ctx context.Context, j
 }
 
 // updateMergeUserRow applies update to the scanned row in one transaction with
-// the merge fence checks, so a lost lease or a revoked requester writes nothing.
+// the merge fence checks (or, after the job is done, the post-merge fence), so
+// a lost lease or a revoked requester writes nothing.
 func (r *DynamoDBRepository) updateMergeUserRow(ctx context.Context, job *model.AccountMergeJob, row MergeUserRow, update expression.UpdateBuilder, cond expression.ConditionBuilder) error {
-	fence, err := r.mergeFenceChecks(job)
+	fence, err := r.userRowFenceChecks(job)
 	if err != nil {
 		return err
 	}
@@ -265,7 +266,7 @@ func (r *DynamoDBRepository) updateMergeUserRow(ctx context.Context, job *model.
 		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: append([]types.TransactWriteItem{item}, fence...)}); err != nil {
-		moverFailed, fenceErr := classifyMergeFence(err)
+		moverFailed, fenceErr := classifyFence(err, len(fence))
 		if fenceErr != nil {
 			return fenceErr
 		}
