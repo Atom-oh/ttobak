@@ -43,6 +43,7 @@ Scoring follows the fixed rubric: deductions require a located, quoted defect;
 each defect costs one quarter of its category, summed then rounded once to the
 nearest 0.5 with midpoints up. No unresolved defect was identified after revision,
 so no deduction applies. Informational scope boundaries do not count as defects.
+Content quality and latest-head CI/publication are separate gates.
 
 ## Evidence and revisions
 
@@ -69,7 +70,7 @@ so no deduction applies. Informational scope boundaries do not count as defects.
 - `check_docs.py` and JavaScript syntax validation passed. No runtime application,
   AWS configuration or workflow/review-gate code changed.
 
-## Independent review revisions and remaining issues
+## Independent CI review revisions and remaining issues
 
 The independent review found mixed upload paths, an inaccurate connector-screen
 description, overstated Library status visibility and dropped operational limits.
@@ -77,6 +78,8 @@ This revision separates the upload paths, corrects AI connection permissions and
 Library list capabilities, and restores sharing/project/simulation limits.
 Existing-meeting instructions distinguish the immediate attachment gallery from
 the queued audio/document uploader; password recovery guidance is restored.
+Project creation fields, Docs type badges and older Mac microphone behavior
+were checked against the current UI and corrected.
 Reader fixes also guard IME composition, keep search results below the sticky
 header and force readable no-JavaScript dark-preference printing. Fresh
 latest-head review remains required. Notes-only conflict checks, normalized
