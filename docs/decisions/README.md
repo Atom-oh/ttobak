@@ -20,4 +20,3 @@ to it has been rewritten.
 | Former record | Now in |
 |---|---|
 | ADR-008 Per-user dictionaries for speech recognition | [ADR-005](ADR-005-live-stt-translation-and-dictionary.md) |
-| ADR-043 Specialist review protocol | [ADR-002](ADR-002-delivery-pipeline-and-pr-review.md) |
