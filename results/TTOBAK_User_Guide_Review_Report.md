@@ -46,6 +46,10 @@ do not deduct points.
   visually inspected at original resolution or in full-resolution review sheets.
   Sidebar labels, menu order, icons, controls and layouts are the real frontend.
   No app DOM/CSS rewrite, redrawing, cropping or image resizing was used.
+- The people figure explicitly describes the related-person area within the
+  Account overview; identical overview/people pixels are intentional context,
+  not an independently navigated people page. The Billing capture was inspected
+  and contains the rendered dashboard and service-tag controls, not a 404 frame.
 - Captured revision: `0d9f1075169ba8d4692036dc98360b6514ef3b44`.
   Later main changes before review affect the MCP bundle/intake, not these UI
   components. The manifest records the captured revision rather than implying
