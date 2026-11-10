@@ -21,19 +21,14 @@ python3 scripts/docs/build_user_guide.py --output /tmp/ttobak-guide-preview
 python3 -m http.server 8080 --bind 127.0.0.1 --directory /tmp/ttobak-guide-preview
 ```
 
-Only the explicit `scripts/docs/build_user_guide.py` allowlist is published:
-HTML, CSS, JavaScript, favicon and 36 actual lossless UI screenshots. Eight
-figures are replaced here; additional chapter figures follow in the dependent
-update. Captured source is `0d9f1075169ba8d4692036dc98360b6514ef3b44`,
-with unchanged frontend UI and fictional read-only data. No production data.
-
-Images are the documentation-only `guide-ui-2026-11-10` Release's `guide-ui.zip`.
-The manifest pins its public asset API URL, bounded size/SHA-256 and each image
-identity/dimension. Credential-free octet-stream fetches or an offline
-`--screenshot-archive` cache use identical checks before output exists. Published
-bytes must not be replaced. Serve packaged output; no images exist in source.
-Only local verified images reach readers; the self-only CSP and review gates
-remain. Internal manifests, reports and references are not published.
+Only allowlisted HTML/CSS/JS/favicon and 36 actual lossless UI captures are
+published. Eight figures are replaced here; remaining figures follow in the
+dependent update. Captures use unchanged frontend UI and fictional read-only
+data. The documentation-only `guide-ui-2026-11-10` Release's `guide-ui.zip`
+is pinned by archive/image SHA-256, bounded sizes and dimensions in
+`screenshots.json`. The credential-free public asset API fetch (or offline
+`--screenshot-archive`) verifies all bytes before output. Serve packaged output.
+Internal files stay excluded; CSP and review gates remain. No production data.
 
 The repository Pages API reports `https://www.atomai.click/ttobak/` as its publication URL (verified 2026-11-10).
 
