@@ -64,7 +64,7 @@ so no deduction applies. Informational scope boundaries do not count as defects.
   Reviewed image references are copied; unreviewed images and symlinks are rejected.
   Local-only CSP, anchor integrity and existing-output preservation remain checked.
 - The final artifact contains 141 validated anchors and 12 explicit public assets.
-  All reader checks passed; structured evidence is recorded in
+  All 33 reader checks passed; structured evidence is recorded in
   `results/TTOBAK_User_Guide_Browser_Checks.json` and is not published.
 - `check_docs.py` and JavaScript syntax validation passed. No runtime application,
   AWS configuration or workflow/review-gate code changed.
