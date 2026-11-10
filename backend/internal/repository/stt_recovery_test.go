@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -471,5 +472,40 @@ func TestDeleteSttFailedMeetingObjectsListsPlaybackCopies(t *testing.T) {
 	want := []string{"audio/owner/m/", "audio-playback/owner/m/", "images/owner/m/", "files/owner/m/", "transcripts/m"}
 	if strings.Join(listed, ",") != strings.Join(want, ",") {
 		t.Fatalf("listed %v, want %v", listed, want)
+	}
+}
+
+// An English note is user-visible generated output like content: a marked
+// failed recording that has one is never auto-deleted (the meeting-row
+// condition rejects it) and is never re-driven.
+func TestDeleteSttFailedMeetingKeepsEnglishNote(t *testing.T) {
+	var transact map[string]any
+	deleted := false
+	repo, _ := sttWire(t, func(op string, body map[string]any) (int, string) {
+		switch op {
+		case "Query":
+			return 200, `{"Items":[{"SK":{"S":"ANALYSIS#summaryEn"}}]}`
+		case "TransactWriteItems":
+			transact = body
+			// The stored row carries a non-empty contentEn, so its emptiness
+			// guard fails and DynamoDB cancels the whole transaction.
+			return 400, `{"__type":"TransactionCanceledException","message":"cancelled","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]}`
+		case "DeleteItem", "BatchWriteItem":
+			deleted = true
+		}
+		return 200, `{}`
+	})
+	if err := repo.DeleteSttFailedMeeting(context.Background(), "owner", "m", sttDeleteMark()); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("a meeting with an English note must not be deleted: %v", err)
+	}
+	if deleted {
+		t.Fatal("rows removed outside the guarded transaction")
+	}
+	meeting := transact["TransactItems"].([]any)[0].(map[string]any)["Delete"].(map[string]any)
+	if condition := analysisCondition(t, meeting); !strings.Contains(condition, `((attribute_not_exists (contentEn)) OR (contentEn = {"S":""}))`) {
+		t.Fatalf("meeting delete condition does not require an empty English note: %s", condition)
+	}
+	if !slices.Contains(sttRecoveryEmptyFields, "contentEn") {
+		t.Fatal("a meeting with an English note must not be re-driven")
 	}
 }
