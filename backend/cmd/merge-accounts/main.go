@@ -30,6 +30,23 @@
 // that fails to move is counted in errors; the worker is then not started,
 // so a rerun resumes from the same state.
 //
+// -scan-users -apply also runs after the job is done (a merge started on the
+// web never reaches these rows). There is no lease then; every row write
+// carries the post-merge fence instead (ADR-072): the job is done for -into,
+// -from is the tombstone mergedInto -into, the requester is still a direct
+// member of -into and was the job's requester or is the owner of -into, and
+// -into is open. Each row stays conditioned on accountId naming -from, and
+// nothing writes into -from. Link-only meetings move and stay link-only;
+// published stragglers are only counted. The worker is not run.
+//
+// -abort ends a stuck merge: a failed job, or a running one whose lease is
+// absent or expired. Only the job's requester may abort it, and only while
+// still the Owner of -from (META owner and MEMBER role). Without -apply it
+// prints the job and writes nothing; with -apply one transaction marks the
+// job aborted, removes the source's mergingInto (the source is open again)
+// and decrements the target's incomingMerges. Data already moved stays on the
+// target; nothing is rolled back.
+//
 // Output is JSON counts and the job state only: no names, titles, mention
 // text, calendar fields or contact fields. Errors print a code only.
 //
@@ -40,6 +57,7 @@
 //
 //	TABLE_NAME=ttobak-main KMS_KEY_ID=... go run ./cmd/merge-accounts -from A -into B -requester USER_ID [-scan-users] [-accept-unmoved] [-apply]
 //	TABLE_NAME=ttobak-main go run ./cmd/merge-accounts -from A -requester USER_ID -status
+//	TABLE_NAME=ttobak-main go run ./cmd/merge-accounts -from A -into B -requester USER_ID -abort [-apply]
 package main
 
 import (
@@ -92,7 +110,7 @@ type options struct {
 	From, Into, Requester string
 	Apply, AcceptUnmoved  bool
 	ScanUsers, Status     bool
-	Verify                bool
+	Verify, Abort         bool
 	MaxPages              int
 }
 
@@ -102,7 +120,10 @@ var (
 	errInvalidMaxPages  = errors.New("-max-pages must be > 0")
 	errNoProgress       = errors.New("merge worker made no progress; the job lease may be held elsewhere")
 	errVerifyReadOnly   = errors.New("-verify is read-only and excludes -apply and -status")
+	errAbortExclusive   = errors.New("-abort excludes -status, -verify, -scan-users and -accept-unmoved")
 	errScanIncomplete   = errors.New("user row scan left rows behind; worker not started")
+	errPostMergeScan    = errors.New("the merge is done: only -scan-users -apply can run")
+	errNotTombstoned    = errors.New("-from is not merged into -into")
 )
 
 func validateOptions(o options) error {
@@ -123,6 +144,9 @@ func validateOptions(o options) error {
 	if o.Verify && (o.Apply || o.Status) {
 		return errVerifyReadOnly
 	}
+	if o.Abort && (o.Status || o.Verify || o.ScanUsers || o.AcceptUnmoved) {
+		return errAbortExclusive
+	}
 	return nil
 }
 
@@ -132,10 +156,15 @@ type mergeService interface {
 	Preview(ctx context.Context, requesterID, fromID, intoID string) (*model.AccountMergePreview, error)
 	Start(ctx context.Context, requesterID, fromID string, req *model.StartAccountMergeRequest) (*model.AccountMergeJobDTO, error)
 	ProcessAccountMergeRequested(ctx context.Context, e model.AccountMergeRequested, deadline time.Time) error
+	Abort(ctx context.Context, requesterID, fromID, intoID string, apply bool) (*model.AccountMergeJobDTO, error)
 }
 
 type memberReader interface {
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+}
+
+type accountReader interface {
+	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
 }
 
 type jobStore interface {
@@ -158,11 +187,12 @@ type payloadCipher interface {
 }
 
 type deps struct {
-	svc     mergeService
-	jobs    jobStore
-	members memberReader
-	users   userRowStore
-	cipher  payloadCipher
+	svc      mergeService
+	jobs     jobStore
+	members  memberReader
+	accounts accountReader
+	users    userRowStore
+	cipher   payloadCipher
 	// owner is the lease owner, cli-<host>-<pid>.
 	owner string
 	now   func() time.Time
@@ -199,6 +229,18 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 			return res, err
 		}
 		res.Into, res.State, res.Step, res.ErrorCode, res.Counts = dto.IntoAccountID, dto.State, dto.Step, dto.ErrorCode, dto.Counts
+		return res, nil
+	}
+	if o.Abort {
+		res.Mode = "abort-dry-run"
+		if o.Apply {
+			res.Mode = "abort"
+		}
+		dto, err := d.svc.Abort(ctx, o.Requester, o.From, o.Into, o.Apply)
+		if err != nil {
+			return res, err
+		}
+		res.State, res.Step, res.ErrorCode, res.Counts = dto.State, dto.Step, dto.ErrorCode, dto.Counts
 		return res, nil
 	}
 	if o.Verify {
@@ -239,6 +281,13 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 	}
 
 	res.Mode = "apply"
+	existing, err := d.jobs.GetAccountMergeJob(ctx, o.From)
+	if err != nil {
+		return res, err
+	}
+	if existing != nil && existing.State == model.MergeStateDone {
+		return d.postMerge(ctx, o, existing, res)
+	}
 	dto, err := d.svc.Start(ctx, o.Requester, o.From, &model.StartAccountMergeRequest{IntoAccountID: o.Into, AcceptUnmoved: o.AcceptUnmoved})
 	if err != nil {
 		return res, err
@@ -271,6 +320,50 @@ func run(ctx context.Context, d deps, o options) (result, error) {
 	return res, err
 }
 
+// postMerge moves the CLI-only rows still naming the source after the job is
+// done, under the post-merge fence (see the package comment). The checks here
+// give a clear refusal before the scan; every row write enforces them again.
+func (d deps) postMerge(ctx context.Context, o options, job *model.AccountMergeJob, res result) (result, error) {
+	res.Mode, res.State, res.Step = "post-merge", job.State, job.Step
+	if !o.ScanUsers {
+		return res, errPostMergeScan
+	}
+	if job.TargetAccountID != o.Into {
+		return res, service.ErrForbidden
+	}
+	source, err := d.accounts.GetAccount(ctx, o.From)
+	if err != nil {
+		return res, err
+	}
+	if source == nil || source.MergedInto != o.Into || source.MergingInto != "" {
+		return res, errNotTombstoned
+	}
+	member, err := d.members.GetMember(ctx, o.Into, o.Requester)
+	if err != nil {
+		return res, err
+	}
+	if member == nil || member.UserID != o.Requester {
+		return res, service.ErrForbidden
+	}
+	if o.Requester != job.RequesterUserID {
+		target, err := d.accounts.GetAccount(ctx, o.Into)
+		if err != nil {
+			return res, err
+		}
+		if target == nil || target.OwnerUserID != o.Requester {
+			return res, service.ErrForbidden
+		}
+	}
+	fenced := *job
+	fenced.PostMergeOperator = o.Requester
+	counts, err := d.scanUserRows(ctx, o, &cliLease{d: d, source: o.From, job: &fenced, fixed: true})
+	res.UserRows = counts
+	if err == nil && (counts["errors"] > 0 || skippedRows(counts) > 0) {
+		err = errScanIncomplete
+	}
+	return res, err
+}
+
 // scanApplyPasses bounds the re-scans that pick up rows a concurrent edit
 // made the CLI skip (its version condition failed).
 const scanApplyPasses = 3
@@ -290,7 +383,7 @@ const scanIncompleteCode = "SCAN_INCOMPLETE"
 // a delivery, so it cannot finish over stranded rows, and an -apply rerun
 // restarts it from its saved step.
 func (d deps) scanApply(ctx context.Context, o options) (map[string]int, error) {
-	lease := &cliLease{d: d, source: o.From}
+	lease := &cliLease{d: d, source: o.From, into: o.Into}
 	if err := lease.renew(ctx); err != nil {
 		return nil, err
 	}
@@ -352,11 +445,17 @@ func skippedRows(counts map[string]int) int {
 
 // cliLease keeps the CLI's claim on the job fresh for the duration of a scan.
 type cliLease struct {
-	d       deps
-	source  string
+	d      deps
+	source string
+	// into is the expected target; a claimed job for another target, or a
+	// different job instance than the first claim, is a lost fence (an abort
+	// and a fresh merge can replace the job while this process stalled).
+	into    string
 	mu      sync.Mutex
 	job     *model.AccountMergeJob
 	claimed time.Time
+	// fixed is a post-merge job copy: there is no lease to claim or renew.
+	fixed bool
 }
 
 func (l *cliLease) current() *model.AccountMergeJob {
@@ -368,6 +467,9 @@ func (l *cliLease) current() *model.AccountMergeJob {
 func (l *cliLease) renew(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.fixed {
+		return nil
+	}
 	now := l.d.now()
 	if l.job != nil && now.Sub(l.claimed) < leaseRenewAfter {
 		return nil
@@ -375,6 +477,10 @@ func (l *cliLease) renew(ctx context.Context) error {
 	job, err := l.d.jobs.ClaimMergeLease(ctx, l.source, l.d.owner, now, leaseTTL)
 	if err != nil {
 		return err
+	}
+	if job == nil || (l.into != "" && job.TargetAccountID != l.into) ||
+		(l.job != nil && (job.TargetAccountID != l.job.TargetAccountID || !job.StartedAt.Equal(l.job.StartedAt))) {
+		return fmt.Errorf("%w: the merge job was replaced", repository.ErrMergeFenceLost)
 	}
 	l.job, l.claimed = job, now
 	return nil
@@ -619,7 +725,7 @@ func errorCode(err error) string {
 		return "FORBIDDEN"
 	case errors.Is(err, service.ErrNotFound):
 		return "NOT_FOUND"
-	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, errFromIntoRequired), errors.Is(err, errRequesterNeeded), errors.Is(err, errInvalidMaxPages), errors.Is(err, errVerifyReadOnly):
+	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, errFromIntoRequired), errors.Is(err, errRequesterNeeded), errors.Is(err, errInvalidMaxPages), errors.Is(err, errVerifyReadOnly), errors.Is(err, errAbortExclusive):
 		return "INVALID_INPUT"
 	case errors.Is(err, service.ErrAccountMergeIneligible):
 		return "INELIGIBLE"
@@ -627,12 +733,18 @@ func errorCode(err error) string {
 		return "JOB_RUNNING"
 	case errors.Is(err, service.ErrAccountMergeConflict):
 		return "START_CONFLICT"
+	case errors.Is(err, service.ErrMergeNotAbortable):
+		return "NOT_ABORTABLE"
 	case errors.Is(err, service.ErrMergeContactIndexTooLarge):
 		return "CONTACT_INDEX_TOO_LARGE"
 	case errors.Is(err, repository.ErrMergeFenceLost), errors.Is(err, repository.ErrAccountMerging):
 		return "FENCE_LOST"
 	case errors.Is(err, errScanIncomplete):
 		return "SCAN_INCOMPLETE"
+	case errors.Is(err, errPostMergeScan):
+		return "MERGE_DONE"
+	case errors.Is(err, errNotTombstoned):
+		return "NOT_MERGED"
 	case errors.Is(err, errNoProgress):
 		return "NO_PROGRESS"
 	}
@@ -658,12 +770,13 @@ func main() {
 	o := options{}
 	flag.StringVar(&o.From, "from", "", "source account ID, merged into -into and left as a tombstone")
 	flag.StringVar(&o.Into, "into", "", "target account ID")
-	flag.StringVar(&o.Requester, "requester", "", "user ID of the requester: Owner of -from and a direct member of -into")
+	flag.StringVar(&o.Requester, "requester", "", "user ID of the requester: Owner of -from and a direct member of -into (after the merge: a direct member of -into who was the job's requester or owns -into)")
 	flag.BoolVar(&o.Apply, "apply", false, "start or resume the merge (default: print counts only)")
 	flag.BoolVar(&o.AcceptUnmoved, "accept-unmoved", false, "accept the categories v1 leaves on the source")
-	flag.BoolVar(&o.ScanUsers, "scan-users", false, "also rewrite SpecReq tasks, calendar events and link-only meetings")
+	flag.BoolVar(&o.ScanUsers, "scan-users", false, "also rewrite SpecReq tasks, calendar events and link-only meetings; after the merge is done, -scan-users -apply moves them under the post-merge fence")
 	flag.BoolVar(&o.Status, "status", false, "print the source's merge job state and counts (needs -from and -requester only)")
 	flag.BoolVar(&o.Verify, "verify", false, "read-only: count CLI-only rows still naming -from; needs -from, -into and -requester (a direct member of -into); usable after the merge is done")
+	flag.BoolVar(&o.Abort, "abort", false, "end a failed (or stalled running) job: the source opens again and moved data stays on -into; needs -from, -into and -requester (the job's requester, still Owner of -from); writes only with -apply")
 	flag.IntVar(&o.MaxPages, "max-pages", defaultMaxPages, "page limit per user scan segment")
 	flag.Parse()
 	if err := validateOptions(o); err != nil {
@@ -701,7 +814,7 @@ func main() {
 	svc.SetMergePublisher(func(context.Context, model.AccountMergeRequested) error { return nil })
 	svc.SetPeopleResolvePublisher(service.PeopleResolvePublisher(eventbridge.NewFromConfig(cfg)))
 	host, _ := os.Hostname()
-	d := deps{svc: svc, jobs: repo, members: repo, users: repo, cipher: service.NewCalendarCipher(kmsClient, keyID),
+	d := deps{svc: svc, jobs: repo, members: repo, accounts: repo, users: repo, cipher: service.NewCalendarCipher(kmsClient, keyID),
 		owner: leaseOwner(host, os.Getpid()), now: time.Now, pause: pause}
 	res, err := run(ctx, d, o)
 	res.ErrorCode = firstNonEmpty(res.ErrorCode, errorCode(err))

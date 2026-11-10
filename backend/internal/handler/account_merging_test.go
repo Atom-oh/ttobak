@@ -116,6 +116,7 @@ func TestAccountMergingMapsTo409ForNewsAndPeople(t *testing.T) {
 		"news":            accountNewsError,
 		"people":          accountPeopleError,
 		"insights delete": writeInsightsDeleteError,
+		"audio crop":      writeCropError,
 		"document share":  func(w http.ResponseWriter, err error) { writeDocumentServiceError(w, err, "") },
 	} {
 		w := httptest.NewRecorder()

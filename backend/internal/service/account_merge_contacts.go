@@ -210,7 +210,7 @@ func (s *AccountMergeService) moveContacts(fence *mergeFence, job *model.Account
 		for i, c := range page {
 			ids[i] = c.ContactID
 		}
-		mapped, err := s.mover.GetMergeContactMap(ctx, job.SourceAccountID, ids)
+		mapped, err := s.mover.GetMergeContactMap(ctx, job.SourceAccountID, job.TargetAccountID, ids)
 		if err != nil {
 			return result, fence.translate(err)
 		}

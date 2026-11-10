@@ -84,6 +84,11 @@ func TestMoveContactForMergeTransaction(t *testing.T) {
 		attrS(t, mapRow, "sourceContactId") != "c1" || !strings.Contains(resolvedCondition(items[7]), "attribute_not_exists (PK)") {
 		t.Errorf("map row %v", mapRow)
 	}
+	// The map row names its merge target, and only a row for another
+	// (aborted) target may be replaced.
+	if attrS(t, mapRow, "targetAccountId") != "tgt" || !strings.Contains(resolvedCondition(items[7]), "targetAccountId <> ") {
+		t.Errorf("map row must bind its target: %v %q", mapRow, resolvedCondition(items[7]))
+	}
 	if strings.Contains(resolvedCondition(items[2]), "attribute_not_exists (mergingInto)") {
 		t.Error("source META carries the open fence")
 	}
@@ -202,7 +207,10 @@ func TestContactMergeFailsClosedAndRejectsInvalidInput(t *testing.T) {
 		"target no rev": func() error {
 			return r.MergeContactIntoExisting(context.Background(), mergeRowsJob(), mergeFromContact(), model.AccountContact{ContactID: "b9"})
 		},
-		"map key in id": func() error { _, err := r.GetMergeContactMap(context.Background(), "src", []string{"a#b"}); return err },
+		"map key in id": func() error {
+			_, err := r.GetMergeContactMap(context.Background(), "src", "tgt", []string{"a#b"})
+			return err
+		},
 	} {
 		if err := call(); err == nil {
 			t.Errorf("%s: want error", name)
@@ -247,17 +255,21 @@ func TestGetMergeContactMap(t *testing.T) {
 	var calls []fenceRequest
 	r := fenceRepo(t, &calls, func(fenceRequest) (int, string) {
 		return 200, `{"Responses":{"` + fenceTable + `":[` +
-			`{"PK":{"S":"ACCOUNT#src"},"SK":{"S":"MERGE#contact#c1"},"sourceContactId":{"S":"c1"},"targetContactId":{"S":"b9"}}` +
+			`{"PK":{"S":"ACCOUNT#src"},"SK":{"S":"MERGE#contact#c1"},"sourceContactId":{"S":"c1"},"targetContactId":{"S":"b9"},"targetAccountId":{"S":"tgt"}},` +
+			`{"PK":{"S":"ACCOUNT#src"},"SK":{"S":"MERGE#contact#c2"},"sourceContactId":{"S":"c2"},"targetContactId":{"S":"x9"},"targetAccountId":{"S":"aborted-target"}},` +
+			`{"PK":{"S":"ACCOUNT#src"},"SK":{"S":"MERGE#contact#c3"},"sourceContactId":{"S":"c3"},"targetContactId":{"S":"l9"}}` +
 			`]}}`
 	})
-	got, err := r.GetMergeContactMap(context.Background(), "src", []string{"c1", "c2"})
+	got, err := r.GetMergeContactMap(context.Background(), "src", "tgt", []string{"c1", "c2", "c3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got["c1"] != "b9" {
+	// c2 was written by a merge into another (aborted) target and is ignored;
+	// c3 predates the target binding and still counts.
+	if len(got) != 2 || got["c1"] != "b9" || got["c3"] != "l9" {
 		t.Errorf("map %v", got)
 	}
-	none, err := r.GetMergeContactMap(context.Background(), "src", nil)
+	none, err := r.GetMergeContactMap(context.Background(), "src", "tgt", nil)
 	if err != nil || len(none) != 0 || len(calls) != 1 {
 		t.Errorf("empty selection: %v %v calls=%d", none, err, len(calls))
 	}

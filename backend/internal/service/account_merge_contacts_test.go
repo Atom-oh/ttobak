@@ -110,7 +110,7 @@ func (f *contactFake) GetAccountContact(_ context.Context, account, id string) (
 	return &c, nil
 }
 
-func (f *contactFake) GetMergeContactMap(_ context.Context, _ string, ids []string) (map[string]string, error) {
+func (f *contactFake) GetMergeContactMap(_ context.Context, _, _ string, ids []string) (map[string]string, error) {
 	f.mapReads++
 	out := map[string]string{}
 	for _, id := range ids {

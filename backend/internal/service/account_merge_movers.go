@@ -24,7 +24,7 @@ type accountMergeMoverRepo interface {
 	ListAccountPartitionKeys(ctx context.Context, accountID, prefix string, limit int) ([]string, bool, error)
 	ListAccountContactsForMerge(ctx context.Context, accountID string, limit int, after string) ([]model.AccountContact, []string, string, error)
 	GetAccountContact(ctx context.Context, accountID, contactID string) (*model.AccountContact, error)
-	GetMergeContactMap(ctx context.Context, sourceAccountID string, ids []string) (map[string]string, error)
+	GetMergeContactMap(ctx context.Context, sourceAccountID, targetAccountID string, ids []string) (map[string]string, error)
 	MoveContactForMerge(ctx context.Context, job *model.AccountMergeJob, from model.AccountContact) error
 	MergeContactIntoExisting(ctx context.Context, job *model.AccountMergeJob, from model.AccountContact, into model.AccountContact) error
 

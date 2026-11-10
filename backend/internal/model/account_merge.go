@@ -17,6 +17,9 @@ const (
 	MergeStateRunning = "running"
 	MergeStateDone    = "done"
 	MergeStateFailed  = "failed"
+	// MergeStateAborted is an operator-aborted job: the source is open again
+	// and data already moved stays on the target (no rollback).
+	MergeStateAborted = "aborted"
 )
 
 // MergeSteps is the ordered list of merge job steps.
@@ -39,12 +42,22 @@ type AccountMergeJob struct {
 	// LeaseOwner, so the previous holder's fenced writes fail.
 	LeaseUntil    int64 `dynamodbav:"leaseUntil,omitempty"`
 	AcceptUnmoved bool  `dynamodbav:"acceptUnmoved,omitempty"`
+	// ResolvePending is set by the finish transaction and cleared once the
+	// target's people resolve request is published, so a redelivered worker
+	// event on a done job publishes it again when the first attempt failed.
+	ResolvePending bool `dynamodbav:"resolvePending,omitempty"`
 	// Counts holds per-step totals keyed "{step}.{moved|skipped|resumed|unreadable|keptSeparate}".
 	Counts     map[string]int `dynamodbav:"counts,omitempty"`
 	StartedAt  time.Time      `dynamodbav:"startedAt"`
 	UpdatedAt  time.Time      `dynamodbav:"updatedAt"`
 	FinishedAt *time.Time     `dynamodbav:"finishedAt,omitempty"`
+	AbortedAt  *time.Time     `dynamodbav:"abortedAt,omitempty"`
 	EntityType string         `dynamodbav:"entityType"` // "ACCOUNT_MERGE_JOB"
+
+	// PostMergeOperator is never stored. When set on a copy of a done job, the
+	// merge CLI's user-row movers write under the post-merge fence (ADR-072)
+	// as this user instead of under the job lease.
+	PostMergeOperator string `dynamodbav:"-" json:"-"`
 }
 
 // AccountMergeContactMap records which target contact a source contact became.
@@ -53,6 +66,9 @@ type AccountMergeContactMap struct {
 	SK              string `dynamodbav:"SK"`
 	SourceContactID string `dynamodbav:"sourceContactId"`
 	TargetContactID string `dynamodbav:"targetContactId"`
+	// TargetAccountID binds the mapping to the merge that wrote it: after an
+	// abort the source can merge elsewhere, and that merge ignores this row.
+	TargetAccountID string `dynamodbav:"targetAccountId,omitempty"`
 	EntityType      string `dynamodbav:"entityType"` // "ACCOUNT_MERGE_CONTACT_MAP"
 }
 
@@ -108,6 +124,7 @@ type AccountMergeJobDTO struct {
 	StartedAt     time.Time      `json:"startedAt"`
 	UpdatedAt     time.Time      `json:"updatedAt"`
 	FinishedAt    *time.Time     `json:"finishedAt,omitempty"`
+	AbortedAt     *time.Time     `json:"abortedAt,omitempty"`
 }
 
 // DTO returns the public progress view of the job.
@@ -117,7 +134,8 @@ func (j *AccountMergeJob) DTO() *AccountMergeJobDTO {
 		counts[k] = v
 	}
 	return &AccountMergeJobDTO{FromAccountID: j.SourceAccountID, IntoAccountID: j.TargetAccountID, State: j.State,
-		Step: j.Step, ErrorCode: j.ErrorCode, Counts: counts, StartedAt: j.StartedAt, UpdatedAt: j.UpdatedAt, FinishedAt: j.FinishedAt}
+		Step: j.Step, ErrorCode: j.ErrorCode, Counts: counts, StartedAt: j.StartedAt, UpdatedAt: j.UpdatedAt, FinishedAt: j.FinishedAt,
+		AbortedAt: j.AbortedAt}
 }
 
 // MergeStepIndex returns the position of step in MergeSteps, or -1.
