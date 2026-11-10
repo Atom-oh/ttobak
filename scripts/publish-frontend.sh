@@ -26,6 +26,19 @@ if not ready:
     sys.exit("Deploy the compatible frontend router before publishing segmented exports")'
 fi
 
+if [[ -f "$export_dir/user-guide/index.html" ]]; then
+  # ConfigDeployment depends on the distribution update, so this marker is
+  # available only after the manual's same-origin framing policy is deployed.
+  aws s3 cp "s3://${S3_BUCKET}/config.json" - --only-show-errors |
+    python3 -c 'import json,sys
+try:
+    ready=json.load(sys.stdin).get("userGuideRevision")=="same-origin-framing-v1"
+except (ValueError,AttributeError):
+    ready=False
+if not ready:
+    sys.exit("Deploy the compatible user guide framing policy before publishing the manual")'
+fi
+
 # Existing HTML/tabs can still request previous chunks. Retain every old key;
 # garbage collection needs a separate, measured client-retention policy.
 aws s3 sync "$export_dir/_next/static/" "s3://${S3_BUCKET}/_next/static/" \

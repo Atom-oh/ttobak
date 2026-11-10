@@ -30,6 +30,10 @@ archive; for offline builds set `TTOBAK_GUIDE_SCREENSHOT_ARCHIVE` to a local
 copy, which must pass the same archive and image hash checks.
 Deploy FrontendStack's `/user-guide/*` framing behavior before publishing
 the embedded reader; the default application headers intentionally reject frames.
+The shared publisher requires the infrastructure-owned `userGuideRevision:
+same-origin-framing-v1` marker before any upload of an export containing the
+manual. If infrastructure has not finished, publication fails without changes;
+retry the frontend workflow after the marker is deployed.
 Conditional Billing/admin controls depend on configuration and permissions;
 these screenshots do not establish production or native macOS acceptance.
 

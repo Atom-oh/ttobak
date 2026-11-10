@@ -33,7 +33,8 @@ Rebuilds must validate the new package before replacing previous generated outpu
 - [x] Record content review and browser evidence.
 - [x] Reproduce the production framing rejection and the responsive-ancestor defect.
 - [x] Add a manual-only CloudFront behavior and body portal; retain root framing denial.
-- [ ] Verify header-aware browser checks and full infrastructure synthesis/tests.
-- [ ] Update the content quality gate with the corrected deployment boundary.
+- [x] Verify header-aware browser checks and full infrastructure synthesis/tests.
+- [x] Update the content quality gate with the corrected deployment boundary.
+- [x] Enforce deployed manual framing readiness before frontend publication.
 - [ ] Push a scoped PR, satisfy latest-head independent review, merge and deploy.
 - [ ] Verify published manual assets and production guide access.

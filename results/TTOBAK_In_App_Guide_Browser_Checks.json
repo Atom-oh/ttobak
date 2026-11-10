@@ -269,12 +269,8 @@
     "Escape from guide content does not close the app reader before the scoped message bridge"
   ],
   "date": "2026-11-10",
-  "baseRevision": "44523fbd195a9f717a1adf735ac8b6a72b5f67a4",
-  "workingTreeChanges": [
-    "frontend/src/components/layout/UserGuideButton.tsx",
-    "docs/user-guide/guide.js",
-    "frontend/scripts/update-icon-font.mjs"
-  ],
+  "baseRevision": "6438171f4f9b6e95867de1b632e74fb9cf467d68",
+  "workingTreeChanges": [],
   "fixtureScope": "Synthetic Cognito/API responses, public-origin fixture, no production login or provider calls",
   "assetHashes": {
     "favicon.svg": "af0638f836b54089f277b5a8f3adf19d39edb4dcfe4d7fbcc62a6379c145bef6",

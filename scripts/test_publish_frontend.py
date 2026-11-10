@@ -109,6 +109,38 @@ class FrontendPublicationTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(state["index.html"]["body"], "OLD_HTML")
 
+    def test_manual_requires_deployed_framing_before_any_publication(self):
+        (self.export / "user-guide").mkdir()
+        (self.export / "user-guide/index.html").write_text("REVIEWED_MANUAL")
+        for marker in [None, False, True, "old-framing"]:
+            with self.subTest(marker=marker):
+                self.log.unlink(missing_ok=True)
+                state = json.loads(self.store.read_text())
+                config = {"privateFixture": "DO_NOT_LOG_RUNTIME_CONFIG"}
+                if marker is not None:
+                    config["userGuideRevision"] = marker
+                state["config.json"]["body"] = json.dumps(config)
+                self.store.write_text(json.dumps(state))
+                result, calls, installed = self.run_publish()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual([c[:2] for c in calls], [["s3", "cp"]])
+                self.assertEqual(installed, state)
+                self.assertNotIn("DO_NOT_LOG_RUNTIME_CONFIG", result.stdout + result.stderr)
+
+    def test_ready_manual_publishes_after_readiness_and_preserves_config(self):
+        (self.export / "user-guide").mkdir()
+        (self.export / "user-guide/index.html").write_text("REVIEWED_MANUAL")
+        state = json.loads(self.store.read_text())
+        state["config.json"]["body"] = json.dumps({"userGuideRevision": "same-origin-framing-v1"})
+        self.store.write_text(json.dumps(state))
+        result, calls, installed = self.run_publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[0][:2], ["s3", "cp"])
+        self.assertEqual(calls[1][:2], ["s3", "sync"])
+        self.assertEqual(installed["config.json"], state["config.json"])
+        self.assertEqual(installed["user-guide/index.html"]["body"], "REVIEWED_MANUAL")
+        self.assertEqual(installed["user-guide/index.html"]["cache"], "no-cache,max-age=0,must-revalidate")
+
     def test_runtime_connector_profiles_survive_static_publication_unchanged(self):
         state = json.loads(self.store.read_text())
         config = json.dumps({

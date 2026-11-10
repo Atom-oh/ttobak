@@ -21,6 +21,10 @@ links open an image dialog inside the reader; standalone links retain their
 new-tab behavior. `frontend` development and production hooks run
 `npm run guide:build`; an optional `TTOBAK_GUIDE_SCREENSHOT_ARCHIVE` local cache
 must pass the same media identity checks.
+Publishing an export containing the manual requires FrontendStack's deployed
+`userGuideRevision: same-origin-framing-v1` config marker, which follows the
+distribution update. This blocks frontend publication until the manual's
+same-origin framing policy is ready.
 
 The 2026-11-10 UI correction replaces the simplified menu illustrations with
 36 actual frontend screenshots captured at revision

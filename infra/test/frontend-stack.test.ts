@@ -10,7 +10,11 @@ import * as path from 'node:path';
 
 describe('FrontendStack', () => {
   let template: Template;
-  let runtimeConfig: { cognito: { userPoolClientId: string }; mcp: Record<string, unknown> };
+  let runtimeConfig: {
+    cognito: { userPoolClientId: string };
+    mcp: Record<string, unknown>;
+    userGuideRevision: string;
+  };
 
   beforeAll(() => {
     const app = new cdk.App({
@@ -80,6 +84,10 @@ describe('FrontendStack', () => {
     expect(JSON.stringify(application.ContentSecurityPolicy.ContentSecurityPolicy)).toContain("frame-ancestors 'none'");
     expect(config.CacheBehaviors.filter((value: { ResponseHeadersPolicyId?: unknown }) =>
       JSON.stringify(value.ResponseHeadersPolicyId) === JSON.stringify(guide.ResponseHeadersPolicyId))).toHaveLength(1);
+    expect(runtimeConfig.userGuideRevision).toBe('same-origin-framing-v1');
+    const deployment = Object.values(template.findResources('Custom::CDKBucketDeployment'))[0];
+    const distributionId = Object.keys(template.findResources('AWS::CloudFront::Distribution'))[0];
+    expect(deployment.DependsOn).toContain(distributionId);
   });
 
   test('the HTTP origin resolves only the current field of an explicit secret version', () => {

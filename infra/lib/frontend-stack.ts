@@ -601,6 +601,7 @@ function handler(event) {
         s3deploy.Source.jsonData('config.json', {
           wsUrl: WEBSOCKET_PATH,
           staticRouterRevision: 'segmented-rsc-v1',
+          userGuideRevision: 'same-origin-framing-v1',
           qaAsyncJobs: props.qaAsyncJobsEnabled === true,
           // Shows the Billing Insight hand-off button; only the API holds the URL.
           ...(billingInsightUrlContext(this) ? { billingInsight: true } : {}),

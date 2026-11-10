@@ -73,11 +73,11 @@ checks. It also fixes the responsive-ancestor issue reported by that review.
   manifests and review reports are excluded.
 - Online packaging passes. An invalid offline archive fails, preserves all
   previous generated asset bytes and leaves no temporary staging directory.
-- Frontend: all 696 unit tests pass after the latest base integration.
+- Frontend: all 709 unit tests pass after the latest base integration.
   Lint has zero errors, and production build
   passes without development authentication. Fifteen lint warnings are in
   existing files. Documentation packaging/media tests (18), publication tests
-  (8), documentation validation and JavaScript syntax checks pass.
+  (11), documentation validation and JavaScript syntax checks pass.
 - Infrastructure synthesis, TypeScript compilation and all 335 tests pass.
 
 Browser evidence and export identities are recorded in
@@ -95,6 +95,13 @@ Frontend workflow source triggers now include the guide and its packager,
 ensuring manual updates rebuild the bundled copy. Existing review, test,
 publication ordering, runtime configuration preservation and deployment gates
 remain intact.
+
+An infrastructure-owned `userGuideRevision: same-origin-framing-v1` marker is
+published only after the distribution update. Exports containing the manual
+require that exact deployed marker before any upload or invalidation. Negative
+publication tests demonstrate that missing, boolean and obsolete markers leave
+the site untouched; the ready path publishes the manual and preserves config.
+This corrects the independent review's frontend/infrastructure ordering blocker.
 
 Deploy the reviewed FrontendStack framing behavior before the frontend assets.
 Wait for CloudFront propagation, verify the live manual headers and retained
