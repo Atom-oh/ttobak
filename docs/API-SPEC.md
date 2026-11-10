@@ -1638,7 +1638,10 @@ with a translation label (English or Korean `Translation:` labels, `Here is the 
 starts with `{` or echoes `current_segment`/`previous_segments`, is longer than
 `4*len(text)+200` bytes, has a Hangul letter share below 0.3 for a `ko` target
 (except at most four words that all occur in a Latin-only source, such as kept
-product names), or above 0.1 for an `en` target. Fallback reasons in metering are
+product names), or above 0.1 for an `en`, `ja` or `zh` target. An `en` target
+also rejects a Han/kana letter share above 0.1; a `zh` target rejects output with no
+Han letter and a `ja` target output with neither kana nor Han, with the same
+Latin-only exception. Fallback reasons in metering are
 `unavailable`, `too-long`, `llm-error` (including timeout) and `invalid-output`.
 The web client sends `high` with context for finals and `fast` for opt-in drafts.
 `context` (at most two
