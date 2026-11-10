@@ -122,6 +122,49 @@ class ScreenshotMediaTests(unittest.TestCase):
                     fetch.assert_not_called()
                 self.assertFalse(self.output.exists())
 
+    def test_wrong_dimensions_are_rejected(self):
+        self.receipt['screens'][0]['width'] = 2
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            guide.build(self.output, self.save_archive())
+        self.assertFalse(self.output.exists())
+
+    def test_invalid_image_header_is_rejected_even_with_matching_hashes(self):
+        raw_image = b'not a WebP image'
+        raw = self.make_archive([(self.name, raw_image)])
+        self.receipt['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        self.receipt['screens'][0].update(bytes=len(raw_image),
+                                        sha256=hashlib.sha256(raw_image).hexdigest())
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            guide.build(self.output, self.save_archive(raw))
+        self.assertFalse(self.output.exists())
+
+    def test_symlinked_receipt_and_cache_are_rejected(self):
+        receipt = self.source / 'screenshots.json'
+        actual = self.source / 'receipt.backup'
+        receipt.rename(actual)
+        receipt.symlink_to(actual)
+        with self.assertRaises(ValueError):
+            guide.build(self.output, self.save_archive())
+        self.assertFalse(self.output.exists())
+        receipt.unlink()
+        actual.rename(receipt)
+        linked = self.root / 'linked.zip'
+        linked.symlink_to(self.save_archive())
+        with self.assertRaises(ValueError):
+            guide.build(self.output, linked)
+        self.assertFalse(self.output.exists())
+
+    def test_existing_output_never_fetches_or_overwrites(self):
+        self.output.mkdir()
+        sentinel = self.output / 'keep'
+        sentinel.write_bytes(b'keep')
+        with patch.object(guide, 'urlopen') as fetch:
+            with self.assertRaises(ValueError):
+                guide.build(self.output)
+            fetch.assert_not_called()
+        self.assertEqual(sentinel.read_bytes(), b'keep')
 
 
 if __name__ == '__main__':
