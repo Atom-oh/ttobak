@@ -1,10 +1,12 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -23,8 +25,11 @@ const (
 	// the end of the step, so a step that starts cannot outgrow it.
 	mergeContactIndexCap = 10000
 	mergeContactPageSize = 100
-	// mergeMinPhoneDigits keeps short extensions from matching unrelated people.
-	mergeMinPhoneDigits = 7
+	// mergeContactsPerRun is how many source contacts one moveContacts call
+	// processes. Building the target index decrypts every target row, so the
+	// contacts step ignores the worker's per-call budget and amortizes one
+	// index over this many source contacts.
+	mergeContactsPerRun = 500
 )
 
 // MergeFailureCode returns the job error code for a mover error, or "" when
@@ -36,53 +41,69 @@ func MergeFailureCode(err error) string {
 	return ""
 }
 
-// contactMatchKeys returns the dedupe keys of a contact: its normalized email
-// and the digits of its mobile and work phones. Empty values and phone keys
-// shorter than mergeMinPhoneDigits digits are skipped.
-func contactMatchKeys(c model.AccountContact) []string {
-	var keys []string
+// contactMatchKey returns the dedupe key of a contact: its trimmed,
+// lower-cased email, or "" when it has none. Phones never match: people who
+// share a company line are different contacts.
+func contactMatchKey(c model.AccountContact) string {
 	if email := strings.ToLower(strings.TrimSpace(c.Email)); email != "" {
-		keys = append(keys, "e:"+email)
+		return "e:" + email
 	}
-	for _, phone := range []string{c.Phone, c.WorkPhone} {
-		var digits strings.Builder
-		for _, r := range phone {
-			if r >= '0' && r <= '9' {
-				digits.WriteRune(r)
-			}
-		}
-		if digits.Len() >= mergeMinPhoneDigits {
-			keys = append(keys, "p:"+digits.String())
-		}
+	return ""
+}
+
+// contactMergeFields lists every contact field with its note label.
+func contactMergeFields(c *model.AccountContact) []struct {
+	label string
+	value *string
+} {
+	return []struct {
+		label string
+		value *string
+	}{
+		{"name", &c.Name}, {"company", &c.Company}, {"title", &c.Title}, {"department", &c.Department},
+		{"email", &c.Email}, {"address", &c.Address}, {"workPhone", &c.WorkPhone}, {"fax", &c.Fax},
+		{"phone", &c.Phone}, {"cardRegisteredAt", &c.CardRegisteredAt}, {"cardBook", &c.CardBook},
+		{"group", &c.Group}, {"notes", &c.Notes},
 	}
-	return keys
 }
 
 // mergeContactFields folds from into into: every contact field keeps into's
-// value when it is non-empty after trimming and takes from's otherwise.
-// Identity and revision are into's.
-func mergeContactFields(into, from model.AccountContact) model.AccountContact {
-	pick := func(b, a string) string {
-		if strings.TrimSpace(b) != "" {
-			return b
-		}
-		return a
-	}
+// value when it is non-empty after trimming and takes from's otherwise. A
+// non-empty from value that differs from into's is kept by appending one
+// "[merged from <source>] <field>: <value>" line per field to into's notes.
+// Identity and revision are into's. ok is false when the merged contact
+// would exceed the contact size limits; the caller then keeps from separate.
+func mergeContactFields(into, from model.AccountContact, source string) (model.AccountContact, bool) {
 	out := into
-	out.Name = pick(into.Name, from.Name)
-	out.Company = pick(into.Company, from.Company)
-	out.Title = pick(into.Title, from.Title)
-	out.Department = pick(into.Department, from.Department)
-	out.Email = pick(into.Email, from.Email)
-	out.Address = pick(into.Address, from.Address)
-	out.WorkPhone = pick(into.WorkPhone, from.WorkPhone)
-	out.Fax = pick(into.Fax, from.Fax)
-	out.Phone = pick(into.Phone, from.Phone)
-	out.CardRegisteredAt = pick(into.CardRegisteredAt, from.CardRegisteredAt)
-	out.CardBook = pick(into.CardBook, from.CardBook)
-	out.Group = pick(into.Group, from.Group)
-	out.Notes = pick(into.Notes, from.Notes)
-	return out
+	var lines []string
+	fromFields := contactMergeFields(&from)
+	for i, f := range contactMergeFields(&out) {
+		a, b := strings.TrimSpace(*fromFields[i].value), strings.TrimSpace(*f.value)
+		switch {
+		case b == "":
+			*f.value = *fromFields[i].value
+		case a == "" || a == b || f.label == "email" && strings.EqualFold(a, b):
+		default:
+			lines = append(lines, "[merged from "+source+"] "+f.label+": "+a)
+		}
+	}
+	if len(lines) > 0 {
+		notes := strings.Join(lines, "\n")
+		if strings.TrimSpace(out.Notes) != "" {
+			notes = out.Notes + "\n" + notes
+		}
+		out.Notes = notes
+	}
+	return out, contactWithinLimits(out)
+}
+
+func contactWithinLimits(c model.AccountContact) bool {
+	if len(c.Notes) > contactNotesMaxBytes || !utf8.ValidString(c.Notes) {
+		return false
+	}
+	c.PK, c.SK = "", ""
+	encoded, err := json.Marshal(c)
+	return err == nil && len(encoded) <= contactEncodedMaxBytes
 }
 
 // contactIndexEntry is one target contact. stale means this run wrote it,
@@ -92,24 +113,21 @@ type contactIndexEntry struct {
 	stale   bool
 }
 
-// contactIndex maps dedupe keys to target contacts; the first contact to
+// contactIndex maps email keys to target contacts; the first contact to
 // claim a key keeps it, so matching is deterministic in target key order.
 type contactIndex map[string]*contactIndexEntry
 
 func (ix contactIndex) add(e *contactIndexEntry) {
-	for _, k := range contactMatchKeys(e.contact) {
+	if k := contactMatchKey(e.contact); k != "" {
 		if _, taken := ix[k]; !taken {
 			ix[k] = e
 		}
 	}
 }
 
-// match returns the target for c, trying email before phones.
 func (ix contactIndex) match(c model.AccountContact) *contactIndexEntry {
-	for _, k := range contactMatchKeys(c) {
-		if e := ix[k]; e != nil {
-			return e
-		}
+	if k := contactMatchKey(c); k != "" {
+		return ix[k]
 	}
 	return nil
 }
@@ -154,81 +172,105 @@ func (s *AccountMergeService) buildContactIndex(fence *mergeFence, job *model.Ac
 	return ix, nil
 }
 
-// moveContacts moves up to budget source contacts into the target, folding
-// each into an existing target contact that shares a dedupe key and
-// otherwise moving it under its own ID. Every relocation records a
-// MERGE#contact# map row for the events step. A source row that cannot be
-// opened is left on the source and counted as Unreadable; a row that already
-// has a map row is skipped. The cursor is the source contact ID to continue
-// after; a repeat run moves nothing because moved rows are gone.
-func (s *AccountMergeService) moveContacts(fence *mergeFence, job *model.AccountMergeJob, budget int) (mergeMoveResult, error) {
+// moveContacts moves up to mergeContactsPerRun source contacts into the
+// target. The target's email index is built once per call. A source contact
+// whose email matches a target contact is folded into it (see
+// mergeContactFields); one whose merged form would exceed the size limits is
+// kept as a separate target contact (KeptSeparate); any other moves under its
+// own ID. Every relocation records a MERGE#contact# map row for the events
+// step. A source row that cannot be opened is left on the source and counted
+// as Unreadable; a row that already has a map row is skipped. The cursor is
+// the source contact ID to continue after; a repeat run moves nothing
+// because moved rows are gone.
+func (s *AccountMergeService) moveContacts(fence *mergeFence, job *model.AccountMergeJob) (mergeMoveResult, error) {
 	result := mergeMoveResult{Cursor: job.Cursor}
 	ctx := fence.Context()
 	if err := fence.Err(); err != nil {
 		return result, err
 	}
-	if budget < 1 {
-		return result, fmt.Errorf("%w: merge budget", ErrInvalidInput)
-	}
 	index, err := s.buildContactIndex(fence, job)
 	if err != nil {
 		return result, err
 	}
-	page, unreadable, next, err := s.mover.ListAccountContactsForMerge(ctx, job.SourceAccountID, min(budget, mergeContactPageSize), job.Cursor)
-	if err != nil {
+	source := job.SourceAccountID
+	if acct, err := s.mover.GetAccount(ctx, job.SourceAccountID); err != nil {
 		return result, fence.translate(err)
+	} else if acct != nil && strings.TrimSpace(acct.Name) != "" {
+		source = strings.TrimSpace(acct.Name)
 	}
-	ids := make([]string, len(page))
-	for i, c := range page {
-		ids[i] = c.ContactID
-	}
-	mapped, err := s.mover.GetMergeContactMap(ctx, job.SourceAccountID, ids)
-	if err != nil {
-		return result, fence.translate(err)
-	}
-	moved, merged, skipped := 0, 0, 0
-	for _, c := range page {
-		if err := fence.Err(); err != nil {
-			return result, err
-		}
-		if _, done := mapped[c.ContactID]; done {
-			skipped++
-			continue
-		}
-		target := index.match(c)
-		if target == nil {
-			if err := s.mover.MoveContactForMerge(ctx, job, c); err != nil {
-				return result, fence.translate(err)
-			}
-			index.add(&contactIndexEntry{contact: c, stale: true})
-			moved++
-			continue
-		}
-		if target.stale {
-			fresh, err := s.mover.GetAccountContact(ctx, job.TargetAccountID, target.contact.ContactID)
-			if err != nil {
-				return result, fence.translate(err)
-			}
-			if fresh == nil {
-				return result, fmt.Errorf("merge target contact vanished: %w", repository.ErrConditionFailed)
-			}
-			target.contact, target.stale = *fresh, false
-		}
-		into := mergeContactFields(target.contact, c)
-		if err := s.mover.MergeContactIntoExisting(ctx, job, c, into); err != nil {
+	var out mergeMoveResult
+	merged := 0
+	cursor, processed := job.Cursor, 0
+	for {
+		page, unreadable, next, err := s.mover.ListAccountContactsForMerge(ctx, job.SourceAccountID, min(mergeContactPageSize, mergeContactsPerRun-processed), cursor)
+		if err != nil {
 			return result, fence.translate(err)
 		}
-		target.contact, target.stale = into, true
-		index.add(target)
-		merged++
+		ids := make([]string, len(page))
+		for i, c := range page {
+			ids[i] = c.ContactID
+		}
+		mapped, err := s.mover.GetMergeContactMap(ctx, job.SourceAccountID, ids)
+		if err != nil {
+			return result, fence.translate(err)
+		}
+		for _, c := range page {
+			if err := fence.Err(); err != nil {
+				return result, err
+			}
+			if _, done := mapped[c.ContactID]; done {
+				out.Skipped++
+				continue
+			}
+			target := index.match(c)
+			var into model.AccountContact
+			fits := false
+			if target != nil {
+				if target.stale {
+					fresh, err := s.mover.GetAccountContact(ctx, job.TargetAccountID, target.contact.ContactID)
+					if err != nil {
+						return result, fence.translate(err)
+					}
+					if fresh == nil {
+						return result, fmt.Errorf("merge target contact vanished: %w", repository.ErrConditionFailed)
+					}
+					target.contact, target.stale = *fresh, false
+				}
+				into, fits = mergeContactFields(target.contact, c, source)
+			}
+			if !fits {
+				if err := s.mover.MoveContactForMerge(ctx, job, c); err != nil {
+					return result, fence.translate(err)
+				}
+				index.add(&contactIndexEntry{contact: c, stale: true})
+				if target != nil {
+					out.KeptSeparate++
+				}
+				out.Moved++
+				continue
+			}
+			if err := s.mover.MergeContactIntoExisting(ctx, job, c, into); err != nil {
+				return result, fence.translate(err)
+			}
+			target.contact, target.stale = into, true
+			merged++
+			out.Moved++
+		}
+		out.Unreadable += len(unreadable)
+		processed += len(page) + len(unreadable)
+		if next == "" {
+			out.Done = true
+			break
+		}
+		cursor = next
+		if processed >= mergeContactsPerRun {
+			break
+		}
 	}
-	cursor := next
-	if cursor == "" {
-		cursor = job.Cursor
+	out.Cursor = cursor
+	if out.Unreadable > 0 || out.Skipped > 0 || merged > 0 || out.KeptSeparate > 0 {
+		log.Printf("account merge contacts: source=%s moved=%d merged=%d keptSeparate=%d skipped=%d unreadable=%d",
+			job.SourceAccountID, out.Moved, merged, out.KeptSeparate, out.Skipped, out.Unreadable)
 	}
-	if len(unreadable) > 0 || skipped > 0 || merged > 0 {
-		log.Printf("account merge contacts: source=%s moved=%d merged=%d skipped=%d unreadable=%d",
-			job.SourceAccountID, moved, merged, skipped, len(unreadable))
-	}
-	return mergeMoveResult{Moved: moved + merged, Skipped: skipped, Unreadable: len(unreadable), Cursor: cursor, Done: next == ""}, nil
+	return out, nil
 }

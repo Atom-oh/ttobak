@@ -20,6 +20,7 @@ type accountMergeMoverRepo interface {
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	PutMergedMember(ctx context.Context, job *model.AccountMergeJob, member *model.AccountMember) error
 
+	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
 	ListAccountPartitionKeys(ctx context.Context, accountID, prefix string, limit int) ([]string, bool, error)
 	ListAccountContactsForMerge(ctx context.Context, accountID string, limit int, after string) ([]model.AccountContact, []string, string, error)
 	GetAccountContact(ctx context.Context, accountID, contactID string) (*model.AccountContact, error)
@@ -81,8 +82,11 @@ type mergeMoveResult struct {
 	// Unreadable counts source items left in place because they could not
 	// be opened; the worker reports them on the job.
 	Unreadable int
-	Cursor     string
-	Done       bool
+	// KeptSeparate counts source contacts that matched a target contact but
+	// were moved separately because the merged contact would be too large.
+	KeptSeparate int
+	Cursor       string
+	Done         bool
 }
 
 // mergedMemberRole maps a source role onto the target: the source Owner joins
