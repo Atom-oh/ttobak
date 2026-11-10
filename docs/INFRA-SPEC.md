@@ -319,6 +319,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom ImageUploadCompleted | process-image |
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
 | Custom TermsRequested, ttobak.analysis | summarize, automatic term extraction only |
+| Custom PeopleResolveRequested, ttobak.analysis | summarize, account people resolution only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
 | S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-062; skips checkpoints) |
@@ -692,6 +693,23 @@ longer streak cannot be one alarm. Triggers are logged
 `QUEUED` only while `KB_TERMS_MODE` or `RESEARCH_TERMS_MODE` is `on`, so the
 alarm stays quiet with both off. Missing data is `notBreaching`, and the alarm
 action follows the `PipelineAlarmTopicArn` convention of the other alarms.
+
+## Account people resolution delivery
+
+Rule `ttobak-people-resolve-requested` routes default-bus `ttobak.analysis`
+events with detail-type `PeopleResolveRequested` to the summarize Lambda. Detail
+holds IDs and a reason only (`{accountId,ownerId?,meetingId?,reason}`); the
+worker rereads the meeting, members, contacts and entities. Delivery expires
+after five minutes, with three retry attempts and the SSE-SQS
+`ttobak-people-resolve-dlq` (seven-day retention, redrive denied), scoped to
+the exact rule ARN; `PipelineFailures` watches the DLQ (`PeopleResolve`). The
+API function depends on the rule, so the consumer exists before publishers.
+The API role's existing `events:PutEvents` grant covers publication.
+
+The resolver opens sealed account contacts, so summarize receives `KMS_KEY_ID`
+and its role gains `kms:Decrypt` on the encryption key, never encrypt or data
+key generation. The existing table grant covers the link, mention and run rows.
+The post-summary pass runs inline with its own 30-second bound.
 
 ## Summary privacy writer activation
 

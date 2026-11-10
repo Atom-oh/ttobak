@@ -154,6 +154,15 @@ type MeetingService struct {
 	// LoadDefaultConfig call per invite) and so tests can inject a mock.
 	cognito       cognitoAdminAPI
 	cognitoPoolID string
+
+	// peopleResolve publishes PeopleResolveRequested after a speaker map save
+	// of a meeting published to its account (best-effort).
+	peopleResolve func(context.Context, model.PeopleResolveRequested) error
+}
+
+// SetPeopleResolvePublisher wires the speaker-map people resolve publisher.
+func (s *MeetingService) SetPeopleResolvePublisher(fn func(context.Context, model.PeopleResolveRequested) error) {
+	s.peopleResolve = fn
 }
 
 // NewMeetingService creates a new meeting service
@@ -1018,6 +1027,10 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
 		map[string]interface{}{"updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)}, fields); err != nil {
 		return nil, err
+	}
+	if before.SharedToAccount && before.AccountID != "" {
+		publishPeopleResolve(ctx, s.peopleResolve, model.PeopleResolveRequested{AccountID: before.AccountID,
+			OwnerID: before.UserID, MeetingID: before.MeetingID, Reason: model.PeopleResolveReasonSpeakers})
 	}
 
 	return &model.MeetingUpdateResponse{

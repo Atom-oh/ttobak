@@ -8,6 +8,7 @@
   (document previews), ADR-045 (connector delegation), ADR-063 (account contact
   encryption). Design record:
   [spec](../superpowers/specs/2026-11-08-account-signals-and-flow-design.md).
+- Related: ADR-065 adds people edges in the `LINK#meeting#` range.
 
 ## Context
 

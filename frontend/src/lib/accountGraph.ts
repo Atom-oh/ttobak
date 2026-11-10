@@ -1,4 +1,5 @@
 import type { AccountGraph } from '@/types/meeting';
+import { roleLabel } from './accountPeople';
 
 const MAX_LABEL_CODE_POINTS = 60;
 
@@ -50,7 +51,16 @@ export function toMermaid(graph: AccountGraph): string {
     const from = index.get(edge.from);
     const to = index.get(edge.to);
     if (!from || !to) continue;
-    lines.push(`  ${from} ${edge.origin === 'auto' ? '-.->' : '-->'} ${to}`);
+    const auto = edge.origin === 'auto';
+    const label = edge.kind === 'person' ? escapeLabel(roleLabel(edge.role)) : '';
+    const arrow = label ? (auto ? `-. "${label}" .->` : `-- "${label}" -->`) : (auto ? '-.->' : '-->');
+    lines.push(`  ${from} ${arrow} ${to}`);
   }
   return lines.join('\n');
+}
+
+/** Korean note for the graph: only members with a people edge are drawn. */
+export function memberCountNote(memberCount: number | undefined | null): string {
+  const count = Number(memberCount) || 0;
+  return count > 0 ? `어카운트 멤버 ${count}명 중 미팅에 연결된 멤버만 표시됩니다` : '';
 }

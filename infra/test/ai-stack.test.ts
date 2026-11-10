@@ -96,6 +96,13 @@ describe('AiStack', () => {
     expect(otherReads).toHaveLength(0);
   });
 
+  test('summarize may decrypt but never seal with the encryption key', () => {
+    const kms = statementsOf('TtobakSummarizeRole').filter(statement => JSON.stringify(statement.Action).includes('kms:'));
+    expect(kms).toHaveLength(1);
+    expect(kms[0].Action).toEqual('kms:Decrypt');
+    expect(JSON.stringify(kms[0].Resource)).toContain('TtobakEncryptionKey');
+  });
+
   test('API role can write and delete vocab/ table files', () => {
     const actions = JSON.stringify(statementsOf('TtobakApiRole').map(statement => statement.Action));
     expect(actions).toContain('s3:PutObject');

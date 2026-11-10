@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 func (r *overviewTestRepo) ListProjectStageHistory(_ context.Context, projectID string, limit int) ([]model.ProjectStageChange, error) {
@@ -326,5 +327,117 @@ func TestFlow_CapsAndTruncatedFlag(t *testing.T) {
 	raw, _ := json.Marshal(flow)
 	if len(raw) > MaxAccountFlowBytes || !flow.Truncated || len(flow.Rows) == 0 {
 		t.Fatalf("bytes=%d truncated=%v rows=%d", len(raw), flow.Truncated, len(flow.Rows))
+	}
+}
+
+func (r *overviewTestRepo) ListPeopleLinksForMeeting(_ context.Context, _, meetingID string, _ int) ([]model.PeopleLink, bool, error) {
+	r.peopleQueries++
+	var out []model.PeopleLink
+	for _, l := range r.people {
+		if l.MeetingID == meetingID {
+			out = append(out, l)
+		}
+	}
+	return out, false, nil
+}
+
+func (r *overviewTestRepo) GetUserByID(_ context.Context, id string) (*model.User, error) {
+	return r.users[id], nil
+}
+
+// flowPeopleFixture publishes one unassigned meeting o1:m1.
+func flowPeopleFixture() (*AccountOverviewService, *overviewTestRepo) {
+	svc, repo, _, _ := newOverviewTest()
+	repo.contacts = map[string]*model.AccountContact{}
+	repo.meetings["o1:m1"] = flowMeeting("o1", "m1", signalsNow.Add(-day), true)
+	repo.acctRefs = []model.MeetingRef{acctMeetingRef("o1", "m1", signalsNow.Add(-day))}
+	return svc, repo
+}
+
+func flowContact(repo *overviewTestRepo, i int, name string) string {
+	id := flowEventID(100 + i)
+	repo.contacts[id] = &model.AccountContact{ContactID: id, Name: name}
+	return id
+}
+
+func TestFlow_ResponseItemPeople(t *testing.T) {
+	svc, repo := flowPeopleFixture()
+	repo.members = []model.AccountMember{{PK: model.PrefixAccount + linkAcct, SK: model.PrefixMember + linkUser, AccountID: linkAcct, UserID: linkUser, Email: "a@x.example"}}
+	repo.users = map[string]*model.User{linkUser: {UserID: linkUser, Name: "Kim Lead"}}
+	c, c2 := flowContact(repo, 1, "Lee"), flowContact(repo, 2, "Park")
+	repo.people = []model.PeopleLink{
+		graphPersonEdge("o1:m1", "member", linkUser, "speaker"),
+		graphPersonEdge("o1:m1", "contact", c, "speaker"),
+		graphPersonEdge("o1:m1", "contact", c, "participant"),
+		graphPersonEdge("o1:m1", "contact", c2, "mentions"),
+		graphPersonEdge("o1:m1", "member", "former", "assignee"),
+	}
+	flow, err := svc.Flow(context.Background(), linkUser, linkAcct, signalsNow)
+	if err != nil || len(flow.Unassigned.Response) != 1 {
+		t.Fatalf("flow=%+v err=%v", flow, err)
+	}
+	got := flow.Unassigned.Response[0].People
+	want := []model.FlowPerson{{Kind: "contact", ID: c, Label: "Lee", Role: "participant"}, {Kind: "member", ID: linkUser, Label: "Kim Lead", Role: "speaker"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("people %+v", got)
+	}
+}
+
+func TestFlow_ActivityAttendeesFromContacts(t *testing.T) {
+	svc, repo := flowPeopleFixture()
+	c := flowContact(repo, 1, "Lee")
+	event := flowEvent(0, signalsNow.Add(-day))
+	event.Attendees = []model.EventAttendee{{ContactID: c, Name: "stale"}, {ContactID: flowEventID(150), Name: "removed"}, {Name: "free text"}}
+	repo.addEvent(event)
+	flow, err := svc.Flow(context.Background(), linkUser, linkAcct, signalsNow)
+	if err != nil || len(flow.Unassigned.Activity) != 1 {
+		t.Fatalf("flow=%+v err=%v", flow, err)
+	}
+	if got := flow.Unassigned.Activity[0].People; len(got) != 1 || got[0] != (model.FlowPerson{Kind: "contact", ID: c, Label: "Lee", Role: "attendee"}) {
+		t.Fatalf("people %+v", got)
+	}
+}
+
+func TestFlow_PeopleCappedAtFive(t *testing.T) {
+	svc, repo := flowPeopleFixture()
+	for i := 0; i < 7; i++ {
+		repo.people = append(repo.people, graphPersonEdge("o1:m1", "contact", flowContact(repo, i, fmt.Sprint("P", i)), "participant"))
+	}
+	flow, err := svc.Flow(context.Background(), linkUser, linkAcct, signalsNow)
+	if err != nil || len(flow.Unassigned.Response[0].People) != maxFlowPeoplePerItem {
+		t.Fatalf("flow=%+v err=%v", flow, err)
+	}
+}
+
+func TestFlow_PeopleQueryBound(t *testing.T) {
+	svc, repo := flowPeopleFixture()
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m1", "contact", flowContact(repo, 1, "Lee"), "participant")}
+	reads := newOverviewReads()
+	reads.meetings["o1:m1"] = repo.meetings["o1:m1"]
+	p := &flowPeopleReads{labels: map[string]string{}, contacts: map[string]*model.AccountContact{}, meetings: map[string][]model.FlowPerson{},
+		queries: maxFlowPeopleQueries}
+	people, err := svc.meetingPeople(context.Background(), linkUser, linkAcct, &model.AccountMember{}, "o1:m1", p, reads)
+	if err != nil || people != nil || repo.peopleQueries != 0 || !reads.truncated {
+		t.Fatalf("people=%+v queries=%d truncated=%v err=%v", people, repo.peopleQueries, reads.truncated, err)
+	}
+	p.queries = maxFlowPeopleQueries - 1
+	if people, err := svc.meetingPeople(context.Background(), linkUser, linkAcct, &model.AccountMember{}, "o1:m1", p, reads); err != nil || len(people) != 1 {
+		t.Fatalf("people=%+v err=%v", people, err)
+	}
+}
+
+func TestFlow_SkipsDeletedContactPerson(t *testing.T) {
+	svc, repo := flowPeopleFixture()
+	bad := flowEventID(160)
+	repo.contactErrs = map[string]error{bad: fmt.Errorf("open: %w", repository.ErrContactUnreadable)}
+	keep := flowContact(repo, 1, "Lee")
+	repo.people = []model.PeopleLink{graphPersonEdge("o1:m1", "contact", flowEventID(161), "participant"),
+		graphPersonEdge("o1:m1", "contact", bad, "participant"), graphPersonEdge("o1:m1", "contact", keep, "speaker")}
+	flow, err := svc.Flow(context.Background(), linkUser, linkAcct, signalsNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := flow.Unassigned.Response[0].People; len(got) != 1 || got[0].ID != keep {
+		t.Fatalf("people %+v", got)
 	}
 }

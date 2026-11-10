@@ -366,6 +366,8 @@ export class AiStack extends cdk.Stack {
 
     // KB bucket write (for exporting meeting context documents)
     props.kbBucket.grantWrite(this.summarizeRole);
+    // The people resolver opens sealed account contacts; it never seals them.
+    this.kmsKey.grantDecrypt(this.summarizeRole);
 
     // Dictionary term sources: HeadObject (account-id metadata) and GetObject
     // of KB uploads and research reports only.
