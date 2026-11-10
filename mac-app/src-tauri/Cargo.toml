@@ -23,6 +23,9 @@ env_logger = "0.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "fs", "time", "net", "io-util"] }
 # Local notification when MCP starts a recording (control.rs); Rust-side only.
 tauri-plugin-notification = "2"
+# In-app updates (update.rs); used only through its Rust API. No `updater:`
+# permission is granted to any capability, so the remote SPA cannot call it.
+tauri-plugin-updater = "=2.14.1"
 parking_lot = "0.12"
 hound = "3.5"
 base64 = "0.22"
@@ -46,6 +49,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFString", "CFDictionary", "CFArray", "CFNumber", "CFBase"] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "block2", "objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardware"] }
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+# NSAlert for manual update-check results (update.rs).
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSResponder"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -40,7 +40,9 @@ mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
 mod sleep;
+mod update;
 mod update_policy;
+mod update_prompt;
 mod upload;
 pub mod zoom_mute;
 
@@ -269,6 +271,40 @@ mod command_acl_tests {
                 "{permission} not granted"
             );
         }
+    }
+
+    /// Updates run through the plugin's Rust API only (update.rs); no window,
+    /// least of all the remote SPA, may call the plugin's commands.
+    #[test]
+    fn no_capability_grants_updater_permissions() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("capabilities dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let capability: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+            for permission in capability["permissions"].as_array().expect("permissions") {
+                let id = permission
+                    .as_str()
+                    .or_else(|| permission["identifier"].as_str())
+                    .unwrap_or_default();
+                assert!(
+                    !id.starts_with("updater:"),
+                    "{} grants {id}",
+                    path.display()
+                );
+            }
+            checked += 1;
+        }
+        assert!(
+            checked >= 2,
+            "expected default.json and meeting-prompt.json"
+        );
+        let default = include_str!("../capabilities/default.json");
+        assert!(!default.contains("updater:"));
     }
 }
 
@@ -722,6 +758,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        // Rust API only (update.rs); no capability grants `updater:` commands.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::UpdateState::default())
+        .on_menu_event(|app, event| update::on_menu_event(app, &event.id().0))
         .manage(control::ControlState::default())
         .manage(Arc::new(meeting_detect::MeetingState::default()))
         .manage(RecorderState {
@@ -757,6 +797,12 @@ pub fn run() {
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());
+            // App menu with the update item; failure keeps Tauri's default menu.
+            if let Err(e) = update::install_menu(app.handle()) {
+                log::warn!("update menu unavailable: {e}");
+            }
+            // Update checks; a placeholder pubkey disables them (logged).
+            update::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             sleep::start(app.handle().clone());
             // Adopt any leftover temp WAVs from a previous run (crash, force

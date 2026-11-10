@@ -31,7 +31,6 @@ pub fn is_busy(
 
 /// True when `candidate` is a valid semver strictly newer than `current`.
 /// Any parse failure yields false.
-#[allow(dead_code)] // consumed by the updater tasks that follow
 pub fn is_newer(current: &str, candidate: &str) -> bool {
     match (Version::parse(current), Version::parse(candidate)) {
         (Ok(c), Ok(n)) => n > c,
@@ -41,7 +40,6 @@ pub fn is_newer(current: &str, candidate: &str) -> bool {
 
 /// Prompt only for a version newer than the running one that the user has not
 /// declined; a version newer than the declined one prompts again.
-#[allow(dead_code)] // consumed by the updater tasks that follow
 pub fn should_prompt(current: &str, available: &str, declined: Option<&str>) -> bool {
     is_newer(current, available) && declined != Some(available)
 }
