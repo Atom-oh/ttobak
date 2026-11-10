@@ -29720,24 +29720,23 @@ __export(setup_exports, {
   DEFAULT_SERVERS: () => DEFAULT_SERVERS,
   setup: () => setup
 });
-import { resolve } from "node:path";
+import { rmSync as rmSync3 } from "node:fs";
+import { join as join8, resolve } from "node:path";
 function parseArgs(args) {
-  const options = { yes: false, acceptUnknownSensitivity: false, autoAck: true, skip: /* @__PURE__ */ new Set() };
+  const options = { yes: false, noninteractive: false, acceptUnknownSensitivity: false, skip: /* @__PURE__ */ new Set() };
   const seen = /* @__PURE__ */ new Set();
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
     if (name !== "--skip" && seen.has(name)) throw new IntakeError("INVALID_ARGUMENT", `${name} repeated`);
     seen.add(name);
     if (name === "--yes") options.yes = true;
+    else if (name === "--noninteractive") options.noninteractive = options.yes = true;
     else if (name === "--accept-unknown-sensitivity") options.acceptUnknownSensitivity = true;
-    else if (name === "--skip" || name === "--schedule" || name === "--auto-ack") {
+    else if (name === "--skip" || name === "--schedule") {
       const value = args[++index];
       if (value === void 0 || value.startsWith("--")) throw new IntakeError("INVALID_ARGUMENT", `${name} needs a value`);
       if (name === "--schedule") options.schedule = parseSchedule(value);
-      else if (name === "--auto-ack") {
-        if (value !== "on" && value !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
-        options.autoAck = value === "on";
-      } else {
+      else {
         if (!ORDER.includes(value)) throw new IntakeError("INVALID_ARGUMENT", "--skip takes a connector name");
         options.skip.add(value);
       }
@@ -29774,6 +29773,14 @@ async function setup(args, environment, store) {
     if (code === "AUTH_EXPIRED_MIDWAY") say("Midway \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD130\uBBF8\uB110\uC5D0\uC11C `mwinit -o`\uB97C \uC2E4\uD589\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.");
     return { ok: false, code, message, connectors, dryRun, synced, schedule, ...sync ? { sync } : {} };
   };
+  const before = store.read("selection.json");
+  const restore = () => {
+    try {
+      if (before) store.write(before, "selection.json");
+      else rmSync3(join8(store.directory, "selection.json"), { force: true });
+    } catch {
+    }
+  };
   const reports = listHosts(environment.home, parsePathList(environment.env.PATH));
   for (const connector of ORDER) {
     const label = LABELS[connector];
@@ -29807,18 +29814,37 @@ async function setup(args, environment, store) {
       await selectConnector(connector, {
         host,
         server,
-        autoAck: options.autoAck,
+        autoAck: false,
         acceptUnknownSensitivity: accept,
         identityAuthFatal: true
       }, environment, store);
-      connectors[connector] = { status: "selected", server, host };
+      connectors[connector] = { status: "selected", server, host, ...connector === "specreq" ? { autoAck: false } : {} };
       say(`${label}: ${host}\uC758 ${server} \uD655\uC778 \uC644\uB8CC`);
+      if (connector === "specreq") {
+        say("SpecReq \uC790\uB3D9 \uC218\uB77D(auto-ack)\uC740 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4. \uCF1C\uB824\uBA74 `intake select specreq --host <host> --server spec-req-mcp --auto-ack on`\uC744 \uC2E4\uD589\uD558\uC138\uC694.");
+      }
     } catch (error3) {
       const code = intakeCode(error3);
-      if (code === "AUTH_EXPIRED_MIDWAY") return stop(code, `${server} reported an authentication failure`);
+      if (code === "AUTH_EXPIRED_MIDWAY") {
+        restore();
+        return stop(code, `${server} reported an authentication failure`);
+      }
       connectors[connector] = { status: "skipped", code };
       say(`${label}: ${server} \uD655\uC778 \uC2E4\uD328(${code}), \uAC74\uB108\uB701\uB2C8\uB2E4.`);
     }
+  }
+  const saved = store.read("selection.json");
+  if (saved) {
+    const next = { ...saved };
+    for (const connector of ORDER) {
+      const entry2 = connectors[connector];
+      if (entry2?.status === "skipped" && next[connector]) {
+        delete next[connector];
+        connectors[connector] = { ...entry2, removedPrevious: true };
+        say(`${LABELS[connector]}: \uC774\uC804 \uC120\uD0DD\uC744 \uC81C\uAC70\uD588\uC2B5\uB2C8\uB2E4.`);
+      }
+    }
+    store.write(next, "selection.json");
   }
   const selected = SYNC_CONNECTORS.filter((id) => connectors[id]?.status === "selected");
   if (selected.length) {
@@ -29826,14 +29852,18 @@ async function setup(args, environment, store) {
     const dry = await runConnectors({ dryRun: true, noninteractive: true, only: selected }, environment, store);
     dryRun = dry.results;
     say(`\uB4DC\uB77C\uC774\uB7F0: ${countsLine(dry.results)}`);
-    if (dry.code === "AUTH_EXPIRED_MIDWAY") return stop(dry.code, dry.message ?? "");
-    if (dry.ok && (options.yes || yes(await question("\uCCAB \uC218\uC9D1\uC744 \uC2E4\uD589\uD560\uAE4C\uC694? [y/N]")))) {
+    if (!dry.ok) return stop(dry.code ?? "PARTIAL_FAILURE", dry.message ?? "");
+    if (options.yes || yes(await question("\uCCAB \uC218\uC9D1\uC744 \uC2E4\uD589\uD560\uAE4C\uC694? [y/N]"))) {
       say("\uCCAB \uC218\uC9D1\uC744 \uC2E4\uD589\uD569\uB2C8\uB2E4...");
-      const real = await runConnectors({ dryRun: false, noninteractive: false, only: selected }, environment, store);
+      const real = await runConnectors(
+        { dryRun: false, noninteractive: options.noninteractive, only: selected },
+        environment,
+        store
+      );
       sync = real.results;
       synced = real.ok;
       say(`\uC218\uC9D1 \uACB0\uACFC: ${countsLine(real.results)}`);
-      if (real.code === "AUTH_EXPIRED_MIDWAY") return stop(real.code, real.message ?? "");
+      if (!real.ok) return stop(real.code ?? "PARTIAL_FAILURE", real.message ?? "");
     }
   }
   let wanted = options.schedule;
@@ -30084,7 +30114,7 @@ async function signIn(selection, environment, dryRun, noninteractive) {
   let me = environment.me;
   if (!dryRun && !api) {
     const config2 = ttobakConfig(selection, environment.env);
-    const auth = new CognitoAuth2(config2, { interactive: !noninteractive });
+    const auth = environment.authFactory?.(config2, { interactive: !noninteractive }) ?? new CognitoAuth2(config2, { interactive: !noninteractive });
     api = new TtobakApi(auth, config2.apiUrl);
     let idToken;
     try {
@@ -30435,7 +30465,7 @@ var init_run = __esm({
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
     (a synced run also runs the SpecReq task step when meetings and specreq are selected)
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
-  ttobak-mcp intake setup [--yes] [--accept-unknown-sensitivity] [--auto-ack on|off] [--skip <connector>]...
+  ttobak-mcp intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
   ttobak-mcp intake status`;
