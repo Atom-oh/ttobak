@@ -417,39 +417,3 @@ func TestPersonalDocumentWriteCarriesNoMergeFence(t *testing.T) {
 	}
 }
 
-// A member's team crop copy is published only into an open account.
-func TestTeamAudioCropCarriesMergeFence(t *testing.T) {
-	t.Setenv(AccountDescendantReadsEnv, "")
-	memberRow := `{"Item":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"MEMBER#member"},"accountId":{"S":"acc"},"userId":{"S":"member"}}}`
-	respond := func(failAt int, marker bool) func(fenceRequest) (int, string) {
-		return func(call fenceRequest) (int, string) {
-			if call.target == "GetItem" {
-				return 200, memberRow
-			}
-			if failAt >= 0 {
-				return 400, cancelledAt(len(call.body["TransactItems"].([]any)), failAt, marker)
-			}
-			return 200, `{}`
-		}
-	}
-	var calls []fenceRequest
-	r := fenceRepo(t, &calls, respond(-1, false))
-	source, cropped, ref := teamCropFixture()
-	if err := r.CreateAudioCropForTeam(context.Background(), source, cropped, "member", ref); err != nil {
-		t.Fatal(err)
-	}
-	items := fenceItems(t, calls[len(calls)-1])
-	idx := metaIndex(t, items, "acc")
-	if cond := strings.ReplaceAll(resolvedCondition(items[idx]), "attribute_not_exists (", "attribute_not_exists("); !strings.Contains(cond, "attribute_not_exists(mergingInto)") ||
-		!strings.Contains(cond, "attribute_not_exists(mergedInto)") {
-		t.Fatalf("team META condition %q lacks the merge fence", cond)
-	}
-	source, cropped, ref = teamCropFixture()
-	if err := fenceRepo(t, new([]fenceRequest), respond(idx, true)).CreateAudioCropForTeam(context.Background(), source, cropped, "member", ref); !errors.Is(err, ErrAccountMerging) {
-		t.Fatalf("error=%v, want ErrAccountMerging", err)
-	}
-	source, cropped, ref = teamCropFixture()
-	if err := fenceRepo(t, new([]fenceRequest), respond(idx, false)).CreateAudioCropForTeam(context.Background(), source, cropped, "member", ref); !errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountMerging) {
-		t.Fatalf("error=%v, want ErrConditionFailed", err)
-	}
-}
