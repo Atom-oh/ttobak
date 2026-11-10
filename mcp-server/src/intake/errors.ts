@@ -23,6 +23,9 @@ export const INTAKE_CODES = [
   'IDENTITY_MISMATCH',
   'TASKS_PARTIAL',
   'ASSIGNMENT_CAP_EXCEEDED',
+  'SKIPPED_BY_USER',
+  'PARTIAL_FAILURE',
+  'SCHEDULE_FAILED',
 ] as const;
 
 export type IntakeCode = typeof INTAKE_CODES[number];

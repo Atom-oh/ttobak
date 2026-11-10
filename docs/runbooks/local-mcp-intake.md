@@ -10,10 +10,68 @@ contract for one reader, `aws-outlook-mcp` `calendar_view`. The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
 SA performance data of [ADR-068](../decisions/ADR-068-sa-performance-data-residency.md).
 
-## Commands
+## Quick start: `ttobak-mcp intake setup`, then `ttobak-mcp intake run`
 
 Run with the stdio adapter (`~/.ttobak/server.mjs`) or `node mcp-server/dist/index.js`.
 Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
+`setup` writes Korean prompts and progress to stderr only.
+
+```text
+intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
+  [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
+intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
+```
+
+`intake setup`:
+
+1. Lists the host servers (as `intake hosts` does) and probes only the known
+   name per connector: calendar `aws-outlook-mcp`, sfdc `aws-sentral-mcp`,
+   meetings `amazon-meetings-mcp`, specreq `spec-req-mcp`, slack `slack-mcp`.
+   When one name exists in several hosts, Claude wins over Codex, then Kiro;
+   interactive mode asks only then. `--yes` takes the default.
+2. Verifies each candidate exactly as `intake select` does and stores it. No
+   candidate, `--skip` or a failed check marks the connector `skipped` with a
+   code (`SERVER_NOT_CONFIGURED`, `SKIPPED_BY_USER`, `SCHEMA_CHANGED`, ...),
+   and setup continues. Setup is the source of truth: a skipped connector is
+   disabled in the saved selection (`disabled: true`), so `intake run`
+   matches the report. The entry keeps its `sourceId` and ledger, so selecting
+   the same server again (setup or `intake select`) re-enables it without
+   duplicate TTOBAK copies; a different server gets a new source.
+   SpecReq is always selected with auto-ack off (`autoAck: false`); turn it
+   on deliberately with `intake select specreq ... --auto-ack on`.
+3. Calendar needs consent that private items reach the private TTOBAK
+   calendar (see [Behavior](#behavior)): a yes/no question, or
+   `--accept-unknown-sensitivity` with `--yes`. Consent stored by an earlier
+   selection of the same server is reused (`consentReused: true`), also with
+   `--yes` alone. Otherwise it is skipped with
+   `SENSITIVITY_UNKNOWN`.
+4. `AUTH_EXPIRED_MIDWAY` during a check, dry run or sync stops setup: run
+   `mwinit -o` and rerun. A stop during the checks leaves the saved selection
+   as it was before setup.
+5. Dry-runs the calendar and SFDC connectors selected now and reports the
+   counts. Then it asks whether to run the first sync (`--yes` runs it).
+   Setup is a human command, so the first sync may open the TTOBAK login, even
+   with `--yes`; `--noninteractive` (implies `--yes`) never prompts or opens it.
+6. Writes the LaunchAgent only with `--schedule` or an interactive answer
+   (see [Schedule](#schedule)).
+
+The JSON line is `{ok, connectors: {<name>: {status, code?, server?, host?}},
+dryRun: {<connector>: {result, counts}}, synced, schedule, sync?}`. A failed
+dry run or first sync exits 2 with the run's code and `synced: false`; the
+selections stay saved and no schedule is installed.
+
+`intake run` runs the selected connectors in order, calendar (with its task
+step) then SFDC, with one shared TTOBAK sign-in. The JSON line is
+`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts}}}`.
+It exits 0 only when every attempted connector succeeded. Otherwise it exits 2
+with `PARTIAL_FAILURE`; `AUTH_EXPIRED_MIDWAY` anywhere, including the
+calendar's task step (`tasks.failures`), stops the run before later
+connectors, because they share Midway, and is the code. Setup's first sync
+follows the same rule. Disabled selections are skipped. `--noninteractive` never prompts and
+never opens a browser; the LaunchAgent uses it.
+
+## Advanced: manual commands
 
 | Command | Effect |
 |---|---|
@@ -24,6 +82,7 @@ Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
 | `intake select meetings\|specreq\|slack --host <claude\|codex\|kiro> --server <name>` | Starts that server once and checks every allowlisted tool schema. It stores only the reference and `PATH` directories; TTOBAK endpoints still come from the calendar selection or `TTOBAK_*` env. |
 | `intake select specreq ... --auto-ack on\|off` | `on` (default) lets the runner acknowledge an eligible assignment; `off` queues an `ack_needed` notice instead. |
 | `intake status` | Shows the selection (names only) and the last calendar and task results and counts. |
+| `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
 
 The window is the past 7 days through the next 30 days in the Mac's time zone,
 read as 7-day `calendar_view` requests.
@@ -237,33 +296,50 @@ meeting prompt. Check by hand with the packaged app running:
 Notifications are informational: the app never navigates because of one, so it
 cannot discard unsaved input. The task strip on the meetings page shows the task.
 
-## Schedule (after acceptance)
+## Schedule
 
-Install a LaunchAgent at `~/Library/LaunchAgents/click.atomai.ttobak.intake.plist`.
-It runs every 10 minutes, and its arguments are fixed and contain no secrets:
+Schedule only after the acceptance above. `intake setup --schedule <value>`
+(or a yes answer in interactive setup) writes
+`~/Library/LaunchAgents/click.atomai.ttobak.intake.plist`, boots out any old
+job and runs `launchctl bootstrap gui/<uid>` with argv, never a shell.
+Turn it off with `intake schedule off`, which boots the job out and deletes
+the plist. `intake schedule <value>` only writes or removes the plist and
+reloads the job; it starts no server and runs no sync. Setup's `--schedule`
+calls the same step at the end. No plist is written without one of these. A launchctl failure is
+`SCHEDULE_FAILED`.
+
+| Value | launchd key |
+|---|---|
+| `hourly` | `StartInterval` 3600 |
+| `daily@HH:MM` | one `StartCalendarInterval` entry |
+| `twice-daily@HH:MM,HH:MM` | two `StartCalendarInterval` entries |
+
+The arguments are fixed and contain no secrets: the absolute node executable
+that ran setup, the absolute path of the running CLI script, then
+`intake run --noninteractive`. Keep the CLI at that path (for example
+`~/.ttobak/server.mjs`); rerun `intake setup --schedule ...` after moving or
+reinstalling the CLI. The plist built by
+`buildLaunchAgentPlist` in `mcp-server/src/intake/schedule.ts` looks like:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>click.atomai.ttobak.intake</string>
-  <key>ProgramArguments</key><array>
-    <string>/ABSOLUTE/PATH/TO/node</string>
-    <string>/Users/YOU/.ttobak/server.mjs</string>
-    <string>intake</string><string>calendar</string><string>--noninteractive</string>
-  </array>
-  <key>StartInterval</key><integer>600</integer>
+  <key>ProgramArguments</key><array><string>/ABSOLUTE/PATH/TO/node</string><string>/Users/YOU/.ttobak/server.mjs</string><string>intake</string><string>run</string><string>--noninteractive</string></array>
+  <key>StartCalendarInterval</key><array><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict></array>
   <key>StandardOutPath</key><string>/Users/YOU/Library/Logs/ttobak/intake.log</string>
   <key>StandardErrorPath</key><string>/Users/YOU/Library/Logs/ttobak/intake.err</string>
   <key>Nice</key><integer>10</integer>
 </dict></plist>
 ```
 
-Load it with `launchctl bootstrap gui/$(id -u) <plist>`, and remove it with
-`launchctl bootout gui/$(id -u)/click.atomai.ttobak.intake`. The log holds
-codes and counts only. Delete `~/.ttobak/intake/` to forget the local ledger.
-Calendar copies stay until removed in TTOBAK; SFDC assignments are reconciled
-(see below).
+A hand-installed job with the same label (the earlier 10-minute
+`intake calendar` template) is replaced. To remove a job by hand, run
+`launchctl bootout gui/$(id -u)/click.atomai.ttobak.intake` and delete the
+plist. The log holds codes and counts only. Delete `~/.ttobak/intake/` to
+forget the local ledger. Calendar copies stay until removed in TTOBAK; SFDC
+assignments are reconciled (see below).
 
 ## SFDC connector
 
@@ -313,4 +389,6 @@ only and makes no TTOBAK calls. It holds `sfdc.lock`.
 
 Acceptance on the Mac is pending: run `intake sfdc --dry-run`, compare the
 counts with AWSentral, then run `intake sfdc` and re-run to confirm empty
-batches. Add `intake sfdc --noninteractive` to the schedule only after that.
+batches. The scheduled `intake run` includes SFDC whenever it is selected, so
+schedule only after that, or pass `--skip sfdc` to setup, which disables
+SFDC and keeps its ledger.
