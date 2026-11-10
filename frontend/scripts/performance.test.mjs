@@ -139,3 +139,11 @@ test('goals stay read-only until a successful load', () => {
   assert.deepEqual(plain(perf.goalsEditorControls({ status: 'ready', dirty: true, tooLong: true })), { editable: true, canSave: false });
   assert.deepEqual(plain(perf.goalsEditorControls({ status: 'saving', dirty: true, tooLong: false })), { editable: false, canSave: false });
 });
+
+test('missed list at the server cap never shows a clean empty state', () => {
+  const full = { items: Array.from({ length: 500 }, () => ({ kind: 'logging_gap' })) };
+  assert.equal(perf.missedListMayBeCapped(full), true);
+  assert.equal(perf.missedListMayBeCapped({ items: [] }), false);
+  assert.match(perf.missedGroupEmptyText('연락이 끊긴 고객이 없습니다.', true), /표시 한도\(500건\)/);
+  assert.equal(perf.missedGroupEmptyText('연락이 끊긴 고객이 없습니다.', false), '연락이 끊긴 고객이 없습니다.');
+});

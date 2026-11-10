@@ -49,7 +49,9 @@ export default function PerformancePage() {
     let active = true;
     const key = `${membershipRevision}:${reloadKey}:${accountsAttempt}`;
     // A failed list is an error state with a retry, never an empty account list.
-    accountApi.list({ expectedUserId: userId })
+    // accountApi.list can throw synchronously (AUTH_CHANGED); start from a promise so it becomes the error state.
+    Promise.resolve()
+      .then(() => accountApi.list({ expectedUserId: userId }))
       .then(result => { if (active) setAccountsResult(Array.isArray(result?.accounts) ? { userId, key, accounts: result.accounts } : { userId, key, error: true }); })
       .catch(() => { if (active) setAccountsResult({ userId, key, error: true }); });
     return () => { active = false; };
