@@ -422,7 +422,7 @@ test('deduplication keeps the latest supplied record and does not mutate inputs'
   assert.equal(JSON.stringify(rows), snapshot);
 });
 
-test('account groups preserve selected order and keep unassigned meetings in their own group', () => {
+test('account groups keep row order inside each group and put unassigned meetings last', () => {
   const { groupMeetingRows } = loadWorkspace()('@/lib/meetingWorkspace');
   const groups = groupMeetingRows([
     meeting('alpha-new', undefined, { accountId: 'alpha' }),
@@ -431,7 +431,25 @@ test('account groups preserve selected order and keep unassigned meetings in the
     meeting('empty-account', undefined, { accountId: '' }),
   ]);
   assert.deepEqual(Array.from(groups, group => [group.accountId, ids(group.meetings)]), [
-    ['alpha', ['alpha-new', 'alpha-old']], [null, ['unassigned', 'empty-account']], ['beta', ['beta']],
+    ['alpha', ['alpha-new', 'alpha-old']], ['beta', ['beta']], [null, ['unassigned', 'empty-account']],
+  ]);
+});
+
+test('account groups sort by Korean account name, not by the newest meeting', () => {
+  const { groupMeetingRows } = loadWorkspace()('@/lib/meetingWorkspace');
+  const names = new Map([['carrot', '당근'], ['ga', '가나전자'], ['ha', '하늘은행'], ['b', 'Beta']]);
+  const groups = groupMeetingRows([
+    meeting('carrot-newest', undefined, { accountId: 'carrot' }),
+    meeting('unassigned'),
+    meeting('gone', undefined, { accountId: 'deleted-account' }),
+    meeting('ha', undefined, { accountId: 'ha' }),
+    meeting('beta', undefined, { accountId: 'b' }),
+    meeting('ga', undefined, { accountId: 'ga' }),
+    meeting('carrot-old', undefined, { accountId: 'carrot' }),
+  ], accountId => names.get(accountId));
+  assert.deepEqual(Array.from(groups, group => [group.accountId, ids(group.meetings)]), [
+    ['ga', ['ga']], ['carrot', ['carrot-newest', 'carrot-old']], ['ha', ['ha']], ['b', ['beta']],
+    ['deleted-account', ['gone']], [null, ['unassigned']],
   ]);
 });
 
