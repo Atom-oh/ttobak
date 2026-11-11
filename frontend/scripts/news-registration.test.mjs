@@ -55,13 +55,25 @@ test('name prefill follows the picked customer until the user types', () => {
   assert.equal(reg.prefillSourceName('그대로', false, undefined), '그대로');
 });
 
-test('account edit sends only changed fields and rejects empty queries', () => {
-  const original = { sourceId: 's', sourceName: '예시', kind: 'account', accountId: 'a', newsQueries: ['예시'], aliases: ['EX'] };
-  assert.deepEqual(plain(reg.accountEditRequest({ sourceName: '예시 ', queries: '예시, AI', aliases: 'EX' }, original).body), { newsQueries: ['예시', 'AI'] });
-  assert.deepEqual(plain(reg.accountEditRequest({ sourceName: '새 이름', queries: '예시', aliases: '' }, original).body), { sourceName: '새 이름', aliases: [] });
-  assert.equal(reg.accountEditRequest({ sourceName: '예시', queries: '예시', aliases: 'EX' }, original).error, '바뀐 내용이 없습니다.');
-  assert.equal(reg.accountEditRequest({ sourceName: '예시', queries: ' ', aliases: '' }, original).error, '검색어를 하나 이상 입력해 주세요.');
-  assert.equal(reg.accountEditRequest({ sourceName: '', queries: 'a', aliases: '' }, original).error, overview.NEWS_SOURCE_NAME_REQUIRED);
+test('account edit sends only fields whose text changed, one term per line', () => {
+  const source = { sourceName: 'Acme', newsQueries: ['Acme, Inc.', 'Acme AI'], aliases: ['ACME'] };
+  const prefilled = reg.accountEditForm(source);
+  assert.deepEqual(plain(prefilled), { sourceName: 'Acme', queries: 'Acme, Inc.\nAcme AI', aliases: 'ACME' });
+  // Editing nothing sends no request.
+  assert.equal(reg.accountEditRequest({ ...prefilled }, prefilled).unchanged, true);
+  assert.equal(reg.accountEditRequest({ ...prefilled }, prefilled).body, undefined);
+  // Editing only the alias sends only aliases; the comma query is untouched.
+  assert.deepEqual(plain(reg.accountEditRequest({ ...prefilled, aliases: 'ACME\nAcme Corp' }, prefilled).body), { aliases: ['ACME', 'Acme Corp'] });
+  // Editing the query to two lines keeps the comma term intact.
+  assert.deepEqual(plain(reg.accountEditRequest({ ...prefilled, queries: 'Acme, Inc.\nAcme cloud' }, prefilled).body),
+    { newsQueries: ['Acme, Inc.', 'Acme cloud'] });
+  // A name that trims back to the prefill is not a change.
+  assert.equal(reg.accountEditRequest({ ...prefilled, sourceName: ' Acme ' }, prefilled).unchanged, true);
+  assert.deepEqual(plain(reg.accountEditRequest({ ...prefilled, sourceName: 'Acme KR' }, prefilled).body), { sourceName: 'Acme KR' });
+  assert.deepEqual(plain(reg.accountEditRequest({ ...prefilled, aliases: '' }, prefilled).body), { aliases: [] });
+  assert.equal(reg.accountEditRequest({ ...prefilled, queries: ' \n ' }, prefilled).error, '검색어를 하나 이상 입력해 주세요.');
+  assert.equal(reg.accountEditRequest({ ...prefilled, sourceName: '' }, prefilled).error, overview.NEWS_SOURCE_NAME_REQUIRED);
+  assert.deepEqual(plain(reg.parseTermLines(' a, b \n\na, b\nc')), ['a, b', 'c']);
 });
 
 test('errors map to readable Korean, never raw codes', () => {
@@ -112,7 +124,7 @@ test('sources view is addressable by query string', () => {
 test('insights wires the view, scope filter and old entry points', () => {
   const list = read('../src/components/InsightsList.tsx');
   assert.match(list, /뉴스 소스 관리/);
-  assert.match(list, /reconcileScope\(newsScope, scopeCapable, scopeSources\.loaded, scopeOptions\)/);
+  assert.match(list, /reconcileScope\(newsScope, scopeCapable, scopeSources\.settled, scopeOptions\)/);
   assert.match(list, /newsScopeParams\(usableScope, scopeCapable\)/);
   assert.match(list, /activeTab === 'news' && scopeCapable && \(/);
   assert.match(list, /if \(usableScope !== newsScope\) \{\s*setNewsScope\(usableScope\);\s*setPage\(1\);/);
@@ -125,8 +137,11 @@ test('insights wires the view, scope filter and old entry points', () => {
   assert.match(manager, /이렇게 찾습니다/);
   assert.match(manager, /수정하면 이전 설정으로 수집된 기사 일부가 목록에서 빠질 수 있어요\./);
   // Edit forms start from the full per-account source, never the directory item.
-  assert.match(manager, /accountApi\.newsSources\.list\(item\.accountId!/);
+  assert.match(manager, /accountApi\.newsSources\.list\(accountId!/);
+  assert.match(manager, /setForm\(initial\)/);
   assert.match(manager, /더 보기/);
+  assert.match(manager, /if \(result\.unchanged\) \{ onCancel\(\); return; \}/);
+  assert.match(manager, /한 줄에 하나씩/);
   // Common registration checks subscriptions first and binds the user.
   assert.match(manager, /crawlerApi\.listSources\(\{ expectedUserId: userId \}\)/);
   assert.match(manager, /subscribedSourceFor\(commonBody\.request\.sourceName, subscribed\)/);
@@ -223,11 +238,31 @@ test('stale or unsupported scopes fall back to all', () => {
   const options = reg.newsScopeOptions([{ sourceId: '1', sourceName: 'x', kind: 'account', accountId: 'a', accountName: '가나' }]);
   assert.equal(reg.reconcileScope('account:a', true, true, options), 'account:a');
   assert.equal(reg.reconcileScope('common', true, true, options), 'common');
-  // The selected customer disappeared after a successful reload.
+  // The selected customer disappeared after the reload's auto-paging settled.
   assert.equal(reg.reconcileScope('account:b', true, true, options), '');
-  // While a reload is pending the selection stays.
+  // Until auto-paging settles (the customer may be on page 2 or 3) it stays.
   assert.equal(reg.reconcileScope('account:b', true, false, options), 'account:b');
   // No capability: always all.
   assert.equal(reg.reconcileScope('common', false, true, options), '');
   assert.equal(reg.reconcileScope('account:a', false, false, options), '');
+});
+
+test('directory settles only after auto-paging finishes', () => {
+  const page = (ids, extra = {}) => ({ sources: ids.map((id) => ({ sourceId: id, sourceName: id, kind: 'account', accountId: id, accountName: id })), ...extra });
+  let state = reg.directoryReload({ ...reg.INITIAL_DIRECTORY, capable: true, settled: true });
+  assert.equal(state.settled, false);
+  state = reg.directoryPageLoaded(state, 1, page(['a'], { nextCursor: 'c' }));
+  assert.equal(state.settled, false, 'page 1 alone does not settle');
+  const options = reg.newsScopeOptions(state.sources);
+  // A customer on page 2 survives the partial load.
+  assert.equal(reg.reconcileScope('account:b', state.capable, state.settled, options), 'account:b');
+  assert.equal(reg.directorySettled(state, 0), state, 'stale generation ignored');
+  state = reg.directoryPageLoaded(state, 1, page(['b']));
+  state = reg.directorySettled(state, 1);
+  assert.equal(state.settled, true);
+  assert.equal(reg.reconcileScope('account:b', state.capable, state.settled, reg.newsScopeOptions(state.sources)), 'account:b');
+  assert.equal(reg.directoryFailed(reg.directoryReload(state), 2, { status: 500 }).settled, true);
+  const later = reg.directoryFailed(reg.directoryPageLoaded(reg.directoryReload(state), 2, page(['a'], { nextCursor: 'c' })), 2, { status: 500 });
+  assert.equal(later.settled, true);
+  assert.equal(later.capable, true);
 });

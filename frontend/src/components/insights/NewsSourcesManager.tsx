@@ -5,9 +5,9 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { accountApi, crawlerApi, newsSourcesApi } from '@/lib/api';
 import { newsSourceInput } from '@/lib/accountOverview';
 import {
-  accountEditRequest, commonNewsRequest, directoryFailed, directoryLoadingMore, directoryPageLoaded, directoryReload,
+  accountEditForm, accountEditRequest, commonNewsRequest, directoryFailed, directoryLoadingMore, directoryPageLoaded, directoryReload, directorySettled,
   ALREADY_SUBSCRIBED_MESSAGE, INITIAL_DIRECTORY, prefillSourceName, registrationErrorMessage, sourceTermsText, subscribedSourceFor,
-  type DirectoryState, type NewsSourceItem, type NewsSourceKind,
+  type AccountEditForm, type DirectoryState, type NewsSourceItem, type NewsSourceKind,
 } from '@/lib/newsRegistration';
 import type { AccountSummary } from '@/types/meeting';
 import { NewsKindBadge } from './NewsOrigin';
@@ -41,12 +41,14 @@ export function useNewsSources(userId: string | undefined, enabled: boolean, aut
           if (controller.signal.aborted) return;
           setState((s) => directoryPageLoaded(s, generation, result));
           cursor = result.nextCursor ?? '';
-          if (!cursor) return;
+          if (!cursor) break;
         } catch (failure) {
+          // directoryFailed also settles the generation.
           if (!controller.signal.aborted) setState((s) => directoryFailed(s, generation, failure));
           return;
         }
       }
+      setState((s) => directorySettled(s, generation));
     })();
     return () => controller.abort();
   }, [userId, enabled, attempt, autoPages]);
@@ -136,8 +138,9 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
         await accountApi.newsSources.create(account.accountId, accountBody.input, { expectedUserId: userId });
       } else if (commonBody?.request) {
         // AddSource resolves the name to an existing source and replaces the
-        // caller's whole subscription (AWS services included), so an already
-        // subscribed source is never submitted from here.
+        // caller's whole subscription (AWS services included). Best effort:
+        // skip names matching a subscription seen just now; one created
+        // concurrently elsewhere is not visible to this check.
         let subscribed: string[];
         try {
           subscribed = ((await crawlerApi.listSources({ expectedUserId: userId })).sources ?? []).map((item) => item.source.sourceId);
@@ -243,29 +246,33 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
 
 function EditRow({ item, userId, onDone, onCancel }: { item: NewsSourceItem; userId: string; onDone: () => void; onCancel: () => void }) {
   const id = useId();
-  // The directory item may carry cut lists, so the form starts from the
-  // full source in the per-account list.
-  const [original, setOriginal] = useState<NewsSourceItem | null>(null);
-  const [form, setForm] = useState({ sourceName: '', queries: '', aliases: '' });
+  // Prefilled from the full per-account source (directory lists may be cut);
+  // only fields whose text differs from this prefill are sent.
+  const [prefilled, setPrefilled] = useState<AccountEditForm | null>(null);
+  const [form, setForm] = useState<AccountEditForm>({ sourceName: '', queries: '', aliases: '' });
+  const { accountId, sourceId } = item;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
     const controller = new AbortController();
-    accountApi.newsSources.list(item.accountId!, { signal: controller.signal, expectedUserId: userId })
+    accountApi.newsSources.list(accountId!, { signal: controller.signal, expectedUserId: userId })
       .then((page) => {
         if (controller.signal.aborted) return;
-        const full = (page.sources ?? []).find((source) => source.sourceId === item.sourceId);
+        const full = (page.sources ?? []).find((source) => source.sourceId === sourceId);
         if (!full) { setError(registrationErrorMessage({ status: 404 }, 'edit-source')); return; }
-        setOriginal({ ...item, sourceName: full.sourceName, newsQueries: full.newsQueries ?? [], aliases: full.aliases ?? [] });
-        setForm({ sourceName: full.sourceName, queries: (full.newsQueries ?? []).join('\n'), aliases: (full.aliases ?? []).join('\n') });
+        const initial = accountEditForm(full);
+        setPrefilled(initial);
+        setForm(initial);
       })
       .catch((failure) => { if (!controller.signal.aborted) setError(registrationErrorMessage(failure, 'edit-source')); });
     return () => controller.abort();
-  }, [item, userId]);
+  }, [accountId, sourceId, userId]);
   const save = async () => {
-    if (!original) return;
-    const { body, error: invalid } = accountEditRequest(form, original);
-    if (!body) { setError(invalid); return; }
+    if (!prefilled) return;
+    const result = accountEditRequest(form, prefilled);
+    if (result.unchanged) { onCancel(); return; }
+    const { body } = result;
+    if (!body) { setError(result.error ?? ''); return; }
     setSaving(true); setError('');
     try {
       await accountApi.newsSources.update(item.accountId!, item.sourceId, body, { expectedUserId: userId });
@@ -275,7 +282,7 @@ function EditRow({ item, userId, onDone, onCancel }: { item: NewsSourceItem; use
       setSaving(false);
     }
   };
-  if (!original) {
+  if (!prefilled) {
     return (
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border-subtle bg-surface-lowest p-3">
         {error ? <p role="alert" className="text-sm text-error">{error}</p> : <p role="status" className="text-sm text-text-secondary">소스 설정을 불러오는 중…</p>}
@@ -289,10 +296,10 @@ function EditRow({ item, userId, onDone, onCancel }: { item: NewsSourceItem; use
       <label className={`${labelText} sm:col-span-2`}>소스 이름
         <input type="text" value={form.sourceName} maxLength={400} onChange={(e) => setForm({ ...form, sourceName: e.target.value })} className={input} />
       </label>
-      <label className={labelText}>검색어 <span className="font-normal text-text-muted">(줄 또는 쉼표로 구분)</span>
+      <label className={labelText}>검색어 <span className="font-normal text-text-muted">(한 줄에 하나씩)</span>
         <textarea value={form.queries} rows={3} onChange={(e) => setForm({ ...form, queries: e.target.value })} className={input} />
       </label>
-      <label className={labelText}>다른 이름
+      <label className={labelText}>다른 이름 <span className="font-normal text-text-muted">(한 줄에 하나씩)</span>
         <textarea value={form.aliases} rows={3} onChange={(e) => setForm({ ...form, aliases: e.target.value })} className={input} />
       </label>
       <p className="text-xs text-amber-700 dark:text-amber-400 sm:col-span-2">{EDIT_EFFECT}</p>

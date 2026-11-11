@@ -66,10 +66,10 @@ export function InsightsList() {
   const scopeOptions = useMemo(() => newsScopeOptions(scopeSources.sources), [scopeSources.sources]);
   const managedSources = useNewsSources(user?.userId, sourcesView.open);
   // The scope filter exists only once the directory answered in this
-  // session; when that capability is lost, or a loaded directory no longer
-  // offers the chosen customer, the scope falls back to all.
+  // session; when that capability is lost, or the settled directory (all
+  // auto pages read) no longer offers the chosen customer, it falls back to all.
   const scopeCapable = scopeSources.capable;
-  const usableScope = reconcileScope(newsScope, scopeCapable, scopeSources.loaded, scopeOptions);
+  const usableScope = reconcileScope(newsScope, scopeCapable, scopeSources.settled, scopeOptions);
   if (usableScope !== newsScope) {
     setNewsScope(usableScope);
     setPage(1);

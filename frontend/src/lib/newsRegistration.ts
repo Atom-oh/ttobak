@@ -1,7 +1,7 @@
 // Pure helpers for news source registration (Insights news tab sources view
 // and Settings › Crawler Sources). Only accountOverview is imported, so tests
 // load this module in a vm context with a small require stub.
-import { newsSourceInput, parseTermList } from '@/lib/accountOverview';
+import { parseTermList } from '@/lib/accountOverview';
 
 export const MAX_ALIASES = 20;
 export const MAX_ALIAS_CHARS = 100;
@@ -132,25 +132,44 @@ export function prefillSourceName(current: string, touched: boolean, accountName
 
 export interface AccountEditForm { sourceName: string; queries: string; aliases: string }
 
-const sameList = (a: string[], b: string[] | undefined) =>
-  a.length === (b ?? []).length && a.every((v, i) => v === (b ?? [])[i]);
+/** Edit prefill: one stored term per line, so every term round-trips. */
+export function accountEditForm(source: { sourceName: string; newsQueries?: string[]; aliases?: string[] }): AccountEditForm {
+  return { sourceName: source.sourceName, queries: (source.newsQueries ?? []).join('\n'), aliases: (source.aliases ?? []).join('\n') };
+}
+
+/** Edit parsing: one term per line only; commas stay inside a term. */
+export function parseTermLines(text: string): string[] {
+  return [...new Set(text.split('\n').map((line) => line.trim()).filter(Boolean))];
+}
 
 /**
- * Builds the `PUT .../news-sources/{id}` body with only the changed fields.
- * An empty query list and a body with no field are rejected by the server.
+ * Builds the `PUT .../news-sources/{id}` body from the fields whose text
+ * differs from the exact prefilled text; an untouched field is never sent.
+ * `unchanged` means there is nothing to save (the server rejects an empty body).
  */
-export function accountEditRequest(form: AccountEditForm, original: NewsSourceItem):
-  { body: { sourceName?: string; newsQueries?: string[]; aliases?: string[] }; error?: undefined } | { body?: undefined; error: string } {
-  const { input, error } = newsSourceInput(form);
-  if (!input) return { error };
-  if (!input.newsQueries?.length) return { error: '검색어를 하나 이상 입력해 주세요.' };
-  const aliases = input.aliases ?? [];
+export function accountEditRequest(form: AccountEditForm, prefilled: AccountEditForm):
+  { body: { sourceName?: string; newsQueries?: string[]; aliases?: string[] }; error?: undefined; unchanged?: undefined }
+  | { body?: undefined; error: string; unchanged?: undefined }
+  | { body?: undefined; error?: undefined; unchanged: true } {
   const body: { sourceName?: string; newsQueries?: string[]; aliases?: string[] } = {};
-  if (input.sourceName !== original.sourceName) body.sourceName = input.sourceName;
-  if (!sameList(input.newsQueries, original.newsQueries)) body.newsQueries = input.newsQueries;
-  if (!sameList(aliases, original.aliases)) body.aliases = aliases;
-  if (Object.keys(body).length === 0) return { error: '바뀐 내용이 없습니다.' };
-  return { body };
+  if (form.sourceName !== prefilled.sourceName) {
+    const sourceName = form.sourceName.trim();
+    if (!sourceName) return { error: '뉴스 소스 이름을 입력해 주세요.' };
+    if ([...sourceName].length > MAX_SOURCE_NAME_CHARS) return { error: '뉴스 소스 이름은 200자 이하로 입력해 주세요.' };
+    if (sourceName !== prefilled.sourceName) body.sourceName = sourceName;
+  }
+  if (form.queries !== prefilled.queries) {
+    const newsQueries = parseTermLines(form.queries);
+    if (newsQueries.length === 0) return { error: '검색어를 하나 이상 입력해 주세요.' };
+    if (newsQueries.length > MAX_NEWS_QUERIES) return { error: '검색어는 최대 32개까지 입력할 수 있습니다.' };
+    body.newsQueries = newsQueries;
+  }
+  if (form.aliases !== prefilled.aliases) {
+    const aliases = parseTermLines(form.aliases);
+    if (aliases.length > MAX_ALIASES) return { error: '별칭은 최대 20개까지 입력할 수 있습니다.' };
+    body.aliases = aliases;
+  }
+  return Object.keys(body).length === 0 ? { unchanged: true } : { body };
 }
 
 // Not plain verbs: those literals collide with Material Symbol names (icon-font check).
@@ -219,12 +238,12 @@ export function newsScopeParams(scope: string, capable: boolean): { kind?: NewsS
 
 /**
  * The scope the news tab may use: all without directory capability, and all
- * when a loaded directory no longer offers the selected entry (a removed
- * customer), so a request never carries a scope the select cannot show.
+ * when the settled directory (auto-paging finished) no longer offers the
+ * selected entry, so a request never carries a scope the select cannot show.
  */
-export function reconcileScope(scope: string, capable: boolean, loaded: boolean, options: readonly ScopeOption[]): string {
+export function reconcileScope(scope: string, capable: boolean, settled: boolean, options: readonly ScopeOption[]): string {
   if (!capable) return SCOPE_ALL;
-  if (loaded && !options.some((option) => option.value === scope)) return SCOPE_ALL;
+  if (settled && !options.some((option) => option.value === scope)) return SCOPE_ALL;
   return scope;
 }
 
@@ -238,6 +257,8 @@ export interface DirectoryState {
   truncated: boolean;
   // A page of the current generation has loaded.
   loaded: boolean;
+  // The current generation's automatic paging has finished or stopped.
+  settled: boolean;
   // The directory answered successfully in this session and has not since
   // failed on a fresh load: the insights scope filters exist.
   capable: boolean;
@@ -247,7 +268,7 @@ export interface DirectoryState {
 }
 
 export const INITIAL_DIRECTORY: DirectoryState = {
-  generation: 0, sources: null, nextCursor: '', truncated: false, loaded: false,
+  generation: 0, sources: null, nextCursor: '', truncated: false, loaded: false, settled: false,
   capable: false, unavailable: false, error: '', loadingMore: false,
 };
 
@@ -258,6 +279,11 @@ export function directoryReload(state: DirectoryState): DirectoryState {
 
 export function directoryLoadingMore(state: DirectoryState, generation: number): DirectoryState {
   return generation === state.generation ? { ...state, loadingMore: true } : state;
+}
+
+/** Marks the current generation's automatic paging as finished. */
+export function directorySettled(state: DirectoryState, generation: number): DirectoryState {
+  return generation === state.generation ? { ...state, settled: true } : state;
 }
 
 /** Applies one page; the first page of a generation replaces, later ones append. */
@@ -280,9 +306,9 @@ export function directoryPageLoaded(state: DirectoryState, generation: number, p
 export function directoryFailed(state: DirectoryState, generation: number, failure: unknown): DirectoryState {
   if (generation !== state.generation) return state;
   const message = registrationErrorMessage(failure, 'load-sources');
-  if (state.loaded) return { ...state, loadingMore: false, error: (failure as { status?: number } | null)?.status === 404 ? '다음 소스를 불러오지 못했습니다.' : message };
+  if (state.loaded) return { ...state, loadingMore: false, settled: true, error: (failure as { status?: number } | null)?.status === 404 ? '다음 소스를 불러오지 못했습니다.' : message };
   const unavailable = (failure as { status?: number } | null)?.status === 404;
-  return { ...state, sources: [], loaded: false, capable: false, unavailable, loadingMore: false, error: unavailable ? '' : message };
+  return { ...state, sources: [], loaded: false, settled: true, capable: false, unavailable, loadingMore: false, error: unavailable ? '' : message };
 }
 
 // ---- Addressable sources view ----
