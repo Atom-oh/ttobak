@@ -690,6 +690,7 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 `infra/cdk.json` sets `on`), which lets the dictionary GET name the caller's
 READY vocabulary for live caption streams.
 
+`infra/cdk.json` sets `ttobak:transcriptCorrection` to `on` (2026-11-11).
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a

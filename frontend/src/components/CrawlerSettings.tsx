@@ -2,7 +2,9 @@
 
 import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { crawlerApi } from '@/lib/api';
+import { aliasError, commonAddRequest, MAX_ALIASES, MAX_ALIAS_CHARS, newsSourcesHref } from '@/lib/newsRegistration';
 import { useAuth } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawlHistory } from '@/types/meeting';
 
@@ -52,9 +54,6 @@ function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-
-const MAX_ALIASES = 20;
-const MAX_ALIAS_CHARS = 100;
 
 interface AddEditModalProps {
   onClose: () => void;
@@ -122,8 +121,9 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit, canRemoveAliases = f
 
   const addAlias = () => {
     const trimmed = aliasInput.trim();
-    if ([...trimmed].length > MAX_ALIAS_CHARS || /[\p{Cc}\p{Cf}]/u.test(trimmed)) {
-      setError(`별칭은 제어 문자 없이 ${MAX_ALIAS_CHARS}자 이내로 입력해 주세요.`);
+    const invalid = aliasError(trimmed);
+    if (invalid) {
+      setError(invalid);
       return;
     }
     if (
@@ -636,14 +636,7 @@ export function CrawlerSettings() {
     customUrls: string[];
     aliases: string[];
   }) => {
-    await crawlerApi.addSource({
-      sourceName: data.sourceName,
-      awsServices: data.awsServices,
-      newsSources: [],
-      newsQueries: data.newsQueries,
-      customUrls: data.customUrls.length > 0 ? data.customUrls : undefined,
-      aliases: data.aliases.length > 0 ? data.aliases : undefined,
-    });
+    await crawlerApi.addSource(commonAddRequest(data));
     setSuccess('Source added successfully');
     await fetchSources();
   };
@@ -691,6 +684,9 @@ export function CrawlerSettings() {
 
   return (
     <div className="space-y-6">
+      <p className="text-sm text-slate-600 dark:text-text-secondary">
+        뉴스 등록은 <Link href={newsSourcesHref()} className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded-sm">인사이트 › 뉴스 소스 관리</Link>에서 공통 뉴스와 고객사 전용 뉴스를 함께 할 수 있습니다.
+      </p>
       {error && (
         <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">
           {error}
