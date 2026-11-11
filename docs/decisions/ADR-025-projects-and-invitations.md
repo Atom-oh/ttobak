@@ -1,7 +1,7 @@
 # ADR-025: Projects, relations and invitations
 
-- Status: Accepted. Merges the earlier records listed below; each section keeps
-  that record's rules, and dates inside mark owner decisions.
+- Status: Accepted. Merges earlier records; each section below keeps one record's
+  rules, and dates inside mark owner decisions.
 - Implementation checked: 2026-11-11.
 
 A project links accounts, meetings and research through canonical sets with reverse references, and members who are not yet users join through an invitation queue materialized at sign-in.
@@ -23,7 +23,7 @@ Represent an opportunity spanning several customer/partner accounts without forc
 - Project access deliberately exposes linked meeting metadata and aggregated insights independently of `SharedToAccount`. Linking an account extends that exposure to its team, including later members. This does not make the ordinary meeting API grant every Project member unrestricted transcript access.
 - Insights are parsed from linked meetings on reads rather than copied into persistent Project insight rows. Delete rejects live account, meeting, research, or direct-member relations; trashed research still counts when canonically linked, while stale orphan refs alone do not.
 - Whole-item `UpdateMeeting` protects `ProjectIDs` with a fresh read, equality/absence condition, and up to three attempts. STT status/transcript changes use partial updates. This guard does not establish concurrency safety for unrelated fields still written as whole-item snapshots.
-- MCP exposes creation, read (including list, brief and insights), update, and account link/unlink. Member management has no MCP tool, and adding a member follows the invitation rules in the next section; document links, direct SFDC fetching, and automatic Project research are outside this decision.
+- MCP exposes creation, read (including list, brief and insights), update, and account link/unlink. Member management has no MCP tool, and adding a member follows the rules under "Project invitations and authenticated session bootstrap"; document links, direct SFDC fetching, and automatic Project research are outside this decision.
 
 ### Tradeoffs and accepted residual risks
 
@@ -39,7 +39,7 @@ The remaining whole-item meeting-write pattern is a specific concurrency risk fo
 
 ## Project invitations and authenticated session bootstrap
 
-_Earlier status notes: Status: Accepted implementation; activation requires the rollout below. Date: 2026-09-18. Extends project membership above and ADR-007 user administration._
+_Earlier status notes: Status: Accepted implementation; activation requires the rollout below. Date: 2026-09-18. Extends "Projects with transactional links and hybrid access" and ADR-007 user administration._
 
 ### Decision
 
@@ -57,8 +57,8 @@ member removal; removal and legacy direct add retire that marker atomically. Lis
 reverse rows canonically. The separate user namespace protects project grants
 from older account/meeting readers. Existing queues and their identity guards stay
 unchanged. Grant expiry remains 30 days; temporary passwords remain seven days.
-Deleted-project queue rows can persist until cleanup/TTL under ADR-025's residual
-storage limit, but a missing/reassigned project cannot grant membership.
+Deleted-project queue rows can persist until cleanup or TTL, but a missing or
+reassigned project cannot grant membership.
 
 The companion authenticated bootstrap initializes the profile and processes project pages of at
 most 25 rows under a five-second budget. Failed pages remain retryable. Identity

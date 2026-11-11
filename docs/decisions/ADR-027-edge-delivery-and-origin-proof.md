@@ -1,10 +1,10 @@
 # ADR-027: Edge delivery: signed media URLs and the origin proof
 
-- Status: Accepted. Merges the earlier records listed below; each section keeps
-  that record's rules, and dates inside mark owner decisions.
+- Status: Accepted. Merges earlier records; each section below keeps one record's
+  rules, and dates inside mark owner decisions.
 - Implementation checked: 2026-11-11.
 
-Downloads are served as signed CloudFront URLs from a private bucket, and the API accepts requests only with the origin proof that CloudFront adds. The two sections below are the rules for each.
+Downloads are served as signed CloudFront URLs from a private bucket, and the API requires the origin proof that CloudFront adds, except for verified private connector reads and explicit local development outside Lambda. The two sections below are the rules for each.
 
 ## CloudFront-signed media downloads
 
@@ -19,7 +19,7 @@ Serve downloads under the application domain instead of exposing the S3 bucket h
 - `GeneratePresignedDownloadURLWithTTL` chooses CloudFront signing when a signer is available; the default TTL is one hour and public-share TTL is five minutes. `/media/{s3Key}` avoids collisions with SPA routes; a dedicated function strips `/media` before S3 lookup.
 - Viewer access uses a trusted key group; origin access uses OAC. Both media behaviors require signing and disable caching. S3 Block Public Access stays enabled. The OAC resource allowlist is exactly `audio/*`, `audio-playback/*` (seekable copies, ADR-014), `images/*`, `files/*`, `docs/*`, and `docs-pdf/*`; internal `transcripts/*` is excluded. A new category requires an explicit policy change.
 - General `/media/*` responses set `nosniff` and `Content-Security-Policy: sandbox` to constrain same-origin uploaded content. More-specific `/media/docs-pdf/*` must come first and uses `nosniff` without sandbox so generated PDFs can use the native viewer. Clients cannot upload arbitrary content directly to that conversion prefix; the converter's residual parser risk remains in ADR-020.
-- Direct-upload PDFs under `docs/` use download guidance in the document UI. Converted PPT/PPTX sidecars retain iframe preview. Thus the original claim that frontend behavior need not change is superseded.
+- Direct-upload PDFs under `docs/` use download guidance in the document UI. Converted PPT/PPTX sidecars retain iframe preview.
 - The public key is committed; the private key is loaded from SSM SecureString `/ttobak/cloudfront/signing-key`, and the key-pair ID from `/ttobak/cloudfront/key-pair-id`. `MEDIA_BASE_URL` enables initialization. Missing/unreadable signing configuration logs a warning and retains private-S3 presigns; configured warm instances retry signer initialization at most every five minutes, with a bounded lookup.
 - Upload PUT URLs remain S3 presigns. Neither that retained transport nor the GET fallback authorizes a public bucket, anonymous origin, or new public API route.
 
@@ -45,8 +45,9 @@ _Earlier status notes: Date: 2026-10-12 Status: Accepted; staged implementation 
 
 ### Context
 
-The HTTP origin proof is a tracked configuration value. Removing that occurrence
-does not revoke repository history, and changing a secret without coordinating
+The HTTP origin proof used to be a tracked configuration value and is now read
+through a Secrets Manager reference. Removing the tracked occurrence does not
+revoke repository history, and changing a secret without coordinating
 CloudFront and cached consumers can interrupt traffic. Source ancestry does not
 prove that a compatible consumer was deployed.
 
@@ -72,10 +73,11 @@ deploy consumers using the active version, drain again and verify rejection of
 the retired proof. Preserve bounded, resumable state after failures; never
 extend a previous-proof deadline silently or claim completion without checks.
 
-The preparatory reader release retains exact comparison of every nonempty
-legacy value, including values outside the new grammar. Observable duplicate
-or conflicting header representations are rejected. Activated ARN mode uses
-the strict document/header contract. Missing configuration never grants HTTP
+The reader accepts only the strict proof document and header contract when the
+ARN and version are configured; the legacy environment path is removed, and an
+out-of-grammar legacy value stops activation until a separately reviewed
+migration. Observable duplicate or conflicting header representations are
+rejected. Missing configuration never grants HTTP
 access; explicit local development is restricted to execution outside Lambda.
 
 ### Consequences
