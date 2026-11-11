@@ -148,7 +148,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
 - **Backend layering.**
   - Go handler → service → repository, using the DynamoDB expression builder.
   - New routes are authenticated, owner-scoped, with bounded responses.
-  - No new public route, and no new HTTP MCP write tool (ADR-045, ADR-065).
+  - No new public route, and no new HTTP MCP write tool (ADR-003, ADR-065).
   - Register routes in the connector catalog as existing routes are.
 - **Billing linkage.**
   - Spend change comes from the Billing service datasets per TTOBAK Account,

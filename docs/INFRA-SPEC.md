@@ -63,7 +63,7 @@ login (v2, Cognito-provided branding per client): Cognito issues `aud`=URL for a
 `resource` request only with both. GatewayStack then runs `ttobak-mcp` (Node.js 22,
 ARM64, exact origin-secret read permission, 29s timeout, 25s server deadline) behind `ANY /api/mcp`
 with the JWT authorizer, plus two unauthenticated static discovery routes,
-`GET /.well-known/oauth-protected-resource` and `.../api/mcp` (ADR-045).
+`GET /.well-known/oauth-protected-resource` and `.../api/mcp` (ADR-003, transports).
 FrontendStack routes those two exact paths to the API origin without the edge
 function; `/api/mcp` keeps the `/api/*` edge client-ID check, whose 401 for that
 path carries `WWW-Authenticate` with the path-specific `resource_metadata` URL. The Lambda checks

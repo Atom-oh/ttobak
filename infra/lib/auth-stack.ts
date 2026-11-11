@@ -183,7 +183,7 @@ export class AuthStack extends cdk.Stack {
       },
       // RFC 8707 resource binding (`resource` -> access-token `aud`) exists only
       // on managed login, not the classic hosted UI. HTTP MCP verifies that
-      // `aud` equals its public URL (ADR-045), so the domain must use it.
+      // `aud` equals its public URL (ADR-003, transports), so the domain must use it.
       managedLoginVersion: cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
     });
 
