@@ -200,7 +200,7 @@ SFDC.
 These are search and read tools with no change feed, so there is nothing
 deterministic to poll. A scheduled AI that "finds relevant docs per account" and
 uploads them would copy internal or confidential content into team-shared account
-KBs (ADR-022, roadmap access rules). It would also give an unattended agent broad
+KBs (ADR-020, roadmap access rules). It would also give an unattended agent broad
 read access. Its value is low and its risk high. **Verdict: neither A nor B as a
 scheduled intake.** Use these servers on demand in the user's interactive host
 (prep, QA), where the user sees what is pulled. The existing

@@ -34,7 +34,7 @@ consume this intentionally shared content.
   configuration or ingestion-start failures so Step Functions can fail visibly.
   It does not treat an error-status payload as successful ingestion.
 - Insights supports filtered lists and detail reading; deep research is a
-  separate pipeline. Markdown uses the sanitized renderer in ADR-010.
+  separate pipeline. Markdown uses the sanitized renderer in ADR-020.
 
 ## Alternatives, consequences, and risks
 

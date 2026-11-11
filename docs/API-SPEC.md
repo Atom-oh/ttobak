@@ -1613,7 +1613,7 @@ the observed preview conditionally. The preview URL path still checks existence;
 canonical indexing/QA readers additionally validate the source binding. Legacy
 unbound previews require regeneration. Public tokens
 are conditionally minted and validated against the document's own PublicShareToken
-on every read; revocation removes that grant. See ADR-022/027/029.
+on every read; revocation removes that grant. See ADR-020/027.
 
 Pending meeting/account invitations bind the invited Cognito sub, require verified
 email at materialization, and expire after 30 days. Revoking an already-materialized
