@@ -25499,7 +25499,7 @@ function applyShare(event, fields2) {
 function decideSharing(event, item, previous, sharing) {
   if (item.seriesId) event.seriesKey = createHash4("sha256").update(`${sharing.sourceId}|${item.seriesId}`).digest("hex");
   const facts = sharing.facts.get(item.meetingId);
-  if (item.privateCategory || facts?.isPrivate || facts === null && previous?.share?.private) {
+  if (item.privateCategory || facts?.isPrivate || facts == null && previous?.share?.private) {
     event.private = true;
     return;
   }
@@ -30454,7 +30454,7 @@ async function select(args, environment, store) {
       server: options["--server"],
       autoAck: autoAckValue === "on",
       acceptUnknownSensitivity: options["--accept-unknown-sensitivity"] === true,
-      ...connector === "calendar" ? { ownDomains: ownDomains(options["--own-domain"]) } : {}
+      ...connector === "calendar" && options["--own-domain"] !== void 0 ? { ownDomains: ownDomains(options["--own-domain"]) } : {}
     },
     environment,
     store

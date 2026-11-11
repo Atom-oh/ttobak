@@ -330,8 +330,9 @@ function applyShare(event: CalendarEvent, fields: ShareFields | undefined): void
 function decideSharing(event: CalendarEvent, item: OutlookItem, previous: LedgerEntry | undefined, sharing: PlanSharing): void {
   if (item.seriesId) event.seriesKey = createHash('sha256').update(`${sharing.sourceId}|${item.seriesId}`).digest('hex');
   const facts = sharing.facts.get(item.meetingId);
-  // Fail closed: a private meeting, or one that was private when its lookup now fails, is never shared.
-  if (item.privateCategory || facts?.isPrivate || (facts === null && previous?.share?.private)) {
+  // Fail closed: a private meeting, or one that was private when its lookup failed or was not
+  // attempted (for example with the meetings connector deselected), is never shared.
+  if (item.privateCategory || facts?.isPrivate || (facts == null && previous?.share?.private)) {
     event.private = true;
     return;
   }

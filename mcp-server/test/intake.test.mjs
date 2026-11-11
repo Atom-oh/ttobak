@@ -955,6 +955,10 @@ test('planner: Private category, private meetings, matches, candidates, domain e
   const decided = sharingPlan(items, ledger, new Map([['d', facts([])], ['m', facts([])]]));
   assert.equal('shareAccountId' in decided.mutations[0].event, false);
   assert.equal(decided.mutations[1].event.shareAccountId, 'acct-hana');
+  // With no lookup attempted (meetings connector deselected), the private flag is still kept.
+  const unattempted = sharingPlan(items, ledger, new Map());
+  assert.equal(unattempted.mutations[1].event.private, true);
+  assert.equal('shareAccountId' in unattempted.mutations[1].event, false);
   // Without a directory, previous share fields (and the private flag) are kept.
   const offline = sharingPlan(items, ledger, new Map(), null);
   assert.equal(offline.counts.directoryUnavailable, true);
@@ -1153,6 +1157,11 @@ test('CLI: own domains, meetings-connector attendee domains and no attendee data
   assert.equal(await runIntake(['select', 'meetings', '--host', 'claude', '--server', 'work'], environment), 0);
   const stored = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8'));
   assert.deepEqual(stored.calendar.ownDomains, ['amazon.com', 'aws.example']);
+  // Reselecting without --own-domain keeps the stored domains.
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook', '--accept-unknown-sensitivity'],
+    environment), 0);
+  const reselected = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8'));
+  assert.deepEqual(reselected.calendar.ownDomains, ['amazon.com', 'aws.example']);
 
   // A dry run without a stored TTOBAK session reports the directory as unavailable.
   delete environment.scope;
