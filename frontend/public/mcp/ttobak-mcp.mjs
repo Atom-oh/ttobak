@@ -28296,7 +28296,9 @@ function internalEmail(email3) {
 function contactPerson(value, accountId) {
   const id = canonicalSfdcId(value.id);
   if (!id) return "invalid";
-  if (canonicalSfdcId(value.accountId) !== accountId) return "mismatch";
+  const ownAccount = canonicalSfdcId(value.accountId);
+  if (!ownAccount) return "invalid";
+  if (ownAccount !== accountId) return "mismatch";
   if (!(value.recordType === void 0 || value.recordType === null || record17(value.recordType))) {
     throw parseFailed("contact record has an unexpected record type");
   }
@@ -28324,12 +28326,11 @@ async function readAccount(source, accountId) {
         limit: PAGE_LIMIT2,
         ...after ? { after } : {}
       }), SFDC_CONTACTS_TOOL.name);
-      const people = page2.records.map((value) => contactPerson(value, accountId));
-      for (const person of people) {
-        if (typeof person !== "string" && seen.size === seen.add(person.id).size) {
-          throw parseFailed("search_contacts repeated a record ID");
-        }
+      for (const value of page2.records) {
+        const recordId = canonicalSfdcId(value.id);
+        if (recordId && seen.size === seen.add(recordId).size) throw parseFailed("search_contacts repeated a record ID");
       }
+      const people = page2.records.map((value) => contactPerson(value, accountId));
       read.fetched += page2.records.length;
       for (const person of people) {
         if (person === "internal") read.internal++;
