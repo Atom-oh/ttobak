@@ -25,7 +25,7 @@ export default function DocsPage() {
   }
   return (
     <AppLayout activePath="/docs">
-      <div className="p-4 lg:p-8">
+      <div className="workspace-page">
         <DocsClient />
       </div>
     </AppLayout>

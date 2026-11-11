@@ -319,7 +319,7 @@ export function ChatClient() {
 
   return (
     <AppLayout activePath="/chat">
-      <div className="flex flex-col h-full">
+      <div className="flex flex-1 flex-col min-w-0 min-h-0">
         {/* Header */}
         <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest">
           <div className="flex items-center gap-2">
@@ -330,6 +330,7 @@ export function ChatClient() {
             {/* Session dropdown */}
             <div className="relative" ref={sessionsRef}>
               <button
+                aria-label="이전 대화"
                 onClick={() => setShowSessions(!showSessions)}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg transition-colors"
               >
@@ -375,6 +376,7 @@ export function ChatClient() {
             </div>
             {/* New chat button */}
             <button
+              aria-label="새 대화"
               onClick={handleNewChat}
               className="flex items-center gap-1.5 px-3 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
             >
@@ -411,20 +413,22 @@ export function ChatClient() {
               </div>
             </div>
           ) : (
-            <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-              {chatHistory.map(entry => (
-                <QAChatMessage
-                  key={entry.id}
-                  question={entry.question}
-                  answer={entry.answer}
-                  sources={entry.sources}
-                  sourceDetails={entry.sourceDetails}
-                  usedKB={entry.usedKB}
-                  usedDocs={entry.usedDocs}
-                  toolsUsed={entry.toolsUsed}
-                  isStreaming={entry.isStreaming}
-                />
-              ))}
+            <div className="workspace-page">
+              <div className="w-full max-w-[90ch] space-y-4">
+                {chatHistory.map(entry => (
+                  <QAChatMessage
+                    key={entry.id}
+                    question={entry.question}
+                    answer={entry.answer}
+                    sources={entry.sources}
+                    sourceDetails={entry.sourceDetails}
+                    usedKB={entry.usedKB}
+                    usedDocs={entry.usedDocs}
+                    toolsUsed={entry.toolsUsed}
+                    isStreaming={entry.isStreaming}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -437,8 +441,8 @@ export function ChatClient() {
         )}
 
         {/* Input bar */}
-        <div className="border-t border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest px-4 py-4">
-          <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
+        <div className="border-t border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest workspace-inline-gutter shrink-0 py-4">
+          <form onSubmit={handleSubmit} className="w-full min-w-0">
             <div className="flex items-center gap-2">
               <input
                 ref={inputRef}
@@ -446,13 +450,14 @@ export function ChatClient() {
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 placeholder="질문을 입력하세요..."
-                className="flex-1 px-4 py-2.5 text-sm bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary/30 placeholder:text-slate-400 dark:placeholder:text-slate-500 dark:text-white outline-none transition-colors"
+                className="min-w-0 flex-1 px-4 py-2.5 text-sm bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary/30 placeholder:text-slate-400 dark:placeholder:text-slate-500 dark:text-white outline-none transition-colors"
                 disabled={isAsking}
               />
               <button
                 type="submit"
+                aria-label="질문 보내기"
                 disabled={!question.trim() || isAsking}
-                className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center justify-center shrink-0 w-10 h-10 rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 <span className="material-symbols-outlined text-xl">send</span>
               </button>
