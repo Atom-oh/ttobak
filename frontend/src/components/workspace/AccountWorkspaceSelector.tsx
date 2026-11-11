@@ -6,7 +6,8 @@ import { buildAccountTree, flattenAccountTree } from '@/lib/accountTree';
 import { AccountHierarchyList } from '@/components/AccountHierarchyList';
 import type { AccountSummary } from '@/types/meeting';
 
-export function useAccountWorkspaceAccounts(userId: string) {
+/** `revision` changes reload the list (e.g. after a parent save) without blanking it. */
+export function useAccountWorkspaceAccounts(userId: string, revision = 0) {
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -16,8 +17,10 @@ export function useAccountWorkspaceAccounts(userId: string) {
     setError(null);
     try {
       const cached = accountApi.peekList({ expectedUserId: userId });
-      if (cached) setAccounts(cached.accounts);
-      setLoading(!cached);
+      if (cached) {
+        setAccounts(cached.accounts);
+        setLoading(false);
+      }
       const result = await accountApi.list({ expectedUserId: userId });
       if (current === generation.current) setAccounts(result.accounts);
     } catch {
@@ -33,7 +36,7 @@ export function useAccountWorkspaceAccounts(userId: string) {
   useEffect(() => {
     void refresh();
     return invalidate;
-  }, [refresh, invalidate]);
+  }, [refresh, invalidate, revision]);
   return { accounts, loading, error, refresh };
 }
 

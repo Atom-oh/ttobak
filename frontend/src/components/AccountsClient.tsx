@@ -43,9 +43,13 @@ function AccountsContent() {
     setObservedAccountId(queryAccountId);
     setSelectedAccountId(queryAccountId);
   }
-  // Default to the first row of the hierarchy (Korean name order), not API order.
+  // Default to the first hierarchy row (Korean name order), then keep that
+  // default while it stays listed so a re-parent cannot swap the open customer.
   const firstAccountId = useMemo(() => buildAccountTree(loadedAccounts)[0]?.accountId || '', [loadedAccounts]);
-  const selectedId = selectedAccountId || firstAccountId;
+  const [defaultAccountId, setDefaultAccountId] = useState('');
+  const defaultListed = loadedAccounts.some(account => account.accountId === defaultAccountId);
+  if (!selectedAccountId && !defaultListed && defaultAccountId !== firstAccountId) setDefaultAccountId(firstAccountId);
+  const selectedId = selectedAccountId || (defaultListed ? defaultAccountId : firstAccountId);
   const selectAccount = (accountId: string) => {
     if (!accounts.some(account => account.accountId === accountId)) return;
     setSelectedAccountId(accountId);

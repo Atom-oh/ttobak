@@ -55,6 +55,8 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
   const searchParams = useSearchParams();
   const { membershipRevision } = useAuth();
   const [selectedId, setSelectedId] = useState(accountId);
+  // Bumped after a parent save so the customer tree reloads its hierarchy.
+  const [listRevision, setListRevision] = useState(0);
   const selectAccount = (next: string) => {
     setSelectedId(next);
     const params = new URLSearchParams(searchParams.toString());
@@ -68,9 +70,9 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
         <a href={`/accounts${searchParams.size ? `?${searchParams}` : ''}`} className="text-sm font-semibold text-primary hover:underline">고객 생성 · 계층 관리</a>
       </div>
       <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-6">
-        <AccountWorkspaceSidebar key={membershipRevision} userId={userId} selectedId={selectedId} onSelect={selectAccount} />
+        <AccountWorkspaceSidebar key={membershipRevision} userId={userId} revision={listRevision} selectedId={selectedId} onSelect={selectAccount} />
         <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
-          {selectedId && selectedId !== '_' ? <AccountDetailContent key={selectedId} accountId={selectedId} />
+          {selectedId && selectedId !== '_' ? <AccountDetailContent key={selectedId} accountId={selectedId} onParentUpdated={() => setListRevision(value => value + 1)} />
             : <p className="text-sm text-text-secondary">고객을 선택하세요.</p>}
         </div>
       </div>
@@ -78,10 +80,10 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
   );
 }
 
-function AccountWorkspaceSidebar({ userId, selectedId, onSelect }: {
-  userId: string; selectedId: string; onSelect: (accountId: string) => void;
+function AccountWorkspaceSidebar({ userId, revision, selectedId, onSelect }: {
+  userId: string; revision: number; selectedId: string; onSelect: (accountId: string) => void;
 }) {
-  const list = useAccountWorkspaceAccounts(userId);
+  const list = useAccountWorkspaceAccounts(userId, revision);
   return (
     <div className="min-w-0">
       {list.loading ? <p role="status" className="text-sm text-text-secondary">고객 목록을 불러오는 중…</p> : (

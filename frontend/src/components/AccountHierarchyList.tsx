@@ -14,11 +14,13 @@ export function AccountHierarchyList({ accounts, selectedId, onSelect }: {
 }) {
   const rows = useMemo(() => flattenAccountTree(buildAccountTree(accounts)), [accounts]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [revealedId, setRevealedId] = useState('');
-  // Reveal the selected row once per selection; later collapses stay user-controlled.
+  const [revealedKey, setRevealedKey] = useState('');
+  // Reveal the selected row once per selection and ancestry (re-selection or a
+  // re-parent reveals again); later collapses stay user-controlled.
   const selectedAncestors = rows.find(row => row.node.accountId === selectedId)?.ancestorIds ?? [];
-  if (revealedId !== selectedId && selectedAncestors.length > 0) {
-    setRevealedId(selectedId);
+  const revealKey = [selectedId, ...selectedAncestors].join('/');
+  if (revealedKey !== revealKey) {
+    setRevealedKey(revealKey);
     if (selectedAncestors.some(id => collapsed.has(id))) {
       setCollapsed(prev => new Set([...prev].filter(id => !selectedAncestors.includes(id))));
     }

@@ -968,3 +968,75 @@ test('the customer list is the hierarchy: Korean name order, nested children, in
   assert.equal(page.url.searchParams.get('account'), 'kakao');
   assert.ok(page.calls.some(call => call.name === 'get' && call.args[0] === 'kakao'));
 });
+
+test('a parent save keeps the implicitly selected default customer mounted', async () => {
+  let accounts = [account('A'), account('B')];
+  const page = fixture({ component: 'AccountsClient', url: '/accounts?tab=general', api: {
+    list: () => ({ accounts }),
+    get: id => accounts.find(item => item.accountId === id),
+    updateParent: (accountId, request) => {
+      accounts = accounts.map(item => item.accountId === accountId ? { ...item, parentAccountId: request.parentAccountId || undefined } : item);
+      return { accountId, ...request };
+    },
+  } });
+  await page.settle();
+  const current = () => nodes(page.render()).find(node => node.type === 'button' && node.props['aria-current'] === 'true')?.props['data-account-id'];
+  assert.equal(current(), 'A');
+  assert.equal(page.url.searchParams.get('account'), null);
+  const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
+  nodes(parentEditor()).find(node => node.type === 'select').props.onChange({ target: { value: 'B' } });
+  await page.click('저장');
+  await page.settle();
+  assert.match(text(parentEditor()), /상위 어카운트를 저장했습니다/);
+  assert.equal(current(), 'A', 'B became the first root but A stays selected');
+  assert.equal(page.calls.filter(call => call.name === 'get').length, 1, 'the detail stays mounted');
+});
+
+test('re-selecting a child or re-parenting it under a collapsed group reveals it again', async () => {
+  let accounts = [account('P'), account('Q'), account('C', { parentAccountId: 'P' })];
+  const page = fixture({ component: 'AccountsClient', url: '/accounts?account=C', api: {
+    list: () => ({ accounts }),
+    get: id => accounts.find(item => item.accountId === id),
+    updateParent: (accountId, request) => {
+      accounts = accounts.map(item => item.accountId === accountId ? { ...item, parentAccountId: request.parentAccountId || undefined } : item);
+      return { accountId, ...request };
+    },
+  } });
+  await page.settle();
+  const visible = id => nodes(page.render()).some(node => node.type === 'button' && node.props['data-account-id'] === id);
+  page.click('Customer P 접기');
+  assert.ok(!visible('C'));
+  page.click('Customer Q');
+  await page.settle();
+  const options = nodes(page.render()).find(node => node.props?.id === 'account-workspace-select');
+  options.props.onChange({ target: { value: 'C' } });
+  await page.settle();
+  assert.ok(visible('C'), 're-selection reveals the child');
+  page.click('Customer P 접기');
+  const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
+  nodes(parentEditor()).find(node => node.type === 'select').props.onChange({ target: { value: 'Q' } });
+  await page.click('저장');
+  await page.settle();
+  assert.equal(nodes(page.render()).find(node => node.type === 'button' && node.props['data-account-id'] === 'C').props.title, 'Customer Q / Customer C');
+});
+
+test('the account route reloads the customer tree after a parent save', async () => {
+  let accounts = [account('A'), account('B')];
+  const page = fixture({ component: 'AccountDetailClient', url: '/accounts/A?tab=general', api: {
+    list: () => ({ accounts }),
+    get: id => accounts.find(item => item.accountId === id),
+    updateParent: (accountId, request) => {
+      accounts = accounts.map(item => item.accountId === accountId ? { ...item, parentAccountId: request.parentAccountId || undefined } : item);
+      return { accountId, ...request };
+    },
+  } });
+  await page.settle();
+  const path = id => nodes(page.render()).find(node => node.type === 'button' && node.props['data-account-id'] === id)?.props.title;
+  assert.equal(path('A'), 'Customer A');
+  const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
+  nodes(parentEditor()).find(node => node.type === 'select').props.onChange({ target: { value: 'B' } });
+  await page.click('저장');
+  await page.settle();
+  assert.equal(path('A'), 'Customer B / Customer A');
+  assert.ok(!nodes(page.render()).some(node => node.props?.role === 'status' && text(node).includes('고객 목록을 불러오는 중')), 'the list is not blanked while reloading');
+});

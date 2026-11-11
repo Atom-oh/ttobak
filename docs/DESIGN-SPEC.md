@@ -322,7 +322,10 @@ Render accessible accounts as a collapsible hierarchy. On `/accounts` and
 `/accounts/{id}` that hierarchy is the customer selector: a left tree in the app
 nav style (`AccountWorkspaceSelector` → `AccountHierarchyList`), sorted by Korean
 name order, children nested under their group, the selection's group expanded,
-and no separate flat list; mobile uses a select in the same order. An inaccessible parent
+and no separate flat list. Rows omit role badges; inherited read-only rows show
+a labelled icon. The implicit default (first row) stays selected across parent
+saves, and the `/accounts/{id}` tree reloads after one. Mobile uses a select in
+the same order. An inaccessible parent
 makes a visible child a display root; do not fetch the hidden parent's name.
 Creation can select a parent. Only the child owner sees the parent editor; server
 validation still enforces parent membership, cycles and concurrent ancestry changes.
