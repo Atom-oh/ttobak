@@ -5,10 +5,12 @@ import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 import { UserGuideButton } from '@/components/layout/UserGuideButton';
+import { UserNameEditor } from '@/components/UserNameEditor';
+import { profileApi } from '@/lib/api';
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, isAuthenticated, isLoading, logout } = useAuth();
+  const { user, isAuthenticated, isLoading, logout, applySavedName } = useAuth();
 
   if (isLoading) {
     return (
@@ -49,8 +51,18 @@ export default function ProfilePage() {
             {user.name?.charAt(0) || user.email.charAt(0).toUpperCase()}
           </div>
           <div className="text-center">
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-              {user.name || 'User'}
+            <h2>
+              <UserNameEditor
+                name={user.name}
+                placeholder="이름 없음"
+                label="내 이름"
+                size="title"
+                onSave={async (name) => {
+                  const saved = await profileApi.updateName(name);
+                  await applySavedName(user.userId, saved.name);
+                  return saved.name;
+                }}
+              />
             </h2>
             <p className="text-sm text-slate-500 mt-1">{user.email}</p>
           </div>
