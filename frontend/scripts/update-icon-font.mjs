@@ -38,6 +38,7 @@ export const NON_ICON_LITERALS = new Set([
   'preview', // caption push kind (lib/captionOverlay.ts)
   'message', // window postMessage event type (components/layout/UserGuideButton.tsx)
   'login', // Mac intake run action (lib/intake.ts, hooks/useIntake.ts)
+  'radio', // <input type="radio"> (components/insights/NewsSourcesManager.tsx)
 ]);
 
 function collectIcons(sources, codepoints) {

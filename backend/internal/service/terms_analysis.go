@@ -209,6 +209,12 @@ type termsSource struct {
 	hash       string
 }
 
+// termsExtractorVersion is part of every meeting's terms source identity.
+// Bump it when the extraction prompt, filters or caps change so completed
+// meetings re-qualify instead of reporting UNCHANGED; a run queued under the
+// previous identity ends as SOURCE_CHANGED and is queued again.
+const termsExtractorVersion = "2026-11-11-domain-terms"
+
 func newTermsSource(meeting *model.Meeting) termsSource {
 	transcript, variant := selectMeetingTranscript(meeting)
 	revision := meeting.TranscriptRevisionA
@@ -218,7 +224,7 @@ func newTermsSource(meeting *model.Meeting) termsSource {
 	tainted := meeting.SourceEditedByNonOwnerAt != ""
 	identity, _ := json.Marshal([]string{
 		actionSourceHash(meeting.Content), variant, revision, actionSourceHash(transcript),
-		meeting.AttachmentSummarySources, strconv.FormatBool(tainted),
+		meeting.AttachmentSummarySources, strconv.FormatBool(tainted), termsExtractorVersion,
 	})
 	return termsSource{
 		notes: meeting.Content, transcript: transcript, tainted: tainted,
