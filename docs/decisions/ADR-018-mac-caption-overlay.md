@@ -77,16 +77,24 @@ stationary | fullScreenAuxiliary` on the main thread, in addition to
 enter another app's full-screen Space (owner report, 2026-11-11: with the app
 on one display and a full-screen browser on the other, the caption window
 could not be moved to the full-screen display), because macOS keeps a regular
-app's windows out of such a Space. While at least one caption window exists
-the app therefore runs with the accessory activation policy
-(`sync_activation_policy` in `caption_overlay.rs`) and returns to the regular
-policy when the last one is destroyed. Consequence: TTOBAK has no Dock icon,
-menu bar or Cmd-Tab entry while captions are open; its main window stays
-usable. Rejected: swapping the window's class to a non-activating `NSPanel`
+app's windows out of such a Space and decides this when the window is
+created. Each caption window is therefore created while the app briefly has
+the accessory activation policy (`created_as_accessory` in
+`caption_overlay.rs`), and the app returns to the regular policy as soon as
+the window exists; the window keeps the ability afterwards. Observed on
+2026-11-11 with a second process holding a native full-screen window on the
+other display, using the on-screen window list: a caption window created this
+way was on screen over the full-screen Space when created there, when moved
+there later, and when the full-screen window appeared after it; one created by
+the previous code was not, and switching the policy only after creation did
+not help. Not observed: a browser or slideshow as the full-screen app, and
+whether the Dock icon visibly flickers. Rejected: swapping the window's class to a non-activating `NSPanel`
 after creation. WebKit and AppKit key-value observe the window, and removing
 those observers after the class change raises an Objective-C exception that
-aborts the app (observed 2026-11-11 on caption open and on close). Whether
-the overlay stays above a full-screen PowerPoint or Keynote slideshow is not
+aborts the app (observed 2026-11-11 on caption open and on close). Also
+rejected: staying an accessory app while captions are open, which removes the
+Dock icon and menu bar for the whole talk without being needed. Whether the
+overlay stays above a full-screen PowerPoint or Keynote slideshow is not
 verified.
 
 **Zoom limit.** macOS screen sharing includes the overlay only when the whole

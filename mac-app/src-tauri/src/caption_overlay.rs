@@ -245,35 +245,29 @@ fn screens(app: &AppHandle) -> (Vec<Rect>, Rect) {
     (monitors, primary)
 }
 
-/// Whether the app should run as an accessory (no Dock icon or menu bar)
-/// given the caption windows that stay open. macOS keeps the windows of a
-/// regular app out of another app's full-screen Space whatever their level or
-/// collection behavior; an accessory app's windows may join it.
-pub fn accessory_while_open(open: &[&str], closing: Option<&str>) -> bool {
-    open.iter().any(|label| Some(*label) != closing)
-}
-
-/// Applies `accessory_while_open` for the caption windows that exist now;
-/// `closing` names one that is being destroyed and no longer counts.
+/// Runs `create` while the app is an accessory, then makes it a regular app
+/// again. macOS keeps the windows of a regular app out of another app's
+/// full-screen Space whatever their level or collection behavior, and decides
+/// this when the window is created: a window created while the app is an
+/// accessory can join such a Space and keeps that ability after the app is
+/// regular again, so the Dock icon and menu bar are only gone for a moment.
 #[cfg(target_os = "macos")]
-fn sync_activation_policy(app: &AppHandle, closing: Option<&str>) {
-    let open: Vec<&str> = caption_model::LANGS
-        .iter()
-        .filter_map(|lang| caption_model::window_label(lang))
-        .filter(|label| app.get_webview_window(label).is_some())
-        .collect();
-    let policy = if accessory_while_open(&open, closing) {
-        tauri::ActivationPolicy::Accessory
-    } else {
-        tauri::ActivationPolicy::Regular
+fn created_as_accessory<T>(app: &AppHandle, create: impl FnOnce() -> T) -> T {
+    let set = |policy| {
+        if let Err(e) = app.set_activation_policy(policy) {
+            log::warn!("caption overlay activation policy change failed: {e}");
+        }
     };
-    if let Err(e) = app.set_activation_policy(policy) {
-        log::warn!("caption overlay activation policy change failed: {e}");
-    }
+    set(tauri::ActivationPolicy::Accessory);
+    let created = create();
+    set(tauri::ActivationPolicy::Regular);
+    created
 }
 
 #[cfg(not(target_os = "macos"))]
-fn sync_activation_policy(_app: &AppHandle, _closing: Option<&str>) {}
+fn created_as_accessory<T>(_app: &AppHandle, create: impl FnOnce() -> T) -> T {
+    create()
+}
 
 /// Lifts the window above full-screen apps on every Space.
 #[cfg(target_os = "macos")]
@@ -436,7 +430,6 @@ fn watch(app: &AppHandle, window: &WebviewWindow, lang: String) {
             WindowEvent::CloseRequested { .. } => {
                 let _ = mark_closed(&app.state::<CaptionState>(), &lang);
             }
-            WindowEvent::Destroyed => sync_activation_policy(&app, Some(&label)),
             _ => {}
         }
     });
@@ -472,7 +465,7 @@ pub async fn caption_overlay_open(
         let (monitors, primary) = screens(&app);
         let (x, y) = caption_model::placement(saved_pos, size, &monitors, primary);
         let url = tauri::WebviewUrl::App(overlay_url(&lang).into());
-        let built = tauri::WebviewWindowBuilder::new(&app, label, url)
+        let builder = tauri::WebviewWindowBuilder::new(&app, label, url)
             .title("TTOBAK captions")
             .initialization_script(style_script(&saved.style))
             .inner_size(size.0, size.1)
@@ -485,13 +478,17 @@ pub async fn caption_overlay_open(
             .always_on_top(true)
             .visible_on_all_workspaces(true)
             .skip_taskbar(true)
-            .focused(false)
-            .build();
+            .focused(false);
+        let built = created_as_accessory(&app, || {
+            let built = builder.build();
+            if let Ok(window) = &built {
+                float_above_full_screen(window);
+            }
+            built
+        });
         match built {
             Ok(window) => {
-                float_above_full_screen(&window);
                 watch(&app, &window, lang.clone());
-                sync_activation_policy(&app, None);
                 created = Some(window);
             }
             // A concurrent open created it first.
@@ -797,17 +794,6 @@ mod tests {
         assert!(gated_label(&none, "zh").is_err());
         assert!(gated_label(&none, "fr").is_err());
         assert_eq!(gated_label(&none, "en").unwrap(), "caption-en");
-    }
-
-    #[test]
-    fn app_is_an_accessory_only_while_a_caption_window_stays_open() {
-        assert!(!accessory_while_open(&[], None));
-        assert!(accessory_while_open(&["caption-en"], None));
-        assert!(!accessory_while_open(&["caption-en"], Some("caption-en")));
-        assert!(accessory_while_open(
-            &["caption-en", "caption-ja"],
-            Some("caption-en")
-        ));
     }
 
     #[test]
