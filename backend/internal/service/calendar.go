@@ -32,6 +32,12 @@ type CalendarStore interface {
 	GetCalendarBatchReceipt(context.Context, string, string, string) (*repository.CalendarBatchReceipt, error)
 	ListCalendarEventRows(context.Context, string, model.CalendarQuery) (*repository.CalendarRowPage, error)
 	ListCalendarSources(context.Context, string, string, int32) (*model.CalendarSourcePage, error)
+	GetCalendarEventRow(context.Context, string, string, string) (*repository.CalendarEventRow, error)
+	ListCalendarShareRows(context.Context, string, model.CalendarQuery) (*repository.CalendarSharePage, error)
+	GetCalendarOverride(context.Context, string, string, string) (*repository.CalendarOverrideRow, error)
+	PutCalendarOverride(context.Context, string, string, string, repository.CalendarOverrideRow) error
+	DeleteCalendarOverride(context.Context, string, string, string) error
+	SetCalendarShareState(context.Context, string, string, string, repository.CalendarShareChange) error
 }
 
 type CalendarAccountReader interface {
@@ -39,14 +45,17 @@ type CalendarAccountReader interface {
 }
 
 type CalendarService struct {
-	store    CalendarStore
-	cipher   *CalendarCipher
-	accounts CalendarAccountReader
-	now      func() time.Time
+	store      CalendarStore
+	cipher     *CalendarCipher
+	accounts   CalendarAccountReader
+	membership CalendarMembership
+	now        func() time.Time
 }
 
-func NewCalendarService(store CalendarStore, cipher *CalendarCipher, accounts CalendarAccountReader) *CalendarService {
-	return &CalendarService{store: store, cipher: cipher, accounts: accounts, now: time.Now}
+// NewCalendarService wires the calendar store and cipher. accounts classifies events
+// (GetAccount access); membership is the direct-member check for sharing.
+func NewCalendarService(store CalendarStore, cipher *CalendarCipher, accounts CalendarAccountReader, membership CalendarMembership) *CalendarService {
+	return &CalendarService{store: store, cipher: cipher, accounts: accounts, membership: membership, now: time.Now}
 }
 
 func (svc *CalendarService) Sync(ctx context.Context, userID, sourceID string, request model.CalendarSyncRequest) (*model.CalendarSyncReceipt, error) {
@@ -93,41 +102,74 @@ func (svc *CalendarService) Sync(ctx context.Context, userID, sourceID string, r
 		return nil, err
 	}
 	acceptedAt := svc.now().UTC()
-	batch := repository.CalendarWriteBatch{
-		ExpectedRevision: normalized.ExpectedRevision, PayloadDigest: payloadDigest, AcceptedAt: acceptedAt,
-		WindowStart: normalized.WindowStart, WindowEnd: normalized.WindowEnd, ExpiresAt: acceptedAt.Add(7 * 24 * time.Hour).Unix(),
-		Receipt:   model.CalendarSyncReceipt{BatchID: normalized.BatchID, Revision: normalized.ExpectedRevision + 1, Completed: normalized.Complete},
-		Mutations: make([]repository.CalendarWriteMutation, 0, len(normalized.Mutations)),
-	}
-	for _, mutation := range normalized.Mutations {
-		externalID := calendarMutationExternalID(mutation)
-		eventID := calendarEventID(normalizedSource, externalID)
-		write := repository.CalendarWriteMutation{Op: mutation.Op, ExternalID: externalID, EventID: eventID}
-		if mutation.Op == "upsert" {
-			event := mutation.Event
-			plaintext, err := marshalCalendarPayload(*event)
-			if err != nil {
-				return nil, err
-			}
-			ciphertext, err := svc.cipher.Encrypt(ctx, userID, normalizedSource, eventID, plaintext)
-			if err != nil {
-				return nil, err
-			}
-			write.Event = &repository.CalendarEventRow{
-				UserID: userID, SourceID: normalizedSource, EventID: eventID,
-				StartsAt: event.StartsAt, EndsAt: event.EndsAt, AccountID: event.AccountID,
-				Ciphertext: ciphertext, Revision: batch.Receipt.Revision, ExpiresAt: event.EndsAt.Add(90 * 24 * time.Hour).Unix(),
-			}
-			batch.Receipt.Upserted++
-		} else {
-			batch.Receipt.Removed++
+	ciphertexts := make([]string, len(normalized.Mutations))
+	// A share state changed by SetEventSharing after this batch read it is recomputed and
+	// retried once; a second change is a conflict.
+	for attempt := 0; ; attempt++ {
+		shares, err := svc.planCalendarSyncShares(ctx, userID, normalizedSource, normalized.Mutations)
+		if err != nil {
+			return nil, err
 		}
-		batch.Mutations = append(batch.Mutations, write)
+		batch := repository.CalendarWriteBatch{
+			ExpectedRevision: normalized.ExpectedRevision, PayloadDigest: payloadDigest, AcceptedAt: acceptedAt,
+			WindowStart: normalized.WindowStart, WindowEnd: normalized.WindowEnd, ExpiresAt: acceptedAt.Add(7 * 24 * time.Hour).Unix(),
+			Receipt:   model.CalendarSyncReceipt{BatchID: normalized.BatchID, Revision: normalized.ExpectedRevision + 1, Completed: normalized.Complete},
+			Mutations: make([]repository.CalendarWriteMutation, 0, len(normalized.Mutations)),
+		}
+		for index, mutation := range normalized.Mutations {
+			externalID := calendarMutationExternalID(mutation)
+			eventID := calendarEventID(normalizedSource, externalID)
+			write := repository.CalendarWriteMutation{Op: mutation.Op, ExternalID: externalID, EventID: eventID}
+			if mutation.Op == "upsert" {
+				event := mutation.Event
+				if ciphertexts[index] == "" {
+					plaintext, err := marshalCalendarPayload(*event)
+					if err != nil {
+						return nil, err
+					}
+					if ciphertexts[index], err = svc.cipher.Encrypt(ctx, userID, normalizedSource, eventID, plaintext); err != nil {
+						return nil, err
+					}
+				}
+				write.Event = &repository.CalendarEventRow{
+					UserID: userID, SourceID: normalizedSource, EventID: eventID,
+					StartsAt: event.StartsAt, EndsAt: event.EndsAt, AccountID: event.AccountID, SeriesKey: event.SeriesKey,
+					Ciphertext: ciphertexts[index], Revision: batch.Receipt.Revision, ExpiresAt: event.EndsAt.Add(90 * 24 * time.Hour).Unix(),
+				}
+				plan := shares[index]
+				share, extra, err := svc.buildCalendarShares(ctx, userID, normalizedSource, eventID, *event, plan.decision, plan.member, plan.extraMember)
+				if err != nil {
+					return nil, err
+				}
+				if share != nil {
+					write.Share = share
+					write.Event.ShareAccountID, write.Event.MeetingKey, write.Event.ShareState = share.AccountID, share.MeetingKey, share.State
+				}
+				if extra != nil {
+					write.ExtraVeto = extra
+					write.Event.ExtraVetoAccountID, write.Event.ExtraVetoMeetingKey = extra.AccountID, extra.MeetingKey
+				}
+				// The repository rejects the write if the row changed since this plan read it.
+				expected := plan.expected
+				write.Expected, write.PreviousShareKey = &expected, plan.previous
+				batch.Receipt.Upserted++
+			} else {
+				batch.Receipt.Removed++
+			}
+			batch.Mutations = append(batch.Mutations, write)
+		}
+		if err := svc.authorizeCalendarAccounts(ctx, userID, accountIDs, true); err != nil {
+			return nil, err
+		}
+		receipt, err := svc.store.ApplyCalendarBatch(ctx, userID, normalizedSource, batch)
+		if errors.Is(err, repository.ErrCalendarShareStateChanged) {
+			if attempt == 0 {
+				continue
+			}
+			return nil, errors.Join(repository.ErrConditionFailed, err)
+		}
+		return receipt, err
 	}
-	if err := svc.authorizeCalendarAccounts(ctx, userID, accountIDs, true); err != nil {
-		return nil, err
-	}
-	return svc.store.ApplyCalendarBatch(ctx, userID, normalizedSource, batch)
 }
 
 // authorizeCalendarAccounts requires access to every account. rejectMerged is
@@ -351,12 +393,17 @@ func (svc *CalendarService) ListEvents(ctx context.Context, userID string, query
 		return nil, repository.ErrCalendarCorruptData
 	}
 	page := &model.CalendarEventPage{Events: make([]model.CalendarEvent, 0, len(rows.Rows)), NextCursor: rows.NextCursor}
+	lookups := newCalendarShareLookups()
 	for _, row := range rows.Rows {
-		event, err := svc.decryptCalendarEvent(ctx, userID, row)
+		input, err := svc.decryptCalendarInput(ctx, userID, row)
 		if err != nil {
 			return nil, err
 		}
-		page.Events = append(page.Events, event)
+		override, err := svc.calendarOverride(ctx, lookups, userID, row.SourceID, calendarScopeKey(input, row.EventID))
+		if err != nil {
+			return nil, err
+		}
+		page.Events = append(page.Events, calendarOwnerEvent(row, input, override))
 	}
 	access := make(map[string]bool)
 	for _, event := range page.Events {
@@ -412,13 +459,14 @@ func (svc *CalendarService) ListSources(ctx context.Context, userID, cursor stri
 	return page, nil
 }
 
-func (svc *CalendarService) decryptCalendarEvent(ctx context.Context, userID string, row repository.CalendarEventRow) (model.CalendarEvent, error) {
+// decryptCalendarInput opens the owner's stored payload and checks it against its row.
+func (svc *CalendarService) decryptCalendarInput(ctx context.Context, userID string, row repository.CalendarEventRow) (model.CalendarEventInput, error) {
 	if row.UserID != userID || row.PK != model.PrefixUser+userID || row.SK != model.CalendarEventSortKey(row.SourceID, row.EventID) {
-		return model.CalendarEvent{}, repository.ErrCalendarCorruptData
+		return model.CalendarEventInput{}, repository.ErrCalendarCorruptData
 	}
 	plaintext, err := svc.cipher.Decrypt(ctx, userID, row.SourceID, row.EventID, row.Ciphertext)
 	if err != nil {
-		return model.CalendarEvent{}, err
+		return model.CalendarEventInput{}, err
 	}
 	var input model.CalendarEventInput
 	// The sealed payload tolerates unknown fields so an older reader can still
@@ -426,21 +474,14 @@ func (svc *CalendarService) decryptCalendarEvent(ctx context.Context, userID str
 	// Identity, time and account are rechecked against the row below.
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
 	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF {
-		return model.CalendarEvent{}, repository.ErrCalendarCorruptData
+		return model.CalendarEventInput{}, repository.ErrCalendarCorruptData
 	}
 	input, err = normalizeCalendarEvent(input)
 	if err != nil || calendarEventID(row.SourceID, input.ExternalID) != row.EventID ||
 		!input.StartsAt.Equal(row.StartsAt) || !input.EndsAt.Equal(row.EndsAt) || input.AccountID != row.AccountID {
-		return model.CalendarEvent{}, repository.ErrCalendarCorruptData
+		return model.CalendarEventInput{}, repository.ErrCalendarCorruptData
 	}
-	return model.CalendarEvent{
-		EventID: row.EventID, SourceID: row.SourceID, Provider: "outlook",
-		Title: input.Title, StartsAt: input.StartsAt, EndsAt: input.EndsAt, TimeZone: input.TimeZone,
-		IsAllDay: input.IsAllDay, StartDate: input.StartDate, EndDate: input.EndDate, Location: input.Location, OrganizerDomain: input.OrganizerDomain, AccountID: input.AccountID,
-		// No share rows exist yet, so nothing is reported as shared: shareAccountId and its
-		// evidence are reported only once the account share is stored.
-		CandidateAccountIDs: input.CandidateAccountIDs, Private: input.Private, SharingMode: "auto",
-	}, nil
+	return input, nil
 }
 
 func calendarResultFits(value any) bool {

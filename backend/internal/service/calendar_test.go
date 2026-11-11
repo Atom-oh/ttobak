@@ -30,6 +30,26 @@ type calendarStoreFake struct {
 	query        model.CalendarQuery
 	sourceLimit  int32
 	applyError   error
+
+	// Share fakes: stored event rows (keyed sourceID/eventID), overrides (keyed
+	// userID/sourceID/scopeKey), share pages and queued errors.
+	stored         map[string]*repository.CalendarEventRow
+	rowReads       int
+	overrides      map[string]*repository.CalendarOverrideRow
+	overrideWrites []string
+	sharePage      *repository.CalendarSharePage
+	shareQueries   []string
+	shareStates    []calendarShareStateCall
+	applyErrors    []error
+	stateErrors    []error
+	// onRowRead runs once, after a GetCalendarEventRow result is taken (a concurrent writer).
+	onRowRead      func()
+	onOverrideRead func()
+}
+
+type calendarShareStateCall struct {
+	UserID, SourceID, EventID string
+	repository.CalendarShareChange
 }
 
 func (fake *calendarStoreFake) GetCalendarBatchReceipt(_ context.Context, userID, sourceID, batchID string) (*repository.CalendarBatchReceipt, error) {
@@ -44,7 +64,34 @@ func (fake *calendarStoreFake) ApplyCalendarBatch(_ context.Context, userID, sou
 	if fake.applyError != nil {
 		return nil, fake.applyError
 	}
+	if len(fake.applyErrors) > 0 {
+		err := fake.applyErrors[0]
+		fake.applyErrors = fake.applyErrors[1:]
+		fake.batches = append(fake.batches, batch)
+		return nil, err
+	}
 	fake.batches = append(fake.batches, batch)
+	if fake.stored == nil {
+		fake.stored = map[string]*repository.CalendarEventRow{}
+	}
+	for _, mutation := range batch.Mutations {
+		if mutation.Expected != nil && *mutation.Expected != repository.CalendarRowVersionOf(fake.stored[sourceID+"/"+mutation.EventID]) {
+			return nil, repository.ErrCalendarShareStateChanged
+		}
+	}
+	for _, mutation := range batch.Mutations {
+		old := fake.stored[sourceID+"/"+mutation.EventID]
+		if mutation.Event == nil {
+			delete(fake.stored, sourceID+"/"+mutation.EventID)
+			continue
+		}
+		row := *mutation.Event
+		row.PK, row.SK = model.PrefixUser+userID, model.CalendarEventSortKey(sourceID, row.EventID)
+		if old != nil {
+			row.ShareVersion = old.ShareVersion
+		}
+		fake.stored[sourceID+"/"+row.EventID] = &row
+	}
 	fake.saved = &repository.CalendarBatchReceipt{
 		UserID: userID, SourceID: sourceID, PayloadDigest: batch.PayloadDigest, Receipt: batch.Receipt, ExpiresAt: batch.ExpiresAt,
 	}
@@ -67,6 +114,127 @@ func (fake *calendarStoreFake) ListCalendarSources(_ context.Context, userID, cu
 		return fake.sources, nil
 	}
 	return &model.CalendarSourcePage{Sources: []model.CalendarSourceStatus{}}, nil
+}
+
+func (fake *calendarStoreFake) GetCalendarEventRow(_ context.Context, userID, sourceID, eventID string) (*repository.CalendarEventRow, error) {
+	fake.rowReads++
+	if hook := fake.onRowRead; hook != nil {
+		fake.onRowRead = nil
+		defer hook()
+	}
+	row := fake.stored[sourceID+"/"+eventID]
+	if row == nil || row.UserID != userID {
+		return nil, nil
+	}
+	copied := *row
+	return &copied, nil
+}
+
+func (fake *calendarStoreFake) ListCalendarShareRows(_ context.Context, accountID string, query model.CalendarQuery) (*repository.CalendarSharePage, error) {
+	fake.shareQueries = append(fake.shareQueries, accountID)
+	fake.query = query
+	if fake.sharePage != nil {
+		return fake.sharePage, nil
+	}
+	return &repository.CalendarSharePage{}, nil
+}
+
+func (fake *calendarStoreFake) GetCalendarOverride(_ context.Context, userID, sourceID, scopeKey string) (*repository.CalendarOverrideRow, error) {
+	if hook := fake.onOverrideRead; hook != nil {
+		fake.onOverrideRead = nil
+		defer hook()
+	}
+	if row := fake.overrides[userID+"/"+sourceID+"/"+scopeKey]; row != nil {
+		copied := *row
+		return &copied, nil
+	}
+	return nil, nil
+}
+
+func (fake *calendarStoreFake) PutCalendarOverride(_ context.Context, userID, sourceID, scopeKey string, override repository.CalendarOverrideRow) error {
+	if fake.overrides == nil {
+		fake.overrides = map[string]*repository.CalendarOverrideRow{}
+	}
+	fake.overrideWrites = append(fake.overrideWrites, "put "+scopeKey+" "+override.Mode+" "+override.AccountID)
+	fake.overrides[userID+"/"+sourceID+"/"+scopeKey] = &repository.CalendarOverrideRow{
+		UserID: userID, SourceID: sourceID, ScopeKey: scopeKey, Mode: override.Mode, AccountID: override.AccountID,
+	}
+	return nil
+}
+
+func (fake *calendarStoreFake) DeleteCalendarOverride(_ context.Context, userID, sourceID, scopeKey string) error {
+	fake.overrideWrites = append(fake.overrideWrites, "delete "+scopeKey)
+	delete(fake.overrides, userID+"/"+sourceID+"/"+scopeKey)
+	return nil
+}
+
+func (fake *calendarStoreFake) SetCalendarShareState(_ context.Context, userID, sourceID, eventID string, change repository.CalendarShareChange) error {
+	fake.shareStates = append(fake.shareStates, calendarShareStateCall{UserID: userID, SourceID: sourceID, EventID: eventID, CalendarShareChange: change})
+	share := change.Share
+	if len(fake.stateErrors) > 0 {
+		err := fake.stateErrors[0]
+		fake.stateErrors = fake.stateErrors[1:]
+		if err != nil {
+			return err
+		}
+	}
+	row := fake.stored[sourceID+"/"+eventID]
+	if row == nil {
+		return repository.ErrCalendarEventNotFound
+	}
+	if change.Expected != repository.CalendarRowVersionOf(row) {
+		return repository.ErrCalendarShareStateChanged
+	}
+	row.ShareAccountID, row.MeetingKey, row.ShareState = "", "", ""
+	row.ExtraVetoAccountID, row.ExtraVetoMeetingKey = "", ""
+	if share != nil {
+		row.ShareAccountID, row.MeetingKey, row.ShareState = share.AccountID, share.MeetingKey, share.State
+	}
+	if change.ExtraVeto != nil {
+		row.ExtraVetoAccountID, row.ExtraVetoMeetingKey = change.ExtraVeto.AccountID, change.ExtraVeto.MeetingKey
+	}
+	row.ShareVersion++
+	return nil
+}
+
+type calendarMembershipFake struct {
+	members     map[string][]model.AccountMember // accountID -> direct members
+	accounts    map[string]*model.Account
+	memberships map[string][]model.AccountMember // userID -> GSI rows
+	calls       []string
+}
+
+func (fake *calendarMembershipFake) addMember(accountID, userID, email string) {
+	if fake.members == nil {
+		fake.members = map[string][]model.AccountMember{}
+	}
+	fake.members[accountID] = append(fake.members[accountID], model.AccountMember{AccountID: accountID, UserID: userID, Email: email, Role: "member"})
+}
+
+func (fake *calendarMembershipFake) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	fake.calls = append(fake.calls, "member "+accountID+"/"+userID)
+	for _, member := range fake.members[accountID] {
+		if member.UserID == userID {
+			copied := member
+			return &copied, nil
+		}
+	}
+	return nil, nil
+}
+
+func (fake *calendarMembershipFake) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
+	fake.calls = append(fake.calls, "members "+accountID)
+	return append([]model.AccountMember{}, fake.members[accountID]...), nil
+}
+
+func (fake *calendarMembershipFake) ListAccountsForUser(_ context.Context, userID string) ([]model.AccountMember, error) {
+	fake.calls = append(fake.calls, "accounts "+userID)
+	return append([]model.AccountMember{}, fake.memberships[userID]...), nil
+}
+
+func (fake *calendarMembershipFake) GetAccount(_ context.Context, accountID string) (*model.Account, error) {
+	fake.calls = append(fake.calls, "account "+accountID)
+	return fake.accounts[accountID], nil
 }
 
 type calendarAccountsFake struct {
@@ -101,12 +269,18 @@ func TestCalendarSyncRefusesMergedAccount(test *testing.T) {
 }
 
 func calendarFixture() (*CalendarService, *calendarStoreFake, *calendarKMSFake, *calendarAccountsFake) {
+	svc, store, sdk, accounts, _ := calendarShareFixture()
+	return svc, store, sdk, accounts
+}
+
+func calendarShareFixture() (*CalendarService, *calendarStoreFake, *calendarKMSFake, *calendarAccountsFake, *calendarMembershipFake) {
 	store := &calendarStoreFake{}
 	sdk := &calendarKMSFake{}
 	accounts := &calendarAccountsFake{denied: map[string]error{}}
-	svc := NewCalendarService(store, NewCalendarCipher(sdk, "configured-key"), accounts)
+	membership := &calendarMembershipFake{}
+	svc := NewCalendarService(store, NewCalendarCipher(sdk, "configured-key"), accounts, membership)
 	svc.now = func() time.Time { return calendarNow }
-	return svc, store, sdk, accounts
+	return svc, store, sdk, accounts, membership
 }
 
 func calendarRequest() model.CalendarSyncRequest {
@@ -491,12 +665,11 @@ func TestCalendarEventReadsReturnStoredSharingFields(test *testing.T) {
 	request := calendarRequest()
 	first := request.Mutations[0].Event
 	first.CandidateAccountIDs = []string{"account-3", "account-2"}
-	shared, private := *first, *first
-	shared.ExternalID, shared.CandidateAccountIDs = "series/occurrence-2", nil
-	shared.ShareAccountID, shared.ShareEvidence = "account-2", []string{"title"}
+	plain, private := *first, *first
+	plain.ExternalID, plain.CandidateAccountIDs = "series/occurrence-2", nil
 	private.ExternalID, private.CandidateAccountIDs, private.Private = "series/occurrence-3", nil, true
 	request.Mutations = append(request.Mutations,
-		model.CalendarMutation{Op: "upsert", Event: &shared}, model.CalendarMutation{Op: "upsert", Event: &private})
+		model.CalendarMutation{Op: "upsert", Event: &plain}, model.CalendarMutation{Op: "upsert", Event: &private})
 	calendarStoredEvents(test, svc, store, request)
 	page, err := svc.ListEvents(context.Background(), "owner", model.CalendarQuery{From: calendarNow, To: calendarNow.Add(24 * time.Hour)})
 	if err != nil || len(page.Events) != 3 {
@@ -505,7 +678,7 @@ func TestCalendarEventReadsReturnStoredSharingFields(test *testing.T) {
 	seen := 0
 	for _, event := range page.Events {
 		if event.SharingMode != "auto" || event.ShareAccountID != "" || event.ShareEvidence != nil {
-			test.Fatalf("an unstored share was reported: %+v", event)
+			test.Fatalf("an unshared event reported a share: %+v", event)
 		}
 		switch {
 		case reflect.DeepEqual(event.CandidateAccountIDs, []string{"account-2", "account-3"}) && !event.Private:

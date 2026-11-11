@@ -222,7 +222,8 @@ test('calendar planning: window, exclusions, explicit removals only, sanitized l
   assert.equal(sanitizeLocation('https://example.invalid/x?pwd=1'), undefined);
 
   const many = Array.from({ length: 45 }, (_, index) => ({ op: 'remove', externalId: `id-${index}` }));
-  assert.deepEqual(batches(many).map(group => group.length), [20, 20, 5]);
+  // Calendar batches stop at 12 so share-bearing upserts fit the server's 100-item transaction.
+  assert.deepEqual(batches(many).map(group => group.length), [12, 12, 12, 9]);
 });
 
 function fakeApi({ fail = [] } = {}) {

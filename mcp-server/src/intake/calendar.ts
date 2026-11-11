@@ -17,6 +17,8 @@ export const PAST_DAYS = 7;
 export const FUTURE_DAYS = 30;
 const MAX_ITEMS = 5000;
 const LEDGER_RETENTION_DAYS = 120;
+/** A shared, rescheduled upsert costs up to seven transaction items; 12 + 2 stay within 100. */
+const MAX_BATCH = 12;
 const UNTITLED = '(제목 없음)';
 
 export interface OutlookItem {
@@ -330,9 +332,9 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   return { mutations, set, remove, counts, preview };
 }
 
-/** Splits mutations into batches of at most 20 within the request byte budget. */
+/** Splits mutations into batches of at most 12 within the request byte budget. */
 export function batches(mutations: Mutation[]): Mutation[][] {
-  return splitBatches(mutations);
+  return splitBatches(mutations, MAX_BATCH);
 }
 
 export function pruneLedger(ledger: Ledger, now: Date): Ledger {

@@ -342,7 +342,7 @@ not invoke process-image. convert-doc produces a docs-pdf/ sidecar and has docs/
 read plus docs-pdf/* read/write permissions in isolated subnets. Source GET
 ETag/version metadata and conditional preview replacement bind converted bytes.
 Canonical readers validate that binding; the preview URL still checks existence.
-Cross-tenant original/preview reads and parser risk remain (ADR-022).
+Cross-tenant original/preview reads and parser risk remain (ADR-020).
 
 audio-remux (ADR-014) writes `audio-playback/` copies with `ffmpeg -c copy`,
 leaving the source untouched. It reads `audio/*` and `audio-playback/*`, writes
