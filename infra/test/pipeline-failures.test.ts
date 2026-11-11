@@ -119,7 +119,7 @@ describe('pipeline failure retention and alarm routing', () => {
       }
       expect(byMetric('TermsLayerPersonal')).toEqual(['"terms run:" "status=succeeded"']);
       expect(byMetric('TermsLayerAccount')).toEqual(['"layer=account" "outcome=MERGED"']);
-      expect(byMetric('TermsLayerCommon')).toEqual(['"terms news:" "outcome=SUCCEEDED"']);
+      expect(byMetric('TermsLayerCommon')).toEqual(['"terms news:" "outcome=SUCCEEDED"', '"terms tech:" "outcome=SUCCEEDED"']);
       // Ruling R8: failed Account merges are not retried, so they must be visible.
       expect(byMetric('TermsAccountFailures')).toEqual([
         '"layer=account" "outcome=FAILED"', '"layer=account" "outcome=MEMBERS_FAILED"',
@@ -133,13 +133,16 @@ describe('pipeline failure retention and alarm routing', () => {
       expect(byMetric('TermsNewsRuns')).toEqual(['"terms news:" "outcome=SUCCEEDED"']);
       expect(byMetric('TermsNewsDisabled')).toEqual(['"terms news:" "outcome=DISABLED"']);
       expect(byMetric('TermsNewsFailed')).toEqual(['"terms news:" "outcome=FAILED"']);
+      expect(byMetric('TermsTechRuns')).toEqual(['"terms tech:" "outcome=SUCCEEDED"']);
+      expect(byMetric('TermsTechDisabled')).toEqual(['"terms tech:" "outcome=DISABLED"']);
+      expect(byMetric('TermsTechFailed')).toEqual(['"terms tech:" "outcome=FAILED"']);
       // The exact backend/cmd/summarize/transcript_quality.go log format.
       expect(byMetric('TranscriptCorrectionApplied')).toEqual(['"transcript correction outcome=APPLIED"']);
       expect(byMetric('TranscriptCorrectionNone')).toEqual(['"transcript correction outcome=APPLIED" "corrections=0"']);
       expect(byMetric('TranscriptCorrectionUnavailable')).toEqual(['"transcript correction outcome=GLOSSARY_UNAVAILABLE"']);
     });
 
-    test.each(['TermsNewsFailed', 'TermsAccountFailures'])('%s alarms on any failure in a day', name => {
+    test.each(['TermsNewsFailed', 'TermsTechFailed', 'TermsAccountFailures'])('%s alarms on any failure in a day', name => {
       const alarm = Object.values(termsFixture().findResources('AWS::CloudWatch::Alarm'))
         .map(a => a.Properties).find(a => a.AlarmName === name)!;
       expect(alarm).toMatchObject({

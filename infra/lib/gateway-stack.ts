@@ -193,7 +193,8 @@ export function transcriptCorrectionEnvironment(scope: Construct): Record<string
  * KB-document, research-report and daily news term extraction for the
  * summarize Lambda (layered dictionary 4.2). CDK context `ttobak:kbTermsMode` and
  * `ttobak:researchTermsMode` (off|personal|on; personal never writes an Account,
- * ADR-008 FU4), `ttobak:newsTermsMode` (off|on), all default off, plus
+ * ADR-008 FU4), `ttobak:newsTermsMode` and `ttobak:techTermsMode` (off|on;
+ * daily news and AWS technical documents into Common), all default off, plus
  * `ttobak:newsTermsSources` (global|all, default global); invalid values fail
  * synth.
  */
@@ -219,6 +220,7 @@ export function sourceTermsEnvironment(scope: Construct): Record<string, string>
     RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode', layered),
     NEWS_TERMS_MODE: read('ttobak:newsTermsMode'),
     NEWS_TERMS_SOURCES: newsSources,
+    TECH_TERMS_MODE: read('ttobak:techTermsMode'),
   };
 }
 
@@ -1394,6 +1396,27 @@ export class GatewayStack extends cdk.Stack {
       deadLetterQueue: termsNewsDlq,
     }));
     pipelineFailures.watchQueue('TermsNews', termsNewsDlq);
+    // Daily AWS technical document terms into the Common layer: at 21:30
+    // UTC summarize processes the same day's tech documents (GSI4 DOC#tech)
+    // in its own invocation. The rule is always enabled; with
+    // ttobak:techTermsMode off each run logs DISABLED.
+    const termsTechDlq = new sqs.Queue(this, 'TermsTechDlq', {
+      queueName: 'ttobak-terms-tech-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    new events.Rule(this, 'TermsTechDailyRule', {
+      ruleName: 'ttobak-terms-tech-daily',
+      description: 'Extract dictionary terms from the day of crawled AWS technical documents into the common layer',
+      schedule: events.Schedule.expression('cron(30 21 * * ? *)'),
+    }).addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      event: events.RuleTargetInput.fromObject({ kind: 'tech-daily' }),
+      maxEventAge: cdk.Duration.hours(1),
+      retryAttempts: 2,
+      deadLetterQueue: termsTechDlq,
+    }));
+    pipelineFailures.watchQueue('TermsTech', termsTechDlq);
 
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
