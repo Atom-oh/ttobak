@@ -1868,7 +1868,8 @@ always the verified JWT subject) and admin-only `PUT /api/settings/users/{userId
 take `{ "name": "..." }` (1 KiB body, unknown fields rejected) and return
 `{ userId, name }`. `service.NormalizeUserName` trims and allows 1-64 code points,
 rejecting control and bidi-control characters (400). `UserAdminService.UpdateUserName`
-writes only Cognito `name` via AdminUpdateUserAttributes, then the
+requires a sub target (an email alias returns 404), writes only Cognito `name` via
+AdminUpdateUserAttributes, then the
 `USER#{id}/PROFILE` copy read by account people lists; a missing PROFILE row is
 not an error. A profile-sync failure after the Cognito write returns 500 and an
 identical retry converges. The caller's ID-token `name` changes on the next refresh.

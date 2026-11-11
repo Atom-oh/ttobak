@@ -83,6 +83,9 @@ func TestUpdateUserNameRejectsInvalidBeforeAnyWrite(t *testing.T) {
 	if _, err := svc.UpdateUserName(context.Background(), "", "홍길동"); !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("empty target err = %v, want ErrUserNotFound", err)
 	}
+	if _, err := svc.UpdateUserName(context.Background(), "someone@example.com", "홍길동"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("email-alias target err = %v, want ErrUserNotFound", err)
+	}
 	if len(cognito.updateAttrCalls) != 0 || len(repo.nameUpdates) != 0 {
 		t.Fatal("invalid input must not reach Cognito or DynamoDB")
 	}

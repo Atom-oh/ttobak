@@ -55,7 +55,9 @@ func NormalizeUserName(raw string) (string, error) {
 // subject, the admin route sits behind middleware.RequireAdmin. Username==sub
 // for this pool (see listAdminUserIDs).
 func (s *UserAdminService) UpdateUserName(ctx context.Context, targetUserID, rawName string) (*model.UserNameResponse, error) {
-	if strings.TrimSpace(targetUserID) == "" {
+	// Only a sub addresses both stores. Cognito also resolves the email alias
+	// as a Username, which would rename the user but miss USER#{sub}/PROFILE.
+	if strings.TrimSpace(targetUserID) == "" || strings.Contains(targetUserID, "@") {
 		return nil, ErrUserNotFound
 	}
 	name, err := NormalizeUserName(rawName)

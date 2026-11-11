@@ -45,10 +45,8 @@ export function UserNameEditor({ name, placeholder = '-', onSave, label, size = 
       setError(checked.message);
       return;
     }
-    if (checked.name === (name || '')) {
-      cancel();
-      return;
-    }
+    // No same-name shortcut: re-saving the shown name is the documented retry
+    // when Cognito accepted a rename but the profile copy did not sync.
     setSaving(true);
     setError(null);
     try {
