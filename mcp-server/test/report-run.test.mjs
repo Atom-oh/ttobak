@@ -90,6 +90,8 @@ function setup(t, scenario = {}, options = {}) {
     // The real temp roots are never swept by tests.
     sweepRoots: options.sweepRoots ?? [join(home, 'no-sweep-root')],
     ...(options.tempRoot ? { tempRoot: options.tempRoot } : {}),
+    // CI hosts may lack sandbox-exec or bwrap; tests that cover the probe set it explicitly.
+    sandboxSupported: () => true,
   };
   const run = (args = ['run', '--period', 'quarter', '--noninteractive']) => runReport(args, environment);
   const output = () => JSON.parse(stdout.at(-1));
