@@ -77,6 +77,6 @@ needed focused tests and explicit recovery.
   the old unconditional skip of stale `summarizing` jobs: retry eligibility after
   20 minutes differs from the 60-minute stuck threshold.
 
-[ADR-014](../../../docs/decisions/ADR-014-multi-file-audio-and-linked-meetings.md),
+[ADR-014](../../../docs/decisions/ADR-014-meeting-audio-files-and-lookup.md),
 [current API](../../../docs/API-SPEC.md), [infrastructure](../../../docs/INFRA-SPEC.md),
 and [documentation map](../../../docs/README.md) are the current references.

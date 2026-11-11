@@ -19,5 +19,5 @@ Intended validation covered ownership/status/self-merge rejection, transcript hy
 
 The proposed `MergeService`, merge handler/route, and `AudioSources` model are absent from the reviewed source. Current `AudioKeys` multipart processing and `LinkedMeetingIDs` predecessor context are different features, not evidence this destructive merge shipped.
 
-- [ADR-014](../../decisions/ADR-014-multi-file-audio-and-linked-meetings.md), [meeting model](../../../backend/internal/model/meeting.go), [API routes](../../../backend/cmd/api/main.go), [multipart transcript merge](../../../backend/cmd/summarize/merge.go).
+- [ADR-014](../../decisions/ADR-014-meeting-audio-files-and-lookup.md), [meeting model](../../../backend/internal/model/meeting.go), [API routes](../../../backend/cmd/api/main.go), [multipart transcript merge](../../../backend/cmd/summarize/merge.go).
 - [ADR-009](../../decisions/ADR-009-batch-stt-and-diarization.md) governs speaker preservation; [ADR-031](../../decisions/ADR-031-summarize-timeout-resilience.md) governs summary retries. Neither authorizes deleting source meetings under this old proposal.

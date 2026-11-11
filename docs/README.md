@@ -50,7 +50,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Self-service Account invitations](decisions/ADR-054-self-service-account-invitations.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
 | [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
 | [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
-| [Seekable audio playback copies](decisions/ADR-062-seekable-audio-playback-copies.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
+| [Meeting audio files and lookup](decisions/ADR-014-meeting-audio-files-and-lookup.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
 | [Local MCP intake](decisions/ADR-065-local-mcp-intake.md) | Deterministic local connectors over host MCP servers; references not copies; calendar first, AI proposals only; amended for the SpecReq task step's two provider writes | `mcp-server/src/intake/`; calendar and task acceptance pending |
 | [Account contact encryption and retention](decisions/ADR-063-account-contact-encryption-and-retention.md) | Contact fields KMS envelope-encrypted per row, bound to account/contact; kept until deleted, PITR window disclosed | `backend/internal/sealing`, contact repository, `KMS_KEY_ID` |
 | [Account relationship links, signals and KB references](decisions/ADR-064-account-relationship-links.md) | Typed account links with manual/auto origin and read-time revalidation, account news sources, KB refs, bounded overview reads; QA retrieval unchanged | `backend/internal/service/account_links.go`, `account_overview.go`, `account_kb.go`, `account_news.go` |
@@ -93,12 +93,12 @@ python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
 ```
 
-- [Cognito app client write attributes and self-service email change](decisions/ADR-057-cognito-client-write-attributes.md)
+- [Cognito app client write attributes and self-service email change](decisions/ADR-007-sign-up-identity-and-admin.md)
 - [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
 - [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
 - [Browser and mobile recording, recovery and retention](decisions/ADR-006-browser-and-mobile-recording.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
-- [Private audio crops and activation](decisions/ADR-047-private-audio-crops.md)
+- [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
 - [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)
 - [Shared speaker correction and account publication](decisions/ADR-051-shared-speaker-correction-and-account-publication.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-050-http-origin-proof-rotation.md)

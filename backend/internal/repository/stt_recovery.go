@@ -482,7 +482,7 @@ func (r *DynamoDBRepository) DeleteSttFailedMeetingObjects(ctx context.Context, 
 		return result, ErrSummaryObject
 	}
 	var keys []string
-	// audio-playback holds ADR-062 remuxed copies of the same recordings.
+	// audio-playback holds ADR-014 remuxed copies of the same recordings.
 	for _, category := range []string{"audio", "audio-playback", "images", "files"} {
 		prefix := category + "/" + ownerID + "/" + meetingID + "/"
 		listed, err := r.listSttObjectKeys(ctx, prefix)

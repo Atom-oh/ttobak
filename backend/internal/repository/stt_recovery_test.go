@@ -457,7 +457,7 @@ func TestIsSttMeetingTranscriptKey(t *testing.T) {
 	}
 }
 
-// ADR-062: grace deletion of a failed recording also lists its playback copies.
+// ADR-014: grace deletion of a failed recording also lists its playback copies.
 func TestDeleteSttFailedMeetingObjectsListsPlaybackCopies(t *testing.T) {
 	repo, calls := sttWire(t, func(string, map[string]any) (int, string) { return 200, `{}` })
 	if _, err := repo.DeleteSttFailedMeetingObjects(context.Background(), "owner", "m"); err != nil {

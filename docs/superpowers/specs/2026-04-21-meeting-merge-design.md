@@ -46,7 +46,7 @@ available API contracts.
 
 The current [Meeting model](../../../backend/internal/model/meeting.go) and
 [API router](../../../backend/cmd/api/main.go) do not implement this `AudioSources`/
-`MergedFrom` migration or merge endpoint. [ADR-014](../../decisions/ADR-014-multi-file-audio-and-linked-meetings.md)
+`MergedFrom` migration or merge endpoint. [ADR-014](../../decisions/ADR-014-meeting-audio-files-and-lookup.md)
 instead covers multiple audio inputs within one meeting and separate follow-up
 links. Neither feature proves retroactive record merging or authorizes deleting
 source meetings or unioning their permissions.
