@@ -814,7 +814,7 @@ behavior; configuration wiring does not establish deployed activation.
 `SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED` only to API. Its rule requires privacy
 writer `1`, and its value also binds the immutable API version. Deploy compatible
 Go/Python approval readers with this flag disabled before enabling owner
-disclosure of current completed notes to one Account (ADR-059). Preserve existing
+disclosure of current completed notes to one Account (ADR-029, owner approval). Preserve existing
 writer/reader/cutoff parameters; the new flag does not change email/pending gates.
 
 Grant fences, pending/publication guards, owner sharing-safe regeneration and its

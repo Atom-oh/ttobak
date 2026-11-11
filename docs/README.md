@@ -57,7 +57,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Account people edges](decisions/ADR-067-account-people-edges.md) | Deterministic member/contact/entity resolution into role-keyed `LINK#meeting#` edges; manual wins, mention review, leased runs | `backend/internal/service/account_people*.go`, `backend/cmd/backfill-account-people` |
 | [SA performance data residency](decisions/ADR-068-sa-performance-data-residency.md) | Owner-private `PERF*` field table, default-encryption exception, per-row retention (year+2 TTL for dated rows), organizer-domain calendar counterpart | `backend/internal/model/performance.go`, `backend/internal/repository/performance.go` |
 | [Mac caption overlay](decisions/ADR-069-mac-caption-overlay.md) | Floating per-language caption windows (PR 2/4); translation on the user's own AWS profile (Bedrock Luna finals, Amazon Translate interims) and a native confirmation of profile changes; seven validated remote commands (three in 1/4, four overlay commands in 2/4); listen-only overlay capability (2/4); Zoom whole-screen limit | `mac-app/src-tauri/src/caption_*.rs`, `capabilities/caption-overlay.json` (2/4), `frontend/src/lib/captionOverlay.ts` (3/4) |
-| [Shareable-by-default note provenance](decisions/ADR-070-shareable-default-note-provenance.md) | No linked-predecessor evidence, human edits keep `safe` provenance, first live draft safe, own image analyses safe, Korean-only final notes, owner-only sharing-safe reset | `backend/internal/repository/summary_privacy.go`, `backend/internal/service/bedrock.go` |
+| [Shareable-by-default note provenance](decisions/ADR-029-note-provenance-and-sharing-safety.md) | No linked-predecessor evidence, human edits keep `safe` provenance, first live draft safe, own image analyses safe, Korean-only final notes, owner-only sharing-safe reset | `backend/internal/repository/summary_privacy.go`, `backend/internal/service/bedrock.go` |
 | [Account owner transfer](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Dual owner condition, confirmed direct-member target, previous Owner to SA, cleared initial-owner designation, non-delegable route | `backend/internal/service/account_owner_transfer.go`, `backend/internal/repository/account_owner_transfer.go` |
 | [Account merge](decisions/ADR-072-account-merge.md) | Owner-of-source and direct-member-of-target eligibility, dedicated meeting writer, write fence, unmoved categories need acceptance, readable tombstone, no undo; eligibility and preview only so far | `backend/internal/service/account_merge_preview.go`, `backend/internal/handler/account_merge.go` |
 
@@ -95,11 +95,11 @@ python3 scripts/docs/check_docs.py
 
 - [Cognito app client write attributes and self-service email change](decisions/ADR-007-sign-up-identity-and-admin.md)
 - [Descendant Account read sharing](decisions/ADR-015-accounts-roles-and-hierarchy.md)
-- [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
+- [Owner-approved Account sharing](decisions/ADR-029-note-provenance-and-sharing-safety.md)
 - [Browser and mobile recording, recovery and retention](decisions/ADR-006-browser-and-mobile-recording.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
 - [Conditional news publication and cost reservations](decisions/ADR-004-insights-crawler-and-news.md)
 - [Shared speaker correction and account publication](decisions/ADR-016-meeting-account-sharing.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-027-edge-delivery-and-origin-proof.md)
-- [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)
+- [Summary sharing and source provenance](decisions/ADR-029-note-provenance-and-sharing-safety.md)

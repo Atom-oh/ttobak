@@ -353,7 +353,7 @@ Unicode code points and opaque `cursor` (at most 2,048 characters).
 Account filters classify accessible meetings; they never grant access.
 Reads neither materialize invitations nor create or update user profiles.
 Account-team readers see published meetings' current derived previews, as
-owners do (ADR-049 2026-11-06 amendment); unpublished meetings are not listed.
+owners do (ADR-029 source provenance, 2026-11-06 amendment); unpublished meetings are not listed.
 
 Each response is at most 10,000 encoded JSON bytes. Reassemble `dataJson`
 fragments for the same revision before parsing the complete group. Discovery
@@ -656,7 +656,7 @@ and an unchanged value is not written. It cannot be combined with an
 `expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
 (`""` for legacy rows). The field is stored and accepted but no longer
 affects generation: Korean final notes always use the Korean directive
-(`noteLanguageDirective`, ADR-070). Both summary captures still pin the field in
+(`noteLanguageDirective`, ADR-029, shareable by default). Both summary captures still pin the field in
 their source conditions, so a change during a run fails that run with
 `SOURCE_CHANGED` and keeps the prior summary.
 
@@ -1437,7 +1437,7 @@ are preserved; absent legacy Insight revisions are minted to reject stale copies
 Generic requests cannot assign approval. Protected Account readers accept only a
 current owner/audience/generation/hash-bound approval. Content/live writes, summary
 publication and audience changes invalidate it even during writer rollback.
-`canCreateGrant` retains direct-email/pending safe-source semantics; see ADR-059.
+`canCreateGrant` retains direct-email/pending safe-source semantics; see ADR-029 (owner approval).
 
 For a protected account membership, unapproved unknown/private meeting derivation withholds
 summary, tasks, insights, tags, sentiment and live draft context. Parent-owned
@@ -2448,7 +2448,7 @@ saved summary text.
 The explicit owner `sharingSafe` mode uses the selected saved transcript, saved
 notes, verified current DOCUMENT extraction and the owner's own image analyses.
 It excludes prior generated and preview evidence; no mode reads linked
-predecessors (ADR-070). It is the owner-only reset; ordinary human edits keep
+predecessors (ADR-029, shareable by default). It is the owner-only reset; ordinary human edits keep
 `safe` provenance and need no reset. Mode is persisted and pinned through delivery.
 Success atomically publishes safe provenance, resets tasks/insights/tags/sentiment/
 live draft, and deletes action-analysis and simulator state. Source/edit-grant CAS
@@ -2465,7 +2465,7 @@ without a meeting check during the frontend rollout; remove that allowance once 
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
 verified document extraction, and writes Korean notes; the POST body never selects a language and the stored `noteLanguage`
-does not change it (ADR-070). It does not rerun STT or refinement and does not
+does not change it (ADR-029, shareable by default). It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;

@@ -77,7 +77,7 @@ Status: Historical implementation plan (2026-11-10); deployment acceptance is re
 
   Plus writer test `TestLiveSummaryFirstWriteStampsSafe`: `UpdateMeetingFieldsIfMatch` with `{"liveSummary": "draft"}` on a fresh meeting, writers enabled, asserts stored `summaryPrivacy.state == "safe"` and `InheritedState == ""`; and `TestOwnerEditKeepsSafe` / `TestOwnerEditKeepsUnknownSticky`.
 - [ ] **Step 2: Run** `(cd backend && /usr/local/go/bin/go test ./internal/repository/ -run 'EditedSummaryPrivacyState|FirstWriteStampsSafe|EditKeeps' -count=1)` — expect FAIL.
-- [ ] **Step 3: Implement.** Replace the `if state == safe { state = unknown }` block with `state := editedSummaryPrivacyState(parent)`; set `InheritedState` to `""` when the result is `safe`, else to the state. Leave the ADR-059 approval clearing on content/live writes unchanged.
+- [ ] **Step 3: Implement.** Replace the `if state == safe { state = unknown }` block with `state := editedSummaryPrivacyState(parent)`; set `InheritedState` to `""` when the result is `safe`, else to the state. Leave the ADR-029 approval clearing on content/live writes unchanged.
 - [ ] **Step 4: Run** full repository and service tests — expect PASS; update tests that asserted safe→unknown on edit to the new rule.
 - [ ] **Step 5: Commit** `feat(summary): keep safe provenance across human edits`
 
@@ -100,7 +100,7 @@ Status: Historical implementation plan (2026-11-10); deployment acceptance is re
 
 **Files:**
 - Create: `docs/decisions/ADR-069-shareable-default-note-provenance.md` (confirm the next free number with `ls docs/decisions`)
-- Modify: `docs/decisions/ADR-049-summary-sharing-source-provenance.md` (header line "Partially superseded by ADR-069: …"), `docs/API-SPEC.md` (resummary/noteLanguage/provenance paragraphs), `docs/architecture.md` (summary inputs), `docs/README.md` index if ADRs are listed there
+- Modify: `docs/decisions/ADR-029-note-provenance-and-sharing-safety.md` (header line "Partially superseded by ADR-069: …"), `docs/API-SPEC.md` (resummary/noteLanguage/provenance paragraphs), `docs/architecture.md` (summary inputs), `docs/README.md` index if ADRs are listed there
 
 - [ ] **Step 1:** ADR-069 records: predecessors removed from all generation; human `content`/`liveSummary` edits keep `safe`; first live draft on empty provenance is `safe`; image analyses are safe evidence (verified: `AnalyzeImage`/`ProcessImageAttachment` read only the image object and attachment row at `dde84cb8`); `noteLanguage` no longer affects Korean generation. Status line and rationale per `docs/CLAUDE.md`.
 - [ ] **Step 2: Run** `python3 scripts/docs/check_docs.py` from repo root — PASS.
