@@ -23907,6 +23907,10 @@ function performanceSource(source) {
   if (!PERFORMANCE_SOURCES.includes(source)) throw new Error("performance source is invalid");
   return source;
 }
+function performanceReportKey(key) {
+  if (!PERFORMANCE_REPORT_KEY.test(key)) throw new Error("performance report period key is invalid");
+  return key;
+}
 function parseApiResponse(status, body) {
   if (status === 204) return {};
   let parsed;
@@ -23925,7 +23929,7 @@ function parseApiResponse(status, body) {
   }
   return parsed;
 }
-var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, ApiResponseError, TtobakApi;
+var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, PERFORMANCE_REPORT_KEY, MAX_PERFORMANCE_REPORT_BYTES, ApiResponseError, TtobakApi;
 var init_api2 = __esm({
   "src/api.ts"() {
     "use strict";
@@ -23971,6 +23975,8 @@ var init_api2 = __esm({
     PERFORMANCE_SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     MAX_PERFORMANCE_API_BYTES = 14e3;
     MAX_PERFORMANCE_MAPPINGS_BYTES = 2e6;
+    PERFORMANCE_REPORT_KEY = /^(W\d{4}-\d{2}|Q\d{4}-[1-4]|Y\d{4}|C\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2})$/;
+    MAX_PERFORMANCE_REPORT_BYTES = 6 * 262144 + 4096;
     ApiResponseError = class extends Error {
       constructor(message, status, code) {
         super(message);
@@ -24017,6 +24023,31 @@ var init_api2 = __esm({
       /** The owner's SFDC assignments; local intake reads only the IDs. */
       async performanceMappings() {
         return this.request("GET", "/api/performance/mappings", void 0, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
+      }
+      /** Owner-private SA performance report of one period; replaces an earlier one. */
+      async putPerformanceReport(periodKey, report) {
+        return this.request(
+          "PUT",
+          `/api/performance/reports/${performanceReportKey(periodKey)}`,
+          report,
+          MAX_PERFORMANCE_API_BYTES,
+          false,
+          true
+        );
+      }
+      /** The owner's reports, newest first: `{items: [{periodKey, label, generatedAt, partial}], truncated}`. */
+      async listPerformanceReports() {
+        return this.request("GET", "/api/performance/reports", void 0, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
+      }
+      async getPerformanceReport(periodKey) {
+        return this.request(
+          "GET",
+          `/api/performance/reports/${performanceReportKey(periodKey)}`,
+          void 0,
+          MAX_PERFORMANCE_REPORT_BYTES,
+          false,
+          true
+        );
       }
       async listCalendarEvents(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
