@@ -1203,8 +1203,24 @@ async function main() {
     process.exitCode = await runIntake(cliArguments.slice(1), defaultEnvironment());
     return;
   }
+  if (cliArguments[0] === 'report') {
+    const { runReport } = await import('./report/run.js');
+    const { defaultEnvironment } = await import('./intake/run.js');
+    // The Mac app cancels a run with SIGTERM; the run stops claude and removes its files.
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once('SIGINT', cancel);
+    process.once('SIGTERM', cancel);
+    try {
+      process.exitCode = await runReport(cliArguments.slice(1), { ...defaultEnvironment(), signal: controller.signal });
+    } finally {
+      process.off('SIGINT', cancel);
+      process.off('SIGTERM', cancel);
+    }
+    return;
+  }
   if (cliArguments.includes('--help')) {
-    console.log('Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help. Downloaded adapter: stdio only; HTTP requires the installed server package.');
+    console.log('Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help. Downloaded adapter: stdio only; HTTP requires the installed server package.');
     return;
   }
   if (cliArguments.length && (cliArguments.length !== 2 || cliArguments[0] !== '--transport')) {

@@ -269,7 +269,7 @@ export async function selectConnector(connector: ConnectorId, request: SelectReq
 }
 
 /** The TTOBAK API and account scope of a real run; a dry run only uses the test seam. */
-async function signIn(selection: Selection | null, environment: IntakeEnvironment, dryRun: boolean, noninteractive: boolean) {
+export async function signIn(selection: Selection | null, environment: IntakeEnvironment, dryRun: boolean, noninteractive: boolean) {
   let api = environment.api;
   let scope = environment.scope;
   let me = environment.me;
