@@ -38,6 +38,18 @@ export function responseOf(value: string | undefined): CalendarResponse | 'decli
   }
 }
 
+/**
+ * A complete read where no item carries a string `response` means the field
+ * was renamed or dropped: mapped to `none`, the default filter would remove
+ * every synced event. The step fails instead, before any upsert or removal
+ * (a dry run reports the same code).
+ */
+export function assertResponsesPresent(items: readonly OutlookItem[]): void {
+  if (items.length > 0 && !items.some(item => typeof item.response === 'string')) {
+    throw new IntakeError('SCHEMA_CHANGED', 'calendar_view items carry no response field');
+  }
+}
+
 export interface OutlookItem {
   meetingId: string;
   subject?: string;
@@ -506,6 +518,7 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const window = syncWindow(now, zone);
   const items: OutlookItem[] = [];
   for (const request of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request)));
+  assertResponsesPresent(items);
   const plan = planCalendar(items, state.ledger, window, zone, options.responses);
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {

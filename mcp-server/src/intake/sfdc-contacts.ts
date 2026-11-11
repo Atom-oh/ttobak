@@ -30,13 +30,15 @@ const CONTACT_PAGE = 25;
 const CONTACT_PAGE_BYTES = 512 * 1024;
 const MAX_CONTACT_PAGES = 1_000;
 const MAX_LEDGER_IDS = 20_000;
+/** No new Account starts after this; the app kills a run at 20 minutes, and status must still be written. */
+export const SFDC_CONTACTS_BUDGET_MS = 8 * 60_000;
 
 const INTERNAL_RECORD_TYPES = new Set(['Stakeholder Map - Internal Contacts', 'Project Resource']);
 const RESULTS = ['created', 'filled', 'unchanged', 'alreadyLinked', 'suppressed', 'conflict', 'invalid'] as const;
 type SyncResult = typeof RESULTS[number];
 
 export interface SfdcContactCounts {
-  /** TTOBAK Accounts with at least one mapped SFDC account. */
+  /** TTOBAK Accounts with at least one mapped SFDC account that this run processed. */
   accounts: number;
   /** `search_contacts` records read, before filtering. */
   fetched: number;
@@ -65,6 +67,8 @@ export interface SfdcContactCounts {
   invalidIds: number;
   /** Corrupt suppression ledgers that were treated as empty. */
   ledgerReset: number;
+  /** TTOBAK Accounts not started because the time budget ran out; they run next time. */
+  deferred: number;
 }
 
 export interface SfdcContactsResult { result: 'ok' | IntakeCode; counts: SfdcContactCounts }
@@ -106,7 +110,7 @@ export interface MatchResult {
 function emptyCounts(): SfdcContactCounts {
   return { accounts: 0, fetched: 0, created: 0, filled: 0, unchanged: 0, alreadyLinked: 0, suppressed: 0, conflict: 0,
     invalid: 0, ambiguous: 0, skippedInternal: 0, skippedCap: 0, skippedAccountCap: 0, incomplete: 0, marked: 0,
-    unmarked: 0, skipped: 0, forbidden: 0, invalidIds: 0, ledgerReset: 0 };
+    unmarked: 0, skipped: 0, forbidden: 0, invalidIds: 0, ledgerReset: 0, deferred: 0 };
 }
 
 // ---------- matching (pure) ----------
@@ -190,7 +194,12 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
     const email = emailKey(person.email);
     const targets = email ? byEmail.get(email) ?? [] : [];
     if (!targets.length) { byNameOnly.push(person); continue; }
-    if (targets.length > 1 || sfdcEmails.get(email)! > 1 || targets[0].sfdcContactId) { result.ambiguous++; continue; }
+    if (targets.length > 1 || sfdcEmails.get(email)! > 1 || targets[0].sfdcContactId) {
+      // A contact whose email belongs to another SFDC person is never a name candidate either.
+      for (const target of targets) claimed.add(target.contactId);
+      result.ambiguous++;
+      continue;
+    }
     claimed.add(targets[0].contactId);
     links.push(item(person, targets[0]));
   }
@@ -441,6 +450,10 @@ export interface SfdcContactsOptions {
   /** Local state for the suppression ledger; without both, nothing is remembered. */
   store?: IntakeStore;
   scope?: string;
+  /** Milliseconds clock; injectable for tests. */
+  now?: () => number;
+  /** Defaults to `SFDC_CONTACTS_BUDGET_MS`. */
+  budgetMs?: number;
 }
 
 /**
@@ -450,6 +463,9 @@ export interface SfdcContactsOptions {
  */
 export async function runSfdcContacts(options: SfdcContactsOptions): Promise<SfdcContactsResult> {
   const { session, api, dryRun, store } = options;
+  const now = options.now ?? Date.now;
+  const budgetMs = options.budgetMs ?? SFDC_CONTACTS_BUDGET_MS;
+  const startedAt = now();
   const scope = options.scope && SCOPE_PATTERN.test(options.scope) ? options.scope : undefined;
   const counts = emptyCounts();
   let failure: IntakeCode | undefined;
@@ -457,7 +473,11 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
   try {
     const mappings = await mappedAccounts(api);
     counts.invalidIds += mappings.invalidIds;
+    let index = 0;
     for (const [accountId, group] of mappings.accounts) {
+      // Out of time: the remaining Accounts follow on the next run, and the result stays ok.
+      if (now() - startedAt >= budgetMs) { counts.deferred = mappings.accounts.size - index; break; }
+      index++;
       counts.accounts++;
       let current: ExistingContact[];
       try { current = await existingContacts(api, accountId, counts); } catch (error) {

@@ -15,7 +15,7 @@ import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
-import { SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
+import { SFDC_CONTACTS_TOOL, SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
 import { runSfdcContacts, type SfdcContactCounts } from './sfdc-contacts.js';
 import { resolveMe } from './specreq.js';
 import { IntakeStore } from './store.js';
@@ -178,10 +178,11 @@ function definedTtobakEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith('TTOBAK_') && value));
 }
 
+/** `optional` tools are allowed but not required here; their step checks them itself. */
 async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
-  tools: readonly ToolExpectation[]) {
+  tools: readonly ToolExpectation[], optional: readonly ToolExpectation[] = []) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: tools.map(tool => tool.name) });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [...tools, ...optional].map(tool => tool.name) });
   try {
     for (const tool of tools) await session.requireTool(tool);
   } catch (error) {
@@ -473,7 +474,9 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     previous = store.read<RunStatus>('status.json')?.sfdc;
     let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
-    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
+    const contactsOn = syncOptions(selection).sfdcContacts;
+    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS,
+      contactsOn ? [SFDC_CONTACTS_TOOL] : []);
     const active = session;
     const source: SfdcSource = { call: async (tool, request) => resultJson(await active.call(tool, request), tool) };
     const result = await runSfdc({
@@ -485,7 +488,7 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     // The contacts step reuses this session and sign-in. Its failures never change the
     // SFDC result; `intake run` reports them as a partial failure.
     const sfdcContacts = api ? await sfdcContactsStep(store, source, api, scope, dryRun, environment.now(),
-      syncOptions(selection).sfdcContacts) : undefined;
+      contactsOn, async () => { await active.requireTool(SFDC_CONTACTS_TOOL); }) : undefined;
     return { ok: true, connector: 'sfdc', dryRun, counts: result.counts, ...(sfdcContacts ? { sfdcContacts } : {}) };
   } catch (error) {
     const entry: NonNullable<RunStatus['sfdc']> = { ...(previous ?? {}), lastRunAt: startedAt.toISOString(),
@@ -501,11 +504,16 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
 
 /** Runs `sfdc-contacts` and records its status entry (`lastRunAt`, `lastSuccessAt`, `result`, `counts` only). */
 async function sfdcContactsStep(store: IntakeStore, source: SfdcSource, api: TtobakApi, scope: string | undefined,
-  dryRun: boolean, ranAt: Date, on: boolean): Promise<{ result: 'ok' | 'disabled' | IntakeCode; counts?: SfdcContactCounts }> {
+  dryRun: boolean, ranAt: Date, on: boolean, requireTool: () => Promise<void>,
+): Promise<{ result: 'ok' | 'disabled' | IntakeCode; counts?: SfdcContactCounts }> {
   let step: { result: 'ok' | 'disabled' | IntakeCode; counts?: SfdcContactCounts };
   if (!on) step = { result: 'disabled' };
   else {
-    try { step = await runSfdcContacts({ session: source, api, dryRun, store, ...(scope ? { scope } : {}) }); } catch (error) {
+    try {
+      // A missing or changed `search_contacts` fails this step only (SCHEMA_CHANGED).
+      await requireTool();
+      step = await runSfdcContacts({ session: source, api, dryRun, store, ...(scope ? { scope } : {}) });
+    } catch (error) {
       step = { result: intakeCode(error) };
     }
   }

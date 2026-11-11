@@ -111,6 +111,36 @@ test('turning_off_a_response_removes_synced_copies', async t => {
   assert.equal(third.counts.removals, 0);
 });
 
+test('a read without any response field fails with SCHEMA_CHANGED and changes nothing', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi();
+  const withResponse = { store, api, sourceId: SOURCE_ID, scope: SCOPE, zone: ZONE, now: NOW, dryRun: false,
+    source: { async view() { return ITEMS; } } };
+  assert.equal((await runCalendar(withResponse)).counts.upserts, 4);
+  const sent = api.calls.length;
+  const stripped = ITEMS.map(({ response: _response, ...rest }) => rest);
+  const base = { ...withResponse, source: { async view() { return stripped; } } };
+  for (const dryRun of [true, false]) {
+    await assert.rejects(runCalendar({ ...base, dryRun }), error => error.code === 'SCHEMA_CHANGED', `dryRun=${dryRun}`);
+  }
+  assert.equal(api.calls.length, sent, 'no upsert or removal is sent');
+  // One item with a response is enough; an empty read is not a schema change.
+  await runCalendar({ ...base, dryRun: true, source: { async view() { return [...stripped, ITEMS[0]]; } } });
+  await runCalendar({ ...base, dryRun: true, source: { async view() { return []; } } });
+});
+
+test('the CLI dry run reports a missing response field', async t => {
+  const home = tempHome(t);
+  const stripped = ITEMS.map(({ response: _response, ...rest }) => rest);
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: {
+    outlook: { command: process.execPath, args: [OUTLOOK], env: { FAKE_OUTLOOK_ITEMS: JSON.stringify(stripped) } } } }));
+  const lines = [];
+  const env = cliEnvironment(home, lines);
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], env), 0, lines.at(-1));
+  assert.notEqual(await runIntake(['calendar', '--dry-run'], env), 0);
+  assert.equal(JSON.parse(lines.at(-1)).code, 'SCHEMA_CHANGED');
+});
+
 function cliEnvironment(home, lines, api) {
   return {
     home, now: () => NOW, zone: ZONE, stdout: line => lines.push(line),

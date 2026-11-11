@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { matchContacts, normalizeName, runSfdcContacts } from '../dist/intake/sfdc-contacts.js';
-import { SFDC_TOOLS } from '../dist/intake/sfdc.js';
+import { SFDC_CONTACTS_TOOL, SFDC_TOOLS } from '../dist/intake/sfdc.js';
 import { IntakeStore } from '../dist/intake/store.js';
 import { runIntake } from '../dist/intake/run.js';
 import { ApiResponseError } from '../dist/api.js';
@@ -148,6 +148,19 @@ test('email_match_beats_name_mismatch', () => {
   assert.equal(ambiguous, 0);
   assert.deepEqual(items, [{ action: 'link', sfdcContactId: id('003XX0000000E01'), sfdcAccountId: ACCOUNT_A,
     name: 'Jane Customer', title: 'CTO', contactId: 'card-1', revision: 'r-card-1' }]);
+});
+
+test('a contact whose email two SFDC people share is not name-linked to a third', () => {
+  const sfdc = [
+    { id: id('003XX0000000E01'), name: 'Ha Kim', title: '', email: 'shared@customer.example', accountId: ACCOUNT_A },
+    { id: id('003XX0000000E02'), name: 'Jo Kim', title: '', email: 'shared@customer.example', accountId: ACCOUNT_A },
+    { id: id('003XX0000000E03'), name: 'Ha Kim', title: '', email: '', accountId: ACCOUNT_A },
+  ];
+  const current = [existing('card-1', 'Ha Kim', { email: 'shared@customer.example' })];
+  const result = matchContacts(sfdc, current, new Set());
+  assert.equal(result.ambiguous, 2);
+  assert.ok(!result.items.some(item => item.contactId === 'card-1'), 'the shared-email contact stays unlinked');
+  assert.deepEqual(result.items.map(item => [item.action, item.sfdcContactId]), [['create', id('003XX0000000E03')]]);
 });
 
 test('existing_link_wins', () => {
@@ -388,6 +401,24 @@ test('server_results_are_counted_and_suppressed_ids_are_remembered_locally', asy
   assert.ok(!ledger.includes('@') && !ledger.includes('acct-1'));
 });
 
+test('time budget defers the remaining accounts and the result stays ok', async () => {
+  const B = id('001XX0000000A02');
+  const C = id('001XX0000000A03');
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1'], [B, 'acct-2'], [C, 'acct-3']] });
+  const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B')]],
+    [B]: [[contactRecord(id('003XX0000000F02'), 'C', 'D', { accountId: B })]] });
+  // Start at 0; the first Account starts at 0, the second just before 8 minutes, the third after.
+  const ticks = [0, 0, 8 * 60_000 - 1, 8 * 60_000];
+  const now = () => ticks.length > 1 ? ticks.shift() : ticks[0];
+  const result = await runSfdcContacts({ session: source, api, dryRun: false, now });
+  assert.equal(result.result, 'ok');
+  assert.equal(result.counts.accounts, 2);
+  assert.equal(result.counts.deferred, 1);
+  assert.deepEqual(api.syncs.map(sync => sync.accountId), ['acct-1', 'acct-2']);
+  const fresh = await runSfdcContacts({ session: source, api: contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] }), dryRun: true });
+  assert.equal(fresh.counts.deferred, 0, 'the real clock stays within the budget');
+});
+
 test('dry_run_sends_nothing_and_reports_counts', async () => {
   const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
   const result = await runSfdcContacts({ session: contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B')]] }),
@@ -419,9 +450,9 @@ function writeSentral(home, contacts = 'ok', mode = 'ok') {
     'aws-sentral-mcp': { command: process.execPath, args: [SENTRAL], env: { FAKE_SENTRAL_MODE: mode, FAKE_SENTRAL_CONTACTS: contacts } } } }));
 }
 
-async function cli(t, { contacts = 'ok', existingContacts = [] } = {}) {
+async function cli(t, { contacts = 'ok', existingContacts = [], selectContacts = 'ok' } = {}) {
   const home = tempHome(t);
-  writeSentral(home);
+  writeSentral(home, selectContacts);
   const lines = [];
   const errors = [];
   const environment = {
@@ -440,7 +471,8 @@ async function cli(t, { contacts = 'ok', existingContacts = [] } = {}) {
 
 test('run_includes_sfdc_contacts_after_sfdc', async t => {
   const { lines, environment, api, home } = await cli(t);
-  assert.ok(SFDC_TOOLS.some(tool => tool.name === 'search_contacts'));
+  assert.equal(SFDC_CONTACTS_TOOL.name, 'search_contacts');
+  assert.ok(!SFDC_TOOLS.includes(SFDC_CONTACTS_TOOL), 'the SFDC sync never requires the contacts tool');
   assert.equal(await runIntake(['run', '--noninteractive', '--only', 'sfdc'], environment), 0, lines.at(-1));
   const output = JSON.parse(lines.at(-1));
   assert.equal(output.ok, true);
@@ -484,6 +516,20 @@ test('incomplete_snapshot_sends_no_present_list', async t => {
   assert.equal(status.sfdcContacts.result, 'SOURCE_ERROR');
   assert.equal(status.sfdcContacts.lastSuccessAt, undefined);
   assert.equal(status.sfdc.result, 'ok');
+});
+
+test('a missing contacts tool fails only the contacts step', async t => {
+  // Selection does not require search_contacts either.
+  const { lines, environment, api, home } = await cli(t, { contacts: 'missing', selectContacts: 'missing' });
+  assert.equal(await runIntake(['run', '--noninteractive', '--only', 'sfdc'], environment), 2);
+  const output = JSON.parse(lines.at(-1));
+  assert.equal(output.code, 'PARTIAL_FAILURE');
+  assert.equal(output.results.sfdc.result, 'ok', 'the SFDC performance sync still succeeds');
+  assert.equal(output.results.sfdc.sfdcContacts.result, 'SCHEMA_CHANGED');
+  assert.equal(api.syncs.length, 0);
+  const status = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'status.json'), 'utf8'));
+  assert.equal(status.sfdc.result, 'ok');
+  assert.equal(status.sfdcContacts.result, 'SCHEMA_CHANGED');
 });
 
 test('auth_expired_midway_stops', async t => {

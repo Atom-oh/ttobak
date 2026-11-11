@@ -203,7 +203,10 @@ is kept. Absent fields mean the defaults; the first selection stores them.
   default `accept,organizer,tentative`; an empty list syncs no events. The
   `calendar_view` `response` maps `Accept`, `Organizer`, `Tentative` or
   `TentativelyAccepted`, and `NoResponseReceived` or `None`; any other or
-  missing value counts as `none`. `Decline` is always excluded.
+  missing value counts as `none`. `Decline` is always excluded. If a complete
+  read has at least one item and none carries a string `response`, the field
+  was renamed or dropped: the calendar step fails with `SCHEMA_CHANGED` before
+  any upsert or removal, and a dry run reports the same code.
 - `sfdcContacts`: default on. Off skips the [contacts step](#sfdc-contacts-step)
   with result `disabled`, which is not a failure.
 
@@ -480,8 +483,9 @@ assignments are reconciled (see below).
 ## SFDC connector
 
 `intake select sfdc --host <claude|codex|kiro> --server aws-sentral-mcp` checks
-the input schemas of `get_my_personal_details`, `get_registry_assignments`,
-`search_tasks` and `search_contacts`, and keeps the calendar selection. `intake sfdc [--dry-run]
+the input schemas of `get_my_personal_details`, `get_registry_assignments` and
+`search_tasks`, and keeps the calendar selection. `search_contacts` is allowed
+and checked only by the contacts step while it is on. `intake sfdc [--dry-run]
 [--noninteractive] [--reconcile]` then reads and syncs; a dry run prints counts
 only and makes no TTOBAK calls. It holds `sfdc.lock`.
 
@@ -533,7 +537,10 @@ SFDC and keeps its ledger.
 
 After a successful SFDC sync, the same `intake sfdc` or `intake run`, on the
 same `aws-sentral-mcp` session, runs `sfdc-contacts`
-(`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`.
+(`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`,
+which is on the session allowlist only while the step is on. A missing or
+changed `search_contacts` fails the step with `SCHEMA_CHANGED`; the SFDC
+performance sync keeps its result.
 `intake sfdc` still exits 0 when this step fails, like the calendar's task
 step: the failure is in its `sfdcContacts.result` and in `status.json`; only
 `intake run` turns it into `PARTIAL_FAILURE`. With `sfdcContacts` off in the
@@ -565,8 +572,8 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   spaces ignored for Hangul and other CJK names, which also match with given
   and family name in either order; Latin names match only as given) without
   a conflicting email links it. A contact already
-  linked to another SFDC ID, or already matched by email, is not a name
-  candidate. Several candidates, or several SFDC contacts for one candidate,
+  linked to another SFDC ID, already matched by email, or whose email is
+  ambiguous (for example shared by two SFDC people) is not a name candidate. Several candidates, or several SFDC contacts for one candidate,
   are `ambiguous` and skipped this run. No match creates a contact.
 - **Batch.** One `POST /api/accounts/{id}/contacts/sfdc-sync` per Account: links
   first, then creates, each ordered by SFDC ID, at most 200 items and 512 KiB;
@@ -588,7 +595,13 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   `filled`, `unchanged`, `alreadyLinked`, `suppressed`, `conflict`, `invalid`,
   `ambiguous`, `skippedInternal`, `skippedCap`, `skippedAccountCap`,
   `incomplete`, `marked`, `unmarked`, `skipped`, `forbidden`, `invalidIds`,
-  `ledgerReset`.
+  `ledgerReset`, `deferred`. Settings shows the counts also when the result is
+  a failure code, with `skipped`, `ambiguous`, `forbidden` and `incomplete`
+  only when non-zero.
+- **Time budget.** No new Account starts once the step has run 8 minutes
+  (`SFDC_CONTACTS_BUDGET_MS`); the rest count as `deferred` and follow on the
+  next run, and the result stays `ok`. This keeps the step, and its status
+  write, well inside the app's 20-minute run timeout.
 - **Failures.** A failed page or a failed Account request becomes the step's
   `result` while later Accounts still run, so `intake run` reports
   `PARTIAL_FAILURE`; the SFDC sources keep their own result.

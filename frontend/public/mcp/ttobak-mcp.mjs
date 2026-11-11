@@ -25211,6 +25211,11 @@ function responseOf(value) {
       return "none";
   }
 }
+function assertResponsesPresent(items) {
+  if (items.length > 0 && !items.some((item2) => typeof item2.response === "string")) {
+    throw new IntakeError("SCHEMA_CHANGED", "calendar_view items carry no response field");
+  }
+}
 function zoneParts(instant2, zone) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: zone,
@@ -25543,6 +25548,7 @@ async function runCalendar(options2) {
   const window = syncWindow(now, zone);
   const items = [];
   for (const request2 of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request2)));
+  assertResponsesPresent(items);
   const plan = planCalendar(items, state.ledger, window, zone, options2.responses);
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options2.acceptUnknownSensitivity) {
@@ -28094,12 +28100,7 @@ var init_sfdc = __esm({
     };
     SFDC_TASKS_TOOL = { name: "search_tasks", properties: ["condition", "limit", "after"] };
     SFDC_CONTACTS_TOOL = { name: "search_contacts", properties: ["condition", "limit", "after"] };
-    SFDC_TOOLS = [
-      SFDC_PERSONAL_TOOL,
-      SFDC_REGISTRY_TOOL,
-      SFDC_TASKS_TOOL,
-      SFDC_CONTACTS_TOOL
-    ];
+    SFDC_TOOLS = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];
     ACTIVITY_ROLE = "activity";
     SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     PAGE_LIMIT = 500;
@@ -28165,7 +28166,8 @@ function emptyCounts() {
     skipped: 0,
     forbidden: 0,
     invalidIds: 0,
-    ledgerReset: 0
+    ledgerReset: 0,
+    deferred: 0
   };
 }
 function normalizeName(value) {
@@ -28235,6 +28237,7 @@ function matchContacts(sfdc2, existing, suppressed) {
       continue;
     }
     if (targets.length > 1 || sfdcEmails.get(email3) > 1 || targets[0].sfdcContactId) {
+      for (const target of targets) claimed.add(target.contactId);
       result.ambiguous++;
       continue;
     }
@@ -28443,6 +28446,9 @@ function readLedger(store, scope, accountId) {
 }
 async function runSfdcContacts(options2) {
   const { session, api, dryRun, store } = options2;
+  const now = options2.now ?? Date.now;
+  const budgetMs = options2.budgetMs ?? SFDC_CONTACTS_BUDGET_MS;
+  const startedAt = now();
   const scope = options2.scope && SCOPE_PATTERN.test(options2.scope) ? options2.scope : void 0;
   const counts = emptyCounts();
   let failure2;
@@ -28452,7 +28458,13 @@ async function runSfdcContacts(options2) {
   try {
     const mappings = await mappedAccounts(api);
     counts.invalidIds += mappings.invalidIds;
+    let index = 0;
     for (const [accountId, group] of mappings.accounts) {
+      if (now() - startedAt >= budgetMs) {
+        counts.deferred = mappings.accounts.size - index;
+        break;
+      }
+      index++;
       counts.accounts++;
       let current;
       try {
@@ -28548,7 +28560,7 @@ async function runSfdcContacts(options2) {
   }
   return { result: failure2 ?? "ok", counts };
 }
-var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
+var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, SFDC_CONTACTS_BUDGET_MS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
 var init_sfdc_contacts = __esm({
   "src/intake/sfdc-contacts.ts"() {
     "use strict";
@@ -28568,6 +28580,7 @@ var init_sfdc_contacts = __esm({
     CONTACT_PAGE_BYTES = 512 * 1024;
     MAX_CONTACT_PAGES = 1e3;
     MAX_LEDGER_IDS = 2e4;
+    SFDC_CONTACTS_BUDGET_MS = 8 * 6e4;
     INTERNAL_RECORD_TYPES = /* @__PURE__ */ new Set(["Stakeholder Map - Internal Contacts", "Project Resource"]);
     RESULTS = ["created", "filled", "unchanged", "alreadyLinked", "suppressed", "conflict", "invalid"];
     CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
@@ -30552,9 +30565,9 @@ function ttobakConfig(selection, env) {
 function definedTtobakEnv(env) {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith("TTOBAK_") && value));
 }
-async function openSession(environment, host, server, pathDirs, tools) {
+async function openSession(environment, host, server, pathDirs, tools, optional4 = []) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: tools.map((tool) => tool.name) });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [...tools, ...optional4].map((tool) => tool.name) });
   try {
     for (const tool of tools) await session.requireTool(tool);
   } catch (error3) {
@@ -30888,7 +30901,15 @@ async function sfdcRun(options2, environment, store, signedIn) {
     previous = store.read("status.json")?.sfdc;
     let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options2.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
-    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
+    const contactsOn = syncOptions(selection).sfdcContacts;
+    session = await openSession(
+      environment,
+      selected.host,
+      selected.server,
+      selected.pathDirs,
+      SFDC_TOOLS,
+      contactsOn ? [SFDC_CONTACTS_TOOL] : []
+    );
     const active = session;
     const source = { call: async (tool, request2) => resultJson(await active.call(tool, request2), tool) };
     const result = await runSfdc({
@@ -30918,7 +30939,10 @@ async function sfdcRun(options2, environment, store, signedIn) {
       scope,
       dryRun,
       environment.now(),
-      syncOptions(selection).sfdcContacts
+      contactsOn,
+      async () => {
+        await active.requireTool(SFDC_CONTACTS_TOOL);
+      }
     ) : void 0;
     return { ok: true, connector: "sfdc", dryRun, counts: result.counts, ...sfdcContacts ? { sfdcContacts } : {} };
   } catch (error3) {
@@ -30939,11 +30963,12 @@ async function sfdcRun(options2, environment, store, signedIn) {
     release();
   }
 }
-async function sfdcContactsStep(store, source, api, scope, dryRun, ranAt, on) {
+async function sfdcContactsStep(store, source, api, scope, dryRun, ranAt, on, requireTool) {
   let step;
   if (!on) step = { result: "disabled" };
   else {
     try {
+      await requireTool();
       step = await runSfdcContacts({ session: source, api, dryRun, store, ...scope ? { scope } : {} });
     } catch (error3) {
       step = { result: intakeCode(error3) };
