@@ -88,11 +88,15 @@ test('scope options and parameters', () => {
   assert.deepEqual(options.map((o) => [o.value, o.label]), [
     ['', '전체'], ['common', '공통'], ['account', '고객사 전체'], ['account:a', '가나'], ['account:b', '하나'],
   ]);
-  assert.deepEqual(plain(reg.newsScopeParams('')), {});
-  assert.deepEqual(plain(reg.newsScopeParams('common')), { kind: 'common' });
-  assert.deepEqual(plain(reg.newsScopeParams('account')), { kind: 'account' });
-  assert.deepEqual(plain(reg.newsScopeParams('account:a/b')), { kind: 'account', account: 'a/b' });
-  assert.deepEqual(plain(reg.newsScopeParams('account:')), {});
+  assert.deepEqual(plain(reg.newsScopeParams('', true)), {});
+  assert.deepEqual(plain(reg.newsScopeParams('common', true)), { kind: 'common' });
+  assert.deepEqual(plain(reg.newsScopeParams('account', true)), { kind: 'account' });
+  assert.deepEqual(plain(reg.newsScopeParams('account:a/b', true)), { kind: 'account', account: 'a/b' });
+  assert.deepEqual(plain(reg.newsScopeParams('account:', true)), {});
+  // Without a directory answer the server may not filter: send nothing.
+  for (const scope of ['', 'common', 'account', 'account:a']) {
+    assert.deepEqual(plain(reg.newsScopeParams(scope, false)), {}, scope);
+  }
 });
 
 test('sources view is addressable by query string', () => {
@@ -108,7 +112,9 @@ test('sources view is addressable by query string', () => {
 test('insights wires the view, scope filter and old entry points', () => {
   const list = read('../src/components/InsightsList.tsx');
   assert.match(list, /뉴스 소스 관리/);
-  assert.match(list, /newsScopeParams\(newsScope\)/);
+  assert.match(list, /newsScopeParams\(scopeCapable \? newsScope : SCOPE_ALL, scopeCapable\)/);
+  assert.match(list, /activeTab === 'news' && scopeCapable && \(/);
+  assert.match(list, /if \(!scopeCapable && newsScope !== SCOPE_ALL\) \{\s*setNewsScope\(SCOPE_ALL\);/);
   assert.match(list, /parseNewsSourcesView\(searchParams\)/);
   const api = read('../src/lib/api.ts');
   assert.match(api, /if \(params\.kind\) q\.set\('kind', params\.kind\)/);
@@ -120,6 +126,9 @@ test('insights wires the view, scope filter and old entry points', () => {
   // Edit forms start from the full per-account source, never the directory item.
   assert.match(manager, /accountApi\.newsSources\.list\(item\.accountId!/);
   assert.match(manager, /더 보기/);
+  // Preselection reads the live touched flag, never a hard-coded false.
+  assert.match(manager, /prefillSourceName\(f\.sourceName, nameTouchedRef\.current, name\)/);
+  assert.doesNotMatch(manager, /pickAccount\([^)]*false\)/);
   assert.match(list, /useNewsSources\(user\?\.userId, urlTab === 'news', 3\)/);
   assert.doesNotMatch(manager, /confirm\(|dangerouslySetInnerHTML/);
   const account = read('../src/components/account/AccountNewsSources.tsx');
@@ -131,4 +140,52 @@ test('directory terms show an ellipsis when the lists were cut', () => {
   assert.equal(reg.sourceTermsText({ newsQueries: ['a', 'b'] }, '없음'), 'a, b');
   assert.equal(reg.sourceTermsText({ newsQueries: [] }, '없음'), '없음');
   assert.equal(reg.sourceTermsText({ newsQueries: ['a'], listsTruncated: true }, '없음'), 'a …');
+});
+
+test('directory reducer keeps generations apart and pages on failure', () => {
+  const page = (ids, extra = {}) => ({ sources: ids.map((id) => ({ sourceId: id, sourceName: id, kind: 'common' })), ...extra });
+  const ids = (state) => plain((state.sources ?? []).map((s) => s.sourceId));
+  let state = reg.directoryReload(reg.INITIAL_DIRECTORY);
+  assert.equal(state.generation, 1);
+  assert.equal(state.capable, false);
+  state = reg.directoryPageLoaded(state, 1, page(['a'], { nextCursor: 'c1' }));
+  assert.deepEqual(ids(state), ['a']);
+  assert.equal(state.capable, true);
+  assert.equal(state.nextCursor, 'c1');
+  // A reload starts generation 2; a late load-more from generation 1 is ignored.
+  const loadingMore = reg.directoryLoadingMore(state, 1);
+  state = reg.directoryReload(loadingMore);
+  assert.equal(state.capable, true, 'capability survives while the reload is pending');
+  assert.equal(state.sources, null);
+  assert.equal(reg.directoryPageLoaded(state, 1, page(['stale'], { nextCursor: 'old' })), state);
+  assert.equal(reg.directoryFailed(state, 1, { status: 500 }), state);
+  assert.equal(reg.directoryLoadingMore(state, 1), state);
+  state = reg.directoryPageLoaded(state, 2, page(['b'], { nextCursor: 'c2' }));
+  state = reg.directoryPageLoaded(state, 2, page(['c'], { truncated: true }));
+  assert.deepEqual(ids(state), ['b', 'c']);
+  assert.equal(state.nextCursor, '');
+  assert.equal(state.truncated, true);
+  // A later-page failure, even 404, keeps loaded pages and capability.
+  const later = reg.directoryFailed({ ...state, nextCursor: 'c3', loadingMore: true }, 2, { status: 404 });
+  assert.deepEqual(ids(later), ['b', 'c']);
+  assert.equal(later.capable, true);
+  assert.equal(later.unavailable, false);
+  assert.equal(later.loadingMore, false);
+  assert.ok(later.error);
+  // A first-page failure drops capability; 404 marks the endpoint unavailable.
+  const fresh = reg.directoryReload(state);
+  const missing = reg.directoryFailed(fresh, fresh.generation, { status: 404 });
+  assert.equal(missing.capable, false);
+  assert.equal(missing.unavailable, true);
+  assert.deepEqual(ids(missing), []);
+  const broken = reg.directoryFailed(fresh, fresh.generation, { status: 500 });
+  assert.equal(broken.capable, false);
+  assert.equal(broken.unavailable, false);
+  assert.ok(broken.error);
+});
+
+test('directory wrapper sends only limit and cursor', () => {
+  const api = read('../src/lib/api.ts');
+  const body = api.slice(api.indexOf('export const newsSourcesApi'), api.indexOf('// Insights API'));
+  assert.deepEqual([...body.matchAll(/q\.set\('([^']+)'/g)].map((m) => m[1]), ['limit', 'cursor']);
 });

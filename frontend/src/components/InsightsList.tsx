@@ -65,6 +65,15 @@ export function InsightsList() {
   const scopeSources = useNewsSources(user?.userId, urlTab === 'news', 3);
   const scopeOptions = useMemo(() => newsScopeOptions(scopeSources.sources), [scopeSources.sources]);
   const managedSources = useNewsSources(user?.userId, sourcesView.open);
+  // The scope filter exists only once the directory answered in this
+  // session; when that capability is lost the scope falls back to all.
+  const scopeCapable = scopeSources.capable;
+  if (!scopeCapable && newsScope !== SCOPE_ALL) {
+    setNewsScope(SCOPE_ALL);
+    setPage(1);
+  }
+  // Primitive deps, so gaining capability with scope "all" does not refetch.
+  const { kind: scopeKind, account: scopeAccount } = newsScopeParams(scopeCapable ? newsScope : SCOPE_ALL, scopeCapable);
 
   // The sidebar's News & Updates and Deep Research items both point at this
   // page and differ only in ?tab=, so a click between them changes the URL
@@ -118,7 +127,7 @@ export function InsightsList() {
         type: activeTab,
         page,
         limit,
-        ...(activeTab === 'news' ? newsScopeParams(newsScope) : {}),
+        ...(activeTab === 'news' && scopeKind ? { kind: scopeKind, ...(scopeAccount ? { account: scopeAccount } : {}) } : {}),
       };
       if (crawlerFilter) {
         params.source = crawlerFilter;
@@ -165,7 +174,7 @@ export function InsightsList() {
         setLoading(false);
       }
     }
-  }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, newsScope, limit]);
+  }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, scopeKind, scopeAccount, limit]);
 
   // handleDelete awaits a delete API call before refetching -- by the time
   // it resolves, the user may have changed tab/page/filters, making
@@ -803,7 +812,7 @@ export function InsightsList() {
           <div className="space-y-3">
             {/* Crawler source / Service dropdown + count */}
             <div className="flex items-center gap-3 flex-wrap">
-              {activeTab === 'news' && (
+              {activeTab === 'news' && scopeCapable && (
                 <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-text-secondary">
                   범위
                   <select

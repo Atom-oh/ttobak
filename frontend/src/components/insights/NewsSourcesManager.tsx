@@ -5,58 +5,47 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { accountApi, crawlerApi, newsSourcesApi } from '@/lib/api';
 import { newsSourceInput } from '@/lib/accountOverview';
 import {
-  accountEditRequest, commonNewsRequest, prefillSourceName, registrationErrorMessage, sourceTermsText,
-  type NewsSourceItem, type NewsSourceKind,
+  accountEditRequest, commonNewsRequest, directoryFailed, directoryLoadingMore, directoryPageLoaded, directoryReload,
+  INITIAL_DIRECTORY, prefillSourceName, registrationErrorMessage, sourceTermsText,
+  type DirectoryState, type NewsSourceItem, type NewsSourceKind,
 } from '@/lib/newsRegistration';
 import type { AccountSummary } from '@/types/meeting';
 import { NewsKindBadge } from './NewsOrigin';
 
-export interface NewsSourcesState {
-  sources: NewsSourceItem[] | null;
-  nextCursor: string;
-  truncated: boolean;
-  // The list endpoint answered 404 (not deployed yet).
-  unavailable: boolean;
-  error: string;
-  loadingMore: boolean;
+export interface NewsSourcesState extends DirectoryState {
   reload: () => void;
   loadMore: () => void;
 }
 
-type ListState = Omit<NewsSourcesState, 'reload' | 'loadMore'>;
-const INITIAL: ListState = { sources: null, nextCursor: '', truncated: false, unavailable: false, error: '', loadingMore: false };
-
 /**
  * Pages through `GET /api/news-sources`. The first `autoPages` pages load on
  * their own (the scope select uses a small fixed number); further pages only
- * through `loadMore`. A 404 degrades to `unavailable`.
+ * through `loadMore`. Every response is tied to the generation that started
+ * it (see the pure reducers in lib/newsRegistration), so a late load-more
+ * never touches a reloaded list.
  */
 export function useNewsSources(userId: string | undefined, enabled: boolean, autoPages = 1): NewsSourcesState {
-  const [state, setState] = useState<ListState>(INITIAL);
+  const [state, setState] = useState<DirectoryState>(INITIAL_DIRECTORY);
   const [attempt, setAttempt] = useState(0);
-  const generation = useRef(0);
-  const fail = (failure: unknown, previous: ListState): ListState => {
-    const unavailable = (failure as { status?: number })?.status === 404;
-    return { ...previous, sources: previous.sources ?? [], loadingMore: false, unavailable,
-      error: unavailable ? '' : registrationErrorMessage(failure, 'load-sources') };
-  };
+  const generationRef = useRef(0);
   useEffect(() => {
     if (!userId || !enabled) return;
-    const run = ++generation.current;
+    const generation = ++generationRef.current;
+    setState((s) => ({ ...directoryReload(s), generation }));
     const controller = new AbortController();
     void (async () => {
-      let next: ListState = { ...INITIAL, sources: [] };
-      try {
-        let cursor = '';
-        for (let page = 0; page < autoPages; page++) {
+      let cursor = '';
+      for (let page = 0; page < autoPages; page++) {
+        try {
           const result = await newsSourcesApi.list({ cursor }, { signal: controller.signal, expectedUserId: userId });
+          if (controller.signal.aborted) return;
+          setState((s) => directoryPageLoaded(s, generation, result));
           cursor = result.nextCursor ?? '';
-          next = { ...next, sources: [...(next.sources ?? []), ...(result.sources ?? [])], nextCursor: cursor, truncated: !!result.truncated };
-          if (!cursor) break;
+          if (!cursor) return;
+        } catch (failure) {
+          if (!controller.signal.aborted) setState((s) => directoryFailed(s, generation, failure));
+          return;
         }
-        if (run === generation.current) setState(next);
-      } catch (failure) {
-        if (!controller.signal.aborted && run === generation.current) setState(fail(failure, { ...INITIAL }));
       }
     })();
     return () => controller.abort();
@@ -64,16 +53,12 @@ export function useNewsSources(userId: string | undefined, enabled: boolean, aut
   const reload = useCallback(() => setAttempt((a) => a + 1), []);
   const loadMore = useCallback(() => {
     if (!userId || !state.nextCursor || state.loadingMore) return;
-    const run = generation.current;
-    setState((s) => ({ ...s, loadingMore: true }));
+    const generation = state.generation;
+    setState((s) => directoryLoadingMore(s, generation));
     newsSourcesApi.list({ cursor: state.nextCursor }, { expectedUserId: userId })
-      .then((result) => {
-        if (run !== generation.current) return;
-        setState((s) => ({ ...s, loadingMore: false, error: '', sources: [...(s.sources ?? []), ...(result.sources ?? [])],
-          nextCursor: result.nextCursor ?? '', truncated: s.truncated || !!result.truncated }));
-      })
-      .catch((failure) => { if (run === generation.current) setState((s) => fail(failure, s)); });
-  }, [userId, state.nextCursor, state.loadingMore]);
+      .then((result) => setState((s) => directoryPageLoaded(s, generation, result)))
+      .catch((failure) => setState((s) => directoryFailed(s, generation, failure)));
+  }, [userId, state.nextCursor, state.loadingMore, state.generation]);
   return { ...state, reload, loadMore };
 }
 
@@ -103,17 +88,18 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
   const [accounts, setAccounts] = useState<AccountSummary[] | null>(null);
   const [accountId, setAccountId] = useState('');
   const [fields, setFields] = useState(EMPTY_FIELDS);
-  const [nameTouched, setNameTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  const pickAccount = useCallback((next: string, list: AccountSummary[] | null, touched: boolean) => {
+  // A typed name is never replaced; the ref also covers the async preselection.
+  const nameTouchedRef = useRef(false);
+  const pickAccount = useCallback((next: string, list: AccountSummary[] | null) => {
     setAccountId(next);
     const name = list?.find((a) => a.accountId === next)?.name;
-    setFields((f) => ({ ...f, sourceName: prefillSourceName(f.sourceName, touched, name) }));
+    setFields((f) => ({ ...f, sourceName: prefillSourceName(f.sourceName, nameTouchedRef.current, name) }));
   }, []);
 
   useEffect(() => {
@@ -122,14 +108,14 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
       .then(({ accounts: list }) => {
         if (cancelled) return;
         setAccounts(list);
-        if (initialAccountId && list.some((a) => a.accountId === initialAccountId)) pickAccount(initialAccountId, list, false);
+        if (initialAccountId && list.some((a) => a.accountId === initialAccountId)) pickAccount(initialAccountId, list);
       })
       .catch(() => { if (!cancelled) { setAccounts([]); setError('고객사 목록을 불러오지 못했습니다.'); } });
     return () => { cancelled = true; };
   }, [userId, initialAccountId, pickAccount]);
 
   const set = (key: keyof typeof EMPTY_FIELDS) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    if (key === 'sourceName') setNameTouched(true);
+    if (key === 'sourceName') nameTouchedRef.current = true;
     setFields((f) => ({ ...f, [key]: e.target.value }));
   };
 
@@ -153,7 +139,7 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
       if (!mounted.current) return;
       setNotice(`'${fields.sourceName.trim()}' 소스를 등록했습니다. 다음 수집부터 뉴스가 모입니다.`);
       setFields(EMPTY_FIELDS);
-      setNameTouched(false);
+      nameTouchedRef.current = false;
       onRegistered();
     } catch (failure) {
       if (mounted.current) setError(registrationErrorMessage(failure, kind === 'account' ? 'create-account' : 'create-common'));
@@ -192,7 +178,7 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
         </p>
       ) : (
         <label className={labelText}>고객사
-          <select value={accountId} onChange={(e) => pickAccount(e.target.value, accounts, nameTouched)} className={input} required>
+          <select value={accountId} onChange={(e) => pickAccount(e.target.value, accounts)} className={input} required>
             <option value="">고객사를 선택해 주세요</option>
             {accounts.map((a) => <option key={a.accountId} value={a.accountId}>{a.name}</option>)}
           </select>

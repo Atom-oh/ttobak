@@ -172,14 +172,77 @@ export function newsScopeOptions(sources: readonly NewsSourceItem[] | null): Sco
   return options.concat(sorted.map(([id, name]) => ({ value: `${SCOPE_ACCOUNT_PREFIX}${id}`, label: name })));
 }
 
-/** Maps a scope value to the `GET /api/insights` `kind` / `account` parameters. */
-export function newsScopeParams(scope: string): { kind?: NewsSourceKind; account?: string } {
+/**
+ * Maps a scope value to the `GET /api/insights` `kind` / `account` parameters.
+ * The directory endpoint and these filters ship together, so without a
+ * successful directory answer (`capable`) nothing is sent: an older server
+ * ignores them and would show everything under a "filtered" label.
+ */
+export function newsScopeParams(scope: string, capable: boolean): { kind?: NewsSourceKind; account?: string } {
+  if (!capable) return {};
   if (scope === SCOPE_COMMON) return { kind: 'common' };
   if (scope === SCOPE_ACCOUNTS) return { kind: 'account' };
   if (scope.startsWith(SCOPE_ACCOUNT_PREFIX) && scope.length > SCOPE_ACCOUNT_PREFIX.length) {
     return { kind: 'account', account: scope.slice(SCOPE_ACCOUNT_PREFIX.length) };
   }
   return {};
+}
+
+// ---- Directory list state (`GET /api/news-sources` pages) ----
+
+export interface DirectoryState {
+  // Bumped by every reload; responses from an older generation are ignored.
+  generation: number;
+  sources: NewsSourceItem[] | null;
+  nextCursor: string;
+  truncated: boolean;
+  // A page of the current generation has loaded.
+  loaded: boolean;
+  // The directory answered successfully in this session and has not since
+  // failed on a fresh load: the insights scope filters exist.
+  capable: boolean;
+  unavailable: boolean;
+  error: string;
+  loadingMore: boolean;
+}
+
+export const INITIAL_DIRECTORY: DirectoryState = {
+  generation: 0, sources: null, nextCursor: '', truncated: false, loaded: false,
+  capable: false, unavailable: false, error: '', loadingMore: false,
+};
+
+/** Starts a fresh load; capability is kept until that load answers. */
+export function directoryReload(state: DirectoryState): DirectoryState {
+  return { ...INITIAL_DIRECTORY, generation: state.generation + 1, capable: state.capable };
+}
+
+export function directoryLoadingMore(state: DirectoryState, generation: number): DirectoryState {
+  return generation === state.generation ? { ...state, loadingMore: true } : state;
+}
+
+/** Applies one page; the first page of a generation replaces, later ones append. */
+export function directoryPageLoaded(state: DirectoryState, generation: number, page: NewsSourcesPage): DirectoryState {
+  if (generation !== state.generation) return state;
+  return {
+    ...state,
+    sources: [...(state.loaded ? state.sources ?? [] : []), ...(page.sources ?? [])],
+    nextCursor: page.nextCursor ?? '',
+    truncated: (state.loaded && state.truncated) || !!page.truncated,
+    loaded: true, capable: true, unavailable: false, error: '', loadingMore: false,
+  };
+}
+
+/**
+ * Applies a failure. After a page of this generation loaded, the loaded pages
+ * and capability stay (a later 404 is just an error); before that, 404 means
+ * the endpoint is not deployed and any failure drops capability.
+ */
+export function directoryFailed(state: DirectoryState, generation: number, failure: unknown): DirectoryState {
+  if (generation !== state.generation) return state;
+  const message = registrationErrorMessage(failure, 'load-sources');
+  if (state.loaded) return { ...state, loadingMore: false, error: (failure as { status?: number } | null)?.status === 404 ? '다음 소스를 불러오지 못했습니다.' : message };
+  const unavailable = (failure as { status?: number } | null)?.status === 404;
+  return { ...state, sources: [], loaded: false, capable: false, unavailable, loadingMore: false, error: unavailable ? '' : message };
 }
 
 // ---- Addressable sources view ----
