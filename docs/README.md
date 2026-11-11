@@ -101,5 +101,5 @@ python3 scripts/docs/check_docs.py
 - [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
 - [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)
 - [Shared speaker correction and account publication](decisions/ADR-016-meeting-account-sharing.md)
-- [Versioned HTTP origin proof rotation](decisions/ADR-027-cloudfront-signed-media-urls.md)
+- [Versioned HTTP origin proof rotation](decisions/ADR-027-edge-delivery-and-origin-proof.md)
 - [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)

@@ -103,7 +103,7 @@ a separate user queue plus a project reverse row, keeping older API readers from
 consuming unknown grant kinds. Transactions bind project ownership, invitation
 version/expiry and recipient sub before publishing membership. JWT email
 verification remains required; account roles and global admin rights are never
-inherited from a project invitation. See ADR-044 and API-SPEC for contracts.
+inherited from a project invitation. See ADR-025 and API-SPEC for contracts.
 
 Deploy and verify the API with `/api/session/bootstrap` and project pending routes
 before publishing the new frontend. The new frontend requires bootstrap and will

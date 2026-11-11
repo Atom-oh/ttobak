@@ -2,7 +2,7 @@
 
 This runbook describes the release coordinator and its remaining runtime acceptance.
 Source checks alone do not prove a deployed rotation. See
-[ADR-050](../decisions/ADR-050-http-origin-proof-rotation.md).
+[ADR-027](../decisions/ADR-027-edge-delivery-and-origin-proof.md).
 
 ## Activation prerequisite
 

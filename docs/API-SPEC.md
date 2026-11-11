@@ -85,24 +85,30 @@ at 32,000, returning errors rather than truncating receipts or continuations.
 An Account association classifies private data; it grants no sharing. Personal
 reads omit a revoked association; an inaccessible Account-filtered read is denied.
 
-Account-sharing fields (ADR-066) are validated and stored encrypted with the
+Account-sharing fields are validated and stored encrypted with the
 event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
 use the Account ID format and differ from each other; `shareEvidence` holds up to
 three distinct kinds (`title`, `location`, `domain`) and requires
 `shareAccountId`; `private` excludes both; `seriesKey` is 64 lowercase hex.
-No share rows are written yet. Owner event views report `sharingMode:"auto"`,
+Sync writes a share row only when the user is a direct member of
+`shareAccountId`; otherwise it returns `403 FORBIDDEN`. A `Private` event or a
+hidden owner override writes a veto row for the matched or previously shared
+account instead. Owner
+event views report `sharingMode` (`auto`, `account` or `hidden`),
 `candidateAccountIds` and `private`; `shareAccountId` and `shareEvidence` appear
 only once a stored share is granted.
 
 Rollback boundary: API builds older than this contract reject a stored event
 carrying any of these fields as corrupt, failing every event page that contains
 it. Do not roll the API Lambda back past this contract once a client has sent
-sharing fields; the intake runner sends them only from a later release.
+sharing fields.
 
 Errors use `{error:{code,message}}`: `400 BAD_REQUEST` for invalid input/cursor,
 `401 UNAUTHORIZED` for missing authentication, `403 FORBIDDEN` for denied access,
 `404 NOT_FOUND` for missing resources, `409 CONFLICT` for revision/batch conflict,
-`413 BAD_REQUEST` for oversized sync bodies, and `503 INTERNAL_ERROR` when
+`413 BAD_REQUEST` for oversized sync bodies, `413 CALENDAR_BATCH_TOO_LARGE` when a
+batch's planned share writes exceed one 100-item transaction (resend fewer
+mutations; the intake runner sends at most 12), and `503 INTERNAL_ERROR` when
 calendar encryption is unavailable. Other failures use `500 INTERNAL_ERROR`.
 Sensitive event payloads use context-bound encryption; event retention is
 scheduled at 90 days after event end and receipts at seven days. TTL is
@@ -466,7 +472,7 @@ Member removal and legacy direct addition retire it atomically; cleanup conflict
 remain retryable. A durable control row also gates queue/claim transactions and bootstrap
 capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
 continuation. Project user queues are isolated from old readers; transactional rows, TTL and
-the required incompatible-API rollback drain are specified in ADR-044.
+the required incompatible-API rollback drain are specified in ADR-025.
 
 Admin user summaries include `emailVerified`. Password reset requires an enabled,
 CONFIRMED user with verified email; missing verification returns 409
@@ -1607,7 +1613,7 @@ the observed preview conditionally. The preview URL path still checks existence;
 canonical indexing/QA readers additionally validate the source binding. Legacy
 unbound previews require regeneration. Public tokens
 are conditionally minted and validated against the document's own PublicShareToken
-on every read; revocation removes that grant. See ADR-022/027/029.
+on every read; revocation removes that grant. See ADR-020/027.
 
 Pending meeting/account invitations bind the invited Cognito sub, require verified
 email at materialization, and expire after 30 days. Revoking an already-materialized
