@@ -133,17 +133,17 @@ export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopH
   ];
 
   return (
-    <header className="h-16 border-b border-slate-200 dark:border-white/5 bg-white/80 dark:bg-transparent backdrop-blur-md dark:backdrop-blur-xl flex items-center justify-between px-8 shrink-0">
+    <header className="workspace-inline-gutter h-16 border-b border-slate-200 dark:border-white/5 bg-white/80 dark:bg-transparent backdrop-blur-md dark:backdrop-blur-xl flex items-center justify-between gap-4 shrink-0">
       {/* Breadcrumbs */}
-      <div className="flex items-center gap-3">
-        <nav className="flex items-center gap-2 text-slate-500 dark:text-text-muted text-sm">
+      <div className="flex min-w-0 items-center gap-3">
+        <nav className="flex min-w-0 items-center gap-2 text-slate-500 dark:text-text-muted text-sm">
           {resolvedBreadcrumbs.map((crumb, index) => (
-            <span key={index} className="flex items-center gap-2">
+            <span key={index} className={`flex items-center gap-2 ${index === resolvedBreadcrumbs.length - 1 ? 'min-w-0' : 'shrink-0'}`}>
               {index > 0 && (
                 <span className="material-symbols-outlined text-xs">chevron_right</span>
               )}
               {index === resolvedBreadcrumbs.length - 1 ? (
-                <span className="text-slate-900 dark:text-text-main font-semibold">{crumb.label}</span>
+                <span title={crumb.label} className="truncate text-slate-900 dark:text-text-main font-semibold">{crumb.label}</span>
               ) : (
                 <span>{crumb.label}</span>
               )}
@@ -161,7 +161,7 @@ export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopH
       </div>
 
       {/* Right Actions */}
-      <div className="flex items-center gap-4">
+      <div className="flex shrink-0 items-center gap-3">
         {/* Search Input — useSearchParams needs a Suspense boundary under
             static export; the fallback is the same box, just inert until
             the params are available (one frame). */}

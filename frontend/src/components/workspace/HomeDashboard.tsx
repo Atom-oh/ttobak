@@ -130,7 +130,7 @@ function HomeContent({ userId }: { userId: string }) {
     ? selectedAccountId : accountList.accounts[0]?.accountId;
   return (
     <AppLayout activePath="/">
-      <div className="mx-auto w-full max-w-7xl space-y-7 px-4 py-6 pb-28 lg:px-8 lg:py-8">
+      <div className="workspace-page space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="mb-2 text-xs font-semibold tracking-widest text-primary">나의 미팅 워크스페이스</p>

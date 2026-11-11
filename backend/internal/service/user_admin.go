@@ -46,6 +46,7 @@ type cognitoAdminAPI interface {
 	AdminEnableUser(ctx context.Context, params *cognitoidp.AdminEnableUserInput, optFns ...func(*cognitoidp.Options)) (*cognitoidp.AdminEnableUserOutput, error)
 	AdminResetUserPassword(ctx context.Context, params *cognitoidp.AdminResetUserPasswordInput, optFns ...func(*cognitoidp.Options)) (*cognitoidp.AdminResetUserPasswordOutput, error)
 	AdminUserGlobalSignOut(ctx context.Context, params *cognitoidp.AdminUserGlobalSignOutInput, optFns ...func(*cognitoidp.Options)) (*cognitoidp.AdminUserGlobalSignOutOutput, error)
+	AdminUpdateUserAttributes(ctx context.Context, params *cognitoidp.AdminUpdateUserAttributesInput, optFns ...func(*cognitoidp.Options)) (*cognitoidp.AdminUpdateUserAttributesOutput, error)
 }
 
 // CognitoAdminAPI is the exported alias of cognitoAdminAPI for cross-package test mocks.
@@ -55,6 +56,7 @@ type CognitoAdminAPI = cognitoAdminAPI
 type userAdminRepo interface {
 	BatchGetUserLastLogins(ctx context.Context, userIDs []string) (map[string]time.Time, error)
 	DetachDeletedUserProfile(ctx context.Context, userID string) error
+	UpdateUserProfileName(ctx context.Context, userID, name string) error
 }
 
 // UserAdminRepo is the exported alias of userAdminRepo for cross-package test mocks.

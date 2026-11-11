@@ -169,7 +169,7 @@ function MeetingsContent({ userId }: { userId: string }) {
 
   return (
     <AppLayout activePath="/meetings">
-      <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 pb-28 lg:px-8 lg:py-8">
+      <div className="workspace-page space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-text-main lg:text-3xl">미팅 기록</h1>
