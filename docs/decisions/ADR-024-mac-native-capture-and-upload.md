@@ -121,7 +121,7 @@
 - With no CI for the Mac app, `cargo fmt`, `clippy`, `cargo test` and a signed
   build are run locally.
 - Signing uses `codesign --deep`; notarization with a real Developer ID needs
-  explicit nested signing (see ADR-073).
+  explicit nested signing (see ADR-019).
 - The CSP in the Tauri configuration is not the policy in force for the remote
   window; the remote site's policy is.
 
