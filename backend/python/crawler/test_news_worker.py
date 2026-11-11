@@ -283,6 +283,28 @@ class TestCandidateWorker(unittest.TestCase):
         self.assertEqual(finish["known_cost"], Decimal(0))
         self.deps.s3.put_object.assert_not_called()
 
+    def test_current_search_scope_is_rechecked_before_fetch_and_after_redirect(self):
+        # The scope is outside the revision, so a candidate discovered under an
+        # older allowlist still matches its revision; the worker rechecks it.
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["fss.or.kr"])
+        result = process_candidate(self.candidate, self.deps)
+        self.assertEqual((result["status"], result["reason"]), ("FETCH_REJECTED", "OUT_OF_SCOPE"))
+        self.fetch.assert_not_called()
+        self.store.reserve.assert_not_called()
+
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["example.com"])
+        self.fetch.return_value = replace(valid_body(), final_url="https://elsewhere.test/a",
+                                          canonical_url="https://elsewhere.test/a")
+        result = process_candidate(self.candidate, self.deps)
+        self.assertEqual((result["status"], result["reason"]), ("FETCH_REJECTED", "OUT_OF_SCOPE"))
+        self.store.reserve.assert_not_called()
+
+        self.fetch.return_value = valid_body()
+        self.assertEqual(process_candidate(self.candidate, self.deps)["status"], "PUBLISHED")
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["Bad Domain"])
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            process_candidate(self.candidate, self.deps)
+
     def test_quality_rejection_reports_validator_locations_without_content(self):
         invalid = valid_enrichment_json(executive_summary="짧은 요약")
         self.client.converse.return_value = bedrock_response(invalid)

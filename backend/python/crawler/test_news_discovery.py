@@ -118,24 +118,40 @@ class TestDiscovery(unittest.TestCase):
                                    (datetime(2026, 9, 21, 12, tzinfo=timezone.utc), NOW)})
         self.assertTrue(all(call.kwargs["domains"] == () for call in gateway.call_args_list))
 
-    def test_operator_search_domains_scope_search_and_revision(self):
+    def test_operator_search_domains_scope_search_but_not_revision(self):
         domains = ["fss.or.kr", "koreaherald.com"]
-        result, gateway, _ = self.run_discovery([article()], config=source(searchDomains=domains))
+        values = [article(1, url="https://www.fss.or.kr/a"), article(2, url="https://m.koreaherald.com/b"),
+                  article(3, url="https://example.com/c"), article(4, url="https://notfss.or.kr/d")]
+        result, gateway, _ = self.run_discovery(values, config=source(searchDomains=domains))
         self.assertTrue(all(call.kwargs["domains"] == tuple(domains)
                             for call in gateway.call_args_list))
-        self.assertEqual(discovery.source_snapshot(source(searchDomains=domains))["searchDomains"],
-                         domains)
-        self.assertNotEqual(result["sourceRevision"], discovery.source_revision(source()))
-        # Sources without the field keep their existing revision (no rename of
-        # in-flight runs on deployment), and an empty list is the same as absent.
-        self.assertNotIn("searchDomains", discovery.source_snapshot(source()))
-        self.assertEqual(discovery.source_revision(source(searchDomains=[])),
-                         discovery.source_revision(source()))
+        # An older connector ignores domainFilter; the local check still scopes.
+        self.assertEqual({item["url"] for item in result["candidates"]},
+                         {"https://www.fss.or.kr/a", "https://m.koreaherald.com/b"})
+        self.assertGreater(result["scopeRejected"], 0)
+        # The QA and Go readers hash seven fields; the scope never enters the
+        # published revision.
+        self.assertNotIn("searchDomains", discovery.source_snapshot(source(searchDomains=domains)))
+        self.assertEqual(result["sourceRevision"], discovery.source_revision(source()))
         for value in ("fss.or.kr", ["https://fss.or.kr"], ["fss.or.kr", "fss.or.kr"],
-                      ["FSS.OR.KR"], ["*.fss.or.kr"], [f"d{i}.com" for i in range(101)]):
+                      ["FSS.OR.KR"], ["*.fss.or.kr"], [f"d{i}.com" for i in range(101)], [7]):
             with self.subTest(value=value), self.assertRaisesRegex(
                     discovery.DiscoveryRejected, "INVALID_CONFIG"):
-                discovery.source_snapshot(source(searchDomains=value))
+                self.run_discovery([article()], config=source(searchDomains=value))
+
+    def test_qa_reader_revision_contract_is_unchanged_by_search_scope(self):
+        import importlib.util, os, sys
+        qa = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "qa")
+        spec = importlib.util.spec_from_file_location(
+            "qa_news_text_contract", os.path.join(qa, "news_text.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, qa)
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.path.remove(qa)
+        config = source(searchDomains=["fss.or.kr"], aliases=["FSS"], ownerId="")
+        self.assertEqual(module.news_source_revision(config), discovery.source_revision(config))
 
     def test_unrepresentable_utc_date_does_not_discard_valid_neighbor(self):
         for published in ("0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"):

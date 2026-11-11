@@ -11,7 +11,7 @@ import (
 )
 
 // These mirror the crawler's checks (news_discovery.valid_source_id and
-// source_snapshot, news_pipeline.valid_search_domain): a definition they would
+// source_snapshot, news_discovery.search_domains): a definition they would
 // reject fails the whole source run as INVALID_CONFIG, so it must not be seeded.
 var (
 	seedSourceID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)

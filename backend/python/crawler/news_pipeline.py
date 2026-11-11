@@ -125,6 +125,15 @@ def valid_search_domain(value) -> bool:
     return all(_DOMAIN_LABEL.fullmatch(label) for label in labels)
 
 
+def in_search_scope(url, domains) -> bool:
+    """True without an allowlist, else when the canonical host is a listed
+    domain or one of its subdomains (the connector's include semantics)."""
+    if not domains:
+        return True
+    host = urlsplit(canonicalize_url(url)).hostname or ""
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
 # ---------------------------------------------------------------------------
 # Query expansion
 # ---------------------------------------------------------------------------

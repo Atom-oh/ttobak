@@ -45,38 +45,43 @@ _NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:[,.]\d+)*(?:%|퍼센트)?")
 # won" as 2,368 eok, "10 million" as 1,000 man, "July" as month 7, "six" as 6
 # with a counter. Such a fact number is grounded only when its exact scaled
 # value appears in the cited excerpt; the raw-digit match above remains sufficient.
+# Same digit span and boundary as _NUMBER, so every token the base gate checks
+# is still checked: "2026.11.11" stays one token and ".5%" yields "5%".
 _SCALED_NUMBER = re.compile(
-    r"(?<![A-Za-z0-9.,])(\d+(?:,\d{3})*(?:\.\d+)?)(?![0-9])"
-    r"(?:\s?(thousand|million|billion|trillion)\b|(천|만|억|조))?(월)?", re.IGNORECASE)
+    r"(?<![A-Za-z0-9])(\d+(?:[,.]\d+)*)(?:(%|퍼센트)|(?:\s?(thousand|million|billion|trillion)"
+    r"(?![A-Za-z])|(천|만|억|조))?(월)?)", re.IGNORECASE)
+# A single plain number: grouped thousands or digits, with at most one decimal.
+_PLAIN_NUMBER = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
 _SCALES = {"thousand": 10 ** 3, "million": 10 ** 6, "billion": 10 ** 9, "trillion": 10 ** 12,
            "천": 10 ** 3, "만": 10 ** 4, "억": 10 ** 8, "조": 10 ** 12}
+# Capitalized English month names only, so the modal "may" is not month 5.
 _MONTH = re.compile(
-    r"(?<![A-Za-z])(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)"
-    r"(?:uary|ruary|ch|il|e|y|ust|ember|ober)?\.?(?![A-Za-z])", re.IGNORECASE)
+    r"(?<![A-Za-z])(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
+    r"(?:uary|ruary|ch|il|e|y|ust|ember|ober)?\.?(?![A-Za-z])")
 _MONTHS = {name: index for index, name in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+# "one" is excluded: "one of the banks" is not a count.
 _WORD_NUMBERS = {name: index for index, name in enumerate(
-    ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-     "eleven", "twelve"), 1)}
+    ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+     "eleven", "twelve"), 2)}
 _WORD_NUMBER = re.compile(r"(?<![A-Za-z])(" + "|".join(_WORD_NUMBERS) + r")(?![A-Za-z])",
                           re.IGNORECASE)
 
 
 def _number_tokens(text):
-    """Yield (raw, key) for each number: raw keeps the existing digit/percent
-    identity; key is an exact scaled value or month number, or None."""
+    """Yield (raw, key) for each _NUMBER token: raw is the base gate's
+    comma-free digits (with any percent sign); key is an exact scaled value or
+    month number, or None when only the raw form can ground it."""
     for match in _SCALED_NUMBER.finditer(text):
-        digits, english, korean, month = match.groups()
+        digits, percent, english, korean, month = match.groups()
         raw = digits.replace(",", "")
-        rest = text[match.end():match.end() + 3]
-        if not (english or korean or month) and rest.startswith(("%", "퍼센트")):
-            yield raw + ("%" if rest.startswith("%") else "퍼센트"), None
+        if percent:
+            yield raw + percent, None
             continue
-        try:
-            value = Decimal(raw)
-        except ArithmeticError:
-            yield raw, None
+        if not _PLAIN_NUMBER.fullmatch(digits):
+            yield raw, None  # dotted dates, versions and other sequences
             continue
+        value = Decimal(raw)
         if month and not (english or korean):
             yield raw, ("month", value)
         else:

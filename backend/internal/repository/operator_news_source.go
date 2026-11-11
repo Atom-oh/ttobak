@@ -40,7 +40,10 @@ const (
 var ErrNotOperatorSource = errors.New("crawler source is not operator-managed")
 
 // SearchDomainsAttribute holds an operator source's search domain allowlist
-// (news_discovery.source_snapshot). No API path reads or writes it.
+// (news_discovery.search_domains). It is outside the seven-field source
+// revision but inside the crawler's transactional config guard, so changing
+// it fails an in-flight run's reservation or publication instead of
+// republishing under a stale scope. No API path reads or writes it.
 const SearchDomainsAttribute = "searchDomains"
 
 // operatorManaged reports whether item may be rewritten by the seed: the same

@@ -415,6 +415,9 @@ type VocabularyView struct {
 	ActiveReady bool   `json:"activeReady"`
 	FailureCode string `json:"failureCode,omitempty"`
 	TermCount   int    `json:"termCount"`
+	// LiveName is the caller's own READY active vocabulary for live caption
+	// streams; empty unless live vocabularies are enabled (LIVE_VOCABULARY_MODE).
+	LiveName string `json:"liveName,omitempty"`
 }
 
 // VocabularyViews lists the personal vocabularies by language.
