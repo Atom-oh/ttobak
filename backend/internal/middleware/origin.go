@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/ttobak/backend/internal/connector"
 )
@@ -48,6 +49,19 @@ type OriginVerifier struct {
 	proofs  originProofSet
 	expires time.Time
 	lookup  chan struct{}
+}
+
+// OriginSecretHTTPClient is the HTTP client for the origin proof lookup. The
+// lookup never retries and runs at most once per cache period, so a pooled
+// connection is always idle for at least originCacheTTL when reused. A Lambda
+// environment is frozen while idle and cannot observe Secrets Manager closing
+// that connection; the thawed lookup then fails immediately and rejects a valid
+// request. Opening a new connection per lookup removes that failure without
+// adding a retry.
+func OriginSecretHTTPClient() *awshttp.BuildableClient {
+	return awshttp.NewBuildableClient().WithTransportOptions(func(transport *http.Transport) {
+		transport.DisableKeepAlives = true
+	})
 }
 
 func NewOriginVerifier(arn string, client originSecretClient, localDevelopment bool, version string) *OriginVerifier {
