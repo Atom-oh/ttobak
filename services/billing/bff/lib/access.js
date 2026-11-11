@@ -1,5 +1,5 @@
 'use strict';
-// Billing-only sharing (ADR-060): direct or ancestor membership, with fresh canonical reads.
+// Billing-only sharing (ADR-012): direct or ancestor membership, with fresh canonical reads.
 // GSI1 and CHILDREF rows propose candidates; neither grants access. Display caches grant nothing.
 const { QueryCommand, GetItemCommand, TransactGetItemsCommand } = require('@aws-sdk/client-dynamodb');
 const { ACCT_ID } = require('./store.js');

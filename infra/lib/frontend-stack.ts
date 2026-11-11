@@ -511,7 +511,7 @@ function handler(event) {
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         },
-        // Billing (ADR-056), before '/api/public/*' and '/api/*' so
+        // Billing (ADR-012), before '/api/public/*' and '/api/*' so
         // '/api/billing/*' wins over '/api/*'. Empty without Billing props.
         ...this.billingBehaviors(props, s3Origin, applicationCache, dataBucket.bucketName),
         // Public slide-share redirects — MUST be defined before '/api/*'
@@ -632,7 +632,7 @@ function handler(event) {
     if (billingPolicy) configDeployment.node.addDependency(billingPolicy);
   }
 
-  // The three Billing behaviors (ADR-056), or none without props.billing.
+  // The three Billing behaviors (ADR-012), or none without props.billing.
   private billingBehaviors(
     props: FrontendStackProps, siteOrigin: cloudfront.IOrigin, siteCache: cloudfront.ICachePolicy,
     assetsBucketName: string,

@@ -10,7 +10,7 @@ Markdown for English language and historical/current status.
 
 ## Current references
 
-Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) supersedes the direct-membership-only Billing policy. [Billing release](runbooks/billing-release.md) covers the BFF, static pages and separate companion worker image.
+Billing team access: [ADR-012](decisions/ADR-012-billing-origin-identity-and-team-access.md) supersedes the direct-membership-only Billing policy. [Billing release](runbooks/billing-release.md) covers the BFF, static pages and separate companion worker image.
 
 | Reference | Purpose | Verify against |
 |---|---|---|
@@ -49,7 +49,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Account merge operator](runbooks/account-merge.md) | `merge-accounts` CLI dry run, apply, status, resume, post-merge rows, abort and `REQUESTER_REVOKED` recovery | `backend/cmd/merge-accounts/`, ADR-022, `backend/internal/service/account_merge_job.go` |
 | [Self-service Account invitations](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
 | [Designated initial Account Owner](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
-| [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
+| [Billing service origin and identity](decisions/ADR-012-billing-origin-identity-and-team-access.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-012), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
 | [Meeting audio files and lookup](decisions/ADR-014-meeting-audio-files-and-lookup.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
 | [Local MCP intake](decisions/ADR-003-mcp-access.md) | Deterministic local connectors over host MCP servers; references not copies; calendar first, AI proposals only; amended for the SpecReq task step's two provider writes | `mcp-server/src/intake/`; calendar and task acceptance pending |
 | [Account contact encryption and retention](decisions/ADR-063-account-contact-encryption-and-retention.md) | Contact fields KMS envelope-encrypted per row, bound to account/contact; kept until deleted, PITR window disclosed | `backend/internal/sealing`, contact repository, `KMS_KEY_ID` |

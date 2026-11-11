@@ -521,8 +521,8 @@ The Billing routes under `/api/billing/*` are served by the separate Billing BFF
 API, so they are not part of the Go route inventory above. Identity comes only
 from `Authorization: Bearer <JWT>`, verified by the BFF (issuer, signature,
 expiry and client allowlist; see
-[ADR-056](decisions/ADR-056-billing-service-origin-and-identity.md)). Access
-uses canonical direct membership or validated ancestor membership (ADR-060);
+[ADR-012](decisions/ADR-012-billing-origin-identity-and-team-access.md)). Access
+uses canonical direct membership or validated ancestor membership (ADR-012);
 pending rows grant nothing. Billing uploads and POSTs work only on the custom domain
 (`PUBLIC_URL`), not on the raw CloudFront domain.
 
