@@ -131,7 +131,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
     Slack, SpecReq and TFC fields.
   - A new ADR must record the owner-private residency table above, distinct
     from the account-shared limit.
-  - That ADR is ADR-068. It cites ADR-003 (local MCP intake) and ADR-021
+  - That ADR is ADR-023. It cites ADR-003 (local MCP intake) and ADR-067
     (account people edges) by title.
 - **Storage.**
   - Owner-private DynamoDB rows live under the user's own partition, for
@@ -140,7 +140,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
   - No account-membership read path may reach these rows.
   - Encryption (owner decision): use the table's default encryption at rest
     plus owner-only authorization, with no field-level envelope sealing as in
-    ADR-021. `ttobak-main` has no customer-managed KMS key. The new ADR records
+    ADR-063. `ttobak-main` has no customer-managed KMS key. The new ADR records
     this as an accepted exception to the "sensitive data requires KMS" rule,
     scoped to these owner-private rows.
   - Retention: keep the current year plus the previous one. Expire older rows

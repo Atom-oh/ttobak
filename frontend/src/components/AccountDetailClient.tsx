@@ -152,7 +152,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const [accountResult, setAccountResult] = useState<{ scope: typeof readScope; account: Account } | null>(null);
   const account = accountResult?.scope === readScope ? accountResult.account : null;
   const caps = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
-  // A merging or merged Account is read-only (ADR-072); the owner keeps the merge controls.
+  // A merging or merged Account is read-only (ADR-022); the owner keeps the merge controls.
   const mergeFenced = !!account && (!!account.mergingInto || !!account.mergedInto);
   const canEdit = caps.canEdit && !mergeFenced;
   const isOwner = caps.isOwner && !mergeFenced;
@@ -611,7 +611,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
         ) : account && (
           <>
             {mergedInto && (
-              // A tombstone stays readable for its unmoved categories (ADR-072).
+              // A tombstone stays readable for its unmoved categories (ADR-022).
               <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
                 <span>{ACCOUNT_MERGE_COPY.mergedBanner}</span>
                 <button type="button" onClick={() => router.push(`/accounts/${encodeURIComponent(mergedInto)}`)} className="font-semibold underline">{ACCOUNT_MERGE_COPY.openTarget}</button>

@@ -1,4 +1,4 @@
-# ADR-039: Meeting document text extraction
+# ADR-001: Meeting document text extraction
 
 - Status: Accepted, 2026-09-12.
 - Code checked: 2026-09-13. Parser, Lambda parent, infrastructure and Go/QA
@@ -50,7 +50,8 @@ RCE-proof sandbox, and same-UID compromise can expose parent credentials.
 Logs omit document text and parser stderr.
 
 Results use the existing private, versioned assets bucket with S3-managed
-encryption and Block Public Access. No `files/` expiration is configured.
+encryption and Block Public Access. The only `files/` expiration rule is filtered by the meeting-PDF-export tag
+and does not match the untagged result JSON, so results are not expired.
 Attachment/meeting deletion removes canonical access and `ATTEXT#` rows but
 does not erase result object versions. Ambiguous commits retain objects;
 unreferenced-object reclamation remains a gap. Never expire active results
