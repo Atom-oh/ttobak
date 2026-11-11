@@ -28183,7 +28183,7 @@ function emailKey(value) {
   return (value ?? "").normalize("NFKC").trim().toLowerCase();
 }
 function fillable(contact, person) {
-  return !(contact.title ?? "").trim() && !!person.title || !(contact.company ?? "").trim();
+  return (contact.title ?? "") === "" && !!person.title || (contact.company ?? "") === "";
 }
 function item(person, contact) {
   const base = { sfdcContactId: person.id, sfdcAccountId: person.accountId, name: person.name, title: person.title };

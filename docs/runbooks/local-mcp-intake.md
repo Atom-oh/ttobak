@@ -571,7 +571,8 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   `amazon.co.kr` or `aws.com`, are dropped (`skippedInternal`). Phone fields
   are never read.
 - **Match.** An existing `sfdcContactId` link always wins and is sent only
-  when the contact's title or company is empty. Otherwise a one-to-one,
+  when the contact's title or company is exactly empty (as the server fills;
+  whitespace-only is not empty). Otherwise a one-to-one,
   case-insensitive email match links the contact. Otherwise a unique
   normalized name (NFKC, lower case, `.`/`,` dropped, whitespace collapsed;
   spaces ignored for Hangul and other CJK names, which also match with given

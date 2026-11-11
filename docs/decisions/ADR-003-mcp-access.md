@@ -514,8 +514,8 @@ configuration.
   never navigate the app (a reload could discard unsaved input), and the task
   strip on the meetings page shows the task. Delivery is unverified until the
   Mac acceptance in the runbook.
-- **SFDC contacts step (amendment, 2026-11-11).** At the end of each `sfdc`
-  connector run, on the same session, the runner reads `search_contacts` (a
+- **SFDC contacts step (amendment, 2026-11-11).** After a successful `sfdc`
+  sync, on the same session, the runner reads `search_contacts` (a
   read tool on the `sfdc` allowlist) for every SFDC account mapped to a TTOBAK
   Account, matches the people against that Account's contacts on the Mac and
   sends one bounded batch per Account to `POST /api/accounts/{id}/contacts/sfdc-sync`
