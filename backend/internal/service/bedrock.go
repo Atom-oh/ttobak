@@ -1048,7 +1048,7 @@ func refinementFailureCode(err error) string {
 // runs in parallel batches of 4 (see refineParallel) to stay within the
 // Lambda timeout. A ~1,000-1,500 segment / 50-80 minute meeting lands at
 // 10-16 chunks and was therefore always on the parallel path -- the actual
-// ttobak-summarize timeout on meetings that size (ADR-031) was the Lambda's
+// ttobak-summarize timeout on meetings that size (ADR-013) was the Lambda's
 // 10-minute budget being too tight for refine (however many waves that
 // takes) plus the Opus 5 summarize call that follows, not this threshold.
 // Per-chunk failures fall back to raw segments rather than discarding the entire result.

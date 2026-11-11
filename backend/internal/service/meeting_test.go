@@ -931,7 +931,7 @@ func TestIsSummarizeRetryEligible_ThresholdBoundary(t *testing.T) {
 	}
 }
 
-// TestSummarizeRetryEligibleShorterThanStuck locks in the invariant ADR-031
+// TestSummarizeRetryEligibleShorterThanStuck locks in the invariant ADR-013
 // depends on: the retry-eligibility window must open strictly before the
 // auto-expiry-to-error window closes it, or a redelivery landing between
 // them can never actually recover a dead summarize attempt.

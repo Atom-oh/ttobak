@@ -26,3 +26,4 @@ rewritten.
 | [ADR-009](ADR-009-batch-stt-and-diarization.md) | Batch STT and diarization; absorbs the former ADR-019 (acoustic diarization) and ADR-035 (pyannote 4 and ASR pins) |
 | [ADR-011](ADR-011-interactive-deep-research.md) | Rewritten in place |
 | [ADR-014](ADR-014-meeting-audio-files-and-lookup.md) | Meeting audio files and lookup; absorbs the former ADR-012 (GSI3 lookup), ADR-047 (private audio crops) and ADR-062 (seekable playback copies) |
+| [ADR-013](ADR-013-summary-generation-and-publication.md) | Summary generation, recovery and publication; absorbs the former ADR-031 (summarize timeout resilience and STT recovery), ADR-037 (immutable spills) and ADR-040 (guarded summary publication) |

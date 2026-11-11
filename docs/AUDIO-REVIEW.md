@@ -49,7 +49,7 @@ batch STT uses configured GPU Whisper. Mobile wake-lock, stall/reconnect and
 manual gesture recovery are implemented (ADR-030). Final native WAV transport is
 Rust streaming, with small PCM events for captions (ADR-024).
 
-Summarize timeout/retry policy is now ADR-031. Transcript-family spill budgets and
+Summarize timeout/retry policy is now ADR-013. Transcript-family spill budgets and
 UTF-16 condition guards live in repository code. Upload timeouts track stalled
 progress, not the historical proposed file-size-based total timeout. Current
 diarization/ASR pins are ADR-009. Do not reapply old code snippets or assert that

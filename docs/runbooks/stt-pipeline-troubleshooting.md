@@ -47,8 +47,7 @@ ttobak-whisper-asg --scaling-processes AZRebalance`.
 
 ## Scheduled STT recovery
 
-`ttobak-stt-recovery` invokes `ttobak-transcribe` every 15 minutes (ADR-031
-amendment). Its log lines start with `stt-recovery` and carry only meeting IDs,
+`ttobak-stt-recovery` invokes `ttobak-transcribe` every 15 minutes (ADR-013). Its log lines start with `stt-recovery` and carry only meeting IDs,
 statuses, sizes, attempts and fixed reasons; each tick ends with one
 `Ttobak/SttRecovery` embedded-metric line of counts.
 

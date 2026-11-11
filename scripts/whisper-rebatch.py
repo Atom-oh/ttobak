@@ -4,7 +4,7 @@
 Lists eligible meetings (dry run by default) and, with --run, triggers one
 Whisper ECS task per selected meeting. The existing pipeline then handles
 Whisper -> S3 transcripts/ -> EventBridge -> summarize. The scheduled
-ttobak-stt-recovery tick (ADR-031 amendment) is the preferred automatic path for
+ttobak-stt-recovery tick (ADR-013, scheduled STT recovery) is the preferred automatic path for
 single-file meetings; this script is the authorized manual fallback
 (docs/runbooks/stt-pipeline-troubleshooting.md).
 

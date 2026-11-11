@@ -11,7 +11,7 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-// SttRecoveryAction is the scheduled tick's per-meeting decision (ADR-031 amendment).
+// SttRecoveryAction is the scheduled tick's per-meeting decision (ADR-013, scheduled STT recovery).
 type SttRecoveryAction string
 
 const (
