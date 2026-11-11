@@ -41,6 +41,30 @@ DynamoDB data needs KMS encryption and a retention design.
 - Retention: a contact remains until a direct member deletes it. There is no
   TTL. Deleted rows can persist in point-in-time recovery for the table's 35-day window. Their contact fields remain sealed ciphertext; keys, `contactId` and `revision` stay plaintext under the table's default AWS-owned key.
 
+- SFDC contact links (`backend/internal/repository/account_contacts_sfdc.go`):
+  - Inside the sealed contact, `source: "sfdc"`, `sfdcContactId`,
+    `sfdcAccountId` and `sfdcLeftAt` (departure mark) use the same envelope
+    encryption. Only the SFDC sync (a later change) may set them: generic
+    creates (web, bulk import, connector) drop them, and generic updates carry
+    the stored values over under the same revision condition. An unexported
+    service option gates the sync path; no link is ever changed or cleared.
+  - SFDC IDs are stored, keyed and compared only in canonical 18-character
+    form (`model.CanonicalSfdcID`: 15 or 18 alphanumerics, the 15-character
+    form gains the case-checksum suffix, an 18-character suffix must match).
+  - Plain rows in the Account partition hold only those IDs:
+    `SFDCCONTACT#{sfdcContactId}` (index: `contactId`, `sfdcAccountId`) and
+    `SFDCSUPPRESS#{sfdcContactId}`. A linking write reserves the index row in
+    the contact transaction, conditioned on both rows being absent, so one
+    contact exists per (Account, SFDC contact).
+  - Deleting a linked contact deletes its index row and writes the
+    suppression row in the same transaction, so the sync never recreates it.
+  - An Account merge moves index and suppression rows inside the fenced merge
+    transaction; a folded contact without a link takes the source link, and a
+    target that keeps another link suppresses the source ID.
+  - Retention: the index row goes with its contact. Suppression rows have no
+    TTL; merge moves them to the surviving Account, and with no Account
+    deletion routine they persist indefinitely.
+
 - Account events (`EVENT#{startAt}#{eventId}` with an `EVENTREF#{eventId}`
   pointer) seal title, location, attendees, notes and end time with purpose
   `ttobak-account-event`. The start time stays plaintext in the sort key so
@@ -55,7 +79,10 @@ DynamoDB data needs KMS encryption and a retention design.
 - Server-side search over contact fields is not possible; duplicate detection
   stays in the client after an authorized list.
 - Account deletion has no cleanup routine today; if one is added it must delete
-  `CONTACT#` rows.
+  `CONTACT#`, `SFDCCONTACT#` and `SFDCSUPPRESS#` rows.
+- Known limit: a contact delete reads every `SFDCCONTACT#` row in the Account
+  (a filtered query), so its cost grows with the Account's links, and a
+  malformed index row blocks contact deletes in that Account until repaired.
 
 ## Account relationship links, signals and KB references
 

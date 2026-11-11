@@ -56,10 +56,11 @@ func contactMatchKey(c model.AccountContact) string {
 
 // contactSfdcKey returns the SFDC dedupe key of a linked contact, or "".
 // Two contacts linked to one SFDC contact are the same person whatever
-// their emails, so this key is matched before the email key.
+// their emails, so this key is matched before the email key. The key uses
+// the canonical 18-character ID; a malformed ID gives no key.
 func contactSfdcKey(c model.AccountContact) string {
-	if c.SfdcContactID != "" {
-		return "s:" + c.SfdcContactID
+	if id, ok := model.CanonicalSfdcID(c.SfdcContactID); ok {
+		return "s:" + id
 	}
 	return ""
 }

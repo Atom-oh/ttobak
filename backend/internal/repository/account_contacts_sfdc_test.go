@@ -13,8 +13,8 @@ import (
 
 const (
 	sfdcTestContactID = "01234567-89ab-4cde-8123-0123456789ab"
-	sfdcTestID        = "003AB00000abcdEFGH"
-	sfdcTestAccountID = "001AB00000abcdEFGH"
+	sfdcTestID        = "003AB00000abcdEYAQ"
+	sfdcTestAccountID = "001AB00000abcdEYAQ"
 )
 
 func sfdcTestContact() *model.AccountContact {
@@ -98,6 +98,8 @@ func TestSfdcContactLinks(t *testing.T) {
 		for _, c := range []model.AccountContact{
 			{ContactID: sfdcTestContactID, Name: "A", SfdcContactID: "003#SFDCSUPPRESS#x"},
 			{ContactID: sfdcTestContactID, Name: "A", SfdcContactID: "short"},
+			{ContactID: sfdcTestContactID, Name: "A", SfdcContactID: "003AB00000abcdEZZZ"},
+			{ContactID: sfdcTestContactID, Name: "A", SfdcContactID: "003AB00000abcdEY"},
 			{ContactID: sfdcTestContactID, Name: "A", SfdcContactID: sfdcTestID, SfdcAccountID: "bad id"},
 		} {
 			for _, op := range []string{"create", "update"} {
@@ -242,16 +244,16 @@ func TestSfdcContactLinks(t *testing.T) {
 				return `{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"` + prefix + id + `"},"sfdcContactId":{"S":"` + id + `"},"contactId":{"S":"c-` + id + `"},"sfdcAccountId":{"S":"` + sfdcTestAccountID + `"}}`
 			}
 			if body["ExclusiveStartKey"] == nil {
-				return `{"Items":[` + row("003AB00000abcdEFG1") + `],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"` + prefix + `003AB00000abcdEFG1"}}}`
+				return `{"Items":[` + row("003AB00000abcd1YAA") + `],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"` + prefix + `003AB00000abcd1YAA"}}}`
 			}
-			return `{"Items":[` + row("003AB00000abcdEFG2") + `]}`
+			return `{"Items":[` + row("003AB00000abcd2YAA") + `]}`
 		})
 		links, err := repo.ListSfdcContactLinks(context.Background(), "account")
-		if err != nil || len(links) != 2 || links[1] != (SfdcContactLink{SfdcContactID: "003AB00000abcdEFG2", SfdcAccountID: sfdcTestAccountID, ContactID: "c-003AB00000abcdEFG2"}) {
+		if err != nil || len(links) != 2 || links[1] != (SfdcContactLink{SfdcContactID: "003AB00000abcd2YAA", SfdcAccountID: sfdcTestAccountID, ContactID: "c-003AB00000abcd2YAA"}) {
 			t.Fatalf("links %+v %v", links, err)
 		}
 		suppressed, err := repo.ListSfdcSuppressions(context.Background(), "account")
-		if err != nil || len(suppressed) != 2 || !suppressed["003AB00000abcdEFG1"] || !suppressed["003AB00000abcdEFG2"] {
+		if err != nil || len(suppressed) != 2 || !suppressed["003AB00000abcd1YAA"] || !suppressed["003AB00000abcd2YAA"] {
 			t.Fatalf("suppressions %v %v", suppressed, err)
 		}
 		if len(starts) != 4 {
@@ -259,13 +261,19 @@ func TestSfdcContactLinks(t *testing.T) {
 		}
 	})
 
-	t.Run("sfdc_fields_are_sealed_not_plain", func(t *testing.T) {
+	t.Run("sfdc_fields_are_sealed_canonical_not_plain", func(t *testing.T) {
 		var items []map[string]any
 		repo := contactWire(t, func(_ string, body map[string]interface{}) string { items = wireItems(body); return `{}` })
+		// 15-character inputs are sealed and keyed in their 18-character form.
 		c := sfdcTestContact()
+		c.SfdcContactID, c.SfdcAccountID = sfdcTestID[:15], sfdcTestAccountID[:15]
 		c.SfdcLeftAt = "2026-11-11T00:00:00Z"
 		if err := repo.WriteAccountContact(context.Background(), "account", "user", c, "create"); err != nil {
 			t.Fatal(err)
+		}
+		if itemKey(items[3]) != "ACCOUNT#account|SFDCCONTACT#"+sfdcTestID || itemKey(items[4]) != "ACCOUNT#account|SFDCSUPPRESS#"+sfdcTestID ||
+			attrS(t, items[3]["Item"].(map[string]any), "sfdcAccountId") != sfdcTestAccountID {
+			t.Fatalf("keys not canonical: %s %s", itemKey(items[3]), itemKey(items[4]))
 		}
 		row := items[2]["Item"].(map[string]any)
 		for _, k := range []string{"source", "sfdcContactId", "sfdcAccountId", "sfdcLeftAt"} {
@@ -283,17 +291,6 @@ func TestSfdcContactLinks(t *testing.T) {
 			t.Fatalf("sealed SFDC fields %+v %v", got, err)
 		}
 	})
-}
-
-func TestValidSfdcID(t *testing.T) {
-	for id, want := range map[string]bool{
-		"003AB00000abcdE": true, "003AB00000abcdEFGH": true, "003AB00000abcd": false,
-		"003AB00000abcdEFGHI": false, "003AB00000abcd#FG": false, "": false, "003AB00000abcdé": false,
-	} {
-		if model.ValidSfdcID(id) != want {
-			t.Errorf("%q: want %v", id, want)
-		}
-	}
 }
 
 // sfdcMergeRespond answers GetItem for the target's SFDC rows from present
@@ -409,7 +406,7 @@ func TestSfdcMergeRows(t *testing.T) {
 	t.Run("merge_into_other_link_suppresses_duplicate", func(t *testing.T) {
 		var calls []fenceRequest
 		r, _ := sealedMergeRepo(t, &calls, sfdcMergeRespond(nil))
-		into := model.AccountContact{ContactID: "b9", Revision: "rev-b", Name: "Alice", Source: "sfdc", SfdcContactID: "003AB00000abcdOTHR", SfdcAccountID: sfdcTestAccountID}
+		into := model.AccountContact{ContactID: "b9", Revision: "rev-b", Name: "Alice", Source: "sfdc", SfdcContactID: "003AB00000abcd9YAA", SfdcAccountID: sfdcTestAccountID}
 		if err := r.MergeContactIntoExisting(context.Background(), mergeRowsJob(), linkedMergeFrom(), into); err != nil {
 			t.Fatal(err)
 		}

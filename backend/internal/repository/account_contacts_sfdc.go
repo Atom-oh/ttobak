@@ -63,6 +63,9 @@ type sfdcSuppressRow struct {
 	SfdcContactID string `dynamodbav:"sfdcContactId"`
 }
 
+// validSfdcLink checks the link and rewrites both IDs to their canonical
+// 18-character form, so the sealed fields and every key derived from them
+// agree for the 15- and 18-character spellings of one record.
 func validSfdcLink(c *model.AccountContact) error {
 	if c.SfdcContactID == "" {
 		if c.SfdcAccountID != "" {
@@ -70,10 +73,23 @@ func validSfdcLink(c *model.AccountContact) error {
 		}
 		return nil
 	}
-	if !model.ValidSfdcID(c.SfdcContactID) || c.SfdcAccountID != "" && !model.ValidSfdcID(c.SfdcAccountID) {
+	id, ok := model.CanonicalSfdcID(c.SfdcContactID)
+	if !ok {
 		return ErrInvalidSfdcLink
 	}
+	c.SfdcContactID = id
+	if c.SfdcAccountID != "" {
+		if c.SfdcAccountID, ok = model.CanonicalSfdcID(c.SfdcAccountID); !ok {
+			return ErrInvalidSfdcLink
+		}
+	}
 	return nil
+}
+
+// storedSfdcID reports whether a stored row key holds a canonical SFDC ID.
+func storedSfdcID(id string) bool {
+	canonical, ok := model.CanonicalSfdcID(id)
+	return ok && canonical == id
 }
 
 // stripSfdcLink removes every SFDC field from a contact copy.
@@ -85,9 +101,12 @@ func buildCondition(c expression.ConditionBuilder) (expression.Expression, error
 	return expression.NewBuilder().WithCondition(c).Build()
 }
 
-// sfdcIndexPut writes the index row for contactID. With replaceOwn the row
+// sfdcIndexPut writes the index row for contactID; IDs must be canonical. With replaceOwn the row
 // may already belong to contactID (a kept link); otherwise it must be absent.
 func (r *DynamoDBRepository) sfdcIndexPut(account, sfdcID, sfdcAccountID, contactID string, replaceOwn bool) (types.TransactWriteItem, error) {
+	if !storedSfdcID(sfdcID) || sfdcAccountID != "" && !storedSfdcID(sfdcAccountID) {
+		return types.TransactWriteItem{}, ErrInvalidSfdcLink
+	}
 	item, err := attributevalue.MarshalMap(sfdcIndexRow{PK: model.PrefixAccount + account, SK: sfdcIndexPrefix + sfdcID,
 		SfdcContactID: sfdcID, ContactID: contactID, SfdcAccountID: sfdcAccountID})
 	if err != nil {
@@ -126,8 +145,11 @@ func (r *DynamoDBRepository) sfdcAbsentCheck(account, prefix, sfdcID string) (ty
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names()}}, nil
 }
 
-// sfdcSuppressPut writes the (idempotent) suppression row.
+// sfdcSuppressPut writes the (idempotent) suppression row for a canonical ID.
 func (r *DynamoDBRepository) sfdcSuppressPut(account, sfdcID string) (types.TransactWriteItem, error) {
+	if !storedSfdcID(sfdcID) {
+		return types.TransactWriteItem{}, ErrInvalidSfdcLink
+	}
 	item, err := attributevalue.MarshalMap(sfdcSuppressRow{PK: model.PrefixAccount + account, SK: sfdcSuppressPrefix + sfdcID, SfdcContactID: sfdcID})
 	if err != nil {
 		return types.TransactWriteItem{}, err
@@ -193,7 +215,7 @@ func decodeSfdcIndexRow(account string, item map[string]types.AttributeValue) (s
 		return row, fmt.Errorf("decode sfdc index row: %w", err)
 	}
 	id := strings.TrimPrefix(row.SK, sfdcIndexPrefix)
-	if row.PK != model.PrefixAccount+account || !model.ValidSfdcID(id) || row.ContactID == "" {
+	if row.PK != model.PrefixAccount+account || !storedSfdcID(id) || row.ContactID == "" {
 		return row, errors.New("invalid sfdc index row")
 	}
 	row.SfdcContactID = id
@@ -222,7 +244,7 @@ func (r *DynamoDBRepository) ListSfdcSuppressions(ctx context.Context, account s
 	out := map[string]bool{}
 	err := r.querySfdcRows(ctx, account, sfdcSuppressPrefix, nil, func(item map[string]types.AttributeValue) error {
 		sk, _ := item["SK"].(*types.AttributeValueMemberS)
-		if sk == nil || !model.ValidSfdcID(strings.TrimPrefix(sk.Value, sfdcSuppressPrefix)) {
+		if sk == nil || !storedSfdcID(strings.TrimPrefix(sk.Value, sfdcSuppressPrefix)) {
 			return errors.New("invalid sfdc suppression row")
 		}
 		out[strings.TrimPrefix(sk.Value, sfdcSuppressPrefix)] = true
@@ -363,7 +385,7 @@ func (r *DynamoDBRepository) MoveSfdcSuppressionsForMerge(ctx context.Context, j
 			return errStop
 		}
 		sk, _ := item["SK"].(*types.AttributeValueMemberS)
-		if sk == nil || !model.ValidSfdcID(strings.TrimPrefix(sk.Value, sfdcSuppressPrefix)) {
+		if sk == nil || !storedSfdcID(strings.TrimPrefix(sk.Value, sfdcSuppressPrefix)) {
 			return errors.New("invalid sfdc suppression row")
 		}
 		ids = append(ids, strings.TrimPrefix(sk.Value, sfdcSuppressPrefix))

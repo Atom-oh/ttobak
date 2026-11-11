@@ -428,13 +428,13 @@ func TestMergeContactsSfdc(t *testing.T) {
 		s, repo, job := contactsFixture()
 		// b1 holds L1; c1 has a different email but the same SFDC ID, so it
 		// is the same person and folds into b1, which keeps its link.
-		repo.putContact("tgt", model.AccountContact{ContactID: "b1", Name: "Bo", Email: "bo@x.com", Source: "sfdc", SfdcContactID: "003AB00000abcdEFG1", SfdcAccountID: "001AB00000abcdEFGH"})
-		repo.putContact("src", model.AccountContact{ContactID: "c1", Name: "Bo Kim", Email: "bo.kim@x.com", Source: "sfdc", SfdcContactID: "003AB00000abcdEFG1", SfdcAccountID: "001AB00000abcdEFGX"})
+		repo.putContact("tgt", model.AccountContact{ContactID: "b1", Name: "Bo", Email: "bo@x.com", Source: "sfdc", SfdcContactID: "003AB00000abcd1YAA", SfdcAccountID: "001AB00000abcdEYAQ"})
+		repo.putContact("src", model.AccountContact{ContactID: "c1", Name: "Bo Kim", Email: "bo.kim@x.com", Source: "sfdc", SfdcContactID: "003AB00000abcd1YAA", SfdcAccountID: "001AB00000abcd1YAA"})
 		// b2 is unlinked; c2 matches it by email and brings its link.
 		repo.putContact("tgt", model.AccountContact{ContactID: "b2", Name: "Cy", Email: "cy@x.com"})
-		repo.putContact("src", model.AccountContact{ContactID: "c2", Name: "Cy", Email: "cy@x.com", Source: "sfdc", SfdcContactID: "003AB00000abcdEFG2", SfdcAccountID: "001AB00000abcdEFGH", SfdcLeftAt: "2026-11-01T00:00:00Z"})
+		repo.putContact("src", model.AccountContact{ContactID: "c2", Name: "Cy", Email: "cy@x.com", Source: "sfdc", SfdcContactID: "003AB00000abcd2YAA", SfdcAccountID: "001AB00000abcdEYAQ", SfdcLeftAt: "2026-11-01T00:00:00Z"})
 		// c3 matches nothing and moves with its link.
-		repo.putContact("src", model.AccountContact{ContactID: "c3", Name: "Di", Source: "sfdc", SfdcContactID: "003AB00000abcdEFG3", SfdcAccountID: "001AB00000abcdEFGH"})
+		repo.putContact("src", model.AccountContact{ContactID: "c3", Name: "Di", Source: "sfdc", SfdcContactID: "003AB00000abcd3YAA", SfdcAccountID: "001AB00000abcdEYAQ"})
 		repo.suppressions = 3
 		res, err := s.moveContacts(newMergeFence(context.Background()), job)
 		if err != nil || !res.Done || res.Moved != 3 {
@@ -443,13 +443,13 @@ func TestMergeContactsSfdc(t *testing.T) {
 		if want := map[string]string{"c1": "b1", "c2": "b2", "c3": "c3"}; !reflect.DeepEqual(repo.maps, want) {
 			t.Fatalf("map rows %v, want %v", repo.maps, want)
 		}
-		if b1 := repo.contacts["tgt"]["b1"]; b1.SfdcContactID != "003AB00000abcdEFG1" || b1.SfdcAccountID != "001AB00000abcdEFGH" {
+		if b1 := repo.contacts["tgt"]["b1"]; b1.SfdcContactID != "003AB00000abcd1YAA" || b1.SfdcAccountID != "001AB00000abcdEYAQ" {
 			t.Errorf("target link must win: %+v", b1)
 		}
-		if b2 := repo.contacts["tgt"]["b2"]; b2.Source != "sfdc" || b2.SfdcContactID != "003AB00000abcdEFG2" || b2.SfdcLeftAt != "2026-11-01T00:00:00Z" {
+		if b2 := repo.contacts["tgt"]["b2"]; b2.Source != "sfdc" || b2.SfdcContactID != "003AB00000abcd2YAA" || b2.SfdcLeftAt != "2026-11-01T00:00:00Z" {
 			t.Errorf("unlinked target must take the source link: %+v", b2)
 		}
-		if c3 := repo.contacts["tgt"]["c3"]; c3.SfdcContactID != "003AB00000abcdEFG3" {
+		if c3 := repo.contacts["tgt"]["c3"]; c3.SfdcContactID != "003AB00000abcd3YAA" {
 			t.Errorf("moved contact must keep its link: %+v", c3)
 		}
 		if repo.suppressions != 0 || repo.suppressionMoves == 0 {
