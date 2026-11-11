@@ -25095,13 +25095,13 @@ var init_auth = __esm({
 });
 
 // src/intake/batch.ts
-function batches(mutations) {
+function batches(mutations, max = MAX_BATCH) {
   const result = [];
   let current = [];
   let bytes = 0;
   for (const mutation of mutations) {
     const size = Buffer.byteLength(JSON.stringify(mutation)) + 1;
-    if (current.length && (current.length >= MAX_BATCH || bytes + size > MAX_BATCH_BYTES)) {
+    if (current.length && (current.length >= Math.min(max, MAX_BATCH) || bytes + size > MAX_BATCH_BYTES)) {
       result.push(current);
       current = [];
       bytes = 0;
@@ -25391,7 +25391,7 @@ function planCalendar(items, ledger, window, zone) {
   return { mutations, set: set2, remove, counts, preview };
 }
 function batches2(mutations) {
-  return batches(mutations);
+  return batches(mutations, MAX_BATCH2);
 }
 function pruneLedger(ledger, now) {
   const cutoff = now.getTime() - LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
@@ -25514,7 +25514,7 @@ async function runCalendar(options) {
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
@@ -25526,6 +25526,7 @@ var init_calendar2 = __esm({
     FUTURE_DAYS = 30;
     MAX_ITEMS = 5e3;
     LEDGER_RETENTION_DAYS = 120;
+    MAX_BATCH2 = 12;
     UNTITLED = "(\uC81C\uBAA9 \uC5C6\uC74C)";
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
@@ -33156,7 +33157,7 @@ var registry2 = {
     },
     {
       name: "ttobak_add_account_member",
-      description: "Add a teammate to an account by email. Any existing account member can do this (ADR-034), not just the owner. If the email belongs to an invited-but-not-yet-logged-in user, the grant is queued and applies automatically on their first login. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.",
+      description: "Add a teammate to an account by email. Any existing account member can do this (ADR-015, member permissions), not just the owner. If the email belongs to an invited-but-not-yet-logged-in user, the grant is queued and applies automatically on their first login. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.",
       inputSchema: {
         type: "object",
         properties: {

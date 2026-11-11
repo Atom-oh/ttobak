@@ -404,7 +404,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
           <div className="space-y-4">
             {isPdf && !doc.previewUrl ? (
               // A directly-uploaded PDF has no previewUrl sidecar (that's
-              // convert-doc's PPTX->PDF output only, ADR-022) -- its
+              // convert-doc's PPTX->PDF output only, ADR-020) -- its
               // downloadUrl is its own file, under docs/*, which gets
               // ADR-027's `/media/*` `CSP: sandbox` header (mitigating
               // stored-XSS from arbitrary client-supplied Content-Type on

@@ -59,8 +59,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   convertDocRole?: iam.IRole;
   /** ADR-014 playback-copy worker; optional so unit tests skip the Docker asset. */
   audioRemuxRole?: iam.IRole;
-  // VPC ID for convert-doc's network isolation (ADR-022 residual-risk
-  // follow-up) -- same pre-existing VPC WhisperStack already uses
+  // VPC ID for convert-doc's network isolation (ADR-020)
+  // -- same pre-existing VPC WhisperStack already uses
   // (ec2.Vpc.fromLookup, not a stack this one depends on). Optional so
   // unit tests that omit convertDocRole don't need a VPC context lookup.
   vpcId?: string;
@@ -498,7 +498,7 @@ export class GatewayStack extends cdk.Stack {
         WHISPER_CLUSTER: WHISPER_CLUSTER_NAME,
         WHISPER_TASK_DEF: WHISPER_TASK_FAMILY,
         WHISPER_CONTAINER: WHISPER_CONTAINER_NAME,
-        // Scheduled STT recovery (ADR-031 amendment): off | report | active. Report
+        // Scheduled STT recovery (ADR-013): off | report | active. Report
         // logs decisions without writing; activate in a separate change.
         STT_RECOVERY_MODE: 'report',
         STT_RECOVERY_DELETE_MODE: 'report',
@@ -1129,7 +1129,7 @@ export class GatewayStack extends cdk.Stack {
       eventPattern: { source: ['ttobak.audio'], detailType: ['AudioCropRequested'] },
     });
     pipelineFailures.addTarget('AudioCrop', audioCropRule, this.transcribeFunction);
-    // Scheduled STT recovery tick (ADR-031 amendment). The input carries no parameters,
+    // Scheduled STT recovery tick (ADR-013, scheduled STT recovery). The input carries no parameters,
     // so a forged tick can only start the same bounded sweep. A lost tick is
     // harmless: no retries, no DLQ.
     const sttRecoveryRule = new events.Rule(this, 'SttRecoveryTick', {
@@ -1375,7 +1375,7 @@ export class GatewayStack extends cdk.Stack {
     // researchWorkerRole above) so unit tests that omit convertDocRole don't
     // trigger a Docker build during `npm test`.
     if (props.convertDocRole) {
-      // Network-isolate convert-doc (ADR-022 residual-risk follow-up):
+      // Network-isolate convert-doc (ADR-020):
       // LibreOffice parses untrusted, attacker-controllable PPTX/PPT
       // content, and app-layer mitigations (AWS_* env stripping) can't
       // close an SSRF/RCE-via-linked-content vector -- only removing the

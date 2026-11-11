@@ -85,24 +85,30 @@ at 32,000, returning errors rather than truncating receipts or continuations.
 An Account association classifies private data; it grants no sharing. Personal
 reads omit a revoked association; an inaccessible Account-filtered read is denied.
 
-Account-sharing fields (ADR-066) are validated and stored encrypted with the
+Account-sharing fields are validated and stored encrypted with the
 event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
 use the Account ID format and differ from each other; `shareEvidence` holds up to
 three distinct kinds (`title`, `location`, `domain`) and requires
 `shareAccountId`; `private` excludes both; `seriesKey` is 64 lowercase hex.
-No share rows are written yet. Owner event views report `sharingMode:"auto"`,
+Sync writes a share row only when the user is a direct member of
+`shareAccountId`; otherwise it returns `403 FORBIDDEN`. A `Private` event or a
+hidden owner override writes a veto row for the matched or previously shared
+account instead. Owner
+event views report `sharingMode` (`auto`, `account` or `hidden`),
 `candidateAccountIds` and `private`; `shareAccountId` and `shareEvidence` appear
 only once a stored share is granted.
 
 Rollback boundary: API builds older than this contract reject a stored event
 carrying any of these fields as corrupt, failing every event page that contains
 it. Do not roll the API Lambda back past this contract once a client has sent
-sharing fields; the intake runner sends them only from a later release.
+sharing fields.
 
 Errors use `{error:{code,message}}`: `400 BAD_REQUEST` for invalid input/cursor,
 `401 UNAUTHORIZED` for missing authentication, `403 FORBIDDEN` for denied access,
 `404 NOT_FOUND` for missing resources, `409 CONFLICT` for revision/batch conflict,
-`413 BAD_REQUEST` for oversized sync bodies, and `503 INTERNAL_ERROR` when
+`413 BAD_REQUEST` for oversized sync bodies, `413 CALENDAR_BATCH_TOO_LARGE` when a
+batch's planned share writes exceed one 100-item transaction (resend fewer
+mutations; the intake runner sends at most 12), and `503 INTERNAL_ERROR` when
 calendar encryption is unavailable. Other failures use `500 INTERNAL_ERROR`.
 Sensitive event payloads use context-bound encryption; event retention is
 scheduled at 90 days after event end and receipts at seven days. TTL is
@@ -466,7 +472,7 @@ Member removal and legacy direct addition retire it atomically; cleanup conflict
 remain retryable. A durable control row also gates queue/claim transactions and bootstrap
 capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
 continuation. Project user queues are isolated from old readers; transactional rows, TTL and
-the required incompatible-API rollback drain are specified in ADR-044.
+the required incompatible-API rollback drain are specified in ADR-025.
 
 Admin user summaries include `emailVerified`. Password reset requires an enabled,
 CONFIRMED user with verified email; missing verification returns 409
@@ -728,7 +734,7 @@ Conditional transcript/speaker edits publish new immutable
 matching database update. Conflicts return 409; ambiguous database failures retain
 new objects because the write may have committed. Existing referenced objects
 remain intact. Go and QA readers accept strictly validated legacy and versioned
-keys; deploy compatible readers before writers (ADR-037).
+keys; deploy compatible readers before writers (ADR-013).
 
 `PUT /api/meetings/{meetingId}/speakers` permits owners, direct read/edit
 recipients and current members of the published account team to correct speaker
@@ -749,7 +755,7 @@ Restricted account views never write their hidden content/action fields.
 Unchanged derived fields are also omitted, preserving safe summary clearance
 for attribution-only corrections. Action-item updates target JSON text/assignee
 fields and preserve task IDs, completion and other metadata.
-See ADR-051.
+See ADR-016.
 
 `POST /api/kb/upload` `{fileName, fileType, accountId?}` returns `{uploadUrl,
 key, expiresIn, headers?}`. An empty `accountId` is a personal file and the
@@ -1278,7 +1284,7 @@ relinking in the API; code checks alone do not establish live revocation.
 Account creation accepts optional `ownerEmail`, `keepCreatorAsMember` and a UUID
 `requestId` in a single JSON object capped at 16 KiB. Without another Owner,
 the creator remains Owner. A different Owner is resolved to the current Cognito
-sub; missing identities use ADR-054's invitation gates. Create META, the canonical
+sub; missing identities use ADR-015's invitation gates. Create META, the canonical
 Owner and optional creator AM atomically. `keepCreatorAsMember: false` creates no
 creator membership or read grant. The response returns the actual `ownerUserId`,
 initial members, `creatorMember`, `ownerInvitationPending` (an initial invitation
@@ -1407,7 +1413,7 @@ per caller per UTC hour; counter failure returns 503 and limit exhaustion 429.
 `INVITATION_GRANT_FAILED` (500) records requested delivery followed by queue
 failure. Account materialization transactionally revalidates current inviter
 membership, the invited sub, expiry and pending-row version. Removal and
-pending-invite revocation remain owner-only (ADR-034/054).
+pending-invite revocation remain owner-only (ADR-015, member permissions, invitations).
 Project permissions are separate: owner/direct member/member of a
 linked account. The service list unions those access paths; project deletion
 rejects remaining relationships. Canonical sets and reverse references change in
@@ -1607,7 +1613,7 @@ the observed preview conditionally. The preview URL path still checks existence;
 canonical indexing/QA readers additionally validate the source binding. Legacy
 unbound previews require regeneration. Public tokens
 are conditionally minted and validated against the document's own PublicShareToken
-on every read; revocation removes that grant. See ADR-022/027/029.
+on every read; revocation removes that grant. See ADR-020/027.
 
 Pending meeting/account invitations bind the invited Cognito sub, require verified
 email at materialization, and expire after 30 days. Revoking an already-materialized

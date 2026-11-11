@@ -23,7 +23,10 @@ import (
 )
 
 var (
-	ErrInvalidCalendarBatch  = errors.New("invalid calendar batch")
+	ErrInvalidCalendarBatch = errors.New("invalid calendar batch")
+	// ErrCalendarBatchTooLarge is an otherwise valid batch whose planned writes exceed one
+	// transaction; the client must resend it in smaller batches.
+	ErrCalendarBatchTooLarge = fmt.Errorf("%w: exceeds the transaction item limit", ErrInvalidCalendarBatch)
 	ErrInvalidCalendarCursor = errors.New("invalid calendar cursor")
 	ErrInvalidCalendarQuery  = errors.New("invalid calendar query")
 	ErrCalendarCorruptData   = errors.New("invalid calendar storage identity")
@@ -287,7 +290,7 @@ func (repo *CalendarRepository) ApplyCalendarBatch(ctx context.Context, userID, 
 	}
 	operations = append(operations, types.TransactWriteItem{Put: receiptPut})
 	if len(operations) > calendarMaxTransactItems {
-		return nil, ErrInvalidCalendarBatch
+		return nil, ErrCalendarBatchTooLarge
 	}
 	_, err = repo.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: operations},
 		func(options *dynamodb.Options) { options.Retryer = aws.NopRetryer{} })

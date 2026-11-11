@@ -17,5 +17,5 @@ Intended checks covered TypeScript/build, both detail pages, TOC scroll tracking
 
 ## Current references
 
-- [ADR-010](../../decisions/ADR-010-insights-obsidian-style-markdown-rendering.md), [renderer](../../../frontend/src/components/markdown/MarkdownRenderer.tsx), [code highlighting](../../../frontend/src/components/markdown/CodeBlock.tsx), [TOC](../../../frontend/src/components/markdown/TOCSidebar.tsx), [table view](../../../frontend/src/components/InsightsTableView.tsx).
+- [ADR-020](../../decisions/ADR-020-personal-documents.md), [renderer](../../../frontend/src/components/markdown/MarkdownRenderer.tsx), [code highlighting](../../../frontend/src/components/markdown/CodeBlock.tsx), [TOC](../../../frontend/src/components/markdown/TOCSidebar.tsx), [table view](../../../frontend/src/components/InsightsTableView.tsx).
 - [2026-08-04 readability record](2026-08-04-insights-readability-redesign.md) extends structured content and layout. Original exact colors, widths, dependency versions, and component line numbers are historical choices, not current review requirements.

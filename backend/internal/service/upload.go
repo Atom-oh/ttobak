@@ -393,7 +393,7 @@ func (s *UploadService) GeneratePresignedDownloadURL(
 // unauthenticated GET /api/public/docs/{token} route stays valid -- much
 // shorter than the 1-hour default used elsewhere, since it's the window an
 // already-issued URL keeps working even after RevokeUserDocPublicShare
-// clears the token (ADR-022).
+// clears the token (ADR-020).
 const PublicShareURLTTL = 5 * time.Minute
 
 // GeneratePresignedDownloadURLWithTTL is GeneratePresignedDownloadURL with a

@@ -56,7 +56,7 @@
 - On the server, a meeting that has only checkpoint files is user data: the
   scheduled recovery tick reports it and the owner recovers it; it is never
   deleted automatically. Checkpoint names must match the exact allowlisted
-  `recording_progress.{webm|m4a|ogg}` names, not a suffix (ADR-031).
+  `recording_progress.{webm|m4a|ogg}` names, not a suffix (ADR-013).
 - One tab owns a recording through a Web Lock; without the lock there is no
   recovery. A generation counter rejects blobs from an earlier flow.
 - Restore re-checks the signed-in user and binds to the server meeting: a
@@ -89,7 +89,7 @@
   channels, and depends on the user's permission and the chosen source.
 - Mobile streaming uses the existing authenticated identity-pool permission
   and adds no IAM capability.
-- The server's seven-day deletion of failed recordings (ADR-031) is separate
+- The server's seven-day deletion of failed recordings (ADR-013) is separate
   from browser backups and never touches owner-recoverable checkpoints.
 - The recovery API depends on the transcribe function in GatewayStack, so the
   consumer deploys first; local tests do not prove a rollout.

@@ -270,7 +270,7 @@ func (h *DocumentHandler) PublicGetDoc(w http.ResponseWriter, r *http.Request) {
 
 	// Short-lived (PublicShareURLTTL, not the usual 1-hour default): this URL
 	// leaks to an unauthenticated caller, so a revoke should close the window
-	// quickly rather than leaving it valid for an hour (ADR-022).
+	// quickly rather than leaving it valid for an hour (ADR-020).
 	targetKey := doc.FileKey
 	if sidecarKey := service.SidecarPDFKey(doc.FileKey); sidecarKey != "" {
 		previewURL, err := h.uploadService.GeneratePreviewPDFURLShortLived(ctx, doc.FileKey)

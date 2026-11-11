@@ -416,7 +416,7 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       expect(byKey(key).AuthorizationType ?? 'NONE').toBe('NONE');
     }
     // Unauthenticated routes stay limited to the public document redirect and the
-    // two static discovery documents (ADR-022, ADR-045).
+    // two static discovery documents (ADR-045).
     expect(routes.filter(route => (route.AuthorizationType ?? 'NONE') === 'NONE').map(route => route.RouteKey).sort()).toEqual([
       'GET /.well-known/oauth-protected-resource',
       'GET /.well-known/oauth-protected-resource/api/mcp',
@@ -1138,7 +1138,7 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       ProvisionedConcurrencyConfig: { ProvisionedConcurrentExecutions: 4 },
     });
   });
-  test('STT recovery tick reuses the transcribe worker with a fixed, unretried input (ADR-031 amendment)', () => {
+  test('STT recovery tick reuses the transcribe worker with a fixed, unretried input (ADR-013, scheduled STT recovery)', () => {
     template.hasResourceProperties('AWS::Events::Rule', {
       Name: 'ttobak-stt-recovery',
       ScheduleExpression: 'rate(15 minutes)',

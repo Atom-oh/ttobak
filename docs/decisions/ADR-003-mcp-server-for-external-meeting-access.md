@@ -44,7 +44,7 @@ without a demonstrated need.
 
 MCP application API requests must use CloudFront. Direct Cognito authentication
 and signed S3 upload requests remain existing service integrations. The sole
-public-document route exception is defined by ADR-022; it does not authorize
+public-document route exception is defined by ADR-020; it does not authorize
 public MCP routes or a new application origin.
 
 ## Consequences and risks

@@ -2,7 +2,7 @@
 
 - Status: Accepted for implementation; deployed acceptance is recorded separately.
 - Decision date: 2026-11-10.
-- Amends [ADR-034](ADR-034-account-member-permission-democratization.md) and
+- Amends [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) and
   [ADR-055](ADR-055-designated-account-owner.md): they forbade any post-creation
   Owner change; this ADR adds exactly one path.
 
