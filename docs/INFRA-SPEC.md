@@ -671,7 +671,10 @@ a no-op for unchanged content.
 Meetings re-qualify when `termsExtractorVersion` (part of the terms source
 identity in `service/terms_analysis.go`) changes; the operator CLI
 `backend/cmd/backfill-meeting-terms` (dry run by default; apply mode needs
-`TABLE_NAME` and `AUTO_TERMS_MODE=personal`) scans done meetings and calls the
+`TABLE_NAME`, `BUCKET_NAME` so spilled transcripts hydrate as in the worker,
+`AUTO_TERMS_MODE=personal`, `AUTO_TERMS_USERS` copied from the deployed
+summarize function, and `events:PutEvents`; claim or publish failures exit
+nonzero) scans done meetings and calls the
 production `Enqueue` (reason `backfill`), spacing queued runs (`-interval`,
 default 15s). Unchanged sources report `UNCHANGED`; output is outcome counts only.
 

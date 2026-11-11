@@ -15,9 +15,11 @@
 // concurrent model calls. Output is outcome counts only, never titles or
 // content.
 //
-// Requires TABLE_NAME and AUTO_TERMS_MODE=personal in the environment (the
-// same value as the deployed summarize function) and standard AWS
-// credentials/region.
+// Requires TABLE_NAME and, in apply mode, BUCKET_NAME (the assets bucket, so
+// spilled transcripts hydrate exactly as in the summarize worker and the
+// source identity matches), AUTO_TERMS_MODE=personal and AUTO_TERMS_USERS
+// copied from the deployed summarize function configuration, plus standard
+// AWS credentials/region with events:PutEvents on the default bus.
 package main
 
 import (
@@ -35,6 +37,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -100,6 +103,13 @@ func backfill(ctx context.Context, list meetingLister, enqueue enqueuer, opts ba
 		}
 		cursor = next
 	}
+}
+
+// failedRun reports outcomes an operator must act on: a failed claim, or a
+// claim whose TermsRequested publish failed (the row is then failed and no
+// worker receives it, e.g. a shell without events:PutEvents).
+func failedRun(outcomes map[string]int) bool {
+	return outcomes[service.TermsEnqueueFailed] > 0 || outcomes[model.AnalysisPublishFailed] > 0
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
@@ -190,7 +200,14 @@ func main() {
 			fmt.Fprintln(os.Stderr, "ERROR: AUTO_TERMS_MODE=personal is required in apply mode")
 			os.Exit(1)
 		}
-		repo := repository.NewDynamoDBRepository(client, tableName)
+		bucket := os.Getenv("BUCKET_NAME")
+		if bucket == "" {
+			fmt.Fprintln(os.Stderr, "ERROR: BUCKET_NAME is required in apply mode")
+			os.Exit(1)
+		}
+		// Same hydration as the summarize worker: a spilled transcript must hash
+		// as its text, not its s3:// reference, or every run ends SOURCE_CHANGED.
+		repo := repository.NewDynamoDBRepositoryWithS3(client, tableName, s3.NewFromConfig(awsCfg), bucket)
 		terms := service.NewTermsAnalysisService(repo, nil, nil, nil, nil, service.TermsPublisher(eventbridge.NewFromConfig(awsCfg)), cfg)
 		enqueue = func(ctx context.Context, ownerID, meetingID string) string {
 			return terms.Enqueue(ctx, ownerID, meetingID, "backfill")
@@ -212,7 +229,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}
-	if result.Outcomes[service.TermsEnqueueFailed] > 0 {
+	if failedRun(result.Outcomes) {
 		os.Exit(1)
 	}
 }

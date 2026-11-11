@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -64,5 +65,22 @@ func TestBackfillLimitAndListingError(t *testing.T) {
 	result, err = backfill(context.Background(), pagedLister(pages, 1), enqueue, backfillOptions{})
 	if err == nil || result.Scanned != 2 || count != 2 {
 		t.Fatalf("listing error: result %+v err %v calls %d", result, err, count)
+	}
+}
+
+func TestFailedRunCoversClaimAndPublishFailures(t *testing.T) {
+	cases := []struct {
+		outcomes map[string]int
+		want     bool
+	}{
+		{map[string]int{service.TermsEnqueueQueued: 3, service.TermsEnqueueUnchanged: 2}, false},
+		{map[string]int{service.TermsEnqueueFailed: 1}, true},
+		{map[string]int{model.AnalysisPublishFailed: 1, service.TermsEnqueueQueued: 4}, true},
+		{map[string]int{"DRY_RUN": 9}, false},
+	}
+	for _, tc := range cases {
+		if got := failedRun(tc.outcomes); got != tc.want {
+			t.Fatalf("failedRun(%v) = %v, want %v", tc.outcomes, got, tc.want)
+		}
 	}
 }
