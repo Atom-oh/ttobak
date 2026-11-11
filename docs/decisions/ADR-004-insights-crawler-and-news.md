@@ -207,7 +207,7 @@ responses instead of assuming absent documents.
 
 ### Token counting and staged receipt compatibility
 
-Current behavior follows the 2026-11-05 amendment below. Opus 5 counting used the fixed US East (N. Virginia) Mantle endpoint and
+Current behavior follows the publication model section below. Opus 5 counting used the fixed US East (N. Virginia) Mantle endpoint and
 `bedrock-mantle` signing service because the ordinary Runtime CountTokens API
 does not support this model's inference profile. The adapter translates the
 complete public text, system instructions and disabled-thinking setting of the
@@ -372,16 +372,16 @@ second write leaves the first immutable object unpublished and retained. This
 change introduces no upload/model retry, object deletion, or historical ledger
 refund. Local regression evidence does not establish deployed acceptance.
 
-### 2026-11-05 amendment: runtime-only Opus 5.5 publication
+### Publication model and the runtime-only token bound
 
-The decision moves news publication to `global.anthropic.claude-opus-5-5` on
-the Seoul runtime Converse client, without Mantle. **Code does not implement
-the model change yet:** the worker's `FINAL_MODEL_ID` is `NEWS_MODEL_ID`
-(`global.openai.gpt-6-luna`, `infra/lib/news-publication.ts`,
-`news_enrichment.py`) and the model client rejects any other model; Opus 5.5
-appears only as an `InvokeModel` grant on the worker role. Mantle is no longer
-called. Which model is intended is an open owner decision; until it is made,
-the configuration is the behavior in force. Runtime CountTokens still
+News publication uses `NEWS_MODEL_ID` (`global.openai.gpt-6-luna`,
+`infra/lib/news-publication.ts`, `news_enrichment.py`) on the Seoul runtime
+Converse client, without Mantle; the model client rejects any other model.
+The 2026-11-05 decision to move publication to
+`global.anthropic.claude-opus-5-5` is withdrawn: the owner decided on
+2026-11-11 that Luna is sufficient. The worker role still carries an unused
+Opus 5.5 `InvokeModel` grant from that decision; removing it is a pending
+least-privilege cleanup. Runtime CountTokens still
 rejects the Opus 5 and 5.5 profiles (verified in `ap-northeast-2` and
 `us-east-1`), so the pre-call check is a local upper bound: UTF-8 bytes of the
 system and message text plus a fixed framing allowance, assuming each token
@@ -389,8 +389,7 @@ covers at least one byte. The 100,000-token input cap and reservation are
 unchanged. The bound is stricter than the exact count for dense non-Latin text,
 so oversized multi-source Korean inputs fail with `INPUT_BUDGET` before any
 billable call. Service-reported usage remains the charge and the post-call cap
-still rejects overruns. The worker role loses its `bedrock-mantle` grant and
-keeps exact Opus 5.5 profile/model resources. Mantle remains limited to the
+still rejects overruns. The worker role has no `bedrock-mantle` grant. Mantle remains limited to the
 GPT web-search path.
 
 ### Evidence

@@ -137,8 +137,13 @@ runner collects and syncs.
 | `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,reason?,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
+| `PUT /api/performance/reports/{periodKey}` | JSON report (below), at most 256 KiB | `{periodKey,generatedAt}`; replaces any report for the key |
+| `GET /api/performance/reports` | none | `{items:[{periodKey,label,generatedAt,partial}],truncated}` newest `generatedAt` first; at most 200 items |
+| `GET /api/performance/reports/{periodKey}` | none | the stored report; `404` when absent or expired |
+| `DELETE /api/performance/reports/{periodKey}` | none | `204`; `404` when absent |
 
-Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
+Sync bodies (all routes above except the report PUT, whose cap is 256 KiB) are
+limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
 trailing data and unsupported query parameters are rejected. A sync batch has at
 most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
 lowercase); `expectedRevision` is the source's current revision (zero when new).
@@ -156,6 +161,52 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
   Descriptions and comments are not accepted.
 - Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
   or task ID.
+
+### Performance reports
+
+Reports are owner-private `PERFREPORT#{periodKey}` rows written by the owner's
+Mac (residency and allowed content: ADR-023). Validation is in
+`backend/internal/model/performance_report.go` and
+`backend/internal/service/performance_report.go`. Another user's report, like
+a missing one, is `404`.
+
+Period keys: `W{ISO year}-{01..53}` (ISO Monday through Sunday; week 53 only
+in a 53-week year), `Q{year}-{1..4}`, `Y{year}`, and
+`C{YYYY-MM-DD}_{YYYY-MM-DD}` with start no later than end and at most 400 days
+inclusive. Years run from 2000 to 2100; any other key is `400`.
+
+The PUT body is strict JSON (as above, nesting up to the table cell) with
+required top-level fields `schemaVersion` (1), `periodKey` (equal to the path),
+`period {start,end,label}` (`start`/`end` equal to the key's first and last
+`YYYY-MM-DD`, nonempty `label`), `alias`, `generatedAt` (RFC 3339 with at most 9 fractional digits, at most 35 bytes), `model`,
+`partial`, `summary`, `ledger`, `sections`, `actions` and `dataBasis`.
+`missingSources[]` and `highlights {projects,initiatives,channels,programs}`
+may be absent; so may a section's `tables`/`cards`, a ledger `note` and a data
+basis `estimates`. Null is never accepted, and absent lists read back as `[]`.
+
+- `ledger[]` (at most 50): `{label,value,unit,note}`; `sections[]` (at most
+  40, unique `id` matching `[A-Za-z0-9_-]{1,64}`): `{id,title,lede,paragraphs[],
+  tables[{columns[],rows[][]}],cards[{title,body}]}`; `actions[]` (at most
+  200): `{severity: hi|mid|lo, title, detail, source}`; `dataBasis[]` (at most
+  50): `{source,query,exclusions,estimates}`.
+- Table cells are strings. A table has 1 to 50 columns and at most 500 rows,
+  and every row has one cell per column. A section has at most 100
+  paragraphs, 20 tables and 50 cards.
+- Lengths in code points: titles, labels, names, columns, ledger
+  `label`/`value`/`unit`, sources and list items at most 200; `summary`,
+  ledes, paragraphs, cells, card bodies, action details, ledger notes and
+  data-basis text at most 4,000. Each highlights list and `missingSources`
+  hold at most 20 items.
+- Every string is plain text: valid UTF-8 without control characters other
+  than tab and newlines, and without `<` followed by a letter or `/`, `](`
+  or `slack.com` (any case). The compact re-encoded report must also fit in
+  256 KiB.
+
+A PUT for a period already past its retention returns `400`. The listing reads
+at most 1,000 rows (one extra row is probed) with a projection of summary fields
+and sorts them by `generatedAt`; `truncated` is true when more rows exist than
+the read or the 200-item response holds. Rows past their retention are hidden
+before TTL deletion.
 
 The mappings list reads at most 501 assignment rows (no cursor), returns the
 first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
@@ -671,8 +722,12 @@ results to the current source. Malformed arrays or invalid entries surface
 `fieldInsightsError: "INVALID_INSIGHTS"`; usable entries can still be returned.
 The projection allows at most 50 items and 64 KiB of encoded array JSON. Text
 and evidence are capped at 2,000 code points each, implication/nextAction at
-1,000 each, ID at 128, timestamp marker at 64, and entities at 20 entries of 128
-code points each. Any size/count shortening sets `fieldInsightsTruncated: true`.
+1,000 each, ID at 128 and timestamp marker at 64. Both `entities` and optional
+`personEntities` are capped at 20 entries of 128 code points each.
+`personEntities` contains model-classified person candidates from `entities`;
+its absence means legacy data or no classified people. See the
+[person-candidate rules](decisions/ADR-021-account-contacts-links-and-people.md#resolver).
+Any size/count shortening sets `fieldInsightsTruncated: true`.
 These bounds cover the insight projection, not the entire legacy detail body.
 Saved notes are user input, distinct from generated content. Stuck transcription
 or summarization is reconciled after 60 minutes; summarize retry eligibility is a
@@ -1042,9 +1097,30 @@ and only meetings currently published to the account count:
   over visible meetings. `GET /people/mentions?cursor=` returns `{groups,
   nextCursor?, truncated}`: at most 100 unresolved groups `{key, text, meetings,
   roles}` where `key` is 32 lowercase hex. Cursors are opaque base64url.
+- Candidate classification: mixed insight `entities` do not automatically
+  enter person review. The existing extraction call supplies model-classified
+  `personEntities`; subset/deduplication/size checks and an exact substring
+  check against the extraction input filter that output. This is not proof
+  that each candidate is a person; incorrect classifications can still be
+  ignored. Known entities retain deterministic person/account/project matching.
+- Read-time cutover hides two row kinds: insight rows without the stored
+  `personCandidate` attribute, and rows from any source whose mention is a
+  single or grouped speaker code (formats in ADR-021).
+  Legitimate legacy insight names are hidden too. They return only
+  after insight re-extraction and a people resolver run; no backfill is
+  scheduled by this change. Filtering itself makes no model call and deletes
+  no meeting content, contacts or existing manual edges.
 - `POST /people/mentions/{mentionKey}/resolve` takes `{kind: member|contact,
-  id}`, writes manual edges for the visible rows and returns `{written,
-  remaining}`; `remaining` means more rows are left for another call.
+  id, cursor?}`, writes at most 100 visible manual edges and returns `{written,
+  remaining, nextCursor?}`. It skips hidden rows across at most 20 hash pages
+  (at most 2,000 stored rows), retaining the 300 publication-read bound.
+  `remaining` indicates unread stored rows, not a count of visible candidates.
+  Send `nextCursor` as `cursor` to continue; it is scoped to the account and
+  mention hash and grants no access. Reads and writes revalidate authorization.
+  The app retains continuation for the same account, viewer, group and target
+  when the member repeats the connection action. A stale request containing
+  only hidden rows writes zero edges. A fully hidden partial review page also
+  retains its row cursor so later classified candidates remain reachable.
   `POST .../ignore` returns 204 and hides the text account-wide (no undo route).
 - `GET /people/edges?meetingId=` returns `{edges, labels}` for one meeting;
   `labels` is keyed `{kind}:{id}` and holds only readable targets. `POST
@@ -2022,6 +2098,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/performance/mappings` | `performanceHandler.ListMappings` |
 | PUT | `/api/performance/mappings/{sfdcAccountId}` | `performanceHandler.PutMapping` |
 | GET | `/api/performance/missed` | `performanceHandler.ListMissed` |
+| GET | `/api/performance/reports` | `performanceHandler.ListReports` |
+| GET | `/api/performance/reports/{periodKey}` | `performanceHandler.GetReport` |
+| PUT | `/api/performance/reports/{periodKey}` | `performanceHandler.PutReport` |
+| DELETE | `/api/performance/reports/{periodKey}` | `performanceHandler.DeleteReport` |
 | GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |

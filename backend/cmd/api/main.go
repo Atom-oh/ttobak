@@ -305,7 +305,10 @@ func init() {
 	r.Use(middleware.Recovery)
 	originVerifier := middleware.NewOriginVerifier(
 		os.Getenv("ORIGIN_VERIFY_SECRET_ARN"),
-		secretsmanager.NewFromConfig(cfg, func(o *secretsmanager.Options) { o.TracerProvider = awsTracing }),
+		secretsmanager.NewFromConfig(cfg, func(o *secretsmanager.Options) {
+			o.TracerProvider = awsTracing
+			o.HTTPClient = middleware.OriginSecretHTTPClient()
+		}),
 		os.Getenv("TTOBAK_ORIGIN_LOCAL_DEV") == "1" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "",
 		os.Getenv("ORIGIN_VERIFY_SECRET_VERSION_ID"),
 	)
@@ -354,6 +357,10 @@ func init() {
 		r.Get("/api/performance/mappings", performanceHandler.ListMappings)
 		r.Put("/api/performance/mappings/{sfdcAccountId}", performanceHandler.PutMapping)
 		r.Get("/api/performance/missed", performanceHandler.ListMissed)
+		r.Get("/api/performance/reports", performanceHandler.ListReports)
+		r.Get("/api/performance/reports/{periodKey}", performanceHandler.GetReport)
+		r.Put("/api/performance/reports/{periodKey}", performanceHandler.PutReport)
+		r.Delete("/api/performance/reports/{periodKey}", performanceHandler.DeleteReport)
 		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
 		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
 		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)

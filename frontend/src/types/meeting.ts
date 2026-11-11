@@ -925,7 +925,7 @@ export interface PeopleLink {
 export interface MeetingPeopleEdges { edges: PeopleLink[]; labels: Record<string, string> }
 export interface PeopleEdgeKey { meetingId: string; toKind: string; toId: string; role: string }
 export interface PeopleEdgeInput extends PeopleEdgeKey { sourceRef?: string }
-export interface ResolveMentionResult { written: number; remaining: boolean }
+export interface ResolveMentionResult { written: number; remaining: boolean; nextCursor?: string }
 
 export interface CreateAccountNewsSourceInput {
   sourceName: string;
