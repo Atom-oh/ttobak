@@ -36,6 +36,9 @@ type accountNewsTestRepo struct {
 	countReads   int
 	reconcileErr error
 	afterList    func()
+	// updates records each edit; updateErr fails it.
+	updates   []repository.AccountNewsSourceFields
+	updateErr error
 	// One-shot hooks between reconcile's counter read, ref list and write.
 	afterReconcileRead, afterReconcileList func()
 }
@@ -131,6 +134,11 @@ func (r *accountNewsTestRepo) DeleteAccountNewsSource(_ context.Context, account
 		}
 	}
 	return r.deleteErr
+}
+
+func (r *accountNewsTestRepo) UpdateAccountNewsSource(_ context.Context, _, _, _ string, fields repository.AccountNewsSourceFields) error {
+	r.updates = append(r.updates, fields)
+	return r.updateErr
 }
 
 func runOnce(hook *func()) {

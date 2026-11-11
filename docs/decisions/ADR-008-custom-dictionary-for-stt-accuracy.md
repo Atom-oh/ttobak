@@ -325,10 +325,12 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   before any flip, else `ActiveName` while `activeReady`; a pre-A/B in-place
   build (no fingerprint) is still confirmed with Transcribe, as before, and no
   A/B build is claimed until its result is recorded. A migration retry leaves
-  a row with A/B fields to the builder. Live streams receive no vocabulary
-  name (below).
-- **No vocabulary name in responses:** the live client would send it on a
-  ko-KR/en-US multi-language stream, which may fail; it waits for rollout check 5.
+  a row with A/B fields to the builder. Live streams receive the active name
+  through the dictionary GET when enabled (below).
+- **Live name in responses:** with `LIVE_VOCABULARY_MODE=on` the views carry
+  `liveName`, the owner's READY active slot (never while not READY or after
+  `emptySince`). Rollout check 5 passed, so the live client sends it on the
+  ko-KR/en-US multi-language stream as `VocabularyNames`.
 - **Empty language** stops advertising at once (`activeReady` false,
   `emptySince` set), also while a build is claimed or submitted: the claim is
   dropped and its provider result is never flipped or served. Both slots are
@@ -347,9 +349,10 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   half runs in `npm run test:unit`, in CI only for `frontend/**` changes). An unmigratable legacy
   item's terms cannot be edited; the UI marks the conflicting ones and deletes
   them through the legacy DELETE-by-phrase, which retries migration.
-- **No live name.** The A/B builder's wait for rollout check 5 stands: there is no
-  live-config route and no response names a vocabulary, so the recording page
-  only calls the dictionary GET (a flip opportunity) and live streams send none.
+- **Live name.** The recording page reads `vocabularies.*.liveName` from the
+  dictionary GET it already makes (a flip opportunity) and streams started after
+  it resolves send the name; earlier streams do not wait for it. There is still
+  no live-config route; `ttobak:liveVocabularyMode` is the server kill switch.
 - **Client plumbing.** `liveVocabulary.ts` sends one name per `LanguageOptions`
   language when given names; with one, a vocabulary BadRequest before the first
   event retries once without it and any vocabulary rejection drops it for the
@@ -368,7 +371,13 @@ Rollout checks (record each with a date):
    (unverified). Until then the identity-pool `*` grant lets a user who learns a
    vocabulary name bias their own stream; random names reduce that risk.
 5. Whether a multi-language stream with ko-KR-only or ko-KR plus en-US
-   `VocabularyNames` survives en-US speech.
+   `VocabularyNames` survives en-US speech. **2026-11-11: passed** for
+   ko-KR-only. A synthetic Polly ko/en/ko clip on `IdentifyMultipleLanguages`
+   (`ko-KR,en-US`) with `VocabularyNames` set to a READY ko-KR vocabulary
+   returned ko-KR and en-US finals like the run without one;
+   `VocabularyName` on the same stream fails at once with BadRequestException.
+   Recognition gain from the personal tables is not yet measured: a legacy
+   base table with Hangul `SoundsLike` misrecognized one product name in that run.
 6. That `GetVocabulary` `LastModifiedTime` advances on each accepted Create
    and Update, which the submit verification relies on.
 
