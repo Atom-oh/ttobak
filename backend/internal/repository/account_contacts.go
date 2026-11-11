@@ -237,38 +237,67 @@ func (r *DynamoDBRepository) ListSpeakerTeamMembers(ctx context.Context, account
 	return members, next, nil
 }
 
+// contactItemErrors names what a failed condition on each item of a plain
+// contact write means: [account open, member, contact].
+var contactItemErrors = []error{ErrContactAccess, ErrContactAccess, ErrConditionFailed}
+
 // Only complete condition failures are classified. Missing reasons, conflicts,
 // and mixed failures remain internal errors rather than false 403/404s.
 func classifyContactTransaction(err error) error {
+	return classifyContactItems(err, contactItemErrors)
+}
+
+// classifyContactItems maps a cancelled contact transaction by item index:
+// kinds[i] is the error a failed condition on item i means, and the first
+// failed item in order wins (access, then the contact row, then the SFDC
+// rows). A nil kind is an item without a condition.
+func classifyContactItems(err error, kinds []error) error {
 	var cancelled *types.TransactionCanceledException
-	if !errors.As(err, &cancelled) || len(cancelled.CancellationReasons) != 3 {
+	if !errors.As(err, &cancelled) || len(cancelled.CancellationReasons) != len(kinds) {
 		return err
 	}
-	codes := make([]string, 3)
-	failed := false
+	var first error
 	for i, reason := range cancelled.CancellationReasons {
-		codes[i] = aws.ToString(reason.Code)
-		if codes[i] == "ConditionalCheckFailed" {
-			failed = true
-		} else if codes[i] != "None" {
+		switch code := aws.ToString(reason.Code); code {
+		case "None":
+		case "ConditionalCheckFailed":
+			if kinds[i] == nil {
+				return err
+			}
+			if first == nil {
+				first = kinds[i]
+			}
+		default:
 			return err
 		}
 	}
-	if !failed {
+	if first == nil {
 		return err
 	}
-	if codes[0] == "ConditionalCheckFailed" || codes[1] == "ConditionalCheckFailed" {
-		return ErrContactAccess
+	if errors.Is(first, ErrSfdcAlreadyLinked) || errors.Is(first, ErrSfdcSuppressed) {
+		return fmt.Errorf("%w: %w", first, err)
 	}
-	if codes[2] == "ConditionalCheckFailed" {
-		return ErrConditionFailed
-	}
-	return err
+	return first
 }
 
 // Each mutation shares one transaction with both canonical access conditions.
 // A concurrent revocation/deletion therefore prevents any contact write.
+//
+// SFDC rows ride in the same transaction (at most 2 extra items):
+//   - create/update of a linked contact reserves SFDCCONTACT#{id} for it
+//     (create: absent; update: absent or already this contact's) and checks
+//     that SFDCSUPPRESS#{id} is absent;
+//   - delete removes every index row pointing at the contact and writes its
+//     suppression row, so the sync never recreates it.
+//
+// Changing or clearing an existing link is the caller's responsibility: the
+// service carries the stored SFDC fields over on generic updates.
 func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, user string, c *model.AccountContact, op string) error {
+	if op != "delete" {
+		if err := validSfdcLink(c); err != nil {
+			return err
+		}
+	}
 	exists, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
 	if err != nil {
 		return err
@@ -285,6 +314,7 @@ func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, u
 		return err
 	}
 	items := []types.TransactWriteItem{open, check(model.PrefixMember + user)}
+	kinds := append([]error(nil), contactItemErrors...)
 	nextRevision := ""
 	if op == "delete" || op == "update" {
 		condition := expression.AttributeExists(expression.Name("PK")).And(expression.Name("revision").Equal(expression.Value(c.Revision)))
@@ -305,6 +335,24 @@ func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, u
 		}
 		if op == "delete" {
 			items = append(items, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: contactKey(account, contactPrefix+c.ContactID), ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}})
+			// The revision condition above pins the contact this index read
+			// describes: linking it changes its revision.
+			links, err := r.contactSfdcLinks(ctx, account, c.ContactID)
+			if err != nil {
+				return err
+			}
+			for _, id := range links {
+				del, err := r.sfdcIndexDelete(account, id, c.ContactID)
+				if err != nil {
+					return err
+				}
+				put, err := r.sfdcSuppressPut(account, id)
+				if err != nil {
+					return err
+				}
+				items = append(items, del, put)
+				kinds = append(kinds, ErrConditionFailed, nil)
+			}
 		} else {
 			items = append(items, types.TransactWriteItem{Update: &types.Update{TableName: aws.String(r.tableName), Key: contactKey(account, contactPrefix+c.ContactID), ConditionExpression: expr.Condition(), UpdateExpression: expr.Update(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}})
 		}
@@ -317,12 +365,20 @@ func (r *DynamoDBRepository) WriteAccountContact(ctx context.Context, account, u
 	} else {
 		return errors.New("invalid contact operation")
 	}
+	if op != "delete" && c.SfdcContactID != "" {
+		reserve, err := r.sfdcReserve(account, c, op == "update")
+		if err != nil {
+			return err
+		}
+		items = append(items, reserve...)
+		kinds = append(kinds, ErrSfdcAlreadyLinked, ErrSfdcSuppressed)
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		if merging := mergeFenceError(err); merging != nil {
 			return merging
 		}
-		return classifyContactTransaction(err)
+		return classifyContactItems(err, kinds)
 	}
 	if op == "update" {
 		c.Revision = nextRevision
