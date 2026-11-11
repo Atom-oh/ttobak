@@ -210,4 +210,10 @@ func TestListAccountCalendarUndecryptableRows(test *testing.T) {
 	if _, err := svc.ListAccountCalendar(context.Background(), "u1", "acc_1", calendarAccountQuery()); !errors.Is(err, ErrCalendarEncryption) {
 		test.Fatalf("no decryptable row at all must not look like an empty calendar: %v", err)
 	}
+	// One undecryptable meeting next to a readable one fails the page closed too.
+	store.sharePage.Groups = append(store.sharePage.Groups, []repository.CalendarShareRow{
+		calendarTestShareRow(test, svc, "acc_1", "u2", "shared", "Fine", start.Add(time.Hour))})
+	if _, err := svc.ListAccountCalendar(context.Background(), "u1", "acc_1", calendarAccountQuery()); !errors.Is(err, ErrCalendarEncryption) {
+		test.Fatalf("a partly undecryptable page must not be returned as complete: %v", err)
+	}
 }
