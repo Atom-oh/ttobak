@@ -814,7 +814,7 @@ behavior; configuration wiring does not establish deployed activation.
 `SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED` only to API. Its rule requires privacy
 writer `1`, and its value also binds the immutable API version. Deploy compatible
 Go/Python approval readers with this flag disabled before enabling owner
-disclosure of current completed notes to one Account (ADR-059). Preserve existing
+disclosure of current completed notes to one Account (ADR-029, owner approval). Preserve existing
 writer/reader/cutoff parameters; the new flag does not change email/pending gates.
 
 Grant fences, pending/publication guards, owner sharing-safe regeneration and its
@@ -917,7 +917,7 @@ Resources:
     `PK` / `SK`, discovers `CHILDREF#` candidates. IAM cannot constrain the sort-key
     prefix; the application's bounded query selects it and canonical reads grant
     access. The limited ability to enumerate opaque membership keys is recorded in
-    ADR-060. Inherited grants receive a `TransactGetItems` confirmation using the
+    ADR-012. Inherited grants receive a `TransactGetItems` confirmation using the
     existing projected `GetItem` permissions.
 - Dedicated code bucket: versioned, SSE-S3, TLS-only, all public access
   blocked, retained on delete, no lifecycle rule.
@@ -1006,7 +1006,7 @@ from the companion stack is a one-time cutover ([Billing release](runbooks/billi
 
 ### Billing behaviors on the TTOBAK distribution
 
-FrontendStack gains the Billing behaviors (ADR-056) only through context
+FrontendStack gains the Billing behaviors (ADR-012) only through context
 strings, never stack exports, so the HTTP-origin release coordinator deploys it
 the same way with or without Billing:
 

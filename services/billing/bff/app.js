@@ -108,7 +108,7 @@ function createApp({ s3, ddb, env, authenticate, authenticateReading = authentic
   const { DATA_BUCKET, PUBLIC_URL, ACCOUNT_TABLE, PLATFORM_TABLE } = env;
 
   const store = createStore({ ddb, table: PLATFORM_TABLE });
-  // Billing-only ancestor sharing; INDEX rows never grant access (ADR-060).
+  // Billing-only ancestor sharing; INDEX rows never grant access (ADR-012).
   const access = createAccess({ ddb, ttobakTable: ACCOUNT_TABLE, now });
 
   // ---------- S3 reads ----------
@@ -256,7 +256,7 @@ function createApp({ s3, ddb, env, authenticate, authenticateReading = authentic
   api.use(authenticate); // sets req.sub and req.user, or answers 401
   api.use(wrap(async (req, res, next) => {
     try {
-      req.accounts = await accountsFor(req.sub); // membership is re-read on every request (ADR-056), so removed members lose access at once
+      req.accounts = await accountsFor(req.sub); // membership is re-read on every request (ADR-012), so removed members lose access at once
     } catch (e) {
       console.error('access lookup failed', e.name);
       return res.status(503).json({ error: 'access check unavailable' });

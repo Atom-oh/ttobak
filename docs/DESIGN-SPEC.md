@@ -136,7 +136,13 @@ counts down 30 seconds before stopping and uploading, with keep recording and st
 now actions. The native waveform is drawn on a -60..-10 dBFS scale. Nothing records without the user's confirmation; the
 start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
-(ADR-017). In System Audio mode, `NativeMicSelector` offers automatic (follow the
+(ADR-017). Settings also shows `IntakeSettings` (Mac local intake, ADR-003) only in
+an app build with the intake commands: adapter state and update, node path when
+missing, selected servers, schedule (off, hourly, daily, twice daily) with a
+warning when the CLI LaunchAgent is also installed, per-source status, setup with
+private-calendar consent and skip toggles, run now, login, cancel and a live
+progress log. A failed state read shows a one-line error. 
+In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
 supports it (ADR-017, #621), the record page also reacts to native events: the
@@ -341,7 +347,7 @@ Activated ancestor access displays a read-only label and its granting Account
 controls (not delete or audio upload) to every member (ADR-016 2026-11-06
 amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
-membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
+membership. Billing is the ADR-012 exception: the BFF's authorized entries allow
 direct and ancestor team members to view and upload. Its COT selector describes
 the required Current State/COH workbooks and COT360 HTML, supporting both three-
 and five-file ZIPs. Preserve independently granted editing controls. Account discovery
@@ -704,7 +710,10 @@ period control (this week / quarter / this year, default this week) drives
   "change" when another account is selected. Manual mappings are not listed.
   `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
-- Source freshness: one line per `sourceFreshness` entry, "last collected" in
+- Source freshness: the `IntakeRunControl` collect button sits here (Mac app
+  only; a browser shows a hint, an older app build shows nothing, a failed state
+  read shows a one-line error). A run that ends with success or `PARTIAL_FAILURE`
+  reloads the missed list, mappings and accounts. One line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or
   `ttobak-mcp intake calendar`.
 

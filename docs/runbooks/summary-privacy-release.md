@@ -15,7 +15,7 @@ contract, not completed production acceptance.
 | `SummaryPrivacyLegacyMemberCutoff` | empty | `SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF` on API and QA |
 | `SummaryOwnerAccountShareEnabled` | `0` | `SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED` on API only |
 
-ADR-059's owner disclosure flag requires privacy writer `1`. Deploy Go/Python
+The ADR-029 owner approval disclosure flag requires privacy writer `1`. Deploy Go/Python
 approval readers with the new flag `0`, verify exact API live and QA artifacts,
 then enable it and verify the new immutable API alias/configuration. Preserve all
 existing flags, fixed cutoff, model and origin parameters. Never reset an existing
@@ -42,7 +42,7 @@ their separate scope.
 
 The steps below apply only to the first privacy rollout, with owner disclosure
 disabled and unapproved-output fixtures. For an already activated deployment,
-use the incremental ADR-059 sequence above and preserve its existing privacy
+use the incremental ADR-029 (owner approval) sequence above and preserve its existing privacy
 flags and fixed cutoff.
 
 1. Capture current main/deployment activity, all live Lambda versions/configuration,

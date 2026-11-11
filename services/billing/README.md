@@ -1,12 +1,12 @@
 # Billing service
 
-Billing Insight inside TTOBAK (ADR-056). Three parts:
+Billing Insight inside TTOBAK (ADR-012). Three parts:
 
 - `bff/`: Express BFF served under `/api/billing` as a Lambda Web Function
   (`index.js`). `lib/auth.js` verifies the TTOBAK Cognito JWT from
   `Authorization: Bearer` only; `lib/access.js` grants read and upload access
   through current direct or ancestor Account membership
-  ([ADR-060](../../docs/decisions/ADR-060-billing-shared-team-access.md)).
+  ([ADR-012](../../docs/decisions/ADR-012-billing-origin-identity-and-team-access.md)).
   Child references discover candidates only; canonical membership and complete
   parent chains authorize requests.
 - `page/`: dashboard and upload pages, served at `/billing-app/` (below).
@@ -34,7 +34,7 @@ companion stack on 2026-11-04.
 Changes against the source in this import: pages, cookies, OAuth hand-off and the
 Lambda client are removed; every route moves under `/api/billing`; `createApp`
 takes an injected `authenticate` middleware. `lib/access.js` was later rewritten
-from the imported hierarchy rule to canonical TTOBAK membership; ADR-060 extends
+from the imported hierarchy rule to canonical TTOBAK membership; ADR-012 extends
 Billing access to canonical ancestor membership.
 
 ## Tests

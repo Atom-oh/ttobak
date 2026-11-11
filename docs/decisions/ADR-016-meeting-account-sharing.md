@@ -49,7 +49,7 @@ Linking a meeting to an account and publishing it to the account's team are sepa
     transaction conditions, with the actor's direct `MEMBER#` row pinned whether or
     not summary-privacy writers are enabled); moving
     to another account or publishing an unpublished meeting stays creator-only.
-    Only the creator mints the ADR-059 owner approval; a member republish changes
+    Only the creator mints the ADR-029 owner approval; a member republish changes
     no audience and publishes without approval.
   - Predecessor links must be the creator's meetings. A member may link only
     predecessors published to the same account (never one readable only through

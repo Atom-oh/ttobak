@@ -6,7 +6,7 @@ Status: historical implementation plan; current API references own the contract.
 
 **Goal:** Let external MCP clients read authorized customer Billing metadata, datasets and reports for meeting preparation.
 
-**Architecture:** ADR-056 caller-token CloudFront reads, a bounded Billing route with current connector grants, and three read-only MCP tools. Reuse connector authorization instead of copying its rules.
+**Architecture:** ADR-012 caller-token CloudFront reads, a bounded Billing route with current connector grants, and three read-only MCP tools. Reuse connector authorization instead of copying its rules.
 
 **Tech Stack:** Node.js 24, Express, TypeScript MCP, AWS SDK v3, Cognito, CDK.
 

@@ -145,7 +145,7 @@ func TestListMeetings_LaterTeamMemberReadsPublishedDerivatives(t *testing.T) {
 			}
 			item := got.Meetings[0]
 			// Account publication shares the current summary regardless of
-			// privacy provenance (ADR-049 2026-11-06 amendment).
+			// privacy provenance (ADR-029 source provenance, 2026-11-06 amendment).
 			if item.Summary != meeting.Content || len(item.Tags) != 1 || item.Sentiment != meeting.Sentiment {
 				t.Fatalf("published derived view withheld (safe=%v): %+v", safe, item)
 			}
