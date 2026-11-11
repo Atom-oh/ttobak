@@ -10,14 +10,13 @@ Linking a meeting to an account and publishing it to the account's team are sepa
 
 ### Status and dated amendments
 
-- Status: Accepted; provenance hardened by [ADR-016](ADR-016-meeting-account-sharing.md).
+- Status: Accepted; provenance hardened by the share-provenance section below.
   Membership permissions and hierarchy follow ADR-034 and ADR-036.
 - Decision date: Not recorded in the original ADR.
 - Implementation checked: 2026-09-13.
 - Amendment (2026-09-13): the SA workflow's private relink supersedes the former preservation
   of team publication; see the current behavior below.
-- Amendment (2026-10-20): [ADR-016](ADR-016-meeting-account-sharing.md)
-  supersedes the separate meeting-detail link/share controls with one explicit
+- Amendment (2026-10-20): the speaker-correction section below supersedes the separate meeting-detail link/share controls with one explicit
   publication action. Private classification API semantics remain unchanged.
 - Amendment (2026-11-06, accepted following explicit user authorization in the
   delivery session, including inherited members): publication grants members **edit**,
@@ -29,7 +28,9 @@ Linking a meeting to an account and publishing it to the account's team are sepa
   membership lasts. Resummary capture fences the granting member row (and, for
   inherited access, every traversed parent link) in its snapshot transaction.
 - Amendment (2026-11-06, management, same authorization): live members (direct
-  or inherited) also get every creator management action except delete. For
+  or inherited) also get every creator management action except delete. Linking a meeting to an account and
+  publishing it there still require the actor's direct membership of that
+  account; inherited access never classifies a meeting into another account. For
   inherited members this supersedes ADR-058's invitation/linking restriction for
   meetings only (see its 2026-11-06 amendment).
   `resolveMeetingManager` returns the creator's canonical meeting; writes keep
