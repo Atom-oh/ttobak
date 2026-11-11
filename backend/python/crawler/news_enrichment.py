@@ -41,65 +41,18 @@ MAX_TOTAL_EXCERPT_CHARS = 1000
 MAX_VERBATIM_RUN_CHARS = 200
 RELEVANCE_THRESHOLD = 0.75
 _NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:[,.]\d+)*(?:%|퍼센트)?")
-# A Korean briefing restates English figures with Korean units: "236.8 billion
-# won" as 2,368 eok, "10 million" as 1,000 man, "July" as month 7. Such a fact
-# number is grounded only when its exact scaled value appears in the cited
-# excerpt; the raw-digit match above remains sufficient. English number words
-# ("six", "twenty-six") never ground a digit: compounds and fractions made every
-# word-matching rule accept counts the source does not state.
-# Same digit span and boundary as _NUMBER, so every token the base gate checks
-# is still checked: "2026.11.11" stays one token and ".5%" yields "5%".
-_SCALED_NUMBER = re.compile(
-    r"(?<![A-Za-z0-9])(\d+(?:[,.]\d+)*)(?:(%|퍼센트)|(?:\s?(thousand|million|billion|trillion)"
-    r"(?![A-Za-z-])(?!\s?(?:hundred|thousand|million|billion|trillion)(?![A-Za-z]))"
-    r"|([백천만억조]+))?(월)?)", re.IGNORECASE)
-# A single plain number: grouped thousands or digits, with at most one decimal.
-_PLAIN_NUMBER = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
-_SCALES = {"thousand": 10 ** 3, "million": 10 ** 6, "billion": 10 ** 9, "trillion": 10 ** 12,
-           "백": 10 ** 2, "천": 10 ** 3, "만": 10 ** 4, "억": 10 ** 8, "조": 10 ** 12}
-# Full capitalized English month names or their abbreviations, so neither the
-# modal "may" nor names such as "Jane" or "Mary" become months.
-_MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July",
-                "August", "September", "October", "November", "December")
-_MONTH = re.compile(r"(?<![A-Za-z])(" + "|".join(
-    _MONTH_NAMES + ("Sept", "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep",
-                    "Oct", "Nov", "Dec")) + r")\.?(?![A-Za-z])")
-_MONTHS = {name[:3].lower(): index for index, name in enumerate(_MONTH_NAMES, 1)}
-
-def _number_tokens(text):
-    """Yield (raw, key) for each _NUMBER token: raw is the base gate's
-    comma-free digits (with any percent sign); key is an exact scaled value or
-    month number, or None when only the raw form can ground it."""
-    for match in _SCALED_NUMBER.finditer(text):
-        digits, percent, english, korean, month = match.groups()
-        raw = digits.replace(",", "")
-        if percent:
-            yield raw + percent, None
-            continue
-        if not _PLAIN_NUMBER.fullmatch(digits) or text[match.start() - 1:match.start()] in (".", ","):
-            # Dotted dates, versions and other sequences, and partial numbers
-            # such as the 5 of ".5 million": only the raw form can ground them.
-            yield raw, None
-            continue
-        value = Decimal(raw)
-        if month and not (english or korean):
-            yield raw, ("month", value)
-            continue
-        if english:
-            value *= _SCALES[english.lower()]
-        for unit in korean or "":
-            # Consecutive Korean units multiply: 5천만 is 50,000,000.
-            value *= _SCALES[unit]
-        yield raw, ("value", value)
 
 
 def _unsupported_numbers(fact, cited):
-    """Fact numbers absent from the cited excerpt, raw or as an exact scaled value."""
-    raw = {n.replace(",", "") for n in _NUMBER.findall(cited)}
-    keys = {key for _, key in _number_tokens(cited) if key is not None}
-    keys.update(("month", Decimal(_MONTHS[m.group(1)[:3].lower()])) for m in _MONTH.finditer(cited))
-    return [token for token, key in _number_tokens(fact)
-            if token not in raw and (key is None or key not in keys)]
+    """Fact number tokens absent from the cited excerpt's raw tokens.
+
+    Grounding is verbatim only (comma-free digits, with any percent sign): an
+    equivalence such as Korean units or month names was tried and every
+    variant accepted figures the source did not state, so the prompt instead
+    asks the model to copy numbers exactly as written or omit them.
+    """
+    supported = {n.replace(",", "") for n in _NUMBER.findall(cited)}
+    return [n for n in (m.replace(",", "") for m in _NUMBER.findall(fact)) if n not in supported]
 
 
 _FIELDS = {
@@ -356,9 +309,11 @@ Evidence URLs and dates must exactly match the supplied sources. Each excerpt mu
 an exact substring from that same URL's body in its original language (never
 translate or reformat it): one sentence or clause of at most 240 characters; total
 excerpts at most 1000 characters. Numbers in facts must appear in their cited
-excerpts: copy each number as written there, or convert units exactly (236.8 billion
-= 2,368억, 10 million = 1,000만, July = 7월); never round or estimate. Do not turn
-a number written in words into digits; keep it in words or leave it out.
+excerpts: copy every number exactly as written there, with the same digits,
+separators and unit words (keep "236.8 billion won", never convert it to 2,368억;
+keep "July" or "Nov. 5" as written instead of 7월 or 11월 5일). Do not turn a
+number written in words into digits. Omit any number you cannot copy verbatim;
+never round, convert or estimate.
 Use at least two questions/actions in total. Paraphrase prose; do not copy long
 passages. If requireRelevance=true, assess whether the configured organization/topic
 is the article's subject, not a namesake or passing mention. Do not invent AWS relevance.
