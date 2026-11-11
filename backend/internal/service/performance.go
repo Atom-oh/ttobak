@@ -54,6 +54,14 @@ type PerformanceStore interface {
 	DeleteAccountMappingIfAutomatic(ctx context.Context, userID, sfdcAccountID string) error
 	GetPerformanceGoals(ctx context.Context, userID string, year int) (*model.PerformanceGoals, error)
 	PutPerformanceGoals(ctx context.Context, userID string, goals model.PerformanceGoals) error
+	// PutPerformanceReport overwrites the owner's report for its period key.
+	PutPerformanceReport(ctx context.Context, userID string, report model.PerformanceReport) error
+	// GetPerformanceReport returns nil when no live report is stored.
+	GetPerformanceReport(ctx context.Context, userID, periodKey string) (*model.PerformanceReport, error)
+	// ListPerformanceReports returns summary fields of the owner's live reports.
+	ListPerformanceReports(ctx context.Context, userID string) ([]model.PerformanceReportSummary, bool, error)
+	// DeletePerformanceReport returns ErrConditionFailed when no row exists.
+	DeletePerformanceReport(ctx context.Context, userID, periodKey string) error
 }
 
 // PerformanceAccountReader is the AccountService read check used to confirm
