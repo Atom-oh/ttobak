@@ -22,14 +22,14 @@ export function AppLayout({ activePath, children, showMobileNav = true, breadcru
       </div>
 
       {/* Main Content */}
-      <main className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden overflow-y-auto ${showMobileNav ? 'workspace-main-with-nav' : ''}`}>
+      <main className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden ${showMobileNav ? 'workspace-main-with-nav' : ''}`}>
         {/* Desktop Header - hidden on mobile */}
         <div className="hidden lg:block shrink-0">
           <DesktopHeader activePath={activePath} breadcrumbs={breadcrumbs} isRecording={isRecording} />
         </div>
 
         {/* Page Content */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 animate-in">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden overflow-y-auto animate-in">
           {children}
         </div>
       </main>

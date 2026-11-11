@@ -50,10 +50,13 @@ use CSS variants.
 
 `AppLayout` uses the dynamic viewport height and a shrinking main column beside
 the 256px desktop sidebar. Its mobile main area reserves the same height and
-safe-area inset as `MobileNav`; chat inputs and independently scrolling detail
-panes must stay above that navigation.
+safe-area inset as `MobileNav`. The bounded content wrapper owns page scrolling;
+the header and main shell remain outside that scroll region. List continuation
+controls, chat inputs, and independently scrolling detail panes must stay above
+the navigation.
 
-`globals.css` owns `--workspace-gutter` (16px below 1024px, 24px above it) and
+`globals.css` owns `--workspace-gutter` (16px below the `64rem` desktop breakpoint,
+24px at and above it, matching Tailwind's `lg`) and
 `.workspace-page` / `.workspace-inline-gutter`. Workspace list, dashboard and
 detail wrappers fill the available width instead of using a global reading cap.
 Use `.workspace-card-grid` for adaptive project cards and

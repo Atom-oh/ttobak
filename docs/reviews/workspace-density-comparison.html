@@ -18,6 +18,10 @@
   .comparison.mobile { max-width: 390px; aspect-ratio: 390/844; }
   .comparison img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
   #after { clip-path: inset(0 50% 0 0); }
+  #divider { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); background: #3211d4; box-shadow: 0 0 0 1px white; pointer-events: none; }
+  .capture-label { position: absolute; top: 8px; padding: 3px 8px; color: white; background: #0f172a; border-radius: 4px; font-size: 14px; pointer-events: none; }
+  #after-label { left: 8px; }
+  #before-label { right: 8px; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr)); gap: 24px; }
   figure { margin: 0; }
   figure img { width: 100%; height: auto; border: 1px solid #64748b; }
@@ -38,6 +42,9 @@
   <div class="comparison" id="comparison">
     <img id="before" src="assets/workspace-density/projects-before.png" alt="Actual Projects screen before: centered two-column list">
     <img id="after" src="assets/workspace-density/projects-after.png" alt="Actual Projects screen after: full-width three-column list">
+    <span id="divider" aria-hidden="true"></span>
+    <span id="after-label" class="capture-label" aria-hidden="true">After</span>
+    <span id="before-label" class="capture-label" aria-hidden="true">Before</span>
   </div>
   <h2>Additional actual screens</h2>
   <div class="gallery">
@@ -54,12 +61,16 @@
   position.addEventListener('input', () => {
     after.style.clipPath = `inset(0 ${100 - Number(position.value)}% 0 0)`;
     document.getElementById('value').value = `${position.value}%`;
+    document.getElementById('divider').style.left = `${Number(position.value)}%`;
+    document.getElementById('divider').hidden = Number(position.value) === 0 || Number(position.value) === 100;
+    document.getElementById('after-label').hidden = Number(position.value) === 0;
+    document.getElementById('before-label').hidden = Number(position.value) === 100;
   });
   surface.addEventListener('change', () => {
     const mobile = surface.value === 'chat-mobile';
     document.getElementById('comparison').classList.toggle('mobile', mobile);
-    document.getElementById('before').src = `assets/workspace-density/${surface.value}-before.png`;
-    after.src = `assets/workspace-density/${surface.value}-after.png`;
+    document.getElementById('before').src = mobile ? 'assets/workspace-density/chat-mobile-before.png' : 'assets/workspace-density/projects-before.png';
+    after.src = mobile ? 'assets/workspace-density/chat-mobile-after.png' : 'assets/workspace-density/projects-after.png';
     document.getElementById('before').alt = mobile ? 'Actual mobile Assistant before: composer covered by navigation' : 'Actual Projects before: centered two-column list';
     after.alt = mobile ? 'Actual mobile Assistant after: visible composer above navigation' : 'Actual Projects after: full-width three-column list';
   });

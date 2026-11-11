@@ -135,7 +135,7 @@ body {
   grid-column: 1 / -1;
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 64rem) {
   :root {
     --workspace-gutter: 1.5rem;
   }
