@@ -76,14 +76,19 @@ type TermsAnalysis struct {
 	AcceptedTerms       []TermsAcceptedTerm `dynamodbav:"acceptedTerms,omitempty" json:"-"`
 	// AccountIDs are the Accounts this meeting's terms were merged into,
 	// recorded before each Account merge; the deletion sweep cleans each
-	// ACCOUNT# partition for AccountSweepKeys. The set only grows, so an
-	// Account the meeting was later unlinked from is still swept.
+	// ACCOUNT# partition for AccountSweepKeys. Only the relink sweep
+	// (SweepMeetingAccountTerms) removes an entry, after that Account's
+	// partition is clean of this meeting.
 	AccountIDs []string `dynamodbav:"accountIds,omitempty,stringset" json:"-"`
 	// AccountAcceptedTerms are the term keys merged into those Accounts,
 	// recorded with AccountIDs before the merge. The personal merge can skip
 	// a key (a personal manual or tombstoned term) that the Account merge
 	// still observes, so AcceptedTerms alone does not cover the Account.
 	AccountAcceptedTerms []string `dynamodbav:"accountAcceptedTerms,omitempty,stringset" json:"-"`
+	// AccountRecords counts RecordTermsAccount calls. The relink sweep
+	// (ADR-008 FU4) removes a cleaned Account from AccountIDs only while it
+	// is unchanged, so a record that lands during the sweep keeps its entry.
+	AccountRecords int64 `dynamodbav:"accountRecords,omitempty" json:"-"`
 }
 
 // AccountSweepKeys is the union of AcceptedTerms and AccountAcceptedTerms in

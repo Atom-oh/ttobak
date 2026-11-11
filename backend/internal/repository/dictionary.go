@@ -26,7 +26,8 @@ var (
 	ErrDictObservationExists = errors.New("dictionary observation already recorded")
 	ErrLegacyBlobChanged     = errors.New("legacy dictionary changed or was migrated")
 	// ErrDictSourceMeetingGone: the observation's source meeting no longer
-	// exists, so nothing was written (deletion cleanup already ran or will).
+	// exists or, for an ACCOUNT# observation, is no longer linked to that
+	// Account, so nothing was written (deletion or relink cleanup owns it).
 	ErrDictSourceMeetingGone = errors.New("dictionary observation source meeting is gone")
 )
 
@@ -628,18 +629,29 @@ func (r *DictionaryRepository) CreateAutoTermChecked(ctx context.Context, term *
 // withSourceMeetingCheck appends a ConditionCheck that the observation's
 // source meeting (USER#{owner}/MEETING#{meeting}) still exists, so a worker
 // that outlives a meeting deletion cannot leave observations behind (A8).
-// KB and research observations carry no meetingId and get no check.
+// KB and research observations carry no meetingId and get no check. An
+// observation in an ACCOUNT# partition also requires the meeting to still be
+// linked to that Account (ADR-008 FU4): a run that read the link before a
+// relink cannot write into the Account the meeting left, so the relink sweep,
+// which runs after the relink commits, sees every write it must clean.
 func (r *DictionaryRepository) withSourceMeetingCheck(items []types.TransactWriteItem, obs *model.DictObservation) ([]types.TransactWriteItem, error) {
 	if obs.OwnerID == "" || obs.MeetingID == "" {
 		return items, nil
 	}
-	expr, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	condition := expression.AttributeExists(expression.Name("PK"))
+	if scope, accountID, _ := model.TermScopeOf(obs.PK); scope == model.TermScopeAccount {
+		condition = condition.And(expression.Name("accountId").Equal(expression.Value(accountID)))
+	} else if strings.HasPrefix(obs.PK, model.PrefixAccount) {
+		return nil, fmt.Errorf("%w: malformed account partition", ErrInvalidInput)
+	}
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return nil, err
 	}
 	return append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixUser+obs.OwnerID, model.PrefixMeeting+obs.MeetingID),
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
 	}}), nil
 }
 
