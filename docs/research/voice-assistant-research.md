@@ -34,4 +34,4 @@ MCP and a macOS wrapper are no longer merely proposed capabilities.
 A new provider/model decision needs current primary documentation, a reviewed
 representative audio set, measured loss/latency/cost and data-egress analysis.
 The current system is described in [architecture](../architecture.md), with
-recording/diarization decisions in ADR-006/009/024/030.
+recording/diarization decisions in ADR-006/009/024.

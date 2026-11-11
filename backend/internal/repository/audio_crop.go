@@ -56,7 +56,7 @@ func (r *DynamoDBRepository) CreateAudioCrop(ctx context.Context, source, croppe
 }
 
 // CreateAudioCropForTeam creates a managing member's crop copy, published to
-// the source's team account, in one transaction (ADR-047 note): the source
+// the source's team account, in one transaction (ADR-014): the source
 // must still match and still be published to that account, the actor's live
 // grant (direct member row, or ancestor member row plus parent links) must be
 // unchanged, and the copy and its team MEETINGREF are written together. The

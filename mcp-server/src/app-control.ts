@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-// Client for the TTOBAK Mac app's local control socket (ADR-046). The app
+// Client for the TTOBAK Mac app's local control socket (ADR-024). The app
 // records system audio mixed with the microphone and owns sign-in, meeting
 // creation and upload; this adapter only asks it to start/stop and reads
 // status. Stdio only: the HTTP transport never exposes these tools.

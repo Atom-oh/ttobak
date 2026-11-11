@@ -213,7 +213,7 @@ local edge locations; class 100 excluded Asia and served Seoul from Europe.
 
 Assets and KB buckets use S3-managed encryption, versioning, retain policies and
 Block Public Access. Media reads use an OAC allowlist for audio/, audio-playback/,
-images/, files/, docs/ and docs-pdf/ (audio-playback/ holds ADR-062 remuxed copies,
+images/, files/, docs/ and docs-pdf/ (audio-playback/ holds ADR-014 remuxed copies,
 with its own 90-day IA transition). New categories must extend that allowlist; transcript spill
 objects are not public media. Signed GETs use CloudFront with an S3 fallback when
 signing material is unavailable; signed upload PUTs still target S3 directly.
@@ -222,7 +222,7 @@ Conditional transcript writers use immutable `{field}.{32-lowercase-hex}.txt`
 keys under the authorized meeting's transcripts/ prefix; legacy fixed keys remain
 readable. Bucket versioning is not what makes those new keys immutable. Failed
 definite conditional writes clean only new spills; ambiguous writes retain them.
-Deploy Go/QA reader compatibility before writers (ADR-037).
+Deploy Go/QA reader compatibility before writers (ADR-013).
 
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
@@ -330,7 +330,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom AccountMergeRequested, ttobak.analysis | summarize, account merge worker only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
-| S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-062; skips checkpoints) |
+| S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-014; skips checkpoints) |
 | One-minute ttobak-kb-index-tick | kb; configured enabled by the checked-in CDK app, all mode |
 | Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
@@ -344,7 +344,7 @@ ETag/version metadata and conditional preview replacement bind converted bytes.
 Canonical readers validate that binding; the preview URL still checks existence.
 Cross-tenant original/preview reads and parser risk remain (ADR-022).
 
-audio-remux (ADR-062) writes `audio-playback/` copies with `ffmpeg -c copy`,
+audio-remux (ADR-014) writes `audio-playback/` copies with `ffmpeg -c copy`,
 leaving the source untouched. It reads `audio/*` and `audio-playback/*`, writes
 only `audio-playback/*`, has no DynamoDB access and runs in the same isolated
 subnets. It downloads the HEAD-observed source version, publishes only if that
@@ -440,7 +440,7 @@ cluster-only ListTasks call does not match a container-instance resource);
 RunTask and PassRole are unchanged. Existing AiStack table and bucket grants cover
 the scan, claims, transactional deletes, transcript self-copy and object deletes.
 Deletions leave noncurrent object versions in the versioned bucket. See the
-[ADR-031 amendment](decisions/ADR-031-summarize-timeout-resilience.md#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention).
+[ADR-013 (scheduled STT recovery)](decisions/ADR-013-summary-generation-and-publication.md).
 
 Audio cropping uses the private `ttobak.audio` / `AudioCropRequested` EventBridge
 rule to the existing transcribe Lambda and production Whisper task. It adds no

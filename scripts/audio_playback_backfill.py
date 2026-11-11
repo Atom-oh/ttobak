@@ -1,4 +1,4 @@
-"""Backfill ADR-062 seekable playback copies for existing meeting audio.
+"""Backfill ADR-014 seekable playback copies for existing meeting audio.
 
 Scans ttobak-main meeting rows for their current audioKey/audioKeys, keeps the
 WebM/Ogg keys that get a playback copy (same rule as

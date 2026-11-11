@@ -272,7 +272,7 @@ describe('AiStack', () => {
     }
   });
 
-  test('audio remux reads audio and writes only playback copies (ADR-062)', () => {
+  test('audio remux reads audio and writes only playback copies (ADR-014)', () => {
     const statements = Object.values(template.findResources('AWS::IAM::Policy'))
       .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakAudioRemuxRole'))
       .flatMap((policy) => policy.Properties.PolicyDocument.Statement);

@@ -35,7 +35,7 @@ The checklist's `Promise.allSettled` parallel uploader, append indices based on 
 parts, absolute cross-track seek, structured `fromMeeting` action badges, and
 30-minutes-per-part expiry were proposed tasks. They are not mandatory patterns
 for unrelated PRs, and current core multipart support does not prove those extensions.
-The current uploader is sequential; current retry/expiry follows ADR-031.
+The current uploader is sequential; current retry/expiry follows ADR-013.
 
 Predecessor context is now additionally constrained by collaborator confidentiality.
 Having same-owner source IDs is insufficient if the destination meeting is shared.
@@ -59,8 +59,8 @@ The [uploader](../../../frontend/src/components/AudioUploader.tsx),
 actual UI behavior. [GatewayStack](../../../infra/lib/gateway-stack.ts) and
 [AiStack](../../../infra/lib/ai-stack.ts) define event/IAM wiring.
 
-Follow [ADR-014](../../../docs/decisions/ADR-014-multi-file-audio-and-linked-meetings.md),
-[ADR-031](../../../docs/decisions/ADR-031-summarize-timeout-resilience.md), and the
+Follow [ADR-014](../../../docs/decisions/ADR-014-meeting-audio-files-and-lookup.md),
+[ADR-013](../../../docs/decisions/ADR-013-summary-generation-and-publication.md), and the
 [current documentation map](../../../docs/README.md) rather than rerunning old
 copied build/deployment steps. No source changes or deployment are authorized by
 this historical task list.

@@ -370,7 +370,7 @@ export const meetingsApi = {
     api.get<{ audioUrl?: string; audioUrls?: string[] }>(`/api/meetings/${id}/audio`),
 
   /**
-   * Per ADR-014 Phase 6: link this meeting to one or more chronologically prior meetings.
+   * Linked meetings (ADR-014): link this meeting to one or more chronologically prior meetings.
    * The summarize Lambda will prepend the linked meetings' summaries to the prompt,
    * giving the LLM cross-meeting context for follow-up discussions.
    */

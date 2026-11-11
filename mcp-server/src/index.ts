@@ -46,7 +46,7 @@ export interface ServerOptions {
   clientId: string;
   /** Local microphone recorder; stdio only (ADR-045). */
   recorder?: Recorder;
-  /** TTOBAK Mac app control socket; stdio only (ADR-046). */
+  /** TTOBAK Mac app control socket; stdio only (ADR-024). */
   appControl?: { socketPath: string; timeoutMs?: number };
 }
 

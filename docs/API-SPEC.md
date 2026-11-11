@@ -751,7 +751,7 @@ Conditional transcript/speaker edits publish new immutable
 matching database update. Conflicts return 409; ambiguous database failures retain
 new objects because the write may have committed. Existing referenced objects
 remain intact. Go and QA readers accept strictly validated legacy and versioned
-keys; deploy compatible readers before writers (ADR-037).
+keys; deploy compatible readers before writers (ADR-013).
 
 `PUT /api/meetings/{meetingId}/speakers` permits owners, direct read/edit
 recipients and current members of the published account team to correct speaker
@@ -1678,7 +1678,7 @@ rejected copies and surfaces cleanup failures. Ambiguous writes retain their cop
 
 `GET /api/meetings/{meetingId}/audio` returns `audioUrl` (single file) or
 `audioUrls` (ordered parts, empty slots skipped) as one-hour signed URLs. For a
-WebM/Ogg key it signs the ADR-062 `audio-playback/` copy only when that copy's
+WebM/Ogg key it signs the ADR-014 `audio-playback/` copy only when that copy's
 `source-etag` and `source-version-id` equal the source's current HEAD; a missing,
 stale or unreadable copy falls back to the original key. The response shape is
 unchanged and the original remains the STT/crop/recovery input.

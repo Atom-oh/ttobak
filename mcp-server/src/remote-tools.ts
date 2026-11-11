@@ -20,7 +20,7 @@ export function mutationReceipt(name: string, value: string): string | undefined
 }
 
 // Tools that touch the MCP host's machine (session files, microphone, local
-// audio files, the Mac app's control socket). ADR-045/046: the HTTP transport
+// audio files, the Mac app's control socket). ADR-045/024: the HTTP transport
 // never exposes them.
 export const LOCAL_ONLY_TOOLS = [
   ...CALENDAR_TOOL_NAMES,

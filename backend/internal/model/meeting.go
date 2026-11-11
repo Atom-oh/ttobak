@@ -75,7 +75,7 @@ type Meeting struct {
 	AllPartsEmittedAt string `dynamodbav:"allPartsEmittedAt,omitempty"`
 	// SummarizeRetryClaimedAt is the atomic-claim lock for reprocessing a
 	// stale `summarizing` meeting (see repository.ClaimSummarizeRetry,
-	// ADR-031) -- must round-trip through this struct exactly like
+	// ADR-013) -- must round-trip through this struct exactly like
 	// AllPartsEmittedAt above: without a field here, a whole-item
 	// UpdateMeeting (PutItem) write during reprocessing would silently drop
 	// the claim, letting a second concurrent redelivery re-claim and

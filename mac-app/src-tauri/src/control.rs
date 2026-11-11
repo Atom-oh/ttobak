@@ -1,4 +1,4 @@
-//! Local control socket (ADR-046): lets a same-user process such as the TTOBAK
+//! Local control socket (ADR-024): lets a same-user process such as the TTOBAK
 //! MCP server start/stop an app recording and read its status.
 //!
 //! `~/Library/Application Support/ttobak/control.sock` (directory 0700, socket

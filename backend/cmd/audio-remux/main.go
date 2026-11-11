@@ -1,4 +1,4 @@
-// audio-remux writes ADR-062 seekable playback copies of browser-recorded
+// audio-remux writes ADR-014 seekable playback copies of browser-recorded
 // meeting audio. It is triggered by EventBridge S3 Object Created events for
 // WebM/Ogg keys under audio/ and can be invoked directly with {"key": "..."}
 // by the backfill script. It never modifies the source object.

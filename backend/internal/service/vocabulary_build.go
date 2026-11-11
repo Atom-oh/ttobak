@@ -92,7 +92,7 @@ func randomVocabularyName() (string, error) {
 }
 
 // vocabObjectKey is vocab/{name}.{fingerprint}.tsv: a stale submitter never
-// overwrites a different table. It is not attempt-unique (unlike ADR-037), so
+// overwrites a different table. It is not attempt-unique (unlike ADR-013), so
 // two attempts of the same table share one key.
 func vocabObjectKey(name, fingerprint string) string {
 	return vocabObjectDir + name + "." + fingerprint + ".tsv"

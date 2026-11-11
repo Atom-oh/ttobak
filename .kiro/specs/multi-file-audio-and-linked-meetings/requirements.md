@@ -43,7 +43,7 @@ an established structured reconciliation system.
 
 ## Current mapping and limits
 
-[ADR-014](../../../docs/decisions/ADR-014-multi-file-audio-and-linked-meetings.md)
+[ADR-014](../../../docs/decisions/ADR-014-meeting-audio-files-and-lookup.md)
 records implemented multi-part upload, merge, playback, and linking. The current
 [uploader](../../../frontend/src/components/AudioUploader.tsx) sends selected files
 sequentially, assigns indices only to audio, and does not calculate a safe append
@@ -54,7 +54,7 @@ provides part playback; it does not establish every proposed absolute-seek behav
 
 [Summarization](../../../backend/cmd/summarize/main.go) tracks completed part identities
 and skips predecessor context when the target has non-owner collaborators or account
-publication. [ADR-031](../../../docs/decisions/ADR-031-summarize-timeout-resilience.md)
+publication. [ADR-013](../../../docs/decisions/ADR-013-summary-generation-and-publication.md)
 records later retry/timeout behavior; old fixed or part-multiplied deadlines are
 not current acceptance criteria.
 

@@ -551,7 +551,7 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
 
 `ttobak_app_status`, `ttobak_app_start_recording` and `ttobak_app_stop_recording`
 drive the TTOBAK Mac app, which records system audio (Zoom, Teams, Meet) mixed with
-the microphone, even with headphones (ADR-046). Prefer them over the ffmpeg
+the microphone, even with headphones (ADR-024). Prefer them over the ffmpeg
 microphone tools when the app is running. The adapter sends one JSON line to the
 app's socket, `~/Library/Application Support/ttobak/control.sock`
 (`TTOBAK_APP_SOCKET` overrides). The app accepts only the same macOS user and

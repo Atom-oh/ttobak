@@ -3,7 +3,7 @@
 //! The macOS implementation (`mod macos`) records a Core Audio process tap of
 //! every other app's output (Zoom, Teams, Chrome, …) mixed with the default
 //! microphone, through one private aggregate device (macOS 14.2+; see
-//! ADR-046). Channel splitting, mixing and caption resampling are pure
+//! ADR-024). Channel splitting, mixing and caption resampling are pure
 //! functions in `crate::mix` so they are unit tested on every platform.
 //!
 //! Non-macOS builds provide a stub that returns `Unsupported`, so `cargo
@@ -307,7 +307,7 @@ impl SilenceCheck {
 #[cfg(target_os = "macos")]
 pub mod macos {
     //! Core Audio process-tap capture (macOS 14.2+) mixed with the default
-    //! microphone in one private aggregate device (ADR-046): the microphone
+    //! microphone in one private aggregate device (ADR-024): the microphone
     //! is the clock sub-device, the tap is drift-compensated, and one IOProc
     //! gets the mic streams followed by the tap stream. Without an input
     //! device the default output clocks a system-only recording. The

@@ -73,10 +73,10 @@ needed focused tests and explicit recovery.
 - The current predecessor-context gate re-reads sharing state and omits private
   linked context for collaborative targets. The link handler rejects direct
   reverse links, not arbitrary graph-wide cycles.
-- [ADR-031](../../../docs/decisions/ADR-031-summarize-timeout-resilience.md) supersedes
+- [ADR-013](../../../docs/decisions/ADR-013-summary-generation-and-publication.md) supersedes
   the old unconditional skip of stale `summarizing` jobs: retry eligibility after
   20 minutes differs from the 60-minute stuck threshold.
 
-[ADR-014](../../../docs/decisions/ADR-014-multi-file-audio-and-linked-meetings.md),
+[ADR-014](../../../docs/decisions/ADR-014-meeting-audio-files-and-lookup.md),
 [current API](../../../docs/API-SPEC.md), [infrastructure](../../../docs/INFRA-SPEC.md),
 and [documentation map](../../../docs/README.md) are the current references.
