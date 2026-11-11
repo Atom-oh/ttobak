@@ -67,13 +67,12 @@ export interface MeetingRowGroup {
 }
 
 /**
- * Account and unassigned groups keep first-seen order; internal groups follow
- * them in the fixed category order so they render under one Internal section.
+ * Account groups sort by account name (Korean collation), never by which
+ * account holds the newest meeting, so a selection or filter keeps a stable
+ * order. Accounts without a known name follow, then unassigned meetings; rows
+ * inside each group keep the caller's (date) order. Internal groups come last
+ * in the fixed category order so they render under one Internal section.
  */
-// Account groups are ordered by account name (Korean collation), never by
-// which account holds the newest meeting, so a selection or filter keeps a
-// stable order. Accounts without a known name follow, then unassigned meetings.
-// Rows inside each group keep the caller's (date) order.
 export function groupMeetingRows(
   meetings: Meeting[], accountName: (accountId: string) => string | undefined = () => undefined,
 ): MeetingRowGroup[] {

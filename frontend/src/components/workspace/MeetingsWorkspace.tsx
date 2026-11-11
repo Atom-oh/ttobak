@@ -59,7 +59,8 @@ export function useWorkspaceAccounts(userId: string) {
 // Meetings lead the page. Wide screens (xl) show the schedule as a sticky right
 // sidebar; narrower screens place it after the list, collapsed by default.
 // The panel stays mounted while collapsed (CSS-hidden), so expanding or resizing
-// never refetches, and a ?task= highlight link opens it.
+// never refetches, and a ?task= highlight link opens it. The sticky height
+// subtracts the 4rem DesktopHeader above AppLayout's scroll area plus margins.
 function MeetingsUpcoming() {
   const highlight = parseTaskHighlight(useSearchParams().get('task'));
   const [expanded, setExpanded] = useState(Boolean(highlight));
@@ -70,7 +71,7 @@ function MeetingsUpcoming() {
   }
   const panelId = useId();
   return (
-    <aside aria-label="내 일정" className="min-w-0 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto">
+    <aside aria-label="내 일정" className="min-w-0 xl:sticky xl:top-6 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto">
       <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded(open => !open)}
         className="flex w-full items-center justify-between gap-2 rounded-xl border border-border-subtle bg-surface px-4 py-3 text-sm font-semibold text-text-main focus-visible:outline-2 focus-visible:outline-primary xl:hidden">
         <span className="inline-flex items-center gap-2">
