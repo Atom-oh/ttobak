@@ -27,8 +27,9 @@ const (
 	MaxTombstonesPerScope  = 2000
 	// MaxLegacyTerms bounds a legacy PUT body. GET lists auto rows too, so a
 	// full round-trip can exceed the manual cap; only entries that become or
-	// stay manual rows count toward MaxManualTermsPerScope.
-	MaxLegacyTerms = 1000
+	// stay manual rows count toward MaxManualTermsPerScope. It covers both caps
+	// (plus one new entry of slack per manual cap) so a full GET always fits.
+	MaxLegacyTerms = MaxAutoTermsPerScope + MaxManualTermsPerScope
 )
 
 const vocabularyRebuildWarning = "vocabulary rebuild failed; recognition keeps the previous vocabulary"

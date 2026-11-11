@@ -44,7 +44,7 @@ func TestDictionaryRequestBounds(t *testing.T) {
 		{"bad term id", "PATCH", "/api/settings/dictionary/terms/ABC", `{"version":1}`, 404},
 		{"traversal term id", "DELETE", "/api/settings/dictionary/terms/..%2F" + id, ``, 404},
 		{"bad delete version", "DELETE", "/api/settings/dictionary/terms/" + id + "?version=0", ``, 400},
-		{"legacy PUT over 256 KB", "PUT", "/api/settings/dictionary", `{"terms":[{"phrase":"` + strings.Repeat("a", 256<<10) + `"}]}`, 400},
+		{"legacy PUT over 1 MiB", "PUT", "/api/settings/dictionary", `{"terms":[{"phrase":"` + strings.Repeat("a", 1<<20) + `"}]}`, 400},
 		// A phrase-less legacy term is the service's decision (GET may return
 		// phrase-less rows); see TestLegacyPutValidation.
 	}

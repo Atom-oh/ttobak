@@ -19,7 +19,8 @@ import (
 
 // Request bounds for dictionary routes.
 const (
-	dictLegacyPutMaxBytes = 256 << 10
+	// A full GET round trip (service.MaxLegacyTerms entries) must fit.
+	dictLegacyPutMaxBytes = 1 << 20
 	dictTermMaxBytes      = 4 << 10
 )
 
