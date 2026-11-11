@@ -148,11 +148,11 @@ export default function PerformancePage() {
             ))}
           </div>
 
-          {/* The report tab stays mounted (hidden) so a finish event while the dashboard shows is handled. */}
+          {/* Both tabs stay mounted (hidden) so a report or collection that finishes on the other tab is still handled. */}
           <div hidden={tab !== 'reportTab'}>
             <ReportTab userId={userId} membershipRevision={membershipRevision} reloadKey={reloadKey} />
           </div>
-          {tab === 'dashboardTab' && <>
+          <div hidden={tab !== 'dashboardTab'}>
 
           <section className={cardClass} aria-labelledby="perf-scorecard">
             <h3 id="perf-scorecard" className={headingClass}>스코어카드</h3>
@@ -197,7 +197,7 @@ export default function PerformancePage() {
                 );
               })}
           </section>
-          </>}
+          </div>
         </div>
       </div>
     </AppLayout>
