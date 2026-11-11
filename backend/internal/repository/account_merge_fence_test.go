@@ -188,10 +188,18 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 			if err := tc.call(r); err != nil {
 				t.Fatal(err)
 			}
-			if len(calls) != 1 || calls[0].target != "TransactWriteItems" {
+			// Reads before the write (the contact delete's SFDC index query)
+			// are allowed; exactly one write must be transactional.
+			var writes []fenceRequest
+			for _, c := range calls {
+				if c.target != "Query" && c.target != "GetItem" {
+					writes = append(writes, c)
+				}
+			}
+			if len(writes) != 1 || writes[0].target != "TransactWriteItems" {
 				t.Fatalf("calls=%+v, want one TransactWriteItems", calls)
 			}
-			items := fenceItems(t, calls[0])
+			items := fenceItems(t, writes[0])
 			idx := metaIndex(t, items, tc.account)
 			cond := resolvedCondition(items[idx])
 			for _, want := range []string{"attribute_not_exists(mergingInto)", "attribute_not_exists(mergedInto)"} {
@@ -203,11 +211,22 @@ func TestAccountWritesCarryMergeFence(t *testing.T) {
 				t.Errorf("META item must return the stored row on failure: %+v", items[idx])
 			}
 
-			fenced := fenceRepo(t, new([]fenceRequest), func(fenceRequest) (int, string) { return 400, cancelledAt(len(items), idx, true) })
+			reads := func(call fenceRequest) bool { return call.target == "Query" || call.target == "GetItem" }
+			fenced := fenceRepo(t, new([]fenceRequest), func(call fenceRequest) (int, string) {
+				if reads(call) {
+					return 200, `{}`
+				}
+				return 400, cancelledAt(len(items), idx, true)
+			})
 			if err := tc.call(fenced); !errors.Is(err, ErrAccountMerging) || errors.Is(err, ErrConditionFailed) {
 				t.Fatalf("merge cancellation error=%v, want ErrAccountMerging only", err)
 			}
-			plain := fenceRepo(t, new([]fenceRequest), func(fenceRequest) (int, string) { return 400, cancelledAt(len(items), idx, false) })
+			plain := fenceRepo(t, new([]fenceRequest), func(call fenceRequest) (int, string) {
+				if reads(call) {
+					return 200, `{}`
+				}
+				return 400, cancelledAt(len(items), idx, false)
+			})
 			err := tc.call(plain)
 			if err == nil || errors.Is(err, ErrAccountMerging) || (tc.plain != nil && !errors.Is(err, tc.plain)) {
 				t.Fatalf("a failed condition without a merge marker must keep its mapping %v, got %v", tc.plain, err)

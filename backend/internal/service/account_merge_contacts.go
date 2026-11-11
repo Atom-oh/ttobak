@@ -30,6 +30,9 @@ const (
 	// contacts step ignores the worker's per-call budget and amortizes one
 	// index over this many source contacts.
 	mergeContactsPerRun = 500
+	// mergeSuppressionsPerRun is how many source SFDC suppression rows one
+	// moveContacts call moves before it touches contacts.
+	mergeSuppressionsPerRun = 200
 )
 
 // MergeFailureCode returns the job error code for a mover error, or "" when
@@ -47,6 +50,16 @@ func MergeFailureCode(err error) string {
 func contactMatchKey(c model.AccountContact) string {
 	if email := strings.ToLower(strings.TrimSpace(c.Email)); email != "" {
 		return "e:" + email
+	}
+	return ""
+}
+
+// contactSfdcKey returns the SFDC dedupe key of a linked contact, or "".
+// Two contacts linked to one SFDC contact are the same person whatever
+// their emails, so this key is matched before the email key.
+func contactSfdcKey(c model.AccountContact) string {
+	if c.SfdcContactID != "" {
+		return "s:" + c.SfdcContactID
 	}
 	return ""
 }
@@ -87,6 +100,11 @@ func mergeContactFields(into, from model.AccountContact, source string) (model.A
 			lines = append(lines, "[merged from "+source+"] "+f.label+": "+a)
 		}
 	}
+	// The SFDC link moves only onto an unlinked contact; a linked target
+	// keeps its own (the repository suppresses the duplicate's ID).
+	if out.SfdcContactID == "" && from.SfdcContactID != "" {
+		out.Source, out.SfdcContactID, out.SfdcAccountID, out.SfdcLeftAt = from.Source, from.SfdcContactID, from.SfdcAccountID, from.SfdcLeftAt
+	}
 	if len(lines) > 0 {
 		notes := strings.Join(lines, "\n")
 		if strings.TrimSpace(out.Notes) != "" {
@@ -118,16 +136,20 @@ type contactIndexEntry struct {
 type contactIndex map[string]*contactIndexEntry
 
 func (ix contactIndex) add(e *contactIndexEntry) {
-	if k := contactMatchKey(e.contact); k != "" {
-		if _, taken := ix[k]; !taken {
-			ix[k] = e
+	for _, k := range []string{contactSfdcKey(e.contact), contactMatchKey(e.contact)} {
+		if k != "" {
+			if _, taken := ix[k]; !taken {
+				ix[k] = e
+			}
 		}
 	}
 }
 
 func (ix contactIndex) match(c model.AccountContact) *contactIndexEntry {
-	if k := contactMatchKey(c); k != "" {
-		return ix[k]
+	for _, k := range []string{contactSfdcKey(c), contactMatchKey(c)} {
+		if e := ix[k]; k != "" && e != nil {
+			return e
+		}
 	}
 	return nil
 }
@@ -173,20 +195,30 @@ func (s *AccountMergeService) buildContactIndex(fence *mergeFence, job *model.Ac
 }
 
 // moveContacts moves up to mergeContactsPerRun source contacts into the
-// target. The target's email index is built once per call. A source contact
-// whose email matches a target contact is folded into it (see
-// mergeContactFields); one whose merged form would exceed the size limits is
+// target. The target's SFDC-link and email index is built once per call. A
+// source contact linked to the same SFDC contact as a target contact, or
+// else whose email matches one, is folded into it (see mergeContactFields); one whose merged form would exceed the size limits is
 // kept as a separate target contact (KeptSeparate); any other moves under its
 // own ID. Every relocation records a MERGE#contact# map row for the events
 // step. A source row that cannot be opened is left on the source and counted
 // as Unreadable; a row that already has a map row is skipped. The cursor is
 // the source contact ID to continue after; a repeat run moves nothing
-// because moved rows are gone.
+// because moved rows are gone. SFDC index rows move with their contacts and
+// suppression rows move before any contact (repository MoveContactForMerge,
+// MergeContactIntoExisting and MoveSfdcSuppressionsForMerge); the target's
+// existing link or suppression wins over the source's.
 func (s *AccountMergeService) moveContacts(fence *mergeFence, job *model.AccountMergeJob) (mergeMoveResult, error) {
 	result := mergeMoveResult{Cursor: job.Cursor}
 	ctx := fence.Context()
 	if err := fence.Err(); err != nil {
 		return result, err
+	}
+	// SFDC suppression rows move first, in bounded batches that keep the
+	// cursor, so the target index is built only once they are all moved.
+	if _, done, err := s.mover.MoveSfdcSuppressionsForMerge(ctx, job, mergeSuppressionsPerRun); err != nil {
+		return result, fence.translate(err)
+	} else if !done {
+		return result, nil
 	}
 	index, err := s.buildContactIndex(fence, job)
 	if err != nil {

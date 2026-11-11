@@ -101,6 +101,10 @@ func (r *DynamoDBRepository) MoveContactForMerge(ctx context.Context, job *model
 	}
 	moved := from
 	moved.PK, moved.SK, moved.Revision = "", "", uuid.NewString()
+	extra, err := r.sfdcMoveItems(ctx, job, from, &moved)
+	if err != nil {
+		return err
+	}
 	item, err := r.SealedContactItem(ctx, job.TargetAccountID, &moved)
 	if err != nil {
 		return err
@@ -113,7 +117,7 @@ func (r *DynamoDBRepository) MoveContactForMerge(ctx context.Context, job *model
 		TableName: aws.String(r.tableName), Item: item,
 		ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names(),
 	}}
-	return r.commitContactMerge(ctx, job, put, fence, from, from.ContactID)
+	return r.commitContactMerge(ctx, job, put, fence, from, from.ContactID, extra...)
 }
 
 // MergeContactIntoExisting folds one source contact into an existing target
@@ -129,6 +133,10 @@ func (r *DynamoDBRepository) MergeContactIntoExisting(ctx context.Context, job *
 		return fmt.Errorf("invalid merge target contact")
 	}
 	fence, err := r.mergeFenceChecks(job)
+	if err != nil {
+		return err
+	}
+	extra, err := r.sfdcMoveItems(ctx, job, from, &into)
 	if err != nil {
 		return err
 	}
@@ -148,7 +156,7 @@ func (r *DynamoDBRepository) MergeContactIntoExisting(ctx context.Context, job *
 		ConditionExpression: expr.Condition(), UpdateExpression: expr.Update(),
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
 	}}
-	return r.commitContactMerge(ctx, job, upd, fence, from, into.ContactID)
+	return r.commitContactMerge(ctx, job, upd, fence, from, into.ContactID, extra...)
 }
 
 func validMergeContact(job *model.AccountMergeJob, from model.AccountContact) error {
@@ -161,11 +169,12 @@ func validMergeContact(job *model.AccountMergeJob, from model.AccountContact) er
 	return nil
 }
 
-// commitContactMerge writes [target write, fence..., source delete, map put].
-// A fence failure wins; any failure of the contact items is
-// ErrConditionFailed (a concurrent target edit, a target ID collision or an
-// already recorded mapping) and nothing is written.
-func (r *DynamoDBRepository) commitContactMerge(ctx context.Context, job *model.AccountMergeJob, target types.TransactWriteItem, fence []types.TransactWriteItem, from model.AccountContact, targetID string) error {
+// commitContactMerge writes [target write, fence..., source delete, map put,
+// sfdc...]. A fence failure wins; any failure of the contact or SFDC items is
+// ErrConditionFailed (a concurrent target edit, a target ID collision, an
+// already recorded mapping or a concurrent SFDC link on the target) and
+// nothing is written; the retried step re-reads the target state.
+func (r *DynamoDBRepository) commitContactMerge(ctx context.Context, job *model.AccountMergeJob, target types.TransactWriteItem, fence []types.TransactWriteItem, from model.AccountContact, targetID string, sfdc ...types.TransactWriteItem) error {
 	present := expression.AttributeExists(expression.Name("PK")).And(expression.Name("revision").Equal(expression.Value(from.Revision)))
 	delExpr, err := expression.NewBuilder().WithCondition(present).Build()
 	if err != nil {
@@ -196,6 +205,7 @@ func (r *DynamoDBRepository) commitContactMerge(ctx context.Context, job *model.
 			TableName: aws.String(r.tableName), Item: mapItem,
 			ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names(), ExpressionAttributeValues: absent.Values(),
 		}})
+	items = append(items, sfdc...)
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		moverFailed, fenceErr := classifyMergeFence(err)
 		if fenceErr != nil {
