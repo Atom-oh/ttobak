@@ -37,7 +37,7 @@ and stores typed, provenance-bearing edges in the existing account link rows.
 | `account` | account META (this account or a descendant) | `accountId` |
 | `project` | project CONFIG linked to the account | `projectId` |
 
-Contacts stay per account (ADR-063). There is no cross-account person identity
+Contacts stay per account (ADR-021). There is no cross-account person identity
 in this project (call: it would need contact data outside the sealed account
 partition).
 

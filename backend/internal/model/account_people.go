@@ -193,6 +193,9 @@ type UnresolvedMention struct {
 	Mention     string `dynamodbav:"mention" json:"mention"`
 	SourceRef   string `dynamodbav:"sourceRef,omitempty" json:"sourceRef,omitempty"`
 	CreatedAt   string `dynamodbav:"createdAt" json:"createdAt"`
+	// PersonCandidate distinguishes typed person mentions from legacy insight
+	// entities. Metadata-only readers can hide the old mixed review queue.
+	PersonCandidate bool `dynamodbav:"personCandidate,omitempty" json:"-"`
 }
 
 // PeopleRun is the resolver run state for one meeting or the whole account.

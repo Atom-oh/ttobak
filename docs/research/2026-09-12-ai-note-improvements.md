@@ -24,5 +24,5 @@ historical review/deployment evidence is separate from this documentation sync. 
 Current source boundary: manual-only private/shared snapshot bootstrap is scheduled;
 canonical/all-mode indexing and the prepared strict QA/history integration remain
 staged. Parser/worker and attachment state exist, but full producer/consumer
-activation must follow ADR-038/039/042. Merged foundation PRs alone do not complete
+activation must follow ADR-028/001. Merged foundation PRs alone do not complete
 the end-to-end automatic indexing or attachment-grounding goals.

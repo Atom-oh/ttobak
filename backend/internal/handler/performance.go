@@ -31,6 +31,10 @@ type PerformanceAPI interface {
 	ListMappings(ctx context.Context, userID string) (*model.PerformanceMappingList, error)
 	PutMapping(ctx context.Context, userID, sfdcAccountID, accountID string) (*model.AccountMapping, error)
 	ListMissed(ctx context.Context, userID, period string) (*model.PerformanceMissedList, error)
+	PutReport(ctx context.Context, userID, periodKey string, report model.PerformanceReport) (*model.PerformanceReportReceipt, error)
+	GetReport(ctx context.Context, userID, periodKey string) (*model.PerformanceReport, error)
+	ListReports(ctx context.Context, userID string) (*model.PerformanceReportList, error)
+	DeleteReport(ctx context.Context, userID, periodKey string) error
 }
 
 type PerformanceHandler struct {
@@ -173,6 +177,83 @@ func (handler *PerformanceHandler) ListMissed(writer http.ResponseWriter, reques
 	writePerformanceJSON(writer, result)
 }
 
+// performanceReportFields are the report's required top-level fields.
+// missingSources and highlights may be absent; nested optional fields (tables,
+// cards, note, estimates) may be absent too. Null is never accepted.
+var performanceReportFields = []string{"schemaVersion", "periodKey", "period", "alias", "generatedAt", "model", "partial",
+	"summary", "ledger", "sections", "actions", "dataBasis"}
+
+func (handler *PerformanceHandler) PutReport(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	var input model.PerformanceReport
+	if !decodePerformanceBodyWithin(writer, request, performanceReportBodyLimits, &input, performanceReportFields...) {
+		return
+	}
+	result, err := handler.service.PutReport(request.Context(), userID, chi.URLParam(request, "periodKey"), input)
+	if err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	writePerformanceJSON(writer, result)
+}
+
+func (handler *PerformanceHandler) GetReport(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	result, err := handler.service.GetReport(request.Context(), userID, chi.URLParam(request, "periodKey"))
+	if err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	writePerformanceJSON(writer, result)
+}
+
+func (handler *PerformanceHandler) ListReports(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	result, err := handler.service.ListReports(request.Context(), userID)
+	if err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	writePerformanceJSON(writer, result)
+}
+
+func (handler *PerformanceHandler) DeleteReport(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	if err := handler.service.DeleteReport(request.Context(), userID, chi.URLParam(request, "periodKey")); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func performanceHTTPYear(writer http.ResponseWriter, request *http.Request) (int, bool) {
 	values, err := calendarHTTPQuery(request, "year")
 	if err != nil || !performanceYearPattern.MatchString(values.Get("year")) {
@@ -187,21 +268,40 @@ func performanceHTTPYear(writer http.ResponseWriter, request *http.Request) (int
 	return year, true
 }
 
+// performanceBodyLimits bounds one strict JSON body.
+type performanceBodyLimits struct {
+	maxBytes int64
+	maxDepth int
+	tooLarge string
+}
+
+var (
+	performanceSyncBodyLimits = performanceBodyLimits{maxBytes: performanceBodyMaxBytes, maxDepth: 4, tooLarge: "Performance request exceeds 64 KiB"}
+	// A report nests report > sections > section > tables > table > rows > row > cell.
+	performanceReportBodyLimits = performanceBodyLimits{maxBytes: model.PerformanceReportMaxBytes, maxDepth: 7, tooLarge: "Performance report exceeds 256 KiB"}
+)
+
 // decodePerformanceBody reads at most 64 KiB of strict JSON: valid UTF-8, no
 // duplicate keys or nulls, no unknown fields, no trailing data, and every
 // required top-level field present. It writes the error response itself.
 func decodePerformanceBody(writer http.ResponseWriter, request *http.Request, target any, required ...string) bool {
-	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, performanceBodyMaxBytes))
+	return decodePerformanceBodyWithin(writer, request, performanceSyncBodyLimits, target, required...)
+}
+
+// decodePerformanceBodyWithin is decodePerformanceBody with explicit limits.
+// The byte cap applies while reading, before any decoding.
+func decodePerformanceBodyWithin(writer http.ResponseWriter, request *http.Request, limits performanceBodyLimits, target any, required ...string) bool {
+	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, limits.maxBytes))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(writer, http.StatusRequestEntityTooLarge, model.ErrCodeBadRequest, "Performance request exceeds 64 KiB")
+			writeError(writer, http.StatusRequestEntityTooLarge, model.ErrCodeBadRequest, limits.tooLarge)
 		} else {
 			writePerformanceError(writer, service.ErrInvalidInput)
 		}
 		return false
 	}
-	if !utf8.Valid(body) || !validPerformanceJSON(json.NewDecoder(bytes.NewReader(body)), 0) {
+	if !utf8.Valid(body) || !validPerformanceJSON(json.NewDecoder(bytes.NewReader(body)), 0, limits.maxDepth) {
 		writePerformanceError(writer, service.ErrInvalidInput)
 		return false
 	}
@@ -226,9 +326,9 @@ func decodePerformanceBody(writer http.ResponseWriter, request *http.Request, ta
 }
 
 // validPerformanceJSON rejects nulls, duplicate object keys and nesting
-// deeper than the sync request needs. Field names are checked by the decoder.
-func validPerformanceJSON(decoder *json.Decoder, depth int) bool {
-	if depth > 4 {
+// deeper than maxDepth. Field names are checked by the decoder.
+func validPerformanceJSON(decoder *json.Decoder, depth, maxDepth int) bool {
+	if depth > maxDepth {
 		return false
 	}
 	token, err := decoder.Token()
@@ -252,7 +352,7 @@ func validPerformanceJSON(decoder *json.Decoder, depth int) bool {
 			}
 			seen[name] = true
 		}
-		if !validPerformanceJSON(decoder, depth+1) {
+		if !validPerformanceJSON(decoder, depth+1, maxDepth) {
 			return false
 		}
 	}
@@ -274,7 +374,7 @@ func writePerformanceJSON(writer http.ResponseWriter, value any) {
 func writePerformanceError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, repository.ErrInvalidPerformanceBatch),
-		errors.Is(err, repository.ErrInvalidPerformanceInput):
+		errors.Is(err, repository.ErrInvalidPerformanceInput), errors.Is(err, model.ErrInvalidPerformanceReport):
 		writeError(writer, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid performance request")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(writer, http.StatusForbidden, model.ErrCodeForbidden, "Performance access denied")

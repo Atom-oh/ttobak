@@ -39,6 +39,7 @@ import { nativeMicSwitchError } from '@/lib/nativeMicSwitch';
 import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
 import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
+import { openMicStream } from '@/lib/micStream';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
@@ -66,6 +67,12 @@ function RecordPageInner() {
   const debugCaptions = searchParams.get('debugCaptions') === '1';
   const { isAuthenticated, isLoading, user } = useAuth();
   const { devices, selectedDeviceId, selectDevice, refreshDevices } = useAudioDevices();
+  // Shown after a remembered microphone vanished and the default one was used.
+  const [micFallbackNotice, setMicFallbackNotice] = useState(false);
+  const handleMicDeviceUnavailable = useCallback(() => {
+    selectDevice('');
+    setMicFallbackNotice(true);
+  }, [selectDevice]);
 
   // Config state
   const [meetingTitle, setMeetingTitle] = useState('');
@@ -86,7 +93,7 @@ function RecordPageInner() {
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   // Mac app capture notes (silent source, no microphone); reset per recording.
   const [nativeWarnings, setNativeWarnings] = useState<string[]>([]);
-  // Mac app microphone: '' follows the meeting app's microphone (ADR-061).
+  // Mac app microphone: '' follows the meeting app's microphone (ADR-017).
   const [nativeInputUid, setNativeInputUid] = useState('');
   const [nativeInput, setNativeInput] = useState<NativeSelectedInput | null>(null);
   // Only app builds with `switch_recording_input` offer the live picker.
@@ -823,10 +830,14 @@ function RecordPageInner() {
     let cancelled = false;
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { deviceId: { exact: selectedDeviceId } },
-        });
+        const { stream, usedDefault } = await openMicStream(navigator.mediaDevices, selectedDeviceId);
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        if (usedDefault) {
+          // Clearing the selection re-runs this effect without a device.
+          stream.getTracks().forEach((t) => t.stop());
+          handleMicDeviceUnavailable();
+          return;
+        }
         const ctx = new AudioContext();
         const source = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
@@ -841,7 +852,7 @@ function RecordPageInner() {
     })();
 
     return () => { cancelled = true; cleanupPreview(); };
-  }, [selectedDeviceId, session.isRecording, audioSource]);
+  }, [selectedDeviceId, session.isRecording, audioSource, handleMicDeviceUnavailable]);
 
   // --- Early returns ---
   if (isLoading) {
@@ -1385,10 +1396,15 @@ function RecordPageInner() {
               <MicSelector
                 devices={devices}
                 selectedDeviceId={selectedDeviceId}
-                onSelect={selectDevice}
+                onSelect={(deviceId) => { setMicFallbackNotice(false); selectDevice(deviceId); }}
                 disabled={session.isRecording}
                 analyser={session.isRecording ? analyserNode : previewAnalyser}
               />
+            )}
+            {audioSource === 'mic' && micFallbackNotice && (
+              <p role="status" className="px-4 py-2 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-900/20 dark:text-amber-200">
+                선택했던 마이크를 찾을 수 없어 기본 마이크를 사용합니다. 다른 마이크를 쓰려면 목록에서 다시 선택하세요.
+              </p>
             )}
             {audioSource === 'tab' && !session.isRecording && (
               <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-500/20 rounded-lg text-sm text-blue-700 dark:text-blue-300">
@@ -1541,6 +1557,7 @@ function RecordPageInner() {
             // is still null and a second start would race it.
             disabled={!!postRecording.step || meetingFlowBusy}
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
+            onMicDeviceUnavailable={handleMicDeviceUnavailable}
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobFinalizing={() => {
               setBrowserFinalizing(true);

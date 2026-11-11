@@ -4,7 +4,7 @@ import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync,
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 
-// Local microphone capture for the stdio transport only (ADR-045: the HTTP
+// Local microphone capture for the stdio transport only (ADR-003, transports: the HTTP
 // transport never touches the server's filesystem or processes). ffmpeg's
 // avfoundation input records the Mac microphone; the child inherits the MCP
 // host app's macOS microphone (TCC) permission, and a host without it records

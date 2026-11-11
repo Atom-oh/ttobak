@@ -63,7 +63,7 @@ linux/arm64 on the `ttobak-arm` runner.
 
 **Spec:**
 - [Billing service design](../specs/2026-10-26-billing-service-design.md) §4.3, §8, §9, §10
-- [ADR-056](../../decisions/ADR-056-billing-service-origin-and-identity.md)
+- [ADR-012](../../decisions/ADR-012-billing-origin-identity-and-team-access.md)
 - [Billing Phase 1 plan](2026-10-27-billing-phase1-bff.md) (Task 8 stack, rulings K1–K4, A8b)
 
 ## Global Constraints

@@ -64,10 +64,10 @@ KMS coverage was not supported by the table configuration.
 
 ## Current evidence and successors
 
-[ADR-015](../../decisions/ADR-015-account-first-class-shared-entity.md) through
-[ADR-018](../../decisions/ADR-018-mcp-back-data-tools.md) cover implemented foundations;
-[ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md) changes
-member-add/role permissions and [ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md)
+[ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) through
+[ADR-003](../../decisions/ADR-003-mcp-access.md) cover implemented foundations;
+[ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) changes
+member-add/role permissions and [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md)
 adds hierarchy without inherited access. Current
 [account](../../../backend/internal/service/account.go),
 [meeting](../../../backend/internal/service/meeting.go), and

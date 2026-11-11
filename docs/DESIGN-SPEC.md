@@ -55,7 +55,7 @@ use CSS variants.
 | Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links. AccountSection gives the creator a meeting-category control; an internal meeting hides account linking, and Internal is disabled while an account is linked |
 | Markdown | MarkdownRenderer, MermaidBlock, CodeBlock, DataTable, DiagramLightbox |
 | Documents | Personal document hub, editor/preview, share dialogs and public document viewer |
-| Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents. The members table shows an owner-only "Transfer owner" button on each non-owner row with a `userId` (never on pending rows or for AM/inherited viewers); it confirms with the target email and the note that the previous owner becomes SA, calls `POST /api/accounts/{id}/owner-transfer`, reloads, and maps 409 to a refresh-and-retry message. The Account Owner also sees a "merge into another Account" action (`AccountMergeDialog`, ADR-072): it picks a target from directly editable Accounts (never the source), calls `GET merge-preview`, and shows move counts (`-1` means capped), the categories that do not move (billing is marked as not checkable), the CLI-only categories (labelled as rows an operator moves with the CLI after the merge) and who gains access. Start stays disabled until the unmoved-items checkbox is checked and never fires unconfirmed. Progress polls `GET merge` every 5 s (doubling after failed polls, 30 s cap) and stops on `done`, `failed` or `aborted`; failure codes map to plain Korean copy, a failed or stalled job offers retry (`POST merge` again to resume), and an operator-aborted job shows that moved items stay on the target, with no retry. A merging Account (`mergingInto`) shows a read-only banner, hides write controls and keeps a progress link for the Owner; a tombstone (`mergedInto`) stays read-only with a banner linking to the target, so its unmoved categories remain reachable; writes answered with 409 `ACCOUNT_MERGING` show a merge-specific message. |
+| Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents. The members table shows an owner-only "Transfer owner" button on each non-owner row with a `userId` (never on pending rows or for AM/inherited viewers); it confirms with the target email and the note that the previous owner becomes SA, calls `POST /api/accounts/{id}/owner-transfer`, reloads, and maps 409 to a refresh-and-retry message. The Account Owner also sees a "merge into another Account" action (`AccountMergeDialog`, ADR-022): it picks a target from directly editable Accounts (never the source), calls `GET merge-preview`, and shows move counts (`-1` means capped), the categories that do not move (billing is marked as not checkable), the CLI-only categories (labelled as rows an operator moves with the CLI after the merge) and who gains access. Start stays disabled until the unmoved-items checkbox is checked and never fires unconfirmed. Progress polls `GET merge` every 5 s (doubling after failed polls, 30 s cap) and stops on `done`, `failed` or `aborted`; failure codes map to plain Korean copy, a failed or stalled job offers retry (`POST merge` again to resume), and an operator-aborted job shows that moved items stay on the target, with no retry. A merging Account (`mergingInto`) shows a read-only banner, hides write controls and keeps a progress link for the Owner; a tombstone (`mergedInto`) stays read-only with a banner linking to the target, so its unmoved categories remain reachable; writes answered with 409 `ACCOUNT_MERGING` show a merge-specific message. |
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
@@ -124,7 +124,7 @@ hidden on any failure. The Mac app's own update UI is native, not the SPA: the
 TTOBAK app menu has a check-for-updates item (a manual check reports up-to-date or
 failure by notification, and opens the popup when an update exists) that becomes an
 update-available item with the version once an update is known. The small local popup
-(`update-prompt.html`, ADR-073) has Update and Later buttons, shows a static
+(`update-prompt.html`, ADR-019) has Update and Later buttons, shows a static
 downloading status (not progress) after Update, stays open until install succeeds, and
 asks the user to retry after the recording when work is in progress. Copy is Korean; see
 `update.rs` and the page for exact strings. No popup appears while recording, finalizing or
@@ -136,10 +136,20 @@ counts down 30 seconds before stopping and uploading, with keep recording and st
 now actions. The native waveform is drawn on a -60..-10 dBFS scale. Nothing records without the user's confirmation; the
 start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
-(ADR-061). In System Audio mode, `NativeMicSelector` offers automatic (follow the
+(ADR-017). Settings also shows `IntakeSettings` (Mac local intake, ADR-003) only in
+an app build with the intake commands: adapter state and update, node path when
+missing, selected servers, schedule (off, hourly, daily, twice daily) with a
+warning when the CLI LaunchAgent is also installed, per-source status, setup with
+private-calendar consent and skip toggles, run now, login, cancel and a live
+progress log. A failed state read shows a one-line error. 
+In Mic mode, `MicSelector` remembers the chosen device; when that device no
+longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
+rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
+cleared and an amber notice asks the user to reselect.
+In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
-supports it (ADR-061, #621), the record page also reacts to native events: the
+supports it (ADR-017, #621), the record page also reacts to native events: the
 picker stays available during a recording only when the start response reports
 `can_switch_input` (also for a start without a microphone); a failed switch shows
 Korean guidance with the app's reason, and says so when `recording_status`
@@ -198,7 +208,7 @@ Single-target speech already in the target language uses one original column.
 In the bilingual ko-en mode, a Japanese or Chinese source renders as the original plus a
 Korean translation (`TranslationView`). `translationSourceLanguage` labels `zh` and `ja`.
 
-Mac app caption windows (ADR-069) are separate from this card. In the Mac app only,
+Mac app caption windows (ADR-018) are separate from this card. In the Mac app only,
 the record page shows `CaptionOverlayPanel` (state from `useCaptionOverlay`, wired in
 `record/page.tsx`): an AWS profile select (from the local profile names), a region
 select (`ap-northeast-2`, the default, and `us-east-1`; a saved region outside that list
@@ -318,7 +328,14 @@ the application never silently verifies the address or changes credentials.
 
 ## Accounts, filters and sharing
 
-Render accessible accounts as a collapsible hierarchy. An inaccessible parent
+Render accessible accounts as a collapsible hierarchy. On `/accounts` and
+`/accounts/{id}` that hierarchy is the customer selector: a left tree in the app
+nav style (`AccountWorkspaceSelector` → `AccountHierarchyList`), sorted by Korean
+name order, children nested under their group, the selection's group expanded,
+and no separate flat list. Rows omit role badges; inherited read-only rows show
+a labelled icon. The implicit default (first row) stays selected across parent
+saves, and the `/accounts/{id}` tree reloads after one. Mobile uses a select in
+the same order. An inaccessible parent
 makes a visible child a display root; do not fetch the hidden parent's name.
 Creation can select a parent. Only the child owner sees the parent editor; server
 validation still enforces parent membership, cycles and concurrent ancestry changes.
@@ -327,21 +344,21 @@ Exclude self/known descendants from the picker and show save errors.
 Meeting account selection supports multiple IDs. Expand selected visible groups
 client-side and retain normalized selection across pagination; reset cursor on
 change. Empty pages with nextCursor can still have later matches. Hierarchy and
-classification never grant access to private content (ADR-036).
+classification never grant access to private content (ADR-015, hierarchy).
 
 Activated ancestor access displays a read-only label and its granting Account
-(ADR-058); published meetings are the exception and show edit and management
+(ADR-015, descendant reads); published meetings are the exception and show edit and management
 controls (not delete or audio upload) to every member (ADR-016 2026-11-06
 amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
-membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
+membership. Billing is the ADR-012 exception: the BFF's authorized entries allow
 direct and ancestor team members to view and upload. Its COT selector describes
 the required Current State/COH workbooks and COT360 HTML, supporting both three-
 and five-file ZIPs. Preserve independently granted editing controls. Account discovery
 consumes bounded pages with explicit cursor-loop and size errors.
 
 All current account members may add members/change assignable non-owner roles.
-Removal/pending-invite revocation stay owner-only (ADR-034). UI
+Removal/pending-invite revocation stay owner-only (ADR-015, member permissions). UI
 visibility is not the authorization boundary.
 
 `accountApi.list` keeps the signed-in user's Account list in memory for one
@@ -391,7 +408,7 @@ reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A c
 Person edges carry the Korean role label (dotted when auto), and a note gives
 the direct member count because only connected members are drawn.
 
-A **people** panel follows the flow (ADR-067, `components/account/AccountPeople.tsx`,
+A **people** panel follows the flow (ADR-021 people edges, `components/account/AccountPeople.tsx`,
 copy in `src/lib/accountPeople.ts`). It lists resolved members and contacts with
 meeting counts and a role summary, then unresolved names with their meeting
 count. "Link" opens a member/contact picker fed by the speaker-team and
@@ -409,6 +426,15 @@ members and untag for the uploader or an owner.
 Direct members manage a shared customer contact list on the Account's general
 tab. CSV and XLSX imports parse locally, map Remember and common Korean/English
 headers, show unmapped columns and a selectable preview, and report each row.
+The preview matches each row's company to the current Account
+(`matchRowToAccount`/`planAccountRows` in `src/lib/contactBulkImport.ts`): an
+exact name or alias (legal forms, case, spacing and a `KEB` prefix ignored), or
+the Account's mail domain when the company is blank, is labeled exact; one name holding
+the other with the shorter at least two characters and half the longer's length
+is labeled contained. Matching rows are preselected and listed first (exact, then
+contained, then the rest, each by normalized company); other rows start
+unselected. A file that maps neither company nor email keeps every row selected
+in file order. Import still runs only when the user confirms the selected rows.
 Existing and earlier imported rows are checked for matching email or phone;
 shared office numbers can cause skips, and concurrent imports can race. Import is
 scoped to the currently selected Account and authenticated user. Manual entry,
@@ -455,7 +481,7 @@ shows a creation receipt and stays on the Account list. Separate explicit
 meeting/document shares remain possible without Account membership. Reuse one
 creation UUID after a failed request, rotate it for edited input and reject stale
 results after an authentication change. Initial Owner assignment remains exclusive
-to creation; generic member operations never assign Owner (ADR-055).
+to creation; generic member operations never assign Owner (ADR-015, initial Owner).
 
 An initial pending Owner invitation exposes an explicit resend action on detail
 and the creator's receipt. Members or the recorded creator within thirty days can
@@ -471,7 +497,7 @@ explicit "resend invitation" action to members; cancellation remains owner-only.
 New-user invitation and resend confirmations
 acknowledge a mail request, not inbox delivery. The configured invitation includes
 the login link and temporary password. Domain allowlisting, verified requester
-email and the hourly invitation counter apply (ADR-054).
+email and the hourly invitation counter apply (ADR-015, invitations).
 
 Account document sharing creates a copy. Email sharing is a read-only reference,
 with no permission toggle. A public link is separately revocable. previewUrl is
@@ -678,7 +704,7 @@ and shows an informational "recognizing without the custom dictionary" line.
 `/performance` (`app/performance/page.tsx`, `components/performance/`, pure
 helpers and wire types in `lib/performance.ts`, client `performanceApi` in
 `lib/api.ts`) is the owner's own page: every request reads only the caller's
-rows ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)) and there is
+rows ([ADR-023](decisions/ADR-023-sa-performance-data-residency.md)) and there is
 no share control. The Work menu entry is SA Activity. A segmented
 period control (this week / quarter / this year, default this week) drives
 `GET /api/performance/missed`. Sections, in order:
@@ -707,9 +733,35 @@ period control (this week / quarter / this year, default this week) drives
   "change" when another account is selected. Manual mappings are not listed.
   `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
-- Source freshness: one line per `sourceFreshness` entry, "last collected" in
+- Source freshness: the `IntakeRunControl` collect button sits here (Mac app
+  only; a browser shows a hint, an older app build shows nothing, a failed state
+  read shows a one-line error). A run that ends with success or `PARTIAL_FAILURE`
+  reloads the missed list, mappings and accounts. One line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or
   `ttobak-mcp intake calendar`.
+
+Two tabs sit under the header: Dashboard (the sections above, with the period
+control) and Report (`ReportTab`, [ADR-023](decisions/ADR-023-sa-performance-data-residency.md);
+helpers in `lib/performanceReport.ts`). The report tab lists the owner's stored
+reports newest first (`ReportList`, a partial badge per row) and renders the
+selected one natively from its JSON (`ReportView`): every string is a React text
+node, with no HTML, Markdown or links built from content. The view shows the
+period, generation time and model, a partial badge naming the missing sources,
+the summary, ledger tiles, sections in stored order (lede, paragraphs, tables,
+cards), actions grouped high/medium/low, and the data basis collapsed at the end.
+Delete uses an inline confirm (not a browser dialog) and reloads the list.
+
+Generation is Mac app only (`ReportGenerateDialog`, an in-page dialog; a browser
+shows a hint). It takes a period (this week, this quarter, this year, custom
+start/end of at most 400 days, ending no more than two calendar years ago) and four highlight lists, one item per line,
+prefilled from the newest stored report of the same period kind and checked
+like the Mac runner before `report_generate`. An advanced section holds the
+Bedrock toggle and AWS profile picker (`report_settings_get/set`). While a run
+goes, the dialog shows elapsed time, progress lines and Cancel; closing it keeps
+the run going. A successful `report://finished` reloads the list and opens the
+new report; a failure shows the Korean label of its code (report labels, then the shared runner labels). The report tab stays
+mounted (hidden) while the dashboard shows, so a finish event is not lost and is
+handled when the user returns. A failed cancel shows its error inline.
 
 ## Verification
 

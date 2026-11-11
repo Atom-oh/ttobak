@@ -20,7 +20,7 @@ parent has three direct members, including that child member. The additional two
 parent members cannot use the current direct-membership authorization path.
 No meeting text, credentials, or member email addresses are included here.
 
-This follows the existing ADR-036 behavior: hierarchy organizes Accounts but
+This follows the existing ADR-015 behavior: hierarchy organizes Accounts but
 does not confer access. The new user requirement changes that behavior. Changing
 one meeting's share rows would leave the same problem for future meetings, new
 parent members, discovery lists, documents, and AI reads.
@@ -78,7 +78,7 @@ individual share rows for inherited readers.
 For direct access, validate the canonical Account/member identities and preserve
 the current direct permission. For inherited access, validate the complete
 observed path from the requested Account to the root and choose the nearest
-qualifying ancestor membership. Reuse ADR-036's maximum of 64 ancestors, valid
+qualifying ancestor membership. Reuse ADR-015's maximum of 64 ancestors, valid
 identifiers, and cycle rejection. Missing Accounts, malformed identities,
 cycles, and excessive depth deny inherited access; storage failures propagate.
 No ancestor names are exposed without a qualifying read grant.
@@ -205,9 +205,9 @@ Rolling the flag back to off restores direct-only hierarchy authorization. Child
 references may remain as non-authoritative indexes. Do not remove existing
 individual shares or direct memberships during rollback.
 
-Record an ADR explicitly superseding only ADR-036's no-inheritance decision.
+Record an ADR explicitly superseding only ADR-015's no-inheritance decision.
 Update affected API, architecture, UI and QA contracts, the canonical guide, and
-the generated review context. Preserve ADR-036's filtering and hierarchy-write
+the generated review context. Preserve ADR-015's filtering and hierarchy-write
 rules. Deployment uses only the affected functions/stacks under the existing
 release procedures; implementation approval does not invent additional cloud
 mutation or external-message authorization.

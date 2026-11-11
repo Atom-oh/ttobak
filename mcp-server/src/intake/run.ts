@@ -132,6 +132,7 @@ const USAGE = `Usage:
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
+  ttobak-mcp intake login
   ttobak-mcp intake status`;
 
 function flags(args: string[], allowed: Record<string, 'value' | 'flag' | 'list'>): Record<string, string | true | string[]> {
@@ -290,7 +291,7 @@ export async function selectConnector(connector: ConnectorId, request: SelectReq
 }
 
 /** The TTOBAK API and account scope of a real run; a dry run only uses the test seam. */
-async function signIn(selection: Selection | null, environment: IntakeEnvironment, dryRun: boolean, noninteractive: boolean) {
+export async function signIn(selection: Selection | null, environment: IntakeEnvironment, dryRun: boolean, noninteractive: boolean) {
   let api = environment.api;
   let scope = environment.scope;
   let me = environment.me;
@@ -347,6 +348,30 @@ async function openMeetingFacts(environment: IntakeEnvironment, store: IntakeSto
   } : null;
   const sourceId = selection.calendar!.sourceId;
   return { session, facts: new AttendeeFacts(store, sourceId, reader, syncWindow(now, environment.zone)) };
+}
+
+/** Interactive Cognito sign-in for an explicit user click; a browser may open. */
+async function login(environment: IntakeEnvironment, store: IntakeStore): Promise<{ email: string }> {
+  const selection = store.read<Selection>('selection.json');
+  const config = ttobakConfig(selection, environment.env);
+  const auth = environment.authFactory?.(config, { interactive: true }) ?? new CognitoAuth(config, { interactive: true });
+  let idToken: string;
+  try { idToken = await auth.getIdToken(); } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (message.startsWith('TTOBAK_LOGIN_REQUIRED')) throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
+    throw error;
+  }
+  return { email: tokenEmail(idToken) };
+}
+
+/** Runs one command under the single-run lock; a second concurrent run is rejected before touching state. */
+async function withRunLock<T>(store: IntakeStore, body: () => Promise<T>): Promise<T> {
+  let release: () => void;
+  try { release = store.lock('run'); } catch (error) {
+    if (error instanceof IntakeError && error.code === 'LOCKED') throw new IntakeError('RUN_IN_PROGRESS');
+    throw error;
+  }
+  try { return await body(); } finally { release(); }
 }
 
 /**
@@ -587,13 +612,17 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     if (command === 'hosts' && rest.length === 0) {
       output = { ok: true, hosts: listHosts(environment.home, parsePathList(environment.env.PATH)) };
     } else if (command === 'select') output = await select(rest, environment, store);
-    else if (command === 'calendar') output = await calendar(rest, environment, store);
-    else if (command === 'sfdc') output = await sfdc(rest, environment, store);
+    else if (command === 'calendar') output = await withRunLock(store, () => calendar(rest, environment, store));
+    else if (command === 'sfdc') output = await withRunLock(store, () => sfdc(rest, environment, store));
+    else if (command === 'login' && rest.length === 0) {
+      const { email } = await login(environment, store);
+      output = { ok: true, email };
+    }
     else if (command === 'schedule' && rest.length === 1) {
       output = { ok: true, schedule: await installSchedule(parseSchedule(rest[0]), environment) };
     } else if (command === 'run' || command === 'setup') {
-      const result = command === 'run' ? await run(rest, environment, store)
-        : await (await import('./setup.js')).setup(rest, environment, store);
+      const result = await withRunLock(store, async () => command === 'run' ? await run(rest, environment, store)
+        : await (await import('./setup.js')).setup(rest, environment, store));
       environment.stdout(JSON.stringify(result));
       return result.ok ? 0 : 2;
     }

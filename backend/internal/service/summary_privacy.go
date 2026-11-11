@@ -16,7 +16,7 @@ const SummaryPrivacyCutoffEnv = "SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF"
 const SummaryPrivacyReaderEnv = "SUMMARY_PRIVACY_READER_ENABLED"
 
 // Publishing a meeting to an account team shares its current summary and
-// derived content with every member who can read it (ADR-049 2026-11-06
+// derived content with every member who can read it (ADR-029 source provenance, 2026-11-06
 // amendment). Privacy provenance is still recorded for owner tooling, but it
 // no longer hides published content from members.
 //
@@ -58,7 +58,7 @@ func projectAccountMeeting(meeting *model.Meeting, member *model.AccountMember) 
 func summarySharingStatus(meeting *model.Meeting, permission string, directTeamMember bool) *model.SummarySharingStatus {
 	allowed := meeting.CanCreateSummaryGrant()
 	// The approval path (OwnerAccountShareEnabled) is the creator's alone
-	// (ADR-059). A managing member only republishes the meeting to the account
+	// (ADR-029, owner approval). A managing member only republishes the meeting to the account
 	// it is already published to, which needs no approval.
 	canShareAccount := permission == "owner" && (allowed || repository.OwnerAccountShareEnabled() &&
 		(meeting.Status == model.StatusDone || meeting.Status == model.StatusError)) ||

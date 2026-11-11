@@ -22,7 +22,7 @@ import { AccountSignals } from '@/components/account/AccountSignals';
 import { AccountFlow } from '@/components/account/AccountFlow';
 import { AccountKB } from '@/components/account/AccountKB';
 import { AccountLinksPanel } from '@/components/account/AccountLinksPanel';
-import { AccountPeople } from '@/components/account/AccountPeople';
+import { AccountPeople, type MentionResolveProgress } from '@/components/account/AccountPeople';
 import { eventProjectLinks } from '@/lib/accountOverview';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
@@ -56,6 +56,8 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
   const searchParams = useSearchParams();
   const { membershipRevision } = useAuth();
   const [selectedId, setSelectedId] = useState(accountId);
+  // Bumped after a parent save so the customer tree reloads its hierarchy.
+  const [listRevision, setListRevision] = useState(0);
   const selectAccount = (next: string) => {
     setSelectedId(next);
     const params = new URLSearchParams(searchParams.toString());
@@ -63,15 +65,15 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
     router.push(`/accounts/${encodeURIComponent(next)}${params.size ? `?${params}` : ''}`, { scroll: false });
   };
   return (
-    <div className="mx-auto w-full max-w-7xl min-w-0 p-4 lg:p-8">
+    <div className="w-full min-w-0 p-4 lg:p-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight text-text-main">고객 Accounts</h1>
         <a href={`/accounts${searchParams.size ? `?${searchParams}` : ''}`} className="text-sm font-semibold text-primary hover:underline">고객 생성 · 계층 관리</a>
       </div>
-      <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <AccountWorkspaceSidebar key={membershipRevision} userId={userId} selectedId={selectedId} onSelect={selectAccount} />
+      <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-6">
+        <AccountWorkspaceSidebar key={membershipRevision} userId={userId} revision={listRevision} selectedId={selectedId} onSelect={selectAccount} />
         <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
-          {selectedId && selectedId !== '_' ? <AccountDetailContent key={selectedId} accountId={selectedId} />
+          {selectedId && selectedId !== '_' ? <AccountDetailContent key={selectedId} accountId={selectedId} onParentUpdated={() => setListRevision(value => value + 1)} />
             : <p className="text-sm text-text-secondary">고객을 선택하세요.</p>}
         </div>
       </div>
@@ -79,10 +81,10 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
   );
 }
 
-function AccountWorkspaceSidebar({ userId, selectedId, onSelect }: {
-  userId: string; selectedId: string; onSelect: (accountId: string) => void;
+function AccountWorkspaceSidebar({ userId, revision, selectedId, onSelect }: {
+  userId: string; revision: number; selectedId: string; onSelect: (accountId: string) => void;
 }) {
-  const list = useAccountWorkspaceAccounts(userId);
+  const list = useAccountWorkspaceAccounts(userId, revision);
   return (
     <div className="min-w-0">
       {list.loading ? <p role="status" className="text-sm text-text-secondary">고객 목록을 불러오는 중…</p> : (
@@ -151,7 +153,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const [accountResult, setAccountResult] = useState<{ scope: typeof readScope; account: Account } | null>(null);
   const account = accountResult?.scope === readScope ? accountResult.account : null;
   const caps = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
-  // A merging or merged Account is read-only (ADR-072); the owner keeps the merge controls.
+  // A merging or merged Account is read-only (ADR-022); the owner keeps the merge controls.
   const mergeFenced = !!account && (!!account.mergingInto || !!account.mergedInto);
   const canEdit = caps.canEdit && !mergeFenced;
   const isOwner = caps.isOwner && !mergeFenced;
@@ -177,7 +179,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   }, [isAuthenticated, accountId, account, readScope]);
   const billingEntry = account && billing?.scope === readScope ? billing.entry : null;
   const billingVisible = billingEntry !== null;
-  // Events, like contacts, are for direct members only (ADR-063).
+  // Events, like contacts, are for direct members only (ADR-021, contact encryption).
   const eventsVisible = !!account && account.accountId === accountId && !!user?.userId
     && account.members.some((member) => member.userId === user.userId);
   const tabs = visibleAccountTabs(billingVisible, eventsVisible);
@@ -218,6 +220,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const [inviting, setInviting] = useState(false);
 
   const activeAccountIdRef = useRef(accountId);
+  const peopleResolveProgress = useRef<MentionResolveProgress>(new Map());
   const mounted = useRef(true);
   const inviteGeneration = useRef(0);
   const accessLossGeneration = useRef(0);
@@ -237,6 +240,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     setPendingNoticeAccountId(null);
   }, []);
   useLayoutEffect(() => {
+    peopleResolveProgress.current.clear();
     mounted.current = true;
     activeAccountIdRef.current = accountId;
     inviteGeneration.current++;
@@ -610,7 +614,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
         ) : account && (
           <>
             {mergedInto && (
-              // A tombstone stays readable for its unmoved categories (ADR-072).
+              // A tombstone stays readable for its unmoved categories (ADR-022).
               <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
                 <span>{ACCOUNT_MERGE_COPY.mergedBanner}</span>
                 <button type="button" onClick={() => router.push(`/accounts/${encodeURIComponent(mergedInto)}`)} className="font-semibold underline">{ACCOUNT_MERGE_COPY.openTarget}</button>
@@ -683,7 +687,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                         flow={flowState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
                       <SectionStatus {...peopleState} />
                       {peopleState.data && <AccountPeople accountId={accountId} userId={user.userId}
-                        data={peopleState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
+                        data={peopleState.data} resolveProgress={peopleResolveProgress}
+                        onChanged={refreshOverview} onAccessLost={onAccessLost} />}
                       <AccountLinksPanel accountId={accountId} userId={user.userId} projectNames={projectNames}
                         revision={linksRevision} onChanged={refreshOverview} onAccessLost={onAccessLost} />
                     </>
@@ -704,7 +709,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                       {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
                         const isOwnerRow = m.userId === account.ownerUserId;
                         // Any member (not just the owner) may change another
-                        // member's role -- removal stays owner-only (ADR-034).
+                        // member's role -- removal stays owner-only (ADR-015, member permissions).
                         const isMember = canEdit;
                         return (
                           <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
@@ -778,7 +783,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                   </section>
 
                   {account.accountId === accountId && user?.userId && account.members.some((member) => member.userId === user.userId) && (
-                    <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId} />
+                    <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
+                      account={{ name: account.name, aliases: account.aliases ?? [], domains: account.domains ?? [] }} />
                   )}
                 </>
               )}

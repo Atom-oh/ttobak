@@ -78,7 +78,7 @@ export interface GatewayStackProps extends cdk.StackProps {
    * Off by default; when off, ttobak-api's configuration is unchanged.
    */
   apiTelemetryEnabled?: boolean;
-  /** ADR-033 cost/sizing simulator */
+  /** ADR-010 cost/sizing simulator */
   simRole?: iam.IRole;
   simCodeInterpreterId?: string;
 }
@@ -786,7 +786,7 @@ export class GatewayStack extends cdk.Stack {
     });
     qaJobsMapping.node.addDependency(qaJobsPolicy);
 
-    // Cost/sizing simulator worker (ADR-033) — invoked async by the api
+    // Cost/sizing simulator worker (ADR-010) — invoked async by the api
     // Lambda (InvocationType=Event) once a run is recorded as "queued".
     // 15-minute timeout budgets for a Code Interpreter session (10-minute
     // sessionTimeoutSeconds in the handler) plus up to 3 codegen/execute
@@ -831,7 +831,7 @@ export class GatewayStack extends cdk.Stack {
         throw new Error('ttobak:mcpResourceAudience must be the exact HTTPS /api/mcp URL');
       }
     }
-    // HTTP MCP (ADR-045): the installed-package HTTP server bundled as one
+    // HTTP MCP (ADR-003, transports): the installed-package HTTP server bundled as one
     // Lambda behind the existing API. Enabled by the same context value that
     // admits the MCP audience, so the audience and the endpoint cannot diverge.
     // API Gateway caps HTTP API integrations at 30s, so the Lambda runs 29s and
@@ -1039,7 +1039,7 @@ export class GatewayStack extends cdk.Stack {
         integration: mcpIntegration,
         authorizer: jwtAuthorizer,
       });
-      // Public RFC 9728 discovery documents (ADR-045). Deliberately without an
+      // Public RFC 9728 discovery documents (ADR-003, transports). Deliberately without an
       // authorizer: static metadata, no meeting or user data. Do not add other
       // unauthenticated routes here.
       for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/api/mcp']) {

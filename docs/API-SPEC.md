@@ -34,7 +34,7 @@ additionally requires safe JavaScript revisions, with input maximum
 `Number.MAX_SAFE_INTEGER - 1`. Window and event intervals use RFC3339 instants,
 have positive duration and are at most 93 elapsed days. An upsert whose
 `accountId` names a merging or merged account rejects the batch with 409
-`ACCOUNT_MERGING` (ADR-072); reads still return events on a merge tombstone.
+`ACCOUNT_MERGING` (ADR-022); reads still return events on a merge tombstone.
 
 A sync batch whose DynamoDB transaction would exceed 100 items is rejected with
 `413 CALENDAR_BATCH_TOO_LARGE` (the runner sends at most 12 mutations).
@@ -104,7 +104,7 @@ use the same query, limit and 14,000-byte rules as personal reads, and
 return `503` when any shared meeting on the page has no decryptable row. Shared events are not
 exposed to QA, briefs, insights, KB, vault export or any MCP tool.
 
-Account-sharing fields (ADR-066) are validated and stored encrypted with the
+Account-sharing fields (ADR-026) are validated and stored encrypted with the
 event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
 use the Account ID format and differ from each other; `shareEvidence` holds up to
 three distinct kinds (`title`, `location`, `domain`) and requires
@@ -137,7 +137,7 @@ acceptance or the Calendar 5 persisted integration.
 
 ## SA performance
 
-Owner-only SA performance data ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)).
+Owner-only SA performance data ([ADR-023](decisions/ADR-023-sa-performance-data-residency.md)).
 Routes are in `backend/internal/handler/performance.go`, validation in
 `backend/internal/service/performance.go`, and wire types in
 `backend/internal/model/performance.go`. Every route reads or writes only the
@@ -156,8 +156,13 @@ runner collects and syncs.
 | `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,reason?,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
+| `PUT /api/performance/reports/{periodKey}` | JSON report (below), at most 256 KiB | `{periodKey,generatedAt}`; replaces any report for the key |
+| `GET /api/performance/reports` | none | `{items:[{periodKey,label,generatedAt,partial}],truncated}` newest `generatedAt` first; at most 200 items |
+| `GET /api/performance/reports/{periodKey}` | none | the stored report; `404` when absent or expired |
+| `DELETE /api/performance/reports/{periodKey}` | none | `204`; `404` when absent |
 
-Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
+Sync bodies (all routes above except the report PUT, whose cap is 256 KiB) are
+limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
 trailing data and unsupported query parameters are rejected. A sync batch has at
 most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
 lowercase); `expectedRevision` is the source's current revision (zero when new).
@@ -175,6 +180,52 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
   Descriptions and comments are not accepted.
 - Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
   or task ID.
+
+### Performance reports
+
+Reports are owner-private `PERFREPORT#{periodKey}` rows written by the owner's
+Mac (residency and allowed content: ADR-023). Validation is in
+`backend/internal/model/performance_report.go` and
+`backend/internal/service/performance_report.go`. Another user's report, like
+a missing one, is `404`.
+
+Period keys: `W{ISO year}-{01..53}` (ISO Monday through Sunday; week 53 only
+in a 53-week year), `Q{year}-{1..4}`, `Y{year}`, and
+`C{YYYY-MM-DD}_{YYYY-MM-DD}` with start no later than end and at most 400 days
+inclusive. Years run from 2000 to 2100; any other key is `400`.
+
+The PUT body is strict JSON (as above, nesting up to the table cell) with
+required top-level fields `schemaVersion` (1), `periodKey` (equal to the path),
+`period {start,end,label}` (`start`/`end` equal to the key's first and last
+`YYYY-MM-DD`, nonempty `label`), `alias`, `generatedAt` (RFC 3339 with at most 9 fractional digits, at most 35 bytes), `model`,
+`partial`, `summary`, `ledger`, `sections`, `actions` and `dataBasis`.
+`missingSources[]` and `highlights {projects,initiatives,channels,programs}`
+may be absent; so may a section's `tables`/`cards`, a ledger `note` and a data
+basis `estimates`. Null is never accepted, and absent lists read back as `[]`.
+
+- `ledger[]` (at most 50): `{label,value,unit,note}`; `sections[]` (at most
+  40, unique `id` matching `[A-Za-z0-9_-]{1,64}`): `{id,title,lede,paragraphs[],
+  tables[{columns[],rows[][]}],cards[{title,body}]}`; `actions[]` (at most
+  200): `{severity: hi|mid|lo, title, detail, source}`; `dataBasis[]` (at most
+  50): `{source,query,exclusions,estimates}`.
+- Table cells are strings. A table has 1 to 50 columns and at most 500 rows,
+  and every row has one cell per column. A section has at most 100
+  paragraphs, 20 tables and 50 cards.
+- Lengths in code points: titles, labels, names, columns, ledger
+  `label`/`value`/`unit`, sources and list items at most 200; `summary`,
+  ledes, paragraphs, cells, card bodies, action details, ledger notes and
+  data-basis text at most 4,000. Each highlights list and `missingSources`
+  hold at most 20 items.
+- Every string is plain text: valid UTF-8 without control characters other
+  than tab and newlines, and without `<` followed by a letter or `/`, `](`
+  or `slack.com` (any case). The compact re-encoded report must also fit in
+  256 KiB.
+
+A PUT for a period already past its retention returns `400`. The listing reads
+at most 1,000 rows (one extra row is probed) with a projection of summary fields
+and sorts them by `generatedAt`; `truncated` is true when more rows exist than
+the read or the 200-item response holds. Rows past their retention are hidden
+before TTL deletion.
 
 The mappings list reads at most 501 assignment rows (no cursor), returns the
 first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
@@ -237,7 +288,7 @@ account names, aliases and domains come only from those accounts.
   intake window, so calendar-based gaps cover only events from that time on.
 
 Residency: rows use default table encryption without envelope sealing (an
-ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
+ADR-023 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
 two years after their own year through `pendingShareExpiresAt`; batch receipts
 expire after seven days. Errors use `{error:{code,message}}` with `400`, `401`,
 `403`, `404`, `409`, `413` and `500`, as for the private calendar. Responses use
@@ -300,7 +351,7 @@ in unmatched or encoded URLs. Public-share cleanup failures also omit tokens
 and provider error text. Existing logs and previously exposed links require
 separate operational review; changing the logger does not revoke a public link.
 
-The connector API consumer (ADR-053) is a service-IAM Lambda invocation,
+The connector API consumer (ADR-003, connector delegation) is a service-IAM Lambda invocation,
 not an additional HTTP route. Its top-level `ttobak.connector.invoke.v1` frame
 binds the operation, request ID and exact argument bytes to a signed delegation.
 When `CONNECTOR_SIGNING_KEY_ARN` is configured, the consumer loads that exact
@@ -372,7 +423,7 @@ Unicode code points and opaque `cursor` (at most 2,048 characters).
 Account filters classify accessible meetings; they never grant access.
 Reads neither materialize invitations nor create or update user profiles.
 Account-team readers see published meetings' current derived previews, as
-owners do (ADR-049 2026-11-06 amendment); unpublished meetings are not listed.
+owners do (ADR-029 source provenance, 2026-11-06 amendment); unpublished meetings are not listed.
 
 Each response is at most 10,000 encoded JSON bytes. Reassemble `dataJson`
 fragments for the same revision before parsing the complete group. Discovery
@@ -491,7 +542,7 @@ Member removal and legacy direct addition retire it atomically; cleanup conflict
 remain retryable. A durable control row also gates queue/claim transactions and bootstrap
 capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
 continuation. Project user queues are isolated from old readers; transactional rows, TTL and
-the required incompatible-API rollback drain are specified in ADR-044.
+the required incompatible-API rollback drain are specified in ADR-025.
 
 Admin user summaries include `emailVerified`. Password reset requires an enabled,
 CONFIRMED user with verified email; missing verification returns 409
@@ -540,8 +591,8 @@ The Billing routes under `/api/billing/*` are served by the separate Billing BFF
 API, so they are not part of the Go route inventory above. Identity comes only
 from `Authorization: Bearer <JWT>`, verified by the BFF (issuer, signature,
 expiry and client allowlist; see
-[ADR-056](decisions/ADR-056-billing-service-origin-and-identity.md)). Access
-uses canonical direct membership or validated ancestor membership (ADR-060);
+[ADR-012](decisions/ADR-012-billing-origin-identity-and-team-access.md)). Access
+uses canonical direct membership or validated ancestor membership (ADR-012);
 pending rows grant nothing. Billing uploads and POSTs work only on the custom domain
 (`PUBLIC_URL`), not on the raw CloudFront domain.
 
@@ -610,7 +661,7 @@ never grants a private meeting. A direct edit share keeps edit; a direct read
 share yields to live team edit on a published meeting (ADR-016 amendment).
 
 Clients expand selected visible account groups to accessible descendants and send
-the resulting IDs. With ADR-058 activated, canonical ancestor membership gives
+the resulting IDs. With ADR-015 (descendant reads) activated, canonical ancestor membership gives
 read-only access to explicitly published descendant content, except meetings:
 every direct or inherited member gets `edit` on a published meeting (ADR-016
 2026-11-06 amendment). Account filters remain classification. Independent
@@ -675,7 +726,7 @@ and an unchanged value is not written. It cannot be combined with an
 `expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
 (`""` for legacy rows). The field is stored and accepted but no longer
 affects generation: Korean final notes always use the Korean directive
-(`noteLanguageDirective`, ADR-070). Both summary captures still pin the field in
+(`noteLanguageDirective`, ADR-029, shareable by default). Both summary captures still pin the field in
 their source conditions, so a change during a run fails that run with
 `SOURCE_CHANGED` and keeps the prior summary.
 
@@ -690,8 +741,12 @@ results to the current source. Malformed arrays or invalid entries surface
 `fieldInsightsError: "INVALID_INSIGHTS"`; usable entries can still be returned.
 The projection allows at most 50 items and 64 KiB of encoded array JSON. Text
 and evidence are capped at 2,000 code points each, implication/nextAction at
-1,000 each, ID at 128, timestamp marker at 64, and entities at 20 entries of 128
-code points each. Any size/count shortening sets `fieldInsightsTruncated: true`.
+1,000 each, ID at 128 and timestamp marker at 64. Both `entities` and optional
+`personEntities` are capped at 20 entries of 128 code points each.
+`personEntities` contains model-classified person candidates from `entities`;
+its absence means legacy data or no classified people. See the
+[person-candidate rules](decisions/ADR-021-account-contacts-links-and-people.md#resolver).
+Any size/count shortening sets `fieldInsightsTruncated: true`.
 These bounds cover the insight projection, not the entire legacy detail body.
 Saved notes are user input, distinct from generated content. Stuck transcription
 or summarization is reconciled after 60 minutes; summarize retry eligibility is a
@@ -774,7 +829,7 @@ Restricted account views never write their hidden content/action fields.
 Unchanged derived fields are also omitted, preserving safe summary clearance
 for attribution-only corrections. Action-item updates target JSON text/assignee
 fields and preserve task IDs, completion and other metadata.
-See ADR-051.
+See ADR-016.
 
 `POST /api/kb/upload` `{fileName, fileType, accountId?}` returns `{uploadUrl,
 key, expiresIn, headers?}`. An empty `accountId` is a personal file and the
@@ -886,7 +941,7 @@ after authorization. Storage references are never returned. Source:
 `handler/meeting_reading.go`, `service/meeting_reading*.go`; MCP usage:
 [adapter README](../mcp-server/README.md).
 
-HTTP MCP (ADR-045) is served by the `ttobak-mcp` Lambda, not the Go API:
+HTTP MCP (ADR-003, transports) is served by the `ttobak-mcp` Lambda, not the Go API:
 `ANY /api/mcp` (JWT authorizer; POST JSON-RPC, stateless, other methods 405) and
 the unauthenticated static discovery documents
 `GET /.well-known/oauth-protected-resource` and
@@ -918,7 +973,7 @@ there is no transcript fallback when the summary is missing. Conflicts return
 ### Accounts and projects
 
 Meeting management (ADR-016 2026-11-06 amendment; for inherited members it
-supersedes ADR-058's invitation/linking restriction for meetings only): the
+supersedes ADR-015 (descendant reads)'s invitation/linking restriction for meetings only): the
 creator or a live direct or inherited member of the account a meeting is
 published to may call the share, revoke, pending-revoke, account,
 share-account, link, image/file upload, recover, rediarize, audio-crop, simulator
@@ -969,7 +1024,7 @@ cursor parameters and recheck the requester's access. Invalid input returns
 errors a generic 500. Responses are not cached and contact content is not logged.
 
 Contact fields are KMS envelope-encrypted per row before storage and bound to
-the account and contact (ADR-063); without a configured key, contact routes
+the account and contact (ADR-021, contact encryption); without a configured key, contact routes
 return 503 `CONTACTS_UNAVAILABLE`; delegated connector creates seal the row the
 same way and return that 503 before any write. Contact rows have no TTL and remain until a
 direct member deletes them. Point-in-time recovery can retain deleted, still
@@ -1051,7 +1106,7 @@ automatic linker never re-creates that pair. None of the three routes is
 connector-delegable; the list carries meeting-derived evidence. People edges
 (below) live in the `LINK#meeting#` range and never appear on these routes.
 
-The `/api/accounts/{accountId}/people` routes serve ADR-067 people edges for
+The `/api/accounts/{accountId}/people` routes serve ADR-021 people edges for
 **direct** members, checked on every request (not connector-delegable;
 `Cache-Control: no-store`; 400 uses `BAD_REQUEST`, an unreadable contact
 directory 503 `CONTACTS_UNAVAILABLE`). Meeting IDs are `{ownerUserId}:{meetingId}`,
@@ -1061,9 +1116,30 @@ and only meetings currently published to the account count:
   over visible meetings. `GET /people/mentions?cursor=` returns `{groups,
   nextCursor?, truncated}`: at most 100 unresolved groups `{key, text, meetings,
   roles}` where `key` is 32 lowercase hex. Cursors are opaque base64url.
+- Candidate classification: mixed insight `entities` do not automatically
+  enter person review. The existing extraction call supplies model-classified
+  `personEntities`; subset/deduplication/size checks and an exact substring
+  check against the extraction input filter that output. This is not proof
+  that each candidate is a person; incorrect classifications can still be
+  ignored. Known entities retain deterministic person/account/project matching.
+- Read-time cutover hides two row kinds: insight rows without the stored
+  `personCandidate` attribute, and rows from any source whose mention is a
+  single or grouped speaker code (formats in ADR-021).
+  Legitimate legacy insight names are hidden too. They return only
+  after insight re-extraction and a people resolver run; no backfill is
+  scheduled by this change. Filtering itself makes no model call and deletes
+  no meeting content, contacts or existing manual edges.
 - `POST /people/mentions/{mentionKey}/resolve` takes `{kind: member|contact,
-  id}`, writes manual edges for the visible rows and returns `{written,
-  remaining}`; `remaining` means more rows are left for another call.
+  id, cursor?}`, writes at most 100 visible manual edges and returns `{written,
+  remaining, nextCursor?}`. It skips hidden rows across at most 20 hash pages
+  (at most 2,000 stored rows), retaining the 300 publication-read bound.
+  `remaining` indicates unread stored rows, not a count of visible candidates.
+  Send `nextCursor` as `cursor` to continue; it is scoped to the account and
+  mention hash and grants no access. Reads and writes revalidate authorization.
+  The app retains continuation for the same account, viewer, group and target
+  when the member repeats the connection action. A stale request containing
+  only hidden rows writes zero edges. A fully hidden partial review page also
+  retains its row cursor so later classified candidates remain reachable.
   `POST .../ignore` returns 204 and hides the text account-wide (no undo route).
 - `GET /people/edges?meetingId=` returns `{edges, labels}` for one meeting;
   `labels` is keyed `{kind}:{id}` and holds only readable targets. `POST
@@ -1086,7 +1162,7 @@ as invalid input. A stage change sets `stageChangedAt` and appends an immutable
 `STAGEHIST#` row with the update; legacy values outside the list read as unmapped
 and projects without a change time show an unknown stage age. Project list rows
 carry `stageChangedAt` (when recorded) and `stageMapped`, like the detail
-response. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
+response. See [ADR-021, relationship links](decisions/ADR-021-account-contacts-links-and-people.md).
 
 `GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
 for **direct** members (membership is read on every call; no query parameters;
@@ -1237,7 +1313,7 @@ Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 order and resolved range. Without `from`, ascending lists start now (upcoming)
 and descending lists cover all past times. Responses are `{events,
 nextCursor}` and are not cached. Event fields except `startAt` are sealed like
-contacts (ADR-063); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
+contacts (ADR-021, contact encryption); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
 Delegated MCP clients create events through the private bridge like contacts:
 `{event, idempotencyKey}` with strict decoding (no unknown, server-owned or
 null fields), direct membership and current read+write approval pinned in the
@@ -1303,7 +1379,7 @@ relinking in the API; code checks alone do not establish live revocation.
 Account creation accepts optional `ownerEmail`, `keepCreatorAsMember` and a UUID
 `requestId` in a single JSON object capped at 16 KiB. Without another Owner,
 the creator remains Owner. A different Owner is resolved to the current Cognito
-sub; missing identities use ADR-054's invitation gates. Create META, the canonical
+sub; missing identities use ADR-015's invitation gates. Create META, the canonical
 Owner and optional creator AM atomically. `keepCreatorAsMember: false` creates no
 creator membership or read grant. The response returns the actual `ownerUserId`,
 initial members, `creatorMember`, `ownerInvitationPending` (an initial invitation
@@ -1318,7 +1394,7 @@ recorded creator within thirty days may resend only the canonical initial Owner
 invitation. Recheck the current Cognito email/sub, pending password status,
 allowlist and shared hourly counter. Confirmed users return 409; identity or
 delivery dependency failures return 503. Non-members gain no Account read access.
-The operation's connector inventory disables delegation (ADR-055).
+The operation's connector inventory disables delegation (ADR-015, initial Owner).
 
 `POST /api/accounts/{accountId}/owner-transfer` requires verified email and a body
 `{"targetUserId"}` capped at 1,024 bytes with unknown fields rejected. Only the
@@ -1334,7 +1410,7 @@ non-member target; 409 concurrent change; 503 Cognito unwired or lookup failure.
 It is the only path that grants Owner; its connector inventory disables delegation.
 
 `GET /api/accounts/{accountId}/merge-preview?into={id}` is a read-only inventory of
-merging the path Account into `into` (ADR-072). The requester must own the source
+merging the path Account into `into` (ADR-022). The requester must own the source
 (MEMBER role and META owner) and be a direct member of the target. Response:
 `fromAccountId`, `intoAccountId`, `counts` (`members`, `meetings`, `projects`,
 `research`, `contacts`, `events`, `children`; `-1` when a bounded read cap is
@@ -1348,7 +1424,7 @@ target direct member; 404 missing Account; 409 `MERGE_INELIGIBLE` with the reaso
 or large). The connector inventory disables delegation.
 
 `POST /api/accounts/{accountId}/merge` starts merging the path Account into
-`intoAccountId` (ADR-072). Body `{"intoAccountId","acceptUnmoved"}` is capped at
+`intoAccountId` (ADR-022). Body `{"intoAccountId","acceptUnmoved"}` is capped at
 1,024 bytes with unknown fields rejected, and the email must be verified. It
 re-checks the preview's eligibility rules, requires `acceptUnmoved: true` when any
 unmoved category is present (billing always is), and rejects a merge whose source
@@ -1376,7 +1452,7 @@ source or of the job's target: `fromAccountId`, `intoAccountId`, `state`
 `finishedAt` and `abortedAt`. Lease and cursor state are not exposed. 404 when a source member
 asks and no job exists; 403 otherwise. Both routes disable connector delegation.
 
-Account writes are fenced while an Account merges (ADR-072). Writers that check the
+Account writes are fenced while an Account merges (ADR-022). Writers that check the
 Account META row also require `mergingInto` and `mergedInto` to be absent in the same
 transaction: member add, removal and role change, owner transfer, parent changes
 (child and new parent), contact and event writes, link create and delete, project and
@@ -1394,7 +1470,7 @@ before mail and transactionally before creation. Parent updates require child ow
 and new-parent membership; the required field uses an empty string to detach,
 not omitted/null. Self/cyclic/deep ancestry (over 64 nodes) is rejected;
 transactional ancestry checks and retries protect concurrent moves. Conflicts
-return 409. Canonical child references change in the same transaction. ADR-058
+return 409. Canonical child references change in the same transaction. ADR-015 (descendant reads)
 adds read-only descendant access when `ACCOUNT_DESCENDANT_READS_ENABLED=1`;
 private meeting links, mutations and Billing continue to require direct grants.
 
@@ -1432,7 +1508,7 @@ per caller per UTC hour; counter failure returns 503 and limit exhaustion 429.
 `INVITATION_GRANT_FAILED` (500) records requested delivery followed by queue
 failure. Account materialization transactionally revalidates current inviter
 membership, the invited sub, expiry and pending-row version. Removal and
-pending-invite revocation remain owner-only (ADR-034/054).
+pending-invite revocation remain owner-only (ADR-015, member permissions, invitations).
 Project permissions are separate: owner/direct member/member of a
 linked account. The service list unions those access paths; project deletion
 rejects remaining relationships. Canonical sets and reverse references change in
@@ -1456,7 +1532,7 @@ are preserved; absent legacy Insight revisions are minted to reject stale copies
 Generic requests cannot assign approval. Protected Account readers accept only a
 current owner/audience/generation/hash-bound approval. Content/live writes, summary
 publication and audience changes invalidate it even during writer rollback.
-`canCreateGrant` retains direct-email/pending safe-source semantics; see ADR-059.
+`canCreateGrant` retains direct-email/pending safe-source semantics; see ADR-029 (owner approval).
 
 For a protected account membership, unapproved unknown/private meeting derivation withholds
 summary, tasks, insights, tags, sentiment and live draft context. Parent-owned
@@ -1556,7 +1632,7 @@ Authenticated `GET /api/navigation/accounts` and `/api/navigation/projects`
 provide bounded metadata catalogs (`pageSize` 1–50, default 20; opaque `cursor`;
 10,000 encoded bytes). GSI candidates are revalidated against consistent
 canonical membership/resource reads; indexes never grant access. Account
-hierarchy discovery includes validated descendant read grants under ADR-058.
+hierarchy discovery includes validated descendant read grants under ADR-015 (descendant reads).
 Project pages visit ownership, direct
 membership and linked-account membership. Deduplication uses only exact IDs
 already emitted, never an inferred earlier path: membership/ref indexes can lag.
@@ -1817,7 +1893,7 @@ runs are persisted to error by GetSimRun, not merely displayed as error.
 Only validated requirements/options enter codegen; option descriptions still
 influence the prompt. The interpreter's empty IAM role and SANDBOX network are the
 execution boundary. Worker updates require matching simRunId. Outputs stay under
-images/ and files/; details are in ADR-033 and service/sim.go.
+images/ and files/; details are in ADR-010 and service/sim.go.
 
 ### Admin and settings
 
@@ -2022,6 +2098,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/performance/mappings` | `performanceHandler.ListMappings` |
 | PUT | `/api/performance/mappings/{sfdcAccountId}` | `performanceHandler.PutMapping` |
 | GET | `/api/performance/missed` | `performanceHandler.ListMissed` |
+| GET | `/api/performance/reports` | `performanceHandler.ListReports` |
+| GET | `/api/performance/reports/{periodKey}` | `performanceHandler.GetReport` |
+| PUT | `/api/performance/reports/{periodKey}` | `performanceHandler.PutReport` |
+| DELETE | `/api/performance/reports/{periodKey}` | `performanceHandler.DeleteReport` |
 | GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
@@ -2470,7 +2550,7 @@ saved summary text.
 The explicit owner `sharingSafe` mode uses the selected saved transcript, saved
 notes, verified current DOCUMENT extraction and the owner's own image analyses.
 It excludes prior generated and preview evidence; no mode reads linked
-predecessors (ADR-070). It is the owner-only reset; ordinary human edits keep
+predecessors (ADR-029, shareable by default). It is the owner-only reset; ordinary human edits keep
 `safe` provenance and need no reset. Mode is persisted and pinned through delivery.
 Success atomically publishes safe provenance, resets tasks/insights/tags/sentiment/
 live draft, and deletes action-analysis and simulator state. Source/edit-grant CAS
@@ -2487,7 +2567,7 @@ without a meeting check during the frontend rollout; remove that allowance once 
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
 verified document extraction, and writes Korean notes; the POST body never selects a language and the stored `noteLanguage`
-does not change it (ADR-070). It does not rerun STT or refinement and does not
+does not change it (ADR-029, shareable by default). It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;

@@ -283,12 +283,10 @@ The [Markdown components](../../../frontend/src/components/markdown) already imp
 parts of the presentation work. Do not classify all of this proposal as either
 shipped or missing based on one component.
 
-Relevant decisions: [ADR-004](../../decisions/ADR-004-crawler-insights-for-sa-knowledge-base.md),
+Relevant decisions: [ADR-004](../../decisions/ADR-004-insights-crawler-and-news.md),
 [ADR-008](../../decisions/ADR-008-custom-dictionary-for-stt-accuracy.md),
 [ADR-020](../../decisions/ADR-020-personal-documents.md),
-[ADR-011](../../decisions/ADR-011-interactive-deep-research.md),
-[ADR-021](../../decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md),
-and [ADR-026](../../decisions/ADR-026-insights-relevance-gate-and-curation.md).
+and [ADR-011](../../decisions/ADR-011-interactive-deep-research.md).
 The proposed model/residency, private-report, and per-user vocabulary decisions
 would need explicit new/superseding ADRs when implemented.
 

@@ -416,7 +416,7 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       expect(byKey(key).AuthorizationType ?? 'NONE').toBe('NONE');
     }
     // Unauthenticated routes stay limited to the public document redirect and the
-    // two static discovery documents (ADR-045).
+    // two static discovery documents (ADR-003, transports).
     expect(routes.filter(route => (route.AuthorizationType ?? 'NONE') === 'NONE').map(route => route.RouteKey).sort()).toEqual([
       'GET /.well-known/oauth-protected-resource',
       'GET /.well-known/oauth-protected-resource/api/mcp',

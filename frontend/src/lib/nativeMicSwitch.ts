@@ -1,7 +1,7 @@
 /** Longest app error detail shown with a failed microphone switch. */
 const MAX_DETAIL_CHARS = 300;
 
-/** The message for a failed mid-recording microphone switch (ADR-061):
+/** The message for a failed mid-recording microphone switch (ADR-017):
  * Korean guidance first, then the app's own reason. `captureLost` means the
  * recording no longer captures anything and must be stopped to save it. */
 export function nativeMicSwitchError(err: unknown, captureLost: boolean): string {

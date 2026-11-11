@@ -77,7 +77,7 @@ model. Browsers also use authenticated Cognito/Transcribe SDK calls and signed S
 PUTs. The Mac app records a Core Audio system-audio tap mixed with the microphone
 (ADR-024); native finished audio uploads stream directly from disk in Rust; live
 PCM crosses IPC for captions. It also polls Core Audio microphone users to offer,
-never start, a recording for detected meetings (ADR-061). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-073). The public-document route is the single intentional
+never start, a recording for detected meetings (ADR-017). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-019). The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.
 Extraction's event target/worker, API producers and summary consumer are wired;
 QA/UI activation remains separate. The KB activation configuration retains the
@@ -87,14 +87,14 @@ deployed activation or completed public acceptance.
 
 ## Identity onboarding
 
-Account hierarchy read access follows ADR-058: current canonical ancestor
+Account hierarchy read access follows ADR-015 (descendant reads): current canonical ancestor
 membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
-Linked meetings are navigation only and never note evidence (ADR-070);
+Linked meetings are navigation only and never note evidence (ADR-029, shareable by default);
 mutations remain direct-only. Billing read/upload access also follows ancestor
-membership, with an atomic path/grant confirmation (ADR-060).
+membership, with an atomic path/grant confirmation (ADR-012).
 
 Cognito identity, the app PROFILE and resource membership are separate states.
 The authenticated session bootstrap coordinates profile creation and eligible
@@ -103,7 +103,7 @@ a separate user queue plus a project reverse row, keeping older API readers from
 consuming unknown grant kinds. Transactions bind project ownership, invitation
 version/expiry and recipient sub before publishing membership. JWT email
 verification remains required; account roles and global admin rights are never
-inherited from a project invitation. See ADR-044 and API-SPEC for contracts.
+inherited from a project invitation. See ADR-025 and API-SPEC for contracts.
 
 Deploy and verify the API with `/api/session/bootstrap` and project pending routes
 before publishing the new frontend. The new frontend requires bootstrap and will
@@ -120,11 +120,11 @@ stack and origin reached through a hashed, 60-second `HANDOFF#` code. The
 hand-off code path remains in the API but is off in the checked-in configuration
 (INFRA-SPEC "Billing Insight hand-off").
 
-The Billing service (ADR-056, `services/billing/`) is part of TTOBAK, distinct
+The Billing service (ADR-012, `services/billing/`) is part of TTOBAK, distinct
 from that companion. CloudFront routes `/api/billing/*` to the Billing BFF, an
 IAM-authenticated Lambda Web Function behind OAC, which verifies the forwarded
 TTOBAK JWT and grants Billing access through current direct or ancestor Account
-membership (ADR-060). `/billing` frames the
+membership (ADR-012). `/billing` frames the
 static `/billing-app/` pages. Uploads go by presigned URL through
 `/billing-upload/*`, rewritten to the Billing data bucket. The Python worker
 (`services/billing/worker`, `run_account.sh`: validate, extract, datasets, check;
@@ -155,7 +155,7 @@ retired. Its data moves in a one-time cutover
    placeholder-protected and without speaker labels or times, through the same
    interpreter path to client memory only (`MEETING_TRANSLATION_ENABLED`, daily
    byte budget).
-   In the Mac app only, caption overlay windows (ADR-069) translate on a separate
+   In the Mac app only, caption overlay windows (ADR-018) translate on a separate
    local path: the main window calls Rust, which uses the user's own AWS profile
    (Bedrock Luna for finals, Amazon Translate for interims and fallback) and relays
    text to bundled overlay pages. It never uses the server's `/api/translate`, so
@@ -189,7 +189,7 @@ retired. Its data moves in a one-time cutover
    Refinement and auxiliary calls keep their independent model selection.
    Authorized shared readers can correct known speaker names through the bounded
    speaker endpoint with the existing version comparison. General editing and
-   owner-only re-diarization retain their separate permissions (ADR-051).
+   owner-only re-diarization retain their separate permissions (ADR-016).
 4. Derive account/project material using explicit relations and current access.
    Hierarchy classifies accounts; it never grants membership. Project lists union
    owner, direct membership and linked-account access.
@@ -214,10 +214,10 @@ reads before returning stored excerpts. See [workflow](features/sa-meeting-workf
 
 Calendar data flow: the local `ttobak-mcp intake` runner reads Outlook, matches
 events to Accounts and sends bounded batches to the authenticated calendar API
-(ADR-065). Owner events stay private; an event shared with an Account is written
+(ADR-003). Owner events stay private; an event shared with an Account is written
 as an encrypted share row in that Account's partition and read only by direct
 members. One veto hides it, and QA, briefs, KB, vault export and MCP tools never
-read it (ADR-066).
+read it (ADR-026).
 
 ## New processing and reading contracts
 
@@ -277,7 +277,7 @@ retain their separate ASCII constraint. Rejected usage remains charged;
 unknown or abandoned usage retains its reservation. Immutable attempt keys live
 outside the legacy shared-text prefix. New consumers must verify current
 publication state before those writers activate; see
-[ADR-052](decisions/ADR-052-conditional-news-publication.md).
+[ADR-004, news publication](decisions/ADR-004-insights-crawler-and-news.md).
 The staged `news_worker.py` now joins current source checks, HTTPS-only article
 fetches, queued-candidate freshness checks, model accounting, immutable uploads
 and conditional publication. Its input boundary uses the same exact Unicode
@@ -384,7 +384,7 @@ delivery stages; see the [news release contract](runbooks/knowledge-grade-news-r
 The English meeting note is an independent derivative: `SummaryRequested` with
 target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
 state, regenerates from the transcript, notes, verified documents and image
-analyses (never the Korean note) and writes only `contentEn` fields (ADR-070).
+analyses (never the Korean note) and writes only `contentEn` fields (ADR-029, shareable by default).
 During rollout, a summarize Lambda that predates the English path treats a
 target `en` event as Korean, finds a run-ID mismatch on `ANALYSIS#summary` and
 does nothing; the English row then expires to `INTERRUPTED`, which is retryable.
@@ -406,7 +406,7 @@ within a bounded budget, filters candidates and merges them into the owner's
 personal dictionary; non-owner source edits make a run suggest only. Meeting
 deletion sweeps the meeting's observations and run state.
 
-Account links (ADR-064) connect an account's news, tech documents, events and
+Account links (ADR-021, relationship links) connect an account's news, tech documents, events and
 meetings to its projects through `LINK#`/`LINKTO#` rows written in one
 transaction. After an account-shared summary is published, a non-fatal hook asks
 the lightweight model to match the account's recent news to the meeting and stores
@@ -415,7 +415,7 @@ reads revalidate membership and every endpoint, apply fixed bounds and report
 truncation instead of guessing. Account KB uploads gain a `KBREF#` row at presign;
 QA retrieval scope is unchanged.
 
-Account people edges (ADR-067) bind meeting participants, speakers, assignees and
+Account people edges (ADR-021) bind meeting participants, speakers, assignees and
 insight entities to members, contacts, sub-accounts and projects with a
 deterministic resolver (no model call). Summarize runs it inline after summary
 publication; speaker map and contact changes publish `PeopleResolveRequested` to
@@ -423,7 +423,7 @@ the same Lambda, and `backend/cmd/backfill-account-people` replays older meeting
 Runs hold a per-meeting lease that fences their writes. The people panel, graph
 and flow read the rows back with read-time revalidation.
 
-Account merge (ADR-072) is a resumable summarize-worker job: the owner starts it
+Account merge (ADR-022) is a resumable summarize-worker job: the owner starts it
 from the web dialog (preview, explicit unmoved-items acceptance, then
 `POST /merge`) and the page polls `GET /merge` until `done` or `failed`. A merging
 Account is fenced (writes return 409 `ACCOUNT_MERGING`) and the web page turns
@@ -445,16 +445,25 @@ falling back to the legacy list/export. Collection groups are individually curre
 meeting consumers union overlapping access paths by meeting ID.
 The installed adapter also provides stateless, authenticated HTTP with caller-supplied
 file bytes. Remote hosting and OAuth client acceptance remain separate from code
-readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
+readiness; see [ADR-003, transports](decisions/ADR-003-mcp-access.md).
 Stdio alone can record the Mac microphone through a local ffmpeg child and upload
 the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
-The local intake runner (ADR-065) appends SpecReq task notices to
+The local intake runner (ADR-003, local intake) appends SpecReq task notices to
 `~/.ttobak/intake/notify.jsonl`. The Mac app polls that file every 60 seconds
 (`mac-app/src-tauri/src/intake_notify.rs`), validates each line, dedupes on `key`
 in its own seen store and posts a desktop notification. The file is read only
 when it is a private regular file of at most 1 MiB. Notifications are
 informational and never navigate the app; the task strip on the meetings page
 shows the task.
+
+SA performance reports (ADR-023) follow the same local-first pattern. The Mac app
+(`report_runner.rs`) or `ttobak-mcp report run` starts the owner's own Claude Code
+CLI headless with the `sa-performance-report` skill, a read-only tool allowlist and
+a Seatbelt sandbox for Bash (no network, writes only in the run's work directory).
+The CLI output is validated as JSON by the adapter, which then uploads it with the
+owner's own token to `PUT /api/performance/reports/{periodKey}`. The owner-private
+report routes store and serve it; the web report tab renders it as React text. No
+report generation runs in AWS, and TTOBAK holds no Claude credentials for it.
 
 The private connector transport signs verified request identities and exact arguments,
 then invokes private API and QA consumers through service IAM. Atomic current client
@@ -469,10 +478,10 @@ OAuth issuance and private HTTP transport; HTTP hosts must sign in with a
 dedicated client, while stdio keeps its first-party credentials. Edge challenges
 and resource discovery require the same read scope. Deployed provider, IAM,
 consumer and rollback acceptance are separate from these source flags; see
-[ADR-053](decisions/ADR-053-connector-capability-private-delegation.md).
+[ADR-003, connector delegation](decisions/ADR-003-mcp-access.md).
 
 Billing MCP reads use the caller's own JWT through the existing CloudFront
-Billing Web Function route (ADR-056), separate from Go/QA private delegation.
+Billing Web Function route (ADR-012), separate from Go/QA private delegation.
 The bounded reader bypasses all-account discovery, verifies canonical connector
 policy and current direct/ancestor Billing access twice, and pins published
 CUR/COT source identity. Three read-only tools expose metadata, scoped dataset
@@ -547,7 +556,7 @@ stop legacy fixed-object KB exports. Reader deployment, fixed cutoff, old-writer
 queued-work drain and authorized consumer verification remain independent rollout
 gates; see the [implementation plan](superpowers/plans/2026-10-12-summary-sharing-privacy.md).
 
-[ADR-059](decisions/ADR-059-owner-approved-account-sharing.md) adds separate
+[ADR-029](decisions/ADR-029-note-provenance-and-sharing-safety.md) (owner approval) adds separate
 owner disclosure to the current Account audience without changing provenance,
 generation or output. Approval and publication pin current source and direct
 membership atomically. Account readers bind disclosure to current owner, audience,

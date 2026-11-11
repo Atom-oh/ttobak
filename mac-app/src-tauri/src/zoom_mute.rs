@@ -1,4 +1,4 @@
-//! Follow Zoom's own microphone mute while recording (ADR-061).
+//! Follow Zoom's own microphone mute while recording (ADR-017).
 //!
 //! The recording opens the microphone directly, so without this a user muted
 //! in Zoom is still recorded. Like Notion's meeting notes, the state comes

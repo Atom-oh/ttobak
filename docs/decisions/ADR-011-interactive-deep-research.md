@@ -45,7 +45,8 @@
 - Chat reading and sending are gated by the research detail check, which also
   admits share recipients. A recipient can therefore read the chat, and a
   message they send is stored before the owner-only agent trigger refuses it.
-  This is a known gap, not an accepted policy.
+  Recipient access to the chat is accepted policy (owner decision,
+  2026-11-11); starting the agent stays owner-only.
 - The table TTL sweeps only `pendingShareExpiresAt`, which chat rows do not
   carry.
 - Stored chat text is later sent to the agent as user input.

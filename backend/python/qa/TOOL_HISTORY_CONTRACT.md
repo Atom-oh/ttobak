@@ -2,7 +2,7 @@
 
 For handler registration and deployment acceptance status, see
 [SOURCE_CONTRACT.md](SOURCE_CONTRACT.md). Use the current-source policy in
-[ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md)
+[ADR-028](../../../docs/decisions/ADR-028-qa-search-indexing-and-sources.md)
 and [strict account callbacks](ACCOUNT_READS_CONTRACT.md).
 
 ## Host integration

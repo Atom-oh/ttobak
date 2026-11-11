@@ -20,4 +20,8 @@ const help = execFileSync(process.execPath, [fileURLToPath(new URL('../dist/ttob
   cwd, encoding: 'utf8', env: { PATH: process.env.PATH ?? '' },
 });
 assert.match(help, /ttobak-mcp intake hosts/, 'The bundled intake command must start');
-console.log('Bundle reproducibility, stdio reading/calendar, intake start and HTTP artifact tests passed.');
+const reportHelp = execFileSync(process.execPath, [fileURLToPath(new URL('../dist/ttobak-mcp.mjs', import.meta.url)), 'report', '--help'], {
+  cwd, encoding: 'utf8', env: { PATH: process.env.PATH ?? '' },
+});
+assert.match(reportHelp, /ttobak-mcp report run --period/, 'The bundled report command must start');
+console.log('Bundle reproducibility, stdio reading/calendar, intake/report start and HTTP artifact tests passed.');

@@ -13,6 +13,7 @@ import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountS
 import type { AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
+import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
 import type {
   AccountCalendarPage, CalendarEvent, CalendarEventPage, CalendarEventQuery, CalendarShareDirectoryAccount,
@@ -234,6 +235,13 @@ export const performanceApi = {
     }),
   sources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     apiFetch<PerformanceSourceList>('/api/performance/sources', { ...options, cache: 'no-store' }),
+  // Reports are written only by the owner's Mac CLI (PUT); the web lists, reads and deletes.
+  reports: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<PerformanceReportList>('/api/performance/reports', { ...options, cache: 'no-store' }),
+  report: (periodKey: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<PerformanceReport>(`/api/performance/reports/${encodeURIComponent(periodKey)}`, { ...options, cache: 'no-store' }),
+  deleteReport: (periodKey: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<void>(`/api/performance/reports/${encodeURIComponent(periodKey)}`, { ...options, method: 'DELETE', cache: 'no-store' }),
 };
 
 type PrivateRequest = { signal?: AbortSignal; expectedUserId?: string };
@@ -351,7 +359,7 @@ export const meetingsApi = {
       `/api/meetings/${meetingId}/action-items/${encodeURIComponent(itemId)}`, { completed }, options,
     ),
 
-  // ADR-033 cost/sizing simulator
+  // ADR-010 cost/sizing simulator
   extractSimRequirements: (meetingId: string) =>
     api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim/extract`, {}),
 
@@ -1051,9 +1059,9 @@ export const accountApi = {
     mentions: (id: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.get<MentionGroupsPage>(`/api/accounts/${encodeURIComponent(id)}/people/mentions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
         { ...options, cache: 'no-store' }),
-    resolveMention: (id: string, key: string, target: { kind: 'member' | 'contact'; id: string }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    resolveMention: (id: string, key: string, target: { kind: 'member' | 'contact'; id: string; cursor?: string }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.post<ResolveMentionResult>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/resolve`,
-        { kind: target.kind, id: target.id }, options),
+        { kind: target.kind, id: target.id, ...(target.cursor ? { cursor: target.cursor } : {}) }, options),
     ignoreMention: (id: string, key: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/ignore`, undefined, options),
     edges: (id: string, meetingId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>

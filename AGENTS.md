@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 8aa0d143f446 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d4b6d4fc1f1d · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -157,10 +157,10 @@ limit instead of claiming a Mac build passed.
   min. The ADR-013 `ttobak-stt-recovery` tick re-drives only untranscribed
   single-file audio via two conditional claims, never via `GetMeetingDetail` or
   checkpoints; marked-failure deletion spares user data.
-- **Accounts:** members add/change non-owner roles (ADR-034/054). Creation permits
-  another Owner and optional creator AM (ADR-055). Removal/revocation/reparenting
-  are owner-only; Owner changes only via owner transfer (ADR-071). Ancestor reads
-  permit Billing (ADR-058/060); filters classify (ADR-036); members manage
+- **Accounts:** members add/change non-owner roles (ADR-015). Creation permits
+  another Owner and optional creator AM (ADR-015). Removal/revocation/reparenting
+  are owner-only; Owner changes only via owner transfer (ADR-015). Ancestor reads
+  permit Billing (ADR-015/012); filters classify (ADR-015); members manage
   published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
@@ -171,13 +171,13 @@ limit instead of claiming a Mac build passed.
   Owner-only mutations use partition isolation; recipients read through the
   share row. Inaccessible docs 404. Use `SHAREDDOC#`/`DOCSHARE_TO#`, never
   meeting `SHARED#` keys (ADR-020).
-- **Public routes:** `GET /api/public/docs/{token}` and ADR-045's two static MCP
+- **Public routes:** `GET /api/public/docs/{token}` and ADR-003's two static MCP
   discovery GETs are the only unauthenticated routes. Revalidate `PublicShareToken`;
   conditional minting prevents orphans; downloads last 5 minutes. Edge bypass
   covers `/api/public/*`; API Gateway registers only the literal doc route.
   A new unauthenticated route is CRITICAL (ADR-020).
 - **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows
-  (ADR-044). Keep writers disabled until companion bootstrap and rollback guards
+  (ADR-025). Keep writers disabled until companion bootstrap and rollback guards
   are deployed. Account/meeting `PENDING_SHARE#`/`PENDING_ACCOUNT#`/
   `PENDING_MEETING#` rows bind the invited Cognito sub and require verified email
   before materialization. Enforce 30-day expiry synchronously and via
@@ -196,7 +196,7 @@ limit instead of claiming a Mac build passed.
   it fails open on DynamoDB errors and is an abuse brake, not an access boundary.
 - **Indexing and extraction rollout:** canonical `all` mode may be checked in
   only after recorded manual snapshot/provider verification and actual
-  current-source QA acceptance (ADR-038). Keep the KB schedule enabled for
+  current-source QA acceptance (ADR-028). Keep the KB schedule enabled for
   reconciliation. A draft configuration, deployed package or successful WS
   connection is not consumer acceptance. Use the bootstrap runbook's dated
   readiness record and verify the deployed mode independently.
@@ -219,7 +219,7 @@ limit instead of claiming a Mac build passed.
   concurrent human edits. Failures retain prior content. Meeting and summary state
   deletion share the first transaction. Consumers/rule/permission precede API update.
 - **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
-  state exist (ADR-039). Consumers accept only authorized immutable result identity
+  state exist (ADR-001). Consumers accept only authorized immutable result identity
   with the current source ETag; extraction JSON does not claim a source version ID.
   Upload completion and text retry/status/page routes use `AttachmentTextService`;
   `SetAttachmentTextService` injects verified DOCUMENT collection into summarization.
@@ -235,7 +235,7 @@ limit instead of claiming a Mac build passed.
   remain visible but nonreplayable; creation receipts never replay a mutation.
   Registration status lives in `qa/SOURCE_CONTRACT.md` and must match handler
   imports. Helper installation alone does not wire either transport.
-  Code readiness and deployed acceptance are separate gates (ADR-042; QA contracts).
+  Code readiness and deployed acceptance are separate gates (ADR-028; QA contracts).
 - **Bounded meeting/MCP reads:** the authenticated reading endpoint uses
   metadata-only authorization for notes and binds continuation to source revision,
   selection and access. API JSON is capped at 14,000 encoded bytes. MCP forwards
@@ -243,13 +243,13 @@ limit instead of claiming a Mac build passed.
   HTTP bytes and serialized tool results at 32,000; never fall back to full-meeting
   reads or truncate a page while inventing continuation.
   HTTP uses request-scoped, resource-bound access tokens, not local token files
-  or server file paths (ADR-045).
+  or server file paths (ADR-003).
 - **Simulator:** transcript feeds extraction only. Only allowlisted numeric
   requirements/options JSON enters codegen; option names/descriptions remain
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX
   networking, not prompt filtering/import denylisting. A per-meeting `SIMRUN`
   singleton and matching `simRunId` conditions prevent stale worker writes;
-  preserve both Go and Python guards (ADR-033).
+  preserve both Go and Python guards (ADR-010).
 - **Mac:** finished WAV bytes stream disk-to-S3 in Rust, never through WebView IPC;
   live raw PCM chunks intentionally cross IPC. Pin the exact
   `EXPECTED_BUCKET_HOST`, not an AWS domain suffix. Upload timeouts measure stalled
@@ -292,7 +292,7 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/040); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
+| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-001/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
@@ -303,7 +303,7 @@ exposure:
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
 | Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
-| Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-056; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
+| Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-012; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
 
 JWT verification and document file-key ownership checks exist:
 inspect `ParseVerifiedJWT` and `validateFileKeyOwnership` before reporting a bypass.

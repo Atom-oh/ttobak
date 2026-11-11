@@ -66,14 +66,14 @@ frontend meeting AccountSection/ResummaryControls/types and relevant tests.
 
 ### Task 3: Controlled rollout and delivery
 
-**Files:** infra/lib/gateway-stack.ts, infra privacy tests, ADR-059 and current contract/runbook references.
+**Files:** infra/lib/gateway-stack.ts, infra privacy tests, ADR-029 and current contract/runbook references.
 
 **Interfaces:**
 - Consumes reader compatibility and API-only writer gate.
 - Produces default-off CfnParameter `SummaryOwnerAccountShareEnabled`.
 
 - [x] Test default-off API-only wiring and privacy-writer prerequisite.
-- [x] Add rollout parameter and update ADR-049's narrowly superseded disclosure requirement.
+- [x] Add rollout parameter and update ADR-029's narrowly superseded disclosure requirement.
 - [x] Run Go full checks, Python QA, frontend checks, infra synth/tests and docs checks.
 - [ ] Request fresh code/security/content review, fix supported findings, create PR and pass exact-head required review/CI.
 - [ ] Merge after required checks; deploy readers with approval disabled, verify packages, then enable the API writer and publish frontend.

@@ -18,4 +18,4 @@ Intended validation covered Go builds, frontend build, CDK synthesis, authentica
 ## Current references
 
 - [Crawler workflow](../../../infra/lib/crawler-stack.ts), [crawler service](../../../backend/internal/service/crawler.go), [source repository](../../../backend/internal/repository/crawler.go), [QA retrieval](../../../backend/python/qa/handler.py).
-- [ADR-004](../../decisions/ADR-004-crawler-insights-for-sa-knowledge-base.md) records the foundation; [ADR-021](../../decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md) corrects ingestion payload/configuration handling; [ADR-026](../../decisions/ADR-026-insights-relevance-gate-and-curation.md) adds relevance and curation. The July Gateway-search plan supersedes the RSS news-search proposal.
+- [ADR-004](../../decisions/ADR-004-insights-crawler-and-news.md) records the foundation; [ADR-004](../../decisions/ADR-004-insights-crawler-and-news.md) corrects ingestion payload/configuration handling; [ADR-004](../../decisions/ADR-004-insights-crawler-and-news.md) adds relevance and curation. The July Gateway-search plan supersedes the RSS news-search proposal.

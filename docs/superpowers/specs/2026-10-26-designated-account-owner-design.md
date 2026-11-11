@@ -147,7 +147,7 @@ checkbox, actual Owner shown, opt-out receipt without forbidden navigation or
 member-add requests, retained request ID, partial outcomes and stale navigation.
 
 Document the narrow initial-ownership exception in a new ADR and supersede
-only the relevant creator-only assertions in ADR-015/034/054 and generated
+only the relevant creator-only assertions in ADR-015 and generated
 review context. Preserve unrelated rollout flags, origin protection, runtime
 configuration and private meeting publication safeguards. The existing Account
 member email-storage encryption/retention limitation remains visible; this

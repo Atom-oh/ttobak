@@ -631,8 +631,8 @@ test('inline parent save updates the mounted hierarchy and creation selector whi
   page.click('New Account');
   const creationForm = () => nodes(page.render()).find(node => node.type === 'form');
   const creationSelect = () => nodes(creationForm()).find(node => node.type === 'select' && nodes(node).some(option => option.type === 'option' && option.props.value === 'A'));
-  const hierarchy = () => nodes(page.render()).find(node => node.type === 'details');
-  const hierarchyPath = accountId => nodes(hierarchy()).find(node => node.type === 'a' && node.props.href === `/accounts/${accountId}`)?.props.title;
+  const hierarchy = () => nodes(page.render()).find(node => node.type === 'nav' && node.props['aria-label'] === '고객 계층');
+  const hierarchyPath = accountId => nodes(hierarchy()).find(node => node.type === 'button' && node.props['data-account-id'] === accountId)?.props.title;
   const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
   const parentSelect = () => nodes(parentEditor()).find(node => node.type === 'select');
   const creationPath = accountId => text(nodes(creationSelect()).find(node => node.type === 'option' && node.props.value === accountId));
@@ -684,8 +684,8 @@ test('pending parent save updates hierarchy and creation paths after a same-acco
   const creationForm = () => nodes(page.render()).find(node => node.type === 'form');
   const creationSelect = () => nodes(creationForm()).find(node => node.type === 'select' && nodes(node).some(option => option.type === 'option' && option.props.value === 'A'));
   const creationPath = accountId => text(nodes(creationSelect()).find(node => node.type === 'option' && node.props.value === accountId));
-  const hierarchyPath = accountId => nodes(nodes(page.render()).find(node => node.type === 'details'))
-    .find(node => node.type === 'a' && node.props.href === `/accounts/${accountId}`)?.props.title;
+  const hierarchyPath = accountId => nodes(nodes(page.render()).find(node => node.type === 'nav' && node.props['aria-label'] === '고객 계층'))
+    .find(node => node.type === 'button' && node.props['data-account-id'] === accountId)?.props.title;
   const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
   nodes(creationForm()).find(node => node.props?.placeholder?.startsWith('Account name')).props.onChange({ target: { value: 'Draft customer' } });
   creationSelect().props.onChange({ target: { value: 'C' } });
@@ -826,8 +826,8 @@ for (const scope of ['account', 'user', 'membership', 'denial']) {
     saved.resolve({ accountId: 'A', parentAccountId: 'B' });
     await saving;
     await page.settle();
-    const hierarchy = nodes(page.render()).find(node => node.type === 'details');
-    assert.equal(nodes(hierarchy).find(node => node.type === 'a' && node.props.href === '/accounts/A').props.title, 'Customer A');
+    const hierarchy = nodes(page.render()).find(node => node.type === 'nav' && node.props['aria-label'] === '고객 계층');
+    assert.equal(nodes(hierarchy).find(node => node.type === 'button' && node.props['data-account-id'] === 'A').props.title, 'Customer A');
     assert.doesNotMatch(page.text, /상위 어카운트를 저장했습니다/);
     if (scope === 'account') assert.equal(page.url.searchParams.get('account'), 'B');
     if (scope === 'denial') assert.ok(!nodes(page.render()).some(node => node.type === 'h2'));
@@ -864,8 +864,8 @@ for (const section of ['meetings', 'calendarEvents']) for (const status of [401,
     saved.resolve({ accountId: 'A', parentAccountId: 'B' });
     await saving;
     await page.settle();
-    const hierarchy = nodes(page.render()).find(node => node.type === 'details');
-    assert.equal(nodes(hierarchy).find(node => node.type === 'a' && node.props.href === '/accounts/A').props.title, 'Customer A');
+    const hierarchy = nodes(page.render()).find(node => node.type === 'nav' && node.props['aria-label'] === '고객 계층');
+    assert.equal(nodes(hierarchy).find(node => node.type === 'button' && node.props['data-account-id'] === 'A').props.title, 'Customer A');
     nodes(page.render()).find(node => node.props?.id === 'account-tab-general').props.onClick();
     await page.settle();
     const recovered = nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
@@ -911,8 +911,8 @@ for (const scenario of [
     saved.resolve({ accountId: 'A', parentAccountId: 'B' });
     await saving;
     await page.settle();
-    const hierarchy = nodes(page.render()).find(node => node.type === 'details');
-    assert.equal(nodes(hierarchy).find(node => node.type === 'a' && node.props.href === '/accounts/A').props.title, 'Customer A');
+    const hierarchy = nodes(page.render()).find(node => node.type === 'nav' && node.props['aria-label'] === '고객 계층');
+    assert.equal(nodes(hierarchy).find(node => node.type === 'button' && node.props['data-account-id'] === 'A').props.title, 'Customer A');
     if (!scenario.recoverFirst) assert.ok(!nodes(page.render()).some(node => node.type === 'h2'));
     const writes = page.calls.filter(call => call.name === 'updateParent').length;
     await capturedSave();
@@ -930,3 +930,115 @@ for (const scenario of [
     assert.equal(page.lateSets(), 0);
   });
 }
+
+test('the customer list is the hierarchy: Korean name order, nested children, in-place selection', async () => {
+  const accounts = [
+    { ...account('kakao'), name: '카카오' },
+    { ...account('sds'), name: '삼성SDS', parentAccountId: 'samsung' },
+    { ...account('samsung'), name: '삼성그룹' },
+    { ...account('elec'), name: '삼성전자', parentAccountId: 'samsung', role: '', accessPermission: 'read', inheritedFromAccountId: 'samsung' },
+    { ...account('lg'), name: 'LG' },
+  ];
+  const page = fixture({ component: 'AccountsClient', url: '/accounts?tab=general', api: {
+    list: () => ({ accounts }),
+    get: id => accounts.find(item => item.accountId === id),
+  } });
+  await page.settle();
+  const tree = () => nodes(page.render()).find(node => node.type === 'nav' && node.props['aria-label'] === '고객 계층');
+  const rows = () => nodes(tree()).filter(node => node.type === 'button' && node.props['data-account-id']);
+  assert.deepEqual(rows().map(node => node.props['data-account-id']), ['samsung', 'elec', 'sds', 'kakao', 'lg']);
+  assert.equal(rows().find(node => node.props['data-account-id'] === 'elec').props.title, '삼성그룹 / 삼성전자');
+  assert.ok(nodes(tree()).some(node => node.props?.['aria-label'] === '상위 공유 · 읽기 전용'));
+  assert.equal(nodes(page.render()).filter(node => node.type === 'details').length, 0, 'no separate hierarchy block');
+  const options = nodes(page.render()).find(node => node.props?.id === 'account-workspace-select');
+  assert.deepEqual(nodes(options).filter(node => node.type === 'option').map(node => node.props.value), ['samsung', 'elec', 'sds', 'kakao', 'lg']);
+  assert.equal(rows().find(node => node.props['aria-current'] === 'true').props['data-account-id'], 'samsung', 'defaults to the first hierarchy row');
+
+  page.click('삼성그룹 접기');
+  assert.ok(!rows().some(node => node.props['data-account-id'] === 'elec'));
+  options.props.onChange({ target: { value: 'elec' } });
+  await page.settle();
+  assert.equal(page.url.searchParams.get('account'), 'elec');
+  assert.equal(page.url.searchParams.get('tab'), 'general');
+  assert.equal(rows().find(node => node.props['aria-current'] === 'true').props['data-account-id'], 'elec', 'selection reveals its group');
+  page.click('삼성그룹 접기');
+  assert.ok(!rows().some(node => node.props['data-account-id'] === 'elec'), 'later collapse stays user-controlled');
+  page.click('삼성그룹 펼치기');
+  rows().find(node => node.props['data-account-id'] === 'kakao').props.onClick();
+  await page.settle();
+  assert.equal(page.url.pathname, '/accounts');
+  assert.equal(page.url.searchParams.get('account'), 'kakao');
+  assert.ok(page.calls.some(call => call.name === 'get' && call.args[0] === 'kakao'));
+});
+
+test('a parent save keeps the implicitly selected default customer mounted', async () => {
+  let accounts = [account('A'), account('B')];
+  const page = fixture({ component: 'AccountsClient', url: '/accounts?tab=general', api: {
+    list: () => ({ accounts }),
+    get: id => accounts.find(item => item.accountId === id),
+    updateParent: (accountId, request) => {
+      accounts = accounts.map(item => item.accountId === accountId ? { ...item, parentAccountId: request.parentAccountId || undefined } : item);
+      return { accountId, ...request };
+    },
+  } });
+  await page.settle();
+  const current = () => nodes(page.render()).find(node => node.type === 'button' && node.props['aria-current'] === 'true')?.props['data-account-id'];
+  assert.equal(current(), 'A');
+  assert.equal(page.url.searchParams.get('account'), null);
+  const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
+  nodes(parentEditor()).find(node => node.type === 'select').props.onChange({ target: { value: 'B' } });
+  await page.click('저장');
+  await page.settle();
+  assert.match(text(parentEditor()), /상위 어카운트를 저장했습니다/);
+  assert.equal(current(), 'A', 'B became the first root but A stays selected');
+  assert.equal(page.calls.filter(call => call.name === 'get').length, 1, 'the detail stays mounted');
+});
+
+test('re-selecting a child or re-parenting it under a collapsed group reveals it again', async () => {
+  let accounts = [account('P'), account('Q'), account('C', { parentAccountId: 'P' })];
+  const page = fixture({ component: 'AccountsClient', url: '/accounts?account=C', api: {
+    list: () => ({ accounts }),
+    get: id => accounts.find(item => item.accountId === id),
+    updateParent: (accountId, request) => {
+      accounts = accounts.map(item => item.accountId === accountId ? { ...item, parentAccountId: request.parentAccountId || undefined } : item);
+      return { accountId, ...request };
+    },
+  } });
+  await page.settle();
+  const visible = id => nodes(page.render()).some(node => node.type === 'button' && node.props['data-account-id'] === id);
+  page.click('Customer P 접기');
+  assert.ok(!visible('C'));
+  page.click('Customer Q');
+  await page.settle();
+  const options = nodes(page.render()).find(node => node.props?.id === 'account-workspace-select');
+  options.props.onChange({ target: { value: 'C' } });
+  await page.settle();
+  assert.ok(visible('C'), 're-selection reveals the child');
+  page.click('Customer P 접기');
+  const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
+  nodes(parentEditor()).find(node => node.type === 'select').props.onChange({ target: { value: 'Q' } });
+  await page.click('저장');
+  await page.settle();
+  assert.equal(nodes(page.render()).find(node => node.type === 'button' && node.props['data-account-id'] === 'C').props.title, 'Customer Q / Customer C');
+});
+
+test('the account route reloads the customer tree after a parent save', async () => {
+  let accounts = [account('A'), account('B')];
+  const page = fixture({ component: 'AccountDetailClient', url: '/accounts/A?tab=general', api: {
+    list: () => ({ accounts }),
+    get: id => accounts.find(item => item.accountId === id),
+    updateParent: (accountId, request) => {
+      accounts = accounts.map(item => item.accountId === accountId ? { ...item, parentAccountId: request.parentAccountId || undefined } : item);
+      return { accountId, ...request };
+    },
+  } });
+  await page.settle();
+  const path = id => nodes(page.render()).find(node => node.type === 'button' && node.props['data-account-id'] === id)?.props.title;
+  assert.equal(path('A'), 'Customer A');
+  const parentEditor = () => nodes(page.render()).find(node => node.type === 'section' && text(node).includes('상위 어카운트 멤버는'));
+  nodes(parentEditor()).find(node => node.type === 'select').props.onChange({ target: { value: 'B' } });
+  await page.click('저장');
+  await page.settle();
+  assert.equal(path('A'), 'Customer B / Customer A');
+  assert.ok(!nodes(page.render()).some(node => node.props?.role === 'status' && text(node).includes('고객 목록을 불러오는 중')), 'the list is not blanked while reloading');
+});
