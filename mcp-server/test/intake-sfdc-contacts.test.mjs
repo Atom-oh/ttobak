@@ -254,18 +254,21 @@ test('fifteen_char_sentral_id_matches_stored_18_char_link', async () => {
 test('one_failed_sfdc_account_of_two_sends_items_without_a_snapshot', async () => {
   const B = id('001XX0000000A02');
   const { IntakeError } = await import('../dist/intake/errors.js');
-  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1'], [B, 'acct-1']] });
-  const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B')]],
+  // F01 is already linked, so its fill is still sent; the unlinked F03 is deferred.
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1'], [B, 'acct-1']],
+    contacts: { 'acct-1': [existing('linked', 'A B', { sfdcContactId: id('003XX0000000F01') })] } });
+  const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B'), contactRecord(id('003XX0000000F03'), 'E', 'F')]],
     [B]: [[contactRecord(id('003XX0000000F02'), 'C', 'D', { accountId: B })]] },
   { fail: { [`${B}:0`]: new IntakeError('SOURCE_TIMEOUT', 'search_contacts call failed') } });
   const result = await runSfdcContacts({ session: source, api, dryRun: false });
   assert.equal(result.result, 'SOURCE_TIMEOUT');
+  assert.equal(result.counts.deferredIncomplete, 1);
   assert.equal(api.syncs.length, 1);
   const { body } = api.syncs[0];
   assert.equal(body.snapshotComplete, false);
   assert.equal(body.present, undefined);
   assert.deepEqual(body.sfdcAccountIds, [ACCOUNT_A, B]);
-  assert.deepEqual(body.items.map(item => item.sfdcContactId), [id('003XX0000000F01')]);
+  assert.deepEqual(body.items.map(item => [item.action, item.sfdcContactId]), [['link', id('003XX0000000F01')]]);
   assert.equal(result.counts.incomplete, 1);
 });
 
@@ -273,8 +276,8 @@ test('truncated_mappings_send_no_snapshot', async () => {
   const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']], truncated: true });
   const result = await runSfdcContacts({ session: contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B')]] }),
     api, dryRun: false });
-  assert.equal(api.syncs[0].body.snapshotComplete, false);
-  assert.equal(api.syncs[0].body.present, undefined);
+  assert.equal(api.syncs.length, 0, 'no create is inferred and nothing is linked, so nothing is sent');
+  assert.equal(result.counts.deferredIncomplete, 1);
   assert.equal(result.counts.incomplete, 1);
 });
 
@@ -359,12 +362,8 @@ test('more_than_20_sfdc_accounts_sends_no_snapshot_and_reads_only_the_first_20',
   const source = contactSource(pages);
   const result = await runSfdcContacts({ session: source, api, dryRun: false });
   assert.equal(source.calls.length, 20);
-  assert.equal(api.syncs.length, 1);
-  const { body } = api.syncs[0];
-  assert.equal(body.snapshotComplete, false);
-  assert.equal(body.present, undefined);
-  assert.deepEqual(body.sfdcAccountIds, ids.slice(0, 20));
-  assert.equal(body.items.length, 20);
+  assert.equal(api.syncs.length, 0, 'an incomplete Account infers no links or creates');
+  assert.equal(result.counts.deferredIncomplete, 20);
   assert.equal(result.counts.skippedAccountCap, 3);
   assert.equal(result.counts.incomplete, 1);
 });
@@ -376,7 +375,8 @@ test('read_cap_of_5000_makes_the_snapshot_incomplete', async () => {
   const source = contactSource({ [ACCOUNT_A]: pages });
   const result = await runSfdcContacts({ session: source, api, dryRun: false });
   assert.equal(source.calls.length, 10, 'at most 5,000 contacts are read per SFDC account');
-  assert.equal(api.syncs[0].body.snapshotComplete, false);
+  assert.equal(api.syncs.length, 0);
+  assert.equal(result.counts.deferredIncomplete, 5000);
   assert.equal(result.counts.incomplete, 1);
   assert.equal(result.result, 'ok', 'a capped read is incomplete, not a failure');
 });
@@ -437,8 +437,94 @@ test('a failed read is a step failure but other accounts still sync', async () =
   { fail: { [`${ACCOUNT_A}:1`]: new IntakeError('SOURCE_ERROR', 'search_contacts returned an error') } });
   const result = await runSfdcContacts({ session: source, api, dryRun: false });
   assert.equal(result.result, 'SOURCE_ERROR');
-  assert.deepEqual(api.syncs.map(sync => [sync.accountId, sync.body.snapshotComplete]), [['acct-1', false], ['acct-2', true]]);
-  assert.deepEqual(api.syncs[0].body.items.map(item => item.sfdcContactId), [id('003XX0000000F01')]);
+  assert.deepEqual(api.syncs.map(sync => [sync.accountId, sync.body.snapshotComplete]), [['acct-2', true]]);
+  assert.equal(result.counts.deferredIncomplete, 1);
+});
+
+test('incomplete_read_infers_no_link_from_a_partial_name_match', async () => {
+  // Two same-named SFDC people on different pages and one unlinked TTOBAK contact:
+  // a complete read counts both ambiguous; when page two fails, nothing is linked.
+  const { IntakeError } = await import('../dist/intake/errors.js');
+  const first = contactRecord(id('003XX0000000H01'), 'Jane', 'Doe', { email: undefined });
+  const second = contactRecord(id('003XX0000000H02'), 'Jane', 'Doe', { email: undefined });
+  const contacts = { 'acct-1': [existing('card-1', 'Jane Doe'), existing('linked', 'Old Link', { sfdcContactId: id('003XX0000000H03') })] };
+  const third = contactRecord(id('003XX0000000H03'), 'Old', 'Link');
+  const pages = { [ACCOUNT_A]: [[first, third], [second]] };
+
+  const complete = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']], contacts });
+  const full = await runSfdcContacts({ session: contactSource(pages), api: complete, dryRun: false });
+  assert.equal(full.counts.ambiguous, 2);
+  assert.deepEqual(complete.syncs[0].body.items.map(item => item.contactId), ['linked']);
+
+  const partial = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']], contacts });
+  const result = await runSfdcContacts({ session: contactSource(pages,
+    { fail: { [`${ACCOUNT_A}:1`]: new IntakeError('SOURCE_ERROR', 'search_contacts returned an error') } }), api: partial, dryRun: false });
+  assert.equal(result.result, 'SOURCE_ERROR');
+  assert.equal(result.counts.deferredIncomplete, 1);
+  assert.equal(result.counts.ambiguous, 0);
+  const { body } = partial.syncs[0];
+  assert.equal(body.snapshotComplete, false);
+  assert.deepEqual(body.items.map(item => [item.action, item.sfdcContactId, item.contactId]),
+    [['link', id('003XX0000000H03'), 'linked']], 'only the existing link is filled; card-1 is not linked');
+});
+
+test('uneven_pages_over_5000_ids_make_the_read_incomplete', async () => {
+  // One short page, then ten full pages: 5,001 kept IDs, ending on a terminal page.
+  const pages = [[contactRecord(sfdcId('003', 1), 'S', 'X')],
+    ...Array.from({ length: 10 }, (_, page) => Array.from({ length: 500 }, (_, n) => contactRecord(sfdcId('003', 10 + page * 500 + n), `N${page}-${n}`, 'X')))];
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
+  const source = contactSource({ [ACCOUNT_A]: pages });
+  const result = await runSfdcContacts({ session: source, api, dryRun: false });
+  assert.equal(source.calls.length, 11);
+  assert.equal(result.result, 'ok');
+  assert.equal(result.counts.incomplete, 1);
+  assert.equal(result.counts.deferredIncomplete, 5000, 'at most 5,000 people are kept for item building');
+  assert.equal(api.syncs.length, 0, 'no present list above 5,000 is ever sent');
+});
+
+/** A source whose pages are produced by `page(index, args)`. */
+function scriptedSource(page) {
+  const calls = [];
+  return { calls, async call(tool, args) { calls.push(structuredClone(args)); return page(calls.length - 1, args); } };
+}
+
+test('empty_pages_with_more_and_cycling_cursors_fail_closed', async () => {
+  const empty = scriptedSource(index => ({ data: { resultRecords: [], totalCount: '9', hasNextPage: true, cursor: index % 2 ? 'a' : 'b' } }));
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
+  const first = await runSfdcContacts({ session: empty, api, dryRun: false });
+  assert.equal(first.result, 'PARSE_FAILED');
+  assert.equal(empty.calls.length, 1, 'an empty page that claims more stops the read');
+  assert.equal(first.counts.incomplete, 1);
+
+  // Fresh records on every page but a cursor cycle a -> b -> a.
+  const cycling = scriptedSource(index => ({ data: { resultRecords: [contactRecord(sfdcId('003', 100 + index), `C${index}`, 'X')],
+    totalCount: '99', hasNextPage: true, cursor: index % 2 ? 'b' : 'a' } }));
+  const second = await runSfdcContacts({ session: cycling, api, dryRun: false });
+  assert.equal(second.result, 'PARSE_FAILED');
+  assert.equal(cycling.calls.length, 3, 'the first repeated cursor stops the read');
+  assert.equal(second.counts.deferredIncomplete, 3);
+
+  // Distinct cursors with short pages stop at the page bound.
+  const endless = scriptedSource(index => ({ data: { resultRecords: [contactRecord(sfdcId('003', 300 + index), `E${index}`, 'X')],
+    totalCount: '99', hasNextPage: true, cursor: `c${index}` } }));
+  const third = await runSfdcContacts({ session: endless, api, dryRun: false });
+  assert.equal(third.result, 'PARSE_FAILED');
+  assert.equal(endless.calls.length, 11);
+  assert.equal(api.syncs.length, 0);
+});
+
+test('records_of_another_account_are_dropped', async () => {
+  const B = id('001XX0000000A02');
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
+  const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B'),
+    contactRecord(id('003XX0000000F02'), 'C', 'D', { accountId: B }),
+    contactRecord(id('003XX0000000F03'), 'E', 'F', { accountId: '001XX0000000A01' }),
+    contactRecord(id('003XX0000000F04'), 'G', 'H', { accountId: null })]] });
+  const result = await runSfdcContacts({ session: source, api, dryRun: false });
+  assert.equal(result.result, 'ok');
+  assert.equal(result.counts.accountMismatch, 2);
+  assert.deepEqual(api.syncs[0].body.present[ACCOUNT_A], [id('003XX0000000F01'), id('003XX0000000F03')],
+    'a 15-character account ID matches its canonical form');
 });
 
 // ---------- CLI ----------
@@ -502,7 +588,9 @@ test('no_email_or_phone_leaves_the_mac', async t => {
 });
 
 test('incomplete_snapshot_sends_no_present_list', async t => {
-  const { lines, environment, api, home } = await cli(t, { contacts: 'page2-error' });
+  // C01 is already linked, so its fill is still sent; nothing is inferred from the partial read.
+  const { lines, environment, api, home } = await cli(t, { contacts: 'page2-error',
+    existingContacts: [existing('card-1', 'Jane Customer', { sfdcContactId: id('003XX0000000C01') })] });
   assert.equal(await runIntake(['run', '--noninteractive', '--only', 'sfdc'], environment), 2);
   const output = JSON.parse(lines.at(-1));
   assert.equal(output.code, 'PARTIAL_FAILURE');

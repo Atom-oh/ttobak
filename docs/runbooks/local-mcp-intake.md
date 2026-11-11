@@ -552,13 +552,18 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   15-character ID gains its 3-character case checksum, an 18-character ID is
   kept only if its checksum matches. Other values are dropped and counted as
   `invalidIds`. All matching, `present` and items use the 18-character form.
+  A record whose own canonical `accountId` is not the queried SFDC account is
+  dropped (`accountMismatch`).
 - **Accounts.** `GET /api/performance/mappings` groups the mapped SFDC
   accounts by TTOBAK Account. A `truncated` listing may miss an Account's
   other SFDC accounts, so then no Account gets a departure snapshot. Each Account's TTOBAK contacts are listed first,
   every page; a 403 counts as `forbidden` and the Account is skipped.
 - **Reads.** Per SFDC account, `search_contacts` with
   `{field: accountId, operator: EXACT_MATCH}` and `limit: 500`, following
-  `cursor` through `after`, up to 5,000 contacts. At most 20 SFDC accounts per
+  `cursor` through `after`, up to 5,000 contacts and 11 pages. An empty page
+  that claims more pages, any repeated cursor, or a 12th page fails the read
+  (`PARSE_FAILED`). More than 5,000 kept IDs (uneven pages) make the read
+  incomplete; only the first 5,000 are kept. At most 20 SFDC accounts per
   TTOBAK Account are read (sorted by ID); the rest count as
   `skippedAccountCap`.
 - **Filter.** Record types `Stakeholder Map - Internal Contacts` and
@@ -573,8 +578,14 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   and family name in either order; Latin names match only as given) without
   a conflicting email links it. A contact already
   linked to another SFDC ID, already matched by email, or whose email is
-  ambiguous (for example shared by two SFDC people) is not a name candidate. Several candidates, or several SFDC contacts for one candidate,
-  are `ambiguous` and skipped this run. No match creates a contact.
+  ambiguous (for example shared by two SFDC people) is not a name candidate.
+  Several candidates, or several SFDC contacts for one candidate, are
+  `ambiguous` and skipped this run. No match creates a contact. When the
+  Account's read is incomplete (a failed page, a cap, a truncated mapping
+  listing or more than 20 SFDC accounts), a missing person could make a match
+  ambiguous, so only contacts that already carry the SFDC link are filled;
+  every other unsuppressed SFDC contact is `deferredIncomplete` (no email or
+  name link and no create) until a complete run.
 - **Batch.** One `POST /api/accounts/{id}/contacts/sfdc-sync` per Account: links
   first, then creates, each ordered by SFDC ID, at most 200 items and 512 KiB;
   the rest count as `skippedCap` and follow on later runs. Items carry only the
@@ -594,10 +605,11 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   `lastSuccessAt`, `result` and `counts`: `accounts`, `fetched`, `created`,
   `filled`, `unchanged`, `alreadyLinked`, `suppressed`, `conflict`, `invalid`,
   `ambiguous`, `skippedInternal`, `skippedCap`, `skippedAccountCap`,
-  `incomplete`, `marked`, `unmarked`, `skipped`, `forbidden`, `invalidIds`,
-  `ledgerReset`, `deferred`. Settings shows the counts also when the result is
-  a failure code, with `skipped`, `ambiguous`, `forbidden` and `incomplete`
-  only when non-zero.
+  `incomplete`, `deferredIncomplete`, `accountMismatch`, `marked`,
+  `unmarked`, `skipped`, `forbidden`, `invalidIds`, `ledgerReset`, `deferred`.
+  Settings shows the counts also when the result is a failure code, with
+  `skipped`, `ambiguous`, `forbidden`, `incomplete`, `deferredIncomplete` and
+  `accountMismatch` only when non-zero.
 - **Time budget.** No new Account starts once the step has run 8 minutes
   (`SFDC_CONTACTS_BUDGET_MS`); the rest count as `deferred` and follow on the
   next run, and the result stays `ok`. This keeps the step, and its status
