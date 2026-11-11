@@ -11,7 +11,7 @@ Linking a meeting to an account and publishing it to the account's team are sepa
 ### Status and dated amendments
 
 - Status: Accepted; provenance hardened by the share-provenance section below.
-  Membership permissions and hierarchy follow ADR-034 and ADR-036.
+  Membership permissions and hierarchy follow ADR-015 and ADR-015.
 - Decision date: Not recorded in the original ADR.
 - Implementation checked: 2026-09-13.
 - Amendment (2026-09-13): the SA workflow's private relink supersedes the former preservation
@@ -112,8 +112,8 @@ direct member of the target account; ownership of the account is unnecessary.
 
 ### Supersession and remaining limits
 
-ADR-034 permits any member to add members/change assignable roles; removal and
-pending-invite revocation stay owner-only. ADR-036 adds organization hierarchy;
+ADR-015 permits any member to add members/change assignable roles; removal and
+pending-invite revocation stay owner-only. ADR-015 adds organization hierarchy;
 inherited (ancestor-account) reads and team management follow ADR-058 and the
 2026-11-06 amendment. `accountIds` meeting filtering uses an explicit
 OR set; selecting only a parent ID does not implicitly include descendants.
@@ -158,7 +158,7 @@ Account-wide insight DTOs omit near-verbatim meeting `Evidence` by design.
 
 ## Meeting-share provenance and legacy removal safeguards
 
-_Earlier status notes: Status: Accepted; extends ADR-016. [ADR-034](ADR-034-account-member-permission-democratization.md) changes member-add/role-update authority, not removal authority or provenance. Original decision date: Not recorded; originally associated with `feat/account-team-members`. Code checked: 2026-09-13. No migration execution is implied._
+_Earlier status notes: Status: Accepted; extends ADR-016. [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) changes member-add/role-update authority, not removal authority or provenance. Original decision date: Not recorded; originally associated with `feat/account-team-members`. Code checked: 2026-09-13. No migration execution is implied._
 
 ### Original decision and rationale
 

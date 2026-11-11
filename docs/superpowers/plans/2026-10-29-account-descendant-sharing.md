@@ -171,7 +171,7 @@ modify `handler.py`, `account_reads.py`, `document_context.py`,
 affected guides/ADR/runbook, generated `AGENTS.md`; deployment evidence outside
 tracked source contains only metadata.
 
-- [ ] Record an ADR superseding ADR-036's no-inheritance rule and update affected
+- [ ] Record an ADR superseding ADR-015's no-inheritance rule and update affected
   current contracts. Mark the approved spec's scope confirmation as resolved.
 - [ ] Add the nonsecret activation configuration to the Go and Python function
   configuration, default off until child references are verified.

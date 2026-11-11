@@ -1284,7 +1284,7 @@ relinking in the API; code checks alone do not establish live revocation.
 Account creation accepts optional `ownerEmail`, `keepCreatorAsMember` and a UUID
 `requestId` in a single JSON object capped at 16 KiB. Without another Owner,
 the creator remains Owner. A different Owner is resolved to the current Cognito
-sub; missing identities use ADR-054's invitation gates. Create META, the canonical
+sub; missing identities use ADR-015's invitation gates. Create META, the canonical
 Owner and optional creator AM atomically. `keepCreatorAsMember: false` creates no
 creator membership or read grant. The response returns the actual `ownerUserId`,
 initial members, `creatorMember`, `ownerInvitationPending` (an initial invitation
@@ -1413,7 +1413,7 @@ per caller per UTC hour; counter failure returns 503 and limit exhaustion 429.
 `INVITATION_GRANT_FAILED` (500) records requested delivery followed by queue
 failure. Account materialization transactionally revalidates current inviter
 membership, the invited sub, expiry and pending-row version. Removal and
-pending-invite revocation remain owner-only (ADR-034/054).
+pending-invite revocation remain owner-only (ADR-015, member permissions, invitations).
 Project permissions are separate: owner/direct member/member of a
 linked account. The service list unions those access paths; project deletion
 rejects remaining relationships. Canonical sets and reverse references change in

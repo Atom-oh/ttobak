@@ -2,7 +2,7 @@
 
 - Status: Accepted for implementation; deployed acceptance is recorded separately.
 - Decision date: 2026-10-26.
-- Supersedes ADR-015's creator-only initial ownership. Extends ADR-034/054 only
+- Supersedes ADR-015's creator-only initial ownership. Extends ADR-015 only
   for initial creation and canonical Owner invitation recovery.
 - Amended by [ADR-071](ADR-071-account-owner-transfer.md): ownership may later move
   through owner transfer, which clears the initial-owner invitation designation.
@@ -11,7 +11,7 @@
 
 An authenticated user can prepare a customer Account for a colleague by selecting
 that colleague's email as the initial Owner. If no login identity exists, request
-the domain-limited Cognito invitation described by ADR-054. Bind ownership to the
+the domain-limited Cognito invitation described by ADR-015. Bind ownership to the
 current Cognito sub; an existing PROFILE email index must agree with that sub.
 Pre-existing identities must be enabled, have a verified current email, and be
 CONFIRMED or FORCE_CHANGE_PASSWORD before initial Owner membership is published.
@@ -56,7 +56,7 @@ Removal, revocation and reparenting stay Owner-only.
   Confirmed users are never reset and recreated same-email identities cannot
   acquire ownership. The initial invitation hint in detail/receipts is not proof
   of current status; actual resend performs the authoritative check.
-- New delivery and resend share ADR-054's current domain allowlist and fail-closed
+- New delivery and resend share ADR-015's current domain allowlist and fail-closed
   twenty-attempts-per-caller-per-UTC-hour counter. A mail request followed by
   unconfirmed persistence is reported as partial success; mailbox delivery is
   never inferred.

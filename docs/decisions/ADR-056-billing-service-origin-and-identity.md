@@ -22,7 +22,7 @@ a resource policy scoped to the distribution ARN, and application-level auth.
 
 The companion signs users in with its own cookie session. Its access check also
 lets a member of a parent Account act on child Accounts, which conflicts with
-the TTOBAK rule that hierarchy grants no access (ADR-036/055).
+the TTOBAK rule that hierarchy grants no access (ADR-015/055).
 
 ## Decision and rationale
 
@@ -128,7 +128,7 @@ eliminate customer billing context leaving the account.
   tasks, the ALB and the VPC origin.
 - Rejected: an MCP SigV4 path with an asserted subject header. It would make an
   IAM grant equivalent to user identity.
-- Rejected: the companion's hierarchy-based access. It contradicts ADR-036/055.
+- Rejected: the companion's hierarchy-based access. It contradicts ADR-015/055.
 - Residual risk: the endpoint domain is internet-reachable.
   - Same-account principals whose identity policies allow
     `lambda:InvokeWebFunctionEndpoint` on it (for example administrators, or the
@@ -154,6 +154,6 @@ eliminate customer billing context leaving the account.
   (`lambda.CfnResourcePolicy`) in FrontendStack, not a custom resource. It owns
   the function's whole policy. aws-cdk-lib 2.273.0 also exposes `CfnWebFunction`,
   `CfnWebFunctionRevision` and `CfnWebFunctionEndpoint`.
-- Related: ADR-020 (public routes), ADR-036/055 (Account hierarchy), ADR-045
+- Related: ADR-020 (public routes), ADR-015/055 (Account hierarchy), ADR-045
   (MCP resource-bound tokens), `backend/internal/middleware/auth.go`
   (`ParseVerifiedJWT`, `API_ALLOWED_CLIENT_IDS`), `infra/lib/edge-auth-stack.ts`.
