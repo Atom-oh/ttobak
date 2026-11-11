@@ -5,7 +5,7 @@ Fetches from AWS What's New RSS, AWS Blog RSS, the AgentCore Gateway Web
 Search connector, and direct documentation pages. Generates summaries +
 auto-tags via Bedrock, stores in S3 + DynamoDB. Also runs a one-shot web
 search each run to discover AWS services not yet in any source's
-awsServices list (ADR-021).
+awsServices list (ADR-004, pipeline repair).
 
 Dependencies: stdlib + boto3 only.
 """
@@ -460,7 +460,7 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 
 
 # ---------------------------------------------------------------------------
-# New-service discovery (ADR-021) — RSS/blog crawling only covers services
+# New-service discovery (ADR-004, pipeline repair) — RSS/blog crawling only covers services
 # we already know to ask about; this catches the ones we don't yet track.
 # ---------------------------------------------------------------------------
 
@@ -616,7 +616,7 @@ def handler(event, context):
         # RSS), so the cap must have room for all three sources -- otherwise
         # a busy service whose RSS feeds alone fill MAX_ARTICLES_PER_SOURCE*2
         # silently drops every web search result, defeating the "catches
-        # announcements RSS hasn't indexed yet" purpose (ADR-021) for
+        # announcements RSS hasn't indexed yet" purpose (ADR-004, pipeline repair) for
         # exactly the services that need it most.
         article_cap = MAX_ARTICLES_PER_SOURCE * 2 + WEB_SEARCH_RESULTS_PER_SERVICE
         for article in unique_articles[:article_cap]:

@@ -19,4 +19,4 @@ Intended tests checked optional-field parsing/propagation and evidence non-propa
 
 [Insight models](../../../backend/internal/model/account.go), [account fan-out](../../../backend/internal/service/meeting.go), [account reads](../../../backend/internal/service/account.go), [Project reads](../../../backend/internal/service/project.go), [shared UI](../../../frontend/src/components/FieldInsightsSection.tsx), [crawler tests](../../../backend/python/crawler/test_crawlers.py).
 
-[ADR-025](../../decisions/ADR-025-projects-and-invitations.md) defines Project access/aggregation; [ADR-026](../../decisions/ADR-026-insights-relevance-gate-and-curation.md) defines crawler relevance. The later knowledge-grade news plan is a separate unimplemented pipeline proposal, not proof these briefings meet its stronger gates.
+[ADR-025](../../decisions/ADR-025-projects-and-invitations.md) defines Project access/aggregation; [ADR-004](../../decisions/ADR-004-insights-crawler-and-news.md) defines crawler relevance. The later knowledge-grade news plan is a separate unimplemented pipeline proposal, not proof these briefings meet its stronger gates.
