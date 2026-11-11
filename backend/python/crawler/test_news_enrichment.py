@@ -177,53 +177,40 @@ class TestStructuredQuality(unittest.TestCase):
         raw["evidence"][0]["supportingExcerpt"] = "투자액은 300억원이다."
         enrichment.validate_enrichment(raw, [valid_body("투자액은 300억원이다. " + "가" * 1200)])
 
-    def test_korean_restatement_of_english_figures_requires_the_exact_value(self):
-        # Reproduced 2026-11-11 from production rejections: Korean facts restate
-        # English excerpts with Korean units, month numbers and digit counts.
+    def test_fact_numbers_are_grounded_only_verbatim(self):
+        # Equivalence grounding (Korean units, month names, number words) was
+        # removed after review: every variant accepted figures the source did
+        # not state. A fact number must appear in its cited excerpt as written.
         grounded = [
-            ("토스증권은 7월 계좌 보유자 1,000만 명을 넘겼다",
+            ("토스증권은 July 기준 계좌 10 million 개를 넘겼다",
              "Toss Securities surpassed 10 million account holders in July this year."),
-            ("상반기 순이익 2,368억 원을 재투자한다",
+            ("상반기 순이익 236.8 billion won을 재투자한다",
              "reinvest the record net profit of 236.8 billion won it posted in the first half"),
             ("21개 세션에 참여했다",
              "Experts from Toss and its six subsidiaries participated in 21 sessions."),
-            ("11월 6일 행사를 열었다", "the conference held on November 6 at COEX"),
-            ("1.5조 원 규모다", "a 1.5 trillion won program"),
             ("점유율은 40%다", "40% of the market"),
             ("투자액은 300억원이다", "투자액은 300억원이다."),
-            ("5월 시행", "takes effect in May"),
             ("2026.11.10 공고", "published on 2026.11.10"),
-            ("5,000만 원 지원", "5천만원 지원"),
-            ("9월 시행", "effective Sept. 4"),
-            ("1월 시행", "effective January 3"),
+            ("1,000명이 참석했다", "attracting over 1000 professionals"),
+            ("1.5조 원 규모다", "a 1.5 trillion won program"),  # same digits as written
         ]
         ungrounded = [
-            ("상반기 순이익 2,369억 원", "net profit of 236.8 billion won", "2369"),
-            ("8월 출시", "launched in July", "8"),
-            ("점유율 40%", "40 of the market", "40%"),
-            ("1조5천억 원", "1.5 trillion won", "1"),
-            ("7개 계열사", "six subsidiaries", "7"),
-            # Review regressions: every base-gate token is still checked.
-            ("2026.11.11 공고", "published on 2026.11.10", "2026.11.11"),
-            ("금리는 .5% 올랐다", "rates rose 0.25%", "5%"),
-            ("5월 시행", "banks may revise the rule", "5"),
-            ("1개 은행", "one of the banks", "1"),
-            # Second review: compounds never ground their last component.
-            ("5,000원 지원", "5천만원 지원", "5000"),
-            ("6개 계열사", "Twenty-six subsidiaries", "6"),
-            ("6개 계열사", "twenty six subsidiaries", "6"),
-            ("6개 지점", "six hundred branches", "6"),
-            # Fourth review: number words never ground digits.
+            # Former equivalence cases: no longer grounded.
+            ("토스증권은 7월 계좌 보유자 1,000만 명을 넘겼다",
+             "Toss Securities surpassed 10 million account holders in July this year.", "7"),
+            ("상반기 순이익 2,368억 원을 재투자한다",
+             "net profit of 236.8 billion won", "2368"),
+            ("11월 6일 행사를 열었다", "the conference held on November 6 at COEX", "11"),
             ("6개 계열사", "Experts from its six subsidiaries", "6"),
             ("6개 은행", "Twenty‑six banks participated", "6"),
             ("2개 기업", "Two and a half million companies joined", "2"),
-            ("50만 명", "500 thousand million people", "50"),
-            ("5월 발표", "Jane announced it", "5"),
-            ("3월 발표", "Mary announced it", "3"),
-            # Third review: a partial leading-decimal number has no scaled value.
+            # Review regressions of the equivalence heuristic stay rejected.
+            ("200만 달러", "a 1/2 million dollars grant", "200"),
+            ("5,000원 지원", "5천만원 지원", "5000"),
             ("500만 명", "about .5 million people", "500"),
-            ("50억 원", "a .5 billion won fund", "50"),
-            ("5,000만 원", "rose by 1,5 million", "5000"),
+            ("2026.11.11 공고", "published on 2026.11.10", "2026.11.11"),
+            ("금리는 .5% 올랐다", "rates rose 0.25%", "5%"),
+            ("점유율 40%", "40 of the market", "40%"),
         ]
         for fact, excerpt in grounded:
             with self.subTest(fact=fact):
@@ -233,25 +220,20 @@ class TestStructuredQuality(unittest.TestCase):
                 enrichment.validate_enrichment(raw, [valid_body(excerpt + " " + "가" * 1200)])
         for fact, excerpt, token in ungrounded:
             with self.subTest(fact=fact):
-                self.assertIn(token, enrichment._unsupported_numbers(fact, excerpt))
+                missing = enrichment._unsupported_numbers(fact, excerpt)
+                self.assertIn(token, missing)
                 raw = valid_enrichment_json(evidence_excerpt=excerpt)
                 raw["keyFacts"][2]["fact"] = fact
                 with self.assertRaises(enrichment.QualityRejected) as caught:
                     enrichment.validate_enrichment(raw, [valid_body(excerpt + " " + "가" * 1200)])
                 self.assertEqual(caught.exception.reason, "NUMERIC_CLAIM_UNGROUNDED")
-                # The repair learns which fact failed and its own number only.
-                missing = ", ".join(enrichment._unsupported_numbers(fact, excerpt))
-                self.assertEqual(caught.exception.errors,
-                                 [f"keyFacts[2]: numeric claim absent from cited excerpt: {missing}"])
+                # The repair learns which fact failed and its own numbers only.
+                self.assertEqual(caught.exception.errors, [
+                    "keyFacts[2]: numeric claim absent from cited excerpt: " + ", ".join(missing[:4])])
 
-    def test_numeric_tokens_cover_every_base_gate_token(self):
-        # Each _NUMBER token of a fact is also produced by the new tokenizer,
-        # so the scaled comparison can only add grounding, never skip a number.
-        for text in ("2026.11.11 공고 .5% 1,000만 3.16% 236.8 billion 7월 6개 v1.2.3 1,5",
-                     "점유율 40%와 50퍼센트, 4~5%"):
-            with self.subTest(text=text):
-                base = sorted(n.replace(",", "") for n in enrichment._NUMBER.findall(text))
-                self.assertEqual(sorted(raw for raw, _ in enrichment._number_tokens(text)), base)
+    def test_prompt_requires_verbatim_numbers(self):
+        self.assertIn("copy every number exactly as written", enrichment._SYSTEM)
+        self.assertIn("Omit any number you cannot copy verbatim", enrichment._SYSTEM)
 
     def test_evidence_rejection_names_the_citation_without_source_text(self):
         raw = valid_enrichment_json()

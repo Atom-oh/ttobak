@@ -371,8 +371,11 @@ before or between JSON objects, single-sentence English excerpts over 180
 characters, and Korean restatement of English figures (`236.8 billion won` as
 2,368 eok won). Discovery now passes the freshness window as
 `filters.publishedDateFilter`, the worker requests reasoning effort `low`, the
-excerpt bound is 300 characters (total still 1,000), and numeric grounding accepts
-only exact scaled equivalents. Rejected worker results carry `validationErrors`
+excerpt bound is 300 characters (total still 1,000), and the prompt requires numbers
+copied verbatim (or omitted) while grounding stays verbatim-only; equivalence
+grounding (Korean units, month names, number words) was removed after review
+because every variant accepted figures the source did not state. Numeric errors
+name the failing fact for the repair. Rejected worker results carry `validationErrors`
 (validator locations and measured lengths only) in the execution history.
 HTTP 403, script-only pages and oversized bodies remain rejections.
 
