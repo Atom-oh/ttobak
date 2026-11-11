@@ -472,7 +472,7 @@ Member removal and legacy direct addition retire it atomically; cleanup conflict
 remain retryable. A durable control row also gates queue/claim transactions and bootstrap
 capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
 continuation. Project user queues are isolated from old readers; transactional rows, TTL and
-the required incompatible-API rollback drain are specified in ADR-044.
+the required incompatible-API rollback drain are specified in ADR-025.
 
 Admin user summaries include `emailVerified`. Password reset requires an enabled,
 CONFIRMED user with verified email; missing verification returns 409
@@ -755,7 +755,7 @@ Restricted account views never write their hidden content/action fields.
 Unchanged derived fields are also omitted, preserving safe summary clearance
 for attribution-only corrections. Action-item updates target JSON text/assignee
 fields and preserve task IDs, completion and other metadata.
-See ADR-051.
+See ADR-016.
 
 `POST /api/kb/upload` `{fileName, fileType, accountId?}` returns `{uploadUrl,
 key, expiresIn, headers?}`. An empty `accountId` is a personal file and the

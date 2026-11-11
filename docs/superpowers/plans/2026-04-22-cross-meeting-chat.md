@@ -18,4 +18,4 @@ Intended checks included Go/frontend builds, cross-meeting answers, shared-meeti
 ## Current references
 
 - [Chat UI](../../../frontend/src/app/chat/ChatClient.tsx), [session HTTP handlers](../../../backend/internal/handler/chat.go), [QA sessions/retrieval](../../../backend/python/qa/handler.py).
-- WebSocket streaming is implemented through [ask_live routing](../../../backend/cmd/websocket/main.go), [JWT connection authorizer](../../../backend/cmd/ws-authorizer/main.go), and Python streaming. [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md) adds current web-search egress and quota behavior; [ADR-023](../../decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) explains share provenance.
+- WebSocket streaming is implemented through [ask_live routing](../../../backend/cmd/websocket/main.go), [JWT connection authorizer](../../../backend/cmd/ws-authorizer/main.go), and Python streaming. [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md) adds current web-search egress and quota behavior; [ADR-016](../../decisions/ADR-016-meeting-account-sharing.md) explains share provenance.

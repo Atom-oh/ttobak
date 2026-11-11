@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: c02b32f77108 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: a1c093dab810 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -177,7 +177,7 @@ limit instead of claiming a Mac build passed.
   covers `/api/public/*`; API Gateway registers only the literal doc route.
   A new unauthenticated route is CRITICAL (ADR-020).
 - **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows
-  (ADR-044). Keep writers disabled until companion bootstrap and rollback guards
+  (ADR-025). Keep writers disabled until companion bootstrap and rollback guards
   are deployed. Account/meeting `PENDING_SHARE#`/`PENDING_ACCOUNT#`/
   `PENDING_MEETING#` rows bind the invited Cognito sub and require verified email
   before materialization. Enforce 30-day expiry synchronously and via

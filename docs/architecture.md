@@ -103,7 +103,7 @@ a separate user queue plus a project reverse row, keeping older API readers from
 consuming unknown grant kinds. Transactions bind project ownership, invitation
 version/expiry and recipient sub before publishing membership. JWT email
 verification remains required; account roles and global admin rights are never
-inherited from a project invitation. See ADR-044 and API-SPEC for contracts.
+inherited from a project invitation. See ADR-025 and API-SPEC for contracts.
 
 Deploy and verify the API with `/api/session/bootstrap` and project pending routes
 before publishing the new frontend. The new frontend requires bootstrap and will
@@ -189,7 +189,7 @@ retired. Its data moves in a one-time cutover
    Refinement and auxiliary calls keep their independent model selection.
    Authorized shared readers can correct known speaker names through the bounded
    speaker endpoint with the existing version comparison. General editing and
-   owner-only re-diarization retain their separate permissions (ADR-051).
+   owner-only re-diarization retain their separate permissions (ADR-016).
 4. Derive account/project material using explicit relations and current access.
    Hierarchy classifies accounts; it never grants membership. Project lists union
    owner, direct membership and linked-account access.

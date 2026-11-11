@@ -100,6 +100,6 @@ python3 scripts/docs/check_docs.py
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
 - [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)
-- [Shared speaker correction and account publication](decisions/ADR-051-shared-speaker-correction-and-account-publication.md)
-- [Versioned HTTP origin proof rotation](decisions/ADR-050-http-origin-proof-rotation.md)
+- [Shared speaker correction and account publication](decisions/ADR-016-meeting-account-sharing.md)
+- [Versioned HTTP origin proof rotation](decisions/ADR-027-edge-delivery-and-origin-proof.md)
 - [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)

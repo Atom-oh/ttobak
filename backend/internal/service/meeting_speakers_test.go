@@ -186,7 +186,7 @@ func TestSharedSpeakerRenameByAccountMemberUpdatesPublishedContent(t *testing.T)
 				t.Fatal(err)
 			}
 			stored := repo.meetingsByID["meeting"]
-			// The member now reads the canonical summary, so the ADR-051 rename
+			// The member now reads the canonical summary, so the ADR-016 rename
 			// applies to it; untouched derived fields stay canonical.
 			if stored.Content != "Private Kim summary" ||
 				stored.ActionItems != `[{"assignee":"Kim","id":"task","text":"Private task"}]` ||
