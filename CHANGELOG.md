@@ -1,16 +1,67 @@
 # Changelog
 
-Repository change history, not a live deployment inventory. Older model aliases,
-workflow counts and infrastructure choices below describe their original changes;
-current configuration belongs to the project guide and source manifests.
+Repository change history, not a live deployment inventory. Notable changes follow
+the categories of Keep a Changelog and Semantic Versioning. Each version is an
+annotated `vX.Y.Z` Git tag described in the [release runbook](docs/runbooks/releases.md);
+**Unreleased** holds changes merged since the latest tag. The app's `/changelog` page
+shows the user-facing subset of each release. A tag does not prove deployment.
+Older model aliases, workflow counts and infrastructure choices below describe their
+original changes; current configuration belongs to the project guide and source
+manifests.
 
-## Unreleased
+## [Unreleased]
+
+## [1.0.0] - 2026-11-11
+
+First tagged application release. It contains all earlier history; the entries below
+summarize the main user-visible changes merged from 2026-11-03 to 2026-11-11 and the
+previously unreleased log. Mac app binaries keep separate `mac-v*` releases.
 
 ### Added
 
+- Versioned releases: `vX.Y.Z` tags, this changelog's release sections and the in-app
+  `/changelog` page, reached from a version link at the bottom of the sidebar and the
+  mobile menu sheet that marks a release the browser has not opened yet. Notes live
+  in `frontend/src/lib/releaseNotes.ts`; tests keep them aligned with this file, the
+  frontend package version and served routes.
+- Separate Home and Meetings workspaces (#640); customer and project links while
+  recording (#648); internal meeting categories with a list filter (#724).
+- English meeting notes with a Korean/English toggle on the AI summary (#802, #807,
+  #808, #809).
+- Owner-only SA Activity page with scorecard, missed SFDC logging and mapping queue
+  (#817), saved SA reports and Mac-app report generation (#882, #883), Mac local intake
+  settings and collection (#860, #862).
+- Account overview AWS signals, per-opportunity flow and person/project focus graph
+  (#718, #719, #877); account people panel and speaker binding (#744); account merge
+  (#835, #837) and owner transfer (#819).
+- Remember/CSV/Excel contact import with account matching (#677, #858).
+- SpecReq task strip on Home and Meetings (#775).
+- Fixed SFDC-aligned project stages with history (#708).
+- Self-service and admin display-name editing (#880).
+- In-app product manual (#811).
+- Mac app: caption overlay windows (#788, #803), meeting detection recording prompt
+  (#679, #722), Zoom/Meet mute following and mid-recording microphone switch (#621,
+  #667, #725), in-app update checks (#764).
 - Billing Insight single-use hand-off button: `POST /api/billing-insight/handoff`
   stores a 60-second hashed code and returns the AWS Billing Insight companion
   redemption URL; gated by `ttobak:billingInsightUrl` and runtime `billingInsight`.
+
+### Changed
+
+- Account hierarchy tree in Accounts (#852); news origin labels and common/customer
+  grouping, with customer-source news limited to direct members (#886, #891);
+  recording card layout menu (#804); full-width workspace layouts with mobile
+  navigation clearance (#889); meetings list first with a schedule sidebar and
+  alphabetical account groups (#893).
+- Run the first Whisper worker on On-Demand capacity and activate STT recovery for
+  stranded single-file audio (#888).
+
+### Fixed
+
+- Seek meeting audio from summary timestamps (#598, #610); fall back to the default
+  microphone when the saved device is gone (#885); confirm/alert dialogs in the Mac
+  app (#619); let Mac caption windows enter other apps' full-screen Spaces (#887, not
+  yet observed over a real full-screen slideshow).
 
 ### Documentation and review
 

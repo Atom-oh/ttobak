@@ -240,7 +240,7 @@ function handler(event) {
   }
 
   // Known static pages → append .html; unknown paths → SPA fallback
-  var knownPages = ['/meetings', '/files', '/kb', '/dictionary', '/settings', '/record', '/chat', '/profile', '/insights', '/accounts', '/projects', '/docs', '/billing', '/performance', '/meeting/_', '/insights/_/_', '/insights/research/_', '/accounts/_', '/projects/_', '/accounts/_/docs/_', '/docs/_'];
+  var knownPages = ['/meetings', '/files', '/kb', '/dictionary', '/settings', '/record', '/chat', '/profile', '/insights', '/accounts', '/projects', '/docs', '/billing', '/performance', '/changelog', '/meeting/_', '/insights/_/_', '/insights/research/_', '/accounts/_', '/projects/_', '/accounts/_/docs/_', '/docs/_'];
   if (uri !== '/' && !uri.includes('.') && !uri.endsWith('/')) {
     if (knownPages.indexOf(uri) >= 0) {
       request.uri = uri + '.html';

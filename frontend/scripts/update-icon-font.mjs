@@ -37,6 +37,7 @@ export const NON_ICON_LITERALS = new Set([
   'clear', // caption push kind (lib/captionOverlay.ts)
   'preview', // caption push kind (lib/captionOverlay.ts)
   'message', // window postMessage event type (components/layout/UserGuideButton.tsx)
+  'storage', // window storage event type (lib/releaseNotes.ts)
   'login', // Mac intake run action (lib/intake.ts, hooks/useIntake.ts)
 ]);
 
