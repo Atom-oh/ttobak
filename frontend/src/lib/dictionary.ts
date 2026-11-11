@@ -23,7 +23,7 @@ export interface DictTermItem {
   updatedBy?: string;
 }
 
-export type TermSourceKind = 'meeting' | 'kb' | 'research' | 'news';
+export type TermSourceKind = 'meeting' | 'kb' | 'research' | 'news' | 'tech';
 export interface TermSourceRef { kind: TermSourceKind; ref: string; at: string }
 
 /** `personal`, `common`, or `account:{accountId}`. */
@@ -68,6 +68,7 @@ export function isRestorable(entry: Pick<TermLogEntry, 'before'>): boolean {
 
 const SOURCE_LABELS: ReadonlyArray<{ kind: TermSourceKind; label: string }> = [
   { kind: 'meeting', label: '미팅' }, { kind: 'kb', label: 'KB' }, { kind: 'research', label: '리서치' }, { kind: 'news', label: '뉴스' },
+  { kind: 'tech', label: 'AWS 문서' },
 ];
 
 /** One badge per source kind present, in a fixed order; unknown kinds are skipped. */
@@ -81,6 +82,8 @@ export interface VocabularyView {
   activeReady: boolean;
   failureCode?: string;
   termCount: number;
+  /** The caller's READY vocabulary for live caption streams, when enabled. */
+  liveName?: string;
 }
 export type VocabularyViews = { ko: VocabularyView; en: VocabularyView };
 export type LegacyDictionaryTerm = { phrase: string; soundsLike: string; displayAs: string };

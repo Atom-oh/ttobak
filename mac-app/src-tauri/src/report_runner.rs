@@ -324,6 +324,17 @@ fn tmpdir_env(value: Option<std::ffi::OsString>) -> Option<std::ffi::OsString> {
     value.filter(|v| Path::new(v).is_absolute())
 }
 
+/// Usage text only an adapter with the `report run` command contains
+/// (`mcp-server/src/report/run.ts`). An intake-only adapter exits with an
+/// unrelated startup error, so the app checks this before spawning.
+const REPORT_MARKER: &[u8] = b"report run --period";
+
+fn supports_report(bytes: &[u8]) -> bool {
+    bytes
+        .windows(REPORT_MARKER.len())
+        .any(|w| w == REPORT_MARKER)
+}
+
 /// Rust's forced ends in the CLI's report vocabulary.
 fn report_code(code: Option<String>) -> Option<String> {
     code.map(|c| match c.as_str() {
@@ -523,6 +534,9 @@ async fn run_report(
         Ok(l) => l,
         Err(code) => return Outcome::failed(code),
     };
+    if !intake_runner::local_adapter(&launch.home).is_some_and(|b| supports_report(&b)) {
+        return Outcome::failed("ADAPTER_OUTDATED");
+    }
     let mut cmd =
         intake_runner::node_command(&launch, report_argv(args, &launch.server, highlights));
     let user = std::env::var("USER").ok();
@@ -1087,6 +1101,22 @@ mod tests {
         );
         assert_eq!(bad.report, ReportSettings::default());
         assert_ne!(bad, IntakeSettings::default(), "the schedule is kept");
+    }
+
+    #[test]
+    fn adapter_without_report_command_is_outdated() {
+        // An intake-only adapter (before the report command) has no usage line.
+        assert!(!supports_report(b"intake setup ... --transport stdio|http"));
+        assert!(!supports_report(b""));
+        assert!(supports_report(
+            b"usage: ttobak-mcp report run --period week|quarter|year|custom"
+        ));
+        // The adapter bundle this revision serves keeps the marker.
+        let bundle = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../frontend/public/mcp/ttobak-mcp.mjs"),
+        )
+        .expect("served adapter bundle");
+        assert!(supports_report(&bundle));
     }
 
     #[test]

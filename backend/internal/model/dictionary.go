@@ -205,6 +205,8 @@ const (
 	DictSourceKB       = "kb"
 	DictSourceResearch = "research"
 	DictSourceNews     = "news"
+	// DictSourceTech: AWS technical documents (Common only, Ref = day).
+	DictSourceTech = "tech"
 
 	// MaxDictSources caps DictTerm.Sources.
 	MaxDictSources = 10
@@ -297,8 +299,8 @@ const (
 	DictLogActionUpdate  = "update"
 	DictLogActionDelete  = "delete"
 	DictLogActionRestore = "restore"
-	// DictLogActionCreate and DictLogActionEvict audit the news job's
-	// system writes: a new automatic term and a cap eviction.
+	// DictLogActionCreate and DictLogActionEvict audit the news and tech
+	// jobs' system writes: a new automatic term and a cap eviction.
 	DictLogActionCreate = "create"
 	DictLogActionEvict  = "evict"
 	MaxDictLogsPerTerm  = 20
@@ -415,6 +417,9 @@ type VocabularyView struct {
 	ActiveReady bool   `json:"activeReady"`
 	FailureCode string `json:"failureCode,omitempty"`
 	TermCount   int    `json:"termCount"`
+	// LiveName is the caller's own READY active vocabulary for live caption
+	// streams; empty unless live vocabularies are enabled (LIVE_VOCABULARY_MODE).
+	LiveName string `json:"liveName,omitempty"`
 }
 
 // VocabularyViews lists the personal vocabularies by language.

@@ -345,6 +345,36 @@ func TestLegacyPutNeverTombstonesOrTouchesAutoRows(t *testing.T) {
 	}
 }
 
+func TestLegacyPutRoundTripsFullAutoScope(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	// The automatic cap plus rows it does not count (user-edited ones): GET
+	// lists them all and every one passes through.
+	for i := 0; i < MaxAutoTermsPerScope+5; i++ {
+		store.seedRow(fmt.Sprintf("Auto %04d", i), fmt.Sprintf("Auto-%04d", i), model.TermOriginAuto, model.TermStateActive, 1)
+	}
+	for i := 0; i < MaxManualTermsPerScope; i++ {
+		store.seedRow(fmt.Sprintf("Manual %03d", i), fmt.Sprintf("Manual-%03d", i), model.TermOriginManual, model.TermStateActive, 1)
+	}
+	svc := newTestDictService(store, nil)
+	got, err := svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || len(got.Terms) != MaxAutoTermsPerScope+5+MaxManualTermsPerScope {
+		t.Fatalf("GET = %d terms %v", len(got.Terms), err)
+	}
+	if _, err := svc.UpdateDictionary(ctx, "u1", got.Terms); err != nil {
+		t.Fatalf("a full GET past the automatic cap must round-trip through the legacy PUT: %v", err)
+	}
+
+	var input *TermInputError
+	var many []model.DictionaryTerm
+	for i := 0; i <= MaxLegacyTerms; i++ {
+		many = append(many, model.DictionaryTerm{Phrase: fmt.Sprintf("New-%04d", i)})
+	}
+	if _, err := svc.UpdateDictionary(ctx, "u1", many); !errors.As(err, &input) || input.Field != "terms" {
+		t.Fatalf("more than %d non-automatic entries must be rejected: %v", MaxLegacyTerms, err)
+	}
+}
+
 func TestLegacyPutRoundTripsGetOutput(t *testing.T) {
 	ctx := context.Background()
 	store := migratedStore()

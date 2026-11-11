@@ -177,6 +177,79 @@ class TestStructuredQuality(unittest.TestCase):
         raw["evidence"][0]["supportingExcerpt"] = "투자액은 300억원이다."
         enrichment.validate_enrichment(raw, [valid_body("투자액은 300억원이다. " + "가" * 1200)])
 
+    def test_fact_numbers_are_grounded_only_verbatim(self):
+        # Equivalence grounding (Korean units, month names, number words) was
+        # removed after review: every variant accepted figures the source did
+        # not state. A fact number must appear in its cited excerpt as written.
+        grounded = [
+            ("토스증권은 July 기준 계좌 10 million 개를 넘겼다",
+             "Toss Securities surpassed 10 million account holders in July this year."),
+            ("상반기 순이익 236.8 billion won을 재투자한다",
+             "reinvest the record net profit of 236.8 billion won it posted in the first half"),
+            ("21개 세션에 참여했다",
+             "Experts from Toss and its six subsidiaries participated in 21 sessions."),
+            ("점유율은 40%다", "40% of the market"),
+            ("투자액은 300억원이다", "투자액은 300억원이다."),
+            ("2026.11.10 공고", "published on 2026.11.10"),
+            ("1,000명이 참석했다", "attracting over 1000 professionals"),
+            ("1.5조 원 규모다", "a 1.5 trillion won program"),  # same digits as written
+        ]
+        ungrounded = [
+            # Former equivalence cases: no longer grounded.
+            ("토스증권은 7월 계좌 보유자 1,000만 명을 넘겼다",
+             "Toss Securities surpassed 10 million account holders in July this year.", "7"),
+            ("상반기 순이익 2,368억 원을 재투자한다",
+             "net profit of 236.8 billion won", "2368"),
+            ("11월 6일 행사를 열었다", "the conference held on November 6 at COEX", "11"),
+            ("6개 계열사", "Experts from its six subsidiaries", "6"),
+            ("6개 은행", "Twenty‑six banks participated", "6"),
+            ("2개 기업", "Two and a half million companies joined", "2"),
+            # Review regressions of the equivalence heuristic stay rejected.
+            ("200만 달러", "a 1/2 million dollars grant", "200"),
+            ("5,000원 지원", "5천만원 지원", "5000"),
+            ("500만 명", "about .5 million people", "500"),
+            ("2026.11.11 공고", "published on 2026.11.10", "2026.11.11"),
+            ("금리는 .5% 올랐다", "rates rose 0.25%", "5%"),
+            ("점유율 40%", "40 of the market", "40%"),
+        ]
+        for fact, excerpt in grounded:
+            with self.subTest(fact=fact):
+                self.assertEqual(enrichment._unsupported_numbers(fact, excerpt), [])
+                raw = valid_enrichment_json(evidence_excerpt=excerpt)
+                raw["keyFacts"][0]["fact"] = fact
+                enrichment.validate_enrichment(raw, [valid_body(excerpt + " " + "가" * 1200)])
+        for fact, excerpt, token in ungrounded:
+            with self.subTest(fact=fact):
+                missing = enrichment._unsupported_numbers(fact, excerpt)
+                self.assertIn(token, missing)
+                raw = valid_enrichment_json(evidence_excerpt=excerpt)
+                raw["keyFacts"][2]["fact"] = fact
+                with self.assertRaises(enrichment.QualityRejected) as caught:
+                    enrichment.validate_enrichment(raw, [valid_body(excerpt + " " + "가" * 1200)])
+                self.assertEqual(caught.exception.reason, "NUMERIC_CLAIM_UNGROUNDED")
+                # The repair learns which fact failed and its own numbers only.
+                self.assertEqual(caught.exception.errors, [
+                    "keyFacts[2]: numeric claim absent from cited excerpt: " + ", ".join(missing[:4])])
+
+    def test_prompt_requires_verbatim_numbers(self):
+        self.assertIn("copy every number exactly as written", enrichment._SYSTEM)
+        self.assertIn("Omit any number you cannot copy verbatim", enrichment._SYSTEM)
+
+    def test_evidence_rejection_names_the_citation_without_source_text(self):
+        raw = valid_enrichment_json()
+        raw["evidence"][0]["supportingExcerpt"] = "번역된 인용문"
+        with self.assertRaises(enrichment.QualityRejected) as caught:
+            enrichment.validate_enrichment(raw, [valid_body()])
+        self.assertEqual(caught.exception.reason, "EVIDENCE_NOT_FOUND")
+        self.assertEqual(caught.exception.errors,
+                         ["evidence S1: excerpt is not an exact substring of its source body"])
+
+    def test_one_sentence_excerpt_fits_but_total_excerpt_bound_is_unchanged(self):
+        sentence = "가" * 240
+        raw = valid_enrichment_json(evidence_excerpt=sentence)
+        enrichment.validate_enrichment(raw, [valid_body(sentence + " " + "나" * 1200)])
+        self.assertEqual(enrichment.MAX_TOTAL_EXCERPT_CHARS, 1000)
+
     def test_count_and_total_excerpt_limits(self):
         variants = []
         raw = valid_enrichment_json()
@@ -185,7 +258,7 @@ class TestStructuredQuality(unittest.TestCase):
         raw = valid_enrichment_json()
         raw["meetingQuestions"], raw["recommendedActions"] = [], []
         variants.append(raw)
-        raw = valid_enrichment_json(evidence_excerpt="가" * 181)
+        raw = valid_enrichment_json(evidence_excerpt="가" * (enrichment.MAX_EXCERPT_CHARS + 1))
         variants.append(raw)
         raw = valid_enrichment_json()
         raw["evidence"] = [dict(raw["evidence"][0], id=f"S{i}", supportingExcerpt="가" * 170)
@@ -277,7 +350,7 @@ class TestSynthesis(unittest.TestCase):
         self.assertNotIn("temperature", args["inferenceConfig"])
         self.assertEqual(args["modelId"], "global.openai.gpt-6-luna")
         self.assertEqual(args["additionalModelRequestFields"],
-                         {"reasoning": {"effort": "none"}})
+                         {"reasoning": {"effort": "low"}})
         value = json.loads(args["messages"][0]["content"][0]["text"])
         self.assertEqual(value["sources"][0]["url"], valid_body().final_url)
         self.assertEqual(value["sources"][0]["body"], valid_body().body)
