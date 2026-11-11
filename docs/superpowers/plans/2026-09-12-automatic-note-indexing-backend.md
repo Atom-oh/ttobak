@@ -3,7 +3,7 @@
 Historical planning/acceptance record from 2026-09-12. Checklist statements below
 record the original slice, not current deployment or instructions to restart it.
 For current activation, follow [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md),
-[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md), where relevant.
+[ADR-001](../../decisions/ADR-001-meeting-document-extraction.md), where relevant.
 
 This planning slice had no automatic trigger. Current invocation details are in
 `docs/API-SPEC.md`; the later manual-only bootstrap schedule is a separate stage.

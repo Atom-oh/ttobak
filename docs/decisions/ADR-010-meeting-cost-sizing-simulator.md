@@ -1,4 +1,4 @@
-# ADR-033: Meeting cost and sizing simulations
+# ADR-010: Meeting cost and sizing simulations
 
 - Status: Accepted; uses ADR-013 transcript anchors and ADR-027 media prefixes.
 - Decision date: 2026-08-18.

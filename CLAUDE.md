@@ -222,7 +222,7 @@ limit instead of claiming a Mac build passed.
   concurrent human edits. Failures retain prior content. Meeting and summary state
   deletion share the first transaction. Consumers/rule/permission precede API update.
 - **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
-  state exist (ADR-039). Consumers accept only authorized immutable result identity
+  state exist (ADR-001). Consumers accept only authorized immutable result identity
   with the current source ETag; extraction JSON does not claim a source version ID.
   Upload completion and text retry/status/page routes use `AttachmentTextService`;
   `SetAttachmentTextService` injects verified DOCUMENT collection into summarization.
@@ -252,7 +252,7 @@ limit instead of claiming a Mac build passed.
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX
   networking, not prompt filtering/import denylisting. A per-meeting `SIMRUN`
   singleton and matching `simRunId` conditions prevent stale worker writes;
-  preserve both Go and Python guards (ADR-033).
+  preserve both Go and Python guards (ADR-010).
 - **Mac:** finished WAV bytes stream disk-to-S3 in Rust, never through WebView IPC;
   live raw PCM chunks intentionally cross IPC. Pin the exact
   `EXPECTED_BUCKET_HOST`, not an AWS domain suffix. Upload timeouts measure stalled
@@ -295,7 +295,7 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
+| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-001/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |

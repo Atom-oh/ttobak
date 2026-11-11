@@ -118,7 +118,7 @@ acceptance or the Calendar 5 persisted integration.
 
 ## SA performance
 
-Owner-only SA performance data ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)).
+Owner-only SA performance data ([ADR-023](decisions/ADR-023-sa-performance-data-residency.md)).
 Routes are in `backend/internal/handler/performance.go`, validation in
 `backend/internal/service/performance.go`, and wire types in
 `backend/internal/model/performance.go`. Every route reads or writes only the
@@ -218,7 +218,7 @@ account names, aliases and domains come only from those accounts.
   intake window, so calendar-based gaps cover only events from that time on.
 
 Residency: rows use default table encryption without envelope sealing (an
-ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
+ADR-023 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
 two years after their own year through `pendingShareExpiresAt`; batch receipts
 expire after seven days. Errors use `{error:{code,message}}` with `400`, `401`,
 `403`, `404`, `409`, `413` and `500`, as for the private calendar. Responses use
@@ -1798,7 +1798,7 @@ runs are persisted to error by GetSimRun, not merely displayed as error.
 Only validated requirements/options enter codegen; option descriptions still
 influence the prompt. The interpreter's empty IAM role and SANDBOX network are the
 execution boundary. Worker updates require matching simRunId. Outputs stay under
-images/ and files/; details are in ADR-033 and service/sim.go.
+images/ and files/; details are in ADR-010 and service/sim.go.
 
 ### Admin and settings
 

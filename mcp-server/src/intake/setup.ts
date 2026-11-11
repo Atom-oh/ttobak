@@ -126,7 +126,7 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
       say(`${label}: ${server} 서버를 찾지 못해 건너뜁니다.`);
       continue;
     }
-    // 2. Calendar consent: private items are included (ADR-003 local intake, ADR-068).
+    // 2. Calendar consent: private items are included (ADR-003 local intake, ADR-023).
     let accept = false;
     let consentReused = false;
     if (connector === 'calendar') {
