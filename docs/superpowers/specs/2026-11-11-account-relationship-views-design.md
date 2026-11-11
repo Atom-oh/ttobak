@@ -1,7 +1,6 @@
 # Account relationship graph: person and project focus
 
-- Status: historical design record (draft); revised after owner feedback on 2026-11-11, not
-  yet approved.
+- Status: historical design record; approved by the owner on 2026-11-11.
 - Replaces: the whole-account view of `AccountGraph`
   (`frontend/src/components/account/AccountGraph.tsx`,
   `GET /api/accounts/{accountId}/graph`).
@@ -105,7 +104,9 @@ EKS meetings."
 
 New read route:
 
-`GET /api/accounts/{accountId}/graph/focus?focus={kind}:{id}&cursor=...`
+`GET /api/accounts/{accountId}/people/focus?focus={kind}:{id}&cursor=...`
+
+It lives with the people panel reads, so it has the same direct-member rule.
 
 - `kind` is `contact`, `member` or `project`. Any other value returns 400.
 - The response has the focus card, one page of meetings (at most 12) and the
