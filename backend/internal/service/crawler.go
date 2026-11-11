@@ -156,6 +156,9 @@ func operatorSourceError(err error) error {
 // crawlerRepo defines the repository methods used by CrawlerService and InsightsService.
 type crawlerRepo interface {
 	GetSource(ctx context.Context, sourceID string) (*model.CrawlerSource, error)
+	// GetSourceOrigin reads only a CONFIG row's sourceName and accountId,
+	// leniently, for Insights origin resolution.
+	GetSourceOrigin(ctx context.Context, sourceID string) (sourceName, accountID string, found bool, err error)
 	PutSourceIfAbsent(ctx context.Context, source *model.CrawlerSource) error
 	UpdateSourcePartial(ctx context.Context, sourceID string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error
 	GetSubscription(ctx context.Context, userID, sourceID string) (*model.CrawlerSubscription, error)

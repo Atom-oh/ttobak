@@ -128,8 +128,11 @@ func cleanNewsTerms(values []string, maxCount, maxRunes int, strict bool) ([]str
 	return out, nil
 }
 
+// accountNewsSourcePrefix starts every account-owned crawler source ID.
+const accountNewsSourcePrefix = "acct_"
+
 func accountNewsSourceID(accountID, suffix string) (string, error) {
-	id := "acct_" + accountID + "_" + suffix
+	id := accountNewsSourcePrefix + accountID + "_" + suffix
 	if !validNewsSourceID(id) {
 		return "", ErrInvalidInput
 	}
