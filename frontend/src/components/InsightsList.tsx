@@ -11,6 +11,8 @@ import { LinkToOpportunity } from '@/components/account/LinkToOpportunity';
 import { documentLinkId, documentLinkKind } from '@/lib/accountOverview';
 import { groupNewsByOrigin, NEWS_LAYOUT_STORAGE_KEY, parseNewsLayout, type NewsLayout } from '@/lib/newsOrigin';
 import { NewsGroupHeading, NewsLayoutSwitch, NewsOriginDetails } from './insights/NewsOrigin';
+import { NewsSourcesManager, useNewsSources } from './insights/NewsSourcesManager';
+import { newsScopeOptions, newsScopeParams, newsSourcesHref, parseNewsSourcesView, SCOPE_ALL } from '@/lib/newsRegistration';
 
 type TabType = 'news' | 'tech' | 'research';
 
@@ -55,7 +57,14 @@ export function InsightsList() {
   const [sortBy, setSortBy] = useState('newest');
   const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
   const [newsLayout, setNewsLayout] = useState<NewsLayout>('all');
+  const [newsScope, setNewsScope] = useState(SCOPE_ALL);
   const limit = 20;
+  const sourcesView = parseNewsSourcesView(searchParams);
+  // The scope select reads at most three directory pages; customers beyond
+  // them are still reachable through the sources view and the source filter.
+  const scopeSources = useNewsSources(user?.userId, urlTab === 'news', 3);
+  const scopeOptions = useMemo(() => newsScopeOptions(scopeSources.sources), [scopeSources.sources]);
+  const managedSources = useNewsSources(user?.userId, sourcesView.open);
 
   // The sidebar's News & Updates and Deep Research items both point at this
   // page and differ only in ?tab=, so a click between them changes the URL
@@ -71,6 +80,7 @@ export function InsightsList() {
       setServiceFilter('');
       setSelectedTags([]);
       setSortBy('newest');
+      setNewsScope(SCOPE_ALL);
     }
   }
 
@@ -104,10 +114,11 @@ export function InsightsList() {
     try {
       setLoading(true);
       setError(null);
-      const params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page: number; limit: number } = {
+      const params: Parameters<typeof insightsApi.list>[0] = {
         type: activeTab,
         page,
         limit,
+        ...(activeTab === 'news' ? newsScopeParams(newsScope) : {}),
       };
       if (crawlerFilter) {
         params.source = crawlerFilter;
@@ -154,7 +165,7 @@ export function InsightsList() {
         setLoading(false);
       }
     }
-  }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, limit]);
+  }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, newsScope, limit]);
 
   // handleDelete awaits a delete API call before refetching -- by the time
   // it resolves, the user may have changed tab/page/filters, making
@@ -186,10 +197,10 @@ export function InsightsList() {
   useEffect(() => {
     if (activeTab === 'research') {
       fetchResearchJobs();
-    } else {
+    } else if (!sourcesView.open) {
       fetchDocuments();
     }
-  }, [activeTab, fetchDocuments, fetchResearchJobs]);
+  }, [activeTab, fetchDocuments, fetchResearchJobs, sourcesView.open]);
 
   // Polling for running research jobs
   useEffect(() => {
@@ -248,6 +259,7 @@ export function InsightsList() {
     setServiceFilter('');
     setSelectedTags([]);
     setSortBy('newest');
+    setNewsScope(SCOPE_ALL);
     router.replace(`/insights?tab=${tab}`, { scroll: false });
   };
 
@@ -560,7 +572,17 @@ export function InsightsList() {
       </div>
 
       {/* Research Tab Content */}
-      {activeTab === 'research' ? (
+      {activeTab === 'news' && sourcesView.open && user?.userId ? (
+        <NewsSourcesManager
+          userId={user.userId}
+          initialAccountId={sourcesView.accountId}
+          list={managedSources}
+          onClose={() => {
+            scopeSources.reload();
+            router.replace('/insights?tab=news', { scroll: false });
+          }}
+        />
+      ) : activeTab === 'research' ? (
         <div className="space-y-4">
           {/* New Research button */}
           <div className="flex items-center justify-between">
@@ -781,6 +803,23 @@ export function InsightsList() {
           <div className="space-y-3">
             {/* Crawler source / Service dropdown + count */}
             <div className="flex items-center gap-3 flex-wrap">
+              {activeTab === 'news' && (
+                <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-text-secondary">
+                  범위
+                  <select
+                    value={newsScope}
+                    onChange={(e) => {
+                      setNewsScope(e.target.value);
+                      setPage(1);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  >
+                    {scopeOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {/* Crawler source filter (customer) — shown on news & tech tabs */}
               {(activeTab as string) !== 'research' && uniqueCrawlerSources.length > 0 && (
                 <select
@@ -852,6 +891,15 @@ export function InsightsList() {
               </div>
               {activeTab === 'news' && (
                 <NewsLayoutSwitch value={newsLayout} onChange={changeNewsLayout} />
+              )}
+              {activeTab === 'news' && (
+                <button
+                  type="button"
+                  onClick={() => router.replace(newsSourcesHref(), { scroll: false })}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary border border-primary/20 rounded-lg hover:bg-primary/5 dark:hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-colors"
+                >
+                  뉴스 소스 관리
+                </button>
               )}
               {!loading && (
                 <span className="text-xs text-slate-500 dark:text-text-muted ml-auto">

@@ -16,6 +16,7 @@ import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/type
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
+import type { NewsSourceItem, NewsSourcesPage } from '@/lib/newsRegistration';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -751,12 +752,26 @@ export const crawlerApi = {
     api.get<{ history: CrawlHistory[] }>(`/api/crawler/sources/${sourceId}/history`),
 };
 
+// Every news source the caller can manage: account-owned ones of their direct
+// accounts and their common subscriptions. 404 until the endpoint is deployed.
+export const newsSourcesApi = {
+  list: (query: { limit?: number; cursor?: string } = {}, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const q = new URLSearchParams();
+    if (query.limit) q.set('limit', String(query.limit));
+    if (query.cursor) q.set('cursor', query.cursor);
+    const suffix = q.toString();
+    return api.get<NewsSourcesPage>(`/api/news-sources${suffix ? `?${suffix}` : ''}`, { ...options, cache: 'no-store' });
+  },
+};
+
 // Insights API
 export const insightsApi = {
-  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number }) => {
+  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number; kind?: 'common' | 'account'; account?: string }) => {
     const q = new URLSearchParams();
     q.set('type', params.type);
     if (params.source) q.set('source', params.source);
+    if (params.kind) q.set('kind', params.kind);
+    if (params.account) q.set('account', params.account);
     if (params.service) q.set('service', params.service);
     if (params.tags && params.tags.length > 0) q.set('tags', params.tags.join(','));
     if (params.sort) q.set('sort', params.sort);
@@ -1091,6 +1106,8 @@ export const accountApi = {
       api.post<CrawlerSource>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, input, options),
     remove: (id: string, sourceId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, options),
+    update: (id: string, sourceId: string, input: { sourceName?: string; newsQueries?: string[]; aliases?: string[] }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.put<NewsSourceItem>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, input, options),
   },
 };
 

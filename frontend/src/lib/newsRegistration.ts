@@ -1,0 +1,198 @@
+// Pure helpers for news source registration (Insights news tab sources view
+// and Settings › Crawler Sources). Only accountOverview is imported, so tests
+// load this module in a vm context with a small require stub.
+import { newsSourceInput, parseTermList } from '@/lib/accountOverview';
+
+export const MAX_ALIASES = 20;
+export const MAX_ALIAS_CHARS = 100;
+export const MAX_SOURCE_NAME_CHARS = 200;
+export const MAX_NEWS_QUERIES = 32;
+
+export type NewsSourceKind = 'common' | 'account';
+
+/** One item of `GET /api/news-sources`. */
+export interface NewsSourceItem {
+  sourceId: string;
+  sourceName: string;
+  kind: NewsSourceKind;
+  accountId?: string;
+  accountName?: string;
+  newsQueries?: string[];
+  aliases?: string[];
+  customUrls?: string[];
+  newsSources?: string[];
+  status?: string;
+  lastCrawledAt?: string;
+  documentCount?: number;
+  canEdit?: boolean;
+  // The directory cut this item's lists; never prefill an edit form from it.
+  listsTruncated?: boolean;
+}
+
+/** One page of `GET /api/news-sources`. */
+export interface NewsSourcesPage { sources: NewsSourceItem[]; nextCursor?: string; truncated?: boolean }
+
+/** Search terms for the list, marked when the directory cut them. */
+export function sourceTermsText(item: NewsSourceItem, fallback: string): string {
+  const terms = (item.newsQueries ?? []).join(', ');
+  if (item.listsTruncated) return `${terms || fallback} …`;
+  return terms || fallback;
+}
+
+export const ALIAS_INVALID_MESSAGE = `별칭은 제어 문자 없이 ${MAX_ALIAS_CHARS}자 이내로 입력해 주세요.`;
+
+/** Settings' per-alias rule: at most 100 code points, no control/format characters. */
+export function aliasError(alias: string): string | null {
+  return [...alias].length > MAX_ALIAS_CHARS || /[\p{Cc}\p{Cf}]/u.test(alias) ? ALIAS_INVALID_MESSAGE : null;
+}
+
+export interface CommonSourceFields {
+  sourceName: string;
+  awsServices: string[];
+  newsQueries: string[];
+  customUrls: string[];
+  aliases: string[];
+}
+
+/** The `POST /api/crawler/sources` body Settings sends; shared so both forms stay identical. */
+export function commonAddRequest(data: CommonSourceFields) {
+  return {
+    sourceName: data.sourceName,
+    awsServices: data.awsServices,
+    newsSources: [] as string[],
+    newsQueries: data.newsQueries,
+    customUrls: data.customUrls.length > 0 ? data.customUrls : undefined,
+    aliases: data.aliases.length > 0 ? data.aliases : undefined,
+  };
+}
+
+export interface CommonNewsForm { sourceName: string; queries: string; aliases: string; customUrls: string }
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+/** Validates the Insights common news form and builds the Settings request (no AWS services). */
+export function commonNewsRequest(form: CommonNewsForm):
+  { request: ReturnType<typeof commonAddRequest>; error?: undefined } | { request?: undefined; error: string } {
+  const sourceName = form.sourceName.trim();
+  if (!sourceName) return { error: '뉴스 소스 이름을 입력해 주세요.' };
+  if ([...sourceName].length > MAX_SOURCE_NAME_CHARS) return { error: '뉴스 소스 이름은 200자 이하로 입력해 주세요.' };
+  const newsQueries = parseTermList(form.queries);
+  if (newsQueries.length > MAX_NEWS_QUERIES) return { error: '검색어는 최대 32개까지 입력할 수 있습니다.' };
+  const aliases: string[] = [];
+  for (const alias of parseTermList(form.aliases)) {
+    if (aliasError(alias)) return { error: ALIAS_INVALID_MESSAGE };
+    if (!aliases.some((a) => a.toLowerCase() === alias.toLowerCase())) aliases.push(alias);
+  }
+  if (aliases.length > MAX_ALIASES) return { error: '별칭은 최대 20개까지 입력할 수 있습니다.' };
+  const customUrls = [...new Set(form.customUrls.split(/\s+/).filter(Boolean))];
+  if (customUrls.some((url) => !isHttpUrl(url))) return { error: '직접 수집할 주소는 http 또는 https로 시작해야 합니다.' };
+  return { request: commonAddRequest({ sourceName, awsServices: [], newsQueries, customUrls, aliases }) };
+}
+
+/** Prefills the name with the picked customer while the user has not typed one. */
+export function prefillSourceName(current: string, touched: boolean, accountName: string | undefined): string {
+  return touched || !accountName ? current : accountName;
+}
+
+export interface AccountEditForm { sourceName: string; queries: string; aliases: string }
+
+const sameList = (a: string[], b: string[] | undefined) =>
+  a.length === (b ?? []).length && a.every((v, i) => v === (b ?? [])[i]);
+
+/**
+ * Builds the `PUT .../news-sources/{id}` body with only the changed fields.
+ * An empty query list and a body with no field are rejected by the server.
+ */
+export function accountEditRequest(form: AccountEditForm, original: NewsSourceItem):
+  { body: { sourceName?: string; newsQueries?: string[]; aliases?: string[] }; error?: undefined } | { body?: undefined; error: string } {
+  const { input, error } = newsSourceInput(form);
+  if (!input) return { error };
+  if (!input.newsQueries?.length) return { error: '검색어를 하나 이상 입력해 주세요.' };
+  const aliases = input.aliases ?? [];
+  const body: { sourceName?: string; newsQueries?: string[]; aliases?: string[] } = {};
+  if (input.sourceName !== original.sourceName) body.sourceName = input.sourceName;
+  if (!sameList(input.newsQueries, original.newsQueries)) body.newsQueries = input.newsQueries;
+  if (!sameList(aliases, original.aliases)) body.aliases = aliases;
+  if (Object.keys(body).length === 0) return { error: '바뀐 내용이 없습니다.' };
+  return { body };
+}
+
+// Not plain verbs: those literals collide with Material Symbol names (icon-font check).
+export type RegistrationAction = 'create-account' | 'create-common' | 'edit-source' | 'remove-source' | 'load-sources';
+
+/** Readable Korean text for a failed news source request; never a raw code. */
+export function registrationErrorMessage(failure: unknown, action: RegistrationAction): string {
+  const status = (failure as { status?: number } | null)?.status;
+  if (status === 403) {
+    return action === 'create-common'
+      ? '이 이름은 공통 뉴스로 등록할 수 없습니다. 다른 이름을 입력해 주세요.'
+      : '이 고객사의 직접 구성원만 뉴스 소스를 관리할 수 있습니다.';
+  }
+  if (status === 404) return action === 'load-sources' ? '뉴스 소스 목록을 아직 사용할 수 없습니다.' : '고객사나 뉴스 소스를 찾을 수 없습니다. 목록을 새로 고쳐 주세요.';
+  if (status === 400) {
+    if (action === 'create-account') return '등록할 수 없습니다. 입력 내용과 고객사별 소스 개수(최대 10개)를 확인해 주세요.';
+    if (action === 'create-common') return '등록할 수 없습니다. 이름, 검색어, 별칭과 주소를 확인해 주세요.';
+    return '저장할 수 없습니다. 이름과 검색어를 확인해 주세요.';
+  }
+  if (status === 429) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
+  const verb = action === 'remove-source' ? '삭제하지' : action === 'load-sources' ? '불러오지' : '저장하지';
+  return `뉴스 소스를 ${verb} 못했습니다. 잠시 후 다시 시도해 주세요.`;
+}
+
+// ---- Insights news scope filter ----
+
+export const SCOPE_ALL = '';
+export const SCOPE_COMMON = 'common';
+export const SCOPE_ACCOUNTS = 'account';
+const SCOPE_ACCOUNT_PREFIX = 'account:';
+
+export interface ScopeOption { value: string; label: string }
+
+/** The three fixed entries, then one per customer that has a registered source, by name. */
+export function newsScopeOptions(sources: readonly NewsSourceItem[] | null): ScopeOption[] {
+  const options: ScopeOption[] = [
+    { value: SCOPE_ALL, label: '전체' },
+    { value: SCOPE_COMMON, label: '공통' },
+    { value: SCOPE_ACCOUNTS, label: '고객사 전체' },
+  ];
+  const accounts = new Map<string, string>();
+  for (const source of sources ?? []) {
+    if (source.kind === 'account' && source.accountId && !accounts.has(source.accountId)) {
+      accounts.set(source.accountId, source.accountName?.trim() || source.accountId);
+    }
+  }
+  const sorted = [...accounts].sort((a, b) => a[1].localeCompare(b[1], 'ko') || a[0].localeCompare(b[0]));
+  return options.concat(sorted.map(([id, name]) => ({ value: `${SCOPE_ACCOUNT_PREFIX}${id}`, label: name })));
+}
+
+/** Maps a scope value to the `GET /api/insights` `kind` / `account` parameters. */
+export function newsScopeParams(scope: string): { kind?: NewsSourceKind; account?: string } {
+  if (scope === SCOPE_COMMON) return { kind: 'common' };
+  if (scope === SCOPE_ACCOUNTS) return { kind: 'account' };
+  if (scope.startsWith(SCOPE_ACCOUNT_PREFIX) && scope.length > SCOPE_ACCOUNT_PREFIX.length) {
+    return { kind: 'account', account: scope.slice(SCOPE_ACCOUNT_PREFIX.length) };
+  }
+  return {};
+}
+
+// ---- Addressable sources view ----
+
+/** `/insights?tab=news&sources=1[&account={id}]`, the link other pages use. */
+export function newsSourcesHref(accountId?: string): string {
+  const query = new URLSearchParams({ tab: 'news', sources: '1' });
+  if (accountId) query.set('account', accountId);
+  return `/insights?${query.toString()}`;
+}
+
+/** Whether the sources view is open, and the customer to preselect. */
+export function parseNewsSourcesView(params: { get(name: string): string | null }): { open: boolean; accountId: string } {
+  const open = (params.get('tab') ?? 'news') === 'news' && params.get('sources') === '1';
+  return { open, accountId: open ? (params.get('account') ?? '').trim() : '' };
+}
