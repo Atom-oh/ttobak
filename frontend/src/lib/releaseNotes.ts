@@ -47,7 +47,7 @@ export const RELEASES: Release[] = [
         body: '릴리스마다 바뀐 점과 새 기능의 위치를 이 페이지에서 확인합니다. 새 릴리스가 나오면 사이드바 아래 버전 표시에 점이 붙습니다.',
         where: '사이드바 아래 변경 내역 · 버전, 모바일은 지식 메뉴',
         to: null,
-        refs: [896],
+        refs: [903],
       },
       {
         kind: 'new',

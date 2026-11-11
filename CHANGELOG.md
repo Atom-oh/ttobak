@@ -23,7 +23,7 @@ previously unreleased log. Mac app binaries keep separate `mac-v*` releases.
   `/changelog` page, reached from a version link at the bottom of the sidebar and the
   mobile menu sheet that marks a release the browser has not opened yet. Notes live
   in `frontend/src/lib/releaseNotes.ts`; tests keep them aligned with this file, the
-  frontend package version and served routes.
+  frontend package version and served routes (#903).
 - Separate Home and Meetings workspaces (#640); customer and project links while
   recording (#648); internal meeting categories with a list filter (#724).
 - English meeting notes with a Korean/English toggle on the AI summary (#802, #807,
