@@ -251,7 +251,9 @@ func (s *AccountContactSyncService) applyItem(ctx context.Context, account, user
 // the deadline or a cancelled context; contacts already correct cost one read
 // and no write, so later runs continue the pass. A contact that changed
 // concurrently is skipped, not retried; one that cannot be opened is counted
-// in skipped.
+// in skipped. Presence is the union of every present list in the request: a
+// contact that moved between two listed SFDC accounts keeps the link's
+// original sfdcAccountId and is still present.
 func (s *AccountContactSyncService) markDepartures(ctx context.Context, account, user string, deadline time.Time, accounts map[string]bool, present map[string]map[string]bool) (marked, unmarked, skipped int, err error) {
 	links, err := s.repo.ListSfdcContactLinks(ctx, account)
 	if err != nil {
@@ -265,6 +267,12 @@ func (s *AccountContactSyncService) markDepartures(ctx context.Context, account,
 	}
 	if len(scoped) == 0 {
 		return 0, 0, 0, nil
+	}
+	union := map[string]bool{}
+	for _, ids := range present {
+		for id := range ids {
+			union[id] = true
+		}
 	}
 	now := s.now().UTC().Format(time.RFC3339)
 	first := s.start(len(scoped))
@@ -287,7 +295,7 @@ func (s *AccountContactSyncService) markDepartures(ctx context.Context, account,
 		if c == nil || !sameSfdcID(c.SfdcContactID, l.SfdcContactID) || !sameSfdcID(c.SfdcAccountID, l.SfdcAccountID) {
 			continue
 		}
-		isPresent := present[l.SfdcAccountID][l.SfdcContactID]
+		isPresent := union[l.SfdcContactID]
 		target := c.SfdcLeftAt
 		if !isPresent && c.SfdcLeftAt == "" {
 			target = now
