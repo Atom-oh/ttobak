@@ -163,6 +163,16 @@ test('a contact whose email two SFDC people share is not name-linked to a third'
   assert.deepEqual(result.items.map(item => [item.action, item.sfdcContactId]), [['create', id('003XX0000000E03')]]);
 });
 
+test('whitespace-only title or company is not fillable, matching the server', () => {
+  const sfdc = [{ id: id('003XX0000000E01'), name: 'Bo Kim', title: 'VP', email: '', accountId: ACCOUNT_A }];
+  const blank = [existing('linked', 'Bo Kim', { sfdcContactId: id('003XX0000000E01'), title: ' ', company: '  ' })];
+  const result = matchContacts(sfdc, blank, new Set());
+  assert.deepEqual(result.items, []);
+  assert.equal(result.unchanged, 1);
+  const empty = [existing('linked', 'Bo Kim', { sfdcContactId: id('003XX0000000E01'), title: ' ', company: '' })];
+  assert.deepEqual(matchContacts(sfdc, empty, new Set()).items.map(item => item.contactId), ['linked']);
+});
+
 test('existing_link_wins', () => {
   const sfdc = [{ id: id('003XX0000000E01'), name: 'Jane Customer', title: 'CTO', email: 'jane@customer.example', accountId: ACCOUNT_A },
     { id: id('003XX0000000E02'), name: 'Bo Kim', title: 'VP', email: '', accountId: ACCOUNT_A }];

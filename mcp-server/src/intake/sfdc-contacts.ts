@@ -141,8 +141,9 @@ function emailKey(value: string | undefined): string {
   return (value ?? '').normalize('NFKC').trim().toLowerCase();
 }
 
+/** Mirrors the server's fill-empty-only rule: only an exactly empty field is filled. */
 function fillable(contact: ExistingContact, person: SfdcPerson): boolean {
-  return (!(contact.title ?? '').trim() && !!person.title) || !(contact.company ?? '').trim();
+  return ((contact.title ?? '') === '' && !!person.title) || (contact.company ?? '') === '';
 }
 
 function item(person: SfdcPerson, contact?: ExistingContact): SfdcContactSyncItem {
