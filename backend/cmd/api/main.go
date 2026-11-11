@@ -204,6 +204,7 @@ func init() {
 	exportHandler.SetPDFStorage(uploadService)
 	settingsHandler := handler.NewSettingsHandler(repo, cryptoService, notionService, meetingService)
 	userAdminHandler := handler.NewUserAdminHandler(userAdminService)
+	profileHandler := handler.NewProfileHandler(userAdminService)
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
 	// Only the API Lambda builds vocabularies (A/B slots, vocab/ table files).
@@ -400,6 +401,7 @@ func init() {
 		r.Post("/api/accounts/{accountId}/people/mentions/{mentionKey}/resolve", accountPeopleHandler.ResolveMention)
 		r.Post("/api/accounts/{accountId}/people/mentions/{mentionKey}/ignore", accountPeopleHandler.IgnoreMention)
 		r.Get("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Edges)
+		r.Get("/api/accounts/{accountId}/people/focus", accountPeopleHandler.Focus)
 		r.Post("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Bind)
 		r.Delete("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Unbind)
 		r.Post("/api/accounts/{accountId}/people/resolve", accountPeopleHandler.Resolve)
@@ -525,6 +527,9 @@ func init() {
 		r.Put("/api/settings/integrations/notion", settingsHandler.SaveNotionKey)
 		r.Delete("/api/settings/integrations/notion", settingsHandler.DeleteNotionKey)
 
+		// Self-service display name (target is always the verified JWT subject)
+		r.Put("/api/settings/profile/name", profileHandler.UpdateMyName)
+
 		// Allowed domains management
 		r.Put("/api/settings/allowed-domains", settingsHandler.SaveAllowedDomains)
 
@@ -541,6 +546,7 @@ func init() {
 			r.Put("/api/settings/users/{userId}/disable", userAdminHandler.DisableUser)
 			r.Post("/api/settings/users/{userId}/resend-invite", userAdminHandler.ResendInvite)
 			r.Post("/api/settings/users/{userId}/reset-password", userAdminHandler.ResetPassword)
+			r.Put("/api/settings/users/{userId}/name", userAdminHandler.UpdateUserName)
 		})
 
 		// Dictionary routes

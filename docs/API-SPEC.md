@@ -1182,6 +1182,25 @@ and only meetings currently published to the account count:
   label or a default diarization label (`spk_N` or the Korean speaker letter form). `DELETE /people/edges` takes the four
   key fields as query parameters, returns 204, and for an auto edge writes a
   deny row.
+- `GET /people/focus?focus={contact|member|project}:{id}&cursor=` returns the
+  focus graph `{focus, meetings, techs, other, nextCursor?, truncated}`.
+  `focus` is `{kind, id, label, detail?, meetings}`. `meetings` holds at most 12
+  meetings still published to the account, newest first, each
+  `{id, title, date, roles, techs, people}`. `id` is `{ownerUserId}:{meetingId}`.
+  `roles` are the focus person's roles (empty for a project). `techs` are
+  catalog IDs from the meeting's stored tags (`tech_catalog.go`, exact alias
+  match). `people` are readable members and contacts with their roles. `techs`
+  counts and `other` (uncatalogued tags) cover every read focus meeting, at most
+  60; reaching that bound, the link row bound, a meeting's people row bound,
+  20 people per meeting or 120 distinct person label reads per page sets
+  `truncated`. Titles are capped at 200 code points. Person focus uses the person's people links; past 60, which
+  meetings are read follows reverse-index order, not date. Project focus uses
+  project meeting refs newest first and requires the meeting's `projectIds` to
+  still list the project. A focus not readable in the account returns 404. A
+  malformed focus, an unknown query key or a cursor of another account or focus
+  returns 400. A valid cursor past the end, after meetings were unpublished,
+  returns an empty final page. Under the summary guard,
+  the meeting's tags and its assignee and insight rows are left out.
 - `POST /people/resolve` (no body, no query) returns 202 `{accepted: true}` and queues one resolve
   request for the account. Bulk and CSV contact imports write rows with
   `?peopleResolve=defer` and call it once per account with saved rows; a failed
@@ -1931,7 +1950,7 @@ images/ and files/; details are in ADR-010 and service/sim.go.
 
 ### Admin and settings
 
-Invite-user and the six user-management routes use RequireAdmin. Delete/disable
+Invite-user and the seven user-management routes use RequireAdmin. Delete/disable
 protect self and last-admin targets, with a post-write race warning. Sign-out
 revokes refresh tokens but issued locally validated JWTs survive until expiry.
 PostAuthentication records lastLoginAt separately from PROFILE and fails open;
@@ -1940,6 +1959,18 @@ and NEW_PASSWORD_REQUIRED, never self-signup. The domain allowlist is supplement
 `isApprovedAdminInvite` exempts only `demo@atomai.click` (case-insensitive) on
 `PreSignUp_AdminCreateUser`; it grants neither a domain-wide exception nor group
 membership. RESEND trigger behavior remains unverified.
+
+Display names: `PUT /api/settings/profile/name` (any signed-in user; target is
+always the verified JWT subject) and admin-only `PUT /api/settings/users/{userId}/name`
+take `{ "name": "..." }` (1 KiB body, unknown fields rejected) and return
+`{ userId, name }`. `service.NormalizeUserName` trims and allows 1-64 code points,
+rejecting control and bidi-control characters (400). `UserAdminService.UpdateUserName`
+requires a sub target (an email alias returns 404), writes only Cognito `name` via
+AdminUpdateUserAttributes, then the
+`USER#{id}/PROFILE` copy read by account people lists; a missing PROFILE row is
+not an error. A profile-sync failure after the Cognito write returns 500 and an
+identical retry converges. The caller's ID-token `name` changes on the next refresh.
+Both routes are non-delegable connector operations.
 
 ### Personal dictionary
 
@@ -2172,6 +2203,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/people/mentions/{mentionKey}/resolve` | `accountPeopleHandler.ResolveMention` |
 | POST | `/api/accounts/{accountId}/people/mentions/{mentionKey}/ignore` | `accountPeopleHandler.IgnoreMention` |
 | GET | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Edges` |
+| GET | `/api/accounts/{accountId}/people/focus` | `accountPeopleHandler.Focus` |
 | POST | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Bind` |
 | DELETE | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Unbind` |
 | POST | `/api/accounts/{accountId}/people/resolve` | `accountPeopleHandler.Resolve` |
@@ -2264,6 +2296,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/connectors/approval` | `connectorSettingsHandler.UpdateApproval` |
 | PUT | `/api/settings/integrations/notion` | `settingsHandler.SaveNotionKey` |
 | DELETE | `/api/settings/integrations/notion` | `settingsHandler.DeleteNotionKey` |
+| PUT | `/api/settings/profile/name` | `profileHandler.UpdateMyName` |
 | PUT | `/api/settings/allowed-domains` | `settingsHandler.SaveAllowedDomains` |
 | PUT | `/api/settings/connector-policy` | `connectorSettingsHandler.UpdatePolicy` |
 | POST | `/api/settings/invite-user` | `settingsHandler.InviteUser` |
@@ -2273,6 +2306,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/settings/users/{userId}/disable` | `userAdminHandler.DisableUser` |
 | POST | `/api/settings/users/{userId}/resend-invite` | `userAdminHandler.ResendInvite` |
 | POST | `/api/settings/users/{userId}/reset-password` | `userAdminHandler.ResetPassword` |
+| PUT | `/api/settings/users/{userId}/name` | `userAdminHandler.UpdateUserName` |
 | GET | `/api/settings/dictionary` | `dictHandler.GetDictionary` |
 | PUT | `/api/settings/dictionary` | `dictHandler.UpdateDictionary` |
 | DELETE | `/api/settings/dictionary/term` | `dictHandler.DeleteTerm` |
