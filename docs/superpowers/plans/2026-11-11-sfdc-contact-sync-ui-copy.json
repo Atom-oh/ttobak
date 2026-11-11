@@ -1,0 +1,6 @@
+{
+ "sourceSfdcContacts": "SFDC 연락처",
+ "badgeSfdc": "SFDC",
+ "badgeLeftSfdc": "SFDC에서 빠짐",
+ "leftSfdcTooltip": "SFDC에서 빠진 날짜: {date}"
+}
