@@ -3,23 +3,25 @@
 import { useCallback, useState } from 'react';
 import Link from 'next/link';
 import { useIntake } from '@/hooks/useIntake';
-import { errorCode, finishedMessage, INTAKE_COPY, intakeCodeLabel, type IntakeFinished } from '@/lib/intake';
+import { errorCode, finishedMessage, INTAKE_COPY, loadErrorText, intakeCodeLabel, type IntakeFinished } from '@/lib/intake';
 import { cancelIntake, isTauri, runIntakeNow } from '@/lib/tauri';
 
 /** [지금 수집] next to the freshness lines. A browser shows only a hint; an
  * app build without intake shows nothing. `onCollected` runs after a run
- * finishes successfully. */
+ * finishes successfully or with PARTIAL_FAILURE. */
 export function IntakeRunControl({ onCollected }: { onCollected: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const onFinished = useCallback((finished: IntakeFinished) => {
     if (finished.action !== 'run') return;
     setMessage(finishedMessage(finished) || null);
-    if (!finished.code) onCollected();
+    if (!finished.code || finished.code === 'PARTIAL_FAILURE') onCollected();
   }, [onCollected]);
-  const { state, refresh, markStarted } = useIntake(onFinished);
+  const { state, loadError, refresh, markStarted } = useIntake(onFinished);
 
   if (!isTauri()) return <p className="text-xs text-slate-500 dark:text-text-muted">{INTAKE_COPY.browserHint}</p>;
-  if (!state) return null;
+  if (!state) {
+    return loadError ? <p role="alert" className="text-xs text-red-600 dark:text-red-400">{loadErrorText(loadError)}</p> : null;
+  }
 
   const running = state.running !== null;
   const collect = async () => {

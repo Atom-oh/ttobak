@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useIntake } from '@/hooks/useIntake';
 import {
-  errorCode, finishedMessage, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
+  errorCode, finishedMessage, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
   scheduleFromForm, scheduleLabel, showLaunchAgentWarning, sourceRows, type IntakeConnector, type IntakeFinished,
   type IntakeScheduleKind,
 } from '@/lib/intake';
@@ -28,7 +28,7 @@ function formatTime(iso: string | null): string {
 export function IntakeSettings() {
   const [message, setMessage] = useState<string | null>(null);
   const onFinished = useCallback((finished: IntakeFinished) => setMessage(finishedMessage(finished) || null), []);
-  const { state, setState, progress, refresh, markStarted } = useIntake(onFinished);
+  const { state, setState, progress, loadError, refresh, markStarted } = useIntake(onFinished);
   const [busy, setBusy] = useState(false);
   const [nodeInput, setNodeInput] = useState('');
   const [form, setForm] = useState<{ kind: IntakeScheduleKind; first: string; second: string } | null>(null);
@@ -47,7 +47,12 @@ export function IntakeSettings() {
     return () => { active = false; };
   }, [loaded, setState]);
 
-  if (!isTauri() || !state) return null;
+  if (!isTauri()) return null;
+  if (!state) {
+    return loadError ? (
+      <section className="mb-6"><p role="alert" className="text-sm text-red-600 dark:text-red-400">{loadErrorText(loadError)}</p></section>
+    ) : null;
+  }
 
   const running = state.running !== null;
   const schedule = form ?? {

@@ -91,6 +91,12 @@ export function errorCode(error: unknown): string {
   return typeof message === 'string' ? message : String(error);
 }
 
+/** One-line Korean text for a failed state read (not command-not-found). */
+export function loadErrorText(message: string): string {
+  const oneLine = message.replace(/\s+/g, ' ').trim().slice(0, 200);
+  return `Mac 로컬 수집 상태를 읽지 못했어요: ${oneLine || '알 수 없는 오류'}`;
+}
+
 export const SCHEDULE_OPTIONS: { kind: IntakeScheduleKind; label: string }[] = [
   { kind: 'off', label: '끄기' },
   { kind: 'hourly', label: '매시간' },

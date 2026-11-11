@@ -127,3 +127,10 @@ test('error codes from invoke rejections', () => {
   assert.equal(intake.errorCode(new Error('ADAPTER_UPDATING')), 'ADAPTER_UPDATING');
   assert.equal(intake.errorCode({ weird: true }), '[object Object]');
 });
+
+test('load error text is one Korean line', () => {
+  assert.equal(intake.loadErrorText('boom'), 'Mac 로컬 수집 상태를 읽지 못했어요: boom');
+  assert.equal(intake.loadErrorText('a\nb   c'), 'Mac 로컬 수집 상태를 읽지 못했어요: a b c');
+  assert.match(intake.loadErrorText(''), /알 수 없는 오류$/);
+  assert.ok(intake.loadErrorText('x'.repeat(500)).length < 260);
+});
