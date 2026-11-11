@@ -457,6 +457,23 @@ func TestMergeContactsSfdc(t *testing.T) {
 		}
 	})
 
+	t.Run("fold_registers_filled_email_for_later_source", func(t *testing.T) {
+		s, repo, job := contactsFixture()
+		repo.putContact("tgt", model.AccountContact{ContactID: "b1", Name: "Bo", Source: "sfdc", SfdcContactID: "003AB00000abcd1YAA", SfdcAccountID: "001AB00000abcdEYAQ"})
+		repo.putContact("src", model.AccountContact{ContactID: "c1", Name: "Bo", Email: "bo@x.com", Source: "sfdc", SfdcContactID: "003AB00000abcd1YAA", SfdcAccountID: "001AB00000abcd1YAA"})
+		repo.putContact("src", model.AccountContact{ContactID: "c2", Name: "Bo K", Email: "bo@x.com"})
+		res, err := s.moveContacts(newMergeFence(context.Background()), job)
+		if err != nil || !res.Done || res.KeptSeparate != 0 {
+			t.Fatalf("%+v %v", res, err)
+		}
+		if want := map[string]string{"c1": "b1", "c2": "b1"}; !reflect.DeepEqual(repo.maps, want) {
+			t.Fatalf("map rows %v, want %v", repo.maps, want)
+		}
+		if n := len(repo.contacts["tgt"]); n != 1 {
+			t.Fatalf("target holds %d contacts, want 1", n)
+		}
+	})
+
 	t.Run("suppressions_move_first_in_bounded_batches", func(t *testing.T) {
 		s, repo, job := contactsFixture()
 		job.Cursor = "c0"

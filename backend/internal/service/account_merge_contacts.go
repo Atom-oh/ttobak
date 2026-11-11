@@ -286,6 +286,8 @@ func (s *AccountMergeService) moveContacts(fence *mergeFence, job *model.Account
 				return result, fence.translate(err)
 			}
 			target.contact, target.stale = into, true
+			// Register keys the fold filled (email, SFDC link); taken keys stay.
+			index.add(target)
 			merged++
 			out.Moved++
 		}

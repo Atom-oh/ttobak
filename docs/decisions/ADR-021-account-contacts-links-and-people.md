@@ -60,7 +60,9 @@ DynamoDB data needs KMS encryption and a retention design.
     suppression row in the same transaction, so the sync never recreates it.
   - An Account merge moves index and suppression rows inside the fenced merge
     transaction; a folded contact without a link takes the source link, and a
-    target that keeps another link suppresses the source ID.
+    target that keeps another link suppresses the source ID. A contact that
+    moves unmatched arrives unlinked when the target Account already holds or
+    suppresses its SFDC ID.
   - Retention: the index row goes with its contact. Suppression rows have no
     TTL; merge moves them to the surviving Account, and with no Account
     deletion routine they persist indefinitely.
