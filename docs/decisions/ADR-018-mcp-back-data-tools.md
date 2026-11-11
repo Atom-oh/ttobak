@@ -31,7 +31,7 @@ fixed tool count are historical. `ttobak_put_document` creates a fresh ID;
 `ttobak_update_document` revises an existing document. The adapter exposes no
 meeting-content editing tool, but writes are no longer limited to documents.
 
-**ADR-034 supersedes the old owner-only member-add claim.** Any current account
+**ADR-015 supersedes the old owner-only member-add claim.** Any current account
 member can add an assignable role; removal/pending-revocation remain owner-only
 in the REST service. Account hierarchy does not confer inherited authorization.
 

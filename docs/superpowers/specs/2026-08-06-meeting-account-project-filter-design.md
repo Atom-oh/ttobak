@@ -42,7 +42,7 @@ continuation; they were not recorded execution results.
 
 ## Current contract and successor
 
-[ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md) implements
+[ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) implements
 account selection across owned, direct-share, and inherited-account streams.
 [MeetingHandler](../../../backend/internal/handler/meeting.go) accepts comma-separated
 `accountIds`, preserves one legacy `accountId`, and rejects repeated/ambiguous inputs.
