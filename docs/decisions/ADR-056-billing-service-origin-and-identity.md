@@ -154,6 +154,6 @@ eliminate customer billing context leaving the account.
   (`lambda.CfnResourcePolicy`) in FrontendStack, not a custom resource. It owns
   the function's whole policy. aws-cdk-lib 2.273.0 also exposes `CfnWebFunction`,
   `CfnWebFunctionRevision` and `CfnWebFunctionEndpoint`.
-- Related: ADR-022 (public routes), ADR-036/055 (Account hierarchy), ADR-045
+- Related: ADR-020 (public routes), ADR-036/055 (Account hierarchy), ADR-045
   (MCP resource-bound tokens), `backend/internal/middleware/auth.go`
   (`ParseVerifiedJWT`, `API_ALLOWED_CLIENT_IDS`), `infra/lib/edge-auth-stack.ts`.
