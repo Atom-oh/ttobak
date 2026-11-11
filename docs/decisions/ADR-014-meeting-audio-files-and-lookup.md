@@ -16,12 +16,17 @@
   rollout.
 - Discovery is not authorization: the index is eventually consistent, and access
   is decided by the base-table read and the caller's identity. Callers that
-  already know the owner read the base table directly.
+  already know the owner and need fresh state use the strongly consistent
+  base-table read, as the transcribe path does. The single-result lookup is an
+  exception for the canonical meeting entity only; user-owned collections are
+  always paginated.
 
 ### Multi-file audio and linked meetings
 
 - A meeting has at most 10 audio parts (`MaxAudioParts`), stored as
   `audio/{userId}/{meetingId}/part_{NNN}_{name}` and uploaded sequentially.
+  Upload completion writes a fixed indexed slot, and an upload never counts as
+  a completed transcript.
 - Each part transcript is `transcripts/{meetingId}_part_{NNN}.json`. Summarize
   records ready parts in an idempotent number set and merges only when the
   count matches and the indexes are contiguous. Speaker labels are namespaced by
@@ -47,11 +52,23 @@
 - Cropped audio is immutable: it cannot be replaced by an upload, and the
   worker's result key is excluded from ordinary STT.
 - Limits: 6 hours selected, a 24-hour end offset and a 2 GiB source.
-- The worker heartbeats every 30 seconds while FFmpeg runs with a file and pipe
+- The worker heartbeats every 30 seconds from before the download through
+  conversion, transcription and upload. FFmpeg runs with a file and pipe
   protocol whitelist and a 900-second timeout; an overrun or short output fails
   instead of shortening the range. Crop and copy writes
-  are conditional and tied to a run; an ambiguous publication keeps the audio
-  object instead of deleting it.
+  are conditional and tied to a run. A definite rejection deletes only the
+  unique candidate object, an ambiguous binding keeps it, and a cleanup failure
+  is reported.
+- A lost claim cannot publish. An expired owned run is marked failed even if
+  the meeting is already in error, late delivery cannot revive an expired
+  copy, and failure fencing requires that no audio is bound, so a replacement
+  binding cannot regress. Once audio is bound, an unconfirmed transcript write
+  leaves the status `transcribing` so a committed S3 event can proceed.
+- The worker's DynamoDB client makes one attempt with bounded timeouts, so a
+  retry cannot turn a committed binding into a rejection.
+- The crop route is authenticated through the existing CloudFront origin and
+  adds no public origin. Dispatch uses a private EventBridge rule, and the ECS
+  client token deduplicates repeated dispatch.
 
 ### Seekable playback copies
 
@@ -60,7 +77,10 @@
 - A copy is served only when its recorded source ETag and version ID match the
   current source; otherwise, or on a lookup error or a two-second timeout, the
   original is served. Copy keys are deterministic and replaced conditionally;
-  recovered recordings are included. A copy never replaces the original, and STT reads only `audio/`.
+  recovered recordings are included. Only WebM and Ogg get copies; because a
+  missing, stale or failed copy falls back to the original, deployment order
+  is not a correctness dependency. A copy never replaces the original, and STT
+  reads only `audio/`.
 - The remux role reads `audio/*` and `audio-playback/*` and writes only
   `audio-playback/*`. The prefix is in the OAC allowlist, moves to infrequent
   access after 90 days, and is covered by failed-recording cleanup.
@@ -90,13 +110,23 @@
 - Summaries generated while linked predecessors still fed generation were not
   rewritten.
 - Crop tests with synthetic media and a stub recognizer do not establish
-  production GPU or model acceptance.
+  production GPU or model acceptance; the opt-in integration test uses a local
+  DynamoDB endpoint only.
+- An abrupt process or Spot termination can leave an uploaded crop candidate.
+  Its address is recorded, so an operator reconciles it against the canonical
+  audio key before deleting it. There is no candidate janitor and no automatic
+  Spot restart.
+- Storage roughly doubles for remuxed recordings until both objects move to
+  infrequent access.
+- Speaker namespaces do not identify one person across parts, and action items
+  are not reconciled across merged parts or linked predecessors.
 - Deleting a meeting does not delete its S3 audio or playback copies.
 
 ## Source
 
 `infra/lib/storage-stack.ts`, `ai-stack.ts`, `gateway-stack.ts`,
-`backend/internal/repository/dynamodb.go`, `backend/internal/service/upload.go`,
+`backend/internal/repository/dynamodb.go`, `backend/internal/model/meeting.go`,
+`backend/internal/service/upload.go`,
 `meeting_manager.go`, `audio_crop.go`, `audio_playback.go`,
 `backend/internal/audioplayback/`, `backend/cmd/summarize/merge.go`,
 `backend/cmd/audio-remux/`, `backend/whisper/audio_crop.py`,
