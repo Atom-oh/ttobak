@@ -22,6 +22,8 @@ alone. CSS tokens share names across themes and are exposed through `@theme inli
 Background-light/background-dark remain separate tokens. Material Symbols
 Outlined supply icons. Legacy glass/glow/neon class names remain compatibility
 hooks with flat/no-glow styling; their presence is not a request to restore neon.
+`glass-panel` is also registered as a Tailwind utility so its `dark:` variant
+uses the theme surface/border tokens instead of leaving white cards under light text.
 Typography and component dimensions come from CSS/layout components, not DESIGN.md.
 Body and headline utilities share an installed system font stack in both themes;
 their font choice must not depend on download timing or the browser font cache.

@@ -183,6 +183,12 @@ body {
   border: 1px solid var(--border-subtle);
 }
 
+/* Register the compatibility surface so Tailwind also emits dark:glass-panel. */
+@utility glass-panel {
+  background: var(--surface-lowest);
+  border: 1px solid var(--border-subtle);
+}
+
 /* Legacy glow utilities — intentionally no-op (neon removed) */
 .glow-primary,
 .glow-accent,

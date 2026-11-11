@@ -14,6 +14,11 @@ columns, with the administration table spanning them. Long document/news/researc
 prose retains a 76ch reading width; Assistant turns retain a 90ch content region.
 The desktop sidebar remains 256px wide, as in the reference.
 
+Visual inspection also found light text on white cards in dark mode. Registering
+the legacy `glass-panel` surface as a Tailwind utility now generates its `dark:`
+variant. Actual project/document card text has a measured 15.4:1 contrast ratio
+against the restored dark surface; this is not a whole-product contrast audit.
+
 Reference: the local `claude-code-usage-dashboard` repository, specifically
 `dashboard/web/src/App.jsx`, `components/Sidebar.jsx`, and `index.css`. Its
 window-filling main column and separate scrolling navigation informed these
@@ -83,8 +88,10 @@ the same-size before/after captures.
   overflow.
 - Reading surfaces: document, news article, and research detail at 390, 1440,
   and 3840px (9 checks), with no console errors or failed HTTP responses.
-- Dark/short windows: Home, Projects, Assistant, and Settings at the same three
-  widths and 600px height (12 checks), with no console errors or HTTP failures.
+- Final dark/short windows: nine working/reading routes at 390, 1440, and
+  3840px and 600px height (27 checks), with no console errors, HTTP failures, or
+  horizontal document overflow. Project/document card contrast also passed
+  separate computed-color checks.
 - Interaction checks: 15 passed, including typed input/focus, mobile menu opening,
   Escape/focus restoration, query-preserving research navigation, short-window
   guide access, recording upload navigation, adaptive cards, and settings table
@@ -94,7 +101,7 @@ the same-size before/after captures.
   external requests, or horizontal document overflow.
 - Comparison gallery: image loading, slider, surface selection, keyboard input,
   and overflow checked at 390, 768, 1440, and 3840px.
-- Final checks: all 771 frontend unit tests, production build, documentation
+- Final checks: all 776 frontend unit tests after main integration, production build, documentation
   checks, and 23 documentation tests passed. Lint has no errors and 15 existing
   warnings. Independent content quality and latest-HEAD PR review gate publication.
 
