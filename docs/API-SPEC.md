@@ -1504,6 +1504,11 @@ is defined by the summary-privacy writer state in INFRA-SPEC.
 The meeting-detail UI uses that publication endpoint directly for its single
 link-and-share action: no preliminary private link request is needed. Existing
 private links and recording preparation remain private until explicit publication.
+After either write commits, the service removes the meeting's automatic-term
+evidence from Account dictionaries it is no longer linked to (ADR-008 FU4). This
+sweep is best effort: a failure is logged and never changes the response, and
+repeating the request retries it. Its version bump can make a concurrent Account
+term PATCH return 409 `VERSION_CONFLICT`.
 
 Account meeting lists and meeting-sourced insights, including the registered QA
 account insight/brief tools, revalidate the exact
@@ -1942,7 +1947,15 @@ capped at 32KB; violations return 400.
 model configured by `BEDROCK_TRANSLATE_MODEL_ID` first, then falls back to Amazon
 Translate on any model error, timeout (`TRANSLATE_HIGH_TIMEOUT_MS`, default 6000,
 accepted 500–8000), truncated or rejected output, or when the model is unset or
-the text exceeds 3,000 bytes. `validateInterpretation` rejects output that starts
+the text exceeds 3,000 bytes. On the interpreter path the request also carries a
+`glossary` of the caller's own dictionary terms that occur in the segment
+(`SelectTranslateGlossary`: Personal then Common active rows from
+`GlossaryForMeeting` without an Account, Latin forms on word boundaries, at most
+20 terms with up to three matched heardAs spellings, cached per user for five
+minutes per API instance); the read has its own 800 ms deadline, and a failed or
+timed-out read sends none, is cached as empty for 30 seconds and never fails the
+translation.
+`validateInterpretation` rejects output that starts
 with a translation label (English or Korean `Translation:` labels, `Here is the translation`…; see `interpreterMetaPrefixes`),
 starts with `{` or echoes `current_segment`/`previous_segments`, is longer than
 `4*len(text)+200` bytes, has a Hangul letter share below 0.3 for a `ko` target

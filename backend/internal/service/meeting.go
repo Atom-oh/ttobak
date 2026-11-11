@@ -1764,15 +1764,22 @@ func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, actorID, meet
 		return ErrForbidden
 	}
 	if actorID == meeting.UserID {
-		return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+		err = s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
 			"accountId": accountID, "sharedToAccount": false,
 		})
-	}
-	writer, ok := s.repo.(actorAccountWriter)
-	if !ok {
+	} else if writer, ok := s.repo.(actorAccountWriter); ok {
+		err = writer.LinkMeetingToAccountAs(ctx, meeting.UserID, actorID, meetingID, accountID)
+	} else {
 		return ErrForbidden
 	}
-	return writer.LinkMeetingToAccountAs(ctx, meeting.UserID, actorID, meetingID, accountID)
+	if err != nil {
+		return err
+	}
+	// The link committed; the Account(s) the meeting left lose its
+	// automatic-term evidence (ADR-008 FU4). Best effort: logged, retried by
+	// a repeated link call, the next terms run or meeting deletion.
+	_ = sweepUnlinkedAccountTerms(ctx, s.repo, "link", meeting.UserID, meetingID)
+	return nil
 }
 
 // meetingCategoryWriter conditionally writes the owner's internal category.
@@ -1855,6 +1862,9 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, actorID, act
 	if err != nil {
 		return nil, err
 	}
+	// Publication may have moved the meeting to another Account (ADR-008 FU4,
+	// best effort as on LinkMeetingToAccount).
+	_ = sweepUnlinkedAccountTerms(ctx, s.repo, "share-account", ownerID, meetingID)
 	// Publication may mint an Insight identity for legacy output. Fan out only
 	// the current canonical bytes/identity; stale copies must remain invisible
 	// if refresh fails after the canonical share commits.

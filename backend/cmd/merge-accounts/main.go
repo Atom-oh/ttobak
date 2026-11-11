@@ -592,6 +592,9 @@ func (d deps) handleRow(ctx context.Context, o options, lease *cliLease, row rep
 	switch {
 	case err == nil:
 		add(kind+"Moved", 1)
+		if row.Kind == repository.MergeUserRowMeeting {
+			d.sweepMovedMeetingTerms(ctx, row, add)
+		}
 	case errors.Is(err, repository.ErrMergeFenceLost), errors.Is(err, repository.ErrAccountMerging), ctx.Err() != nil:
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -604,6 +607,35 @@ func (d deps) handleRow(ctx context.Context, o options, lease *cliLease, row rep
 		add("errors."+failureReason(err), 1)
 	}
 	return nil
+}
+
+// termsAccountSweeper is the ADR-008 FU4 relink sweep of the repository.
+type termsAccountSweeper interface {
+	SweepMeetingAccountTerms(ctx context.Context, ownerID, meetingID string) (repository.TermsAccountSweep, error)
+}
+
+// sweepMovedMeetingTerms removes a moved link-only meeting's automatic-term
+// evidence from the source Account, as the worker does for published ones.
+// The source's dictionary layer itself stays (an unmoved category). Best
+// effort: a failure is counted, never fails the row, and is cleaned by a
+// later relink sweep, terms run or the meeting's deletion.
+func (d deps) sweepMovedMeetingTerms(ctx context.Context, row repository.MergeUserRow, add func(string, int)) {
+	sweeper, ok := d.users.(termsAccountSweeper)
+	if !ok {
+		return
+	}
+	sweepCtx, cancel := context.WithTimeout(ctx, rowMoveTimeout)
+	defer cancel()
+	result, err := sweeper.SweepMeetingAccountTerms(sweepCtx, row.UserID, row.MeetingID)
+	if err != nil {
+		add("termsSweepFailed", 1)
+		return
+	}
+	for key, n := range map[string]int{"termsAccountsDropped": result.Dropped, "termsAccountsRetained": result.Retained} {
+		if n > 0 {
+			add(key, n)
+		}
+	}
 }
 
 // reasonError tags a row failure with a fixed reason for the error counts.
