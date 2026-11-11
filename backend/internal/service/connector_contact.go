@@ -90,6 +90,8 @@ func (s *ConnectorContactService) Create(ctx context.Context, p connector.Princi
 	if json.Unmarshal(fields["contact"], &contact) != nil || validateContact(contact) != nil {
 		return empty, ErrInvalidInput
 	}
+	// SFDC fields are server-owned; only the SFDC sync sets them.
+	copySfdcFields(&contact, model.AccountContact{})
 	contact.ContactID, contact.Revision = uuid.NewString(), uuid.NewString()
 	encoded, err := json.Marshal(contact)
 	if err != nil || len(encoded) > 12000 {

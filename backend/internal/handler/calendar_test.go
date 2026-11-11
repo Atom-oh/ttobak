@@ -36,6 +36,9 @@ type calendarAPIFake struct {
 	limit    int32
 	err      error
 	page     *model.CalendarEventPage
+	account  string
+	eventID  string
+	sharing  model.CalendarSharingRequest
 }
 
 func (fake *calendarAPIFake) Sync(_ context.Context, userID, sourceID string, request model.CalendarSyncRequest) (*model.CalendarSyncReceipt, error) {
@@ -59,6 +62,24 @@ func (fake *calendarAPIFake) ListSources(_ context.Context, userID, cursor strin
 	return &model.CalendarSourcePage{Sources: []model.CalendarSourceStatus{}}, fake.err
 }
 
+func (fake *calendarAPIFake) ListAccountCalendar(_ context.Context, userID, accountID string, query model.CalendarQuery) (*model.AccountCalendarPage, error) {
+	fake.calls++
+	fake.userID, fake.account, fake.query = userID, accountID, query
+	return &model.AccountCalendarPage{Events: []model.AccountCalendarEvent{}}, fake.err
+}
+
+func (fake *calendarAPIFake) SetEventSharing(_ context.Context, userID, sourceID, eventID string, request model.CalendarSharingRequest) (*model.CalendarEvent, error) {
+	fake.calls++
+	fake.userID, fake.sourceID, fake.eventID, fake.sharing = userID, sourceID, eventID, request
+	return &model.CalendarEvent{SharingMode: request.Mode}, fake.err
+}
+
+func (fake *calendarAPIFake) ShareDirectory(_ context.Context, userID, _ string) (*model.CalendarShareDirectory, error) {
+	fake.calls++
+	fake.userID = userID
+	return &model.CalendarShareDirectory{Accounts: []model.CalendarShareDirectoryAccount{}}, fake.err
+}
+
 func calendarHTTPRouter(api *calendarAPIFake, userID string, verifiedAuth bool) http.Handler {
 	handler := NewCalendarHandler(api)
 	router := chi.NewRouter()
@@ -75,6 +96,9 @@ func calendarHTTPRouter(api *calendarAPIFake, userID string, verifiedAuth bool) 
 	router.Post("/api/calendar/sources/{sourceId}/sync", handler.Sync)
 	router.Get("/api/calendar/events", handler.ListEvents)
 	router.Get("/api/calendar/sources", handler.ListSources)
+	router.Put("/api/calendar/sources/{sourceId}/events/{eventId}/sharing", handler.SetEventSharing)
+	router.Get("/api/calendar/share-directory", handler.ShareDirectory)
+	router.Get("/api/accounts/{accountId}/calendar", handler.ListAccountCalendar)
 	return router
 }
 
@@ -383,5 +407,87 @@ func TestCalendarHTTPOrganizerDomainRoundTrips(test *testing.T) {
 	response := do(http.MethodGet, "/events?from=2026-11-07T00:00:00Z&to=2026-11-14T00:00:00Z", "")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"organizerDomain":"example.com"`) {
 		test.Fatalf("organizerDomain not returned: %d %s", response.Code, response.Body.String())
+	}
+}
+
+const calendarHTTPEvent = "/events/" + "0123abcd" + "/sharing"
+
+func TestCalendarHTTPShareRoutes(test *testing.T) {
+	sharing := "/api/calendar/sources/" + calendarHTTPSource + calendarHTTPEvent
+	account := "/api/accounts/acc_1/calendar?from=2026-11-07T00:00:00Z&to=2026-11-14T00:00:00Z"
+	cases := []struct {
+		name, method, target, body string
+		status                     int
+	}{
+		{"account ok", http.MethodGet, account + "&limit=5&cursor=c", "", 200},
+		{"account unknown query", http.MethodGet, account + "&accountId=x", "", 400},
+		{"account bad limit", http.MethodGet, account + "&limit=51", "", 400},
+		{"account missing from", http.MethodGet, "/api/accounts/acc_1/calendar?to=2026-11-14T00:00:00Z", "", 400},
+		{"sharing ok", http.MethodPut, sharing, `{"mode":"account","accountId":"acc_1"}`, 200},
+		{"sharing auto", http.MethodPut, sharing, `{"mode":"auto"}`, 200},
+		{"sharing unknown field", http.MethodPut, sharing, `{"mode":"auto","x":1}`, 400},
+		{"sharing duplicate", http.MethodPut, sharing, `{"mode":"auto","mode":"hidden"}`, 400},
+		{"sharing nested", http.MethodPut, sharing, `{"mode":{"a":1}}`, 400},
+		{"sharing null", http.MethodPut, sharing, `{"mode":null}`, 400},
+		{"sharing missing mode", http.MethodPut, sharing, `{"accountId":"a"}`, 400},
+		{"sharing trailing", http.MethodPut, sharing, `{"mode":"auto"}{}`, 400},
+		{"sharing query", http.MethodPut, sharing + "?x=1", `{"mode":"auto"}`, 400},
+		{"sharing too large", http.MethodPut, sharing, `{"mode":"auto"}` + strings.Repeat(" ", 4096), 413},
+		{"sharing bad source", http.MethodPut, "/api/calendar/sources/nope/events/ev1/sharing", `{"mode":"auto"}`, 400},
+		{"sharing bad event", http.MethodPut, "/api/calendar/sources/" + calendarHTTPSource + "/events/a.b/sharing", `{"mode":"auto"}`, 400},
+		{"directory ok", http.MethodGet, "/api/calendar/share-directory", "", 200},
+		{"directory query", http.MethodGet, "/api/calendar/share-directory?x=1", "", 400},
+	}
+	for _, scenario := range cases {
+		test.Run(scenario.name, func(test *testing.T) {
+			api := &calendarAPIFake{}
+			response := calendarHTTPRequest(api, "owner", scenario.method, scenario.target, scenario.body)
+			if response.Code != scenario.status {
+				test.Fatalf("status %d, want %d: %s", response.Code, scenario.status, response.Body)
+			}
+			if response.Header().Get("Cache-Control") != "private, no-store" {
+				test.Fatal("response can be cached")
+			}
+			if scenario.status != 200 && api.calls != 0 {
+				test.Fatal("rejected request reached service")
+			}
+			if scenario.status != 200 {
+				var body struct{ Error struct{ Code string } }
+				if json.Unmarshal(response.Body.Bytes(), &body) != nil || body.Error.Code == "" {
+					test.Fatalf("error shape wrong: %s", response.Body)
+				}
+			}
+		})
+	}
+}
+
+func TestCalendarHTTPShareRoutesPassScope(test *testing.T) {
+	api := &calendarAPIFake{}
+	response := calendarHTTPRequest(api, "owner", http.MethodPut, "/api/calendar/sources/"+calendarHTTPSource+calendarHTTPEvent, `{"mode":"account","accountId":"acc_1"}`)
+	if response.Code != 200 || api.userID != "owner" || api.sourceID != calendarHTTPSource || api.eventID != "0123abcd" ||
+		api.sharing.Mode != "account" || api.sharing.AccountID != "acc_1" || !strings.Contains(response.Body.String(), `"sharingMode":"account"`) {
+		test.Fatalf("sharing scope wrong: %+v %s", api.sharing, response.Body)
+	}
+	api = &calendarAPIFake{}
+	calendarHTTPRequest(api, "owner", http.MethodGet, "/api/accounts/acc_9/calendar?from=2026-11-07T00:00:00Z&to=2026-11-14T00:00:00Z&limit=7", "")
+	if api.account != "acc_9" || api.userID != "owner" || api.query.Limit != 7 || api.query.AccountID != "" {
+		test.Fatalf("account scope wrong: %+v", api.query)
+	}
+}
+
+func TestCalendarHTTPShareRoutesMapErrorsAndRequireAuth(test *testing.T) {
+	for _, target := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/accounts/acc_1/calendar?from=2026-11-07T00:00:00Z&to=2026-11-14T00:00:00Z", ""},
+		{http.MethodPut, "/api/calendar/sources/" + calendarHTTPSource + calendarHTTPEvent, `{"mode":"auto"}`},
+		{http.MethodGet, "/api/calendar/share-directory", ""},
+	} {
+		api := &calendarAPIFake{err: fmt.Errorf("wrapped: %w", service.ErrForbidden)}
+		if response := calendarHTTPRequest(api, "owner", target.method, target.path, target.body); response.Code != 403 {
+			test.Fatalf("%s forbidden mapped to %d", target.path, response.Code)
+		}
+		api = &calendarAPIFake{}
+		if response := calendarHTTPRequest(api, "", target.method, target.path, target.body); response.Code != 401 || api.calls != 0 {
+			test.Fatalf("%s unauthenticated: %d", target.path, response.Code)
+		}
 	}
 }

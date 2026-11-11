@@ -54,6 +54,14 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 	return &cp, nil
 }
 
+func (m *mockCrawlerRepo) GetSourceOrigin(_ context.Context, sourceID string) (string, string, bool, error) {
+	src, ok := m.sources[sourceID]
+	if !ok {
+		return "", "", false, nil
+	}
+	return src.SourceName, src.AccountID, true, nil
+}
+
 func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.CrawlerSource) error {
 	if _, exists := m.sources[source.SourceID]; exists {
 		return fmt.Errorf("%w: source %s already exists", repository.ErrConditionFailed, source.SourceID)

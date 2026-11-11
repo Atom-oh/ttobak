@@ -370,3 +370,21 @@ func TestConnectorContactCreateFailsClosedWithoutEncryptionKey(t *testing.T) {
 		t.Fatalf("unconfigured key: %d %s writes=%d", out.StatusCode, out.Body, w.writes)
 	}
 }
+
+// SFDC fields are server-owned: a delegated create cannot set them, in any
+// key case, and a valid create stores none of them.
+func TestConnectorContactCreateCannotSetSfdcFields(t *testing.T) {
+	w := &contactWire{noteWire: newNoteWire(t), account: true, member: true}
+	bridge, sign := contactBridge(t, w)
+	for _, field := range []string{`"source":"sfdc"`, `"sfdcContactId":"003000000000001AAA"`, `"SfdcContactId":"003000000000001AAA"`, `"sfdcAccountId":"001000000000001AAA"`, `"sfdcLeftAt":"2026-01-01T00:00:00Z"`} {
+		body := `{"contact":{"name":"A",` + field + `},"idempotencyKey":"request"}`
+		out := bridge.Invoke(context.Background(), sign("POST", "/api/accounts/acct/contacts", body, "api.accountContacts.create"))
+		if out.StatusCode != 400 || w.writes != 0 {
+			t.Fatalf("%s: %d writes %d", field, out.StatusCode, w.writes)
+		}
+	}
+	out := bridge.Invoke(context.Background(), sign("POST", "/api/accounts/acct/contacts", `{"contact":{"name":"A"},"idempotencyKey":"request"}`, "api.accountContacts.create"))
+	if out.StatusCode != 200 || w.writes != 1 || strings.Contains(out.Body, "sfdc") || strings.Contains(out.Body, `"source"`) {
+		t.Fatalf("create: %+v", out)
+	}
+}

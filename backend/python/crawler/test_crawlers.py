@@ -945,6 +945,78 @@ class TestWriteMetadataSanitized(unittest.TestCase):
             )
         self.assertEqual(captured['item']['ingestSource'], 'custom')
 
+    def test_matched_term_is_one_line_of_at_most_200_code_points(self):
+        captured = {}
+
+        def fake_put_item(**kwargs):
+            captured['item'] = kwargs['Item']
+
+        with mock.patch.object(news_crawler.table, 'put_item', side_effect=fake_put_item):
+            news_crawler._write_metadata(
+                'tech-news', 'hash10', 'Title', 'https://example.com/x', '2026-07-01',
+                matched_term='우리은행\n클라우드 ' + '가' * 300,
+            )
+        term = captured['item']['matchedTerm']
+        self.assertNotIn('\n', term)
+        self.assertTrue(term.startswith('우리은행 클라우드 '))
+        self.assertEqual(len(term), 200)
+
+    def test_matched_term_absent_for_custom_or_empty(self):
+        for kwargs in ({'ingest_source': 'custom', 'matched_term': '우리은행'}, {}):
+            captured = {}
+
+            def fake_put_item(**put):
+                captured['item'] = put['Item']
+
+            with mock.patch.object(news_crawler.table, 'put_item', side_effect=fake_put_item):
+                news_crawler._write_metadata(
+                    'tech-news', 'hash11', 'Title', 'https://example.com/x', '2026-07-01', **kwargs,
+                )
+            self.assertNotIn('matchedTerm', captured['item'])
+
+
+class TestHandlerMatchedTerm(unittest.TestCase):
+    """A search result is stored with the query that found it; a custom URL
+    is stored without one."""
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], True, 1.0))
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    @mock.patch.object(news_crawler, '_fetch_url')
+    def test_search_result_carries_query_and_custom_url_does_not(
+        self, mock_fetch, mock_exists, mock_summarize, mock_s3, mock_meta,
+    ):
+        mock_fetch.return_value = (
+            '<html><body><p>' + 'This is a long enough paragraph for testing. ' * 5 + '</p></body></html>'
+        )
+
+        def fake_search(query, max_results=10):
+            return ([{'title': 'Hit for ' + query, 'url': 'https://example.com/' + str(len(query)),
+                      'text': 'x' * 150, 'publishedDate': ''}], None)
+
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = 'https://test-gateway.example.com/mcp'
+            with mock.patch.object(news_crawler, '_gateway_web_search', side_effect=fake_search):
+                news_crawler.handler({
+                    'sourceId': 'woori', 'sourceName': '우리은행',
+                    'customUrls': ['https://example.com/custom'],
+                }, None)
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+        by_url = {c.args[3]: c.kwargs for c in mock_meta.call_args_list}
+        custom = by_url.pop('https://example.com/custom')
+        self.assertEqual(custom.get('ingest_source'), 'custom')
+        self.assertEqual(custom.get('matched_term'), '')
+        self.assertTrue(by_url)
+        for call in mock_meta.call_args_list:
+            if call.args[3] == 'https://example.com/custom':
+                continue
+            self.assertEqual(call.kwargs.get('ingest_source'), 'search')
+            self.assertEqual('Hit for ' + call.kwargs.get('matched_term'), call.args[2])
+
 
 # ---------------------------------------------------------------------------
 # 8. news_crawler._extract_sse_json
