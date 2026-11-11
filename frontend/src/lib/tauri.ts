@@ -1,6 +1,7 @@
 'use client';
 
 import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView } from './intake';
+import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView } from './performanceReport';
 
 interface TauriEvent<T> {
   payload: T;
@@ -740,4 +741,48 @@ export function onIntakeProgress(handler: (line: string) => void): () => void {
 
 export function onIntakeFinished(handler: (finished: IntakeFinished) => void): () => void {
   return subscribeTauriEvent<IntakeFinished, IntakeFinished>('intake://finished', (raw) => raw, handler);
+}
+
+// ---------------------------------------------------------------- SA report
+// Commands and events of mac-app/src-tauri/src/report_runner.rs (ADR-023).
+// Commands reject with a string code such as RUN_IN_PROGRESS.
+
+/** Report state, or `null` when the installed app predates report generation. */
+export async function getReportState(): Promise<ReportStateView | null> {
+  try {
+    return await invoke<ReportStateView>('report_get_state');
+  } catch (err) {
+    if (isCommandNotFound(err)) return null;
+    throw err;
+  }
+}
+
+export function generateReport(input: ReportGenerateInput): Promise<void> {
+  return invoke<void>('report_generate', { ...input });
+}
+
+export function cancelReport(): Promise<boolean> {
+  return invoke<boolean>('report_cancel');
+}
+
+export function getReportSettings(): Promise<ReportSettingsView> {
+  return invoke<ReportSettingsView>('report_settings_get');
+}
+
+export function setReportSettings(useBedrock: boolean, awsProfile: string | null): Promise<ReportSettingsView> {
+  return invoke<ReportSettingsView>('report_settings_set', awsProfile ? { useBedrock, awsProfile } : { useBedrock });
+}
+
+export function onReportProgress(handler: (line: string) => void): () => void {
+  return subscribeTauriEvent<{ line?: unknown }, string>(
+    'report://progress',
+    (raw) => (typeof raw?.line === 'string' ? raw.line : ''),
+    (line) => {
+      if (line) handler(line);
+    },
+  );
+}
+
+export function onReportFinished(handler: (finished: ReportFinished) => void): () => void {
+  return subscribeTauriEvent<ReportFinished, ReportFinished>('report://finished', (raw) => raw, handler);
 }

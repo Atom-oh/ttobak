@@ -44,6 +44,11 @@
     "allow-intake-login",
     "allow-intake-cancel",
     "allow-intake-check-adapter",
-    "allow-intake-update-adapter"
+    "allow-intake-update-adapter",
+    "allow-report-generate",
+    "allow-report-cancel",
+    "allow-report-get-state",
+    "allow-report-settings-get",
+    "allow-report-settings-set"
   ]
 }

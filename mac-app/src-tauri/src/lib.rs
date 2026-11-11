@@ -17,6 +17,8 @@
 //!   (ADR-017); see `meeting_detect.rs`
 //! - `intake_*` — set up, schedule and run the local intake CLI (ADR-003);
 //!   see `intake_runner.rs`
+//! - `report_*` — generate the SA report through the local CLI (ADR-023);
+//!   see `report_runner.rs`
 //!
 //! `read_recording_bytes` (WAV bytes via IPC binary response) used to exist
 //! here and has been deliberately removed: on a real ~35-minute recording it
@@ -49,6 +51,7 @@ mod meeting_prompt;
 mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
+mod report_runner;
 mod sleep;
 mod update;
 mod update_policy;
@@ -832,6 +835,11 @@ pub fn run() {
             intake_runner::intake_cancel,
             intake_runner::intake_check_adapter,
             intake_runner::intake_update_adapter,
+            report_runner::report_generate,
+            report_runner::report_cancel,
+            report_runner::report_get_state,
+            report_runner::report_settings_get,
+            report_runner::report_settings_set,
         ])
         .setup(|app| {
             // Caption translation; failure only disables it.
@@ -845,6 +853,8 @@ pub fn run() {
             // Local intake runner and scheduler; failure only disables it.
             intake_runner::manage(app);
             intake_runner::start(app.handle().clone());
+            // SA report runs (separate run slot from intake).
+            report_runner::manage(app);
             // App menu with the update item; failure keeps Tauri's default menu.
             if let Err(e) = update::install_menu(app.handle()) {
                 log::warn!("update menu unavailable: {e}");
@@ -925,7 +935,7 @@ pub fn run() {
             // (process exit is already in motion; nothing else needs this
             // thread) than to abandon and lose the tail of the recording.
             if let tauri::RunEvent::Exit = event {
-                // A running intake CLI dies with its process group.
+                // Running intake and report CLIs die with their process groups.
                 intake_runner::kill_running(app_handle);
                 let state = app_handle.state::<RecorderState>();
                 let handle = {
