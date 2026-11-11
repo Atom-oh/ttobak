@@ -135,7 +135,8 @@ and the per-rule drop counts (`TermFilterCounts`) hold numbers only, never text.
 Rules, in order:
 
 - **Confidence** at least the configured minimum (default 0.85; values outside
-  (0, 1] use the default).
+  (0, 1] use the default). `infra/cdk.json` sets 0.7 (2026-11-11, owner
+  decision to collect more uncommon domain terms; grounding still applies).
 - **Blocklist.** The embedded `terms_blocklist.txt` (common Korean and English
   meeting and function words plus fillers, about 550 entries) is matched on an
   automatic candidate's term key and on every heardAs. For manual terms,
@@ -171,7 +172,7 @@ Rules, in order:
   acronyms keep `TranscribeKo=false` until a live ko-KR build records that
   Transcribe accepts them. A term without a phrase is still kept.
 - **Duplicates** by term key keep the best-ranked candidate.
-- **Cap.** At most 15 terms per run, ranked by confidence, then source-type count.
+- **Cap.** At most 40 terms per run (`AutoTermsMaxNewPerRun`), ranked by confidence, then source-type count.
 
 ## Run state and merge rules
 
@@ -218,7 +219,7 @@ caller.
   undercounted, never double-counted. A
   leftover observation without a term (failed eviction cleanup) is deleted
   before the create is retried.
-- **Caps.** Unedited automatic terms (active or suggested) are capped at 300 per
+- **Caps.** Unedited automatic terms (active or suggested) are capped at 1000 per
   scope; `EvictAutoTerm` (now also accepting `suggested`) removes the lowest
   `hits*2 + (lastSeen within 30 days ? 1 : 0)` first, oldest `lastSeenAt` on
   ties. When its version and `userEditedAt` guards fail, the row is re-read: a
@@ -388,7 +389,7 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
 
 - **Layers and partitions.** Common `DICT#COMMON`, Account `ACCOUNT#{accountId}`
   and Personal `USER#{userId}`. Term rows stay `DICTTERM#{termKey}` with the
-  unchanged `termKey` rules. Caps per scope: 300 automatic terms
+  unchanged `termKey` rules. Caps per scope: 1000 automatic terms
   (`MaxAutoTermsPerScope`), 500 manual terms (`MaxManualTermsPerScope`), 10
   observations per term; Common keeps at most 20 audit rows per term, the
   oldest (create or first system) row pinned and the newest 19 others kept.
