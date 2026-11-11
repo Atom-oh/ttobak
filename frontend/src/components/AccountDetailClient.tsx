@@ -777,7 +777,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                   </section>
 
                   {account.accountId === accountId && user?.userId && account.members.some((member) => member.userId === user.userId) && (
-                    <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId} />
+                    <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
+                      account={{ name: account.name, aliases: account.aliases ?? [], domains: account.domains ?? [] }} />
                   )}
                 </>
               )}
