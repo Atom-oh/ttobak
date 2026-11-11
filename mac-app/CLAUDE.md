@@ -156,7 +156,7 @@ ACL for every command called from the remote SPA: each command must be listed in
   log from the IOProc.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
   within its deadline, recording or not.
-- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-073): update
+- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-019): update
   commands are never in the remote capability (`command_acl_tests` enforces it), and
   nothing installs or restarts while `app_busy`. Update checks are disabled while the
   `tauri.conf.json` updater pubkey is the placeholder. The archive download is bounded

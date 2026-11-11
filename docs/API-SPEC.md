@@ -31,7 +31,7 @@ additionally requires safe JavaScript revisions, with input maximum
 `Number.MAX_SAFE_INTEGER - 1`. Window and event intervals use RFC3339 instants,
 have positive duration and are at most 93 elapsed days. An upsert whose
 `accountId` names a merging or merged account rejects the batch with 409
-`ACCOUNT_MERGING` (ADR-072); reads still return events on a merge tombstone.
+`ACCOUNT_MERGING` (ADR-022); reads still return events on a merge tombstone.
 
 Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
@@ -1315,7 +1315,7 @@ non-member target; 409 concurrent change; 503 Cognito unwired or lookup failure.
 It is the only path that grants Owner; its connector inventory disables delegation.
 
 `GET /api/accounts/{accountId}/merge-preview?into={id}` is a read-only inventory of
-merging the path Account into `into` (ADR-072). The requester must own the source
+merging the path Account into `into` (ADR-022). The requester must own the source
 (MEMBER role and META owner) and be a direct member of the target. Response:
 `fromAccountId`, `intoAccountId`, `counts` (`members`, `meetings`, `projects`,
 `research`, `contacts`, `events`, `children`; `-1` when a bounded read cap is
@@ -1329,7 +1329,7 @@ target direct member; 404 missing Account; 409 `MERGE_INELIGIBLE` with the reaso
 or large). The connector inventory disables delegation.
 
 `POST /api/accounts/{accountId}/merge` starts merging the path Account into
-`intoAccountId` (ADR-072). Body `{"intoAccountId","acceptUnmoved"}` is capped at
+`intoAccountId` (ADR-022). Body `{"intoAccountId","acceptUnmoved"}` is capped at
 1,024 bytes with unknown fields rejected, and the email must be verified. It
 re-checks the preview's eligibility rules, requires `acceptUnmoved: true` when any
 unmoved category is present (billing always is), and rejects a merge whose source
@@ -1357,7 +1357,7 @@ source or of the job's target: `fromAccountId`, `intoAccountId`, `state`
 `finishedAt` and `abortedAt`. Lease and cursor state are not exposed. 404 when a source member
 asks and no job exists; 403 otherwise. Both routes disable connector delegation.
 
-Account writes are fenced while an Account merges (ADR-072). Writers that check the
+Account writes are fenced while an Account merges (ADR-022). Writers that check the
 Account META row also require `mergingInto` and `mergedInto` to be absent in the same
 transaction: member add, removal and role change, owner transfer, parent changes
 (child and new parent), contact and event writes, link create and delete, project and
