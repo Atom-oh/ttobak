@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0ce4e23454f3 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d4b6d4fc1f1d · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -249,7 +249,7 @@ limit instead of claiming a Mac build passed.
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX
   networking, not prompt filtering/import denylisting. A per-meeting `SIMRUN`
   singleton and matching `simRunId` conditions prevent stale worker writes;
-  preserve both Go and Python guards (ADR-033).
+  preserve both Go and Python guards (ADR-010).
 - **Mac:** finished WAV bytes stream disk-to-S3 in Rust, never through WebView IPC;
   live raw PCM chunks intentionally cross IPC. Pin the exact
   `EXPECTED_BUCKET_HOST`, not an AWS domain suffix. Upload timeouts measure stalled

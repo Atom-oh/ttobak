@@ -202,7 +202,7 @@ type MeetingDetailResponse struct {
 	Permission                 string                `json:"permission"` // "owner", "read", or "edit"
 	Attachments                []AttachmentResponse  `json:"attachments,omitempty"`
 	Shares                     []ShareResponse       `json:"shares,omitempty"` // Only visible to owner
-	SimRun                     *SimRunResponse       `json:"simRun,omitempty"` // ADR-033 cost/sizing simulator, singleton per meeting
+	SimRun                     *SimRunResponse       `json:"simRun,omitempty"` // ADR-010 cost/sizing simulator, singleton per meeting
 	CreatedAt                  string                `json:"createdAt"`
 	UpdatedAt                  string                `json:"updatedAt"`
 
@@ -221,7 +221,7 @@ type SimChartResponse struct {
 	URL string `json:"url,omitempty"`
 }
 
-// SimRunResponse is the API shape of model.SimRun (ADR-033). Requirements/
+// SimRunResponse is the API shape of model.SimRun (ADR-010). Requirements/
 // Options are re-parsed from their JSON-string storage form into typed
 // slices for the frontend confirm form.
 type SimRunResponse struct {
