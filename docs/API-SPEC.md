@@ -722,8 +722,12 @@ results to the current source. Malformed arrays or invalid entries surface
 `fieldInsightsError: "INVALID_INSIGHTS"`; usable entries can still be returned.
 The projection allows at most 50 items and 64 KiB of encoded array JSON. Text
 and evidence are capped at 2,000 code points each, implication/nextAction at
-1,000 each, ID at 128, timestamp marker at 64, and entities at 20 entries of 128
-code points each. Any size/count shortening sets `fieldInsightsTruncated: true`.
+1,000 each, ID at 128 and timestamp marker at 64. Both `entities` and optional
+`personEntities` are capped at 20 entries of 128 code points each.
+`personEntities` contains model-classified person candidates from `entities`;
+its absence means legacy data or no classified people. See the
+[person-candidate rules](decisions/ADR-021-account-contacts-links-and-people.md#resolver).
+Any size/count shortening sets `fieldInsightsTruncated: true`.
 These bounds cover the insight projection, not the entire legacy detail body.
 Saved notes are user input, distinct from generated content. Stuck transcription
 or summarization is reconciled after 60 minutes; summarize retry eligibility is a
@@ -1093,9 +1097,30 @@ and only meetings currently published to the account count:
   over visible meetings. `GET /people/mentions?cursor=` returns `{groups,
   nextCursor?, truncated}`: at most 100 unresolved groups `{key, text, meetings,
   roles}` where `key` is 32 lowercase hex. Cursors are opaque base64url.
+- Candidate classification: mixed insight `entities` do not automatically
+  enter person review. The existing extraction call supplies model-classified
+  `personEntities`; subset/deduplication/size checks and an exact substring
+  check against the extraction input filter that output. This is not proof
+  that each candidate is a person; incorrect classifications can still be
+  ignored. Known entities retain deterministic person/account/project matching.
+- Read-time cutover hides two row kinds: insight rows without the stored
+  `personCandidate` attribute, and rows from any source whose mention is a
+  single or grouped speaker code (formats in ADR-021).
+  Legitimate legacy insight names are hidden too. They return only
+  after insight re-extraction and a people resolver run; no backfill is
+  scheduled by this change. Filtering itself makes no model call and deletes
+  no meeting content, contacts or existing manual edges.
 - `POST /people/mentions/{mentionKey}/resolve` takes `{kind: member|contact,
-  id}`, writes manual edges for the visible rows and returns `{written,
-  remaining}`; `remaining` means more rows are left for another call.
+  id, cursor?}`, writes at most 100 visible manual edges and returns `{written,
+  remaining, nextCursor?}`. It skips hidden rows across at most 20 hash pages
+  (at most 2,000 stored rows), retaining the 300 publication-read bound.
+  `remaining` indicates unread stored rows, not a count of visible candidates.
+  Send `nextCursor` as `cursor` to continue; it is scoped to the account and
+  mention hash and grants no access. Reads and writes revalidate authorization.
+  The app retains continuation for the same account, viewer, group and target
+  when the member repeats the connection action. A stale request containing
+  only hidden rows writes zero edges. A fully hidden partial review page also
+  retains its row cursor so later classified candidates remain reachable.
   `POST .../ignore` returns 204 and hides the text account-wide (no undo route).
 - `GET /people/edges?meetingId=` returns `{edges, labels}` for one meeting;
   `labels` is keyed `{kind}:{id}` and holds only readable targets. `POST
