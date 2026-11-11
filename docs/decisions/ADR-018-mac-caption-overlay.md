@@ -74,18 +74,20 @@ change, so review it as such.
 (`NSScreenSaverWindowLevel`) and collection behavior `canJoinAllSpaces |
 stationary | fullScreenAuxiliary` on the main thread, in addition to
 `always_on_top`. Level and collection behavior alone did not let the window
-enter another app's full-screen Space (owner report, 2026-11-11: the window
-could not be moved to the display showing a full-screen app), because an
-ordinary window of a regular app is kept out of such a Space. Each overlay is
-therefore also turned into a non-activating panel at creation
-(`become_panel` in `caption_overlay.rs`): its class is swapped to an `NSPanel`
-subclass that can become key but not main, with
-`NSWindowStyleMaskNonactivatingPanel`, `hidesOnDeactivate` off and
-`becomesKeyOnlyIfNeeded` on, so clicking or dragging a caption does not
-activate TTOBAK and switch away from the slideshow. If the panel class is
-unavailable or larger than the window's allocation the window is left as it
-was and a warning is logged. Whether this stays above a full-screen PowerPoint
-or Keynote slideshow is not verified.
+enter another app's full-screen Space (owner report, 2026-11-11: with the app
+on one display and a full-screen browser on the other, the caption window
+could not be moved to the full-screen display), because macOS keeps a regular
+app's windows out of such a Space. While at least one caption window exists
+the app therefore runs with the accessory activation policy
+(`sync_activation_policy` in `caption_overlay.rs`) and returns to the regular
+policy when the last one is destroyed. Consequence: TTOBAK has no Dock icon,
+menu bar or Cmd-Tab entry while captions are open; its main window stays
+usable. Rejected: swapping the window's class to a non-activating `NSPanel`
+after creation. WebKit and AppKit key-value observe the window, and removing
+those observers after the class change raises an Objective-C exception that
+aborts the app (observed 2026-11-11 on caption open and on close). Whether
+the overlay stays above a full-screen PowerPoint or Keynote slideshow is not
+verified.
 
 **Zoom limit.** macOS screen sharing includes the overlay only when the whole
 screen is shared. Sharing a single window (for example only PowerPoint) excludes

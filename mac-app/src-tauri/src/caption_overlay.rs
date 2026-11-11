@@ -245,79 +245,35 @@ fn screens(app: &AppHandle) -> (Vec<Rect>, Rect) {
     (monitors, primary)
 }
 
-/// `NSWindowStyleMaskNonactivatingPanel`.
-#[cfg(target_os = "macos")]
-const NONACTIVATING_PANEL: usize = 1 << 7;
-
-/// An `NSPanel` subclass for caption windows. An ordinary window of a regular
-/// app cannot enter another app's full-screen Space whatever its level or
-/// collection behavior; a non-activating panel can. It may become key (so the
-/// page still gets clicks and drags) without activating this app, which would
-/// switch away from the slideshow's Space.
-#[cfg(target_os = "macos")]
-fn caption_panel_class() -> Option<&'static objc2::runtime::AnyClass> {
-    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-
-    extern "C-unwind" fn yes(_: &AnyObject, _: Sel) -> Bool {
-        Bool::YES
-    }
-    extern "C-unwind" fn no(_: &AnyObject, _: Sel) -> Bool {
-        Bool::NO
-    }
-
-    const NAME: &std::ffi::CStr = c"TtobakCaptionPanel";
-    if let Some(existing) = AnyClass::get(NAME) {
-        return Some(existing);
-    }
-    let mut builder = ClassBuilder::new(NAME, AnyClass::get(c"NSPanel")?)?;
-    // SAFETY: both selectors take no argument and return BOOL, matching the
-    // functions above.
-    unsafe {
-        builder.add_method(
-            objc2::sel!(canBecomeKeyWindow),
-            yes as extern "C-unwind" fn(_, _) -> _,
-        );
-        builder.add_method(
-            objc2::sel!(canBecomeMainWindow),
-            no as extern "C-unwind" fn(_, _) -> _,
-        );
-    }
-    Some(builder.register())
+/// Whether the app should run as an accessory (no Dock icon or menu bar)
+/// given the caption windows that stay open. macOS keeps the windows of a
+/// regular app out of another app's full-screen Space whatever their level or
+/// collection behavior; an accessory app's windows may join it.
+pub fn accessory_while_open(open: &[&str], closing: Option<&str>) -> bool {
+    open.iter().any(|label| Some(*label) != closing)
 }
 
-/// Turns the live window into a non-activating panel. Returns false, leaving
-/// the window untouched, when the panel class is unavailable or would not fit
-/// the window's allocation.
-///
-/// # Safety
-/// `ns_window` must be a live `NSWindow`, and this must run on the main thread.
+/// Applies `accessory_while_open` for the caption windows that exist now;
+/// `closing` names one that is being destroyed and no longer counts.
 #[cfg(target_os = "macos")]
-unsafe fn become_panel(ns_window: *mut objc2::runtime::AnyObject) -> bool {
-    let Some(panel) = caption_panel_class() else {
-        return false;
+fn sync_activation_policy(app: &AppHandle, closing: Option<&str>) {
+    let open: Vec<&str> = caption_model::LANGS
+        .iter()
+        .filter_map(|lang| caption_model::window_label(lang))
+        .filter(|label| app.get_webview_window(label).is_some())
+        .collect();
+    let policy = if accessory_while_open(&open, closing) {
+        tauri::ActivationPolicy::Accessory
+    } else {
+        tauri::ActivationPolicy::Regular
     };
-    // SAFETY: the caller guarantees a live object.
-    let current = unsafe { (*ns_window).class() };
-    if std::ptr::eq(current, panel) {
-        return true;
+    if let Err(e) = app.set_activation_policy(policy) {
+        log::warn!("caption overlay activation policy change failed: {e}");
     }
-    // The object keeps its original allocation, so the new class must not
-    // expect a larger instance.
-    if panel.instance_size() > current.instance_size() {
-        return false;
-    }
-    // SAFETY: `panel` is an NSWindow subclass no larger than the allocation;
-    // the selectors take or return plain integers and BOOLs.
-    unsafe {
-        objc2::ffi::object_setClass(ns_window, panel);
-        let mask: usize = objc2::msg_send![ns_window, styleMask];
-        let _: () = objc2::msg_send![ns_window, setStyleMask: mask | NONACTIVATING_PANEL];
-        // Panels hide when their app is inactive by default; captions must stay.
-        let _: () = objc2::msg_send![ns_window, setHidesOnDeactivate: false];
-        let _: () = objc2::msg_send![ns_window, setBecomesKeyOnlyIfNeeded: true];
-    }
-    true
 }
+
+#[cfg(not(target_os = "macos"))]
+fn sync_activation_policy(_app: &AppHandle, _closing: Option<&str>) {}
 
 /// Lifts the window above full-screen apps on every Space.
 #[cfg(target_os = "macos")]
@@ -335,9 +291,6 @@ fn float_above_full_screen(window: &WebviewWindow) {
         // SAFETY: `ns_window` is the live NSWindow of `target`, used on the
         // main thread; both selectors take a plain integer and return void.
         unsafe {
-            if !become_panel(ns_window) {
-                log::warn!("caption overlay: panel unavailable; full-screen Spaces may hide it");
-            }
             let _: () = objc2::msg_send![ns_window, setLevel: SCREEN_SAVER_LEVEL];
             let _: () = objc2::msg_send![ns_window, setCollectionBehavior: COLLECTION_BEHAVIOR];
         }
@@ -483,6 +436,7 @@ fn watch(app: &AppHandle, window: &WebviewWindow, lang: String) {
             WindowEvent::CloseRequested { .. } => {
                 let _ = mark_closed(&app.state::<CaptionState>(), &lang);
             }
+            WindowEvent::Destroyed => sync_activation_policy(&app, Some(&label)),
             _ => {}
         }
     });
@@ -537,6 +491,7 @@ pub async fn caption_overlay_open(
             Ok(window) => {
                 float_above_full_screen(&window);
                 watch(&app, &window, lang.clone());
+                sync_activation_policy(&app, None);
                 created = Some(window);
             }
             // A concurrent open created it first.
@@ -842,6 +797,17 @@ mod tests {
         assert!(gated_label(&none, "zh").is_err());
         assert!(gated_label(&none, "fr").is_err());
         assert_eq!(gated_label(&none, "en").unwrap(), "caption-en");
+    }
+
+    #[test]
+    fn app_is_an_accessory_only_while_a_caption_window_stays_open() {
+        assert!(!accessory_while_open(&[], None));
+        assert!(accessory_while_open(&["caption-en"], None));
+        assert!(!accessory_while_open(&["caption-en"], Some("caption-en")));
+        assert!(accessory_while_open(
+            &["caption-en", "caption-ja"],
+            Some("caption-en")
+        ));
     }
 
     #[test]
