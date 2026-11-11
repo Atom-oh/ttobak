@@ -41,6 +41,8 @@
 
 ### Upload
 
+- Presigning, authentication and the completion call stay in the web app; only
+  the byte transport is native.
 - A finished WAV streams from disk to S3 in Rust and never crosses WebView IPC.
   Live PCM for captions does cross IPC, by design, as 16 kHz mono chunks of
   1,024 samples.
