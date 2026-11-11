@@ -27,7 +27,7 @@ type CalendarAPI interface {
 	ListSources(context.Context, string, string, int32) (*model.CalendarSourcePage, error)
 	ListAccountCalendar(context.Context, string, string, model.CalendarQuery) (*model.AccountCalendarPage, error)
 	SetEventSharing(context.Context, string, string, string, model.CalendarSharingRequest) (*model.CalendarEvent, error)
-	ShareDirectory(context.Context, string) (*model.CalendarShareDirectory, error)
+	ShareDirectory(context.Context, string, string) (*model.CalendarShareDirectory, error)
 }
 
 const calendarShareDirectoryMaxBytes = 64 * 1024
@@ -216,11 +216,12 @@ func (handler *CalendarHandler) ShareDirectory(writer http.ResponseWriter, reque
 	if userID == "" {
 		return
 	}
-	if _, err := calendarHTTPQuery(request); err != nil {
+	query, err := calendarHTTPQuery(request, "cursor")
+	if err != nil {
 		writeCalendarError(writer, err)
 		return
 	}
-	directory, err := handler.service.ShareDirectory(request.Context(), userID)
+	directory, err := handler.service.ShareDirectory(request.Context(), userID, query.Get("cursor"))
 	if err != nil {
 		writeCalendarError(writer, err)
 		return

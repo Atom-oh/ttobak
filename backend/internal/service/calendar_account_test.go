@@ -138,7 +138,7 @@ func TestShareDirectoryDirectOnly(test *testing.T) {
 		"acc_stale":  {AccountID: "acc_stale", Name: "Removed from me"},
 		"acc_merged": {AccountID: "acc_merged", Name: "Tombstone", MergedInto: "acc_a"},
 	}
-	directory, err := svc.ShareDirectory(context.Background(), "owner")
+	directory, err := svc.ShareDirectory(context.Background(), "owner", "")
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -161,11 +161,21 @@ func TestShareDirectoryDirectOnly(test *testing.T) {
 		membership.members[id] = []model.AccountMember{{AccountID: id, UserID: "owner"}}
 		membership.accounts[id] = &model.Account{AccountID: id, Name: id}
 	}
-	directory, err = svc.ShareDirectory(context.Background(), "owner")
+	directory, err = svc.ShareDirectory(context.Background(), "owner", "")
 	if err != nil || len(directory.Accounts) != 200 || directory.Accounts[0].AccountID != "acc_000" || directory.Accounts[199].AccountID != "acc_199" {
 		test.Fatalf("directory must cap at 200 sorted accounts: %d %v", len(directory.Accounts), err)
 	}
-	if _, err := svc.ShareDirectory(context.Background(), ""); !errors.Is(err, ErrForbidden) {
+	if directory.NextCursor != "acc_199" {
+		test.Fatalf("a capped page must continue: %q", directory.NextCursor)
+	}
+	rest, err := svc.ShareDirectory(context.Background(), "owner", directory.NextCursor)
+	if err != nil || len(rest.Accounts) != 5 || rest.Accounts[0].AccountID != "acc_200" || rest.NextCursor != "" {
+		test.Fatalf("second page: %d %q %v", len(rest.Accounts), rest.NextCursor, err)
+	}
+	if _, err := svc.ShareDirectory(context.Background(), "owner", "bad cursor"); !errors.Is(err, ErrInvalidInput) {
+		test.Fatalf("malformed cursor: %v", err)
+	}
+	if _, err := svc.ShareDirectory(context.Background(), "", ""); !errors.Is(err, ErrForbidden) {
 		test.Fatalf("anonymous directory: %v", err)
 	}
 }
@@ -215,5 +225,40 @@ func TestListAccountCalendarUndecryptableRows(test *testing.T) {
 		calendarTestShareRow(test, svc, "acc_1", "u2", "shared", "Fine", start.Add(time.Hour))})
 	if _, err := svc.ListAccountCalendar(context.Background(), "u1", "acc_1", calendarAccountQuery()); !errors.Is(err, ErrCalendarEncryption) {
 		test.Fatalf("a partly undecryptable page must not be returned as complete: %v", err)
+	}
+}
+
+func TestShareDirectoryPagesByBytes(test *testing.T) {
+	svc, _, _, _, membership := calendarShareFixture()
+	membership.memberships = map[string][]model.AccountMember{}
+	membership.members = map[string][]model.AccountMember{}
+	membership.accounts = map[string]*model.Account{}
+	aliases := make([]string, 32)
+	for index := range aliases {
+		aliases[index] = strings.Repeat(string(rune('a'+index%26)), 250)
+	}
+	for index := 0; index < 20; index++ {
+		id := fmt.Sprintf("acc_%02d", index)
+		membership.memberships["owner"] = append(membership.memberships["owner"], model.AccountMember{AccountID: id, UserID: "owner"})
+		membership.members[id] = []model.AccountMember{{AccountID: id, UserID: "owner"}}
+		membership.accounts[id] = &model.Account{AccountID: id, Name: id, Aliases: aliases, Domains: aliases}
+	}
+	seen, cursor := 0, ""
+	for page := 0; page < 20; page++ {
+		directory, err := svc.ShareDirectory(context.Background(), "owner", cursor)
+		if err != nil {
+			test.Fatal(err)
+		}
+		encoded, _ := json.Marshal(directory)
+		if len(encoded) > 64*1024 || len(directory.Accounts) == 0 {
+			test.Fatalf("page %d: %d bytes, %d accounts", page, len(encoded), len(directory.Accounts))
+		}
+		seen += len(directory.Accounts)
+		if cursor = directory.NextCursor; cursor == "" {
+			break
+		}
+	}
+	if seen != 20 {
+		test.Fatalf("every account must be reachable: %d", seen)
 	}
 }

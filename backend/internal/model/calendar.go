@@ -140,6 +140,8 @@ type CalendarShareDirectoryAccount struct {
 
 type CalendarShareDirectory struct {
 	Accounts []CalendarShareDirectoryAccount `json:"accounts"`
+	// NextCursor is the last returned accountId when more accounts remain.
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type CalendarQuery struct {

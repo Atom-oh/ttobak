@@ -55,6 +55,10 @@ type fakePeopleRepo struct {
 	contactErr  map[string]error
 	pubReads    int
 
+	// Focus graph reads.
+	meetingLinks       map[string][]model.PeopleLink
+	projectMeetingRefs []model.ProjectMeetingRef
+
 	// People panel writes.
 	stored         map[model.PeopleLinkKey]*model.PeopleLink
 	putActors      []string
@@ -163,7 +167,10 @@ func (f *fakePeopleRepo) DeletePeopleLinkInRun(_ context.Context, _ string, k mo
 	f.deletes = append(f.deletes, fmt.Sprintf("%s/%s/%s/actor=%q/%s/deny=%t", k.Role, k.ToKind, k.ToID, "", model.LinkOriginAuto, false))
 	return nil
 }
-func (f *fakePeopleRepo) ListPeopleLinksForMeeting(context.Context, string, string, int) ([]model.PeopleLink, bool, error) {
+func (f *fakePeopleRepo) ListPeopleLinksForMeeting(_ context.Context, _, meetingID string, _ int) ([]model.PeopleLink, bool, error) {
+	if f.meetingLinks != nil {
+		return f.meetingLinks[meetingID], false, nil
+	}
 	return f.existing, false, nil
 }
 func (f *fakePeopleRepo) GetMentionIgnores(_ context.Context, _ string, hashes []string) (map[string]bool, error) {

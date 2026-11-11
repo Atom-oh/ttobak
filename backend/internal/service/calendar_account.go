@@ -133,11 +133,16 @@ func (svc *CalendarService) decryptCalendarShare(ctx context.Context, accountID 
 	}, true
 }
 
-// ShareDirectory lists the caller's direct-membership accounts (at most 200, by accountId)
-// with the names, aliases and domains the intake matcher uses.
-func (svc *CalendarService) ShareDirectory(ctx context.Context, userID string) (*model.CalendarShareDirectory, error) {
+// ShareDirectory lists one page of the caller's direct-membership accounts
+// after cursor (by accountId) with the names, aliases and domains the intake
+// matcher uses. A page holds at most 200 accounts and calendarShareDirectoryPageBytes
+// of encoded entries; NextCursor continues it, so no account is dropped.
+func (svc *CalendarService) ShareDirectory(ctx context.Context, userID, cursor string) (*model.CalendarShareDirectory, error) {
 	if !calendarIdentifier.MatchString(userID) {
 		return nil, ErrForbidden
+	}
+	if cursor != "" && !calendarIdentifier.MatchString(cursor) {
+		return nil, ErrInvalidInput
 	}
 	directory := &model.CalendarShareDirectory{Accounts: []model.CalendarShareDirectoryAccount{}}
 	if svc.membership == nil {
@@ -154,12 +159,16 @@ func (svc *CalendarService) ShareDirectory(ctx context.Context, userID string) (
 			continue
 		}
 		seen[membership.AccountID] = true
-		accountIDs = append(accountIDs, membership.AccountID)
+		if membership.AccountID > cursor {
+			accountIDs = append(accountIDs, membership.AccountID)
+		}
 	}
 	sort.Strings(accountIDs)
 	lookups := newCalendarShareLookups()
+	used := 0
 	for _, accountID := range accountIDs {
 		if len(directory.Accounts) == calendarShareDirectoryMax {
+			directory.NextCursor = directory.Accounts[len(directory.Accounts)-1].AccountID
 			break
 		}
 		// GSI1 is eventually consistent: revalidate the canonical membership
@@ -178,10 +187,23 @@ func (svc *CalendarService) ShareDirectory(ctx context.Context, userID string) (
 		if account == nil || account.AccountID != "" && account.AccountID != accountID || account.MergedInto != "" {
 			continue
 		}
-		directory.Accounts = append(directory.Accounts, model.CalendarShareDirectoryAccount{
+		entry := model.CalendarShareDirectoryAccount{
 			AccountID: accountID, Name: account.Name,
 			Aliases: append([]string{}, account.Aliases...), Domains: append([]string{}, account.Domains...),
-		})
+		}
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return nil, err
+		}
+		if used+len(encoded)+1 > calendarShareDirectoryPageBytes {
+			if len(directory.Accounts) == 0 {
+				return nil, repository.ErrCalendarCorruptData
+			}
+			directory.NextCursor = directory.Accounts[len(directory.Accounts)-1].AccountID
+			break
+		}
+		used += len(encoded) + 1
+		directory.Accounts = append(directory.Accounts, entry)
 	}
 	return directory, nil
 }
