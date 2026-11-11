@@ -795,7 +795,7 @@ the API immutable version description. Deploy reviewed readers and transactional
 child-reference writers disabled, bootstrap/verify metadata-only `CHILDREF#`
 rows, then activate using previous values for every other parameter. References
 never authorize alone. See [the release runbook](runbooks/account-descendant-sharing.md)
-and ADR-058; configuration alone does not prove deployed acceptance.
+and ADR-015 (descendant reads); configuration alone does not prove deployed acceptance.
 
 GatewayStack declares `SummaryPrivacyWriterEnabled` and
 `SummaryPrivacyReaderEnabled` (`0` or `1`, default `0`) plus

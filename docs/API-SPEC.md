@@ -591,7 +591,7 @@ never grants a private meeting. A direct edit share keeps edit; a direct read
 share yields to live team edit on a published meeting (ADR-016 amendment).
 
 Clients expand selected visible account groups to accessible descendants and send
-the resulting IDs. With ADR-058 activated, canonical ancestor membership gives
+the resulting IDs. With ADR-015 (descendant reads) activated, canonical ancestor membership gives
 read-only access to explicitly published descendant content, except meetings:
 every direct or inherited member gets `edit` on a published meeting (ADR-016
 2026-11-06 amendment). Account filters remain classification. Independent
@@ -899,7 +899,7 @@ there is no transcript fallback when the summary is missing. Conflicts return
 ### Accounts and projects
 
 Meeting management (ADR-016 2026-11-06 amendment; for inherited members it
-supersedes ADR-058's invitation/linking restriction for meetings only): the
+supersedes ADR-015 (descendant reads)'s invitation/linking restriction for meetings only): the
 creator or a live direct or inherited member of the account a meeting is
 published to may call the share, revoke, pending-revoke, account,
 share-account, link, image/file upload, recover, rediarize, audio-crop, simulator
@@ -1299,7 +1299,7 @@ recorded creator within thirty days may resend only the canonical initial Owner
 invitation. Recheck the current Cognito email/sub, pending password status,
 allowlist and shared hourly counter. Confirmed users return 409; identity or
 delivery dependency failures return 503. Non-members gain no Account read access.
-The operation's connector inventory disables delegation (ADR-055).
+The operation's connector inventory disables delegation (ADR-015, initial Owner).
 
 `POST /api/accounts/{accountId}/owner-transfer` requires verified email and a body
 `{"targetUserId"}` capped at 1,024 bytes with unknown fields rejected. Only the
@@ -1375,7 +1375,7 @@ before mail and transactionally before creation. Parent updates require child ow
 and new-parent membership; the required field uses an empty string to detach,
 not omitted/null. Self/cyclic/deep ancestry (over 64 nodes) is rejected;
 transactional ancestry checks and retries protect concurrent moves. Conflicts
-return 409. Canonical child references change in the same transaction. ADR-058
+return 409. Canonical child references change in the same transaction. ADR-015 (descendant reads)
 adds read-only descendant access when `ACCOUNT_DESCENDANT_READS_ENABLED=1`;
 private meeting links, mutations and Billing continue to require direct grants.
 
@@ -1537,7 +1537,7 @@ Authenticated `GET /api/navigation/accounts` and `/api/navigation/projects`
 provide bounded metadata catalogs (`pageSize` 1–50, default 20; opaque `cursor`;
 10,000 encoded bytes). GSI candidates are revalidated against consistent
 canonical membership/resource reads; indexes never grant access. Account
-hierarchy discovery includes validated descendant read grants under ADR-058.
+hierarchy discovery includes validated descendant read grants under ADR-015 (descendant reads).
 Project pages visit ownership, direct
 membership and linked-account membership. Deduplication uses only exact IDs
 already emitted, never an inferred earlier path: membership/ref indexes can lag.

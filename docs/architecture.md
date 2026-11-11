@@ -87,7 +87,7 @@ deployed activation or completed public acceptance.
 
 ## Identity onboarding
 
-Account hierarchy read access follows ADR-058: current canonical ancestor
+Account hierarchy read access follows ADR-015 (descendant reads): current canonical ancestor
 membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
@@ -270,7 +270,7 @@ retain their separate ASCII constraint. Rejected usage remains charged;
 unknown or abandoned usage retains its reservation. Immutable attempt keys live
 outside the legacy shared-text prefix. New consumers must verify current
 publication state before those writers activate; see
-[ADR-052](decisions/ADR-052-conditional-news-publication.md).
+[ADR-004, news publication](decisions/ADR-004-insights-crawler-and-news.md).
 The staged `news_worker.py` now joins current source checks, HTTPS-only article
 fetches, queued-candidate freshness checks, model accounting, immutable uploads
 and conditional publication. Its input boundary uses the same exact Unicode

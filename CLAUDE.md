@@ -161,9 +161,9 @@ limit instead of claiming a Mac build passed.
   single-file audio via two conditional claims, never via `GetMeetingDetail` or
   checkpoints; marked-failure deletion spares user data.
 - **Accounts:** members add/change non-owner roles (ADR-015). Creation permits
-  another Owner and optional creator AM (ADR-055). Removal/revocation/reparenting
-  are owner-only; Owner changes only via owner transfer (ADR-071). Ancestor reads
-  permit Billing (ADR-058/060); filters classify (ADR-015); members manage
+  another Owner and optional creator AM (ADR-015). Removal/revocation/reparenting
+  are owner-only; Owner changes only via owner transfer (ADR-015). Ancestor reads
+  permit Billing (ADR-015/060); filters classify (ADR-015); members manage
   published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
