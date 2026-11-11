@@ -267,7 +267,8 @@ retained-grant removal using deployed function timeout/last-modified metadata.
 Only the summary role receives the selected final-note model/profile grant.
 Images use GPT-6.1 Terra via independent `BEDROCK_IMAGE_MODEL_ID` in us-west-2.
 Legacy news briefings and the structured news worker use GPT-6 Luna in the stack
-region. Their exact model/profile grants retain outgoing Claude permissions for
+region; the structured worker requests reasoning effort `low` (`none` leaked
+planning text into the JSON answer). Their exact model/profile grants retain outgoing Claude permissions for
 rollout safety; runtime has no expensive-model fallback. Structured news prices
 are conservatively metered at USD 0.125 for all input (including separate
 cache-read/write tokens) / USD 0.50 output per million tokens. Verified
@@ -469,6 +470,14 @@ Bedrock Agent/alias and tool Lambdas, not that AgentCore Runtime. AI imports
 the pre-created ttobak-agentcore-research-role; absence from CDK creation is not proof
 that the role is missing. Web search calls the us-east-1 Gateway through SigV4 from
 three separately packaged callers.
+
+The Gateway's `ttobak-web-search-tool` target declares only `connectorId:
+web-search`. CloudFormation's `ConnectorSource` has no version property, so the
+connector version is pinned out of band and is sticky across later stack updates
+(see the news release runbook). News discovery sends `filters.publishedDateFilter`
+and an optional `filters.domainFilter.include`, which need connector 1.2.0 or later;
+an older target silently ignores them (observed 2026-11-11 on the target created
+2026-07-13, whose `tools/list` schema had only `query` and `maxResults`).
 
 The simulator interpreter role has no execution permissions and uses SANDBOX
 networking. Generated option text is untrusted; its prompt/import checks are not

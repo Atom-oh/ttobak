@@ -283,6 +283,71 @@ class TestCandidateWorker(unittest.TestCase):
         self.assertEqual(finish["known_cost"], Decimal(0))
         self.deps.s3.put_object.assert_not_called()
 
+    def test_current_search_scope_is_rechecked_before_fetch_and_after_redirect(self):
+        # The scope is outside the revision, so a candidate discovered under an
+        # older allowlist still matches its revision; the worker rechecks it.
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["fss.or.kr"])
+        result = process_candidate(self.candidate, self.deps)
+        self.assertEqual((result["status"], result["reason"]), ("FETCH_REJECTED", "OUT_OF_SCOPE"))
+        self.fetch.assert_not_called()
+        self.store.reserve.assert_not_called()
+
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["example.com"])
+        self.fetch.return_value = replace(valid_body(), final_url="https://elsewhere.test/a",
+                                          canonical_url="https://elsewhere.test/a")
+        result = process_candidate(self.candidate, self.deps)
+        self.assertEqual((result["status"], result["reason"]), ("FETCH_REJECTED", "OUT_OF_SCOPE"))
+        self.store.reserve.assert_not_called()
+
+        self.fetch.return_value = valid_body()
+        self.assertEqual(process_candidate(self.candidate, self.deps)["status"], "PUBLISHED")
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["Bad Domain"])
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            process_candidate(self.candidate, self.deps)
+
+    def test_corroborating_sources_must_stay_in_current_scope(self):
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["example.com"])
+        candidate = dict(self.candidate, corroboratingSources=[
+            {"url": "https://outside.test/b"}, {"url": "https://example.com/c"}])
+        redirected = replace(valid_body(url="https://elsewhere.test/c"))
+        self.fetch.side_effect = [valid_body(), redirected]
+        result = process_candidate(candidate, self.deps)
+        self.assertEqual(result["status"], "PUBLISHED")
+        # The out-of-scope URL is never fetched; the redirected one is unused.
+        self.assertEqual([call.args[0] for call in self.fetch.call_args_list],
+                         ["https://example.com/a", "https://example.com/c"])
+        finish = self.store.finish.call_args.kwargs
+        self.assertEqual(finish["warnings"], ["CORROBORATION_UNUSABLE", "CORROBORATION_UNUSABLE"])
+        self.assertEqual(finish["document"]["corroboratingSourceCount"], 0)
+
+    def test_checked_scope_is_bound_to_reservation_and_publication(self):
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["example.com"])
+        process_candidate(self.candidate, self.deps)
+        self.assertEqual(self.store.reserve.call_args.kwargs["scope"], ("example.com",))
+        self.assertEqual(self.store.finish.call_args.kwargs["scope"], ("example.com",))
+        self.store.current_config.return_value = dict(CONFIG)
+        process_candidate(self.candidate, self.deps)
+        self.assertEqual(self.store.finish.call_args.kwargs["scope"], ())
+
+    def test_quality_rejection_reports_validator_locations_without_content(self):
+        invalid = valid_enrichment_json(executive_summary="짧은 요약")
+        self.client.converse.return_value = bedrock_response(invalid)
+        result = process_candidate(self.candidate, self.deps)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["reason"], "SCHEMA_INVALID")
+        self.assertEqual(result["validationErrors"],
+                         ["executiveSummary: characters=5; required=600..4000"])
+        self.deps.s3.put_object.assert_not_called()
+
+    def test_validation_locations_drop_numbers_and_unknown_text(self):
+        from news_worker import validation_locations
+        self.assertEqual(validation_locations([
+            "keyFacts[2]: numeric claim absent from cited excerpt: 2369",
+            "evidence S1: excerpt is not an exact substring of its source body",
+            "invalid JSON", "모델 출력: secret", 7,
+        ]), ["keyFacts[2]", "evidence S1", "invalid JSON", "OTHER"])
+        self.assertEqual(validation_locations("not a list"), [])
+
     def test_render_bound_rejection_settles_known_cost_without_uploads(self):
         with mock.patch("news_worker.render_news_markdown", side_effect=ValueError("size")):
             result = process_candidate(self.candidate, self.deps)
