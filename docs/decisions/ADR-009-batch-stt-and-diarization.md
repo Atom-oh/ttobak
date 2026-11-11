@@ -14,9 +14,14 @@
   task-definition configuration is missing; a failed task does not fail over.
 - Production ASR forces Korean (`language="ko"`).
 - Model weights are streamed from S3 at run time, not baked into the image.
-- The Auto Scaling group idles at zero (minimum 0, maximum 10). It mixes `g4dn.xlarge` and
-  `g4dn.2xlarge`, with one On-Demand base instance and price-capacity-optimized
-  Spot above it, capped at $1.10. Root volumes are 200 GiB encrypted gp3 and stopped-task cleanup
+- Two Auto Scaling groups idle at zero with identical `g4dn.xlarge`/`g4dn.2xlarge`
+  hosts: an On-Demand group (maximum 2) behind `ttobak-whisper-ondemand` and a
+  price-capacity-optimized Spot group (maximum 10, capped at $1.10) behind
+  `ttobak-whisper-spot`. The transcribe Lambda sends a run to On-Demand when the
+  cluster has no task and to Spot when it overlaps another run. One mixed group
+  with an On-Demand base could not keep the first worker off Spot: ECS placed the
+  task on whichever host registered first, and on 2026-11-11 a task died on its
+  reclaimed Spot host while the On-Demand host stayed idle. Root volumes are 200 GiB encrypted gp3 and stopped-task cleanup
   is short, a deliberate response to disk exhaustion on reused hosts.
 - The capacity provider uses ECS managed draining, so CDK's own drain hook is
   omitted. AZRebalance is suspended through a custom resource with a constant
@@ -88,8 +93,9 @@
   hand; the STT runbook checks the suspended processes for that drift.
 - Deploy only the changed stacks, with `--exclusively` and in dependency order
   (ADR-002).
-- On-Demand base capacity costs the normal rate while active and does not
-  guarantee capacity. Both instance sizes have a single GPU; the larger adds
+- The first worker costs the On-Demand rate while active and On-Demand capacity
+  is not guaranteed. Two runs that both observe an idle cluster may both use
+  On-Demand; the group maximum bounds that. Both instance sizes have a single GPU; the larger adds
   host memory and CPU only.
 - Before a rollout, confirm that the diarization bundle exists in S3 and that
   the On-Demand G and VT instance quota is sufficient.

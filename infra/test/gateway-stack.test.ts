@@ -1152,7 +1152,10 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     });
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-transcribe',
-      Environment: { Variables: Match.objectLike({ STT_RECOVERY_MODE: 'report', STT_RECOVERY_DELETE_MODE: 'report' }) },
+      Environment: { Variables: Match.objectLike({
+        STT_RECOVERY_MODE: 'active', STT_RECOVERY_DELETE_MODE: 'report',
+        WHISPER_ONDEMAND_CAPACITY_PROVIDER: 'ttobak-whisper-ondemand',
+      }) },
     });
     // No other rule may match the recovery envelope.
     for (const rule of Object.values(template.findResources('AWS::Events::Rule'))) {
@@ -1172,6 +1175,10 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     expect(Object.keys(list.Condition)).toEqual(['ArnEquals']);
     expect(JSON.stringify(list.Condition)).toContain('ecs:cluster');
     expect(JSON.stringify(list.Condition)).toContain('cluster/ttobak-whisper');
+    const describe = statements.find(statement => statement.Sid === 'EcsDescribeWhisperCluster');
+    expect(describe.Action).toBe('ecs:DescribeClusters');
+    expect(JSON.stringify(describe.Resource)).toContain('cluster/ttobak-whisper');
+    expect(JSON.stringify(describe.Resource)).not.toContain('*');
     const run = statements.find(statement => statement.Sid === 'EcsRunWhisperTask');
     expect(run.Action).toBe('ecs:RunTask');
     expect(JSON.stringify(run.Resource)).toContain('task-definition/ttobak-whisper*');
