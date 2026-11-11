@@ -20,9 +20,9 @@ export const CALENDAR_TOOL = { name: 'calendar_view', properties: ['start_date',
 export const PAST_DAYS = 7;
 export const FUTURE_DAYS = 30;
 const MAX_ITEMS = 5000;
-// The server spends up to 7 transaction items per share-bearing upsert, plus 2 (limit 100).
-const MAX_BATCH = 12;
 const LEDGER_RETENTION_DAYS = 120;
+/** A shared, rescheduled upsert costs up to seven transaction items; 12 + 2 stay within 100. */
+const MAX_BATCH = 12;
 const UNTITLED = '(제목 없음)';
 
 export interface OutlookItem {

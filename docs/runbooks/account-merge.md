@@ -2,8 +2,8 @@
 
 Operator procedure for [ADR-072](../decisions/ADR-072-account-merge.md) merges that
 need the CLI: starting a merge, moving the user-partition rows only the CLI can
-reach, checking progress, resuming a stalled job and recovering a job that failed
-with `REQUESTER_REVOKED`. This is a checked-in procedure, not deployed acceptance.
+reach (during the merge or after it is done), checking progress, resuming a stalled
+job, recovering a job that failed with `REQUESTER_REVOKED`, and aborting a stuck job. This is a checked-in procedure, not deployed acceptance.
 
 ## What the CLI is
 
@@ -21,10 +21,11 @@ is). Output is JSON counts and job state only. Errors print a code only.
 | `-requester` | Required user ID of the requester; same authorization as the API |
 | `-apply` | Write. Without it the CLI prints preview counts and writes nothing, not even a lease |
 | `-accept-unmoved` | Accept the categories v1 leaves on A |
-| `-scan-users` | Also count (dry run) or rewrite the CLI-only rows below; with `-apply` it runs inside the same invocation that starts or resumes the job |
+| `-scan-users` | Also count (dry run) or rewrite the CLI-only rows below; with `-apply` it runs inside the invocation that starts or resumes the job, or, once the job is `done`, under the post-merge fence (section 7) |
 | `-verify` | Read-only count of CLI-only rows still naming `-from`; skips the preview, so it works after the merge is done; the requester must be a direct member of `-into` |
 | `-max-pages` | Page limit per scan segment, default 100000 |
 | `-status` | Print the job state and counts; needs only `-from` and `-requester` |
+| `-abort` | End a `failed` job or a `running` one with an expired lease (section 8); writes only with `-apply` |
 
 Environment: `TABLE_NAME` (no fallback) and standard AWS credentials and region;
 `KMS_KEY_ID` is also required with `-apply` because contacts, events and calendar
@@ -48,22 +49,26 @@ it off peak and one merge at a time. It handles three kinds of rows:
   worker's meetings step.
 
 Each rewrite is one transaction with the merge fence checks (running job, CLI lease,
-source owner, requester membership of the target, open target), conditioned on
-`accountId` still naming A and the row state the scan read. A lost fence stops the
-scan. A changed row counts as `Skipped` and the scan repeats, up to three passes;
-other failures count in `errors` (by reason: `errors.decrypt`, `errors.payload`,
-`errors.encrypt`, `errors.write`). If any row stays skipped or failed, the CLI marks
-the job `failed` with `SCAN_INCOMPLETE` instead of releasing its lease, so no worker
-delivery finishes the job over rows left behind (a lost fence fails it too); rerun
-step 2 to restart it from its saved step. A row that fails on every run (decrypt or
-payload) blocks the merge until fixed; v1 has no per-row skip. The scan is eventually consistent, so a row committed just before the
-start can be missed; `-verify` reports it.
-
-A calendar move bumps the row's `shareVersion`, so a sync that read the row before
-the move fails and re-reads it, and a sync naming a merging or merged account is
-refused with 409 `ACCOUNT_MERGING`. A sync authorized before the start that reads
-the row after the move can still write A back (an accepted narrow window);
-`-verify` reports such rows.
+source owner, requester membership of the target, open target; after the job is done
+the post-merge fence of section 7) and is conditioned on
+`accountId` still naming A and on the row state the scan read. A lost fence stops
+the scan. A changed row is counted as `Skipped` and the scan runs again, up to three
+passes. During a job the CLI holds the job lease from the scan through its
+in-process worker. If rows remain skipped or any row fails, it marks the job `failed`
+with `SCAN_INCOMPLETE` instead of releasing the lease, so no worker delivery can
+finish the job over rows left behind (a lost fence fails it too); rerun the step 2
+command to restart it from its saved step. A row that fails on every run (decrypt or
+payload) blocks the merge until fixed, or until `-abort` (section 8); v1 has no
+per-row skip. A post-merge run (section 7) reports the same code while rows stay
+skipped. A calendar move also bumps the row's `shareVersion`, so a sync that read the
+row before the move fails and re-reads it, and a sync naming a merging or merged
+account is refused with 409 `ACCOUNT_MERGING`. A sync authorized before the start
+that reads the row after the move can still write A back (an accepted narrow window):
+`-verify` reports such rows and a post-merge run moves them. Any other
+failure is counted in `errors` and by reason in `errors.decrypt`, `errors.payload`,
+`errors.encrypt` or `errors.write`, and fails the job the same way. The scan reads
+eventually consistent, so a row committed just before the start can be missed; the
+worker is not started while any observed row remains, and `-verify` reports the rest.
 
 ## 1. Preview (dry run)
 
@@ -102,12 +107,11 @@ Start codes: `JOB_RUNNING` (a worker holds a live lease, wait and check status),
 `NO_PROGRESS` (the worker loop saw no progress for about ten minutes, usually a
 lease held by another worker), `SCAN_INCOMPLETE` (see above).
 
-`-scan-users` must run in the same `-apply` invocation that starts or resumes the
-job, because the meeting writer needs the running job's lease and fence; it cannot
-run after the job is `done`. A merge started through the API leaves these rows
-unmoved: if its job is still `running` (lease expired) or `failed`, rerun this
-command with `-scan-users`, which takes over the job. Once it is `done`, the rows
-named above cannot be rewritten by this tool; `-verify` reports them.
+While the job runs, `-scan-users` rewrites rows inside the `-apply` invocation that
+starts or resumes it, under the job lease. A merge started through the API (the web
+dialog) leaves these rows unmoved: if its job is still `running` (lease expired) or
+`failed`, rerun this command with `-scan-users`, which takes over the job; once it is
+`done`, use the post-merge procedure in section 7.
 
 ## 3. Status
 
@@ -116,8 +120,8 @@ TABLE_NAME=ttobak-main go run ./cmd/merge-accounts -from SOURCE_ID -requester US
 ```
 
 The requester must be a direct member of the source or of the job's target (the
-same rule as `GET /api/accounts/{accountId}/merge`). `state` is `running`, `failed`
-or `done`; `step` is the next step to run (`members`, `children`, `projects`,
+same rule as `GET /api/accounts/{accountId}/merge`). `state` is `running`, `failed`,
+`done` or `aborted`; `step` is the next step to run (`members`, `children`, `projects`,
 `research`, `contacts`, `events`, `meetings`, `metadata`, `finish`); `errorCode` is
 `REQUESTER_REVOKED`, `CONTACT_INDEX_TOO_LARGE`, `MERGE_CONFLICT`, `STEP_FAILED` or
 `DISPATCH_FAILED`.
@@ -170,16 +174,69 @@ After `state` is `done`:
   counts rows with `accountId` still A: `specreqTasks`, `calendarEvents` and
   `linkOnlyMeetings` should be 0. A nonzero `publishedMeetings` means published
   meetings are still on A (their `MEETINGREF#` row was missing); report them, because
-  the worker will not move them. Nonzero task or event counts after `done` mean the
-  scan did not run in the apply invocation; they cannot be fixed afterwards by this
-  tool and are reported.
+  the worker will not move them. Nonzero task, event or link-only meeting counts
+  after `done` are moved with the post-merge procedure in section 7.
 - `counts` should show `members`, `contacts`, `events` and `meetings` moved or
   skipped with `unreadable` and `keptSeparate` reviewed.
 - In the web app as a target member, open the account: moved meetings, contacts and
   events appear, and a former source member still opens the unmoved categories
   (news sources, KB, documents, calendar shares, dictionary) through the tombstone.
 - The worker requests a people resolve run for the target when the job finishes;
-  links on A stay on the tombstone (ADR-072).
+  links on A stay on the tombstone (ADR-072). If that publish failed, the job keeps
+  `resolvePending` and the redelivered worker event republishes it; worker logs show
+  `people resolve republished`.
 
 There is no undo. Do not delete the tombstone, the job row or the `MERGE#` mapping
 rows: a resume or a later `-verify` run depends on them.
+
+## 7. Move CLI-only rows after the merge is done
+
+A web-started merge finishes without touching SpecReq tasks, calendar events or
+link-only meetings. After `state` is `done`, run as a direct member of the target who
+was the job's requester or is the target's owner:
+
+```bash
+TABLE_NAME=ttobak-main KMS_KEY_ID=KEY_ID go run ./cmd/merge-accounts \
+  -from SOURCE_ID -into TARGET_ID -requester USER_ID -scan-users -apply
+```
+
+The CLI sees the `done` job and does not start, lease or run the worker (`mode`
+`post-merge`). It refuses before scanning when `-into` is not the job's target or the
+requester lacks that authority (`FORBIDDEN`), when the source is not the tombstone
+`mergedInto` the target (`NOT_MERGED`), or without `-scan-users` (`MERGE_DONE`). Each
+row write carries the post-merge fence: the job is `done` for the target, the source
+META is `mergedInto` the target with no `mergingInto`, the requester is still a direct
+member of the target (and was the job's requester, or owns the target), and the
+target is open. Rows stay conditioned on `accountId` naming the source; nothing writes
+into the source. Link-only meetings stay link-only (no grants, no target reference).
+A published meeting still on the source is counted in `publishedMeetings` and left
+alone. Codes and counts are as in section 2: a lost fence is `FENCE_LOST`, changed
+rows are `Skipped`, failures are counted in `errors` and the command can be rerun.
+Finish with the `-verify` check of section 6.
+
+Until this scan moves a calendar row, a calendar sync that sends that row's
+`accountId` of a merging or merged account is rejected with 409 `ACCOUNT_MERGING`;
+reads keep listing the event with its stored account.
+
+## 8. Abort a stuck job
+
+Use this only when a job cannot be finished: it is `failed`, or `running` with no
+progress and an expired lease, and resuming (section 4) is not wanted. The
+requester must be the job's requester and still Owner of the source.
+
+```bash
+# Dry run: prints the job, writes nothing.
+TABLE_NAME=ttobak-main go run ./cmd/merge-accounts -from SOURCE_ID -into TARGET_ID -requester USER_ID -abort
+# Abort.
+TABLE_NAME=ttobak-main go run ./cmd/merge-accounts -from SOURCE_ID -into TARGET_ID -requester USER_ID -abort -apply
+```
+
+One transaction, conditioned on the job's observed state and lease owner, sets the
+job `aborted`, removes the source's `mergingInto` (the source opens for writes again)
+and decrements the target's `incomingMerges`. Nothing is rolled back: members,
+children, projects, research, contacts, events and meetings already moved stay on
+the target, and the job `counts` record what moved. Codes: `NOT_ABORTABLE` (the job
+is `done` or a worker holds a live lease), `FORBIDDEN` (not the job's requester, a
+different `-into`, or the requester is no longer Owner of the source),
+`START_CONFLICT` (the job or the target changed; check `-status` and rerun),
+`NOT_FOUND` (no job). A later merge of the source starts as a fresh job.

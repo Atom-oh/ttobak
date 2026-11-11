@@ -625,13 +625,14 @@ export interface AccountMergePreview {
 export interface AccountMergeJob {
   fromAccountId: string;
   intoAccountId: string;
-  state: 'running' | 'failed' | 'done';
+  state: 'running' | 'failed' | 'done' | 'aborted';
   step: string;
   errorCode?: string;
   counts: Record<string, number>;
   startedAt: string;
   updatedAt: string;
   finishedAt?: string;
+  abortedAt?: string;
 }
 
 export interface AccountCreationRequest {

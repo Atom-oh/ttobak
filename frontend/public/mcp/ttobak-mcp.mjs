@@ -25731,7 +25731,7 @@ async function runCalendar(options) {
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, MAX_BATCH2, LEDGER_RETENTION_DAYS, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
@@ -25743,8 +25743,8 @@ var init_calendar2 = __esm({
     PAST_DAYS = 7;
     FUTURE_DAYS = 30;
     MAX_ITEMS = 5e3;
-    MAX_BATCH2 = 12;
     LEDGER_RETENTION_DAYS = 120;
+    MAX_BATCH2 = 12;
     UNTITLED = "(\uC81C\uBAA9 \uC5C6\uC74C)";
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
