@@ -94,7 +94,7 @@ references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
 Linked meetings are navigation only and never note evidence (ADR-029, shareable by default);
 mutations remain direct-only. Billing read/upload access also follows ancestor
-membership, with an atomic path/grant confirmation (ADR-060).
+membership, with an atomic path/grant confirmation (ADR-012).
 
 Cognito identity, the app PROFILE and resource membership are separate states.
 The authenticated session bootstrap coordinates profile creation and eligible
@@ -120,11 +120,11 @@ stack and origin reached through a hashed, 60-second `HANDOFF#` code. The
 hand-off code path remains in the API but is off in the checked-in configuration
 (INFRA-SPEC "Billing Insight hand-off").
 
-The Billing service (ADR-056, `services/billing/`) is part of TTOBAK, distinct
+The Billing service (ADR-012, `services/billing/`) is part of TTOBAK, distinct
 from that companion. CloudFront routes `/api/billing/*` to the Billing BFF, an
 IAM-authenticated Lambda Web Function behind OAC, which verifies the forwarded
 TTOBAK JWT and grants Billing access through current direct or ancestor Account
-membership (ADR-060). `/billing` frames the
+membership (ADR-012). `/billing` frames the
 static `/billing-app/` pages. Uploads go by presigned URL through
 `/billing-upload/*`, rewritten to the Billing data bucket. The Python worker
 (`services/billing/worker`, `run_account.sh`: validate, extract, datasets, check;
@@ -465,7 +465,7 @@ consumer and rollback acceptance are separate from these source flags; see
 [ADR-003, connector delegation](decisions/ADR-003-mcp-access.md).
 
 Billing MCP reads use the caller's own JWT through the existing CloudFront
-Billing Web Function route (ADR-056), separate from Go/QA private delegation.
+Billing Web Function route (ADR-012), separate from Go/QA private delegation.
 The bounded reader bypasses all-account discovery, verifies canonical connector
 policy and current direct/ancestor Billing access twice, and pins published
 CUR/COT source identity. Three read-only tools expose metadata, scoped dataset

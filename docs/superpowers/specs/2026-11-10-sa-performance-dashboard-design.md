@@ -156,7 +156,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
   - Coverage exists only for accounts with an upload. Freshness equals the last
     upload. The page must show "no billing data" or the data date, not
     zero growth.
-  - Reads must respect Billing access (ADR-060). The owner sees spend only for
+  - Reads must respect Billing access (ADR-012). The owner sees spend only for
     accounts whose Billing they can read.
   - Coverage, per the owner: only some assigned accounts have uploads.
     Sections A and B ship first. Section C ships second, shows only accounts
@@ -165,9 +165,9 @@ Cloud processing (Bedrock) of the stored fields is allowed.
     contact") always use the last complete month in the data, labeled with that
     month, for every period including "this week" (designer's call).
   - Spend change is computed by a new small summary endpoint on the Billing BFF.
-    It applies the existing ADR-060 check and returns per-account monthly
+    It applies the existing ADR-012 check and returns per-account monthly
     totals only. The Go API must not read BillingStack S3 directly or
-    reimplement ADR-060 (designer's call).
+    reimplement ADR-012 (designer's call).
 - **Assigned accounts and SFDC mapping (owner decision).**
   - The assigned-account list is the owner's AWSentral registry assignments
     (`get_registry_assignments`), collected on the Mac.
