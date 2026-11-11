@@ -161,6 +161,21 @@ export function autoTermsEnvironment(scope: Construct): Record<string, string> {
 }
 
 /**
+ * Live caption vocabulary for the API Lambda (ADR-008 rollout check 5). With
+ * `ttobak:liveVocabularyMode` on, the dictionary GET names the caller's own
+ * READY ko-KR vocabulary so live streams send it as VocabularyNames; off is
+ * the kill switch. Default off; invalid values fail synth.
+ */
+export function liveVocabularyEnvironment(scope: Construct): Record<string, string> {
+  const raw = scope.node.tryGetContext('ttobak:liveVocabularyMode');
+  const mode = raw === undefined || raw === null ? 'off' : String(raw).trim() || 'off';
+  if (mode !== 'off' && mode !== 'on') {
+    throw new Error(`ttobak:liveVocabularyMode must be off or on, got ${JSON.stringify(mode)}`);
+  }
+  return { LIVE_VOCABULARY_MODE: mode };
+}
+
+/**
  * Silent glossary-based transcript correction for the summarize Lambda
  * (layered dictionary, L3). CDK context `ttobak:transcriptCorrection`
  * (off|on, default off); invalid values fail synth.
@@ -375,6 +390,7 @@ export class GatewayStack extends cdk.Stack {
       role: props.apiRole as iam.Role,
       environment: {
         ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
+        ...liveVocabularyEnvironment(this),
         PROJECT_INVITATIONS_ENABLED: projectInvitationsEnabled.valueAsString,
         SUMMARY_PRIVACY_WRITER_ENABLED: summaryPrivacyWriter.valueAsString,
         SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED: summaryOwnerAccountShare.valueAsString,
