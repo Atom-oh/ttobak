@@ -36,6 +36,7 @@ mod control_proto;
 mod error;
 mod input_select;
 mod intake_notify;
+mod intake_plan;
 mod interpreter;
 mod leftover;
 pub mod meet_mute;
