@@ -8,7 +8,7 @@ acceptance. Scheduled recovery and the 986-item retained-legacy archive, includi
 a complete second reconciliation, also passed. Daily scheduling and `all` mode
 are implemented but their production activation remains pending. The deployment
 default remains off.
-[ADR-052](../decisions/ADR-052-conditional-news-publication.md) owns publication
+[ADR-004, news publication](../decisions/ADR-004-insights-crawler-and-news.md) owns publication
 and accounting semantics.
 
 ## Runtime contract

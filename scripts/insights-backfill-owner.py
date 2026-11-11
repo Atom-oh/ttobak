@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report on CrawlerSource rows missing OwnerID (ADR-026).
+"""Report on CrawlerSource rows missing OwnerID (ADR-004, relevance and curation).
 
 DELETE /api/insights/{sourceId}/{docHash} authorizes on source.OwnerID,
 which is only set by AddSource's new-source branch -- any CrawlerSource
