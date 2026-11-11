@@ -230,8 +230,12 @@ function performanceSource(source: string): string {
 
 // Period keys of `/api/performance/reports/{periodKey}`; the server checks bounds.
 const PERFORMANCE_REPORT_KEY = /^(W\d{4}-\d{2}|Q\d{4}-[1-4]|Y\d{4}|C\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2})$/;
-/** A stored report is at most 256 KiB; the response adds only JSON framing. */
-const MAX_PERFORMANCE_REPORT_BYTES = 300_000;
+/**
+ * A stored report is at most 256 KiB measured without HTML escaping, but the
+ * GET handler's json.Marshal escapes `&`, `<` and `>` as six-byte `\u00XX`
+ * sequences, so the wire form can be up to six times larger.
+ */
+const MAX_PERFORMANCE_REPORT_BYTES = 6 * 262_144 + 4_096;
 
 function performanceReportKey(key: string): string {
   if (!PERFORMANCE_REPORT_KEY.test(key)) throw new Error('performance report period key is invalid');
