@@ -61,7 +61,7 @@ export function useWorkspaceAccounts(userId: string) {
 // The panel stays mounted while collapsed (CSS-hidden), so expanding or resizing
 // never refetches, and a ?task= highlight link opens it. The sticky height
 // subtracts the 4rem DesktopHeader above AppLayout's scroll area plus margins.
-function MeetingsUpcoming() {
+function MeetingsUpcoming({ accounts }: { accounts: AccountSummary[] }) {
   const highlight = parseTaskHighlight(useSearchParams().get('task'));
   const [expanded, setExpanded] = useState(Boolean(highlight));
   const [seenHighlight, setSeenHighlight] = useState(highlight);
@@ -81,7 +81,7 @@ function MeetingsUpcoming() {
         <span className="material-symbols-outlined text-lg text-text-secondary" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
       </button>
       <div id={panelId} className={expanded ? 'mt-3 xl:mt-0' : 'hidden xl:block'}>
-        <PrivateUpcomingMeetings highlight={highlight} />
+        <PrivateUpcomingMeetings highlight={highlight} accounts={accounts} />
       </div>
     </aside>
   );
@@ -225,7 +225,7 @@ function MeetingsContent({ userId }: { userId: string }) {
               </div>
             )}
           </div>
-          <Suspense fallback={<SkeletonCard />}><MeetingsUpcoming /></Suspense>
+          <Suspense fallback={<SkeletonCard />}><MeetingsUpcoming accounts={accountList.accounts} /></Suspense>
         </div>
       </div>
     </AppLayout>

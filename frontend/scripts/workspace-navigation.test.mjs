@@ -189,6 +189,8 @@ function workspace(entry, options = {}) {
         confirm: options.confirm ?? (() => true),
         get location() { return url; },
         history: { replaceState: (_state, _title, href) => { url = new URL(href, url); } },
+        // Pagination fixtures read internal events, so the internal group is expanded.
+        localStorage: { getItem: key => key === 'ttobak-calendar-internal-collapsed' ? 'expanded' : null, setItem() {} },
       },
       require: name => load(name.startsWith('.') ? posix.join(posix.dirname(path), name) : name),
     });

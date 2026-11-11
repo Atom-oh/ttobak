@@ -29,6 +29,8 @@ import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
 import { SAPreparation } from '@/components/record/SAPreparation';
 import { RecordingLinkControls } from '@/components/record/RecordingLinkControls';
+import { AutoLinkChip } from '@/components/record/AutoLinkChip';
+import { useCalendarAutoLink } from '@/hooks/useCalendarAutoLink';
 import { PreparationReferences } from '@/components/record/PreparationReferences';
 import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown, type MeetingReference, type QAReferenceEvidence, type QuestionDraft, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
@@ -281,6 +283,34 @@ function RecordPageInner() {
 
   const serverMeetingId = postRecording.serverMeetingId;
   useEffect(() => { serverMeetingIdRef.current = serverMeetingId; }, [serverMeetingId]);
+
+  // Calendar auto-link (owner request 2026-11-11): an empty Account nobody
+  // chose is filled from the ongoing calendar event, on mount and again at
+  // recording start. URL, MCP and user choices are never overwritten.
+  const autoLinkRecordingRef = useRef(false);
+  useEffect(() => { if (postRecording.step !== null) autoLinkRecordingRef.current = false; }, [postRecording.step]);
+  const { changeRecordingAccount } = postRecording;
+  const calendarLink = useCalendarAutoLink({
+    userId: user?.userId,
+    accountId: referenceAccountId,
+    setAccountId: setReferenceAccountId,
+    setTitle: setMeetingTitle,
+    recordingAccountId: postRecording.recordingLinks.accountId,
+    isRecordingActive: () => autoLinkRecordingRef.current,
+    applyToRecording: (id) => { void changeRecordingAccount(id); },
+    initialSource: searchParams.get('accountId') ? 'url' : 'none',
+    enabled: !isUploadMode,
+  });
+  const { markSource: markAccountSource } = calendarLink;
+  const chooseReferenceAccount = useCallback((id: string) => {
+    markAccountSource('user');
+    setReferenceAccountId(id);
+  }, [markAccountSource]);
+  const autoLinkChip = calendarLink.autoLink && (calendarLink.autoLink.accountId === referenceAccountId
+    || calendarLink.autoLink.accountId === postRecording.recordingLinks.accountId)
+    // A draft already bound to it can only switch Accounts in RecordingLinkControls.
+    ? <AutoLinkChip name={calendarLink.autoLink.name}
+      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId ? undefined : calendarLink.dismiss} /> : null;
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
   const persistRecordingNotes = postRecording.persistNotes;
@@ -667,7 +697,10 @@ function RecordPageInner() {
         };
         setMeetingTitle(title);
         setAudioSource('system');
-        if (request.params.accountId) setReferenceAccountId(request.params.accountId);
+        if (request.params.accountId) {
+          markAccountSource('mcp');
+          setReferenceAccountId(request.params.accountId);
+        }
         setControlTick((n) => n + 1);
         return;
       }
@@ -693,7 +726,7 @@ function RecordPageInner() {
       controlStopRef.current = { requestId: request.requestId, upload: request.params.upload !== false };
       void recordButtonRef.current?.stopExternal();
     });
-  }, [finishControlStart]); // The handler reads refs; it registers once.
+  }, [finishControlStart, markAccountSource]); // The handler reads refs; it registers once.
 
   useEffect(() => {
     const pending = controlStartRef.current;
@@ -917,8 +950,11 @@ function RecordPageInner() {
     // start a competing draft in this window (the mirror of the guard the
     // card's handlers hold against RecordButton).
     setFlowBusy(true);
+    autoLinkRecordingRef.current = true;
     try {
-      await postRecording.createDraftMeeting();
+      const draft = postRecording.createDraftMeeting();
+      calendarLink.check();
+      await draft;
     } finally {
       setFlowBusy(false);
     }
@@ -1433,13 +1469,14 @@ function RecordPageInner() {
               isRecording={session.isRecording}
             />
             <div className="mt-3 w-full max-w-3xl">
+              {autoLinkChip && <div className="mb-2 flex">{autoLinkChip}</div>}
               <SAPreparation value={contextText} onChange={setContextText} title={meetingTitle} onTitleChange={setMeetingTitle}
-                accountId={referenceAccountId} onAccountChange={setReferenceAccountId}
+                accountId={referenceAccountId} onAccountChange={chooseReferenceAccount}
                 initialDocumentId={searchParams.get('prepDocId') || undefined} disabled={meetingFlowBusy} />
               <PreparationReferences>
                 <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
                   qaPanel={<LiveQAPanel transcriptContext={qaContext} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
-                  referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={setReferenceAccountId} transcriptTail={contextText}
+                  referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={chooseReferenceAccount} transcriptTail={contextText}
                     onAddReference={handleAddReference} onPrepareQuestion={handlePrepareQuestion} />} />
               </PreparationReferences>
             </div>
@@ -1468,6 +1505,9 @@ function RecordPageInner() {
         {/* Customer/project links stay editable after recording starts
             (browser and native modes). Separate from ReferencePanel's
             account, which only browses references. */}
+        {(session.isRecording || isNativeRecording) && !postRecording.step && autoLinkChip && (
+          <div className="mb-2 flex justify-center">{autoLinkChip}</div>
+        )}
         {(session.isRecording || isNativeRecording) && !postRecording.step && (
           <RecordingLinkControls
             accountId={postRecording.recordingLinks.accountId}
@@ -1476,7 +1516,7 @@ function RecordPageInner() {
             linkedProjectIds={postRecording.recordingLinks.linkedProjectIds}
             meetingReady={!!postRecording.serverMeetingId}
             error={postRecording.linkError}
-            onAccountChange={(id) => { void postRecording.changeRecordingAccount(id); }}
+            onAccountChange={(id) => { markAccountSource('user'); void postRecording.changeRecordingAccount(id); }}
             onProjectsChange={(ids) => { void postRecording.changeRecordingProjects(ids); }}
           />
         )}
@@ -1922,7 +1962,7 @@ function RecordPageInner() {
             referencePanel={
               <ReferencePanel
                 accountId={referenceAccountId}
-                onAccountChange={setReferenceAccountId}
+                onAccountChange={chooseReferenceAccount}
                 transcriptTail={session.transcriptContext}
                 onAddReference={handleAddReference}
                 onPrepareQuestion={handlePrepareQuestion}
@@ -1995,7 +2035,7 @@ function RecordPageInner() {
                 referencePanel={
                   <ReferencePanel
                     accountId={referenceAccountId}
-                    onAccountChange={setReferenceAccountId}
+                    onAccountChange={chooseReferenceAccount}
                     transcriptTail={session.transcriptContext}
                 onAddReference={handleAddReference}
                 onPrepareQuestion={handlePrepareQuestion}
