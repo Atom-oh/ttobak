@@ -42,9 +42,11 @@ MAX_VERBATIM_RUN_CHARS = 200
 RELEVANCE_THRESHOLD = 0.75
 _NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:[,.]\d+)*(?:%|퍼센트)?")
 # A Korean briefing restates English figures with Korean units: "236.8 billion
-# won" as 2,368 eok, "10 million" as 1,000 man, "July" as month 7, "six" as 6
-# with a counter. Such a fact number is grounded only when its exact scaled
-# value appears in the cited excerpt; the raw-digit match above remains sufficient.
+# won" as 2,368 eok, "10 million" as 1,000 man, "July" as month 7. Such a fact
+# number is grounded only when its exact scaled value appears in the cited
+# excerpt; the raw-digit match above remains sufficient. English number words
+# ("six", "twenty-six") never ground a digit: compounds and fractions made every
+# word-matching rule accept counts the source does not state.
 # Same digit span and boundary as _NUMBER, so every token the base gate checks
 # is still checked: "2026.11.11" stays one token and ".5%" yields "5%".
 _SCALED_NUMBER = re.compile(
@@ -63,17 +65,6 @@ _MONTH = re.compile(r"(?<![A-Za-z])(" + "|".join(
     _MONTH_NAMES + ("Sept", "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep",
                     "Oct", "Nov", "Dec")) + r")\.?(?![A-Za-z])")
 _MONTHS = {name[:3].lower(): index for index, name in enumerate(_MONTH_NAMES, 1)}
-# "one" is excluded: "one of the banks" is not a count.
-_WORD_NUMBERS = {name: index for index, name in enumerate(
-    ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-     "eleven", "twelve"), 2)}
-# A word inside a compound ("twenty-six", "twenty six", "six hundred") is not
-# that small number.
-_WORD_NUMBER = re.compile(
-    r"(?<![A-Za-z-])(?<!ty )(?<!red )(?<!and )(" + "|".join(_WORD_NUMBERS)
-    + r")(?![A-Za-z-])(?!\s+(?:hundred|thousand|million|billion|trillion|dozen)(?![A-Za-z]))",
-    re.IGNORECASE)
-
 
 def _number_tokens(text):
     """Yield (raw, key) for each _NUMBER token: raw is the base gate's
@@ -107,8 +98,6 @@ def _unsupported_numbers(fact, cited):
     raw = {n.replace(",", "") for n in _NUMBER.findall(cited)}
     keys = {key for _, key in _number_tokens(cited) if key is not None}
     keys.update(("month", Decimal(_MONTHS[m.group(1)[:3].lower()])) for m in _MONTH.finditer(cited))
-    keys.update(("value", Decimal(_WORD_NUMBERS[m.group(1).lower()]))
-                for m in _WORD_NUMBER.finditer(cited))
     return [token for token, key in _number_tokens(fact)
             if token not in raw and (key is None or key not in keys)]
 
@@ -368,7 +357,8 @@ an exact substring from that same URL's body in its original language (never
 translate or reformat it): one sentence or clause of at most 240 characters; total
 excerpts at most 1000 characters. Numbers in facts must appear in their cited
 excerpts: copy each number as written there, or convert units exactly (236.8 billion
-= 2,368억, 10 million = 1,000만, July = 7월); never round or estimate.
+= 2,368억, 10 million = 1,000만, July = 7월); never round or estimate. Do not turn
+a number written in words into digits; keep it in words or leave it out.
 Use at least two questions/actions in total. Paraphrase prose; do not copy long
 passages. If requireRelevance=true, assess whether the configured organization/topic
 is the article's subject, not a namesake or passing mention. Do not invent AWS relevance.

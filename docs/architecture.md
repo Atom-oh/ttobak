@@ -256,10 +256,9 @@ then pins through commit.
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts
 retain token accounting. A fact number must appear in its cited excerpt either as
-written or as the exact same value with Korean units, a month number or a small
-English number word (`236.8 billion` restated as 2,368 eok; consecutive Korean units
-multiply, and words inside English compounds such as `twenty-six` do not count);
-worker results list only the
+written or as the exact same value with Korean units or a month number
+(`236.8 billion` restated as 2,368 eok; consecutive Korean units multiply). English
+number words never ground digits; worker results list only the
 validator locations of a rejection. One repair may reuse the complete original sources.
 An explicit negative or valid below-threshold relevance verdict ends the attempt even
 if other fields are malformed; the relevance gate requires a boolean.
