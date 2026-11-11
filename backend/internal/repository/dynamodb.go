@@ -3718,8 +3718,9 @@ func (r *DynamoDBRepository) DetachDeletedUserProfile(ctx context.Context, userI
 
 // UpdateUserProfileName sets the display name copied onto USER#{id}/PROFILE.
 // The row is created by GetOrCreateUser on first sign-in; when it does not
-// exist yet there is nothing to sync (the next creation reads the fresh
-// Cognito name from the ID token), so a failed existence check is not an error.
+// exist yet there is nothing to sync, so a failed existence check is not an
+// error. Creation copies the name from the caller's ID token, so a token issued
+// before the rename can still seed the old name; a second rename corrects it.
 func (r *DynamoDBRepository) UpdateUserProfileName(ctx context.Context, userID, name string) error {
 	expr, err := expression.NewBuilder().
 		WithUpdate(expression.Set(expression.Name("name"), expression.Value(name))).
