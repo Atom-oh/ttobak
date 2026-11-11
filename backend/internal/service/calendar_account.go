@@ -57,7 +57,6 @@ func (svc *CalendarService) ListAccountCalendar(ctx context.Context, userID, acc
 	}
 	page := &model.AccountCalendarPage{Events: make([]model.AccountCalendarEvent, 0, len(rows.Groups)), NextCursor: rows.NextCursor}
 	var groupOf []int
-	attempted, decrypted := 0, 0
 	for groupIndex, group := range rows.Groups {
 		var shared []repository.CalendarShareRow
 		vetoed := false
@@ -88,22 +87,19 @@ func (svc *CalendarService) ListAccountCalendar(ctx context.Context, userID, acc
 			}
 			sharedByMe = sharedByMe || row.UserID == userID
 			if event == nil {
-				attempted++
 				if decoded, ok := svc.decryptCalendarShare(ctx, accountID, row); ok {
-					decrypted++
 					event = &decoded
 				}
 			}
 		}
+		// An eligible meeting with no decryptable row (a KMS failure or a bad
+		// ciphertext) fails the page closed instead of being skipped silently.
 		if event == nil {
-			continue
+			return nil, ErrCalendarEncryption
 		}
 		event.SharedBy, event.SharedByMe = sharedBy, sharedByMe
 		page.Events = append(page.Events, *event)
 		groupOf = append(groupOf, groupIndex)
-	}
-	if attempted > 0 && decrypted == 0 {
-		return nil, ErrCalendarEncryption
 	}
 	for !calendarResultFits(page) {
 		retained := len(page.Events) - 1
