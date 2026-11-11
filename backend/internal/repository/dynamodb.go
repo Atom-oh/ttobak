@@ -3716,6 +3716,40 @@ func (r *DynamoDBRepository) DetachDeletedUserProfile(ctx context.Context, userI
 	return nil
 }
 
+// UpdateUserProfileName sets the display name copied onto USER#{id}/PROFILE.
+// The row is created by GetOrCreateUser on first sign-in; when it does not
+// exist yet there is nothing to sync (the next creation reads the fresh
+// Cognito name from the ID token), so a failed existence check is not an error.
+func (r *DynamoDBRepository) UpdateUserProfileName(ctx context.Context, userID, name string) error {
+	expr, err := expression.NewBuilder().
+		WithUpdate(expression.Set(expression.Name("name"), expression.Value(name))).
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixProfile},
+		},
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       expr.Condition(),
+	})
+	if err != nil {
+		var cce *types.ConditionalCheckFailedException
+		if errors.As(err, &cce) {
+			return nil
+		}
+		return fmt.Errorf("failed to update user profile name: %w", err)
+	}
+	return nil
+}
+
 // GetIntegration retrieves an integration by userID and service
 func (r *DynamoDBRepository) GetIntegration(ctx context.Context, userID, service string) (*model.Integration, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
