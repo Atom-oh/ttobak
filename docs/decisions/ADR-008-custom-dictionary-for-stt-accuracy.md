@@ -282,7 +282,7 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   reports `NONE`.
 - **Table.** Active phrase terms, manual first, then hits, then oldest, deduped
   by phrase; `vocab/{InactiveName}.{fingerprint}.tsv` (a stale submitter
-  writes its own key, never a different table; unlike ADR-037 keys it is not
+  writes its own key, never a different table; unlike ADR-013 keys it is not
   attempt-unique, so retries of one table share it) with header
   `Phrase\tSoundsLike\tIPA\tDisplayAs`, four fields per row, at most 1,500 rows
   and 48 KB; invalid rows are dropped individually. The phrase validator is

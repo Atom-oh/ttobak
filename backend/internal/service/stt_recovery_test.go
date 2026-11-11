@@ -53,7 +53,7 @@ func TestClassifySttRecovery(t *testing.T) {
 		{"audio crop", sttRow(func(r *model.SttRecoveryRow) { r.AudioCrop = map[string]interface{}{"status": "queued"} }), sttFacts(), SttRecoverySkip, "audio_crop", 0},
 		{"summary retry claim", sttRow(func(r *model.SttRecoveryRow) { r.SummarizeRetryClaimedAt = "x" }), sttFacts(), SttRecoverySkip, "summary_state", 0},
 		{"summary retry pending", sttRow(func(r *model.SttRecoveryRow) { r.SummaryRetryPending = true }), sttFacts(), SttRecoverySkip, "summary_state", 0},
-		{"retry exhausted ADR-040 state", sttRow(func(r *model.SttRecoveryRow) { r.Status, r.SummaryConflictCode = model.StatusError, "RETRY_EXHAUSTED" }), sttFacts(), SttRecoverySkip, "summary_state", 0},
+		{"retry exhausted ADR-013 state", sttRow(func(r *model.SttRecoveryRow) { r.Status, r.SummaryConflictCode = model.StatusError, "RETRY_EXHAUSTED" }), sttFacts(), SttRecoverySkip, "summary_state", 0},
 		{"current AUDIO_CORRUPT mark", sttRow(markCurrent(model.SttFailureAudioCorrupt)), sttFacts(), SttRecoveryTerminal, "audio_corrupt", 0},
 		{"current NO_SPEECH mark", sttRow(markCurrent(model.SttFailureNoSpeech)), sttFacts(), SttRecoveryTerminal, "no_speech", 0},
 		{"current RECOVERY_EXHAUSTED mark", sttRow(markCurrent(model.SttFailureRecoveryExhausted)), sttFacts(), SttRecoveryTerminal, "recovery_exhausted", 0},
