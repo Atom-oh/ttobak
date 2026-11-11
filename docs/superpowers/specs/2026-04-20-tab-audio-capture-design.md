@@ -43,9 +43,9 @@ verify, not an unconditional browser guarantee.
 mic/tab/native branches. Its tab branch does not mix a second microphone stream;
 it stops video tracks, checks for audio, and handles track termination.
 [device.ts](../../../frontend/src/lib/device.ts) supplies capability detection.
-[ADR-006](../../decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md) and
-[ADR-024](../../decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md)
-cover the native alternative; [ADR-030](../../decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md)
+[ADR-006](../../decisions/ADR-006-browser-and-mobile-recording.md) and
+[ADR-024](../../decisions/ADR-024-mac-native-capture-and-upload.md)
+cover the native alternative; [ADR-006](../../decisions/ADR-006-browser-and-mobile-recording.md)
 protects recording when live captions fail. This historical record does not prove
 any browser/device combination was tested today.
 

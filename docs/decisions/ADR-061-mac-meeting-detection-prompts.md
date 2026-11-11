@@ -3,7 +3,7 @@
 - Status: Accepted for implementation; detection needs macOS verification with
   real Zoom, Teams and browser meetings.
 - Decision date: 2026-11-06.
-- Builds on: ADR-046 (Core Audio capture and the local control path).
+- Builds on: ADR-024 (Core Audio capture and the local control path).
 
 ## Context
 
@@ -76,7 +76,7 @@ without a user confirmation.
   It closes after 30 s unanswered, on an answer in the banner, or at the end.
   An end still posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same
-  `native-control-request` path as ADR-046, so busy and sign-in checks are
+  `native-control-request` path as ADR-024, so busy and sign-in checks are
   unchanged. Detection starts do not post the MCP "started" notification.
 - Detection is on by default and toggled in Settings; the preference is stored
   in the app config directory.

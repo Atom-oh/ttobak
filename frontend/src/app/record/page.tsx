@@ -81,7 +81,7 @@ function RecordPageInner() {
   // fallback at all -- see SttManager.fallbackToWebSpeech), so this
   // default only changes behavior once config IS available. Web Speech's
   // independent mic capture can end the recording's mic track on mobile,
-  // so it should never be the default anywhere (ADR-030).
+  // so it should never be the default anywhere (ADR-006).
   const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('transcribe-streaming');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   // Mac app capture notes (silent source, no microphone); reset per recording.
@@ -242,7 +242,7 @@ function RecordPageInner() {
     // mobile, where the fallback branch also calls this to keep the
     // LiveSttSelector's "active" badge honest, it would poison
     // SttManager's own preferredProvider tracking and permanently block
-    // retryWithConfig's promotion (see sttManager.ts, ADR-030). The
+    // retryWithConfig's promotion (see sttManager.ts, ADR-006). The
     // "active" badge already reads session.activeProvider, which
     // useRecordingSession updates from this same signal internally --
     // this prop has no other consumer, so it's simply omitted.
@@ -606,7 +606,7 @@ function RecordPageInner() {
     };
   }, []);
 
-  // --- Mac app local control (MCP over the app's socket; ADR-046) ---------
+  // --- Mac app local control (MCP over the app's socket; ADR-024) ---------
   // A start sets title/source/account first, then fires once that state has
   // rendered into RecordButton (controlTick); success is the native capture
   // actually starting (onPermissionGranted), failure is onError. There is no
