@@ -105,7 +105,7 @@ configuration.
   attendee list means no task.
 - Codex TOML is read by a bounded in-repo parser (`toml.ts`); no new dependency.
 - The Mac Settings UI and app-managed schedule are Phase 2.
-- Phase 2: the Mac app owns the schedule (launch and wake catch-up, one try per
-  slot) and runs the CLI itself; the LaunchAgent stays optional, and one CLI run
+- Phase 2: the Mac app owns the schedule (launch and wake catch-up, at most two
+  attempts per slot) and runs the CLI itself; the LaunchAgent stays optional, and one CLI run
   lock covers both. The app spawns node with argv only and a cleared environment
   (`HOME`, `LANG`, `PATH` from a one-time login-shell probe).
