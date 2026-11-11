@@ -163,7 +163,7 @@ limit instead of claiming a Mac build passed.
 - **Accounts:** members add/change non-owner roles (ADR-015). Creation permits
   another Owner and optional creator AM (ADR-015). Removal/revocation/reparenting
   are owner-only; Owner changes only via owner transfer (ADR-015). Ancestor reads
-  permit Billing (ADR-015/060); filters classify (ADR-015); members manage
+  permit Billing (ADR-015/012); filters classify (ADR-015); members manage
   published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
@@ -306,7 +306,7 @@ exposure:
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
 | Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
-| Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-056; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
+| Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-012; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
 
 JWT verification and document file-key ownership checks exist:
 inspect `ParseVerifiedJWT` and `validateFileKeyOwnership` before reporting a bypass.

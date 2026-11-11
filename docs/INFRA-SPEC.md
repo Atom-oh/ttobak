@@ -917,7 +917,7 @@ Resources:
     `PK` / `SK`, discovers `CHILDREF#` candidates. IAM cannot constrain the sort-key
     prefix; the application's bounded query selects it and canonical reads grant
     access. The limited ability to enumerate opaque membership keys is recorded in
-    ADR-060. Inherited grants receive a `TransactGetItems` confirmation using the
+    ADR-012. Inherited grants receive a `TransactGetItems` confirmation using the
     existing projected `GetItem` permissions.
 - Dedicated code bucket: versioned, SSE-S3, TLS-only, all public access
   blocked, retained on delete, no lifecycle rule.
@@ -1006,7 +1006,7 @@ from the companion stack is a one-time cutover ([Billing release](runbooks/billi
 
 ### Billing behaviors on the TTOBAK distribution
 
-FrontendStack gains the Billing behaviors (ADR-056) only through context
+FrontendStack gains the Billing behaviors (ADR-012) only through context
 strings, never stack exports, so the HTTP-origin release coordinator deploys it
 the same way with or without Billing:
 

@@ -341,7 +341,7 @@ Activated ancestor access displays a read-only label and its granting Account
 controls (not delete or audio upload) to every member (ADR-016 2026-11-06
 amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
-membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
+membership. Billing is the ADR-012 exception: the BFF's authorized entries allow
 direct and ancestor team members to view and upload. Its COT selector describes
 the required Current State/COH workbooks and COT360 HTML, supporting both three-
 and five-file ZIPs. Preserve independently granted editing controls. Account discovery

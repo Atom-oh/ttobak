@@ -297,7 +297,7 @@ production artifact and deployment receipts are separate evidence.
 
 ## Descendant Account read sharing
 
-[ADR-060](ADR-060-billing-shared-team-access.md) supersedes only the Billing exclusion: shared ancestor teams may act on descendant Billing. Other inherited mutation restrictions remain.
+[ADR-012](ADR-012-billing-origin-identity-and-team-access.md) supersedes only the Billing exclusion: shared ancestor teams may act on descendant Billing. Other inherited mutation restrictions remain.
 
 - Status: Accepted on 2026-10-29 following explicit user authorization.
 - Amended 2026-11-06 by the ADR-016 amendments (explicit user authorization):
