@@ -29132,34 +29132,34 @@ var init_tasks = __esm({
           this.fallbackLogin = recorded?.login ?? "";
           throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
         }
-        let login2;
+        let login3;
         try {
-          login2 = await resolveMe(session);
+          login3 = await resolveMe(session);
         } catch (error3) {
           this.fallbackLogin = recorded?.login ?? "";
           throw error3;
         }
-        if (recorded && recorded.login !== login2) {
+        if (recorded && recorded.login !== login3) {
           throw new IntakeError("IDENTITY_MISMATCH", "the SpecReq login differs from the one recorded for this TTOBAK account");
         }
         if (!recorded) store.write(
-          { version: 1, login: login2, recordedAt: now.toISOString() },
+          { version: 1, login: login3, recordedAt: now.toISOString() },
           ...seenPath(scope, "identity.json")
         );
-        this.myLogin = login2;
+        this.myLogin = login3;
       }
       amazonLogin() {
         return this.myLogin || this.fallbackLogin || alias(this.options.me.email) || "";
       }
       /** Every address I may attend with, lowercased and deduplicated. */
       myEmails() {
-        const login2 = this.amazonLogin();
-        return [...new Set([this.options.me.email.trim().toLowerCase(), ...login2 ? [`${login2}@amazon.com`] : []].filter(Boolean))];
+        const login3 = this.amazonLogin();
+        return [...new Set([this.options.me.email.trim().toLowerCase(), ...login3 ? [`${login3}@amazon.com`] : []].filter(Boolean))];
       }
       /** The address the meetings provider expects; the TTOBAK email only when no Amazon login is known. */
       meetingsEmail() {
-        const login2 = this.amazonLogin();
-        return login2 ? `${login2}@amazon.com` : this.options.me.email;
+        const login3 = this.amazonLogin();
+        return login3 ? `${login3}@amazon.com` : this.options.me.email;
       }
       /** Records this sync's new occurrences first, so a failed step retries them next run. */
       register() {
@@ -30158,6 +30158,34 @@ async function signIn(selection, environment, dryRun, noninteractive) {
   }
   return { api, scope, me };
 }
+async function login2(environment, store) {
+  const selection = store.read("selection.json");
+  const config2 = ttobakConfig(selection, environment.env);
+  const auth = environment.authFactory?.(config2, { interactive: true }) ?? new CognitoAuth2(config2, { interactive: true });
+  let idToken;
+  try {
+    idToken = await auth.getIdToken();
+  } catch (error3) {
+    const message = error3 instanceof Error ? error3.message : "";
+    if (message.startsWith("TTOBAK_LOGIN_REQUIRED")) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    throw error3;
+  }
+  return { email: tokenEmail(idToken) };
+}
+async function withRunLock(store, body) {
+  let release;
+  try {
+    release = store.lock("run");
+  } catch (error3) {
+    if (error3 instanceof IntakeError && error3.code === "LOCKED") throw new IntakeError("RUN_IN_PROGRESS");
+    throw error3;
+  }
+  try {
+    return await body();
+  } finally {
+    release();
+  }
+}
 async function openTaskSessions(environment, selection) {
   const sessions = {};
   const unavailable = {};
@@ -30417,12 +30445,15 @@ async function runIntake(args, environment) {
     if (command === "hosts" && rest.length === 0) {
       output = { ok: true, hosts: listHosts(environment.home, parsePathList(environment.env.PATH)) };
     } else if (command === "select") output = await select(rest, environment, store);
-    else if (command === "calendar") output = await calendar(rest, environment, store);
-    else if (command === "sfdc") output = await sfdc(rest, environment, store);
-    else if (command === "schedule" && rest.length === 1) {
+    else if (command === "calendar") output = await withRunLock(store, () => calendar(rest, environment, store));
+    else if (command === "sfdc") output = await withRunLock(store, () => sfdc(rest, environment, store));
+    else if (command === "login" && rest.length === 0) {
+      const { email: email3 } = await login2(environment, store);
+      output = { ok: true, email: email3 };
+    } else if (command === "schedule" && rest.length === 1) {
       output = { ok: true, schedule: await installSchedule(parseSchedule(rest[0]), environment) };
     } else if (command === "run" || command === "setup") {
-      const result = command === "run" ? await run(rest, environment, store) : await (await Promise.resolve().then(() => (init_setup(), setup_exports))).setup(rest, environment, store);
+      const result = await withRunLock(store, async () => command === "run" ? await run(rest, environment, store) : await (await Promise.resolve().then(() => (init_setup(), setup_exports))).setup(rest, environment, store));
       environment.stdout(JSON.stringify(result));
       return result.ok ? 0 : 2;
     } else if (command === "status" && rest.length === 0) {
@@ -30501,6 +30532,7 @@ var init_run = __esm({
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
+  ttobak-mcp intake login
   ttobak-mcp intake status`;
     SYNC_CONNECTORS = ["calendar", "sfdc"];
   }

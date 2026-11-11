@@ -21,6 +21,7 @@ intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
 intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
 intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
+intake login
 ```
 
 `intake setup`:
@@ -81,8 +82,15 @@ never opens a browser; the LaunchAgent uses it.
 | `intake calendar [--noninteractive] [--reconcile]` | Syncs. `--noninteractive` fails with `TTOBAK_LOGIN_REQUIRED` instead of opening a browser. `--reconcile` adopts the server revision after a 409. |
 | `intake select meetings\|specreq\|slack --host <claude\|codex\|kiro> --server <name>` | Starts that server once and checks every allowlisted tool schema. It stores only the reference and `PATH` directories; TTOBAK endpoints still come from the calendar selection or `TTOBAK_*` env. |
 | `intake select specreq ... --auto-ack on\|off` | `on` (default) lets the runner acknowledge an eligible assignment; `off` queues an `ack_needed` notice instead. |
+| `intake login` | Interactive Cognito sign-in (a browser may open; use it only from an explicit user action). Prints `{ok:true,email}`; exits 2 with `{ok:false,code}` on failure. It does not take the run lock. |
 | `intake status` | Shows the selection (names only) and the last calendar and task results and counts. |
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
+
+`run`, `setup`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
+(`<pid> <random token>`, the same `IntakeStore.lock` as the per-connector locks).
+A second concurrent run exits 2 with `RUN_IN_PROGRESS` and touches no state; a lock
+whose process is gone is reclaimed under a serializing `run.lock.break` lock. `status`, `hosts`,
+`schedule`, `login` and `select` do not take it.
 
 The window is the past 7 days through the next 30 days in the Mac's time zone,
 read as 7-day `calendar_view` requests.

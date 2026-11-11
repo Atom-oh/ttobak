@@ -491,3 +491,26 @@ test('setup exits 2 when the first sync fails and keeps the selections; --nonint
   assert.equal(await runIntake(['setup', '--yes'], interactive.env), 2);
   assert.deepEqual(modes, [false, true]);
 });
+
+function idTokenFor(email) {
+  const part = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${part({ alg: 'none' })}.${part({ sub: 'u-me', email })}.sig`;
+}
+
+test('login_prints_email', async t => {
+  const home = tempHome(t);
+  const seen = [];
+  const context = environment(home, { auth: options => { seen.push(options); return { getIdToken: async () => idTokenFor('Me@Example.Invalid') }; } });
+  assert.equal(await runIntake(['login'], context.env), 0);
+  assert.deepEqual(context.last(), { ok: true, email: 'me@example.invalid' });
+  assert.deepEqual(seen, [{ interactive: true }], 'an explicit login may open a browser');
+});
+
+test('login_failure_exits_2_with_code', async t => {
+  const home = tempHome(t);
+  const context = environment(home, { auth: () => ({ getIdToken: async () => { throw new Error('TTOBAK_LOGIN_REQUIRED: x'); } }) });
+  assert.equal(await runIntake(['login'], context.env), 2);
+  const out = context.last();
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 'TTOBAK_LOGIN_REQUIRED');
+});
