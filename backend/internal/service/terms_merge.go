@@ -23,7 +23,7 @@ import (
 const (
 	// MaxAutoTermsPerScope caps unedited automatic (active or suggested)
 	// terms; the lowest-scoring are evicted after a merge.
-	MaxAutoTermsPerScope = 300
+	MaxAutoTermsPerScope = 1000
 	// MaxObservationsPerTerm keeps the newest observation rows of a term.
 	MaxObservationsPerTerm = 10
 	// termMergeAttempts bounds re-reads after a version conflict.
