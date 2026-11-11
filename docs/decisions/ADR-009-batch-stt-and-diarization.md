@@ -38,7 +38,9 @@
   the Dockerfile, and `verify_pins.py` gates the image on the same list. A
   security update may move a pin only after representative coverage and speaker
   benchmarks, changing both files together; a general dependency refresh does
-  not move them.
+  not move them. The pinned set is faster-whisper 1.2.1, ctranslate2 4.8.1,
+  onnxruntime 1.29.0, av 18.1.0, tokenizers 0.23.1, huggingface-hub 1.29.0,
+  pyannote.audio 4.0.7, torch and torchaudio 2.8.0+cu128 and torchcodec 0.7.0.
 - The image, not CDK, owns the diarization bundle key, so an image and a stack
   deployment cannot race on it. The deploy workflow strips a stray override.
 - Diarization is best effort: a missing bundle or a failure yields unlabeled
@@ -52,12 +54,15 @@
   `DiarizationSpeakerHint`, set by rediarization, overrides it when positive.
 - Segments take the speaker with the greatest time overlap; labels are
   normalized to `spk_N` in order of first appearance and namespaced by audio
-  part index when parts are merged.
+  part index when parts are merged. Renaming a speaker matches whole labels,
+  so `spk_1` never matches inside a namespaced label such as `spk_1000000`.
+- `whisper_metadata.duration_seconds` is the decoded audio length, not
+  processing time.
 - Acoustic labels are authoritative. The refinement model cleans text only:
   `remapPreservedSpeakers` recomputes labels by time overlap and
   `hasCrossSpeakerMerge` falls back when a merge crosses speakers.
 - Rediarization is available to the creator or a managing account member, for
-  idle, single-part Whisper meetings, with 2 to 20 speakers. It clears the
+  idle, single-part Whisper meetings that are not crops, with 2 to 20 speakers. It clears the
   speaker map, sets the hint and moves the meeting to `transcribing` in one
   conditional write before the audio copy, so the new run cannot read stale
   state.
@@ -70,13 +75,27 @@
 
 ## Limits and accepted risks
 
+- An instance type that an Availability Zone does not offer rejects the whole
+  mixed fleet request, and exhausted Spot pools surface as an empty capacity
+  provider. Recheck offerings before changing instance types or subnets.
+- Idling at zero does not remove every cost or delay: the scale-in delay, the
+  200 GiB volumes, the registry and networking remain, and each cold start
+  stages models again. The GPU machine image needs maintenance.
+- Recovery is not guaranteed. The scheduled tick re-drives single-file meetings
+  only, twice per audio key, and never while the cluster has running or pending
+  tasks; multi-part and checkpoint-only meetings need an operator or the owner.
+- A redeploy does not suspend AZRebalance again after someone resumed it by
+  hand; the STT runbook checks the suspended processes for that drift.
+- Deploy only the changed stacks, with `--exclusively` and in dependency order
+  (ADR-002).
 - On-Demand base capacity costs the normal rate while active and does not
   guarantee capacity. Both instance sizes have a single GPU; the larger adds
   host memory and CPU only.
 - Before a rollout, confirm that the diarization bundle exists in S3 and that
   the On-Demand G and VT instance quota is sufficient.
 - The bundle pre-check compares the bundle's generation name with the installed
-  pyannote major version. It does not verify content.
+  pyannote major version. On a mismatch in either direction it logs it and
+  skips diarization. It does not verify content.
 - Waveform preloading bypasses pyannote's own decoding path, and the pins
   freeze named packages, not transitive dependencies or the base image digest.
   Any dependency change needs a full audio regression.
