@@ -18,6 +18,8 @@ type accountNewsStub struct {
 	user, account, sourceID string
 	req                     *model.CreateAccountNewsSourceRequest
 	update                  *model.UpdateAccountNewsSourceRequest
+	cursor                  string
+	limit                   int
 }
 
 func (s *accountNewsStub) Create(_ context.Context, user, account string, req *model.CreateAccountNewsSourceRequest) (*model.CrawlerSource, error) {
@@ -47,9 +49,9 @@ func (s *accountNewsStub) Update(_ context.Context, user, account, sourceID stri
 	}
 	return &model.NewsSourceItem{SourceID: sourceID, Kind: model.NewsSourceKindAccount, AccountID: account, CanEdit: true}, nil
 }
-func (s *accountNewsStub) ListAll(_ context.Context, user string) (*model.NewsSourcesResponse, error) {
+func (s *accountNewsStub) ListAll(_ context.Context, user, cursor string, limit int) (*model.NewsSourcesResponse, error) {
 	s.calls++
-	s.user = user
+	s.user, s.cursor, s.limit = user, cursor, limit
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -95,6 +97,9 @@ func TestAccountNewsHTTPRoutesAndIdentity(t *testing.T) {
 		len(all.Sources) != 1 || !all.Sources[0].CanEdit || strings.Contains(w.Body.String(), "truncated") {
 		t.Fatalf("list all: %d %s", w.Code, w.Body.String())
 	}
+	if w := contactRequest(h, "GET", "/news-sources?limit=7&cursor=abc", ""); w.Code != 200 || s.cursor != "abc" || s.limit != 7 {
+		t.Fatalf("paging params: %d %q %d", w.Code, s.cursor, s.limit)
+	}
 }
 
 func TestAccountNewsHTTPRejectsMalformedInputBeforeTheService(t *testing.T) {
@@ -111,6 +116,10 @@ func TestAccountNewsHTTPRejectsMalformedInputBeforeTheService(t *testing.T) {
 		{"PUT", "/accounts/a/news-sources/s?x=1", `{"sourceName":"n"}`},
 		{"PUT", "/accounts/a/news-sources/s", `{"sourceName":"n"}{}`},
 		{"GET", "/news-sources?x=1", ""},
+		{"GET", "/news-sources?limit=0", ""},
+		{"GET", "/news-sources?limit=ten", ""},
+		{"GET", "/news-sources?limit=5&limit=6", ""},
+		{"GET", "/news-sources?cursor=a&cursor=b", ""},
 	} {
 		if w := contactRequest(h, tc[0], tc[1], tc[2]); w.Code != 400 {
 			t.Fatalf("%v: %d", tc, w.Code)

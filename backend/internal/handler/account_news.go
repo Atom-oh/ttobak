@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
@@ -18,7 +20,7 @@ type accountNewsAPI interface {
 	List(ctx context.Context, userID, accountID string) ([]model.CrawlerSource, error)
 	Delete(ctx context.Context, userID, accountID, sourceID string) error
 	Update(ctx context.Context, userID, accountID, sourceID string, req *model.UpdateAccountNewsSourceRequest) (*model.NewsSourceItem, error)
-	ListAll(ctx context.Context, userID string) (*model.NewsSourcesResponse, error)
+	ListAll(ctx context.Context, userID, cursor string, limit int) (*model.NewsSourcesResponse, error)
 }
 
 // AccountNewsHandler serves account-owned news sources (direct members only).
@@ -96,14 +98,31 @@ func (h *AccountNewsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListAll handles GET /api/news-sources: the caller's common and account sources.
+// ListAll handles GET /api/news-sources?limit=&cursor=: one page of the
+// caller's common and account sources. Other or repeated parameters, a
+// non-positive or non-numeric limit and a bad cursor are 400; limit is
+// capped by the service.
 func (h *AccountNewsHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if r.URL.RawQuery != "" {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
 		accountNewsError(w, service.ErrInvalidInput)
 		return
 	}
-	resp, err := h.service.ListAll(r.Context(), middleware.GetUserID(r.Context()))
+	limit := 0
+	for key, values := range query {
+		if (key != "limit" && key != "cursor") || len(values) != 1 {
+			accountNewsError(w, service.ErrInvalidInput)
+			return
+		}
+	}
+	if raw, ok := query["limit"]; ok {
+		if limit, err = strconv.Atoi(raw[0]); err != nil || limit < 1 {
+			accountNewsError(w, service.ErrInvalidInput)
+			return
+		}
+	}
+	resp, err := h.service.ListAll(r.Context(), middleware.GetUserID(r.Context()), query.Get("cursor"), limit)
 	if err != nil {
 		accountNewsError(w, err)
 		return

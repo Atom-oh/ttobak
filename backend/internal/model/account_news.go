@@ -68,13 +68,16 @@ type NewsSourceItem struct {
 	LastCrawledAt string   `json:"lastCrawledAt"`
 	DocumentCount int      `json:"documentCount"`
 	CanEdit       bool     `json:"canEdit"`
+	// ListsTruncated reports that a list or string was cut to item bounds.
+	ListsTruncated bool `json:"listsTruncated,omitempty"`
 }
 
-// NewsSourcesResponse lists the caller's news sources. Truncated reports that
-// a membership or subscription cap left some sources out.
+// NewsSourcesResponse is one page of the caller's news sources. Truncated
+// reports that a membership or subscription cap left sources out.
 type NewsSourcesResponse struct {
-	Sources   []NewsSourceItem `json:"sources"`
-	Truncated bool             `json:"truncated,omitempty"`
+	Sources    []NewsSourceItem `json:"sources"`
+	NextCursor string           `json:"nextCursor,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
 }
 
 // NewOpportunityScoreMin is the minimum QualityScore for a news row to count

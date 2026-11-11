@@ -534,6 +534,49 @@ func (r *CrawlerRepository) ListUserSubscriptions(ctx context.Context, userID st
 	return subs, nil
 }
 
+// ListUserSubscriptionsBounded reads the user's subscriptions across every
+// Query page until it holds limit+1 rows, and returns at most limit of them
+// (key order) with more=true when at least one further row exists.
+func (r *CrawlerRepository) ListUserSubscriptionsBounded(ctx context.Context, userID string, limit int) ([]model.CrawlerSubscription, bool, error) {
+	if limit < 1 {
+		return nil, false, fmt.Errorf("subscription limit must be positive")
+	}
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixCrawlSub))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to build expression: %w", err)
+	}
+	input := &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}
+	subs := []model.CrawlerSubscription{}
+	for {
+		input.Limit = aws.Int32(int32(limit + 1 - len(subs)))
+		result, err := r.client.Query(ctx, input)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to query subscriptions: %w", err)
+		}
+		var items []subscriptionItem
+		if err := attributevalue.UnmarshalListOfMaps(result.Items, &items); err != nil {
+			return nil, false, fmt.Errorf("failed to unmarshal subscriptions: %w", err)
+		}
+		for _, item := range items {
+			subs = append(subs, item.CrawlerSubscription)
+		}
+		if len(subs) > limit {
+			return subs[:limit], true, nil
+		}
+		if len(result.LastEvaluatedKey) == 0 {
+			return subs, false, nil
+		}
+		input.ExclusiveStartKey = result.LastEvaluatedKey
+	}
+}
+
 // ErrInvalidDocument identifies unreadable stored metadata, separately from an
 // AWS read failure. Consumers can make only this document unavailable.
 var ErrInvalidDocument = errors.New("invalid crawler document metadata")
