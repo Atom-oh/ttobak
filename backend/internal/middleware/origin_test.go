@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -216,5 +217,36 @@ func TestOriginDiagnosticsContainOnlyFixedFailureCategories(t *testing.T) {
 				t.Fatal("diagnostic category missing or value leaked")
 			}
 		})
+	}
+}
+
+// A pooled connection reused after a Lambda freeze can already be closed by
+// Secrets Manager; the no-retry lookup must open a fresh connection instead.
+func TestOriginSecretHTTPClientOpensFreshConnectionPerLookup(t *testing.T) {
+	var connections int
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections++
+		}
+	}
+	server.Start()
+	defer server.Close()
+	client := OriginSecretHTTPClient()
+	for range 2 {
+		request, err := http.NewRequest("GET", server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+	}
+	if connections != 2 {
+		t.Fatalf("origin lookups reused a pooled connection: %d connections for 2 lookups", connections)
 	}
 }
