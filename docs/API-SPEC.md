@@ -2097,8 +2097,8 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   Every edit sets `userEditedAt`, blocking automatic writes; `origin` is kept.
 - `DELETE .../terms/{termId}[?version=]` tombstones any origin; failed observation
   cleanup or pruning (beyond 2,000 tombstones, oldest first) is a `warnings` entry.
-- Legacy `PUT` (at most 1 MiB and 1,500 entries, `MaxLegacyTerms` = automatic plus
-  manual caps; `soundsLike` splits on commas)
+- Legacy `PUT` (at most 256 KB, and at most 1,000 entries besides live automatic
+  terms passed through, `MaxLegacyTerms`; `soundsLike` splits on commas)
   accepts the GET `terms` unchanged. Entries whose key belongs to a live auto or
   suggested row are passed through without validation and never written; if one
   differs from that row, or names a suggestion, the response carries a
