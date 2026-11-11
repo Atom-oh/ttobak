@@ -37,6 +37,9 @@
 - PowerPoint uploads under `docs/` are converted asynchronously to
   `docs-pdf/` by the `convert-doc` container. The child process runs with AWS
   credentials stripped and a time limit. It is the only writer of `docs-pdf/`.
+- Network isolation of the converter is required. Deployments supply the VPC;
+  the stack can be built without one only as a unit-test convenience, which is
+  not an approved configuration.
 - With a VPC configured the converter runs in isolated subnets with no NAT and
   reaches S3 through the existing gateway endpoint. Do not add a second S3
   gateway endpoint; the duplicate route rolls the stack back.
@@ -59,7 +62,8 @@
 - Each request revalidates that the token is the document's current one and
   redirects to a five-minute signed URL with `no-store`. A PowerPoint without a
   converted preview returns 404; the original is never served.
-- The `/api/public/*` edge behavior has no JWT check and no caching. Origin
+- The `/api/public/*` edge behavior allows GET and HEAD only, with no JWT check
+  and no caching. Origin
   verification and the handler's token lookup are the only gates, and this
   exception does not extend to other routes.
 
@@ -74,7 +78,10 @@
   the recipient reads the owner's item without its public token. The recipient
   must already have an account; there is no pending-share queue.
 - Document shares use `SHAREDDOC#` and `DOCSHARE_TO#` keys, never the meeting
-  `SHARED#` keys. An inaccessible document returns 404.
+  `SHARED#` keys: the meeting shared-list pagination reads `SHARED#` rows
+  without a document filter, so reusing them would consume page capacity and
+  corrupt discovery. Document-share lists paginate internally. An inaccessible
+  document returns 404.
 - Downloads use signed CloudFront URLs when signing material is readable, else
   S3 presigned URLs (ADR-027).
 
@@ -109,7 +116,9 @@
 - Public links have no rate limit; token entropy is the only defense against
   guessing.
 - Revoking a share blocks future access only. Downloaded content cannot be
-  recalled and a URL already issued lives up to five minutes.
+  recalled, and a media URL already issued stays valid until its own expiry:
+  five minutes for a public link, one hour for a signed-in recipient's
+  download or preview.
 - Deleting an original leaves share rows behind with no cascade or sweeper;
   recipient lists skip them.
 - Document creation does not check that the S3 object exists, and wikilink
