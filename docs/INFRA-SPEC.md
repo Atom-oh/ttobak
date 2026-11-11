@@ -824,6 +824,19 @@ The contacts and events steps re-seal moved rows with the target's binding, so
 the summarize role also gains `kms:GenerateDataKey` on the encryption key (AIStack;
 never `kms:Encrypt` or `kms:ReEncrypt*`). Deploy AIStack before GatewayStack.
 
+## Customer brief worker delivery
+
+Rule `ttobak-customer-brief-requested` routes default-bus `ttobak.analysis`
+events with detail-type `CustomerBriefRequested` (`{accountId,userId,runId}`,
+identifiers only) to the summarize Lambda (ADR-015, customer brief). Delivery
+expires after five minutes, with three retry attempts and the SSE-SQS
+`ttobak-customer-brief-dlq` (seven-day retention, redrive denied), scoped to the
+exact rule ARN; `PipelineFailures` watches the DLQ (`CustomerBrief`). The API
+function depends on the rule so the consumer exists before a producer route
+ships; no route publishes yet. No IAM change: the summarize role already has the
+table grant, `kms:Decrypt`/`kms:GenerateDataKey` for sealing and calendar
+decryption, and the `BEDROCK_MODEL_ID` model resources.
+
 ## Summary privacy writer activation
 
 GatewayStack also declares `AccountDescendantReadsEnabled` (`0` or `1`, default

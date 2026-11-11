@@ -60,6 +60,9 @@ var (
 	// AccountMergeRequested worker: one bounded run of the source's merge job.
 	processAccountMergeRequested = func(context.Context, model.AccountMergeRequested) error { return nil }
 
+	// CustomerBriefRequested worker: one per-member customer brief run.
+	processCustomerBriefRequested = func(context.Context, model.CustomerBriefRequested) error { return nil }
+
 	// KB/research term sources: Object Created on the KB bucket is mapped to
 	// TermsSourceRequested, which runs in its own invocation.
 	termsSourceBucket  string
@@ -201,8 +204,22 @@ func init() {
 	// and the account merge worker re-seals moved contacts and events, so
 	// only this repository view carries the record sealer.
 	peopleRepo := repo.MetadataView()
-	if sealer := sealing.NewEnvelope(kms.NewFromConfig(cfg), os.Getenv("KMS_KEY_ID")); sealer != nil {
+	kmsClient := kms.NewFromConfig(cfg)
+	if sealer := sealing.NewEnvelope(kmsClient, os.Getenv("KMS_KEY_ID")); sealer != nil {
 		peopleRepo.SetRecordSealer(sealer)
+	}
+
+	// Customer briefs read as the requester through the existing read paths
+	// and seal the brief, so the brief and event reads use the sealing view.
+	// The worker publishes no events; producers live in the API Lambda.
+	briefAccounts := service.NewAccountService(repo, s3Client, bucketName)
+	briefCalendar := service.NewCalendarService(repository.NewCalendarRepository(dynamoClient, tableName),
+		service.NewCalendarCipher(kmsClient, os.Getenv("KMS_KEY_ID")), briefAccounts, repo)
+	customerBriefService := service.NewCustomerBriefService(peopleRepo,
+		service.NewCustomerBriefSources(briefAccounts, accountNewsService, service.NewAccountEventsService(peopleRepo), briefCalendar, dictionaryRepo),
+		bedrockService.GenerateCustomerBrief, nil)
+	processCustomerBriefRequested = func(ctx context.Context, event model.CustomerBriefRequested) error {
+		return customerBriefService.Process(ctx, event.AccountID, event.UserID, event.RunID)
 	}
 	peopleService := service.NewAccountPeopleService(peopleRepo)
 	resolveMeetingPeople = func(ctx context.Context, meeting *model.Meeting) {
@@ -425,6 +442,16 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			return fmt.Errorf("decode account merge event")
 		}
 		return processAccountMergeRequested(ctx, event.Detail)
+	}
+
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "CustomerBriefRequested" {
+		var event struct {
+			Detail model.CustomerBriefRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode customer brief event")
+		}
+		return processCustomerBriefRequested(ctx, event.Detail)
 	}
 
 	// KB/research term extraction likewise runs in its own invocation.
