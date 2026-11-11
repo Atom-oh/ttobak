@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { accountApi } from '@/lib/api';
 import { LOAD_MORE_LABEL, TRUNCATED_NOTICE } from '@/lib/accountOverview';
 import {
@@ -12,6 +12,7 @@ import {
 import type { AccountContact, AccountPeoplePage, AccountSpeakerTeamMember, MentionGroup, MentionGroupsPage } from '@/types/meeting';
 
 export interface AccountPeopleData { people: AccountPeoplePage; mentions: MentionGroupsPage }
+export type MentionResolveProgress = Map<string, { target: string; cursor: string }>;
 
 type Options = { members: AccountSpeakerTeamMember[]; contacts: AccountContact[]; teamCursor: string; contactCursor: string };
 
@@ -23,10 +24,11 @@ function failureStatus(failure: unknown): number | undefined {
  * Resolved people and unresolved mention groups of the account (ADR-021, people edges).
  * The parent loads the first pages; actions call `onChanged` to reload them.
  */
-export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost }: {
+export function AccountPeople({ accountId, userId, data, resolveProgress, onChanged, onAccessLost }: {
   accountId: string;
   userId: string;
   data: AccountPeopleData;
+  resolveProgress: RefObject<MentionResolveProgress>;
   onChanged: () => void;
   onAccessLost: () => void;
 }) {
@@ -41,7 +43,6 @@ export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost
   const [choice, setChoice] = useState('');
   const [options, setOptions] = useState<Options | null>(null);
   const controller = useRef<AbortController | null>(null);
-  const resolveProgress = useRef(new Map<string, { target: string; cursor: string }>());
 
   useEffect(() => {
     setPeople(data.people.people ?? []);
