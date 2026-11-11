@@ -32,7 +32,7 @@ The account KB reference rows live in `ttobak-main` (ADR-021, relationship links
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
 | TtobakCrawlerStack | Crawling/ingestion workflow and workers; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
-| TtobakWhisperStack | GPU Spot ECS, ECR, production/benchmark tasks | Storage |
+| TtobakWhisperStack | GPU On-Demand/Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
 | TtobakBillingStack (optional) | Billing BFF Lambda Web Function, code bucket, execution role | Auth |
 
@@ -401,16 +401,18 @@ separate. Creating this construct does not backfill attachments. See
 
 ## Whisper and research
 
-Whisper uses the imported VPC's actual private-with-egress subnets and a mixed
-g4dn.xlarge/g4dn.2xlarge ASG (min/desired 0, max 10). Price-capacity-optimized
-allocation uses GPU types observed in both 2a and 2b in account 180294183052 on
-2026-09-17. That account's 2b did not offer g5; including it rejected the mixed
-Fleet request. Recheck offerings before changing types or subnets (ADR-009).
-The first active instance uses On-Demand capacity, preferring the smaller type,
-so a Spot shortage cannot prevent all workers from starting. Additional instances
-use Spot with the existing $1.10 hourly ceiling. The On-Demand base applies only
-within desired capacity: idle capacity still scales to zero. On-Demand uses its
-normal instance rate, not the Spot price ceiling; capacity is still not guaranteed.
+Whisper uses the imported VPC's actual private-with-egress subnets and two
+g4dn.xlarge/g4dn.2xlarge pools with identical hosts (min/desired 0): the
+On-Demand `ttobak-whisper-od-asg` (max 2, smaller type preferred) behind capacity
+provider `ttobak-whisper-ondemand`, and the Spot-only `ttobak-whisper-asg` (max 10,
+price-capacity-optimized, $1.10 hourly ceiling) behind `ttobak-whisper-spot`. The
+GPU types were observed in both 2a and 2b in account 180294183052 on 2026-09-17.
+That account's 2b did not offer g5; including it rejected the mixed Fleet request.
+Recheck offerings before changing types or subnets (ADR-009). The transcribe
+Lambda (`WHISPER_ONDEMAND_CAPACITY_PROVIDER`) sends a run to On-Demand when the
+cluster has no task and to Spot when it overlaps another run, and uses Spot until
+`DescribeClusters` lists the On-Demand provider. On-Demand uses its normal rate;
+capacity is still not guaranteed. Both pools still scale to zero when idle.
 Root disk is 200GiB encrypted gp3, and ECS stopped-task cleanup is three minutes
 to avoid disk exhaustion when a host is reused. Host-network tasks request one GPU.
 These choices do not prove current instances or capacity availability.
@@ -421,22 +423,23 @@ benchmark task has its own bundle variable; do not conflate the two. Its
 run_engine.py allowlisting entrypoint must not be overridden by CDK entryPoint or
 command. Engine selection uses ENGINE; image and CDK tests guard the boundary.
 
-The capacity provider enables ECS managed draining, so aws-cdk-lib adds no
+Both capacity providers enable ECS managed draining, so aws-cdk-lib adds no
 InstanceDrainHook lifecycle hook or drain Lambda; that hook could not drain a host
-that had not yet registered with ECS. The `WhisperAzRebalanceSuspended` custom
-resource suspends `AZRebalance` on `ttobak-whisper-asg` (its IAM is
-`autoscaling:SuspendProcesses`/`ResumeProcesses` on that group only), and deleting
-it resumes the process. Host user data sets `ECS_ENABLE_SPOT_INSTANCE_DRAINING=true`.
+that had not yet registered with ECS. The `WhisperAzRebalanceSuspended` and
+`WhisperOnDemandAzRebalanceSuspended` custom resources suspend `AZRebalance` on
+their own group (IAM is `autoscaling:SuspendProcesses`/`ResumeProcesses` on that
+group only), and deleting one resumes the process. Host user data sets `ECS_ENABLE_SPOT_INSTANCE_DRAINING=true`.
 The production image sets `PYTHONUNBUFFERED=1`. Every WhisperStack deploy also
 reapplies `desiredCapacity: 0`; deploy it only while the cluster is idle.
 
 GatewayStack's `ttobak-stt-recovery` rule (`rate(15 minutes)`, retry 0, 10-minute
 maximum age, no DLQ) sends the fixed input `{source: ttobak.recovery,
 detail-type: SttRecoveryTick, detail: {}}` to the existing transcribe Lambda.
-`STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` (`off|report|active`) default to
-`report`. The transcribe role adds only `ecs:ListTasks` on `Resource: "*"`
-confined by an `ArnEquals ecs:cluster` condition to the Whisper cluster (a
-cluster-only ListTasks call does not match a container-instance resource);
+`STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` take `off|report|active`;
+STT re-drives are `active` and deletion stays `report`. The transcribe role adds
+`ecs:ListTasks` on `Resource: "*"` confined by an `ArnEquals ecs:cluster`
+condition to the Whisper cluster (a cluster-only ListTasks call does not match a
+container-instance resource) and `ecs:DescribeClusters` on that cluster's ARN;
 RunTask and PassRole are unchanged. Existing AiStack table and bucket grants cover
 the scan, claims, transactional deletes, transcript self-copy and object deletes.
 Deletions leave noncurrent object versions in the versioned bucket. See the

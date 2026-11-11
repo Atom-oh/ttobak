@@ -78,6 +78,7 @@ func init() {
 	if whisperContainer == "" {
 		whisperContainer = "whisper"
 	}
+	whisperOnDemandProvider = os.Getenv("WHISPER_ONDEMAND_CAPACITY_PROVIDER")
 }
 
 // Handler processes EventBridge S3 events for new audio uploads
@@ -347,11 +348,15 @@ type whisperTaskOptions struct {
 	Crop        bool
 	ClientToken string
 	StartedBy   string
+	// CapacityProvider is chosen by chooseWhisperCapacityProvider; empty
+	// means the Spot provider.
+	CapacityProvider string
 }
 
 type ecsAPI interface {
 	RunTask(ctx context.Context, params *ecs.RunTaskInput, optFns ...func(*ecs.Options)) (*ecs.RunTaskOutput, error)
 	ListTasks(ctx context.Context, params *ecs.ListTasksInput, optFns ...func(*ecs.Options)) (*ecs.ListTasksOutput, error)
+	DescribeClusters(ctx context.Context, params *ecs.DescribeClustersInput, optFns ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error)
 }
 
 // whisperInputs derives the ASR inputs shared by the S3-event and recovery
@@ -416,13 +421,17 @@ func whisperRunTaskInput(meetingID, userID, audioKey, initialPrompt, outputKey s
 	if opts.Crop {
 		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{Name: aws.String("AUDIO_CROP"), Value: aws.String("1")})
 	}
+	provider := opts.CapacityProvider
+	if provider == "" {
+		provider = whisperSpotCapacityProvider
+	}
 	input := &ecs.RunTaskInput{
 		Cluster:        aws.String(whisperCluster),
 		TaskDefinition: aws.String(whisperTaskDef),
 		Count:          aws.Int32(1),
 		CapacityProviderStrategy: []ecsTypes.CapacityProviderStrategyItem{
 			{
-				CapacityProvider: aws.String("ttobak-whisper-spot"),
+				CapacityProvider: aws.String(provider),
 				Weight:           1,
 			},
 		},
@@ -445,6 +454,8 @@ func whisperRunTaskInput(meetingID, userID, audioKey, initialPrompt, outputKey s
 }
 
 func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, opts whisperTaskOptions) error {
+	opts.CapacityProvider = chooseWhisperCapacityProvider(ctx, ecsClient)
+	log.Printf("Whisper capacity provider for meeting %s: %s", meetingID, opts.CapacityProvider)
 	result, err := ecsClient.RunTask(ctx, whisperRunTaskInput(meetingID, userID, audioKey, initialPrompt, outputKey, numSpeakers, opts))
 	if err != nil {
 		return err

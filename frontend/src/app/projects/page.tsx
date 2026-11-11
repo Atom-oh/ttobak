@@ -21,7 +21,7 @@ export default function ProjectsPage() {
   }
   return (
     <AppLayout activePath="/projects">
-      <div className="p-4 lg:p-8">
+      <div className="workspace-page">
         <ProjectsClient />
       </div>
     </AppLayout>

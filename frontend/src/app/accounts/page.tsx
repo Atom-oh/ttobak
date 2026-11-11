@@ -25,7 +25,7 @@ export default function AccountsPage() {
   }
   return (
     <AppLayout activePath="/accounts">
-      <div className="p-4 lg:p-8">
+      <div className="workspace-page">
         <Suspense fallback={<p role="status">불러오는 중…</p>}>
           <AccountsClient />
         </Suspense>

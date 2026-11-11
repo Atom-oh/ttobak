@@ -373,8 +373,9 @@ func (r *sttRecoveryRunner) redriveSTT(ctx context.Context, row model.SttRecover
 	}
 	prompt, speakers := r.inputs(ctx, meeting, row.UserID)
 	input := whisperRunTaskInput(row.MeetingID, row.UserID, decision.Key, prompt, "", speakers, whisperTaskOptions{
-		ClientToken: sttRecoveryClientToken(row.MeetingID, decision.Key, claim),
-		StartedBy:   sttRecoveryStartedBy(row.MeetingID),
+		ClientToken:      sttRecoveryClientToken(row.MeetingID, decision.Key, claim),
+		StartedBy:        sttRecoveryStartedBy(row.MeetingID),
+		CapacityProvider: chooseWhisperCapacityProvider(ctx, r.ecs),
 	})
 	out, err := r.ecs.RunTask(ctx, input)
 	if err == nil && len(out.Failures) == 0 && len(out.Tasks) > 0 {
