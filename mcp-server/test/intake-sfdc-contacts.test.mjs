@@ -548,13 +548,35 @@ test('records_of_another_account_are_dropped', async () => {
   const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
   const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B'),
     contactRecord(id('003XX0000000F02'), 'C', 'D', { accountId: B }),
-    contactRecord(id('003XX0000000F03'), 'E', 'F', { accountId: '001XX0000000A01' }),
-    contactRecord(id('003XX0000000F04'), 'G', 'H', { accountId: null })]] });
+    contactRecord(id('003XX0000000F03'), 'E', 'F', { accountId: '001XX0000000A01' })]] });
   const result = await runSfdcContacts({ session: source, api, dryRun: false });
   assert.equal(result.result, 'ok');
-  assert.equal(result.counts.accountMismatch, 2);
+  assert.equal(result.counts.accountMismatch, 1);
   assert.deepEqual(api.syncs[0].body.present[ACCOUNT_A], [id('003XX0000000F01'), id('003XX0000000F03')],
     'a 15-character account ID matches its canonical form');
+});
+
+test('a missing or malformed record account ID makes the read incomplete', async () => {
+  for (const accountId of [null, undefined, 'not-an-id']) {
+    const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
+    const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B'),
+      contactRecord(id('003XX0000000F04'), 'G', 'H', { accountId })]] });
+    const result = await runSfdcContacts({ session: source, api, dryRun: false });
+    assert.equal(result.counts.invalidIds, 1, String(accountId));
+    assert.equal(result.counts.incomplete, 1);
+    assert.ok(api.syncs.every(sync => !sync.body.snapshotComplete), 'no departure snapshot');
+  }
+});
+
+test('a repeated filtered record ID fails the read closed', async () => {
+  const internal = { recordType: { name: 'Project Resource' } };
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
+  const source = contactSource({ [ACCOUNT_A]: [
+    [contactRecord(id('003XX0000000F01'), 'A', 'B'), contactRecord(id('003XX0000000F09'), 'I', 'R', internal)],
+    [contactRecord(id('003XX0000000F09'), 'I', 'R', internal)]] });
+  const result = await runSfdcContacts({ session: source, api, dryRun: false });
+  assert.equal(result.result, 'PARSE_FAILED');
+  assert.ok(api.syncs.every(sync => !sync.body.snapshotComplete), 'no departure snapshot');
 });
 
 // ---------- CLI ----------
