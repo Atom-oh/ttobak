@@ -19,7 +19,7 @@ Current benchmark writes are scoped to `bench-transcripts/*`, avoiding summarize
 
 Intended tests covered output shape, speaker normalization/fallbacks, helper errors, CDK resource/IAM separation, and default-path regressions. Planned operator work included model-gating approval, an x86 image build, representative completed-meeting pairs, coverage/speaker comparison, peak GPU/memory/runtime sampling, and removal of benchmark artifacts. Reusing capacity could affect available GPU throughput; bundle schema/path compatibility required an actual load check.
 
-The original checklist was unchecked and contained no completed benchmark table. [ADR-035](../../decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) records the later benchmark-based decision: keep faster-whisper ASR, adopt community-1 diarization, and pin default ASR dependencies. Its later default-image changes supersede this Phase 1 byte-identical constraint.
+The original checklist was unchecked and contained no completed benchmark table. [ADR-009](../../decisions/ADR-009-batch-stt-and-diarization.md) records the later benchmark-based decision: keep faster-whisper ASR, adopt community-1 diarization, and pin default ASR dependencies. Its later default-image changes supersede this Phase 1 byte-identical constraint.
 
 ## Evidence pointers
 

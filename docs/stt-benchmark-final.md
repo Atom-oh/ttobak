@@ -32,5 +32,5 @@ about 9-10x for this sample.
 The recommendation was asynchronous GPU Whisper after upload with separate live
 captions. The old proposed Fargate/ALB path and baked-in-model/zero-cold-start claim
 were not the final design. Current Whisper uses EC2 GPU Spot tasks, S3 model
-loading, zero-scale startup and current exact pins; see ADR-009/035 and the
+loading, zero-scale startup and current exact pins; see ADR-009 and the
 [WhisperX runbook](runbooks/whisperx-benchmark.md).

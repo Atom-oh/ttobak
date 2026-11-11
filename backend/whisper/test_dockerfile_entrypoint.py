@@ -68,7 +68,7 @@ VERIFY_PINS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 class TestLegacyPinLockstep(unittest.TestCase):
-    """ADR-035's "pins must not move" invariant is enforced at build time by
+    """ADR-009's "pins must not move" invariant is enforced at build time by
     verify_pins.py — but only for packages that file lists. This guard keeps
     the Dockerfile's exact pins and verify_pins.py's PINS in lockstep (the
     same dual-guard convention as the dispatcher ENTRYPOINT tests above),

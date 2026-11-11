@@ -1833,7 +1833,7 @@ membership. RESEND trigger behavior remains unverified.
 
 ### Personal dictionary
 
-Storage and migration: ADR-008's 2026-10-18 amendments. Routes act on the
+Storage and migration: ADR-008. Routes act on the
 caller's `USER#` partition; `termId` is the 32-hex `termKey` (other shapes 404).
 `ValidateTermInput`: NFKC and trim of surrounding spaces; Cc/Cf (tabs and
 newlines anywhere, including the edges) and line separators rejected;
@@ -1890,7 +1890,7 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   `LEGACY_DICTIONARY_CONFLICT`. A manual row changed concurrently during a legacy
   PUT or DELETE is 409 `VERSION_CONFLICT`; 409 `CONFLICT` only reports a legacy
   item that kept changing during migration.
-- Vocabularies (ADR-008 A/B builder amendment): the GET and every
+- Vocabularies (ADR-008 A/B builder): the GET and every
   recognition-affecting manual write (one interval bypass each) call
   `EnsureVocabularies`, which polls, flips or starts the personal ko-KR build
   (en-US is deferred and reports `NONE`); failures are `warnings` and the
@@ -1902,7 +1902,7 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   which flips it), otherwise `READY` whenever the active vocabulary is ready.
   No response carries a
   vocabulary name yet: the live client would send a ko-KR-only
-  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 acceptance item 5).
+  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 rollout check 5).
   The builder replaces the earlier in-place rebuild of the derived ko-KR
   vocabulary, including its pending-build deferral warning and bounded
   conflict recomputation; that path no longer exists.

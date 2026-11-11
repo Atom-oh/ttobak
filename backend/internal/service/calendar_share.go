@@ -178,14 +178,15 @@ func (svc *CalendarService) directMember(ctx context.Context, lookups *calendarS
 }
 
 func (svc *CalendarService) calendarOverride(ctx context.Context, lookups *calendarShareLookups, userID, sourceID, scopeKey string) (*repository.CalendarOverrideRow, error) {
-	if override, checked := lookups.overrides[scopeKey]; checked {
+	cacheKey := sourceID + "/" + scopeKey
+	if override, checked := lookups.overrides[cacheKey]; checked {
 		return override, nil
 	}
 	override, err := svc.store.GetCalendarOverride(ctx, userID, sourceID, scopeKey)
 	if err != nil {
 		return nil, err
 	}
-	lookups.overrides[scopeKey] = override
+	lookups.overrides[cacheKey] = override
 	return override, nil
 }
 
@@ -287,7 +288,9 @@ func (svc *CalendarService) planCalendarSyncShares(ctx context.Context, userID, 
 			return nil, repository.ErrCalendarCorruptData
 		}
 		previous, recorded := calendarGrantedShareKey(old, userID)
-		override, err := svc.calendarOverride(ctx, lookups, userID, sourceID, calendarScopeKey(input, eventID))
+		// Read after this occurrence's row, never from a batch cache: a hide that lands between
+		// two occurrences must reach the later one, whose row version then matches it.
+		override, err := svc.store.GetCalendarOverride(ctx, userID, sourceID, calendarScopeKey(input, eventID))
 		if err != nil {
 			return nil, err
 		}
@@ -324,6 +327,11 @@ func calendarOwnerEvent(row repository.CalendarEventRow, input model.CalendarEve
 			// Match evidence belongs to the automatic account only; a manual assignment has none.
 			event.ShareEvidence = input.ShareEvidence
 		}
+	}
+	// Report a share only once the stored row holds it granted; a sealed claim that was not
+	// granted (or an event stored before share rows existed) is not shared.
+	if row.ShareState != calendarStateShared || row.ShareAccountID != event.ShareAccountID {
+		event.ShareAccountID, event.ShareEvidence = "", nil
 	}
 	return event
 }

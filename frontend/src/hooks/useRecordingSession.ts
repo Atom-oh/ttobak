@@ -136,8 +136,8 @@ export function useRecordingSession({
       if (cancelled) return;
       if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
         // The dictionary GET is a vocabulary poll/flip opportunity (ADR-008).
-        // No response names a vocabulary for live streams until acceptance
-        // item 5, so live captions send none and the vocabulary retry is inert.
+        // No response names a vocabulary for live streams until ADR-008
+        // rollout check 5, so live captions send none and the vocabulary retry is inert.
         import('@/lib/api').then(({ dictionaryApi }) => dictionaryApi.get()).catch(() => {});
         const config: TranscribeStreamingConfig = {
           region: cfg.cognito.region,
