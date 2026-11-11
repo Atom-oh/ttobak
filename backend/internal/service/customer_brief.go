@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -53,7 +57,9 @@ type CustomerBriefSources struct {
 }
 
 // NewCustomerBriefSources binds the existing read paths. Terms reads rows
-// directly: DictionaryService.ListLayer may perform a migration write.
+// directly: DictionaryService.ListLayer may perform a migration write. For
+// the personal layer it also reads the legacy blob (GetItem only), so an
+// unmigrated dictionary still yields its effective term keys.
 func NewCustomerBriefSources(accounts *AccountService, news *AccountNewsService, events *AccountEventsService, calendar *CalendarService, dict *repository.DictionaryRepository) CustomerBriefSources {
 	return CustomerBriefSources{
 		Insights: func(ctx context.Context, userID, accountID string, from, to time.Time) ([]model.AccountInsightDTO, error) {
@@ -79,7 +85,44 @@ func NewCustomerBriefSources(accounts *AccountService, news *AccountNewsService,
 			}
 			return page.Events, next, nil
 		},
-		Terms: dict.ListDictTerms,
+		Terms: func(ctx context.Context, pk string) ([]model.DictTerm, error) {
+			rows, err := dict.ListDictTerms(ctx, pk)
+			if err != nil || !strings.HasPrefix(pk, model.PrefixUser) {
+				return rows, err
+			}
+			legacy, err := dict.GetDictionary(ctx, strings.TrimPrefix(pk, model.PrefixUser))
+			if err != nil {
+				return nil, err
+			}
+			keys := effectiveTermKeys(legacy, rows)
+			terms := make([]model.DictTerm, len(keys))
+			for i, key := range keys {
+				terms[i] = model.DictTerm{TermKey: key, State: model.TermStateActive}
+			}
+			return terms, nil
+		},
+	}
+}
+
+// CustomerBriefPublisher publishes one CustomerBriefRequested event, with
+// identifiers only, on the default bus.
+func CustomerBriefPublisher(client actionEventClient) func(context.Context, model.CustomerBriefRequested) error {
+	return func(ctx context.Context, event model.CustomerBriefRequested) error {
+		if client == nil || event.AccountID == "" || event.UserID == "" || event.RunID == "" {
+			return ErrCustomerBriefPublish
+		}
+		body, err := json.Marshal(event)
+		if err != nil {
+			return ErrCustomerBriefPublish
+		}
+		out, err := client.PutEvents(ctx, &eventbridge.PutEventsInput{Entries: []ebtypes.PutEventsRequestEntry{{
+			EventBusName: aws.String("default"), Source: aws.String("ttobak.analysis"),
+			DetailType: aws.String("CustomerBriefRequested"), Detail: aws.String(string(body)),
+		}}})
+		if err != nil || out == nil || out.FailedEntryCount != 0 || len(out.Entries) != 1 || aws.ToString(out.Entries[0].ErrorCode) != "" || aws.ToString(out.Entries[0].EventId) == "" {
+			return ErrCustomerBriefPublish
+		}
+		return nil
 	}
 }
 
@@ -127,8 +170,35 @@ func (s *CustomerBriefService) requireDirectMember(ctx context.Context, userID, 
 	return nil
 }
 
-func customerBriefStatus(state *model.CustomerBriefState) *model.CustomerBriefResponse {
-	return &model.CustomerBriefResponse{Status: state.Status, RunID: state.RunID, ErrorCode: state.ErrorCode, LeaseUntil: state.LeaseUntil}
+// customerBriefErrorCodes are the worker codes passed through to clients;
+// any other stored code reads as FAILED.
+var customerBriefErrorCodes = map[string]bool{
+	model.AnalysisSourceChanged: true, "SOURCE_UNAVAILABLE": true, model.AnalysisInvalidOutput: true,
+	"ACCESS_REVOKED": true, model.AnalysisInterrupted: true, "TIMEOUT": true, model.AnalysisProviderFailed: true,
+	model.AnalysisPublishFailed: true, model.AnalysisPersistenceFail: true, "OUTPUT_TOO_LARGE": true,
+}
+
+// customerBriefRun maps a stored row to the client run state. A pending run
+// whose lease passed reads as failed/INTERRUPTED.
+func customerBriefRun(state *model.CustomerBriefState, now time.Time) model.CustomerBriefRun {
+	if state == nil {
+		return model.CustomerBriefRun{Status: "none"}
+	}
+	run := model.CustomerBriefRun{Status: state.Status, RunID: state.RunID}
+	if !state.RequestedAt.IsZero() {
+		requested := state.RequestedAt
+		run.RequestedAt = &requested
+	}
+	switch {
+	case state.Pending() && state.LeaseUntil <= now.UnixMilli():
+		run.Status, run.ErrorCode = model.AnalysisFailed, model.AnalysisInterrupted
+	case state.Pending(), state.Status == model.AnalysisSucceeded:
+	case state.Status == model.AnalysisFailed && customerBriefErrorCodes[state.ErrorCode]:
+		run.ErrorCode = state.ErrorCode
+	default:
+		run.Status, run.ErrorCode = model.AnalysisFailed, "FAILED"
+	}
+	return run
 }
 
 // Request claims a run for the member and publishes CustomerBriefRequested.
@@ -146,17 +216,20 @@ func (s *CustomerBriefService) Request(ctx context.Context, userID, accountID st
 	now := s.now().UTC()
 	expired := prior.Expired(now)
 	if prior.Pending() && !expired && prior.LeaseUntil > now.UnixMilli() {
-		return customerBriefStatus(prior), nil
+		return &model.CustomerBriefResponse{Run: customerBriefRun(prior, now)}, nil
 	}
 	next := &model.CustomerBriefState{AccountID: accountID, UserID: userID, RunID: uuid.NewString(), Status: model.AnalysisQueued,
 		RequestedAt: now, LeaseUntil: now.Add(customerBriefQueuedLease).UnixMilli(), UpdatedAt: now,
 		ExpiresAt: now.Add(model.CustomerBriefTTL).Unix()}
-	if prior != nil && !expired && prior.Sealed != "" {
-		// Keep the last good brief's own expiry, floored so the sweep cannot
-		// remove the row while this run may still be working.
-		next.ExpiresAt = max(prior.ExpiresAt, now.Add(customerBriefRunFloor).Unix())
+	keep := prior.BriefReadable(now)
+	if keep {
+		// The brief keeps its own expiry (pinned on legacy rows too); only the
+		// row TTL is floored so the sweep cannot remove a working run.
+		next.BriefExpiresAt = prior.BriefExpiry()
+		next.ExpiresAt = max(next.BriefExpiresAt, now.Add(customerBriefRunFloor).Unix())
 	}
-	if err := s.repo.QueueCustomerBrief(ctx, prior, next, prior != nil && expired); err != nil {
+	// A brief past its own expiry is cleared in the same write.
+	if err := s.repo.QueueCustomerBrief(ctx, prior, next, prior != nil && !keep); err != nil {
 		return nil, err
 	}
 	err = ErrCustomerBriefPublish
@@ -169,11 +242,13 @@ func (s *CustomerBriefService) Request(ctx context.Context, userID, accountID st
 		}
 		return nil, ErrCustomerBriefPublish
 	}
-	return customerBriefStatus(next), nil
+	// The response does not open the retained brief; GET returns it.
+	return &model.CustomerBriefResponse{Run: customerBriefRun(next, now)}, nil
 }
 
 // Get returns the run status and the last good brief to a current direct
-// member. An expired row reads as absent even before the sweep removes it.
+// member. An expired row reads as absent even before the sweep removes it,
+// and the brief is returned only before its own expiry.
 func (s *CustomerBriefService) Get(ctx context.Context, userID, accountID string) (*model.CustomerBriefResponse, error) {
 	if err := s.requireDirectMember(ctx, userID, accountID); err != nil {
 		return nil, err
@@ -183,14 +258,11 @@ func (s *CustomerBriefService) Get(ctx context.Context, userID, accountID string
 		return nil, err
 	}
 	now := s.now()
-	if state == nil || state.Expired(now) {
-		return &model.CustomerBriefResponse{Status: model.AnalysisUnknown}, nil
+	if state.Expired(now) {
+		state = nil
 	}
-	result := customerBriefStatus(state)
-	if state.Pending() && state.LeaseUntil <= now.UnixMilli() {
-		result.Status, result.ErrorCode, result.LeaseUntil = model.AnalysisFailed, model.AnalysisInterrupted, 0
-	}
-	if state.Sealed == "" {
+	result := &model.CustomerBriefResponse{Run: customerBriefRun(state, now)}
+	if !state.BriefReadable(now) {
 		return result, nil
 	}
 	plain, err := s.repo.OpenCustomerBrief(ctx, state)
@@ -198,11 +270,11 @@ func (s *CustomerBriefService) Get(ctx context.Context, userID, accountID string
 		return nil, err
 	}
 	var brief model.CustomerBrief
-	if err := json.Unmarshal(plain, &brief); err != nil {
+	// The size check keeps the response within CustomerBriefResponseMaxBytes.
+	if len(plain) > model.CustomerBriefMaxBytes || json.Unmarshal(plain, &brief) != nil {
 		return nil, repository.ErrCustomerBriefUnreadable
 	}
-	generated := state.GeneratedAt
-	result.Brief, result.GeneratedAt = &brief, &generated
+	result.Brief = &model.CustomerBriefView{GeneratedAt: state.GeneratedAt, Content: &brief}
 	return result, nil
 }
 
