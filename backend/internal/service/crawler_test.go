@@ -20,6 +20,8 @@ type mockCrawlerRepo struct {
 	allDocuments  []model.CrawledDocument               // all documents for scan
 	listLimits    []int32                               // limits ListDocuments was called with
 	scanLimits    []int32                               // limits ListAllDocumentsByType was called with
+	originReads   int                                   // GetSourceOrigin calls
+	originErr     error                                 // GetSourceOrigin failure
 }
 
 func newMockCrawlerRepo() *mockCrawlerRepo {
@@ -49,6 +51,18 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 	cp.CustomUrls = append([]string(nil), src.CustomUrls...)
 	cp.Aliases = append([]string(nil), src.Aliases...)
 	return &cp, nil
+}
+
+func (m *mockCrawlerRepo) GetSourceOrigin(_ context.Context, sourceID string) (string, string, bool, error) {
+	m.originReads++
+	if m.originErr != nil {
+		return "", "", false, m.originErr
+	}
+	src, ok := m.sources[sourceID]
+	if !ok {
+		return "", "", false, nil
+	}
+	return src.SourceName, src.AccountID, true, nil
 }
 
 func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.CrawlerSource) error {

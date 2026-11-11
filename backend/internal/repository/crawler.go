@@ -88,6 +88,42 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 	return &item.CrawlerSource, nil
 }
 
+// GetSourceOrigin reads only a CONFIG row's sourceName and accountId, so
+// legacy scalar list values cannot fail it as they can GetSource. A string
+// attribute gives its value, anything else "". PK is projected so a row
+// without either attribute is still found.
+func (r *CrawlerRepository) GetSourceOrigin(ctx context.Context, sourceID string) (sourceName, accountID string, found bool, err error) {
+	projection, err := expression.NewBuilder().WithProjection(expression.NamesList(
+		expression.Name("PK"), expression.Name("sourceName"), expression.Name("accountId"))).Build()
+	if err != nil {
+		return "", "", false, fmt.Errorf("failed to build source origin projection: %w", err)
+	}
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		ProjectionExpression:     projection.Projection(),
+		ExpressionAttributeNames: projection.Names(),
+	})
+	if err != nil {
+		return "", "", false, fmt.Errorf("failed to get crawler source origin: %w", err)
+	}
+	if len(result.Item) == 0 {
+		return "", "", false, nil
+	}
+	return originString(result.Item["sourceName"]), originString(result.Item["accountId"]), true, nil
+}
+
+// originString is the lenient decode GetSourceOrigin uses: a string value or "".
+func originString(value types.AttributeValue) string {
+	if text, ok := value.(*types.AttributeValueMemberS); ok {
+		return text.Value
+	}
+	return ""
+}
+
 // GlobalNewsSourceAttribute marks an operator-curated crawler source whose
 // news may feed the Common dictionary layer. Only operators set it, directly
 // on the CONFIG item; no API path sets it true (CrawlerSource.GlobalNewsSource

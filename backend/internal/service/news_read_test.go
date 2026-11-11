@@ -159,7 +159,7 @@ func TestPublishedNewsTitleMatchesProducerWhitespaceContract(t *testing.T) {
 		strings.Repeat(" ", 25000) + "Accepted title"} {
 		svc, fixture, _, keys := newNewsReadFixture(t)
 		fixture.rows[keys[0]]["title"] = &types.AttributeValueMemberS{Value: title}
-		got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+		got, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16))
 		if err != nil || got.Title != strings.TrimSpace(title) {
 			t.Fatalf("producer-valid title rejected or changed: %q %v", title, err)
 		}
@@ -182,7 +182,7 @@ func TestPublishedNewsTagsTrimOnlyDisplayPadding(t *testing.T) {
 	svc, fixture, _, keys := newNewsReadFixture(t)
 	rawTag := strings.Repeat(" ", 25000) + "Accepted tag" + "\t\n"
 	fixture.rows[keys[0]]["tags"] = newsAV(t, map[string]any{"tags": []string{rawTag, " second "}})["tags"]
-	got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+	got, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16))
 	if err != nil || len(got.Tags) != 2 || got.Tags[0] != "Accepted tag" || got.Tags[1] != "second" {
 		t.Fatalf("producer-valid padded tags broke detail: %v", err)
 	}
@@ -234,19 +234,19 @@ func TestLegacyTechDetailKeepsReservedPartition(t *testing.T) {
 	}}
 	object := &newsS3Fixture{data: "# Lambda"}
 	svc := &InsightsService{repo: repo, s3: object, kbBucketName: "knowledge"}
-	if _, err := svc.GetDocumentDetail(context.Background(), "__tech__", "techhash"); err != nil {
+	if _, err := svc.GetDocumentDetail(context.Background(), "user-1", "__tech__", "techhash"); err != nil {
 		t.Fatalf("legacy tech article no longer opens: %v", err)
 	}
 	if len(object.gets) != 1 || object.gets[0] != "shared/aws-docs/lambda/techhash.md" {
 		t.Fatal("tech detail used the wrong stored key")
 	}
 	for _, sourceID := range []string{"__other__", "../tech", "__tech__/other"} {
-		if _, err := svc.GetDocumentDetail(context.Background(), sourceID, "techhash"); !errors.Is(err, ErrNotFound) {
+		if _, err := svc.GetDocumentDetail(context.Background(), "user-1", sourceID, "techhash"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("unexpected reserved partition permitted: %q %v", sourceID, err)
 		}
 	}
 	repo.documents["__tech__"][0].Type = "news"
-	if _, err := svc.GetDocumentDetail(context.Background(), "__tech__", "techhash"); !errors.Is(err, ErrNotFound) {
+	if _, err := svc.GetDocumentDetail(context.Background(), "user-1", "__tech__", "techhash"); !errors.Is(err, ErrNotFound) {
 		t.Fatal("tech exception admitted reserved news source")
 	}
 }
@@ -263,7 +263,7 @@ func TestLegacyNewsRemainsReadableAfterSourceDisabled(t *testing.T) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("disabled legacy source hid existing news: %v", err)
 	}
-	if _, err := svc.GetDocumentDetail(context.Background(), "legacy", "oldhash"); err != nil {
+	if _, err := svc.GetDocumentDetail(context.Background(), "user-1", "legacy", "oldhash"); err != nil {
 		t.Fatalf("disabled legacy source prevented detail: %v", err)
 	}
 }
@@ -286,7 +286,7 @@ func TestPublishedNewsReadsCanonicalObjectAndRejectsChangedState(t *testing.T) {
 					delete(fixture.rows, keys[0])
 				}
 			}
-			got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+			got, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16))
 			if mutation == "none" {
 				if err != nil || got.Content != object.data || got.Title != "Current publication" {
 					t.Fatalf("unexpected detail: %+v, %v", got, err)
@@ -316,7 +316,7 @@ func TestPublishedNewsRejectsInvalidPublicationBeforeObjectRead(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			svc, fixture, object, keys := newNewsReadFixture(t)
 			fixture.rows[keys[0]][field] = value
-			got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+			got, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16))
 			if !errors.Is(err, ErrNotFound) || got != nil || len(object.gets) != 0 {
 				t.Fatalf("invalid publication read object: %+v %v %v", got, err, object.gets)
 			}
@@ -328,14 +328,14 @@ func TestPublishedNewsRejectsChangedOrOversizedBytesWithoutFallback(t *testing.T
 	for _, data := range []string{"", "wrong", strings.Repeat("a", maxPublishedNewsBytes+1), string([]byte{255})} {
 		svc, _, object, keys := newNewsReadFixture(t)
 		object.data = data
-		got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+		got, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16))
 		if !errors.Is(err, ErrNotFound) || got != nil || len(object.gets) != 1 {
 			t.Fatalf("invalid bytes accepted or retried: %v %v", err, object.gets)
 		}
 	}
 	svc, _, object, keys := newNewsReadFixture(t)
 	object.getErr = errors.New("object unavailable")
-	if _, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16)); err == nil || len(object.gets) != 1 {
+	if _, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16)); err == nil || len(object.gets) != 1 {
 		t.Fatalf("object failure must not fall back: %v %v", err, object.gets)
 	}
 }
@@ -346,24 +346,24 @@ func TestNewsListRevalidatesCacheBeforePagination(t *testing.T) {
 	svc, fixture, _, keys := newNewsReadFixture(t)
 	stale := model.CrawledDocument{SourceID: keys[0].SourceID, DocHash: strings.Repeat("a", 16), Type: "news", Title: "Stale"}
 	scanCache.set("scan:news", []model.CrawledDocument{stale}, 1)
-	result, err := svc.ListInsights(context.Background(), "news", "", "", nil, "", 1, 20)
+	result, err := svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "", 1, 20)
 	if err != nil || len(result.Documents) != 1 || result.Documents[0].Title != "Current publication" {
 		t.Fatalf("cache did not hydrate canonical state: %+v, %v", result, err)
 	}
 	fixture.rows[keys[0]]["qualityStatus"] = &types.AttributeValueMemberS{Value: "DELETED"}
-	result, err = svc.ListInsights(context.Background(), "news", "", "", nil, "", 1, 20)
+	result, err = svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "", 1, 20)
 	if err != nil || len(result.Documents) != 0 || result.TotalCount != 0 {
 		t.Fatalf("cached deletion was visible: %+v, %v", result, err)
 	}
 	fixture.fail = errors.New("incomplete current state")
-	if _, err := svc.ListInsights(context.Background(), "news", "", "", nil, "", 1, 20); err == nil {
+	if _, err := svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "", 1, 20); err == nil {
 		t.Fatal("failed current read silently used cache")
 	}
 }
 
 func TestMissingMetadataNeverReadsOrphanObject(t *testing.T) {
 	svc, _, object, _ := newNewsReadFixture(t)
-	if _, err := svc.GetDocumentDetail(context.Background(), "missing", "document"); !errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
+	if _, err := svc.GetDocumentDetail(context.Background(), "user-1", "missing", "document"); !errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
 		t.Fatalf("orphan fallback: %v %v", err, object.gets)
 	}
 }

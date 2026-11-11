@@ -109,6 +109,41 @@ type CalendarSharingRequest struct {
 	AccountID string `json:"accountId,omitempty"`
 }
 
+// AccountCalendarEvent is one deduplicated shared meeting on an account's calendar.
+type AccountCalendarEvent struct {
+	MeetingKey string    `json:"meetingKey"`
+	Title      string    `json:"title"`
+	StartsAt   time.Time `json:"startsAt"`
+	EndsAt     time.Time `json:"endsAt"`
+	TimeZone   string    `json:"timeZone"`
+	IsAllDay   bool      `json:"isAllDay"`
+	StartDate  string    `json:"startDate,omitempty"`
+	EndDate    string    `json:"endDate,omitempty"`
+	Location   string    `json:"location,omitempty"`
+	// SharedBy holds up to five current members' emails.
+	SharedBy   []string `json:"sharedBy"`
+	SharedByMe bool     `json:"sharedByMe"`
+}
+
+type AccountCalendarPage struct {
+	Events     []AccountCalendarEvent `json:"events"`
+	NextCursor *string                `json:"nextCursor"`
+}
+
+// CalendarShareDirectoryAccount is one direct-membership account the intake matcher may use.
+type CalendarShareDirectoryAccount struct {
+	AccountID string   `json:"accountId"`
+	Name      string   `json:"name"`
+	Aliases   []string `json:"aliases"`
+	Domains   []string `json:"domains"`
+}
+
+type CalendarShareDirectory struct {
+	Accounts []CalendarShareDirectoryAccount `json:"accounts"`
+	// NextCursor is the last returned accountId when more accounts remain.
+	NextCursor string `json:"nextCursor,omitempty"`
+}
+
 type CalendarQuery struct {
 	From      time.Time
 	To        time.Time
