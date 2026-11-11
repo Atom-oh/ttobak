@@ -491,7 +491,7 @@ function handler(event) {
             },
           ],
         },
-        // HTTP MCP public discovery (RFC 9728), ADR-045. Exactly these two
+        // HTTP MCP public discovery (RFC 9728), ADR-003, transports. Exactly these two
         // paths, never '/.well-known/*'. They return a static document naming
         // the Cognito issuer and scopes and expose no data; the MCP endpoint
         // itself stays under '/api/*' with the edge check and API authorizer.

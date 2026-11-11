@@ -438,7 +438,7 @@ falling back to the legacy list/export. Collection groups are individually curre
 meeting consumers union overlapping access paths by meeting ID.
 The installed adapter also provides stateless, authenticated HTTP with caller-supplied
 file bytes. Remote hosting and OAuth client acceptance remain separate from code
-readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
+readiness; see [ADR-003, transports](decisions/ADR-003-mcp-access.md).
 Stdio alone can record the Mac microphone through a local ffmpeg child and upload
 the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
 The local intake runner (ADR-065) appends SpecReq task notices to

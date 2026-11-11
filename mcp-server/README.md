@@ -311,7 +311,7 @@ IDs through FrontendStack after deployment acceptance. Validate each client's ex
 resource binding, refresh and representative operations. Access tokens need not
 carry email/verified-email claims: do not fabricate them or weaken pending-invite
 checks. Source wiring and synthetic tests do not prove live client acceptance.
-See [ADR-045](../docs/decisions/ADR-045-dual-mcp-transports.md).
+See [ADR-003, transports](../docs/decisions/ADR-003-mcp-access.md).
 
 ### HTTP MCP from code-server
 
@@ -505,7 +505,7 @@ export, projects and links.
 
 `ttobak_list_audio_devices`, `ttobak_start_recording`, `ttobak_recording_status`,
 `ttobak_stop_recording` and `ttobak_upload_audio` exist only on stdio; the HTTP
-transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
+transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-003 transports).
 
 - Requires macOS and ffmpeg (`brew install ffmpeg`, or set `TTOBAK_FFMPEG`).
   `src/recorder.ts` records the microphone only (avfoundation, 16 kHz mono WAV,
@@ -683,7 +683,7 @@ artifact; CI's byte comparison verifies the committed copy.
 For connection failures, first verify the executable path, target configuration,
 OAuth callback/scopes and current user login. Do not solve authorization failures
 by granting anonymous API access. See [API reference](../docs/API-SPEC.md) and
-[ADR-003](../docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md).
+[ADR-003](../docs/decisions/ADR-003-mcp-access.md).
 
 KB file discovery uses bounded `/api/kb/files/reading` pages. Preserve opaque
 continuations until complete and restart stale anchors. File IDs stay exact;

@@ -867,7 +867,7 @@ after authorization. Storage references are never returned. Source:
 `handler/meeting_reading.go`, `service/meeting_reading*.go`; MCP usage:
 [adapter README](../mcp-server/README.md).
 
-HTTP MCP (ADR-045) is served by the `ttobak-mcp` Lambda, not the Go API:
+HTTP MCP (ADR-003, transports) is served by the `ttobak-mcp` Lambda, not the Go API:
 `ANY /api/mcp` (JWT authorizer; POST JSON-RPC, stateless, other methods 405) and
 the unauthenticated static discovery documents
 `GET /.well-known/oauth-protected-resource` and

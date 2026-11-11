@@ -20,7 +20,7 @@ An account is a shared entity with members and roles. The sections below keep, i
 Personal meeting partitions and per-meeting shares did not provide a durable team
 home for customer knowledge. Add Account to the existing DynamoDB single table,
 with memberships, roles, aliases, and reverse lookup. This avoids a new table or
-GSI while supporting the sharing and knowledge workflows of ADR-016 through ADR-018.
+GSI while supporting the sharing and knowledge workflows of ADR-016 through ADR-003.
 
 ### Current model and authorization
 
