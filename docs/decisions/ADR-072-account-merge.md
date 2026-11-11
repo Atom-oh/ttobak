@@ -5,7 +5,7 @@
   this branch; deployed acceptance is recorded separately.
 - Decision date: 2026-11-10.
 - Design: [account owner transfer and merge](../superpowers/specs/2026-11-10-account-owner-transfer-and-merge-design.md).
-- Relies on [ADR-071](ADR-071-account-owner-transfer.md) for the dual Owner condition.
+- Relies on [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) for the dual Owner condition.
 
 ## Decision
 
@@ -34,7 +34,7 @@ change of meeting owners or S3 object locations.
   is gone or on a third account is skipped and left in place.
 - **Children.** A's children move to B through a writer fenced by the merge job and
   B's ancestor chain, because the generic reparent requires the child's Owner.
-- **Audience.** Moved meetings become visible to B's direct members and ADR-058
+- **Audience.** Moved meetings become visible to B's direct members and ADR-015
   ancestor readers, not only to A's members gaining B's content. The preview reports
   `newAudience` (B members absent from A, whether B has ancestors) so the UI can show it;
   there is no further flag.

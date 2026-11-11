@@ -150,7 +150,7 @@ job is `failed` at the step it reached.
 2. Decide who should finish the merge. Either restore the original requester's
    Owner role and target membership through the normal member and owner-transfer
    routes, or choose another user who is already Owner of the source and a direct
-   member of the target. ADR-071 owner transfer is refused while the source carries
+   member of the target. ADR-015 owner transfer is refused while the source carries
    `mergingInto`, so it cannot appoint a new Owner during a fenced job.
 3. Rerun the step 2 command with `-requester` set to that user and the same `-into`
    (the target must match the failed job). Start re-authorizes the new requester and

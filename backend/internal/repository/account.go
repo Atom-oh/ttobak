@@ -128,7 +128,7 @@ func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.Accoun
 		return fmt.Errorf("marshal member: %w", err)
 	}
 	// Always create-only: a stale duplicate add must never overwrite an existing
-	// row, in particular one that just became the Owner (ADR-071).
+	// row, in particular one that just became the Owner (ADR-015, owner transfer).
 	expr, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
 	if err != nil {
 		return err
@@ -158,7 +158,7 @@ func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.Accoun
 }
 
 // nonOwnerMemberCondition fences generic member writers: the Owner row can
-// change concurrently through owner transfer (ADR-071), so these writes must
+// change concurrently through owner transfer (ADR-015, owner transfer), so these writes must
 // never land on a row that is (or just became) the Owner.
 func nonOwnerMemberCondition() expression.ConditionBuilder {
 	return expression.AttributeExists(expression.Name("PK")).
@@ -168,7 +168,7 @@ func nonOwnerMemberCondition() expression.ConditionBuilder {
 // DeleteMember removes an existing non-owner member only while ownerID is
 // still the Owner (META ownerUserId and MEMBER role), in one transaction, so a
 // removal racing an owner transfer cannot land after the requester lost
-// ownership (ADR-071). Any failed condition surfaces ErrConditionFailed (the
+// ownership (ADR-015, owner transfer). Any failed condition surfaces ErrConditionFailed (the
 // service re-reads to map not-found vs conflict).
 func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, ownerID, userID string) error {
 	if accountID == "" || ownerID == "" || userID == "" || ownerID == userID {
