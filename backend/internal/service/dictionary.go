@@ -69,7 +69,14 @@ type DictionaryService struct {
 	// correctionStore backs heardAs feedback from transcript corrections;
 	// nil disables the feedback.
 	correctionStore TermCorrectionStore
+	// liveVocabulary serves the READY active vocabulary name to its owner for
+	// live caption streams (SetLiveVocabulary).
+	liveVocabulary bool
 }
+
+// SetLiveVocabulary enables naming the caller's READY vocabulary in dictionary
+// responses so live caption streams can send it as VocabularyNames.
+func (s *DictionaryService) SetLiveVocabulary(enabled bool) { s.liveVocabulary = enabled }
 
 // NewDictionaryService creates a new dictionary service
 func NewDictionaryService(repo *repository.DictionaryRepository, transcribeClient *transcribe.Client) *DictionaryService {

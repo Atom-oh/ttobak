@@ -81,6 +81,8 @@ export interface VocabularyView {
   activeReady: boolean;
   failureCode?: string;
   termCount: number;
+  /** The caller's READY vocabulary for live caption streams, when enabled. */
+  liveName?: string;
 }
 export type VocabularyViews = { ko: VocabularyView; en: VocabularyView };
 export type LegacyDictionaryTerm = { phrase: string; soundsLike: string; displayAs: string };

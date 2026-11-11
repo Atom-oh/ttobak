@@ -30,6 +30,7 @@ const CODE_LABELS: Record<string, string> = {
   CLAUDE_CLI_MISSING: 'Claude Code CLI를 찾을 수 없어요. 설치 후 다시 시도하세요.',
   CLAUDE_CLI_AUTH: 'Claude Code 로그인이 필요해요. 터미널에서 `claude`를 실행해 `/login` 하세요.',
   SKILL_MISSING: 'sa-performance-report 스킬이 설치돼 있지 않아요.',
+  ADAPTER_OUTDATED: 'TTOBAK 수집 도구가 예전 버전이라 리포트를 만들 수 없어요. 설정의 수집 섹션에서 [업데이트]를 누른 뒤 다시 시도하세요.',
   SKILL_OUTDATED: 'sa-performance-report 스킬이 예전 버전이에요. internal-mcp-setup v1.4.0 설치 스크립트로 스킬을 갱신하세요.',
   REPORT_SANDBOX_UNAVAILABLE: 'Claude Code 샌드박스를 쓸 수 없어 리포트를 만들지 않았어요. Claude Code를 최신 버전으로 업데이트하세요.',
   REPORT_NO_SFDC: 'SFDC 데이터가 없어 리포트를 만들 수 없어요. 먼저 [지금 수집]을 실행하세요.',

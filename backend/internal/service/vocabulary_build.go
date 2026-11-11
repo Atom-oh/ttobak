@@ -127,7 +127,10 @@ func laterStamp(a, b string) string {
 	return b
 }
 
-func vocabularyView(st *model.VocabularyState) model.VocabularyView {
+// vocabularyView maps a state to its API form. live names the READY active
+// slot for the owner's live caption stream (ADR-008 rollout check 5); the name
+// is never served while the active slot is not READY or was emptied.
+func vocabularyView(st *model.VocabularyState, live bool) model.VocabularyView {
 	if st == nil {
 		return model.VocabularyView{Status: model.VocabStatusNone}
 	}
@@ -135,7 +138,12 @@ func vocabularyView(st *model.VocabularyState) model.VocabularyView {
 	if status == "" {
 		status = model.VocabStatusNone
 	}
-	return model.VocabularyView{Status: status, ActiveReady: st.ActiveReady && st.ActiveName != "", FailureCode: st.FailureCode, TermCount: st.TermCount}
+	ready := st.ActiveReady && st.ActiveName != ""
+	view := model.VocabularyView{Status: status, ActiveReady: ready, FailureCode: st.FailureCode, TermCount: st.TermCount}
+	if live && ready && st.EmptySince == "" {
+		view.LiveName = st.ActiveName
+	}
+	return view
 }
 
 // vocabularyViews reads the personal states without writing.
@@ -169,7 +177,7 @@ func (s *DictionaryService) viewsFrom(userID string, ko, en stateRead) *model.Vo
 		if r.err != nil {
 			log.Printf("failed to read %s vocabulary state for user %s: %v", lang, userID, r.err)
 		}
-		return vocabularyView(r.state)
+		return vocabularyView(r.state, s.liveVocabulary)
 	}
 	return &model.VocabularyViews{Ko: view(model.VocabLangKo, ko), En: view(model.VocabLangEn, en)}
 }
