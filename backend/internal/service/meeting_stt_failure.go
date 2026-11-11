@@ -18,7 +18,7 @@ type sttFailedMeetingDeleter interface {
 }
 
 // DeleteFailedRecording is the scheduled grace deletion of an AUDIO_CORRUPT
-// or NO_SPEECH meeting (ADR-031 amendment). It is never exposed through an API route.
+// or NO_SPEECH meeting (ADR-013, scheduled STT recovery). It is never exposed through an API route.
 // The owner ID comes from the row's own partition key. Rows are deleted in
 // one conditional transaction that refuses any user-authored data or relation;
 // owned S3 objects are removed only after that commit, and cleanup failures

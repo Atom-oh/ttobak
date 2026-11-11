@@ -61,5 +61,5 @@ the event reader. The share-origin backfill has no S3 client and reads access
 metadata only. Image/research/model-artifact readers do not hydrate spills.
 
 Reader preparation alone did not fix fixed-key overwrites before a rejected
-conditional write. [ADR-037](../decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md)
+conditional write. [ADR-013](../decisions/ADR-013-summary-generation-and-publication.md)
 records the immutable writer and retained-object tradeoffs.
