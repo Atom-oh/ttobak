@@ -19,6 +19,8 @@ import type { IntakeStore } from './store.js';
 const PAGE_LIMIT = 500;
 /** Departure-read cap per SFDC account; above it the snapshot is incomplete. */
 const MAX_READ_PER_ACCOUNT = 5_000;
+/** Page bound per SFDC account: a full read plus one terminal page. */
+const MAX_PAGES = Math.ceil(MAX_READ_PER_ACCOUNT / PAGE_LIMIT) + 1;
 /** Server caps (API-SPEC, sfdc-sync). */
 const MAX_SFDC_ACCOUNTS = 20;
 const MAX_ITEMS = 200;
@@ -55,6 +57,10 @@ export interface SfdcContactCounts {
   skippedAccountCap: number;
   /** TTOBAK Accounts sent without a departure snapshot. */
   incomplete: number;
+  /** Unlinked SFDC contacts of an incomplete Account: no email/name link or create is inferred from a partial read. */
+  deferredIncomplete: number;
+  /** `search_contacts` records whose own account ID is not the queried SFDC account; dropped. */
+  accountMismatch: number;
   marked: number;
   unmarked: number;
   /** Linked contacts the server's departure pass could not open. */
@@ -101,11 +107,14 @@ export interface MatchResult {
   suppressed: number;
   /** SFDC contacts without a usable name. */
   invalid: number;
+  /** Unlinked SFDC contacts not matched because `inferLinks` is false. */
+  deferred: number;
 }
 
 function emptyCounts(): SfdcContactCounts {
   return { accounts: 0, fetched: 0, created: 0, filled: 0, unchanged: 0, alreadyLinked: 0, suppressed: 0, conflict: 0,
-    invalid: 0, ambiguous: 0, skippedInternal: 0, skippedCap: 0, skippedAccountCap: 0, incomplete: 0, marked: 0,
+    invalid: 0, ambiguous: 0, skippedInternal: 0, skippedCap: 0, skippedAccountCap: 0, incomplete: 0,
+    deferredIncomplete: 0, accountMismatch: 0, marked: 0,
     unmarked: 0, skipped: 0, forbidden: 0, invalidIds: 0, ledgerReset: 0 };
 }
 
@@ -148,9 +157,13 @@ const byId = (first: { sfdcContactId: string }, second: { sfdcContactId: string 
  * email. A contact linked to another SFDC ID, or already matched by email, is
  * another person for a name match. Several candidates, or several SFDC
  * contacts for one candidate, are ambiguous and skipped; no match is a create.
+ * With `inferLinks: false` (an incomplete SFDC read, where a missing person
+ * could make a match ambiguous) only existing links are filled; every other
+ * unsuppressed contact is `deferred`.
  */
-export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], suppressed: Set<string>): MatchResult {
-  const result: MatchResult = { items: [], ambiguous: 0, unchanged: 0, suppressed: 0, invalid: 0 };
+export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], suppressed: Set<string>,
+  { inferLinks = true }: { inferLinks?: boolean } = {}): MatchResult {
+  const result: MatchResult = { items: [], ambiguous: 0, unchanged: 0, suppressed: 0, invalid: 0, deferred: 0 };
   const linked = new Map<string, ExistingContact>();
   const byEmail = new Map<string, ExistingContact[]>();
   const byName = new Map<string, ExistingContact[]>();
@@ -177,6 +190,11 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
     }
     if (suppressed.has(person.id)) { result.suppressed++; continue; }
     remaining.push(person);
+  }
+  if (!inferLinks) {
+    result.deferred = remaining.length;
+    result.items = links.sort(byId);
+    return result;
   }
 
   const sfdcEmails = new Map<string, number>();
@@ -233,11 +251,13 @@ function internalEmail(email: string): boolean {
 
 /**
  * One customer contact, `'internal'` for an internal record type or AWS email,
- * or `'invalid'` for an ID that is not an SFDC ID. Phone fields are never read.
+ * `'invalid'` for an ID that is not an SFDC ID, or `'mismatch'` when the
+ * record's own account ID is not the queried one. Phone fields are never read.
  */
-function contactPerson(value: Record<string, unknown>, accountId: string): SfdcPerson | 'internal' | 'invalid' {
+function contactPerson(value: Record<string, unknown>, accountId: string): SfdcPerson | 'internal' | 'invalid' | 'mismatch' {
   const id = canonicalSfdcId(value.id);
   if (!id) return 'invalid';
+  if (canonicalSfdcId(value.accountId) !== accountId) return 'mismatch';
   if (!(value.recordType === undefined || value.recordType === null || record(value.recordType))) {
     throw parseFailed('contact record has an unexpected record type');
   }
@@ -255,16 +275,25 @@ function contactPerson(value: Record<string, unknown>, accountId: string): SfdcP
 }
 
 interface AccountRead {
-  people: SfdcPerson[]; ids: string[]; fetched: number; internal: number; invalidIds: number; complete: boolean; failure?: IntakeCode;
+  people: SfdcPerson[]; ids: string[]; fetched: number; internal: number; invalidIds: number; mismatch: number;
+  complete: boolean; failure?: IntakeCode;
 }
 
-/** Every page of one SFDC account, up to 5,000 contacts. Only Midway expiry throws. */
+/**
+ * Every page of one SFDC account, up to 5,000 contacts and 11 pages. An empty
+ * page that claims more, or any repeated cursor, fails closed. More than 5,000
+ * kept IDs (uneven pages) make the read incomplete and are cut to 5,000. Only
+ * Midway expiry throws.
+ */
 async function readAccount(source: SfdcSource, accountId: string): Promise<AccountRead> {
-  const read: AccountRead = { people: [], ids: [], fetched: 0, internal: 0, invalidIds: 0, complete: false };
+  const read: AccountRead = { people: [], ids: [], fetched: 0, internal: 0, invalidIds: 0, mismatch: 0, complete: false };
   const seen = new Set<string>();
+  const cursors = new Set<string>();
   let after: string | undefined;
   try {
-    while (read.fetched < MAX_READ_PER_ACCOUNT) {
+    for (let index = 0; ; index++) {
+      if (read.fetched >= MAX_READ_PER_ACCOUNT) break;
+      if (index >= MAX_PAGES) throw parseFailed(`search_contacts exceeded ${MAX_PAGES} pages`);
       const page = parsePage(await source.call(SFDC_CONTACTS_TOOL.name, {
         condition: { field: 'accountId', operator: 'EXACT_MATCH', value: accountId }, limit: PAGE_LIMIT,
         ...(after ? { after } : {}) }), SFDC_CONTACTS_TOOL.name);
@@ -278,15 +307,22 @@ async function readAccount(source: SfdcSource, accountId: string): Promise<Accou
       for (const person of people) {
         if (person === 'internal') read.internal++;
         else if (person === 'invalid') read.invalidIds++;
+        else if (person === 'mismatch') read.mismatch++;
         else { read.people.push(person); read.ids.push(person.id); }
       }
       if (!page.hasNextPage) {
         if (read.fetched < page.totalCount) throw parseFailed('search_contacts result is incomplete');
         read.complete = true;
-        return read;
+        break;
       }
-      if (page.cursor === after) throw parseFailed('search_contacts cursor did not advance');
+      if (!page.records.length) throw parseFailed('search_contacts returned an empty page with more pages');
+      if (cursors.size === cursors.add(page.cursor!).size) throw parseFailed('search_contacts repeated a cursor');
       after = page.cursor!;
+    }
+    if (read.ids.length > MAX_READ_PER_ACCOUNT) {
+      read.complete = false;
+      read.ids = read.ids.slice(0, MAX_READ_PER_ACCOUNT);
+      read.people = read.people.slice(0, MAX_READ_PER_ACCOUNT);
     }
     return read;
   } catch (error) {
@@ -477,6 +513,7 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
         counts.fetched += read.fetched;
         counts.skippedInternal += read.internal;
         counts.invalidIds += read.invalidIds;
+        counts.accountMismatch += read.mismatch;
         people.push(...read.people);
         present[sfdcAccountId] = read.ids;
         if (!read.complete) complete = false;
@@ -488,7 +525,8 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
       const ledger = readLedger(store, scope, accountId);
       if (ledger.reset) counts.ledgerReset++;
       const suppressed = ledger.ids;
-      const match = matchContacts(people, current, suppressed);
+      // A partial read could hide a same-named or same-email person, so only existing links are filled.
+      const match = matchContacts(people, current, suppressed, { inferLinks: complete });
       // Emails were needed only for matching; none reaches the request.
       for (const person of people) delete person.email;
       for (const contact of current) contact.email = '';
@@ -496,6 +534,7 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
       counts.unchanged += match.unchanged;
       counts.suppressed += match.suppressed;
       counts.invalid += match.invalid;
+      counts.deferredIncomplete += match.deferred;
       counts.skippedCap += Math.max(0, match.items.length - MAX_ITEMS);
       const body: SfdcContactSyncBody = { snapshotComplete: complete, sfdcAccountIds,
         ...(complete ? { present } : {}), items: match.items.slice(0, MAX_ITEMS) };
