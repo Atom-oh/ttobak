@@ -1,7 +1,7 @@
 // Synthetic stand-in for a local aws-sentral-mcp server. It mirrors only the
 // recorded result shapes of four read tools; every ID, name, email and phone is synthetic.
 // FAKE_SENTRAL_MODE: ok | auth (second task page fails) | schema (search_tasks changed).
-// FAKE_SENTRAL_CONTACTS: ok | page2-error (second contact page fails) | page2-auth (it reports Midway expiry).
+// FAKE_SENTRAL_CONTACTS: ok | page2-error (second contact page fails) | page2-auth (it reports Midway expiry) | missing (no search_contacts tool).
 // FAKE_SENTRAL_REGISTRY: single | mixed (adds a Partner L14 record and an older sales version).
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -25,8 +25,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: 'search_tasks', description: 'synthetic', inputSchema: mode === 'schema'
       ? object({ query: { type: 'string' }, limit: { type: 'number' } })
       : object({ condition: { type: 'object' }, limit: { type: 'number' }, after: { type: 'string' } }) },
-    { name: 'search_contacts', description: 'synthetic', inputSchema: object({ condition: { type: 'object' },
-      limit: { type: 'number' }, after: { type: 'string' }, queryTerm: { type: 'string' } }) },
+    ...(contactsMode === 'missing' ? [] : [{ name: 'search_contacts', description: 'synthetic', inputSchema: object({ condition: { type: 'object' },
+      limit: { type: 'number' }, after: { type: 'string' }, queryTerm: { type: 'string' } }) }]),
   ],
 }));
 
