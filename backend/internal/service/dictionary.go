@@ -138,7 +138,7 @@ func (s *DictionaryService) readDictionary(ctx context.Context, userID string, w
 // personalVocabularyStatus reports the legacy status string for the personal
 // ko-KR vocabulary, preferring the VOCAB# row (read by the caller) over the
 // blob. The response carries no vocabulary name: the live client would send a
-// ko-KR-only vocabulary on its ko-KR/en-US stream (ADR-008 acceptance item 5).
+// ko-KR-only vocabulary on its ko-KR/en-US stream (ADR-008 rollout check 5).
 func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary, ko stateRead) string {
 	state, err := ko.state, ko.err
 	if err != nil {

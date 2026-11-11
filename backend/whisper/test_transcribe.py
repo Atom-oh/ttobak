@@ -161,7 +161,7 @@ class TestTurnsFromDiarization(unittest.TestCase):
 
 
 class TestBundlePyannoteMismatch(unittest.TestCase):
-    """ADR-035 deploy-ordering guard: a half-deployed state (new image +
+    """ADR-009 deploy-ordering guard: a half-deployed state (new image +
     old bundle, or the reverse) must produce one loud line and a skip, not
     a swallowed config-incompatibility inside _diarize."""
 
@@ -178,7 +178,7 @@ class TestBundlePyannoteMismatch(unittest.TestCase):
         msg = transcribe._bundle_pyannote_mismatch(
             'models/whisperx-diarization-4.x.tar.gz', '3.4.0')
         self.assertIn('MISMATCH', msg)
-        self.assertIn('ADR-035', msg)
+        self.assertIn('ADR-009', msg)
 
     def test_unrecognized_key_skips_check(self):
         # No marker at all, and a numeric marker outside the known

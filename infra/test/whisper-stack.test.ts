@@ -197,13 +197,13 @@ describe('WhisperStack whisperx benchmark additions', () => {
   });
 });
 
-describe('WhisperStack legacy task definition (ADR-035)', () => {
+describe('WhisperStack legacy task definition (ADR-009)', () => {
   test('does NOT set DIARIZATION_S3_KEY, and keeps its other required env', () => {
     // The bundle key's source of truth is transcribe.py's in-image default,
     // so bundle generation and pyannote pin ship atomically with the image.
     // A CDK-set key would deploy through a different workflow than the
     // image and the two race on merge pushes — re-adding it here would
-    // resurrect the mismatch window ADR-035 closed. The presence checks pin
+    // resurrect the mismatch window ADR-009 closed. The presence checks pin
     // the rest of the env so this test can't pass vacuously against a
     // container whose environment went missing entirely.
     const template = synth();

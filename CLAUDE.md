@@ -14,8 +14,8 @@ documentation stays English.
 - Verify implementation claims against the reviewed revision's code, tests,
   manifests, and CDK. Documentation records intent, not proof of deployment.
   Keep security requirements even when existing code has a documented gap.
-- `docs/README.md` indexes current references. ADRs record decisions and name
-  superseding decisions explicitly. Plans, research, benchmarks, and old
+- `docs/README.md` indexes current references. ADRs are topic records of
+  the rules in force. Plans, research, benchmarks, and old
   review reports are historical evidence, not current acceptance criteria.
 - Report a PR defect only with a changed path/line, a concrete failing scenario,
   and code evidence. Model agreement is not evidence. Missing context is an
@@ -149,7 +149,7 @@ limit instead of claiming a Mac build passed.
   task IDs/human completion and conditional checkbox updates; absent legacy metadata
   is unknown, expired leases are interrupted failures.
 - **Whisper:** keep production ASR pins consistent with `verify_pins.py`.
-  Diarization uses pyannote 4.x/community-1 (ADR-035). The image, not CDK, owns
+  Diarization uses pyannote 4.x/community-1 (ADR-009). The image, not CDK, owns
   the bundle key, avoiding independent deploy races. WhisperX's dispatcher
   is `ENTRYPOINT ["python3", "run_engine.py"]`; engine selection uses `ENGINE`.
   Adding task-definition `entryPoint`/`command` overrides or bypassing the image
@@ -305,7 +305,7 @@ exposure:
 | Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-037); do not generalize the legacy window to that path. |
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
-| Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009/035, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
+| Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
 | Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-056; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
 
 JWT verification and document file-key ownership checks exist:
@@ -352,7 +352,10 @@ the session; a generic skill cannot invent another approval loop.
 
 Update only affected current references: API handlers to `docs/API-SPEC.md`, CDK to
 `docs/INFRA-SPEC.md`, UI to `docs/DESIGN-SPEC.md`, cross-component changes to
-`docs/architecture.md`, durable decisions to ADRs. Keep historical records labeled
+`docs/architecture.md`, durable decisions to ADRs. ADRs are at most 30 topic
+records (`docs/decisions/README.md`): put a new decision into the record that owns
+its topic and rewrite the affected rules in place, without dated amendments or a
+new numbered file per decision. Keep historical records labeled
 and link successors rather than restating abandoned plans as rules. Use paths and
 symbols instead of fragile line numbers or copied implementation blocks.
 
