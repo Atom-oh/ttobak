@@ -350,6 +350,7 @@ describe('AiStack', () => {
               'cognito-idp:AdminUserGlobalSignOut',
               'cognito-idp:AdminGetUser',
               'cognito-idp:ListUsersInGroup',
+              'cognito-idp:AdminUpdateUserAttributes',
             ]),
             Resource: 'arn:aws:cognito-idp:ap-northeast-2:111111111111:userpool/test-pool',
           }),
