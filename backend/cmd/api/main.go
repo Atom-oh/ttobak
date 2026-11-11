@@ -215,10 +215,10 @@ func init() {
 	dictService.SetMembershipBatchReader(service.BatchMembershipReader(repo))
 	// Account terms join the personal vocabulary in meeting-recency order.
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
-	// Live translation keeps the speaker's dictionary spellings (high quality only).
-	translateService.SetGlossarySource(dictService)
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
+	// Live translation keeps the speaker's dictionary spellings (high quality only).
+	translateService.SetGlossarySource(dictService)
 	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.
 	translateHandler.SetRateLimits(
 		service.NewWindowCounter(repository.NewRateCounterRepository(dynamoClient, tableName)),
