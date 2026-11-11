@@ -422,6 +422,34 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   (`accountAcceptedTerms`, which can hold keys the personal merge skipped) in
   one update before the Account merge; the deletion sweep cleans each recorded
   Account for `acceptedTerms` plus `accountAcceptedTerms`.
+- **Meeting relink and the Account layer (FU4, 2026-11-11).** After a change of
+  the meeting's `accountId` commits (private link, `share-account`, account
+  merge in the worker and the CLI's link-only move),
+  `SweepMeetingAccountTerms` cleans every recorded Account other than the
+  current one: per key it deletes the meeting's observation, then deletes an
+  unedited auto term left without observations or removes the meeting from
+  `sources` and `firstSourceMeetingId` of a term that stays (manual and edited
+  terms included), version-guarded with re-reads. A clean Account leaves
+  `accountIds` only while `accountRecords` is unchanged and the meeting is not
+  linked to it again. `hits` is not decremented. The sweep is best effort and
+  idempotent: failures log `trigger`, outcome, an error code and counts only;
+  it re-runs on a repeated link call and on the next terms run, and deletion
+  still sweeps every recorded Account. Race guard: `RecordTermsAccount` and
+  every Account observation write require the meeting to still be linked to
+  that Account in the same transaction (`outcome=UNLINKED` otherwise). Each
+  Account observation write also updates the run state in that transaction:
+  it needs the Account in `accountIds` and bumps `accountRecords`, as
+  `RecordTermsAccount` does. So no write lands in an Account the sweep already
+  dropped, and a write after the sweep read the run state (for example during
+  two relinks inside one merge pass) fails the drop guard and keeps the
+  Account recorded for the next relink's sweep. A relink straight back during
+  a sweep can still drop the meeting's evidence from the Account it returned
+  to (an undercount until a changed source runs again); every Account
+  observation stays recorded. For an account merge the source's dictionary layer stays on the
+  retired source (an unmoved category, ADR-022) and is not copied: moved
+  meetings' evidence leaves it like on any relink, other evidence and manual
+  rows stay. The new Account gets a meeting's terms only from its next run
+  with a changed source (an unchanged `sourceHash` queues none).
 - **L3 (corrections).** Glossary corrections to the transcript are applied
   silently; the records are stored on the meeting and never shown in the UI. A
   refined segment in which a glossary form appears more often than in its source
@@ -470,9 +498,14 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   unlinked from or relinked to an Account (a meeting's `accountId` change, a
   research report's `accountIds` change, a KB object's `account-id` change):
   remove that source's observations, its `sources` references on the term and
-  auto terms left without observations in the old Account. Today only meeting
-  deletion sweeps an Account. FU4 is required before `accountTermsMode`,
-  `kbTermsMode` or `researchTermsMode` is turned on. Those two flags also
+  auto terms left without observations in the old Account. The meeting part
+  is done (2026-11-11, see meeting relink above) and is the part
+  `accountTermsMode` needs; the flag stays off until its own deployment. The
+  research `accountIds` and KB `account-id` parts remain and still gate
+  `kbTermsMode` and `researchTermsMode` `on`. Transcript-correction rows in an
+  Account (`TERMS_CORRECTION#` meeting sets, TTL-bounded, and automatic
+  `heardAs` appends) are L3 feedback, not observations, and are not swept on
+  relink. Those two flags also
   accept `personal` (2026-11-09): Personal-layer writes only, which FU4 does not
   gate. FU5: promote and demote
   terms between Personal and Account (spec section 4.5); not implemented. FU6:
