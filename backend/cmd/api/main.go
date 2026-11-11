@@ -216,6 +216,9 @@ func init() {
 	dictService.SetMembershipBatchReader(service.BatchMembershipReader(repo))
 	// Account terms join the personal vocabulary in meeting-recency order.
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
+	// Live caption streams receive the owner's READY vocabulary name only when
+	// enabled (ADR-008 rollout check 5); "off" is the kill switch.
+	dictService.SetLiveVocabulary(os.Getenv("LIVE_VOCABULARY_MODE") == "on")
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.

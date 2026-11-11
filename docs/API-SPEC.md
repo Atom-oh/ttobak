@@ -2076,14 +2076,15 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   `EnsureVocabularies`, which polls, flips or starts the personal ko-KR build
   (en-US is deferred and reports `NONE`); failures are `warnings` and the
   active vocabulary keeps serving.
-  `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount}`
+  `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount, liveName?}`
   per language (`status` `READY|BUILDING|FAILED|QUOTA_EXCEEDED|NONE` is the
   latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `PENDING`
   while a ko-KR build is in flight (so the settings UI keeps polling the GET,
   which flips it), otherwise `READY` whenever the active vocabulary is ready.
-  No response carries a
-  vocabulary name yet: the live client would send a ko-KR-only
-  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 rollout check 5).
+  `liveName` is the caller's own READY active vocabulary name, present only
+  when `LIVE_VOCABULARY_MODE=on` and the active slot is READY and not emptied.
+  The recording page sends it as `VocabularyNames` on live streams, including
+  the ko-KR/en-US multi-language stream (ADR-008 rollout check 5).
   The builder replaces the earlier in-place rebuild of the derived ko-KR
   vocabulary, including its pending-build deferral warning and bounded
   conflict recomputation; that path no longer exists.
