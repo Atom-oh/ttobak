@@ -78,7 +78,7 @@ export interface GatewayStackProps extends cdk.StackProps {
    * Off by default; when off, ttobak-api's configuration is unchanged.
    */
   apiTelemetryEnabled?: boolean;
-  /** ADR-033 cost/sizing simulator */
+  /** ADR-010 cost/sizing simulator */
   simRole?: iam.IRole;
   simCodeInterpreterId?: string;
 }
@@ -786,7 +786,7 @@ export class GatewayStack extends cdk.Stack {
     });
     qaJobsMapping.node.addDependency(qaJobsPolicy);
 
-    // Cost/sizing simulator worker (ADR-033) — invoked async by the api
+    // Cost/sizing simulator worker (ADR-010) — invoked async by the api
     // Lambda (InvocationType=Event) once a run is recorded as "queued".
     // 15-minute timeout budgets for a Code Interpreter session (10-minute
     // sessionTimeoutSeconds in the handler) plus up to 3 codegen/execute

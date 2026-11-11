@@ -334,7 +334,7 @@ export const meetingsApi = {
       `/api/meetings/${meetingId}/action-items/${encodeURIComponent(itemId)}`, { completed }, options,
     ),
 
-  // ADR-033 cost/sizing simulator
+  // ADR-010 cost/sizing simulator
   extractSimRequirements: (meetingId: string) =>
     api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim/extract`, {}),
 
