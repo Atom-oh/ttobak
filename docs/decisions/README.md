@@ -44,3 +44,4 @@ rewritten.
 | [ADR-019](ADR-019-mac-app-distribution-and-updates.md) | Mac app distribution and in-app updates; the former ADR-073, renumbered |
 | [ADR-001](ADR-001-meeting-document-extraction.md) | Meeting document text extraction; the former ADR-039, renumbered |
 | [ADR-023](ADR-023-sa-performance-data-residency.md) | SA performance data residency; the former ADR-068, renumbered |
+| [ADR-010](ADR-010-meeting-cost-sizing-simulator.md) | Meeting cost and sizing simulations; the former ADR-033, renumbered |

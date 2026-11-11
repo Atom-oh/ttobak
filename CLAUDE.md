@@ -252,7 +252,7 @@ limit instead of claiming a Mac build passed.
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX
   networking, not prompt filtering/import denylisting. A per-meeting `SIMRUN`
   singleton and matching `simRunId` conditions prevent stale worker writes;
-  preserve both Go and Python guards (ADR-033).
+  preserve both Go and Python guards (ADR-010).
 - **Mac:** finished WAV bytes stream disk-to-S3 in Rust, never through WebView IPC;
   live raw PCM chunks intentionally cross IPC. Pin the exact
   `EXPECTED_BUCKET_HOST`, not an AWS domain suffix. Upload timeouts measure stalled

@@ -1798,7 +1798,7 @@ runs are persisted to error by GetSimRun, not merely displayed as error.
 Only validated requirements/options enter codegen; option descriptions still
 influence the prompt. The interpreter's empty IAM role and SANDBOX network are the
 execution boundary. Worker updates require matching simRunId. Outputs stay under
-images/ and files/; details are in ADR-033 and service/sim.go.
+images/ and files/; details are in ADR-010 and service/sim.go.
 
 ### Admin and settings
 

@@ -36,7 +36,7 @@ export class AiStack extends cdk.Stack {
   public readonly convertDocRole: iam.Role;
   public readonly audioRemuxRole: iam.Role;
   public readonly simRole: iam.Role;
-  /** aws.codeinterpreter.v1's custom sibling (ADR-033) -- SANDBOX network,
+  /** aws.codeinterpreter.v1's custom sibling (ADR-010) -- SANDBOX network,
    * no policy ever attached to its own execution role. */
   public readonly simCodeInterpreter: agentcore.CodeInterpreterCustom;
   public readonly kmsKey: kms.Key;
@@ -116,7 +116,7 @@ export class AiStack extends cdk.Stack {
     );
 
     // api Lambda hands a confirmed simulation run off to ttobak-sim
-    // asynchronously (ADR-033) -- same InvocationType=Event shape as
+    // asynchronously (ADR-010) -- same InvocationType=Event shape as
     // websocketRole's InvokeQALambda grant below.
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
@@ -478,7 +478,7 @@ export class AiStack extends cdk.Stack {
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
     );
 
-    // ==================== Sim Code Interpreter (ADR-033) ====================
+    // ==================== Sim Code Interpreter (ADR-010) ====================
     // usingSandboxNetwork() must be explicit -- the L2 construct's default
     // is usingPublicNetwork(), which would silently give the sandbox
     // internet access. What actually keeps the sandbox from reaching AWS
@@ -501,7 +501,7 @@ export class AiStack extends cdk.Stack {
     this.simRole = createLambdaRole(
       'TtobakSimRole',
       'ttobak-sim-role',
-      'Role for ttobak-sim Lambda function (ADR-033 cost/sizing simulator)'
+      'Role for ttobak-sim Lambda function (ADR-010 cost/sizing simulator)'
     );
     props.table.grantReadWriteData(this.simRole);
     props.bucket.grantWrite(this.simRole, 'images/*');
@@ -516,7 +516,7 @@ export class AiStack extends cdk.Stack {
     );
     this.simCodeInterpreter.grantUse(this.simRole);
     // Price List API has no resource-level permissions at all -- Resource:"*"
-    // is unavoidable, not a shortcut. Documented exception (ADR-033),
+    // is unavoidable, not a shortcut. Documented exception (ADR-010),
     // alongside the existing CognitoListUsers/BedrockKBRetrieve wildcards:
     // read-only, publicly-published pricing data, nothing tenant-specific.
     this.simRole.addToPolicy(
