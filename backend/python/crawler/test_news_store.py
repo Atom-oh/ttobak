@@ -247,6 +247,15 @@ class TestNewsStoreTransactions(unittest.TestCase):
         self.assertIsNone(self.row(self.job.sk))
         self.assertIsNone(self.row("NEWSBUDGET#2026-10"))
 
+    def test_invalid_search_scope_is_a_changed_source_not_an_exception(self):
+        self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
+                               UpdateExpression="SET searchDomains = :d",
+                               ExpressionAttributeValues={":d": ["Not A Domain"]})
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.store.current_config(self.job.source_id, self.job.revision)
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.reserve()
+
     def test_scope_narrowed_after_the_worker_check_blocks_reservation_and_publication(self):
         # The worker checked an empty scope; an operator then adds an allowlist.
         self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
