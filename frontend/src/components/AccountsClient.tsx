@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi } from '@/lib/api';
+import { buildAccountTree } from '@/lib/accountTree';
 import { addMemberWithInvite, summarizeMemberOutcomes, type MemberAddOutcome } from '@/lib/accountInvite';
 import { accountCreationAttempt, accountCreationNotice, type CreationAttempt } from '@/lib/accountCreation';
 import { MemberPicker } from '@/components/MemberPicker';
-import { AccountHierarchyList } from '@/components/AccountHierarchyList';
 import { AccountParentSelect } from '@/components/AccountParentSelect';
 import { AccountDetailContent } from '@/components/AccountDetailClient';
 import { AccountWorkspaceSelector } from '@/components/workspace/AccountWorkspaceSelector';
@@ -43,7 +43,13 @@ function AccountsContent() {
     setObservedAccountId(queryAccountId);
     setSelectedAccountId(queryAccountId);
   }
-  const selectedId = selectedAccountId || loadedAccounts[0]?.accountId || '';
+  // Default to the first hierarchy row (Korean name order), then keep that
+  // default while it stays listed so a re-parent cannot swap the open customer.
+  const firstAccountId = useMemo(() => buildAccountTree(loadedAccounts)[0]?.accountId || '', [loadedAccounts]);
+  const [defaultAccountId, setDefaultAccountId] = useState('');
+  const defaultListed = loadedAccounts.some(account => account.accountId === defaultAccountId);
+  if (!selectedAccountId && !defaultListed && defaultAccountId !== firstAccountId) setDefaultAccountId(firstAccountId);
+  const selectedId = selectedAccountId || (defaultListed ? defaultAccountId : firstAccountId);
   const selectAccount = (accountId: string) => {
     if (!accounts.some(account => account.accountId === accountId)) return;
     setSelectedAccountId(accountId);
@@ -209,7 +215,7 @@ function AccountsContent() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl min-w-0">
+    <div className="w-full min-w-0">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-text-main">고객 Accounts</h1>
@@ -357,7 +363,7 @@ function AccountsContent() {
         </form>
       )}
 
-      <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-6">
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
@@ -381,12 +387,6 @@ function AccountsContent() {
             : <p className="text-sm text-text-secondary">고객을 선택하거나 새 어카운트를 만드세요.</p>}
         </div>
       </div>
-      {!loading && accounts.length > 0 && (
-        <details className="mt-6 rounded-xl border border-border-subtle p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-text-main">어카운트 계층 보기</summary>
-          <div className="mt-4"><AccountHierarchyList accounts={accounts} /></div>
-        </details>
-      )}
     </div>
   );
 }

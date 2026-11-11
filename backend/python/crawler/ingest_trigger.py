@@ -46,7 +46,7 @@ def handler(event, context):
     # execution reports SUCCEEDED regardless. 'PENDING' is checked
     # explicitly (not just falsiness): it's the actual placeholder
     # knowledge-stack.ts hardcodes before the real KB/DataSource are wired
-    # up (see ADR-021) -- a truthy, non-empty string that `not KB_ID` alone
+    # up (see ADR-004, pipeline repair) -- a truthy, non-empty string that `not KB_ID` alone
     # would let straight through.
     if not KB_ID or not DATA_SOURCE_ID or 'PENDING' in (KB_ID, DATA_SOURCE_ID):
         raise RuntimeError(f'KB_ID/DATA_SOURCE_ID not configured (KB_ID={KB_ID!r}, DATA_SOURCE_ID={DATA_SOURCE_ID!r})')

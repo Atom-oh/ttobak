@@ -39,7 +39,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | Command | Contract |
 |---|---|
 | start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
-| list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
+| list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-017) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, capture_lost (a failed mic switch stopped capture), optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
@@ -49,11 +49,11 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
 | control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
-| meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-061) |
+| meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-017) |
 | meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 | update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
-| caption_settings_get | returns {settings {profile, region, extraLanguage, windows}, profiles (names only), fonts} (ADR-069) |
+| caption_settings_get | returns {settings {profile, region, extraLanguage, windows}, profiles (names only), fonts} (ADR-018) |
 | caption_settings_set | profile?, region, extraLanguage ja/zh/null; profile must be in the local AWS profile list; choosing or changing the profile or region first shows a native confirmation sheet from Rust (cancel: `confirmation-declined`, settings unchanged; for 30 s after a cancel such a change returns `confirmation-cooldown` with no sheet; a call while one runs: `invalid-input`); clears cached AWS clients |
 | caption_translate | text, sourceLang, targetLang, isFinal, context[]; returns translatedText, engine llm/translate; SigV4 credentials only from the selected profile, never the default credentials chain (other SDK settings still load via `aws_config::defaults`); Bedrock is pinned to SigV4, so `AWS_BEARER_TOKEN_BEDROCK` is ignored (`bedrock_config`); upstream throttling returns `rate-limited`; only while that language's overlay window is open; 600 requests and 600,000 input bytes (text plus context) per sliding minute; text at most 9,000 bytes, context at most five items |
 | caption_overlay_open | lang ko/en/ja/zh (ja/zh only as the extra language); opens or reuses the window, returns its saved layout |
@@ -61,6 +61,16 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | caption_overlay_set_style | lang, style {fontFamily, fontSize 16-160, fontColor, outlineColor, outlineWidth 0-12, backgroundOpacity 0-1}; saved and sent to the window |
 | caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus; `clear` also makes the window ignore the pointer; pushes to one window are serialised (`PushLanes`), other windows are independent |
 | caption_overlay_idle | idle; overlay windows only (`caption-overlay.json`, never the remote SPA); sets only the calling `caption-<lang>` window to let clicks through while it shows no caption, and to take them again once it does; sync, main thread, no lock |
+| intake_get_state | returns {adapter {present, updateAvailable null/bool}, nodePath, nodeMissing, schedule {kind off/hourly/daily/twiceDaily, times}, running run/setup/login/scheduleOff/null, lastResult (last `intake://finished` payload), status (`~/.ttobak/intake/status.json`, at most 256 KiB), selection [{connector, server, host, disabled}] (names only), launchAgentInstalled (the CLI LaunchAgent plist exists; the UI warns when the app schedule is also on), progress (last 200 lines)} (ADR-003, `intake_runner.rs`) |
+| intake_set_schedule / intake_set_node_path | schedule (typed); path (absolute executable regular file named `node`, else `invalid-node-path`); stored in app config `intake.json` |
+| intake_run_now / intake_setup / intake_login | start one background CLI run (setup: acceptPrivateCalendar, skip [connector]); `RUN_IN_PROGRESS` while one runs, `ADAPTER_UPDATING` during an adapter update; progress as `intake://progress` {line}, end as `intake://finished` {action, exitCode, result, code}; 20-minute timeout SIGTERMs the process group, then SIGKILLs it after a 3 s grace even when the CLI leader already exited |
+| intake_cancel / intake_launch_agent_off | cancel returns whether a run was cancelled; launch-agent-off runs `intake schedule off` in the same exclusive run slot (killed on quit) and returns its JSON or code |
+| intake_check_adapter / intake_update_adapter | compare or install `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (no redirects, at most 8 MiB, must contain `intake setup`) against `~/.ttobak/server.mjs`, keeping one `server.mjs.bak` (a link to the replaced file; `server.mjs` changes only by an atomic rename); only `intake_update_adapter` is refused while a run is going (`intake_check_adapter` is allowed) |
+| report_generate | period week/quarter/year/custom, start?/end? (strict `YYYY-MM-DD` calendar dates 2000-2100, only and both for custom, end >= start, at most 400 days inclusive; an end year + 3 not after the current UTC year: `REPORT_PERIOD_EXPIRED`), highlights? {projects, initiatives, channels, programs} (unknown keys refused; each at most 20 items of at most 200 characters, no control characters, tags, Markdown or Slack links); else `INVALID_ARGUMENT` before any spawn; a stored Bedrock profile no longer listed: `profile-missing`; starts `report run --noninteractive` in the background (`report_runner.rs`; highlights go to a 0600 file in a fresh 0700 temp directory, named `ttobak-report-hl-<pid>-<nanos>-<seq>`, removed after the run, and stale ones of dead app processes are swept at launch; the child gets the app's `TMPDIR`, so the CLI's run directory shares that temp root); `RUN_IN_PROGRESS` while a report runs (its own slot: it may overlap an intake run); progress as `report://progress` {line}, end as `report://finished` {exitCode, result (the CLI's `{ok, periodKey, partial, missingSources}` line), code (CLI code; Rust's forced ends are `REPORT_TIMEOUT`/`REPORT_CANCELLED`)}; 50-minute timeout (the CLI's own is 45), SIGTERM then SIGKILL of the group after a 10 s grace; at app quit a running report's group gets up to 2 s (only until it is gone) instead of 300 ms |
+| report_cancel / report_get_state | cancel returns whether a run was cancelled; state returns {running, lastResult (last `report://finished` payload), progress (last 200 lines), settings {useBedrock, awsProfile}} so the page recovers after a reload |
+| report_settings_get / report_settings_set | {useBedrock, awsProfile?}; get also returns profiles (names only); the profile must be in the local AWS profile list (`profile-missing`); stored under `report` in app config `intake.json` (a malformed value reads as the default) |
+
+Intake commands spawn node with argv only (no shell; the login PATH is captured once with `$SHELL -l -c`), a cleared environment (HOME, LANG, PATH) and their own process group, group-killed on timeout, cancel and app exit (a `shutting_down` flag stops any later spawn). The scheduler runs due slots and catches up at launch and about 45 s after a wake (`native-system-wake` or a wall-clock jump); a `PARTIAL_FAILURE` run satisfies its slot only when a connector succeeded. Report runs share that spawn (`intake_runner::run_child`) and app-exit kill, and add only `USER`/`LOGNAME` (Keychain login of the claude CLI) plus, only when Bedrock is enabled in the report settings, `TTOBAK_REPORT_USE_BEDROCK=1` and the validated `TTOBAK_REPORT_AWS_PROFILE`.
 
 Caption command errors carry a fixed `code`: profile-missing, credentials-expired,
 model-access, rate-limited, invalid-input, invalid-output, timeout, aws-error,
@@ -78,7 +88,7 @@ native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser
 recording}) also go to the main window only; native-meeting-answered (same shape)
 closes the banner after the floating prompt window (`meeting_prompt.rs`, local
 `meeting-prompt.html`, `meeting_prompt_choose` only) answered it.
-Caption overlay (ADR-069): `caption-update` ({lang, kind, id, order, text, isFinal}) and
+Caption overlay (ADR-018): `caption-update` ({lang, kind, id, order, text, isFinal}) and
 `caption-style` (style fields plus lang) are sent with `emit_to` to the matching
 `caption-<lang>` window. A JS listener with the default target receives every emit, so the
 page listens with target `{kind: 'WebviewWindow', label: 'caption-<lang>'}` and also drops
@@ -90,7 +100,7 @@ passes clicks through and shows no hover chrome until text returns. Hover chrome
 (outline, move handle, resize grip) is invisible without a pointer; the grip resizes
 via page `setSize` because tao has no macOS `startResizeDragging`. Credentials stay in Rust;
 only profile names cross IPC. The event ACL has no per-event scope, so the overlay could
-listen to broadcast events such as native-pcm-chunk (accepted, ADR-069). Overlay windows
+listen to broadcast events such as native-pcm-chunk (accepted, ADR-018). Overlay windows
 use level 1000, all Spaces and full-screen-auxiliary behavior, are destroyed (keeping
 their saved `open` flags) when the main window is destroyed, and need
 `macOSPrivateApi` for transparency. `interpreter.rs` mirrors
@@ -149,7 +159,7 @@ ACL for every command called from the remote SPA: each command must be listed in
   log from the IOProc.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
   within its deadline, recording or not.
-- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-073): update
+- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-019): update
   commands are never in the remote capability (`command_acl_tests` enforces it), and
   nothing installs or restarts while `app_busy`. Update checks are disabled while the
   `tauri.conf.json` updater pubkey is the placeholder. The archive download is bounded

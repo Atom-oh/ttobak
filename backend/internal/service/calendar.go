@@ -191,7 +191,7 @@ func (svc *CalendarService) authorizeCalendarAccounts(ctx context.Context, userI
 			return ErrForbidden
 		}
 		// A merging or merged account takes no new classifications; the
-		// merge CLI moves existing calendar rows (ADR-072).
+		// merge CLI moves existing calendar rows (ADR-022).
 		if rejectMerged && (account.MergingInto != "" || account.MergedInto != "") {
 			return ErrAccountMerging
 		}

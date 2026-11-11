@@ -9,7 +9,7 @@ The later hosted MCP signer must derive identity/scopes/expiry from its verified
 access token and invoke private API/QA consumers with service IAM. Those consumers
 must fetch the exact configured key's public material and verify before execution
 and before returning read results. Native migration and deployed/provider
-acceptance remain separate gates under ADR-053.
+acceptance remain separate gates under ADR-003 connector delegation.
 
 The signed payload has this exact JSON field order:
 

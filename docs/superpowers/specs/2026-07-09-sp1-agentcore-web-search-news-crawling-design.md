@@ -56,7 +56,7 @@ separate technical crawler, not a news-search fallback.
 [research-agent/tools.py](../../../backend/python/research-agent/tools.py) is a
 separate artifact. QA later gained a third client in
 [web_search.py](../../../backend/python/qa/web_search.py), covered by
-[ADR-028](../../decisions/ADR-028-qa-web-search-and-proactive-question-search.md).
+[ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md).
 The [enrichment proposal](2026-08-07-knowledge-enrichment-pipeline-design.md) later
 proposed mandatory full fetch; it is not evidence that snippet publication changed.
 

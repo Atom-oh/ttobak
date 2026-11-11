@@ -64,7 +64,7 @@ class SummaryPrivacySourceTests(_SourceFixture, unittest.TestCase):
 
     def test_stamped_membership_reads_published_summary_without_revision_change(self):
         # Account publication shares current derived content with every member
-        # (ADR-049 2026-11-06 amendment); the privacy marker no longer projects.
+        # (ADR-029 source provenance, 2026-11-06 amendment); the privacy marker no longer projects.
         member = self.account_meeting()
         before = self.source_reader.read('reader', 'USER#owner', 'MEETING#meeting')
         member['summaryPrivacyVersion'] = 1

@@ -19,6 +19,6 @@ Intended tests covered cycle/access/revocation races, legacy roots, malformed an
 
 ## Current references
 
-[ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md), [hierarchy service](../../../backend/internal/service/account_hierarchy.go), [transaction tests](../../../backend/internal/repository/account_hierarchy_test.go), [filter service](../../../backend/internal/service/meeting_filter.go), [filter tests](../../../backend/internal/service/meeting_filter_test.go), [tree helpers](../../../frontend/src/lib/accountTree.ts), [picker](../../../frontend/src/components/AccountTreePicker.tsx).
+[ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md), [hierarchy service](../../../backend/internal/service/account_hierarchy.go), [transaction tests](../../../backend/internal/repository/account_hierarchy_test.go), [filter service](../../../backend/internal/service/meeting_filter.go), [filter tests](../../../backend/internal/service/meeting_filter_test.go), [tree helpers](../../../frontend/src/lib/accountTree.ts), [picker](../../../frontend/src/components/AccountTreePicker.tsx).
 
-Backend and UI code exist, but that does not prove deployment. Current responses retain parent identifiers even when the tree cannot display a parent's name. [ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md) governs member changes independently; hierarchy does not broaden those permissions.
+Backend and UI code exist, but that does not prove deployment. Current responses retain parent identifiers even when the tree cannot display a parent's name. [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) governs member changes independently; hierarchy does not broaden those permissions.

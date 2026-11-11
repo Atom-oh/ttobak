@@ -13,7 +13,7 @@ import (
 	"github.com/ttobak/backend/internal/service"
 )
 
-// SimHandler handles the cost/sizing simulator endpoints (ADR-033).
+// SimHandler handles the cost/sizing simulator endpoints (ADR-010).
 // Kept separate from MeetingHandler (already 597+ lines) per the design
 // doc's component-boundary decision.
 type SimHandler struct {

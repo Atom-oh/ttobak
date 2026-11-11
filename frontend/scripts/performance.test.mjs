@@ -166,3 +166,13 @@ test('missed list at the server cap never shows a clean empty state', () => {
   assert.match(perf.missedGroupEmptyText('연락이 끊긴 고객이 없습니다.', true), /표시 한도\(500건\)/);
   assert.equal(perf.missedGroupEmptyText('연락이 끊긴 고객이 없습니다.', false), '연락이 끊긴 고객이 없습니다.');
 });
+
+test('both performance tabs stay mounted so finish events on the other tab are handled', () => {
+  const page = readFileSync(new URL('../src/app/performance/page.tsx', import.meta.url), 'utf8');
+  // IntakeRunControl lives in the dashboard subtree and ReportTab owns the report hook;
+  // unmounting either would drop its intake://finished or report://finished listener.
+  assert.match(page, /<div hidden=\{tab !== 'dashboardTab'\}>/);
+  assert.match(page, /<div hidden=\{tab !== 'reportTab'\}>/);
+  assert.doesNotMatch(page, /tab === 'dashboardTab' && <>/);
+  assert.doesNotMatch(page, /tab === 'reportTab' && /);
+});

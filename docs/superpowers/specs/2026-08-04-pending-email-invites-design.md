@@ -54,9 +54,9 @@ grant awaiting a matching login, not proof that an email was sent.
 
 Regression coverage belongs in the meeting/account service tests and repository
 pending-share tests: wrong identity, unverified email, expiry, stale inviter, duplicate
-replay, concurrent re-invite, and revoke/materialize races. ADR-034's member-add rule
+replay, concurrent re-invite, and revoke/materialize races. ADR-015's member-add rule
 still excludes granting `owner`; destructive removal/revocation remains owner-only.
 
 Current references: [documentation map](../../README.md), [API](../../API-SPEC.md),
-[ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md), and
+[ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md), and
 [StorageStack](../../../infra/lib/storage-stack.ts).

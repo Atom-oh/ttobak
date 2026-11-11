@@ -46,7 +46,7 @@ tool, with the current source revision required after the first page. They retai
 their distinct provenance and `newsURI` dependency through REST, WebSocket and
 replay validation. No unauthenticated route is added. Reader wiring alone does not
 establish production acceptance or migrate old `shared/` news objects. Deploy and
-verify these consumers before enabling new publication writers (ADR-052).
+verify these consumers before enabling new publication writers (ADR-004, news publication).
 Never move private uploads there. Snapshot availability cannot replace current
 authorization, and a pending-only consumer cannot replace existing binary recall.
 
@@ -286,7 +286,7 @@ visibility rule changes.
 
 ## Staged summary privacy scope
 
-Since the 2026-11-06 ADR-049 amendment, `enforce_summary_guard` returns false
+Since the 2026-11-06 amendment to ADR-029 (source provenance), `enforce_summary_guard` returns false
 for every member, so the protected view below is dormant: account readers
 receive current derived summary/tasks. The mechanism remains for provenance.
 

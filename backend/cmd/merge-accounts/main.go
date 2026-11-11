@@ -32,7 +32,7 @@
 //
 // -scan-users -apply also runs after the job is done (a merge started on the
 // web never reaches these rows). There is no lease then; every row write
-// carries the post-merge fence instead (ADR-072): the job is done for -into,
+// carries the post-merge fence instead (ADR-022): the job is done for -into,
 // -from is the tombstone mergedInto -into, the requester is still a direct
 // member of -into and was the job's requester or is the owner of -into, and
 // -into is open. Each row stays conditioned on accountId naming -from, and
@@ -210,7 +210,7 @@ type result struct {
 	UserRows              map[string]int `json:"userRows,omitempty"`
 	UnmovedPresent        []string       `json:"unmovedPresent,omitempty"`
 	RequiresAcceptUnmoved bool           `json:"requiresAcceptUnmoved,omitempty"`
-	// NewAudience is ADR-072's disclosure: target members absent from the
+	// NewAudience is ADR-022's disclosure: target members absent from the
 	// source and whether the target has ancestors. Tell members before -apply.
 	NewAudience *model.MergeAudience `json:"newAudience,omitempty"`
 }

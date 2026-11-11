@@ -1,6 +1,6 @@
 # Descendant Account sharing release
 
-Policy: [ADR-058](../decisions/ADR-058-descendant-account-read-sharing.md).
+Policy: [ADR-015](../decisions/ADR-015-accounts-roles-and-hierarchy.md) (descendant reads).
 User approved implementation and deployment on 2026-10-29. Source and synthetic
 tests do not establish deployed acceptance.
 

@@ -419,7 +419,7 @@ func TestCreateAccount_ReplayAfterTransferReturnsOriginalOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate the transfer transaction's META update (ADR-071).
+	// Simulate the transfer transaction's META update (ADR-015, owner transfer).
 	account := r.accounts[first.AccountID]
 	account.OriginalOwnerUserID, account.OwnerUserID, account.InitialOwnerEmail = first.OwnerUserID, "later-owner", ""
 	retry, err := f.svc.CreateAccountWithOwner(context.Background(), "creator", "creator@example.com", req)

@@ -633,7 +633,7 @@ func (s *IndexingService) prepareMember(ctx context.Context, key model.IndexReso
 }
 
 // unconfirmedRemovals drops removal obligations that the provider already
-// reports as NOT_FOUND, which ADR-038 accepts as proof that an explicitly
+// reports as NOT_FOUND, which ADR-028 accepts as proof that an explicitly
 // requested former projection is gone. It runs only after cleanupTracked has
 // deleted and re-listed the job's projection prefix and legacy exports, so
 // only those keys are known to be absent from S3 and cannot be re-ingested by

@@ -1987,6 +1987,7 @@ func parseMeetingInsights(raw string) ([]model.MeetingInsight, error) {
 			continue
 		}
 		it.ID = fmt.Sprintf("ins_%d", len(out)+1)
+		it.PersonEntities = insightPersonEntities(it)
 		out = append(out, it)
 	}
 	return out, nil
@@ -2033,7 +2034,8 @@ func (s *BedrockService) ExtractInsightsForMeeting(ctx context.Context, meeting 
   "implication": <고객 또는 영업 기회에 미치는 의미>,
   "nextAction": <담당자가 바로 실행할 수 있는 다음 단계>,
   "tsMarker": <원문에 존재하는 [TS:NNN] 표식>,
-  "entities": [관련 고객명, 서비스명, 프로젝트명, 인물명]
+  "entities": [관련 고객명, 서비스명, 프로젝트명, 인물명],
+  "personEntities": [entities 중 실제 사람의 이름만]
 }
 유형(type)은 반드시 다음 8가지 중 하나:
 - trend: 고객/시장 트렌드 (예: 그룹사 클라우드 전환 가속)
@@ -2047,8 +2049,11 @@ func (s *BedrockService) ExtractInsightsForMeeting(ctx context.Context, meeting 
 해당 유형이 명확하고 회의 내용으로 뒷받침되는 항목만 추출하세요.
 evidence, implication, nextAction은 근거가 있을 때 각각 1~2문장으로 작성하고, 추측이 필요한 필드는 빈 문자열로 두세요.
 tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복사하고 절대 만들어내지 마세요.
+personEntities는 원문에 명시된 실제 사람의 이름만 원문 그대로 entities에도 포함하여 작성하세요.
+회사·조직·고객사·제품·서비스·프로젝트·장소·기술·업무 용어와 "팀 구성원" 같은 집단/직책은 사람이 아닙니다.
+spk_0, 화자A 같은 화자 코드와 코드 묶음도 인물명이 아닙니다. 사람이 확실하지 않으면 personEntities는 []로 두세요.
 같은 내용을 여러 유형으로 중복하지 마세요. 유효한 JSON 배열만 반환하고, 없으면 []를 반환하세요.
-예시: [{"type":"risk","text":"PoC 일정이 최대 2개월 지연될 수 있다","evidence":"보안 검토 일정이 아직 확정되지 않았다","implication":"목표 오픈 일정과 후속 워크로드 전환이 밀릴 수 있다","nextAction":"고객 보안 담당자와 검토 일정을 확정한다","entities":["PoC"]}]`
+예시: [{"type":"risk","text":"PoC 일정이 최대 2개월 지연될 수 있다","evidence":"보안 검토 일정이 아직 확정되지 않았다","implication":"목표 오픈 일정과 후속 워크로드 전환이 밀릴 수 있다","nextAction":"고객 보안 담당자와 검토 일정을 확정한다","entities":["PoC"],"personEntities":[]}]`
 
 	userPrompt := fmt.Sprintf("다음 회의 내용에서 인사이트를 추출하세요:\n\n%s", source)
 
@@ -2079,6 +2084,15 @@ tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복�
 	if err != nil || len(items) != len(rawItems) {
 		return "", ErrInvalidAnalysisResponse
 	}
+	for i := range items {
+		grounded := items[i].PersonEntities[:0]
+		for _, name := range items[i].PersonEntities {
+			if strings.Contains(source, name) {
+				grounded = append(grounded, name)
+			}
+		}
+		items[i].PersonEntities = grounded
+	}
 	result, err := json.Marshal(items)
 	if err != nil {
 		return "", ErrInvalidAnalysisResponse
@@ -2087,7 +2101,7 @@ tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복�
 }
 
 // ExtractSimRequirements drafts a quantitative requirement set (users, TPS,
-// data volume, SLO, ...) for the cost/sizing simulator (ADR-033), from the
+// data volume, SLO, ...) for the cost/sizing simulator (ADR-010), from the
 // meeting's own content -- the caller already has the meeting loaded (this
 // runs inline in the api Lambda's extract handler, not the batch summarize
 // pipeline), so it takes *model.Meeting directly rather than re-fetching by

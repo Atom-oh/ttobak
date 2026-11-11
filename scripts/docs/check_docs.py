@@ -36,8 +36,24 @@ def validate_evidence(root: Path) -> list[str]:
     return errors
 
 
+def validate_decisions(root: Path) -> list[str]:
+    """Decision records stay at most 30 topic files numbered ADR-001 to ADR-030."""
+    errors, seen = [], {}
+    for path in sorted((root / "docs/decisions").glob("ADR-*.md")):
+        match = re.fullmatch(r"ADR-(\d{3})-[a-z0-9-]+\.md", path.name)
+        if not match or not 1 <= int(match.group(1)) <= 30:
+            errors.append(f"docs/decisions/{path.name}: record files are named "
+                          "ADR-NNN-topic.md with NNN from 001 to 030")
+        elif match.group(1) in seen:
+            errors.append(f"docs/decisions/{path.name}: ADR-{match.group(1)} is already "
+                          f"used by {seen[match.group(1)]}; extend that record")
+        else:
+            seen[match.group(1)] = path.name
+    return errors
+
+
 def main() -> int:
-    errors = validate_evidence(ROOT)
+    errors = validate_evidence(ROOT) + validate_decisions(ROOT)
     names = subprocess.check_output(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"],
         cwd=ROOT, text=True,

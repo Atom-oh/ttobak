@@ -10,6 +10,7 @@ const (
 	PrefixPerformanceTask       = "PERFTASK#"
 	PrefixPerformanceMapping    = "PERFMAP#"
 	PrefixPerformanceGoals      = "PERFGOAL#"
+	PrefixPerformanceReport     = "PERFREPORT#"
 )
 
 // Valid performance sync sources. No other source is accepted.
@@ -103,6 +104,10 @@ func PerformanceMappingSortKey(sfdcAccountID string) string {
 func PerformanceGoalsSortKey(year int) string {
 	return fmt.Sprintf("%s%04d", PrefixPerformanceGoals, year)
 }
+
+// PerformanceReportSortKey takes a period key already checked by
+// PerformancePeriodBounds.
+func PerformanceReportSortKey(periodKey string) string { return PrefixPerformanceReport + periodKey }
 
 // PerformanceSourceStatus is the owner's sync state for one source. A source
 // that has never synced reports revision 0 and no timestamps.

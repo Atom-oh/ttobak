@@ -86,7 +86,7 @@ func (r *DynamoDBRepository) mergeFenceChecks(job *model.AccountMergeJob) ([]typ
 const postMergeFenceCheckCount = 4
 
 // postMergeFenceChecks returns the fence the merge CLI's user-row movers
-// carry after the job is done (ADR-072). There is no lease; instead:
+// carry after the job is done (ADR-022). There is no lease; instead:
 //  1. the job row is done for this target (and, when the operator is the
 //     job's requester, still names them),
 //  2. the source META is the tombstone mergedInto the target (not merging),

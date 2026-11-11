@@ -2,7 +2,7 @@
 
 Status: historical design proposal (2026-11-09), awaiting approval. This is not a
 record of implementation. It builds on the local MCP intake Phase 1 runner
-([ADR-065](../../decisions/ADR-065-local-mcp-intake.md), PR #705) and the private
+([ADR-003](../../decisions/ADR-003-mcp-access.md), formerly ADR-065, PR #705) and the private
 calendar API (`docs/API-SPEC.md`, "Private calendar"). Decisions made with the
 user on 2026-11-09 (including a builder check) are marked **(user)**; the author's calls are marked **(call)**.
 

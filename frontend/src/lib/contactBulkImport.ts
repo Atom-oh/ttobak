@@ -355,3 +355,48 @@ export async function runBulkImport(
     }
   }
 }
+
+/** How one row relates to the account a single-account import targets. */
+export type RowAccountMatch = 'exact' | 'contained' | 'none';
+
+/**
+ * A row's company against one account. Exact: the normalized company equals the
+ * name or an alias, or, with no company, the email domain is the account's.
+ * Contained: one normalized name holds the other and the shorter has at least two
+ * characters and half the longer's length (하나은행 in "하나은행 IB본부"), so a bare group
+ * prefix (하나 in 하나금융티아이) stays unselected.
+ */
+export function matchRowToAccount(contact: ContactInput, account: Pick<MatchAccount, 'name' | 'aliases' | 'domains'>): RowAccountMatch {
+  const key = normalizeCompany(contact.company);
+  const names = [account.name, ...account.aliases].map(normalizeCompany).filter(Boolean);
+  if (!key) {
+    const domain = companyDomain(contact.email);
+    return domain && account.domains.some((accountDomain) => domainMatches(domain, normalizeDomain(accountDomain))) ? 'exact' : 'none';
+  }
+  if (names.includes(key)) return 'exact';
+  const contained = names.some((name) => {
+    const [short, long] = name.length <= key.length ? [name, key] : [key, name];
+    const shortLength = [...short].length;
+    return shortLength >= 2 && shortLength * 2 >= [...long].length && long.includes(short);
+  });
+  return contained ? 'contained' : 'none';
+}
+
+export interface AccountRowPlan {
+  /** Row indexes in display order: exact, then contained, then the rest; by company within each. */
+  order: number[];
+  /** Per row; null when the file maps neither company nor email (nothing to judge). */
+  matches: (RowAccountMatch | null)[];
+  /** Rows preselected for import. */
+  selected: Set<number>;
+}
+
+export function planAccountRows(contacts: ContactInput[], account: Pick<MatchAccount, 'name' | 'aliases' | 'domains'>, judged: boolean): AccountRowPlan {
+  if (!judged) return { order: contacts.map((_, row) => row), matches: contacts.map(() => null), selected: new Set(contacts.map((_, row) => row)) };
+  const matches = contacts.map((contact) => matchRowToAccount(contact, account));
+  const rank = { exact: 0, contained: 1, none: 2 } as const;
+  const collator = new Intl.Collator('ko');
+  const order = contacts.map((_, row) => row).sort((a, b) => rank[matches[a]] - rank[matches[b]]
+    || collator.compare(normalizeCompany(contacts[a].company), normalizeCompany(contacts[b].company)) || a - b);
+  return { order, matches, selected: new Set(order.filter((row) => matches[row] !== 'none')) };
+}
