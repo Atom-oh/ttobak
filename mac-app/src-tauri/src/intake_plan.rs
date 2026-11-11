@@ -1,7 +1,5 @@
 //! Pure intake planning: schedule slots, catch-up decisions, CLI argv and node
 //! resolution. No Tauri imports so it stays unit-testable.
-// Task 3 wires this module into the runner/scheduler and Tauri commands.
-#![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -240,6 +238,8 @@ pub enum IntakeAction {
         skip: BTreeSet<Connector>,
     },
     Login,
+    // `intake status`; the app reads status.json directly instead.
+    #[allow(dead_code)]
     Status,
     /// `intake schedule off`: removes the LaunchAgent.
     ScheduleOff,

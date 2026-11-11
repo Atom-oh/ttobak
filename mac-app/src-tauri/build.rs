@@ -27,6 +27,16 @@ const COMMANDS: &[&str] = &[
     "caption_overlay_close",
     "caption_overlay_set_style",
     "caption_overlay_push",
+    "intake_get_state",
+    "intake_set_schedule",
+    "intake_set_node_path",
+    "intake_launch_agent_off",
+    "intake_run_now",
+    "intake_setup",
+    "intake_login",
+    "intake_cancel",
+    "intake_check_adapter",
+    "intake_update_adapter",
     // Granted only to the local overlay windows (capabilities/caption-overlay.json).
     "caption_overlay_idle",
 ];
