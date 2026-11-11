@@ -42,6 +42,8 @@ func TestNewsPublicListIsolatesUnsupportedIdentitiesThroughRepository(t *testing
 				HTTPClient: newsMetadataHTTP(func(req *http.Request) (*http.Response, error) {
 					var body map[string]any
 					switch req.Header.Get("X-Amz-Target") {
+					case "DynamoDB_20120810.GetItem":
+						body = map[string]any{} // no source CONFIG row: a common source
 					case "DynamoDB_20120810.Scan":
 						body = map[string]any{"Items": []any{bad, good}}
 					case "DynamoDB_20120810.BatchGetItem":
@@ -76,12 +78,12 @@ func TestNewsPublicListIsolatesUnsupportedIdentitiesThroughRepository(t *testing
 			})
 			repo := repository.NewCrawlerRepository(client, "news")
 			svc := &InsightsService{repo: repo, news: repo}
-			got, err := svc.ListInsights(context.Background(), "news", "", "", nil, "newest", 1, 20)
+			got, err := svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "newest", 1, 20)
 			if err != nil || len(got.Documents) != 1 || got.Documents[0].Title != "Valid neighbor" || got.TotalCount != 1 || batches != 1 {
 				t.Fatalf("unsupported identity hid valid neighbor: %+v %v batches=%d", got, err, batches)
 			}
 			failRead = true
-			if _, err := svc.ListInsights(context.Background(), "news", "", "", nil, "newest", 1, 20); !errors.Is(err, storageFailure) {
+			if _, err := svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "newest", 1, 20); !errors.Is(err, storageFailure) {
 				t.Fatalf("real storage failure hidden: %v", err)
 			}
 			priorBatches := batches
@@ -113,6 +115,8 @@ func TestNewsPublicListIsolatesMetadataThroughRepository(t *testing.T) {
 				HTTPClient: newsMetadataHTTP(func(req *http.Request) (*http.Response, error) {
 					var body map[string]any
 					switch req.Header.Get("X-Amz-Target") {
+					case "DynamoDB_20120810.GetItem":
+						body = map[string]any{} // no source CONFIG row: a common source
 					case "DynamoDB_20120810.Query", "DynamoDB_20120810.Scan":
 						body = map[string]any{"Items": []any{bad, good}}
 					case "DynamoDB_20120810.BatchGetItem":
@@ -130,7 +134,7 @@ func TestNewsPublicListIsolatesMetadataThroughRepository(t *testing.T) {
 			})
 			repo := repository.NewCrawlerRepository(client, "news")
 			svc := &InsightsService{repo: repo, news: repo}
-			got, err := svc.ListInsights(context.Background(), "news", scope, "", nil, "newest", 1, 20)
+			got, err := svc.ListInsights(context.Background(), "user-1", "news", scope, "", nil, "newest", 1, 20)
 			if err != nil || len(got.Documents) != 1 || got.Documents[0].Title != "Valid neighbor" || got.TotalCount != 1 {
 				t.Fatalf("public list hid valid neighbor: %+v %v", got, err)
 			}
@@ -148,7 +152,7 @@ func TestNewsLegacyDetailRejectsUnrenderableCurrentMetadataBeforeS3(t *testing.T
 			row["summary"] = &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{}}
 		}
 		fixture.rows[keys[0]] = row
-		got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+		got, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16))
 		if got != nil || !errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
 			t.Fatalf("unrenderable current metadata reached S3: %+v %v %v", got, err, object.gets)
 		}
@@ -168,7 +172,7 @@ func TestNewsDetailInitialMetadataFailureClassification(t *testing.T) {
 			}),
 		})
 		svc := &InsightsService{repo: repository.NewCrawlerRepository(client, "news")}
-		got, err := svc.GetDocumentDetail(context.Background(), "source", "hash")
+		got, err := svc.GetDocumentDetail(context.Background(), "user-1", "source", "hash")
 		if got != nil || err == nil || errors.Is(err, ErrNotFound) == failed {
 			t.Fatalf("data/transport classification lost: %+v %v", got, err)
 		}

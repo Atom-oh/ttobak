@@ -1061,6 +1061,20 @@ transaction, legacy documents by a claim transaction that checks the CONFIG
 fenced at that claim (or unpublish) commit: a membership revoked before it
 returns 403; the object and metadata removal that follows is not re-fenced.
 
+`GET /api/insights` and `GET /api/insights/{sourceId}/{docHash}` are
+caller-scoped. Each distinct source's CONFIG row is read once per request. A
+row with `accountId` makes its documents visible only to a current direct
+member of an existing account; a row without one is common. With no row, a
+source ID starting `acct_` is hidden and any other ID (such as `__tech__`) is
+common. Hidden documents are removed before `totalCount`, the `services` and
+`sourceIds` facets, sorting and paging; `source={hidden}` returns an empty
+page. A hidden detail returns the same 404 as a missing document. Each
+returned document adds `sourceName` (the CONFIG name, omitted without a row),
+`sourceKind` (`common` or `account`), `accountId` and `accountName` for the
+account kind, and `matchedTerm` (the search query that found a news article,
+stored at collection time; absent for custom URLs and older documents). The
+first four are computed per request and never stored.
+
 `GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
 for **direct** members. Allowed pairs are news→project, tech→project,
 event→project and news→meeting. News and tech IDs are `{sourceId}:{docHash}`

@@ -185,7 +185,7 @@ func TestNewsReadProjectionCarriesEnrichmentAndAccountBinding(t *testing.T) {
 			"type": map[string]string{"S": "news"}, "title": map[string]string{"S": "Title"},
 			"awsRelevance":     map[string]string{"S": "Amazon EKS · AWS Lambda"},
 			"opportunityCount": map[string]string{"N": "2"}, "qualityScore": map[string]string{"N": "0.8"},
-			"unprojected": map[string]string{"S": "hidden"},
+			"unprojected": map[string]string{"S": "hidden"}, "matchedTerm": map[string]string{"S": "Woori cloud"},
 		},
 		"CONFIG": {
 			"PK": map[string]string{"S": "CRAWLER#source"}, "SK": map[string]string{"S": "CONFIG"},
@@ -235,7 +235,7 @@ func TestNewsReadProjectionCarriesEnrichmentAndAccountBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"awsRelevance", "opportunityCount", "qualityScore"} {
+	for _, name := range []string{"awsRelevance", "opportunityCount", "qualityScore", "matchedTerm"} {
 		if rows[doc][name] == nil {
 			t.Errorf("projection drops %s", name)
 		}
