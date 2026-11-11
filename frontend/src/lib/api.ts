@@ -728,8 +728,8 @@ export const summaryApi = {
 
 // Crawler API
 export const crawlerApi = {
-  listSources: () =>
-    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources'),
+  listSources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources', options),
   addSource: (data: {
     sourceName: string;
     awsServices: string[];
@@ -737,7 +737,7 @@ export const crawlerApi = {
     customUrls?: string[];
     newsQueries?: string[];
     aliases?: string[];
-  }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data),
+  }, options?: { expectedUserId?: string }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data, options),
   updateSource: (sourceId: string, data: {
     awsServices: string[];
     newsSources: string[];
@@ -746,8 +746,8 @@ export const crawlerApi = {
     aliases?: string[];
     removeAliases?: string[];
   }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
-  unsubscribe: (sourceId: string) =>
-    api.delete(`/api/crawler/sources/${sourceId}`),
+  unsubscribe: (sourceId: string, options?: { expectedUserId?: string }) =>
+    api.delete(`/api/crawler/sources/${sourceId}`, options),
   getHistory: (sourceId: string) =>
     api.get<{ history: CrawlHistory[] }>(`/api/crawler/sources/${sourceId}/history`),
 };

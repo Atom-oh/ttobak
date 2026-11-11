@@ -66,6 +66,35 @@ export function commonAddRequest(data: CommonSourceFields) {
   };
 }
 
+// Go White_Space, which strings.TrimSpace uses (unicode.IsSpace); JS trim()
+// differs (it trims U+FEFF and keeps U+0085), so the ends are trimmed here.
+const GO_TRIM = /^\p{White_Space}+|\p{White_Space}+$/gu;
+
+/**
+ * Port of `normalizeSourceID` in backend/internal/service/crawler.go, which
+ * `CrawlerService.AddSource` uses to resolve a common source by name:
+ * strings.ToLower (per code point, so no final-sigma context), TrimSpace,
+ * ASCII spaces to hyphens, then keep unicode.IsLetter, unicode.IsDigit (Nd)
+ * and '-'. Keep in step with that function and its TestNormalizeSourceID.
+ */
+export function normalizeSourceId(name: string): string {
+  const lower = Array.from(name, (ch) => ch.toLowerCase()).join('');
+  const trimmed = lower.replace(GO_TRIM, '').replaceAll(' ', '-');
+  return Array.from(trimmed).filter((ch) => /^[\p{L}\p{Nd}-]$/u.test(ch)).join('');
+}
+
+export const ALREADY_SUBSCRIBED_MESSAGE = '이미 등록한 공통 뉴스 소스예요. 수정은 설정의 Crawler Sources에서 할 수 있어요.';
+
+/**
+ * The subscribed source a common registration would resolve to, or null.
+ * AddSource replaces the caller's whole subscription for an existing
+ * subscribed source, so the form must not submit in that case.
+ */
+export function subscribedSourceFor(sourceName: string, subscribedIds: readonly string[]): string | null {
+  const id = normalizeSourceId(sourceName);
+  return id && subscribedIds.includes(id) ? id : null;
+}
+
 export interface CommonNewsForm { sourceName: string; queries: string; aliases: string; customUrls: string }
 
 function isHttpUrl(value: string): boolean {
@@ -186,6 +215,17 @@ export function newsScopeParams(scope: string, capable: boolean): { kind?: NewsS
     return { kind: 'account', account: scope.slice(SCOPE_ACCOUNT_PREFIX.length) };
   }
   return {};
+}
+
+/**
+ * The scope the news tab may use: all without directory capability, and all
+ * when a loaded directory no longer offers the selected entry (a removed
+ * customer), so a request never carries a scope the select cannot show.
+ */
+export function reconcileScope(scope: string, capable: boolean, loaded: boolean, options: readonly ScopeOption[]): string {
+  if (!capable) return SCOPE_ALL;
+  if (loaded && !options.some((option) => option.value === scope)) return SCOPE_ALL;
+  return scope;
 }
 
 // ---- Directory list state (`GET /api/news-sources` pages) ----

@@ -12,7 +12,7 @@ import { documentLinkId, documentLinkKind } from '@/lib/accountOverview';
 import { groupNewsByOrigin, NEWS_LAYOUT_STORAGE_KEY, parseNewsLayout, type NewsLayout } from '@/lib/newsOrigin';
 import { NewsGroupHeading, NewsLayoutSwitch, NewsOriginDetails } from './insights/NewsOrigin';
 import { NewsSourcesManager, useNewsSources } from './insights/NewsSourcesManager';
-import { newsScopeOptions, newsScopeParams, newsSourcesHref, parseNewsSourcesView, SCOPE_ALL } from '@/lib/newsRegistration';
+import { newsScopeOptions, newsScopeParams, newsSourcesHref, parseNewsSourcesView, reconcileScope, SCOPE_ALL } from '@/lib/newsRegistration';
 
 type TabType = 'news' | 'tech' | 'research';
 
@@ -66,14 +66,15 @@ export function InsightsList() {
   const scopeOptions = useMemo(() => newsScopeOptions(scopeSources.sources), [scopeSources.sources]);
   const managedSources = useNewsSources(user?.userId, sourcesView.open);
   // The scope filter exists only once the directory answered in this
-  // session; when that capability is lost the scope falls back to all.
+  // session; when that capability is lost, or a loaded directory no longer
+  // offers the chosen customer, the scope falls back to all.
   const scopeCapable = scopeSources.capable;
-  if (!scopeCapable && newsScope !== SCOPE_ALL) {
-    setNewsScope(SCOPE_ALL);
+  const usableScope = reconcileScope(newsScope, scopeCapable, scopeSources.loaded, scopeOptions);
+  if (usableScope !== newsScope) {
+    setNewsScope(usableScope);
     setPage(1);
   }
-  // Primitive deps, so gaining capability with scope "all" does not refetch.
-  const { kind: scopeKind, account: scopeAccount } = newsScopeParams(scopeCapable ? newsScope : SCOPE_ALL, scopeCapable);
+  const { kind: scopeKind, account: scopeAccount } = newsScopeParams(usableScope, scopeCapable);
 
   // The sidebar's News & Updates and Deep Research items both point at this
   // page and differ only in ?tab=, so a click between them changes the URL

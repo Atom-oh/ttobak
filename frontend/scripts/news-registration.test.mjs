@@ -112,9 +112,10 @@ test('sources view is addressable by query string', () => {
 test('insights wires the view, scope filter and old entry points', () => {
   const list = read('../src/components/InsightsList.tsx');
   assert.match(list, /뉴스 소스 관리/);
-  assert.match(list, /newsScopeParams\(scopeCapable \? newsScope : SCOPE_ALL, scopeCapable\)/);
+  assert.match(list, /reconcileScope\(newsScope, scopeCapable, scopeSources\.loaded, scopeOptions\)/);
+  assert.match(list, /newsScopeParams\(usableScope, scopeCapable\)/);
   assert.match(list, /activeTab === 'news' && scopeCapable && \(/);
-  assert.match(list, /if \(!scopeCapable && newsScope !== SCOPE_ALL\) \{\s*setNewsScope\(SCOPE_ALL\);/);
+  assert.match(list, /if \(usableScope !== newsScope\) \{\s*setNewsScope\(usableScope\);\s*setPage\(1\);/);
   assert.match(list, /parseNewsSourcesView\(searchParams\)/);
   const api = read('../src/lib/api.ts');
   assert.match(api, /if \(params\.kind\) q\.set\('kind', params\.kind\)/);
@@ -126,6 +127,12 @@ test('insights wires the view, scope filter and old entry points', () => {
   // Edit forms start from the full per-account source, never the directory item.
   assert.match(manager, /accountApi\.newsSources\.list\(item\.accountId!/);
   assert.match(manager, /더 보기/);
+  // Common registration checks subscriptions first and binds the user.
+  assert.match(manager, /crawlerApi\.listSources\(\{ expectedUserId: userId \}\)/);
+  assert.match(manager, /subscribedSourceFor\(commonBody\.request\.sourceName, subscribed\)/);
+  assert.match(manager, /crawlerApi\.addSource\(commonBody\.request, \{ expectedUserId: userId \}\)/);
+  assert.match(manager, /crawlerApi\.unsubscribe\(item\.sourceId, \{ expectedUserId: userId \}\)/);
+  assert.ok(manager.indexOf('listSources(') < manager.indexOf('addSource('), 'subscriptions load before the add');
   // Preselection reads the live touched flag, never a hard-coded false.
   assert.match(manager, /prefillSourceName\(f\.sourceName, nameTouchedRef\.current, name\)/);
   assert.doesNotMatch(manager, /pickAccount\([^)]*false\)/);
@@ -188,4 +195,39 @@ test('directory wrapper sends only limit and cursor', () => {
   const api = read('../src/lib/api.ts');
   const body = api.slice(api.indexOf('export const newsSourcesApi'), api.indexOf('// Insights API'));
   assert.deepEqual([...body.matchAll(/q\.set\('([^']+)'/g)].map((m) => m[1]), ['limit', 'cursor']);
+});
+
+test('source id normalization matches the Go normalizeSourceID', () => {
+  // Cases from TestNormalizeSourceID and the function comment in
+  // backend/internal/service/crawler.go.
+  for (const [input, expected] of [
+    ['AWS Blog', 'aws-blog'], ['  TechCrunch  ', 'techcrunch'], ['Hello World 123', 'hello-world-123'],
+    ['Special!@#Chars', 'specialchars'], ['하나금융그룹', '하나금융그룹'],
+  ]) assert.equal(reg.normalizeSourceId(input), expected, input);
+  assert.equal(reg.normalizeSourceId(' 하나 금융 (주) '), '하나-금융-주');
+  assert.equal(reg.normalizeSourceId('KB국민은행 AI'), 'kb국민은행-ai');
+  // Only ASCII spaces become hyphens; tabs and other spaces are dropped.
+  assert.equal(reg.normalizeSourceId('a\tb\u3000c'), 'abc');
+  assert.equal(reg.normalizeSourceId('a--b_c.d'), 'a--bcd');
+  // Go lowercases per rune: no final sigma; U+FEFF is not trimmed by TrimSpace.
+  assert.equal(reg.normalizeSourceId('ΟΔΟΣ'), 'οδοσ');
+  assert.equal(reg.normalizeSourceId('abc \ufeff'), 'abc-');
+  assert.equal(reg.normalizeSourceId('\u0085abc\u0085'), 'abc');
+  assert.equal(reg.normalizeSourceId('١٢٣'), '١٢٣');
+  assert.equal(reg.subscribedSourceFor(' AWS  Blog', ['aws--blog']), 'aws--blog');
+  assert.equal(reg.subscribedSourceFor('AWS Blog', ['aws--blog']), null);
+  assert.equal(reg.subscribedSourceFor('!!!', ['']), null);
+});
+
+test('stale or unsupported scopes fall back to all', () => {
+  const options = reg.newsScopeOptions([{ sourceId: '1', sourceName: 'x', kind: 'account', accountId: 'a', accountName: '가나' }]);
+  assert.equal(reg.reconcileScope('account:a', true, true, options), 'account:a');
+  assert.equal(reg.reconcileScope('common', true, true, options), 'common');
+  // The selected customer disappeared after a successful reload.
+  assert.equal(reg.reconcileScope('account:b', true, true, options), '');
+  // While a reload is pending the selection stays.
+  assert.equal(reg.reconcileScope('account:b', true, false, options), 'account:b');
+  // No capability: always all.
+  assert.equal(reg.reconcileScope('common', false, true, options), '');
+  assert.equal(reg.reconcileScope('account:a', false, false, options), '');
 });

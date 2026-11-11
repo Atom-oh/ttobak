@@ -6,7 +6,7 @@ import { accountApi, crawlerApi, newsSourcesApi } from '@/lib/api';
 import { newsSourceInput } from '@/lib/accountOverview';
 import {
   accountEditRequest, commonNewsRequest, directoryFailed, directoryLoadingMore, directoryPageLoaded, directoryReload,
-  INITIAL_DIRECTORY, prefillSourceName, registrationErrorMessage, sourceTermsText,
+  ALREADY_SUBSCRIBED_MESSAGE, INITIAL_DIRECTORY, prefillSourceName, registrationErrorMessage, sourceTermsText, subscribedSourceFor,
   type DirectoryState, type NewsSourceItem, type NewsSourceKind,
 } from '@/lib/newsRegistration';
 import type { AccountSummary } from '@/types/meeting';
@@ -91,6 +91,7 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [alreadySubscribed, setAlreadySubscribed] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -122,7 +123,7 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saving) return;
-    setError(''); setNotice('');
+    setError(''); setNotice(''); setAlreadySubscribed(false);
     const account = kind === 'account' ? accounts?.find((a) => a.accountId === accountId) : undefined;
     if (kind === 'account' && !account) { setError('고객사를 선택해 주세요.'); return; }
     const accountBody = account ? newsSourceInput(fields) : null;
@@ -134,7 +135,21 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
       if (account && accountBody?.input) {
         await accountApi.newsSources.create(account.accountId, accountBody.input, { expectedUserId: userId });
       } else if (commonBody?.request) {
-        await crawlerApi.addSource(commonBody.request);
+        // AddSource resolves the name to an existing source and replaces the
+        // caller's whole subscription (AWS services included), so an already
+        // subscribed source is never submitted from here.
+        let subscribed: string[];
+        try {
+          subscribed = ((await crawlerApi.listSources({ expectedUserId: userId })).sources ?? []).map((item) => item.source.sourceId);
+        } catch {
+          if (mounted.current) setError('구독 중인 공통 소스를 확인하지 못해 등록하지 않았습니다. 다시 시도해 주세요.');
+          return;
+        }
+        if (subscribedSourceFor(commonBody.request.sourceName, subscribed)) {
+          if (mounted.current) setAlreadySubscribed(true);
+          return;
+        }
+        await crawlerApi.addSource(commonBody.request, { expectedUserId: userId });
       }
       if (!mounted.current) return;
       setNotice(`'${fields.sourceName.trim()}' 소스를 등록했습니다. 다음 수집부터 뉴스가 모입니다.`);
@@ -160,7 +175,7 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
             <label key={choice.kind}
               className={`flex cursor-pointer gap-3 rounded-lg border p-3 focus-within:ring-2 focus-within:ring-primary/50 ${kind === choice.kind ? 'border-primary bg-primary/5 dark:bg-primary/10' : 'border-border-subtle'}`}>
               <input type="radio" name={`${id}-kind`} value={choice.kind} checked={kind === choice.kind}
-                onChange={() => { setKind(choice.kind); setError(''); }} className="mt-1 accent-primary" aria-describedby={`${id}-${choice.kind}-help`} />
+                onChange={() => { setKind(choice.kind); setError(''); setAlreadySubscribed(false); }} className="mt-1 accent-primary" aria-describedby={`${id}-${choice.kind}-help`} />
               <span>
                 <span className="block text-sm font-semibold text-text-main">{choice.label}</span>
                 <span id={`${id}-${choice.kind}-help`} className="block text-xs text-text-secondary">{choice.help}</span>
@@ -212,6 +227,12 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
       </div>
 
       {error && <p role="alert" className="text-sm text-error">{error}</p>}
+      {alreadySubscribed && (
+        <p role="alert" className="text-sm text-text-main">
+          {ALREADY_SUBSCRIBED_MESSAGE}{' '}
+          <Link href={SETTINGS_HREF} className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded-sm">설정 열기</Link>
+        </p>
+      )}
       {notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</p>}
       <div className="flex justify-end">
         <button type="submit" disabled={disabled} className={primaryButton}>{saving ? '등록 중…' : '등록'}</button>
@@ -293,7 +314,7 @@ function SourceRow({ item, userId, onChanged }: { item: NewsSourceItem; userId: 
     setBusy(true); setError('');
     try {
       if (isAccount) await accountApi.newsSources.remove(item.accountId!, item.sourceId, { expectedUserId: userId });
-      else await crawlerApi.unsubscribe(item.sourceId);
+      else await crawlerApi.unsubscribe(item.sourceId, { expectedUserId: userId });
       onChanged();
     } catch (failure) {
       setError(registrationErrorMessage(failure, 'remove-source'));
