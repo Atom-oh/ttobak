@@ -24,7 +24,7 @@ meeting. See the [local reader runbook](runbooks/local-outlook-calendar-sync.md)
 | `GET /api/calendar/sources` | Optional `limit`, `cursor` | `{sources:[...],nextCursor:string|null}` |
 | `GET /api/accounts/{accountId}/calendar` | Required `from`, `to`; optional `limit`, `cursor` | `{events:[AccountCalendarEvent],nextCursor:string|null}` |
 | `PUT /api/calendar/sources/{sourceId}/events/{eventId}/sharing` | Nonzero UUID source, `[A-Za-z0-9_-]{1,128}` event; JSON `mode` (`auto`, `account` or `hidden`), optional `accountId`; at most 4 KiB | `200` owner event view |
-| `GET /api/calendar/share-directory` | No parameters | `{accounts:[{accountId,name,aliases,domains}]}`, at most 64 KiB |
+| `GET /api/calendar/share-directory` | No parameters | `{accounts:[{accountId,name,aliases,domains}]}`, at most 64 KiB; accounts whose canonical membership row confirms direct membership, merge tombstones excluded |
 
 Sync JSON is limited to 64 KiB. Unknown, duplicate or incorrectly cased fields,
 null values, invalid types and unsupported query parameters are rejected.
@@ -37,7 +37,7 @@ have positive duration and are at most 93 elapsed days. An upsert whose
 `ACCOUNT_MERGING` (ADR-072); reads still return events on a merge tombstone.
 
 A sync batch whose DynamoDB transaction would exceed 100 items is rejected with
-`400` (the runner sends at most 12 mutations).
+`413 CALENDAR_BATCH_TOO_LARGE` (the runner sends at most 12 mutations).
 
 Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
@@ -751,7 +751,7 @@ Conditional transcript/speaker edits publish new immutable
 matching database update. Conflicts return 409; ambiguous database failures retain
 new objects because the write may have committed. Existing referenced objects
 remain intact. Go and QA readers accept strictly validated legacy and versioned
-keys; deploy compatible readers before writers (ADR-037).
+keys; deploy compatible readers before writers (ADR-013).
 
 `PUT /api/meetings/{meetingId}/speakers` permits owners, direct read/edit
 recipients and current members of the published account team to correct speaker
@@ -1630,7 +1630,7 @@ the observed preview conditionally. The preview URL path still checks existence;
 canonical indexing/QA readers additionally validate the source binding. Legacy
 unbound previews require regeneration. Public tokens
 are conditionally minted and validated against the document's own PublicShareToken
-on every read; revocation removes that grant. See ADR-022/027/029.
+on every read; revocation removes that grant. See ADR-020/027.
 
 Pending meeting/account invitations bind the invited Cognito sub, require verified
 email at materialization, and expire after 30 days. Revoking an already-materialized
@@ -1678,7 +1678,7 @@ rejected copies and surfaces cleanup failures. Ambiguous writes retain their cop
 
 `GET /api/meetings/{meetingId}/audio` returns `audioUrl` (single file) or
 `audioUrls` (ordered parts, empty slots skipped) as one-hour signed URLs. For a
-WebM/Ogg key it signs the ADR-062 `audio-playback/` copy only when that copy's
+WebM/Ogg key it signs the ADR-014 `audio-playback/` copy only when that copy's
 `source-etag` and `source-version-id` equal the source's current HEAD; a missing,
 stale or unreadable copy falls back to the original key. The response shape is
 unchanged and the original remains the STT/crop/recovery input.

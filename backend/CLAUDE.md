@@ -25,7 +25,7 @@ permissions must be inspected before alleging an authorization bypass.
   material: definite rejection cleans only new objects, ambiguous responses retain
   them, and cleanup failures surface. Legacy converging writers retain fixed keys.
   Go/QA readers pin bucket, lookup meeting and exact field/version grammar; deploy
-  those readers before writers (ADR-037).
+  those readers before writers (ADR-013).
 - Bounded meeting reading uses metadata views for authorization, notes/summary and
   action state; hydrate only the requested transcript and eligible segments after
   access checks. Preserve exact Unicode-code-point pages, current revision/cursor

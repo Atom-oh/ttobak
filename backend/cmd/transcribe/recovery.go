@@ -27,7 +27,7 @@ import (
 	"github.com/ttobak/backend/internal/service"
 )
 
-// The scheduled recovery tick (ADR-031 amendment). EventBridge sends a fixed,
+// The scheduled recovery tick (ADR-013, scheduled STT recovery). EventBridge sends a fixed,
 // parameterless envelope; a forged tick can only start the same bounded sweep.
 const (
 	sttRecoverySource     = "ttobak.recovery"

@@ -31,7 +31,7 @@ date or that all listed deployment changes are still configured.
 
 - Editable research titles distinct from immutable prompts; research Markdown/Notion
   export, tab URL synchronization and follow-up research features.
-- Admin user lifecycle panel and fail-open last-login tracking (ADR-032).
+- Admin user lifecycle panel and fail-open last-login tracking (ADR-007).
 - Meeting-driven Code Interpreter sizing simulator (ADR-033).
 - Pending email shares for invited users, materialized after verified login.
 - Mermaid zoom/pan and fullscreen display.
@@ -67,4 +67,4 @@ date or that all listed deployment changes are still configured.
   integration-key handling. These additions do not certify complete compliance.
 - Add crawler paywall/body-quality filtering. Filtering is not access authorization.
 - Public document links later introduced an explicit, narrow unauthenticated route;
-  old claims that every API route requires login are superseded by ADR-022.
+  old claims that every API route requires login are superseded by ADR-020.

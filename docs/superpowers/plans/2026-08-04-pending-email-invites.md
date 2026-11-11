@@ -7,7 +7,7 @@
 
 Avoid immediate user-not-found errors when sharing with someone who had not provisioned a profile. The draft covered five flows: meeting, document, and research sharing plus account and Project membership. It proposed `PendingInvite` rows keyed by normalized email, entity reverse refs, reconciliation only in `GetOrCreateUser`'s new-profile branch, and generic owner list/revoke routes.
 
-UI work included email fallback choices, pending badges/notices, and using returned API state instead of inventing a recipient identity. Dedicated cancellation was necessary because a pending email had no user ID. The draft also proposed enabling uppercase `TTL` table sweeping and a new ADR-030.
+UI work included email fallback choices, pending badges/notices, and using returned API state instead of inventing a recipient identity. Dedicated cancellation was necessary because a pending email had no user ID. The draft also proposed enabling uppercase `TTL` table sweeping and a new ADR-006.
 
 ## Implemented boundary that supersedes the draft
 
@@ -17,7 +17,7 @@ The queue requires an existing Cognito-invited identity, records its sub, and ma
 
 Expiry is checked synchronously at 30 days and uses `pendingShareExpiresAt` for physical TTL cleanup. QA history/cache rows with uppercase `TTL` are not swept by that setting. Revoke/materialization races can return conflict rather than falsely report a live grant canceled. The proposed generic `PendingInvite` files/routes are not the implemented API.
 
-The proposed ADR number was never reserved: [ADR-030](../../decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md) covers mobile captions. [ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md) separately changes member-add authority while keeping pending-invite cancellation owner-only.
+The proposed ADR number was never reserved: [ADR-006](../../decisions/ADR-006-browser-and-mobile-recording.md) covers mobile captions. [ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md) separately changes member-add authority while keeping pending-invite cancellation owner-only.
 
 ## Risks, validation, and result record
 

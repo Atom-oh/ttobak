@@ -124,11 +124,19 @@ func TestShareDirectoryDirectOnly(test *testing.T) {
 	membership.memberships = map[string][]model.AccountMember{"owner": {
 		{AccountID: "acc_b", UserID: "owner"}, {AccountID: "acc_a", UserID: "owner"},
 		{AccountID: "acc_x", UserID: "someone-else"}, {AccountID: "acc_gone", UserID: "owner"},
+		{AccountID: "acc_stale", UserID: "owner"}, {AccountID: "acc_merged", UserID: "owner"},
 	}}
+	// Canonical membership rows: acc_stale is only a stale GSI1 entry.
+	membership.members = map[string][]model.AccountMember{
+		"acc_a": {{AccountID: "acc_a", UserID: "owner"}}, "acc_b": {{AccountID: "acc_b", UserID: "owner"}},
+		"acc_gone": {{AccountID: "acc_gone", UserID: "owner"}}, "acc_merged": {{AccountID: "acc_merged", UserID: "owner"}},
+	}
 	membership.accounts = map[string]*model.Account{
-		"acc_a": {AccountID: "acc_a", Name: "Hana Bank", Aliases: []string{"HNB"}, Domains: []string{"hanabank.com"}},
-		"acc_b": {AccountID: "acc_b", Name: "Beta"},
-		"acc_x": {AccountID: "acc_x", Name: "Not mine"},
+		"acc_a":      {AccountID: "acc_a", Name: "Hana Bank", Aliases: []string{"HNB"}, Domains: []string{"hanabank.com"}},
+		"acc_b":      {AccountID: "acc_b", Name: "Beta"},
+		"acc_x":      {AccountID: "acc_x", Name: "Not mine"},
+		"acc_stale":  {AccountID: "acc_stale", Name: "Removed from me"},
+		"acc_merged": {AccountID: "acc_merged", Name: "Tombstone", MergedInto: "acc_a"},
 	}
 	directory, err := svc.ShareDirectory(context.Background(), "owner")
 	if err != nil {
@@ -150,6 +158,7 @@ func TestShareDirectoryDirectOnly(test *testing.T) {
 	for index := 0; index < 205; index++ {
 		id := fmt.Sprintf("acc_%03d", 204-index)
 		membership.memberships["owner"] = append(membership.memberships["owner"], model.AccountMember{AccountID: id, UserID: "owner"})
+		membership.members[id] = []model.AccountMember{{AccountID: id, UserID: "owner"}}
 		membership.accounts[id] = &model.Account{AccountID: id, Name: id}
 	}
 	directory, err = svc.ShareDirectory(context.Background(), "owner")

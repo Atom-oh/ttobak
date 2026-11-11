@@ -156,7 +156,7 @@ export class StorageStack extends cdk.Stack {
           ],
         },
         {
-          // ADR-062 playback copies age like their audio/ sources.
+          // ADR-014 playback copies age like their audio/ sources.
           id: 'AudioPlaybackToIA',
           prefix: 'audio-playback/',
           transitions: [
@@ -317,7 +317,7 @@ exports.handler = async () => {
         effect: iam.Effect.ALLOW,
         actions: ['s3:GetObject'],
         principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-        // audio-playback: ADR-062 remuxed (seekable) copies of meeting audio.
+        // audio-playback: ADR-014 remuxed (seekable) copies of meeting audio.
         resources: ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf'].map((prefix) =>
           this.bucket.arnForObjects(`${prefix}/*`)
         ),

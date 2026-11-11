@@ -30,7 +30,7 @@ export interface Meeting {
   /** Per ADR-014: ordered S3 keys for multi-file uploads. Falls back to audioKey for legacy single-file meetings. */
   audioKey?: string;
   audioKeys?: string[];
-  /** Per ADR-014 Phase 6: ordered predecessor meeting IDs whose summaries are prepended to this meeting's prompt. */
+  /** Ordered predecessor meeting IDs (ADR-014). Navigation only: their summaries are never generation evidence. */
   linkedMeetingIds?: string[];
   /** ADR-033 cost/sizing simulator, singleton per meeting. */
   simRun?: SimRun;

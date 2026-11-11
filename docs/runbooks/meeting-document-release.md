@@ -57,6 +57,6 @@ to inspect retained events and validate a dry run. A terminal summary still
 requires `/resummary`; the replay tool never resets its budget or invents a run.
 Rollback: revert/redeploy, preserving readers/workers and ambiguous spills.
 Bounds: 8 MiB/source, 1 MiB snapshot, 300 KiB row, 22 objects, 100 checks.
-[ADR-040](../decisions/ADR-040-guarded-summary-publication.md).
+[ADR-013](../decisions/ADR-013-summary-generation-and-publication.md).
 
 DOCUMENT input also caps 20 documents, 50 units and 16/64 KiB per-document/total.

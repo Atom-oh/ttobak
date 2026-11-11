@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: fe399bd39d24 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 8aa0d143f446 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -114,7 +114,7 @@ limit instead of claiming a Mac build passed.
   for new-spill writes. Reader-compatible code must be deployed before writers.
   Go/Python readers accept exact legacy or immutable keys for the configured bucket,
   authorized lookup meeting and allowed field, rejecting encoded/traversal suffixes
-  (ADR-037). Unconditional writers retain their separate fixed-key behavior.
+  (ADR-013). Unconditional writers retain their separate fixed-key behavior.
 - Item budgets use UTF-8 bytes; `inlineFieldSize.utf16Units` serves only the
   empirically observed DynamoDB String `size()` condition behavior, a recorded
   runtime observation, not an AWS-documented unit contract; see
@@ -154,7 +154,7 @@ limit instead of claiming a Mac build passed.
 - **Recovery:** checkpoints overwrite exact `recording_progress.{webm|m4a|ogg}`
   names, other uploads stay unique; never loosen `isCheckpointFileName`. Summarize
   retry claims (20 min) differ from 60-minute stuck expiry; Lambda timeout is 15
-  min. The ADR-031 `ttobak-stt-recovery` tick re-drives only untranscribed
+  min. The ADR-013 `ttobak-stt-recovery` tick re-drives only untranscribed
   single-file audio via two conditional claims, never via `GetMeetingDetail` or
   checkpoints; marked-failure deletion spares user data.
 - **Accounts:** members add/change non-owner roles (ADR-034/054). Creation permits
@@ -170,12 +170,12 @@ limit instead of claiming a Mac build passed.
   document shares reference the owner's document, always read-only.
   Owner-only mutations use partition isolation; recipients read through the
   share row. Inaccessible docs 404. Use `SHAREDDOC#`/`DOCSHARE_TO#`, never
-  meeting `SHARED#` keys (ADR-022/029).
+  meeting `SHARED#` keys (ADR-020).
 - **Public routes:** `GET /api/public/docs/{token}` and ADR-045's two static MCP
   discovery GETs are the only unauthenticated routes. Revalidate `PublicShareToken`;
   conditional minting prevents orphans; downloads last 5 minutes. Edge bypass
   covers `/api/public/*`; API Gateway registers only the literal doc route.
-  A new unauthenticated route is CRITICAL (ADR-022).
+  A new unauthenticated route is CRITICAL (ADR-020).
 - **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows
   (ADR-044). Keep writers disabled until companion bootstrap and rollback guards
   are deployed. Account/meeting `PENDING_SHARE#`/`PENDING_ACCOUNT#`/
@@ -187,7 +187,7 @@ limit instead of claiming a Mac build passed.
 - **Admin:** `RequireAdmin` checks verified JWT `cognito:groups`; frontend `isAdmin`
   is cosmetic. Delete/disable reject self/last-admin targets, with a post-write
   warning for races. PostAuthentication tracking must fail open: short abort
-  timeout, try/catch, no reserved concurrency, `DISABLED=1` switch (ADR-032).
+  timeout, try/catch, no reserved concurrency, `DISABLED=1` switch (ADR-007).
 - **QA search:** SigV4/MCP transport is deliberately repeated in three
   artifacts: crawler/news_crawler.py, research-agent/tools.py, qa/web_search.py.
   Keep fixes aligned. Hash-redact queries in logs. Manual and opt-in proactive
@@ -206,7 +206,7 @@ limit instead of claiming a Mac build passed.
   origin proof. `$connect` requires that proof and a verified Cognito JWT;
   ws-authorizer reads the proof from Secrets Manager using only an ARN in env.
   Never expose the proof in public config or restore a direct-origin URL fallback.
-- **Batch summaries ([ADR-040](docs/decisions/ADR-040-guarded-summary-publication.md)):**
+- **Batch summaries ([ADR-013](docs/decisions/ADR-013-summary-generation-and-publication.md)):**
   CAS pins source presence/bytes and human text. Fresh runs reset the two-retry
   budget when `!pending || status != summarizing`; resumed runs never reset it.
   Busy errors retain delivery; run errors release owned claims, ending at
@@ -226,7 +226,7 @@ limit instead of claiming a Mac build passed.
   Partial/retained text is explicit and failed-current results are not model evidence.
   Code wiring does not prove deployed acceptance; QA/UI cutover is separate. Preview PDFs bind
   exact source ETag/version and conditionally replace the observed preview; legacy
-  previews need regeneration before canonical use (ADR-022).
+  previews need regeneration before canonical use (ADR-020).
 - **Current-source QA foundation:** helpers verify present authorization/revisions
   before bytes and replay, including immutable manual/shared snapshots and bounded
   legacy text. Metadata and cached vectors never grant access. ToolHistory uses
@@ -256,11 +256,11 @@ limit instead of claiming a Mac build passed.
   progress, not total duration; delete WAV only after upload-complete succeeds.
   Release recorder locks around blocking Core Audio FFI; the real-time IOProc only
   mixes and enqueues, and taps/aggregates tear down after `AudioDeviceStop`
-  (ADR-046). Update transition state in the same critical section; `StartGuard` clears abandoned starts.
+  (ADR-024). Update transition state in the same critical section; `StartGuard` clears abandoned starts.
   Check path containment before canonicalization to avoid existence probes.
 - **Mobile:** keep recording when captions fail. Wake-lock/reconnect/watchdog and
   manual recovery are implemented mitigations. Gesture-backed `resumeAudio()` and
-  `manualStallRecovery()` must run synchronously before any `await` (ADR-030).
+  `manualStallRecovery()` must run synchronously before any `await` (ADR-006).
 
 ## Security requirements and accepted limits
 
@@ -293,13 +293,13 @@ exposure:
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
 | Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/040); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
-| convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-022; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
+| convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
-| Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-032; refresh revocation differs from access/ID token expiry. |
-| User deletion preserves old profile/data | ADR-032; removes email GSI keys; refresh-token use does not update lastLoginAt. |
+| Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-007; refresh revocation differs from access/ID token expiry. |
+| User deletion preserves old profile/data | ADR-007; removes email GSI keys; refresh-token use does not update lastLoginAt. |
 | Some QA rows use an unswept `TTL` field | `storage-stack.ts`, `qa/handler.py`; a sweep would be a separate data-retention change. |
-| Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-037); do not generalize the legacy window to that path. |
+| Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-013); do not generalize the legacy window to that path. |
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
 | Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
