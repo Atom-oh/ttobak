@@ -70,7 +70,7 @@ label still shows a model-reported time the transcript does not corroborate.
 Readers can verify summary context without extra matching-model calls. Prompt and
 postprocessing maintenance increase; nearest-time matching remains approximate,
 and poor transcript segmentation limits precision. User verification remains
-necessary. Linked predecessor context has separate confidentiality rules in ADR-014.
+necessary. Linked predecessors are navigation only and are never generation evidence (ADR-014, ADR-070).
 
 ## Evidence
 

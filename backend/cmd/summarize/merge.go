@@ -116,7 +116,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		// failed refinement doesn't silently collapse the rest of the
 		// timeline onto offset=0:
 		//   1. whisper_metadata.duration_seconds (preferred — true audio length
-		//      including trailing silence; ADR-014 §5.2 mandates this)
+		//      including trailing silence; preferred per ADR-014)
 		//   2. last refined segment's EndTime (covers older transcripts without
 		//      whisper metadata; understates by trailing silence so subsequent
 		//      parts drift earlier)

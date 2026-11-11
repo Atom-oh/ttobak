@@ -59,7 +59,7 @@ The [uploader](../../../frontend/src/components/AudioUploader.tsx),
 actual UI behavior. [GatewayStack](../../../infra/lib/gateway-stack.ts) and
 [AiStack](../../../infra/lib/ai-stack.ts) define event/IAM wiring.
 
-Follow [ADR-014](../../../docs/decisions/ADR-014-multi-file-audio-and-linked-meetings.md),
+Follow [ADR-014](../../../docs/decisions/ADR-014-meeting-audio-files-and-lookup.md),
 [ADR-031](../../../docs/decisions/ADR-031-summarize-timeout-resilience.md), and the
 [current documentation map](../../../docs/README.md) rather than rerunning old
 copied build/deployment steps. No source changes or deployment are authorized by

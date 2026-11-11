@@ -674,7 +674,7 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 			if key == "" {
 				continue // skip pre-allocated empty slots
 			}
-			// ADR-062: a current seekable copy when one exists, else the original.
+			// ADR-014: a current seekable copy when one exists, else the original.
 			url, urlErr := h.uploadService.GenerateAudioPlaybackURL(ctx, key)
 			if urlErr != nil {
 				writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to generate audio URL")

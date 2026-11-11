@@ -213,7 +213,7 @@ local edge locations; class 100 excluded Asia and served Seoul from Europe.
 
 Assets and KB buckets use S3-managed encryption, versioning, retain policies and
 Block Public Access. Media reads use an OAC allowlist for audio/, audio-playback/,
-images/, files/, docs/ and docs-pdf/ (audio-playback/ holds ADR-062 remuxed copies,
+images/, files/, docs/ and docs-pdf/ (audio-playback/ holds ADR-014 remuxed copies,
 with its own 90-day IA transition). New categories must extend that allowlist; transcript spill
 objects are not public media. Signed GETs use CloudFront with an S3 fallback when
 signing material is unavailable; signed upload PUTs still target S3 directly.
@@ -330,7 +330,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom AccountMergeRequested, ttobak.analysis | summarize, account merge worker only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
-| S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-062; skips checkpoints) |
+| S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-014; skips checkpoints) |
 | One-minute ttobak-kb-index-tick | kb; configured enabled by the checked-in CDK app, all mode |
 | Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
@@ -344,7 +344,7 @@ ETag/version metadata and conditional preview replacement bind converted bytes.
 Canonical readers validate that binding; the preview URL still checks existence.
 Cross-tenant original/preview reads and parser risk remain (ADR-022).
 
-audio-remux (ADR-062) writes `audio-playback/` copies with `ffmpeg -c copy`,
+audio-remux (ADR-014) writes `audio-playback/` copies with `ffmpeg -c copy`,
 leaving the source untouched. It reads `audio/*` and `audio-playback/*`, writes
 only `audio-playback/*`, has no DynamoDB access and runs in the same isolated
 subnets. It downloads the HEAD-observed source version, publishes only if that

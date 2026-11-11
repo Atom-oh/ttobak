@@ -43,7 +43,7 @@ an established structured reconciliation system.
 
 ## Current mapping and limits
 
-[ADR-014](../../../docs/decisions/ADR-014-multi-file-audio-and-linked-meetings.md)
+[ADR-014](../../../docs/decisions/ADR-014-meeting-audio-files-and-lookup.md)
 records implemented multi-part upload, merge, playback, and linking. The current
 [uploader](../../../frontend/src/components/AudioUploader.tsx) sends selected files
 sequentially, assigns indices only to audio, and does not calculate a safe append
