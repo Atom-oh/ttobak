@@ -137,6 +137,10 @@ runner collects and syncs.
 | `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,reason?,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
+| `PUT /api/performance/reports/{periodKey}` | JSON report (below), at most 256 KiB | `{periodKey,generatedAt}`; replaces any report for the key |
+| `GET /api/performance/reports` | none | `{items:[{periodKey,label,generatedAt,partial}],truncated}` newest `generatedAt` first; at most 200 items |
+| `GET /api/performance/reports/{periodKey}` | none | the stored report; `404` when absent or expired |
+| `DELETE /api/performance/reports/{periodKey}` | none | `204`; `404` when absent |
 
 Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
 trailing data and unsupported query parameters are rejected. A sync batch has at
@@ -156,6 +160,50 @@ lowercase); `expectedRevision` is the source's current revision (zero when new).
   Descriptions and comments are not accepted.
 - Remove: `{"op":"remove","externalId":"..."}` for that source's SFDC account
   or task ID.
+
+### Performance reports
+
+Reports are owner-private `PERFREPORT#{periodKey}` rows written by the owner's
+Mac (residency and allowed content: ADR-023). Validation is in
+`backend/internal/model/performance_report.go` and
+`backend/internal/service/performance_report.go`. Another user's report, like
+a missing one, is `404`.
+
+Period keys: `W{ISO year}-{01..53}` (ISO Monday through Sunday; week 53 only
+in a 53-week year), `Q{year}-{1..4}`, `Y{year}`, and
+`C{YYYY-MM-DD}_{YYYY-MM-DD}` with start no later than end and at most 400 days
+inclusive. Years run from 2000 to 2100; any other key is `400`.
+
+The PUT body is strict JSON (as above, nesting up to the table cell) with
+required top-level fields `schemaVersion` (1), `periodKey` (equal to the path),
+`period {start,end,label}` (`start`/`end` equal to the key's first and last
+`YYYY-MM-DD`, nonempty `label`), `alias`, `generatedAt` (RFC 3339), `model`,
+`partial`, `summary`, `ledger`, `sections`, `actions` and `dataBasis`.
+`missingSources[]` and `highlights {projects,initiatives,channels,programs}`
+may be absent; so may a section's `tables`/`cards`, a ledger `note` and a data
+basis `estimates`. Null is never accepted, and absent lists read back as `[]`.
+
+- `ledger[]` (at most 50): `{label,value,unit,note}`; `sections[]` (at most
+  40, unique `id` matching `[A-Za-z0-9_-]{1,64}`): `{id,title,lede,paragraphs[],
+  tables[{columns[],rows[][]}],cards[{title,body}]}`; `actions[]` (at most
+  200): `{severity: hi|mid|lo, title, detail, source}`; `dataBasis[]` (at most
+  50): `{source,query,exclusions,estimates}`.
+- Table cells are strings. A table has 1 to 50 columns and at most 500 rows,
+  and every row has one cell per column. A section has at most 100
+  paragraphs, 20 tables and 50 cards.
+- Lengths in code points: titles, labels, names, columns, ledger
+  `label`/`value`/`unit`, sources and list items at most 200; `summary`,
+  ledes, paragraphs, cells, card bodies, action details, ledger notes and
+  data-basis text at most 4,000. Each highlights list and `missingSources`
+  hold at most 20 items.
+- Every string is plain text: valid UTF-8 without control characters other
+  than tab and newlines, and without `<` followed by a letter or `/`, `](`
+  or `slack.com` (any case). The compact re-encoded report must also fit in
+  256 KiB.
+
+The listing reads at most 1,000 rows with a projection of summary fields and
+sorts them by `generatedAt`. Rows past their retention are hidden before TTL
+deletion.
 
 The mappings list reads at most 501 assignment rows (no cursor), returns the
 first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated
@@ -2003,6 +2051,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/performance/mappings` | `performanceHandler.ListMappings` |
 | PUT | `/api/performance/mappings/{sfdcAccountId}` | `performanceHandler.PutMapping` |
 | GET | `/api/performance/missed` | `performanceHandler.ListMissed` |
+| GET | `/api/performance/reports` | `performanceHandler.ListReports` |
+| GET | `/api/performance/reports/{periodKey}` | `performanceHandler.GetReport` |
+| PUT | `/api/performance/reports/{periodKey}` | `performanceHandler.PutReport` |
+| DELETE | `/api/performance/reports/{periodKey}` | `performanceHandler.DeleteReport` |
 | GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |

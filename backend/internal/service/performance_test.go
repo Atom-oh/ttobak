@@ -33,6 +33,8 @@ type performanceStoreFake struct {
 	deleted      []string
 	deleteErr    error
 	replay       bool
+	reports      map[string]map[string]model.PerformanceReport
+	summaries    []model.PerformanceReportSummary
 }
 
 type storedPerformanceReceipt struct {

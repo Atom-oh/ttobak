@@ -31,6 +31,7 @@ type performanceMemoryStore struct {
 	tasks       map[string]map[string]model.SFDCTask
 	mappings    map[string]map[string]model.AccountMapping
 	goals       map[string]model.PerformanceGoals
+	reports     map[string]map[string]model.PerformanceReport
 }
 
 func newPerformanceMemoryStore() *performanceMemoryStore {
@@ -38,6 +39,7 @@ func newPerformanceMemoryStore() *performanceMemoryStore {
 		batches: map[string]performanceSavedBatch{}, revisions: map[string]int64{},
 		assignments: map[string]map[string]model.SFDCAssignment{}, tasks: map[string]map[string]model.SFDCTask{},
 		mappings: map[string]map[string]model.AccountMapping{}, goals: map[string]model.PerformanceGoals{},
+		reports: map[string]map[string]model.PerformanceReport{},
 	}
 }
 
@@ -191,6 +193,10 @@ func performanceHTTPRouter(api PerformanceAPI, userID string) http.Handler {
 	router.Get("/api/performance/mappings", handler.ListMappings)
 	router.Put("/api/performance/mappings/{sfdcAccountId}", handler.PutMapping)
 	router.Get("/api/performance/missed", handler.ListMissed)
+	router.Get("/api/performance/reports", handler.ListReports)
+	router.Get("/api/performance/reports/{periodKey}", handler.GetReport)
+	router.Put("/api/performance/reports/{periodKey}", handler.PutReport)
+	router.Delete("/api/performance/reports/{periodKey}", handler.DeleteReport)
 	return router
 }
 

@@ -384,12 +384,22 @@ const PerformanceListRowLimit = 501
 // partition. A positive limit stops after that many rows and never follows
 // further pages; zero reads every page.
 func (r *DynamoDBRepository) queryPerformanceRows(ctx context.Context, userID, prefix string, limit int) ([]map[string]types.AttributeValue, error) {
+	return r.queryPerformanceRowsProjected(ctx, userID, prefix, limit, nil)
+}
+
+// queryPerformanceRowsProjected is queryPerformanceRows with an optional
+// projection of the returned attributes.
+func (r *DynamoDBRepository) queryPerformanceRowsProjected(ctx context.Context, userID, prefix string, limit int, projection *expression.ProjectionBuilder) ([]map[string]types.AttributeValue, error) {
 	if !performanceUserID.MatchString(userID) {
 		return nil, ErrInvalidPerformanceInput
 	}
-	built, err := expression.NewBuilder().WithKeyCondition(
+	builder := expression.NewBuilder().WithKeyCondition(
 		expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
-			And(expression.Key("SK").BeginsWith(prefix))).Build()
+			And(expression.Key("SK").BeginsWith(prefix)))
+	if projection != nil {
+		builder = builder.WithProjection(*projection)
+	}
+	built, err := builder.Build()
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +409,7 @@ func (r *DynamoDBRepository) queryPerformanceRows(ctx context.Context, userID, p
 		input := &dynamodb.QueryInput{
 			TableName: aws.String(r.tableName), KeyConditionExpression: built.KeyCondition(),
 			ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
-			ConsistentRead: aws.Bool(true), ExclusiveStartKey: startKey,
+			ConsistentRead: aws.Bool(true), ExclusiveStartKey: startKey, ProjectionExpression: built.Projection(),
 		}
 		if limit > 0 {
 			input.Limit = aws.Int32(int32(limit - len(items)))
@@ -638,4 +648,151 @@ func (r *DynamoDBRepository) ListPerformanceSources(ctx context.Context, userID 
 		sources = append(sources, row.PerformanceSourceStatus)
 	}
 	return sources, nil
+}
+
+type performanceReportRow struct {
+	PK        string `dynamodbav:"PK"`
+	SK        string `dynamodbav:"SK"`
+	UserID    string `dynamodbav:"userId"`
+	ExpiresAt int64  `dynamodbav:"pendingShareExpiresAt"`
+	model.PerformanceReport
+}
+
+// PerformanceReportListRowLimit bounds a report listing read. The service
+// returns at most service.MaxPerformanceReportList of these, newest first.
+const PerformanceReportListRowLimit = 1000
+
+// performanceReportExpiry is 00:00 UTC on January 1 of (period end year + 3):
+// two full calendar years after the end year.
+func performanceReportExpiry(periodKey string) (int64, error) {
+	_, end, err := model.PerformancePeriodBounds(periodKey)
+	if err != nil {
+		return 0, ErrInvalidPerformanceInput
+	}
+	return performanceYearExpiry(end.Year() + 1), nil
+}
+
+// PutPerformanceReport replaces the owner's report for one period key with an
+// unconditional PutItem: the report is an owner singleton, and the previous
+// report stays readable until this write succeeds. The service validates the
+// content; this checks identity and retention.
+func (r *DynamoDBRepository) PutPerformanceReport(ctx context.Context, userID string, report model.PerformanceReport) error {
+	if !performanceUserID.MatchString(userID) {
+		return ErrInvalidPerformanceInput
+	}
+	expires, err := performanceReportExpiry(report.PeriodKey)
+	if err != nil {
+		return err
+	}
+	if performanceExpired(expires) {
+		return ErrInvalidPerformanceInput // already past retention; TTL would never sweep it
+	}
+	put, err := r.performancePut(performanceReportRow{
+		PK: model.PrefixUser + userID, SK: model.PerformanceReportSortKey(report.PeriodKey), UserID: userID,
+		ExpiresAt: expires, PerformanceReport: report,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: put.TableName, Item: put.Item}); err != nil {
+		return fmt.Errorf("put performance report: %w", err)
+	}
+	return nil
+}
+
+// GetPerformanceReport returns nil when no live report is stored.
+func (r *DynamoDBRepository) GetPerformanceReport(ctx context.Context, userID, periodKey string) (*model.PerformanceReport, error) {
+	if !performanceUserID.MatchString(userID) {
+		return nil, ErrInvalidPerformanceInput
+	}
+	if _, err := performanceReportExpiry(periodKey); err != nil {
+		return nil, err
+	}
+	sortKey := model.PerformanceReportSortKey(periodKey)
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName), Key: performanceKey(userID, sortKey), ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read performance report: %w", err)
+	}
+	if len(result.Item) == 0 {
+		return nil, nil
+	}
+	var row performanceReportRow
+	if err := attributevalue.UnmarshalMap(result.Item, &row); err != nil || row.PK != model.PrefixUser+userID ||
+		row.SK != sortKey || row.UserID != userID || row.PeriodKey != periodKey {
+		return nil, ErrPerformanceCorruptData
+	}
+	if row.ExpiresAt != 0 && performanceExpired(row.ExpiresAt) { // TTL deletion lags; hide expired rows.
+		return nil, nil
+	}
+	report := row.PerformanceReport
+	return &report, nil
+}
+
+// ListPerformanceReports pages through the owner's reports, projecting only
+// the summary fields, and returns at most PerformanceReportListRowLimit live
+// rows in sort-key order.
+func (r *DynamoDBRepository) ListPerformanceReports(ctx context.Context, userID string) ([]model.PerformanceReportSummary, error) {
+	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"), expression.Name("userId"),
+		expression.Name("periodKey"), expression.Name("period.label"), expression.Name("generatedAt"),
+		expression.Name("partial"), expression.Name("pendingShareExpiresAt"))
+	items, err := r.queryPerformanceRowsProjected(ctx, userID, model.PrefixPerformanceReport, PerformanceReportListRowLimit, &projection)
+	if err != nil {
+		return nil, err
+	}
+	now := performanceNow().Unix()
+	summaries := make([]model.PerformanceReportSummary, 0, len(items))
+	for _, item := range items {
+		var row struct {
+			PK          string `dynamodbav:"PK"`
+			SK          string `dynamodbav:"SK"`
+			UserID      string `dynamodbav:"userId"`
+			ExpiresAt   int64  `dynamodbav:"pendingShareExpiresAt"`
+			PeriodKey   string `dynamodbav:"periodKey"`
+			GeneratedAt string `dynamodbav:"generatedAt"`
+			Partial     bool   `dynamodbav:"partial"`
+			Period      struct {
+				Label string `dynamodbav:"label"`
+			} `dynamodbav:"period"`
+		}
+		if attributevalue.UnmarshalMap(item, &row) != nil || row.PK != model.PrefixUser+userID || row.UserID != userID ||
+			row.SK != model.PerformanceReportSortKey(row.PeriodKey) {
+			continue
+		}
+		if row.ExpiresAt != 0 && row.ExpiresAt <= now { // TTL deletion lags; hide expired rows.
+			continue
+		}
+		summaries = append(summaries, model.PerformanceReportSummary{
+			PeriodKey: row.PeriodKey, Label: row.Period.Label, GeneratedAt: row.GeneratedAt, Partial: row.Partial,
+		})
+	}
+	return summaries, nil
+}
+
+// DeletePerformanceReport removes the owner's report. A missing row returns
+// ErrConditionFailed.
+func (r *DynamoDBRepository) DeletePerformanceReport(ctx context.Context, userID, periodKey string) error {
+	if !performanceUserID.MatchString(userID) {
+		return ErrInvalidPerformanceInput
+	}
+	if _, err := performanceReportExpiry(periodKey); err != nil {
+		return err
+	}
+	built, err := expression.NewBuilder().WithCondition(expression.Name("userId").Equal(expression.Value(userID))).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName), Key: performanceKey(userID, model.PerformanceReportSortKey(periodKey)),
+		ConditionExpression: built.Condition(), ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
+	})
+	if err != nil {
+		var rejected *types.ConditionalCheckFailedException
+		if errors.As(err, &rejected) {
+			return errors.Join(ErrConditionFailed, err)
+		}
+		return fmt.Errorf("delete performance report: %w", err)
+	}
+	return nil
 }
