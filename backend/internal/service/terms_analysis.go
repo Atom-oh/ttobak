@@ -209,6 +209,12 @@ type termsSource struct {
 	hash       string
 }
 
+// termsExtractorVersion is part of every meeting's terms source identity.
+// Bump it when the extraction prompt, filters or caps change so completed
+// meetings re-qualify instead of reporting UNCHANGED; a run queued under the
+// previous identity ends as SOURCE_CHANGED and is queued again.
+const termsExtractorVersion = "2026-11-11-domain-terms"
+
 func newTermsSource(meeting *model.Meeting) termsSource {
 	transcript, variant := selectMeetingTranscript(meeting)
 	revision := meeting.TranscriptRevisionA
@@ -218,7 +224,7 @@ func newTermsSource(meeting *model.Meeting) termsSource {
 	tainted := meeting.SourceEditedByNonOwnerAt != ""
 	identity, _ := json.Marshal([]string{
 		actionSourceHash(meeting.Content), variant, revision, actionSourceHash(transcript),
-		meeting.AttachmentSummarySources, strconv.FormatBool(tainted),
+		meeting.AttachmentSummarySources, strconv.FormatBool(tainted), termsExtractorVersion,
 	})
 	return termsSource{
 		notes: meeting.Content, transcript: transcript, tainted: tainted,
@@ -441,6 +447,11 @@ func (s *TermsAnalysisService) Process(ctx context.Context, event model.TermsReq
 		refresh = append(refresh, event.OwnerID)
 	}
 	refresh = append(refresh, s.mergeAccountLayer(runCtx, event, fresh.AccountID, state.AccountAcceptedTerms, terms, source)...)
+	// Retry a relink sweep that failed or was retained earlier (ADR-008 FU4),
+	// after this run's own RecordTermsAccount so its drop sees that record.
+	if hasStaleTermsAccount(state.AccountIDs, fresh.AccountID) {
+		_ = sweepUnlinkedAccountTerms(ctx, s.repo, "terms-run", event.OwnerID, event.MeetingID)
+	}
 	s.refreshVocabularies(ctx, fmt.Sprintf("terms run: meeting=%s run=%s", event.MeetingID, event.RunID), refresh)
 	// An Enqueue during this run returned PENDING and queued nothing; a source
 	// that changed after the freshness check gets its own run now.
@@ -515,7 +526,14 @@ func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event mode
 	// that the Account still observes, so acceptedTerms does not cover the
 	// Account: record the Account and every key it will observe first, so the
 	// deletion sweep cleans them there.
+	// RecordTermsAccount and every Account observation write also require the
+	// meeting to still be linked to accountID: a relink after the freshness
+	// read refuses them (UNLINKED; a replaced run fails the record the same
+	// way), so nothing lands where the relink sweep would not look.
 	if err := s.repo.RecordTermsAccount(ctx, event.OwnerID, event.MeetingID, event.RunID, accountID, keys); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return skip("UNLINKED")
+		}
 		return skip("RECORD_FAILED")
 	}
 	// No acceptedTerms: that list tracks the personal partition, and an Account
@@ -535,7 +553,10 @@ func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event mode
 	}
 	// A failure is not retried (R8); its partial counters are logged.
 	outcome := "MERGED"
-	if err != nil {
+	switch {
+	case errors.Is(err, repository.ErrDictSourceMeetingGone):
+		outcome = "UNLINKED"
+	case err != nil:
 		outcome = "FAILED"
 	}
 	c := merged.Counters
