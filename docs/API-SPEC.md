@@ -1504,6 +1504,11 @@ is defined by the summary-privacy writer state in INFRA-SPEC.
 The meeting-detail UI uses that publication endpoint directly for its single
 link-and-share action: no preliminary private link request is needed. Existing
 private links and recording preparation remain private until explicit publication.
+After either write commits, the service removes the meeting's automatic-term
+evidence from Account dictionaries it is no longer linked to (ADR-008 FU4). This
+sweep is best effort: a failure is logged and never changes the response, and
+repeating the request retries it. Its version bump can make a concurrent Account
+term PATCH return 409 `VERSION_CONFLICT`.
 
 Account meeting lists and meeting-sourced insights, including the registered QA
 account insight/brief tools, revalidate the exact

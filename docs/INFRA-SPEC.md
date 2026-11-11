@@ -267,7 +267,8 @@ retained-grant removal using deployed function timeout/last-modified metadata.
 Only the summary role receives the selected final-note model/profile grant.
 Images use GPT-6.1 Terra via independent `BEDROCK_IMAGE_MODEL_ID` in us-west-2.
 Legacy news briefings and the structured news worker use GPT-6 Luna in the stack
-region. Their exact model/profile grants retain outgoing Claude permissions for
+region; the structured worker requests reasoning effort `low` (`none` leaked
+planning text into the JSON answer). Their exact model/profile grants retain outgoing Claude permissions for
 rollout safety; runtime has no expensive-model fallback. Structured news prices
 are conservatively metered at USD 0.125 for all input (including separate
 cache-read/write tokens) / USD 0.50 output per million tokens. Verified
@@ -470,6 +471,14 @@ the pre-created ttobak-agentcore-research-role; absence from CDK creation is not
 that the role is missing. Web search calls the us-east-1 Gateway through SigV4 from
 three separately packaged callers.
 
+The Gateway's `ttobak-web-search-tool` target declares only `connectorId:
+web-search`. CloudFormation's `ConnectorSource` has no version property, so the
+connector version is pinned out of band and is sticky across later stack updates
+(see the news release runbook). News discovery sends `filters.publishedDateFilter`
+and an optional `filters.domainFilter.include`, which need connector 1.2.0 or later;
+an older target silently ignores them (observed 2026-11-11 on the target created
+2026-07-13, whose `tools/list` schema had only `query` and `maxResults`).
+
 The simulator interpreter role has no execution permissions and uses SANDBOX
 networking. Generated option text is untrusted; its prompt/import checks are not
 the security boundary. Verify role/network configuration when modifying execution.
@@ -668,6 +677,15 @@ operator CLI `backend/cmd/backfill-terms-sources` (dry run by default) passes
 every `kb/` and `shared/research/` key to the same mapper and spaces the
 published requests (`-interval`, default 5s). The worker's run row makes a rerun
 a no-op for unchanged content.
+Meetings re-qualify when `termsExtractorVersion` (part of the terms source
+identity in `service/terms_analysis.go`) changes; the operator CLI
+`backend/cmd/backfill-meeting-terms` (dry run by default; apply mode needs
+`TABLE_NAME`, `BUCKET_NAME` so spilled transcripts hydrate as in the worker,
+`AUTO_TERMS_MODE=personal`, `AUTO_TERMS_USERS` copied from the deployed
+summarize function, and `events:PutEvents`; claim or publish failures exit
+nonzero) scans done meetings and calls the
+production `Enqueue` (reason `backfill`), spacing queued runs (`-interval`,
+default 15s). Unchanged sources report `UNCHANGED`; output is outcome counts only.
 
 Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
 (`cron(0 21 * * ? *)`, after the 19:00 crawl) invokes summarize with
@@ -685,7 +703,9 @@ READY vocabulary for live caption streams.
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
-crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
+crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
+`backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
+regulator sources as such); `all` reads every
 searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly

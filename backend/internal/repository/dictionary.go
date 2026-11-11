@@ -26,7 +26,8 @@ var (
 	ErrDictObservationExists = errors.New("dictionary observation already recorded")
 	ErrLegacyBlobChanged     = errors.New("legacy dictionary changed or was migrated")
 	// ErrDictSourceMeetingGone: the observation's source meeting no longer
-	// exists, so nothing was written (deletion cleanup already ran or will).
+	// exists or, for an ACCOUNT# observation, is no longer linked to that
+	// Account, so nothing was written (deletion or relink cleanup owns it).
 	ErrDictSourceMeetingGone = errors.New("dictionary observation source meeting is gone")
 )
 
@@ -620,7 +621,7 @@ func (r *DictionaryRepository) CreateAutoTermChecked(ctx context.Context, term *
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
-		return dictMemberTransactError(err, memberIdx, []error{ErrDictTermConflict, ErrDictObservationExists, ErrDictSourceMeetingGone})
+		return dictMemberTransactError(err, memberIdx, append([]error{ErrDictTermConflict, ErrDictObservationExists}, sourceMeetingKinds...))
 	}
 	return nil
 }
@@ -629,19 +630,54 @@ func (r *DictionaryRepository) CreateAutoTermChecked(ctx context.Context, term *
 // source meeting (USER#{owner}/MEETING#{meeting}) still exists, so a worker
 // that outlives a meeting deletion cannot leave observations behind (A8).
 // KB and research observations carry no meetingId and get no check.
+//
+// An observation in an ACCOUNT# partition (ADR-008 FU4) also requires the
+// meeting to still be linked to that Account, and adds an update of the
+// meeting's run state (MEETING#{id}/ANALYSIS#terms) that needs the Account
+// in accountIds and bumps accountRecords. So a run that read the link before
+// a relink cannot write into the Account the meeting left; no write can land
+// in an Account the relink sweep already removed from accountIds; and a write
+// after the sweep read the run state fails the sweep's accountRecords guard,
+// keeping the Account recorded. Every Account observation therefore stays
+// discoverable by the relink and deletion sweeps.
 func (r *DictionaryRepository) withSourceMeetingCheck(items []types.TransactWriteItem, obs *model.DictObservation) ([]types.TransactWriteItem, error) {
 	if obs.OwnerID == "" || obs.MeetingID == "" {
 		return items, nil
 	}
-	expr, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	condition := expression.AttributeExists(expression.Name("PK"))
+	scope, accountID, _ := model.TermScopeOf(obs.PK)
+	account := scope == model.TermScopeAccount
+	if account {
+		condition = condition.And(expression.Name("accountId").Equal(expression.Value(accountID)))
+	} else if strings.HasPrefix(obs.PK, model.PrefixAccount) {
+		return nil, fmt.Errorf("%w: malformed account partition", ErrInvalidInput)
+	}
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return nil, err
 	}
-	return append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+	items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixUser+obs.OwnerID, model.PrefixMeeting+obs.MeetingID),
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
-	}}), nil
+		ExpressionAttributeValues: expr.Values(),
+	}})
+	if !account {
+		return items, nil
+	}
+	record, err := analysisUpdate(r.tableName, termsAnalysisKey(obs.MeetingID),
+		expression.Add(expression.Name("accountRecords"), expression.Value(1)),
+		expression.Name("ownerId").Equal(expression.Value(obs.OwnerID)).
+			And(expression.Contains(expression.Name("accountIds"), accountID)))
+	if err != nil {
+		return nil, err
+	}
+	return append(items, types.TransactWriteItem{Update: record}), nil
 }
+
+// sourceMeetingKinds are the error kinds of the items withSourceMeetingCheck
+// may append: the meeting check and, for an Account observation, the run
+// state update; both mean the source no longer contributes here.
+var sourceMeetingKinds = []error{ErrDictSourceMeetingGone, ErrDictSourceMeetingGone}
 
 // MergeAutoObservation records a new observation and bumps the auto term in
 // one transaction. hits increases only when the observation row is new and
@@ -727,7 +763,7 @@ func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMerge
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
-		return dictMemberTransactError(err, memberIdx, []error{ErrDictObservationExists, ErrDictTermConflict, ErrDictSourceMeetingGone})
+		return dictMemberTransactError(err, memberIdx, append([]error{ErrDictObservationExists, ErrDictTermConflict}, sourceMeetingKinds...))
 	}
 	return nil
 }
