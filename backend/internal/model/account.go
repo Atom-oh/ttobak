@@ -279,7 +279,7 @@ type MeetingInsight struct {
 	TsMarker    string   `json:"tsMarker,omitempty"` // [TS:NNN] transcript deep link
 	Entities    []string `json:"entities,omitempty"`
 	// PersonEntities is the explicitly identified human subset of Entities.
-	// An absent field is legacy mixed-entity data, not a person classification.
+	// An absent field means legacy data or no classified people.
 	PersonEntities []string `json:"personEntities,omitempty"`
 }
 

@@ -113,7 +113,7 @@ func TestPeopleCandidates_LegacyReviewRowsAreHiddenWithoutDeletingManualEdges(t 
 	}
 	result, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA,
 		model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact})
-	if err != nil || result.Written != 0 || len(f.puts) != 0 {
+	if err != nil || result.Written != 0 || result.Remaining || len(f.puts) != 0 {
 		t.Fatalf("a stale review page must not bind a non-person: result=%+v err=%v", result, err)
 	}
 	edges, err := s.MeetingEdges(context.Background(), "viewer", "acc", "owner:m1")

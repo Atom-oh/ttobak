@@ -268,13 +268,24 @@ what. This is step 2 of the account roadmap; it must never guess.
 - Korean honorific suffixes (`peopleHonorificSuffixes` in Go) are stripped
   from the mention side only, after an exact full-name miss.
 - Insight `entities` mix people, organizations, projects and technical terms.
-  The existing extraction call also supplies `personEntities`, a distinct,
-  bounded human subset of `entities` grounded in the extraction input.
-  Only that subset becomes unresolved person candidates; generic entities
+  The existing extraction call also supplies model-classified `personEntities`.
+  `insightPersonEntities` enforces subset membership, distinct entries, a
+  20-name/120-code-point bound and exclusion of control characters and speaker
+  codes. Extraction additionally requires each name to occur as an exact
+  substring in its input; this check is not replayed against current meeting
+  content during resolver runs. These checks do not prove human identity:
+  the model can still misclassify a term, which members can ignore.
+  Only classified names become unresolved insight candidates; generic entities
   retain deterministic matching against known people/accounts/projects.
   Person mentions are collected before generic entities consume the bound.
-  Single or grouped acoustic speaker codes never become names; a single
-  assignee code still resolves through the saved speaker map.
+- Speaker codes are `spk_<number>` or the Korean speaker prefix immediately
+  followed by one Latin letter A–Z (case-insensitive), alone
+  or joined by `,`, `/`, `、`, `，`, `·`, `;`, `&`, `+`, `and` or its Korean
+  conjunction, with
+  optional surrounding whitespace; `isPeopleSpeakerCode` also applies NFKC.
+  These values are excluded from person candidates in every source. A single
+  assignee code still resolves through the saved speaker map if its mapped
+  name is not itself a speaker code.
 - Per meeting at most 50 mentions are considered and 100 edges written; a run
   reads at most 2,000 contacts and 200 descendant accounts.
 
@@ -287,11 +298,18 @@ what. This is step 2 of the account roadmap; it must never guess.
   by normalized text. Resolving a group writes manual edges and removes its
   rows; ignoring writes the account-wide `LINKDENY#mention#{hash}`, and the
   runner never relists resolved or ignored text.
-- New candidate rows carry `personCandidate`. Metadata-only reads suppress
-  legacy insight rows without that classification and acoustic code groups,
-  including stale mention-resolution requests. Old mixed insight names can
-  return after re-extraction with explicit classification. No meeting content,
-  contacts or existing manual decisions are deleted during this cutover.
+- New candidate rows carry the storage-only `personCandidate` attribute.
+  Read-time filtering uses row attributes to suppress legacy insight rows
+  without that classification and single or grouped speaker codes, including
+  stale mention-resolution requests. Legitimate legacy insight names leave
+  the review queue too; no backfill is scheduled by this change.
+- Recovery requires `BedrockService.DeriveSummary` for `insights` (one extraction
+  call per meeting), then `AccountPeopleService.ResolveMeeting`. The normal
+  batch-summary pipeline already performs both in that order. A people-only
+  run never re-extracts insights. `ReplaceUnresolvedMentions` uses lease-fenced
+  `Put` operations to replace same-key legacy rows with classified rows.
+  Re-extraction incurs model work; filtering itself does not. No meeting
+  content, contacts or existing manual decisions are deleted by the cutover.
 
 #### Runs and triggers
 
