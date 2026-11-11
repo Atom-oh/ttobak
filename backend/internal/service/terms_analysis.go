@@ -60,8 +60,10 @@ const (
 // ACCOUNT_TERMS_MODE (off|on; needs AUTO_TERMS_MODE on), KB_TERMS_MODE and
 // RESEARCH_TERMS_MODE (off|personal|on; KB documents and research reports,
 // personal never writes an Account, see ProcessSource), NEWS_TERMS_MODE (off|on; daily news into Common, see
-// ProcessNewsDaily; independent of AUTO_TERMS_MODE and the canary list) and
-// NEWS_TERMS_SOURCES (global|all; which sources' news is eligible).
+// ProcessNewsDaily; independent of AUTO_TERMS_MODE and the canary list),
+// NEWS_TERMS_SOURCES (global|all; which sources' news is eligible) and
+// TECH_TERMS_MODE (off|on; daily AWS technical documents into Common, see
+// ProcessTechDaily; independent of the news flags).
 type TermsConfig struct {
 	Mode          string
 	Users         map[string]bool
@@ -72,12 +74,14 @@ type TermsConfig struct {
 	ResearchMode  string
 	NewsMode      string
 	NewsSources   string
+	TechMode      string
 }
 
 // TermsConfigFromEnv parses the flags; unknown modes are off.
 func TermsConfigFromEnv() TermsConfig {
 	cfg := TermsConfig{Mode: AutoTermsModeOff, AccountMode: AccountTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID),
-		KBMode: sourceLayerMode("KB_TERMS_MODE"), ResearchMode: sourceLayerMode("RESEARCH_TERMS_MODE"), NewsMode: sourceTermsMode("NEWS_TERMS_MODE"), NewsSources: NewsTermsSourcesGlobal}
+		KBMode: sourceLayerMode("KB_TERMS_MODE"), ResearchMode: sourceLayerMode("RESEARCH_TERMS_MODE"), NewsMode: sourceTermsMode("NEWS_TERMS_MODE"), NewsSources: NewsTermsSourcesGlobal,
+		TechMode: sourceTermsMode("TECH_TERMS_MODE")}
 	if strings.TrimSpace(os.Getenv("NEWS_TERMS_SOURCES")) == NewsTermsSourcesAll {
 		cfg.NewsSources = NewsTermsSourcesAll
 	}
@@ -166,6 +170,9 @@ type TermsAnalysisService struct {
 	sources TermsSourceDeps
 	// news reads crawled news documents and the news rows (ProcessNewsDaily).
 	news TermsNewsDeps
+	// tech reads crawled AWS technical documents and the tech rows
+	// (ProcessTechDaily).
+	tech TermsTechDeps
 }
 
 // SetVocabularyRefresher installs the post-run vocabulary hook; nil disables it.
