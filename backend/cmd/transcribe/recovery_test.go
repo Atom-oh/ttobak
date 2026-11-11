@@ -129,10 +129,25 @@ func (f *fakeS3) CopyObject(_ context.Context, in *s3.CopyObjectInput, _ ...func
 }
 
 type fakeECS struct {
-	busy    bool
-	listErr error
-	runErr  error
-	runs    []*ecs.RunTaskInput
+	busy        bool
+	listErr     error
+	runErr      error
+	runs        []*ecs.RunTaskInput
+	providers   []string
+	describeErr error
+	describes   int
+	lists       int
+}
+
+func (f *fakeECS) DescribeClusters(_ context.Context, in *ecs.DescribeClustersInput, _ ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error) {
+	f.describes++
+	if len(in.Clusters) != 1 || in.Clusters[0] != "ttobak-whisper" {
+		return nil, errors.New("unexpected cluster lookup")
+	}
+	if f.describeErr != nil {
+		return nil, f.describeErr
+	}
+	return &ecs.DescribeClustersOutput{Clusters: []ecsTypes.Cluster{{ClusterName: aws.String("ttobak-whisper"), CapacityProviders: f.providers}}}, nil
 }
 
 func (f *fakeECS) RunTask(_ context.Context, in *ecs.RunTaskInput, _ ...func(*ecs.Options)) (*ecs.RunTaskOutput, error) {
@@ -143,6 +158,7 @@ func (f *fakeECS) RunTask(_ context.Context, in *ecs.RunTaskInput, _ ...func(*ec
 	return &ecs.RunTaskOutput{Tasks: []ecsTypes.Task{{TaskArn: aws.String("arn:task")}}}, nil
 }
 func (f *fakeECS) ListTasks(_ context.Context, in *ecs.ListTasksInput, _ ...func(*ecs.Options)) (*ecs.ListTasksOutput, error) {
+	f.lists++
 	if in.DesiredStatus != ecsTypes.DesiredStatusRunning || aws.ToString(in.Cluster) != "ttobak-whisper" {
 		return nil, errors.New("unexpected list")
 	}
