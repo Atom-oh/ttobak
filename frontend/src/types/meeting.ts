@@ -453,6 +453,14 @@ export interface CrawledDocument {
   crawledAt: number | string;
   inKB?: boolean;
   pubDate?: string;
+  // Optional news origin (absent on legacy and custom-URL documents).
+  // `sourceName` is the registered source; the publisher stays in `source`.
+  sourceName?: string;
+  sourceKind?: 'common' | 'account';
+  accountId?: string;
+  accountName?: string;
+  matchedTerm?: string;
+  qualityScore?: number;
 }
 
 export interface CrawlHistory {

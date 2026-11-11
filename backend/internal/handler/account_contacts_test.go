@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -85,7 +86,7 @@ func TestContactHTTPErrorsAreGeneric(t *testing.T) {
 	for _, tc := range []struct {
 		err    error
 		status int
-	}{{service.ErrInvalidInput, 400}, {service.ErrForbidden, 403}, {service.ErrNotFound, 404}, {service.ErrContactConflict, 409}, {fmt.Errorf("open contact: %w", service.ErrContactsUnavailable), 503}, {errors.New("private provider details"), 500}} {
+	}{{service.ErrInvalidInput, 400}, {service.ErrForbidden, 403}, {service.ErrNotFound, 404}, {service.ErrContactConflict, 409}, {fmt.Errorf("link: %w", repository.ErrSfdcAlreadyLinked), 409}, {repository.ErrSfdcSuppressed, 409}, {repository.ErrInvalidSfdcLink, 400}, {fmt.Errorf("open contact: %w", service.ErrContactsUnavailable), 503}, {errors.New("private provider details"), 500}} {
 		s := &contactsAPIStub{err: tc.err}
 		w := contactRequest(contactRouter(s), "GET", "/accounts/a/contacts", "")
 		if w.Code != tc.status || strings.Contains(w.Body.String(), "private") {

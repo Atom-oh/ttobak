@@ -89,13 +89,15 @@ type legacyAccountDeleteFencer interface {
 	ClaimLegacyAccountDocumentDelete(ctx context.Context, sourceID, docHash, accountID, userID string) error
 }
 
-// insightsMemberReader reads a caller's current direct account membership.
+// insightsMemberReader reads an account and a caller's current direct
+// membership of it.
 type insightsMemberReader interface {
+	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 }
 
 // SetAccountMemberReader injects the membership reader used to authorize
-// deletes of account-owned sources' documents.
+// reads and deletes of account-owned sources' documents.
 func (s *InsightsService) SetAccountMemberReader(members insightsMemberReader) {
 	s.members = members
 }
@@ -127,13 +129,159 @@ func (s *InsightsService) authorizeSourceDelete(ctx context.Context, userID stri
 	return nil
 }
 
+// Document origin kinds returned as CrawledDocument.SourceKind.
+const (
+	sourceKindCommon  = "common"
+	sourceKindAccount = "account"
+)
+
+// docOrigin is one source's visibility and origin for one caller.
+type docOrigin struct {
+	visible     bool
+	sourceName  string
+	kind        string
+	accountID   string
+	accountName string
+}
+
+// maxOriginNameRunes bounds the source and account names copied onto every
+// returned document. A common source's stored name is not bounded at
+// registration, and the names are added after the per-document size check,
+// so an oversized name repeated across a page must not grow the response.
+const maxOriginNameRunes = 200
+
+func boundedOriginName(name string) string {
+	return truncateRunes(strings.ToValidUTF8(name, ""), maxOriginNameRunes)
+}
+
+func (o docOrigin) applyTo(doc *model.CrawledDocument) {
+	doc.SourceName, doc.SourceKind = boundedOriginName(o.sourceName), o.kind
+	doc.AccountID, doc.AccountName = o.accountID, boundedOriginName(o.accountName)
+}
+
+// originResolver resolves each source and account once per request for one
+// caller. It is never shared across requests or stored in scanCache.
+type originResolver struct {
+	svc     *InsightsService
+	userID  string
+	origins map[string]docOrigin
+	// accounts maps an account ID to the account when the caller may read
+	// it, or nil when not. Lookup errors are not memoized.
+	accounts map[string]*model.Account
+}
+
+func (s *InsightsService) newOriginResolver(userID string) *originResolver {
+	return &originResolver{svc: s, userID: userID, origins: map[string]docOrigin{}, accounts: map[string]*model.Account{}}
+}
+
+func (r *originResolver) resolve(ctx context.Context, sourceID string) (docOrigin, error) {
+	if origin, ok := r.origins[sourceID]; ok {
+		return origin, nil
+	}
+	origin, err := r.sourceOrigin(ctx, sourceID)
+	if err != nil {
+		return docOrigin{}, err
+	}
+	r.origins[sourceID] = origin
+	return origin, nil
+}
+
+// filter returns copies of the caller-visible documents with origin fields
+// set. It never modifies docs, which may be the shared cached scan.
+func (r *originResolver) filter(ctx context.Context, docs []model.CrawledDocument) ([]model.CrawledDocument, error) {
+	out := make([]model.CrawledDocument, 0, len(docs))
+	for _, doc := range docs {
+		origin, err := r.resolve(ctx, doc.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		if !origin.visible {
+			continue
+		}
+		origin.applyTo(&doc)
+		out = append(out, doc)
+	}
+	return out, nil
+}
+
+// sourceOrigin applies the Insights read rule to one source. A row with an
+// accountId requires the caller's direct membership; any other row is common.
+// Without a row, an acct_-shaped ID is hidden and any other ID (__tech__) is
+// common. GetSourceOrigin decodes only sourceName and accountId, leniently.
+// Lookup failures are returned, never treated as a grant.
+func (r *originResolver) sourceOrigin(ctx context.Context, sourceID string) (docOrigin, error) {
+	common := docOrigin{visible: true, kind: sourceKindCommon}
+	if sourceID == "" {
+		return common, nil
+	}
+	sourceName, accountID, found, err := r.svc.repo.GetSourceOrigin(ctx, sourceID)
+	if err != nil {
+		return docOrigin{}, fmt.Errorf("failed to get document source: %w", err)
+	}
+	if !found {
+		if strings.HasPrefix(sourceID, accountNewsSourcePrefix) {
+			return docOrigin{}, nil
+		}
+		return common, nil
+	}
+	if accountID == "" {
+		common.sourceName = sourceName
+		return common, nil
+	}
+	account, err := r.readableAccount(ctx, accountID)
+	if err != nil || account == nil {
+		return docOrigin{}, err
+	}
+	return docOrigin{visible: true, sourceName: sourceName, kind: sourceKindAccount,
+		accountID: accountID, accountName: account.Name}, nil
+}
+
+// readableAccount memoizes InsightsService.readableAccount per account.
+func (r *originResolver) readableAccount(ctx context.Context, accountID string) (*model.Account, error) {
+	if account, ok := r.accounts[accountID]; ok {
+		return account, nil
+	}
+	account, err := r.svc.readableAccount(ctx, accountID, r.userID)
+	if err != nil {
+		return nil, err
+	}
+	r.accounts[accountID] = account
+	return account, nil
+}
+
+// readableAccount mirrors AccountNewsService.authorize: the account exists and
+// the caller is a current direct member. It returns nil without an error when
+// the caller may not read it, including a nil member reader or invalid IDs.
+func (s *InsightsService) readableAccount(ctx context.Context, accountID, userID string) (*model.Account, error) {
+	if s.members == nil || validateAccountHierarchyIDs(accountID, "") != nil || validateAccountHierarchyIDs(userID, "") != nil {
+		return nil, nil
+	}
+	account, err := s.members.GetAccount(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read document account: %w", err)
+	}
+	if account == nil {
+		return nil, nil
+	}
+	member, err := s.members.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account membership: %w", err)
+	}
+	if member == nil {
+		return nil, nil
+	}
+	return account, nil
+}
+
 // NewInsightsService creates a new InsightsService.
 func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client, kbBucketName, artifactBucketName string) *InsightsService {
 	return &InsightsService{repo: repo, news: repo, s3: s3Client, kbBucketName: kbBucketName, artifactBucketName: artifactBucketName, accountDeletes: repo}
 }
 
-// GetDocumentDetail reads metadata from DynamoDB and full content from S3.
-func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
+// GetDocumentDetail reads metadata from DynamoDB and full content from S3 for
+// a document the caller may read. A document hidden from the caller returns
+// ErrNotFound, the same as a missing one.
+func (s *InsightsService) GetDocumentDetail(ctx context.Context, userID, sourceID, docHash string) (*model.InsightDetailResponse, error) {
 	if (sourceID != "__tech__" && !validNewsSourceID(sourceID)) || !validNewsSourceID(docHash) {
 		return nil, ErrNotFound
 	}
@@ -152,6 +300,13 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 	if sourceID == "__tech__" && meta.Type != "tech" {
 		return nil, ErrNotFound
 	}
+	origin, err := s.newOriginResolver(userID).resolve(ctx, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	if !origin.visible {
+		return nil, ErrNotFound
+	}
 	if meta.Type == "news" || meta.QualityStatus != "" || strings.HasPrefix(meta.S3Key, "news/") {
 		keys := newsKeys(sourceID, docHash)
 		rows, err := s.newsRows(ctx, keys)
@@ -163,7 +318,12 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 			return nil, ErrNotFound
 		}
 		if isVersionedNews(row) {
-			return s.publishedNewsDetail(ctx, sourceID, docHash)
+			resp, err := s.publishedNewsDetail(ctx, sourceID, docHash)
+			if err != nil {
+				return nil, err
+			}
+			origin.applyTo(&resp.CrawledDocument)
+			return resp, nil
 		}
 		current, err := decodeNewsDocument(row, sourceID, docHash)
 		if err != nil {
@@ -223,6 +383,7 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 	}
 
 	resp := &model.InsightDetailResponse{Content: string(body), CrawledDocument: *meta}
+	origin.applyTo(&resp.CrawledDocument)
 	return resp, nil
 }
 
@@ -336,9 +497,11 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	return nil
 }
 
-// ListInsights retrieves crawled documents with optional filtering by type, source, service, tags, and sort.
+// ListInsights retrieves the caller-visible crawled documents with optional
+// filtering by type, source, service, tags, and sort. Totals and facets count
+// only documents the caller may see.
 // sortBy: "newest" (default), "oldest", "title"
-func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {
+func (s *InsightsService) ListInsights(ctx context.Context, userID, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	if page < 1 {
@@ -355,15 +518,16 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 	var services, sourceIDs []string
 	var totalCount int
 	var err error
+	origins := s.newOriginResolver(userID)
 
 	if source != "" {
-		docs, services, totalCount, err = s.listBySource(ctx, source, docType, service, tags, sortBy, page, limit)
+		docs, services, totalCount, err = s.listBySource(ctx, origins, source, docType, service, tags, sortBy, page, limit)
 		if err == nil {
 			// The source dropdown must keep listing every customer while one is selected.
-			sourceIDs, err = s.sourceFacet(ctx, docType, service, tags)
+			sourceIDs, err = s.sourceFacet(ctx, origins, docType, service, tags)
 		}
 	} else {
-		docs, services, sourceIDs, totalCount, err = s.scanAll(ctx, docType, service, tags, sortBy, page, limit)
+		docs, services, sourceIDs, totalCount, err = s.scanAll(ctx, origins, docType, service, tags, sortBy, page, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -423,8 +587,8 @@ func uniqueSourceIDs(docs []model.CrawledDocument) []string {
 
 // sourceFacet computes the source facet over the global (all-source) set after
 // type, tag and service filters, ignoring the source filter.
-func (s *InsightsService) sourceFacet(ctx context.Context, docType, service string, tags []string) ([]string, error) {
-	_, _, sourceIDs, _, err := s.scanAll(ctx, docType, service, tags, "", 1, 1)
+func (s *InsightsService) sourceFacet(ctx context.Context, origins *originResolver, docType, service string, tags []string) ([]string, error) {
+	_, _, sourceIDs, _, err := s.scanAll(ctx, origins, docType, service, tags, "", 1, 1)
 	return sourceIDs, err
 }
 
@@ -435,7 +599,15 @@ func (s *InsightsService) sourceFacet(ctx context.Context, docType, service stri
 // before sorting would return an arbitrary subset that "newest" sorting can
 // only reorder locally -- silently hiding genuinely new documents that
 // happened to land outside that arbitrary slice.
-func (s *InsightsService) listBySource(ctx context.Context, source, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, int, error) {
+// A source hidden from the caller yields an empty page, not an error.
+func (s *InsightsService) listBySource(ctx context.Context, origins *originResolver, source, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, int, error) {
+	origin, err := origins.resolve(ctx, source)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if !origin.visible {
+		return []model.CrawledDocument{}, []string{}, 0, nil
+	}
 	docs, _, count, err := s.repo.ListDocuments(ctx, source, docType, 0, nil)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("failed to list documents for source %s: %w", source, err)
@@ -444,6 +616,10 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 		docs[i].SourceID = source
 	}
 	docs, err = s.currentNewsList(ctx, docs)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	docs, err = origins.filter(ctx, docs)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -475,8 +651,9 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 }
 
 // scanAll scans all documents filtered by type with pagination.
-// Results are cached for 30 seconds to avoid repeated full-table scans.
-func (s *InsightsService) scanAll(ctx context.Context, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, []string, int, error) {
+// The unfiltered scan is cached for 30 seconds to avoid repeated full-table
+// scans; caller visibility is applied per request after the cache.
+func (s *InsightsService) scanAll(ctx context.Context, origins *originResolver, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, []string, []string, int, error) {
 	if docType == "" {
 		docType = "blog"
 	}
@@ -493,6 +670,10 @@ func (s *InsightsService) scanAll(ctx context.Context, docType, service string, 
 	}
 
 	docs, err := s.currentNewsList(ctx, allDocs)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	docs, err = origins.filter(ctx, docs)
 	if err != nil {
 		return nil, nil, nil, 0, err
 	}

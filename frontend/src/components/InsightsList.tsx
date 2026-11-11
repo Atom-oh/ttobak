@@ -9,6 +9,8 @@ import { InsightsTableView } from './InsightsTableView';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { LinkToOpportunity } from '@/components/account/LinkToOpportunity';
 import { documentLinkId, documentLinkKind } from '@/lib/accountOverview';
+import { groupNewsByOrigin, NEWS_LAYOUT_STORAGE_KEY, parseNewsLayout, type NewsLayout } from '@/lib/newsOrigin';
+import { NewsGroupHeading, NewsLayoutSwitch, NewsOriginDetails } from './insights/NewsOrigin';
 
 type TabType = 'news' | 'tech' | 'research';
 
@@ -40,6 +42,9 @@ export function InsightsList() {
   // Dropdown facets: customers load once; services come from the server over the full filtered set.
   const [sourceFacet, setSourceFacet] = useState<string[]>([]);
   const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
+  // Registered source names carried on loaded documents; preferred over the
+  // subscription names because they come from the source row itself.
+  const [docSourceNames, setDocSourceNames] = useState<Record<string, string>>({});
   const [serviceOptions, setServiceOptions] = useState<string[]>([]);
   // Set, not a single key -- a single value would let two concurrent
   // deletes clear each other's pending state in `finally`.
@@ -49,6 +54,7 @@ export function InsightsList() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState('newest');
   const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
+  const [newsLayout, setNewsLayout] = useState<NewsLayout>('all');
   const limit = 20;
 
   // The sidebar's News & Updates and Deep Research items both point at this
@@ -122,6 +128,14 @@ export function InsightsList() {
         setTotalCount(response.totalCount || 0);
         setServiceOptions(response.services || []);
         setSourceFacet(response.sourceIds || []);
+        const named = docs.filter((d) => d.sourceId && d.sourceName?.trim());
+        if (named.length > 0) {
+          setDocSourceNames((prev) => {
+            const next = { ...prev };
+            named.forEach((d) => { next[d.sourceId as string] = (d.sourceName as string).trim(); });
+            return next;
+          });
+        }
       }
       return docs;
     } catch (err) {
@@ -209,6 +223,23 @@ export function InsightsList() {
     if (saved === 'card' || saved === 'table') setViewMode(saved);
   }, []);
   useEffect(() => { localStorage.setItem('insights-view', viewMode); }, [viewMode]);
+  // News layout is a per-browser convenience; storage may throw (private
+  // mode, blocked site data), so the page falls back to the flat list.
+  useEffect(() => {
+    try {
+      setNewsLayout(parseNewsLayout(localStorage.getItem(NEWS_LAYOUT_STORAGE_KEY)));
+    } catch {
+      // Keep the default layout.
+    }
+  }, []);
+  const changeNewsLayout = (layout: NewsLayout) => {
+    setNewsLayout(layout);
+    try {
+      localStorage.setItem(NEWS_LAYOUT_STORAGE_KEY, layout);
+    } catch {
+      // Not persisted; the choice still applies to this visit.
+    }
+  };
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
@@ -346,6 +377,133 @@ export function InsightsList() {
         return 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400';
     }
   };
+
+  const renderDocumentCard = (doc: CrawledDocument, idx: number) => (
+    <div
+      key={doc.docHash || doc.url || String(idx)}
+      className="glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg"
+    >
+      {/* Title */}
+      <button
+        onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
+        className="group w-full min-w-0 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+      >
+        <h3 className="text-base font-semibold text-slate-900 dark:text-text-main leading-snug group-hover:text-primary transition-colors line-clamp-2">
+          {doc.title}
+        </h3>
+      </button>
+
+      {/* Meta row: source, date */}
+      <div className="flex flex-wrap items-center gap-2 mt-2">
+        {(doc.source || doc.type) && (
+          <span className="text-xs text-slate-500 dark:text-text-muted">
+            {doc.source || (doc.type === 'news' ? 'News' : 'AWS Docs')}
+          </span>
+        )}
+        <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
+        <span className="text-xs text-slate-500 dark:text-text-muted">
+          {formatDate(doc.pubDate || doc.crawledAt)}
+        </span>
+        {doc.type === 'news' && <NewsOriginDetails doc={doc} />}
+      </div>
+
+      {/* Tags row */}
+      {((doc.tags && doc.tags.length > 0) || (doc.awsServices && doc.awsServices.length > 0)) && (
+        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+          {(doc.tags || []).slice(0, 6).map((tag) => (
+            <button
+              key={tag}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!selectedTags.includes(tag)) toggleTag(tag);
+              }}
+              className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                selectedTags.includes(tag)
+                  ? 'bg-primary/20 text-primary ring-1 ring-primary/30'
+                  : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary hover:bg-slate-200 dark:hover:bg-white/10'
+              }`}
+            >
+              {tag}
+            </button>
+          ))}
+          {(doc.tags || []).length > 6 && (
+            <span className="text-xs text-slate-400 dark:text-text-muted">
+              +{(doc.tags || []).length - 6}
+            </span>
+          )}
+          {doc.awsServices && doc.awsServices.length > 0 && (doc.tags || []).length > 0 && (
+            <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
+          )}
+          {(doc.awsServices || []).slice(0, 3).map((svc) => (
+            <span
+              key={svc}
+              className="bg-primary/5 text-primary dark:bg-primary/10 text-xs px-2 py-0.5 rounded-full"
+            >
+              {svc}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Summary */}
+      {(doc.summary || doc.title) && (
+        <p className="text-sm text-slate-600 dark:text-text-secondary mt-3 line-clamp-3 leading-relaxed">
+          {doc.summary || doc.title}
+        </p>
+      )}
+
+      {/* Footer: KB status + Read/Open buttons */}
+      <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
+        <div className="flex flex-wrap items-center gap-3">
+          {doc.inKB ? (
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-0.5 rounded-full">
+              <span className="material-symbols-outlined text-sm">check_circle</span>
+              KB
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
+              Not in KB
+            </span>
+          )}
+          {user?.userId && doc.sourceId && doc.docHash && (
+            <LinkToOpportunity userId={user.userId} fromKind={documentLinkKind(doc.type)}
+              fromId={documentLinkId(doc.sourceId, doc.docHash)} />
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary border border-primary/20 rounded-lg hover:bg-primary/5 dark:hover:bg-primary/10 transition-colors"
+          >
+            <span className="material-symbols-outlined text-lg">article</span>
+            Read
+          </button>
+          <button
+            onClick={() => { if (doc.url?.startsWith('http')) window.open(doc.url, '_blank'); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-500 dark:text-text-muted border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+          >
+            <span className="material-symbols-outlined text-lg">open_in_new</span>
+            Original
+          </button>
+          {doc.type !== 'tech' && (
+            <button
+              onClick={() => handleDelete(doc)}
+              disabled={deletingKeys.has(`${doc.sourceId}#${doc.docHash}`)}
+              title="Delete this insight"
+              aria-label="인사이트 삭제"
+              className="flex items-center justify-center rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-text-muted dark:hover:bg-red-500/10 dark:hover:text-red-400"
+            >
+              <span className="material-symbols-outlined text-lg">
+                {deletingKeys.has(`${doc.sourceId}#${doc.docHash}`) ? 'hourglass_empty' : 'delete'}
+              </span>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const newsGroups = activeTab === 'news' && newsLayout === 'grouped' ? groupNewsByOrigin(documents) : null;
 
   return (
     <div className="space-y-6">
@@ -636,7 +794,7 @@ export function InsightsList() {
                   <option value="">All Customers</option>
                   {uniqueCrawlerSources.map((src) => (
                     <option key={src} value={src}>
-                      {sourceNames[src] || src}
+                      {docSourceNames[src] || sourceNames[src] || src}
                     </option>
                   ))}
                 </select>
@@ -692,6 +850,9 @@ export function InsightsList() {
                   <span className="material-symbols-outlined text-lg">table_rows</span>
                 </button>
               </div>
+              {activeTab === 'news' && (
+                <NewsLayoutSwitch value={newsLayout} onChange={changeNewsLayout} />
+              )}
               {!loading && (
                 <span className="text-xs text-slate-500 dark:text-text-muted ml-auto">
                   {totalCount} document{totalCount !== 1 ? 's' : ''}
@@ -769,6 +930,30 @@ export function InsightsList() {
                     : 'Subscribe to AWS services in Settings to see updates here.'}
               </p>
             </div>
+          ) : newsGroups ? (
+            // Grouping covers the loaded page only; counts say so.
+            <div className="space-y-6">
+              {newsGroups.map((group) => (
+                <section key={group.key} className="space-y-3" aria-label={`${group.title} 뉴스`}>
+                  <NewsGroupHeading group={group} />
+                  {viewMode === 'table' ? (
+                    <InsightsTableView
+                      documents={group.documents}
+                      totalCount={totalCount}
+                      page={page}
+                      limit={limit}
+                      onTagClick={toggleTag}
+                      selectedTags={selectedTags}
+                      hideFooter
+                    />
+                  ) : (
+                    <div className="space-y-4">
+                      {group.documents.map(renderDocumentCard)}
+                    </div>
+                  )}
+                </section>
+              ))}
+            </div>
           ) : viewMode === 'table' ? (
             <InsightsTableView
               documents={documents}
@@ -780,129 +965,7 @@ export function InsightsList() {
             />
           ) : (
             <div className="space-y-4">
-              {documents.map((doc, idx) => (
-                <div
-                  key={doc.docHash || doc.url || String(idx)}
-                  className="glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg"
-                >
-                  {/* Title */}
-                  <button
-                    onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
-                    className="group w-full min-w-0 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-                  >
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-text-main leading-snug group-hover:text-primary transition-colors line-clamp-2">
-                      {doc.title}
-                    </h3>
-                  </button>
-
-                  {/* Meta row: source, date */}
-                  <div className="flex flex-wrap items-center gap-2 mt-2">
-                    {(doc.source || doc.type) && (
-                      <span className="text-xs text-slate-500 dark:text-text-muted">
-                        {doc.source || (doc.type === 'news' ? 'News' : 'AWS Docs')}
-                      </span>
-                    )}
-                    <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
-                    <span className="text-xs text-slate-500 dark:text-text-muted">
-                      {formatDate(doc.pubDate || doc.crawledAt)}
-                    </span>
-                  </div>
-
-                  {/* Tags row */}
-                  {((doc.tags && doc.tags.length > 0) || (doc.awsServices && doc.awsServices.length > 0)) && (
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                      {(doc.tags || []).slice(0, 6).map((tag) => (
-                        <button
-                          key={tag}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!selectedTags.includes(tag)) toggleTag(tag);
-                          }}
-                          className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
-                            selectedTags.includes(tag)
-                              ? 'bg-primary/20 text-primary ring-1 ring-primary/30'
-                              : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary hover:bg-slate-200 dark:hover:bg-white/10'
-                          }`}
-                        >
-                          {tag}
-                        </button>
-                      ))}
-                      {(doc.tags || []).length > 6 && (
-                        <span className="text-xs text-slate-400 dark:text-text-muted">
-                          +{(doc.tags || []).length - 6}
-                        </span>
-                      )}
-                      {doc.awsServices && doc.awsServices.length > 0 && (doc.tags || []).length > 0 && (
-                        <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
-                      )}
-                      {(doc.awsServices || []).slice(0, 3).map((svc) => (
-                        <span
-                          key={svc}
-                          className="bg-primary/5 text-primary dark:bg-primary/10 text-xs px-2 py-0.5 rounded-full"
-                        >
-                          {svc}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Summary */}
-                  {(doc.summary || doc.title) && (
-                    <p className="text-sm text-slate-600 dark:text-text-secondary mt-3 line-clamp-3 leading-relaxed">
-                      {doc.summary || doc.title}
-                    </p>
-                  )}
-
-                  {/* Footer: KB status + Read/Open buttons */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
-                    <div className="flex flex-wrap items-center gap-3">
-                      {doc.inKB ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-0.5 rounded-full">
-                          <span className="material-symbols-outlined text-sm">check_circle</span>
-                          KB
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
-                          Not in KB
-                        </span>
-                      )}
-                      {user?.userId && doc.sourceId && doc.docHash && (
-                        <LinkToOpportunity userId={user.userId} fromKind={documentLinkKind(doc.type)}
-                          fromId={documentLinkId(doc.sourceId, doc.docHash)} />
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary border border-primary/20 rounded-lg hover:bg-primary/5 dark:hover:bg-primary/10 transition-colors"
-                      >
-                        <span className="material-symbols-outlined text-lg">article</span>
-                        Read
-                      </button>
-                      <button
-                        onClick={() => { if (doc.url?.startsWith('http')) window.open(doc.url, '_blank'); }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-500 dark:text-text-muted border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
-                      >
-                        <span className="material-symbols-outlined text-lg">open_in_new</span>
-                        Original
-                      </button>
-                      {doc.type !== 'tech' && (
-                        <button
-                          onClick={() => handleDelete(doc)}
-                          disabled={deletingKeys.has(`${doc.sourceId}#${doc.docHash}`)}
-                          title="Delete this insight"
-                          aria-label="인사이트 삭제"
-                          className="flex items-center justify-center rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-text-muted dark:hover:bg-red-500/10 dark:hover:text-red-400"
-                        >
-                          <span className="material-symbols-outlined text-lg">
-                            {deletingKeys.has(`${doc.sourceId}#${doc.docHash}`) ? 'hourglass_empty' : 'delete'}
-                          </span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
+              {documents.map(renderDocumentCard)}
             </div>
           )}
 

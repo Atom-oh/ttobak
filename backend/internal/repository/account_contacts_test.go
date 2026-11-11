@@ -20,6 +20,9 @@ func TestContactMutationsAreAtomicAndConditional(t *testing.T) {
 		t.Run(op, func(t *testing.T) {
 			calls := 0
 			repo := contactWire(t, func(target string, body map[string]interface{}) string {
+				if op == "delete" && target == "DynamoDB_20120810.Query" {
+					return `{"Items":[]}` // the SFDC index lookup: not linked
+				}
 				calls++
 				if target != "DynamoDB_20120810.TransactWriteItems" {
 					t.Fatalf("target %s", target)
@@ -115,7 +118,10 @@ func TestSpeakerTeamQueryUsesStrongBoundedAccountPages(t *testing.T) {
 func TestContactMutationConditionsAndRetention(t *testing.T) {
 	for _, op := range []string{"create", "update", "delete"} {
 		t.Run(op, func(t *testing.T) {
-			repo := contactWire(t, func(_ string, body map[string]interface{}) string {
+			repo := contactWire(t, func(target string, body map[string]interface{}) string {
+				if target == "DynamoDB_20120810.Query" {
+					return `{"Items":[]}` // the SFDC index lookup: not linked
+				}
 				items := body["TransactItems"].([]interface{})
 				kind := "Put"
 				if op == "update" {

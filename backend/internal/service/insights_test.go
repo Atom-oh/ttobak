@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -48,7 +49,7 @@ func TestListInsights_WithSourceFilter(t *testing.T) {
 		{DocHash: "doc3", Type: "announcement", Title: "EC2 Launch", Source: "aws-blog", AWSServices: []string{"ec2"}},
 	}
 
-	resp, err := svc.ListInsights(ctx, "blog", "aws-blog", "", nil, "", 1, 20)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "aws-blog", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestListInsights_WithSourceAndServiceFilter(t *testing.T) {
 		{DocHash: "doc3", Type: "blog", Title: "Lambda Tips", Source: "aws-blog", AWSServices: []string{"lambda", "dynamodb"}},
 	}
 
-	resp, err := svc.ListInsights(ctx, "blog", "aws-blog", "lambda", nil, "", 1, 20)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "aws-blog", "lambda", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestListInsights_CrossSourceByType(t *testing.T) {
 	}
 
 	// No source filter => scans all documents by type
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 20)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -144,7 +145,7 @@ func TestListInsights_CrossSource_DefaultType(t *testing.T) {
 	}
 
 	// Empty type => defaults to "blog" in scanAll
-	resp, err := svc.ListInsights(ctx, "", "", "", nil, "", 1, 20)
+	resp, err := svc.ListInsights(ctx, "user-1", "", "", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -342,7 +343,7 @@ func TestListInsights_PaginationDefaults(t *testing.T) {
 	}
 
 	// page=0 and limit=0 should default to page=1, limit=20
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 0, 0)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -364,7 +365,7 @@ func TestListInsights_PaginationDefaults_Negative(t *testing.T) {
 	repo.allDocuments = []model.CrawledDocument{}
 
 	// Negative values should also default
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", -5, -10)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", -5, -10)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -386,7 +387,7 @@ func TestListInsights_LimitCap(t *testing.T) {
 	repo.allDocuments = []model.CrawledDocument{}
 
 	// limit > 50 should be capped to 50
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 100)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 1, 100)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -405,7 +406,7 @@ func TestListInsights_LimitCapBoundary(t *testing.T) {
 	repo.allDocuments = []model.CrawledDocument{}
 
 	// limit = 50 should stay at 50 (boundary)
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 50)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 1, 50)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -415,7 +416,7 @@ func TestListInsights_LimitCapBoundary(t *testing.T) {
 	}
 
 	// limit = 51 should be capped
-	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 51)
+	resp, err = svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 1, 51)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -443,7 +444,7 @@ func TestListInsights_Pagination(t *testing.T) {
 	}
 
 	// Page 1, limit 2 => first 2 docs
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 2)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 1, 2)
 	if err != nil {
 		t.Fatalf("ListInsights page 1 returned error: %v", err)
 	}
@@ -456,7 +457,7 @@ func TestListInsights_Pagination(t *testing.T) {
 	}
 
 	// Page 3, limit 2 => last 1 doc
-	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, "", 3, 2)
+	resp, err = svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 3, 2)
 	if err != nil {
 		t.Fatalf("ListInsights page 3 returned error: %v", err)
 	}
@@ -466,7 +467,7 @@ func TestListInsights_Pagination(t *testing.T) {
 	}
 
 	// Page 4, limit 2 => 0 docs (past the end)
-	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, "", 4, 2)
+	resp, err = svc.ListInsights(ctx, "user-1", "blog", "", "", nil, "", 4, 2)
 	if err != nil {
 		t.Fatalf("ListInsights page 4 returned error: %v", err)
 	}
@@ -482,7 +483,7 @@ func TestListInsights_EmptyResult(t *testing.T) {
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
 
-	resp, err := svc.ListInsights(ctx, "blog", "nonexistent", "", nil, "", 1, 20)
+	resp, err := svc.ListInsights(ctx, "user-1", "blog", "nonexistent", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -518,7 +519,7 @@ func TestListInsights_SortsBeforePaginating_CrossSource(t *testing.T) {
 	}
 	svc.news = legacyNewsRows(t, "hanabank", repo.allDocuments)
 
-	resp, err := svc.ListInsights(ctx, "news", "", "", nil, "", 1, 2)
+	resp, err := svc.ListInsights(ctx, "user-1", "news", "", "", nil, "", 1, 2)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -550,7 +551,7 @@ func TestListInsights_SortsBeforePaginating_WithSource(t *testing.T) {
 	}
 	svc.news = legacyNewsRows(t, "hanabank", repo.documents["hanabank"])
 
-	resp, err := svc.ListInsights(ctx, "news", "hanabank", "", nil, "", 1, 2)
+	resp, err := svc.ListInsights(ctx, "user-1", "news", "hanabank", "", nil, "", 1, 2)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -580,7 +581,7 @@ func TestListInsights_CrossSourceNewestBeyond500(t *testing.T) {
 	svc := &InsightsService{repo: repo}
 	svc.news = legacyNewsRows(t, "hanabank", repo.allDocuments)
 
-	resp, err := svc.ListInsights(context.Background(), "news", "", "", nil, "date", 1, 20)
+	resp, err := svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "date", 1, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +600,7 @@ func TestListInsights_WithSourceNewestBeyond500(t *testing.T) {
 	svc := &InsightsService{repo: repo}
 	svc.news = legacyNewsRows(t, "hanabank", repo.documents["hanabank"])
 
-	resp, err := svc.ListInsights(context.Background(), "news", "hanabank", "", nil, "date", 1, 20)
+	resp, err := svc.ListInsights(context.Background(), "user-1", "news", "hanabank", "", nil, "date", 1, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +626,7 @@ func TestListInsights_CrossSourceServiceFilter(t *testing.T) {
 	repo.allDocuments = techServiceDocs()
 	svc := &InsightsService{repo: repo}
 
-	resp, err := svc.ListInsights(context.Background(), "tech", "", "Amazon EKS", nil, "date", 1, 20)
+	resp, err := svc.ListInsights(context.Background(), "user-1", "tech", "", "Amazon EKS", nil, "date", 1, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,7 +650,7 @@ func TestListInsights_ReturnsServicesFacet(t *testing.T) {
 	repo.allDocuments = techServiceDocs()
 	svc := &InsightsService{repo: repo}
 
-	resp, err := svc.ListInsights(context.Background(), "tech", "", "", nil, "date", 1, 1)
+	resp, err := svc.ListInsights(context.Background(), "user-1", "tech", "", "", nil, "date", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +671,7 @@ func TestListInsights_ReturnsSourceIDsFacet(t *testing.T) {
 		repo.documents["s1"] = []model.CrawledDocument{repo.allDocuments[0]}
 		svc := &InsightsService{repo: repo}
 
-		resp, err := svc.ListInsights(context.Background(), "tech", source, "", nil, "date", 1, 1)
+		resp, err := svc.ListInsights(context.Background(), "user-1", "tech", source, "", nil, "date", 1, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -681,11 +682,29 @@ func TestListInsights_ReturnsSourceIDsFacet(t *testing.T) {
 	}
 }
 
-// insightsMembers is a direct-membership reader for account-source deletes.
+// insightsMembers is an account and direct-membership reader for
+// account-source reads and deletes.
 type insightsMembers struct {
-	members map[string]bool // accountID + "/" + userID
-	calls   int
-	err     error
+	members      map[string]bool   // accountID + "/" + userID
+	accounts     map[string]string // accountID -> name; nil means every account exists
+	calls        int               // GetMember calls
+	accountCalls int               // GetAccount calls
+	err          error
+}
+
+func (m *insightsMembers) GetAccount(_ context.Context, accountID string) (*model.Account, error) {
+	m.accountCalls++
+	if m.err != nil {
+		return nil, m.err
+	}
+	name, ok := m.accounts[accountID]
+	if m.accounts != nil && !ok {
+		return nil, nil
+	}
+	if !ok {
+		name = accountID
+	}
+	return &model.Account{AccountID: accountID, Name: name}, nil
 }
 
 func (m *insightsMembers) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
@@ -893,5 +912,268 @@ func TestDeleteDocument_PersonalSourceOwnerUnchanged(t *testing.T) {
 	}
 	if members.calls != 0 {
 		t.Fatalf("personal sources must not consult account membership, got %d reads", members.calls)
+	}
+}
+
+const (
+	visibleAccountSource = "acct_acct-1_0123abcd"
+	orphanAccountSource  = "acct_acct-2_89abcdef"
+)
+
+// insightsVisibilityFixture holds one account-owned source, one common source
+// with a row, the synthetic __tech__ source and an account-shaped source
+// without a CONFIG row.
+func insightsVisibilityFixture(members *insightsMembers) (*InsightsService, *mockCrawlerRepo, *newsS3Fixture) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	repo.sources[visibleAccountSource] = &model.CrawlerSource{SourceID: visibleAccountSource, SourceName: "Hana Financial", AccountID: "acct-1"}
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", SourceName: "Hana Bank"}
+	docs := []model.CrawledDocument{
+		{DocHash: "a1", SourceID: visibleAccountSource, Type: "tech", Title: "Account", AWSServices: []string{"Amazon Bedrock"}, CrawledAt: 4},
+		{DocHash: "c1", SourceID: "hanabank", Type: "tech", Title: "Common", AWSServices: []string{"AWS Lambda"}, CrawledAt: 3},
+		{DocHash: "t1", SourceID: "__tech__", Type: "tech", Title: "Tech", AWSServices: []string{"Amazon EKS"}, CrawledAt: 2},
+		{DocHash: "o1", SourceID: orphanAccountSource, Type: "tech", Title: "Orphan", AWSServices: []string{"Amazon S3"}, CrawledAt: 1},
+	}
+	repo.allDocuments = docs
+	for _, doc := range docs {
+		repo.documents[doc.SourceID] = append(repo.documents[doc.SourceID], doc)
+	}
+	object := &newsS3Fixture{data: "# Article"}
+	svc := &InsightsService{repo: repo, s3: object, kbBucketName: "knowledge"}
+	if members != nil {
+		svc.SetAccountMemberReader(members)
+	}
+	return svc, repo, object
+}
+
+func insightsTitles(docs []model.CrawledDocument) []string {
+	out := []string{}
+	for _, doc := range docs {
+		out = append(out, doc.Title)
+	}
+	return out
+}
+
+func TestListInsights_AccountSourceVisibility(t *testing.T) {
+	type view struct{ titles, services, sources []string }
+	all := view{[]string{"Account", "Common", "Tech"}, []string{"Amazon Bedrock", "Amazon EKS", "AWS Lambda"},
+		[]string{"__tech__", visibleAccountSource, "hanabank"}}
+	commonOnly := view{[]string{"Common", "Tech"}, []string{"Amazon EKS", "AWS Lambda"}, []string{"__tech__", "hanabank"}}
+	member := map[string]bool{"acct-1/member": true}
+	for _, tc := range []struct {
+		name    string
+		members *insightsMembers
+		user    string
+		want    view
+	}{
+		{"member sees account documents", &insightsMembers{members: member, accounts: map[string]string{"acct-1": "Hana Financial Group"}}, "member", all},
+		{"non-member sees common documents only", &insightsMembers{members: member}, "outsider", commonOnly},
+		{"nil member reader hides account documents", nil, "member", commonOnly},
+		{"missing account hides its documents", &insightsMembers{members: member, accounts: map[string]string{}}, "member", commonOnly},
+		{"empty caller hides account documents", &insightsMembers{members: map[string]bool{"acct-1/": true}}, "", commonOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, _ := insightsVisibilityFixture(tc.members)
+			resp, err := svc.ListInsights(context.Background(), tc.user, "tech", "", "", nil, "newest", 1, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := view{insightsTitles(resp.Documents), resp.Services, resp.SourceIDs}
+			if !reflect.DeepEqual(got, tc.want) || resp.TotalCount != len(tc.want.titles) {
+				t.Fatalf("got %+v total=%d, want %+v", got, resp.TotalCount, tc.want)
+			}
+			for _, doc := range resp.Documents {
+				switch doc.SourceID {
+				case visibleAccountSource:
+					if doc.SourceKind != "account" || doc.AccountID != "acct-1" || doc.AccountName != "Hana Financial Group" || doc.SourceName != "Hana Financial" {
+						t.Fatalf("account origin = %+v", doc)
+					}
+				case "hanabank":
+					if doc.SourceKind != "common" || doc.SourceName != "Hana Bank" || doc.AccountID != "" || doc.AccountName != "" {
+						t.Fatalf("common origin = %+v", doc)
+					}
+				case "__tech__":
+					if doc.SourceKind != "common" || doc.SourceName != "" || doc.AccountID != "" {
+						t.Fatalf("tech origin = %+v", doc)
+					}
+				default:
+					t.Fatalf("unexpected document %+v", doc)
+				}
+			}
+		})
+	}
+}
+
+func TestListInsights_SourceFilterVisibility(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{"acct-1/member": true}}
+	for _, tc := range []struct {
+		name, user, source string
+		wantTitles         []string
+	}{
+		{"member reads account source", "member", visibleAccountSource, []string{"Account"}},
+		{"non-member gets an empty page", "outsider", visibleAccountSource, []string{}},
+		{"account-shaped source without a row is hidden", "member", orphanAccountSource, []string{}},
+		{"tech source without a row is common", "outsider", "__tech__", []string{"Tech"}},
+		{"common source for a non-member", "outsider", "hanabank", []string{"Common"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, _ := insightsVisibilityFixture(members)
+			resp, err := svc.ListInsights(context.Background(), tc.user, "tech", tc.source, "", nil, "newest", 1, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := insightsTitles(resp.Documents); !reflect.DeepEqual(got, tc.wantTitles) {
+				t.Fatalf("titles = %v, want %v", got, tc.wantTitles)
+			}
+			if resp.TotalCount != len(tc.wantTitles) {
+				t.Fatalf("totalCount = %d, want %d", resp.TotalCount, len(tc.wantTitles))
+			}
+			if len(tc.wantTitles) == 0 && len(resp.Services) != 0 {
+				t.Fatalf("hidden source exposed services %v", resp.Services)
+			}
+			for _, id := range resp.SourceIDs {
+				if id == orphanAccountSource || tc.user == "outsider" && id == visibleAccountSource {
+					t.Fatalf("hidden source in facet: %v", resp.SourceIDs)
+				}
+			}
+		})
+	}
+}
+
+func TestGetDocumentDetail_AccountSourceVisibility(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{"acct-1/member": true}}
+	for _, tc := range []struct {
+		name, user, source, hash string
+		wantKind                 string
+	}{
+		{"member reads account document", "member", visibleAccountSource, "a1", "account"},
+		{"non-member is not found", "outsider", visibleAccountSource, "a1", ""},
+		{"account-shaped source without a row is not found", "member", orphanAccountSource, "o1", ""},
+		{"tech document without a row is readable", "outsider", "__tech__", "t1", "common"},
+		{"common document is readable", "outsider", "hanabank", "c1", "common"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, object := insightsVisibilityFixture(members)
+			if tc.source == "__tech__" {
+				repo.documents["__tech__"][0].S3Key = "shared/aws-docs/eks/t1.md"
+			}
+			got, err := svc.GetDocumentDetail(context.Background(), tc.user, tc.source, tc.hash)
+			if tc.wantKind == "" {
+				if got != nil || !errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
+					t.Fatalf("hidden detail: %+v %v reads=%v", got, err, object.gets)
+				}
+				return
+			}
+			if err != nil || got.SourceKind != tc.wantKind || got.Content != "# Article" {
+				t.Fatalf("visible detail: %+v %v", got, err)
+			}
+			if tc.wantKind == "account" && (got.AccountID != "acct-1" || got.AccountName != "acct-1" || got.SourceName != "Hana Financial") {
+				t.Fatalf("account origin = %+v", got.CrawledDocument)
+			}
+		})
+	}
+}
+
+func TestInsightsVisibilityLookupErrorsPropagate(t *testing.T) {
+	failure := errors.New("membership unavailable")
+	svc, _, object := insightsVisibilityFixture(&insightsMembers{err: failure})
+	if _, err := svc.ListInsights(context.Background(), "member", "tech", "", "", nil, "newest", 1, 20); !errors.Is(err, failure) {
+		t.Fatalf("list hid a membership failure: %v", err)
+	}
+	if _, err := svc.GetDocumentDetail(context.Background(), "member", visibleAccountSource, "a1"); !errors.Is(err, failure) || errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
+		t.Fatalf("detail hid a membership failure: %v", err)
+	}
+
+	// A failed source read is returned too, even for a common source.
+	sourceFailure := errors.New("source read unavailable")
+	svc, repo, object := insightsVisibilityFixture(&insightsMembers{members: map[string]bool{}})
+	repo.originErr = sourceFailure
+	if _, err := svc.ListInsights(context.Background(), "member", "tech", "", "", nil, "newest", 1, 20); !errors.Is(err, sourceFailure) {
+		t.Fatalf("list hid a source read failure: %v", err)
+	}
+	if _, err := svc.GetDocumentDetail(context.Background(), "member", "hanabank", "c1"); !errors.Is(err, sourceFailure) || errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
+		t.Fatalf("detail hid a source read failure: %v", err)
+	}
+}
+
+// Many sources of one account read that account and the caller's membership
+// once per request, whether or not the caller is a member.
+func TestListInsights_AccountLookupsOncePerAccount(t *testing.T) {
+	for _, tc := range []struct {
+		user      string
+		wantTotal int
+	}{
+		{user: "member", wantTotal: 10},
+		{user: "outsider", wantTotal: 0},
+	} {
+		t.Run(tc.user, func(t *testing.T) {
+			scanCache.clear()
+			repo := newMockCrawlerRepo()
+			for i := 0; i < 10; i++ {
+				id := fmt.Sprintf("acct_acct-1_%08x", i)
+				repo.sources[id] = &model.CrawlerSource{SourceID: id, SourceName: "Source", AccountID: "acct-1"}
+				repo.allDocuments = append(repo.allDocuments, model.CrawledDocument{
+					DocHash: fmt.Sprintf("d%d", i), SourceID: id, Type: "tech", Title: "Doc", CrawledAt: int64(i),
+				})
+			}
+			members := &insightsMembers{members: map[string]bool{"acct-1/member": true}}
+			svc := &InsightsService{repo: repo}
+			svc.SetAccountMemberReader(members)
+			resp, err := svc.ListInsights(context.Background(), tc.user, "tech", "", "", nil, "newest", 1, 20)
+			if err != nil || resp.TotalCount != tc.wantTotal {
+				t.Fatalf("list: %+v %v", resp, err)
+			}
+			if members.accountCalls != 1 || members.calls != 1 || repo.originReads != 10 {
+				t.Fatalf("lookups: account=%d member=%d sources=%d", members.accountCalls, members.calls, repo.originReads)
+			}
+		})
+	}
+}
+
+// The shared scan cache holds the unfiltered scan; each caller's view is
+// computed per request.
+func TestListInsights_CachedScanIsFilteredPerCaller(t *testing.T) {
+	members := &insightsMembers{members: map[string]bool{"acct-1/member": true}}
+	svc, repo, _ := insightsVisibilityFixture(members)
+	member, err := svc.ListInsights(context.Background(), "member", "tech", "", "", nil, "newest", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := svc.ListInsights(context.Background(), "outsider", "tech", "", "", nil, "newest", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.scanLimits) != 1 {
+		t.Fatalf("expected one cached scan, got %d scans", len(repo.scanLimits))
+	}
+	if member.TotalCount != 3 || outsider.TotalCount != 2 {
+		t.Fatalf("totals member=%d outsider=%d", member.TotalCount, outsider.TotalCount)
+	}
+	cached, _, _ := scanCache.get("scan:tech")
+	for _, doc := range cached {
+		if doc.SourceKind != "" || doc.AccountName != "" {
+			t.Fatalf("cache holds caller-scoped fields: %+v", doc)
+		}
+	}
+}
+
+func TestDocOriginApplyToBoundsNames(t *testing.T) {
+	long := strings.Repeat("<", 70000)
+	origin := docOrigin{visible: true, sourceName: long, kind: sourceKindAccount, accountID: "acc1", accountName: "고객" + long}
+	var doc model.CrawledDocument
+	origin.applyTo(&doc)
+	if got := len([]rune(doc.SourceName)); got != maxOriginNameRunes {
+		t.Fatalf("sourceName runes = %d, want %d", got, maxOriginNameRunes)
+	}
+	if got := len([]rune(doc.AccountName)); got != maxOriginNameRunes {
+		t.Fatalf("accountName runes = %d, want %d", got, maxOriginNameRunes)
+	}
+	if !strings.HasPrefix(doc.AccountName, "고객") {
+		t.Fatalf("accountName lost its prefix: %q", doc.AccountName[:12])
+	}
+	short := docOrigin{visible: true, sourceName: "우리은행", kind: sourceKindCommon}
+	short.applyTo(&doc)
+	if doc.SourceName != "우리은행" || doc.AccountName != "" {
+		t.Fatalf("short names changed: %q %q", doc.SourceName, doc.AccountName)
 	}
 }

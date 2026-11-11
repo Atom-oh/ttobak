@@ -56,6 +56,9 @@ BLOCKED_URL_PATTERNS = [
     'paywalled.',
 ]
 MIN_BODY_LENGTH = 100
+# matchedTerm (the search query that found an article) is stored as one line
+# of at most this many code points.
+MAX_MATCHED_TERM_CHARS = 200
 
 # Minimum relevanceConfidence (see _summarize_and_tag) for a search result to
 # be persisted. Below this, the article is treated as search-engine recall
@@ -648,7 +651,7 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
 def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
                     pub_date: str, summary: str = '', source_name: str = '',
                     tags: list = None, relevance: float = None,
-                    ingest_source: str = 'search') -> None:
+                    ingest_source: str = 'search', matched_term: str = '') -> None:
     # title/url/pub_date/summary/tags are untrusted (open web search
     # result); this metadata is read by the Go API and shown in the
     # frontend insights UI, so sanitize it the same way as the S3 KB doc in
@@ -684,6 +687,11 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
         item['sourceName'] = safe_source_name
     if tags:
         item['tags'] = [_strip_newlines(_sanitize_snippet(t)) for t in tags]
+    # The search query that found the article, shown as its matched term.
+    # Single line, at most 200 code points; custom URLs have none.
+    term = _strip_newlines(matched_term or '')[:MAX_MATCHED_TERM_CHARS]
+    if term and ingest_source == 'search':
+        item['matchedTerm'] = term
     if relevance is not None:
         # Decimal, not float -- boto3's DynamoDB resource rejects float
         # attribute values. Observability/backfill-tuning only, not read by
@@ -767,7 +775,8 @@ def _is_blocked_url(url: str) -> bool:
 def _process_article(source_id: str, title: str, url: str,
                      pub_date: str, snippet: str = '',
                      crawler_source_name: str = '', keywords: list = None,
-                     require_relevance: bool = True, seen_urls: set = None) -> bool:
+                     require_relevance: bool = True, seen_urls: set = None,
+                     matched_term: str = '') -> bool:
     if not url or not title:
         logger.info(f'Skipping result with missing url/title: url={url!r} title={title!r}')
         return False
@@ -825,7 +834,8 @@ def _process_article(source_id: str, title: str, url: str,
     _write_to_s3(source_id, doc_hash, title, url, snippet, briefing_markdown, pub_date, tags)
     _write_metadata(source_id, doc_hash, title, url, pub_date, preview, source_name,
                     tags, relevance=confidence,
-                    ingest_source='search' if require_relevance else 'custom')
+                    ingest_source='search' if require_relevance else 'custom',
+                    matched_term=matched_term if require_relevance else '')
     return True
 
 
@@ -874,13 +884,14 @@ def handler(event, context):
     errors = []
     seen_urls = set()
 
-    def _try_process(title, url, pub_date='', snippet='', require_relevance=True):
+    def _try_process(title, url, pub_date='', snippet='', require_relevance=True, matched_term=''):
         nonlocal docs_added
         if url in seen_urls:
             return
         try:
             if _process_article(source_id, title, url, pub_date, snippet, source_name,
-                                keywords, require_relevance, seen_urls):
+                                keywords, require_relevance, seen_urls,
+                                matched_term=matched_term):
                 docs_added += 1
             # _process_article itself marks seen_urls once it's past the
             # cheap pre-checks (about to spend a Bedrock call) -- a rejected
@@ -969,7 +980,8 @@ def handler(event, context):
         logger.info(f'Web search "{query}": {len(results)} result(s)')
         for r in results:
             _try_process(r.get('title', ''), r.get('url', ''),
-                         r.get('publishedDate', ''), r.get('text', ''))
+                         r.get('publishedDate', ''), r.get('text', ''),
+                         matched_term=query)
 
     result = {
         'docsAdded': docs_added,
