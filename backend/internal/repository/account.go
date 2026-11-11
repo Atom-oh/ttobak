@@ -121,6 +121,42 @@ func (r *DynamoDBRepository) GetMeetingPublication(ctx context.Context, ownerID,
 	return &meeting, nil
 }
 
+// GetMeetingFocusState is a strong read of a meeting's publication fields
+// plus title, date, tags and projectIds for the focus graph. It never loads
+// transcripts, notes or summary content.
+func (r *DynamoDBRepository) GetMeetingFocusState(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error) {
+	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"),
+		expression.Name("meetingId"), expression.Name("userId"), expression.Name("entityType"),
+		expression.Name("accountId"), expression.Name("sharedToAccount"),
+		expression.Name("summaryPrivacy"), expression.Name("summaryAccountApproval"), expression.Name("insightsRevision"),
+		expression.Name("title"), expression.Name("date"), expression.Name("tags"), expression.Name("projectIds"))
+	expr, err := expression.NewBuilder().WithProjection(projection).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build meeting focus state projection: %w", err)
+	}
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		ProjectionExpression:     expr.Projection(),
+		ExpressionAttributeNames: expr.Names(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get meeting focus state: %w", err)
+	}
+	if len(result.Item) == 0 {
+		return nil, nil
+	}
+	var meeting model.Meeting
+	if err := attributevalue.UnmarshalMap(result.Item, &meeting); err != nil {
+		return nil, fmt.Errorf("unmarshal meeting focus state: %w", err)
+	}
+	return &meeting, nil
+}
+
 func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.AccountMember) error {
 	member = stampSummaryMembership(member)
 	item, err := attributevalue.MarshalMap(member)
