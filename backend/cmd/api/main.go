@@ -398,6 +398,7 @@ func init() {
 		r.Post("/api/accounts/{accountId}/people/mentions/{mentionKey}/resolve", accountPeopleHandler.ResolveMention)
 		r.Post("/api/accounts/{accountId}/people/mentions/{mentionKey}/ignore", accountPeopleHandler.IgnoreMention)
 		r.Get("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Edges)
+		r.Get("/api/accounts/{accountId}/people/focus", accountPeopleHandler.Focus)
 		r.Post("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Bind)
 		r.Delete("/api/accounts/{accountId}/people/edges", accountPeopleHandler.Unbind)
 		r.Post("/api/accounts/{accountId}/people/resolve", accountPeopleHandler.Resolve)
