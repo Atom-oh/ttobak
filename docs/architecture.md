@@ -399,7 +399,7 @@ within a bounded budget, filters candidates and merges them into the owner's
 personal dictionary; non-owner source edits make a run suggest only. Meeting
 deletion sweeps the meeting's observations and run state.
 
-Account links (ADR-064) connect an account's news, tech documents, events and
+Account links (ADR-021, relationship links) connect an account's news, tech documents, events and
 meetings to its projects through `LINK#`/`LINKTO#` rows written in one
 transaction. After an account-shared summary is published, a non-fatal hook asks
 the lightweight model to match the account's recent news to the meeting and stores
@@ -408,7 +408,7 @@ reads revalidate membership and every endpoint, apply fixed bounds and report
 truncation instead of guessing. Account KB uploads gain a `KBREF#` row at presign;
 QA retrieval scope is unchanged.
 
-Account people edges (ADR-067) bind meeting participants, speakers, assignees and
+Account people edges (ADR-021) bind meeting participants, speakers, assignees and
 insight entities to members, contacts, sub-accounts and projects with a
 deterministic resolver (no model call). Summarize runs it inline after summary
 publication; speaker map and contact changes publish `PeopleResolveRequested` to

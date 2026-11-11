@@ -950,7 +950,7 @@ cursor parameters and recheck the requester's access. Invalid input returns
 errors a generic 500. Responses are not cached and contact content is not logged.
 
 Contact fields are KMS envelope-encrypted per row before storage and bound to
-the account and contact (ADR-063); without a configured key, contact routes
+the account and contact (ADR-021, contact encryption); without a configured key, contact routes
 return 503 `CONTACTS_UNAVAILABLE`; delegated connector creates seal the row the
 same way and return that 503 before any write. Contact rows have no TTL and remain until a
 direct member deletes them. Point-in-time recovery can retain deleted, still
@@ -1032,7 +1032,7 @@ automatic linker never re-creates that pair. None of the three routes is
 connector-delegable; the list carries meeting-derived evidence. People edges
 (below) live in the `LINK#meeting#` range and never appear on these routes.
 
-The `/api/accounts/{accountId}/people` routes serve ADR-067 people edges for
+The `/api/accounts/{accountId}/people` routes serve ADR-021 people edges for
 **direct** members, checked on every request (not connector-delegable;
 `Cache-Control: no-store`; 400 uses `BAD_REQUEST`, an unreadable contact
 directory 503 `CONTACTS_UNAVAILABLE`). Meeting IDs are `{ownerUserId}:{meetingId}`,
@@ -1067,7 +1067,7 @@ as invalid input. A stage change sets `stageChangedAt` and appends an immutable
 `STAGEHIST#` row with the update; legacy values outside the list read as unmapped
 and projects without a change time show an unknown stage age. Project list rows
 carry `stageChangedAt` (when recorded) and `stageMapped`, like the detail
-response. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
+response. See [ADR-021, relationship links](decisions/ADR-021-account-contacts-links-and-people.md).
 
 `GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
 for **direct** members (membership is read on every call; no query parameters;
@@ -1218,7 +1218,7 @@ Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 order and resolved range. Without `from`, ascending lists start now (upcoming)
 and descending lists cover all past times. Responses are `{events,
 nextCursor}` and are not cached. Event fields except `startAt` are sealed like
-contacts (ADR-063); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
+contacts (ADR-021, contact encryption); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
 Delegated MCP clients create events through the private bridge like contacts:
 `{event, idempotencyKey}` with strict decoding (no unknown, server-owned or
 null fields), direct membership and current read+write approval pinned in the

@@ -77,7 +77,7 @@ The "Rulings" section below overrides the spec where it says so.
 8. **Account events reference contacts** (`EventAttendee.ContactID`). When a contact is
    deduplicated into an existing B contact, the event mover remaps the ID through
    persisted `MERGE#contact#{aContactId}` rows.
-9. **No account-wide link refresh exists** (ADR-064 links are created per news/meeting by
+9. **No account-wide link refresh exists** (ADR-021 links are created per news/meeting by
    `LinkAuto`). v1 only emits `PeopleResolveRequested{AccountID: B, Reason: contacts}`;
    A's links stay on the tombstone.
 10. **Audience is symmetric.** The spec's anti-goal names only A's members gaining B's

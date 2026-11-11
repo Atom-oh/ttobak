@@ -20,7 +20,7 @@ function failureStatus(failure: unknown): number | undefined {
 }
 
 /**
- * Resolved people and unresolved mention groups of the account (ADR-067).
+ * Resolved people and unresolved mention groups of the account (ADR-021, people edges).
  * The parent loads the first pages; actions call `onChanged` to reload them.
  */
 export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost }: {

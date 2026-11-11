@@ -569,7 +569,7 @@ export interface ContactInput {
 
 export interface AccountContact extends ContactInput { contactId: string; revision: string }
 
-/** A shared event (schedule) of an account; direct members only (ADR-063). */
+/** A shared event (schedule) of an account; direct members only (ADR-021, contact encryption). */
 export interface EventAttendee { contactId?: string; name: string; email?: string }
 export interface AccountEventInput {
   revision?: string;

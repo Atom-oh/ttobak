@@ -178,7 +178,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   }, [isAuthenticated, accountId, account, readScope]);
   const billingEntry = account && billing?.scope === readScope ? billing.entry : null;
   const billingVisible = billingEntry !== null;
-  // Events, like contacts, are for direct members only (ADR-063).
+  // Events, like contacts, are for direct members only (ADR-021, contact encryption).
   const eventsVisible = !!account && account.accountId === accountId && !!user?.userId
     && account.members.some((member) => member.userId === user.userId);
   const tabs = visibleAccountTabs(billingVisible, eventsVisible);

@@ -32,7 +32,7 @@ export function fromLocalInput(value: string): string | null {
 
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 
-/** Validates like the API (ADR-063 limits) and builds the request body. */
+/** Validates like the API (ADR-021 contact encryption limits) and builds the request body. */
 export function eventInputFromForm(form: EventForm, revision?: string): { input?: AccountEventInput; error?: string } {
   const title = form.title.trim();
   if (!title) return { error: '제목을 입력해 주세요.' };
