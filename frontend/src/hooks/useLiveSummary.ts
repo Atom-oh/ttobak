@@ -3,18 +3,20 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { ProactiveBatch } from '@/lib/proactiveSearch';
 import { summaryApi, qaApi } from '@/lib/api';
+import { LiveQuestionDetector } from '@/lib/liveQuestionDetector';
 
 interface UseLiveSummaryOptions {
   summaryInterval: number;
+  meetingTitle?: string;
+  meetingContext?: string;
 }
 
-export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
+export function useLiveSummary({ summaryInterval, meetingTitle, meetingContext }: UseLiveSummaryOptions) {
   const [liveSummary, setLiveSummary] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [lastSummaryWordCount, setLastSummaryWordCount] = useState(0);
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
-  // Subset of detectedQuestions the detector flagged as immediately
-  // answerable via search — LiveQAPanel auto-fires the first new one.
+  // Explicit spoken, answerable questions; generated suggestions stay manual.
   const [proactiveBatch, setProactiveBatch] = useState<ProactiveBatch | undefined>(undefined);
   // Monotonic generation id for proactive batches: LiveQAPanel's consumed-
   // batch guard compares this id, so each detection round is fireable at
@@ -26,6 +28,28 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   const summaryIntervalRef = useRef(summaryInterval);
   const liveSummaryRef = useRef('');
   const askedQuestionsRef = useRef<string[]>([]);
+  const detectionContextRef = useRef({ meetingTitle, meetingContext });
+  const detectorRef = useRef<LiveQuestionDetector | null>(null);
+  useEffect(() => {
+    detectionContextRef.current = { meetingTitle, meetingContext };
+  }, [meetingTitle, meetingContext]);
+  useEffect(() => {
+    const detector = new LiveQuestionDetector(
+      (input, signal) => qaApi.detectQuestions(input.transcript, askedQuestionsRef.current,
+        liveSummaryRef.current || undefined, input.meetingTitle, input.meetingContext, { signal }),
+      result => {
+        setDetectedQuestions(result.questions);
+        setProactiveBatch(result.automatic?.length
+          ? { id: ++proactiveBatchSeqRef.current, questions: result.automatic }
+          : undefined);
+      },
+    );
+    detectorRef.current = detector;
+    return () => {
+      detector.dispose();
+      detectorRef.current = null;
+    };
+  }, []);
   // Every summarizeLive request currently in flight, so a caller about to
   // read liveSummaryRef (e.g. usePostRecording saving on recording stop) can
   // await ALL of them first -- without this, a summary triggered just before
@@ -54,16 +78,6 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   //     only summary that actually succeeded.
   const summaryGenerationRef = useRef(0);
   const appliedGenerationRef = useRef(0);
-  // Same guard for the detect-questions path: without it a straggling
-  // response from a PREVIOUS recording (or an older round of this one) could
-  // overwrite fresher suggestions — and, worse than the pre-proactive world
-  // where stale questions were only cosmetic chips, a stale proactive entry
-  // would AUTO-FIRE a Bedrock round + external web search in the new
-  // recording. Detect shares summaryGenerationRef's numbering (both are
-  // captured per checkThreshold round; reset() bumps it past every in-flight
-  // request), with its own applied cursor.
-  const detectAppliedGenerationRef = useRef(0);
-
   // Keep refs in sync
   useEffect(() => { summaryIntervalRef.current = summaryInterval; }, [summaryInterval]);
 
@@ -76,6 +90,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     lastSummaryWordCountRef.current = 0;
     liveSummaryRef.current = '';
     askedQuestionsRef.current = [];
+    detectorRef.current?.reset();
     pendingSummariesRef.current.clear();
     // Bump forward, never back to 0: any request still in flight from the
     // recording that just ended is immediately stale against this new
@@ -84,7 +99,11 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     // "generation > appliedGenerationRef.current" for the NEW one.
     summaryGenerationRef.current += 1;
     appliedGenerationRef.current = summaryGenerationRef.current;
-    detectAppliedGenerationRef.current = summaryGenerationRef.current;
+  }, []);
+
+  const stopDetection = useCallback(() => {
+    detectorRef.current?.reset();
+    setProactiveBatch(undefined);
   }, []);
 
   /**
@@ -105,13 +124,14 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
 
   /**
    * Called by useRecordingSession when a new final transcript arrives.
-   * Checks if word count threshold is met and triggers summary + question detection.
+   * Detection tracks each final update; summary retains its word threshold.
    */
   const checkThreshold = useCallback((
     newTotalWordCount: number,
     allTranscriptText: string,
     meetingId: string,
   ) => {
+    detectorRef.current?.update({ transcript: allTranscriptText, ...detectionContextRef.current });
     if (newTotalWordCount - lastSummaryWordCountRef.current < summaryIntervalRef.current) {
       return;
     }
@@ -119,10 +139,6 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     lastSummaryWordCountRef.current = newTotalWordCount;
     setLastSummaryWordCount(newTotalWordCount);
     setIsGenerating(true);
-
-    const trimmedContext = allTranscriptText.length > 2000
-      ? allTranscriptText.slice(-2000)
-      : allTranscriptText;
 
     const generation = ++summaryGenerationRef.current;
     const summaryPromise: Promise<void> = summaryApi.summarizeLive(
@@ -145,37 +161,15 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
         // own initializer: this callback only runs asynchronously, after
         // the `const` assignment below has completed.
         pendingSummariesRef.current.delete(summaryPromise);
+        if (generation === summaryGenerationRef.current) setIsGenerating(false);
       });
     pendingSummariesRef.current.add(summaryPromise);
-
-    const detectPromise = qaApi.detectQuestions(
-      trimmedContext,
-      askedQuestionsRef.current,
-      liveSummaryRef.current || undefined,
-    )
-      .then((res) => {
-        // Generation-guarded (see detectAppliedGenerationRef) and REPLACE
-        // semantics for both arrays — keeping a previous round's non-empty
-        // proactive list when the fresh response is empty would let a
-        // minutes-old batch (held while an answer was in flight) auto-fire
-        // long after the conversation moved on.
-        if (generation <= detectAppliedGenerationRef.current) return;
-        detectAppliedGenerationRef.current = generation;
-        setDetectedQuestions(res.questions);
-        setProactiveBatch(
-          res.proactive && res.proactive.length > 0
-            ? { id: ++proactiveBatchSeqRef.current, questions: res.proactive }
-            : undefined,
-        );
-      })
-      .catch(() => {}); // silent fail
-
-    Promise.all([summaryPromise, detectPromise])
-      .finally(() => setIsGenerating(false));
   }, []);
 
   const addAskedQuestion = useCallback((q: string) => {
-    askedQuestionsRef.current.push(q);
+    if (!askedQuestionsRef.current.includes(q)) {
+      askedQuestionsRef.current = [...askedQuestionsRef.current, q].slice(-50);
+    }
   }, []);
 
   return {
@@ -190,5 +184,6 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     addAskedQuestion,
     flushPendingSummary,
     reset,
+    stopDetection,
   };
 }

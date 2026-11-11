@@ -484,6 +484,7 @@ function retryableQAError(error: unknown): boolean {
 
 async function askQA(request: {
   mode: 'ask' | 'meeting'; question: string; context?: string; sessionId?: string; meetingId?: string;
+  automatic?: boolean; allowWebSearch?: boolean;
 }, onSubmit?: (jobId?: string) => void): Promise<QAResponse> {
   const auth = await getAuthHeaders();
   const userId = tokenUserId(auth.Authorization?.slice(7) || null);
@@ -573,16 +574,18 @@ async function askQA(request: {
 
 export const qaApi = {
   ask: (question: string, context?: string, sessionId?: string, meetingId?: string,
-        onSubmit?: (jobId?: string) => void) =>
-    askQA({ mode: 'ask', question, context, sessionId, meetingId }, onSubmit),
+        onSubmit?: (jobId?: string) => void,
+        policy?: { automatic: boolean; allowWebSearch: boolean }) =>
+    askQA({ mode: 'ask', question, context, sessionId, meetingId, ...policy }, onSubmit),
 
   askMeeting: (meetingId: string, question: string, sessionId?: string) =>
     askQA({ mode: 'meeting', question, sessionId, meetingId }),
 
-  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
-    api.post<{ questions: string[]; proactive?: string[] }>(
+  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string,
+                    meetingTitle?: string, meetingContext?: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/lib/liveQuestionDetector').LiveDetectionResult>(
       '/api/qa/detect-questions',
-      { transcript, previousQuestions, summary }
+      { transcript, previousQuestions, summary, meetingTitle, meetingContext }, options
     ),
 };
 
