@@ -276,20 +276,26 @@ func TestFilterCandidatesDuplicateKeepsBest(t *testing.T) {
 }
 
 func TestFilterCandidatesCapAndRanking(t *testing.T) {
+	n := AutoTermsMaxNewPerRun + 2
 	var words []string
 	var transcript strings.Builder
-	for i := 0; i < 17; i++ {
-		w := "Zorb" + strings.Repeat(string(rune('a'+i)), 3)
+	for i := 0; i < n; i++ {
+		w := fmt.Sprintf("Zorb%c%c", 'a'+i/26, 'a'+i%26)
 		words = append(words, w)
 		fmt.Fprintf(&transcript, "%s 그리고 %s. ", w, w)
 	}
-	sources := TermSources{Transcript: transcript.String(), Notes: words[16] + " 메모"}
+	last := n - 1
+	sources := TermSources{Transcript: transcript.String(), Notes: words[last] + " 메모"}
 	var cands []TermCandidate
 	for i, w := range words {
-		cands = append(cands, TermCandidate{DisplayAs: w, Confidence: 0.86 + float64(i%8)*0.01, Evidence: transcriptEvidence(w)})
+		confidence := 0.86 + float64(i%8+1)*0.01
+		if i == 0 || i == 1 || i == last {
+			confidence = 0.86 // the lowest tier: two of these three are capped
+		}
+		cands = append(cands, TermCandidate{DisplayAs: w, Confidence: confidence, Evidence: transcriptEvidence(w)})
 	}
 	got, counts := FilterCandidates(cands, sources, 0.85)
-	if len(got) != AutoTermsMaxNewPerRun || counts.Cap != 2 || counts.Kept != 15 || counts.Input != 17 {
+	if len(got) != AutoTermsMaxNewPerRun || counts.Cap != 2 || counts.Kept != AutoTermsMaxNewPerRun || counts.Input != n {
 		t.Fatalf("got %d, counts %+v", len(got), counts)
 	}
 	for i := 1; i < len(got); i++ {
@@ -297,14 +303,15 @@ func TestFilterCandidatesCapAndRanking(t *testing.T) {
 			t.Fatalf("not ranked by confidence at %d", i)
 		}
 	}
-	// words[0], words[8] and words[16] share the lowest confidence; words[16]
-	// has two source types, so it outranks them and the other two are capped.
-	last := got[len(got)-1]
-	if last.DisplayAs != words[16] || len(last.SourceTypes) != 2 {
-		t.Fatalf("last kept = %q %v", last.DisplayAs, last.SourceTypes)
+	// words[0], words[1] and words[last] share the lowest confidence;
+	// words[last] has two source types, so it outranks them and the other
+	// two are capped.
+	tail := got[len(got)-1]
+	if tail.DisplayAs != words[last] || len(tail.SourceTypes) != 2 {
+		t.Fatalf("last kept = %q %v", tail.DisplayAs, tail.SourceTypes)
 	}
 	for _, g := range got {
-		if g.DisplayAs == words[0] || g.DisplayAs == words[8] {
+		if g.DisplayAs == words[0] || g.DisplayAs == words[1] {
 			t.Fatalf("%q should have been capped", g.DisplayAs)
 		}
 	}

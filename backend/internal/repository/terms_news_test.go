@@ -45,6 +45,12 @@ func TestTermsNewsRowsNeedTheirKeys(t *testing.T) {
 	if err := repo.PutTermsNewsRun(context.Background(), &model.TermsNewsRun{Day: "2026-10-18", ExpiresAt: 1}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("run without a hash: %v", err)
 	}
+	if err := repo.PutTermsTechHistory(context.Background(), &model.TermsTechHistory{TermKey: "k", ExpiresAt: 1}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("tech history without days: %v", err)
+	}
+	if err := repo.PutTermsTechRun(context.Background(), &model.TermsTechRun{Day: "2026-10-18", ExpiresAt: 1}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("tech run without a hash: %v", err)
+	}
 }
 
 // A Common create or eviction by the news job carries its audit row in the

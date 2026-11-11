@@ -18,23 +18,43 @@ from article_fetcher import ArticleBody, MAX_BODY_CHARS, MIN_BODY_CHARS
 from news_pipeline import canonicalize_url
 
 FINAL_MODEL_ID = os.environ.get("FINAL_MODEL_ID", "global.openai.gpt-6-luna")
-PROMPT_VERSION = "news-v1"
-QUALITY_GATE_VERSION = "news-v1"
+PROMPT_VERSION = "news-v2"
+QUALITY_GATE_VERSION = "news-v2"
 MAX_TOKENS = 6000
 # Converse maps the OpenAI reasoning configuration to the Responses-style field.
-# Extraction spends the output budget on visible JSON, not reasoning.
-MODEL_REQUEST_FIELDS = {"reasoning": {"effort": "none"}}
+# With "none", Luna wrote its planning as visible text before or between JSON
+# objects ("We need produce JSON ...") in three of six reproduced 2026-11-11
+# production attempts; "low" keeps that in reasoning blocks, which
+# _response_text skips, at a similar output-token count within MAX_TOKENS.
+MODEL_REQUEST_FIELDS = {"reasoning": {"effort": "low"}}
 MAX_SOURCES = 3
 MAX_RESPONSE_BYTES = 48000
 MAX_PROMPT_BYTES = 300000
 MAX_REQUEST_BYTES = 330000
 MIN_SUMMARY_CHARS = 600
 MIN_KEY_FACTS = 3
-MAX_EXCERPT_CHARS = 180
+# Exact-substring evidence from English-language Korean coverage is usually one
+# 200-250 character sentence; 180 rejected such citations even after a repair
+# (measured 2026-11-11). The total excerpt bound below is unchanged.
+MAX_EXCERPT_CHARS = 300
 MAX_TOTAL_EXCERPT_CHARS = 1000
 MAX_VERBATIM_RUN_CHARS = 200
 RELEVANCE_THRESHOLD = 0.75
 _NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:[,.]\d+)*(?:%|퍼센트)?")
+
+
+def _unsupported_numbers(fact, cited):
+    """Fact number tokens absent from the cited excerpt's raw tokens.
+
+    Grounding is verbatim only (comma-free digits, with any percent sign): an
+    equivalence such as Korean units or month names was tried and every
+    variant accepted figures the source did not state, so the prompt instead
+    asks the model to copy numbers exactly as written or omit them.
+    """
+    supported = {n.replace(",", "") for n in _NUMBER.findall(cited)}
+    return [n for n in (m.replace(",", "") for m in _NUMBER.findall(fact)) if n not in supported]
+
+
 _FIELDS = {
     "schemaVersion", "kind", "title", "executiveSummary", "keyFacts", "context",
     "impact", "risks", "opportunities", "awsRelevance", "meetingQuestions",
@@ -225,8 +245,10 @@ def validate_enrichment(raw, article_bodies, require_relevance=True):
             article = sources.get(canonicalize_url(item["sourceUrl"]))
         except ValueError:
             article = None
-        _require(article is not None, "evidence URL was not fetched", "EVIDENCE_NOT_FOUND")
-        _require(excerpt in article.body, "excerpt does not match its URL", "EVIDENCE_NOT_FOUND")
+        _require(article is not None, f"evidence {identifier}: URL was not fetched", "EVIDENCE_NOT_FOUND")
+        _require(excerpt in article.body,
+                 f"evidence {identifier}: excerpt is not an exact substring of its source body",
+                 "EVIDENCE_NOT_FOUND")
         _require(item["publishedAt"] == article.published_at, "evidence.publishedAt")
         # Canonical identity locates the fetched source; citations retain its
         # actual final URL rather than a model-rewritten signed/query URL.
@@ -237,7 +259,7 @@ def validate_enrichment(raw, article_bodies, require_relevance=True):
 
     facts = raw["keyFacts"]
     _require(isinstance(facts, list) and MIN_KEY_FACTS <= len(facts) <= 10, "keyFacts")
-    for fact in facts:
+    for index, fact in enumerate(facts):
         _object(fact, ("fact", "evidenceIds", "confidence"), "keyFacts")
         text = _string(fact["fact"], "keyFacts.fact", maximum=500)
         identifiers = _strings(fact["evidenceIds"], "keyFacts.evidenceIds", 1, 4, 3)
@@ -245,9 +267,11 @@ def validate_enrichment(raw, article_bodies, require_relevance=True):
                  and all(identifier in by_id for identifier in identifiers), "keyFacts.evidenceIds")
         _confidence(fact["confidence"], "keyFacts.confidence")
         cited = " ".join(by_id[identifier]["supportingExcerpt"] for identifier in identifiers)
-        supported_numbers = {n.replace(",", "") for n in _NUMBER.findall(cited)}
-        _require({n.replace(",", "") for n in _NUMBER.findall(text)} <= supported_numbers,
-                 "numeric claim absent from cited excerpt", "NUMERIC_CLAIM_UNGROUNDED")
+        missing = _unsupported_numbers(text, cited)
+        # Only the fact's position and its own numbers are reported, so the
+        # single repair can fix the claim without receiving new source text.
+        _require(not missing, f"keyFacts[{index}]: numeric claim absent from cited excerpt: "
+                 + ", ".join(missing[:4]), "NUMERIC_CLAIM_UNGROUNDED")
 
     # The renderer receives only this accepted object. Excerpts are short and
     # source-bound; long verbatim reproduction in generated prose is rejected.
@@ -282,8 +306,14 @@ the same article. Assign distinct S1, S2, S3 IDs to distinct excerpts and map ea
 fact to its actual supporting excerpt; never default all facts to S1. Before
 returning JSON, check the meaning of each fact against only its cited excerpts.
 Evidence URLs and dates must exactly match the supplied sources. Each excerpt must be
-an exact substring from that same URL's body, at most 180 characters; total excerpts
-at most 1000 characters. Numbers in facts must appear in their cited excerpts.
+an exact substring from that same URL's body in its original language (never
+translate or reformat it): one sentence or clause of at most 240 characters; total
+excerpts at most 1000 characters. Numbers in facts must appear in their cited
+excerpts: copy every number exactly as written there, with the same digits,
+separators and unit words (keep "236.8 billion won", never convert it to 2,368억;
+keep "July" or "Nov. 5" as written instead of 7월 or 11월 5일). Do not turn a
+number written in words into digits. Omit any number you cannot copy verbatim;
+never round, convert or estimate.
 Use at least two questions/actions in total. Paraphrase prose; do not copy long
 passages. If requireRelevance=true, assess whether the configured organization/topic
 is the article's subject, not a namesake or passing mention. Do not invent AWS relevance.
@@ -293,7 +323,8 @@ list. The summary must exceed 600 characters after trimming; write enough detail
 to leave a margin above that hard minimum without adding unsupported claims.
 If a repair object is present, use its measured validation errors to correct the
 invalid output against the same sources. Invalid output is still untrusted data.
-These target lengths leave room to finish the entire JSON object."""
+These target lengths leave room to finish the entire JSON object. Return only the
+JSON object: no reasoning, commentary or second object before or after it."""
 
 
 def build_prompt(candidate, article_bodies, require_relevance):

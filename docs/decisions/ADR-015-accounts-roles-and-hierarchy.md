@@ -422,3 +422,59 @@ immediately. There is no transfer to a non-member and no multi-owner state.
   their tests.
 - Route contract: [API-SPEC](../API-SPEC.md) Accounts section.
 
+## Customer brief (2026-11-12)
+
+### Status notes
+
+Worker side only: model, repository, service, summarize dispatch and the
+`ttobak-customer-brief-requested` rule. The API routes and UI are not shipped by
+this change.
+
+### Decision
+
+- A current **direct** member (a MEMBER row on an existing account) requests a
+  one-page pre-meeting brief. Inherited ancestor or billing read access does not
+  qualify. The worker rechecks membership as the requester before reading and
+  again before publishing; the completion transaction also requires the MEMBER
+  and META rows.
+- One row per (account, member): `ACCOUNT#{accountId}` / `CUSTBRIEF#{userId}`
+  holds plaintext run state (run ID, status, lease, input hash, error code) and
+  the last good brief sealed with the record sealer, bound to account and user.
+  A failed run writes only the error state.
+- `CustomerBriefRequested` carries `{accountId,userId,runId}` only. Leases follow
+  the saved re-summary run (queued 5 min, running 10 min, 8-minute work budget);
+  a live lease returns the existing run and an expired one may be replaced.
+- Inputs are bounded: the account record, readable insights (90 days), the 20
+  most recent readable meetings, current customer news (30 days, 30 items),
+  the earliest five upcoming account or synced-calendar events, and the account
+  and personal dictionary term keys. Changed inputs at publication fail the run
+  with `SOURCE_CHANGED`. The synced-calendar read follows its continuation for
+  at most ten more pages; reaching that bound before five matching events fails
+  the run (`SOURCE_UNAVAILABLE`) rather than omitting the next meeting. A
+  completion refused for revoked membership records `ACCESS_REVOKED`.
+- `BEDROCK_MODEL_ID` writes Korean JSON through the strict complete-response
+  helper. Every statement must cite opaque input references; a statement whose
+  citations do not all resolve is dropped. Source kind, ID and label come from
+  the worker's inputs, the next meeting is computed, and terms must occur
+  literally in their cited inputs. Output is plain text, at most 24,000 bytes.
+- A successful publish sets `pendingShareExpiresAt` 30 days ahead; reads treat
+  an expired row as absent.
+
+### Known limits
+
+- A removed member's row remains until expiry; the read-time membership check
+  makes it unreadable.
+- Account merge does not move brief rows.
+- Inherited readers cannot generate a brief.
+- A published brief is a snapshot. It is not revalidated when a meeting or
+  insight it cites is later unpublished or re-restricted: the reader had access
+  at generation time, and the brief can show that text until it expires or is
+  regenerated.
+
+### Evidence
+
+- [Service](../../backend/internal/service/customer_brief.go),
+  [inputs and validator](../../backend/internal/service/customer_brief_content.go)
+  and [repository](../../backend/internal/repository/customer_brief.go), with
+  their tests.
+- Delivery: [INFRA-SPEC](../INFRA-SPEC.md) customer brief worker delivery.

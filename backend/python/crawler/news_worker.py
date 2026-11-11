@@ -16,12 +16,12 @@ import uuid
 from botocore.exceptions import ClientError
 
 from article_fetcher import ArticleBody, FetchRejected, fetch_article
-from news_discovery import valid_source_id
+from news_discovery import DiscoveryRejected, search_domains, valid_source_id
 from news_enrichment import (
     QualityRejected, enrich_article, FINAL_MODEL_ID, MAX_TOKENS,
     QUALITY_GATE_VERSION, PROMPT_VERSION,
 )
-from news_pipeline import canonicalize_url, document_hash, is_within_days
+from news_pipeline import canonicalize_url, document_hash, in_search_scope, is_within_days
 from news_renderer import render_news_markdown
 from news_store import Attempt, LEASE_SECONDS, StateRejected, _money
 
@@ -122,6 +122,23 @@ class WorkerDeps:
     now: object
     fetch: object = fetch_article
     token: object = lambda: uuid.uuid4().hex
+
+
+_LOCATION = re.compile(r"[A-Za-z][A-Za-z0-9_. \[\]]{0,63}")
+_MEASURED = re.compile(r" characters=[0-9]{1,7}; required=[0-9]{1,7}\.\.[0-9]{1,7}")
+
+
+def validation_locations(errors):
+    """Validator field/position plus measured lengths; never fact numbers or text."""
+    values = []
+    for error in errors[:8] if isinstance(errors, list) else []:
+        if not isinstance(error, str):
+            continue
+        location, _, detail = error.partition(":")
+        if not _LOCATION.fullmatch(location):
+            location = "OTHER"
+        values.append(location + (":" + detail if _MEASURED.fullmatch(detail) else ""))
+    return values
 
 
 def _result(status, source_id, doc_hash="", reason="", warnings=()):
@@ -249,6 +266,13 @@ def _process_candidate(candidate, deps):
     config = deps.store.current_config(source_id, revision)
     if custom and not _configured_custom(config, url):
         raise StateRejected("SOURCE_CHANGED")
+    try:
+        scope = () if custom else search_domains(config)
+    except DiscoveryRejected:
+        raise StateRejected("SOURCE_CHANGED") from None
+    # The scope is outside the revision; recheck it against current config.
+    if not in_search_scope(url, scope):
+        return _result("FETCH_REJECTED", source_id, reason="OUT_OF_SCOPE")
     if not _fresh(candidate, deps.now()):
         return _result("FETCH_REJECTED", source_id, reason="STALE_CANDIDATE")
     if deps.remaining() < FETCH_SECONDS + MODEL_SECONDS + SETTLEMENT_SECONDS:
@@ -259,6 +283,8 @@ def _process_candidate(candidate, deps):
         return _result("FETCH_REJECTED", source_id, reason=error.reason)
     if not isinstance(lead, ArticleBody) or not lead.final_url.startswith("https://"):
         return _result("FETCH_REJECTED", source_id, reason="INSECURE_REDIRECT")
+    if not in_search_scope(lead.final_url, scope):
+        return _result("FETCH_REJECTED", source_id, reason="OUT_OF_SCOPE")
     if not _fresh(candidate, deps.now(), lead):
         return _result("FETCH_REJECTED", source_id, reason="STALE_ARTICLE")
     canonical = canonicalize_url(lead.canonical_url)
@@ -270,9 +296,13 @@ def _process_candidate(candidate, deps):
         if deps.remaining() < FETCH_SECONDS + MODEL_SECONDS + SETTLEMENT_SECONDS:
             warnings.extend(["CORROBORATION_DEFERRED"] * (len(related) - index))
             break
+        if not in_search_scope(other, scope):
+            warnings.append("CORROBORATION_UNUSABLE")
+            continue
         try:
             body = deps.fetch(other, https_only=True)
             if (isinstance(body, ArticleBody) and body.final_url.startswith("https://")
+                    and in_search_scope(body.final_url, scope)
                     and canonicalize_url(body.final_url)
                     not in {canonicalize_url(item.final_url) for item in bodies}
                     and canonicalize_url(body.canonical_url)
@@ -291,7 +321,8 @@ def _process_candidate(candidate, deps):
     job = Attempt(source_id, doc_hash, run_id, deps.token(),
                   datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m"), revision,
                   deps.policy.reservation, now + LEASE_SECONDS)
-    deps.store.reserve(job, now=now, month_limit=deps.month_limit, run_limit=deps.run_limit)
+    deps.store.reserve(job, now=now, month_limit=deps.month_limit, run_limit=deps.run_limit,
+                       scope=None if custom else scope)
     model = MeteredModel(deps.bedrock, deps.policy, deps.remaining)
     # Identity/context is current canonical config, never arbitrary caller prose.
     prompt_candidate = {"sourceName": config.get("sourceName", ""),
@@ -302,10 +333,13 @@ def _process_candidate(candidate, deps):
         artifact, _ = enrich_article(prompt_candidate, bodies, model,
                                      model_id=deps.policy.model_id)
     except QualityRejected as error:
-        return deps.store.finish(
+        receipt = deps.store.finish(
             job, now=deps.now(), status="REJECTED", reason=error.reason,
             known_cost=deps.policy.cost(model.usage), usage_complete=model.complete,
             usage=model.usage, warnings=warnings)
+        # Execution history keeps only code-authored validator locations, so a
+        # rejected class can be diagnosed without storing generated or source text.
+        return {**receipt, "validationErrors": validation_locations(error.errors)}
     if not _fresh(candidate, deps.now(), lead):
         return deps.store.finish(
             job, now=deps.now(), status="REJECTED", reason="STALE_ARTICLE",
@@ -372,7 +406,8 @@ def _process_candidate(candidate, deps):
         return deps.store.finish(job, now=deps.now(), status="PUBLISHED",
                                  known_cost=deps.policy.cost(model.usage),
                                  usage_complete=model.complete, usage=model.usage,
-                                 document=row, warnings=warnings)
+                                 document=row, warnings=warnings,
+                                 scope=None if custom else scope)
     except StateRejected as error:
         if error.reason != "SOURCE_CHANGED":
             raise
