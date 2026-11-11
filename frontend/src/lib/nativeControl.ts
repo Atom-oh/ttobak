@@ -2,7 +2,7 @@
 
 import { replyNativeControl, type NativeControlRequest } from './tauri';
 
-// Mac app local control (ADR-046): the layout-level bridge receives requests
+// Mac app local control (ADR-024): the layout-level bridge receives requests
 // on every page; the record page registers the handler that can act on them.
 // A start that arrives elsewhere is queued while the bridge navigates to
 // /record, then delivered when that page registers.

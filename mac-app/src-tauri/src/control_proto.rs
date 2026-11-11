@@ -1,4 +1,4 @@
-//! Wire protocol of the local control socket (ADR-046): one newline-terminated
+//! Wire protocol of the local control socket (ADR-024): one newline-terminated
 //! JSON request per connection, one JSON response line back.
 //!
 //! Request:  `{"v":1,"id":"<1-64 [A-Za-z0-9_-]>","action":"status"|"start"|"stop", ...}`

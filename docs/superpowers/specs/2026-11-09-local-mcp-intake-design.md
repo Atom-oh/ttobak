@@ -257,7 +257,7 @@ launchd LaunchAgent → runs the runner on an interval (also when app closed)
 
 Why the runner is Node in `mcp-server`, not Rust:
 
-- Rust must not own Cognito tokens (mac-app CLAUDE.md, ADR-024/046). The Node
+- Rust must not own Cognito tokens (mac-app CLAUDE.md, ADR-024). The Node
   package already owns verified stdio login, the refresh cache under
   `~/.ttobak/tokens/` and the calendar validators (`src/calendar.ts`).
 - The MCP TypeScript SDK already ships a client and stdio transport. Rust would

@@ -6,8 +6,8 @@
 - Decision date: 2026-11-10.
 - Numbering: ADR-069 because ADR-066 is reserved by the account-shared
   calendar work and ADR-068 is SA performance data residency.
-- Builds on: ADR-024 (Mac app and system-audio captions), ADR-046 (Core Audio
-  capture), ADR-061 (floating prompt window pattern).
+- Builds on: ADR-024 (Mac app, system-audio captions and Core Audio capture),
+  ADR-061 (floating prompt window pattern).
 - Design: the working design and plan documents were not merged; this ADR is
   the durable decision.
 - Delivery: four stacked PRs. 1/4: caption model, profile discovery, interpreter,

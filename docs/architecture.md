@@ -75,7 +75,7 @@ flowchart TB
 The diagram groups responsibilities; it is not an exhaustive network-policy
 model. Browsers also use authenticated Cognito/Transcribe SDK calls and signed S3
 PUTs. The Mac app records a Core Audio system-audio tap mixed with the microphone
-(ADR-046); native finished audio uploads stream directly from disk in Rust; live
+(ADR-024); native finished audio uploads stream directly from disk in Rust; live
 PCM crosses IPC for captions. It also polls Core Audio microphone users to offer,
 never start, a recording for detected meetings (ADR-061). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-073). The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.

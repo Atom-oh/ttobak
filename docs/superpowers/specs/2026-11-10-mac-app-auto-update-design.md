@@ -159,7 +159,7 @@ POSIX `sh` (bash 3.2-compatible), `set -eu`, run as the user (no `sudo`):
 1. Refuse non-macOS, non-arm64, or macOS older than 14.2.
 2. Fetch `latest.json`, download the archive to a temp dir, verify SHA-256.
 3. If TTOBAK is running, query its status over the existing control socket
-   (`~/Library/Application Support/ttobak/control.sock`, ADR-046) using the
+   (`~/Library/Application Support/ttobak/control.sock`, ADR-024) using the
    same busy definition as the app. Busy → refuse and tell the user to finish
    the recording. Idle → ask it to quit and wait. Socket unreachable → tell the
    user to quit TTOBAK and rerun. Never `kill`. (Design call; the builder
