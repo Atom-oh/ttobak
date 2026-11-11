@@ -8,7 +8,7 @@ A project links accounts, meetings and research through canonical sets with reve
 
 ## Projects with transactional links and hybrid access
 
-_Earlier status notes: Status: Accepted; original implementation PR #128, MCP amendment PR #131. Original decision date: Not recorded. Code checked: 2026-09-13. Account hierarchy (ADR-036) does not extend Project membership through parent accounts; only reads may follow an ancestor grant when descendant reads are enabled (ADR-058)._
+_Earlier status notes: Status: Accepted; original implementation PR #128, MCP amendment PR #131. Original decision date: Not recorded. Code checked: 2026-09-13. Account hierarchy (ADR-015) does not extend Project membership through parent accounts; only reads may follow an ancestor grant when descendant reads are enabled (ADR-058)._
 
 ### Original decision and rationale
 

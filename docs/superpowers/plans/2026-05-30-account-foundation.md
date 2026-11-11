@@ -17,5 +17,5 @@ The author's self-review marked design coverage and signature consistency as sat
 
 ## Current references and supersession
 
-- [ADR-015](../../decisions/ADR-015-account-first-class-shared-entity.md), [account model](../../../backend/internal/model/account.go), [service](../../../backend/internal/service/account.go), [repository](../../../backend/internal/repository/account.go), [tests](../../../backend/internal/service/account_test.go).
-- [ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md) replaces owner-only add/role-update authority with existing-member authority while excluding owner promotion. [ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md) adds hierarchy metadata without inherited membership. The original fixed role list and flat UI are not current requirements.
+- [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md), [account model](../../../backend/internal/model/account.go), [service](../../../backend/internal/service/account.go), [repository](../../../backend/internal/repository/account.go), [tests](../../../backend/internal/service/account_test.go).
+- [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) replaces owner-only add/role-update authority with existing-member authority while excluding owner promotion. [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) adds hierarchy metadata without inherited membership. The original fixed role list and flat UI are not current requirements.

@@ -14,7 +14,7 @@
   restriction below **for meetings only**. Classification and publication still
   require direct membership of the target account; roles, hierarchy, documents
   and account invitations keep the inherited restrictions.
-- Supersedes ADR-036's no-inheritance policy only. Its meeting classification,
+- Supersedes ADR-015's no-inheritance policy only. Its meeting classification,
   explicit multi-filter semantics and owner-only hierarchy writes remain.
 - (Superseded 2026-11-06 for meetings by the amendment above.) Narrowed ADR-051's
   reader speaker-correction permission: inherited-only readers could not correct

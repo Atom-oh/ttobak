@@ -33,3 +33,4 @@ rewritten.
 | [ADR-020](ADR-020-personal-documents.md) | Personal documents, previews, public links and sharing; absorbs the former ADR-010 (Markdown rendering), ADR-017 (vault export and ingest), ADR-022 (slide previews and public links) and ADR-029 (document sharing by reference) |
 | [ADR-027](ADR-027-edge-delivery-and-origin-proof.md) | Edge delivery: signed media URLs and the origin proof; absorbs the former ADR-050 (versioned HTTP origin proof rotation) |
 | [ADR-025](ADR-025-projects-and-invitations.md) | Projects, relations and invitations; absorbs the former ADR-044 (project invitations and session bootstrap) |
+| [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) | Accounts, roles, hierarchy and ownership; absorbs the former ADR-034 (member permissions), ADR-036 (hierarchy and meeting filters) and ADR-054 (self-service invitations) |

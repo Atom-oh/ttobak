@@ -1,6 +1,6 @@
 # ADR-023: Meeting-share provenance and legacy removal safeguards
 
-- Status: Accepted; extends ADR-016. [ADR-034](ADR-034-account-member-permission-democratization.md) changes member-add/role-update authority, not removal authority or provenance.
+- Status: Accepted; extends ADR-016. [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) changes member-add/role-update authority, not removal authority or provenance.
 - Original decision date: Not recorded; originally associated with `feat/account-team-members`.
 - Code checked: 2026-09-13. No migration execution is implied.
 

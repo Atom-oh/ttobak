@@ -1,7 +1,7 @@
 # ADR-016: Meeting Classification and Account Team Sharing
 
 - Status: Accepted; provenance hardened by [ADR-023](ADR-023-share-origin-provenance-and-legacy-migration.md).
-  Membership permissions and hierarchy follow ADR-034 and ADR-036.
+  Membership permissions and hierarchy follow ADR-015 and ADR-015.
 - Decision date: Not recorded in the original ADR.
 - Implementation checked: 2026-09-13.
 - Amendment (2026-09-13): the SA workflow's private relink supersedes the former preservation
@@ -101,8 +101,8 @@ meeting owner to be an account member; ownership of the account is unnecessary.
 
 ## Supersession and remaining limits
 
-ADR-034 permits any member to add members/change assignable roles; removal and
-pending-invite revocation stay owner-only. ADR-036 adds organization hierarchy
+ADR-015 permits any member to add members/change assignable roles; removal and
+pending-invite revocation stay owner-only. ADR-015 adds organization hierarchy
 without inherited content access. `accountIds` meeting filtering uses an explicit
 OR set; selecting only a parent ID does not implicitly include descendants.
 

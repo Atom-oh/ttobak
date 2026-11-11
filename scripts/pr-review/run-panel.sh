@@ -46,7 +46,7 @@ T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-3}"
 # glm-5(kiro-glm) 는 로스터에서 제외 — AWS-Demo-Platform 저장소의 PR#88 리뷰에서 이 모델만
 # 4건의 오탐을 냈다(AWS-Demo-Platform 저장소의 ADR-015 — 이 repo의
-# ADR-015-account-first-class-shared-entity 와는 무관). 되살릴 때는 오탐률을 먼저 재측정할 것.
+# ADR-015-accounts-roles-and-hierarchy 와는 무관). 되살릴 때는 오탐률을 먼저 재측정할 것.
 KIRO_MODELS=("claude-opus-5:kiro-opus" "gpt-5.6-sol:kiro-gpt")
 # 러너 이미지의 kiro-cli 는 unpinned vendor-latest 라(AWS-Demo-Platform 저장소의
 # docker/actions-runner-claude/Dockerfile 참조) 아래 무툴/한도 시그니처 가정(2.11.1 기준)이
