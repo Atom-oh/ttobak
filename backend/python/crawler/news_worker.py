@@ -296,9 +296,13 @@ def _process_candidate(candidate, deps):
         if deps.remaining() < FETCH_SECONDS + MODEL_SECONDS + SETTLEMENT_SECONDS:
             warnings.extend(["CORROBORATION_DEFERRED"] * (len(related) - index))
             break
+        if not in_search_scope(other, scope):
+            warnings.append("CORROBORATION_UNUSABLE")
+            continue
         try:
             body = deps.fetch(other, https_only=True)
             if (isinstance(body, ArticleBody) and body.final_url.startswith("https://")
+                    and in_search_scope(body.final_url, scope)
                     and canonicalize_url(body.final_url)
                     not in {canonicalize_url(item.final_url) for item in bodies}
                     and canonicalize_url(body.canonical_url)
@@ -317,7 +321,8 @@ def _process_candidate(candidate, deps):
     job = Attempt(source_id, doc_hash, run_id, deps.token(),
                   datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m"), revision,
                   deps.policy.reservation, now + LEASE_SECONDS)
-    deps.store.reserve(job, now=now, month_limit=deps.month_limit, run_limit=deps.run_limit)
+    deps.store.reserve(job, now=now, month_limit=deps.month_limit, run_limit=deps.run_limit,
+                       scope=None if custom else scope)
     model = MeteredModel(deps.bedrock, deps.policy, deps.remaining)
     # Identity/context is current canonical config, never arbitrary caller prose.
     prompt_candidate = {"sourceName": config.get("sourceName", ""),
@@ -401,7 +406,8 @@ def _process_candidate(candidate, deps):
         return deps.store.finish(job, now=deps.now(), status="PUBLISHED",
                                  known_cost=deps.policy.cost(model.usage),
                                  usage_complete=model.complete, usage=model.usage,
-                                 document=row, warnings=warnings)
+                                 document=row, warnings=warnings,
+                                 scope=None if custom else scope)
     except StateRejected as error:
         if error.reason != "SOURCE_CHANGED":
             raise

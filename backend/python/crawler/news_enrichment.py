@@ -49,23 +49,30 @@ _NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:[,.]\d+)*(?:%|퍼센트)?")
 # is still checked: "2026.11.11" stays one token and ".5%" yields "5%".
 _SCALED_NUMBER = re.compile(
     r"(?<![A-Za-z0-9])(\d+(?:[,.]\d+)*)(?:(%|퍼센트)|(?:\s?(thousand|million|billion|trillion)"
-    r"(?![A-Za-z])|(천|만|억|조))?(월)?)", re.IGNORECASE)
+    r"(?![A-Za-z-])(?!\s?(?:hundred|thousand|million|billion|trillion)(?![A-Za-z]))"
+    r"|([백천만억조]+))?(월)?)", re.IGNORECASE)
 # A single plain number: grouped thousands or digits, with at most one decimal.
 _PLAIN_NUMBER = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
 _SCALES = {"thousand": 10 ** 3, "million": 10 ** 6, "billion": 10 ** 9, "trillion": 10 ** 12,
-           "천": 10 ** 3, "만": 10 ** 4, "억": 10 ** 8, "조": 10 ** 12}
-# Capitalized English month names only, so the modal "may" is not month 5.
-_MONTH = re.compile(
-    r"(?<![A-Za-z])(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
-    r"(?:uary|ruary|ch|il|e|y|ust|ember|ober)?\.?(?![A-Za-z])")
-_MONTHS = {name: index for index, name in enumerate(
-    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+           "백": 10 ** 2, "천": 10 ** 3, "만": 10 ** 4, "억": 10 ** 8, "조": 10 ** 12}
+# Full capitalized English month names or their abbreviations, so neither the
+# modal "may" nor names such as "Jane" or "Mary" become months.
+_MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July",
+                "August", "September", "October", "November", "December")
+_MONTH = re.compile(r"(?<![A-Za-z])(" + "|".join(
+    _MONTH_NAMES + ("Sept", "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep",
+                    "Oct", "Nov", "Dec")) + r")\.?(?![A-Za-z])")
+_MONTHS = {name[:3].lower(): index for index, name in enumerate(_MONTH_NAMES, 1)}
 # "one" is excluded: "one of the banks" is not a count.
 _WORD_NUMBERS = {name: index for index, name in enumerate(
     ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
      "eleven", "twelve"), 2)}
-_WORD_NUMBER = re.compile(r"(?<![A-Za-z])(" + "|".join(_WORD_NUMBERS) + r")(?![A-Za-z])",
-                          re.IGNORECASE)
+# A word inside a compound ("twenty-six", "twenty six", "six hundred") is not
+# that small number.
+_WORD_NUMBER = re.compile(
+    r"(?<![A-Za-z-])(?<!ty )(?<!red )(?<!and )(" + "|".join(_WORD_NUMBERS)
+    + r")(?![A-Za-z-])(?!\s+(?:hundred|thousand|million|billion|trillion|dozen)(?![A-Za-z]))",
+    re.IGNORECASE)
 
 
 def _number_tokens(text):
@@ -84,16 +91,20 @@ def _number_tokens(text):
         value = Decimal(raw)
         if month and not (english or korean):
             yield raw, ("month", value)
-        else:
-            yield raw, ("value", value * _SCALES.get((english or korean or "").lower(), 1))
+            continue
+        if english:
+            value *= _SCALES[english.lower()]
+        for unit in korean or "":
+            # Consecutive Korean units multiply: 5천만 is 50,000,000.
+            value *= _SCALES[unit]
+        yield raw, ("value", value)
 
 
 def _unsupported_numbers(fact, cited):
     """Fact numbers absent from the cited excerpt, raw or as an exact scaled value."""
     raw = {n.replace(",", "") for n in _NUMBER.findall(cited)}
     keys = {key for _, key in _number_tokens(cited) if key is not None}
-    keys.update(("month", Decimal(_MONTHS["sep" if m.group(1).lower() == "sept" else m.group(1).lower()]))
-                for m in _MONTH.finditer(cited))
+    keys.update(("month", Decimal(_MONTHS[m.group(1)[:3].lower()])) for m in _MONTH.finditer(cited))
     keys.update(("value", Decimal(_WORD_NUMBERS[m.group(1).lower()]))
                 for m in _WORD_NUMBER.finditer(cited))
     return [token for token, key in _number_tokens(fact)

@@ -193,6 +193,9 @@ class TestStructuredQuality(unittest.TestCase):
             ("투자액은 300억원이다", "투자액은 300억원이다."),
             ("5월 시행", "takes effect in May"),
             ("2026.11.10 공고", "published on 2026.11.10"),
+            ("5,000만 원 지원", "5천만원 지원"),
+            ("9월 시행", "effective Sept. 4"),
+            ("1월 시행", "effective January 3"),
         ]
         ungrounded = [
             ("상반기 순이익 2,369억 원", "net profit of 236.8 billion won", "2369"),
@@ -205,6 +208,14 @@ class TestStructuredQuality(unittest.TestCase):
             ("금리는 .5% 올랐다", "rates rose 0.25%", "5%"),
             ("5월 시행", "banks may revise the rule", "5"),
             ("1개 은행", "one of the banks", "1"),
+            # Second review: compounds never ground their last component.
+            ("5,000원 지원", "5천만원 지원", "5000"),
+            ("6개 계열사", "Twenty-six subsidiaries", "6"),
+            ("6개 계열사", "twenty six subsidiaries", "6"),
+            ("6개 지점", "six hundred branches", "6"),
+            ("50만 명", "500 thousand million people", "50"),
+            ("5월 발표", "Jane announced it", "5"),
+            ("3월 발표", "Mary announced it", "3"),
         ]
         for fact, excerpt in grounded:
             with self.subTest(fact=fact):

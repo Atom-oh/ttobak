@@ -406,7 +406,9 @@ Then confirm a SigV4 `tools/list` on the Gateway shows `filters` in the
 with `--exclusively`. An operator source may carry a `searchDomains` list (at
 most 100 lowercase hosts) sent as `filters.domainFilter.include` and also applied
 locally. It is not part of the source revision (published rows keep the reader
-contract); the config guard and a worker recheck reject a scope change mid-run.
+contract). The worker checks candidate, final and corroborating URLs against the
+current scope, and reservation and publication fail with `SOURCE_CHANGED` when the
+scope changed after that check.
 Acceptance is a later daily execution with
 `docsAdded > 0` and matching `GSI4PK=DOC#news` rows; a deployment alone is not.
 

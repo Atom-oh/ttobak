@@ -247,6 +247,25 @@ class TestNewsStoreTransactions(unittest.TestCase):
         self.assertIsNone(self.row(self.job.sk))
         self.assertIsNone(self.row("NEWSBUDGET#2026-10"))
 
+    def test_scope_narrowed_after_the_worker_check_blocks_reservation_and_publication(self):
+        # The worker checked an empty scope; an operator then adds an allowlist.
+        self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
+                               UpdateExpression="SET searchDomains = :d",
+                               ExpressionAttributeValues={":d": ["fss.or.kr"]})
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.reserve(scope=())
+        self.assertIsNone(self.row(self.job.sk))
+        self.reserve(scope=("fss.or.kr",))
+        self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
+                               UpdateExpression="SET searchDomains = :d",
+                               ExpressionAttributeValues={":d": ["yna.co.kr"]})
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.finish(status="PUBLISHED", document=document(self.job), reason="",
+                        scope=("fss.or.kr",))
+        self.assertIsNone(self.row("DOC#" + self.job.doc_hash))
+        # Settlement without a document never depends on the scope.
+        self.finish(status="FAILED", reason="SOURCE_CHANGED")
+
     def test_rejected_usage_is_settled_once_and_retry_returns_same_receipt(self):
         self.reserve()
         first, second = self.finish(), self.finish()
