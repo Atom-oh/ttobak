@@ -1062,7 +1062,8 @@ fenced at that claim (or unpublish) commit: a membership revoked before it
 returns 403; the object and metadata removal that follows is not re-fenced.
 
 `GET /api/insights` and `GET /api/insights/{sourceId}/{docHash}` are
-caller-scoped. Each distinct source's CONFIG row is read once per request. A
+caller-scoped. Origin resolution is memoized per distinct source within a
+request, and `sourceName`/`accountName` are cut to 200 code points. A
 row with `accountId` makes its documents visible only to a current direct
 member of an existing account; a row without one is common. With no row, a
 source ID starting `acct_` is hidden and any other ID (such as `__tech__`) is

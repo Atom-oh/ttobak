@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -1148,5 +1149,26 @@ func TestListInsights_CachedScanIsFilteredPerCaller(t *testing.T) {
 		if doc.SourceKind != "" || doc.AccountName != "" {
 			t.Fatalf("cache holds caller-scoped fields: %+v", doc)
 		}
+	}
+}
+
+func TestDocOriginApplyToBoundsNames(t *testing.T) {
+	long := strings.Repeat("<", 70000)
+	origin := docOrigin{visible: true, sourceName: long, kind: sourceKindAccount, accountID: "acc1", accountName: "고객" + long}
+	var doc model.CrawledDocument
+	origin.applyTo(&doc)
+	if got := len([]rune(doc.SourceName)); got != maxOriginNameRunes {
+		t.Fatalf("sourceName runes = %d, want %d", got, maxOriginNameRunes)
+	}
+	if got := len([]rune(doc.AccountName)); got != maxOriginNameRunes {
+		t.Fatalf("accountName runes = %d, want %d", got, maxOriginNameRunes)
+	}
+	if !strings.HasPrefix(doc.AccountName, "고객") {
+		t.Fatalf("accountName lost its prefix: %q", doc.AccountName[:12])
+	}
+	short := docOrigin{visible: true, sourceName: "우리은행", kind: sourceKindCommon}
+	short.applyTo(&doc)
+	if doc.SourceName != "우리은행" || doc.AccountName != "" {
+		t.Fatalf("short names changed: %q %q", doc.SourceName, doc.AccountName)
 	}
 }

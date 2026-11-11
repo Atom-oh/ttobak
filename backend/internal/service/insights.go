@@ -144,9 +144,19 @@ type docOrigin struct {
 	accountName string
 }
 
+// maxOriginNameRunes bounds the source and account names copied onto every
+// returned document. A common source's stored name is not bounded at
+// registration, and the names are added after the per-document size check,
+// so an oversized name repeated across a page must not grow the response.
+const maxOriginNameRunes = 200
+
+func boundedOriginName(name string) string {
+	return truncateRunes(strings.ToValidUTF8(name, ""), maxOriginNameRunes)
+}
+
 func (o docOrigin) applyTo(doc *model.CrawledDocument) {
-	doc.SourceName, doc.SourceKind = o.sourceName, o.kind
-	doc.AccountID, doc.AccountName = o.accountID, o.accountName
+	doc.SourceName, doc.SourceKind = boundedOriginName(o.sourceName), o.kind
+	doc.AccountID, doc.AccountName = o.accountID, boundedOriginName(o.accountName)
 }
 
 // originResolver resolves each distinct source once per request for one
