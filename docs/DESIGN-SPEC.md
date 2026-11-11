@@ -337,7 +337,7 @@ change. Empty pages with nextCursor can still have later matches. Hierarchy and
 classification never grant access to private content (ADR-015, hierarchy).
 
 Activated ancestor access displays a read-only label and its granting Account
-(ADR-058); published meetings are the exception and show edit and management
+(ADR-015, descendant reads); published meetings are the exception and show edit and management
 controls (not delete or audio upload) to every member (ADR-016 2026-11-06
 amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
@@ -452,7 +452,7 @@ shows a creation receipt and stays on the Account list. Separate explicit
 meeting/document shares remain possible without Account membership. Reuse one
 creation UUID after a failed request, rotate it for edited input and reject stale
 results after an authentication change. Initial Owner assignment remains exclusive
-to creation; generic member operations never assign Owner (ADR-055).
+to creation; generic member operations never assign Owner (ADR-015, initial Owner).
 
 An initial pending Owner invitation exposes an explicit resend action on detail
 and the creator's receipt. Members or the recorded creator within thirty days can

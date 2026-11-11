@@ -87,7 +87,7 @@ deployed activation or completed public acceptance.
 
 ## Identity onboarding
 
-Account hierarchy read access follows ADR-058: current canonical ancestor
+Account hierarchy read access follows ADR-015 (descendant reads): current canonical ancestor
 membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
