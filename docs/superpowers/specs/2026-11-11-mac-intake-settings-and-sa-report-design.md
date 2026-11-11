@@ -5,8 +5,8 @@
   `docs/superpowers/plans/2026-11-11-mac-intake-ui-copy.json`.
 - Follows: the [SA performance dashboard design](2026-11-10-sa-performance-dashboard-design.md)
   and `ttobak-mcp intake setup|run|schedule` (PR #824).
-- Decisions touched: ADR-003 (local MCP intake), ADR-068 (SA performance data
-  residency), ADR-061 (Mac settings surface precedent). Part B needs a new ADR.
+- Decisions touched: ADR-003 (local MCP intake), ADR-023 (SA performance data
+  residency), ADR-017 (Mac settings surface precedent). Part B needs a new ADR.
 
 ## Intent
 
@@ -39,7 +39,7 @@ Two parts, delivered in order:
   user has Bedrock or an Enterprise login; TTOBAK never holds a model key.
 - Earlier, still binding: mail bodies never stored, titles OK; calendar bodies
   never stored; cloud processing OK; the self-evaluation is visible only to
-  the owner (ADR-068).
+  the owner (ADR-023).
 
 ## Part A: local intake in the Mac app
 
@@ -173,25 +173,25 @@ text.
 - If the CLI is missing or not logged in, show the exact terminal step
   (`claude` then `/login`) instead of trying to log in from the app.
 
-### Residency (new ADR, amends ADR-068)
+### Residency (new ADR, amends ADR-023)
 
 - The stored report is model-composed text derived from SFDC, SpecReq, TFC
   Hub, calendar titles and counts, and Slack. It is owner-private
   (`USER#{id}` / `PERFREPORT#{periodKey}`), default table encryption as in
-  ADR-068, TTL year+2 like goals.
+  ADR-023, TTL year+2 like goals.
 - The prompt and schema forbid: mail bodies, calendar bodies, DM or group DM
   content and names, customer message originals (topic summaries only),
   candidates, 1:1 partners, HR data. The server cannot verify absence; the
   ADR records that this rests on the skill's rules and the prompt, and that
   the owner reviews the report.
-- Owner decision (2026-11-11) on report fields, which widens ADR-068 for
+- Owner decision (2026-11-11) on report fields, which widens ADR-023 for
   this report only:
   - **allowed:** exact opportunity amounts; one- or two-line topic summaries
     of customer questions from shared channels, never the original text;
     names of SpecReq requesters and of colleagues (SA, AM) on the work;
   - **not stored:** Slack thread permalinks. The report has no URL fields,
     and the server rejects `slack.com` links in any text field.
-  - The dashboard rows keep the ADR-068 limits unchanged.
+  - The dashboard rows keep the ADR-023 limits unchanged.
 - Raw MCP results stay on the Mac in the CLI's working directory, which the
   runner deletes after the run.
 - Never visible to other users, including Account members. Not indexed into

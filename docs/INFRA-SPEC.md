@@ -18,7 +18,7 @@ Account KB downloads (`GET /api/accounts/{accountId}/kb/{refId}/download`) are
 five-minute S3 presigned GETs on the existing private KB bucket, signed by the API
 role after a per-request membership and object-metadata check. They add no
 CloudFront behavior, origin or bucket policy; `/media/*` signing is not used.
-The account KB reference rows live in `ttobak-main` (ADR-064).
+The account KB reference rows live in `ttobak-main` (ADR-021, relationship links).
 
 | Stack | Role | Dependencies explicitly declared in the app |
 |---|---|---|
@@ -397,7 +397,7 @@ minutes to a seven-day encrypted DLQ, with Lambda async retries disabled.
 Deploy/verify the worker before the wired API upload/retry producers and summary
 consumer. API status/text routes expose validated results; QA/UI activation remains
 separate. Creating this construct does not backfill attachments. See
-[worker contract](../backend/python/document-extract/LAMBDA.md) and ADR-039.
+[worker contract](../backend/python/document-extract/LAMBDA.md) and ADR-001.
 
 ## Whisper and research
 
@@ -753,7 +753,7 @@ own 30-second bound.
 
 Rule `ttobak-account-merge-requested` routes default-bus `ttobak.analysis` events
 with detail-type `AccountMergeRequested` (`{sourceAccountId}`) to the summarize
-Lambda (ADR-072). The API publishes one after starting or resuming a job; the
+Lambda (ADR-022). The API publishes one after starting or resuming a job; the
 worker claims a five-minute job lease under a per-invocation ID, runs the job's
 steps in `model.MergeSteps` order, saves step, cursor and counts after every
 bounded mover call, and three minutes before its deadline releases the lease and
@@ -814,7 +814,7 @@ behavior; configuration wiring does not establish deployed activation.
 `SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED` only to API. Its rule requires privacy
 writer `1`, and its value also binds the immutable API version. Deploy compatible
 Go/Python approval readers with this flag disabled before enabling owner
-disclosure of current completed notes to one Account (ADR-059). Preserve existing
+disclosure of current completed notes to one Account (ADR-029, owner approval). Preserve existing
 writer/reader/cutoff parameters; the new flag does not change email/pending gates.
 
 Grant fences, pending/publication guards, owner sharing-safe regeneration and its
@@ -917,7 +917,7 @@ Resources:
     `PK` / `SK`, discovers `CHILDREF#` candidates. IAM cannot constrain the sort-key
     prefix; the application's bounded query selects it and canonical reads grant
     access. The limited ability to enumerate opaque membership keys is recorded in
-    ADR-060. Inherited grants receive a `TransactGetItems` confirmation using the
+    ADR-012. Inherited grants receive a `TransactGetItems` confirmation using the
     existing projected `GetItem` permissions.
 - Dedicated code bucket: versioned, SSE-S3, TLS-only, all public access
   blocked, retained on delete, no lifecycle rule.
@@ -1006,7 +1006,7 @@ from the companion stack is a one-time cutover ([Billing release](runbooks/billi
 
 ### Billing behaviors on the TTOBAK distribution
 
-FrontendStack gains the Billing behaviors (ADR-056) only through context
+FrontendStack gains the Billing behaviors (ADR-012) only through context
 strings, never stack exports, so the HTTP-origin release coordinator deploys it
 the same way with or without Billing:
 

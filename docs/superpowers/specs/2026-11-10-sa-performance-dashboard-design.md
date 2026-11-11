@@ -131,7 +131,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
     Slack, SpecReq and TFC fields.
   - A new ADR must record the owner-private residency table above, distinct
     from the account-shared limit.
-  - That ADR is ADR-068. It cites ADR-003 (local MCP intake) and ADR-067
+  - That ADR is ADR-023. It cites ADR-003 (local MCP intake) and ADR-021
     (account people edges) by title.
 - **Storage.**
   - Owner-private DynamoDB rows live under the user's own partition, for
@@ -140,7 +140,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
   - No account-membership read path may reach these rows.
   - Encryption (owner decision): use the table's default encryption at rest
     plus owner-only authorization, with no field-level envelope sealing as in
-    ADR-063. `ttobak-main` has no customer-managed KMS key. The new ADR records
+    ADR-021. `ttobak-main` has no customer-managed KMS key. The new ADR records
     this as an accepted exception to the "sensitive data requires KMS" rule,
     scoped to these owner-private rows.
   - Retention: keep the current year plus the previous one. Expire older rows
@@ -156,7 +156,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
   - Coverage exists only for accounts with an upload. Freshness equals the last
     upload. The page must show "no billing data" or the data date, not
     zero growth.
-  - Reads must respect Billing access (ADR-060). The owner sees spend only for
+  - Reads must respect Billing access (ADR-012). The owner sees spend only for
     accounts whose Billing they can read.
   - Coverage, per the owner: only some assigned accounts have uploads.
     Sections A and B ship first. Section C ships second, shows only accounts
@@ -165,9 +165,9 @@ Cloud processing (Bedrock) of the stored fields is allowed.
     contact") always use the last complete month in the data, labeled with that
     month, for every period including "this week" (designer's call).
   - Spend change is computed by a new small summary endpoint on the Billing BFF.
-    It applies the existing ADR-060 check and returns per-account monthly
+    It applies the existing ADR-012 check and returns per-account monthly
     totals only. The Go API must not read BillingStack S3 directly or
-    reimplement ADR-060 (designer's call).
+    reimplement ADR-012 (designer's call).
 - **Assigned accounts and SFDC mapping (owner decision).**
   - The assigned-account list is the owner's AWSentral registry assignments
     (`get_registry_assignments`), collected on the Mac.

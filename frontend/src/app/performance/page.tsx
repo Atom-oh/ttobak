@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { GoalsEditor } from '@/components/performance/GoalsEditor';
 import { MappingQueue } from '@/components/performance/MappingQueue';
 import { MissedList } from '@/components/performance/MissedList';
+import { IntakeRunControl } from '@/components/performance/IntakeRunControl';
 import { accountApi, performanceApi } from '@/lib/api';
 import {
   accountListState, describeFreshness, PERFORMANCE_PERIODS, periodLabel, type AccountListResult,
@@ -25,7 +26,7 @@ function Spinner() {
 }
 
 // Owner-only SA activity page: every request reads the caller's own rows and
-// the page has no share control (ADR-068).
+// the page has no share control (ADR-023).
 export default function PerformancePage() {
   const { isLoading, isAuthenticated, user, membershipRevision } = useAuth();
   const router = useRouter();
@@ -90,6 +91,8 @@ export default function PerformancePage() {
   const accounts = accountList.accounts;
   const accountNames = useMemo(() => accountList.status === 'error' ? null : new Map(accounts.map(account => [account.accountId, account.name])), [accountList.status, accounts]);
   const retryAccounts = () => setAccountsAttempt(attempt => attempt + 1);
+  // A finished local intake run reloads every list on the page.
+  const reloadAfterIntake = useCallback(() => setReloadKey(key => key + 1), []);
 
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center"><Spinner /></div>;
@@ -162,9 +165,9 @@ export default function PerformancePage() {
                 : <div className="flex justify-center py-8"><Spinner /></div>}
           </section>
 
-          {missed && missed.sourceFreshness.length > 0 && (
-            <section aria-label="데이터 수집 상태" className="space-y-1 text-xs text-slate-500 dark:text-text-muted">
-              {missed.sourceFreshness.map(entry => {
+          <section aria-label="데이터 수집 상태" className="space-y-1 text-xs text-slate-500 dark:text-text-muted">
+            <IntakeRunControl onCollected={reloadAfterIntake} />
+            {missed && missed.sourceFreshness.map(entry => {
                 const line = describeFreshness(entry);
                 return (
                   <p key={line.source}>
@@ -173,8 +176,7 @@ export default function PerformancePage() {
                   </p>
                 );
               })}
-            </section>
-          )}
+          </section>
         </div>
       </div>
     </AppLayout>

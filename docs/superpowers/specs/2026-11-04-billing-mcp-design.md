@@ -11,7 +11,7 @@ then read a dataset or report, following opaque continuation until complete.
 
 ## Architecture and host decisions
 
-Follow ADR-056: call the same application CloudFront origin with the caller's own
+Follow ADR-012: call the same application CloudFront origin with the caller's own
 Bearer token. Add a bounded GET `/api/billing/accounts/{accountId}/reading` before
 the BFF's expensive all-account discovery middleware. Do not assert identity or
 add an application origin. Existing Go/QA signed private transport is unchanged.
@@ -36,7 +36,7 @@ Published content requires a done upload bound to account, source and version.
 Current reads bind to the fresh current pointer; explicit versions can read older
 published uploads. Missing data and unauthorized accounts return 404.
 
-Reuse Billing canonical direct/validated ancestor access (ADR-060), including
+Reuse Billing canonical direct/validated ancestor access (ADR-012), including
 publication-time rechecks. Dataset rows retain only the requested entity; raw
 catalog entries filter entities to that account. CUR and COT selectors cannot
 read the other's datasets. Reports remain account-key scoped plain Markdown.

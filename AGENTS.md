@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 57b38bebdce6 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d4b6d4fc1f1d · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -160,7 +160,7 @@ limit instead of claiming a Mac build passed.
 - **Accounts:** members add/change non-owner roles (ADR-015). Creation permits
   another Owner and optional creator AM (ADR-015). Removal/revocation/reparenting
   are owner-only; Owner changes only via owner transfer (ADR-015). Ancestor reads
-  permit Billing (ADR-015/060); filters classify (ADR-015); members manage
+  permit Billing (ADR-015/012); filters classify (ADR-015); members manage
   published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
@@ -219,7 +219,7 @@ limit instead of claiming a Mac build passed.
   concurrent human edits. Failures retain prior content. Meeting and summary state
   deletion share the first transaction. Consumers/rule/permission precede API update.
 - **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
-  state exist (ADR-039). Consumers accept only authorized immutable result identity
+  state exist (ADR-001). Consumers accept only authorized immutable result identity
   with the current source ETag; extraction JSON does not claim a source version ID.
   Upload completion and text retry/status/page routes use `AttachmentTextService`;
   `SetAttachmentTextService` injects verified DOCUMENT collection into summarization.
@@ -249,7 +249,7 @@ limit instead of claiming a Mac build passed.
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX
   networking, not prompt filtering/import denylisting. A per-meeting `SIMRUN`
   singleton and matching `simRunId` conditions prevent stale worker writes;
-  preserve both Go and Python guards (ADR-033).
+  preserve both Go and Python guards (ADR-010).
 - **Mac:** finished WAV bytes stream disk-to-S3 in Rust, never through WebView IPC;
   live raw PCM chunks intentionally cross IPC. Pin the exact
   `EXPECTED_BUCKET_HOST`, not an AWS domain suffix. Upload timeouts measure stalled
@@ -292,7 +292,7 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
+| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-001/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
@@ -303,7 +303,7 @@ exposure:
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
 | Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
-| Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-056; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
+| Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-012; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
 
 JWT verification and document file-key ownership checks exist:
 inspect `ParseVerifiedJWT` and `validateFileKeyOwnership` before reporting a bypass.

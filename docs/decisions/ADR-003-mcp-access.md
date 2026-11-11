@@ -344,7 +344,7 @@ source revisions. The API's dedicated HTTP read boundary now receives the same
 atomic grant resolver. Its private mutations are the personal-note executor below
 and, since 2026-11-08, account contact creation: a separate executor with direct
 membership, current approval and an arguments-bound receipt in one transaction,
-storing contacts sealed under ADR-063 (contract in `docs/API-SPEC.md`). Account
+storing contacts sealed under ADR-021 (contract in `docs/API-SPEC.md`). Account
 event creation uses an equivalent executor that also writes the event's
 reference row in the same transaction.
 
@@ -447,10 +447,10 @@ inventory. These source tests do not prove deployed provider or consumer behavio
 
 ### Status notes
 
-- Status: Accepted; Phase 1 (calendar runner, CLI only) implemented. Calendar
-  acceptance on the user's Mac is pending (see the runbook). Amended
-  2026-11-10 for the meeting SpecReq task step (code only; Mac acceptance
-  pending).
+- Status: Accepted; the CLI runner, the Mac Settings UI and the app-managed
+  schedule are implemented. Calendar acceptance on the user's Mac is pending
+  (see the runbook). Amended 2026-11-10 for the meeting SpecReq task step
+  (code only; Mac acceptance pending).
 - Decision date: 2026-11-09.
 - Runbook: [local MCP intake](../runbooks/local-mcp-intake.md).
 - Related: The stdio server section (stdio-only calendar tools), ADR-024 (Mac control path).
@@ -476,7 +476,7 @@ configuration.
   re-reads that one host entry and spawns it with argv, never a shell. Command,
   arguments and environment stay in memory. They are never written to disk,
   printed, logged or sent to TTOBAK. The one exception is the SA performance report run's temporary
-  0600 configuration file, deleted after the run (ADR-068).
+  0600 configuration file, deleted after the run (ADR-023).
 - **Calendar.** `aws-outlook-mcp` `calendar_view` is the only calendar source.
   It follows the [calendar sync runbook](../runbooks/local-outlook-calendar-sync.md):
   - occurrence `meetingId` as `externalId`;
@@ -513,9 +513,11 @@ configuration.
   strip on the meetings page shows the task. Delivery is unverified until the
   Mac acceptance in the runbook.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
-- **Scheduling** uses a user-installed launchd LaunchAgent that runs
-  `intake run --noninteractive` (all selected sync connectors). Background runs never open a browser
-  login.
+- **Scheduling** is owned by the Mac app, which runs `intake run
+  --noninteractive` (all selected sync connectors) itself, with launch and wake
+  catch-up and at most two attempts per slot. A user-installed launchd
+  LaunchAgent running the same command stays optional; one CLI run lock covers
+  both. Background runs never open a browser login.
 - **Setup (amendment, 2026-11-10).** `intake setup` may install that
   LaunchAgent itself, now running `intake run --noninteractive`, only with an
   explicit `--schedule` or an interactive yes; `intake schedule <value|off>`
@@ -552,5 +554,13 @@ configuration.
   `calendar_view` lacks. A private meeting gets no task, and an unknown flag or
   attendee list means no task.
 - Codex TOML is read by a bounded in-repo parser (`toml.ts`); no new dependency.
-- The Mac Settings UI and app-managed schedule are Phase 2.
+- The Mac app spawns node with argv only and a cleared environment (`HOME`,
+  `LANG`, `PATH` from a one-time login-shell probe). Cancel, timeout and app
+  exit SIGTERM the run's process group and always SIGKILL it after a grace
+  period, even if the CLI leader exited; app exit also blocks later spawns.
+- Adapter update channel: the Settings button fetches the exact https URL
+  `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (the setup guide's URL; no
+  redirects, at most 8 MiB, must contain `intake setup`) and swaps it in
+  atomically, keeping one `server.mjs.bak`. Update is refused during a run;
+  check is allowed.
 

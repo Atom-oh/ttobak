@@ -12,7 +12,7 @@ import (
 // SA performance reports are owner-private rows (PK USER#{id}, SK
 // PERFREPORT#{periodKey}) written by the owner's Mac from model-composed JSON.
 // Every string is plain text; validation here is the server-side safety net
-// for content the server cannot otherwise verify (ADR-068).
+// for content the server cannot otherwise verify (ADR-023).
 
 // ErrInvalidPerformanceReport marks a report or period key that fails
 // validation. Services map it to ErrInvalidInput.

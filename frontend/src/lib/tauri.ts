@@ -1,5 +1,7 @@
 'use client';
 
+import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView } from './intake';
+
 interface TauriEvent<T> {
   payload: T;
 }
@@ -148,7 +150,7 @@ export interface TauriUploadProgress {
 }
 
 /** `inputDeviceUid` from `listNativeInputDevices`; omit to follow the
- * meeting app's microphone, else the system default (ADR-061). Older app
+ * meeting app's microphone, else the system default (ADR-017). Older app
  * builds ignore it and record the system default. */
 export function startNativeRecording(meetingId: string, inputDeviceUid?: string): Promise<TauriStartResponse> {
   return invoke<TauriStartResponse>('start_recording', { meetingId, inputDeviceUid: inputDeviceUid || null });
@@ -546,7 +548,7 @@ export function reportNativeControlState(state: {
   return invoke<void>('control_report_state', { state }).catch(() => undefined);
 }
 
-/** A meeting the Mac app noticed using the microphone (ADR-061). */
+/** A meeting the Mac app noticed using the microphone (ADR-017). */
 export interface NativeMeetingDetection {
   detectionId: string;
   kind: string;
@@ -618,7 +620,7 @@ export function onNativeMeetingAnswered(handler: (d: NativeMeetingDetection) => 
   );
 }
 
-/** The recording follows a meeting app's own mute (ADR-061): while `muted`,
+/** The recording follows a meeting app's own mute (ADR-017): while `muted`,
  * the microphone is mixed silent. */
 export interface NativeMicMuted {
   muted: boolean;
@@ -640,7 +642,7 @@ export function onNativeMicMuted(handler: (m: NativeMicMuted) => void): () => vo
   );
 }
 
-/** The Mac woke from sleep (ADR-061): a recording stopped for sleep may
+/** The Mac woke from sleep (ADR-017): a recording stopped for sleep may
  * have an interrupted upload to resume. */
 export function onNativeSystemWake(handler: () => void): () => void {
   return subscribeTauriEvent<unknown, true>('native-system-wake', () => true, () => handler());
@@ -673,4 +675,69 @@ export function respondMeetingDetection(
     action,
     title,
   });
+}
+
+// ---------------------------------------------------------------- local intake
+// Commands and events of mac-app/src-tauri/src/intake_runner.rs (ADR-003, local intake).
+// Commands reject with a string code such as RUN_IN_PROGRESS.
+
+/** Intake state, or `null` when the installed app predates local intake. */
+export async function getIntakeState(): Promise<IntakeStateView | null> {
+  try {
+    return await invoke<IntakeStateView>('intake_get_state');
+  } catch (err) {
+    if (isCommandNotFound(err)) return null;
+    throw err;
+  }
+}
+
+export function setIntakeSchedule(schedule: IntakeSchedule): Promise<void> {
+  return invoke<void>('intake_set_schedule', { schedule });
+}
+
+export function setIntakeNodePath(path: string): Promise<string> {
+  return invoke<string>('intake_set_node_path', { path });
+}
+
+export function runIntakeNow(): Promise<void> {
+  return invoke<void>('intake_run_now');
+}
+
+export function runIntakeSetup(acceptPrivateCalendar: boolean, skip: IntakeConnector[]): Promise<void> {
+  return invoke<void>('intake_setup', { acceptPrivateCalendar, skip });
+}
+
+export function runIntakeLogin(): Promise<void> {
+  return invoke<void>('intake_login');
+}
+
+export function cancelIntake(): Promise<boolean> {
+  return invoke<boolean>('intake_cancel');
+}
+
+/** Removes the CLI's LaunchAgent (`intake schedule off`); emits no finished event. */
+export function turnOffIntakeLaunchAgent(): Promise<unknown> {
+  return invoke<unknown>('intake_launch_agent_off');
+}
+
+export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {
+  return invoke<IntakeStateView['adapter']>('intake_check_adapter');
+}
+
+export function updateIntakeAdapter(): Promise<IntakeStateView['adapter']> {
+  return invoke<IntakeStateView['adapter']>('intake_update_adapter');
+}
+
+export function onIntakeProgress(handler: (line: string) => void): () => void {
+  return subscribeTauriEvent<{ line?: unknown }, string>(
+    'intake://progress',
+    (raw) => (typeof raw?.line === 'string' ? raw.line : ''),
+    (line) => {
+      if (line) handler(line);
+    },
+  );
+}
+
+export function onIntakeFinished(handler: (finished: IntakeFinished) => void): () => void {
+  return subscribeTauriEvent<IntakeFinished, IntakeFinished>('intake://finished', (raw) => raw, handler);
 }

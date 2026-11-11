@@ -14,7 +14,7 @@
 //!   previous run (crash / force quit), so the SPA can offer to upload or
 //!   delete them; see `leftover.rs` and `RecorderState::adopted_paths`
 //! - `meeting_detection_get/set_enabled/respond` — meeting detection prompts
-//!   (ADR-061); see `meeting_detect.rs`
+//!   (ADR-017); see `meeting_detect.rs`
 //! - `intake_*` — set up, schedule and run the local intake CLI (ADR-003);
 //!   see `intake_runner.rs`
 //!
@@ -375,7 +375,7 @@ pub(crate) fn validate_recording_path(
 async fn start_recording(
     meeting_id: String,
     // Device UID from `list_input_devices`; absent means follow the meeting
-    // app's input, else the system default (ADR-061).
+    // app's input, else the system default (ADR-017).
     input_device_uid: Option<String>,
     state: State<'_, RecorderState>,
     app: AppHandle,
@@ -473,7 +473,7 @@ async fn list_input_devices() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::Value::Array(Vec::new()))
 }
 
-/// Switches the running recording's microphone (ADR-061); `None` follows the
+/// Switches the running recording's microphone (ADR-017); `None` follows the
 /// meeting app. The recording continues; returns the new input.
 #[tauri::command]
 async fn switch_recording_input(
@@ -838,7 +838,7 @@ pub fn run() {
             caption_translate::manage(app);
             // MCP control channel (ADR-024); failure only disables it.
             control::start(app.handle().clone());
-            // Meeting detection prompts (ADR-061); failure only disables them.
+            // Meeting detection prompts (ADR-017); failure only disables them.
             meeting_detect::start(app.handle().clone());
             // SpecReq task notices from the local intake runner (ADR-003 local intake).
             intake_notify::start(app.handle().clone());
@@ -938,6 +938,9 @@ pub fn run() {
                         log::error!("stop_and_finalize on exit failed: {e}");
                     }
                 }
+                // A job that passed try_begin before the first kill is refused at
+                // spawn; this second pass catches one that spawned meanwhile.
+                intake_runner::kill_running(app_handle);
                 #[cfg(not(target_os = "macos"))]
                 let _ = handle;
             }

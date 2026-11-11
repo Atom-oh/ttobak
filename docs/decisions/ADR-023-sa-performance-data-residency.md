@@ -1,13 +1,13 @@
-# ADR-068: SA performance data residency
+# ADR-023: SA performance data residency
 
-- Status: Accepted; implementation in progress (storage in
+- Status: Accepted; partly implemented (storage in
   `backend/internal/repository/performance.go`; report validation in
   `backend/internal/model/performance_report.go`).
 - Decision date: 2026-11-10.
 - Design: [SA performance dashboard](../superpowers/specs/2026-11-10-sa-performance-dashboard-design.md),
   [SA performance report](../superpowers/specs/2026-11-11-mac-intake-settings-and-sa-report-design.md).
-- Related: ADR-003 (Local MCP intake), ADR-067 (Account people edges and
-  deterministic entity resolution), ADR-063 (account contact encryption).
+- Related: ADR-003 (Local MCP intake), ADR-021 (Account people edges and
+  deterministic entity resolution), ADR-021 (account contact encryption).
 
 ## Context
 
@@ -20,9 +20,13 @@ from the account-shared limit, which stays opportunity ID, name and stage.
 ## Decision
 
 - **Owner-private residency table.** These fields may be stored in `PERF*` rows
-  under the owner's own `USER#` partition. Bodies, notes, attachments, join
-  links and exact amounts stay on the Mac; only the performance report below
-  may hold exact opportunity amounts.
+  under the owner's own `USER#` partition. Only the `sfdc-assignments` and
+  `sfdc-tasks` sources are implemented, and the performance report is in progress; the other
+  rows are decided but have no source, model type or key prefix yet. Calendar
+  data is not copied into `PERF*` rows: the dashboard reads the calendar
+  intake's events at request time. Bodies, notes, attachments, join links and
+  exact amounts stay on the Mac; only the performance report below may hold
+  exact opportunity amounts.
 
   | Source | Stored (owner-private) | Stays on the Mac |
   |---|---|---|
@@ -64,11 +68,14 @@ from the account-shared limit, which stays opportunity ID, name and stage.
   runner deletes after the run.
 - **Encryption exception.** `PERF*` rows use the table's default encryption at
   rest plus owner-only authorization, with no field-level envelope sealing as in
-  ADR-063. This is an accepted exception to the rule that sensitive DynamoDB
+  ADR-021. This is an accepted exception to the rule that sensitive DynamoDB
   data requires KMS encryption, scoped to `PERF*` rows only.
 - **Private calendar items.** They are included. The calendar source exposes no
   sensitivity flag, so the performance connector runs as if
-  `--accept-unknown-sensitivity` were set. This acceptance is explicit.
+  `--accept-unknown-sensitivity` were set. This acceptance is explicit. No
+  performance-specific code path implements it yet: the calendar intake still
+  excludes private and confidential items and requires explicit acceptance
+  when sensitivity is unknown.
 - **Retention.** Retention differs by row type; only dated rows carry a TTL.
   The table TTL attribute is `pendingShareExpiresAt`.
 

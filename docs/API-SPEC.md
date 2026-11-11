@@ -31,7 +31,7 @@ additionally requires safe JavaScript revisions, with input maximum
 `Number.MAX_SAFE_INTEGER - 1`. Window and event intervals use RFC3339 instants,
 have positive duration and are at most 93 elapsed days. An upsert whose
 `accountId` names a merging or merged account rejects the batch with 409
-`ACCOUNT_MERGING` (ADR-072); reads still return events on a merge tombstone.
+`ACCOUNT_MERGING` (ADR-022); reads still return events on a merge tombstone.
 
 Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
@@ -118,7 +118,7 @@ acceptance or the Calendar 5 persisted integration.
 
 ## SA performance
 
-Owner-only SA performance data ([ADR-068](decisions/ADR-068-sa-performance-data-residency.md)).
+Owner-only SA performance data ([ADR-023](decisions/ADR-023-sa-performance-data-residency.md)).
 Routes are in `backend/internal/handler/performance.go`, validation in
 `backend/internal/service/performance.go`, and wire types in
 `backend/internal/model/performance.go`. Every route reads or writes only the
@@ -218,7 +218,7 @@ account names, aliases and domains come only from those accounts.
   intake window, so calendar-based gaps cover only events from that time on.
 
 Residency: rows use default table encryption without envelope sealing (an
-ADR-068 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
+ADR-023 accepted exception). Tasks and goals expire at 00:00 UTC on January 1
 two years after their own year through `pendingShareExpiresAt`; batch receipts
 expire after seven days. Errors use `{error:{code,message}}` with `400`, `401`,
 `403`, `404`, `409`, `413` and `500`, as for the private calendar. Responses use
@@ -353,7 +353,7 @@ Unicode code points and opaque `cursor` (at most 2,048 characters).
 Account filters classify accessible meetings; they never grant access.
 Reads neither materialize invitations nor create or update user profiles.
 Account-team readers see published meetings' current derived previews, as
-owners do (ADR-049 2026-11-06 amendment); unpublished meetings are not listed.
+owners do (ADR-029 source provenance, 2026-11-06 amendment); unpublished meetings are not listed.
 
 Each response is at most 10,000 encoded JSON bytes. Reassemble `dataJson`
 fragments for the same revision before parsing the complete group. Discovery
@@ -521,8 +521,8 @@ The Billing routes under `/api/billing/*` are served by the separate Billing BFF
 API, so they are not part of the Go route inventory above. Identity comes only
 from `Authorization: Bearer <JWT>`, verified by the BFF (issuer, signature,
 expiry and client allowlist; see
-[ADR-056](decisions/ADR-056-billing-service-origin-and-identity.md)). Access
-uses canonical direct membership or validated ancestor membership (ADR-060);
+[ADR-012](decisions/ADR-012-billing-origin-identity-and-team-access.md)). Access
+uses canonical direct membership or validated ancestor membership (ADR-012);
 pending rows grant nothing. Billing uploads and POSTs work only on the custom domain
 (`PUBLIC_URL`), not on the raw CloudFront domain.
 
@@ -656,7 +656,7 @@ and an unchanged value is not written. It cannot be combined with an
 `expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
 (`""` for legacy rows). The field is stored and accepted but no longer
 affects generation: Korean final notes always use the Korean directive
-(`noteLanguageDirective`, ADR-070). Both summary captures still pin the field in
+(`noteLanguageDirective`, ADR-029, shareable by default). Both summary captures still pin the field in
 their source conditions, so a change during a run fails that run with
 `SOURCE_CHANGED` and keeps the prior summary.
 
@@ -950,7 +950,7 @@ cursor parameters and recheck the requester's access. Invalid input returns
 errors a generic 500. Responses are not cached and contact content is not logged.
 
 Contact fields are KMS envelope-encrypted per row before storage and bound to
-the account and contact (ADR-063); without a configured key, contact routes
+the account and contact (ADR-021, contact encryption); without a configured key, contact routes
 return 503 `CONTACTS_UNAVAILABLE`; delegated connector creates seal the row the
 same way and return that 503 before any write. Contact rows have no TTL and remain until a
 direct member deletes them. Point-in-time recovery can retain deleted, still
@@ -1032,7 +1032,7 @@ automatic linker never re-creates that pair. None of the three routes is
 connector-delegable; the list carries meeting-derived evidence. People edges
 (below) live in the `LINK#meeting#` range and never appear on these routes.
 
-The `/api/accounts/{accountId}/people` routes serve ADR-067 people edges for
+The `/api/accounts/{accountId}/people` routes serve ADR-021 people edges for
 **direct** members, checked on every request (not connector-delegable;
 `Cache-Control: no-store`; 400 uses `BAD_REQUEST`, an unreadable contact
 directory 503 `CONTACTS_UNAVAILABLE`). Meeting IDs are `{ownerUserId}:{meetingId}`,
@@ -1067,7 +1067,7 @@ as invalid input. A stage change sets `stageChangedAt` and appends an immutable
 `STAGEHIST#` row with the update; legacy values outside the list read as unmapped
 and projects without a change time show an unknown stage age. Project list rows
 carry `stageChangedAt` (when recorded) and `stageMapped`, like the detail
-response. See [ADR-064](decisions/ADR-064-account-relationship-links.md).
+response. See [ADR-021, relationship links](decisions/ADR-021-account-contacts-links-and-people.md).
 
 `GET /api/accounts/{accountId}/signals` returns the account page's AWS signals
 for **direct** members (membership is read on every call; no query parameters;
@@ -1218,7 +1218,7 @@ Listing accepts `from`, `to` (RFC 3339; events starting in `[from, to)`),
 order and resolved range. Without `from`, ascending lists start now (upcoming)
 and descending lists cover all past times. Responses are `{events,
 nextCursor}` and are not cached. Event fields except `startAt` are sealed like
-contacts (ADR-063); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
+contacts (ADR-021, contact encryption); without a key the routes return 503 `EVENTS_UNAVAILABLE`.
 Delegated MCP clients create events through the private bridge like contacts:
 `{event, idempotencyKey}` with strict decoding (no unknown, server-owned or
 null fields), direct membership and current read+write approval pinned in the
@@ -1315,7 +1315,7 @@ non-member target; 409 concurrent change; 503 Cognito unwired or lookup failure.
 It is the only path that grants Owner; its connector inventory disables delegation.
 
 `GET /api/accounts/{accountId}/merge-preview?into={id}` is a read-only inventory of
-merging the path Account into `into` (ADR-072). The requester must own the source
+merging the path Account into `into` (ADR-022). The requester must own the source
 (MEMBER role and META owner) and be a direct member of the target. Response:
 `fromAccountId`, `intoAccountId`, `counts` (`members`, `meetings`, `projects`,
 `research`, `contacts`, `events`, `children`; `-1` when a bounded read cap is
@@ -1329,7 +1329,7 @@ target direct member; 404 missing Account; 409 `MERGE_INELIGIBLE` with the reaso
 or large). The connector inventory disables delegation.
 
 `POST /api/accounts/{accountId}/merge` starts merging the path Account into
-`intoAccountId` (ADR-072). Body `{"intoAccountId","acceptUnmoved"}` is capped at
+`intoAccountId` (ADR-022). Body `{"intoAccountId","acceptUnmoved"}` is capped at
 1,024 bytes with unknown fields rejected, and the email must be verified. It
 re-checks the preview's eligibility rules, requires `acceptUnmoved: true` when any
 unmoved category is present (billing always is), and rejects a merge whose source
@@ -1357,7 +1357,7 @@ source or of the job's target: `fromAccountId`, `intoAccountId`, `state`
 `finishedAt` and `abortedAt`. Lease and cursor state are not exposed. 404 when a source member
 asks and no job exists; 403 otherwise. Both routes disable connector delegation.
 
-Account writes are fenced while an Account merges (ADR-072). Writers that check the
+Account writes are fenced while an Account merges (ADR-022). Writers that check the
 Account META row also require `mergingInto` and `mergedInto` to be absent in the same
 transaction: member add, removal and role change, owner transfer, parent changes
 (child and new parent), contact and event writes, link create and delete, project and
@@ -1437,7 +1437,7 @@ are preserved; absent legacy Insight revisions are minted to reject stale copies
 Generic requests cannot assign approval. Protected Account readers accept only a
 current owner/audience/generation/hash-bound approval. Content/live writes, summary
 publication and audience changes invalidate it even during writer rollback.
-`canCreateGrant` retains direct-email/pending safe-source semantics; see ADR-059.
+`canCreateGrant` retains direct-email/pending safe-source semantics; see ADR-029 (owner approval).
 
 For a protected account membership, unapproved unknown/private meeting derivation withholds
 summary, tasks, insights, tags, sentiment and live draft context. Parent-owned
@@ -1798,7 +1798,7 @@ runs are persisted to error by GetSimRun, not merely displayed as error.
 Only validated requirements/options enter codegen; option descriptions still
 influence the prompt. The interpreter's empty IAM role and SANDBOX network are the
 execution boundary. Worker updates require matching simRunId. Outputs stay under
-images/ and files/; details are in ADR-033 and service/sim.go.
+images/ and files/; details are in ADR-010 and service/sim.go.
 
 ### Admin and settings
 
@@ -2448,7 +2448,7 @@ saved summary text.
 The explicit owner `sharingSafe` mode uses the selected saved transcript, saved
 notes, verified current DOCUMENT extraction and the owner's own image analyses.
 It excludes prior generated and preview evidence; no mode reads linked
-predecessors (ADR-070). It is the owner-only reset; ordinary human edits keep
+predecessors (ADR-029, shareable by default). It is the owner-only reset; ordinary human edits keep
 `safe` provenance and need no reset. Mode is persisted and pinned through delivery.
 Success atomically publishes safe provenance, resets tasks/insights/tags/sentiment/
 live draft, and deletes action-analysis and simulator state. Source/edit-grant CAS
@@ -2465,7 +2465,7 @@ without a meeting check during the frontend rollout; remove that allowance once 
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
 verified document extraction, and writes Korean notes; the POST body never selects a language and the stored `noteLanguage`
-does not change it (ADR-070). It does not rerun STT or refinement and does not
+does not change it (ADR-029, shareable by default). It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;

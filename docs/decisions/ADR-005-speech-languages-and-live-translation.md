@@ -20,7 +20,7 @@
 - Final and regenerated notes are written in Korean. `Meeting.noteLanguage`
   accepts only `""`, `ko` and `en` and is pinned in summary source conditions,
   but it does not select the prompt language; English notes come only from the
-  separate English-note generation (ADR-070).
+  separate English-note generation (ADR-029).
 
 ### Live interpretation
 

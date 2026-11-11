@@ -39,7 +39,7 @@ Legacy approval installs an Insight revision if one is absent, without changing
 the summary generation or action state. Old unidentified Account Insight copies
 remain inaccessible until current canonical copies are written successfully.
 
-Direct-email and pending grants retain ADR-049's existing policy. Account share
+Direct-email and pending grants retain ADR-029's existing policy. Account share
 approval does not authorize another audience. No member role, invitation,
 hierarchy write permission, authentication, public route, model or indexing
 activation changes.

@@ -39,3 +39,13 @@ rewritten.
 | [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) | Accounts, roles, hierarchy and ownership; absorbs the former ADR-034 (member permissions), ADR-036 (hierarchy and meeting filters), ADR-054 (self-service invitations), ADR-055 (designated initial Owner), ADR-058 (descendant read sharing) and ADR-071 (owner transfer) |
 | [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) | Accounts, roles, hierarchy and ownership; absorbs the former ADR-034 (member permissions), ADR-036 (hierarchy and meeting filters) and ADR-054 (self-service invitations) |
 | [ADR-003](ADR-003-mcp-access.md) | MCP access: transports, tools, connector delegation and local intake; absorbs the former ADR-018 (back-data tools), ADR-045 (dual transports), ADR-053 (connector capabilities and private delegation) and ADR-065 (local intake) |
+| [ADR-017](ADR-017-mac-meeting-detection-prompts.md) | Mac meeting detection prompts; the former ADR-061, renumbered |
+| [ADR-022](ADR-022-account-merge.md) | Account merge; the former ADR-072, renumbered |
+| [ADR-019](ADR-019-mac-app-distribution-and-updates.md) | Mac app distribution and in-app updates; the former ADR-073, renumbered |
+| [ADR-001](ADR-001-meeting-document-extraction.md) | Meeting document text extraction; the former ADR-039, renumbered |
+| [ADR-023](ADR-023-sa-performance-data-residency.md) | SA performance data residency; the former ADR-068, renumbered |
+| [ADR-010](ADR-010-meeting-cost-sizing-simulator.md) | Meeting cost and sizing simulations; the former ADR-033, renumbered |
+| [ADR-003](ADR-003-mcp-access.md) | MCP access: transports, tools, connector delegation and local intake; absorbs the former ADR-018 (back-data tools) and ADR-045 (dual transports) |
+| [ADR-012](ADR-012-billing-origin-identity-and-team-access.md) | Billing: service origin, identity and team access; merges the former ADR-056 and ADR-060 under a freed number |
+| [ADR-029](ADR-029-note-provenance-and-sharing-safety.md) | Note provenance and sharing safety; merges the former ADR-049 (summary sharing source provenance), ADR-059 (owner-approved account sharing) and ADR-070 (shareable-by-default note provenance) under a freed number |
+| [ADR-021](ADR-021-account-contacts-links-and-people.md) | Account contacts, relationship links and people edges; merges the former ADR-063 (contact encryption and retention), ADR-064 (relationship links, signals and KB references) and ADR-067 (people edges) under a freed number |

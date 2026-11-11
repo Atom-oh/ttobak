@@ -32,7 +32,7 @@ export interface Meeting {
   audioKeys?: string[];
   /** Ordered predecessor meeting IDs (ADR-014). Navigation only: their summaries are never generation evidence. */
   linkedMeetingIds?: string[];
-  /** ADR-033 cost/sizing simulator, singleton per meeting. */
+  /** ADR-010 cost/sizing simulator, singleton per meeting. */
   simRun?: SimRun;
   /** List items: true for meetings shared with the viewer. */
   isShared?: boolean;
@@ -62,7 +62,7 @@ export interface SimChart {
   url?: string;
 }
 
-/** Mirrors backend/internal/model.SimRunResponse's JSON shape (ADR-033). */
+/** Mirrors backend/internal/model.SimRunResponse's JSON shape (ADR-010). */
 export interface SimRun {
   simRunId: string;
   status: 'extracted' | 'queued' | 'running' | 'done' | 'error';
@@ -569,7 +569,7 @@ export interface ContactInput {
 
 export interface AccountContact extends ContactInput { contactId: string; revision: string }
 
-/** A shared event (schedule) of an account; direct members only (ADR-063). */
+/** A shared event (schedule) of an account; direct members only (ADR-021, contact encryption). */
 export interface EventAttendee { contactId?: string; name: string; email?: string }
 export interface AccountEventInput {
   revision?: string;

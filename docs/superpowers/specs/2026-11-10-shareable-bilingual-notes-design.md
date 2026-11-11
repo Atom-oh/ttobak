@@ -6,7 +6,7 @@ Date: 2026-11-10. Status: Historical design record, approved by the user on 2026
 
 Users think about meeting notes in two states only: not shared (private) or
 shared with an account team. Today a third, hidden state exists: generated notes
-can be "private" or "unknown" under ADR-049, and the owner must run a separate
+can be "private" or "unknown" under ADR-029, and the owner must run a separate
 the sharing-safe regeneration action before an account or email
 share is allowed. That step should disappear for normal use.
 
@@ -51,7 +51,7 @@ transcript.
 - The English note must not become a translation of the Korean note.
 - No path may publish a note marked safe that consumed private/unknown
   generated content or predecessor content. Removing the user-facing step must
-  not weaken ADR-049's guarantees for existing private/unknown rows.
+  not weaken ADR-029's guarantees for existing private/unknown rows.
 - Generating or regenerating the English note must not reset or change Korean
   content, action items (IDs, completion), insights, tags, sentiment, simulator
   state or their provenance.
@@ -62,8 +62,8 @@ transcript.
 - Deployed Lambda env: `ttobak-api` writer=1 reader=1 and
   `SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED=1`, `ttobak-summarize` writer=1,
   `ttobak-qa` reader=1 (`aws lambda get-function-configuration`).
-- Account-team sharing already works without regeneration: ADR-059 lets the
-  owner approve current output for one account, and the 2026-11-06 ADR-049
+- Account-team sharing already works without regeneration: ADR-029 lets the
+  owner approve current output for one account, and the 2026-11-06 ADR-029
   amendment shows published summaries to every member. The remaining gate is
   direct-email and pending grants, which still require `CanCreateGrant`
   (safe provenance). `ResummaryControls.tsx` tells users that individual invitations need
@@ -135,12 +135,12 @@ transcript.
 ### Human edits (decided by the user, 2026-11-10)
 
 An owner/editor edit of a `safe` note stays `safe` (new generation ID, new
-content hash). Rationale: ADR-049 already states safe provenance does not
+content hash). Rationale: ADR-029 already states safe provenance does not
 classify information a user types; saved notes are treated the same way. The
 editor is an authorized participant making a deliberate disclosure, not model
 output inheriting hidden evidence. The same rule applies to live-draft
 (`liveSummary`) edits of a `safe` row. Edits of `private`/`unknown` notes remain
-sticky. A new ADR records this and the predecessor removal; ADR-049 gains a
+sticky. A new ADR records this and the predecessor removal; ADR-029 gains a
 "superseded in part by" pointer rather than rewritten history.
 
 ### Korean default
@@ -171,7 +171,7 @@ sticky. A new ADR records this and the predecessor removal; ADR-049 gains a
   the English note as outdated and offers regeneration. It is never silently
   regenerated.
 - Readers: meeting detail returns the English note, its status and freshness to
-  anyone who can read the Korean note, under the same ADR-049 reader projection
+  anyone who can read the Korean note, under the same ADR-029 reader projection
   (an account member sees it only if its own state is `safe`).
 - Editing: v1 is read-only with regeneration (builder's call, see below).
 - Deletion: deleting the meeting deletes the English note and its run state in
@@ -187,15 +187,15 @@ sticky. A new ADR records this and the predecessor removal; ADR-049 gains a
 
 ## Constraints
 
-- ADR-049/013/028 guarantees, CAS rules and reader projections remain.
+- ADR-029/013/028 guarantees, CAS rules and reader projections remain.
 - Inline item budget: the English field counts against the ~300KB item budget
   like `content`, or gets its own overflow; publication must fail cleanly
   rather than exceed the item limit.
 - Reader-compatible code (API detail, account projection, QA if it reads full
   items) deploys before the writer.
 - Docs to update: `docs/API-SPEC.md`, `docs/DESIGN-SPEC.md`,
-  `docs/architecture.md`, a new ADR amending ADR-049 (predecessor removal,
-  safe-edit rule, image-analysis evidence) with a pointer added to ADR-049.
+  `docs/architecture.md`, a new ADR amending ADR-029 (predecessor removal,
+  safe-edit rule, image-analysis evidence) with a pointer added to ADR-029.
 
 ## Left to the builder
 

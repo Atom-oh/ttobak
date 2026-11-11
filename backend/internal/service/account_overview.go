@@ -499,7 +499,7 @@ func (s *AccountOverviewService) accountEvent(ctx context.Context, accountID, id
 }
 
 // hasUpcomingEvent reports whether any linked account event starts after now.
-// Per-user calendar entries are deliberately excluded (ADR-064).
+// Per-user calendar entries are deliberately excluded (ADR-021, relationship links).
 func (s *AccountOverviewService) hasUpcomingEvent(ctx context.Context, accountID string, eventIDs []string, now time.Time, reads *overviewReads) (bool, error) {
 	for _, id := range eventIDs {
 		event, err := s.accountEvent(ctx, accountID, id, reads)

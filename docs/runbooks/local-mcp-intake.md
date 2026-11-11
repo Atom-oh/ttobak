@@ -2,13 +2,101 @@
 
 This runbook covers the Phase 1 calendar runner and its meeting SpecReq task
 step from [ADR-003, local intake](../decisions/ADR-003-mcp-access.md). It is a command line in
-the TTOBAK stdio adapter, `ttobak-mcp intake`. The Mac Settings UI does not
-exist yet. Acceptance on the user's Mac is pending; nothing here proves it.
+the TTOBAK stdio adapter, `ttobak-mcp intake`. The Mac app drives the same
+commands from Settings and the SA activity page ([Mac app](#mac-app)); the
+command line stays available. Acceptance on the user's Mac is pending; nothing here proves it.
 
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
 contract for one reader, `aws-outlook-mcp` `calendar_view`. The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
-SA performance data of [ADR-068](../decisions/ADR-068-sa-performance-data-residency.md).
+SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md).
+
+## Mac app
+
+The Mac app runs the adapter for you: a Settings section (copy key
+`sectionTitle`) and a collect button on the SA activity page. Both are hidden in
+a browser and in an app build without intake. The app spawns `node` with an
+argument list (no shell) and a cleared environment: `HOME`, `LANG` and a `PATH`
+taken once from the login shell (`$SHELL -l -c`), with the node directory
+prepended. Nothing else from your shell reaches the run.
+
+Install and update the adapter:
+
+- The adapter is `~/.ttobak/server.mjs`. Settings shows whether it is present and
+  whether a newer one is available; the update button downloads
+  `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (https only, no redirects, at
+  most 8 MiB, must contain `intake setup`).
+- One `server.mjs.bak` keeps the replaced file. `server.mjs` changes only by an
+  atomic rename, so it is never missing.
+- An update is refused while a run is going (`RUN_IN_PROGRESS`), and a run
+  cannot start during an update (`ADAPTER_UPDATING`).
+- If node is not found, Settings asks for its path. The path must be an
+  executable regular file named `node`; any other value is rejected with one
+  generic message.
+
+Connect sources (the setup button runs `intake setup`):
+
+- Setup lists the selected server per connector, as in the Quick start below.
+- The private-calendar consent checkbox maps to `--accept-unknown-sensitivity`.
+  Without it, calendar setup fails with `SENSITIVITY_UNKNOWN`.
+- Each connector has a skip toggle (`--skip`). Skipped connectors are disabled
+  in the saved selection and shown as skipped.
+- After setup finishes, Settings lists each connector as selected (with its
+  host) or skipped, with the skip reason (for example `SERVER_NOT_CONFIGURED`,
+  `SKIPPED_BY_USER`, `SCHEMA_CHANGED`, `SENSITIVITY_UNKNOWN`).
+- If TTOBAK login is needed (`TTOBAK_LOGIN_REQUIRED`), Settings offers a login
+  button that runs `intake login`. It opens a browser.
+- Setup and login runs are never recorded against a schedule slot.
+
+Schedule: off, hourly, once a day or twice a day, with local times (twice a day
+needs two different times). The app owns the schedule:
+
+- A scheduler runs a due slot while the app is open, and catches up at app
+  launch, on system wake and after a wall-clock jump of more than two minutes.
+  The wake and clock-jump catch-ups wait about 45 seconds so the network can
+  come back first.
+- Only the latest slot at or before now is considered. A slot is satisfied by
+  success or by a `PARTIAL_FAILURE` in which at least one connector succeeded;
+  a `PARTIAL_FAILURE` where no connector succeeded does not satisfy it. Any
+  other code (for example `AUTH_EXPIRED_MIDWAY`, `TIMEOUT`, `CANCELLED`) leaves
+  it unsatisfied, and it is retried once at the next launch or wake: at most two
+  attempts per slot (the scheduled one plus one catch-up retry). A failed
+  collect-button run also counts as one of those two attempts. The next slot
+  then runs normally.
+- `RUN_IN_PROGRESS` and `ADAPTER_UPDATING` are not recorded. The app re-checks
+  when the busy run or update ends.
+- The collect button runs now and records against the latest slot due at the
+  click, if there is one.
+- Changing the schedule never runs immediately.
+
+Run lock and LaunchAgent:
+
+- One run at a time. The app holds an in-process slot, and the CLI's
+  `~/.ttobak/intake/run.lock` covers other processes, including a LaunchAgent
+  run and a terminal run. Whoever loses gets `RUN_IN_PROGRESS`.
+- The LaunchAgent from `intake schedule` stays optional. When it is installed
+  and the app schedule is also on, Settings warns that runs may double up and
+  offers a button that runs `intake schedule off`. The app never changes the
+  LaunchAgent by itself.
+- A run times out after 20 minutes. Cancel, timeout and app exit stop the whole
+  process group.
+
+Codes shown in the app, and what to do:
+
+| Code | What to do |
+|---|---|
+| `AUTH_EXPIRED_MIDWAY` | Run `mwinit -o` in a terminal, then collect again. |
+| `TTOBAK_LOGIN_REQUIRED` | Use the login button. |
+| `RUN_IN_PROGRESS` | Wait for the current run, or cancel it. |
+| `PARTIAL_FAILURE` | Some sources updated; the dashboard reloads. Check the per-source status. |
+| `SENSITIVITY_UNKNOWN` | Accept the private-calendar consent in setup, or skip calendar. |
+| `ADAPTER_UPDATING` | Wait for the update to finish. |
+| `ADAPTER_MISSING` | Install the adapter with the update button. |
+| `NODE_MISSING` | Set the node path in Settings. |
+| `TIMEOUT`, `CANCELLED`, `EXIT_FAILED`, `SPAWN_FAILED` | Read the progress log, then retry. |
+
+If the state cannot be read, the section shows a one-line error instead of the
+controls. Acceptance on a real Mac is still pending.
 
 ## Quick start: `ttobak-mcp intake setup`, then `ttobak-mcp intake run`
 
@@ -287,7 +375,7 @@ or partial lines, `v` other than 1, keys or paths that do not match the 64-hex
 event ID, entries older than 24 hours or more than 5 minutes ahead, and over-long
 text. It dedupes on `key` in `intake-notified.json` (app data directory, 0600,
 pruned after 48 hours) and posts at most 5 per cycle. Notification delivery has
-not been verified on a Mac; ADR-061 found app notifications unreliable for the
+not been verified on a Mac; ADR-017 found app notifications unreliable for the
 meeting prompt. Check by hand with the packaged app running:
 
 1. Append one synthetic line with a fresh 64-hex ID and a current `createdAt`

@@ -286,7 +286,7 @@ visibility rule changes.
 
 ## Staged summary privacy scope
 
-Since the 2026-11-06 ADR-049 amendment, `enforce_summary_guard` returns false
+Since the 2026-11-06 amendment to ADR-029 (source provenance), `enforce_summary_guard` returns false
 for every member, so the protected view below is dormant: account readers
 receive current derived summary/tasks. The mechanism remains for provenance.
 

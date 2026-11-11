@@ -43,7 +43,7 @@
 - Modify: `backend/internal/model/performance.go` (prefix, types, key and validation)
 - Modify: `backend/internal/repository/performance.go` (+ interface), `backend/internal/service/performance.go`, `backend/internal/handler/performance.go`, `backend/cmd/api/main.go`
 - Test: the matching `*_test.go` files
-- Create: `docs/decisions/ADR-074-sa-performance-report.md` (check `docs/decisions/` and open PRs for the next free number first), and update `docs/decisions/README.md`, `docs/API-SPEC.md` and ADR-068 (a "See ADR-074" line)
+- Create: `docs/decisions/ADR-074-sa-performance-report.md` (check `docs/decisions/` and open PRs for the next free number first), and update `docs/decisions/README.md`, `docs/API-SPEC.md` and ADR-023 (a "See ADR-074" line)
 
 **Interfaces:**
 - Produces:

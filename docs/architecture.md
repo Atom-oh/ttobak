@@ -77,7 +77,7 @@ model. Browsers also use authenticated Cognito/Transcribe SDK calls and signed S
 PUTs. The Mac app records a Core Audio system-audio tap mixed with the microphone
 (ADR-024); native finished audio uploads stream directly from disk in Rust; live
 PCM crosses IPC for captions. It also polls Core Audio microphone users to offer,
-never start, a recording for detected meetings (ADR-061). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-073). The public-document route is the single intentional
+never start, a recording for detected meetings (ADR-017). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-019). The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.
 Extraction's event target/worker, API producers and summary consumer are wired;
 QA/UI activation remains separate. The KB activation configuration retains the
@@ -92,9 +92,9 @@ membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
-Linked meetings are navigation only and never note evidence (ADR-070);
+Linked meetings are navigation only and never note evidence (ADR-029, shareable by default);
 mutations remain direct-only. Billing read/upload access also follows ancestor
-membership, with an atomic path/grant confirmation (ADR-060).
+membership, with an atomic path/grant confirmation (ADR-012).
 
 Cognito identity, the app PROFILE and resource membership are separate states.
 The authenticated session bootstrap coordinates profile creation and eligible
@@ -120,11 +120,11 @@ stack and origin reached through a hashed, 60-second `HANDOFF#` code. The
 hand-off code path remains in the API but is off in the checked-in configuration
 (INFRA-SPEC "Billing Insight hand-off").
 
-The Billing service (ADR-056, `services/billing/`) is part of TTOBAK, distinct
+The Billing service (ADR-012, `services/billing/`) is part of TTOBAK, distinct
 from that companion. CloudFront routes `/api/billing/*` to the Billing BFF, an
 IAM-authenticated Lambda Web Function behind OAC, which verifies the forwarded
 TTOBAK JWT and grants Billing access through current direct or ancestor Account
-membership (ADR-060). `/billing` frames the
+membership (ADR-012). `/billing` frames the
 static `/billing-app/` pages. Uploads go by presigned URL through
 `/billing-upload/*`, rewritten to the Billing data bucket. The Python worker
 (`services/billing/worker`, `run_account.sh`: validate, extract, datasets, check;
@@ -377,7 +377,7 @@ delivery stages; see the [news release contract](runbooks/knowledge-grade-news-r
 The English meeting note is an independent derivative: `SummaryRequested` with
 target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
 state, regenerates from the transcript, notes, verified documents and image
-analyses (never the Korean note) and writes only `contentEn` fields (ADR-070).
+analyses (never the Korean note) and writes only `contentEn` fields (ADR-029, shareable by default).
 During rollout, a summarize Lambda that predates the English path treats a
 target `en` event as Korean, finds a run-ID mismatch on `ANALYSIS#summary` and
 does nothing; the English row then expires to `INTERRUPTED`, which is retryable.
@@ -399,7 +399,7 @@ within a bounded budget, filters candidates and merges them into the owner's
 personal dictionary; non-owner source edits make a run suggest only. Meeting
 deletion sweeps the meeting's observations and run state.
 
-Account links (ADR-064) connect an account's news, tech documents, events and
+Account links (ADR-021, relationship links) connect an account's news, tech documents, events and
 meetings to its projects through `LINK#`/`LINKTO#` rows written in one
 transaction. After an account-shared summary is published, a non-fatal hook asks
 the lightweight model to match the account's recent news to the meeting and stores
@@ -408,7 +408,7 @@ reads revalidate membership and every endpoint, apply fixed bounds and report
 truncation instead of guessing. Account KB uploads gain a `KBREF#` row at presign;
 QA retrieval scope is unchanged.
 
-Account people edges (ADR-067) bind meeting participants, speakers, assignees and
+Account people edges (ADR-021) bind meeting participants, speakers, assignees and
 insight entities to members, contacts, sub-accounts and projects with a
 deterministic resolver (no model call). Summarize runs it inline after summary
 publication; speaker map and contact changes publish `PeopleResolveRequested` to
@@ -416,7 +416,7 @@ the same Lambda, and `backend/cmd/backfill-account-people` replays older meeting
 Runs hold a per-meeting lease that fences their writes. The people panel, graph
 and flow read the rows back with read-time revalidation.
 
-Account merge (ADR-072) is a resumable summarize-worker job: the owner starts it
+Account merge (ADR-022) is a resumable summarize-worker job: the owner starts it
 from the web dialog (preview, explicit unmoved-items acceptance, then
 `POST /merge`) and the page polls `GET /merge` until `done` or `failed`. A merging
 Account is fenced (writes return 409 `ACCOUNT_MERGING`) and the web page turns
@@ -465,7 +465,7 @@ consumer and rollback acceptance are separate from these source flags; see
 [ADR-003, connector delegation](decisions/ADR-003-mcp-access.md).
 
 Billing MCP reads use the caller's own JWT through the existing CloudFront
-Billing Web Function route (ADR-056), separate from Go/QA private delegation.
+Billing Web Function route (ADR-012), separate from Go/QA private delegation.
 The bounded reader bypasses all-account discovery, verifies canonical connector
 policy and current direct/ancestor Billing access twice, and pins published
 CUR/COT source identity. Three read-only tools expose metadata, scoped dataset
@@ -540,7 +540,7 @@ stop legacy fixed-object KB exports. Reader deployment, fixed cutoff, old-writer
 queued-work drain and authorized consumer verification remain independent rollout
 gates; see the [implementation plan](superpowers/plans/2026-10-12-summary-sharing-privacy.md).
 
-[ADR-059](decisions/ADR-059-owner-approved-account-sharing.md) adds separate
+[ADR-029](decisions/ADR-029-note-provenance-and-sharing-safety.md) (owner approval) adds separate
 owner disclosure to the current Account audience without changing provenance,
 generation or output. Approval and publication pin current source and direct
 membership atomically. Account readers bind disclosure to current owner, audience,
