@@ -18,7 +18,7 @@ import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { Construct } from 'constructs';
-import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
+import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME, WHISPER_ONDEMAND_CAPACITY_PROVIDER } from './whisper-stack';
 import { DocumentExtraction } from './document-extraction';
 import { WebSocketOriginVerification, WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_STAGE } from './websocket-origin';
 import { PipelineFailures } from './pipeline-failures';
@@ -498,9 +498,13 @@ export class GatewayStack extends cdk.Stack {
         WHISPER_CLUSTER: WHISPER_CLUSTER_NAME,
         WHISPER_TASK_DEF: WHISPER_TASK_FAMILY,
         WHISPER_CONTAINER: WHISPER_CONTAINER_NAME,
-        // Scheduled STT recovery (ADR-013): off | report | active. Report
-        // logs decisions without writing; activate in a separate change.
-        STT_RECOVERY_MODE: 'report',
+        // First active worker runs On-Demand once the cluster lists this
+        // provider; until then every run stays on Spot (ADR-009).
+        WHISPER_ONDEMAND_CAPACITY_PROVIDER: WHISPER_ONDEMAND_CAPACITY_PROVIDER,
+        // Scheduled STT recovery (ADR-013): off | report | active. STT
+        // re-drives are active; deletion stays report until its would-delete
+        // lines are reviewed.
+        STT_RECOVERY_MODE: 'active',
         STT_RECOVERY_DELETE_MODE: 'report',
       },
       timeout: cdk.Duration.minutes(5),
@@ -542,6 +546,16 @@ export class GatewayStack extends cdk.Stack {
         conditions: {
           ArnEquals: { 'ecs:cluster': `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}` },
         },
+      })
+    );
+    // Placement reads only the Whisper cluster's capacity provider
+    // association, to use the On-Demand provider once it exists.
+    (props.transcribeRole as iam.Role).addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EcsDescribeWhisperCluster',
+        effect: iam.Effect.ALLOW,
+        actions: ['ecs:DescribeClusters'],
+        resources: [`arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}`],
       })
     );
 

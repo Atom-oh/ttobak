@@ -69,7 +69,7 @@ export default function ProjectsClient() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="w-full min-w-0">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">Projects</h2>
         <button
@@ -140,7 +140,7 @@ export default function ProjectsClient() {
           아직 프로젝트가 없습니다. 새 프로젝트를 만들어 시작하세요.
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="workspace-card-grid">
           {projects.map((project) => (
             <button
               type="button"

@@ -57,7 +57,7 @@ func sfdcRouter(r *sfdcHandlerRepo) http.Handler {
 func sfdcItems(n int) string {
 	items := make([]string, n)
 	for i := range items {
-		items[i] = fmt.Sprintf(`{"sfdcContactId":"003%015d","sfdcAccountId":"001000000000001AAA","name":"N%d","title":"","action":"create"}`, i, i)
+		items[i] = fmt.Sprintf(`{"sfdcContactId":"003%012dAAA","sfdcAccountId":"001000000000001AAA","name":"N%d","title":"","action":"create"}`, i, i)
 	}
 	return `{"snapshotComplete":false,"sfdcAccountIds":["001000000000001AAA"],"items":[` + strings.Join(items, ",") + `]}`
 }
@@ -69,17 +69,17 @@ func sfdcFullSnapshot(textLen int) string {
 	present := make([]string, 4)
 	accounts := make([]string, 4)
 	for a := range present {
-		accounts[a] = fmt.Sprintf(`"001%015d"`, a)
+		accounts[a] = fmt.Sprintf(`"001%012dAAA"`, a)
 		ids := make([]string, 5000)
 		for i := range ids {
-			ids[i] = fmt.Sprintf(`"003%015d"`, a*5000+i)
+			ids[i] = fmt.Sprintf(`"003%012dAAA"`, a*5000+i)
 		}
 		present[a] = accounts[a] + ":[" + strings.Join(ids, ",") + "]"
 	}
 	text := strings.Repeat("x", textLen)
 	items := make([]string, 200)
 	for i := range items {
-		items[i] = fmt.Sprintf(`{"sfdcContactId":"003%015d","sfdcAccountId":"001%015d","name":"N%s","title":"%s","action":"create"}`, i, 0, text[:max(textLen-1, 0)], text)
+		items[i] = fmt.Sprintf(`{"sfdcContactId":"003%012dAAA","sfdcAccountId":"001%012dAAA","name":"N%s","title":"%s","action":"create"}`, i, 0, text[:max(textLen-1, 0)], text)
 	}
 	return `{"snapshotComplete":true,"sfdcAccountIds":[` + strings.Join(accounts, ",") + `],"present":{` + strings.Join(present, ",") + `},"items":[` + strings.Join(items, ",") + `]}`
 }
@@ -107,7 +107,7 @@ func TestSfdcSyncHTTP(t *testing.T) {
 			"201 items":     sfdcItems(201),
 			"unknown field": `{"snapshotComplete":false,"sfdcAccountIds":["001000000000001AAA"],"items":[],"extra":1}`,
 			"unknown item":  `{"snapshotComplete":false,"sfdcAccountIds":["001000000000001AAA"],"items":[{"sfdcContactId":"003000000000001AAA","sfdcAccountId":"001000000000001AAA","name":"A","title":"","action":"create","email":"a@example.test"}]}`,
-			"bad sfdc id":   strings.Replace(sfdcItems(1), `"003000000000000000"`, `"003#BAD"`, 1),
+			"bad account":   strings.Replace(sfdcItems(0), `"001000000000001AAA"`, `"001000000000001AAB"`, 1),
 			"trailing":      sfdcItems(1) + ` {}`,
 			"over 512 KiB":  big,
 			"present list":  `{"snapshotComplete":true,"sfdcAccountIds":["001000000000001AAA"],"present":["003000000000001AAA"],"items":[]}`,
@@ -117,6 +117,14 @@ func TestSfdcSyncHTTP(t *testing.T) {
 			if w.Code != 400 || r.writes != 0 || w.Header().Get("Cache-Control") != "no-store" {
 				t.Errorf("%s: %d %s writes=%d", name, w.Code, w.Body, r.writes)
 			}
+		}
+	})
+	t.Run("bad_item_id_is_invalid_result", func(t *testing.T) {
+		r := &sfdcHandlerRepo{member: true}
+		w := contactRequest(sfdcRouter(r), "POST", "/accounts/a/contacts/sfdc-sync", strings.Replace(sfdcItems(1), `"003000000000000AAA"`, `"003#BAD"`, 1))
+		var out model.SfdcContactSyncResponse
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || len(out.Results) != 1 || out.Results[0].Result != "invalid" || r.writes != 0 {
+			t.Fatalf("%d %s writes=%d", w.Code, w.Body, r.writes)
 		}
 	})
 	t.Run("non_member_forbidden", func(t *testing.T) {

@@ -245,7 +245,7 @@ func (s *AccountContactsService) MutateWith(ctx context.Context, account, user, 
 // them; generic updates carry the stored values over, read here and pinned by
 // the revision condition of the same write. The sync may set a link only where
 // none exists, and never changes or clears one: a changed link would orphan
-// its index row.
+// its index row. IDs compare in canonical form.
 func (s *AccountContactsService) guardSfdcFields(ctx context.Context, account, op, id string, c *model.AccountContact, sync *sfdcWrite) error {
 	if op == "delete" {
 		return nil
@@ -272,10 +272,17 @@ func (s *AccountContactsService) guardSfdcFields(ctx context.Context, account, o
 	if base == nil || base.ContactID != id || base.Revision != c.Revision {
 		return ErrInvalidInput
 	}
-	if base.SfdcContactID != "" && (c.SfdcContactID != base.SfdcContactID || base.SfdcAccountID != "" && c.SfdcAccountID != base.SfdcAccountID) {
+	if base.SfdcContactID != "" && (!sameSfdcID(c.SfdcContactID, base.SfdcContactID) || base.SfdcAccountID != "" && !sameSfdcID(c.SfdcAccountID, base.SfdcAccountID)) {
 		return ErrContactConflict
 	}
 	return nil
+}
+
+// sameSfdcID reports whether a and b are valid spellings of one SFDC ID.
+func sameSfdcID(a, b string) bool {
+	ca, okA := model.CanonicalSfdcID(a)
+	cb, okB := model.CanonicalSfdcID(b)
+	return okA && okB && ca == cb
 }
 
 func (s *AccountContactsService) SpeakerTeamPage(ctx context.Context, account, user string, limit int, cursor string) (*model.SpeakerTeam, error) {

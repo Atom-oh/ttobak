@@ -327,7 +327,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
 
   return (
     <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
-      <div className={`${isSlide ? 'max-w-none' : 'max-w-3xl'} mx-auto p-6`}>
+      <div className="workspace-page">
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}
@@ -355,7 +355,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
             }}
             onBlur={handleTitleBlur}
             disabled={isSlide || !canEdit}
-            className="flex-1 text-2xl font-bold bg-transparent border-none outline-none focus:ring-0 text-slate-900 dark:text-text-main disabled:text-slate-500"
+            className="min-w-0 flex-1 text-2xl font-bold bg-transparent border-none outline-none focus:ring-0 text-slate-900 dark:text-text-main disabled:text-slate-500"
           />
           {doc.docType && (
             <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary dark:bg-accent/10 dark:text-accent">
@@ -495,14 +495,16 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
             )}
           </div>
         ) : (
-          <MeetingEditor
-            content={marked.parse(doc.content ?? '', { async: false }) as string}
-            onChange={handleChange}
-            onAutoSave={handleAutoSave}
-            autoSaveDelay={2000}
-            readOnly={!canEdit}
-            wikilinkTitles={titles}
-          />
+          <div className="w-full max-w-[76ch] min-w-0">
+            <MeetingEditor
+              content={marked.parse(doc.content ?? '', { async: false }) as string}
+              onChange={handleChange}
+              onAutoSave={handleAutoSave}
+              autoSaveDelay={2000}
+              readOnly={!canEdit}
+              wikilinkTitles={titles}
+            />
+          </div>
         )}
       </div>
     </AppLayout>

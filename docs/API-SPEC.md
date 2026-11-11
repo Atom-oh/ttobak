@@ -22,6 +22,9 @@ meeting. See the [local reader runbook](runbooks/local-outlook-calendar-sync.md)
 | `POST /api/calendar/sources/{sourceId}/sync` | Nonzero UUID path; JSON `batchId`, `expectedRevision`, `windowStart`, `windowEnd`, `complete`, `mutations` | `200` receipt: `batchId`, `revision`, `upserted`, `removed`, `completed` |
 | `GET /api/calendar/events` | Required `from`, `to`; optional `accountId`, `limit`, `cursor` | `{events:[...],nextCursor:string|null}` |
 | `GET /api/calendar/sources` | Optional `limit`, `cursor` | `{sources:[...],nextCursor:string|null}` |
+| `GET /api/accounts/{accountId}/calendar` | Required `from`, `to`; optional `limit`, `cursor` | `{events:[AccountCalendarEvent],nextCursor:string|null}` |
+| `PUT /api/calendar/sources/{sourceId}/events/{eventId}/sharing` | Nonzero UUID source, `[A-Za-z0-9_-]{1,128}` event; JSON `mode` (`auto`, `account` or `hidden`), optional `accountId`; at most 4 KiB | `200` owner event view |
+| `GET /api/calendar/share-directory` | Optional `cursor` (an accountId) | `{accounts:[{accountId,name,aliases,domains}], nextCursor?}`: at most 200 accounts by accountId and 60 KiB of entries per page, continued by `nextCursor`; accounts whose canonical membership row confirms direct membership, merge tombstones excluded |
 
 Sync JSON is limited to 64 KiB. Unknown, duplicate or incorrectly cased fields,
 null values, invalid types and unsupported query parameters are rejected.
@@ -32,6 +35,9 @@ additionally requires safe JavaScript revisions, with input maximum
 have positive duration and are at most 93 elapsed days. An upsert whose
 `accountId` names a merging or merged account rejects the batch with 409
 `ACCOUNT_MERGING` (ADR-022); reads still return events on a merge tombstone.
+
+A sync batch whose DynamoDB transaction would exceed 100 items is rejected with
+`413 CALENDAR_BATCH_TOO_LARGE` (the runner sends at most 12 mutations).
 
 Each batch has at most 20 distinct occurrence IDs, with only these mutations:
 
@@ -82,8 +88,19 @@ query scope/limit until null. Cursors cap at 4096 bytes; responses cap at
 14,000 encoded bytes and use `Cache-Control: private, no-store`. The MCP adapter
 also caps original calendar HTTP bytes at 14,000 and its serialized tool result
 at 32,000, returning errors rather than truncating receipts or continuations.
-An Account association classifies private data; it grants no sharing. Personal
-reads omit a revoked association; an inaccessible Account-filtered read is denied.
+The classifying `accountId` still grants nothing; sharing uses `shareAccountId`.
+Personal reads omit a revoked association; an inaccessible Account-filtered read is denied.
+
+Owner event views also carry `sharingMode` (`auto`, `account` or `hidden`) and,
+when present, `shareAccountId`, `shareEvidence`, `candidateAccountIds` and
+`private`. A shared event is visible to direct Account members only; any sharer's
+veto hides the meeting from the Account calendar. `AccountCalendarEvent` contains
+`meetingKey`, `title`, `startsAt`, `endsAt`, `timeZone`, `isAllDay`, optional
+`startDate`, `endDate`, `location`, `sharedBy` (at most five emails) and
+`sharedByMe`. Account reads are limited to direct members (others get `403`),
+use the same query, limit and 14,000-byte rules as personal reads, and
+return `503` when any shared meeting on the page has no decryptable row. Shared events are not
+exposed to QA, briefs, insights, KB, vault export or any MCP tool.
 
 Account-sharing fields are validated and stored encrypted with the
 event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
@@ -1021,9 +1038,14 @@ larger body are 400):
             "title": "...", "action": "create|link", "contactId": "...", "revision": "..."}]}
 ```
 
-- SFDC IDs match `^[A-Za-z0-9]{15,18}$`. `sfdcAccountIds` has 1 to 20 distinct
-  IDs; `items` at most 200 with distinct `sfdcContactId`, each `sfdcAccountId`
-  listed in `sfdcAccountIds`.
+- SFDC IDs are 15 or 18 ASCII alphanumerics; an 18-character ID must carry the
+  case-checksum suffix of its first 15 (`model.CanonicalSfdcID`). Every ID is
+  canonicalized to 18 characters before any comparison, key or departure scope,
+  so both spellings of one record are one ID, and results echo the canonical
+  `sfdcContactId`. An invalid ID in `sfdcAccountIds` or `present` is 400; an
+  item whose own `sfdcContactId` or `sfdcAccountId` is invalid gets `invalid`.
+- `sfdcAccountIds` has 1 to 20 distinct IDs; `items` at most 200 with distinct
+  `sfdcContactId`, each `sfdcAccountId` listed in `sfdcAccountIds`.
 - `present` maps every ID in `sfdcAccountIds` (no other key) to the SFDC
   contact IDs read from that account: at most 5,000 per account and 20,000 in
   total. It is required when `snapshotComplete` is true and forbidden
@@ -1044,7 +1066,7 @@ with results in item order:
 | `alreadyLinked` | another contact holds this SFDC ID |
 | `suppressed` | a member deleted the linked contact; never recreated |
 | `conflict` | stale or missing contact, another link on it, or a transient transaction conflict; retry next run |
-| `invalid` | `name` blank, `name`/`title` over 256 bytes, or the linked contact cannot be opened |
+| `invalid` | an item SFDC ID that does not canonicalize (echoed as sent), `name` blank, `name`/`title` over 256 bytes, or the linked contact cannot be opened |
 
 Only a complete snapshot updates departures. The pass reads the Account's
 `SFDCCONTACT#` links of the listed SFDC accounts and opens only those linked
@@ -1113,6 +1135,24 @@ transaction, legacy documents by a claim transaction that checks the CONFIG
 `accountId`, the account and the caller's direct `MEMBER#` row. Membership is
 fenced at that claim (or unpublish) commit: a membership revoked before it
 returns 403; the object and metadata removal that follows is not re-fenced.
+
+`GET /api/insights` and `GET /api/insights/{sourceId}/{docHash}` are
+caller-scoped. Origin resolution is memoized per distinct source, and the
+account and membership reads per distinct account, within a request;
+`sourceName`/`accountName` are cut to 200 code points. Only the CONFIG row's
+`sourceName` and `accountId` are read (projected; a non-string value counts as
+absent), so legacy scalar list values do not fail the read. A row with a string `accountId` makes its
+documents visible only to a current direct member of an existing account; a
+row without one is common. With no row, a
+source ID starting `acct_` is hidden and any other ID (such as `__tech__`) is
+common. Hidden documents are removed before `totalCount`, the `services` and
+`sourceIds` facets, sorting and paging; `source={hidden}` returns an empty
+page. A hidden detail returns the same 404 as a missing document. Each
+returned document adds `sourceName` (the CONFIG name, omitted without a row),
+`sourceKind` (`common` or `account`), `accountId` and `accountName` for the
+account kind, and `matchedTerm` (the search query that found a news article,
+stored at collection time; absent for custom URLs and older documents). The
+first four are computed per request and never stored.
 
 `GET/POST/DELETE /api/accounts/{accountId}/links` manage typed account links
 for **direct** members. Allowed pairs are news→project, tech→project,
@@ -2171,6 +2211,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
 | POST | `/api/specreq-tasks/{eventId}/transitions` | `specReqTaskHandler.Transition` |
+| PUT | `/api/calendar/sources/{sourceId}/events/{eventId}/sharing` | `calendarHandler.SetEventSharing` |
+| GET | `/api/calendar/share-directory` | `calendarHandler.ShareDirectory` |
+| GET | `/api/accounts/{accountId}/calendar` | `calendarHandler.ListAccountCalendar` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |

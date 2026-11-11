@@ -41,36 +41,50 @@ DynamoDB data needs KMS encryption and a retention design.
 - Retention: a contact remains until a direct member deletes it. There is no
   TTL. Deleted rows can persist in point-in-time recovery for the table's 35-day window. Their contact fields remain sealed ciphertext; keys, `contactId` and `revision` stay plaintext under the table's default AWS-owned key.
 
-- SFDC contacts. The Mac intake syncs SFDC contacts of the SFDC accounts mapped
-  to a TTOBAK Account through `POST /api/accounts/{accountId}/contacts/sfdc-sync`
-  (`backend/internal/service/account_contacts_sfdc.go`):
-  - Only name, title and company (the TTOBAK Account name) are sent and stored
-    as contact fields; email and phone never leave the Mac. Inside the sealed
-    contact, `source: "sfdc"`, `sfdcContactId`, `sfdcAccountId` and
-    `sfdcLeftAt` (the departure mark) follow the same envelope encryption.
-  - Fill-empty-only: a sync fills an empty title or company and sets a link
-    only where none exists. It never changes the name or a non-empty field,
-    and no path changes or clears an existing link.
-  - The four SFDC fields are server-owned. Generic creates (web, bulk import,
-    connector) drop them; generic updates carry the stored values over under
-    the same revision condition.
-  - Plain rows in the Account partition hold only opaque SFDC IDs:
+- SFDC contact links (`backend/internal/repository/account_contacts_sfdc.go`):
+  - Inside the sealed contact, `source: "sfdc"`, `sfdcContactId`,
+    `sfdcAccountId` and `sfdcLeftAt` (departure mark) use the same envelope
+    encryption. Only the SFDC sync may set them: generic
+    creates (web, bulk import, connector) drop them, and generic updates carry
+    the stored values over under the same revision condition. An unexported
+    service option gates the sync path; no link is ever changed or cleared.
+  - SFDC IDs are stored, keyed and compared only in canonical 18-character
+    form (`model.CanonicalSfdcID`: 15 or 18 alphanumerics, the 15-character
+    form gains the case-checksum suffix, an 18-character suffix must match).
+  - Plain rows in the Account partition hold only those IDs:
     `SFDCCONTACT#{sfdcContactId}` (index: `contactId`, `sfdcAccountId`) and
-    `SFDCSUPPRESS#{sfdcContactId}`. A create or link reserves the index row in
-    the contact transaction, so one contact exists per (Account, SFDC contact);
-    a second creator gets `alreadyLinked`.
-  - Deleting a linked contact removes its index row and writes the suppression
-    row in the same transaction; the sync never recreates or relinks a
-    suppressed ID. Suppression rows have no TTL and stay until the Account is
-    deleted.
-  - An Account merge carries links and suppression rows to the surviving
-    Account (`backend/internal/service/account_merge_contacts.go`).
+    `SFDCSUPPRESS#{sfdcContactId}`. A linking write reserves the index row in
+    the contact transaction, conditioned on both rows being absent, so one
+    contact exists per (Account, SFDC contact).
+  - Deleting a linked contact deletes its index row and writes the
+    suppression row in the same transaction, so the sync never recreates it.
+  - An Account merge moves index and suppression rows inside the fenced merge
+    transaction; a folded contact without a link takes the source link, and a
+    target that keeps another link suppresses the source ID. A contact that
+    moves unmatched arrives unlinked when the target Account already holds or
+    suppresses its SFDC ID.
+  - Retention: the index row goes with its contact. Suppression rows have no
+    TTL; merge moves them to the surviving Account, and with no Account
+    deletion routine they persist indefinitely.
+- SFDC contact sync: the Mac intake sends contacts of the SFDC accounts mapped
+  to a TTOBAK Account to `POST /api/accounts/{accountId}/contacts/sfdc-sync`
+  (`backend/internal/service/account_contacts_sfdc.go`):
+  - Only name, title and company (the TTOBAK Account name) are stored as
+    contact fields; email and phone never leave the Mac.
+  - Every SFDC ID in the request (items, `sfdcAccountIds`, `present` keys and
+    values) is canonicalized during validation, so duplicates, keys and the
+    departure scope use the 18-character form and results echo it. An invalid
+    request-level ID rejects the request; an invalid item ID only fails its item.
+  - Fill-empty-only: a sync fills an empty title or company and sets a link
+    only where none exists; it never changes the name or a non-empty field.
+    A second creator of one SFDC ID gets `alreadyLinked`, a suppressed ID
+    `suppressed`.
   - Departure marking runs only for a complete snapshot, which lists the
     present contact IDs per SFDC account: links of those accounts absent from
-    it get `sfdcLeftAt`, returning ones lose it. An incomplete read marks and
-    unmarks nobody. The pass walks the in-scope index rows from a random start
-    and opens only linked contacts; it stops after 200 mark changes or 15
-    seconds, and later runs continue because correct contacts need no write.
+    it get `sfdcLeftAt`, returning ones lose it, and an incomplete read marks
+    nobody. The pass walks the in-scope `SFDCCONTACT#` rows from a random
+    start, opens only linked contacts, and stops after 200 mark changes or 15
+    seconds; later runs continue because correct contacts need no write.
   - Bounds per request: 20 SFDC accounts, 200 items, 5,000 present IDs per
     SFDC account and 20,000 in total, 512 KiB body.
 

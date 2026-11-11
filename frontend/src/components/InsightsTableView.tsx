@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import type { CrawledDocument } from '@/types/meeting';
+import { NewsOriginDetails } from './insights/NewsOrigin';
 
 interface InsightsTableViewProps {
   documents: CrawledDocument[];
@@ -10,6 +11,9 @@ interface InsightsTableViewProps {
   limit: number;
   onTagClick?: (tag: string) => void;
   selectedTags?: string[];
+  // Grouped news renders one table per group; the range footer would then
+  // misstate the page, so the caller hides it.
+  hideFooter?: boolean;
 }
 
 function formatDate(value: string | number): string {
@@ -32,6 +36,7 @@ export function InsightsTableView({
   limit,
   onTagClick,
   selectedTags = [],
+  hideFooter = false,
 }: InsightsTableViewProps) {
   const router = useRouter();
 
@@ -77,6 +82,11 @@ export function InsightsTableView({
                   <span className="text-text-muted text-xs">
                     {doc.source || (doc.type === 'news' ? 'News' : 'AWS Docs')}
                   </span>
+                  {doc.type === 'news' && (
+                    <div className="mt-1 flex min-w-0 flex-col items-start gap-0.5 [&>*]:max-w-full">
+                      <NewsOriginDetails doc={doc} />
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <span className="text-text-muted text-xs whitespace-nowrap">
@@ -124,9 +134,11 @@ export function InsightsTableView({
           </tbody>
         </table>
       </div>
-      <div className="px-4 py-3 border-t border-white/[0.05] text-xs text-text-muted">
-        Showing {startIdx}-{endIdx} of {totalCount} documents
-      </div>
+      {!hideFooter && (
+        <div className="px-4 py-3 border-t border-white/[0.05] text-xs text-text-muted">
+          Showing {startIdx}-{endIdx} of {totalCount} documents
+        </div>
+      )}
     </div>
   );
 }

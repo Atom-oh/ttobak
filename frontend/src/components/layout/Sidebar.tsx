@@ -33,7 +33,7 @@ function GroupLabel({ name }: { name: string }) {
 
 function SidebarNav({ activePath, tab }: { activePath: string; tab: string | null }) {
   return (
-    <nav aria-label="주 메뉴" className="flex flex-col gap-4">
+    <nav aria-label="주 메뉴" className="flex flex-col gap-3">
       {NAV_GROUPS.map((group) => (
         <div key={group.name || 'top'} className="flex flex-col gap-1">
           {group.name && <GroupLabel name={group.name} />}
@@ -65,10 +65,10 @@ export function Sidebar({ activePath }: { activePath: string }) {
   const [showNewMenu, setShowNewMenu] = useState(false);
 
   return (
-    <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest/80 dark:backdrop-blur-xl flex flex-col justify-between gap-4 p-4 shrink-0 h-screen sticky top-0">
-      <div className="flex flex-col gap-6 min-h-0 overflow-y-auto">
+    <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest/80 dark:backdrop-blur-xl flex flex-col gap-3 p-4 shrink-0 h-dvh sticky top-0">
+      <div className="flex flex-1 flex-col gap-4 min-h-0 overflow-y-auto">
         {/* Workspace Identity */}
-        <div className="flex items-center gap-3 px-2">
+        <div className="flex shrink-0 items-center gap-3 px-2">
           <div className="bg-primary/10 rounded-lg p-2 flex items-center justify-center">
             <span className="material-symbols-outlined text-primary">record_voice_over</span>
           </div>
@@ -85,7 +85,7 @@ export function Sidebar({ activePath }: { activePath: string }) {
       </div>
 
       {/* Action Area */}
-      <div className="flex flex-col gap-4">
+      <div className="flex shrink-0 flex-col gap-3">
         {/* New Meeting Button */}
         <div className="relative">
           <button

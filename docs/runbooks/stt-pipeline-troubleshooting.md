@@ -21,9 +21,14 @@ Spot capacity, image/bundle loading, disk, model compatibility or output writing
 For zero-scale startup, inspect the current ASG and capacity provider:
 
 ```bash
-aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ttobak-whisper-asg --region ap-northeast-2
-aws ecs describe-capacity-providers --capacity-providers ttobak-whisper-spot --region ap-northeast-2
+aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ttobak-whisper-od-asg ttobak-whisper-asg --region ap-northeast-2
+aws ecs describe-capacity-providers --capacity-providers ttobak-whisper-ondemand ttobak-whisper-spot --region ap-northeast-2
 ```
+
+The transcribe log line `Whisper capacity provider for meeting ...` names the
+pool chosen for each run. A task that stops during `Transcribing...` with no
+further output usually lost its Spot host: look for `BidEvictedEvent` in
+CloudTrail for the instance. Runs that overlap another run use Spot by design.
 
 Use ASG scaling activities and actual subnet availability for capacity failures.
 Do not force a historic AZ list. Reused hosts require disk headroom and shortened

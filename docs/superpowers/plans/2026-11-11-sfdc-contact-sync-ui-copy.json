@@ -2,5 +2,15 @@
  "sourceSfdcContacts": "SFDC 연락처",
  "badgeSfdc": "SFDC",
  "badgeLeftSfdc": "SFDC에서 빠짐",
- "leftSfdcTooltip": "SFDC에서 빠진 날짜: {date}"
+ "leftSfdcTooltip": "SFDC에서 빠진 날짜: {date}",
+ "syncOptionsTitle": "동기화 옵션",
+ "calendarResponsesLabel": "가져올 일정",
+ "responseAccept": "수락함",
+ "responseOrganizer": "내가 주최함",
+ "responseTentative": "잠정 수락",
+ "responseNone": "아직 응답 안 함",
+ "declinedNote": "거절한 일정은 항상 제외돼요.",
+ "sfdcContactsToggle": "SFDC 연락처 가져오기",
+ "uncheckedRemovedNote": "선택을 끈 항목은 다음 동기화 때 TTOBAK에서 지워져요.",
+ "saveOptions": "저장"
 }

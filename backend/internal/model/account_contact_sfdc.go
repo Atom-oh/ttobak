@@ -24,7 +24,8 @@ const (
 // SfdcContactSyncRequest is one bounded batch for one TTOBAK Account.
 // Present maps each SFDC account ID in SfdcAccountIDs to every SFDC contact
 // ID read from it; it is required when, and only allowed when,
-// SnapshotComplete is true.
+// SnapshotComplete is true. Every SFDC ID may be sent in 15- or
+// 18-character form; the server canonicalizes it to 18 characters.
 type SfdcContactSyncRequest struct {
 	SnapshotComplete bool                  `json:"snapshotComplete"`
 	SfdcAccountIDs   []string              `json:"sfdcAccountIds"`
@@ -44,7 +45,8 @@ type SfdcContactSyncItem struct {
 	Revision      string `json:"revision,omitempty"`
 }
 
-// SfdcContactSyncResult reports one item, in request order.
+// SfdcContactSyncResult reports one item, in request order. SfdcContactID is
+// the canonical 18-character ID, or the input as sent when it is invalid.
 type SfdcContactSyncResult struct {
 	SfdcContactID string `json:"sfdcContactId"`
 	Result        string `json:"result"`

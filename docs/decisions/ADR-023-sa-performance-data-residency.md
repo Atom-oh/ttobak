@@ -42,9 +42,11 @@ contacts below.
 
   Bedrock may process the stored fields. No account-membership, admin or
   Billing read path reaches these rows, and there is no share action.
-- **Account-shared SFDC contacts.** One account-shared exception to the
-  owner-private table. Fields are sealed with the Account's contacts (ADR-021,
-  contact encryption) and visible to its direct members.
+- **Account-shared SFDC contacts.** The one account-shared exception. Fields
+  are sealed with the Account's contacts (ADR-021, contact encryption) and
+  visible to its direct members; plain `SFDCCONTACT#`/`SFDCSUPPRESS#` rows
+  hold only canonical 18-character SFDC IDs. Only the SFDC sync
+  (`POST /api/accounts/{accountId}/contacts/sfdc-sync`) writes them.
 
   | Source | Stored (account-shared) | Not stored |
   |---|---|---|
@@ -107,7 +109,7 @@ contacts below.
 
 ## Consequences
 
-- The account-shared limit widens only for the SFDC contacts row; the wider
+- The account-shared limit widens only for SFDC contacts; the wider
   performance fields are visible only to the owner.
 - Anyone with direct DynamoDB or table-key access can read `PERF*` fields
   because no envelope sealing applies. That includes exact opportunity amounts

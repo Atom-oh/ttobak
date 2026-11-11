@@ -45,67 +45,90 @@ func NewAccountContactSyncService(repo sfdcSyncRepo, contacts *AccountContactsSe
 	return &AccountContactSyncService{repo: repo, contacts: contacts, now: time.Now, start: rand.IntN}
 }
 
-// validateSfdcSync checks the whole request before any read. Malformed IDs,
-// caps and contradictions reject the request; a name or title over the
-// contact limits only marks its item invalid.
-func validateSfdcSync(req model.SfdcContactSyncRequest) (accounts map[string]bool, present map[string]map[string]bool, err error) {
+// sfdcSyncItem is one request item after validation: its SFDC IDs are in
+// canonical 18-character form unless invalid is set.
+type sfdcSyncItem struct {
+	model.SfdcContactSyncItem
+	invalid bool
+}
+
+// validateSfdcSync checks the whole request before any read and rewrites
+// every SFDC ID to its canonical 18-character form, so comparisons, keys and
+// the departure scope treat the 15- and 18-character spellings of one record
+// as one ID. A malformed request-level ID (sfdcAccountIds, present keys and
+// values), caps and contradictions reject the request. An item whose own SFDC
+// IDs do not canonicalize, or whose name or title is over the contact limits,
+// only gets the invalid result.
+func validateSfdcSync(req model.SfdcContactSyncRequest) (accounts map[string]bool, present map[string]map[string]bool, items []sfdcSyncItem, err error) {
 	if len(req.SfdcAccountIDs) < 1 || len(req.SfdcAccountIDs) > sfdcSyncMaxAccounts || len(req.Items) > sfdcSyncMaxItems {
-		return nil, nil, ErrInvalidInput
+		return nil, nil, nil, ErrInvalidInput
 	}
 	if req.SnapshotComplete != (req.Present != nil) {
-		return nil, nil, ErrInvalidInput
+		return nil, nil, nil, ErrInvalidInput
 	}
 	accounts = map[string]bool{}
-	for _, id := range req.SfdcAccountIDs {
-		if !model.ValidSfdcID(id) || accounts[id] {
-			return nil, nil, ErrInvalidInput
+	for _, raw := range req.SfdcAccountIDs {
+		id, ok := model.CanonicalSfdcID(raw)
+		if !ok || accounts[id] {
+			return nil, nil, nil, ErrInvalidInput
 		}
 		accounts[id] = true
 	}
 	// A complete snapshot lists every SFDC account, even one with no contacts.
 	if req.SnapshotComplete && len(req.Present) != len(accounts) {
-		return nil, nil, ErrInvalidInput
+		return nil, nil, nil, ErrInvalidInput
 	}
 	present, total := map[string]map[string]bool{}, 0
-	for account, ids := range req.Present {
-		if !accounts[account] || ids == nil || len(ids) > sfdcSyncMaxPresentPerAccount {
-			return nil, nil, ErrInvalidInput
+	for raw, ids := range req.Present {
+		account, ok := model.CanonicalSfdcID(raw)
+		if !ok || !accounts[account] || present[account] != nil || ids == nil || len(ids) > sfdcSyncMaxPresentPerAccount {
+			return nil, nil, nil, ErrInvalidInput
 		}
 		if total += len(ids); total > sfdcSyncMaxPresent {
-			return nil, nil, ErrInvalidInput
+			return nil, nil, nil, ErrInvalidInput
 		}
 		set := make(map[string]bool, len(ids))
-		for _, id := range ids {
-			if !model.ValidSfdcID(id) {
-				return nil, nil, ErrInvalidInput
+		for _, rawID := range ids {
+			id, ok := model.CanonicalSfdcID(rawID)
+			if !ok {
+				return nil, nil, nil, ErrInvalidInput
 			}
 			set[id] = true
 		}
 		present[account] = set
 	}
 	seen := map[string]bool{}
+	items = make([]sfdcSyncItem, 0, len(req.Items))
 	for _, it := range req.Items {
-		if !model.ValidSfdcID(it.SfdcContactID) || seen[it.SfdcContactID] || !accounts[it.SfdcAccountID] {
-			return nil, nil, ErrInvalidInput
-		}
-		seen[it.SfdcContactID] = true
-		if req.SnapshotComplete && !present[it.SfdcAccountID][it.SfdcContactID] {
-			return nil, nil, ErrInvalidInput
-		}
 		switch it.Action {
 		case model.SfdcSyncActionCreate:
 			if it.ContactID != "" || it.Revision != "" {
-				return nil, nil, ErrInvalidInput
+				return nil, nil, nil, ErrInvalidInput
 			}
 		case model.SfdcSyncActionLink:
 			if !validContactID(it.ContactID) || !validContactID(it.Revision) {
-				return nil, nil, ErrInvalidInput
+				return nil, nil, nil, ErrInvalidInput
 			}
 		default:
-			return nil, nil, ErrInvalidInput
+			return nil, nil, nil, ErrInvalidInput
 		}
+		contactID, okC := model.CanonicalSfdcID(it.SfdcContactID)
+		accountID, okA := model.CanonicalSfdcID(it.SfdcAccountID)
+		if !okC || !okA {
+			items = append(items, sfdcSyncItem{SfdcContactSyncItem: it, invalid: true})
+			continue
+		}
+		if seen[contactID] || !accounts[accountID] {
+			return nil, nil, nil, ErrInvalidInput
+		}
+		seen[contactID] = true
+		if req.SnapshotComplete && !present[accountID][contactID] {
+			return nil, nil, nil, ErrInvalidInput
+		}
+		it.SfdcContactID, it.SfdcAccountID = contactID, accountID
+		items = append(items, sfdcSyncItem{SfdcContactSyncItem: it})
 	}
-	return accounts, present, nil
+	return accounts, present, items, nil
 }
 
 // sfdcItemResult maps a per-item write error to its result. Errors that are
@@ -130,7 +153,7 @@ func sfdcItemResult(err error) (string, error) {
 // published at the end when anything changed.
 func (s *AccountContactSyncService) Sync(ctx context.Context, account, user string, req model.SfdcContactSyncRequest) (*model.SfdcContactSyncResponse, error) {
 	deadline := s.now().Add(sfdcDepartureBudget)
-	accounts, present, err := validateSfdcSync(req)
+	accounts, present, items, err := validateSfdcSync(req)
 	if err != nil {
 		return nil, err
 	}
@@ -138,9 +161,9 @@ func (s *AccountContactSyncService) Sync(ctx context.Context, account, user stri
 	if err != nil {
 		return nil, err
 	}
-	out := &model.SfdcContactSyncResponse{Results: make([]model.SfdcContactSyncResult, 0, len(req.Items))}
+	out := &model.SfdcContactSyncResponse{Results: make([]model.SfdcContactSyncResult, 0, len(items))}
 	changed := false
-	for _, it := range req.Items {
+	for _, it := range items {
 		res, err := s.applyItem(ctx, account, user, acct.Name, it)
 		if err != nil {
 			return nil, err
@@ -162,9 +185,12 @@ func (s *AccountContactSyncService) Sync(ctx context.Context, account, user stri
 	return out, nil
 }
 
-func (s *AccountContactSyncService) applyItem(ctx context.Context, account, user, company string, it model.SfdcContactSyncItem) (model.SfdcContactSyncResult, error) {
+// applyItem writes one validated item; its SFDC IDs are canonical, and the
+// result echoes the canonical contact ID.
+func (s *AccountContactSyncService) applyItem(ctx context.Context, account, user, company string, item sfdcSyncItem) (model.SfdcContactSyncResult, error) {
+	it := item.SfdcContactSyncItem
 	res := model.SfdcContactSyncResult{SfdcContactID: it.SfdcContactID}
-	if validateContact(model.AccountContact{Name: it.Name, Title: it.Title}) != nil {
+	if item.invalid || validateContact(model.AccountContact{Name: it.Name, Title: it.Title}) != nil {
 		res.Result = model.SfdcSyncInvalid
 		return res, nil
 	}
@@ -188,7 +214,7 @@ func (s *AccountContactSyncService) applyItem(ctx context.Context, account, user
 	if err != nil {
 		return res, err
 	}
-	if current == nil || current.Revision != it.Revision || current.SfdcContactID != "" && current.SfdcContactID != it.SfdcContactID {
+	if current == nil || current.Revision != it.Revision || current.SfdcContactID != "" && !sameSfdcID(current.SfdcContactID, it.SfdcContactID) {
 		res.Result = model.SfdcSyncConflict
 		return res, nil
 	}
@@ -258,7 +284,7 @@ func (s *AccountContactSyncService) markDepartures(ctx context.Context, account,
 			}
 			return 0, 0, 0, err
 		}
-		if c == nil || c.SfdcContactID != l.SfdcContactID || c.SfdcAccountID != l.SfdcAccountID {
+		if c == nil || !sameSfdcID(c.SfdcContactID, l.SfdcContactID) || !sameSfdcID(c.SfdcAccountID, l.SfdcAccountID) {
 			continue
 		}
 		isPresent := present[l.SfdcAccountID][l.SfdcContactID]

@@ -1259,7 +1259,7 @@ function RecordPageInner() {
       {postRecording.preparationError && <p role="alert" className="mx-6 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">{postRecording.preparationError}</p>}
       {/* Main Content */}
       <div className="relative flex flex-1 min-h-0">
-      <main className="flex-1 flex flex-col px-6 lg:px-8 pt-8 lg:pt-8 pb-32 lg:pb-8 overflow-y-auto">
+      <main className="workspace-page flex-1 min-h-0 flex flex-col overflow-y-auto">
         {user && !postRecording.step && !session.isRecording && !isNativeRecording && (
           <BrowserRecordingsCard key={user.userId} userId={user.userId} busy={meetingFlowBusy} onRestore={async (backup) => {
             if (isMeetingFlowBusy()) throw new Error('현재 녹음 작업을 먼저 마무리해 주세요.');

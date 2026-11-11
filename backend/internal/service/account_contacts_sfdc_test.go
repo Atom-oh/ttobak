@@ -96,11 +96,9 @@ func (r *sfdcSyncFake) put(c model.AccountContact) model.AccountContact {
 	return c
 }
 
+// sfAcct, sfC1 and sfC2 are shared with the generic-path guard tests.
 const (
-	sfAcct  = "001000000000001AAA"
 	sfAcct2 = "001000000000002AAA"
-	sfC1    = "003000000000001AAA"
-	sfC2    = "003000000000002AAA"
 	sfC3    = "003000000000003AAA"
 )
 
@@ -312,12 +310,12 @@ func TestSfdcContactSync(t *testing.T) {
 		tooMany := make([]model.SfdcContactSyncItem, 201)
 		for i := range tooMany {
 			tooMany[i] = ok
-			tooMany[i].SfdcContactID = fmt.Sprintf("003%015d", i)
+			tooMany[i].SfdcContactID = fmt.Sprintf("003%012dAAA", i)
 		}
 		ids := func(n, from int) []string {
 			out := make([]string, n)
 			for i := range out {
-				out[i] = fmt.Sprintf("003%015d", from+i)
+				out[i] = fmt.Sprintf("003%012dAAA", from+i)
 			}
 			return out
 		}
@@ -328,14 +326,13 @@ func TestSfdcContactSync(t *testing.T) {
 		}
 		accounts := make([]string, 21)
 		for i := range accounts {
-			accounts[i] = fmt.Sprintf("001%015d", i)
+			accounts[i] = fmt.Sprintf("001%012dAAA", i)
 		}
 		for name, req := range map[string]model.SfdcContactSyncRequest{
 			"no accounts":        {Items: []model.SfdcContactSyncItem{ok}},
 			"21 accounts":        {SfdcAccountIDs: accounts},
 			"bad account id":     {SfdcAccountIDs: []string{"001#"}},
 			"201 items":          {SfdcAccountIDs: []string{sfAcct}, Items: tooMany},
-			"bad contact id":     {SfdcAccountIDs: []string{sfAcct}, Items: with(func(i *model.SfdcContactSyncItem) { i.SfdcContactID = "003/../x" })},
 			"foreign account":    {SfdcAccountIDs: []string{sfAcct}, Items: with(func(i *model.SfdcContactSyncItem) { i.SfdcAccountID = sfAcct2 })},
 			"bad action":         {SfdcAccountIDs: []string{sfAcct}, Items: with(func(i *model.SfdcContactSyncItem) { i.Action = "delete" })},
 			"link without rev":   {SfdcAccountIDs: []string{sfAcct}, Items: with(func(i *model.SfdcContactSyncItem) { i.Action, i.ContactID = "link", uuid.NewString() })},
@@ -348,6 +345,9 @@ func TestSfdcContactSync(t *testing.T) {
 			"foreign present":    {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct2: {}}},
 			"null present list":  {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: nil}},
 			"duplicate accounts": {SfdcAccountIDs: []string{sfAcct, sfAcct}},
+			"15/18 dup accounts": {SfdcAccountIDs: []string{sfAcct, sfAcct[:15]}},
+			"15/18 dup items":    {SfdcAccountIDs: []string{sfAcct}, Items: append(with(func(i *model.SfdcContactSyncItem) { i.SfdcContactID = sfC1[:15] }), ok)},
+			"15/18 dup present":  {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {}, sfAcct[:15]: {}}},
 		} {
 			if _, err := s.Sync(ctx, "acc", "u1", req); !errors.Is(err, ErrInvalidInput) {
 				t.Errorf("%s: %v", name, err)
@@ -355,6 +355,79 @@ func TestSfdcContactSync(t *testing.T) {
 		}
 		if len(r.writes) != 0 {
 			t.Fatalf("invalid requests wrote %v", r.writes)
+		}
+	})
+
+	t.Run("sync_canonicalizes_15_char_ids", func(t *testing.T) {
+		const (
+			acct15, acct18 = "001Xy0000000001", "001Xy0000000001IAA"
+			new15, new18   = "003Ab0000012345", "003Ab0000012345IAA"
+			link15, link18 = "003Cd0000012345", "003Cd0000012345IAA"
+			gone18         = "003Ef0000012345IAA"
+		)
+		r := newSfdcSyncFake()
+		plain := r.put(model.AccountContact{Name: "Lee"})
+		gone := r.put(model.AccountContact{Name: "Gone", Source: model.ContactSourceSfdc, SfdcContactID: gone18, SfdcAccountID: acct18})
+		s, _ := newSfdcSync(r)
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{acct15},
+			Present: map[string][]string{acct15: {new15, link15}},
+			Items: []model.SfdcContactSyncItem{
+				{SfdcContactID: new15, SfdcAccountID: acct15, Name: "Kim", Action: "create"},
+				{SfdcContactID: link15, SfdcAccountID: acct18, Name: "Lee", Action: "link", ContactID: plain.ContactID, Revision: plain.Revision},
+			}})
+		if err != nil || len(out.Results) != 2 || out.Marked != 1 {
+			t.Fatalf("got %+v %v", out, err)
+		}
+		created, filled := out.Results[0], out.Results[1]
+		if created.Result != model.SfdcSyncCreated || created.SfdcContactID != new18 || filled.Result != model.SfdcSyncFilled || filled.SfdcContactID != link18 {
+			t.Fatalf("results %+v", out.Results)
+		}
+		if c := r.rows[created.ContactID]; c.SfdcContactID != new18 || c.SfdcAccountID != acct18 {
+			t.Fatalf("created %+v", c)
+		}
+		if c := r.rows[plain.ContactID]; c.SfdcContactID != link18 || c.SfdcAccountID != acct18 {
+			t.Fatalf("linked %+v", c)
+		}
+		// The 15-character account scope covers the canonical stored link.
+		if r.rows[gone.ContactID].SfdcLeftAt == "" {
+			t.Fatalf("departure scope must use canonical IDs: %+v", r.rows[gone.ContactID])
+		}
+		// A later 18-character run sees the same records: nothing changes.
+		out, err = s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SfdcAccountIDs: []string{acct18},
+			Items: []model.SfdcContactSyncItem{{SfdcContactID: link18, SfdcAccountID: acct18, Name: "Lee", Action: "link", ContactID: plain.ContactID, Revision: r.rows[plain.ContactID].Revision}}})
+		if err != nil || out.Results[0].Result != model.SfdcSyncUnchanged {
+			t.Fatalf("rerun %+v %v", out, err)
+		}
+	})
+
+	t.Run("sync_rejects_bad_checksum", func(t *testing.T) {
+		const bad = "003Ab0000012345AAA" // the valid suffix is IAA
+		r := newSfdcSyncFake()
+		s, _ := newSfdcSync(r)
+		for name, req := range map[string]model.SfdcContactSyncRequest{
+			"account":     {SfdcAccountIDs: []string{"001Xy0000000001AAA"}},
+			"present key": {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{"001000000000001AAB": {}}},
+			"present id":  {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {bad}}},
+		} {
+			if _, err := s.Sync(ctx, "acc", "u1", req); !errors.Is(err, ErrInvalidInput) {
+				t.Errorf("%s: %v", name, err)
+			}
+		}
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SfdcAccountIDs: []string{sfAcct}, Items: []model.SfdcContactSyncItem{
+			{SfdcContactID: bad, SfdcAccountID: sfAcct, Name: "Kim", Action: "create"},
+			{SfdcContactID: sfC1, SfdcAccountID: "001000000000001AAB", Name: "Lee", Action: "create"},
+			{SfdcContactID: "003/../x", SfdcAccountID: sfAcct, Name: "Park", Action: "create"},
+		}})
+		if err != nil || len(out.Results) != 3 {
+			t.Fatalf("got %+v %v", out, err)
+		}
+		for i, want := range []string{bad, sfC1, "003/../x"} {
+			if res := out.Results[i]; res.Result != model.SfdcSyncInvalid || res.SfdcContactID != want || res.ContactID != "" {
+				t.Fatalf("item %d: %+v", i, res)
+			}
+		}
+		if len(r.writes) != 0 {
+			t.Fatalf("bad IDs wrote %v", r.writes)
 		}
 	})
 
@@ -385,7 +458,7 @@ func TestSfdcContactSync(t *testing.T) {
 
 	manyLinks := func(r *sfdcSyncFake, n int) {
 		for i := 0; i < n; i++ {
-			r.put(model.AccountContact{Name: fmt.Sprint("C", i), SfdcContactID: fmt.Sprintf("003%015d", i), SfdcAccountID: sfAcct})
+			r.put(model.AccountContact{Name: fmt.Sprint("C", i), SfdcContactID: fmt.Sprintf("003%012dAAA", i), SfdcAccountID: sfAcct})
 		}
 	}
 	countLeft := func(r *sfdcSyncFake) int {
@@ -433,7 +506,7 @@ func TestSfdcContactSync(t *testing.T) {
 		}
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
-		if out, err = s.Sync(cancelled, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {"003000000000000000"}}}); err != nil || out.Unmarked != 0 {
+		if out, err = s.Sync(cancelled, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {"003000000000000AAA"}}}); err != nil || out.Unmarked != 0 {
 			t.Fatalf("cancelled: %+v %v", out, err)
 		}
 	})
@@ -474,44 +547,6 @@ func TestSfdcContactSync(t *testing.T) {
 		*published = nil
 		if _, err = s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SfdcAccountIDs: []string{sfAcct}}); err != nil || len(*published) != 0 {
 			t.Fatalf("no change must not publish: %v %+v", err, *published)
-		}
-	})
-}
-
-func TestGenericContactPathsProtectSfdcFields(t *testing.T) {
-	ctx := context.Background()
-	t.Run("generic_create_strips_sfdc_fields", func(t *testing.T) {
-		r := newSfdcSyncFake()
-		s := NewAccountContactsService(r)
-		out, err := s.Mutate(ctx, "acc", "u1", "create", "", model.AccountContact{Name: "Kim", Source: "sfdc", SfdcContactID: sfC1, SfdcAccountID: sfAcct, SfdcLeftAt: "2026-01-01T00:00:00Z"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := r.rows[out.ContactID]
-		if c.Source != "" || c.SfdcContactID != "" || c.SfdcAccountID != "" || c.SfdcLeftAt != "" || len(r.index) != 0 {
-			t.Fatalf("stored %+v index %v", c, r.index)
-		}
-	})
-	t.Run("generic_update_preserves_sfdc_fields", func(t *testing.T) {
-		r := newSfdcSyncFake()
-		linked := r.put(model.AccountContact{Name: "Kim", Source: "sfdc", SfdcContactID: sfC1, SfdcAccountID: sfAcct, SfdcLeftAt: "2026-10-01T00:00:00Z"})
-		plain := r.put(model.AccountContact{Name: "Lee"})
-		s := NewAccountContactsService(r)
-		// A client clearing or changing the link is ignored.
-		out, err := s.Mutate(ctx, "acc", "u1", "update", linked.ContactID, model.AccountContact{Name: "Kim2", Revision: linked.Revision, SfdcContactID: sfC2})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := r.rows[linked.ContactID]
-		if c.Name != "Kim2" || c.Source != "sfdc" || c.SfdcContactID != sfC1 || c.SfdcAccountID != sfAcct || c.SfdcLeftAt != "2026-10-01T00:00:00Z" || *out != c {
-			t.Fatalf("stored %+v", c)
-		}
-		// A client setting a link on an unlinked contact is ignored.
-		if _, err = s.Mutate(ctx, "acc", "u1", "update", plain.ContactID, model.AccountContact{Name: "Lee", Revision: plain.Revision, Source: "sfdc", SfdcContactID: sfC2, SfdcAccountID: sfAcct, SfdcLeftAt: "x"}); err != nil {
-			t.Fatal(err)
-		}
-		if p := r.rows[plain.ContactID]; p.Source != "" || p.SfdcContactID != "" || p.SfdcAccountID != "" || p.SfdcLeftAt != "" || r.index[sfC2] != "" {
-			t.Fatalf("stored %+v", p)
 		}
 	})
 }

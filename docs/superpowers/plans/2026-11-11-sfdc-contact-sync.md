@@ -200,6 +200,58 @@
 - [ ] **Step 4:** Run `(cd frontend && NODE_ENV=production npm run lint && npm run test:unit && NODE_ENV=production npm run build)`. Expect PASS.
 - [ ] **Step 5: Commit** with message `feat(web): SFDC contact badges and intake status`.
 
+### Task 5: Sync options in the Mac intake Settings (owner request, 2026-11-11)
+
+The owner wants to choose which calendar events sync, by their own response, and to see and set all sync options in Settings.
+
+**Files:**
+- `mcp-server/src/intake/calendar.ts` (filter), `run.ts` (new `intake options` command, USAGE), `setup.ts` (defaults on first selection).
+- `mac-app/src-tauri/src/intake_plan.rs` (argv for `IntakeAction::Options`), `intake_runner.rs` (command `intake_set_options`; `intake_get_state` exposes `options`), `build.rs`, `capabilities/default.json`, `mac-app/CLAUDE.md` (wire table).
+- `frontend/src/lib/tauri.ts`, `frontend/src/lib/intake.ts`, `frontend/src/components/IntakeSettings.tsx` (a sync options section).
+- Docs: runbook, ADR-003 (local intake section).
+
+**Interfaces:**
+- Selection fields in `~/.ttobak/intake/selection.json`:
+  - `calendar.responses: Array<'accept'|'organizer'|'tentative'|'none'>`. Default for a new or legacy selection: `['accept','organizer','tentative']`. Declined events are always excluded.
+  - `sfdc.contacts: boolean`, default `true`.
+- Mapping from the `calendar_view` `response` field:
+  - `Accept` → `accept`;
+  - `Organizer` → `organizer`;
+  - `Tentative` or `TentativelyAccepted` → `tentative`;
+  - `NoResponseReceived` or `None` → `none`;
+  - `Decline` → always excluded.
+  - Any other or missing value is treated as `none`.
+- **Filtering.** An event whose response is not selected is treated like an event that vanished from the source: it is not upserted, and an already synced copy is removed on the next complete run through the existing removal path. Dry runs report `excludedByResponse`.
+- **CLI.**
+  - `ttobak-mcp intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]` prints `{ok, options:{calendarResponses, sfdcContacts}}`. With no flags it prints the current options.
+  - An unknown value exits 2 with `INVALID_ARGUMENT`.
+  - It takes the run lock.
+- **Rust.**
+  - `IntakeAction::Options{calendar_responses: BTreeSet<CalendarResponse>, sfdc_contacts: bool}` builds argv `intake options --calendar-responses <csv> --sfdc-contacts on|off`.
+  - `intake_set_options(calendarResponses: Vec<String>, sfdcContacts: bool)` takes typed enums only; an empty set is allowed.
+  - `intake_get_state.options` is read from `selection.json`, with names only.
+- **Web.** A "sync options" block in the Mac local intake section:
+  - four checkboxes for the calendar responses, with Korean labels;
+  - a toggle for SFDC contacts;
+  - a one-line explanation that un-checked items are removed from TTOBAK on the next sync.
+  - Save calls `intake_set_options`. The defaults are shown when unset.
+- When `sfdc.contacts` is false, the `sfdc-contacts` step is skipped with result `disabled`.
+
+- [ ] **Step 1: Write failing tests.**
+  - mcp-server:
+    - `calendar_filter_excludes_unselected_responses`;
+    - `declined_always_excluded`;
+    - `default_responses_exclude_no_response`;
+    - `turning_off_a_response_removes_synced_copies`;
+    - `intake_options_reads_and_writes`;
+    - `sfdc_contacts_off_skips_step`.
+  - Rust: `argv_options_maps_typed_values`.
+  - Web: `syncOptionsView` defaults and labels.
+- [ ] **Step 2:** Run each suite and confirm FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** Run `(cd mcp-server && npm test)` and regenerate the bundle. Run `(cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)`. Run `(cd frontend && NODE_ENV=production npm run lint && npm run test:unit && NODE_ENV=production npm run build)`. Run `python3 scripts/docs/check_docs.py`.
+- [ ] **Step 5: Commit** with message `feat(intake): calendar response filter and sync options in Settings`.
+
 ## Delivery
 
 Ship in three PRs, each opened against main after the previous one merges. Each must stay under the 95 KB review cap; the bundle is excluded.
@@ -207,5 +259,6 @@ Ship in three PRs, each opened against main after the previous one merges. Each 
 1. PR 1: Tasks 1–2 (backend and docs).
 2. PR 2: Task 3 (adapter and runbook).
 3. PR 3: Task 4 (web).
+4. PR 4: Task 5 (sync options). It is opened after PR 3 merges.
 
 Task 1's contact edit path must carry the SFDC fields through an ordinary web update. Task 4 confirms the UI does.

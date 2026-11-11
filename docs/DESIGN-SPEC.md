@@ -22,6 +22,8 @@ alone. CSS tokens share names across themes and are exposed through `@theme inli
 Background-light/background-dark remain separate tokens. Material Symbols
 Outlined supply icons. Legacy glass/glow/neon class names remain compatibility
 hooks with flat/no-glow styling; their presence is not a request to restore neon.
+`glass-panel` is also registered as a Tailwind utility so its `dark:` variant
+uses the theme surface/border tokens instead of leaving white cards under light text.
 Typography and component dimensions come from CSS/layout components, not DESIGN.md.
 Body and headline utilities share an installed system font stack in both themes;
 their font choice must not depend on download timing or the browser font cache.
@@ -44,19 +46,44 @@ Mermaid/Shiki consume JS theme values through the hook; keep Mermaid's explicit
 light/dark palettes aligned when changing CSS tokens. Purely styled components
 use CSS variants.
 
+## Workspace sizing
+
+`AppLayout` uses the dynamic viewport height and a shrinking main column beside
+the 256px desktop sidebar. Its mobile main area reserves the same height and
+safe-area inset as `MobileNav`. The bounded content wrapper owns page scrolling;
+the header and main shell remain outside that scroll region. List continuation
+controls, chat inputs, and independently scrolling detail panes must stay above
+the navigation.
+
+`globals.css` owns `--workspace-gutter` (16px below the `64rem` desktop breakpoint,
+24px at and above it, matching Tailwind's `lg`) and
+`.workspace-page` / `.workspace-inline-gutter`. Workspace list, dashboard and
+detail wrappers fill the available width instead of using a global reading cap.
+Use `.workspace-card-grid` for adaptive project cards and
+`.workspace-settings-grid` for independent settings sections. Administration
+tables span all settings columns. Article prose and the document editor keep a
+76ch reading width inside the full-width page; focused login/profile forms and
+upload/empty-state controls keep their purpose-specific constraints.
+
+The sidebar keeps its actions separate from its scrollable navigation. Long
+breadcrumbs truncate inside the header without displacing search and actions.
+See the [2026-11-11 design review](reviews/2026-11-11-workspace-design-review.md)
+for viewport evidence and remaining design recommendations.
+
 ## Screens and components
 
 | Area | Current responsibilities / code pointers |
 |---|---|
 | Authentication | auth/LoginForm, ForgotPasswordForm, AuthProvider: login, NEW_PASSWORD_REQUIRED, reset; no self-signup |
 | App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route. Menu groups come from `lib/navigation.ts`: Assistant on top; Work (Meetings, Accounts, Projects, Docs, SA Activity `/performance`); Knowledge (Library `/kb`, Deep Research `/insights?tab=research`, News & Updates `/insights`, Custom Dictionary `/dictionary`); Customer Analytics (Billing); Settings. Mobile keeps five bottom tabs; the Knowledge tab opens the grouped menu sheet. `/files` redirects to `/kb?source=meeting` (Library's meeting-attachment source). layout/BillingInsightButton is the Customer Analytics › Billing item (sidebar, menu sheet and profile menu, only with runtime `billingInsight: true`): it opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure. With runtime `billingService: true` the same entry is a plain link to `/billing`, which hosts the Billing dashboard in a same-origin iframe (`/billing-app/index.html`, `upload.html` for `?view=upload`) and gives it tokens through `window.ttobakBilling` (`lib/billingBridge.ts`) |
-| Meeting list | MeetingList: owned/shared/team streams, search, account selection, category filter and opaque pagination. The grouped view shows account and unassigned groups in first-seen order, then one Internal section with Team / 1:1 / Training / Other subgroups (`lib/meetingCategory.ts`) |
+| Meeting list | MeetingList: owned/shared/team streams, search, account selection, category filter and opaque pagination. The grouped view orders account groups by account name (Korean collation, not by newest meeting), then accounts without a visible name, then unassigned meetings, then one Internal section with Team / 1:1 / Training / Other subgroups (`lib/meetingCategory.ts`) |
 | Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner, record/RecordingLinkControls: customer and project links stay editable during browser and native recording; they apply to an existing draft immediately, otherwise when the meeting is created at save (`lib/recordingLinks.ts`). Keeping a recording on the device stores its pending project additions and removals as deltas; a restore applies them to the meeting's current `projectIds` (links made elsewhere meanwhile stay), runs them before upload and then clears them from the copy. A project whose link or unlink request is still in flight is saved as possibly changed. After an audio upload completes (recording or file), the page returns home with an uploaded-meeting reconciliation hint; transcription and notes continue on the server. Meeting cards badge `transcribing`/`summarizing` and `error`. The home list refreshes the current filtered first page every 15 s while a listed meeting is processing or the uploaded meeting has not appeared with a post-recording status, only while visible and for at most 30 minutes (`lib/meetingStatus.ts`). An initially missing uploaded meeting is admitted when it appears; a stale recording status is shown as transcribing while reconciling. Processing meetings on later loaded pages still need manual reload. |
 | Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links. AccountSection gives the creator a meeting-category control; an internal meeting hides account linking, and Internal is disabled while an account is linked |
 | Markdown | MarkdownRenderer, MermaidBlock, CodeBlock, DataTable, DiagramLightbox |
 | Documents | Personal document hub, editor/preview, share dialogs and public document viewer |
 | Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents. The members table shows an owner-only "Transfer owner" button on each non-owner row with a `userId` (never on pending rows or for AM/inherited viewers); it confirms with the target email and the note that the previous owner becomes SA, calls `POST /api/accounts/{id}/owner-transfer`, reloads, and maps 409 to a refresh-and-retry message. The Account Owner also sees a "merge into another Account" action (`AccountMergeDialog`, ADR-022): it picks a target from directly editable Accounts (never the source), calls `GET merge-preview`, and shows move counts (`-1` means capped), the categories that do not move (billing is marked as not checkable), the CLI-only categories (labelled as rows an operator moves with the CLI after the merge) and who gains access. Start stays disabled until the unmoved-items checkbox is checked and never fires unconfirmed. Progress polls `GET merge` every 5 s (doubling after failed polls, 30 s cap) and stops on `done`, `failed` or `aborted`; failure codes map to plain Korean copy, a failed or stalled job offers retry (`POST merge` again to resume), and an operator-aborted job shows that moved items stay on the target, with no retry. A merging Account (`mergingInto`) shows a read-only banner, hides write controls and keeps a progress link for the Owner; a tombstone (`mergedInto`) stays read-only with a banner linking to the target, so its unmoved categories remain reachable; writes answered with 409 `ACCOUNT_MERGING` show a merge-specific message. |
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
+| Insights news | InsightsList, InsightsTableView, insights/NewsOrigin, `lib/newsOrigin.ts`: news cards and table rows keep publisher and date and add, only when the optional fields exist, a text kind badge (Common, or the customer name linked to `/accounts/{id}`, with a generic customer label when the name is missing), the registered source name, the matched search query and a relevance percentage from a `qualityScore` above 0 and at most 1 (the API sends 0 when no score is stored, so 0 shows nothing). Long values truncate with the full text in `title`. An All / Grouped switch (`aria-pressed`; per-browser storage guarded by try/catch; flat by default) groups the loaded page only: Common first, then customers sorted by Korean-aware name, each heading counted as items on this page. Pagination, totals and filters are unchanged. The source filter prefers a document's `sourceName` label. Tech and research tabs are unchanged |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
 | Settings | Mac app install (`MacAppInstall`, section `#mac-app`), integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
@@ -399,11 +426,28 @@ appears on Events tab rows, which show their existing project links with unlink
 (from one bounded links scan, not per-row calls), and on News & Updates document
 cards (choosing a direct account first). Server truncation flags show a partial-links notice. Evidence,
 needs and stall details render as plain text. Every link or news-source mutation
-reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A collapsed
-**relationship graph** renders the graph route client-side with Mermaid under
-`securityLevel: 'strict'`; labels are stripped of directives and backticks.
-Person edges carry the Korean role label (dotted when auto), and a note gives
-the direct member count because only connected members are drawn.
+reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`.
+
+The **relationship graph** section follows the flow and is always open
+(`components/account/AccountFocusGraph.tsx`, pure geometry and helpers in
+`src/lib/accountFocusGraph.ts`). It reads `GET /people/focus` for one focus: a
+contact, a member or a project. The picker reads up to five people pages. The default is the contact with the most
+meetings, then the busiest member, then the first opportunity project. A search
+picker and up to four quick chips change it, and the choice is written to the
+`focus` query parameter; a URL focus that is not found in this account falls back
+to the default. When the section itself is at least 48rem wide (a container
+query, so the sidebar and account column are accounted for), three columns sit
+between two SVG connector bands: the focus card, its meetings (12 per page, "show earlier meetings" for
+more), and the technologies with count bars. Connectors use fixed row heights,
+so no DOM measuring is needed. Technology connectors are dashed in the
+technology's group color, because they come from model-extracted tags; a legend
+says so. Selecting a technology dims other meetings and connectors. Selecting a
+meeting opens a side panel with its technologies, customer and team attendees
+with roles, and a link to the meeting; choosing a person there re-centers the
+graph on them. Uncatalogued tags are collapsed behind a toggle. On a narrower section the
+bands are hidden, technologies become filter chips and each meeting row lists
+its technologies. A 403 says the graph is for direct members, and a 404 asks for
+another focus.
 
 A **people** panel follows the flow (ADR-021 people edges, `components/account/AccountPeople.tsx`,
 copy in `src/lib/accountPeople.ts`). It lists resolved members and contacts with

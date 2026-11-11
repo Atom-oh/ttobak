@@ -320,7 +320,7 @@ export default function ResearchDetailPage() {
       <div className="flex flex-1 min-h-0">
         {/* Main content area — hidden during planning/running (chat-only until report ready) */}
         <div className={`flex-1 overflow-y-auto pb-24 lg:pb-8 ${research?.status === 'planning' || research?.status === 'running' || research?.status === 'approved' ? 'hidden' : ''}`}>
-          <div className="mx-auto w-full max-w-7xl p-4 lg:px-8 lg:pb-8 lg:pt-10">
+          <div className="workspace-page">
 
             {/* Back button (desktop) */}
             <button
