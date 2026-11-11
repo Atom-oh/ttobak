@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useIntake } from '@/hooks/useIntake';
 import {
   errorCode, finishedMessage, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
-  scheduleFromForm, scheduleLabel, showLaunchAgentWarning, sourceRows, type IntakeConnector, type IntakeFinished,
+  scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows, type IntakeConnector, type IntakeFinished,
   type IntakeScheduleKind,
 } from '@/lib/intake';
 import {
@@ -62,6 +62,7 @@ export function IntakeSettings() {
   };
   const scheduleValue = scheduleFromForm(schedule.kind, schedule.first, schedule.second);
   const rows = sourceRows(state.status, state.selection);
+  const setupRows = running ? [] : setupConnectorRows(state.lastResult);
 
   const act = async (work: () => Promise<unknown>, after?: (value: unknown) => void) => {
     setBusy(true);
@@ -113,13 +114,14 @@ export function IntakeSettings() {
         {state.selection.length > 0 && (
           <table className="w-full text-left text-sm">
             <thead className={mutedClass}>
-              <tr><th className="py-1 font-medium">소스</th><th className="py-1 font-medium">서버</th><th className="py-1 font-medium">상태</th></tr>
+              <tr><th className="py-1 font-medium">소스</th><th className="py-1 font-medium">서버</th><th className="py-1 font-medium">호스트</th><th className="py-1 font-medium">상태</th></tr>
             </thead>
             <tbody>
               {state.selection.map(entry => (
                 <tr key={entry.connector} className="border-t border-slate-100 dark:border-white/10">
                   <td className="py-1.5">{INTAKE_CONNECTORS.find(item => item.connector === entry.connector)?.label ?? entry.connector}</td>
                   <td className="py-1.5 font-mono text-xs">{entry.server}</td>
+                  <td className="py-1.5 font-mono text-xs">{entry.host}</td>
                   <td className="py-1.5">{entry.disabled ? INTAKE_COPY.connectorSkipped : INTAKE_COPY.connectorSelected}</td>
                 </tr>
               ))}
@@ -217,6 +219,22 @@ export function IntakeSettings() {
               </button>
               <button type="button" className={buttonClass} onClick={() => setSetupOpen(false)}>{INTAKE_COPY.cancel}</button>
             </div>
+          </div>
+        )}
+
+        {setupRows.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <p className={mutedClass}>연결 설정 결과</p>
+            <ul className="flex flex-col gap-1">
+              {setupRows.map(row => (
+                <li key={row.connector}>
+                  <span className="font-semibold">{row.label}</span>
+                  {' · '}{row.status === 'selected' ? INTAKE_COPY.connectorSelected : INTAKE_COPY.connectorSkipped}
+                  {row.status === 'selected' && row.host && <span className={mutedClass}> ({row.host})</span>}
+                  {row.code && <span className={`block ${mutedClass}`}>{intakeCodeLabel(row.code)}</span>}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

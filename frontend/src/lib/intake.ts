@@ -25,6 +25,9 @@ const CODE_LABELS: Record<string, string> = {
   ADAPTER_UPDATING: '업데이트 중이에요. 잠시 후 다시 시도하세요.',
   ADAPTER_MISSING: 'TTOBAK 수집 도구가 설치돼 있지 않아요. [업데이트]를 눌러 설치하세요.',
   NODE_MISSING: 'Node.js를 찾을 수 없어요. node 경로를 지정하세요.',
+  SERVER_NOT_CONFIGURED: '이 Mac의 Claude/Codex/Kiro 설정에서 해당 MCP 서버를 찾지 못했어요.',
+  SKIPPED_BY_USER: '건너뛰도록 선택했어요.',
+  SCHEMA_CHANGED: 'MCP 서버의 도구 형식이 바뀌어 연결하지 못했어요.',
 };
 
 export type IntakeScheduleKind = 'off' | 'hourly' | 'daily' | 'twiceDaily';
@@ -198,4 +201,33 @@ export function showLaunchAgentWarning(state: Pick<IntakeStateView, 'launchAgent
 /** Message for a finished run; empty on success. */
 export function finishedMessage(finished: IntakeFinished | null | undefined): string {
   return finished?.code ? intakeCodeLabel(finished.code) : '';
+}
+
+export interface IntakeSetupRow {
+  connector: IntakeConnector;
+  label: string;
+  status: 'selected' | 'skipped';
+  /** Skip reason code; null when selected or unknown. */
+  code: string | null;
+  server: string | null;
+  host: string | null;
+}
+
+const NAME_PATTERN = /^[A-Za-z0-9._@-]{1,128}$/;
+const safeName = (value: unknown): string | null => typeof value === 'string' && NAME_PATTERN.test(value) ? value : null;
+
+/** Per-connector rows of the last finished setup (`result.connectors`), in
+ * connector order; empty for any other action. The result is untrusted:
+ * unknown connectors and malformed fields are dropped. */
+export function setupConnectorRows(finished: IntakeFinished | null | undefined): IntakeSetupRow[] {
+  if (finished?.action !== 'setup') return [];
+  const connectors = record(record(finished.result)?.connectors);
+  if (!connectors) return [];
+  return INTAKE_CONNECTORS.flatMap(({ connector, label }) => {
+    const entry = record(connectors[connector]);
+    if (!entry || (entry.status !== 'selected' && entry.status !== 'skipped')) return [];
+    const code = entry.status === 'skipped' && typeof entry.code === 'string' && RESULT_PATTERN.test(entry.code) && entry.code !== 'ok'
+      ? entry.code : null;
+    return [{ connector, label, status: entry.status, code, server: safeName(entry.server), host: safeName(entry.host) }];
+  });
 }

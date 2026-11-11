@@ -41,6 +41,9 @@ Connect sources (the setup button runs `intake setup`):
   Without it, calendar setup fails with `SENSITIVITY_UNKNOWN`.
 - Each connector has a skip toggle (`--skip`). Skipped connectors are disabled
   in the saved selection and shown as skipped.
+- After setup finishes, Settings lists each connector as selected (with its
+  host) or skipped, with the skip reason (for example `SERVER_NOT_CONFIGURED`,
+  `SKIPPED_BY_USER`, `SCHEMA_CHANGED`, `SENSITIVITY_UNKNOWN`).
 - If TTOBAK login is needed (`TTOBAK_LOGIN_REQUIRED`), Settings offers a login
   button that runs `intake login`. It opens a browser.
 - Setup and login runs are never recorded against a schedule slot.
@@ -50,11 +53,16 @@ needs two different times). The app owns the schedule:
 
 - A scheduler runs a due slot while the app is open, and catches up at app
   launch, on system wake and after a wall-clock jump of more than two minutes.
+  The wake and clock-jump catch-ups wait about 45 seconds so the network can
+  come back first.
 - Only the latest slot at or before now is considered. A slot is satisfied by
-  success or `PARTIAL_FAILURE`. Any other code (for example
-  `AUTH_EXPIRED_MIDWAY`, `TIMEOUT`, `CANCELLED`) leaves it unsatisfied, and it is
-  retried once at the next launch or wake: at most two attempts per slot (the
-  scheduled one plus one catch-up retry). The next slot then runs normally.
+  success or by a `PARTIAL_FAILURE` in which at least one connector succeeded;
+  a `PARTIAL_FAILURE` where no connector succeeded does not satisfy it. Any
+  other code (for example `AUTH_EXPIRED_MIDWAY`, `TIMEOUT`, `CANCELLED`) leaves
+  it unsatisfied, and it is retried once at the next launch or wake: at most two
+  attempts per slot (the scheduled one plus one catch-up retry). A failed
+  collect-button run also counts as one of those two attempts. The next slot
+  then runs normally.
 - `RUN_IN_PROGRESS` and `ADAPTER_UPDATING` are not recorded. The app re-checks
   when the busy run or update ends.
 - The collect button runs now and records against the latest slot due at the

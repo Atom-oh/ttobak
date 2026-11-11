@@ -134,3 +134,26 @@ test('load error text is one Korean line', () => {
   assert.match(intake.loadErrorText(''), /알 수 없는 오류$/);
   assert.ok(intake.loadErrorText('x'.repeat(500)).length < 260);
 });
+
+test('setup rows show each connector with its skip reason', () => {
+  assert.equal(intake.intakeCodeLabel('SERVER_NOT_CONFIGURED'), '이 Mac의 Claude/Codex/Kiro 설정에서 해당 MCP 서버를 찾지 못했어요.');
+  assert.equal(intake.intakeCodeLabel('SKIPPED_BY_USER'), '건너뛰도록 선택했어요.');
+  assert.equal(intake.intakeCodeLabel('SCHEMA_CHANGED'), 'MCP 서버의 도구 형식이 바뀌어 연결하지 못했어요.');
+  const finished = { action: 'setup', exitCode: 0, code: null, result: { ok: true, connectors: {
+    slack: { status: 'skipped', code: 'SKIPPED_BY_USER' },
+    calendar: { status: 'selected', server: 'aws-outlook-mcp', host: 'claude' },
+    sfdc: { status: 'skipped', code: 'SERVER_NOT_CONFIGURED' },
+    meetings: { status: 'skipped', code: 'bad code; rm' },
+    specreq: { status: 'weird' },
+    unknown: { status: 'selected' },
+  } } };
+  assert.deepEqual(plain(intake.setupConnectorRows(finished)), [
+    { connector: 'calendar', label: '캘린더', status: 'selected', code: null, server: 'aws-outlook-mcp', host: 'claude' },
+    { connector: 'sfdc', label: 'SFDC', status: 'skipped', code: 'SERVER_NOT_CONFIGURED', server: null, host: null },
+    { connector: 'meetings', label: '회의', status: 'skipped', code: null, server: null, host: null },
+    { connector: 'slack', label: 'Slack', status: 'skipped', code: 'SKIPPED_BY_USER', server: null, host: null },
+  ]);
+  assert.deepEqual(plain(intake.setupConnectorRows({ ...finished, action: 'run' })), []);
+  assert.deepEqual(plain(intake.setupConnectorRows({ action: 'setup', result: null })), []);
+  assert.deepEqual(plain(intake.setupConnectorRows(null)), []);
+});
