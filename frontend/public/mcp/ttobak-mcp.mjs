@@ -23976,7 +23976,7 @@ var init_api2 = __esm({
     MAX_PERFORMANCE_API_BYTES = 14e3;
     MAX_PERFORMANCE_MAPPINGS_BYTES = 2e6;
     PERFORMANCE_REPORT_KEY = /^(W\d{4}-\d{2}|Q\d{4}-[1-4]|Y\d{4}|C\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2})$/;
-    MAX_PERFORMANCE_REPORT_BYTES = 3e5;
+    MAX_PERFORMANCE_REPORT_BYTES = 6 * 262144 + 4096;
     ApiResponseError = class extends Error {
       constructor(message, status, code) {
         super(message);
