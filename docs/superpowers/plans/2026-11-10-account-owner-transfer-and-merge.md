@@ -191,10 +191,10 @@ The "Rulings" section below overrides the spec where it says so.
 
 **Files:**
 - Create: `docs/decisions/ADR-071-account-owner-transfer.md`
-- Modify: `docs/decisions/ADR-034-*.md`, `docs/decisions/ADR-055-designated-account-owner.md` (one "Amended by ADR-071" bullet each), `docs/README.md` (ADR table row), `docs/API-SPEC.md` (Accounts section + Go route inventory), `CLAUDE.md` Accounts line, regenerated `AGENTS.md`
+- Modify: `docs/decisions/ADR-015-accounts-roles-and-hierarchy.md`, `docs/decisions/ADR-055-designated-account-owner.md` (one "Amended by ADR-071" bullet each), `docs/README.md` (ADR table row), `docs/API-SPEC.md` (Accounts section + Go route inventory), `CLAUDE.md` Accounts line, regenerated `AGENTS.md`
 
 - [ ] **Step 1:** Write ADR-071 (Status: Accepted for implementation; Decision date
-  2026-11-10; Amends ADR-034 and ADR-055): dual owner condition, target identity rule,
+  2026-11-10; Amends ADR-015 and ADR-055): dual owner condition, target identity rule,
   previous owner → SA, cleared initial-owner designation, generic routes stay owner-free,
   non-delegable route.
 - [ ] **Step 2:** Update `CLAUDE.md` Accounts bullet to: "Removal/revocation/reparenting

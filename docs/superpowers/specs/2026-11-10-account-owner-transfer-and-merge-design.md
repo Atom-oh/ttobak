@@ -26,7 +26,7 @@ features remove this kind of duplicate:
 - It clears `InitialOwnerEmail` and `InitialOwnerInvitationPending`, so
   `ResendOwnerInvitation` cannot act on a stale designation.
 - Generic `AddMember` and `UpdateMemberRole` still cannot grant or remove Owner
-  (ADR-034/055 stay true for those routes).
+  (ADR-015/055 stay true for those routes).
 - Route: `POST /api/accounts/{accountId}/owner-transfer` `{targetUserId}`,
   authenticated and non-delegable for connectors. The web UI adds a "Transfer owner"
   action (Korean UI label) on a member row for the owner.
