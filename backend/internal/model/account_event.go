@@ -1,7 +1,7 @@
 package model
 
 // AccountEvent is a scheduled customer engagement in an account. Title,
-// location, attendees and notes are sealed at rest (ADR-063); the start time
+// location, attendees and notes are sealed at rest (ADR-021, contact encryption); the start time
 // stays plaintext in the sort key so events can be listed in time order.
 type AccountEvent struct {
 	EventID   string          `json:"eventId"`

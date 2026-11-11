@@ -1,7 +1,7 @@
 # Historical review record: PR #114 ambiguous-share visibility
 
 - Original plan date: 2026-07-19.
-- Historical review plan, not an execution checklist or current review mandate. Later ADR-023 behavior supersedes its response-only protection.
+- Historical review plan, not an execution checklist or current review mandate. Later ADR-016 behavior supersedes its response-only protection.
 
 ## Scope and rationale
 
@@ -17,6 +17,6 @@ Intended tests checked preserved-but-reported shares, failure/ambiguity separati
 
 ## Current references and supersession
 
-[ADR-023](../../decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) records the later pre-delete ambiguity gate, explicit force override, frontend confirmation, ex-member backfill, and detect-only orphan handling. Those changes supersede this plan's deferred UI and current-member-only migration assumptions; genuine direct/legacy ambiguity remains.
+[ADR-016](../../decisions/ADR-016-meeting-account-sharing.md) records the later pre-delete ambiguity gate, explicit force override, frontend confirmation, ex-member backfill, and detect-only orphan handling. Those changes supersede this plan's deferred UI and current-member-only migration assumptions; genuine direct/legacy ambiguity remains.
 
 [Removal service](../../../backend/internal/service/account.go), [handler](../../../backend/internal/handler/account.go), [service tests](../../../backend/internal/service/account_test.go), [migration CLI](../../../backend/cmd/backfill-share-origin/main.go), [owner UI](../../../frontend/src/components/AccountDetailClient.tsx).

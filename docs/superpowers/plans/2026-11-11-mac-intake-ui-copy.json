@@ -1,0 +1,44 @@
+{
+ "collectNow": "지금 수집",
+ "connectSetup": "연결 설정",
+ "ttobakLogin": "TTOBAK 로그인",
+ "update": "업데이트",
+ "makeReport": "리포트 만들기",
+ "sectionTitle": "Mac 로컬 수집",
+ "browserHint": "Mac 앱에서 수집할 수 있어요",
+ "runInProgress": "이미 수집 중이에요.",
+ "authExpiredMidway": "Midway 인증이 만료됐어요. 터미널에서 `mwinit -o`를 실행한 뒤 다시 시도하세요.",
+ "ttobakLoginRequired": "TTOBAK 로그인이 필요해요.",
+ "partialFailure": "일부 소스만 수집됐어요.",
+ "sensitivityUnknown": "비공개 일정 포함에 동의해야 캘린더를 연결할 수 있어요.",
+ "scheduleOptions": [
+  "끄기",
+  "매시간",
+  "하루 한 번",
+  "하루 두 번"
+ ],
+ "connectorSelected": "선택됨",
+ "connectorSkipped": "건너뜀",
+ "reportTab": "리포트",
+ "dashboardTab": "대시보드",
+ "periodOptions": [
+  "이번 주",
+  "이번 분기",
+  "올해",
+  "직접 지정"
+ ],
+ "toolCallLine": "도구 호출: <tool name>",
+ "claudeCliMissing": "Claude Code CLI를 찾을 수 없어요. 설치 후 다시 시도하세요.",
+ "claudeCliAuth": "Claude Code 로그인이 필요해요. 터미널에서 `claude`를 실행해 `/login` 하세요.",
+ "skillMissing": "sa-performance-report 스킬이 설치돼 있지 않아요.",
+ "skillOutdated": "sa-performance-report 스킬이 예전 버전이에요. internal-mcp-setup v1.4.0 설치 스크립트로 스킬을 갱신하세요.",
+ "sandboxUnavailable": "Claude Code 샌드박스를 쓸 수 없어 리포트를 만들지 않았어요. Claude Code를 최신 버전으로 업데이트하세요.",
+ "reportNoSfdc": "SFDC 데이터가 없어 리포트를 만들 수 없어요. 먼저 [지금 수집]을 실행하세요.",
+ "reportInvalid": "리포트 형식이 올바르지 않아 저장하지 않았어요. 다시 시도하세요.",
+ "skillSections": {
+  "doNotInclude": "넣지 않는 것",
+  "actions": "정리할 항목",
+  "dataBasis": "데이터 기준"
+ },
+ "cancel": "취소"
+}

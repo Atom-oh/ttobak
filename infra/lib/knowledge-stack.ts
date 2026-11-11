@@ -185,7 +185,7 @@ export class KnowledgeStack extends cdk.Stack {
     // CLAUDE.md's "extract hardcoded infra values to CDK context" known
     // issue, but fall back to the real values -- not 'PENDING' -- if that
     // context key is ever missing. Falling back to the placeholder is
-    // exactly the regression ADR-021 exists to prevent: it silently breaks
+    // exactly the regression ADR-004 (pipeline repair) exists to prevent: it silently breaks
     // RAG for every stack that reads these props (QAFunction,
     // SummarizeFunction, the crawler's ingest trigger) for 7 weeks with no
     // visible error.

@@ -20,4 +20,4 @@ Export is not permission to reimport product-generated content into the source c
 ## Current references and extensions
 
 - [ADR-020](../../decisions/ADR-020-personal-documents.md), [vault service](../../../backend/internal/service/vault.go), [vault tests](../../../backend/internal/service/vault_test.go), [document core](../../../backend/internal/service/account.go).
-- The same record extends export to personal/account Markdown documents, adds file-backed documents, and governs later previews, public links and sharing; [ADR-027](../../decisions/ADR-027-cloudfront-signed-media-urls.md) governs signed delivery.
+- The same record extends export to personal/account Markdown documents, adds file-backed documents, and governs later previews, public links and sharing; [ADR-027](../../decisions/ADR-027-edge-delivery-and-origin-proof.md) governs signed delivery.

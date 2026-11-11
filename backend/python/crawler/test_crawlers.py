@@ -1716,7 +1716,7 @@ class TestIngestTriggerNoKBConfig(unittest.TestCase):
         # 'PENDING' is truthy and non-empty -- `if not KB_ID` alone would
         # let it straight through. This is the literal placeholder value
         # knowledge-stack.ts hardcodes before the real KB/DataSource are
-        # wired up (ADR-021), and the actual regression that caused 7 weeks
+        # wired up (ADR-004, pipeline repair), and the actual regression that caused 7 weeks
         # of silent ingestion failure.
         original_kb_id = ingest_trigger.KB_ID
         original_ds_id = ingest_trigger.DATA_SOURCE_ID
@@ -1850,7 +1850,7 @@ class TestArticleCapIncludesWebSearch(unittest.TestCase):
     """Regression: web search results are appended to all_articles *after*
     What's New + Blog RSS, so a busy service whose RSS feeds alone fill the
     old cap (MAX_ARTICLES_PER_SOURCE * 2 = 10) would silently drop every
-    web search result -- defeating ADR-021's "catches announcements RSS
+    web search result -- defeating ADR-004 (pipeline repair)'s "catches announcements RSS
     hasn't indexed yet" purpose for exactly the services that need it."""
 
     @mock.patch.object(tech_crawler, '_write_metadata')
@@ -1887,7 +1887,7 @@ class TestArticleCapIncludesWebSearch(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 16. tech_crawler new-service discovery (ADR-021)
+# 16. tech_crawler new-service discovery (ADR-004, pipeline repair)
 # ---------------------------------------------------------------------------
 
 class TestDiscoverNewServices(unittest.TestCase):

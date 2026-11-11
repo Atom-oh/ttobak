@@ -6,6 +6,7 @@ import { uploadAudioBlob } from '@/lib/upload';
 import { isTauri, startNativeRecording, stopNativeRecording, releaseRecordingPower, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type NativeSelectedInput, type TauriStatusResponse } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 import { BrowserRecordingBackup } from '@/lib/browserRecordingBackup';
+import { openMicStream } from '@/lib/micStream';
 
 /**
  * Imperative handle for manually resuming the waveform AudioContext from a
@@ -28,6 +29,9 @@ interface RecordButtonProps {
   meetingId: string;
   meetingTitle?: string;
   deviceId?: string;
+  /** Called when the saved `deviceId` no longer exists and recording fell
+   * back to the default microphone. */
+  onMicDeviceUnavailable?: () => void;
   onRecordingComplete?: (audioUrl: string) => void;
   onBlobReady?: (blob: Blob, mimeType: string, backup?: BrowserRecordingBackup, generation?: number) => void;
   onBlobFinalizing?: () => number;
@@ -45,7 +49,7 @@ interface RecordButtonProps {
    * buffers). Newer app builds only. */
   onNativeWarnings?: (warnings: string[]) => void;
   /** Mac app microphone for System Audio mode; empty follows the meeting
-   * app's microphone (ADR-061). */
+   * app's microphone (ADR-017). */
   nativeInputDeviceUid?: string;
   /** The microphone the Mac app actually records (newer app builds). */
   onNativeInput?: (input: NativeSelectedInput | null, canSwitch: boolean) => void;
@@ -135,6 +139,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   meetingId,
   meetingTitle = 'Meeting',
   deviceId,
+  onMicDeviceUnavailable,
   onRecordingComplete,
   onBlobReady,
   onBlobFinalizing,
@@ -571,10 +576,9 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           throw err;
         }
       } else {
-        const audioConstraints: MediaTrackConstraints | boolean = deviceId
-          ? { deviceId: { exact: deviceId } }
-          : true;
-        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+        const opened = await openMicStream(navigator.mediaDevices, deviceId);
+        stream = opened.stream;
+        if (opened.usedDefault) onMicDeviceUnavailable?.();
       }
 
       onPermissionGranted?.();

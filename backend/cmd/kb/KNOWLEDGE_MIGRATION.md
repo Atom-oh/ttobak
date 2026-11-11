@@ -1,6 +1,6 @@
 # Existing KB binary migration
 
-Extends [ADR-038](../../../docs/decisions/ADR-038-canonical-note-indexing.md) using
+Extends [ADR-028](../../../docs/decisions/ADR-028-qa-search-indexing-and-sources.md) using
 the existing full S3 sync coordinator; no direct ingestion or fabricated DOC#
 source rows. Original upload/list/delete behavior and visibility are preserved.
 

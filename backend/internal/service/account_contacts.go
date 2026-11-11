@@ -44,7 +44,7 @@ func (s *AccountContactsService) SetPeopleResolvePublisher(fn func(context.Conte
 var ErrContactConflict = errors.New("contact changed concurrently")
 
 // ErrContactsUnavailable means contact encryption is not configured; contact
-// reads and writes fail closed rather than handle plaintext (ADR-063).
+// reads and writes fail closed rather than handle plaintext (ADR-021, contact encryption).
 var ErrContactsUnavailable = repository.ErrContactEncryptionUnavailable
 
 func NewAccountContactsService(repo accountContactsRepo) *AccountContactsService {

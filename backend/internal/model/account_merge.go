@@ -55,7 +55,7 @@ type AccountMergeJob struct {
 	EntityType string         `dynamodbav:"entityType"` // "ACCOUNT_MERGE_JOB"
 
 	// PostMergeOperator is never stored. When set on a copy of a done job, the
-	// merge CLI's user-row movers write under the post-merge fence (ADR-072)
+	// merge CLI's user-row movers write under the post-merge fence (ADR-022)
 	// as this user instead of under the job lease.
 	PostMergeOperator string `dynamodbav:"-" json:"-"`
 }

@@ -1,13 +1,25 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { accountApi } from '@/lib/api';
 import { CONTACT_FIELDS, PEOPLE_RESOLVE_FAILED, PEOPLE_RESOLVE_RETRY, contactFromRow, importContacts, isContactAccessDenied, mapContactHeaders, requestPeopleResolve, type ContactField, type ContactMapping, type ImportStatus } from '@/lib/contactImport';
 import { readContactFile } from '@/lib/contactFile';
+import { planAccountRows, type RowAccountMatch } from '@/lib/contactBulkImport';
+
+const matchLabel: Record<RowAccountMatch, string> = { exact: '일치', contained: '포함', none: '—' };
+
+/** The account rows are matched against: its name, aliases and email domains. */
+export interface ImportTargetAccount { name: string; aliases: string[]; domains: string[] }
 
 const statusLabel: Record<ImportStatus, string> = { created: '추가됨', duplicate: '중복으로 건너뜀', failed: '실패 또는 저장 여부 확인 필요', invalid: '이름 없음' };
 
-export function ContactImport({ accountId, userId, onImported, onDenied }: { accountId: string; userId: string; onImported: () => void; onDenied: () => void }) {
+function planFor(table: string[][], mapping: ContactMapping, account: ImportTargetAccount) {
+  const columns = { company: mapping.company, email: mapping.email };
+  return planAccountRows(table.slice(1).map((row) => contactFromRow(row, columns)), account,
+    mapping.company !== undefined || mapping.email !== undefined);
+}
+
+export function ContactImport({ accountId, userId, account, onImported, onDenied }: { accountId: string; userId: string; account: ImportTargetAccount; onImported: () => void; onDenied: () => void }) {
   const [table, setTable] = useState<string[][]>([]);
   const [mapping, setMapping] = useState<ContactMapping>({});
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -16,6 +28,13 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
   const [error, setError] = useState('');
   const [resolveFailed, setResolveFailed] = useState(false);
   const controller = useRef<AbortController | null>(null);
+  // Matching reads only the company and email columns, so remapping other columns keeps the selection.
+  const companyColumn = mapping.company; const emailColumn = mapping.email;
+  const accountKey = JSON.stringify([account.name, account.aliases, account.domains]);
+  const plan = useMemo(() => {
+    const [name, aliases, domains] = JSON.parse(accountKey) as [string, string[], string[]];
+    return planFor(table, { company: companyColumn, email: emailColumn }, { name, aliases, domains });
+  }, [table, companyColumn, emailColumn, accountKey]);
   const fileGeneration = useRef(0);
   useEffect(() => {
     const current = new AbortController();
@@ -33,9 +52,11 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
       const rows = await readContactFile(file);
       if (!current()) return;
       const headers = rows[0];
-      setTable([headers, ...rows.slice(1)]);
-      setMapping(mapContactHeaders(headers));
-      setSelected(new Set(rows.slice(1).map((_, i) => i)));
+      const nextTable = [headers, ...rows.slice(1)];
+      const nextMapping = mapContactHeaders(headers);
+      setTable(nextTable);
+      setMapping(nextMapping);
+      setSelected(new Set(planFor(nextTable, nextMapping, account).selected));
     } catch (err) {
       if (current()) setError(err instanceof Error ? err.message : '파일을 읽지 못했습니다.');
     }
@@ -90,20 +111,27 @@ export function ContactImport({ accountId, userId, onImported, onDenied }: { acc
     {table.length > 0 && <>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {CONTACT_FIELDS.map(([field, label]) => <label key={field} className="text-xs text-slate-600 dark:text-slate-300">{label}{field === 'name' && ' *'}
-          <select value={mapping[field] ?? ''} disabled={busy} onChange={(e) => setMapping((old) => {
-            const next = { ...old };
+          <select value={mapping[field] ?? ''} disabled={busy} onChange={(e) => {
+            const next = { ...mapping };
             if (e.target.value === '') delete next[field as ContactField]; else next[field as ContactField] = Number(e.target.value);
-            return next;
-          })} className="mt-1 w-full rounded border border-slate-200 bg-white p-1.5 dark:border-white/10 dark:bg-slate-900">
+            setMapping(next);
+            // A new company or email column redoes the automatic selection; rows already added stay unselected.
+            if (field === 'company' || field === 'email') {
+              setSelected(new Set([...planFor(table, next, account).selected].filter((i) => statuses[i] !== 'created')));
+            }
+          }} className="mt-1 w-full rounded border border-slate-200 bg-white p-1.5 dark:border-white/10 dark:bg-slate-900">
             <option value="">가져오지 않음</option>{headers.map((header, i) => <option key={i} value={i}>{header}</option>)}
           </select>
         </label>)}
       </div>
       {unmapped.length > 0 && <p className="mt-2 text-xs text-amber-700">연결되지 않은 열: {unmapped.join(', ')}</p>}
-      <p className="mt-3 text-xs text-slate-500">이메일 또는 휴대폰·근무처 전화가 같으면 건너뜁니다. 대표번호를 공유하는 사람도 중복으로 표시될 수 있습니다. 동시 가져오기는 중복이 생길 수 있습니다.</p>
+      <p className="mt-3 text-xs text-slate-600 dark:text-slate-300">{plan.matches.some((match) => match !== null)
+        ? `회사명이 이 고객과 일치하거나 대부분 포함되는 ${plan.selected.size}명을 자동 선택했습니다 (전체 ${table.length - 1}명). 다른 행은 직접 선택하세요.`
+        : '회사 또는 이메일 열이 없어 전체 행을 선택했습니다.'}</p>
+      <p className="mt-1 text-xs text-slate-500">이메일 또는 휴대폰·근무처 전화가 같으면 건너뜁니다. 대표번호를 공유하는 사람도 중복으로 표시될 수 있습니다. 동시 가져오기는 중복이 생길 수 있습니다.</p>
       <div className="mt-2 max-h-80 overflow-auto rounded border border-slate-200 dark:border-white/10">
-        <table className="w-full text-left text-xs"><thead><tr><th className="p-2"><input aria-label="전체 행 선택" type="checkbox" checked={selected.size === table.length - 1} disabled={busy} onChange={(e) => setSelected(e.target.checked ? new Set(table.slice(1).map((_, i) => i)) : new Set())} /></th><th>이름</th><th>회사</th><th>이메일 / 전화</th><th>결과</th></tr></thead>
-          <tbody>{table.slice(1).map((row, i) => { const contact = contactFromRow(row, mapping); return <tr key={i} className="border-t border-slate-100 dark:border-white/5"><td className="p-2"><input aria-label={`${i + 2}행 선택`} type="checkbox" checked={selected.has(i)} disabled={busy || statuses[i] === 'created'} onChange={(e) => setSelected((old) => { const next = new Set(old); if (e.target.checked) next.add(i); else next.delete(i); return next; })} /></td><td className="p-2">{contact.name || '—'}<details><summary className="cursor-pointer text-primary">미리보기</summary><div className="whitespace-pre-wrap">{CONTACT_FIELDS.filter(([field]) => contact[field]).map(([field, label]) => <div key={field}>{label}: {contact[field]}</div>)}</div></details></td><td className="p-2">{contact.company || '—'}</td><td className="p-2">{contact.email || contact.phone || contact.workPhone || '—'}</td><td className="p-2">{statuses[i] ? statusLabel[statuses[i]] : '대기'}</td></tr>; })}</tbody>
+        <table className="w-full text-left text-xs"><thead><tr><th className="p-2"><input aria-label="전체 행 선택" type="checkbox" checked={selected.size === table.length - 1} disabled={busy} onChange={(e) => setSelected(e.target.checked ? new Set(table.slice(1).map((_, i) => i)) : new Set())} /></th><th>이름</th><th>회사</th><th>매칭</th><th>이메일 / 전화</th><th>결과</th></tr></thead>
+          <tbody>{plan.order.map((i) => { const contact = contactFromRow(table[i + 1], mapping); const match = plan.matches[i]; return <tr key={i} className="border-t border-slate-100 dark:border-white/5"><td className="p-2"><input aria-label={`${i + 2}행 선택`} type="checkbox" checked={selected.has(i)} disabled={busy || statuses[i] === 'created'} onChange={(e) => setSelected((old) => { const next = new Set(old); if (e.target.checked) next.add(i); else next.delete(i); return next; })} /></td><td className="p-2">{contact.name || '—'}<details><summary className="cursor-pointer text-primary">미리보기</summary><div className="whitespace-pre-wrap">{CONTACT_FIELDS.filter(([field]) => contact[field]).map(([field, label]) => <div key={field}>{label}: {contact[field]}</div>)}</div></details></td><td className="p-2">{contact.company || '—'}</td><td className="p-2">{match ? matchLabel[match] : '—'}</td><td className="p-2">{contact.email || contact.phone || contact.workPhone || '—'}</td><td className="p-2">{statuses[i] ? statusLabel[statuses[i]] : '대기'}</td></tr>; })}</tbody>
         </table>
       </div>
       <button type="button" disabled={busy || mapping.name === undefined || selected.size === 0} onClick={() => void submit()} className="mt-3 rounded bg-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-40">{busy ? '가져오는 중…' : `선택한 ${selected.size}개 가져오기`}</button>

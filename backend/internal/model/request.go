@@ -56,7 +56,7 @@ type UpdateMeetingRequest struct {
 	// through UpdateMeeting's whole-item PutItem. A concurrent PutItem
 	// carrying a read-time snapshot from before this field's write would
 	// silently revert it -- the exact class of pre-existing, cross-cutting
-	// issue ADR-025's Consequences section already tracks for AccountID/
+	// issue ADR-025's accepted residual risks already track for AccountID/
 	// SharedToAccount (fixed there only for ProjectIDs, via a
 	// ConditionExpression + retry). Real-world exposure here is small: the
 	// writers above run at points in a meeting's lifecycle that rarely
@@ -202,7 +202,7 @@ type MeetingDetailResponse struct {
 	Permission                 string                `json:"permission"` // "owner", "read", or "edit"
 	Attachments                []AttachmentResponse  `json:"attachments,omitempty"`
 	Shares                     []ShareResponse       `json:"shares,omitempty"` // Only visible to owner
-	SimRun                     *SimRunResponse       `json:"simRun,omitempty"` // ADR-033 cost/sizing simulator, singleton per meeting
+	SimRun                     *SimRunResponse       `json:"simRun,omitempty"` // ADR-010 cost/sizing simulator, singleton per meeting
 	CreatedAt                  string                `json:"createdAt"`
 	UpdatedAt                  string                `json:"updatedAt"`
 
@@ -221,7 +221,7 @@ type SimChartResponse struct {
 	URL string `json:"url,omitempty"`
 }
 
-// SimRunResponse is the API shape of model.SimRun (ADR-033). Requirements/
+// SimRunResponse is the API shape of model.SimRun (ADR-010). Requirements/
 // Options are re-parsed from their JSON-string storage form into typed
 // slices for the frontend confirm form.
 type SimRunResponse struct {

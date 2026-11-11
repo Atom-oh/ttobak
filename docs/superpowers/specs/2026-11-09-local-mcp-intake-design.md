@@ -407,7 +407,7 @@ file prevents overlap between launchd and "Run now".
 | SpecReq records | No | After Phase 0: `ACCOUNT#…/SPECREQ#{id}` with an allowlisted field set, idempotent upsert, member read. |
 | Proposals | No | v1 local file shown in Settings; later authenticated `SUGGESTION#` rows with explicit accept/dismiss. |
 | Intake freshness for others | No | Optional `INTAKE#{connector}` status per user (last success time, counts only) so the account page can say "SFDC synced 2h ago". |
-| MCP tools | Calendar tools stdio-only | New opportunity and SpecReq write tools should stay stdio-only like calendar (not delegated connector operations), unless separately reviewed under ADR-053. |
+| MCP tools | Calendar tools stdio-only | New opportunity and SpecReq write tools should stay stdio-only like calendar (not delegated connector operations), unless separately reviewed under ADR-003. |
 
 Every new route is authenticated, under CloudFront, with bounded bodies (≤64 KiB),
 strict decoding, sentinel errors and `{error:{code,message}}`. Update

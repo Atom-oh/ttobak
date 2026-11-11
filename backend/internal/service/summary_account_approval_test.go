@@ -86,7 +86,7 @@ func TestAccountProjectionNoLongerDependsOnApproval(t *testing.T) {
 			meeting := approvedAccountMeeting(t)
 			change.edit(meeting)
 			// Account publication shares current content; approval staleness
-			// no longer withholds it (ADR-049 2026-11-06 amendment).
+			// no longer withholds it (ADR-029 source provenance, 2026-11-06 amendment).
 			projected := projectAccountMeeting(meeting, &model.AccountMember{SummaryPrivacyVersion: 1})
 			if projected.SummaryReadRestricted || projected.Content != meeting.Content ||
 				projected.ActionItems != meeting.ActionItems || projected.Insights != meeting.Insights {

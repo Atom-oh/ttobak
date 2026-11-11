@@ -29,7 +29,7 @@ AWS SDK v3), AWS CDK 2.273.0 L1 `CfnWebFunction*`, CloudFront Functions
 
 **Spec:**
 - [Billing service design](../specs/2026-10-26-billing-service-design.md)
-- [ADR-056](../../decisions/ADR-056-billing-service-origin-and-identity.md),
+- [ADR-012](../../decisions/ADR-012-billing-origin-identity-and-team-access.md),
   which overrides the spec on token transport, MCP path and Account access.
 
 ## Global Constraints
@@ -430,7 +430,7 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 - Modify `infra/lib/frontend-stack.ts`, `infra/lib/frontend-policy.ts`,
   `infra/bin/infra.ts`, and `docs/INFRA-SPEC.md`.
 - Modify `.github/workflows/test-infra.yml` and both `deploy-infra.yml` jobs: add the policy bundle step.
-- Modify `CLAUDE.md`: an accepted-limits row for ADR-056's internet-reachable
+- Modify `CLAUDE.md`: an accepted-limits row for ADR-012's internet-reachable
   IamAuth endpoint and no-OAC upload behavior. Then run
   `python3 scripts/docs/sync_review_context.py`.
 

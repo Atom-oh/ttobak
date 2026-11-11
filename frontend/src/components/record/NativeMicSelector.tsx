@@ -32,7 +32,7 @@ interface NativeMicSelectorProps {
 }
 
 /** Mac app System Audio mode: which microphone to mix with system audio
- * (ADR-061). "Automatic" follows the meeting app's microphone, so the
+ * (ADR-017). "Automatic" follows the meeting app's microphone, so the
  * recording hears what Zoom/Teams/Meet hears. Hidden on app builds without
  * the device list. */
 export function NativeMicSelector({ value, onChange, disabled, errorId }: NativeMicSelectorProps) {

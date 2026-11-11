@@ -34,6 +34,21 @@
     "allow-caption-overlay-open",
     "allow-caption-overlay-close",
     "allow-caption-overlay-set-style",
-    "allow-caption-overlay-push"
+    "allow-caption-overlay-push",
+    "allow-intake-get-state",
+    "allow-intake-set-schedule",
+    "allow-intake-set-node-path",
+    "allow-intake-launch-agent-off",
+    "allow-intake-run-now",
+    "allow-intake-setup",
+    "allow-intake-login",
+    "allow-intake-cancel",
+    "allow-intake-check-adapter",
+    "allow-intake-update-adapter",
+    "allow-report-generate",
+    "allow-report-cancel",
+    "allow-report-get-state",
+    "allow-report-settings-get",
+    "allow-report-settings-set"
   ]
 }

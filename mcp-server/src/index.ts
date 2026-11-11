@@ -44,7 +44,7 @@ export interface ServerOptions {
   apiUrl: string;
   cognitoDomain: string;
   clientId: string;
-  /** Local microphone recorder; stdio only (ADR-045). */
+  /** Local microphone recorder; stdio only (ADR-003, transports). */
   recorder?: Recorder;
   /** TTOBAK Mac app control socket; stdio only (ADR-024). */
   appControl?: { socketPath: string; timeoutMs?: number };
@@ -484,7 +484,7 @@ const registry: { tools: Tool[] } = {
     },
     {
       name: 'ttobak_add_account_member',
-      description: 'Add a teammate to an account by email. Any existing account member can do this (ADR-034), not just the owner. If the email belongs to an invited-but-not-yet-logged-in user, the grant is queued and applies automatically on their first login. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.',
+      description: 'Add a teammate to an account by email. Any existing account member can do this (ADR-015, member permissions), not just the owner. If the email belongs to an invited-but-not-yet-logged-in user, the grant is queued and applies automatically on their first login. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1203,8 +1203,24 @@ async function main() {
     process.exitCode = await runIntake(cliArguments.slice(1), defaultEnvironment());
     return;
   }
+  if (cliArguments[0] === 'report') {
+    const { runReport } = await import('./report/run.js');
+    const { defaultEnvironment } = await import('./intake/run.js');
+    // The Mac app cancels a run with SIGTERM; the run stops claude and removes its files.
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once('SIGINT', cancel);
+    process.once('SIGTERM', cancel);
+    try {
+      process.exitCode = await runReport(cliArguments.slice(1), { ...defaultEnvironment(), signal: controller.signal });
+    } finally {
+      process.off('SIGINT', cancel);
+      process.off('SIGTERM', cancel);
+    }
+    return;
+  }
   if (cliArguments.includes('--help')) {
-    console.log('Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help. Downloaded adapter: stdio only; HTTP requires the installed server package.');
+    console.log('Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help. Downloaded adapter: stdio only; HTTP requires the installed server package.');
     return;
   }
   if (cliArguments.length && (cliArguments.length !== 2 || cliArguments[0] !== '--transport')) {

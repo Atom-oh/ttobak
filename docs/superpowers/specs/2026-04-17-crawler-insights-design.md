@@ -45,9 +45,7 @@ private/shared retrieval, and useful news/technical browsing.
 
 ## Current evidence and successors
 
-[ADR-004](../../decisions/ADR-004-crawler-insights-for-sa-knowledge-base.md),
-[ADR-021](../../decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md),
-and [ADR-026](../../decisions/ADR-026-insights-relevance-gate-and-curation.md) record
+[ADR-004](../../decisions/ADR-004-insights-crawler-and-news.md) records
 later decisions. Current [CrawlerStack](../../../infra/lib/crawler-stack.ts) runs
 one aggregated technical branch beside a per-source news Map, with 14-minute crawl
 workers. [News crawling](../../../backend/python/crawler/news_crawler.py) uses the

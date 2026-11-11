@@ -1,7 +1,7 @@
 # Local MCP intake — implementation plan
 
 Status: historical implementation plan (2026-11-09). Phase 1 is implemented
-(ADR-065, runbook `docs/runbooks/local-mcp-intake.md`); later phases are not.
+(ADR-003, runbook `docs/runbooks/local-mcp-intake.md`); later phases are not.
 Design: [local MCP intake](../specs/2026-11-09-local-mcp-intake-design.md).
 Each phase ships independently and leaves the system consistent.
 
@@ -61,7 +61,7 @@ a documented, user-installed LaunchAgent.
 | `mcp-server/src/intake/store.ts` | `~/.ttobak/intake/` (0700, files 0600, atomic rename) holding `selection.json`, `calendar/<sourceId>/{ledger,journal,checkpoint}.json`, `status.json` and a lock file. Same ownership and symlink checks as the token cache. |
 | `mcp-server/src/intake/run.ts` | Subcommands: `intake hosts` (JSON list, names only); `intake select calendar --host --server` (writes selection); `intake calendar --dry-run` (normalized counts + local preview to stdout, no writes); `intake calendar` (run); `intake status`. Background mode (`--noninteractive`) never opens a browser login. |
 | `docs/runbooks/local-mcp-intake.md` | New: setup, dry run, manual acceptance (reuse calendar runbook step 5), LaunchAgent template with only non-secret keys, uninstall. Cross-link from `local-outlook-calendar-sync.md` and `mcp-server/README.md`. |
-| `docs/decisions/ADR-065-local-mcp-intake.md` | Decision: deterministic local connectors, config references not copies, AI proposals only, residency fields, stdio-only writes. |
+| `docs/decisions/ADR-003-mcp-access.md` | Decision: deterministic local connectors, config references not copies, AI proposals only, residency fields, stdio-only writes. |
 
 ### Tests (node:test)
 
@@ -149,7 +149,7 @@ Backend (Go, handler → service → repository, expression builder):
 | `mcp-server/src/intake/sfdc-connector.ts` | For mapped accounts, page `search_opportunities` and project the allowlisted fields to the upsert. Idempotent re-runs; no deletes. |
 | `mcp-server/src/api.ts` | Client methods; stdio-only MCP tool for mapping (optional). |
 | Frontend account page | Mapping UI (member), "SFDC synced Xh ago". |
-| Docs | `API-SPEC.md`, `DESIGN-SPEC.md`, ADR-065 amendment. |
+| Docs | `API-SPEC.md`, `DESIGN-SPEC.md`, ADR-003 amendment. |
 
 Tests: Go table-driven tests for authorization (non-member 404/403, removed
 member), condition-failure retry, a concurrent double upsert creating one
