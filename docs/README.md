@@ -39,7 +39,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 | [Pipeline recovery](runbooks/pipeline-failure-recovery.md) | Failure queues, alarm routing and controlled replay | GatewayStack, failure construct and replay tool |
-| [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Canary acceptance, retained-legacy archive, verified prices and rollback | News runtime/recovery, ADR-052 |
+| [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Canary acceptance, retained-legacy archive, verified prices and rollback | News runtime/recovery, ADR-004 |
 | [HTTP origin proof migration](runbooks/http-origin-secret-migration.md) | Consumer contract and coordinated rotation gates | Go/QA/MCP origin verifiers and deployment configuration |
 | [Connector capabilities](decisions/ADR-053-connector-capability-private-delegation.md) | Operation policy and recorded private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
 | [Connector delegation wire](security/connector-delegation-v1.md) | Canonical signed bytes, key pinning and lifetime limits | Go/TypeScript/Python verifiers and dated connector acceptance |
@@ -99,7 +99,7 @@ python3 scripts/docs/check_docs.py
 - [Browser and mobile recording, recovery and retention](decisions/ADR-006-browser-and-mobile-recording.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
-- [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)
+- [Conditional news publication and cost reservations](decisions/ADR-004-insights-crawler-and-news.md)
 - [Shared speaker correction and account publication](decisions/ADR-016-meeting-account-sharing.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-027-edge-delivery-and-origin-proof.md)
 - [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)
