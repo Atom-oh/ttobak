@@ -15,6 +15,8 @@
 //!   delete them; see `leftover.rs` and `RecorderState::adopted_paths`
 //! - `meeting_detection_get/set_enabled/respond` — meeting detection prompts
 //!   (ADR-061); see `meeting_detect.rs`
+//! - `intake_*` — set up, schedule and run the local intake CLI (ADR-065);
+//!   see `intake_runner.rs`
 //!
 //! `read_recording_bytes` (WAV bytes via IPC binary response) used to exist
 //! here and has been deliberately removed: on a real ~35-minute recording it
@@ -37,6 +39,7 @@ mod error;
 mod input_select;
 mod intake_notify;
 mod intake_plan;
+mod intake_runner;
 mod interpreter;
 mod leftover;
 pub mod meet_mute;
@@ -819,6 +822,16 @@ pub fn run() {
             caption_overlay::caption_overlay_set_style,
             caption_overlay::caption_overlay_push,
             caption_overlay::caption_overlay_idle,
+            intake_runner::intake_get_state,
+            intake_runner::intake_set_schedule,
+            intake_runner::intake_set_node_path,
+            intake_runner::intake_launch_agent_off,
+            intake_runner::intake_run_now,
+            intake_runner::intake_setup,
+            intake_runner::intake_login,
+            intake_runner::intake_cancel,
+            intake_runner::intake_check_adapter,
+            intake_runner::intake_update_adapter,
         ])
         .setup(|app| {
             // Caption translation; failure only disables it.
@@ -829,6 +842,9 @@ pub fn run() {
             meeting_detect::start(app.handle().clone());
             // SpecReq task notices from the local intake runner (ADR-065).
             intake_notify::start(app.handle().clone());
+            // Local intake runner and scheduler; failure only disables it.
+            intake_runner::manage(app);
+            intake_runner::start(app.handle().clone());
             // App menu with the update item; failure keeps Tauri's default menu.
             if let Err(e) = update::install_menu(app.handle()) {
                 log::warn!("update menu unavailable: {e}");
@@ -909,6 +925,8 @@ pub fn run() {
             // (process exit is already in motion; nothing else needs this
             // thread) than to abandon and lose the tail of the recording.
             if let tauri::RunEvent::Exit = event {
+                // A running intake CLI dies with its process group.
+                intake_runner::kill_running(app_handle);
                 let state = app_handle.state::<RecorderState>();
                 let handle = {
                     let mut rec = state.recorder.lock();

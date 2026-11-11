@@ -1,7 +1,5 @@
 //! Pure intake planning: schedule slots, catch-up decisions, CLI argv and node
 //! resolution. No Tauri imports so it stays unit-testable.
-// Task 3 wires this module into the runner/scheduler and Tauri commands.
-#![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -206,7 +204,8 @@ pub fn should_catch_up(
     (unsatisfied && attempts < MAX_SLOT_ATTEMPTS).then_some(slot)
 }
 
-/// Record a run for `slot`. No error code or `PARTIAL_FAILURE` satisfies the
+/// Record a run for `slot`. No error code or `PARTIAL_FAILURE` (the runner
+/// passes it only when a connector succeeded) satisfies the
 /// slot; every other code (e.g. `AUTH_EXPIRED_MIDWAY`) only counts an attempt.
 pub fn record_result(state: &mut SlotState, slot: i64, code: Option<&str>) {
     if state.last_attempted_slot == Some(slot) {
@@ -260,6 +259,8 @@ pub enum IntakeAction {
         skip: BTreeSet<Connector>,
     },
     Login,
+    // `intake status`; the app reads status.json directly instead.
+    #[allow(dead_code)]
     Status,
     /// `intake schedule off`: removes the LaunchAgent.
     ScheduleOff,
