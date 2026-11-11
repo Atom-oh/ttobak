@@ -1,4 +1,4 @@
-//! The floating "meeting detected" prompt with a Record button (ADR-061).
+//! The floating "meeting detected" prompt with a Record button (ADR-017).
 //!
 //! macOS notifications from the app were not shown reliably, so, like
 //! Notion's meeting notes, the app opens its own small always-on-top window

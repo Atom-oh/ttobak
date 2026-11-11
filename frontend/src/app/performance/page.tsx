@@ -25,7 +25,7 @@ function Spinner() {
 }
 
 // Owner-only SA activity page: every request reads the caller's own rows and
-// the page has no share control (ADR-068).
+// the page has no share control (ADR-023).
 export default function PerformancePage() {
   const { isLoading, isAuthenticated, user, membershipRevision } = useAuth();
   const router = useRouter();

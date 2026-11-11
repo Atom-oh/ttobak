@@ -1,14 +1,14 @@
 # Local MCP intake (calendar, SpecReq tasks and SFDC)
 
 This runbook covers the Phase 1 calendar runner and its meeting SpecReq task
-step from [ADR-065](../decisions/ADR-065-local-mcp-intake.md). It is a command line in
+step from [ADR-003, local intake](../decisions/ADR-003-mcp-access.md). It is a command line in
 the TTOBAK stdio adapter, `ttobak-mcp intake`. The Mac Settings UI does not
 exist yet. Acceptance on the user's Mac is pending; nothing here proves it.
 
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
 contract for one reader, `aws-outlook-mcp` `calendar_view`. The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
-SA performance data of [ADR-068](../decisions/ADR-068-sa-performance-data-residency.md).
+SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md).
 
 ## Quick start: `ttobak-mcp intake setup`, then `ttobak-mcp intake run`
 
@@ -258,7 +258,7 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
    - an all-day event.
 4. Run `intake calendar` and compare with `ttobak_list_calendar_events`.
    Re-run and confirm that the mutations are empty.
-5. Record the date and results in ADR-065's status line.
+5. Record the date and results in ADR-003 local intake's status line.
 
 ### Task step acceptance
 
@@ -276,7 +276,7 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
    notice. Then select `--auto-ack on`, rerun, and confirm exactly one
    `acknowledge_request` (SpecReq shows `WORKING`, the task `acked`).
 4. Confirm `status` and the log hold codes and counts only.
-5. Record the date and results in ADR-065's status line.
+5. Record the date and results in ADR-003 local intake's status line.
 
 ### Mac notification acceptance
 
@@ -287,7 +287,7 @@ or partial lines, `v` other than 1, keys or paths that do not match the 64-hex
 event ID, entries older than 24 hours or more than 5 minutes ahead, and over-long
 text. It dedupes on `key` in `intake-notified.json` (app data directory, 0600,
 pruned after 48 hours) and posts at most 5 per cycle. Notification delivery has
-not been verified on a Mac; ADR-061 found app notifications unreliable for the
+not been verified on a Mac; ADR-017 found app notifications unreliable for the
 meeting prompt. Check by hand with the packaged app running:
 
 1. Append one synthetic line with a fresh 64-hex ID and a current `createdAt`
@@ -299,7 +299,7 @@ meeting prompt. Check by hand with the packaged app running:
 3. Make the file a symlink: nothing posts and the log says the queue is
    unreadable. `chmod 666` it: nothing posts and the log says it was ignored.
 4. Record the observed behaviour (delivered or not, whether the click activates
-   the app) in ADR-065's status line.
+   the app) in ADR-003 local intake's status line.
 
 Notifications are informational: the app never navigates because of one, so it
 cannot discard unsaved input. The task strip on the meetings page shows the task.

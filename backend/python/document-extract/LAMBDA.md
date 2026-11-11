@@ -76,7 +76,7 @@ age and an encrypted seven-day DLQ. Verify actual routes/endpoints separately.
 The parent reserves state-update time; SDK connect/read timeouts are 2/4
 seconds. Bucket-default encryption applies. Resource limits/environment
 stripping do not prevent same-UID RCE or replace tenant authorization.
-See [ADR-039](../../../docs/decisions/ADR-039-meeting-document-extraction.md)
+See [ADR-001](../../../docs/decisions/ADR-001-meeting-document-extraction.md)
 for retained object versions and the absence of result expiry.
 
 From this directory:

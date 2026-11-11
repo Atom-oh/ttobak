@@ -39,7 +39,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | Command | Contract |
 |---|---|
 | start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
-| list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
+| list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-017) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, capture_lost (a failed mic switch stopped capture), optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
@@ -49,7 +49,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
 | control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
-| meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-061) |
+| meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-017) |
 | meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 | update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
@@ -61,7 +61,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | caption_overlay_set_style | lang, style {fontFamily, fontSize 16-160, fontColor, outlineColor, outlineWidth 0-12, backgroundOpacity 0-1}; saved and sent to the window |
 | caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus; `clear` also makes the window ignore the pointer; pushes to one window are serialised (`PushLanes`), other windows are independent |
 | caption_overlay_idle | idle; overlay windows only (`caption-overlay.json`, never the remote SPA); sets only the calling `caption-<lang>` window to let clicks through while it shows no caption, and to take them again once it does; sync, main thread, no lock |
-| intake_get_state | returns {adapter {present, updateAvailable null/bool}, nodePath, nodeMissing, schedule {kind off/hourly/daily/twiceDaily, times}, running run/setup/login/scheduleOff/null, lastResult (last `intake://finished` payload), status (`~/.ttobak/intake/status.json`, at most 256 KiB), selection [{connector, server, host, disabled}] (names only), launchAgentInstalled (the CLI LaunchAgent plist exists; the UI warns when the app schedule is also on), progress (last 200 lines)} (ADR-065, `intake_runner.rs`) |
+| intake_get_state | returns {adapter {present, updateAvailable null/bool}, nodePath, nodeMissing, schedule {kind off/hourly/daily/twiceDaily, times}, running run/setup/login/scheduleOff/null, lastResult (last `intake://finished` payload), status (`~/.ttobak/intake/status.json`, at most 256 KiB), selection [{connector, server, host, disabled}] (names only), launchAgentInstalled (the CLI LaunchAgent plist exists; the UI warns when the app schedule is also on), progress (last 200 lines)} (ADR-003, `intake_runner.rs`) |
 | intake_set_schedule / intake_set_node_path | schedule (typed); path (absolute executable regular file named `node`, else `invalid-node-path`); stored in app config `intake.json` |
 | intake_run_now / intake_setup / intake_login | start one background CLI run (setup: acceptPrivateCalendar, skip [connector]); `RUN_IN_PROGRESS` while one runs, `ADAPTER_UPDATING` during an adapter update; progress as `intake://progress` {line}, end as `intake://finished` {action, exitCode, result, code}; 20-minute timeout kills the process group |
 | intake_cancel / intake_launch_agent_off | cancel returns whether a run was cancelled; launch-agent-off runs `intake schedule off` in the same exclusive run slot (killed on quit) and returns its JSON or code |
@@ -156,7 +156,7 @@ ACL for every command called from the remote SPA: each command must be listed in
   log from the IOProc.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
   within its deadline, recording or not.
-- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-073): update
+- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-019): update
   commands are never in the remote capability (`command_acl_tests` enforces it), and
   nothing installs or restarts while `app_busy`. Update checks are disabled while the
   `tauri.conf.json` updater pubkey is the placeholder. The archive download is bounded

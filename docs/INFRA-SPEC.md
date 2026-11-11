@@ -397,7 +397,7 @@ minutes to a seven-day encrypted DLQ, with Lambda async retries disabled.
 Deploy/verify the worker before the wired API upload/retry producers and summary
 consumer. API status/text routes expose validated results; QA/UI activation remains
 separate. Creating this construct does not backfill attachments. See
-[worker contract](../backend/python/document-extract/LAMBDA.md) and ADR-039.
+[worker contract](../backend/python/document-extract/LAMBDA.md) and ADR-001.
 
 ## Whisper and research
 
@@ -753,7 +753,7 @@ own 30-second bound.
 
 Rule `ttobak-account-merge-requested` routes default-bus `ttobak.analysis` events
 with detail-type `AccountMergeRequested` (`{sourceAccountId}`) to the summarize
-Lambda (ADR-072). The API publishes one after starting or resuming a job; the
+Lambda (ADR-022). The API publishes one after starting or resuming a job; the
 worker claims a five-minute job lease under a per-invocation ID, runs the job's
 steps in `model.MergeSteps` order, saves step, cursor and counts after every
 bounded mover call, and three minutes before its deadline releases the lease and

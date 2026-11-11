@@ -1,4 +1,4 @@
-# ADR-073: Mac app distribution and in-app updates
+# ADR-019: Mac app distribution and in-app updates
 
 - Status: Accepted (2026-11-10); implementation pending owner acceptance (key
   setup, first release, teammate Mac).
@@ -31,12 +31,14 @@ the owner and teammates, not the public.
   so frontend deploys never overwrite release files.
 - **Installer:** `curl -fsSL https://ttobak.atomai.click/mac/install.sh | sh`
   (`mac-app/scripts/install.sh`). It verifies the manifest SHA-256, asks a running
-  app for `updateBusy` over the control socket, and never kills the app.
+  app for `updateBusy` over the control socket, and never force-kills the app: when
+  the app is not busy it asks the app to quit and waits.
 - **Updater:** `tauri-plugin-updater` against `mac/latest.json` with a minisign
-  public key in `tauri.conf.json` and `requireSignedVersion: true`, so a signature
+  public key in `tauri.conf.json` (still a placeholder, so in-app updates stay
+  disabled until the key is set) and `requireSignedVersion: true`, so a signature
   is bound to its version and an old signed archive cannot be replayed as a newer
   release. The update logic is Rust (`update.rs`, `update_policy.rs`); a local popup
-  (`update_prompt.rs`, `update-prompt.html`) offers Update and Later (Korean labels). Update
+  (`update_prompt.rs`, `mac-app/src/update-prompt.html`) offers Update and Later (Korean labels). Update
   commands are granted only to the local popup capability, never to the remote
   origin (a test enforces it).
 - **Busy guard:** no popup and no install while native recording, finalizing, an

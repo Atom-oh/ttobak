@@ -4,7 +4,7 @@
   rules, and dates inside mark owner decisions.
 - Implementation checked: 2026-11-11.
 
-The MCP server is an adapter over the authenticated APIs. The sections below keep, in order, the original stdio server record, the back-data tools record and the dual-transport record. Where a later section changed an earlier rule, the earlier section has been corrected to say so. Connector capabilities with private delegation (ADR-053) and local intake (ADR-065) are still separate records.
+The MCP server is an adapter over the authenticated APIs. The sections below keep, in order, the original stdio server record, the back-data tools record, the dual-transport record, the connector capability and private delegation record, and the local intake record. Where a later section changed an earlier rule, the earlier section has been corrected to say so.
 
 ## Local MCP Access to Meeting Data
 
@@ -258,3 +258,298 @@ now carries the `resource_metadata` challenge (other paths are unchanged).
 - [HTTP transport](../../mcp-server/src/http.ts)
 - [Cognito verification](../../mcp-server/src/http-auth.ts)
 - [Protocol tests](../../mcp-server/test/http-transport.test.mjs)
+
+## Connector capabilities and private delegation
+
+### Status notes
+
+Date: 2026-10-21
+
+Status: Accepted; the connector flags are enabled in source (`infra/bin/infra.ts`) after the acceptance recorded in `docs/runbooks/connector-activation-2026-10-21.md`, and each deployment from main requires exact-commit attestation
+
+### Context
+
+Connector access needs an explicit operation policy independent of HTTP verbs
+and the existing browser session. Read access must not implicitly enable note
+creation, sharing, deletion, asynchronous research or mutation-capable streaming.
+Earlier bounded meeting/document/account/project readers remain the producers;
+this work does not replace their authorization or source-revision checks.
+
+### Decision
+
+Maintain one versioned operation inventory in
+`contracts/connector/v1/operations.json`. Generate matching Go, TypeScript and
+Python tables, with a SHA-256 of the complete inventory in each output. Unknown
+operations and mismatched destinations fail closed. A route's method is a binding,
+not its capability classification. For example, revoking a share requires
+`share`, and question detection can be classified as `read` despite using POST.
+
+Capabilities are sorted, unique subsets of `delete`, `read`, `share`, `write`,
+always including `read`. Effective privileges intersect the current enabled
+client maximum, the current user's approval and the requested delegation.
+Elevated requests bind the exact approval generation and cannot outlive its
+expiry. Revoked, missing, changed or foreign approvals reject the request rather
+than silently reducing its privileges. Generation zero is read-only.
+
+Inventory eligibility is not executor availability. The API reader allowlist
+names only the eight existing bounded reading families, including account and
+project reading. The private protocol separately binds verified client identity, exact operation
+and argument bytes, destination, request identity and expiry. Ordinary browser
+authorization, domain ownership and canonical source revalidation remain
+independent requirements.
+
+### Current implementation and remaining delivery
+
+This revision supplies policy types, operation tables, deterministic generation,
+local RSA-PSS delegation verifiers and shared synthetic signature tests.
+The [wire contract](../security/connector-delegation-v1.md) defines exact bytes,
+key pinning and lifetime limits. Current grant readers now exist in Go and Python:
+client policy and user approval are read together with `TransactGetItems`, with
+strict identity, type and configured issuer/audience checks. Malformed existing
+approval rows reject rather than becoming a missing read-only approval.
+
+Policy and approval writers atomically publish the expected generation and a
+bounded audit receipt. Policy profiles are read or read/write. Grant elevation
+checks the enabled client maximum as a DynamoDB String Set; revocation and blocking remain possible after
+administrators disable or tighten that policy. Blocking has no TTL, while ordinary
+expired approvals and audit receipts retain the documented 30-day cleanup period.
+A removal-only revoke cannot clear an existing block: it returns a condition
+conflict unless the caller retains the block. Unblocking requires explicit
+re-approval through the enabled-policy and capability checks.
+SDK transaction retries carry a stable request token; a condition conflict is
+separate from an unknown transport outcome that requires generation inspection.
+No live signer, approval endpoint, OAuth client, IAM permission
+or scheduler is activated by this foundation. The API auth boundary now applies a dedicated
+read-client policy when configured.
+Its default configuration is empty; without an injected current-grant resolver,
+every dedicated client is denied. Existing first-party client authorization remains
+in force. A successful dedicated read requires fresh enabled-client grants before
+execution and again before releasing its bounded response. The QA HTTP boundary
+similarly admits only bounded question detection and denies
+dedicated clients without a current-grant resolver. Both boundaries reject
+mutation-capable and unbounded routes before dispatch; QA does not decode caller
+headers to establish a configured client's identity.
+
+The API Lambda now distinguishes a top-level private invoke frame from API
+Gateway payload 1.0. A configured exact KMS signing-key ARN enables a lazy,
+bounded public-key lookup and local signature verification; empty configuration
+keeps the private consumer unavailable. The bridge binds operation, exact argument
+bytes and current grants before calling only the bounded API read families (the
+original eight plus the account contact list and account event list/get,
+2026-11-08),
+then verifies again before releasing at most 14,000 body bytes. The router accepts
+only its verifier-created in-process principal; no HTTP header or nested request
+body selects this path. Existing services still check resource ownership and
+source revisions. The API's dedicated HTTP read boundary now receives the same
+atomic grant resolver. Its private mutations are the personal-note executor below
+and, since 2026-11-08, account contact creation: a separate executor with direct
+membership, current approval and an arguments-bound receipt in one transaction,
+storing contacts sealed under ADR-063 (contract in `docs/API-SPEC.md`). Account
+event creation uses an equivalent executor that also writes the event's
+reference row in the same transaction.
+
+The private QA consumer now accepts only `qa.readonlyAsk`, with a question and
+optional meeting ID. It verifies the same signed delegation against the QA
+destination and current grants, then reads through the existing current-source
+boundary. One bounded model call runs without tools, sessions or research/job
+creation. Current source checks and grant checks precede result delivery.
+Model evidence includes verified attachment text and its partial/retained/unavailable
+status; transcript, notes and serialized attachment context share the 24,000-byte
+limit. Attachment citations correspond to the evidence supplied to the model.
+Only the pinned public key is cached; KMS and grant clients use bounded timeouts
+and one attempt. Dedicated HTTP detection now receives the same current-grant
+reader. Empty signing-key configuration leaves private execution unavailable.
+The deployment artifact must contain the pinned ARM64 cryptography wheel before
+key configuration is enabled; source installation does not prove deployment.
+
+The MCP HTTP adapter now has an opt-in private transport for the bounded API
+reads (thirteen since the account contact list and account event list/get were
+added on 2026-11-08), `qa.readonlyAsk`, personal note creation and account
+contact and event creation. Request-scoped verified identity/scopes, atomic
+grant reads, exact-byte KMS signatures and service-IAM invocation replace bearer
+forwarding in this mode. It rechecks grants and expiry before returning bounded
+results, with one SDK attempt and bounded calls. The flag defaults off and a
+private failure never falls back to a legacy request. Stdio remains unchanged.
+
+The first-party settings page now manages the two configured connector profiles.
+Users can block their connection, restore baseline read access, approve personal
+note writing for one hour or revoke writing. Only verified administrators change
+global client enablement. Handler-to-service-to-repository calls pin the policy
+generation/binding, approval generation and audit record transactionally; an
+uncertain outcome is reconciled with a fresh view before resubmission. Management
+routes remain nondelegable, so connector tokens cannot approve themselves.
+
+Personal-note creation requires matching OAuth read/write scopes and a current
+write-approval generation. The signed request ID doubles as a caller retry key;
+the server generates a fresh random UUID for a new personal document. The
+user/client/key-scoped receipt remains authoritative for retries. Reusing a key
+after receipt removal creates a separate identity, keeping retained shares of a
+deleted note from authorizing new content. An expired but present receipt still
+conflicts. Current
+policy and approval conditions, a new document and its 30-day receipt share one
+DynamoDB transaction. Replays validate the receipt and existing note without
+overwriting edits or recreating deletions. Exact body bytes bind the receipt;
+different content conflicts. SDK create retries are disabled; uncertain results
+reconcile through the receipt. The bounded response confirms creation only,
+and grants are checked again before its delivery. No account, file or sharing
+mutation is exposed by this executor.
+
+The infrastructure supplies two dedicated public clients, a retained
+RSA signing key, metadata-only transaction grants, private invocation to the API
+live alias and QA, and a hash-pinned ARM64 cryptography layer. Existing pool/client
+identities and first-party/WebSocket allowlists remain unchanged. Application
+configuration enables issuance and private HTTP transport together. The edge
+challenge follows that private flag and requires the same read scope as MCP;
+discovery also lists optional write. HTTP hosts must use a dedicated client and
+fresh login, while stdio keeps its existing first-party authentication.
+The [release runbook](../runbooks/connector-release.md) defines separate
+deployment verification. Installed stdio bundle refresh, real provider tokens,
+audience and scope checks, current-source reads, expiry/revocation/disable
+behavior, actual KMS/IAM execution and rollback require recorded acceptance
+before main integration of any revision that enables the connector flags.
+Per-host native OAuth migration is not part of that gate: each HTTP host needs
+its own dedicated-client login, refresh and read verification, recorded only
+when that host's evidence exists, and the host guidance keeps that limit. The
+source/artifact-bound
+[dated acceptance record](../runbooks/connector-activation-2026-10-21.md) must be
+complete and land with, or before, that revision. An enabled source flag without
+that record does not satisfy this ordering. The exact merged commit is attested
+before its deployment, as the order below requires.
+No additional external callback or unauthenticated route is approved here.
+
+#### Integration and activation order
+
+Merging a revision that sets the connector flags to true is source integration,
+not activation. Such a merge is permitted only while the push-triggered Deploy
+Infrastructure and Deploy Frontend workflows are both disabled, and it still
+requires current-head review and required CI.
+
+The flags are plain source constants, so every deployment of AuthStack,
+EdgeAuthStack, GatewayStack or FrontendStack from a main commit carrying them is
+an activation, including an unrelated `--exclusively` hotfix. Before any such
+deployment, and before re-enabling either workflow, an independent source/artifact
+comparison must bind that exact main commit to the recorded production acceptance.
+Record the workflow state, the comparison result and the deployed versions in a
+dated connector activation record under `docs/runbooks/`, as the
+[release runbook](../runbooks/connector-release.md) describes. A missing exact-commit attestation for an unmerged
+candidate is a deployment precondition to report, not a merge blocker; it never
+waives the deploy-time comparison.
+
+### Verification
+
+`scripts/connector/generate_contract.py --check` compares all generated files
+against the same inventory. Language tests cover inventory hashes, explicit
+capabilities, unknown operations, destination binding, immutable returned policy
+and current approval intersection. MCP tests also check the current Go route
+inventory. These source tests do not prove deployed provider or consumer behavior.
+
+## Local MCP intake
+
+### Status notes
+
+- Status: Accepted; Phase 1 (calendar runner, CLI only) implemented. Calendar
+  acceptance on the user's Mac is pending (see the runbook). Amended
+  2026-11-10 for the meeting SpecReq task step (code only; Mac acceptance
+  pending).
+- Decision date: 2026-11-09.
+- Runbook: [local MCP intake](../runbooks/local-mcp-intake.md).
+- Related: The stdio server section (stdio-only calendar tools), ADR-024 (Mac control path).
+
+### Context
+
+The user's Mac already runs authenticated internal MCP servers (calendar, SFDC,
+SpecReq) in Claude Code, Codex and Kiro. Their credentials are Midway cookies
+and host-specific environment entries. TTOBAK should stay current with a few
+of these sources without holding provider credentials and without copying host
+configuration.
+
+### Decision
+
+- **Deterministic connectors.** A local runner (`ttobak-mcp intake`, in
+  `mcp-server/src/intake/`) is an MCP client of one selected server per
+  connector. It calls fixed read tools with fixed arguments, parses results
+  strictly and writes through the user's existing TTOBAK API token. AI hosts
+  never write to TTOBAK on a schedule. A later optional AI job may produce
+  proposals only.
+- **References, not copies.** The selection stores a host and server name, the
+  approved `PATH` directories and non-secret TTOBAK endpoints. Each run
+  re-reads that one host entry and spawns it with argv, never a shell. Command,
+  arguments and environment stay in memory. They are never written to disk,
+  printed, logged or sent to TTOBAK.
+- **Calendar.** `aws-outlook-mcp` `calendar_view` is the only calendar source.
+  It follows the [calendar sync runbook](../runbooks/local-outlook-calendar-sync.md):
+  - occurrence `meetingId` as `externalId`;
+  - join links stripped from locations;
+  - private and confidential items excluded when flagged;
+  - removals only for cancelled or excluded tracked occurrences;
+  - a journaled batch before each send, identical retry on ambiguous delivery,
+    and `complete:true` last;
+  - a 409 stops the runner until `--reconcile`.
+- **Residency.** Calendar stays private. The SFDC connector stores only the
+  opportunity ID, name and stage, for accounts a member mapped. The SpecReq
+  connector stores ID, title, status, account and a summary of at most 1,000 bytes.
+- **Task connectors (amendment, 2026-11-10).** After a synced calendar run,
+  under the same run lock, the runner keeps one private TTOBAK task per
+  occurrence ([meeting SpecReq tasks design](../superpowers/specs/2026-11-10-meeting-specreq-tasks-design.md),
+  `mcp-server/src/intake/tasks.ts`). It uses three more selected servers, each
+  limited to an exact tool allowlist (`connectors.ts`); any other name is
+  refused before the call:
+  - `meetings` (`amazon-meetings-mcp`): `list_meetings`, `get_meeting`;
+  - `specreq` (`spec-req-mcp`): `check_user_is_tam`, `search_requests_advanced`,
+    `get_request`, `acknowledge_request`;
+  - `slack` (`slack-mcp`): `lookup_user`, `open_dm_channel`, `list_drafts`,
+    `post_draft`.
+  Never `post_message`, `schedule_message`, `complete_request` or any other
+  write. Classification, linking and drafting are deterministic; no model runs.
+- **Mac notices (amendment, 2026-11-10).** The runner appends one line per
+  (task, state) to `~/.ttobak/intake/notify.jsonl` (contract in
+  `mcp-server/src/intake/notify.ts`). The Mac app reads it
+  (`mac-app/src-tauri/src/intake_notify.rs`) and posts a notification per
+  unseen `key`, tracked in `intake-notified.json` in its app data directory. A
+  line must pass strict shape, age (at most 24 hours old) and path checks; a
+  partial or malformed line is skipped. Notifications are informational: they
+  never navigate the app (a reload could discard unsaved input), and the task
+  strip on the meetings page shows the task. Delivery is unverified until the
+  Mac acceptance in the runbook.
+- **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
+- **Scheduling** uses a user-installed launchd LaunchAgent that runs
+  `intake run --noninteractive` (all selected sync connectors). Background runs never open a browser
+  login.
+- **Setup (amendment, 2026-11-10).** `intake setup` may install that
+  LaunchAgent itself, now running `intake run --noninteractive`, only with an
+  explicit `--schedule` or an interactive yes; `intake schedule <value|off>`
+  changes it alone. A connector setup skips is disabled, keeping its source ID. It probes only the known server
+  names above and still needs explicit calendar sensitivity consent.
+
+### Consequences
+
+- Local state lives in `~/.ttobak/intake/` (0700 directory, 0600 files): the
+  selection, per-source ledger, pending batch, status and a run lock.
+- Midway expiry surfaces as `AUTH_EXPIRED_MIDWAY` and needs a human `mwinit`.
+- The calendar source exposes no sensitivity flag. On 2026-11-09 a synthetic
+  event marked Private in Outlook arrived from `calendar_view` with the same
+  fields as a public one, and no `aws-outlook-mcp` calendar tool mentions
+  sensitivity. Private items are therefore neither hidden nor flagged. Real runs
+  fail closed with `SENSITIVITY_UNKNOWN`; `--accept-unknown-sensitivity` means
+  accepting that private items reach the user's private TTOBAK calendar. Dry
+  runs report the count.
+- The task step adds exactly two provider writes, both by the deterministic
+  runner (this replaces "no unattended provider writes" for these two tools):
+  - `acknowledge_request`, only when `get_request` shows `NEXT_UP` with me as
+    resolver, for a request linked to exactly one "theirs" task, once per
+    request ID ever. The local ack ledger entry is written (fsync, atomic
+    rename) before the call; an uncertain outcome is decided by a later read,
+    never by a second call. `--auto-ack off` replaces it with a notice.
+  - `post_draft`, which saves an unsent Slack draft in the counterpart's DM,
+    only after `list_drafts` shows no draft there, once per task. It never
+    overwrites a draft and never sends.
+- Task rows are private to the user (`USER#`/`SRTASK#`). They hold occurrence
+  identity, account, path, state, the counterpart's TTOBAK user ID and the
+  linked SpecReq ID, title and status. Attendee addresses, Slack IDs and text,
+  and SpecReq bodies stay on the Mac.
+- `get_meeting` `isPrivate` is a second sensitivity source, which
+  `calendar_view` lacks. A private meeting gets no task, and an unknown flag or
+  attendee list means no task.
+- Codex TOML is read by a bounded in-repo parser (`toml.ts`); no new dependency.
+- The Mac Settings UI and app-managed schedule are Phase 2.
+

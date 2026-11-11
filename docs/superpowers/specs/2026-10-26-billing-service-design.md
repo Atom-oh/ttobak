@@ -348,7 +348,7 @@ kind of insight. Proposed grouping by what the user is doing:
   file that came in, filterable by source (meeting attachment / uploaded),
   type, and whether it is indexed for Q&A. `/files` redirects to
   `/kb?source=meeting`. Owner intent (2026-10-26): meeting attachments are
-  indexed for Q&A automatically, subject to the ADR-028/039 indexing and
+  indexed for Q&A automatically, subject to the ADR-028/001 indexing and
   extraction rollout gates; this spec does not activate it.
 - Existing `/insights/...` URLs keep working; only labels and grouping change.
 - The hand-off button is removed; Billing is a normal menu item, shown only to

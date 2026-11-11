@@ -1,4 +1,4 @@
-# ADR-072: Merge one Account into another
+# ADR-022: Merge one Account into another
 
 - Status: Accepted. Preview, start, status, the write fence, the summarize worker,
   the operator CLI (`merge-accounts`) and the web merge dialog are implemented on
@@ -154,8 +154,9 @@ is unchanged and the post-merge fence never accepts a running job.
 
 The preview is read-only and bounded: members, projects, research, contacts and events
 count by sort key only (no row reads or decryption) to 10,000 (then `-1`), meeting references revalidate up to 2,000 (then `-1`), and the response is a
-fixed shape. Its route is authenticated and non-delegable. Later changes add the
-start route, worker and fence; none is active until each is deployed and accepted.
+fixed shape. Its route is authenticated and non-delegable. The start route,
+worker, fence, operator CLI and web dialog are in the code; none is active until
+it is deployed and accepted.
 
 ## Evidence
 

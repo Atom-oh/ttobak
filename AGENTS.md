@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 1ac8f6fd4897 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0ce4e23454f3 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -219,7 +219,7 @@ limit instead of claiming a Mac build passed.
   concurrent human edits. Failures retain prior content. Meeting and summary state
   deletion share the first transaction. Consumers/rule/permission precede API update.
 - **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
-  state exist (ADR-039). Consumers accept only authorized immutable result identity
+  state exist (ADR-001). Consumers accept only authorized immutable result identity
   with the current source ETag; extraction JSON does not claim a source version ID.
   Upload completion and text retry/status/page routes use `AttachmentTextService`;
   `SetAttachmentTextService` injects verified DOCUMENT collection into summarization.
@@ -292,7 +292,7 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
+| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-001/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |

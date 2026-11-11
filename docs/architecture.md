@@ -77,7 +77,7 @@ model. Browsers also use authenticated Cognito/Transcribe SDK calls and signed S
 PUTs. The Mac app records a Core Audio system-audio tap mixed with the microphone
 (ADR-024); native finished audio uploads stream directly from disk in Rust; live
 PCM crosses IPC for captions. It also polls Core Audio microphone users to offer,
-never start, a recording for detected meetings (ADR-061). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-073). The public-document route is the single intentional
+never start, a recording for detected meetings (ADR-017). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-019). The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.
 Extraction's event target/worker, API producers and summary consumer are wired;
 QA/UI activation remains separate. The KB activation configuration retains the
@@ -416,7 +416,7 @@ the same Lambda, and `backend/cmd/backfill-account-people` replays older meeting
 Runs hold a per-meeting lease that fences their writes. The people panel, graph
 and flow read the rows back with read-time revalidation.
 
-Account merge (ADR-072) is a resumable summarize-worker job: the owner starts it
+Account merge (ADR-022) is a resumable summarize-worker job: the owner starts it
 from the web dialog (preview, explicit unmoved-items acceptance, then
 `POST /merge`) and the page polls `GET /merge` until `done` or `failed`. A merging
 Account is fenced (writes return 409 `ACCOUNT_MERGING`) and the web page turns
@@ -441,7 +441,7 @@ file bytes. Remote hosting and OAuth client acceptance remain separate from code
 readiness; see [ADR-003, transports](decisions/ADR-003-mcp-access.md).
 Stdio alone can record the Mac microphone through a local ffmpeg child and upload
 the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
-The local intake runner (ADR-065) appends SpecReq task notices to
+The local intake runner (ADR-003, local intake) appends SpecReq task notices to
 `~/.ttobak/intake/notify.jsonl`. The Mac app polls that file every 60 seconds
 (`mac-app/src-tauri/src/intake_notify.rs`), validates each line, dedupes on `key`
 in its own seen store and posts a desktop notification. The file is read only
@@ -462,7 +462,7 @@ OAuth issuance and private HTTP transport; HTTP hosts must sign in with a
 dedicated client, while stdio keeps its first-party credentials. Edge challenges
 and resource discovery require the same read scope. Deployed provider, IAM,
 consumer and rollback acceptance are separate from these source flags; see
-[ADR-053](decisions/ADR-053-connector-capability-private-delegation.md).
+[ADR-003, connector delegation](decisions/ADR-003-mcp-access.md).
 
 Billing MCP reads use the caller's own JWT through the existing CloudFront
 Billing Web Function route (ADR-012), separate from Go/QA private delegation.

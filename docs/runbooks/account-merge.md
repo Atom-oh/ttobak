@@ -1,6 +1,6 @@
 # Account merge operator runbook
 
-Operator procedure for [ADR-072](../decisions/ADR-072-account-merge.md) merges that
+Operator procedure for [ADR-022](../decisions/ADR-022-account-merge.md) merges that
 need the CLI: starting a merge, moving the user-partition rows only the CLI can
 reach (during the merge or after it is done), checking progress, resuming a stalled
 job, recovering a job that failed with `REQUESTER_REVOKED`, and aborting a stuck job. This is a checked-in procedure, not deployed acceptance.
@@ -43,7 +43,7 @@ it off peak and one merge at a time. It handles three kinds of rows:
   normalization and size cap readers apply). `shareAccountId`, share state and
   meeting key are not rewritten and must be unchanged since the scan: calendar share
   rows (`CALSHARE#`) stay on A (an unmoved category), so repointing would orphan
-  them (ADR-072 amendment).
+  them (ADR-022 amendment).
 - Link-only meetings: moved with the merge's dedicated meeting writer, which never
   publishes. Published meetings are counted as `publishedMeetings` and move in the
   worker's meetings step.
@@ -182,7 +182,7 @@ After `state` is `done`:
   events appear, and a former source member still opens the unmoved categories
   (news sources, KB, documents, calendar shares, dictionary) through the tombstone.
 - The worker requests a people resolve run for the target when the job finishes;
-  links on A stay on the tombstone (ADR-072). If that publish failed, the job keeps
+  links on A stay on the tombstone (ADR-022). If that publish failed, the job keeps
   `resolvePending` and the redelivered worker event republishes it; worker logs show
   `people resolve republished`.
 

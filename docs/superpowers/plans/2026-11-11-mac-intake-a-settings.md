@@ -16,7 +16,7 @@
 
 - Exact Korean UI copy lives in `docs/superpowers/plans/2026-11-11-mac-intake-ui-copy.json`; backticked camelCase names in this plan are its keys.
 
-- Spawn with argv, never a shell; never print or forward host command/args/env values (ADR-065).
+- Spawn with argv, never a shell; never print or forward host command/args/env values (ADR-003).
 - `--noninteractive` for every scheduled or button run, except the explicit [TTOBAK login] (`ttobakLogin`) click.
 - The remote SPA passes typed options only, never argv strings or paths.
 - Every new command is in `mac-app/src-tauri/build.rs` `COMMANDS` and granted in `capabilities/default.json` `remote`.
@@ -127,7 +127,7 @@
 
 ### Task 5: Docs
 
-**Files:** `docs/runbooks/local-mcp-intake.md` (Mac app section first: install/update, setup button, schedule, catch-up, lock), `docs/decisions/ADR-065-local-mcp-intake.md` (one bullet: the app owns the schedule; the LaunchAgent stays optional; one lock across both), `docs/DESIGN-SPEC.md` (settings section, dashboard control), `mac-app/` module docs if any list commands.
+**Files:** `docs/runbooks/local-mcp-intake.md` (Mac app section first: install/update, setup button, schedule, catch-up, lock), `docs/decisions/ADR-003-mcp-access.md` (one bullet: the app owns the schedule; the LaunchAgent stays optional; one lock across both), `docs/DESIGN-SPEC.md` (settings section, dashboard control), `mac-app/` module docs if any list commands.
 
 - [ ] **Step 1:** Edit; run `python3 scripts/docs/check_docs.py` — PASS.
 - [ ] **Step 2: Commit** `docs: Mac app intake settings`.

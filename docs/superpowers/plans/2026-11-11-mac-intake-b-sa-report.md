@@ -43,7 +43,7 @@
 - Modify: `backend/internal/model/performance.go` (prefix, types, key and validation)
 - Modify: `backend/internal/repository/performance.go` (+ interface), `backend/internal/service/performance.go`, `backend/internal/handler/performance.go`, `backend/cmd/api/main.go`
 - Test: the matching `*_test.go` files
-- Create: `docs/decisions/ADR-074-sa-performance-report.md` (check `docs/decisions/` and open PRs for the next free number first), and update `docs/decisions/README.md`, `docs/API-SPEC.md` and ADR-068 (a "See ADR-074" line)
+- Create: `docs/decisions/ADR-074-sa-performance-report.md` (check `docs/decisions/` and open PRs for the next free number first), and update `docs/decisions/README.md`, `docs/API-SPEC.md` and ADR-023 (a "See ADR-074" line)
 
 **Interfaces:**
 - Produces:
@@ -61,7 +61,7 @@
 - [ ] **Step 3: Implement.** The repository uses the expression builder. Listing queries `begins_with(SK, "PERFREPORT#")` and projects summary fields only.
 - [ ] **Step 4: Write the ADR.**
   - Record the fields allowed and forbidden, and that absence of forbidden content rests on the skill rules, the prompt and server pattern checks; the owner reviews the report.
-  - The temporary MCP config file on the Mac is 0600 and deleted after the run. It is the one place server config is copied (ADR-065 otherwise references). Record that as an accepted exception.
+  - The temporary MCP config file on the Mac is 0600 and deleted after the run. It is the one place server config is copied (ADR-003 otherwise references). Record that as an accepted exception.
   - Run `go test`, `go vet`, the arm64 build and `python3 scripts/docs/check_docs.py` — PASS.
 - [ ] **Step 5: Commit** `feat(performance): owner-private SA performance reports`.
 

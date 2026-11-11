@@ -4,7 +4,7 @@ Status: historical design record (2026-11-10). Project 3 of the account
 ontology roadmap
 ([project 1 design](2026-11-08-account-signals-and-flow-design.md)). It builds
 on the local MCP intake design (`2026-11-09-local-mcp-intake-design.md`, carried
-in the calendar stack) and [ADR-065 local MCP intake](../../decisions/ADR-065-local-mcp-intake.md).
+in the calendar stack) and [ADR-003 local MCP intake](../../decisions/ADR-003-mcp-access.md).
 Items marked "(call)" are the designer's decisions; the rest are the user's.
 
 ## Intent
@@ -113,7 +113,7 @@ Superseded in part by the Phase 0 findings: the trigger is the SpecReq
 - Task row in the user's partition: occurrence identity, accountId, path,
   state, counterpart userId, linked SpecReq ID, state timestamps. Visible only
   to that user.
-- SpecReq row in the account partition per ADR-065: ID, title, status,
+- SpecReq row in the account partition per ADR-003: ID, title, status,
   account. The 1,000-byte summary is deferred (call: not needed for tasks).
 - Nothing from mail bodies, Slack, attendee addresses or SFDC beyond the
   existing opportunity ID, name and stage.
@@ -132,7 +132,7 @@ Superseded in part by the Phase 0 findings: the trigger is the SpecReq
 
 ## ADR change
 
-ADR-065 forbids unattended writes to providers. This design adds one explicit
+ADR-003 forbids unattended writes to providers. This design adds one explicit
 exception: the deterministic runner may call `spec-req-mcp`
 `acknowledge_request` for a request already assigned to the user. No other
 provider write is allowed. Slack stays draft-only.
@@ -176,7 +176,7 @@ provider write is allowed. Slack stays draft-only.
    no fuzzy matching. No match or several matches leaves the request unlinked.
    For "theirs", the requester must also be the task's counterpart.
 5. **SpecReq storage.** v1 stores the linked SpecReq ID, title and status on
-   the user's private task row only. ADR-065's account-partition SpecReq
+   the user's private task row only. ADR-003's account-partition SpecReq
    connector stays a later phase.
 6. **Write paths.** The runner sets the automatic states: classification,
    `acked`, `ack_failed`, `issued` and `resolved`. The web sets `requested`,
@@ -188,7 +188,7 @@ provider write is allowed. Slack stays draft-only.
    `~/.ttobak/intake/notify.jsonl` (0600) with a per-(task, state) key. The
    Mac app reads it on launch and every minute, posts unseen entries younger
    than 24 hours, and records the posted keys. Auto-ack is a runner selection
-   flag (`intake select specreq`, default on) until the ADR-065 Phase 2
+   flag (`intake select specreq`, default on) until the ADR-003 Phase 2
    Settings UI exists.
 8. **Phase 0 is a blocking spike** with the user present (`mwinit -o`). Its
    findings are recorded before connector code. Backend task rows, the API
@@ -210,7 +210,7 @@ recorded here.
     required. Otherwise attendees are unknown and no task is created (call).
     This join only enriches a task; the intake identity stays the Outlook
     `meetingId`.
-  - Side finding for the intake runner (ADR-065): `isPrivate` here is a
+  - Side finding for the intake runner (ADR-003): `isPrivate` here is a
     sensitivity source that `calendar_view` lacks.
 - **SpecReq.** `check_user_is_tam` returns `employee_login`.
   - `search_requests_advanced` filters on `resolverId`, `requesterId`,
