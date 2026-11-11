@@ -201,7 +201,7 @@ reviewed documentation files:
 
 - `docs/API-SPEC.md`
 - `docs/README.md`
-- `docs/decisions/ADR-053-connector-capability-private-delegation.md`
+- `docs/decisions/ADR-003-mcp-access.md`
 - `docs/runbooks/connector-activation-2026-10-21.md`
 - `docs/runbooks/connector-release.md`
 - `mcp-server/README.md`
@@ -233,7 +233,7 @@ implementation identity only when an independent comparison of its actual
 commit reproduces the exact source-projection digest and checks every changed
 path. That documentation revision still requires independent content review
 and all applicable current-head CI, including complete required reviewer
-coverage. This is not a waiver of ADR-053's integration and activation order or a reset of
+coverage. This is not a waiver of ADR-003 connector delegation's integration and activation order or a reset of
 review iterations. Changes outside the named files require a new equivalence
 assessment; a document need not contain its own future commit hash. Final
 composed-main verification remains a separate obligation.
@@ -279,7 +279,7 @@ additional difference; none is a runtime or build input.
 The news source includes the separately accepted settlement/scheduler repairs;
 its actual deployment and replay receipts are recorded above. These named inputs
 are an assessment contract, not blanket exclusions or a claim that a future
-merge is already verified. Under ADR-053's integration and activation order,
+merge is already verified. Under ADR-003 connector delegation's integration and activation order,
 before any deployment from a main commit carrying the enabled flags, and before
 re-enabling either push-triggered deploy workflow, the independent
 assessment must bind that exact commit and every path/mode/object to that
@@ -287,7 +287,7 @@ composition, reproduce the 19 connector runtime/build boundary comparisons to
 accepted `bf98ac72` under the inventoried exceptions, and preserve the separate
 news, CI and coordinator source/review bindings. Any additional difference needs explicit
 assessment. That exact-commit attestation and current checks precede the
-deployment and are recorded as ADR-053 requires; naming the component revisions alone does not
+deployment and are recorded as ADR-003 connector delegation requires; naming the component revisions alone does not
 satisfy those gates or turn unchanged compiled inputs into whole-package or
 new-build equivalence.
 

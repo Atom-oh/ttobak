@@ -83,7 +83,7 @@ executable/path templates require user testing. Provider tokens, checkpoints and
 mailbox mappings stay local. Never copy browser tokens or Outlook passwords.
 
 `ttobak-mcp intake` is a built-in reader for a local `aws-outlook-mcp`
-(ADR-065). It reads host MCP configuration by reference and syncs with this
+(ADR-003, local intake). It reads host MCP configuration by reference and syncs with this
 contract; see the [local MCP intake runbook](../docs/runbooks/local-mcp-intake.md).
 Start with `ttobak-mcp intake setup`, then `ttobak-mcp intake run`.
 

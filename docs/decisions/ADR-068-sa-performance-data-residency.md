@@ -4,14 +4,14 @@
   `backend/internal/repository/performance.go`).
 - Decision date: 2026-11-10.
 - Design: [SA performance dashboard](../superpowers/specs/2026-11-10-sa-performance-dashboard-design.md).
-- Related: ADR-065 (Local MCP intake), ADR-067 (Account people edges and
+- Related: ADR-003 (Local MCP intake), ADR-067 (Account people edges and
   deterministic entity resolution), ADR-063 (account contact encryption).
 
 ## Context
 
 The owner-only SA performance dashboard aggregates the user's own activity from
 SFDC, Outlook mail and calendar, Slack, SpecReq and TFC Hub. Local MCP intake
-(ADR-065) limits what SFDC data may reach TTOBAK and stores only calendar
+(ADR-003) limits what SFDC data may reach TTOBAK and stores only calendar
 titles and times. The dashboard needs more fields, and they must stay distinct
 from the account-shared limit, which stays opportunity ID, name and stage.
 

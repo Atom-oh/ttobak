@@ -15,7 +15,7 @@
 //!   delete them; see `leftover.rs` and `RecorderState::adopted_paths`
 //! - `meeting_detection_get/set_enabled/respond` — meeting detection prompts
 //!   (ADR-061); see `meeting_detect.rs`
-//! - `intake_*` — set up, schedule and run the local intake CLI (ADR-065);
+//! - `intake_*` — set up, schedule and run the local intake CLI (ADR-003);
 //!   see `intake_runner.rs`
 //!
 //! `read_recording_bytes` (WAV bytes via IPC binary response) used to exist
@@ -840,7 +840,7 @@ pub fn run() {
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());
-            // SpecReq task notices from the local intake runner (ADR-065).
+            // SpecReq task notices from the local intake runner (ADR-003 local intake).
             intake_notify::start(app.handle().clone());
             // Local intake runner and scheduler; failure only disables it.
             intake_runner::manage(app);
