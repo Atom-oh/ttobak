@@ -104,7 +104,7 @@ use the same query, limit and 14,000-byte rules as personal reads, and
 return `503` when a page has no decryptable share row. Shared events are not
 exposed to QA, briefs, insights, KB, vault export or any MCP tool.
 
-Account-sharing fields are validated and stored encrypted with the
+Account-sharing fields (ADR-066) are validated and stored encrypted with the
 event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
 use the Account ID format and differ from each other; `shareEvidence` holds up to
 three distinct kinds (`title`, `location`, `domain`) and requires
