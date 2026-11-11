@@ -246,7 +246,10 @@ Search freshness accepts ISO-8601 and the web-search gateway's
 `unknown` and other zones stay unknown freshness. Discovery bounds each pass with
 the connector's published-date filter (and an operator source's optional
 `searchDomains` allowlist) instead of a literal `after:` query clause, then still
-checks each result's date locally.
+checks each result's date and scope locally. `searchDomains` stays outside the
+seven-field source revision shared with the QA and Go readers; the transactional
+config guard includes it and the worker rechecks each candidate and its final URL
+against the current scope (`OUT_OF_SCOPE`).
 `news_enrichment.py` accepts only bounded schema-v1
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts

@@ -16,12 +16,12 @@ import uuid
 from botocore.exceptions import ClientError
 
 from article_fetcher import ArticleBody, FetchRejected, fetch_article
-from news_discovery import valid_source_id
+from news_discovery import DiscoveryRejected, search_domains, valid_source_id
 from news_enrichment import (
     QualityRejected, enrich_article, FINAL_MODEL_ID, MAX_TOKENS,
     QUALITY_GATE_VERSION, PROMPT_VERSION,
 )
-from news_pipeline import canonicalize_url, document_hash, is_within_days
+from news_pipeline import canonicalize_url, document_hash, in_search_scope, is_within_days
 from news_renderer import render_news_markdown
 from news_store import Attempt, LEASE_SECONDS, StateRejected, _money
 
@@ -266,6 +266,13 @@ def _process_candidate(candidate, deps):
     config = deps.store.current_config(source_id, revision)
     if custom and not _configured_custom(config, url):
         raise StateRejected("SOURCE_CHANGED")
+    try:
+        scope = () if custom else search_domains(config)
+    except DiscoveryRejected:
+        raise StateRejected("SOURCE_CHANGED") from None
+    # The scope is outside the revision; recheck it against current config.
+    if not in_search_scope(url, scope):
+        return _result("FETCH_REJECTED", source_id, reason="OUT_OF_SCOPE")
     if not _fresh(candidate, deps.now()):
         return _result("FETCH_REJECTED", source_id, reason="STALE_CANDIDATE")
     if deps.remaining() < FETCH_SECONDS + MODEL_SECONDS + SETTLEMENT_SECONDS:
@@ -276,6 +283,8 @@ def _process_candidate(candidate, deps):
         return _result("FETCH_REJECTED", source_id, reason=error.reason)
     if not isinstance(lead, ArticleBody) or not lead.final_url.startswith("https://"):
         return _result("FETCH_REJECTED", source_id, reason="INSECURE_REDIRECT")
+    if not in_search_scope(lead.final_url, scope):
+        return _result("FETCH_REJECTED", source_id, reason="OUT_OF_SCOPE")
     if not _fresh(candidate, deps.now(), lead):
         return _result("FETCH_REJECTED", source_id, reason="STALE_ARTICLE")
     canonical = canonicalize_url(lead.canonical_url)

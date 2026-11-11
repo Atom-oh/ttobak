@@ -404,8 +404,10 @@ PY
 Then confirm a SigV4 `tools/list` on the Gateway shows `filters` in the
 `ttobak-web-search-tool___WebSearch` input schema and deploy CrawlerStack alone
 with `--exclusively`. An operator source may carry a `searchDomains` list (at
-most 100 lowercase hosts) sent as `filters.domainFilter.include`; it is part of
-the source revision only when present. Acceptance is a later daily execution with
+most 100 lowercase hosts) sent as `filters.domainFilter.include` and also applied
+locally. It is not part of the source revision (published rows keep the reader
+contract); the config guard and a worker recheck reject a scope change mid-run.
+Acceptance is a later daily execution with
 `docsAdded > 0` and matching `GSI4PK=DOC#news` rows; a deployment alone is not.
 
 ## Rollback and retention

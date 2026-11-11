@@ -191,6 +191,8 @@ class TestStructuredQuality(unittest.TestCase):
             ("1.5조 원 규모다", "a 1.5 trillion won program"),
             ("점유율은 40%다", "40% of the market"),
             ("투자액은 300억원이다", "투자액은 300억원이다."),
+            ("5월 시행", "takes effect in May"),
+            ("2026.11.10 공고", "published on 2026.11.10"),
         ]
         ungrounded = [
             ("상반기 순이익 2,369억 원", "net profit of 236.8 billion won", "2369"),
@@ -198,6 +200,11 @@ class TestStructuredQuality(unittest.TestCase):
             ("점유율 40%", "40 of the market", "40%"),
             ("1조5천억 원", "1.5 trillion won", "1"),
             ("7개 계열사", "six subsidiaries", "7"),
+            # Review regressions: every base-gate token is still checked.
+            ("2026.11.11 공고", "published on 2026.11.10", "2026.11.11"),
+            ("금리는 .5% 올랐다", "rates rose 0.25%", "5%"),
+            ("5월 시행", "banks may revise the rule", "5"),
+            ("1개 은행", "one of the banks", "1"),
         ]
         for fact, excerpt in grounded:
             with self.subTest(fact=fact):
@@ -217,6 +224,15 @@ class TestStructuredQuality(unittest.TestCase):
                 missing = ", ".join(enrichment._unsupported_numbers(fact, excerpt))
                 self.assertEqual(caught.exception.errors,
                                  [f"keyFacts[2]: numeric claim absent from cited excerpt: {missing}"])
+
+    def test_numeric_tokens_cover_every_base_gate_token(self):
+        # Each _NUMBER token of a fact is also produced by the new tokenizer,
+        # so the scaled comparison can only add grounding, never skip a number.
+        for text in ("2026.11.11 공고 .5% 1,000만 3.16% 236.8 billion 7월 6개 v1.2.3 1,5",
+                     "점유율 40%와 50퍼센트, 4~5%"):
+            with self.subTest(text=text):
+                base = sorted(n.replace(",", "") for n in enrichment._NUMBER.findall(text))
+                self.assertEqual(sorted(raw for raw, _ in enrichment._number_tokens(text)), base)
 
     def test_evidence_rejection_names_the_citation_without_source_text(self):
         raw = valid_enrichment_json()

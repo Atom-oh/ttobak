@@ -22,8 +22,10 @@ _HASH = re.compile(r"[0-9a-f]{16}")
 _ATTEMPT = re.compile(r"[0-9a-f]{32}")
 _REVISION = re.compile(r"[0-9a-f]{64}")
 _MONTH = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])")
+# The seven revision fields plus the operator search scope, which is outside
+# the reader-shared revision but must not change under a reservation/publication.
 CONFIG_FIELDS = ("sourceId", "sourceName", "aliases", "newsQueries",
-                 "customUrls", "status", "ownerId")
+                 "customUrls", "status", "ownerId", "searchDomains")
 MAX_ITEM_BYTES = 128000
 LEASE_SECONDS = 1200
 MAX_RUN_ATTEMPTS = 60
