@@ -137,8 +137,9 @@ function emailKey(value: string | undefined): string {
   return (value ?? '').normalize('NFKC').trim().toLowerCase();
 }
 
+/** Mirrors the server's fill-empty-only rule: only an exactly empty field is filled. */
 function fillable(contact: ExistingContact, person: SfdcPerson): boolean {
-  return (!(contact.title ?? '').trim() && !!person.title) || !(contact.company ?? '').trim();
+  return ((contact.title ?? '') === '' && !!person.title) || (contact.company ?? '') === '';
 }
 
 function item(person: SfdcPerson, contact?: ExistingContact): SfdcContactSyncItem {
@@ -208,7 +209,12 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
     const email = emailKey(person.email);
     const targets = email ? byEmail.get(email) ?? [] : [];
     if (!targets.length) { byNameOnly.push(person); continue; }
-    if (targets.length > 1 || sfdcEmails.get(email)! > 1 || targets[0].sfdcContactId) { result.ambiguous++; continue; }
+    if (targets.length > 1 || sfdcEmails.get(email)! > 1 || targets[0].sfdcContactId) {
+      // A contact whose email belongs to another SFDC person is never a name candidate either.
+      for (const target of targets) claimed.add(target.contactId);
+      result.ambiguous++;
+      continue;
+    }
     claimed.add(targets[0].contactId);
     links.push(item(person, targets[0]));
   }
