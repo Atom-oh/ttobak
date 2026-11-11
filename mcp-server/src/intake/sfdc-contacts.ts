@@ -272,13 +272,16 @@ function internalEmail(email: string): boolean {
 
 /**
  * One customer contact, `'internal'` for an internal record type or AWS email,
- * `'invalid'` for an ID that is not an SFDC ID, or `'mismatch'` when the
- * record's own account ID is not the queried one. Phone fields are never read.
+ * `'invalid'` for a contact or account ID that is absent or not an SFDC ID,
+ * or `'mismatch'` when the record's own valid account ID is another account. Phone fields are never read.
  */
 function contactPerson(value: Record<string, unknown>, accountId: string): SfdcPerson | 'internal' | 'invalid' | 'mismatch' {
   const id = canonicalSfdcId(value.id);
   if (!id) return 'invalid';
-  if (canonicalSfdcId(value.accountId) !== accountId) return 'mismatch';
+  const ownAccount = canonicalSfdcId(value.accountId);
+  // A missing or malformed account ID is a schema problem, never proof of another account.
+  if (!ownAccount) return 'invalid';
+  if (ownAccount !== accountId) return 'mismatch';
   if (!(value.recordType === undefined || value.recordType === null || record(value.recordType))) {
     throw parseFailed('contact record has an unexpected record type');
   }
@@ -318,12 +321,13 @@ async function readAccount(source: SfdcSource, accountId: string): Promise<Accou
       const page = parsePage(await source.call(SFDC_CONTACTS_TOOL.name, {
         condition: { field: 'accountId', operator: 'EXACT_MATCH', value: accountId }, limit: PAGE_LIMIT,
         ...(after ? { after } : {}) }), SFDC_CONTACTS_TOOL.name);
-      const people = page.records.map(value => contactPerson(value, accountId));
-      for (const person of people) {
-        if (typeof person !== 'string' && seen.size === seen.add(person.id).size) {
-          throw parseFailed('search_contacts repeated a record ID');
-        }
+      // Every record with a valid ID, filtered or not, counts toward the total, so a repeat of any of
+      // them could hide a present customer: fail closed before filtering.
+      for (const value of page.records) {
+        const recordId = canonicalSfdcId(value.id);
+        if (recordId && seen.size === seen.add(recordId).size) throw parseFailed('search_contacts repeated a record ID');
       }
+      const people = page.records.map(value => contactPerson(value, accountId));
       read.fetched += page.records.length;
       for (const person of people) {
         if (person === 'internal') read.internal++;
