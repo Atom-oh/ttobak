@@ -676,9 +676,9 @@ SSE-SQS `ttobak-terms-news-dlq`, which `PipelineFailures` watches. Summarize
 receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 `off` each run logs `outcome=DISABLED`. The same pattern applies to
 `ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
-(`TRANSCRIPT_CORRECTION_MODE`); `infra/cdk.json` sets `ttobak:transcriptCorrection`
-to `on` (2026-11-11).
+(`TRANSCRIPT_CORRECTION_MODE`).
 
+`infra/cdk.json` sets `ttobak:transcriptCorrection` to `on` (2026-11-11).
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
