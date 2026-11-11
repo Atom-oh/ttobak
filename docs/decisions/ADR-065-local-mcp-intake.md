@@ -28,7 +28,8 @@ configuration.
   approved `PATH` directories and non-secret TTOBAK endpoints. Each run
   re-reads that one host entry and spawns it with argv, never a shell. Command,
   arguments and environment stay in memory. They are never written to disk,
-  printed, logged or sent to TTOBAK.
+  printed, logged or sent to TTOBAK. The one exception is the SA performance report run's temporary
+  0600 configuration file, deleted after the run (ADR-068).
 - **Calendar.** `aws-outlook-mcp` `calendar_view` is the only calendar source.
   It follows the [calendar sync runbook](../runbooks/local-outlook-calendar-sync.md):
   - occurrence `meetingId` as `externalId`;
