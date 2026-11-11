@@ -24,7 +24,7 @@ meeting. See the [local reader runbook](runbooks/local-outlook-calendar-sync.md)
 | `GET /api/calendar/sources` | Optional `limit`, `cursor` | `{sources:[...],nextCursor:string|null}` |
 | `GET /api/accounts/{accountId}/calendar` | Required `from`, `to`; optional `limit`, `cursor` | `{events:[AccountCalendarEvent],nextCursor:string|null}` |
 | `PUT /api/calendar/sources/{sourceId}/events/{eventId}/sharing` | Nonzero UUID source, `[A-Za-z0-9_-]{1,128}` event; JSON `mode` (`auto`, `account` or `hidden`), optional `accountId`; at most 4 KiB | `200` owner event view |
-| `GET /api/calendar/share-directory` | No parameters | `{accounts:[{accountId,name,aliases,domains}]}`, at most 64 KiB; accounts whose canonical membership row confirms direct membership, merge tombstones excluded |
+| `GET /api/calendar/share-directory` | Optional `cursor` (an accountId) | `{accounts:[{accountId,name,aliases,domains}], nextCursor?}`: at most 200 accounts by accountId and 60 KiB of entries per page, continued by `nextCursor`; accounts whose canonical membership row confirms direct membership, merge tombstones excluded |
 
 Sync JSON is limited to 64 KiB. Unknown, duplicate or incorrectly cased fields,
 null values, invalid types and unsupported query parameters are rejected.

@@ -74,7 +74,7 @@ func (fake *calendarAPIFake) SetEventSharing(_ context.Context, userID, sourceID
 	return &model.CalendarEvent{SharingMode: request.Mode}, fake.err
 }
 
-func (fake *calendarAPIFake) ShareDirectory(_ context.Context, userID string) (*model.CalendarShareDirectory, error) {
+func (fake *calendarAPIFake) ShareDirectory(_ context.Context, userID, _ string) (*model.CalendarShareDirectory, error) {
 	fake.calls++
 	fake.userID = userID
 	return &model.CalendarShareDirectory{Accounts: []model.CalendarShareDirectoryAccount{}}, fake.err
