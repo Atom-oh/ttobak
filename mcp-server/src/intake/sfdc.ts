@@ -17,7 +17,10 @@ export const SFDC_PERSONAL_TOOL: ToolExpectation = { name: 'get_my_personal_deta
 export const SFDC_REGISTRY_TOOL: ToolExpectation = { name: 'get_registry_assignments',
   properties: ['employeeIdentifier', 'hierarchyLevel', 'limit', 'after'] };
 export const SFDC_TASKS_TOOL: ToolExpectation = { name: 'search_tasks', properties: ['condition', 'limit', 'after'] };
-export const SFDC_TOOLS: readonly ToolExpectation[] = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];
+/** Read tool of the `sfdc-contacts` step, which runs at the end of this connector's run on the same session. */
+export const SFDC_CONTACTS_TOOL: ToolExpectation = { name: 'search_contacts', properties: ['condition', 'limit', 'after'] };
+export const SFDC_TOOLS: readonly ToolExpectation[] = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL,
+  SFDC_CONTACTS_TOOL];
 
 /** Role of an account that only the owner's SA Tasks reference. */
 export const ACTIVITY_ROLE = 'activity';
@@ -59,15 +62,15 @@ export interface SfdcCounts {
 
 // ---------- parsing (pure) ----------
 
-function record(value: unknown): value is Record<string, unknown> {
+export function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseFailed(detail: string): IntakeError {
+export function parseFailed(detail: string): IntakeError {
   return new IntakeError('PARSE_FAILED', detail);
 }
 
-function truncateBytes(value: string, bytes: number): string {
+export function truncateBytes(value: string, bytes: number): string {
   const clean = value.replace(/\0/g, '');
   if (Buffer.byteLength(clean) <= bytes) return clean;
   let result = '';
@@ -79,7 +82,7 @@ function truncateBytes(value: string, bytes: number): string {
 }
 
 /** A missing or null text field is empty; any other non-string fails the read. */
-function text(value: Record<string, unknown>, key: string, bytes: number): string {
+export function text(value: Record<string, unknown>, key: string, bytes: number): string {
   const item = value[key];
   if (item === undefined || item === null) return '';
   if (typeof item !== 'string') throw parseFailed(`${key} has an unexpected type`);
@@ -93,10 +96,10 @@ function validDate(value: string): boolean {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
-interface Page { records: Record<string, unknown>[]; hasNextPage: boolean; cursor: string | null; totalCount: number }
+export interface Page { records: Record<string, unknown>[]; hasNextPage: boolean; cursor: string | null; totalCount: number }
 
 /** One `{data:{resultRecords,totalCount,hasNextPage,cursor}}` page; `totalCount` is a string. */
-function parsePage(payload: unknown, tool: string): Page {
+export function parsePage(payload: unknown, tool: string): Page {
   const data = record(payload) ? payload.data : undefined;
   if (!record(data) || !Array.isArray(data.resultRecords) || data.resultRecords.length > PAGE_LIMIT ||
       typeof data.totalCount !== 'string' || !/^\d{1,9}$/.test(data.totalCount) ||

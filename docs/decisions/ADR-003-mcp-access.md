@@ -486,9 +486,11 @@ configuration.
   - a journaled batch before each send, identical retry on ambiguous delivery,
     and `complete:true` last;
   - a 409 stops the runner until `--reconcile`.
-- **Residency.** Calendar stays private. The SFDC connector stores only the
-  opportunity ID, name and stage, for accounts a member mapped. The SpecReq
-  connector stores ID, title, status, account and a summary of at most 1,000 bytes.
+- **Residency.** Calendar stays private. The SFDC connector's owner-private
+  fields and its account-shared contacts follow ADR-023's residency tables,
+  including the SFDC contacts row (name, title, company and IDs; never email or
+  phone). The SpecReq connector stores ID, title, status, account and a summary
+  of at most 1,000 bytes.
 - **Task connectors (amendment, 2026-11-10).** After a synced calendar run,
   under the same run lock, the runner keeps one private TTOBAK task per
   occurrence ([meeting SpecReq tasks design](../superpowers/specs/2026-11-10-meeting-specreq-tasks-design.md),
@@ -512,6 +514,14 @@ configuration.
   never navigate the app (a reload could discard unsaved input), and the task
   strip on the meetings page shows the task. Delivery is unverified until the
   Mac acceptance in the runbook.
+- **SFDC contacts step (amendment, 2026-11-11).** At the end of each `sfdc`
+  connector run, on the same session, the runner reads `search_contacts` (a
+  read tool on the `sfdc` allowlist) for every SFDC account mapped to a TTOBAK
+  Account, matches the people against that Account's contacts on the Mac and
+  sends one bounded batch per Account to `POST /api/accounts/{id}/contacts/sfdc-sync`
+  (ADR-021). Emails are compared on the Mac only; no email or phone reaches a
+  request, log, status file or ledger. A failure of the step is a
+  `PARTIAL_FAILURE` of `intake run`; `AUTH_EXPIRED_MIDWAY` stops it.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** is owned by the Mac app, which runs `intake run
   --noninteractive` (all selected sync connectors) itself, with launch and wake

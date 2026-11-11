@@ -14,7 +14,8 @@ import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
 import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
-import { SFDC_TOOLS, runSfdc, type SfdcCounts } from './sfdc.js';
+import { SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
+import { runSfdcContacts, type SfdcContactCounts } from './sfdc-contacts.js';
 import { resolveMe } from './specreq.js';
 import { IntakeStore } from './store.js';
 import { runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
@@ -59,6 +60,13 @@ export interface RunStatus {
     counts?: SfdcCounts;
     revisions?: Record<string, number | null>;
     scope?: string;
+  };
+  /** The `sfdc-contacts` step; never any contact data. */
+  sfdcContacts?: {
+    lastRunAt: string;
+    lastSuccessAt?: string;
+    result: 'ok' | IntakeCode;
+    counts?: SfdcContactCounts;
   };
 }
 
@@ -455,14 +463,17 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
     const active = session;
+    const source: SfdcSource = { call: async (tool, request) => resultJson(await active.call(tool, request), tool) };
     const result = await runSfdc({
-      store, api, sourceId: selected.sourceId, scope, now: startedAt, dryRun, reconcile: options.reconcile === true,
-      source: { call: async (tool, request) => resultJson(await active.call(tool, request), tool) },
+      store, api, sourceId: selected.sourceId, scope, now: startedAt, dryRun, reconcile: options.reconcile === true, source,
     });
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
     writeStatus({ lastRunAt: startedAt.toISOString(), result: 'ok', dryRun, counts: result.counts,
       revisions: result.revisions, ...(scope ? { scope } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}) });
-    return { ok: true, connector: 'sfdc', dryRun, counts: result.counts };
+    // The contacts step reuses this session and sign-in. Its failures never change the
+    // SFDC result; `intake run` reports them as a partial failure.
+    const sfdcContacts = api ? await sfdcContactsStep(store, source, api, scope, dryRun, environment.now()) : undefined;
+    return { ok: true, connector: 'sfdc', dryRun, counts: result.counts, ...(sfdcContacts ? { sfdcContacts } : {}) };
   } catch (error) {
     const entry: NonNullable<RunStatus['sfdc']> = { ...(previous ?? {}), lastRunAt: startedAt.toISOString(),
       result: intakeCode(error), dryRun };
@@ -473,6 +484,23 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     await session?.close();
     release();
   }
+}
+
+/** Runs `sfdc-contacts` and records its status entry (`lastRunAt`, `lastSuccessAt`, `result`, `counts` only). */
+async function sfdcContactsStep(store: IntakeStore, source: SfdcSource, api: TtobakApi, scope: string | undefined,
+  dryRun: boolean, ranAt: Date): Promise<{ result: 'ok' | IntakeCode; counts?: SfdcContactCounts }> {
+  let step: { result: 'ok' | IntakeCode; counts?: SfdcContactCounts };
+  try { step = await runSfdcContacts({ session: source, api, dryRun, store, ...(scope ? { scope } : {}) }); } catch (error) {
+    step = { result: intakeCode(error) };
+  }
+  try {
+    const status = store.read<RunStatus>('status.json') ?? {};
+    const previous = status.sfdcContacts?.lastSuccessAt;
+    const lastSuccessAt = step.result === 'ok' && !dryRun ? ranAt.toISOString() : previous;
+    store.write({ ...status, sfdcContacts: { lastRunAt: ranAt.toISOString(), result: step.result,
+      ...(step.counts ? { counts: step.counts } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}) } }, 'status.json');
+  } catch { /* the step result stands */ }
+  return step;
 }
 
 export const SYNC_CONNECTORS = ['calendar', 'sfdc'] as const;
@@ -510,6 +538,10 @@ export async function runConnectors(options: { dryRun: boolean; noninteractive: 
         code = 'AUTH_EXPIRED_MIDWAY';
         break;
       }
+      // The SFDC contacts step is its own source: a failure is partial, Midway expiry stops the run.
+      const contacts = 'sfdcContacts' in rest ? rest.sfdcContacts : undefined;
+      if (contacts?.result === 'AUTH_EXPIRED_MIDWAY') { code = 'AUTH_EXPIRED_MIDWAY'; break; }
+      if (contacts && contacts.result !== 'ok') code ??= 'PARTIAL_FAILURE';
     } catch (error) {
       const failure = intakeCode(error);
       results[id] = { result: failure };

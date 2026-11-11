@@ -756,7 +756,8 @@ test('sfdc schema change fails closed', async t => {
   }
   assert.throws(() => parseAssignments(page([{ ...registryRecord('001XX0000000A1AAA', 'Alpha'), nodeId: null }])),
     error => error.code === 'PARSE_FAILED');
-  assert.deepEqual(SFDC_TOOLS.map(tool => tool.name), ['get_my_personal_details', 'get_registry_assignments', 'search_tasks']);
+  assert.deepEqual(SFDC_TOOLS.map(tool => tool.name), ['get_my_personal_details', 'get_registry_assignments', 'search_tasks',
+    'search_contacts']);
 });
 
 test('sfdc delivery: identical retry after ambiguous failure, conflict blocks until reconcile', async t => {

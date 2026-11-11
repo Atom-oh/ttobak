@@ -466,8 +466,8 @@ var init_util = __esm({
       util2.assertNever = assertNever2;
       util2.arrayToEnum = (items) => {
         const obj = {};
-        for (const item of items) {
-          obj[item] = item;
+        for (const item2 of items) {
+          obj[item2] = item2;
         }
         return obj;
       };
@@ -494,9 +494,9 @@ var init_util = __esm({
         return keys2;
       };
       util2.find = (arr, checker) => {
-        for (const item of arr) {
-          if (checker(item))
-            return item;
+        for (const item2 of arr) {
+          if (checker(item2))
+            return item2;
         }
         return void 0;
       };
@@ -1077,7 +1077,7 @@ function deepPartialify(schema) {
   } else if (schema instanceof ZodNullable) {
     return ZodNullable.create(deepPartialify(schema.unwrap()));
   } else if (schema instanceof ZodTuple) {
-    return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
+    return ZodTuple.create(schema.items.map((item2) => deepPartialify(item2)));
   } else {
     return schema;
   }
@@ -2743,14 +2743,14 @@ var init_types = __esm({
           }
         }
         if (ctx.common.async) {
-          return Promise.all([...ctx.data].map((item, i) => {
-            return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+          return Promise.all([...ctx.data].map((item2, i) => {
+            return def.type._parseAsync(new ParseInputLazyPath(ctx, item2, ctx.path, i));
           })).then((result2) => {
             return ParseStatus.mergeArray(status, result2);
           });
         }
-        const result = [...ctx.data].map((item, i) => {
-          return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+        const result = [...ctx.data].map((item2, i) => {
+          return def.type._parseSync(new ParseInputLazyPath(ctx, item2, ctx.path, i));
         });
         return ParseStatus.mergeArray(status, result);
       }
@@ -3410,11 +3410,11 @@ var init_types = __esm({
           });
           status.dirty();
         }
-        const items = [...ctx.data].map((item, itemIndex) => {
+        const items = [...ctx.data].map((item2, itemIndex) => {
           const schema = this._def.items[itemIndex] || this._def.rest;
           if (!schema)
             return null;
-          return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
+          return schema._parse(new ParseInputLazyPath(ctx, item2, ctx.path, itemIndex));
         }).filter((x) => !!x);
         if (ctx.common.async) {
           return Promise.all(items).then((results) => {
@@ -3614,7 +3614,7 @@ var init_types = __esm({
           }
           return { status: status.value, value: parsedSet };
         }
-        const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
+        const elements = [...ctx.data.values()].map((item2, i) => valueType._parse(new ParseInputLazyPath(ctx, item2, ctx.path, i)));
         if (ctx.common.async) {
           return Promise.all(elements).then((elements2) => finalizeSet(elements2));
         } else {
@@ -7037,9 +7037,9 @@ var init_schemas = __esm({
         payload.value = Array(input.length);
         const proms = [];
         for (let i = 0; i < input.length; i++) {
-          const item = input[i];
+          const item2 = input[i];
           const result = def.element._zod.run({
-            value: item,
+            value: item2,
             issues: []
           }, ctx);
           if (result instanceof Promise) {
@@ -7389,7 +7389,7 @@ var init_schemas = __esm({
         }
         payload.value = [];
         const proms = [];
-        const reversedIndex = [...items].reverse().findIndex((item) => item._zod.optin !== "optional");
+        const reversedIndex = [...items].reverse().findIndex((item2) => item2._zod.optin !== "optional");
         const optStart = reversedIndex === -1 ? 0 : items.length - reversedIndex;
         if (!def.rest) {
           const tooBig = input.length > items.length;
@@ -7405,13 +7405,13 @@ var init_schemas = __esm({
           }
         }
         let i = -1;
-        for (const item of items) {
+        for (const item2 of items) {
           i++;
           if (i >= input.length) {
             if (i >= optStart)
               continue;
           }
-          const result = item._zod.run({
+          const result = item2._zod.run({
             value: input[i],
             issues: []
           }, ctx);
@@ -7595,8 +7595,8 @@ var init_schemas = __esm({
         }
         const proms = [];
         payload.value = /* @__PURE__ */ new Set();
-        for (const item of input) {
-          const result = def.valueType._zod.run({ value: item, issues: [] }, ctx);
+        for (const item2 of input) {
+          const result = def.valueType._zod.run({ value: item2, issues: [] }, ctx);
           if (result instanceof Promise) {
             proms.push(result.then((result2) => handleSetResult(result2, payload)));
           } else
@@ -9218,12 +9218,12 @@ function _startsWith(prefix, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _endsWith(suffix, params) {
+function _endsWith(suffix2, params) {
   return new $ZodCheckEndsWith({
     check: "string_format",
     format: "ends_with",
     ...normalizeParams(params),
-    suffix
+    suffix: suffix2
   });
 }
 // @__NO_SIDE_EFFECTS__
@@ -9771,8 +9771,8 @@ function isTransforming(_schema, _ctx) {
     return false;
   }
   if (def.type === "tuple") {
-    for (const item of def.items) {
-      if (isTransforming(item, ctx))
+    for (const item2 of def.items) {
+      if (isTransforming(item2, ctx))
         return true;
     }
     if (def.rest && isTransforming(def.rest, ctx))
@@ -14876,8 +14876,8 @@ var require_code = __commonJS({
       emptyStr() {
         if (this._items.length > 1)
           return false;
-        const item = this._items[0];
-        return item === "" || item === '""';
+        const item2 = this._items[0];
+        return item2 === "" || item2 === '""';
       }
       get str() {
         var _a2;
@@ -15866,8 +15866,8 @@ var require_util = __commonJS({
     var code_1 = require_code();
     function toHash(arr) {
       const hash3 = {};
-      for (const item of arr)
-        hash3[item] = true;
+      for (const item2 of arr)
+        hash3[item2] = true;
       return hash3;
     }
     exports.toHash = toHash;
@@ -20150,19 +20150,19 @@ var require_uniqueItems = __commonJS({
           return itemTypes.length > 0 && !itemTypes.some((t) => t === "object" || t === "array");
         }
         function loopN(i, j) {
-          const item = gen.name("item");
-          const wrongType = (0, dataType_1.checkDataTypes)(itemTypes, item, it.opts.strictNumbers, dataType_1.DataType.Wrong);
+          const item2 = gen.name("item");
+          const wrongType = (0, dataType_1.checkDataTypes)(itemTypes, item2, it.opts.strictNumbers, dataType_1.DataType.Wrong);
           const indices = gen.const("indices", (0, codegen_1._)`{}`);
           gen.for((0, codegen_1._)`;${i}--;`, () => {
-            gen.let(item, (0, codegen_1._)`${data}[${i}]`);
+            gen.let(item2, (0, codegen_1._)`${data}[${i}]`);
             gen.if(wrongType, (0, codegen_1._)`continue`);
             if (itemTypes.length > 1)
-              gen.if((0, codegen_1._)`typeof ${item} == "string"`, (0, codegen_1._)`${item} += "_"`);
-            gen.if((0, codegen_1._)`typeof ${indices}[${item}] == "number"`, () => {
-              gen.assign(j, (0, codegen_1._)`${indices}[${item}]`);
+              gen.if((0, codegen_1._)`typeof ${item2} == "string"`, (0, codegen_1._)`${item2} += "_"`);
+            gen.if((0, codegen_1._)`typeof ${indices}[${item2}] == "number"`, () => {
+              gen.assign(j, (0, codegen_1._)`${indices}[${item2}]`);
               cxt.error();
               gen.assign(valid, false).break();
-            }).code((0, codegen_1._)`${indices}[${item}] = ${i}`);
+            }).code((0, codegen_1._)`${indices}[${item2}] = ${i}`);
           });
         }
         function loopN2(i, j) {
@@ -23929,7 +23929,7 @@ function parseApiResponse(status, body) {
   }
   return parsed;
 }
-var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, PERFORMANCE_REPORT_KEY, MAX_PERFORMANCE_REPORT_BYTES, ApiResponseError, TtobakApi;
+var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES, PERFORMANCE_REPORT_KEY, MAX_PERFORMANCE_REPORT_BYTES, ApiResponseError, TtobakApi;
 var init_api2 = __esm({
   "src/api.ts"() {
     "use strict";
@@ -23975,6 +23975,7 @@ var init_api2 = __esm({
     PERFORMANCE_SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     MAX_PERFORMANCE_API_BYTES = 14e3;
     MAX_PERFORMANCE_MAPPINGS_BYTES = 2e6;
+    MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES = 256 * 1024;
     PERFORMANCE_REPORT_KEY = /^(W\d{4}-\d{2}|Q\d{4}-[1-4]|Y\d{4}|C\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2})$/;
     MAX_PERFORMANCE_REPORT_BYTES = 6 * 262144 + 4096;
     ApiResponseError = class extends Error {
@@ -24129,10 +24130,20 @@ var init_api2 = __esm({
       async listAccounts() {
         return this.get("/api/accounts");
       }
-      async listAccountContacts(accountId, options) {
+      /** One contact page; `maxResponseBytes` lets local intake read full 25-contact pages (each contact at most 12,000 bytes). */
+      async listAccountContacts(accountId, options, maxResponseBytes = MAX_READING_BYTES) {
         const query = new URLSearchParams({ limit: String(options.limit) });
         if (options.cursor !== void 0) query.set("cursor", options.cursor);
-        return this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/contacts?${query}`, void 0, MAX_READING_BYTES);
+        return this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/contacts?${query}`, void 0, maxResponseBytes);
+      }
+      /** One bounded SFDC contact batch of the Mac intake; the body carries no email or phone. */
+      async syncSfdcContacts(accountId, body) {
+        return this.request(
+          "POST",
+          `/api/accounts/${identifier(accountId, "accountId")}/contacts/sfdc-sync`,
+          body,
+          MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES
+        );
       }
       get requiresContactIdempotency() {
         return !!this.options.privateTransport;
@@ -25246,9 +25257,9 @@ function optionalType2(value, key, type) {
 function parseOutlookItems(payload) {
   const list2 = Array.isArray(payload) ? payload : payload && typeof payload === "object" && Array.isArray(payload.meetings) ? payload.meetings : null;
   if (!list2 || list2.length > MAX_ITEMS) throw new IntakeError("PARSE_FAILED", "calendar_view returned an unexpected shape");
-  return list2.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) throw new IntakeError("PARSE_FAILED", "calendar item is not an object");
-    const value = item;
+  return list2.map((item2) => {
+    if (!item2 || typeof item2 !== "object" || Array.isArray(item2)) throw new IntakeError("PARSE_FAILED", "calendar item is not an object");
+    const value = item2;
     if (typeof value.meetingId !== "string" || !value.meetingId || typeof value.start !== "string" || typeof value.end !== "string" || !optionalType2(value, "subject", "string") || !optionalType2(value, "location", "string") || !optionalType2(value, "isCanceled", "boolean") || !optionalType2(value, "isAllDay", "boolean") || !optionalType2(value, "sensitivity", "string")) {
       throw new IntakeError("PARSE_FAILED", "calendar item has unexpected field types");
     }
@@ -25293,8 +25304,8 @@ function organizerDomain(email3) {
   const domain2 = email3.slice(at + 1).trim().toLowerCase();
   return /^[a-z0-9.-]{1,253}$/.test(domain2) ? domain2 : void 0;
 }
-function excludedSensitivity(item) {
-  return item.sensitivity !== void 0 && /^(private|confidential)$/i.test(item.sensitivity.trim());
+function excludedSensitivity(item2) {
+  return item2.sensitivity !== void 0 && /^(private|confidential)$/i.test(item2.sensitivity.trim());
 }
 function instantOf(value) {
   const date4 = new Date(value);
@@ -25304,26 +25315,26 @@ function isLocalMidnight(instant2, zone) {
   const parts = zoneParts(instant2, zone);
   return parts.hour === 0 && parts.minute === 0 && parts.second === 0 && instant2.getMilliseconds() === 0;
 }
-function toEvent(item, zone) {
-  const start = instantOf(item.start), end = instantOf(item.end);
+function toEvent(item2, zone) {
+  const start = instantOf(item2.start), end = instantOf(item2.end);
   if (!start || !end || end <= start) return null;
-  const title = truncateBytes(item.subject?.trim() ? item.subject : UNTITLED, 512);
+  const title = truncateBytes(item2.subject?.trim() ? item2.subject : UNTITLED, 512);
   const event = {
-    externalId: item.meetingId,
+    externalId: item2.meetingId,
     title,
-    startsAt: item.start,
-    endsAt: item.end,
+    startsAt: item2.start,
+    endsAt: item2.end,
     timeZone: zone,
     isAllDay: false
   };
-  if (item.isAllDay && isLocalMidnight(start, zone) && isLocalMidnight(end, zone)) {
+  if (item2.isAllDay && isLocalMidnight(start, zone) && isLocalMidnight(end, zone)) {
     event.isAllDay = true;
     event.startDate = isoDate(localDate(start, zone));
     event.endDate = isoDate(localDate(end, zone));
   }
-  const location = sanitizeLocation(item.location);
+  const location = sanitizeLocation(item2.location);
   if (location) event.location = location;
-  const domain2 = organizerDomain(item.organizer?.email);
+  const domain2 = organizerDomain(item2.organizer?.email);
   if (domain2) event.organizerDomain = domain2;
   return event;
 }
@@ -25371,32 +25382,32 @@ function planCalendar(items, ledger, window, zone) {
     counts.removals++;
     return true;
   };
-  for (const item of items) {
-    if (seen.has(item.meetingId)) continue;
-    const start = instantOf(item.start), end = instantOf(item.end);
+  for (const item2 of items) {
+    if (seen.has(item2.meetingId)) continue;
+    const start = instantOf(item2.start), end = instantOf(item2.end);
     if (!start || !end) {
       counts.skippedInvalid++;
       continue;
     }
     if (!(end > window.start && start < window.end)) continue;
-    seen.add(item.meetingId);
+    seen.add(item2.meetingId);
     counts.fetched++;
-    if (item.sensitivity === void 0) counts.sensitivityUnknown++;
-    if (item.isCanceled) {
-      if (!removeTracked(item.meetingId)) counts.cancelledUntracked++;
-      else preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: "remove" });
+    if (item2.sensitivity === void 0) counts.sensitivityUnknown++;
+    if (item2.isCanceled) {
+      if (!removeTracked(item2.meetingId)) counts.cancelledUntracked++;
+      else preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
-    if (excludedSensitivity(item)) {
+    if (excludedSensitivity(item2)) {
       counts.excluded++;
-      removeTracked(item.meetingId);
+      removeTracked(item2.meetingId);
       continue;
     }
     if (end.getTime() - start.getTime() > LONG_EVENT_MS) {
       counts.skippedLong++;
       continue;
     }
-    const event = toEvent(item, zone);
+    const event = toEvent(item2, zone);
     if (!event || !validEvent(event, window)) {
       counts.skippedInvalid++;
       continue;
@@ -25542,7 +25553,7 @@ async function runCalendar(options) {
   state.ledger = pruneLedger(state.ledger, now);
   store.write(state, ...statePath(state));
   const upserted = /* @__PURE__ */ new Map();
-  for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
+  for (const item2 of items) if (Object.hasOwn(plan.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
 var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN;
@@ -25924,9 +25935,9 @@ function expand(value, host) {
 function stringArray(value, host) {
   if (!Array.isArray(value) || value.length > MAX_ARGS) return void 0;
   const items = [];
-  for (const item of value) {
-    if (typeof item !== "string" || Buffer.byteLength(item) > MAX_ARG_BYTES || item.includes("\0")) return void 0;
-    items.push(expand(item, host));
+  for (const item2 of value) {
+    if (typeof item2 !== "string" || Buffer.byteLength(item2) > MAX_ARG_BYTES || item2.includes("\0")) return void 0;
+    items.push(expand(item2, host));
   }
   return items;
 }
@@ -25935,9 +25946,9 @@ function stringMap(value, host) {
   const entries3 = Object.entries(value);
   if (entries3.length > MAX_ENV) return void 0;
   const result = {};
-  for (const [key, item] of entries3) {
-    if (!ENV_NAME.test(key) || typeof item !== "string" || Buffer.byteLength(item) > MAX_ARG_BYTES || item.includes("\0")) return void 0;
-    result[key] = expand(item, host);
+  for (const [key, item2] of entries3) {
+    if (!ENV_NAME.test(key) || typeof item2 !== "string" || Buffer.byteLength(item2) > MAX_ARG_BYTES || item2.includes("\0")) return void 0;
+    result[key] = expand(item2, host);
   }
   return result;
 }
@@ -27457,7 +27468,7 @@ var init_stdio2 = __esm({
 // src/intake/mcp-client.ts
 function resultJson(result, tool) {
   if (result.structuredContent !== void 0) return result.structuredContent;
-  const texts2 = (result.content ?? []).filter((item) => item.type === "text").map((item) => item.text);
+  const texts2 = (result.content ?? []).filter((item2) => item2.type === "text").map((item2) => item2.text);
   for (const text4 of texts2) {
     const wrapped = /<untrusted_content_[A-Za-z0-9]+>\s*([\s\S]*?)\s*<\/untrusted_content_[A-Za-z0-9]+>/.exec(text4);
     const candidate = (wrapped ? wrapped[1] : text4).trim();
@@ -27537,7 +27548,7 @@ var init_mcp_client = __esm({
           cursor = result.nextCursor;
           if (!cursor) break;
         }
-        const tool = tools.find((item) => item.name === expectation.name);
+        const tool = tools.find((item2) => item2.name === expectation.name);
         const properties = tool?.inputSchema?.properties ?? {};
         if (!tool || expectation.properties.some((property) => !(property in properties))) {
           throw new IntakeError("SCHEMA_CHANGED", `${expectation.name} is missing or its input schema changed`);
@@ -27558,7 +27569,7 @@ var init_mcp_client = __esm({
           throw new IntakeError("PARSE_FAILED", `${name} result exceeds ${MAX_RESULT_BYTES2} bytes`);
         }
         if (result.isError) {
-          const text4 = (result.content ?? []).map((item) => item.type === "text" ? item.text : "").join(" ");
+          const text4 = (result.content ?? []).map((item2) => item2.type === "text" ? item2.text : "").join(" ");
           if (AUTH_PATTERN.test(text4) || AUTH_PATTERN.test(this.stderr())) {
             throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${name} reported an authentication failure`);
           }
@@ -27702,10 +27713,10 @@ function truncateBytes2(value, bytes) {
   return result;
 }
 function text(value, key, bytes) {
-  const item = value[key];
-  if (item === void 0 || item === null) return "";
-  if (typeof item !== "string") throw parseFailed(`${key} has an unexpected type`);
-  return truncateBytes2(item.trim(), bytes);
+  const item2 = value[key];
+  if (item2 === void 0 || item2 === null) return "";
+  if (typeof item2 !== "string") throw parseFailed(`${key} has an unexpected type`);
+  return truncateBytes2(item2.trim(), bytes);
 }
 function validDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -27749,8 +27760,8 @@ function registryRecord(value) {
   } };
 }
 function registryAssignments(records2) {
-  const sales = records2.map(registryRecord).filter((item) => item !== null);
-  const newest = sales.reduce((latest, item) => item.version > latest ? item.version : latest, "");
+  const sales = records2.map(registryRecord).filter((item2) => item2 !== null);
+  const newest = sales.reduce((latest, item2) => item2.version > latest ? item2.version : latest, "");
   const result = /* @__PURE__ */ new Map();
   for (const { version: version3, assignment } of sales) {
     if (version3 === newest && !result.has(assignment.sfdcAccountId)) result.set(assignment.sfdcAccountId, assignment);
@@ -27949,11 +27960,11 @@ async function serverRevisions(api) {
   const sources = record17(value) && Array.isArray(value.sources) ? value.sources : null;
   if (!sources) throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
   const result = { "sfdc-assignments": 0, "sfdc-tasks": 0 };
-  for (const item of sources) {
-    if (!record17(item) || typeof item.source !== "string" || !Number.isSafeInteger(item.revision) || item.revision < 0) {
+  for (const item2 of sources) {
+    if (!record17(item2) || typeof item2.source !== "string" || !Number.isSafeInteger(item2.revision) || item2.revision < 0) {
       throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
     }
-    if (item.source === "sfdc-assignments" || item.source === "sfdc-tasks") result[item.source] = item.revision;
+    if (item2.source === "sfdc-assignments" || item2.source === "sfdc-tasks") result[item2.source] = item2.revision;
   }
   return result;
 }
@@ -27970,11 +27981,11 @@ async function serverAssignmentIds(api) {
   }
   const items = value.items;
   if (value.truncated) throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `server holds more than ${items.length} assignments`);
-  return items.map((item) => {
-    if (!record17(item) || typeof item.sfdcAccountId !== "string" || !ID.test(item.sfdcAccountId)) {
+  return items.map((item2) => {
+    if (!record17(item2) || typeof item2.sfdcAccountId !== "string" || !ID.test(item2.sfdcAccountId)) {
       throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
     }
-    return item.sfdcAccountId;
+    return item2.sfdcAccountId;
   });
 }
 async function deliver(api, store, state, plan) {
@@ -28043,7 +28054,7 @@ async function runSfdc(options) {
   await deliver(options.api, store, taskState, plan.tasks);
   return { counts: plan.counts, revisions: revisions() };
 }
-var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT, MAX_ASSIGNMENTS, MAX_PAGES, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
+var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_CONTACTS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT, MAX_ASSIGNMENTS, MAX_PAGES, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
 var init_sfdc = __esm({
   "src/intake/sfdc.ts"() {
     "use strict";
@@ -28056,7 +28067,13 @@ var init_sfdc = __esm({
       properties: ["employeeIdentifier", "hierarchyLevel", "limit", "after"]
     };
     SFDC_TASKS_TOOL = { name: "search_tasks", properties: ["condition", "limit", "after"] };
-    SFDC_TOOLS = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];
+    SFDC_CONTACTS_TOOL = { name: "search_contacts", properties: ["condition", "limit", "after"] };
+    SFDC_TOOLS = [
+      SFDC_PERSONAL_TOOL,
+      SFDC_REGISTRY_TOOL,
+      SFDC_TASKS_TOOL,
+      SFDC_CONTACTS_TOOL
+    ];
     ACTIVITY_ROLE = "activity";
     SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     PAGE_LIMIT = 500;
@@ -28071,8 +28088,470 @@ var init_sfdc = __esm({
   }
 });
 
+// src/intake/sfdc-id.ts
+function suffix(base) {
+  let result = "";
+  for (let chunk = 0; chunk < 3; chunk++) {
+    let bits = 0;
+    for (let index = 0; index < 5; index++) {
+      const character = base[chunk * 5 + index];
+      if (character >= "A" && character <= "Z") bits |= 1 << index;
+    }
+    result += SUFFIX_ALPHABET[bits];
+  }
+  return result;
+}
+function canonicalSfdcId(id) {
+  if (typeof id !== "string" || id.length !== 15 && id.length !== 18 || !ALPHANUMERIC.test(id)) return null;
+  const expected = suffix(id.slice(0, 15));
+  if (id.length === 15) return id + expected;
+  return id.slice(15) === expected ? id : null;
+}
+var ALPHANUMERIC, SUFFIX_ALPHABET;
+var init_sfdc_id = __esm({
+  "src/intake/sfdc-id.ts"() {
+    "use strict";
+    ALPHANUMERIC = /^[0-9A-Za-z]+$/;
+    SUFFIX_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+  }
+});
+
+// src/intake/sfdc-contacts.ts
+import { createHash as createHash6 } from "node:crypto";
+function emptyCounts() {
+  return {
+    accounts: 0,
+    fetched: 0,
+    created: 0,
+    filled: 0,
+    unchanged: 0,
+    alreadyLinked: 0,
+    suppressed: 0,
+    conflict: 0,
+    invalid: 0,
+    ambiguous: 0,
+    skippedInternal: 0,
+    skippedCap: 0,
+    skippedAccountCap: 0,
+    incomplete: 0,
+    marked: 0,
+    unmarked: 0,
+    skipped: 0,
+    forbidden: 0,
+    invalidIds: 0,
+    ledgerReset: 0
+  };
+}
+function normalizeName(value) {
+  return value.normalize("NFKC").toLowerCase().replace(/[.,]/g, "").replace(/\s+/g, " ").trim();
+}
+function nameKey(value) {
+  const name = normalizeName(value);
+  return CJK.test(name) ? name.replace(/ /g, "") : name;
+}
+function emailKey(value) {
+  return (value ?? "").normalize("NFKC").trim().toLowerCase();
+}
+function fillable(contact, person) {
+  return !(contact.title ?? "").trim() && !!person.title || !(contact.company ?? "").trim();
+}
+function item(person, contact) {
+  const base = { sfdcContactId: person.id, sfdcAccountId: person.accountId, name: person.name, title: person.title };
+  return contact ? { action: "link", ...base, contactId: contact.contactId, revision: contact.revision } : { action: "create", ...base };
+}
+function matchContacts(sfdc2, existing, suppressed) {
+  const result = { items: [], ambiguous: 0, unchanged: 0, suppressed: 0, invalid: 0 };
+  const linked = /* @__PURE__ */ new Map();
+  const byEmail = /* @__PURE__ */ new Map();
+  const byName = /* @__PURE__ */ new Map();
+  for (const contact of existing) {
+    if (contact.sfdcContactId) linked.set(contact.sfdcContactId, contact);
+    const email3 = emailKey(contact.email);
+    if (email3) byEmail.set(email3, [...byEmail.get(email3) ?? [], contact]);
+    const name = nameKey(contact.name);
+    if (name) byName.set(name, [...byName.get(name) ?? [], contact]);
+  }
+  const links = [];
+  const creates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const remaining = [];
+  for (const person of [...sfdc2].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
+    if (seen.has(person.id)) continue;
+    seen.add(person.id);
+    if (!person.name.trim()) {
+      result.invalid++;
+      continue;
+    }
+    const current = linked.get(person.id);
+    if (current) {
+      if (fillable(current, person)) links.push(item(person, current));
+      else result.unchanged++;
+      continue;
+    }
+    if (suppressed.has(person.id)) {
+      result.suppressed++;
+      continue;
+    }
+    remaining.push(person);
+  }
+  const sfdcEmails = /* @__PURE__ */ new Map();
+  for (const person of remaining) {
+    const email3 = emailKey(person.email);
+    if (email3) sfdcEmails.set(email3, (sfdcEmails.get(email3) ?? 0) + 1);
+  }
+  const claimed = /* @__PURE__ */ new Set();
+  const byNameOnly = [];
+  for (const person of remaining) {
+    const email3 = emailKey(person.email);
+    const targets = email3 ? byEmail.get(email3) ?? [] : [];
+    if (!targets.length) {
+      byNameOnly.push(person);
+      continue;
+    }
+    if (targets.length > 1 || sfdcEmails.get(email3) > 1 || targets[0].sfdcContactId) {
+      result.ambiguous++;
+      continue;
+    }
+    claimed.add(targets[0].contactId);
+    links.push(item(person, targets[0]));
+  }
+  const nameClaims = /* @__PURE__ */ new Map();
+  for (const person of byNameOnly) {
+    const email3 = emailKey(person.email);
+    const candidates = /* @__PURE__ */ new Map();
+    for (const key of new Set((person.names?.length ? person.names : [person.name]).map(nameKey))) {
+      for (const contact of byName.get(key) ?? []) {
+        if (contact.sfdcContactId || claimed.has(contact.contactId)) continue;
+        const other = emailKey(contact.email);
+        if (email3 && other && other !== email3) continue;
+        candidates.set(contact.contactId, contact);
+      }
+    }
+    if (candidates.size === 0) creates.push(item(person));
+    else if (candidates.size > 1) result.ambiguous++;
+    else {
+      const [contact] = candidates.values();
+      const claim = nameClaims.get(contact.contactId) ?? { contact, people: [] };
+      claim.people.push(person);
+      nameClaims.set(contact.contactId, claim);
+    }
+  }
+  for (const { contact, people } of nameClaims.values()) {
+    if (people.length > 1) result.ambiguous += people.length;
+    else links.push(item(people[0], contact));
+  }
+  result.items = [...links.sort(byId), ...creates.sort(byId)];
+  return result;
+}
+function internalEmail(email3) {
+  const domain2 = email3.slice(email3.lastIndexOf("@") + 1).trim().toLowerCase();
+  return domain2 === "amazon.com" || domain2.endsWith(".amazon.com") || domain2 === "amazon.co.kr" || domain2 === "aws.com";
+}
+function contactPerson(value, accountId) {
+  const id = canonicalSfdcId(value.id);
+  if (!id) return "invalid";
+  if (!(value.recordType === void 0 || value.recordType === null || record17(value.recordType))) {
+    throw parseFailed("contact record has an unexpected record type");
+  }
+  const recordType2 = record17(value.recordType) ? text(value.recordType, "name", FIELD_BYTES) : "";
+  const email3 = text(value, "email", 1024);
+  if (INTERNAL_RECORD_TYPES.has(recordType2) || email3 && internalEmail(email3)) return "internal";
+  const first = text(value, "firstName", FIELD_BYTES);
+  const last = text(value, "lastName", FIELD_BYTES);
+  const korean = new RegExp("\\p{Script=Hangul}", "u").test(first + last);
+  const name = truncateBytes2(korean ? `${last}${first}` : [first, last].filter(Boolean).join(" "), FIELD_BYTES);
+  const names = CJK.test(first + last) ? [name, `${first} ${last}`, `${last} ${first}`].filter((item2) => item2.trim()) : [name];
+  return { id, name, names, title: text(value, "title", FIELD_BYTES), accountId, ...email3 ? { email: email3 } : {} };
+}
+async function readAccount(source, accountId) {
+  const read = { people: [], ids: [], fetched: 0, internal: 0, invalidIds: 0, complete: false };
+  const seen = /* @__PURE__ */ new Set();
+  let after;
+  try {
+    while (read.fetched < MAX_READ_PER_ACCOUNT) {
+      const page2 = parsePage(await source.call(SFDC_CONTACTS_TOOL.name, {
+        condition: { field: "accountId", operator: "EXACT_MATCH", value: accountId },
+        limit: PAGE_LIMIT2,
+        ...after ? { after } : {}
+      }), SFDC_CONTACTS_TOOL.name);
+      const people = page2.records.map((value) => contactPerson(value, accountId));
+      for (const person of people) {
+        if (typeof person !== "string" && seen.size === seen.add(person.id).size) {
+          throw parseFailed("search_contacts repeated a record ID");
+        }
+      }
+      read.fetched += page2.records.length;
+      for (const person of people) {
+        if (person === "internal") read.internal++;
+        else if (person === "invalid") read.invalidIds++;
+        else {
+          read.people.push(person);
+          read.ids.push(person.id);
+        }
+      }
+      if (!page2.hasNextPage) {
+        if (read.fetched < page2.totalCount) throw parseFailed("search_contacts result is incomplete");
+        read.complete = true;
+        return read;
+      }
+      if (page2.cursor === after) throw parseFailed("search_contacts cursor did not advance");
+      after = page2.cursor;
+    }
+    return read;
+  } catch (error3) {
+    if (intakeCode(error3) === "AUTH_EXPIRED_MIDWAY") throw error3;
+    read.failure = intakeCode(error3);
+    return read;
+  }
+}
+function apiFailure(error3) {
+  const failure2 = deliveryFailure(error3);
+  if (failure2.kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+  if (failure2.kind === "rejected") return failure2.status === 403 ? "forbidden" : failure2.status === 409 ? "TTOBAK_CONFLICT" : "TTOBAK_REJECTED";
+  return "TTOBAK_UNAVAILABLE";
+}
+async function mappedAccounts(api) {
+  let value;
+  try {
+    value = await api.performanceMappings();
+  } catch (error3) {
+    if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance mappings could not be read");
+  }
+  if (!record17(value) || !Array.isArray(value.items) || typeof value.truncated !== "boolean") {
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "performance mappings have an unexpected shape");
+  }
+  const result = /* @__PURE__ */ new Map();
+  let invalidIds = 0;
+  for (const entry2 of value.items) {
+    if (!record17(entry2) || entry2.mapped !== true || typeof entry2.accountId !== "string" || !entry2.accountId) continue;
+    const group = result.get(entry2.accountId) ?? { ids: [], invalid: false };
+    const sfdcAccountId = canonicalSfdcId(entry2.sfdcAccountId);
+    if (sfdcAccountId) {
+      if (!group.ids.includes(sfdcAccountId)) group.ids.push(sfdcAccountId);
+    } else {
+      group.invalid = true;
+      invalidIds++;
+    }
+    result.set(entry2.accountId, group);
+  }
+  for (const group of result.values()) group.ids.sort();
+  return {
+    accounts: new Map([...result].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).filter(([, group]) => group.ids.length)),
+    truncated: value.truncated,
+    invalidIds
+  };
+}
+async function existingContacts(api, accountId, counts) {
+  const contacts = [];
+  let cursor;
+  for (let index = 0; index < MAX_CONTACT_PAGES; index++) {
+    const page2 = await api.listAccountContacts(accountId, { limit: CONTACT_PAGE, ...cursor ? { cursor } : {} }, CONTACT_PAGE_BYTES);
+    if (!record17(page2) || !Array.isArray(page2.contacts) || page2.contacts.length > CONTACT_PAGE) {
+      throw new IntakeError("TTOBAK_UNAVAILABLE", "account contacts have an unexpected shape");
+    }
+    for (const value of page2.contacts) {
+      if (!record17(value) || typeof value.contactId !== "string" || typeof value.revision !== "string" || typeof value.name !== "string") {
+        throw new IntakeError("TTOBAK_UNAVAILABLE", "account contacts have an unexpected shape");
+      }
+      const stored = optionalText(value.sfdcContactId);
+      const link = stored ? canonicalSfdcId(stored) : null;
+      if (stored && !link) counts.invalidIds++;
+      contacts.push({
+        contactId: value.contactId,
+        revision: value.revision,
+        name: value.name,
+        email: optionalText(value.email),
+        title: optionalText(value.title),
+        company: optionalText(value.company),
+        ...stored ? { sfdcContactId: link ?? `invalid:${value.contactId}` } : {}
+      });
+    }
+    const next = page2.nextCursor;
+    if (next === void 0 || next === null || next === "") return contacts;
+    if (typeof next !== "string" || next === cursor) throw new IntakeError("TTOBAK_UNAVAILABLE", "account contacts cursor is invalid");
+    cursor = next;
+  }
+  throw new IntakeError("TTOBAK_UNAVAILABLE", `account contacts exceed ${MAX_CONTACT_PAGES} pages`);
+}
+function syncResponse(value, items) {
+  const count = (key) => record17(value) && Number.isSafeInteger(value[key]) && value[key] >= 0;
+  if (!record17(value) || !Array.isArray(value.results) || value.results.length !== items.length || !count("marked") || !count("unmarked") || !count("skipped")) {
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "sfdc-sync response has an unexpected shape");
+  }
+  const results = value.results.map((entry2, index) => {
+    if (!record17(entry2) || canonicalSfdcId(entry2.sfdcContactId) !== items[index].sfdcContactId || !RESULTS.includes(entry2.result)) {
+      throw new IntakeError("TTOBAK_UNAVAILABLE", "sfdc-sync response has an unexpected shape");
+    }
+    return { sfdcContactId: items[index].sfdcContactId, result: entry2.result };
+  });
+  return { results, marked: value.marked, unmarked: value.unmarked, skipped: value.skipped };
+}
+function fitBody(body) {
+  const items = body.items;
+  let size = Buffer.byteLength(JSON.stringify({ ...body, items: [] }));
+  let kept = 0;
+  for (const entry2 of items) {
+    const next = Buffer.byteLength(JSON.stringify(entry2)) + (kept ? 1 : 0);
+    if (size + next > MAX_BODY_BYTES) break;
+    size += next;
+    kept++;
+  }
+  body.items = items.slice(0, kept);
+  return items.length - kept;
+}
+function ledgerPath(scope, accountId) {
+  return ["sfdc-contacts", scope, `${createHash6("sha256").update(accountId).digest("hex").slice(0, 32)}.json`];
+}
+function readLedger(store, scope, accountId) {
+  if (!store || !scope) return { ids: /* @__PURE__ */ new Set(), reset: false };
+  try {
+    const ledger = store.read(...ledgerPath(scope, accountId));
+    if (ledger === null) return { ids: /* @__PURE__ */ new Set(), reset: false };
+    const ids = record17(ledger) && ledger.version === 1 && Array.isArray(ledger.suppressed) ? ledger.suppressed.map(canonicalSfdcId) : [null];
+    if (ids.some((id) => id === null)) return { ids: /* @__PURE__ */ new Set(), reset: true };
+    return { ids: new Set(ids), reset: false };
+  } catch {
+    return { ids: /* @__PURE__ */ new Set(), reset: true };
+  }
+}
+async function runSfdcContacts(options) {
+  const { session, api, dryRun, store } = options;
+  const scope = options.scope && SCOPE_PATTERN.test(options.scope) ? options.scope : void 0;
+  const counts = emptyCounts();
+  let failure2;
+  const fail = (code) => {
+    failure2 ??= code;
+  };
+  try {
+    const mappings = await mappedAccounts(api);
+    counts.invalidIds += mappings.invalidIds;
+    for (const [accountId, group] of mappings.accounts) {
+      counts.accounts++;
+      let current;
+      try {
+        current = await existingContacts(api, accountId, counts);
+      } catch (error3) {
+        if (error3 instanceof IntakeError) {
+          if (error3.code === "TTOBAK_LOGIN_REQUIRED") throw error3;
+          fail(error3.code);
+          continue;
+        }
+        const code = apiFailure(error3);
+        if (code === "forbidden") counts.forbidden++;
+        else fail(code);
+        continue;
+      }
+      const sfdcAccountIds = group.ids.slice(0, MAX_SFDC_ACCOUNTS);
+      counts.skippedAccountCap += group.ids.length - sfdcAccountIds.length;
+      let complete = !mappings.truncated && !group.invalid && group.ids.length <= MAX_SFDC_ACCOUNTS;
+      const people = [];
+      const present = {};
+      for (const sfdcAccountId of sfdcAccountIds) {
+        const read = await readAccount(session, sfdcAccountId);
+        counts.fetched += read.fetched;
+        counts.skippedInternal += read.internal;
+        counts.invalidIds += read.invalidIds;
+        people.push(...read.people);
+        present[sfdcAccountId] = read.ids;
+        if (!read.complete) complete = false;
+        if (read.failure) fail(read.failure);
+      }
+      if (Object.values(present).reduce((sum, ids) => sum + ids.length, 0) > MAX_PRESENT_TOTAL) complete = false;
+      if (!complete) counts.incomplete++;
+      const ledger = readLedger(store, scope, accountId);
+      if (ledger.reset) counts.ledgerReset++;
+      const suppressed = ledger.ids;
+      const match = matchContacts(people, current, suppressed);
+      for (const person of people) delete person.email;
+      for (const contact of current) contact.email = "";
+      counts.ambiguous += match.ambiguous;
+      counts.unchanged += match.unchanged;
+      counts.suppressed += match.suppressed;
+      counts.invalid += match.invalid;
+      counts.skippedCap += Math.max(0, match.items.length - MAX_ITEMS2);
+      const body = {
+        snapshotComplete: complete,
+        sfdcAccountIds,
+        ...complete ? { present } : {},
+        items: match.items.slice(0, MAX_ITEMS2)
+      };
+      counts.skippedCap += fitBody(body);
+      if (dryRun) {
+        for (const entry2 of body.items) {
+          if (entry2.action === "create") counts.created++;
+          else counts.filled++;
+        }
+        continue;
+      }
+      if (!body.items.length && !complete) continue;
+      let response;
+      try {
+        response = syncResponse(await api.syncSfdcContacts(accountId, body), body.items);
+      } catch (error3) {
+        if (error3 instanceof IntakeError) {
+          if (error3.code === "TTOBAK_LOGIN_REQUIRED") throw error3;
+          fail(error3.code);
+          continue;
+        }
+        const code = apiFailure(error3);
+        if (code === "forbidden") counts.forbidden++;
+        else fail(code);
+        continue;
+      }
+      counts.marked += response.marked;
+      counts.unmarked += response.unmarked;
+      counts.skipped += response.skipped;
+      const newlySuppressed = [];
+      for (const { sfdcContactId, result } of response.results) {
+        counts[result]++;
+        if (result === "suppressed") newlySuppressed.push(sfdcContactId);
+      }
+      if (newlySuppressed.length && store && scope) {
+        const ids = [.../* @__PURE__ */ new Set([...suppressed, ...newlySuppressed])].sort().slice(-MAX_LEDGER_IDS);
+        try {
+          store.write({ version: 1, suppressed: ids }, ...ledgerPath(scope, accountId));
+        } catch {
+          fail("STORE_INVALID");
+        }
+      }
+    }
+  } catch (error3) {
+    if (intakeCode(error3) === "AUTH_EXPIRED_MIDWAY") throw error3;
+    fail(intakeCode(error3));
+  }
+  return { result: failure2 ?? "ok", counts };
+}
+var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
+var init_sfdc_contacts = __esm({
+  "src/intake/sfdc-contacts.ts"() {
+    "use strict";
+    init_batch();
+    init_calendar2();
+    init_errors4();
+    init_sfdc();
+    init_sfdc_id();
+    PAGE_LIMIT2 = 500;
+    MAX_READ_PER_ACCOUNT = 5e3;
+    MAX_SFDC_ACCOUNTS = 20;
+    MAX_ITEMS2 = 200;
+    MAX_PRESENT_TOTAL = 2e4;
+    MAX_BODY_BYTES = 512 * 1024;
+    FIELD_BYTES = 256;
+    CONTACT_PAGE = 25;
+    CONTACT_PAGE_BYTES = 512 * 1024;
+    MAX_CONTACT_PAGES = 1e3;
+    MAX_LEDGER_IDS = 2e4;
+    INTERNAL_RECORD_TYPES = /* @__PURE__ */ new Set(["Stakeholder Map - Internal Contacts", "Project Resource"]);
+    RESULTS = ["created", "filled", "unchanged", "alreadyLinked", "suppressed", "conflict", "invalid"];
+    CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+    byId = (first, second) => first.sfdcContactId < second.sfdcContactId ? -1 : first.sfdcContactId > second.sfdcContactId ? 1 : 0;
+    optionalText = (value) => typeof value === "string" ? value : "";
+  }
+});
+
 // src/intake/ack-ledger.ts
-function ledgerPath(scope) {
+function ledgerPath2(scope) {
   if (!SCOPE_PATTERN2.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "ack ledger scope is invalid");
   return ["specreq", scope, "ack-ledger.json"];
 }
@@ -28088,7 +28567,7 @@ function validEntry(value) {
   return typeof entry2.eventId === "string" && EVENT_ID_PATTERN.test(entry2.eventId) && typeof entry2.attemptedAt === "string" && Number.isFinite(Date.parse(entry2.attemptedAt)) && OUTCOMES.includes(entry2.outcome) && typeof entry2.cloudSynced === "boolean";
 }
 function loadAckLedger(store, scope) {
-  const raw = store.read(...ledgerPath(scope));
+  const raw = store.read(...ledgerPath2(scope));
   if (raw === null) return { version: 1, entries: {} };
   const ledger = raw;
   if (!raw || typeof raw !== "object" || ledger.version !== 1 || !ledger.entries || typeof ledger.entries !== "object" || Array.isArray(ledger.entries)) {
@@ -28102,7 +28581,7 @@ function loadAckLedger(store, scope) {
   return ledger;
 }
 function save(store, scope, ledger) {
-  store.write(ledger, ...ledgerPath(scope));
+  store.write(ledger, ...ledgerPath2(scope));
 }
 function beginAck(store, scope, requestId, eventId, now = /* @__PURE__ */ new Date()) {
   const key = requireRequestId(requestId);
@@ -28202,7 +28681,7 @@ function parseSearch(payload) {
   if (!Array.isArray(data.results) || data.results.length > SEARCH_PAGE_SIZE) {
     throw new IntakeError("PARSE_FAILED", "search_requests_advanced returned an unexpected shape");
   }
-  const requests = data.results.map(parseSummary).filter((item) => item !== null);
+  const requests = data.results.map(parseSummary).filter((item2) => item2 !== null);
   const dropped = data.results.length - requests.length;
   if (dropped > 0) throw new IntakeError("PARSE_FAILED", `search_requests_advanced returned ${dropped} malformed records`);
   const cursor = data.lastEvaluatedIndex;
@@ -28245,7 +28724,7 @@ function localDate2(instant2, zone) {
   if (!Number.isFinite(time3)) return null;
   try {
     const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(time3));
-    const part = (type) => parts.find((item) => item.type === type)?.value ?? "";
+    const part = (type) => parts.find((item2) => item2.type === type)?.value ?? "";
     const date4 = `${part("year")}-${part("month")}-${part("day")}`;
     return /^\d{4}-\d{2}-\d{2}$/.test(date4) ? date4 : null;
   } catch {
@@ -28690,12 +29169,12 @@ function parseMeetingList(payload) {
   }
   return out;
 }
-function joinMeeting(item, list2) {
-  if (typeof item.subject !== "string") return null;
-  const start = Date.parse(item.start);
-  const end = Date.parse(item.end);
+function joinMeeting(item2, list2) {
+  if (typeof item2.subject !== "string") return null;
+  const start = Date.parse(item2.start);
+  const end = Date.parse(item2.end);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const matches2 = list2.filter((m) => m.subject === item.subject && Date.parse(m.start) === start && Date.parse(m.end) === end);
+  const matches2 = list2.filter((m) => m.subject === item2.subject && Date.parse(m.start) === start && Date.parse(m.end) === end);
   return matches2.length === 1 ? matches2[0] : null;
 }
 function parseAttendees(payload) {
@@ -28756,10 +29235,10 @@ var init_classify = __esm({
 });
 
 // src/intake/event-id.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 function calendarEventId(sourceId, externalId) {
   const encoded = JSON.stringify([sourceId, externalId]).replace(/[<>&\u2028\u2029]/g, (character) => "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0"));
-  return createHash6("sha256").update(encoded, "utf8").digest("hex");
+  return createHash7("sha256").update(encoded, "utf8").digest("hex");
 }
 var init_event_id = __esm({
   "src/intake/event-id.ts"() {
@@ -28860,7 +29339,7 @@ function renderSlackRequest(fields2) {
 function draftChannels(draft) {
   if (!isRecord(draft)) return [];
   const direct = [draft.channel, draft.channelId, draft.channel_id].map(channelOf).filter(Boolean);
-  const nested = Array.isArray(draft.destinations) ? draft.destinations.map((item) => isRecord(item) ? channelOf(item.channel_id) || channelOf(item.channel) : "").filter(Boolean) : [];
+  const nested = Array.isArray(draft.destinations) ? draft.destinations.map((item2) => isRecord(item2) ? channelOf(item2.channel_id) || channelOf(item2.channel) : "").filter(Boolean) : [];
   return [...direct, ...nested];
 }
 function matchUser(payload, email3) {
@@ -28903,12 +29382,12 @@ async function prepareDraft(session, counterpartEmail, text4, options = {}) {
     return "failed";
   }
 }
-function ledgerPath2(scope) {
+function ledgerPath3(scope) {
   if (!SCOPE_PATTERN4.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "draft ledger scope is invalid");
   return ["slack", scope, "drafts.json"];
 }
 function draftEntry(store, scope, eventId) {
-  const ledger = store.read(...ledgerPath2(scope));
+  const ledger = store.read(...ledgerPath3(scope));
   if (ledger === null) return null;
   if (!isRecord(ledger)) throw new IntakeError("STORE_INVALID", "draft ledger is malformed");
   if (!Object.hasOwn(ledger, eventId)) return null;
@@ -28922,9 +29401,9 @@ async function draftOnce(store, scope, eventId, session, counterpartEmail, text4
   if (existing) return existing.outcome === "attempting" ? "failed" : existing.outcome;
   const now = options.now ?? (() => /* @__PURE__ */ new Date());
   const save2 = (entry2) => {
-    const ledger = store.read(...ledgerPath2(scope)) ?? {};
+    const ledger = store.read(...ledgerPath3(scope)) ?? {};
     ledger[eventId] = entry2;
-    store.write(ledger, ...ledgerPath2(scope));
+    store.write(ledger, ...ledgerPath3(scope));
   };
   save2({ at: now().toISOString(), outcome: "attempting" });
   const outcome = await prepareDraft(session, counterpartEmail, text4, options);
@@ -29195,9 +29674,9 @@ var init_tasks = __esm({
       /** Records this sync's new occurrences first, so a failed step retries them next run. */
       register() {
         const { sourceId, calendar: calendar2, now, store, scope, zone } = this.options;
-        for (const item of calendar2.upserted) {
-          const eventId = calendarEventId(sourceId, item.meetingId);
-          if (!this.seen.seen[eventId]) this.seen.pending[eventId] = item.meetingId;
+        for (const item2 of calendar2.upserted) {
+          const eventId = calendarEventId(sourceId, item2.meetingId);
+          if (!this.seen.seen[eventId]) this.seen.pending[eventId] = item2.meetingId;
         }
         const window = syncWindow(now, zone);
         const tracked = {};
@@ -29350,7 +29829,7 @@ var init_tasks = __esm({
       async classify() {
         const { sourceId, calendar: calendar2, sessions, me, now, zone } = this.options;
         const candidates = [];
-        const upserted = new Map(calendar2.upserted.map((item) => [calendarEventId(sourceId, item.meetingId), item]));
+        const upserted = new Map(calendar2.upserted.map((item2) => [calendarEventId(sourceId, item2.meetingId), item2]));
         for (const [eventId, externalId] of Object.entries(this.seen.pending)) {
           const existing = this.tasks.get(eventId);
           if (this.seen.seen[eventId] || existing) {
@@ -29363,8 +29842,8 @@ var init_tasks = __esm({
             delete this.seen.pending[eventId];
             continue;
           }
-          const item = upserted.get(eventId) ?? { meetingId: externalId, subject: event.title, start: event.startsAt, end: event.endsAt };
-          candidates.push({ eventId, item, externalId });
+          const item2 = upserted.get(eventId) ?? { meetingId: externalId, subject: event.title, start: event.startsAt, end: event.endsAt };
+          candidates.push({ eventId, item: item2, externalId });
         }
         for (const task of this.tasks.values()) {
           if (task.sourceId !== sourceId || task.state !== "needs_account" && task.state !== "needs_owner" || !task.event) continue;
@@ -29518,11 +29997,11 @@ var init_tasks = __esm({
           await this.opportunityMap(),
           { path: "mine", me: this.myLogin, zone: this.options.zone, counterpartLogin: () => null }
         );
-        const byId = new Map(requests.map((request2) => [request2.requestId, request2]));
+        const byId2 = new Map(requests.map((request2) => [request2.requestId, request2]));
         let failure2;
         for (const [requestId, eventId] of links) {
           const task = this.tasks.get(eventId);
-          const request2 = byId.get(requestId);
+          const request2 = byId2.get(requestId);
           if (!task || !request2) continue;
           try {
             const next = await this.transition(task, (current) => current.path === "mine" && current.state === "issue_needed" && !current.specReqId ? { op: "linkSpecReq", ...this.specReqFields(request2) } : null);
@@ -29545,7 +30024,7 @@ var init_tasks = __esm({
       }
       counterpartLogin(task) {
         if (!task.accountId || !task.counterpartUserId) return null;
-        const member = this.accounts.get(task.accountId)?.members.find((item) => item.userId === task.counterpartUserId);
+        const member = this.accounts.get(task.accountId)?.members.find((item2) => item2.userId === task.counterpartUserId);
         return alias(member?.email);
       }
       ledger() {
@@ -29614,9 +30093,9 @@ var init_tasks = __esm({
             await this.opportunityMap(),
             { path: "theirs", me: this.myLogin, zone: this.options.zone, counterpartLogin: (task) => this.counterpartLogin(task) }
           );
-          const byId = new Map(requests.map((request2) => [request2.requestId, request2]));
+          const byId2 = new Map(requests.map((request2) => [request2.requestId, request2]));
           for (const [requestId, eventId] of links) {
-            const request2 = byId.get(requestId);
+            const request2 = byId2.get(requestId);
             try {
               let task = this.tasks.get(eventId);
               if (!task) continue;
@@ -29650,7 +30129,7 @@ var init_tasks = __esm({
       }
       async refresh() {
         const session = this.options.sessions.specreq;
-        const open = this.allTasks().filter((task) => task.specReqId && !this.touched.has(task.eventId) && task.state !== "closed" && task.state !== "resolved" && task.specReqStatus !== "CANCELLED" && !(task.path === "mine" && task.specReqStatus === "COMPLETED")).map((task) => ({ task, at: this.seen.refreshed[task.eventId] ?? "" })).sort((first, second) => first.at < second.at ? -1 : first.at > second.at ? 1 : first.task.stateChangedAt < second.task.stateChangedAt ? -1 : 1).slice(0, REFRESH_MAX).map((item) => item.task);
+        const open = this.allTasks().filter((task) => task.specReqId && !this.touched.has(task.eventId) && task.state !== "closed" && task.state !== "resolved" && task.specReqStatus !== "CANCELLED" && !(task.path === "mine" && task.specReqStatus === "COMPLETED")).map((task) => ({ task, at: this.seen.refreshed[task.eventId] ?? "" })).sort((first, second) => first.at < second.at ? -1 : first.at > second.at ? 1 : first.task.stateChangedAt < second.task.stateChangedAt ? -1 : 1).slice(0, REFRESH_MAX).map((item2) => item2.task);
         let failure2;
         for (const task of open) {
           this.seen.refreshed[task.eventId] = this.options.now.toISOString();
@@ -29836,7 +30315,7 @@ async function setup(args, environment, store) {
       say(`${label}: \uAC74\uB108\uB700 (--skip)`);
       continue;
     }
-    const candidates = HOSTS.filter((host2) => reports.find((report2) => report2.host === host2)?.servers.some((item) => item.name === server && item.transport === "stdio" && !item.disabled && item.commandFound));
+    const candidates = HOSTS.filter((host2) => reports.find((report2) => report2.host === host2)?.servers.some((item2) => item2.name === server && item2.transport === "stdio" && !item2.disabled && item2.commandFound));
     if (!candidates.length) {
       connectors[connector] = { status: "skipped", code: "SERVER_NOT_CONFIGURED" };
       say(`${label}: ${server} \uC11C\uBC84\uB97C \uCC3E\uC9C0 \uBABB\uD574 \uAC74\uB108\uB701\uB2C8\uB2E4.`);
@@ -29856,7 +30335,7 @@ async function setup(args, environment, store) {
     }
     let host = candidates[0];
     if (candidates.length > 1 && !options.yes) {
-      const answer = await question(`${label}: ${server} \uC11C\uBC84\uAC00 \uC5EC\uB7EC \uD638\uC2A4\uD2B8\uC5D0 \uC788\uC2B5\uB2C8\uB2E4. ${candidates.map((item, index) => `${index + 1}) ${item}`).join(" ")} \uC911 \uBC88\uD638\uB97C \uACE0\uB974\uC138\uC694 [1]:`);
+      const answer = await question(`${label}: ${server} \uC11C\uBC84\uAC00 \uC5EC\uB7EC \uD638\uC2A4\uD2B8\uC5D0 \uC788\uC2B5\uB2C8\uB2E4. ${candidates.map((item2, index) => `${index + 1}) ${item2}`).join(" ")} \uC911 \uBC88\uD638\uB97C \uACE0\uB974\uC138\uC694 [1]:`);
       host = candidates[Number(answer) - 1] ?? candidates[0];
     }
     try {
@@ -29994,12 +30473,12 @@ __export(run_exports, {
 import { homedir as homedir6 } from "node:os";
 import { resolve as resolve3 } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID5 } from "node:crypto";
 function enabled(entry2) {
   return entry2 && !entry2.disabled ? entry2 : void 0;
 }
 function accountScope(apiUrl, subject) {
-  return createHash7("sha256").update(`${apiUrl.replace(/\/+$/, "")}
+  return createHash8("sha256").update(`${apiUrl.replace(/\/+$/, "")}
 ${subject}`).digest("hex").slice(0, 32);
 }
 function tokenSubject(idToken) {
@@ -30381,6 +30860,7 @@ async function sfdcRun(options, environment, store, signedIn) {
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
     const active = session;
+    const source = { call: async (tool, request2) => resultJson(await active.call(tool, request2), tool) };
     const result = await runSfdc({
       store,
       api,
@@ -30389,7 +30869,7 @@ async function sfdcRun(options, environment, store, signedIn) {
       now: startedAt,
       dryRun,
       reconcile: options.reconcile === true,
-      source: { call: async (tool, request2) => resultJson(await active.call(tool, request2), tool) }
+      source
     });
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
     writeStatus({
@@ -30401,7 +30881,8 @@ async function sfdcRun(options, environment, store, signedIn) {
       ...scope ? { scope } : {},
       ...lastSuccessAt ? { lastSuccessAt } : {}
     });
-    return { ok: true, connector: "sfdc", dryRun, counts: result.counts };
+    const sfdcContacts = api ? await sfdcContactsStep(store, source, api, scope, dryRun, environment.now()) : void 0;
+    return { ok: true, connector: "sfdc", dryRun, counts: result.counts, ...sfdcContacts ? { sfdcContacts } : {} };
   } catch (error3) {
     const entry2 = {
       ...previous ?? {},
@@ -30420,6 +30901,27 @@ async function sfdcRun(options, environment, store, signedIn) {
     release();
   }
 }
+async function sfdcContactsStep(store, source, api, scope, dryRun, ranAt) {
+  let step;
+  try {
+    step = await runSfdcContacts({ session: source, api, dryRun, store, ...scope ? { scope } : {} });
+  } catch (error3) {
+    step = { result: intakeCode(error3) };
+  }
+  try {
+    const status = store.read("status.json") ?? {};
+    const previous = status.sfdcContacts?.lastSuccessAt;
+    const lastSuccessAt = step.result === "ok" && !dryRun ? ranAt.toISOString() : previous;
+    store.write({ ...status, sfdcContacts: {
+      lastRunAt: ranAt.toISOString(),
+      result: step.result,
+      ...step.counts ? { counts: step.counts } : {},
+      ...lastSuccessAt ? { lastSuccessAt } : {}
+    } }, "status.json");
+  } catch {
+  }
+  return step;
+}
 async function runConnectors(options, environment, store) {
   const selection = store.read("selection.json");
   const wanted = options.only ?? SYNC_CONNECTORS.filter((id) => enabled(selection?.[id]));
@@ -30429,7 +30931,7 @@ async function runConnectors(options, environment, store) {
   const signedIn = () => pending ??= signIn(selection, environment, options.dryRun, options.noninteractive);
   const results = {};
   let code;
-  for (const id of SYNC_CONNECTORS.filter((item) => wanted.includes(item))) {
+  for (const id of SYNC_CONNECTORS.filter((item2) => wanted.includes(item2))) {
     try {
       const run2 = id === "calendar" ? calendarRun(options, environment, store, signedIn) : sfdcRun(options, environment, store, signedIn);
       const { ok: _ok, connector: _connector, dryRun: _dryRun, ...rest } = await run2;
@@ -30439,6 +30941,12 @@ async function runConnectors(options, environment, store) {
         code = "AUTH_EXPIRED_MIDWAY";
         break;
       }
+      const contacts = "sfdcContacts" in rest ? rest.sfdcContacts : void 0;
+      if (contacts?.result === "AUTH_EXPIRED_MIDWAY") {
+        code = "AUTH_EXPIRED_MIDWAY";
+        break;
+      }
+      if (contacts && contacts.result !== "ok") code ??= "PARTIAL_FAILURE";
     } catch (error3) {
       const failure2 = intakeCode(error3);
       results[id] = { result: failure2 };
@@ -30549,6 +31057,7 @@ var init_run = __esm({
     init_mcp_client();
     init_schedule();
     init_sfdc();
+    init_sfdc_contacts();
     init_specreq();
     init_store();
     init_tasks();
@@ -30937,7 +31446,7 @@ function runClaude(bin, args, options) {
       if (event.type === "system" && event.subtype === "init") {
         if (typeof event.model === "string") outcome.model = event.model.slice(0, 200);
         if (Array.isArray(event.mcp_servers)) {
-          outcome.servers = event.mcp_servers.flatMap((item) => item && typeof item.name === "string" && typeof item.status === "string" ? [{ name: item.name, status: item.status }] : []);
+          outcome.servers = event.mcp_servers.flatMap((item2) => item2 && typeof item2.name === "string" && typeof item2.status === "string" ? [{ name: item2.name, status: item2.status }] : []);
         }
       } else if (event.type === "assistant") {
         if (event.error === "authentication_failed") outcome.authFailed = true;
@@ -31206,7 +31715,7 @@ function cell(value, max, field) {
   return text2(typeof value === "number" && Number.isFinite(value) ? String(value) : value, max, field);
 }
 function texts(value, maxItems, maxRunes, field) {
-  return list(value, maxItems, field).map((item) => text2(item, maxRunes, field));
+  return list(value, maxItems, field).map((item2) => text2(item2, maxRunes, field));
 }
 function optional3(source, name, parse3) {
   return name in source ? { [name]: parse3(source[name]) } : {};
@@ -31235,8 +31744,8 @@ function section(value) {
     title: text2(source.title, SHORT, "section text", true),
     lede: text2(source.lede, LONG, "section text"),
     paragraphs: texts(source.paragraphs, MAX_PARAGRAPHS, LONG, "section text"),
-    ...optional3(source, "tables", (tables) => list(tables, MAX_TABLES, "section size").map((item) => {
-      const table = record18(item, "table");
+    ...optional3(source, "tables", (tables) => list(tables, MAX_TABLES, "section size").map((item2) => {
+      const table = record18(item2, "table");
       const columns = texts(table.columns, MAX_COLUMNS, SHORT, "table");
       if (!columns.length) invalid2("table");
       const rows = list(table.rows, MAX_ROWS2, "table").map((row) => {
@@ -31246,8 +31755,8 @@ function section(value) {
       });
       return { columns, rows };
     })),
-    ...optional3(source, "cards", (cards) => list(cards, MAX_CARDS, "section size").map((item) => {
-      const card = record18(item, "card");
+    ...optional3(source, "cards", (cards) => list(cards, MAX_CARDS, "section size").map((item2) => {
+      const card = record18(item2, "card");
       return { title: text2(card.title, SHORT, "card"), body: text2(card.body, LONG, "card") };
     }))
   };
@@ -31262,7 +31771,7 @@ function withServerDefaults(report2) {
     ...report2,
     missingSources: report2.missingSources ?? [],
     highlights: { ...empty, ...report2.highlights ?? {} },
-    ledger: report2.ledger.map((item) => ({ note: "", ...item })),
+    ledger: report2.ledger.map((item2) => ({ note: "", ...item2 })),
     sections: report2.sections.map((section2) => ({ tables: [], cards: [], ...section2 })),
     dataBasis: report2.dataBasis.map((basis) => ({ estimates: "", ...basis }))
   };
@@ -31276,7 +31785,7 @@ function validateReport(key, value) {
   if (!validGeneratedAt(source.generatedAt)) invalid2("generatedAt");
   if (typeof source.partial !== "boolean") invalid2("partial");
   const sections = list(source.sections, MAX_SECTIONS, "sections").map(section);
-  if (new Set(sections.map((item) => item.id)).size !== sections.length) invalid2("section id");
+  if (new Set(sections.map((item2) => item2.id)).size !== sections.length) invalid2("section id");
   const report2 = {
     schemaVersion: SCHEMA_VERSION,
     periodKey: key,
@@ -31286,10 +31795,10 @@ function validateReport(key, value) {
     model: text2(source.model, SHORT, "alias or model"),
     partial: source.partial,
     ...optional3(source, "missingSources", (items) => texts(items, MAX_MISSING, SHORT, "missingSources")),
-    ...optional3(source, "highlights", (item) => highlights(item, "highlights", "REPORT_INVALID")),
+    ...optional3(source, "highlights", (item2) => highlights(item2, "highlights", "REPORT_INVALID")),
     summary: text2(source.summary, LONG, "summary"),
-    ledger: list(source.ledger, MAX_LEDGER, "ledger").map((item) => {
-      const entry2 = record18(item, "ledger");
+    ledger: list(source.ledger, MAX_LEDGER, "ledger").map((item2) => {
+      const entry2 = record18(item2, "ledger");
       return {
         label: text2(entry2.label, SHORT, "ledger", true),
         value: cell(entry2.value, SHORT, "ledger"),
@@ -31298,8 +31807,8 @@ function validateReport(key, value) {
       };
     }),
     sections,
-    actions: list(source.actions, MAX_ACTIONS, "actions").map((item) => {
-      const action = record18(item, "actions");
+    actions: list(source.actions, MAX_ACTIONS, "actions").map((item2) => {
+      const action = record18(item2, "actions");
       if (!SEVERITIES.includes(action.severity)) invalid2("actions");
       return {
         severity: action.severity,
@@ -31308,8 +31817,8 @@ function validateReport(key, value) {
         source: text2(action.source, SHORT, "actions")
       };
     }),
-    dataBasis: list(source.dataBasis, MAX_DATA_BASIS, "dataBasis").map((item) => {
-      const basis = record18(item, "dataBasis");
+    dataBasis: list(source.dataBasis, MAX_DATA_BASIS, "dataBasis").map((item2) => {
+      const basis = record18(item2, "dataBasis");
       return {
         source: text2(basis.source, SHORT, "dataBasis", true),
         query: text2(basis.query, LONG, "dataBasis"),
@@ -31512,7 +32021,7 @@ function exampleDefaults(skillDir) {
     if (statSync4(path2).size <= MAX_HIGHLIGHTS_FILE_BYTES) {
       const example = JSON.parse(readFileSync8(path2, "utf8"));
       const domains = example.partner_domains;
-      if (Array.isArray(domains) && domains.every((item) => typeof item === "string" && item.length <= 253) && domains.length <= 200) {
+      if (Array.isArray(domains) && domains.every((item2) => typeof item2 === "string" && item2.length <= 253) && domains.length <= 200) {
         return {
           partner_domains: domains,
           internal_team_meeting_regex: typeof example.internal_team_meeting_regex === "string" ? example.internal_team_meeting_regex : ""
@@ -31534,8 +32043,8 @@ async function customers(api) {
   const items = value && typeof value === "object" && Array.isArray(value.items) ? value.items : null;
   if (!items) throw new ReportError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
   const names = /* @__PURE__ */ new Map();
-  for (const item of items) {
-    const entry2 = item;
+  for (const item2 of items) {
+    const entry2 = item2;
     if (!entry2 || typeof entry2.sfdcAccountId !== "string" || !ID2.test(entry2.sfdcAccountId) || typeof entry2.name !== "string") continue;
     const name = entry2.name.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 200);
     if (name && !names.has(name)) names.set(name, [name, namePattern(name)]);
@@ -33349,8 +33858,8 @@ function navigationResult(value, options, kind) {
   if (kind === "projects" && (value.unionKey !== "projectId" || typeof value.overlapPossible !== "boolean")) {
     throw new Error("INVALID_READING_RESPONSE: missing project union contract");
   }
-  for (const item of items) {
-    if (!record12(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
+  for (const item2 of items) {
+    if (!record12(item2) || typeof item2[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item2[kind === "accounts" ? "accountId" : "projectId"]) || typeof item2.name !== "string" || typeof item2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item2.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid navigation metadata");
     }
   }
