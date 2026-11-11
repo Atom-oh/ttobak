@@ -174,7 +174,7 @@ limit instead of claiming a Mac build passed.
   Owner-only mutations use partition isolation; recipients read through the
   share row. Inaccessible docs 404. Use `SHAREDDOC#`/`DOCSHARE_TO#`, never
   meeting `SHARED#` keys (ADR-020).
-- **Public routes:** `GET /api/public/docs/{token}` and ADR-045's two static MCP
+- **Public routes:** `GET /api/public/docs/{token}` and ADR-003's two static MCP
   discovery GETs are the only unauthenticated routes. Revalidate `PublicShareToken`;
   conditional minting prevents orphans; downloads last 5 minutes. Edge bypass
   covers `/api/public/*`; API Gateway registers only the literal doc route.
@@ -246,7 +246,7 @@ limit instead of claiming a Mac build passed.
   HTTP bytes and serialized tool results at 32,000; never fall back to full-meeting
   reads or truncate a page while inventing continuation.
   HTTP uses request-scoped, resource-bound access tokens, not local token files
-  or server file paths (ADR-045).
+  or server file paths (ADR-003).
 - **Simulator:** transcript feeds extraction only. Only allowlisted numeric
   requirements/options JSON enters codegen; option names/descriptions remain
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX

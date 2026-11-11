@@ -65,7 +65,7 @@ KMS coverage was not supported by the table configuration.
 ## Current evidence and successors
 
 [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) through
-[ADR-018](../../decisions/ADR-018-mcp-back-data-tools.md) cover implemented foundations;
+[ADR-003](../../decisions/ADR-003-mcp-access.md) cover implemented foundations;
 [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) changes
 member-add/role permissions and [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md)
 adds hierarchy without inherited access. Current
