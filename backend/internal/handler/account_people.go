@@ -17,6 +17,7 @@ type accountPeopleAPI interface {
 	ListPeople(ctx context.Context, userID, accountID, cursor string) (*model.AccountPeoplePage, error)
 	ListMentionGroups(ctx context.Context, userID, accountID, cursor string) (*model.MentionGroupsPage, error)
 	MeetingEdges(ctx context.Context, userID, accountID, meetingID string) (*model.MeetingPeopleEdges, error)
+	Focus(ctx context.Context, userID, accountID, focus, cursor string) (*model.AccountFocusGraph, error)
 	BindEdge(ctx context.Context, userID, accountID string, in model.PeopleEdgeInput) (*model.PeopleLink, error)
 	UnbindEdge(ctx context.Context, userID, accountID string, k model.PeopleLinkKey) error
 	ResolveMentionGroup(ctx context.Context, userID, accountID, hash string, in model.ResolveMentionInput) (*model.ResolveMentionResult, error)
@@ -129,6 +130,23 @@ func (h *AccountPeopleHandler) Edges(w http.ResponseWriter, r *http.Request) {
 	}
 	user, account := peopleCaller(r)
 	out, err := h.service.MeetingEdges(r.Context(), user, account, r.URL.Query().Get("meetingId"))
+	if err != nil {
+		accountPeopleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// Focus handles GET /api/accounts/{accountId}/people/focus?focus=&cursor=.
+func (h *AccountPeopleHandler) Focus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	query := r.URL.Query()
+	if !onlyQueryKeys(r, "focus", "cursor") || len(query["focus"]) != 1 || len(query["cursor"]) > 1 {
+		accountPeopleError(w, service.ErrInvalidInput)
+		return
+	}
+	user, account := peopleCaller(r)
+	out, err := h.service.Focus(r.Context(), user, account, query.Get("focus"), query.Get("cursor"))
 	if err != nil {
 		accountPeopleError(w, err)
 		return
