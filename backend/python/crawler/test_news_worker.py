@@ -283,6 +283,25 @@ class TestCandidateWorker(unittest.TestCase):
         self.assertEqual(finish["known_cost"], Decimal(0))
         self.deps.s3.put_object.assert_not_called()
 
+    def test_quality_rejection_reports_validator_locations_without_content(self):
+        invalid = valid_enrichment_json(executive_summary="짧은 요약")
+        self.client.converse.return_value = bedrock_response(invalid)
+        result = process_candidate(self.candidate, self.deps)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["reason"], "SCHEMA_INVALID")
+        self.assertEqual(result["validationErrors"],
+                         ["executiveSummary: characters=5; required=600..4000"])
+        self.deps.s3.put_object.assert_not_called()
+
+    def test_validation_locations_drop_numbers_and_unknown_text(self):
+        from news_worker import validation_locations
+        self.assertEqual(validation_locations([
+            "keyFacts[2]: numeric claim absent from cited excerpt: 2369",
+            "evidence S1: excerpt is not an exact substring of its source body",
+            "invalid JSON", "모델 출력: secret", 7,
+        ]), ["keyFacts[2]", "evidence S1", "invalid JSON", "OTHER"])
+        self.assertEqual(validation_locations("not a list"), [])
+
     def test_render_bound_rejection_settles_known_cost_without_uploads(self):
         with mock.patch("news_worker.render_news_markdown", side_effect=ValueError("size")):
             result = process_candidate(self.candidate, self.deps)

@@ -110,8 +110,32 @@ class TestDiscovery(unittest.TestCase):
         result, gateway, _ = self.run_discovery([article(publishedDate="2026-10-01")])
         self.assertEqual(result["freshnessDays"], 30)
         self.assertEqual(len(result["candidates"]), 1)
-        self.assertTrue(any("after:2026-10-14" in call.args[0] for call in gateway.call_args_list))
-        self.assertTrue(any("after:2026-09-21" in call.args[0] for call in gateway.call_args_list))
+        # The window travels as connector filters; no query carries after:.
+        self.assertFalse(any("after:" in call.args[0] for call in gateway.call_args_list))
+        windows = {(call.kwargs["published_after"], call.kwargs["published_before"])
+                   for call in gateway.call_args_list}
+        self.assertEqual(windows, {(datetime(2026, 10, 14, 12, tzinfo=timezone.utc), NOW),
+                                   (datetime(2026, 9, 21, 12, tzinfo=timezone.utc), NOW)})
+        self.assertTrue(all(call.kwargs["domains"] == () for call in gateway.call_args_list))
+
+    def test_operator_search_domains_scope_search_and_revision(self):
+        domains = ["fss.or.kr", "koreaherald.com"]
+        result, gateway, _ = self.run_discovery([article()], config=source(searchDomains=domains))
+        self.assertTrue(all(call.kwargs["domains"] == tuple(domains)
+                            for call in gateway.call_args_list))
+        self.assertEqual(discovery.source_snapshot(source(searchDomains=domains))["searchDomains"],
+                         domains)
+        self.assertNotEqual(result["sourceRevision"], discovery.source_revision(source()))
+        # Sources without the field keep their existing revision (no rename of
+        # in-flight runs on deployment), and an empty list is the same as absent.
+        self.assertNotIn("searchDomains", discovery.source_snapshot(source()))
+        self.assertEqual(discovery.source_revision(source(searchDomains=[])),
+                         discovery.source_revision(source()))
+        for value in ("fss.or.kr", ["https://fss.or.kr"], ["fss.or.kr", "fss.or.kr"],
+                      ["FSS.OR.KR"], ["*.fss.or.kr"], [f"d{i}.com" for i in range(101)]):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    discovery.DiscoveryRejected, "INVALID_CONFIG"):
+                discovery.source_snapshot(source(searchDomains=value))
 
     def test_unrepresentable_utc_date_does_not_discard_valid_neighbor(self):
         for published in ("0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"):
@@ -123,8 +147,8 @@ class TestDiscovery(unittest.TestCase):
                 self.assertGreater(result["invalidRejected"] + result["staleRejected"], 0)
 
     def test_already_published_primary_results_still_allow_fallback(self):
-        def gateway(query, limit):
-            return ([article()] if "2026-10-14" in query
+        def gateway(query, limit, *, published_after, published_before, domains):
+            return ([article()] if published_after.date().isoformat() == "2026-10-14"
                     else [article(2, publishedDate="2026-10-01")]), None
 
         known = pipeline.document_hash("https://example.com/1")

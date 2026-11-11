@@ -124,6 +124,23 @@ class WorkerDeps:
     token: object = lambda: uuid.uuid4().hex
 
 
+_LOCATION = re.compile(r"[A-Za-z][A-Za-z0-9_. \[\]]{0,63}")
+_MEASURED = re.compile(r" characters=[0-9]{1,7}; required=[0-9]{1,7}\.\.[0-9]{1,7}")
+
+
+def validation_locations(errors):
+    """Validator field/position plus measured lengths; never fact numbers or text."""
+    values = []
+    for error in errors[:8] if isinstance(errors, list) else []:
+        if not isinstance(error, str):
+            continue
+        location, _, detail = error.partition(":")
+        if not _LOCATION.fullmatch(location):
+            location = "OTHER"
+        values.append(location + (":" + detail if _MEASURED.fullmatch(detail) else ""))
+    return values
+
+
 def _result(status, source_id, doc_hash="", reason="", warnings=()):
     return {"status": status, "sourceId": source_id, "docHash": doc_hash,
             "reason": reason, "docsAdded": 0, "docsUpdated": 0,
@@ -302,10 +319,13 @@ def _process_candidate(candidate, deps):
         artifact, _ = enrich_article(prompt_candidate, bodies, model,
                                      model_id=deps.policy.model_id)
     except QualityRejected as error:
-        return deps.store.finish(
+        receipt = deps.store.finish(
             job, now=deps.now(), status="REJECTED", reason=error.reason,
             known_cost=deps.policy.cost(model.usage), usage_complete=model.complete,
             usage=model.usage, warnings=warnings)
+        # Execution history keeps only code-authored validator locations, so a
+        # rejected class can be diagnosed without storing generated or source text.
+        return {**receipt, "validationErrors": validation_locations(error.errors)}
     if not _fresh(candidate, deps.now(), lead):
         return deps.store.finish(
             job, now=deps.now(), status="REJECTED", reason="STALE_ARTICLE",

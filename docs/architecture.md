@@ -243,11 +243,17 @@ are retained even without paragraph tags; the paywall scan is independent of bod
 boilerplate exclusion. Nonrepresentable UTC dates remain unknown freshness.
 Search freshness accepts ISO-8601 and the web-search gateway's
 `hh:mmAM, Weekday, Month DD YYYY, TZ` form with a fixed-offset zone table;
-`unknown` and other zones stay unknown freshness.
+`unknown` and other zones stay unknown freshness. Discovery bounds each pass with
+the connector's published-date filter (and an operator source's optional
+`searchDomains` allowlist) instead of a literal `after:` query clause, then still
+checks each result's date locally.
 `news_enrichment.py` accepts only bounded schema-v1
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts
-retain token accounting. One repair may reuse the complete original sources.
+retain token accounting. A fact number must appear in its cited excerpt either as
+written or as the exact same value with Korean units, a month number or a small
+English number word (`236.8 billion` restated as 2,368 eok); worker results list only the
+validator locations of a rejection. One repair may reuse the complete original sources.
 An explicit negative or valid below-threshold relevance verdict ends the attempt even
 if other fields are malformed; the relevance gate requires a boolean.
 Prompt fields must encode as UTF-8 before any model request. The long-copy

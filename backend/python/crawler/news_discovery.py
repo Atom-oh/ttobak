@@ -61,6 +61,11 @@ def source_snapshot(source):
         raise DiscoveryRejected("INVALID_CONFIG")
     # Invalid individual custom URLs are counted and skipped during discovery.
     # Their exact bounded values remain in the fingerprint for revalidation.
+    domains = source.get("searchDomains") or []
+    if (not isinstance(domains, list) or len(domains) > pipeline.MAX_SEARCH_DOMAINS
+            or not all(pipeline.valid_search_domain(domain) for domain in domains)
+            or len(set(domains)) != len(domains)):
+        raise DiscoveryRejected("INVALID_CONFIG")
     result = {
         "sourceId": source_id,
         "sourceName": _text(source.get("sourceName", ""), 200),
@@ -72,6 +77,10 @@ def source_snapshot(source):
     }
     if len(result["aliases"]) + bool(result["sourceName"]) > 32:
         raise DiscoveryRejected("INVALID_CONFIG")
+    if domains:
+        # Operator-curated search scope. Present only when configured, so the
+        # revision of every source without it is unchanged.
+        result["searchDomains"] = list(domains)
     return result
 
 
@@ -99,7 +108,10 @@ def _unpublished(source_id, candidates, lookup):
 def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=20):
     """At most two 12-query passes, 25 results/query, 300 candidates/pass.
 
-    gateway(query, max_results) returns (list, error). The transport owns its
+    gateway(query, max_results, published_after=, published_before=, domains=)
+    returns (list, error). The date window is the pass's freshness window and
+    domains are the source's optional searchDomains; the connector applies
+    both, and each result's date is still checked here. The transport owns its
     request timeout; this staged orchestration does not install one implicitly.
     published_lookup(source_id, hashes) must return known published hashes or
     raise on incomplete/unprocessed reads. No missing-state fallback is allowed.
@@ -128,9 +140,12 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
     for freshness in (7, 30):
         inspected = 0
         result["freshnessDays"] = freshness
+        # No literal after: clause: the connector ignored it as an operator and
+        # ranked pages about the year itself (2026-11-10: Wikipedia "2026").
         queries = pipeline.expand_queries(
-            config["sourceName"], config["aliases"], config["newsQueries"],
-            now.date() - timedelta(days=freshness))
+            config["sourceName"], config["aliases"], config["newsQueries"], None)
+        window = {"published_after": now - timedelta(days=freshness), "published_before": now,
+                  "domains": tuple(config.get("searchDomains", ()))}
         batch = []
         for query in queries:
             if inspected >= pipeline.MAX_CANDIDATES:
@@ -143,7 +158,7 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
                 continue
             result["queryCount"] += 1
             try:
-                values, error = gateway(query.text, MAX_RESULTS_PER_QUERY)
+                values, error = gateway(query.text, MAX_RESULTS_PER_QUERY, **window)
             except Exception:
                 values, error = [], True
             if error or not isinstance(values, list):

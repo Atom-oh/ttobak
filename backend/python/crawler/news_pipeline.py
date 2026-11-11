@@ -110,6 +110,21 @@ def candidate_id(source_id: str, canonical_url: str) -> str:
     return hashlib.sha256(f"{source_id}:{canonical_url}".encode("utf-8")).hexdigest()
 
 
+MAX_SEARCH_DOMAINS = 100
+_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def valid_search_domain(value) -> bool:
+    """A lowercase ASCII registrable host for the search domain filter: no
+    scheme, port, path, wildcard, trailing dot or IP literal."""
+    if not isinstance(value, str) or not 3 <= len(value) <= 253:
+        return False
+    labels = value.split(".")
+    if len(labels) < 2 or labels[-1].isdigit():
+        return False
+    return all(_DOMAIN_LABEL.fullmatch(label) for label in labels)
+
+
 # ---------------------------------------------------------------------------
 # Query expansion
 # ---------------------------------------------------------------------------
@@ -118,8 +133,10 @@ def expand_queries(source_name: str, aliases, keywords, after_date: date) -> lis
     """Build up to MAX_QUERIES_PER_SOURCE search queries from public source
     configuration only (name, aliases, keywords) -- never from meeting
     transcripts, project data, or action items. Each query anchors on a
-    quoted identity (source name or alias) and carries an `after:` freshness
-    clause understood by the AgentCore Web Search connector."""
+    quoted identity (source name or alias). A non-None after_date appends a
+    literal `after:` clause; the connector does not interpret it (it matched
+    pages about the year itself), so the publication workflow passes None and
+    bounds freshness with the connector's publishedDateFilter instead."""
     def public_terms(values):
         if not isinstance(values, (list, tuple)) or len(values) > 32:
             raise ValueError("Too many public source terms")
