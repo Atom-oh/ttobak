@@ -105,7 +105,7 @@ earlier sections. Mail reading is dropped.
    `post_draft`" line.
 6. **Auto-ack off** posts one `ack_needed` notice; a later `WORKING` read moves
    the task to `acked`.
-7. **No new ADR.** ADR-065 (local MCP intake) is amended. ADR-068 stays free.
+7. **No new ADR.** ADR-003 (local MCP intake) is amended. ADR-068 stays free.
 
 ## Delivery parts (stacked PRs, each diff <= 95,000 bytes)
 
@@ -120,7 +120,7 @@ boundary, never inside a task.
 | 3 | Tasks 4-5 | Service; handlers, routes, contract, API-SPEC | ~80 KB |
 | 4 | Tasks 6-8 | Runner selection/allowlist; API client + event ID; attendee join + classifier | ~55 KB |
 | 5 | Tasks 9-10 | SpecReq linking + ack ledger; Slack draft + notify queue | ~60 KB |
-| 6 | Task 11 | Task step orchestration; ADR-065 amendment; runbook | ~45 KB |
+| 6 | Task 11 | Task step orchestration; ADR-003 amendment; runbook | ~45 KB |
 | 7 | Tasks 12-13 | Frontend task strip, actions, DESIGN-SPEC | ~60 KB |
 | 8 | Task 14 | Mac notification reader; architecture and acceptance docs | ~35 KB |
 
@@ -554,7 +554,7 @@ Decisions:
 - Create: `mcp-server/src/intake/tasks.ts`
 - Modify: `mcp-server/src/intake/calendar.ts` (return the plan's upserted and removed external IDs in `CalendarRunResult`)
 - Modify: `mcp-server/src/intake/run.ts` (call `runTasks` after a successful non-dry-run calendar sync; record `status.tasks`)
-- Modify: `docs/decisions/ADR-065-local-mcp-intake.md`, `docs/runbooks/local-mcp-intake.md`
+- Modify: `docs/decisions/ADR-003-mcp-access.md`, `docs/runbooks/local-mcp-intake.md`
 - Test: `mcp-server/test/intake-tasks.test.mjs`
 
 **Interfaces:**
@@ -592,7 +592,7 @@ continues with independent steps, ending as `TASKS_PARTIAL`):
   - `cloud write failure after ack is retried next run without a second ack`.
   - `no attendee address or Slack ID reaches the API or any file` (canary over request bodies and the state tree).
 - [ ] **Step 2: Run** `(cd mcp-server && npm test)`. Expected: FAIL.
-- [ ] **Step 3: Implement**; amend ADR-065: Decision lists the three connectors
+- [ ] **Step 3: Implement**; amend ADR-003: Decision lists the three connectors
   and tool allowlist; Consequences adds the two named provider writes
   (`acknowledge_request` under the eligibility rule, `post_draft` never
   overwriting), the private task rows, and the `get_meeting` `isPrivate`

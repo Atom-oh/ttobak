@@ -678,7 +678,7 @@ export function respondMeetingDetection(
 }
 
 // ---------------------------------------------------------------- local intake
-// Commands and events of mac-app/src-tauri/src/intake_runner.rs (ADR-065).
+// Commands and events of mac-app/src-tauri/src/intake_runner.rs (ADR-003, local intake).
 // Commands reject with a string code such as RUN_IN_PROGRESS.
 
 /** Intake state, or `null` when the installed app predates local intake. */

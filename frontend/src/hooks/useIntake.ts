@@ -7,7 +7,7 @@ import type { IntakeFinished, IntakeStateView } from '@/lib/intake';
 const MAX_LINES = 200;
 
 /**
- * Mac local intake state with live progress (ADR-065). `state` stays null in
+ * Mac local intake state with live progress (ADR-003, local intake). `state` stays null in
  * a browser and in an app build without intake. `onFinished` runs after the
  * state reloads for each `intake://finished` event.
  */

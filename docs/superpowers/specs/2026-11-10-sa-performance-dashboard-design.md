@@ -4,7 +4,7 @@
 - Date: 2026-11-10.
 - Roadmap: project 4 of the account ontology roadmap ("my year, how I work").
   It depends on project 3, the local Mac intake
-  ([ADR-065 local MCP intake](../../decisions/ADR-065-local-mcp-intake.md)).
+  ([ADR-003 local MCP intake](../../decisions/ADR-003-mcp-access.md)).
 - Prior art: the `sa-performance-report` skill
   (`internal-mcp-setup-v1.4.0`). It builds a one-off HTML report from SFDC,
   SpecReq, TFC Hub, Outlook and Slack. This design turns that report into a
@@ -89,7 +89,7 @@ These count as failures even if the feature works:
 - **Leaking into account-shared data.**
   - Personal activity data leaks into the account-shared graph, or into
     account surfaces other members see.
-  - That shared graph keeps the ADR-065 limit: SFDC opportunity ID, name and
+  - That shared graph keeps the ADR-003 limit: SFDC opportunity ID, name and
     stage only.
 - **Ungrounded judgment.**
   - The AI grades or "missed" claims cite no stored evidence.
@@ -118,20 +118,20 @@ Cloud processing (Bedrock) of the stored fields is allowed.
 
 - **Collection.** The internal MCP servers (`aws-sentral-mcp`, `aws-outlook-mcp`,
   `slack-mcp`, `spec-req-mcp`, `aws-tfc-hub-mcp`) are called only from the Mac.
-  Collection extends the ADR-065 intake runner in `mcp-server/src/intake/`, a
+  Collection extends the ADR-003 intake runner in `mcp-server/src/intake/`, a
   deterministic connector per source with fixed read tools and fixed
   arguments, writing through the user's TTOBAK API token:
   - references to host configuration, never copies;
   - a journaled batch with `complete:true` last;
   - `AUTH_EXPIRED_MIDWAY` surfaced, and no background browser login;
-  - a launchd schedule now. The Mac app's Settings UI and schedule are ADR-065
+  - a launchd schedule now. The Mac app's Settings UI and schedule are ADR-003
     Phase 2 and can come later.
 - **Residency decision.**
-  - This widens what ADR-065 (local MCP intake) allows for SFDC, and adds mail,
+  - This widens what ADR-003 (local MCP intake) allows for SFDC, and adds mail,
     Slack, SpecReq and TFC fields.
   - A new ADR must record the owner-private residency table above, distinct
     from the account-shared limit.
-  - That ADR is ADR-068. It cites ADR-065 (local MCP intake) and ADR-067
+  - That ADR is ADR-068. It cites ADR-003 (local MCP intake) and ADR-067
     (account people edges) by title.
 - **Storage.**
   - Owner-private DynamoDB rows live under the user's own partition, for
@@ -148,7 +148,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
 - **Backend layering.**
   - Go handler → service → repository, using the DynamoDB expression builder.
   - New routes are authenticated, owner-scoped, with bounded responses.
-  - No new public route, and no new HTTP MCP write tool (ADR-003, ADR-065).
+  - No new public route, and no new HTTP MCP write tool (ADR-003).
   - Register routes in the connector catalog as existing routes are.
 - **Billing linkage.**
   - Spend change comes from the Billing service datasets per TTOBAK Account,
@@ -194,7 +194,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
   Extend it, behind the new ADR, with the organizer's email domain (the source
   has no attendee list).
 - **Private calendar items (owner decision).** They are included. The calendar
-  source exposes no sensitivity flag (ADR-065, local MCP intake), and only
+  source exposes no sensitivity flag (ADR-003, local MCP intake), and only
   titles and times are stored. The performance connector runs as if
   `--accept-unknown-sensitivity` were set, and the new ADR records this
   acceptance explicitly.

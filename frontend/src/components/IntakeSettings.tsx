@@ -23,7 +23,7 @@ function formatTime(iso: string | null): string {
   return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
-/** Mac app only: local intake setup, schedule and runs (ADR-065). Hidden in a
+/** Mac app only: local intake setup, schedule and runs (ADR-003, local intake). Hidden in a
  * browser or an app build without intake. */
 export function IntakeSettings() {
   const [message, setMessage] = useState<string | null>(null);

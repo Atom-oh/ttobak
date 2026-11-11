@@ -1,7 +1,7 @@
 # Local MCP intake (calendar, SpecReq tasks and SFDC)
 
 This runbook covers the Phase 1 calendar runner and its meeting SpecReq task
-step from [ADR-065](../decisions/ADR-065-local-mcp-intake.md). It is a command line in
+step from [ADR-003, local intake](../decisions/ADR-003-mcp-access.md). It is a command line in
 the TTOBAK stdio adapter, `ttobak-mcp intake`. The Mac app drives the same
 commands from Settings and the SA activity page ([Mac app](#mac-app)); the
 command line stays available. Acceptance on the user's Mac is pending; nothing here proves it.
@@ -346,7 +346,7 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
    - an all-day event.
 4. Run `intake calendar` and compare with `ttobak_list_calendar_events`.
    Re-run and confirm that the mutations are empty.
-5. Record the date and results in ADR-065's status line.
+5. Record the date and results in ADR-003 local intake's status line.
 
 ### Task step acceptance
 
@@ -364,7 +364,7 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
    notice. Then select `--auto-ack on`, rerun, and confirm exactly one
    `acknowledge_request` (SpecReq shows `WORKING`, the task `acked`).
 4. Confirm `status` and the log hold codes and counts only.
-5. Record the date and results in ADR-065's status line.
+5. Record the date and results in ADR-003 local intake's status line.
 
 ### Mac notification acceptance
 
@@ -387,7 +387,7 @@ meeting prompt. Check by hand with the packaged app running:
 3. Make the file a symlink: nothing posts and the log says the queue is
    unreadable. `chmod 666` it: nothing posts and the log says it was ignored.
 4. Record the observed behaviour (delivered or not, whether the click activates
-   the app) in ADR-065's status line.
+   the app) in ADR-003 local intake's status line.
 
 Notifications are informational: the app never navigates because of one, so it
 cannot discard unsaved input. The task strip on the meetings page shows the task.

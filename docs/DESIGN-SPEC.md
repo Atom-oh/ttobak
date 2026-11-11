@@ -136,7 +136,7 @@ counts down 30 seconds before stopping and uploading, with keep recording and st
 now actions. The native waveform is drawn on a -60..-10 dBFS scale. Nothing records without the user's confirmation; the
 start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
-(ADR-061). Settings also shows `IntakeSettings` (Mac local intake, ADR-065) only in
+(ADR-061). Settings also shows `IntakeSettings` (Mac local intake, ADR-003) only in
 an app build with the intake commands: adapter state and update, node path when
 missing, selected servers, schedule (off, hourly, daily, twice daily) with a
 warning when the CLI LaunchAgent is also installed, per-source status, setup with
