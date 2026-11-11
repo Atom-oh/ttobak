@@ -21,6 +21,6 @@ Go race/access tests and frontend lint/type/build checks were intended. All task
 
 ## Current references
 
-- [Round 2](2026-07-16-pr114-review-round2-fixes.md) adopts membership-conditioned share transactions and visible cleanup results. [ADR-023](../../decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) records current conditional origin/account deletion, live membership checks, force gate, and migration limits.
+- [Round 2](2026-07-16-pr114-review-round2-fixes.md) adopts membership-conditioned share transactions and visible cleanup results. [ADR-016](../../decisions/ADR-016-meeting-account-sharing.md) records current conditional origin/account deletion, live membership checks, force gate, and migration limits.
 - [Role persistence](../../../backend/internal/repository/account.go), [share transactions](../../../backend/internal/repository/dynamodb.go), [MemberPicker](../../../frontend/src/components/MemberPicker.tsx), [AccountsClient](../../../frontend/src/components/AccountsClient.tsx).
 - [ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md) supersedes this plan's owner-only role-update authorization while preserving removal restrictions.

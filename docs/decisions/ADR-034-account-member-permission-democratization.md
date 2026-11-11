@@ -1,6 +1,6 @@
 # ADR-034: Account members may add members and update roles
 
-- Status: Accepted; supersedes owner-only authorization for these two operations. ADR-023's removal safeguards remain in force.
+- Status: Accepted; supersedes owner-only authorization for these two operations. ADR-016's removal safeguards remain in force.
 - Decision date: 2026-08-25.
 - Code checked: 2026-09-13. [ADR-036](ADR-036-account-hierarchy-and-meeting-filters.md) adds separate owner-only reparenting, without inherited membership.
 - [ADR-054](ADR-054-self-service-account-invitations.md) supersedes the earlier
