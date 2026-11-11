@@ -50,8 +50,8 @@ export default function SettingsPage() {
       </header>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        <div className="p-4 lg:px-16 lg:pt-16 lg:pb-8 max-w-4xl w-full space-y-8">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="workspace-page space-y-6">
           {/* Page Header */}
           <div>
             <h2 className="hidden lg:block text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">Settings</h2>
@@ -59,86 +59,88 @@ export default function SettingsPage() {
             <p className="text-slate-600 dark:text-text-muted mt-2">Manage your account and integrations.</p>
           </div>
 
-          {/* Profile Section */}
-          <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">Profile</h3>
-            <div className="flex items-center gap-4 dark:glass-panel dark:p-4">
-              <div className="w-14 h-14 rounded-full bg-slate-100 dark:bg-white/5 flex items-center justify-center text-slate-600 dark:text-primary text-xl font-bold">
-                {user?.name?.charAt(0) || user?.email?.charAt(0).toUpperCase() || '?'}
-              </div>
-              <div>
-                <p className="text-base font-semibold text-slate-900 dark:text-text-main">
-                  {user?.name || 'User'}
-                </p>
-                <p className="text-sm text-slate-400 dark:text-text-muted">{user?.email}</p>
-              </div>
-            </div>
-          </section>
-
-          {/* Mac App Section */}
-          <section id="mac-app" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">
-              Mac 앱
-            </h3>
-            <MacAppInstall />
-          </section>
-
-          {/* Integrations Section */}
-          <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">
-              Integrations
-            </h3>
-            <IntegrationSettings />
-          </section>
-
-          <section id="contact-import" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">연락처 가져오기</h3>
-            {user && <BulkContactImport userId={user.userId} />}
-          </section>
-
-          {/* User Invitation Section — admin only */}
-          {isAdmin && (
+          <div className="workspace-settings-grid">
+            {/* Profile Section */}
             <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-              <h3 className="section-header mb-4">사용자 초대</h3>
-              <InviteUser />
+              <h3 className="section-header mb-4">Profile</h3>
+              <div className="flex items-center gap-4 dark:glass-panel dark:p-4">
+                <div className="w-14 h-14 rounded-full bg-slate-100 dark:bg-white/5 flex items-center justify-center text-slate-600 dark:text-primary text-xl font-bold">
+                  {user?.name?.charAt(0) || user?.email?.charAt(0).toUpperCase() || '?'}
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-slate-900 dark:text-text-main">
+                    {user?.name || 'User'}
+                  </p>
+                  <p className="text-sm text-slate-400 dark:text-text-muted">{user?.email}</p>
+                </div>
+              </div>
             </section>
-          )}
 
-          {/* User Management Section — admin only. isAdmin here is a display
-              gate only; the backend's middleware.RequireAdmin is what
-              actually enforces access on every /api/settings/users* route. */}
-          {isAdmin && (
-            <section id="user-management" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-              <h3 className="section-header mb-4">사용자 관리</h3>
-              <UserManagement />
+            {/* Mac App Section */}
+            <section id="mac-app" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">
+                Mac 앱
+              </h3>
+              <MacAppInstall />
             </section>
-          )}
 
-          {/* Custom Dictionary moved to /dictionary (지식 group) */}
-          <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">사용자 사전</h3>
-            <p className="text-sm text-slate-600 dark:text-text-muted">
-              사용자 사전은 <Link href="/dictionary" className="font-semibold text-primary hover:underline">지식 › Custom Dictionary</Link>로 옮겼습니다.
-            </p>
-          </section>
+            {/* Integrations Section */}
+            <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">
+                Integrations
+              </h3>
+              <IntegrationSettings />
+            </section>
 
-          <MeetingDetectionSettings />
-          <IntakeSettings />
+            <section id="contact-import" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">연락처 가져오기</h3>
+              {user && <BulkContactImport userId={user.userId} />}
+            </section>
 
-          {/* Crawler Sources Section */}
-          <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">Crawler Sources</h3>
-            <CrawlerSettings />
-          </section>
+            {/* User Invitation Section — admin only */}
+            {isAdmin && (
+              <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+                <h3 className="section-header mb-4">사용자 초대</h3>
+                <InviteUser />
+              </section>
+            )}
 
-          {/* MCP client connection guides */}
-          <ConnectorSettings isAdmin={isAdmin} />
-          <section>
-            <h3 className="section-header mb-4">
-              Developer Tools
-            </h3>
-            <McpGuide />
-          </section>
+            {/* User Management Section — admin only. isAdmin here is a display
+                gate only; the backend's middleware.RequireAdmin is what
+                actually enforces access on every /api/settings/users* route. */}
+            {isAdmin && (
+              <section id="user-management" className="workspace-settings-wide scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+                <h3 className="section-header mb-4">사용자 관리</h3>
+                <UserManagement />
+              </section>
+            )}
+
+            {/* Custom Dictionary moved to /dictionary (지식 group) */}
+            <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">사용자 사전</h3>
+              <p className="text-sm text-slate-600 dark:text-text-muted">
+                사용자 사전은 <Link href="/dictionary" className="font-semibold text-primary hover:underline">지식 › Custom Dictionary</Link>로 옮겼습니다.
+              </p>
+            </section>
+
+            <MeetingDetectionSettings />
+            <IntakeSettings />
+
+            {/* Crawler Sources Section */}
+            <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">Crawler Sources</h3>
+              <CrawlerSettings />
+            </section>
+
+            {/* MCP client connection guides */}
+            <ConnectorSettings isAdmin={isAdmin} />
+            <section>
+              <h3 className="section-header mb-4">
+                Developer Tools
+              </h3>
+              <McpGuide />
+            </section>
+          </div>
         </div>
       </div>
     </AppLayout>
