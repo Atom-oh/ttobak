@@ -180,6 +180,12 @@ func TestFocus_PagesWithBoundCursor(t *testing.T) {
 	if _, err := svc.Focus(context.Background(), "viewer", "acc", focus, "!!"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("garbage cursor: %v", err)
 	}
+	// Meetings unpublished between pages: a valid cursor past the end is an empty final page.
+	f.targetLinks = f.targetLinks[:3]
+	g3, err := svc.Focus(context.Background(), "viewer", "acc", focus, g.NextCursor)
+	if err != nil || len(g3.Meetings) != 0 || g3.NextCursor != "" || g3.Focus.Meetings != 3 {
+		t.Fatalf("stale cursor = %+v, %v", g3, err)
+	}
 }
 
 func TestFocus_BoundsMeetingReads(t *testing.T) {
@@ -194,4 +200,37 @@ func TestFocus_BoundsMeetingReads(t *testing.T) {
 	if err != nil || !g.Truncated || g.Focus.Meetings != maxFocusMeetings {
 		t.Fatalf("graph = %+v, %v", g.Focus, err)
 	}
+}
+
+func TestFocus_ProjectKeepsNewestMeetingsPastTheBound(t *testing.T) {
+	f := newFocusRepo()
+	f.projects["p1"] = &model.Project{ProjectID: "p1", Name: "Big", AccountIDs: []string{"acc"}}
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	// The repository returns project meeting refs newest first.
+	for i := maxFocusMeetings + 10; i >= 1; i-- {
+		id := fmt.Sprintf("q%03d", i)
+		m := peopleTestMeeting(id)
+		m.Date, m.ProjectIDs = start.AddDate(0, 0, i), []string{"p1"}
+		f.meetings["owner:"+id] = m
+		f.projectMeetingRefs = append(f.projectMeetingRefs, model.ProjectMeetingRef{ProjectID: "p1", MeetingID: id, OwnerUserID: "owner", Date: m.Date})
+	}
+	g, err := NewAccountPeopleService(f).Focus(context.Background(), "viewer", "acc", "project:p1", "")
+	if err != nil || !g.Truncated || g.Meetings[0].ID != fmt.Sprintf("owner:q%03d", maxFocusMeetings+10) {
+		t.Fatalf("first = %+v truncated=%v err=%v", g.Meetings[0], g.Truncated, err)
+	}
+}
+
+func TestFocus_PeopleRowBoundSetsTruncated(t *testing.T) {
+	f := &cutMeetingLinksRepo{newFocusRepo()}
+	g, err := NewAccountPeopleService(f).Focus(context.Background(), "viewer", "acc", "contact:"+peopleTestContact, "")
+	if err != nil || !g.Truncated {
+		t.Fatalf("truncated = %v, %v", g.Truncated, err)
+	}
+}
+
+type cutMeetingLinksRepo struct{ *fakePeopleRepo }
+
+func (r *cutMeetingLinksRepo) ListPeopleLinksForMeeting(ctx context.Context, account, meeting string, n int) ([]model.PeopleLink, bool, error) {
+	links, _, err := r.fakePeopleRepo.ListPeopleLinksForMeeting(ctx, account, meeting, n)
+	return links, true, err
 }

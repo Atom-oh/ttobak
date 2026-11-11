@@ -57,6 +57,7 @@
     ["api.accountPeople.resolveMention", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/people/mentions/{mentionKey}/resolve"],
     ["api.accountPeople.ignoreMention", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/people/mentions/{mentionKey}/ignore"],
     ["api.accountPeople.edges", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/people/edges"],
+    ["api.accountPeople.focus", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/people/focus"],
     ["api.accountPeople.bind", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/people/edges"],
     ["api.accountPeople.unbind", "ttobak-api-bridge", ["delete", "read"], false, "DELETE", "/api/accounts/{accountId}/people/edges"],
     ["api.accountPeople.resolve", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/people/resolve"],

@@ -1062,11 +1062,14 @@ and only meetings currently published to the account count:
   catalog IDs from the meeting's stored tags (`tech_catalog.go`, exact alias
   match). `people` are readable members and contacts with their roles. `techs`
   counts and `other` (uncatalogued tags) cover every read focus meeting, at most
-  60; reaching that bound or a row bound sets `truncated`. Person focus uses
-  the person's people links; project focus uses project meeting refs and
-  requires the meeting's `projectIds` to still list the project. A focus not
-  readable in the account returns 404. A malformed focus, an unknown query key
-  or a cursor of another account or focus returns 400. Under the summary guard,
+  60; reaching that bound, the link row bound or a meeting's people row bound
+  sets `truncated`. Person focus uses the person's people links; past 60, which
+  meetings are read follows reverse-index order, not date. Project focus uses
+  project meeting refs newest first and requires the meeting's `projectIds` to
+  still list the project. A focus not readable in the account returns 404. A
+  malformed focus, an unknown query key or a cursor of another account or focus
+  returns 400. A valid cursor past the end, after meetings were unpublished,
+  returns an empty final page. Under the summary guard,
   the meeting's tags and its assignee and insight rows are left out.
 - `POST /people/resolve` (no body, no query) returns 202 `{accepted: true}` and queues one resolve
   request for the account. Bulk and CSV contact imports write rows with
