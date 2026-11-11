@@ -155,7 +155,7 @@ retired. Its data moves in a one-time cutover
    placeholder-protected and without speaker labels or times, through the same
    interpreter path to client memory only (`MEETING_TRANSLATION_ENABLED`, daily
    byte budget).
-   In the Mac app only, caption overlay windows (ADR-069) translate on a separate
+   In the Mac app only, caption overlay windows (ADR-018) translate on a separate
    local path: the main window calls Rust, which uses the user's own AWS profile
    (Bedrock Luna for finals, Amazon Translate for interims and fallback) and relays
    text to bundled overlay pages. It never uses the server's `/api/translate`, so

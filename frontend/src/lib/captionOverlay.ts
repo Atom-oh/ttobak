@@ -8,7 +8,8 @@ import {
 } from './liveTranslation';
 
 // Bridge to the Mac app's floating caption windows. Nothing here runs unless
-// called, and caption text is never logged.
+// called, and caption text is never logged. Decision record: ADR-018 (Mac
+// caption overlay windows).
 
 export type CaptionLang = 'ko' | 'en' | 'ja' | 'zh';
 export type CaptionPushKind = 'entry' | 'clear' | 'preview';

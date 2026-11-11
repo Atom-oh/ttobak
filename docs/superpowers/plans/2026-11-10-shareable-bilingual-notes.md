@@ -99,12 +99,12 @@ Status: Historical implementation plan (2026-11-10); deployment acceptance is re
 ### Task 4: ADR and references for PR 1
 
 **Files:**
-- Create: `docs/decisions/ADR-069-shareable-default-note-provenance.md` (confirm the next free number with `ls docs/decisions`)
-- Modify: `docs/decisions/ADR-029-note-provenance-and-sharing-safety.md` (header line "Partially superseded by ADR-069: …"), `docs/API-SPEC.md` (resummary/noteLanguage/provenance paragraphs), `docs/architecture.md` (summary inputs), `docs/README.md` index if ADRs are listed there
+- Create: `docs/decisions/ADR-018-mac-caption-overlay.md` (confirm the next free number with `ls docs/decisions`)
+- Modify: `docs/decisions/ADR-029-note-provenance-and-sharing-safety.md` (header line "Partially superseded by ADR-018: …"), `docs/API-SPEC.md` (resummary/noteLanguage/provenance paragraphs), `docs/architecture.md` (summary inputs), `docs/README.md` index if ADRs are listed there
 
-- [ ] **Step 1:** ADR-069 records: predecessors removed from all generation; human `content`/`liveSummary` edits keep `safe`; first live draft on empty provenance is `safe`; image analyses are safe evidence (verified: `AnalyzeImage`/`ProcessImageAttachment` read only the image object and attachment row at `dde84cb8`); `noteLanguage` no longer affects Korean generation. Status line and rationale per `docs/CLAUDE.md`.
+- [ ] **Step 1:** ADR-018 records: predecessors removed from all generation; human `content`/`liveSummary` edits keep `safe`; first live draft on empty provenance is `safe`; image analyses are safe evidence (verified: `AnalyzeImage`/`ProcessImageAttachment` read only the image object and attachment row at `dde84cb8`); `noteLanguage` no longer affects Korean generation. Status line and rationale per `docs/CLAUDE.md`.
 - [ ] **Step 2: Run** `python3 scripts/docs/check_docs.py` from repo root — PASS.
-- [ ] **Step 3: Commit** `docs: record shareable-by-default note provenance (ADR-069)`; open PR 1.
+- [ ] **Step 3: Commit** `docs: record shareable-by-default note provenance (ADR-018)`; open PR 1.
 
 ## PR 2: English note backend (stacked on PR 1)
 

@@ -1,23 +1,19 @@
-# ADR-069: Mac caption overlay windows
+# ADR-018: Mac caption overlay windows
 
-- Status: Accepted for implementation; partly observed in a local test build (see the verification record); not verified on a projector or over a full-screen slideshow
+- Status: Accepted; implemented; partly observed in a local test build (see the verification record); not verified on a projector or over a full-screen slideshow
   (see the verification record); the only real AWS call recorded is one
   `caption_translate` round in that local session.
 - Decision date: 2026-11-10.
-- Numbering: ADR-069 because ADR-066 is reserved by the account-shared
-  calendar work and ADR-023 is SA performance data residency.
 - Builds on: ADR-024 (Mac app, system-audio captions and Core Audio capture),
   ADR-017 (floating prompt window pattern).
-- Design: the working design and plan documents were not merged; this ADR is
+- Design: the dated design and plan documents are kept as historical records
+  ([design](../superpowers/specs/2026-11-10-mac-caption-overlay-design.md),
+  [plan](../superpowers/plans/2026-11-10-mac-caption-overlay.md)); this ADR is
   the durable decision.
-- Delivery: four stacked PRs. 1/4: caption model, profile discovery, interpreter,
-  the three translation commands with their request and byte ceilings, and the
-  profile confirmation; 2/4: overlay windows, page and capability, open-window
-  check; 3/4: record-page
-  bridge and panel; 4/4: layout menu and remaining docs. Parts of later PRs do not
-  exist before they land: the windows, event routing, idle display, transparency,
-  window level, overlay capability and mouse sections describe 2/4, and window
-  reopen on the record page describes 3/4.
+- Delivery: all parts are in the code: the caption model, profile discovery,
+  interpreter, the three translation commands with their request and byte
+  ceilings and the profile confirmation; the overlay windows, page, capability
+  and open-window check; the record-page bridge and panel; and the layout menu.
 
 ## Context
 
@@ -141,18 +137,18 @@ control channel and meeting detection already fail open.
 
 **Remote origin command set.** The remote `default` capability gains exactly
 seven commands (also listed in `build.rs` COMMANDS; `command_acl_tests` enforces
-both): `caption_settings_get`, `caption_settings_set` and `caption_translate` in
-1/4, and `caption_overlay_open`, `caption_overlay_close`, `caption_overlay_set_style`
-and `caption_overlay_push` in 2/4. Rust validates every input: language allowlist,
+both): `caption_settings_get`, `caption_settings_set`, `caption_translate`,
+`caption_overlay_open`, `caption_overlay_close`, `caption_overlay_set_style`
+and `caption_overlay_push`. Rust validates every input: language allowlist,
 AWS profile name pattern and membership in the local profile list, region pattern,
 translation text at most 9,000 bytes with at most five context items of at most
 3,000 bytes, and a sliding ceiling of 600 translation requests and 600,000 input
 bytes (text plus context) per minute across all callers so a misbehaving page
-cannot run up the user's bill (1/4). From 2/4 it also enforces the extra-language
+cannot run up the user's bill. It also enforces the extra-language
 gate, style ranges (font allowlist, size 16-160, outline 0-12, opacity 0-1,
 `#RRGGBB` colors), push kind (`entry`, `clear`, `preview`), id at most 64 bytes and
 pushed text at most 4,000 bytes, and `caption_translate` rejects a target language
-whose overlay window is not open; the record page (3/4) starts an engine only after
+whose overlay window is not open; the record page starts an engine only after
 its window opened and stops it before closing the window. None of the commands reads
 arbitrary files, reaches an arbitrary network address or exposes tokens. Error
 codes are listed in `mac-app/CLAUDE.md`.
@@ -224,7 +220,7 @@ Recorded 2026-11-10. The owner ran a local test build (the app pointed at a
 local dev server) on a laptop with an external display; rows marked "observed"
 come from that single session. Nothing was run on a projector, over a full-screen
 slideshow or in a Zoom share. Go is not installed locally, so `go vet` was
-not run for the comment-only change in `translate.go` (delivered in PR 1/4). Unit tests in the Rust
+not run for the comment-only change in `translate.go`. Unit tests in the Rust
 modules and the frontend scripts are separate from this checklist.
 
 | Check | Result |
