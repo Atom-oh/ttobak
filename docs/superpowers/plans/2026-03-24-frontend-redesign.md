@@ -20,4 +20,4 @@ All task boxes were unchecked. The document recorded expected build results, not
 ## Current references
 
 - [Meeting detail](../../../frontend/src/app/meeting/[id]/MeetingDetailClient.tsx), [audio player](../../../frontend/src/components/AudioPlayer.tsx), [recording page](../../../frontend/src/app/record/page.tsx), [Q&A message](../../../frontend/src/components/qa/QAChatMessage.tsx).
-- [ADR-027](../../decisions/ADR-027-cloudfront-signed-media-urls.md) defines current signed media delivery; [ADR-024](../../decisions/ADR-024-mac-native-capture-and-upload.md) and [ADR-006](../../decisions/ADR-006-browser-and-mobile-recording.md) supersede early recording assumptions.
+- [ADR-027](../../decisions/ADR-027-edge-delivery-and-origin-proof.md) defines current signed media delivery; [ADR-024](../../decisions/ADR-024-mac-native-capture-and-upload.md) and [ADR-006](../../decisions/ADR-006-browser-and-mobile-recording.md) supersede early recording assumptions.

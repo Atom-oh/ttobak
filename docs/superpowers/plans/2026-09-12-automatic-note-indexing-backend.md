@@ -2,9 +2,8 @@
 
 Historical planning/acceptance record from 2026-09-12. Checklist statements below
 record the original slice, not current deployment or instructions to restart it.
-For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
-[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
-and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+For current activation, follow [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md), where relevant.
 
 This planning slice had no automatic trigger. Current invocation details are in
 `docs/API-SPEC.md`; the later manual-only bootstrap schedule is a separate stage.
@@ -67,7 +66,7 @@ Fresh source/byte reads and the source CAS still follow the provider check.
 ## Activation and rollback
 
 Runtime also requires `INDEXING_MODE=manual-only|all`. Follow the four-stage
-[ADR-038 bootstrap extension](../../decisions/ADR-038-canonical-note-indexing.md).
+[ADR-028 bootstrap extension](../../decisions/ADR-028-qa-search-indexing-and-sources.md).
 The steps below apply only to canonical/all-mode activation after manual snapshots
 and strict QA runtime have been verified.
 
@@ -85,7 +84,7 @@ and strict QA runtime have been verified.
    the schedule disabled. Later main enables the manual-only bootstrap schedule;
    canonical/all-mode activation still requires the preceding gates.
 
-Legacy cleanup makes rollback to old QA require re-export (ADR-038).
+Legacy cleanup makes rollback to old QA require re-export (ADR-028).
 
 Validation: `/usr/local/go/bin/go test ./... -count=1`,
 `/usr/local/go/bin/go vet ./...`, and

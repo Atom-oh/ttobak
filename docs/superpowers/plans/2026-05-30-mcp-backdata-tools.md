@@ -19,4 +19,4 @@ The original self-review checked interface/tool-name coverage and noted that MCP
 
 - [ADR-018](../../decisions/ADR-018-mcp-back-data-tools.md), [GetAccountBrief](../../../backend/internal/service/account.go), [account handlers](../../../backend/internal/handler/account.go), [service tests](../../../backend/internal/service/account_test.go).
 - [MCP API client](../../../mcp-server/src/api.ts), [tool registry/dispatch](../../../mcp-server/src/index.ts).
-- [ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md) keeps account briefs scoped to explicit accounts; hierarchy does not automatically aggregate descendants. Later MCP tools do not change this original five-read-tool scope.
+- [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md) keeps account briefs scoped to explicit accounts; hierarchy does not automatically aggregate descendants. Later MCP tools do not change this original five-read-tool scope.

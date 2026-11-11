@@ -323,7 +323,14 @@ the application never silently verifies the address or changes credentials.
 
 ## Accounts, filters and sharing
 
-Render accessible accounts as a collapsible hierarchy. An inaccessible parent
+Render accessible accounts as a collapsible hierarchy. On `/accounts` and
+`/accounts/{id}` that hierarchy is the customer selector: a left tree in the app
+nav style (`AccountWorkspaceSelector` → `AccountHierarchyList`), sorted by Korean
+name order, children nested under their group, the selection's group expanded,
+and no separate flat list. Rows omit role badges; inherited read-only rows show
+a labelled icon. The implicit default (first row) stays selected across parent
+saves, and the `/accounts/{id}` tree reloads after one. Mobile uses a select in
+the same order. An inaccessible parent
 makes a visible child a display root; do not fetch the hidden parent's name.
 Creation can select a parent. Only the child owner sees the parent editor; server
 validation still enforces parent membership, cycles and concurrent ancestry changes.
@@ -332,7 +339,7 @@ Exclude self/known descendants from the picker and show save errors.
 Meeting account selection supports multiple IDs. Expand selected visible groups
 client-side and retain normalized selection across pagination; reset cursor on
 change. Empty pages with nextCursor can still have later matches. Hierarchy and
-classification never grant access to private content (ADR-036).
+classification never grant access to private content (ADR-015, hierarchy).
 
 Activated ancestor access displays a read-only label and its granting Account
 (ADR-058); published meetings are the exception and show edit and management
@@ -346,7 +353,7 @@ and five-file ZIPs. Preserve independently granted editing controls. Account dis
 consumes bounded pages with explicit cursor-loop and size errors.
 
 All current account members may add members/change assignable non-owner roles.
-Removal/pending-invite revocation stay owner-only (ADR-034). UI
+Removal/pending-invite revocation stay owner-only (ADR-015, member permissions). UI
 visibility is not the authorization boundary.
 
 `accountApi.list` keeps the signed-in user's Account list in memory for one
@@ -466,7 +473,7 @@ explicit "resend invitation" action to members; cancellation remains owner-only.
 New-user invitation and resend confirmations
 acknowledge a mail request, not inbox delivery. The configured invitation includes
 the login link and temporary password. Domain allowlisting, verified requester
-email and the hourly invitation counter apply (ADR-054).
+email and the hourly invitation counter apply (ADR-015, invitations).
 
 Account document sharing creates a copy. Email sharing is a read-only reference,
 with no permission toggle. A public link is separately revocable. previewUrl is

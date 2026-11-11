@@ -931,7 +931,7 @@ func TestIsSummarizeRetryEligible_ThresholdBoundary(t *testing.T) {
 	}
 }
 
-// TestSummarizeRetryEligibleShorterThanStuck locks in the invariant ADR-031
+// TestSummarizeRetryEligibleShorterThanStuck locks in the invariant ADR-013
 // depends on: the retry-eligibility window must open strictly before the
 // auto-expiry-to-error window closes it, or a redelivery landing between
 // them can never actually recover a dead summarize attempt.
@@ -1643,7 +1643,7 @@ func TestMaterializePendingShares_AllowsInviterWhoRemainsMemberAfterDemotion(t *
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
 	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "Test Account"}
-	// ADR-054 allows any current member to invite: demotion from owner does
+	// ADR-015 (invitations) allows any current member to invite: demotion from owner does
 	// not invalidate a grant while the inviter's membership remains present.
 	repo.members["acc-1|owner-1"] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleSSA}
 	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{

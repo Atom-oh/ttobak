@@ -117,9 +117,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	// recover the parent Go process's env via /proc/<ppid>/environ, and
 	// this does nothing about SSRF or local-file-read via a document's
 	// linked/remote content. LibreOffice conversion of untrusted input is
-	// an inherent RCE surface; see ADR-022's Consequences for the tracked
-	// residual risk (this Lambda's docs/* IAM grant is bucket-wide across
-	// all users, not scoped to the triggering key) and follow-up.
+	// an inherent RCE surface; see ADR-020 for the residual
+	// risk (this Lambda's docs/* IAM grant is bucket-wide across
+	// all users, not scoped to the triggering key) and its remaining work.
 	cmd.Env = convertdoc.SanitizedEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if err != nil {

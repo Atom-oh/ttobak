@@ -1,7 +1,7 @@
 # Account Hierarchy and Meeting Checkbox Filters
 
 > Historical design record. Original date: 2026-09-11 (filename); no original status
-> was recorded. [ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md)
+> was recorded. [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md)
 > records the decision. This spec preserves design intent, not proof of deployment.
 
 ## Requested behavior and rationale

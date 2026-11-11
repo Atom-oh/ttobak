@@ -53,8 +53,8 @@ aggregate source/word counts; section word counts are computed separately. Savin
 there is not itself an ingestion-completion guarantee.
 
 [ADR-011](../../decisions/ADR-011-interactive-deep-research.md) extends planning and
-child reports; [ADR-010](../../decisions/ADR-010-insights-obsidian-style-markdown-rendering.md)
-covers reading/sections. The later
+child reports and report sections; [ADR-020](../../decisions/ADR-020-personal-documents.md)
+covers Markdown reading. The later
 [enrichment proposal](2026-08-07-knowledge-enrichment-pipeline-design.md) calls for
 private internal reports and measured provenance; it does not prove that migration
 occurred. Current references: [documentation map](../../README.md),

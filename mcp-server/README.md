@@ -490,7 +490,7 @@ export, projects and links.
   selection across pages; hierarchy does not grant access.
 - Project lists include owner, direct-member and linked-account membership paths.
   Link/mutation permissions remain server-enforced. Any existing account member
-  can add another member to an assignable non-owner role (ADR-034).
+  can add another member to an assignable non-owner role (ADR-015, member permissions).
 - Account detail, meeting, insight and brief tools use
   `/api/accounts/{accountId}/reading`. Detail traverses metadata and members;
   brief also traverses meetings and insights. Follow the opaque page cursor

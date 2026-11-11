@@ -18,7 +18,7 @@ MCP tools read-only would prevent the intended contribution workflow.
 | Tool group | Backend contract |
 | --- | --- |
 | Account brief/insights/meetings | Account-member-gated REST reads |
-| Vault export | Caller-scoped export and limits in ADR-017 |
+| Vault export | Caller-scoped export and limits in ADR-020 |
 | Put/list/get/update document | Personal partition when `accountId` is omitted; account scope when supplied; backend ownership/member gates apply |
 | Upload document | Local file to a signed upload URL, then document creation; separate from inline Markdown |
 | KB upload/list/delete | Authenticated user's `kb/{userID}/` objects |
@@ -31,7 +31,7 @@ fixed tool count are historical. `ttobak_put_document` creates a fresh ID;
 `ttobak_update_document` revises an existing document. The adapter exposes no
 meeting-content editing tool, but writes are no longer limited to documents.
 
-**ADR-034 supersedes the old owner-only member-add claim.** Any current account
+**ADR-015 supersedes the old owner-only member-add claim.** Any current account
 member can add an assignable role; removal/pending-revocation remain owner-only
 in the REST service. Account hierarchy does not confer inherited authorization.
 

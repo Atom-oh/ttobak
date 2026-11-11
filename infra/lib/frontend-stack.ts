@@ -298,7 +298,7 @@ function handler(event) {
       `),
     });
 
-    // Security headers for /media/* (ADR-027 follow-up): moving downloads to
+    // Security headers for /media/* (ADR-027): moving downloads to
     // the site's own origin means an uploaded file with an attacker-chosen
     // Content-Type (upload.go sets it from client-supplied req.FileType with
     // no allowlist) is now same-origin with the app, not a separate S3
@@ -339,7 +339,7 @@ function handler(event) {
     // audio/img tags elsewhere, which decode media natively and aren't
     // affected by sandbox at all. This prefix has no attacker-controlled
     // Content-Type risk to mitigate anyway: convert-doc (the only writer to
-    // docs-pdf/*, ADR-022) always produces a PDF from LibreOffice, never a
+    // docs-pdf/*, ADR-020) always produces a PDF from LibreOffice, never a
     // client-supplied MIME type.
     const docsPdfResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
       this,

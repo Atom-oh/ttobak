@@ -126,7 +126,7 @@ func TestCalendarPersistedStdioAcceptance(test *testing.T) {
 		test.Fatal(err)
 	}
 	crypto := service.NewCalendarCipher(persistedCalendarKMS{cipher: authenticatedCipher}, "synthetic-calendar-key")
-	calendar := NewCalendarHandler(service.NewCalendarService(repository.NewCalendarRepository(client, table), crypto, persistedCalendarAccounts{}))
+	calendar := NewCalendarHandler(service.NewCalendarService(repository.NewCalendarRepository(client, table), crypto, persistedCalendarAccounts{}, nil))
 	ownerToken, otherToken := uuid.NewString(), uuid.NewString()
 	router := chi.NewRouter()
 	router.Use(func(next http.Handler) http.Handler {

@@ -45,7 +45,7 @@ type SpecReqTaskService struct {
 func NewSpecReqTaskService(store SpecReqTaskStore, events SpecReqEventReader, cipher *CalendarCipher, accounts CalendarAccountReader) *SpecReqTaskService {
 	return &SpecReqTaskService{
 		store: store, events: events, cipher: cipher, accounts: accounts,
-		calendar: NewCalendarService(nil, cipher, accounts), now: time.Now,
+		calendar: NewCalendarService(nil, cipher, accounts, nil), now: time.Now,
 	}
 }
 
@@ -308,7 +308,7 @@ func (svc *SpecReqTaskService) buildView(ctx context.Context, userID string, row
 	if err != nil || eventRow == nil {
 		return view, nil
 	}
-	event, err := svc.calendar.decryptCalendarEvent(ctx, userID, *eventRow)
+	event, err := svc.calendar.decryptCalendarInput(ctx, userID, *eventRow)
 	if errors.Is(err, repository.ErrCalendarCorruptData) || errors.Is(err, ErrCalendarEncryption) {
 		// A corrupt or undecryptable payload cannot be told apart from a KMS outage here;
 		// the task stays usable without its event summary.

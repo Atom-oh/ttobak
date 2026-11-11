@@ -113,7 +113,7 @@ create notices and determine whether to navigate/add members.
 
 ## Task 4: Review and production delivery
 
-**Files:** ADR-055; ADR-015/034/054; API/DESIGN/README and canonical review context.
+**Files:** ADR-055; ADR-015; API/DESIGN/README and canonical review context.
 Operational evidence stays outside tracked source.
 
 Delivery is split into API/contract PR #480 and companion UI PR #479 to keep

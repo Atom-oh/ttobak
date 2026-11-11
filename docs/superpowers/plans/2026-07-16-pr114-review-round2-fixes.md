@@ -17,7 +17,7 @@ Cleanup reporting retained membership deletion but returned 200 with failed meet
 
 Intended tests exercised removal at the transaction boundary, direct-share preservation, conditional role behavior, and 200/204 response handling, plus frontend/Go checks. Task boxes remained unchecked; no command output established a complete run.
 
-[ADR-023](../../decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) goes further: backfill enumerates meeting shares including ex-members, ambiguity can block removal before mutation, deletion checks account identity as well as origin, and account-derived access is revalidated on reads. The old current-member-only migration and response-only mitigation are superseded.
+[ADR-016](../../decisions/ADR-016-meeting-account-sharing.md) goes further: backfill enumerates meeting shares including ex-members, ambiguity can block removal before mutation, deletion checks account identity as well as origin, and account-derived access is revalidated on reads. The old current-member-only migration and response-only mitigation are superseded.
 
 ## Evidence pointers
 

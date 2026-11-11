@@ -103,7 +103,7 @@ a separate user queue plus a project reverse row, keeping older API readers from
 consuming unknown grant kinds. Transactions bind project ownership, invitation
 version/expiry and recipient sub before publishing membership. JWT email
 verification remains required; account roles and global admin rights are never
-inherited from a project invitation. See ADR-044 and API-SPEC for contracts.
+inherited from a project invitation. See ADR-025 and API-SPEC for contracts.
 
 Deploy and verify the API with `/api/session/bootstrap` and project pending routes
 before publishing the new frontend. The new frontend requires bootstrap and will
@@ -175,7 +175,7 @@ retired. Its data moves in a one-time cutover
    only when the GPU cluster is idle, re-drives an unpublished transcript through
    summarize, records `AUDIO_CORRUPT`/`NO_SPEECH`/`WORKER_FAILED` marks, and after
    seven untouched days deletes marked meetings that hold no user data. Checkpoint-only
-   and multipart meetings are reported, not processed (ADR-031 amendment).
+   and multipart meetings are reported, not processed (ADR-013, scheduled STT recovery).
 3. Refine text while preserving acoustic speakers; summarize the selected source,
    saved notes and supported context into editable meeting content. Transcript
    spill objects are rehydrated by repository reads. Stale segments must not
@@ -189,7 +189,7 @@ retired. Its data moves in a one-time cutover
    Refinement and auxiliary calls keep their independent model selection.
    Authorized shared readers can correct known speaker names through the bounded
    speaker endpoint with the existing version comparison. General editing and
-   owner-only re-diarization retain their separate permissions (ADR-051).
+   owner-only re-diarization retain their separate permissions (ADR-016).
 4. Derive account/project material using explicit relations and current access.
    Hierarchy classifies accounts; it never grants membership. Project lists union
    owner, direct membership and linked-account access.
@@ -270,7 +270,7 @@ retain their separate ASCII constraint. Rejected usage remains charged;
 unknown or abandoned usage retains its reservation. Immutable attempt keys live
 outside the legacy shared-text prefix. New consumers must verify current
 publication state before those writers activate; see
-[ADR-052](decisions/ADR-052-conditional-news-publication.md).
+[ADR-004, news publication](decisions/ADR-004-insights-crawler-and-news.md).
 The staged `news_worker.py` now joins current source checks, HTTPS-only article
 fetches, queued-candidate freshness checks, model accounting, immutable uploads
 and conditional publication. Its input boundary uses the same exact Unicode
@@ -562,4 +562,4 @@ The new API-only writer defaults off until compatible Go and QA readers deploy.
 - [Documentation and ADR navigation](README.md)
 - [Deployment](runbooks/deployment.md), [STT recovery](runbooks/stt-pipeline-troubleshooting.md)
 - [PR review](runbooks/pr-review.md)
-- [Batch summary CAS/retries](decisions/ADR-040-guarded-summary-publication.md)
+- [Batch summary CAS/retries](decisions/ADR-013-summary-generation-and-publication.md)
