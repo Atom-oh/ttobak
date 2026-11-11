@@ -31,6 +31,8 @@ test('code labels use the fixed Korean copy', () => {
   assert.equal(report.reportCodeLabel('RUN_IN_PROGRESS'), '이미 리포트를 만들고 있어요.');
   assert.equal(report.reportCodeLabel('TTOBAK_LOGIN_REQUIRED'), copy.ttobakLoginRequired);
   assert.equal(report.reportCodeLabel('INVALID_ARGUMENT'), '입력값이 올바르지 않아요.');
+  assert.equal(report.reportCodeLabel('ADAPTER_OUTDATED'),
+    'TTOBAK 수집 도구가 예전 버전이라 리포트를 만들 수 없어요. 설정의 수집 섹션에서 [업데이트]를 누른 뒤 다시 시도하세요.');
 });
 
 test('unknown codes fall back to the code itself', () => {
