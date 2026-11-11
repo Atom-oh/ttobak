@@ -142,6 +142,10 @@ missing, selected servers, schedule (off, hourly, daily, twice daily) with a
 warning when the CLI LaunchAgent is also installed, per-source status, setup with
 private-calendar consent and skip toggles, run now, login, cancel and a live
 progress log. A failed state read shows a one-line error. 
+In Mic mode, `MicSelector` remembers the chosen device; when that device no
+longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
+rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
+cleared and an amber notice asks the user to reselect.
 In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
