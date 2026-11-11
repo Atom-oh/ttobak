@@ -258,6 +258,10 @@ fn created_as_accessory<T>(app: &AppHandle, create: impl FnOnce() -> T) -> T {
             log::warn!("caption overlay activation policy change failed: {e}");
         }
     };
+    // One creation at a time: saved windows reopen concurrently at launch,
+    // and another call's return to regular must not land before this build.
+    static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = CREATING.lock().unwrap_or_else(|e| e.into_inner());
     set(tauri::ActivationPolicy::Accessory);
     let created = create();
     set(tauri::ActivationPolicy::Regular);
