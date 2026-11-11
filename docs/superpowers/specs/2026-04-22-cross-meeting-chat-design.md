@@ -52,6 +52,6 @@ QA writes uppercase `TTL` on session rows, but
 [StorageStack](../../../infra/lib/storage-stack.ts) sweeps `pendingShareExpiresAt`.
 The original automatic session-retention claim is therefore not established.
 See [ADR-016](../../decisions/ADR-016-meeting-account-sharing.md) for
-sharing and [ADR-028](../../decisions/ADR-028-qa-web-search-and-proactive-question-search.md)
+sharing and [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md)
 for later web search. Current references: [documentation map](../../README.md) and
 [API](../../API-SPEC.md).
