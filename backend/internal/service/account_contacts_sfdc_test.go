@@ -282,6 +282,25 @@ func TestSfdcContactSync(t *testing.T) {
 		}
 	})
 
+	t.Run("departure_uses_union_of_present_lists", func(t *testing.T) {
+		r := newSfdcSyncFake()
+		moved := r.put(model.AccountContact{Name: "Moved", SfdcContactID: sfC1, SfdcAccountID: sfAcct})
+		gone := r.put(model.AccountContact{Name: "Gone", SfdcContactID: sfC2, SfdcAccountID: sfAcct})
+		back := r.put(model.AccountContact{Name: "Back", SfdcContactID: sfC3, SfdcAccountID: sfAcct, SfdcLeftAt: "2026-10-01T00:00:00Z"})
+		s, _ := newSfdcSync(r)
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct, sfAcct2},
+			Present: map[string][]string{sfAcct: {}, sfAcct2: {sfC1, sfC3}}})
+		if err != nil || out.Marked != 1 || out.Unmarked != 1 {
+			t.Fatalf("got %+v %v", out, err)
+		}
+		if r.rows[moved.ContactID].SfdcLeftAt != "" || r.rows[gone.ContactID].SfdcLeftAt == "" || r.rows[back.ContactID].SfdcLeftAt != "" {
+			t.Fatalf("marks %+v %+v %+v", r.rows[moved.ContactID], r.rows[gone.ContactID], r.rows[back.ContactID])
+		}
+		if r.rows[moved.ContactID].SfdcAccountID != sfAcct || r.rows[back.ContactID].SfdcAccountID != sfAcct {
+			t.Fatalf("link account must not change: %+v %+v", r.rows[moved.ContactID], r.rows[back.ContactID])
+		}
+	})
+
 	t.Run("complete_snapshot_requires_present_and_items_in_it", func(t *testing.T) {
 		r := newSfdcSyncFake()
 		s, _ := newSfdcSync(r)
