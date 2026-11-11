@@ -190,16 +190,17 @@ func TestPeopleMentions_HidesSummaryDerivedTextUnderGuard(t *testing.T) {
 	withPeopleSummaryGuard(t)
 	f := newPeopleReadRepo()
 	f.mentionRows = []model.UnresolvedMention{
-		peopleMentionRow(peopleHashA, "owner:m1", "mentions", model.PeopleSourceInsights, "Secret Corp"),
+		peopleMentionRow(peopleHashA, "owner:m1", "mentions", model.PeopleSourceInsights, "Kim Minsu"),
 		peopleMentionRow(peopleHashB, "owner:m1", "participant", model.PeopleSourceParticipants, "Lee"),
 	}
+	f.mentionRows[0].PersonCandidate = true
 	s := newPeopleTestService(f)
 	page, err := s.ListMentionGroups(context.Background(), "viewer", "acc", "")
 	if err != nil || len(page.Groups) != 1 || page.Groups[0].Key != peopleHashB || page.Groups[0].Text != "Lee" {
 		t.Fatalf("guarded page=%+v err=%v", page, err)
 	}
 	page, err = s.ListMentionGroups(context.Background(), "owner", "acc", "")
-	if err != nil || len(page.Groups) != 2 || page.Groups[0].Text != "Secret Corp" || page.Groups[0].Roles[0] != "mentions" {
+	if err != nil || len(page.Groups) != 2 || page.Groups[0].Text != "Kim Minsu" || page.Groups[0].Roles[0] != "mentions" {
 		t.Fatalf("owner page=%+v err=%v", page, err)
 	}
 }

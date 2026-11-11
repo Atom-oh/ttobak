@@ -278,6 +278,9 @@ type MeetingInsight struct {
 	NextAction  string   `json:"nextAction,omitempty"`
 	TsMarker    string   `json:"tsMarker,omitempty"` // [TS:NNN] transcript deep link
 	Entities    []string `json:"entities,omitempty"`
+	// PersonEntities is the explicitly identified human subset of Entities.
+	// An absent field is legacy mixed-entity data, not a person classification.
+	PersonEntities []string `json:"personEntities,omitempty"`
 }
 
 // AccountInsight is a persisted insight item in the account partition.

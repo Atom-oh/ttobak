@@ -382,6 +382,7 @@ func TestReplaceUnresolvedMentions_DeletesOnlyStale(t *testing.T) {
 	var items []interface{}
 	repo := capturePeopleTx(t, &items)
 	rows := []model.UnresolvedMention{testUnresolved(b, "participant"), testUnresolved(c, "participant")}
+	rows[0].PersonCandidate = true
 	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, []string{skA, skB}, testRunFence); err != nil {
 		t.Fatal(err)
 	}
@@ -391,6 +392,9 @@ func TestReplaceUnresolvedMentions_DeletesOnlyStale(t *testing.T) {
 	}
 	if put := items[0].(wireMap)["Put"].(wireMap); wireS(put["Item"], "entityType") != "ACCOUNT_PEOPLE_MENTION" {
 		t.Fatalf("item %#v", put["Item"])
+	}
+	if item := items[0].(wireMap)["Put"].(wireMap)["Item"].(wireMap); item["personCandidate"].(wireMap)["BOOL"] != true {
+		t.Fatal("person classification must survive the fenced DynamoDB write")
 	}
 	if !wireValues(items[4].(wireMap)["ConditionCheck"].(wireMap))["value:tok"] {
 		t.Fatal("lease check does not pin the token")

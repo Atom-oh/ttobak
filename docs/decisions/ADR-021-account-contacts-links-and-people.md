@@ -267,6 +267,14 @@ what. This is step 2 of the account roadmap; it must never guess.
   resolution, so a later rule never breaks a tie and nothing is stored.
 - Korean honorific suffixes (`peopleHonorificSuffixes` in Go) are stripped
   from the mention side only, after an exact full-name miss.
+- Insight `entities` mix people, organizations, projects and technical terms.
+  The existing extraction call also supplies `personEntities`, a distinct,
+  bounded human subset of `entities` grounded in the extraction input.
+  Only that subset becomes unresolved person candidates; generic entities
+  retain deterministic matching against known people/accounts/projects.
+  Person mentions are collected before generic entities consume the bound.
+  Single or grouped acoustic speaker codes never become names; a single
+  assignee code still resolves through the saved speaker map.
 - Per meeting at most 50 mentions are considered and 100 edges written; a run
   reads at most 2,000 contacts and 200 descendant accounts.
 
@@ -279,6 +287,11 @@ what. This is step 2 of the account roadmap; it must never guess.
   by normalized text. Resolving a group writes manual edges and removes its
   rows; ignoring writes the account-wide `LINKDENY#mention#{hash}`, and the
   runner never relists resolved or ignored text.
+- New candidate rows carry `personCandidate`. Metadata-only reads suppress
+  legacy insight rows without that classification and acoustic code groups,
+  including stale mention-resolution requests. Old mixed insight names can
+  return after re-extraction with explicit classification. No meeting content,
+  contacts or existing manual decisions are deleted during this cutover.
 
 #### Runs and triggers
 

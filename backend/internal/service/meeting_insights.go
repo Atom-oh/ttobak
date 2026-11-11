@@ -54,6 +54,13 @@ func meetingFieldInsights(raw string) ([]model.MeetingInsight, string, bool) {
 		for i := range item.Entities {
 			item.Entities[i] = limit(item.Entities[i], 128)
 		}
+		if len(item.PersonEntities) > 20 {
+			item.PersonEntities = item.PersonEntities[:20]
+			truncated = true
+		}
+		for i := range item.PersonEntities {
+			item.PersonEntities[i] = limit(item.PersonEntities[i], 128)
+		}
 		body, _ := json.Marshal(item) // Same escaping as the HTTP encoder.
 		extra := len(body)
 		if len(out) > 0 {

@@ -722,7 +722,8 @@ results to the current source. Malformed arrays or invalid entries surface
 `fieldInsightsError: "INVALID_INSIGHTS"`; usable entries can still be returned.
 The projection allows at most 50 items and 64 KiB of encoded array JSON. Text
 and evidence are capped at 2,000 code points each, implication/nextAction at
-1,000 each, ID at 128, timestamp marker at 64, and entities at 20 entries of 128
+1,000 each, ID at 128, timestamp marker at 64, and `entities` and optional
+`personEntities` each at 20 entries of 128
 code points each. Any size/count shortening sets `fieldInsightsTruncated: true`.
 These bounds cover the insight projection, not the entire legacy detail body.
 Saved notes are user input, distinct from generated content. Stuck transcription
@@ -1093,6 +1094,14 @@ and only meetings currently published to the account count:
   over visible meetings. `GET /people/mentions?cursor=` returns `{groups,
   nextCursor?, truncated}`: at most 100 unresolved groups `{key, text, meetings,
   roles}` where `key` is 32 lowercase hex. Cursors are opaque base64url.
+  Mixed insight `entities` are not automatically person candidates. New
+  extraction supplies the explicit human subset `personEntities`; only
+  grounded names in that subset enter unresolved insight review. Known
+  entities may still resolve to existing people, accounts or projects.
+  Legacy insight review rows without `personCandidate` and single/grouped
+  diarization codes are hidden on reads and cannot be bound through a stale
+  mention-resolution request. This needs no destructive migration or extra
+  model call. Existing manual edges remain intact.
 - `POST /people/mentions/{mentionKey}/resolve` takes `{kind: member|contact,
   id}`, writes manual edges for the visible rows and returns `{written,
   remaining}`; `remaining` means more rows are left for another call.

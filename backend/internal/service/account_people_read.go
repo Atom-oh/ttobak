@@ -343,6 +343,12 @@ type mentionGroupRows struct {
 // visibleMention: the meeting is still published and, for summary-derived
 // rows, the evidence guard passes.
 func (v *peopleViewer) visibleMention(ctx context.Context, row model.UnresolvedMention) (bool, error) {
+	// Old insight rows mix organizations, technologies, projects and names.
+	// Hide them without a destructive backfill, also for stale resolve requests.
+	if isPeopleSpeakerCode(row.Mention) ||
+		(row.SourceField == model.PeopleSourceInsights && !row.PersonCandidate) {
+		return false, nil
+	}
 	m, known, err := v.meeting(ctx, row.MeetingID)
 	if err != nil || !known || m == nil {
 		return false, err
