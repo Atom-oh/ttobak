@@ -41,6 +41,7 @@ export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost
   const [choice, setChoice] = useState('');
   const [options, setOptions] = useState<Options | null>(null);
   const controller = useRef<AbortController | null>(null);
+  const resolveProgress = useRef(new Map<string, { target: string; cursor: string }>());
 
   useEffect(() => {
     setPeople(data.people.people ?? []);
@@ -107,8 +108,17 @@ export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost
     const target = parsePersonOption(choice);
     if (!target) return;
     void run(`resolve:${group.key}`, async signal => {
-      const result = await accountApi.people.resolveMention(accountId, group.key, target, { signal, expectedUserId: userId });
+      const key = JSON.stringify([accountId, userId, group.key]);
+      const chosen = personOptionValue(target.kind, target.id);
+      const progress = resolveProgress.current.get(key);
+      const cursor = progress?.target === chosen ? progress.cursor : undefined;
+      const result = await accountApi.people.resolveMention(accountId, group.key, { ...target, cursor }, { signal, expectedUserId: userId });
       if (signal.aborted) return;
+      if (result?.remaining && result.nextCursor) {
+        resolveProgress.current.set(key, { target: chosen, cursor: result.nextCursor });
+      } else {
+        resolveProgress.current.delete(key);
+      }
       setPicking(''); setChoice('');
       setNote(result?.remaining ? PEOPLE_TRUNCATED_NOTE : '');
       onChanged();
@@ -118,6 +128,7 @@ export function AccountPeople({ accountId, userId, data, onChanged, onAccessLost
   const ignore = (group: MentionGroup) => run(`ignore:${group.key}`, async signal => {
     await accountApi.people.ignoreMention(accountId, group.key, { signal, expectedUserId: userId });
     if (signal.aborted) return;
+    resolveProgress.current.delete(JSON.stringify([accountId, userId, group.key]));
     setPicking(''); setNote('');
     onChanged();
   });

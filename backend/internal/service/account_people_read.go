@@ -404,6 +404,10 @@ func (s *AccountPeopleService) ListMentionGroups(ctx context.Context, userID, ac
 			}
 			if ok {
 				page.Groups = append(page.Groups, group)
+			} else if cut {
+				// An entirely hidden partial group may have a classified
+				// candidate later in the same hash range.
+				resume = next
 			}
 		}
 		if len(page.Groups) == maxMentionGroupsPerPage && (i < len(groups)-1 || next != "") {

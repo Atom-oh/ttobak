@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -119,6 +121,83 @@ func TestPeopleCandidates_LegacyReviewRowsAreHiddenWithoutDeletingManualEdges(t 
 	edges, err := s.MeetingEdges(context.Background(), "viewer", "acc", "owner:m1")
 	if err != nil || len(edges.Edges) != 1 || edges.Edges[0].Origin != model.LinkOriginManual {
 		t.Fatalf("manual decisions must remain intact: edges=%+v err=%v", edges, err)
+	}
+}
+
+func TestPeopleCandidates_ResolveSkipsLegacyRowsBeforeClassifiedName(t *testing.T) {
+	f := peopleWriteRepo()
+	for i := range 150 {
+		f.mentionRows = append(f.mentionRows, peopleMentionRow(peopleHashA,
+			fmt.Sprintf("owner:a%04d", i), "mentions", model.PeopleSourceInsights, "Kim Min"))
+	}
+	person := peopleMentionRow(peopleHashA, "owner:m1", "mentions", model.PeopleSourceInsights, "Kim Min")
+	person.PersonCandidate = true
+	f.mentionRows = append(f.mentionRows, person)
+	s := newPeopleTestService(f)
+	page, err := s.ListMentionGroups(context.Background(), "viewer", "acc", "")
+	if err != nil || len(page.Groups) != 1 {
+		t.Fatalf("the classified candidate must be listed: page=%+v err=%v", page, err)
+	}
+	result, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA,
+		model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact})
+	if err != nil || result.Written != 1 || result.Remaining || len(f.puts) != 1 || len(f.mentionDeletes) != 1 {
+		t.Fatalf("hidden legacy rows must not block a listed person: result=%+v deletes=%v err=%v", result, f.mentionDeletes, err)
+	}
+}
+
+func TestPeopleCandidates_HiddenRowsPastReadBoundHaveContinuation(t *testing.T) {
+	f := peopleWriteRepo()
+	for i := range 2100 {
+		f.mentionRows = append(f.mentionRows, peopleMentionRow(peopleHashA,
+			fmt.Sprintf("owner:a%04d", i), "mentions", model.PeopleSourceInsights, "Kim Min"))
+	}
+	person := peopleMentionRow(peopleHashA, "owner:m1", "mentions", model.PeopleSourceInsights, "Kim Min")
+	person.PersonCandidate = true
+	f.mentionRows = append(f.mentionRows, person)
+	s := newPeopleTestService(f)
+	page, err := s.ListMentionGroups(context.Background(), "viewer", "acc", "")
+	if err != nil || len(page.Groups) != 0 || page.NextCursor == "" {
+		t.Fatalf("bounded hidden review page: page=%+v err=%v", page, err)
+	}
+	page, err = s.ListMentionGroups(context.Background(), "viewer", "acc", page.NextCursor)
+	if err != nil || len(page.Groups) != 1 || page.Groups[0].Text != person.Mention {
+		t.Fatalf("review continuation must not skip a later classified name: page=%+v err=%v", page, err)
+	}
+	target := model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact}
+	first, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA, target)
+	if err != nil || first.Written != 0 || !first.Remaining || first.NextCursor == "" || len(f.puts) != 0 {
+		t.Fatalf("resolution must stop at its bound with continuation: result=%+v err=%v", first, err)
+	}
+	cursor, err := decodePeopleCursor("acc", first.NextCursor, peopleCursorMention)
+	if err != nil || cursor.S != model.MentionSortKey(peopleHashA, "owner:a1999", "mentions") {
+		t.Fatalf("continuation must follow exactly the consumed rows: cursor=%+v err=%v", cursor, err)
+	}
+	target.Cursor = first.NextCursor
+	last, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA, target)
+	if err != nil || last.Written != 1 || last.Remaining || last.NextCursor != "" || len(f.mentionDeletes) != 1 {
+		t.Fatalf("resuming must reach the person and preserve hidden rows: result=%+v deletes=%v err=%v", last, f.mentionDeletes, err)
+	}
+}
+
+func TestPeopleCandidates_ResolveCursorRejectsOtherScope(t *testing.T) {
+	f := peopleWriteRepo()
+	s := newPeopleTestService(f)
+	for _, cursor := range []string{
+		encodePeopleCursor("other-account", peopleCursorMention, model.MentionSortKey(peopleHashA, "owner:m1", "mentions")),
+		encodePeopleCursor("acc", peopleCursorMention, model.MentionSortKey(peopleHashB, "owner:m1", "mentions")),
+		encodePeopleCursor("acc", "contact", ""),
+		encodePeopleCursor("acc", peopleCursorMention, "MENTION#"+peopleHashA+"#invalid"),
+		encodePeopleCursor("acc", peopleCursorMention, model.MentionSortKey(peopleHashA, "owner:m1", "invalid-role")),
+		strings.Repeat("x", maxPeopleCursorBytes+1),
+	} {
+		_, err := s.ResolveMentionGroup(context.Background(), "viewer", "acc", peopleHashA,
+			model.ResolveMentionInput{Kind: "contact", ID: peopleTestContact, Cursor: cursor})
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("cursor outside this account and mention must be rejected: err=%v", err)
+		}
+	}
+	if len(f.puts) != 0 || len(f.mentionDeletes) != 0 {
+		t.Fatal("invalid cursors must not write")
 	}
 }
 

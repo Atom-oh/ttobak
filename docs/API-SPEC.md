@@ -1103,17 +1103,24 @@ and only meetings currently published to the account count:
   check against the extraction input filter that output. This is not proof
   that each candidate is a person; incorrect classifications can still be
   ignored. Known entities retain deterministic person/account/project matching.
-- Read-time cutover: legacy insight rows without the stored `personCandidate`
-  attribute and single or grouped speaker codes (formats in ADR-021) are
-  hidden. Legitimate legacy insight names are hidden too. They return only
+- Read-time cutover hides two row kinds: insight rows without the stored
+  `personCandidate` attribute, and rows from any source whose mention is a
+  single or grouped speaker code (formats in ADR-021).
+  Legitimate legacy insight names are hidden too. They return only
   after insight re-extraction and a people resolver run; no backfill is
   scheduled by this change. Filtering itself makes no model call and deletes
   no meeting content, contacts or existing manual edges.
 - `POST /people/mentions/{mentionKey}/resolve` takes `{kind: member|contact,
-  id}`, writes manual edges for the visible rows and returns `{written,
-  remaining}`; `remaining` indicates that the stored-row query hit its bound,
-  rather than counting visible candidates. A stale request whose queried
-  rows are all hidden writes zero edges, even if that query is bounded.
+  id, cursor?}`, writes at most 100 visible manual edges and returns `{written,
+  remaining, nextCursor?}`. It skips hidden rows across at most 20 hash pages
+  (at most 2,000 stored rows), retaining the 300 publication-read bound.
+  `remaining` indicates unread stored rows, not a count of visible candidates.
+  Send `nextCursor` as `cursor` to continue; it is scoped to the account and
+  mention hash and grants no access. Reads and writes revalidate authorization.
+  The app retains continuation for the same account, viewer, group and target
+  when the member repeats the connection action. A stale request containing
+  only hidden rows writes zero edges. A fully hidden partial review page also
+  retains its row cursor so later classified candidates remain reachable.
   `POST .../ignore` returns 204 and hides the text account-wide (no undo route).
 - `GET /people/edges?meetingId=` returns `{edges, labels}` for one meeting;
   `labels` is keyed `{kind}:{id}` and holds only readable targets. `POST
