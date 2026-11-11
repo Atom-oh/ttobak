@@ -25,10 +25,15 @@ var (
 const (
 	MaxManualTermsPerScope = 500
 	MaxTombstonesPerScope  = 2000
-	// MaxLegacyTerms bounds a legacy PUT body. GET lists auto rows too, so a
-	// full round-trip can exceed the manual cap; only entries that become or
-	// stay manual rows count toward MaxManualTermsPerScope.
+	// MaxLegacyTerms bounds the legacy PUT entries that are not live automatic
+	// rows passed through unchanged. GET lists every active automatic row
+	// (capped and user-edited ones alike), so passthrough entries never count;
+	// only entries that become or stay manual rows count toward
+	// MaxManualTermsPerScope.
 	MaxLegacyTerms = 1000
+	// maxLegacyBodyEntries bounds the work on one legacy PUT body; the handler's
+	// byte limit already keeps a real body far below it.
+	maxLegacyBodyEntries = 20000
 )
 
 const vocabularyRebuildWarning = "vocabulary rebuild failed; recognition keeps the previous vocabulary"
@@ -439,24 +444,40 @@ type legacyPlan struct {
 // stored. Exact duplicates collapse; distinct terms sharing a key are rejected.
 func prepareLegacyTerms(terms []model.DictionaryTerm, current map[model.DictionaryTerm]bool, rows []model.DictTerm) (legacyPlan, error) {
 	var plan legacyPlan
-	if len(terms) > MaxLegacyTerms {
-		return plan, termInputError("terms", fmt.Sprintf("at most %d terms", MaxLegacyTerms))
+	if len(terms) > maxLegacyBodyEntries {
+		return plan, termInputError("terms", fmt.Sprintf("at most %d terms", maxLegacyBodyEntries))
 	}
 	byKey := make(map[string]model.DictTerm, len(rows))
 	for _, row := range rows {
 		byKey[row.TermKey] = row
 	}
+	passthrough := func(t model.DictionaryTerm) (model.DictTerm, bool) {
+		key := legacyTermKey(t)
+		if key == "" {
+			return model.DictTerm{}, false
+		}
+		row, ok := byKey[key]
+		return row, ok && row.State != model.TermStateDeleted && row.Origin != model.TermOriginManual
+	}
+	// Counted before any validation, so an oversized body is rejected as a whole.
+	counted := 0
+	for _, t := range terms {
+		if _, ok := passthrough(t); !ok {
+			counted++
+		}
+	}
+	if counted > MaxLegacyTerms {
+		return plan, termInputError("terms", fmt.Sprintf("at most %d terms besides automatic ones", MaxLegacyTerms))
+	}
 	out := make([]legacyDesired, 0, len(terms))
 	index := map[string]int{}
 	for i, t := range terms {
 		field := fmt.Sprintf("terms[%d]", i)
-		if key := legacyTermKey(t); key != "" {
-			if row, ok := byKey[key]; ok && row.State != model.TermStateDeleted && row.Origin != model.TermOriginManual {
-				if row.State != model.TermStateActive || legacyTermFromRow(row) != t {
-					plan.ignored = true
-				}
-				continue
+		if row, ok := passthrough(t); ok {
+			if row.State != model.TermStateActive || legacyTermFromRow(row) != t {
+				plan.ignored = true
 			}
+			continue
 		}
 		row, exists := byKey[legacyTermKey(t)]
 		editsManual := exists && row.State == model.TermStateActive && row.Origin == model.TermOriginManual

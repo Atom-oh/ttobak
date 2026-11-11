@@ -97,18 +97,18 @@ func TestTermsAnalysisTransitions(t *testing.T) {
 			[]string{"attribute_exists (PK)"},
 			[]string{`runId = {"S":"run-1"}`, `status = {"S":"running"}`, `leaseUntil = {"N":"5000"}`, `leaseUntil > {"N":"1800000000000"}`},
 			[]string{`status = {"S":"succeeded"}`, "succeededSourceHash = sourceHash", `"TAINTED_SUGGEST_ONLY"`, "acceptedTerms", acceptedKey, `leaseUntil = {"N":"0"}`}, nil},
-		{"record account adds to the swept set for the observed run while the meeting exists",
+		{"record account adds to the swept set for the observed run while the meeting is still linked",
 			func(r *DynamoDBRepository) error {
 				return r.RecordTermsAccount(context.Background(), "owner", "m1", "run-1", "a1", nil)
 			},
-			[]string{"attribute_exists (PK)"},
+			[]string{"attribute_exists (PK)", `accountId = {"S":"a1"}`},
 			[]string{`runId = {"S":"run-1"}`},
-			[]string{`ADD accountIds {"SS":["a1"]}`}, []string{"status", "acceptedTerms", "SET"}},
+			[]string{`ADD accountIds {"SS":["a1"]}`, `accountRecords {"N":"1"}`}, []string{"status", "acceptedTerms", "SET"}},
 		{"record account adds the Account keys in the same update",
 			func(r *DynamoDBRepository) error {
 				return r.RecordTermsAccount(context.Background(), "owner", "m1", "run-1", "a1", []string{acceptedKey, acceptedKey})
 			},
-			[]string{"attribute_exists (PK)"},
+			[]string{"attribute_exists (PK)", `accountId = {"S":"a1"}`},
 			[]string{`runId = {"S":"run-1"}`},
 			[]string{`accountIds {"SS":["a1"]}`, `accountAcceptedTerms {"SS":["` + acceptedKey + `"]}`}, []string{"status", "SET"}},
 		{"fail matches the observed run and keeps accepted terms",

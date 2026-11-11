@@ -1,7 +1,8 @@
 package model
 
-// Daily news terms (layered dictionary, Task 11). News is the only source of
-// automatic Common terms. The rows below live under DICT#COMMON, are read by
+// Daily news terms (layered dictionary, Task 11). News and the AWS technical
+// documents (terms_tech.go) are the only sources of automatic Common terms.
+// The rows below live under DICT#COMMON, are read by
 // the news job only, and store day strings, global crawler source IDs and a
 // content hash; never text or a user ID.
 const (

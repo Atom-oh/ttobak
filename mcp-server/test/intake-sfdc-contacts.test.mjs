@@ -163,6 +163,45 @@ test('a contact whose email two SFDC people share is not name-linked to a third'
   assert.deepEqual(result.items.map(item => [item.action, item.sfdcContactId]), [['create', id('003XX0000000E03')]]);
 });
 
+test('candidates of an ambiguous name are contested, so no other person claims one uniquely', () => {
+  const sfdc = [
+    { id: id('003XX0000000E01'), name: 'Na Kim', title: '', email: '', accountId: ACCOUNT_A },
+    { id: id('003XX0000000E02'), name: 'Na Kim', title: '', email: 'q@customer.example', accountId: ACCOUNT_A },
+  ];
+  const current = [existing('a', 'Na Kim'), existing('b', 'Na Kim', { email: 'b@customer.example' })];
+  const result = matchContacts(sfdc, current, new Set());
+  assert.deepEqual(result.items, [], 'Q never links to A, which P also matched');
+  assert.equal(result.ambiguous, 2);
+});
+
+test('a contact holding a linked or suppressed person\'s email is never name-linked', () => {
+  const linkedId = id('003XX0000000E01');
+  const suppressedId = id('003XX0000000E02');
+  const sfdc = [
+    { id: linkedId, name: 'Linked Kim', title: '', email: 'old@customer.example', accountId: ACCOUNT_A },
+    { id: suppressedId, name: 'Gone Kim', title: '', email: 'gone@customer.example', accountId: ACCOUNT_A },
+    { id: id('003XX0000000E03'), name: 'Card Kim', title: '', email: '', accountId: ACCOUNT_A },
+    { id: id('003XX0000000E04'), name: 'Other Kim', title: '', email: '', accountId: ACCOUNT_A },
+  ];
+  const current = [
+    existing('linked', 'Linked Kim', { sfdcContactId: linkedId, title: 'T', company: 'Co' }),
+    existing('card', 'Card Kim', { email: 'old@customer.example' }),
+    existing('other', 'Other Kim', { email: 'gone@customer.example' }),
+  ];
+  const result = matchContacts(sfdc, current, new Set([suppressedId]));
+  assert.ok(!result.items.some(item => item.action === 'link'), 'neither card is name-linked');
+  assert.deepEqual(result.items.map(item => item.sfdcContactId), [id('003XX0000000E03'), id('003XX0000000E04')]);
+});
+
+test('a record with a malformed ID makes the read incomplete', async () => {
+  const records = [contactRecord('001A000001aBcDe', 'New', 'Person'), contactRecord('003AB00000abcdEZZZ', 'Bad', 'Suffix')];
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']], contacts: { 'acct-1': [] } });
+  const result = await runSfdcContacts({ session: contactSource({ [ACCOUNT_A]: [records] }), api, dryRun: false });
+  assert.equal(result.counts.invalidIds, 1);
+  assert.equal(result.counts.incomplete, 1);
+  assert.ok(api.syncs.every(sync => !sync.body.snapshotComplete), 'no departure snapshot');
+});
+
 test('whitespace-only title or company is not fillable, matching the server', () => {
   const sfdc = [{ id: id('003XX0000000E01'), name: 'Bo Kim', title: 'VP', email: '', accountId: ACCOUNT_A }];
   const blank = [existing('linked', 'Bo Kim', { sfdcContactId: id('003XX0000000E01'), title: ' ', company: '  ' })];
@@ -239,7 +278,6 @@ test('fifteen_char_sentral_id_matches_stored_18_char_link', async () => {
   const records = [
     contactRecord('003AB00000abcdE', 'Linked', 'Person'),
     contactRecord('001A000001aBcDe', 'New', 'Person'),
-    contactRecord('003AB00000abcdEZZZ', 'Bad', 'Suffix'),
     contactRecord('0B0DE0B0DE0B0DE', 'Min', 'Lee'),
   ];
   const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']], contacts: { 'acct-1': [
@@ -252,7 +290,7 @@ test('fifteen_char_sentral_id_matches_stored_18_char_link', async () => {
   const result = await runSfdcContacts({ session: contactSource({ [ACCOUNT_A]: [records] }), api, dryRun: false });
   assert.equal(result.result, 'ok');
   assert.equal(result.counts.unchanged, 1, 'the 15-character record matched its 18-character link');
-  assert.equal(result.counts.invalidIds, 2, 'a bad-suffix record and a malformed stored link');
+  assert.equal(result.counts.invalidIds, 1, 'a malformed stored link');
   assert.equal(result.counts.created, 2);
   const { body } = api.syncs[0];
   assert.deepEqual(body.items.map(item => [item.action, item.sfdcContactId]),

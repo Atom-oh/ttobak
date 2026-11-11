@@ -9,12 +9,14 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 from article_fetcher import _open_response, _target
+from news_pipeline import MAX_SEARCH_DOMAINS, valid_search_domain
 
 MAX_RESPONSE_BYTES = 2000000
 SEARCH_SECONDS = 20
@@ -110,10 +112,45 @@ class NewsSearch:
                     parsed.hostname or "")):
             raise ValueError("INVALID_SEARCH_ENDPOINT")
 
-    def __call__(self, query, maximum):
+    @staticmethod
+    def filters(published_after=None, published_before=None, domains=()):
+        """Connector 1.2.0+ request filters; None when no filter is requested.
+
+        Bounds are inclusive UTC instants. Results without a recognized date or
+        domain are excluded by the connector when the matching filter is set.
+        """
+        value = {}
+        bounds = {}
+        for key, instant in (("from", published_after), ("to", published_before)):
+            if instant is None:
+                continue
+            if not isinstance(instant, datetime) or instant.tzinfo is None:
+                raise ValueError("INVALID_SEARCH_FILTER")
+            bounds[key] = instant.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if len(bounds) == 2 and bounds["from"] > bounds["to"]:
+            raise ValueError("INVALID_SEARCH_FILTER")
+        if bounds:
+            value["publishedDateFilter"] = bounds
+        domains = list(domains)
+        if (len(domains) > MAX_SEARCH_DOMAINS or len(set(domains)) != len(domains)
+                or not all(valid_search_domain(domain) for domain in domains)):
+            raise ValueError("INVALID_SEARCH_FILTER")
+        if domains:
+            value["domainFilter"] = {"include": domains}
+        return value or None
+
+    def __call__(self, query, maximum, *, published_after=None, published_before=None,
+                 domains=()):
         if (not isinstance(query, str) or not 1 <= len(query) <= 200
                 or type(maximum) is not int or not 1 <= maximum <= 25):
             return [], "INVALID_SEARCH_REQUEST"
+        try:
+            filters = self.filters(published_after, published_before, domains)
+        except (TypeError, ValueError):
+            return [], "INVALID_SEARCH_REQUEST"
+        arguments = {"query": query, "maxResults": maximum}
+        if filters:
+            arguments["filters"] = filters
         digest = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
         if self.remaining() < SEARCH_SECONDS + 15:
             return [], "SEARCH_DEADLINE"
@@ -122,7 +159,7 @@ class NewsSearch:
             body = json.dumps({
                 "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {"name": "ttobak-web-search-tool___WebSearch",
-                           "arguments": {"query": query, "maxResults": maximum}},
+                           "arguments": arguments},
             }, ensure_ascii=False).encode("utf-8")
             credentials = self.credentials()
             if credentials is None:

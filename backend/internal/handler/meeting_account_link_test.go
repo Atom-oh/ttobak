@@ -14,7 +14,7 @@ import (
 )
 
 func TestPrivateAccountRelinkUsesSingleAtomicPartialWrite(t *testing.T) {
-	writes := 0
+	writes, sweepReads := 0, 0
 	db := dynamodb.New(dynamodb.Options{
 		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
 		HTTPClient: readingHTTP(func(r *http.Request) (*http.Response, error) {
@@ -29,6 +29,14 @@ func TestPrivateAccountRelinkUsesSingleAtomicPartialWrite(t *testing.T) {
 					return preparationWireResponse(200, `{"Item":{"PK":{"S":"USER#owner"},"SK":{"S":"MEETING#meeting"},"meetingId":{"S":"meeting"},"userId":{"S":"owner"},"accountId":{"S":"account-a"},"sharedToAccount":{"BOOL":true},"notes":{"S":"saved notes"}}}`), nil
 				case input.Key["PK"]["S"] == "ACCOUNT#account-b" && input.Key["SK"]["S"] == "MEMBER#owner":
 					return preparationWireResponse(200, `{"Item":{"accountId":{"S":"account-b"},"userId":{"S":"owner"},"role":{"S":"SA"}}}`), nil
+				case input.Key["PK"]["S"] == "MEETING#meeting" && input.Key["SK"]["S"] == "ANALYSIS#terms":
+					// The ADR-008 FU4 relink sweep reads the run state after the
+					// link commits; no terms run means nothing to sweep.
+					if writes != 1 {
+						t.Fatal("the term sweep must follow the committed link")
+					}
+					sweepReads++
+					return preparationWireResponse(200, `{}`), nil
 				default:
 					t.Fatalf("unexpected access lookup: %+v", input)
 					return nil, nil
@@ -95,8 +103,8 @@ func TestPrivateAccountRelinkUsesSingleAtomicPartialWrite(t *testing.T) {
 	req := withUserCtx(withChiParam(httptest.NewRequest("POST", "/api/meetings/meeting/account",
 		strings.NewReader(`{"accountId":"account-b"}`)), "meetingId", "meeting"), "owner")
 	h.LinkToAccount(w, req)
-	if w.Code != 200 || writes != 1 {
-		t.Fatalf("private link status=%d writes=%d body=%s", w.Code, writes, w.Body.String())
+	if w.Code != 200 || writes != 1 || sweepReads != 1 {
+		t.Fatalf("private link status=%d writes=%d sweepReads=%d body=%s", w.Code, writes, sweepReads, w.Body.String())
 	}
 }
 
