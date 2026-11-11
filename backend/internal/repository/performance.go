@@ -732,14 +732,19 @@ func (r *DynamoDBRepository) GetPerformanceReport(ctx context.Context, userID, p
 
 // ListPerformanceReports pages through the owner's reports, projecting only
 // the summary fields, and returns at most PerformanceReportListRowLimit live
-// rows in sort-key order.
-func (r *DynamoDBRepository) ListPerformanceReports(ctx context.Context, userID string) ([]model.PerformanceReportSummary, error) {
+// rows in sort-key order. truncated is true when more rows existed past the
+// read limit.
+func (r *DynamoDBRepository) ListPerformanceReports(ctx context.Context, userID string) ([]model.PerformanceReportSummary, bool, error) {
 	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"), expression.Name("userId"),
 		expression.Name("periodKey"), expression.Name("period.label"), expression.Name("generatedAt"),
 		expression.Name("partial"), expression.Name("pendingShareExpiresAt"))
-	items, err := r.queryPerformanceRowsProjected(ctx, userID, model.PrefixPerformanceReport, PerformanceReportListRowLimit, &projection)
+	items, err := r.queryPerformanceRowsProjected(ctx, userID, model.PrefixPerformanceReport, PerformanceReportListRowLimit+1, &projection)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	truncated := len(items) > PerformanceReportListRowLimit
+	if truncated {
+		items = items[:PerformanceReportListRowLimit]
 	}
 	now := performanceNow().Unix()
 	summaries := make([]model.PerformanceReportSummary, 0, len(items))
@@ -767,7 +772,7 @@ func (r *DynamoDBRepository) ListPerformanceReports(ctx context.Context, userID 
 			PeriodKey: row.PeriodKey, Label: row.Period.Label, GeneratedAt: row.GeneratedAt, Partial: row.Partial,
 		})
 	}
-	return summaries, nil
+	return summaries, truncated, nil
 }
 
 // DeletePerformanceReport removes the owner's report. A missing row returns

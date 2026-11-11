@@ -141,8 +141,8 @@ func TestListReportsPaginatesAndProjects(test *testing.T) {
 		}
 		return summaryHTTPResponse(200, `{"Items":[`+performanceReportItem("owner", "W2026-45", future)+`,`+performanceReportItem("other", "Y2026", future)+`]}`, nil), nil
 	})
-	items, err := repo.ListPerformanceReports(test.Context(), "owner")
-	if err != nil || pages != 2 || len(items) != 2 || items[0].PeriodKey != "Q2026-3" || items[1].PeriodKey != "W2026-45" ||
+	items, truncated, err := repo.ListPerformanceReports(test.Context(), "owner")
+	if err != nil || truncated || pages != 2 || len(items) != 2 || items[0].PeriodKey != "Q2026-3" || items[1].PeriodKey != "W2026-45" ||
 		items[0].Label != "L Q2026-3" || !items[0].Partial || items[0].GeneratedAt != "2026-11-01T00:00:00Z" {
 		test.Fatalf("reports must paginate and drop expired or foreign rows: %+v pages=%d err=%v", items, pages, err)
 	}
@@ -170,5 +170,32 @@ func TestDeleteReportRequiresExistingRow(test *testing.T) {
 	}
 	if err := repo.DeletePerformanceReport(test.Context(), "owner", "nope"); !errors.Is(err, ErrInvalidPerformanceInput) {
 		test.Fatalf("bad key: %v", err)
+	}
+}
+
+func TestListReportsTruncatedPastRowLimit(test *testing.T) {
+	pinPerformanceNow(test)
+	future := performanceNow().AddDate(1, 0, 0).Unix()
+	var limit int32
+	build := func(count int) string {
+		items := make([]string, count)
+		for i := range items {
+			items[i] = performanceReportItem("owner", "Q2026-3", future)
+		}
+		return strings.Join(items, ",")
+	}
+	count := PerformanceReportListRowLimit + 1
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		limit = int32(performanceBody(test, request)["Limit"].(float64))
+		return summaryHTTPResponse(200, `{"Items":[`+build(count)+`]}`, nil), nil
+	})
+	items, truncated, err := repo.ListPerformanceReports(test.Context(), "owner")
+	if err != nil || !truncated || len(items) != PerformanceReportListRowLimit || limit != PerformanceReportListRowLimit+1 {
+		test.Fatalf("extra row must set truncated: n=%d truncated=%v limit=%d err=%v", len(items), truncated, limit, err)
+	}
+	count = PerformanceReportListRowLimit
+	items, truncated, err = repo.ListPerformanceReports(test.Context(), "owner")
+	if err != nil || truncated || len(items) != PerformanceReportListRowLimit {
+		test.Fatalf("exactly the limit is not truncated: n=%d truncated=%v err=%v", len(items), truncated, err)
 	}
 }

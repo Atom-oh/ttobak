@@ -137,6 +137,9 @@ func TestValidateReportCaps(test *testing.T) {
 		"period mismatch":   func(r *PerformanceReport) { r.Period.End = "2026-09-29" },
 		"empty label":       func(r *PerformanceReport) { r.Period.Label = "" },
 		"bad generatedAt":   func(r *PerformanceReport) { r.GeneratedAt = "2026-10-02" },
+		"long fraction":     func(r *PerformanceReport) { r.GeneratedAt = "2026-10-02T01:02:03." + strings.Repeat("1", 200000) + "Z" },
+		"10 digit fraction": func(r *PerformanceReport) { r.GeneratedAt = "2026-10-02T01:02:03.1234567890Z" },
+		"lowercase t":       func(r *PerformanceReport) { r.GeneratedAt = "2026-10-02t01:02:03Z" },
 		"summary 4001":      func(r *PerformanceReport) { r.Summary = strings.Repeat("가", 4001) },
 		"paragraph 4001":    func(r *PerformanceReport) { r.Sections[0].Paragraphs[0] = strings.Repeat("a", 4001) },
 		"title 201":         func(r *PerformanceReport) { r.Sections[0].Title = strings.Repeat("제", 201) },
@@ -196,4 +199,14 @@ func actions(n int) []PerformanceReportAction {
 		result[i] = PerformanceReportAction{Severity: "lo", Title: "t", Detail: "d", Source: "s"}
 	}
 	return result
+}
+
+func TestValidateReportGeneratedAtAccepted(test *testing.T) {
+	for _, value := range []string{"2026-10-02T01:02:03Z", "2026-10-02T01:02:03.123456789Z", "2026-10-02T10:02:03+09:00", "2026-10-02T01:02:03.5-07:00"} {
+		report := validPerformanceReport()
+		report.GeneratedAt = value
+		if err := ValidatePerformanceReport("Q2026-3", report); err != nil {
+			test.Fatalf("generatedAt %q must be accepted: %v", value, err)
+		}
+	}
 }

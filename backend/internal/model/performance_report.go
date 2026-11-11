@@ -251,7 +251,7 @@ func ValidatePerformanceReport(key string, r *PerformanceReport) error {
 	if r.Period.Label == "" || !validPerformanceReportText(r.Period.Label, performanceReportShortText) {
 		return invalidPerformanceReport("period.label")
 	}
-	if _, err := time.Parse(time.RFC3339, r.GeneratedAt); err != nil {
+	if !validPerformanceReportTimestamp(r.GeneratedAt) {
 		return invalidPerformanceReport("generatedAt")
 	}
 	if !validPerformanceReportText(r.Alias, performanceReportShortText) || !validPerformanceReportText(r.Model, performanceReportShortText) {
@@ -385,4 +385,20 @@ func NormalizePerformanceReport(r *PerformanceReport) {
 	if r.DataBasis == nil {
 		r.DataBasis = []PerformanceReportDataBasis{}
 	}
+}
+
+// performanceReportTimestampMax bounds generatedAt: it is projected into every
+// list summary, so an unbounded fractional-second field must not be accepted.
+const performanceReportTimestampMax = 35
+
+var performanceReportTimestamp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$`)
+
+// validPerformanceReportTimestamp accepts only RFC 3339 with at most nine
+// fractional-second digits, in at most 35 bytes.
+func validPerformanceReportTimestamp(value string) bool {
+	if len(value) > performanceReportTimestampMax || !performanceReportTimestamp.MatchString(value) {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339, value)
+	return err == nil
 }

@@ -68,12 +68,12 @@ func (svc *PerformanceService) GetReport(ctx context.Context, userID, periodKey 
 
 // ListReports returns at most MaxPerformanceReportList summaries, newest
 // generatedAt first (period key breaks ties), and truncated=true when more
-// exist.
+// exist, including past the repository read limit.
 func (svc *PerformanceService) ListReports(ctx context.Context, userID string) (*model.PerformanceReportList, error) {
 	if !performanceUserPattern.MatchString(userID) {
 		return nil, ErrForbidden
 	}
-	summaries, err := svc.store.ListPerformanceReports(ctx, userID)
+	summaries, readTruncated, err := svc.store.ListPerformanceReports(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -89,8 +89,8 @@ func (svc *PerformanceService) ListReports(ctx context.Context, userID string) (
 		}
 		return sorted[i].PeriodKey < sorted[j].PeriodKey
 	})
-	list := &model.PerformanceReportList{Items: sorted, Truncated: len(sorted) > MaxPerformanceReportList}
-	if list.Truncated {
+	list := &model.PerformanceReportList{Items: sorted, Truncated: readTruncated || len(sorted) > MaxPerformanceReportList}
+	if len(sorted) > MaxPerformanceReportList {
 		list.Items = sorted[:MaxPerformanceReportList]
 	}
 	return list, nil

@@ -27,12 +27,12 @@ func (store *performanceMemoryStore) GetPerformanceReport(_ context.Context, use
 	return &report, nil
 }
 
-func (store *performanceMemoryStore) ListPerformanceReports(_ context.Context, userID string) ([]model.PerformanceReportSummary, error) {
+func (store *performanceMemoryStore) ListPerformanceReports(_ context.Context, userID string) ([]model.PerformanceReportSummary, bool, error) {
 	var out []model.PerformanceReportSummary
 	for _, report := range store.reports[userID] {
 		out = append(out, model.PerformanceReportSummary{PeriodKey: report.PeriodKey, Label: report.Period.Label, GeneratedAt: report.GeneratedAt, Partial: report.Partial})
 	}
-	return out, nil
+	return out, false, nil
 }
 
 func (store *performanceMemoryStore) DeletePerformanceReport(_ context.Context, userID, periodKey string) error {

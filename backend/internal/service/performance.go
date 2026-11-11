@@ -59,7 +59,7 @@ type PerformanceStore interface {
 	// GetPerformanceReport returns nil when no live report is stored.
 	GetPerformanceReport(ctx context.Context, userID, periodKey string) (*model.PerformanceReport, error)
 	// ListPerformanceReports returns summary fields of the owner's live reports.
-	ListPerformanceReports(ctx context.Context, userID string) ([]model.PerformanceReportSummary, error)
+	ListPerformanceReports(ctx context.Context, userID string) ([]model.PerformanceReportSummary, bool, error)
 	// DeletePerformanceReport returns ErrConditionFailed when no row exists.
 	DeletePerformanceReport(ctx context.Context, userID, periodKey string) error
 }

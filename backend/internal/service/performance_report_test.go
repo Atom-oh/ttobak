@@ -30,15 +30,15 @@ func (fake *performanceStoreFake) GetPerformanceReport(_ context.Context, userID
 	return &report, nil
 }
 
-func (fake *performanceStoreFake) ListPerformanceReports(_ context.Context, userID string) ([]model.PerformanceReportSummary, error) {
+func (fake *performanceStoreFake) ListPerformanceReports(_ context.Context, userID string) ([]model.PerformanceReportSummary, bool, error) {
 	if fake.summaries != nil {
-		return fake.summaries, nil
+		return fake.summaries, fake.readTruncated, nil
 	}
 	var out []model.PerformanceReportSummary
 	for _, report := range fake.reports[userID] {
 		out = append(out, model.PerformanceReportSummary{PeriodKey: report.PeriodKey, Label: report.Period.Label, GeneratedAt: report.GeneratedAt, Partial: report.Partial})
 	}
-	return out, nil
+	return out, false, nil
 }
 
 func (fake *performanceStoreFake) DeletePerformanceReport(_ context.Context, userID, periodKey string) error {
@@ -156,5 +156,13 @@ func TestGetAndDeleteReport(test *testing.T) {
 	}
 	if err := svc.DeleteReport(test.Context(), "owner", "Q2026-3"); !errors.Is(err, ErrNotFound) {
 		test.Fatalf("second delete: %v", err)
+	}
+}
+
+func TestListReportsTruncatedWhenReadLimitHit(test *testing.T) {
+	store := &performanceStoreFake{summaries: []model.PerformanceReportSummary{{PeriodKey: "Y2025", GeneratedAt: "2026-01-02T00:00:00Z"}}, readTruncated: true}
+	list, err := performanceTestService(store, nil).ListReports(test.Context(), "owner")
+	if err != nil || len(list.Items) != 1 || !list.Truncated {
+		test.Fatalf("a read past the row limit must report truncated: %+v %v", list, err)
 	}
 }

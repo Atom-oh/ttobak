@@ -142,7 +142,8 @@ runner collects and syncs.
 | `GET /api/performance/reports/{periodKey}` | none | the stored report; `404` when absent or expired |
 | `DELETE /api/performance/reports/{periodKey}` | none | `204`; `404` when absent |
 
-Bodies are limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
+Sync bodies (all routes above except the report PUT, whose cap is 256 KiB) are
+limited to 64 KiB of strict JSON: unknown, duplicate or null fields,
 trailing data and unsupported query parameters are rejected. A sync batch has at
 most 20 mutations with distinct IDs. `batchId` is a nonzero UUID (normalized to
 lowercase); `expectedRevision` is the source's current revision (zero when new).
@@ -177,7 +178,7 @@ inclusive. Years run from 2000 to 2100; any other key is `400`.
 The PUT body is strict JSON (as above, nesting up to the table cell) with
 required top-level fields `schemaVersion` (1), `periodKey` (equal to the path),
 `period {start,end,label}` (`start`/`end` equal to the key's first and last
-`YYYY-MM-DD`, nonempty `label`), `alias`, `generatedAt` (RFC 3339), `model`,
+`YYYY-MM-DD`, nonempty `label`), `alias`, `generatedAt` (RFC 3339 with at most 9 fractional digits, at most 35 bytes), `model`,
 `partial`, `summary`, `ledger`, `sections`, `actions` and `dataBasis`.
 `missingSources[]` and `highlights {projects,initiatives,channels,programs}`
 may be absent; so may a section's `tables`/`cards`, a ledger `note` and a data
@@ -201,9 +202,11 @@ basis `estimates`. Null is never accepted, and absent lists read back as `[]`.
   or `slack.com` (any case). The compact re-encoded report must also fit in
   256 KiB.
 
-The listing reads at most 1,000 rows with a projection of summary fields and
-sorts them by `generatedAt`. Rows past their retention are hidden before TTL
-deletion.
+A PUT for a period already past its retention returns `400`. The listing reads
+at most 1,000 rows (one extra row is probed) with a projection of summary fields
+and sorts them by `generatedAt`; `truncated` is true when more rows exist than
+the read or the 200-item response holds. Rows past their retention are hidden
+before TTL deletion.
 
 The mappings list reads at most 501 assignment rows (no cursor), returns the
 first 500 (bounded to 500 items), and looks up their mappings by key, so unrelated

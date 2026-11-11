@@ -16,25 +16,26 @@ import (
 const performanceServiceBatch = "90ec2d25-a32e-43a5-96a9-e203859b7d19"
 
 type performanceStoreFake struct {
-	applied      int
-	digests      []string
-	requests     []model.PerformanceSyncRequest
-	sources      []string
-	assignments  map[string][]model.SFDCAssignment
-	mappings     map[string][]model.AccountMapping
-	statuses     map[string][]model.PerformanceSourceStatus
-	goals        map[string]*model.PerformanceGoals
-	put          []model.AccountMapping
-	putManual    []bool
-	applyErr     error
-	receipts     map[string]storedPerformanceReceipt
-	keepReceipts bool
-	putErr       error
-	deleted      []string
-	deleteErr    error
-	replay       bool
-	reports      map[string]map[string]model.PerformanceReport
-	summaries    []model.PerformanceReportSummary
+	applied       int
+	digests       []string
+	requests      []model.PerformanceSyncRequest
+	sources       []string
+	assignments   map[string][]model.SFDCAssignment
+	mappings      map[string][]model.AccountMapping
+	statuses      map[string][]model.PerformanceSourceStatus
+	goals         map[string]*model.PerformanceGoals
+	put           []model.AccountMapping
+	putManual     []bool
+	applyErr      error
+	receipts      map[string]storedPerformanceReceipt
+	keepReceipts  bool
+	putErr        error
+	deleted       []string
+	deleteErr     error
+	replay        bool
+	reports       map[string]map[string]model.PerformanceReport
+	summaries     []model.PerformanceReportSummary
+	readTruncated bool
 }
 
 type storedPerformanceReceipt struct {
