@@ -43,7 +43,9 @@ test('common and account kinds label the badge', () => {
 });
 
 test('relevance is null unless the score is finite and within 0..1', () => {
-  assert.equal(newsOriginLabel({ qualityScore: 0 }).relevancePercent, 0);
+  // A legacy row has no stored score and the API sends 0 for it.
+  assert.equal(newsOriginLabel({ qualityScore: 0 }).relevancePercent, null);
+  assert.equal(newsOriginLabel(JSON.parse('{"docHash":"a","type":"news","qualityScore":0,"opportunityCount":0}')).relevancePercent, null);
   assert.equal(newsOriginLabel({ qualityScore: 1 }).relevancePercent, 100);
   assert.equal(newsOriginLabel({ qualityScore: 0.005 }).relevancePercent, 1);
   for (const bad of [undefined, null, Number.NaN, Infinity, -0.1, 1.01, '0.5']) {
