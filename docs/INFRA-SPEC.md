@@ -773,6 +773,16 @@ function depends on the rule, so the consumer deploys with or before the start
 route. Both roles' existing `events:PutEvents` grants on the default bus cover
 publication, including the people resolve request for the target after finish.
 
+The rule DLQ captures only events EventBridge could not deliver to the function.
+Once Lambda accepts the asynchronous invocation, a function error is retried under
+the summarize function's own asynchronous settings (not changed for merges) and is
+not sent to `ttobak-account-merge-dlq`. A job whose worker kept failing therefore
+stays `running` until its lease expires; it recovers by redispatch, when the owner
+starts the merge again (API or `merge-accounts -apply`) and start hands the running
+job to a fresh event, or it can be aborted with `merge-accounts -abort`. A failed
+people resolve publish after finish is retried the same way: the finish
+transaction leaves `resolvePending` on the job and a redelivered event republishes it.
+
 The contacts and events steps re-seal moved rows with the target's binding, so
 the summarize role also gains `kms:GenerateDataKey` on the encryption key (AIStack;
 never `kms:Encrypt` or `kms:ReEncrypt*`). Deploy AIStack before GatewayStack.
