@@ -123,7 +123,7 @@ func TestDeleteMeetingStillRejectsAccountMembers(t *testing.T) {
 }
 
 func TestUpdateMeetingRejectsDerivedWritesFromRestrictedProjection(t *testing.T) {
-	// Members no longer receive restricted projections (ADR-049 amendment);
+	// Members no longer receive restricted projections (ADR-029, source provenance amendment);
 	// simulate one so the backstop stays covered if a guard returns.
 	repo := accountPermissionRepo()
 	repo.meetingsByID["m-1"].Content = "PRIVATE_SUMMARY"

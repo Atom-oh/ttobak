@@ -203,7 +203,7 @@ func conditionNames(t *testing.T, update map[string]any) map[string]bool {
 	return found
 }
 
-// ADR-059 approval is the creator's alone. A member republish of a meeting
+// ADR-029 (owner approval) is the creator's alone. A member republish of a meeting
 // already published to the same account publishes without approval, while
 // the creator's own republish of private output still mints it.
 func TestMemberRepublishNeverMintsOwnerApproval(t *testing.T) {

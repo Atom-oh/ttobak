@@ -47,3 +47,4 @@ rewritten.
 | [ADR-010](ADR-010-meeting-cost-sizing-simulator.md) | Meeting cost and sizing simulations; the former ADR-033, renumbered |
 | [ADR-003](ADR-003-mcp-access.md) | MCP access: transports, tools, connector delegation and local intake; absorbs the former ADR-018 (back-data tools) and ADR-045 (dual transports) |
 | [ADR-012](ADR-012-billing-origin-identity-and-team-access.md) | Billing: service origin, identity and team access; merges the former ADR-056 and ADR-060 under a freed number |
+| [ADR-029](ADR-029-note-provenance-and-sharing-safety.md) | Note provenance and sharing safety; merges the former ADR-049 (summary sharing source provenance), ADR-059 (owner-approved account sharing) and ADR-070 (shareable-by-default note provenance) under a freed number |

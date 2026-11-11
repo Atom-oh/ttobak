@@ -92,7 +92,7 @@ membership grants descendant reads, with full-path fingerprints invalidating
 continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
-Linked meetings are navigation only and never note evidence (ADR-070);
+Linked meetings are navigation only and never note evidence (ADR-029, shareable by default);
 mutations remain direct-only. Billing read/upload access also follows ancestor
 membership, with an atomic path/grant confirmation (ADR-012).
 
@@ -377,7 +377,7 @@ delivery stages; see the [news release contract](runbooks/knowledge-grade-news-r
 The English meeting note is an independent derivative: `SummaryRequested` with
 target `en` runs on the same summarize Lambda with its own MEETING#/ANALYSIS#summaryEn
 state, regenerates from the transcript, notes, verified documents and image
-analyses (never the Korean note) and writes only `contentEn` fields (ADR-070).
+analyses (never the Korean note) and writes only `contentEn` fields (ADR-029, shareable by default).
 During rollout, a summarize Lambda that predates the English path treats a
 target `en` event as Korean, finds a run-ID mismatch on `ANALYSIS#summary` and
 does nothing; the English row then expires to `INTERRUPTED`, which is retryable.
@@ -540,7 +540,7 @@ stop legacy fixed-object KB exports. Reader deployment, fixed cutoff, old-writer
 queued-work drain and authorized consumer verification remain independent rollout
 gates; see the [implementation plan](superpowers/plans/2026-10-12-summary-sharing-privacy.md).
 
-[ADR-059](decisions/ADR-059-owner-approved-account-sharing.md) adds separate
+[ADR-029](decisions/ADR-029-note-provenance-and-sharing-safety.md) (owner approval) adds separate
 owner disclosure to the current Account audience without changing provenance,
 generation or output. Approval and publication pin current source and direct
 membership atomically. Account readers bind disclosure to current owner, audience,
