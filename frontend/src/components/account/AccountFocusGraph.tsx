@@ -18,6 +18,9 @@ const ROLE_ICONS: Record<PeopleRole, string> = {
   participant: 'person', speaker: 'record_voice_over', assignee: 'task_alt', mentions: 'forum',
 };
 
+// The people list pages 200 at a time, members first.
+const PEOPLE_PAGES = 5;
+
 const KIND_ICON: Record<string, string> = { contact: 'account_circle', member: 'groups', project: 'work' };
 const KIND_LABEL: Record<string, string> = { contact: '고객', member: '우리 팀', project: '프로젝트' };
 
@@ -55,22 +58,39 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
   const [hover, setHover] = useState<number | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [showOther, setShowOther] = useState(false);
+  const [peopleFailed, setPeopleFailed] = useState(false);
+  const [peopleRetry, setPeopleRetry] = useState(0);
   const generation = useRef(0);
+  // The focus came from the URL; a 404 for it falls back to this account's default.
+  const fromUrl = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
-    accountApi.people.list(accountId, '', { signal: controller.signal, expectedUserId: userId })
-      .then(page => { if (!controller.signal.aborted) setPeople(page.people ?? []); })
-      .catch(() => { /* the picker falls back to projects */ })
+    (async () => {
+      const all: AccountPerson[] = [];
+      let cursor = '';
+      // Members come before contacts, so follow a few pages to reach the contacts.
+      for (let page = 0; page < PEOPLE_PAGES; page++) {
+        const result = await accountApi.people.list(accountId, cursor, { signal: controller.signal, expectedUserId: userId });
+        all.push(...(result.people ?? []));
+        if (!result.nextCursor) break;
+        cursor = result.nextCursor;
+      }
+      return all;
+    })()
+      .then(all => { if (!controller.signal.aborted) { setPeople(all); setPeopleFailed(false); } })
+      .catch(() => { if (!controller.signal.aborted) setPeopleFailed(true); })
       .finally(() => { if (!controller.signal.aborted) setPeopleLoaded(true); });
     return () => controller.abort();
-  }, [accountId, userId, refreshKey]);
+  }, [accountId, userId, refreshKey, peopleRetry]);
 
   const options = useMemo(() => focusOptions(people, projects), [people, projects]);
 
   useEffect(() => {
     if (focus || !peopleLoaded) return;
-    const initial = readUrlFocus() ?? defaultFocus(options);
+    const fromQuery = readUrlFocus();
+    fromUrl.current = !!fromQuery;
+    const initial = fromQuery ?? defaultFocus(options);
     if (initial) setFocus(initial);
   }, [focus, peopleLoaded, options]);
 
@@ -79,19 +99,30 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
     const controller = new AbortController();
     const run = ++generation.current;
     setLoading(true);
+    setLoadingMore(false);
     setError('');
     setTech(null);
     setSelected(null);
     setShowOther(false);
     accountApi.people.focus(accountId, focusParam(focus), '', { signal: controller.signal, expectedUserId: userId })
       .then(g => { if (run === generation.current) setGraph(g); })
-      .catch(e => { if (!controller.signal.aborted && run === generation.current) { setGraph(null); setError(errorText(e)); } })
+      .catch(e => {
+        if (controller.signal.aborted || run !== generation.current) return;
+        const fallback = fromUrl.current && e instanceof ApiError && e.status === 404 ? defaultFocus(options) : null;
+        fromUrl.current = false;
+        if (fallback && !sameFocus(fallback, focus)) { writeUrlFocus(fallback); setFocus(fallback); return; }
+        setGraph(null);
+        setError(errorText(e));
+      })
       .finally(() => { if (run === generation.current) setLoading(false); });
     return () => controller.abort();
+    // options only feeds the 404 fallback; refetching on its change is unnecessary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, userId, focus, refreshKey, retry]);
 
   const choose = useCallback((ref: FocusRef) => {
     if (sameFocus(ref, focus)) return;
+    fromUrl.current = false;
     writeUrlFocus(ref);
     setFocus(ref);
   }, [focus]);
@@ -103,11 +134,11 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
     try {
       const next = await accountApi.people.focus(accountId, focusParam(focus), graph.nextCursor, { expectedUserId: userId });
       if (run !== generation.current) return;
-      setGraph(prev => prev && { ...next, meetings: [...prev.meetings, ...next.meetings] });
+      setGraph(prev => prev && { ...next, truncated: prev.truncated || next.truncated, meetings: [...prev.meetings, ...next.meetings] });
     } catch (e) {
       if (run === generation.current) setError(errorText(e));
     } finally {
-      if (run === generation.current) setLoadingMore(false);
+      setLoadingMore(false);
     }
   }, [accountId, userId, focus, graph]);
 
@@ -117,11 +148,17 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
   const selectedMeeting = graph?.meetings.find(m => m.id === selected) ?? null;
   const dims = (m: FocusMeeting) => !!tech && !m.techs.includes(tech);
 
+  if (peopleLoaded && peopleFailed && options.length === 0) {
+    return <div role="alert" className="flex items-center gap-3 text-sm text-error">
+      사람 목록을 불러오지 못했습니다.
+      <button type="button" onClick={() => setPeopleRetry(n => n + 1)} className="rounded-md border border-border-subtle px-2 py-1 text-xs font-medium text-text-main hover:bg-surface-container">다시 시도</button>
+    </div>;
+  }
   if (peopleLoaded && options.length === 0) {
     return <p className="text-sm text-text-secondary">연락처나 프로젝트가 아직 없습니다. 고객 연락처를 추가하거나 프로젝트를 연결하면 관계 그래프가 그려집니다.</p>;
   }
 
-  return <div className="space-y-4">
+  return <div className="@container space-y-4">
     <FocusPicker options={options} focus={focus} onChoose={choose} />
     {error && <div role="alert" className="flex items-center gap-3 text-sm text-error">
       {error}
@@ -132,14 +169,14 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
       {graph.truncated && <p role="status" className="mb-2 text-xs text-text-secondary">{TRUNCATED_NOTICE}</p>}
 
       {/* Mobile: technology filter chips above the meeting list. */}
-      {graph.techs.length > 0 && <div className="mb-3 flex flex-wrap gap-1.5 md:hidden">
+      {graph.techs.length > 0 && <div className="mb-3 flex flex-wrap gap-1.5 @3xl:hidden">
         {graph.techs.map(t => <TechChip key={t.id} tech={t} dark={dark} active={tech === t.id} onClick={() => setTech(v => v === t.id ? null : t.id)} />)}
       </div>}
 
-      <div className="md:grid md:items-start" style={{ gridTemplateColumns: `minmax(10rem,13rem) ${LEFT_BAND}px minmax(0,1fr) ${RIGHT_BAND}px minmax(9rem,12rem)` }}>
+      <div className="@3xl:grid @3xl:items-start" style={{ gridTemplateColumns: `minmax(10rem,13rem) ${LEFT_BAND}px minmax(0,1fr) ${RIGHT_BAND}px minmax(9rem,12rem)` }}>
         <FocusCardView graph={graph} />
 
-        <svg className="hidden md:block" width={LEFT_BAND} height={layout.height} aria-hidden="true">
+        <svg className="hidden @3xl:block" width={LEFT_BAND} height={layout.height} aria-hidden="true">
           {layout.left.map(e => {
             const m = graph.meetings[e.meetingIndex];
             const active = hover === e.meetingIndex || selected === m.id;
@@ -150,7 +187,7 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
           <circle cx={3} cy={FOCUS_ANCHOR_Y} r={3} className="fill-primary" />
         </svg>
 
-        <ol className="mt-3 md:mt-0" aria-label="미팅">
+        <ol className="mt-3 @3xl:mt-0" aria-label="미팅">
           {graph.meetings.length === 0 && <li className="rounded-lg border border-dashed border-border-subtle p-4 text-sm text-text-secondary">
             {graph.focus.kind === 'project' ? '이 프로젝트에 연결된 미팅이 아직 없습니다.' : '이 사람이 참석자로 연결된 미팅이 아직 없습니다. 미팅의 참석자를 연결하면 여기에 나타납니다.'}
           </li>}
@@ -159,7 +196,7 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
             onSelect={() => setSelected(v => v === m.id ? null : m.id)} />)}
         </ol>
 
-        <svg className="hidden md:block" width={RIGHT_BAND} height={layout.height} aria-hidden="true">
+        <svg className="hidden @3xl:block" width={RIGHT_BAND} height={layout.height} aria-hidden="true">
           {layout.right.map(e => {
             const m = graph.meetings[e.meetingIndex];
             const t = techById.get(e.techId!)!;
@@ -171,7 +208,7 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
           })}
         </svg>
 
-        <div className="hidden md:block" role="group" aria-label="기술셋">
+        <div className="hidden @3xl:block" role="group" aria-label="기술셋">
           {graph.techs.length === 0 && <p className="pt-3 text-xs text-text-secondary">태그된 기술이 없습니다.</p>}
           {graph.techs.map(t => <TechNode key={t.id} tech={t} max={maxCount} dark={dark}
             active={tech === t.id} onClick={() => setTech(v => v === t.id ? null : t.id)} />)}
@@ -179,7 +216,7 @@ export function AccountFocusGraph({ accountId, userId, projects, refreshKey }: P
       </div>
 
       {graph.nextCursor && <button type="button" onClick={loadMore} disabled={loadingMore}
-        className="mt-3 rounded-lg border border-border-subtle px-3 py-1.5 text-sm font-medium text-text-main hover:bg-surface-container disabled:opacity-50 md:ml-[calc(13rem+56px)]">
+        className="mt-3 rounded-lg border border-border-subtle px-3 py-1.5 text-sm font-medium text-text-main hover:bg-surface-container disabled:opacity-50 @3xl:ml-[calc(13rem+56px)]">
         {loadingMore ? '불러오는 중…' : '이전 미팅 더 보기'}
       </button>}
 
@@ -274,7 +311,7 @@ function MeetingRow({ meeting, techById, dark, selected, dimmed, onHover, onSele
       <time dateTime={meeting.date} className="w-[4.25rem] shrink-0 text-xs tabular-nums text-text-secondary">{shortDate(meeting.date)}</time>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-text-main">{meeting.title || '제목 없는 미팅'}</span>
-        <span className="mt-0.5 flex items-center gap-1.5 md:hidden">
+        <span className="mt-0.5 flex items-center gap-1.5 @3xl:hidden">
           {meeting.techs.map(id => techById.get(id)).filter(Boolean).map(t => <span key={t!.id} className="text-[11px] font-medium" style={{ color: techTone(t!.group, dark) }}>{t!.label}</span>)}
         </span>
       </span>
@@ -332,7 +369,7 @@ function MeetingPanel({ meeting, techById, dark, onClose, onFocus }: {
       </li>)}
     </ul>
   </div>;
-  return <aside aria-label="미팅 상세" className="mt-4 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm md:absolute md:right-0 md:top-0 md:mt-0 md:w-80 md:shadow-xl">
+  return <aside aria-label="미팅 상세" className="mt-4 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm @3xl:absolute @3xl:right-0 @3xl:top-0 @3xl:mt-0 @3xl:w-80 @3xl:shadow-xl">
     <div className="mb-3 flex items-start gap-2">
       <div className="min-w-0 flex-1">
         <p className="text-xs tabular-nums text-text-secondary">{shortDate(meeting.date)}</p>

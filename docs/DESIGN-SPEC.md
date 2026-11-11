@@ -397,18 +397,20 @@ reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`.
 The **relationship graph** section follows the flow and is always open
 (`components/account/AccountFocusGraph.tsx`, pure geometry and helpers in
 `src/lib/accountFocusGraph.ts`). It reads `GET /people/focus` for one focus: a
-contact, a member or a project. The default is the contact with the most
+contact, a member or a project. The picker reads up to five people pages. The default is the contact with the most
 meetings, then the busiest member, then the first opportunity project. A search
 picker and up to four quick chips change it, and the choice is written to the
-`focus` query parameter. On desktop, three columns sit between two SVG connector
-bands: the focus card, its meetings (12 per page, "show earlier meetings" for
+`focus` query parameter; a URL focus that is not found in this account falls back
+to the default. When the section itself is at least 48rem wide (a container
+query, so the sidebar and account column are accounted for), three columns sit
+between two SVG connector bands: the focus card, its meetings (12 per page, "show earlier meetings" for
 more), and the technologies with count bars. Connectors use fixed row heights,
 so no DOM measuring is needed. Technology connectors are dashed in the
 technology's group color, because they come from model-extracted tags; a legend
 says so. Selecting a technology dims other meetings and connectors. Selecting a
 meeting opens a side panel with its technologies, customer and team attendees
 with roles, and a link to the meeting; choosing a person there re-centers the
-graph on them. Uncatalogued tags are collapsed behind a toggle. On mobile the
+graph on them. Uncatalogued tags are collapsed behind a toggle. On a narrower section the
 bands are hidden, technologies become filter chips and each meeting row lists
 its technologies. A 403 says the graph is for direct members, and a 404 asks for
 another focus.
