@@ -632,7 +632,7 @@ Claude model. The API function depends on the rule, as for saved summaries.
 
 Summarize receives `AUTO_TERMS_MODE` (`off` by default, or `personal`),
 `AUTO_TERMS_USERS` (comma-separated Cognito subs, empty means every owner),
-`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]) and
+`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]; `infra/cdk.json` sets `0.7`) and
 `BEDROCK_TERMS_MODEL_ID` (default `global.anthropic.claude-sonnet-5-5`; a
 `global.`/`apac.` Claude profile) from CDK context `ttobak:autoTermsMode`,
 `ttobak:autoTermsUsers`, `ttobak:autoTermsMinConfidence` and
