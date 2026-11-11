@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -364,24 +366,191 @@ func TestAccountObservationRequiresTheMeetingLink(t *testing.T) {
 				if want == "" && strings.Contains(meetingCheck, "accountId") || want != "" && !strings.Contains(meetingCheck, want) {
 					t.Fatalf("%s: meeting check %q", pk, meetingCheck)
 				}
+				var stateUpdate map[string]any
+				for _, item := range txItems(t, (*calls)[0]) {
+					if update, ok := item["Update"].(map[string]any); ok {
+						if _, sk := callKey(dictCall{body: update}); sk == model.TermsAnalysisSK {
+							stateUpdate = update
+						}
+					}
+				}
+				if want == "" {
+					if stateUpdate != nil {
+						t.Fatalf("a personal observation does not touch the run state")
+					}
+					continue
+				}
+				if stateUpdate == nil {
+					t.Fatal("an Account observation must update the run state in the same transaction")
+				}
+				if pk, _ := callKey(dictCall{body: stateUpdate}); pk != "MEETING#m1" {
+					t.Fatalf("run state of the source meeting expected: %s", pk)
+				}
+				requireAll(t, "record bump", resolved(stateUpdate, "UpdateExpression"), `ADD accountRecords {"N":"1"}`)
+				requireAll(t, "recorded Account", resolved(stateUpdate, "ConditionExpression"), `contains (accountIds, {"S":"a1"})`, `ownerId = {"S":"u1"}`)
 			}
 		})
 	}
-	repo, calls := dictWire(t, func(int, string, map[string]any) (int, string) {
-		return 400, cancelled("None", "None", "ConditionalCheckFailed", "None")
-	})
-	term, obs := acctTerm("ACCOUNT#a1")
-	if err := repo.CreateAutoTermChecked(context.Background(), term, obs, member); !errors.Is(err, ErrDictSourceMeetingGone) || len(*calls) != 1 {
-		t.Fatalf("a relinked meeting must map to ErrDictSourceMeetingGone: %v", err)
+	// Items: term put, observation put, meeting check, run state, member.
+	for _, failed := range []int{2, 3} {
+		codes := []string{"None", "None", "None", "None", "None"}
+		codes[failed] = "ConditionalCheckFailed"
+		repo, calls := dictWire(t, func(int, string, map[string]any) (int, string) {
+			return 400, cancelled(codes...)
+		})
+		term, obs := acctTerm("ACCOUNT#a1")
+		if err := repo.CreateAutoTermChecked(context.Background(), term, obs, member); !errors.Is(err, ErrDictSourceMeetingGone) || len(*calls) != 1 {
+			t.Fatalf("an unlinked or unrecorded Account must map to ErrDictSourceMeetingGone (item %d): %v", failed, err)
+		}
 	}
 	kbTerm, kbObs := acctTerm("ACCOUNT#a1")
 	kbObs.MeetingID, kbObs.SourceKind, kbObs.SourceRef = "", model.DictSourceKB, "kb/u1/doc.md"
 	kbObs.SK = kbObs.ObservationSK()
-	repo, calls = dictWire(t, nil)
+	repo, calls := dictWire(t, nil)
 	if err := repo.CreateAutoTermChecked(context.Background(), kbTerm, kbObs, member); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(callText((*calls)[0]), "MEETING#") {
 		t.Fatal("a KB observation has no source meeting check")
+	}
+}
+
+// relinkSim evaluates the conditions this change relies on over one meeting
+// (owner u1, m1): its accountId, and the run state's accountIds and
+// accountRecords. Dictionary rows are absent, so a sweep only deletes.
+type relinkSim struct {
+	meetingAccount string
+	accountIDs     map[string]bool
+	records        int
+	puts           int
+	onObsDelete    func()
+}
+
+var simValue = regexp.MustCompile(`\{"[SN]":"([^"]*)"\}`)
+
+func simArg(expr, prefix string) (string, bool) {
+	i := strings.Index(expr, prefix)
+	if i < 0 {
+		return "", false
+	}
+	m := simValue.FindStringSubmatch(expr[i+len(prefix):])
+	return m[1], m != nil
+}
+
+func (s *relinkSim) respond(_ int, op string, body map[string]any) (int, string) {
+	text := callText(dictCall{body: body})
+	switch op {
+	case "GetItem":
+		switch {
+		case strings.Contains(text, "ANALYSIS#terms"):
+			var ids []string
+			for id := range s.accountIDs {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			return 200, sweepStateJSON("u1", ids, s.records, nil, []string{acctKey})
+		case strings.Contains(text, "MEETING#m1"):
+			return 200, `{"Item":{"PK":{"S":"USER#u1"},"accountId":{"S":"` + s.meetingAccount + `"}}}`
+		}
+		return 200, `{}`
+	case "Query":
+		return 200, `{"Count":0}`
+	case "DeleteItem":
+		if hook := s.onObsDelete; hook != nil && strings.Contains(text, "DICTOBS#") {
+			s.onObsDelete = nil
+			hook()
+		}
+		return 200, `{}`
+	case "TransactWriteItems":
+		items := body["TransactItems"].([]any)
+		codes := make([]string, len(items))
+		var apply []func()
+		failed := false
+		for i, raw := range items {
+			codes[i] = "None"
+			item := raw.(map[string]any)
+			ok := true
+			if check, isCheck := item["ConditionCheck"].(map[string]any); isCheck {
+				cond := resolved(check, "ConditionExpression")
+				if id, has := simArg(cond, "accountId = "); has {
+					ok = s.meetingAccount == id
+				}
+				if id, has := simArg(cond, "accountId <> "); has {
+					ok = s.meetingAccount != id
+				}
+			}
+			if update, isUpdate := item["Update"].(map[string]any); isUpdate {
+				cond, upd := resolved(update, "ConditionExpression"), resolved(update, "UpdateExpression")
+				id, _ := simArg(cond, "contains (accountIds, ")
+				ok = s.accountIDs[id]
+				if n, has := simArg(cond, "accountRecords = "); has {
+					want, _ := strconv.Atoi(n)
+					ok = ok && want == s.records
+				}
+				switch {
+				case strings.Contains(upd, "DELETE accountIds"):
+					apply = append(apply, func() { delete(s.accountIDs, id) })
+				case strings.Contains(upd, "ADD accountRecords"):
+					apply = append(apply, func() { s.records++ })
+				}
+			}
+			if _, isPut := item["Put"]; isPut {
+				apply = append(apply, func() { s.puts++ })
+			}
+			if !ok {
+				codes[i], failed = "ConditionalCheckFailed", true
+			}
+		}
+		if failed {
+			return 400, cancelled(codes...)
+		}
+		for _, f := range apply {
+			f()
+		}
+	}
+	return 200, `{}`
+}
+
+// The review scenario (two relinks inside one Account merge pass): record a1,
+// relink a1 -> a2, the sweep drops a1, relink back to a1. The merge's next
+// observation write must fail, because a1 is no longer recorded; otherwise
+// evidence would sit in a1 with a1 missing from accountIds.
+func TestAccountObservationAfterTheSweepDroppedItIsRefused(t *testing.T) {
+	sim := &relinkSim{meetingAccount: "a2", accountIDs: map[string]bool{"a1": true}, records: 1}
+	dict, _ := dictWire(t, sim.respond)
+	got, err := NewDynamoDBRepository(dict.client, "dict-test").SweepMeetingAccountTerms(context.Background(), "u1", "m1")
+	if err != nil || got.Dropped != 1 || sim.accountIDs["a1"] {
+		t.Fatalf("sweep %+v err=%v ids=%v", got, err, sim.accountIDs)
+	}
+	sim.meetingAccount = "a1"
+	term, obs := acctTerm("ACCOUNT#a1")
+	err = dict.CreateAutoTermChecked(context.Background(), term, obs, &MembershipCheck{AccountID: "a1", UserID: "u1"})
+	if !errors.Is(err, ErrDictSourceMeetingGone) || sim.puts != 0 {
+		t.Fatalf("a write into an Account no longer recorded must be refused: err=%v puts=%d", err, sim.puts)
+	}
+}
+
+// A merge write that lands while the sweep cleans (relinked back to a1 and
+// away to a3 in between) bumps accountRecords, so the sweep keeps a1 recorded
+// for the a3 relink's own sweep instead of dropping it.
+func TestAccountObservationDuringTheSweepKeepsTheAccountRecorded(t *testing.T) {
+	sim := &relinkSim{meetingAccount: "a2", accountIDs: map[string]bool{"a1": true}, records: 1}
+	dict, _ := dictWire(t, sim.respond)
+	sim.onObsDelete = func() {
+		sim.meetingAccount = "a1"
+		term, obs := acctTerm("ACCOUNT#a1")
+		if err := dict.CreateAutoTermChecked(context.Background(), term, obs, &MembershipCheck{AccountID: "a1", UserID: "u1"}); err != nil {
+			t.Errorf("the write while linked and recorded must succeed: %v", err)
+		}
+		sim.meetingAccount = "a3"
+	}
+	got, err := NewDynamoDBRepository(dict.client, "dict-test").SweepMeetingAccountTerms(context.Background(), "u1", "m1")
+	if err != nil || got != (TermsAccountSweep{Stale: 1, Retained: 1}) || !sim.accountIDs["a1"] || sim.records != 2 || sim.puts != 2 {
+		t.Fatalf("sweep %+v err=%v ids=%v records=%d puts=%d", got, err, sim.accountIDs, sim.records, sim.puts)
+	}
+	// The a3 relink's sweep then sees the write and drops a1.
+	got, err = NewDynamoDBRepository(dict.client, "dict-test").SweepMeetingAccountTerms(context.Background(), "u1", "m1")
+	if err != nil || got.Dropped != 1 || sim.accountIDs["a1"] {
+		t.Fatalf("second sweep %+v err=%v ids=%v", got, err, sim.accountIDs)
 	}
 }

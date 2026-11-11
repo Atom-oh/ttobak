@@ -85,9 +85,10 @@ type TermsAnalysis struct {
 	// a key (a personal manual or tombstoned term) that the Account merge
 	// still observes, so AcceptedTerms alone does not cover the Account.
 	AccountAcceptedTerms []string `dynamodbav:"accountAcceptedTerms,omitempty,stringset" json:"-"`
-	// AccountRecords counts RecordTermsAccount calls. The relink sweep
-	// (ADR-008 FU4) removes a cleaned Account from AccountIDs only while it
-	// is unchanged, so a record that lands during the sweep keeps its entry.
+	// AccountRecords counts RecordTermsAccount calls and Account observation
+	// writes. The relink sweep (ADR-008 FU4) removes a cleaned Account from
+	// AccountIDs only while it is unchanged, so a record or write that lands
+	// during the sweep keeps its entry.
 	AccountRecords int64 `dynamodbav:"accountRecords,omitempty" json:"-"`
 }
 

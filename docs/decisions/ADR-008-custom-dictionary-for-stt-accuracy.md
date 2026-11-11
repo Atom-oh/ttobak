@@ -420,19 +420,22 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   unedited auto term left without observations or removes the meeting from
   `sources` and `firstSourceMeetingId` of a term that stays (manual and edited
   terms included), version-guarded with re-reads. A clean Account leaves
-  `accountIds` only while `accountRecords` (bumped by every record) is
-  unchanged and the meeting is not linked to it again, so a record landing
-  mid-sweep keeps the entry. `hits` is not decremented. The sweep is best
-  effort and idempotent: failures log `trigger`, outcome and counts only; it
-  re-runs on a repeated link call and on the next terms run, and deletion still
-  sweeps every recorded Account. Race guard: `RecordTermsAccount` and every
-  Account observation write require the meeting to still be linked to that
-  Account in the same transaction (`outcome=UNLINKED` otherwise), so a run
-  that read the link before a relink cannot write where the sweep, which
-  starts after the relink commits, would not look. A relink straight back
-  during a sweep can drop the meeting's evidence from the Account it returned
-  to (an undercount until a changed source runs again), never leave evidence
-  unrecorded. For an account merge the source's dictionary layer stays on the
+  `accountIds` only while `accountRecords` is unchanged and the meeting is not
+  linked to it again. `hits` is not decremented. The sweep is best effort and
+  idempotent: failures log `trigger`, outcome, an error code and counts only;
+  it re-runs on a repeated link call and on the next terms run, and deletion
+  still sweeps every recorded Account. Race guard: `RecordTermsAccount` and
+  every Account observation write require the meeting to still be linked to
+  that Account in the same transaction (`outcome=UNLINKED` otherwise). Each
+  Account observation write also updates the run state in that transaction:
+  it needs the Account in `accountIds` and bumps `accountRecords`, as
+  `RecordTermsAccount` does. So no write lands in an Account the sweep already
+  dropped, and a write after the sweep read the run state (for example during
+  two relinks inside one merge pass) fails the drop guard and keeps the
+  Account recorded for the next relink's sweep. A relink straight back during
+  a sweep can still drop the meeting's evidence from the Account it returned
+  to (an undercount until a changed source runs again); every Account
+  observation stays recorded. For an account merge the source's dictionary layer stays on the
   retired source (an unmoved category, ADR-022) and is not copied: moved
   meetings' evidence leaves it like on any relink, other evidence and manual
   rows stay. The new Account gets a meeting's terms only from its next run

@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/repository"
 )
 
@@ -40,13 +42,29 @@ func sweepUnlinkedAccountTerms(ctx context.Context, repo any, trigger, ownerID, 
 	if err == nil && result.Stale == 0 {
 		return nil
 	}
-	outcome := "SWEPT"
+	outcome, code := "SWEPT", ""
 	if err != nil {
-		outcome = "FAILED"
+		outcome, code = "FAILED", termsSweepErrorCode(err)
 	}
-	log.Printf("terms account sweep: trigger=%s meeting=%s outcome=%s stale=%d dropped=%d retained=%d",
-		trigger, meetingID, outcome, result.Stale, result.Dropped, result.Retained)
+	log.Printf("terms account sweep: trigger=%s meeting=%s outcome=%s code=%s stale=%d dropped=%d retained=%d",
+		trigger, meetingID, outcome, code, result.Stale, result.Dropped, result.Retained)
 	return err
+}
+
+// termsSweepErrorCode names a sweep failure without its message: the first
+// AWS API error code, CONFLICT for a guard that kept failing, TIMEOUT, or
+// ERROR.
+func termsSweepErrorCode(err error) string {
+	var apiErr smithy.APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.ErrorCode() != "":
+		return apiErr.ErrorCode()
+	case errors.Is(err, repository.ErrConditionFailed):
+		return "CONFLICT"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "TIMEOUT"
+	}
+	return "ERROR"
 }
 
 // hasStaleTermsAccount reports a recorded Account other than current.

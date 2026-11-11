@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -259,6 +260,25 @@ func TestProcessRetriesTheRelinkSweep(t *testing.T) {
 	_, repo, _ = relinkTermsRun(t, []string{"a1"}, nil, nil)
 	if len(repo.sweeps) != 0 {
 		t.Fatalf("nothing stale, nothing swept: %v", repo.sweeps)
+	}
+}
+
+func TestTermsSweepErrorCodeCarriesNoMessage(t *testing.T) {
+	throttled := &smithy.GenericAPIError{Code: "ProvisionedThroughputExceededException", Message: "secret detail"}
+	for want, err := range map[string]error{
+		"ProvisionedThroughputExceededException": fmt.Errorf("delete: %w", throttled),
+		"CONFLICT":                               fmt.Errorf("prune: %w", repository.ErrConditionFailed),
+		"TIMEOUT":                                context.DeadlineExceeded,
+		"ERROR":                                  errors.New("secret detail"),
+	} {
+		if got := termsSweepErrorCode(err); got != want {
+			t.Errorf("%v: got %s want %s", err, got, want)
+		}
+	}
+	logs := capturePrivacyLogs(t)
+	_ = sweepUnlinkedAccountTerms(context.Background(), &sweepRecorder{err: throttled}, "link", "o", "m1")
+	if out := logs.String(); !strings.Contains(out, "outcome=FAILED code=ProvisionedThroughputExceededException") || strings.Contains(out, "secret") {
+		t.Fatalf("log: %s", out)
 	}
 }
 

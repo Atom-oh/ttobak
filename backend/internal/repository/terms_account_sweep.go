@@ -34,8 +34,11 @@ type TermsAccountSweep struct {
 // cleanup of the meeting's own evidence and carries no membership check. Only
 // a fully clean Account is removed from accountIds, conditioned on the run
 // state's accountRecords being unchanged and on the meeting not being linked
-// to it again, so a RecordTermsAccount that lands during the sweep keeps the
-// entry for the next sweep. Every step is idempotent, so a failed or retained
+// to it again. RecordTermsAccount and every Account observation write bump
+// accountRecords, and an observation write also needs the Account in
+// accountIds (withSourceMeetingCheck): a write after this sweep read the
+// state keeps the entry, and none can land after the entry is gone. Every
+// step is idempotent, so a failed or retained
 // Account is retried by the next sweep or by meeting deletion. Only the owner
 // recorded on the run state is swept; a deleted meeting is left to
 // SweepMeetingTerms.
