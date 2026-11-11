@@ -105,7 +105,7 @@ earlier sections. Mail reading is dropped.
    `post_draft`" line.
 6. **Auto-ack off** posts one `ack_needed` notice; a later `WORKING` read moves
    the task to `acked`.
-7. **No new ADR.** ADR-003 (local MCP intake) is amended. ADR-068 stays free.
+7. **No new ADR.** ADR-003 (local MCP intake) is amended. ADR-023 stays free.
 
 ## Delivery parts (stacked PRs, each diff <= 95,000 bytes)
 

@@ -3,7 +3,7 @@
 Historical planning/acceptance record from 2026-09-12. Checklist statements below
 record the original slice, not current deployment or instructions to restart it.
 For current activation, follow [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md),
-[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md), where relevant.
+[ADR-001](../../decisions/ADR-001-meeting-document-extraction.md), where relevant.
 
 Readers need to distinguish queued, running, waiting-for-file, indexed and failed
 work. Add authenticated status routes for meetings, personal/shared documents

@@ -131,7 +131,7 @@ Cloud processing (Bedrock) of the stored fields is allowed.
     Slack, SpecReq and TFC fields.
   - A new ADR must record the owner-private residency table above, distinct
     from the account-shared limit.
-  - That ADR is ADR-068. It cites ADR-003 (local MCP intake) and ADR-067
+  - That ADR is ADR-023. It cites ADR-003 (local MCP intake) and ADR-067
     (account people edges) by title.
 - **Storage.**
   - Owner-private DynamoDB rows live under the user's own partition, for
