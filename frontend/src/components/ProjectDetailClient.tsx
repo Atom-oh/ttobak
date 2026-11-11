@@ -300,7 +300,7 @@ export default function ProjectDetailClient() {
 
   return (
     <AppLayout activePath="/projects">
-      <div className="mx-auto w-full max-w-7xl p-4 lg:p-8">
+      <div className="workspace-page">
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}

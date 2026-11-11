@@ -1914,7 +1914,7 @@ images/ and files/; details are in ADR-010 and service/sim.go.
 
 ### Admin and settings
 
-Invite-user and the six user-management routes use RequireAdmin. Delete/disable
+Invite-user and the seven user-management routes use RequireAdmin. Delete/disable
 protect self and last-admin targets, with a post-write race warning. Sign-out
 revokes refresh tokens but issued locally validated JWTs survive until expiry.
 PostAuthentication records lastLoginAt separately from PROFILE and fails open;
@@ -1923,6 +1923,18 @@ and NEW_PASSWORD_REQUIRED, never self-signup. The domain allowlist is supplement
 `isApprovedAdminInvite` exempts only `demo@atomai.click` (case-insensitive) on
 `PreSignUp_AdminCreateUser`; it grants neither a domain-wide exception nor group
 membership. RESEND trigger behavior remains unverified.
+
+Display names: `PUT /api/settings/profile/name` (any signed-in user; target is
+always the verified JWT subject) and admin-only `PUT /api/settings/users/{userId}/name`
+take `{ "name": "..." }` (1 KiB body, unknown fields rejected) and return
+`{ userId, name }`. `service.NormalizeUserName` trims and allows 1-64 code points,
+rejecting control and bidi-control characters (400). `UserAdminService.UpdateUserName`
+requires a sub target (an email alias returns 404), writes only Cognito `name` via
+AdminUpdateUserAttributes, then the
+`USER#{id}/PROFILE` copy read by account people lists; a missing PROFILE row is
+not an error. A profile-sync failure after the Cognito write returns 500 and an
+identical retry converges. The caller's ID-token `name` changes on the next refresh.
+Both routes are non-delegable connector operations.
 
 ### Personal dictionary
 
@@ -2250,6 +2262,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/connectors/approval` | `connectorSettingsHandler.UpdateApproval` |
 | PUT | `/api/settings/integrations/notion` | `settingsHandler.SaveNotionKey` |
 | DELETE | `/api/settings/integrations/notion` | `settingsHandler.DeleteNotionKey` |
+| PUT | `/api/settings/profile/name` | `profileHandler.UpdateMyName` |
 | PUT | `/api/settings/allowed-domains` | `settingsHandler.SaveAllowedDomains` |
 | PUT | `/api/settings/connector-policy` | `connectorSettingsHandler.UpdatePolicy` |
 | POST | `/api/settings/invite-user` | `settingsHandler.InviteUser` |
@@ -2259,6 +2272,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/settings/users/{userId}/disable` | `userAdminHandler.DisableUser` |
 | POST | `/api/settings/users/{userId}/resend-invite` | `userAdminHandler.ResendInvite` |
 | POST | `/api/settings/users/{userId}/reset-password` | `userAdminHandler.ResetPassword` |
+| PUT | `/api/settings/users/{userId}/name` | `userAdminHandler.UpdateUserName` |
 | GET | `/api/settings/dictionary` | `dictHandler.GetDictionary` |
 | PUT | `/api/settings/dictionary` | `dictHandler.UpdateDictionary` |
 | DELETE | `/api/settings/dictionary/term` | `dictHandler.DeleteTerm` |

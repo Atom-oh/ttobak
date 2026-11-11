@@ -23,9 +23,11 @@ function synth(): Template {
 }
 
 describe('WhisperStack whisperx benchmark additions', () => {
-  test('declares supported GPU pools and an On-Demand base without conflicting market options', () => {
+  test('declares supported GPU pools for Spot and On-Demand without conflicting market options', () => {
     const template = synth();
+    template.resourceCountIs('AWS::AutoScaling::AutoScalingGroup', 2);
     template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      AutoScalingGroupName: 'ttobak-whisper-asg',
       LaunchTemplate: Match.absent(),
       MinSize: '0',
       MaxSize: '10',
@@ -41,11 +43,33 @@ describe('WhisperStack whisperx benchmark additions', () => {
           ],
         },
         InstancesDistribution: {
-          OnDemandBaseCapacity: 1,
+          OnDemandBaseCapacity: 0,
           OnDemandAllocationStrategy: 'prioritized',
           OnDemandPercentageAboveBaseCapacity: 0,
           SpotAllocationStrategy: 'price-capacity-optimized',
           SpotMaxPrice: '1.10',
+        },
+      },
+    });
+    template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      AutoScalingGroupName: 'ttobak-whisper-od-asg',
+      LaunchTemplate: Match.absent(),
+      MinSize: '0',
+      MaxSize: '2',
+      MixedInstancesPolicy: {
+        LaunchTemplate: {
+          LaunchTemplateSpecification: Match.anyValue(),
+          Overrides: [
+            { InstanceType: 'g4dn.xlarge' },
+            { InstanceType: 'g4dn.2xlarge' },
+          ],
+        },
+        InstancesDistribution: {
+          OnDemandBaseCapacity: 0,
+          OnDemandAllocationStrategy: 'prioritized',
+          OnDemandPercentageAboveBaseCapacity: 100,
+          SpotAllocationStrategy: Match.absent(),
+          SpotMaxPrice: Match.absent(),
         },
       },
     });
@@ -226,36 +250,63 @@ describe('WhisperStack drain root-cause fix (ADR-009 host lifecycle amendment)',
   test('uses ECS managed draining, so CDK adds no InstanceDrainHook', () => {
     const template = synth();
     template.resourceCountIs('AWS::AutoScaling::LifecycleHook', 0);
-    template.hasResourceProperties('AWS::ECS::CapacityProvider', {
-      AutoScalingGroupProvider: Match.objectLike({ ManagedDraining: 'ENABLED' }),
-    });
+    template.resourceCountIs('AWS::ECS::CapacityProvider', 2);
+    for (const name of ['ttobak-whisper-spot', 'ttobak-whisper-ondemand']) {
+      template.hasResourceProperties('AWS::ECS::CapacityProvider', {
+        Name: name,
+        AutoScalingGroupProvider: Match.objectLike({ ManagedDraining: 'ENABLED' }),
+      });
+    }
+    const associations = Object.values(template.findResources('AWS::ECS::ClusterCapacityProviderAssociations'));
+    expect(associations).toHaveLength(1);
+    const providerIds = Object.keys(template.findResources('AWS::ECS::CapacityProvider')).sort();
+    expect(associations[0].Properties.CapacityProviders.map((p: any) => p.Ref).sort()).toEqual(providerIds);
+    // No cluster default: every RunTask names its provider explicitly.
+    expect(associations[0].Properties.DefaultCapacityProviderStrategy).toEqual([]);
     const functions = Object.values(template.findResources('AWS::Lambda::Function'));
     for (const fn of functions) {
       expect(JSON.stringify(fn)).not.toContain('DrainECSHook');
     }
   });
 
-  test('suspends AZRebalance on create/update and resumes it on delete, scoped to the Whisper ASG', () => {
+  test('suspends AZRebalance on create/update and resumes it on delete, scoped to each Whisper ASG', () => {
     const template = synth();
     const custom = Object.values(template.findResources('Custom::AWS'));
-    expect(custom).toHaveLength(1);
-    const props = custom[0].Properties;
-    for (const phase of ['Create', 'Update', 'Delete']) {
-      expect(JSON.stringify(props[phase])).toContain('AZRebalance');
-      expect(JSON.stringify(props[phase])).toContain(phase === 'Delete' ? 'resumeProcesses' : 'suspendProcesses');
+    expect(custom).toHaveLength(2);
+    for (const resource of custom) {
+      const props = resource.Properties;
+      for (const phase of ['Create', 'Update', 'Delete']) {
+        expect(JSON.stringify(props[phase])).toContain('AZRebalance');
+        expect(JSON.stringify(props[phase])).toContain(phase === 'Delete' ? 'resumeProcesses' : 'suspendProcesses');
+      }
     }
+    // The Spot pool keeps its original physical ID, so it is not re-created.
+    expect(custom.map(resource => JSON.stringify(resource.Properties.Create))).toEqual(expect.arrayContaining([
+      expect.stringContaining('ttobak-whisper-asg-azrebalance-suspended'),
+      expect.stringContaining('ttobak-whisper-od-asg-azrebalance-suspended'),
+    ]));
     const statements = Object.values(template.findResources('AWS::IAM::Policy'))
       .flatMap(policy => policy.Properties.PolicyDocument.Statement as any[])
       .filter(statement => [statement.Action].flat().some((a: string) => a.startsWith('autoscaling:')));
-    expect(statements).toHaveLength(1);
-    expect([statements[0].Action].flat().sort()).toEqual(['autoscaling:ResumeProcesses', 'autoscaling:SuspendProcesses']);
-    expect(JSON.stringify(statements[0].Resource)).toContain('autoScalingGroupName/ttobak-whisper-asg');
-    expect(JSON.stringify(statements[0].Resource)).not.toBe('"*"');
+    expect(statements).toHaveLength(2);
+    const resources = statements.map(statement => JSON.stringify(statement.Resource)).sort();
+    expect(resources[0]).toContain('autoScalingGroupName/ttobak-whisper-asg');
+    expect(resources[1]).toContain('autoScalingGroupName/ttobak-whisper-od-asg');
+    for (const statement of statements) {
+      expect([statement.Action].flat().sort()).toEqual(['autoscaling:ResumeProcesses', 'autoscaling:SuspendProcesses']);
+      expect(JSON.stringify(statement.Resource)).not.toBe('"*"');
+    }
   });
 
-  test('Spot hosts stop accepting placements after an interruption notice', () => {
+  test('both pools share the host configuration, including Spot interruption draining', () => {
     const template = synth();
-    const lt = Object.values(template.findResources('AWS::EC2::LaunchTemplate'))[0];
-    expect(JSON.stringify(lt.Properties.LaunchTemplateData.UserData)).toContain('ECS_ENABLE_SPOT_INSTANCE_DRAINING=true');
+    const templates = Object.values(template.findResources('AWS::EC2::LaunchTemplate'));
+    expect(templates).toHaveLength(2);
+    for (const lt of templates) {
+      const data = lt.Properties.LaunchTemplateData;
+      expect(JSON.stringify(data.UserData)).toContain('ECS_ENABLE_SPOT_INSTANCE_DRAINING=true');
+      expect(JSON.stringify(data.UserData)).toContain('ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m');
+      expect(data.BlockDeviceMappings[0].Ebs).toMatchObject({ VolumeSize: 200, Encrypted: true });
+    }
   });
 });

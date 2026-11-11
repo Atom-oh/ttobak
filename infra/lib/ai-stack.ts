@@ -153,6 +153,9 @@ export class AiStack extends cdk.Stack {
     // AdminUserGlobalSignOut/AdminGetUser/ListUsersInGroup back the admin
     // user-management panel's delete/disable/enable/reset-password actions,
     // its own status lookups before acting, and its last-admin guard.
+    // AdminUpdateUserAttributes backs display-name edits (self-service and
+    // admin); the service writes only the `name` attribute, never custom:*
+    // attributes that cc-on-bedrock uses for authorization in the shared pool.
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CognitoAdminUserManagement',
@@ -167,6 +170,7 @@ export class AiStack extends cdk.Stack {
           'cognito-idp:AdminUserGlobalSignOut',
           'cognito-idp:AdminGetUser',
           'cognito-idp:ListUsersInGroup',
+          'cognito-idp:AdminUpdateUserAttributes',
         ],
         resources: [props.userPoolArn],
       })

@@ -602,8 +602,8 @@ function MeetingDetailContent() {
       {/* Content */}
       <div ref={pageRowRef} className="flex flex-1 min-h-0">
         {/* Main Content */}
-        <div className="flex-1 p-4 lg:p-8 overflow-y-auto">
-          <div className="lg:max-w-7xl lg:mx-auto">
+        <div className="workspace-page flex-1 min-h-0 overflow-y-auto">
+          <div className="w-full min-w-0">
           {/* Header */}
           <MeetingHeader
             meeting={meeting}
@@ -984,7 +984,7 @@ function MeetingDetailContent() {
 
         {/* Q&A / 참조 Side Panel - Desktop only */}
         <aside
-          className="hidden lg:flex dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen"
+          className="hidden lg:flex dark:bg-surface-lowest/50 flex-col sticky top-0 h-full"
           style={{ width: asideWidth }}
         >{/* width persisted via useResizablePanel, see hooks/useResizablePanel.ts */}
           <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}

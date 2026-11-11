@@ -25,6 +25,7 @@ type fakeCognitoAdminAPI struct {
 	adminEnableUserFn        func(ctx context.Context, in *cognitoidp.AdminEnableUserInput) (*cognitoidp.AdminEnableUserOutput, error)
 	adminResetUserPasswordFn func(ctx context.Context, in *cognitoidp.AdminResetUserPasswordInput) (*cognitoidp.AdminResetUserPasswordOutput, error)
 	adminUserGlobalSignOutFn func(ctx context.Context, in *cognitoidp.AdminUserGlobalSignOutInput) (*cognitoidp.AdminUserGlobalSignOutOutput, error)
+	adminUpdateAttributesFn  func(ctx context.Context, in *cognitoidp.AdminUpdateUserAttributesInput) (*cognitoidp.AdminUpdateUserAttributesOutput, error)
 
 	// Call-tracking for assertions.
 	deletedUsers    []string
@@ -33,6 +34,7 @@ type fakeCognitoAdminAPI struct {
 	signedOutUsers  []string
 	createUserCalls []*cognitoidp.AdminCreateUserInput
 	resetPwdUsers   []string
+	updateAttrCalls []*cognitoidp.AdminUpdateUserAttributesInput
 }
 
 func (f *fakeCognitoAdminAPI) ListUsers(ctx context.Context, in *cognitoidp.ListUsersInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.ListUsersOutput, error) {
@@ -111,12 +113,33 @@ func (f *fakeCognitoAdminAPI) AdminUserGlobalSignOut(ctx context.Context, in *co
 	return &cognitoidp.AdminUserGlobalSignOutOutput{}, nil
 }
 
+func (f *fakeCognitoAdminAPI) AdminUpdateUserAttributes(ctx context.Context, in *cognitoidp.AdminUpdateUserAttributesInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.AdminUpdateUserAttributesOutput, error) {
+	f.updateAttrCalls = append(f.updateAttrCalls, in)
+	if f.adminUpdateAttributesFn != nil {
+		return f.adminUpdateAttributesFn(ctx, in)
+	}
+	return &cognitoidp.AdminUpdateUserAttributesOutput{}, nil
+}
+
 // fakeUserAdminRepo is an in-memory implementation of userAdminRepo.
 type fakeUserAdminRepo struct {
 	lastLogins  map[string]time.Time
 	batchErr    error
 	detachErr   error
 	detachedIDs []string
+	nameErr     error
+	nameUpdates map[string]string
+}
+
+func (f *fakeUserAdminRepo) UpdateUserProfileName(_ context.Context, userID, name string) error {
+	if f.nameErr != nil {
+		return f.nameErr
+	}
+	if f.nameUpdates == nil {
+		f.nameUpdates = map[string]string{}
+	}
+	f.nameUpdates[userID] = name
+	return nil
 }
 
 func (f *fakeUserAdminRepo) BatchGetUserLastLogins(_ context.Context, _ []string) (map[string]time.Time, error) {

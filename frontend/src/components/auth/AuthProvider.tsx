@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AuthUser, getCurrentUser, signIn, signOut, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
+import { AuthUser, getCurrentUser, refreshSession, signIn, signOut, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
 import { EmailVerificationPanel } from './EmailVerificationPanel';
 import { proactiveSearchStore, resetProactiveClaims, setProactiveSearchUser } from '@/lib/proactiveSearch';
 import { inviteStatusMessage } from '@/lib/inviteStatus';
@@ -20,6 +20,8 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<SignInResult>;
   completeNewPassword: (challenge: NewPasswordRequiredResult, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Reflects a display name the server just saved for the signed-in user. */
+  applySavedName: (userId: string, name: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -199,6 +201,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
+  // The ID token's `name` claim only changes on the next token refresh, so
+  // show the saved name immediately and then try to pick up a fresh token for
+  // later API calls. A failed refresh keeps the local value until re-login.
+  const applySavedName = useCallback(async (userId: string, name: string) => {
+    const patch = (current: AuthUser | null) =>
+      current && current.userId === userId ? { ...current, name } : current;
+    setUser(patch);
+    try {
+      if (!await refreshSession()) return;
+      const next = await getCurrentUser();
+      if (next && next.userId === userId && activeUserId.current === userId) {
+        setUser(current => current && current.userId === userId ? { ...next, name } : current);
+      }
+    } catch {
+      // Keep the locally patched name; the server already holds the change.
+    }
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -210,6 +230,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         completeNewPassword: completeNewPasswordAction,
         logout,
+        applySavedName,
       }}
     >
       {user && bootstrapError && (

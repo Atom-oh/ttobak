@@ -22,6 +22,8 @@ alone. CSS tokens share names across themes and are exposed through `@theme inli
 Background-light/background-dark remain separate tokens. Material Symbols
 Outlined supply icons. Legacy glass/glow/neon class names remain compatibility
 hooks with flat/no-glow styling; their presence is not a request to restore neon.
+`glass-panel` is also registered as a Tailwind utility so its `dark:` variant
+uses the theme surface/border tokens instead of leaving white cards under light text.
 Typography and component dimensions come from CSS/layout components, not DESIGN.md.
 Body and headline utilities share an installed system font stack in both themes;
 their font choice must not depend on download timing or the browser font cache.
@@ -43,6 +45,30 @@ intentional hydration handling. `layout.tsx` applies the pre-hydration preferenc
 Mermaid/Shiki consume JS theme values through the hook; keep Mermaid's explicit
 light/dark palettes aligned when changing CSS tokens. Purely styled components
 use CSS variants.
+
+## Workspace sizing
+
+`AppLayout` uses the dynamic viewport height and a shrinking main column beside
+the 256px desktop sidebar. Its mobile main area reserves the same height and
+safe-area inset as `MobileNav`. The bounded content wrapper owns page scrolling;
+the header and main shell remain outside that scroll region. List continuation
+controls, chat inputs, and independently scrolling detail panes must stay above
+the navigation.
+
+`globals.css` owns `--workspace-gutter` (16px below the `64rem` desktop breakpoint,
+24px at and above it, matching Tailwind's `lg`) and
+`.workspace-page` / `.workspace-inline-gutter`. Workspace list, dashboard and
+detail wrappers fill the available width instead of using a global reading cap.
+Use `.workspace-card-grid` for adaptive project cards and
+`.workspace-settings-grid` for independent settings sections. Administration
+tables span all settings columns. Article prose and the document editor keep a
+76ch reading width inside the full-width page; focused login/profile forms and
+upload/empty-state controls keep their purpose-specific constraints.
+
+The sidebar keeps its actions separate from its scrollable navigation. Long
+breadcrumbs truncate inside the header without displacing search and actions.
+See the [2026-11-11 design review](reviews/2026-11-11-workspace-design-review.md)
+for viewport evidence and remaining design recommendations.
 
 ## Screens and components
 
@@ -317,6 +343,13 @@ addition without silently resending. Show pending members with paginated refresh
 and cancellation. Admins can follow the existing settings resend path. Email
 request acceptance is not inbox delivery.
 
+Display names are edited inline with `UserNameEditor` (no native text dialog,
+which the Mac WebView lacks): on the Profile page for the signed-in user, and in
+the admin user table's name column. `lib/userName.ts` mirrors the server's 1-64
+character and control-character rules for early feedback; errors show inline.
+After a self rename, AuthProvider's `applySavedName` updates the shown name and
+refreshes the session so the ID token carries it.
+
 User management distinguishes invitation pending, reset required, unverified,
 unknown-schema and disabled states. Unknown readiness provides a refresh control. Do not offer an admin reset for RESET_REQUIRED, disabled or
 unverified users. Existing account/member and sharing notices explicitly say that
@@ -392,11 +425,28 @@ appears on Events tab rows, which show their existing project links with unlink
 (from one bounded links scan, not per-row calls), and on News & Updates document
 cards (choosing a direct account first). Server truncation flags show a partial-links notice. Evidence,
 needs and stall details render as plain text. Every link or news-source mutation
-reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`. A collapsed
-**relationship graph** renders the graph route client-side with Mermaid under
-`securityLevel: 'strict'`; labels are stripped of directives and backticks.
-Person edges carry the Korean role label (dotted when auto), and a note gives
-the direct member count because only connected members are drawn.
+reloads signals and flow. Korean copy lives in `src/lib/accountOverview.ts`.
+
+The **relationship graph** section follows the flow and is always open
+(`components/account/AccountFocusGraph.tsx`, pure geometry and helpers in
+`src/lib/accountFocusGraph.ts`). It reads `GET /people/focus` for one focus: a
+contact, a member or a project. The picker reads up to five people pages. The default is the contact with the most
+meetings, then the busiest member, then the first opportunity project. A search
+picker and up to four quick chips change it, and the choice is written to the
+`focus` query parameter; a URL focus that is not found in this account falls back
+to the default. When the section itself is at least 48rem wide (a container
+query, so the sidebar and account column are accounted for), three columns sit
+between two SVG connector bands: the focus card, its meetings (12 per page, "show earlier meetings" for
+more), and the technologies with count bars. Connectors use fixed row heights,
+so no DOM measuring is needed. Technology connectors are dashed in the
+technology's group color, because they come from model-extracted tags; a legend
+says so. Selecting a technology dims other meetings and connectors. Selecting a
+meeting opens a side panel with its technologies, customer and team attendees
+with roles, and a link to the meeting; choosing a person there re-centers the
+graph on them. Uncatalogued tags are collapsed behind a toggle. On a narrower section the
+bands are hidden, technologies become filter chips and each meeting row lists
+its technologies. A 403 says the graph is for direct members, and a 404 asks for
+another focus.
 
 A **people** panel follows the flow (ADR-021 people edges, `components/account/AccountPeople.tsx`,
 copy in `src/lib/accountPeople.ts`). It lists resolved members and contacts with
