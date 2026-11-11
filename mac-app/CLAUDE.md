@@ -53,7 +53,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 | update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
-| caption_settings_get | returns {settings {profile, region, extraLanguage, windows}, profiles (names only), fonts} (ADR-069) |
+| caption_settings_get | returns {settings {profile, region, extraLanguage, windows}, profiles (names only), fonts} (ADR-018) |
 | caption_settings_set | profile?, region, extraLanguage ja/zh/null; profile must be in the local AWS profile list; choosing or changing the profile or region first shows a native confirmation sheet from Rust (cancel: `confirmation-declined`, settings unchanged; for 30 s after a cancel such a change returns `confirmation-cooldown` with no sheet; a call while one runs: `invalid-input`); clears cached AWS clients |
 | caption_translate | text, sourceLang, targetLang, isFinal, context[]; returns translatedText, engine llm/translate; SigV4 credentials only from the selected profile, never the default credentials chain (other SDK settings still load via `aws_config::defaults`); Bedrock is pinned to SigV4, so `AWS_BEARER_TOKEN_BEDROCK` is ignored (`bedrock_config`); upstream throttling returns `rate-limited`; only while that language's overlay window is open; 600 requests and 600,000 input bytes (text plus context) per sliding minute; text at most 9,000 bytes, context at most five items |
 | caption_overlay_open | lang ko/en/ja/zh (ja/zh only as the extra language); opens or reuses the window, returns its saved layout |
@@ -85,7 +85,7 @@ native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser
 recording}) also go to the main window only; native-meeting-answered (same shape)
 closes the banner after the floating prompt window (`meeting_prompt.rs`, local
 `meeting-prompt.html`, `meeting_prompt_choose` only) answered it.
-Caption overlay (ADR-069): `caption-update` ({lang, kind, id, order, text, isFinal}) and
+Caption overlay (ADR-018): `caption-update` ({lang, kind, id, order, text, isFinal}) and
 `caption-style` (style fields plus lang) are sent with `emit_to` to the matching
 `caption-<lang>` window. A JS listener with the default target receives every emit, so the
 page listens with target `{kind: 'WebviewWindow', label: 'caption-<lang>'}` and also drops
@@ -97,7 +97,7 @@ passes clicks through and shows no hover chrome until text returns. Hover chrome
 (outline, move handle, resize grip) is invisible without a pointer; the grip resizes
 via page `setSize` because tao has no macOS `startResizeDragging`. Credentials stay in Rust;
 only profile names cross IPC. The event ACL has no per-event scope, so the overlay could
-listen to broadcast events such as native-pcm-chunk (accepted, ADR-069). Overlay windows
+listen to broadcast events such as native-pcm-chunk (accepted, ADR-018). Overlay windows
 use level 1000, all Spaces and full-screen-auxiliary behavior, are destroyed (keeping
 their saved `open` flags) when the main window is destroyed, and need
 `macOSPrivateApi` for transparency. `interpreter.rs` mirrors

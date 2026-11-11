@@ -204,7 +204,7 @@ Single-target speech already in the target language uses one original column.
 In the bilingual ko-en mode, a Japanese or Chinese source renders as the original plus a
 Korean translation (`TranslationView`). `translationSourceLanguage` labels `zh` and `ja`.
 
-Mac app caption windows (ADR-069) are separate from this card. In the Mac app only,
+Mac app caption windows (ADR-018) are separate from this card. In the Mac app only,
 the record page shows `CaptionOverlayPanel` (state from `useCaptionOverlay`, wired in
 `record/page.tsx`): an AWS profile select (from the local profile names), a region
 select (`ap-northeast-2`, the default, and `us-east-1`; a saved region outside that list
