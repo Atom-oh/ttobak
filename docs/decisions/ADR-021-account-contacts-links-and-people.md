@@ -41,6 +41,37 @@ DynamoDB data needs KMS encryption and a retention design.
 - Retention: a contact remains until a direct member deletes it. There is no
   TTL. Deleted rows can persist in point-in-time recovery for the table's 35-day window. Their contact fields remain sealed ciphertext; keys, `contactId` and `revision` stay plaintext under the table's default AWS-owned key.
 
+- SFDC contacts. The Mac intake syncs SFDC contacts of the SFDC accounts mapped
+  to a TTOBAK Account through `POST /api/accounts/{accountId}/contacts/sfdc-sync`
+  (`backend/internal/service/account_contacts_sfdc.go`):
+  - Only name, title and company (the TTOBAK Account name) are sent and stored
+    as contact fields; email and phone never leave the Mac. Inside the sealed
+    contact, `source: "sfdc"`, `sfdcContactId`, `sfdcAccountId` and
+    `sfdcLeftAt` (the departure mark) follow the same envelope encryption.
+  - Fill-empty-only: a sync fills an empty title or company and sets a link
+    only where none exists. It never changes the name or a non-empty field,
+    and no path changes or clears an existing link.
+  - The four SFDC fields are server-owned. Generic creates (web, bulk import,
+    connector) drop them; generic updates carry the stored values over under
+    the same revision condition.
+  - Plain rows in the Account partition hold only opaque SFDC IDs:
+    `SFDCCONTACT#{sfdcContactId}` (index: `contactId`, `sfdcAccountId`) and
+    `SFDCSUPPRESS#{sfdcContactId}`. A create or link reserves the index row in
+    the contact transaction, so one contact exists per (Account, SFDC contact);
+    a second creator gets `alreadyLinked`.
+  - Deleting a linked contact removes its index row and writes the suppression
+    row in the same transaction; the sync never recreates or relinks a
+    suppressed ID. Suppression rows have no TTL and stay until the Account is
+    deleted.
+  - An Account merge carries links and suppression rows to the surviving
+    Account (`backend/internal/service/account_merge_contacts.go`).
+  - Departure marking runs only for a complete snapshot of every listed SFDC
+    account: links of those accounts absent from it get `sfdcLeftAt`, returning
+    ones lose it. An incomplete read marks and unmarks nobody.
+  - Bounds per request: 20 SFDC accounts, 200 items, 20,000 present IDs,
+    512 KiB body; departure handling reads at most 10,000 contacts and writes
+    at most 200 marks, and later runs continue.
+
 - Account events (`EVENT#{startAt}#{eventId}` with an `EVENTREF#{eventId}`
   pointer) seal title, location, attendees, notes and end time with purpose
   `ttobak-account-event`. The start time stays plaintext in the sort key so
@@ -55,7 +86,12 @@ DynamoDB data needs KMS encryption and a retention design.
 - Server-side search over contact fields is not possible; duplicate detection
   stays in the client after an authorized list.
 - Account deletion has no cleanup routine today; if one is added it must delete
-  `CONTACT#` rows.
+  `CONTACT#`, `SFDCCONTACT#` and `SFDCSUPPRESS#` rows.
+- Known limit: a contact delete reads every `SFDCCONTACT#` row in the Account
+  (a filtered query), so its cost grows with the Account's links, and a
+  malformed index row blocks contact deletes in that Account until repaired.
+- A sync departure pass lists and opens the Account's contacts (one KMS
+  `Decrypt` each) when any in-scope link exists.
 
 ## Account relationship links, signals and KB references
 
@@ -201,7 +237,8 @@ teammate's calendar-only follow-up can still raise the flag.
 #### Data-residency boundary for projects 2 to 4
 
 The graph is shared with the team, so edges live in TTOBAK cloud. From SFDC only
-the opportunity ID, name and stage may be stored there. Amounts, contact details
+the opportunity ID, name and stage may be stored there, apart from the sealed
+SFDC contacts in the contact encryption section. Amounts, contact details
 and mail or Slack bodies are fetched on demand on the user's Mac and never
 persisted in the cloud. This project ingests no SFDC data. Later suggested links
 must stay distinct from manual links, which remain authoritative.

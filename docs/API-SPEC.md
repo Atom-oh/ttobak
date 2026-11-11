@@ -982,7 +982,10 @@ Account and membership deletion/revocation during a transaction prevents the wri
 
 The contact response contains exactly `contactId`, `revision`, `name`, `company`, `title`,
 `department`, `email`, `address`, `workPhone`, `fax`, `phone`,
-`cardRegisteredAt`, `cardBook`, `group`, and `notes`. POST creates a new UUID
+`cardRegisteredAt`, `cardBook`, `group`, and `notes`, plus `source`,
+`sfdcContactId`, `sfdcAccountId` and `sfdcLeftAt` when set. Those four are
+server-owned: POST and the connector create drop them, and PUT keeps the stored
+values whatever the client sends. POST creates a new UUID
 and returns 201 with the contact. PUT requires the observed `revision`, replaces
 the editable fields and returns 200 with a new revision; DELETE requires the
 observed `revision` query parameter and returns 204. A stale revision returns
@@ -1003,6 +1006,51 @@ available and otherwise the member's email. Team pages accept the same limit and
 cursor parameters and recheck the requester's access. Invalid input returns
 400, denied access 403, a missing contact on PUT/DELETE 404, a stale revision 409, and unexpected
 errors a generic 500. Responses are not cached and contact content is not logged.
+
+`POST /api/accounts/{accountId}/contacts/sfdc-sync` applies one SFDC contact
+batch from the Mac intake (ADR-021, SFDC contacts). It requires direct
+membership (403 otherwise), returns `Cache-Control: no-store`, and takes one
+strict JSON object of at most 512 KiB (unknown fields, trailing data or a
+larger body are 400):
+
+```json
+{"snapshotComplete": true,
+ "sfdcAccountIds": ["001..."],
+ "present": ["003..."],
+ "items": [{"sfdcContactId": "003...", "sfdcAccountId": "001...", "name": "...",
+            "title": "...", "action": "create|link", "contactId": "...", "revision": "..."}]}
+```
+
+- SFDC IDs match `^[A-Za-z0-9]{15,18}$`. `sfdcAccountIds` has 1 to 20 distinct
+  IDs; `items` at most 200 with distinct `sfdcContactId`, each `sfdcAccountId`
+  listed in `sfdcAccountIds`.
+- `present` (at most 20,000) is required when `snapshotComplete` is true and
+  forbidden otherwise; with a complete snapshot every item must be in it.
+- `link` requires `contactId` and the observed `revision`; `create` takes
+  neither. Any of these failures rejects the whole request with 400.
+- `create` stores `name`, `title`, `company` (the Account name), `source: "sfdc"`
+  and the IDs. `link` fills only an empty `title` or `company` and sets the link
+  when none exists; it never changes `name` or another non-empty field.
+
+The response is `{results:[{sfdcContactId, result, contactId?}], marked, unmarked}`
+with results in item order:
+
+| `result` | Meaning |
+|---|---|
+| `created` | new contact; `contactId` returned |
+| `filled` / `unchanged` | link written / nothing to write |
+| `alreadyLinked` | another contact holds this SFDC ID |
+| `suppressed` | a member deleted the linked contact; never recreated |
+| `conflict` | stale or missing contact, another link on it, or a transient transaction conflict; retry next run |
+| `invalid` | `name` blank or `name`/`title` over 256 bytes |
+
+Only a complete snapshot updates departures: links of the listed SFDC
+accounts absent from `present` get `sfdcLeftAt` (counted in `marked`), and
+present ones lose it (`unmarked`). Concurrently changed contacts are skipped.
+At most 200 marks change per request and at most 10,000 contacts are read; later
+runs continue. One people resolve request is queued when anything changed.
+Access, merge (409 `ACCOUNT_MERGING`), encryption (503) and unexpected errors
+fail the request.
 
 Contact fields are KMS envelope-encrypted per row before storage and bound to
 the account and contact (ADR-021, contact encryption); without a configured key, contact routes
@@ -2101,6 +2149,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.Create` |
 | PUT | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Delete` |
+| POST | `/api/accounts/{accountId}/contacts/sfdc-sync` | `accountContactSyncHandler.Sync` |
 | GET | `/api/accounts/{accountId}/speaker-team` | `accountContactsHandler.SpeakerTeam` |
 | GET | `/api/accounts/{accountId}/events` | `accountEventsHandler.List` |
 | POST | `/api/accounts/{accountId}/events` | `accountEventsHandler.Create` |

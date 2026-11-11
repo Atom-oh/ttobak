@@ -15,7 +15,8 @@ The owner-only SA performance dashboard aggregates the user's own activity from
 SFDC, Outlook mail and calendar, Slack, SpecReq and TFC Hub. Local MCP intake
 (ADR-003) limits what SFDC data may reach TTOBAK and stores only calendar
 titles and times. The dashboard needs more fields, and they must stay distinct
-from the account-shared limit, which stays opportunity ID, name and stage.
+from the account-shared limit: opportunity ID, name and stage, plus the SFDC
+contacts below.
 
 ## Decision
 
@@ -41,6 +42,14 @@ from the account-shared limit, which stays opportunity ID, name and stage.
 
   Bedrock may process the stored fields. No account-membership, admin or
   Billing read path reaches these rows, and there is no share action.
+- **Account-shared SFDC contacts.** One account-shared exception to the
+  owner-private table. Fields are sealed with the Account's contacts (ADR-021,
+  contact encryption) and visible to its direct members.
+
+  | Source | Stored (account-shared) | Not stored |
+  |---|---|---|
+  | SFDC contacts | name, title, company (TTOBAK Account name), SFDC contact and account IDs, source, departure mark | email, phone |
+
 - **Performance report.** One `PERFREPORT#{periodKey}` row per period holds a
   plain-text report that the owner's own Claude CLI composes on the Mac from
   SFDC, SpecReq, TFC Hub, calendar titles and counts, and Slack. It is the
@@ -98,8 +107,8 @@ from the account-shared limit, which stays opportunity ID, name and stage.
 
 ## Consequences
 
-- The account-shared limit is unchanged; the wider fields are visible only to
-  the owner.
+- The account-shared limit widens only for the SFDC contacts row; the wider
+  performance fields are visible only to the owner.
 - Anyone with direct DynamoDB or table-key access can read `PERF*` fields
   because no envelope sealing applies. That includes exact opportunity amounts
   and colleague names in a stored report.
