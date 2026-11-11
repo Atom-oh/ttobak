@@ -3,36 +3,41 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { CrawledDocument } from '@/types/meeting';
-import { accountHref, newsOriginLabel, type NewsLayout, type NewsOriginGroup } from '@/lib/newsOrigin';
+import { accountHref, newsOriginLabel, type NewsLayout, type NewsOriginFields, type NewsOriginGroup } from '@/lib/newsOrigin';
 
 const badgeBase = 'inline-block max-w-[12rem] truncate rounded-full px-2 py-0.5 text-xs font-medium align-middle';
 const commonBadge = `${badgeBase} bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-text-secondary`;
 const accountBadge = `${badgeBase} bg-primary/10 text-primary dark:bg-primary/20`;
 const detail = 'max-w-[14rem] truncate text-xs text-slate-500 dark:text-text-muted';
 
+// Text kind badge: Common, or the customer name linked to the account.
+// Renders nothing without a kind (legacy rows).
+export function NewsKindBadge({ origin }: { origin: NewsOriginFields }) {
+  const label = newsOriginLabel(origin);
+  if (!label.kindLabel) return null;
+  return label.kind === 'account' && label.accountId ? (
+    <Link
+      href={accountHref(label.accountId)}
+      onClick={(e) => e.stopPropagation()}
+      title={`고객사: ${label.kindLabel}`}
+      className={`${accountBadge} hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50`}
+    >
+      {label.kindLabel}
+    </Link>
+  ) : (
+    <span title={label.kind === 'common' ? '공통 소스' : `고객사: ${label.kindLabel}`}
+      className={label.kind === 'common' ? commonBadge : accountBadge}>
+      {label.kindLabel}
+    </span>
+  );
+}
+
 // Origin extras after "publisher | date". Renders nothing when the
 // document carries no origin fields, so legacy rows look unchanged.
 export function NewsOriginDetails({ doc }: { doc: CrawledDocument }) {
   const origin = newsOriginLabel(doc);
   const parts: ReactNode[] = [];
-  if (origin.kindLabel) {
-    parts.push(origin.kind === 'account' && origin.accountId ? (
-      <Link
-        key="kind"
-        href={accountHref(origin.accountId)}
-        onClick={(e) => e.stopPropagation()}
-        title={`고객사: ${origin.kindLabel}`}
-        className={`${accountBadge} hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50`}
-      >
-        {origin.kindLabel}
-      </Link>
-    ) : (
-      <span key="kind" title={origin.kind === 'common' ? '공통 소스' : `고객사: ${origin.kindLabel}`}
-        className={origin.kind === 'common' ? commonBadge : accountBadge}>
-        {origin.kindLabel}
-      </span>
-    ));
-  }
+  if (origin.kindLabel) parts.push(<NewsKindBadge key="kind" origin={doc} />);
   if (origin.sourceName) {
     const label = `소스: ${origin.sourceName}`;
     parts.push(<span key="source" title={label} className={detail}>{label}</span>);

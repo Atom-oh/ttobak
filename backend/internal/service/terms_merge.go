@@ -17,13 +17,14 @@ import (
 // MergeExtractedTerms (the owner's personal scope) after the deterministic
 // filters, then MergeScoped into the meeting's Account when that layer is on.
 // Account writes carry the owner's membership ConditionCheck; Common is never
-// written from meetings, KB documents or research (it takes news terms only).
-// ProcessSource merges KB/research terms and ProcessNewsDaily news terms
-// through MergeScoped.
+// written from meetings, KB documents or research (it takes news and AWS
+// technical document terms only). ProcessSource merges KB/research terms,
+// ProcessNewsDaily news terms and ProcessTechDaily tech terms through
+// MergeScoped.
 const (
 	// MaxAutoTermsPerScope caps unedited automatic (active or suggested)
 	// terms; the lowest-scoring are evicted after a merge.
-	MaxAutoTermsPerScope = 300
+	MaxAutoTermsPerScope = 1000
 	// MaxObservationsPerTerm keeps the newest observation rows of a term.
 	MaxObservationsPerTerm = 10
 	// termMergeAttempts bounds re-reads after a version conflict.
@@ -87,9 +88,9 @@ type TermsScope struct {
 
 // TermsSourceRef is the evidence of a scoped merge: Kind/Ref name the source
 // (DictSourceMeeting with Ref = meeting ID, DictSourceKB with Ref = object
-// key, DictSourceResearch with Ref = research ID, DictSourceNews with Ref =
-// crawled document hash) and OwnerID the user whose content it is
-// (model.DictNewsActor for news). NotesSafe, Tainted, Accepted and SummaryGeneration are as on
+// key, DictSourceResearch with Ref = research ID, DictSourceNews and
+// DictSourceTech with Ref = the processed day) and OwnerID the user whose
+// content it is (model.DictNewsActor for news, model.DictTechActor for tech). NotesSafe, Tainted, Accepted and SummaryGeneration are as on
 // TermsMeetingRef.
 type TermsSourceRef struct {
 	Kind, Ref, OwnerID string
@@ -158,9 +159,9 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 
 // validateScope accepts the source owner's personal scope, or an Account scope
 // whose membership check names that owner, for a meeting, KB or research
-// source, and Common for a news source only: written by the news system
-// actor, without a membership check, with a public document hash as the ref
-// (R6: Common rows are visible to every user).
+// source, and Common for a news or tech source only: written by that job's
+// system actor, without a membership check, with the processed day as the
+// ref (R6: Common rows are visible to every user).
 func validateScope(scope TermsScope, ref TermsSourceRef) error {
 	switch ref.Kind {
 	case model.DictSourceMeeting, model.DictSourceKB, model.DictSourceResearch:
@@ -168,6 +169,12 @@ func validateScope(scope TermsScope, ref TermsSourceRef) error {
 		if scope.PK != model.PrefixDictCommon || scope.Member != nil || ref.OwnerID != model.DictNewsActor ||
 			!attachmentIdentifier.MatchString(ref.Ref) || ref.Tainted || len(ref.Accepted) != 0 {
 			return fmt.Errorf("%w: news terms merge writes only Common, as the news job, for one day", ErrInvalidInput)
+		}
+		return nil
+	case model.DictSourceTech:
+		if scope.PK != model.PrefixDictCommon || scope.Member != nil || ref.OwnerID != model.DictTechActor ||
+			!validDay(ref.Ref) || ref.Tainted || len(ref.Accepted) != 0 {
+			return fmt.Errorf("%w: tech terms merge writes only Common, as the tech job, for one day", ErrInvalidInput)
 		}
 		return nil
 	default:
@@ -191,9 +198,9 @@ func validateScope(scope TermsScope, ref TermsSourceRef) error {
 // MergeScoped is MergeExtractedTerms for any scope validateScope accepts. An
 // Account write the membership check refuses ends the merge with
 // repository.ErrNotAccountMember. The auto cap applies per partition. A news
-// merge is one call per day: it keeps no acceptedTerms (its per-day
+// or tech merge is one call per day: it keeps no acceptedTerms (its per-day
 // observation already makes a replay a no-op), and the cap never evicts a
-// term this call observed, so a term confirmed by the day's news is not
+// term this call observed, so a term confirmed by the day's documents is not
 // dropped by the same merge that adds it.
 func (m *TermsMerger) MergeScoped(ctx context.Context, scope TermsScope, candidates []ExtractedTerm, ref TermsSourceRef) (*TermsMergeResult, error) {
 	if err := validateScope(scope, ref); err != nil {
@@ -223,7 +230,7 @@ func (m *TermsMerger) MergeScoped(ctx context.Context, scope TermsScope, candida
 		termKeys[c.key] = true
 	}
 
-	news := ref.Kind == model.DictSourceNews
+	news := commonSourceJob(ref.Kind)
 	observed := map[string]bool{}
 	var cleanup []error
 	for _, c := range merged {
@@ -386,8 +393,8 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 		case term == nil:
 			row := newAutoTerm(pk, c, obsHeard, ref, source, now)
 			if pk == model.PrefixDictCommon {
-				// Only the news job writes Common automatically; its
-				// creations are audited like user edits.
+				// Only the news and tech jobs write Common automatically;
+				// their creations are audited like user edits.
 				var entry *model.DictTermLog
 				if entry, err = commonAudit(row.TermKey, ref.OwnerID, model.DictLogActionCreate, nil, row, now); err != nil {
 					return outcomeSkipped, err
@@ -488,13 +495,22 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 	return outcomeSkipped, nil
 }
 
-// systemActor is the updatedBy a merge records: the news job's actor for a
-// news source; user-sourced merges leave updatedBy as it is.
+// systemActor is the updatedBy a merge records: the news or tech job's actor
+// for its source; user-sourced merges leave updatedBy as it is.
 func systemActor(ref TermsSourceRef) string {
-	if ref.Kind == model.DictSourceNews {
+	switch ref.Kind {
+	case model.DictSourceNews:
 		return model.DictNewsActor
+	case model.DictSourceTech:
+		return model.DictTechActor
 	}
 	return ""
+}
+
+// commonSourceJob reports a daily system job's source kind (news, tech): one
+// merge per day into Common, without acceptedTerms.
+func commonSourceJob(kind string) bool {
+	return kind == model.DictSourceNews || kind == model.DictSourceTech
 }
 
 func newAutoTerm(pk string, c mergeCandidate, heard []string, ref TermsSourceRef, source model.DictSourceRef, now string) *model.DictTerm {
@@ -625,7 +641,7 @@ func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk, actor string, prot
 	return nil
 }
 
-// evict removes one automatic term; a Common eviction (by the news job) is
+// evict removes one automatic term; a Common eviction (by the news or tech job) is
 // audited in the same transaction.
 func (m *TermsMerger) evict(ctx context.Context, pk, actor string, row model.DictTerm, cleanup *[]error) (repository.DictWriteResult, error) {
 	if pk != model.PrefixDictCommon {

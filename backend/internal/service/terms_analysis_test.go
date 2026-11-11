@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -788,5 +789,25 @@ func TestProcessRecordsAccountKeysThePersonalMergeSkipped(t *testing.T) {
 	}
 	if len(acct.obs) != 0 || len(acct.terms) != 0 {
 		t.Fatalf("no Account observations or orphan auto terms may remain: obs=%d terms=%d", len(acct.obs), len(acct.terms))
+	}
+}
+
+func TestTermsSourceIdentityCarriesExtractorVersion(t *testing.T) {
+	meeting := termsTestMeeting()
+	transcript, variant := selectMeetingTranscript(meeting)
+	revision := meeting.TranscriptRevisionA
+	if variant == "B" {
+		revision = meeting.TranscriptRevisionB
+	}
+	tainted := meeting.SourceEditedByNonOwnerAt != ""
+	legacy, _ := json.Marshal([]string{
+		actionSourceHash(meeting.Content), variant, revision, actionSourceHash(transcript),
+		meeting.AttachmentSummarySources, strconv.FormatBool(tainted),
+	})
+	if newTermsSource(meeting).hash == actionSourceHash(string(legacy)) {
+		t.Fatal("a meeting analysed before the extractor version must re-qualify")
+	}
+	if newTermsSource(meeting).hash != newTermsSource(termsTestMeeting()).hash {
+		t.Fatal("the identity must stay deterministic for an unchanged meeting")
 	}
 }

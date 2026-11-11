@@ -400,3 +400,63 @@ func TestGetAccountNewsSourceCountReadsCounterRow(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateAccountNewsSourceIsOneFencedTransaction(t *testing.T) {
+	name, queries := "Hanbit", []string{"q1", "q2"}
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		items := body["TransactItems"].([]interface{})
+		if target != "DynamoDB_20120810.TransactWriteItems" || len(items) != 4 {
+			t.Fatalf("update tx: %s %d", target, len(items))
+		}
+		ref := items[0].(map[string]interface{})["ConditionCheck"].(map[string]interface{})
+		if ref["Key"].(map[string]interface{})["SK"].(map[string]interface{})["S"] != "NEWSSRC#acct_acc_0000abcd" {
+			t.Fatalf("ref check: %#v", ref)
+		}
+		for i, sk := range []string{"META", "MEMBER#u1"} {
+			cc := items[2+i].(map[string]interface{})["ConditionCheck"].(map[string]interface{})
+			if cc["Key"].(map[string]interface{})["SK"].(map[string]interface{})["S"] != sk {
+				t.Fatalf("access check %d: %#v", i, cc)
+			}
+		}
+		up := items[1].(map[string]interface{})["Update"].(map[string]interface{})
+		names := map[string]bool{}
+		for _, v := range up["ExpressionAttributeNames"].(map[string]interface{}) {
+			names[v.(string)] = true
+		}
+		cond, expr := up["ConditionExpression"].(string), up["UpdateExpression"].(string)
+		if up["Key"].(map[string]interface{})["PK"].(map[string]interface{})["S"] != "CRAWLER#acct_acc_0000abcd" ||
+			!names["accountId"] || !names["status"] || !names["globalNewsSource"] || !names["sourceName"] || !names["newsQueries"] ||
+			names["aliases"] || names["sourceId"] || !strings.Contains(cond, "<>") || !strings.Contains(cond, "attribute_not_exists") ||
+			!strings.HasPrefix(expr, "SET ") {
+			t.Fatalf("config update: %#v", up)
+		}
+		return `{}`
+	})
+	if err := repo.UpdateAccountNewsSource(context.Background(), "acc", "u1", "acct_acc_0000abcd", AccountNewsSourceFields{SourceName: &name, NewsQueries: &queries}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateAccountNewsSource(context.Background(), "acc", "u1", "acct_acc_0000abcd", AccountNewsSourceFields{}); err == nil {
+		t.Fatal("an empty update must be rejected before any write")
+	}
+	for _, tc := range []struct {
+		reasons string
+		want    error
+	}{
+		{`[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]`, ErrConditionFailed},
+		{`[{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]`, ErrConditionFailed},
+		{`[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]`, ErrAccountNewsAccess},
+		{`[{"Code":"None"},{"Code":"TransactionConflict"},{"Code":"None"},{"Code":"None"}]`, nil},
+	} {
+		repo := summarySDKRepo(func(*http.Request) (*http.Response, error) {
+			return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":`+tc.reasons+`}`, nil), nil
+		})
+		err := repo.UpdateAccountNewsSource(context.Background(), "acc", "u1", "acct_acc_0000abcd", AccountNewsSourceFields{SourceName: &name})
+		if tc.want == nil {
+			if err == nil || errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrAccountNewsAccess) {
+				t.Fatalf("conflict must stay internal: %v", err)
+			}
+		} else if !errors.Is(err, tc.want) {
+			t.Fatalf("%s: %v", tc.reasons, err)
+		}
+	}
+}

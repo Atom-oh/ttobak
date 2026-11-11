@@ -144,3 +144,53 @@ func TestSourceFieldUnchangedCondition_ScalarField(t *testing.T) {
 		t.Errorf("expected a plain equality condition for a scalar field, got %q", condStr)
 	}
 }
+
+func TestListUserSubscriptionsBoundedFollowsPages(t *testing.T) {
+	// Each Query page returns two rows and a LastEvaluatedKey until 7 rows.
+	page := func(from, to int, more bool) string {
+		rows := []string{}
+		for i := from; i < to; i++ {
+			rows = append(rows, `{"PK":{"S":"USER#u"},"SK":{"S":"CRAWL_SUB#s`+string(rune('a'+i))+`"},"sourceId":{"S":"s`+string(rune('a'+i))+`"}}`)
+		}
+		body := `{"Items":[` + strings.Join(rows, ",") + `]`
+		if more {
+			body += `,"LastEvaluatedKey":{"PK":{"S":"USER#u"},"SK":{"S":"CRAWL_SUB#s` + string(rune('a'+to-1)) + `"}}`
+		}
+		return body + `}`
+	}
+	for _, tc := range []struct {
+		limit, want int
+		more        bool
+	}{{7, 7, false}, {8, 7, false}, {6, 6, true}, {3, 3, true}} {
+		calls := 0
+		client := dynamodb.New(dynamodb.Options{
+			Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+			HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+				var input struct {
+					Limit             int
+					ExclusiveStartKey map[string]map[string]string
+				}
+				if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+					t.Fatal(err)
+				}
+				from := 0
+				if input.ExclusiveStartKey != nil {
+					from = int(input.ExclusiveStartKey["SK"]["S"][len("CRAWL_SUB#s")]-'a') + 1
+				}
+				to := min(from+2, 7, from+input.Limit)
+				calls++
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+					Body: io.NopCloser(strings.NewReader(page(from, to, to < 7)))}, nil
+			}),
+		})
+		subs, more, err := NewCrawlerRepository(client, "t").ListUserSubscriptionsBounded(context.Background(), "u", tc.limit)
+		if err != nil || len(subs) != tc.want || more != tc.more || calls < 2 {
+			t.Fatalf("limit %d: %d rows more=%v calls=%d err=%v", tc.limit, len(subs), more, calls, err)
+		}
+		for i, sub := range subs {
+			if sub.SourceID != "s"+string(rune('a'+i)) {
+				t.Fatalf("limit %d: row %d = %s", tc.limit, i, sub.SourceID)
+			}
+		}
+	}
+}

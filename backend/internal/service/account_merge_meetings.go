@@ -128,6 +128,11 @@ func (s *AccountMergeService) moveMeeting(ctx context.Context, job *model.Accoun
 	if err := s.finishMeetingMove(ctx, job, run, meeting.MeetingID); err != nil {
 		return meetingSkipped, err
 	}
+	// The source's dictionary layer stays on the retired source (an unmoved
+	// category, ADR-022) and is not copied to the target; the moved meeting's
+	// own automatic-term evidence leaves it like on any relink (ADR-008 FU4).
+	// Best effort: a failure is logged and never fails the merge step.
+	_ = sweepUnlinkedAccountTerms(ctx, s.mover, "account-merge", meeting.UserID, meeting.MeetingID)
 	return outcome, s.mover.DeleteMeetingRefForMerge(ctx, job, ref)
 }
 

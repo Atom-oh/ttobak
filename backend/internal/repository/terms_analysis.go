@@ -62,6 +62,12 @@ func (r *DynamoDBRepository) meetingCheck(ownerID, meetingID string, requireDone
 	if requireDone {
 		condition = condition.And(expression.Name("status").Equal(expression.Value(model.StatusDone)))
 	}
+	return r.meetingConditionCheck(ownerID, meetingID, condition)
+}
+
+// meetingConditionCheck is a ConditionCheck of condition on the owner's
+// meeting item.
+func (r *DynamoDBRepository) meetingConditionCheck(ownerID, meetingID string, condition expression.ConditionBuilder) (types.TransactWriteItem, error) {
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return types.TransactWriteItem{}, err
@@ -83,6 +89,11 @@ func (r *DynamoDBRepository) checkedTermsWrite(ctx context.Context, ownerID, mee
 	if err != nil {
 		return err
 	}
+	return r.termsWriteWithCheck(ctx, meetingID, check, update, condition)
+}
+
+// termsWriteWithCheck runs check and the run state update in one transaction.
+func (r *DynamoDBRepository) termsWriteWithCheck(ctx context.Context, meetingID string, check types.TransactWriteItem, update expression.UpdateBuilder, condition expression.ConditionBuilder) error {
 	write, err := analysisUpdate(r.tableName, termsAnalysisKey(meetingID), update, condition)
 	if err != nil {
 		return err
@@ -190,10 +201,12 @@ func (r *DynamoDBRepository) CompleteTermsAnalysis(ctx context.Context, ownerID,
 
 // RecordTermsAccount adds accountID to the run state's accountIds and
 // termKeys (the keys the Account merge will observe) to accountAcceptedTerms in
-// one update before the Account layer writes, so SweepMeetingTerms cleans that
-// partition for every key, including ones the personal merge skipped. It
-// needs the observed run and the meeting item (a deleted meeting's sweep may
-// already have run, so nothing may be written for it).
+// one update before the Account layer writes, so SweepMeetingTerms and
+// SweepMeetingAccountTerms clean that partition for every key, including ones
+// the personal merge skipped. It needs the observed run and the meeting item
+// still linked to accountID (a deleted meeting's sweep may already have run,
+// and a relinked meeting must not regain an Account it left), and it bumps
+// accountRecords so a concurrent relink sweep keeps the entry.
 func (r *DynamoDBRepository) RecordTermsAccount(ctx context.Context, ownerID, meetingID, runID, accountID string, termKeys []string) error {
 	if runID == "" || accountID == "" {
 		return fmt.Errorf("terms account record requires a run and an account")
@@ -212,11 +225,20 @@ func (r *DynamoDBRepository) RecordTermsAccount(ctx context.Context, ownerID, me
 			keys = append(keys, key)
 		}
 	}
-	update := expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))
+	if ownerID == "" || meetingID == "" {
+		return fmt.Errorf("terms analysis write requires owner and meeting")
+	}
+	check, err := r.meetingConditionCheck(ownerID, meetingID, expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("accountId").Equal(expression.Value(accountID))))
+	if err != nil {
+		return err
+	}
+	update := expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}})).
+		Add(expression.Name("accountRecords"), expression.Value(1))
 	if len(keys) > 0 {
 		update = update.Add(expression.Name("accountAcceptedTerms"), expression.Value(&types.AttributeValueMemberSS{Value: keys}))
 	}
-	return r.checkedTermsWrite(ctx, ownerID, meetingID, false, update, expression.Name("runId").Equal(expression.Value(runID)))
+	return r.termsWriteWithCheck(ctx, meetingID, check, update, expression.Name("runId").Equal(expression.Value(runID)))
 }
 
 // FailTermsAnalysis ends the observed run with an enum error code. A
@@ -321,43 +343,70 @@ func (r *DynamoDBRepository) SweepMeetingTerms(ctx context.Context, ownerID, mee
 // the version in one transaction, so any write that lands after the read fails
 // the version-guarded delete; one that lands before it is seen by the count.
 func (r *DynamoDBRepository) deleteOrphanAutoTerm(ctx context.Context, pk, termKey string) error {
+	term, err := r.readSweptTerm(ctx, pk, termKey)
+	if err != nil || term == nil || !autoManagedTerm(term) {
+		return err
+	}
+	observed, err := r.termHasObservations(ctx, pk, termKey)
+	if err != nil || observed {
+		return err
+	}
+	// A failed guard means the row was edited, merged or evicted concurrently.
+	_, err = r.deleteOrphanAt(ctx, pk, termKey, term.Version)
+	return err
+}
+
+// readSweptTerm reads a term row consistently; nil means absent.
+func (r *DynamoDBRepository) readSweptTerm(ctx context.Context, pk, termKey string) (*model.DictTerm, error) {
 	got, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)), ConsistentRead: aws.Bool(true)})
 	if err != nil {
-		return fmt.Errorf("read swept term: %w", err)
+		return nil, fmt.Errorf("read swept term: %w", err)
 	}
 	if len(got.Item) == 0 {
-		return nil
+		return nil, nil
 	}
 	var term model.DictTerm
 	if err := attributevalue.UnmarshalMap(got.Item, &term); err != nil {
-		return fmt.Errorf("decode swept term: %w", err)
+		return nil, fmt.Errorf("decode swept term: %w", err)
 	}
-	if term.Origin != model.TermOriginAuto || term.UserEditedAt != "" ||
-		(term.State != model.TermStateActive && term.State != model.TermStateSuggested) {
-		return nil
-	}
+	return &term, nil
+}
+
+// autoManagedTerm reports an unedited automatic active or suggested term, the
+// only kind of row a sweep deletes.
+func autoManagedTerm(term *model.DictTerm) bool {
+	return term.Origin == model.TermOriginAuto && term.UserEditedAt == "" &&
+		(term.State == model.TermStateActive || term.State == model.TermStateSuggested)
+}
+
+// termHasObservations reports whether the term keeps any DICTOBS# row (any
+// source kind).
+func (r *DynamoDBRepository) termHasObservations(ctx context.Context, pk, termKey string) (bool, error) {
 	keyExpr, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(pk)).
 		And(expression.Key("SK").BeginsWith(model.PrefixDictObs + termKey + "#"))).Build()
 	if err != nil {
-		return err
+		return false, err
 	}
 	remaining, err := r.client.Query(ctx, &dynamodb.QueryInput{
 		TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true), Limit: aws.Int32(1), Select: types.SelectCount,
 		KeyConditionExpression: keyExpr.KeyCondition(), ExpressionAttributeNames: keyExpr.Names(), ExpressionAttributeValues: keyExpr.Values(),
 	})
 	if err != nil {
-		return fmt.Errorf("count term observations: %w", err)
+		return false, fmt.Errorf("count term observations: %w", err)
 	}
-	if remaining.Count > 0 {
-		return nil
-	}
-	condition := expression.Name("version").Equal(expression.Value(term.Version)).
+	return remaining.Count > 0, nil
+}
+
+// deleteOrphanAt deletes an unedited auto term still at version. conflict
+// reports a failed guard: the row changed after it was read.
+func (r *DynamoDBRepository) deleteOrphanAt(ctx context.Context, pk, termKey string, version int64) (conflict bool, err error) {
+	condition := expression.Name("version").Equal(expression.Value(version)).
 		And(expression.Name("origin").Equal(expression.Value(model.TermOriginAuto))).
 		And(expression.AttributeNotExists(expression.Name("userEditedAt"))).
 		And(expression.Name("state").In(expression.Value(model.TermStateActive), expression.Value(model.TermStateSuggested)))
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)),
@@ -365,10 +414,10 @@ func (r *DynamoDBRepository) deleteOrphanAutoTerm(ctx context.Context, pk, termK
 	})
 	var failed *types.ConditionalCheckFailedException
 	if errors.As(err, &failed) {
-		return nil // edited, merged or evicted concurrently
+		return true, nil
 	}
 	if err != nil {
-		return fmt.Errorf("delete orphan auto term: %w", err)
+		return false, fmt.Errorf("delete orphan auto term: %w", err)
 	}
-	return nil
+	return false, nil
 }
