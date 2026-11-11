@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The Mac app generates a period report by running the owner's `claude` CLI headless with the unchanged `sa-performance-report` skill. The validated JSON is stored owner-private in TTOBAK and rendered in a `리포트` tab on `/performance`.
+- Status: historical implementation plan (2026-11-11), approved by the owner.
+
+**Goal:** The Mac app generates a period report by running the owner's `claude` CLI headless with the unchanged `sa-performance-report` skill. The validated JSON is stored owner-private in TTOBAK and rendered in a report tab (`reportTab`) on `/performance`.
 
 **Architecture:** The Go backend adds `PERFREPORT#{periodKey}` rows with strict schema validation. The adapter adds `ttobak-mcp report run`. It builds a temporary MCP config, a read-only allowlist and the prompt, spawns `claude -p`, validates the final JSON and uploads it. Rust spawns that command through the Part A runner. The web renders the schema natively.
 
@@ -13,6 +15,8 @@
 **Depends on:** Part A merged. Task 3 reuses `intake_runner.rs` spawn, progress events and cancel.
 
 ## Global Constraints
+
+- Exact Korean UI copy lives in `docs/superpowers/plans/2026-11-11-mac-intake-ui-copy.json`; backticked camelCase names in this plan are its keys.
 
 - Schema `schemaVersion: 1`; at most 256 KB encoded; at most 40 sections and 200 actions; text fields plain text.
 - The server rejects any `<` followed by a letter or `/`, any `](`, and any `slack.com` substring in any string. There are no URL fields.
@@ -71,7 +75,7 @@
 **Interfaces:**
 - Consumes: Task 1 routes; `signIn` from `intake/run.ts` (export it if needed); `RUN_IN_PROGRESS` lock from Part A (a separate `report.lock`).
 - Produces CLI: `ttobak-mcp report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD] [--highlights-file <path>] [--noninteractive]`. It prints one JSON line, `{ok, periodKey, partial, missingSources}`, or exits 2 with `{ok:false, code}`. Codes: `CLAUDE_CLI_MISSING`, `CLAUDE_CLI_AUTH`, `SKILL_MISSING`, `REPORT_INVALID`, `REPORT_NO_SFDC`, `REPORT_TIMEOUT`, `RUN_IN_PROGRESS`, `TTOBAK_LOGIN_REQUIRED`, `TTOBAK_UNAVAILABLE`.
-- Stderr: Korean progress lines, plus `도구 호출: <tool name>` per tool use (names only, never inputs or results).
+- Stderr: Korean progress lines, plus `toolCallLine` per tool use (names only, never inputs or results).
 
 - [ ] **Step 1: Write failing tests:**
   - `period_keys_from_dates` (ISO week at year boundaries, quarter, year);
@@ -90,7 +94,7 @@
   - Build the temp MCP config from `~/.claude.json` top-level `mcpServers`, copying only `aws-sentral-mcp`, `aws-outlook-mcp`, `slack-mcp`, `spec-req-mcp`, `aws-tfc-hub-mcp` and `builder-mcp` when present.
   - The allowlist in `tools.ts` holds the read tools the skill's `references/data-sources.md` names, as `mcp__<server>__<tool>`. It also allows `Read`, `Glob`, `Grep`, `Agent`, `Write(<tmp>/**)`, and `Bash(python3 -I <skill>/scripts/calendar_count.py:*)`, `…/extract_tool_json.py:*` and `…/slack_threads.py:*`.
   - Use `--add-dir <skill>` and run with `cwd` = the temp dir.
-  - The prompt is in `prompt.ts`, in Korean. It tells the model to read `<skill>/SKILL.md` and follow its collection, counting rules, cross-checks and "넣지 않는 것", but to return the JSON object instead of steps 5–6. It also passes alias, period, highlights and the customers file path, says never to ask questions, and says to record gaps in `dataBasis` and `missingSources`.
+  - The prompt is in `prompt.ts`, in Korean. It tells the model to read `<skill>/SKILL.md` and follow its collection, counting rules, cross-checks and "do not include" (`skillSections.doNotInclude`), but to return the JSON object instead of steps 5–6. It also passes alias, period, highlights and the customers file path, says never to ask questions, and says to record gaps in `dataBasis` and `missingSources`.
   - Spawn `claude` with the argv array and a minimal env: `HOME`, `PATH`, `LANG`, and the model-auth keys.
     - Model-auth keys come from the user's `~/.claude/settings.json` `env`. User settings are not loaded as a setting source, so these keys are carried over explicitly. Only `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `AWS_REGION`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` are carried.
     - The app's report settings, passed in via `TTOBAK_REPORT_USE_BEDROCK` and `TTOBAK_REPORT_AWS_PROFILE`, override those keys.
@@ -121,13 +125,13 @@
 
 **Files:**
 - Create: `frontend/src/lib/performanceReport.ts` + tests (`reportSummaryRows`, `reportCodeLabel`, `periodLabel`), `frontend/src/components/performance/ReportList.tsx`, `ReportView.tsx`, `ReportGenerateDialog.tsx`
-- Modify: `frontend/src/app/performance/page.tsx` (tabs: 대시보드 / 리포트), `frontend/src/lib/tauri.ts`, the performance API client in `frontend/src/lib/` (where `/api/performance/*` calls already live)
+- Modify: `frontend/src/app/performance/page.tsx` (tabs `dashboardTab` / `reportTab`), `frontend/src/lib/tauri.ts`, the performance API client in `frontend/src/lib/` (where `/api/performance/*` calls already live)
 
 **Interfaces:**
 - Consumes: Task 1 routes; Task 3 commands and events.
 - Rendering: every string goes through React text nodes only. Sections follow the stored order; `actions` are grouped hi/mid/lo; a `partial` badge shows the missing sources; `dataBasis` is shown collapsed at the end.
-- The dialog has the period (이번 주 / 이번 분기 / 올해 / 직접 지정) and four highlight lists, prefilled from the newest report of the same period type. It shows elapsed time, progress lines and [취소]. It is Mac app only; a browser shows the list and the view, without generation.
-- `reportCodeLabel` gives Korean copy, at least: `CLAUDE_CLI_MISSING` → "Claude Code CLI를 찾을 수 없어요. 설치 후 다시 시도하세요."; `CLAUDE_CLI_AUTH` → "Claude Code 로그인이 필요해요. 터미널에서 `claude`를 실행해 `/login` 하세요."; `SKILL_MISSING` → "sa-performance-report 스킬이 설치돼 있지 않아요."; `REPORT_NO_SFDC` → "SFDC 데이터가 없어 리포트를 만들 수 없어요. 먼저 [지금 수집]을 실행하세요."; `REPORT_INVALID` → "리포트 형식이 올바르지 않아 저장하지 않았어요. 다시 시도하세요."
+- The dialog has the period (`periodOptions`) and four highlight lists, prefilled from the newest report of the same period type. It shows elapsed time, progress lines and [Cancel] (`cancel`). It is Mac app only; a browser shows the list and the view, without generation.
+- `reportCodeLabel` gives Korean copy from `2026-11-11-mac-intake-ui-copy.json`: `CLAUDE_CLI_MISSING` → `claudeCliMissing`, `CLAUDE_CLI_AUTH` → `claudeCliAuth`, `SKILL_MISSING` → `skillMissing`, `REPORT_NO_SFDC` → `reportNoSfdc`, `REPORT_INVALID` → `reportInvalid`.
 
 - [ ] **Step 1: Write failing unit tests** for the helpers.
 - [ ] **Step 2–4:** Implement; run `(cd frontend && npm run lint && npm run test:unit && npm run build)` — PASS.

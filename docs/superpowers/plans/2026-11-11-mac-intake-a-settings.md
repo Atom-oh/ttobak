@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The Mac app sets up, schedules and runs `ttobak-mcp intake`, shows per-source status, and exposes [연결 설정] / [지금 수집] in Settings and on `/performance`.
+- Status: historical implementation plan (2026-11-11), approved by the owner.
+
+**Goal:** The Mac app sets up, schedules and runs `ttobak-mcp intake`, shows per-source status, and exposes [Set up] (`connectSetup`) / [Collect now] (`collectNow`) in Settings and on `/performance`.
 
 **Architecture:** The CLI stays the only collector. It gains `intake login` and a run lock. Rust gets a pure module for schedule math and argv building, plus a runner module that spawns `node ~/.ttobak/server.mjs intake ...` (argv, no shell), streams stderr lines as events, runs the schedule and catch-up, and updates the adapter. The web calls typed Tauri commands.
 
@@ -12,8 +14,10 @@
 
 ## Global Constraints
 
+- Exact Korean UI copy lives in `docs/superpowers/plans/2026-11-11-mac-intake-ui-copy.json`; backticked camelCase names in this plan are its keys.
+
 - Spawn with argv, never a shell; never print or forward host command/args/env values (ADR-065).
-- `--noninteractive` for every scheduled or button run, except the explicit [TTOBAK 로그인] click.
+- `--noninteractive` for every scheduled or button run, except the explicit [TTOBAK login] (`ttobakLogin`) click.
 - The remote SPA passes typed options only, never argv strings or paths.
 - Every new command is in `mac-app/src-tauri/build.rs` `COMMANDS` and granted in `capabilities/default.json` `remote`.
 - Korean UI copy; English code and docs. Literal UTF-8.
@@ -24,7 +28,7 @@
 
 1. Node not found because the GUI app has no shell PATH → state `nodeMissing` with a path picker, not a silent failure. (Task 2 test `resolve_node_prefers_stored_then_candidates`.)
 2. App launched hours after a missed daily slot → exactly one catch-up run; launching twice does not run twice. (Task 2 test `catch_up_runs_once_per_slot`.)
-3. LaunchAgent and app schedule fire together → the second process exits `RUN_IN_PROGRESS`, the UI shows "이미 수집 중". (Task 1 test `run_lock_rejects_second_run`, Task 3 handling.)
+3. LaunchAgent and app schedule fire together → the second process exits `RUN_IN_PROGRESS`, the UI shows `runInProgress`. (Task 1 test `run_lock_rejects_second_run`, Task 3 handling.)
 4. App quit mid-run → the child process group is killed; the lock is stale-detected next time by PID. (Task 1 test `stale_lock_is_reclaimed`.)
 5. Midway expired at 08:30 → slot unsatisfied, one retry at next launch/wake, no loop. (Task 2 test `auth_expired_does_not_satisfy_slot`.)
 
@@ -110,14 +114,14 @@
 
 **Interfaces:**
 - Consumes: Task 3 commands and events.
-- Produces: `intakeCodeLabel(code: string): string` (Korean; at minimum `AUTH_EXPIRED_MIDWAY` → "Midway 인증이 만료됐어요. 터미널에서 `mwinit -o`를 실행한 뒤 다시 시도하세요.", `TTOBAK_LOGIN_REQUIRED` → "TTOBAK 로그인이 필요해요.", `RUN_IN_PROGRESS` → "이미 수집 중이에요.", `PARTIAL_FAILURE` → "일부 소스만 수집됐어요.", `SENSITIVITY_UNKNOWN` → "비공개 일정 포함에 동의해야 캘린더를 연결할 수 있어요.", unknown → the code itself); `sourceRows(status, selection): Array<{source, label, lastRunAt, lastSuccessAt, result, counts}>`; `scheduleLabel(schedule)`.
+- Produces: `intakeCodeLabel(code: string): string` (Korean copy from `2026-11-11-mac-intake-ui-copy.json`: `AUTH_EXPIRED_MIDWAY` → `authExpiredMidway`, `TTOBAK_LOGIN_REQUIRED` → `ttobakLoginRequired`, `RUN_IN_PROGRESS` → `runInProgress`, `PARTIAL_FAILURE` → `partialFailure`, `SENSITIVITY_UNKNOWN` → `sensitivityUnknown`; unknown → the code itself); `sourceRows(status, selection): Array<{source, label, lastRunAt, lastSuccessAt, result, counts}>`; `scheduleLabel(schedule)`.
 
 - [ ] **Step 1: Write failing unit tests** for the three helpers, including unknown codes and an empty status.
 - [ ] **Step 2: Run** `(cd frontend && npm run test:unit)` — FAIL.
 - [ ] **Step 3: Implement** helpers and components.
-  - Settings shows: adapter state + [업데이트]; node missing + path input; selection table; schedule select (끄기/매시간/하루 한 번/하루 두 번 + time inputs); per-source rows; [연결 설정] (opens a panel with the private-calendar consent checkbox and per-connector skip toggles); [지금 수집]; [TTOBAK 로그인] when the last code is `TTOBAK_LOGIN_REQUIRED`; a LaunchAgent warning when both are on, with a button that runs `IntakeAction::ScheduleOff` through a command `intake_launch_agent_off()` (add it to Task 3's list).
+  - Settings shows: adapter state + [Update] (`update`); node missing + path input; selection table; schedule select (`scheduleOptions` + time inputs); per-source rows; [Set up] (`connectSetup`) (opens a panel with the private-calendar consent checkbox and per-connector skip toggles); [Collect now] (`collectNow`); [TTOBAK login] (`ttobakLogin`) when the last code is `TTOBAK_LOGIN_REQUIRED`; a LaunchAgent warning when both are on, with a button that runs `IntakeAction::ScheduleOff` through a command `intake_launch_agent_off()` (add it to Task 3's list).
   - Progress lines appear in a collapsible log while a run is going.
-  - The dashboard control uses the same wrapper. In a browser it shows only "Mac 앱에서 수집할 수 있어요".
+  - The dashboard control uses the same wrapper. In a browser it shows only `browserHint`.
 - [ ] **Step 4: Run** `(cd frontend && npm run lint && npm run test:unit && npm run build)` — PASS.
 - [ ] **Step 5: Commit** `feat(web): Mac intake settings and dashboard collect button`.
 

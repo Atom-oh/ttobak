@@ -1,6 +1,8 @@
 # Mac app: local intake settings and the SA performance report
 
-- Status: design record (2026-11-11), draft for owner approval.
+- Status: historical design record; approved by the owner on 2026-11-11.
+- UI copy: backticked camelCase names are keys in
+  `docs/superpowers/plans/2026-11-11-mac-intake-ui-copy.json`.
 - Follows: the [SA performance dashboard design](2026-11-10-sa-performance-dashboard-design.md)
   and `ttobak-mcp intake setup|run|schedule` (PR #824).
 - Decisions touched: ADR-065 (local MCP intake), ADR-068 (SA performance data
@@ -20,7 +22,7 @@ visible and one click away.
 Two parts, delivered in order:
 
 - **Part A, local intake in the Mac app.** Settings, schedule, per-source
-  status, a one-click setup and a [지금 수집] button.
+  status, a one-click setup and a [Collect now] (`collectNow`) button.
 - **Part B, the SA performance report.** The Mac app runs the owner's own
   Claude Code CLI headless with the `sa-performance-report` skill, and stores
   the result in TTOBAK as an owner-private report rendered on `/performance`.
@@ -31,7 +33,7 @@ Two parts, delivered in order:
 - Setup is also a button in the app, not only a terminal command.
 - A run missed while the app was closed runs at launch. The LaunchAgent stays
   optional.
-- The report reuses the skill as is ("그대로"), run through the Claude CLI
+- The report reuses the skill as is ("as is"), run through the Claude CLI
   (Claude Agent SDK style) rather than Strands.
 - Auth is whatever the user's own Claude Code CLI is configured with. Each
   user has Bedrock or an Enterprise login; TTOBAK never holds a model key.
@@ -43,47 +45,44 @@ Two parts, delivered in order:
 
 ### Goals
 
-1. **Settings section** `Mac 로컬 수집`, shown only inside the Mac app (same
+1. **Settings section** `sectionTitle`, shown only inside the Mac app (same
    pattern as `MeetingDetectionSettings`), with:
    - state: not set up / set up, the adapter version found, and the selected
      connectors with server and host;
-   - schedule: 끄기, 매시간, 하루 한 번 (time), 하루 두 번 (two times);
+   - schedule: off, hourly, daily (time), twice daily (two times) (`scheduleOptions`);
    - per source (calendar, SpecReq tasks, SFDC assignments, SFDC tasks): last
      run time, last success time, result code in Korean, and counts;
-   - buttons: [연결 설정] (setup), [지금 수집] (run);
+   - buttons: [Set up] (`connectSetup`) (setup), [Collect now] (`collectNow`) (run);
    - the last run's Korean progress lines while a run is going.
 2. **Dashboard control** on `/performance`: next to the data-freshness line,
-   [지금 수집] with the same states. On success the page reloads its data.
-   In a plain browser it shows the freshness only, plus "Mac 앱에서 수집할 수
-   있어요".
+   [Collect now] (`collectNow`) with the same states. On success the page reloads its data.
+   In a plain browser it shows the freshness only, plus `browserHint`.
 3. **Setup button** runs `intake setup --noninteractive` with:
    - a consent checkbox for private calendar items, which maps to
      `--accept-unknown-sensitivity`. Stored consent is reused as the CLI
      already does;
    - per-connector skip toggles, which map to `--skip`;
    - no `--schedule`; the app owns scheduling.
-   The JSON result is shown per connector (선택됨 / 건너뜀 + reason).
+   The JSON result is shown per connector (`connectorSelected` / `connectorSkipped` + reason).
 4. **Run button and schedule** run `intake run --noninteractive`.
 5. **Catch-up.** At launch, and on wake from sleep, if the most recent
    scheduled slot passed with no successful run since, run once.
 6. **Adapter install/update.** If `~/.ttobak/server.mjs` is missing or older
    than the bundle served at `/mcp/ttobak-mcp.mjs`, the section offers
-   [업데이트]. It downloads over HTTPS from the app's own origin, writes
+   [Update] (`update`). It downloads over HTTPS from the app's own origin, writes
    atomically, and keeps one `.bak`. This is the exact step that was missing
    on 2026-11-11.
 
 ### Behavior and errors
 
-- `AUTH_EXPIRED_MIDWAY`: show "Midway 인증이 만료됐어요. 터미널에서
-  `mwinit -o`를 실행한 뒤 다시 시도하세요." A scheduled run retries at the
+- `AUTH_EXPIRED_MIDWAY`: show `authExpiredMidway` A scheduled run retries at the
   next slot only. There are no notifications or retries in a loop.
 - TTOBAK login missing or expired for the adapter: `--noninteractive` never
-  opens a browser. The section shows [TTOBAK 로그인], which runs the
+  opens a browser. The section shows [TTOBAK login] (`ttobakLogin`), which runs the
   adapter's login once on that click (a user action, so a browser may open).
 - `PARTIAL_FAILURE` shows which source failed; others show their result.
 - Only one intake process at a time: the app holds a lock file under
-  `~/.ttobak/intake/`. A second request while running returns "이미 수집
-  중". If the LaunchAgent is installed and the app schedule is on, the
+  `~/.ttobak/intake/`. A second request while running returns `runInProgress`. If the LaunchAgent is installed and the app schedule is on, the
   section warns and offers to turn the LaunchAgent off (`intake schedule
   off`).
 - A run has a timeout (builder's value, at least 15 minutes) and is killed
@@ -110,8 +109,8 @@ Two parts, delivered in order:
 
 ### Goals
 
-1. **Generate.** A [리포트 만들기] button on `/performance` (Mac app only)
-   with a period: 이번 주, 이번 분기, 올해, or custom start/end. The owner said
+1. **Generate.** A [Make report] (`makeReport`) button on `/performance` (Mac app only)
+   with a period: this week, this quarter, this year, or custom start/end (`periodOptions`). The owner said
    reports are for weekly review, quarterly evaluation and year-end
    evaluation.
 2. **Run the skill as is.** The Mac app spawns the owner's `claude` CLI in
@@ -121,7 +120,7 @@ Two parts, delivered in order:
    - the owner's own MCP servers from their Claude config;
    - a prompt that names the alias, the period and the highlights (below),
      and says: follow the skill's collection, counting rules, cross-checks and
-     "넣지 않는 것", but instead of its steps 5 and 6 (HTML template and
+     "do not include" (`skillSections.doNotInclude`), but instead of its steps 5 and 6 (HTML template and
      Artifact), return one JSON object matching the TTOBAK report schema;
    - a read-only tool allowlist: the read tools the skill's
      `references/data-sources.md` uses, Read, Grep/Glob, and Bash limited to
@@ -132,13 +131,13 @@ Two parts, delivered in order:
    channels and programs to feature. Headless runs cannot ask, so the
    generate dialog has those fields, prefilled from the last report.
 4. **Store.** The adapter uploads the JSON to a new owner-private route and
-   the report appears in a `리포트` tab on `/performance`, newest first, one
+   the report appears in a report tab (`reportTab`) on `/performance`, newest first, one
    per period key. Regenerating a period replaces it, keeping the previous
    one until the new upload succeeds.
 5. **Render.** The web renders the schema natively with the dashboard's
    components: header summary and ledger tiles, the skill's sections in the
-   order of `references/report-structure.md`, "정리할 항목" with severity, and
-   "데이터 기준". No model HTML is rendered.
+   order of `references/report-structure.md`, actions (`skillSections.actions`) with severity, and
+   data basis (`skillSections.dataBasis`). No model HTML is rendered.
 6. **Progress.** While running, the button shows elapsed time and the CLI's
    streamed step lines (tool names and counts only). It can be cancelled.
 
@@ -235,7 +234,7 @@ text.
   - A run with no SFDC data at all fails instead of storing.
 - **Period keys.** `W2026-46` (ISO week), `Q2026-4`, `Y2026`, custom
   `C2026-03-01_2026-06-30`. Keys accumulate. Regenerating the same key
-  replaces it, for example "올해" generated in November and again in
+  replaces it, for example "this year" generated in November and again in
   December. TTL is two years after the period's end year.
 - **Spawn environment.**
   - PATH is the login shell's PATH, captured once by running the user's
@@ -274,6 +273,6 @@ text.
 - Rust: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`. There
   is no Mac CI; report that limit.
 - Manual on the owner's Mac: setup button from a fresh `~/.ttobak/intake`,
-  [지금 수집] from the dashboard, an expired Midway session, a weekly report
+  [Collect now] (`collectNow`) from the dashboard, an expired Midway session, a weekly report
   for this week, then a year report, and confirm in the stored report that no
   mail body, DM content or customer message original appears.
