@@ -19,6 +19,12 @@ const (
 	maxFocusMeetings     = 60
 	maxFocusLinkRows     = 600
 	maxFocusCursorBytes  = 512
+	// Each uncached contact label is a consistent read plus a KMS open, so a
+	// page reads at most this many distinct labels and lists at most
+	// maxFocusPeoplePerMeeting people per meeting; either bound sets truncated.
+	maxFocusLabelReads       = 120
+	maxFocusPeoplePerMeeting = 20
+	maxFocusTitleRunes       = 200
 )
 
 // focusRoleOrder is the display order of people roles.
@@ -237,7 +243,7 @@ func (s *AccountPeopleService) Focus(ctx context.Context, userID, accountID, foc
 			return nil, err
 		}
 		out.Truncated = out.Truncated || cut
-		out.Meetings = append(out.Meetings, model.FocusMeeting{ID: f.id, Title: f.m.Title, Date: f.m.Date.UTC().Format(time.RFC3339),
+		out.Meetings = append(out.Meetings, model.FocusMeeting{ID: f.id, Title: capRunes(f.m.Title, maxFocusTitleRunes), Date: f.m.Date.UTC().Format(time.RFC3339),
 			Roles: f.roles, Techs: techsByMeeting[i], People: people})
 	}
 	if end < len(meetings) {
@@ -349,6 +355,17 @@ func (s *AccountPeopleService) focusPeople(ctx context.Context, v *peopleViewer,
 		roles := v.visibleRoles(m, rows[key])
 		if len(roles) == 0 {
 			continue
+		}
+		if len(people) == maxFocusPeoplePerMeeting {
+			cut = true
+			break
+		}
+		if _, cached := v.labels[key]; !cached {
+			if v.focusLabelReads == maxFocusLabelReads {
+				cut = true
+				continue
+			}
+			v.focusLabelReads++
 		}
 		label, ok, err := v.label(ctx, kind, id)
 		if err != nil {

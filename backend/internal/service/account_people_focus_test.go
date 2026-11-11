@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,4 +234,49 @@ type cutMeetingLinksRepo struct{ *fakePeopleRepo }
 func (r *cutMeetingLinksRepo) ListPeopleLinksForMeeting(ctx context.Context, account, meeting string, n int) ([]model.PeopleLink, bool, error) {
 	links, _, err := r.fakePeopleRepo.ListPeopleLinksForMeeting(ctx, account, meeting, n)
 	return links, true, err
+}
+
+func TestFocus_BoundsPeopleAndLabelReads(t *testing.T) {
+	f := newFocusRepo()
+	var links []model.PeopleLink
+	for i := 0; i < maxFocusPeoplePerMeeting+5; i++ {
+		id := fmt.Sprintf("%08d-0000-4000-8000-000000000000", i)
+		f.contacts = append(f.contacts, model.AccountContact{ContactID: id, Name: fmt.Sprintf("P%02d", i)})
+		links = append(links, peopleEdge("owner:m3", "contact", id, "participant", model.PeopleSourceParticipants))
+	}
+	f.meetingLinks["owner:m3"] = links
+	f.meetings["owner:m3"].Title = strings.Repeat("가", maxFocusTitleRunes+50)
+	g, err := NewAccountPeopleService(f).Focus(context.Background(), "viewer", "acc", "contact:"+peopleTestContact, "")
+	if err != nil || !g.Truncated || len(g.Meetings[0].People) != maxFocusPeoplePerMeeting {
+		t.Fatalf("people = %d truncated=%v err=%v", len(g.Meetings[0].People), g.Truncated, err)
+	}
+	if n := len([]rune(g.Meetings[0].Title)); n != maxFocusTitleRunes {
+		t.Fatalf("title runes = %d", n)
+	}
+}
+
+func TestFocus_LabelReadBudgetSetsTruncated(t *testing.T) {
+	f := newFocusRepo()
+	f.targetLinks = nil
+	total := 0
+	for m := 0; m < 8; m++ {
+		mid := fmt.Sprintf("owner:L%d", m)
+		f.meetings[mid] = focusMeetingFixture(fmt.Sprintf("L%d", m), m+1)
+		f.targetLinks = append(f.targetLinks, peopleEdge(mid, "contact", peopleTestContact, "participant", model.PeopleSourceParticipants))
+		for p := 0; p < maxFocusPeoplePerMeeting; p++ {
+			id := fmt.Sprintf("%04d%04d-0000-4000-8000-000000000000", m, p)
+			f.contacts = append(f.contacts, model.AccountContact{ContactID: id, Name: id[:8]})
+			f.meetingLinks[mid] = append(f.meetingLinks[mid], peopleEdge(mid, "contact", id, "participant", model.PeopleSourceParticipants))
+		}
+	}
+	g, err := NewAccountPeopleService(f).Focus(context.Background(), "viewer", "acc", "contact:"+peopleTestContact, "")
+	if err != nil || !g.Truncated {
+		t.Fatalf("truncated=%v err=%v", g.Truncated, err)
+	}
+	for _, m := range g.Meetings {
+		total += len(m.People)
+	}
+	if total != maxFocusLabelReads {
+		t.Fatalf("labelled people = %d", total)
+	}
 }
