@@ -199,7 +199,7 @@ limit instead of claiming a Mac build passed.
   it fails open on DynamoDB errors and is an abuse brake, not an access boundary.
 - **Indexing and extraction rollout:** canonical `all` mode may be checked in
   only after recorded manual snapshot/provider verification and actual
-  current-source QA acceptance (ADR-038). Keep the KB schedule enabled for
+  current-source QA acceptance (ADR-028). Keep the KB schedule enabled for
   reconciliation. A draft configuration, deployed package or successful WS
   connection is not consumer acceptance. Use the bootstrap runbook's dated
   readiness record and verify the deployed mode independently.
@@ -238,7 +238,7 @@ limit instead of claiming a Mac build passed.
   remain visible but nonreplayable; creation receipts never replay a mutation.
   Registration status lives in `qa/SOURCE_CONTRACT.md` and must match handler
   imports. Helper installation alone does not wire either transport.
-  Code readiness and deployed acceptance are separate gates (ADR-042; QA contracts).
+  Code readiness and deployed acceptance are separate gates (ADR-028; QA contracts).
 - **Bounded meeting/MCP reads:** the authenticated reading endpoint uses
   metadata-only authorization for notes and binds continuation to source revision,
   selection and access. API JSON is capped at 14,000 encoded bytes. MCP forwards
@@ -295,7 +295,7 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/040); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
+| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |

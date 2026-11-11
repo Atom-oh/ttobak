@@ -47,7 +47,7 @@ Other recorded UI work improved question-detection timing, persistent desktop QA
 and mobile sheets, transcript entry separation/deduplication, stalled recognition
 recovery, and nonblocking post-record banners.
 
-Current recovery is specified in ADR-006/024/031, current API routes in
+Current recovery is specified in ADR-006/024/013, current API routes in
 [API-SPEC](docs/API-SPEC.md), and known limitations in [CLAUDE.md](CLAUDE.md).
 New issue reports should include revision, reproduction, observed/expected behavior,
 relevant logs with secrets/content removed, and evidence separating a new defect

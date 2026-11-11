@@ -2,9 +2,8 @@
 
 Historical planning/acceptance record from 2026-09-12. Checklist statements below
 record the original slice, not current deployment or instructions to restart it.
-For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
-[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
-and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+For current activation, follow [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md), where relevant.
 
 The complete QA wiring review found that replacing unbound index chunks with
 the current file head discarded matching facts after the first 800 characters.

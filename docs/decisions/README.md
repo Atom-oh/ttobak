@@ -31,3 +31,4 @@ rewritten.
 | [ADR-024](ADR-024-mac-native-capture-and-upload.md) | Mac native capture and upload; absorbs the Mac parts of the former ADR-006 and the former ADR-046 (Core Audio tap and microphone) |
 | [ADR-013](ADR-013-summary-generation-and-publication.md) | Summary generation, recovery and publication; absorbs the former ADR-031 (summarize timeout resilience and STT recovery), ADR-037 (immutable spills) and ADR-040 (guarded summary publication) |
 | [ADR-020](ADR-020-personal-documents.md) | Personal documents, previews, public links and sharing; absorbs the former ADR-010 (Markdown rendering), ADR-017 (vault export and ingest), ADR-022 (slide previews and public links) and ADR-029 (document sharing by reference) |
+| [ADR-028](ADR-028-qa-search-indexing-and-sources.md) | QA: web search, note indexing and current-source answers; absorbs the former ADR-038 (canonical note indexing) and ADR-042 (current-source QA and history) |
