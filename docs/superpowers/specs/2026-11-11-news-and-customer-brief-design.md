@@ -65,6 +65,19 @@ What exists today:
   aliases and keywords, as `news_pipeline.expand_queries` requires today.
 - A second place to register news after this ships.
 
+## Collection path this design builds on
+
+The legacy daily workflow (`news_crawler.py`, 19:00 UTC) is the path that
+collects for every source today. The versioned publication path
+(`infra/lib/news-publication.ts`, `NewsPipelineMode`) defaults off and allows
+one canary source; its normal scheduling and legacy migration are still open
+delivery work in ADR-004. The deployed mode was not verified for this design.
+
+This design therefore targets the legacy path: the matched term is stored by
+`news_crawler.py`, and "collect now" starts the legacy news step for one
+source. Each new stored field is also written by the versioned path so that
+turning it on later does not lose it. Nothing here turns the versioned path on.
+
 ## Design
 
 ### 1. Source registration (Insights > News sources)
@@ -89,7 +102,9 @@ opens it with that customer preselected).
   subscribed common sources and the account-owned sources of accounts the user
   can read.
 - Account-owned sources gain edit (terms, aliases, URLs) with the same
-  authorization as create. Today they can only be deleted and recreated.
+  authorization as create (`AccountNewsService.authorize`: any account
+  member). Editing keeps the source ID and its link row; existing documents
+  keep the label stored when they were collected.
 
 ### 2. Insights news tab
 
@@ -104,7 +119,15 @@ opens it with that customer preselected).
 - Visibility: documents of an account-owned source are returned only to users
   who can read that account. Common documents stay visible to every signed-in
   user as today. (Today account-owned documents appear in the flat list for
-  everyone without a customer name; this design narrows that.)
+  everyone without a customer name; this design narrows that.) The caller's
+  identity is added to the list, facet and detail reads
+  (`ListInsights`, `GetDocumentDetail`); totals and facets count only what the
+  caller may see.
+- Known limit, kept visible: account-owned articles are stored under the shared
+  `shared/news/` knowledge-base prefix, so Q&A retrieval can still surface a
+  public article from another customer's source. This design does not widen
+  that and does not fix it; isolating it needs a separate knowledge-base
+  change and an owner decision.
 
 ### 3. Customer news search
 
@@ -115,8 +138,10 @@ and controllable from the customer side:
   customer" that creates a customer-only source from the account name and
   aliases.
 - "Collect now" on a customer-only source runs that source through the
-  existing pipeline once, outside the daily schedule, limited to one run per
-  source per hour.
+  legacy news step once, outside the daily schedule, limited to one run per
+  source per hour by a conditional claim on the source row. The API has no
+  crawl trigger today, so this phase adds one narrowly scoped start permission
+  and its CDK wiring.
 - The account page news block shows publisher and matched term like the
   Insights cards and links to the Insights By-customer view.
 
@@ -127,7 +152,9 @@ searches the web itself.
 
 Inputs, all re-authorized for the requesting user at generation time:
 
-- the account record and its next calendar-linked or scheduled meeting, if any;
+- the account record and the earliest future account event or synced calendar
+  event linked to the account, if any (no next meeting is a valid state and
+  the section is omitted);
 - meeting-derived account insights and the meetings the user can read
   (the same reads as `GetAccountBrief`);
 - the account's customer-only news of the last 30 days
@@ -141,8 +168,11 @@ Page sections, in order:
 3. Since the last meeting: decisions, open action items, changes.
 4. Recent news: up to five items, each with why it matters to this customer.
 5. Questions to ask in this meeting.
-6. Unfamiliar terms: industry or customer words with a short gloss and
-   whether the dictionary already has them, with an "add to dictionary" action.
+6. Unfamiliar terms: words taken from the inputs above that the user's
+   dictionary layers do not hold as active terms. The list is computed, not
+   invented by the model; the model only writes the short gloss, and the
+   source chip is the article or meeting the word was seen in. Each has an
+   "add to dictionary" action.
 
 Rules:
 
@@ -153,12 +183,15 @@ Rules:
   input hash, lease) following the `ANALYSIS#summary` pattern. The page shows
   the last successful brief with its generation time and a "refresh" action;
   a failed run keeps the previous brief.
-- The brief is stored per user, because readable meetings differ per member.
-  It is deleted with the account membership or the account.
+- The brief is stored per user, because readable meetings differ per member,
+  in the main table (KMS-encrypted) with a 30-day expiry attribute swept by the
+  table TTL. Every read rechecks the account read grant, so a removed member
+  cannot read a brief that has not expired yet; account deletion removes
+  briefs with the account's other rows.
 - It is opened from the account page and from a calendar-linked upcoming
   meeting. It is not generated automatically in this design.
-- Model: the existing auxiliary summary model configuration; the model ID
-  stays function configuration.
+- Model: the auxiliary model configured as `BEDROCK_MODEL_ID` (not the
+  final-notes model); the model ID stays function configuration.
 
 ### 5. Dictionary feeding
 
@@ -168,13 +201,18 @@ Rules:
   account-owned source are written to `ACCOUNT#{accountId}` as system writes
   (`system:news`), each transaction conditioned on the source's `NEWSSRC#`
   link row still existing. A term qualifies when it appears in at least two
-  distinct documents of that account's sources. Custom-URL documents stay
+  distinct documents of that account's sources. This counting key applies to
+  the Account layer only; Common keeps its two-distinct-source rule and
+  `ttobak:newsTermsSources` is unchanged. Custom-URL documents stay
   excluded. Deleting or unlinking the source removes its observations and any
-  automatic term left without observations.
+  automatic term left without observations (the news part of ADR-008 FU4,
+  delivered with this write path). A new flag `ttobak:accountNewsTermsMode`
+  (`off|on`, default off) gates it.
 - **Customer KB → that Account's layer.** Requires the ADR-008 FU4 cleanup for
   KB objects (an `account-id` change or delete removes that file's
-  contributions) before `ttobak:kbTermsMode` moves from `personal` to account
-  writes.
+  contributions) and the FU2 observation sweep on KB file delete before
+  `ttobak:kbTermsMode` moves from `personal` to account writes. Research
+  reports stay on `personal`; their FU4 part is out of scope.
 - **KB PDF and Office files (ADR-008 FU1).** Route them through the
   document-extraction worker and extract terms from validated extracted text
   only. This is also the path for an industry glossary: upload it to the
@@ -202,6 +240,10 @@ working software.
 - The old registration forms are replaced by links, not kept in parallel.
 - "Customer news search" extends the existing per-source search instead of
   adding a second search agent.
+- Member-only visibility covers the Insights list, facets and detail; Q&A
+  retrieval over the shared news prefix is left as a recorded limit.
+- New features target the legacy daily path; the versioned path stays off.
+- Briefs expire after 30 days; the Account news terms get their own flag.
 
 ## Left to the builder
 
