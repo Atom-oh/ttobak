@@ -514,14 +514,16 @@ configuration.
   never navigate the app (a reload could discard unsaved input), and the task
   strip on the meetings page shows the task. Delivery is unverified until the
   Mac acceptance in the runbook.
-- **SFDC contacts step (amendment, 2026-11-11).** At the end of each `sfdc`
-  connector run, on the same session, the runner reads `search_contacts` (a
+- **SFDC contacts step (amendment, 2026-11-11).** After a successful `sfdc`
+  sync, on the same session, the runner reads `search_contacts` (a
   read tool on the `sfdc` allowlist) for every SFDC account mapped to a TTOBAK
   Account, matches the people against that Account's contacts on the Mac and
   sends one bounded batch per Account to `POST /api/accounts/{id}/contacts/sfdc-sync`
   (ADR-021). Emails are compared on the Mac only; no email or phone reaches a
   request, log, status file or ledger. A failure of the step is a
   `PARTIAL_FAILURE` of `intake run`; `AUTH_EXPIRED_MIDWAY` stops it.
+  `search_contacts` is allowed but checked only by the step, so a missing or
+  changed contacts tool fails only the step (`SCHEMA_CHANGED`).
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** is owned by the Mac app, which runs `intake run
   --noninteractive` (all selected sync connectors) itself, with launch and wake

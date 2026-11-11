@@ -28068,12 +28068,7 @@ var init_sfdc = __esm({
     };
     SFDC_TASKS_TOOL = { name: "search_tasks", properties: ["condition", "limit", "after"] };
     SFDC_CONTACTS_TOOL = { name: "search_contacts", properties: ["condition", "limit", "after"] };
-    SFDC_TOOLS = [
-      SFDC_PERSONAL_TOOL,
-      SFDC_REGISTRY_TOOL,
-      SFDC_TASKS_TOOL,
-      SFDC_CONTACTS_TOOL
-    ];
+    SFDC_TOOLS = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];
     ACTIVITY_ROLE = "activity";
     SOURCES = ["sfdc-assignments", "sfdc-tasks"];
     PAGE_LIMIT = 500;
@@ -28155,7 +28150,7 @@ function emailKey(value) {
   return (value ?? "").normalize("NFKC").trim().toLowerCase();
 }
 function fillable(contact, person) {
-  return !(contact.title ?? "").trim() && !!person.title || !(contact.company ?? "").trim();
+  return (contact.title ?? "") === "" && !!person.title || (contact.company ?? "") === "";
 }
 function item(person, contact) {
   const base = { sfdcContactId: person.id, sfdcAccountId: person.accountId, name: person.name, title: person.title };
@@ -28216,6 +28211,7 @@ function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) 
       continue;
     }
     if (targets.length > 1 || sfdcEmails.get(email3) > 1 || targets[0].sfdcContactId) {
+      for (const target of targets) claimed.add(target.contactId);
       result.ambiguous++;
       continue;
     }
@@ -30546,9 +30542,9 @@ function ttobakConfig(selection, env) {
 function definedTtobakEnv(env) {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith("TTOBAK_") && value));
 }
-async function openSession(environment, host, server, pathDirs, tools) {
+async function openSession(environment, host, server, pathDirs, tools, optional4 = []) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
-  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: tools.map((tool) => tool.name) });
+  const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [...tools, ...optional4].map((tool) => tool.name) });
   try {
     for (const tool of tools) await session.requireTool(tool);
   } catch (error3) {
@@ -30879,7 +30875,14 @@ async function sfdcRun(options, environment, store, signedIn) {
     previous = store.read("status.json")?.sfdc;
     let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
-    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS);
+    session = await openSession(
+      environment,
+      selected.host,
+      selected.server,
+      selected.pathDirs,
+      SFDC_TOOLS,
+      [SFDC_CONTACTS_TOOL]
+    );
     const active = session;
     const source = { call: async (tool, request2) => resultJson(await active.call(tool, request2), tool) };
     const result = await runSfdc({
@@ -30902,7 +30905,17 @@ async function sfdcRun(options, environment, store, signedIn) {
       ...scope ? { scope } : {},
       ...lastSuccessAt ? { lastSuccessAt } : {}
     });
-    const sfdcContacts = api ? await sfdcContactsStep(store, source, api, scope, dryRun, environment.now()) : void 0;
+    const sfdcContacts = api ? await sfdcContactsStep(
+      store,
+      source,
+      api,
+      scope,
+      dryRun,
+      environment.now(),
+      async () => {
+        await active.requireTool(SFDC_CONTACTS_TOOL);
+      }
+    ) : void 0;
     return { ok: true, connector: "sfdc", dryRun, counts: result.counts, ...sfdcContacts ? { sfdcContacts } : {} };
   } catch (error3) {
     const entry2 = {
@@ -30922,9 +30935,10 @@ async function sfdcRun(options, environment, store, signedIn) {
     release();
   }
 }
-async function sfdcContactsStep(store, source, api, scope, dryRun, ranAt) {
+async function sfdcContactsStep(store, source, api, scope, dryRun, ranAt, requireTool) {
   let step;
   try {
+    await requireTool();
     step = await runSfdcContacts({ session: source, api, dryRun, store, ...scope ? { scope } : {} });
   } catch (error3) {
     step = { result: intakeCode(error3) };

@@ -443,8 +443,9 @@ assignments are reconciled (see below).
 ## SFDC connector
 
 `intake select sfdc --host <claude|codex|kiro> --server aws-sentral-mcp` checks
-the input schemas of `get_my_personal_details`, `get_registry_assignments`,
-`search_tasks` and `search_contacts`, and keeps the calendar selection. `intake sfdc [--dry-run]
+the input schemas of `get_my_personal_details`, `get_registry_assignments` and
+`search_tasks`, and keeps the calendar selection. `search_contacts` is allowed
+and checked only by the contacts step. `intake sfdc [--dry-run]
 [--noninteractive] [--reconcile]` then reads and syncs; a dry run prints counts
 only and makes no TTOBAK calls. It holds `sfdc.lock`.
 
@@ -497,6 +498,8 @@ SFDC and keeps its ledger.
 After a successful SFDC sync, the same `intake sfdc` or `intake run`, on the
 same `aws-sentral-mcp` session, runs `sfdc-contacts`
 (`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`.
+A missing or changed `search_contacts` fails the step with `SCHEMA_CHANGED`;
+the SFDC performance sync keeps its result.
 `intake sfdc` still exits 0 when this step fails, like the calendar's task
 step: the failure is in its `sfdcContacts.result` and in `status.json`; only
 `intake run` turns it into `PARTIAL_FAILURE`.
@@ -526,14 +529,15 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   `amazon.co.kr` or `aws.com`, are dropped (`skippedInternal`). Phone fields
   are never read.
 - **Match.** An existing `sfdcContactId` link always wins and is sent only
-  when the contact's title or company is empty. Otherwise a one-to-one,
+  when the contact's title or company is exactly empty (as the server fills;
+  whitespace-only is not empty). Otherwise a one-to-one,
   case-insensitive email match links the contact. Otherwise a unique
   normalized name (NFKC, lower case, `.`/`,` dropped, whitespace collapsed;
   spaces ignored for Hangul and other CJK names, which also match with given
   and family name in either order; Latin names match only as given) without
   a conflicting email links it. A contact already
-  linked to another SFDC ID, or already matched by email, is not a name
-  candidate. Several candidates, or several SFDC contacts for one candidate,
+  linked to another SFDC ID, already matched by email, or whose email is
+  ambiguous (for example shared by two SFDC people) is not a name candidate. Several candidates, or several SFDC contacts for one candidate,
   are `ambiguous` and skipped this run. No match creates a contact. When the
   Account's read is incomplete (a failed page, a cap, a truncated mapping
   listing or more than 20 SFDC accounts), a missing person could make a match
