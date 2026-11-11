@@ -643,7 +643,7 @@ func (r *DynamoDBRepository) queryUnresolvedMentions(ctx context.Context, accoun
 		if len(out.LastEvaluatedKey) == 0 {
 			return rows, lastSK, false, nil
 		}
-		if sk, ok := out.LastEvaluatedKey["SK"].(*types.AttributeValueMemberS); ok && len(out.Items) == 0 {
+		if sk, ok := out.LastEvaluatedKey["SK"].(*types.AttributeValueMemberS); ok {
 			lastSK = sk.Value
 		}
 		if read >= maxRows || pages+1 >= maxPages {
@@ -674,15 +674,25 @@ func (r *DynamoDBRepository) ListUnresolvedMentions(ctx context.Context, account
 }
 
 // ListUnresolvedMentionsByHash reads at most maxRows rows of one normalized
-// mention. truncated reports that the bound was hit.
-func (r *DynamoDBRepository) ListUnresolvedMentionsByHash(ctx context.Context, accountID, hash string, maxRows int) ([]model.UnresolvedMention, bool, error) {
+// mention, resuming strictly after afterSK within the same hash. nextSK is
+// empty only once the range is exhausted.
+func (r *DynamoDBRepository) ListUnresolvedMentionsByHash(ctx context.Context, accountID, hash, afterSK string, maxRows int) ([]model.UnresolvedMention, string, error) {
 	if accountID == "" || maxRows <= 0 || !validMentionHash(hash) {
-		return nil, false, fmt.Errorf("invalid unresolved mention listing")
+		return nil, "", fmt.Errorf("invalid unresolved mention listing")
+	}
+	if afterSK != "" {
+		cursorHash, _, _, ok := parseMentionSortKey(afterSK)
+		if !ok || cursorHash != hash {
+			return nil, "", fmt.Errorf("invalid unresolved mention cursor")
+		}
 	}
 	key := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixAccountMention + hash + "#"))
-	rows, _, truncated, err := r.queryUnresolvedMentions(ctx, accountID, key, "", maxRows)
-	return rows, truncated, err
+	rows, nextSK, more, err := r.queryUnresolvedMentions(ctx, accountID, key, afterSK, maxRows)
+	if !more {
+		nextSK = ""
+	}
+	return rows, nextSK, err
 }
 
 // DeleteUnresolvedMention removes one unresolved mention row. When

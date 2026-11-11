@@ -21,7 +21,7 @@ import { AccountSignals } from '@/components/account/AccountSignals';
 import { AccountFlow } from '@/components/account/AccountFlow';
 import { AccountKB } from '@/components/account/AccountKB';
 import { AccountLinksPanel } from '@/components/account/AccountLinksPanel';
-import { AccountPeople } from '@/components/account/AccountPeople';
+import { AccountPeople, type MentionResolveProgress } from '@/components/account/AccountPeople';
 import { eventProjectLinks } from '@/lib/accountOverview';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
@@ -219,6 +219,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
   const [inviting, setInviting] = useState(false);
 
   const activeAccountIdRef = useRef(accountId);
+  const peopleResolveProgress = useRef<MentionResolveProgress>(new Map());
   const mounted = useRef(true);
   const inviteGeneration = useRef(0);
   const accessLossGeneration = useRef(0);
@@ -238,6 +239,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     setPendingNoticeAccountId(null);
   }, []);
   useLayoutEffect(() => {
+    peopleResolveProgress.current.clear();
     mounted.current = true;
     activeAccountIdRef.current = accountId;
     inviteGeneration.current++;
@@ -684,7 +686,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                         flow={flowState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
                       <SectionStatus {...peopleState} />
                       {peopleState.data && <AccountPeople accountId={accountId} userId={user.userId}
-                        data={peopleState.data} onChanged={refreshOverview} onAccessLost={onAccessLost} />}
+                        data={peopleState.data} resolveProgress={peopleResolveProgress}
+                        onChanged={refreshOverview} onAccessLost={onAccessLost} />}
                       <AccountLinksPanel accountId={accountId} userId={user.userId} projectNames={projectNames}
                         revision={linksRevision} onChanged={refreshOverview} onAccessLost={onAccessLost} />
                     </>

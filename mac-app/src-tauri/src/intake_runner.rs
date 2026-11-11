@@ -9,6 +9,7 @@
 //! lines, never stdout noise, argv, env or selection paths.
 
 use std::collections::{BTreeSet, VecDeque};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -23,6 +24,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{oneshot, Notify};
 
 use crate::intake_plan::{self, Connector, IntakeAction, Schedule, SlotState};
+use crate::report_runner::ReportSettings;
 
 /// The only adapter source: the app's own origin, exact path, no redirects.
 pub const ADAPTER_URL: &str = "https://ttobak.atomai.click/mcp/ttobak-mcp.mjs";
@@ -84,12 +86,20 @@ fn cap_progress_line(line: &str) -> Option<String> {
 
 /// The last `MAX_PROGRESS_LINES` progress lines of the current or last run.
 #[derive(Debug, Default)]
-struct ProgressLog {
+pub(crate) struct ProgressLog {
     lines: VecDeque<String>,
 }
 
 impl ProgressLog {
-    fn push(&mut self, line: String) {
+    pub(crate) fn clear(&mut self) {
+        self.lines.clear();
+    }
+
+    pub(crate) fn to_vec(&self) -> Vec<String> {
+        self.lines.iter().cloned().collect()
+    }
+
+    pub(crate) fn push(&mut self, line: String) {
         if self.lines.len() >= MAX_PROGRESS_LINES {
             self.lines.pop_front();
         }
@@ -379,7 +389,7 @@ fn default_schedule() -> Schedule {
 /// `app_config_dir()/intake.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct IntakeSettings {
+pub(crate) struct IntakeSettings {
     #[serde(default = "default_schedule")]
     schedule: Schedule,
     #[serde(default)]
@@ -388,6 +398,10 @@ struct IntakeSettings {
     login_path: Option<String>,
     #[serde(default)]
     slot_state: SlotState,
+    /// Report-run settings; an invalid value falls back to the default
+    /// without discarding the rest of the file.
+    #[serde(default, deserialize_with = "crate::report_runner::lenient_settings")]
+    pub(crate) report: ReportSettings,
 }
 
 impl Default for IntakeSettings {
@@ -397,12 +411,13 @@ impl Default for IntakeSettings {
             node_path: None,
             login_path: None,
             slot_state: SlotState::default(),
+            report: ReportSettings::default(),
         }
     }
 }
 
 impl IntakeSettings {
-    fn from_bytes(b: &[u8]) -> Self {
+    pub(crate) fn from_bytes(b: &[u8]) -> Self {
         let mut s: Self = serde_json::from_slice(b).unwrap_or_default();
         if s.login_path
             .as_deref()
@@ -445,7 +460,7 @@ fn read_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
 }
 
 /// Writes `bytes` to a fresh 0600 file (never through an existing link).
-fn write_new_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_new_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let _ = std::fs::remove_file(path);
     let mut f = std::fs::OpenOptions::new()
@@ -580,17 +595,20 @@ impl IntakeState {
         }
     }
 
-    fn available(&self) -> Result<&Path, String> {
+    pub(crate) fn available(&self) -> Result<&Path, String> {
         self.settings_path
             .as_deref()
             .ok_or_else(|| "unavailable".to_string())
     }
 
-    fn snapshot(&self) -> IntakeSettings {
+    pub(crate) fn snapshot(&self) -> IntakeSettings {
         self.settings.lock().clone()
     }
 
-    fn update_settings(&self, change: impl FnOnce(&mut IntakeSettings)) -> Result<(), String> {
+    pub(crate) fn update_settings(
+        &self,
+        change: impl FnOnce(&mut IntakeSettings),
+    ) -> Result<(), String> {
         let path = self.available()?;
         let mut guard = self.settings.lock();
         let mut next = guard.clone();
@@ -665,30 +683,76 @@ pub fn manage(app: &tauri::App) {
     app.manage(IntakeState::new(path));
 }
 
-/// Kills the current run's process group (app exit).
+/// Grace before SIGKILL at app exit.
+const QUIT_GRACE: Duration = Duration::from_millis(300);
+/// At app exit a report CLI gets longer: on SIGTERM it stops claude's own
+/// process group (not reached by a kill of node's group) and removes its run
+/// and session directories. Waited for only while a report runs, and only
+/// until its group is gone.
+const REPORT_QUIT_GRACE: Duration = Duration::from_secs(2);
+
+/// Whether any process of group `pgid` still exists (EPERM counts).
+fn group_exists(pgid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the group exists.
+    if unsafe { libc::killpg(pgid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Waits until `pgid` is gone, at most `max`, polling every 50 ms.
+fn wait_group_gone(pgid: i32, max: Duration) {
+    let deadline = std::time::Instant::now() + max;
+    while group_exists(pgid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Kills the current intake and report runs' process groups (app exit) and
+/// refuses any later spawn of either.
 pub fn kill_running(app: &AppHandle) {
-    let Some(state) = app.try_state::<IntakeState>() else {
+    let mut intake = 0;
+    let mut report = 0;
+    if let Some(state) = app.try_state::<IntakeState>() {
+        state.shutting_down.store(true, Ordering::SeqCst);
+        intake = state.pgid.swap(0, Ordering::SeqCst);
+    }
+    if let Some(state) = app.try_state::<crate::report_runner::ReportState>() {
+        let track = state.track();
+        track.shutting_down.store(true, Ordering::SeqCst);
+        report = track.pgid.swap(0, Ordering::SeqCst);
+    }
+    let groups: Vec<i32> = [intake, report].into_iter().filter(|&g| g > 1).collect();
+    if groups.is_empty() {
         return;
-    };
-    state.shutting_down.store(true, Ordering::SeqCst);
-    let pgid = state.pgid.swap(0, Ordering::SeqCst);
-    if pgid > 1 {
-        kill_group(pgid, libc::SIGTERM);
-        std::thread::sleep(Duration::from_millis(300));
-        kill_group(pgid, libc::SIGKILL);
+    }
+    for &g in &groups {
+        kill_group(g, libc::SIGTERM);
+    }
+    let started = std::time::Instant::now();
+    if report > 1 {
+        wait_group_gone(report, REPORT_QUIT_GRACE);
+    }
+    if let Some(rest) = QUIT_GRACE.checked_sub(started.elapsed()) {
+        if intake > 1 {
+            std::thread::sleep(rest);
+        }
+    }
+    for &g in &groups {
+        kill_group(g, libc::SIGKILL);
     }
 }
 
 // ---------------------------------------------------------------- spawning
 
-struct Outcome {
-    exit_code: Option<i32>,
-    result: Option<Value>,
-    code: Option<String>,
+pub(crate) struct Outcome {
+    pub exit_code: Option<i32>,
+    pub result: Option<Value>,
+    pub code: Option<String>,
 }
 
 impl Outcome {
-    fn failed(code: &str) -> Self {
+    pub(crate) fn failed(code: &str) -> Self {
         Self {
             exit_code: None,
             result: None,
@@ -758,61 +822,90 @@ async fn capture_login_path(home: &Path) -> Option<String> {
     }
 }
 
-/// Runs one CLI action to completion in the claimed run slot (its pgid is
-/// recorded for app-exit cleanup). Progress lines are kept and emitted when
-/// `progress` is set.
-async fn execute(
-    app: &AppHandle,
-    action: &IntakeAction,
-    timeout: Duration,
-    cancel: Option<oneshot::Receiver<()>>,
-    progress: bool,
-) -> Outcome {
-    let state = app.state::<IntakeState>();
-    let Some(home) = home_dir() else {
-        return Outcome::failed("HOME_MISSING");
-    };
+/// Where a runner (intake or report) records its current child's process
+/// group, and the app-exit flag that refuses any later spawn.
+pub(crate) struct ProcTrack<'a> {
+    pub pgid: &'a AtomicI32,
+    pub shutting_down: &'a AtomicBool,
+}
+
+/// Resolved inputs of a `node ~/.ttobak/server.mjs ...` spawn.
+pub(crate) struct NodeLaunch {
+    pub home: PathBuf,
+    pub node: PathBuf,
+    pub server: PathBuf,
+    pub path: String,
+}
+
+/// Resolves HOME, the adapter, the node binary (stored when newly found) and
+/// the child PATH; a fixed failure code otherwise.
+pub(crate) async fn node_launch(state: &IntakeState) -> Result<NodeLaunch, &'static str> {
+    let home = home_dir().ok_or("HOME_MISSING")?;
     let server = home.join(".ttobak").join("server.mjs");
     if !server.is_file() {
-        return Outcome::failed("ADAPTER_MISSING");
+        return Err("ADAPTER_MISSING");
     }
     let stored = state.snapshot().node_path;
-    let Some(node) = resolve_node(stored.as_deref(), &home) else {
-        return Outcome::failed("NODE_MISSING");
-    };
+    let node = resolve_node(stored.as_deref(), &home).ok_or("NODE_MISSING")?;
     if let Some(found) = node.to_str().filter(|n| stored.as_deref() != Some(*n)) {
         let found = found.to_string();
         let _ = state.update_settings(|s| s.node_path = Some(found));
     }
-    let path = child_path(&node, &login_path(&state, &home).await);
+    let path = child_path(&node, &login_path(state, &home).await);
+    Ok(NodeLaunch {
+        home,
+        node,
+        server,
+        path,
+    })
+}
 
-    let mut cmd = tokio::process::Command::new(&node);
-    cmd.args(intake_plan::argv(action, &server))
+/// `node <args>` with a cleared environment (HOME, LANG, PATH) in HOME.
+/// Callers may add further fixed variables; `run_child` sets the stdio and
+/// the process group.
+pub(crate) fn node_command(launch: &NodeLaunch, args: Vec<OsString>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(&launch.node);
+    cmd.args(args)
         .env_clear()
-        .env("HOME", &home)
+        .env("HOME", &launch.home)
         .env("LANG", "ko_KR.UTF-8")
-        .env("PATH", path)
-        .current_dir(&home)
-        .stdin(Stdio::null())
+        .env("PATH", &launch.path)
+        .current_dir(&launch.home);
+    cmd
+}
+
+/// Spawns `cmd` in its own process group (recorded in `track.pgid` for
+/// app-exit cleanup) and waits for it, the timeout or a cancel. A forced end
+/// SIGTERMs the group, SIGKILLs it after `kill_grace`, and always SIGKILLs
+/// the group once more. Each capped stderr line goes to `on_line`; the last
+/// stdout line is parsed as the result.
+pub(crate) async fn run_child(
+    mut cmd: tokio::process::Command,
+    track: ProcTrack<'_>,
+    timeout: Duration,
+    kill_grace: Duration,
+    cancel: Option<oneshot::Receiver<()>>,
+    mut on_line: impl FnMut(String) + Send + 'static,
+) -> Outcome {
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
         .kill_on_drop(true);
-    // Checked right before spawn: the PATH capture above can outlast the
-    // app-exit kill.
-    if state.shutting_down.load(Ordering::SeqCst) {
+    // Checked right before spawn: the PATH capture can outlast the app-exit
+    // kill.
+    if track.shutting_down.load(Ordering::SeqCst) {
         return Outcome::failed("SHUTTING_DOWN");
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("intake spawn failed: {:?}", e.kind());
+            log::warn!("CLI spawn failed: {:?}", e.kind());
             return Outcome::failed("SPAWN_FAILED");
         }
     };
     let pgid = child.id().map_or(0, |p| p as i32);
-    state.pgid.store(pgid, Ordering::SeqCst);
-    let gen = state.run_gen.load(Ordering::SeqCst);
+    track.pgid.store(pgid, Ordering::SeqCst);
 
     let stdout = child.stdout.take();
     let mut out_task = tokio::spawn(async move {
@@ -829,19 +922,13 @@ async fn execute(
         last.finish().to_vec()
     });
     let stderr = child.stderr.take();
-    let err_app = app.clone();
     let mut err_task = tokio::spawn(async move {
         let Some(mut s) = stderr else {
             return;
         };
-        let state = err_app.state::<IntakeState>();
         let mut emit = |raw: &[u8]| {
-            let Some(line) = cap_progress_line(&String::from_utf8_lossy(raw)) else {
-                return;
-            };
-            if progress && state.run_gen.load(Ordering::SeqCst) == gen {
-                let _ = err_app.emit(PROGRESS_EVENT, json!({ "line": line }));
-                state.progress.lock().push(line);
+            if let Some(line) = cap_progress_line(&String::from_utf8_lossy(raw)) {
+                on_line(line);
             }
         };
         let mut splitter = LineSplitter::new(MAX_STDERR_LINE_BYTES);
@@ -874,7 +961,7 @@ async fn execute(
         Ok(Err(_)) => (None, Some("WAIT_FAILED")),
         Err(code) => {
             kill_group(pgid, libc::SIGTERM);
-            if tokio::time::timeout(KILL_GRACE, child.wait())
+            if tokio::time::timeout(kill_grace, child.wait())
                 .await
                 .is_err()
             {
@@ -905,7 +992,7 @@ async fn execute(
             Vec::new()
         }
     };
-    state.pgid.store(0, Ordering::SeqCst);
+    track.pgid.store(0, Ordering::SeqCst);
     let result = final_json(&stdout_last);
     let code = forced
         .map(str::to_string)
@@ -915,6 +1002,39 @@ async fn execute(
         result,
         code,
     }
+}
+
+/// Runs one CLI action to completion in the claimed run slot (its pgid is
+/// recorded for app-exit cleanup). Progress lines are kept and emitted when
+/// `progress` is set.
+async fn execute(
+    app: &AppHandle,
+    action: &IntakeAction,
+    timeout: Duration,
+    cancel: Option<oneshot::Receiver<()>>,
+    progress: bool,
+) -> Outcome {
+    let state = app.state::<IntakeState>();
+    let launch = match node_launch(&state).await {
+        Ok(l) => l,
+        Err(code) => return Outcome::failed(code),
+    };
+    let cmd = node_command(&launch, intake_plan::argv(action, &launch.server));
+    // `try_begin` bumped the generation before this run started.
+    let gen = state.run_gen.load(Ordering::SeqCst);
+    let line_app = app.clone();
+    let on_line = move |line: String| {
+        let state = line_app.state::<IntakeState>();
+        if progress && state.run_gen.load(Ordering::SeqCst) == gen {
+            let _ = line_app.emit(PROGRESS_EVENT, json!({ "line": line }));
+            state.progress.lock().push(line);
+        }
+    };
+    let track = ProcTrack {
+        pgid: &state.pgid,
+        shutting_down: &state.shutting_down,
+    };
+    run_child(cmd, track, timeout, KILL_GRACE, cancel, on_line).await
 }
 
 /// Starts a tracked run in the background; finishes with `intake://finished`.
@@ -1358,6 +1478,30 @@ pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<Adap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_wait_ends_when_the_group_is_gone() {
+        use std::os::unix::process::CommandExt;
+        // Above any real pid_max: no such group, no wait.
+        let started = std::time::Instant::now();
+        wait_group_gone(2_147_483_646, Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_millis(200));
+        // A group that exits on SIGTERM (and is reaped) ends the wait early.
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("sleep");
+        let pgid = child.id() as i32;
+        let reaper = std::thread::spawn(move || child.wait());
+        assert!(group_exists(pgid));
+        kill_group(pgid, libc::SIGTERM);
+        let started = std::time::Instant::now();
+        wait_group_gone(pgid, Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!group_exists(pgid));
+        let _ = reaper.join();
+    }
     use serde_json::json;
 
     #[test]

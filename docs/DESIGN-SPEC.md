@@ -142,6 +142,10 @@ missing, selected servers, schedule (off, hourly, daily, twice daily) with a
 warning when the CLI LaunchAgent is also installed, per-source status, setup with
 private-calendar consent and skip toggles, run now, login, cancel and a live
 progress log. A failed state read shows a one-line error. 
+In Mic mode, `MicSelector` remembers the chosen device; when that device no
+longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
+rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
+cleared and an amber notice asks the user to reselect.
 In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
@@ -723,6 +727,29 @@ period control (this week / quarter / this year, default this week) drives
   reloads the missed list, mappings and accounts. One line per `sourceFreshness` entry, "last collected" in
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or
   `ttobak-mcp intake calendar`.
+
+Two tabs sit under the header: Dashboard (the sections above, with the period
+control) and Report (`ReportTab`, [ADR-023](decisions/ADR-023-sa-performance-data-residency.md);
+helpers in `lib/performanceReport.ts`). The report tab lists the owner's stored
+reports newest first (`ReportList`, a partial badge per row) and renders the
+selected one natively from its JSON (`ReportView`): every string is a React text
+node, with no HTML, Markdown or links built from content. The view shows the
+period, generation time and model, a partial badge naming the missing sources,
+the summary, ledger tiles, sections in stored order (lede, paragraphs, tables,
+cards), actions grouped high/medium/low, and the data basis collapsed at the end.
+Delete uses an inline confirm (not a browser dialog) and reloads the list.
+
+Generation is Mac app only (`ReportGenerateDialog`, an in-page dialog; a browser
+shows a hint). It takes a period (this week, this quarter, this year, custom
+start/end of at most 400 days, ending no more than two calendar years ago) and four highlight lists, one item per line,
+prefilled from the newest stored report of the same period kind and checked
+like the Mac runner before `report_generate`. An advanced section holds the
+Bedrock toggle and AWS profile picker (`report_settings_get/set`). While a run
+goes, the dialog shows elapsed time, progress lines and Cancel; closing it keeps
+the run going. A successful `report://finished` reloads the list and opens the
+new report; a failure shows the Korean label of its code (report labels, then the shared runner labels). The report tab stays
+mounted (hidden) while the dashboard shows, so a finish event is not lost and is
+handled when the user returns. A failed cancel shows its error inline.
 
 ## Verification
 

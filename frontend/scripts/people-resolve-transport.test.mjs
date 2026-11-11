@@ -22,7 +22,7 @@ function loadApi(respond) {
   vm.runInNewContext(source, {
     exports, atob, URLSearchParams, process: { env: {} },
     require: name => { assert.ok(name in dependencies, name); return dependencies[name]; },
-    fetch: async (url, options) => { requests.push({ url, method: options.method }); return respond(); },
+    fetch: async (url, options) => { requests.push({ url, method: options.method, body: options.body }); return respond(); },
   });
   return { api: exports.accountApi, requests };
 }
@@ -37,4 +37,17 @@ test('the people resolve request parses the 202 JSON body the server returns', a
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /\/api\/accounts\/acc1\/people\/resolve$/);
   assert.equal(requests[0].method, 'POST');
+});
+
+test('mention resolution forwards continuation and preserves bounded results', async () => {
+  const { api, requests } = loadApi(() => ({
+    status: 200, ok: true,
+    headers: { get: key => (key === 'content-type' ? 'application/json' : null) },
+    json: async () => ({ written: 0, remaining: true, nextCursor: 'next-page' }),
+  }));
+  const result = await api.people.resolveMention('acc1', 'hash', { kind: 'contact', id: 'c1', cursor: 'resume-page' });
+  assert.deepEqual({ ...result }, { written: 0, remaining: true, nextCursor: 'next-page' });
+  assert.deepEqual(JSON.parse(requests[0].body), { kind: 'contact', id: 'c1', cursor: 'resume-page' });
+  await api.people.resolveMention('acc1', 'hash', { kind: 'member', id: 'u1' });
+  assert.deepEqual(JSON.parse(requests[1].body), { kind: 'member', id: 'u1' });
 });

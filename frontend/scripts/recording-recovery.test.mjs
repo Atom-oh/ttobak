@@ -103,6 +103,7 @@ test('recording timers use the new draft callback and finalized audio retains it
     '@/lib/upload': {},
     '@/lib/tauri': { isTauri: () => false },
     '@/lib/browserRecordingBackup': storage,
+    '@/lib/micStream': { openMicStream: async (devices) => ({ stream: await devices.getUserMedia({ audio: true }), usedDefault: false }) },
     '@/components/CameraCapture': {},
   };
   const source = readFileSync(new URL('../src/components/RecordButton.tsx', import.meta.url), 'utf8');

@@ -267,6 +267,26 @@ what. This is step 2 of the account roadmap; it must never guess.
   resolution, so a later rule never breaks a tie and nothing is stored.
 - Korean honorific suffixes (`peopleHonorificSuffixes` in Go) are stripped
   from the mention side only, after an exact full-name miss.
+- Insight `entities` mix people, organizations, projects and technical terms.
+  The existing extraction call also supplies model-classified `personEntities`.
+  `insightPersonEntities` enforces subset membership, distinct entries, a
+  a bound of 20 names of at most 120 code points each, and exclusion of
+  control or format characters and speaker
+  codes. Extraction additionally requires each name to occur as an exact
+  substring in its input; this check is not replayed against current meeting
+  content during resolver runs. These checks do not prove human identity:
+  the model can still misclassify a term, which members can ignore.
+  Only classified names become unresolved insight candidates; generic entities
+  retain deterministic matching against known people/accounts/projects.
+  Person mentions are collected before generic entities consume the bound.
+- Speaker codes (case-insensitive) are `spk_<number>` or the Korean speaker
+  prefix immediately followed by one Latin letter A–Z, alone
+  or joined by `,`, `/`, `、`, `，`, `·`, `;`, `&`, `+`, `and` or its Korean
+  conjunction, with
+  optional surrounding whitespace; `isPeopleSpeakerCode` also applies NFKC.
+  These values are excluded from person candidates in every source. A single
+  assignee code still resolves through the saved speaker map if its mapped
+  name is not itself a speaker code.
 - Per meeting at most 50 mentions are considered and 100 edges written; a run
   reads at most 2,000 contacts and 200 descendant accounts.
 
@@ -279,6 +299,28 @@ what. This is step 2 of the account roadmap; it must never guess.
   by normalized text. Resolving a group writes manual edges and removes its
   rows; ignoring writes the account-wide `LINKDENY#mention#{hash}`, and the
   runner never relists resolved or ignored text.
+- New candidate rows carry the storage-only `personCandidate` attribute.
+  Read-time filtering suppresses two row kinds: insight rows without that
+  attribute, and rows from any source whose mention is a single or grouped
+  speaker code. This also applies to stale mention-resolution requests.
+  Legitimate legacy insight names leave
+  the review queue too; no backfill is scheduled by this change.
+- Group resolution skips hidden rows over at most 20 hash pages, reading at
+  most 2,000 stored rows and checking at most 300 meeting publications per
+  request. It writes at most 100 visible candidates and returns a continuation
+  scoped to the account and mention hash at a bound. The app retains it for
+  the same viewer/group/target on the next connection action.
+  Fully hidden partial review groups also retain row continuation rather
+  than skipping the entire hash. Hidden rows are not deleted by these reads.
+- Recovery requires `BedrockService.DeriveSummary` for `insights` (one extraction
+  call per meeting), then `AccountPeopleService.ResolveMeeting`. The normal
+  batch-summary pipeline already performs both in that order. A people-only
+  run never re-extracts insights. `ReplaceUnresolvedMentions` uses lease-fenced
+  `Put` operations to replace same-key legacy rows with classified rows.
+  That run deletes prior candidate rows not rewritten, including hidden legacy
+  insight rows; reverting the filter cannot restore those removed rows.
+  Re-extraction incurs model work; filtering itself does not. No meeting
+  content, contacts or existing manual decisions are deleted by the cutover.
 
 #### Runs and triggers
 

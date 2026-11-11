@@ -15,6 +15,7 @@ import (
 
 const (
 	maxMentionResolveMeetings = 100
+	maxMentionResolvePages    = maxPeopleRowsPerPage / maxMentionResolveMeetings
 	peopleWriteAttempts       = 2
 )
 
@@ -166,23 +167,39 @@ func (s *AccountPeopleService) UnbindEdge(ctx context.Context, userID, accountID
 	return ErrConflict
 }
 
-// visibleMentionRows reads one hash's rows (bounded) visible to the viewer.
-func (s *AccountPeopleService) visibleMentionRows(ctx context.Context, v *peopleViewer, hash string) ([]model.UnresolvedMention, bool, error) {
-	rows, more, err := s.repo.ListUnresolvedMentionsByHash(ctx, v.accountID, hash, maxMentionResolveMeetings)
-	if err != nil {
-		return nil, false, err
-	}
-	visible := rows[:0]
-	for _, r := range rows {
-		ok, err := v.visibleMention(ctx, r)
+// visibleMentionRows skips hidden rows across bounded hash pages, collecting
+// at most 100 visible candidates. A cursor preserves progress at the read bound.
+func (s *AccountPeopleService) visibleMentionRows(ctx context.Context, v *peopleViewer, hash, after string) ([]model.UnresolvedMention, string, error) {
+	visible := []model.UnresolvedMention{}
+	for range maxMentionResolvePages {
+		rows, next, err := s.repo.ListUnresolvedMentionsByHash(ctx, v.accountID, hash, after, maxMentionResolveMeetings-len(visible))
 		if err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
-		if ok && r.Hash == hash {
-			visible = append(visible, r)
+		resume := after
+		for _, r := range rows {
+			if r.Hash != hash {
+				continue
+			}
+			ok, err := v.visibleMention(ctx, r)
+			if err != nil {
+				return nil, "", err
+			}
+			if v.truncated {
+				// Do not advance past a row whose publication was not checked.
+				return visible, resume, nil
+			}
+			resume = model.MentionSortKey(r.Hash, r.MeetingID, r.Role)
+			if ok {
+				visible = append(visible, r)
+			}
 		}
+		if next == "" || len(visible) == maxMentionResolveMeetings {
+			return visible, next, nil
+		}
+		after = next
 	}
-	return visible, more, nil
+	return visible, after, nil
 }
 
 // ResolveMentionGroup binds every visible row of one mention group to a
@@ -191,6 +208,17 @@ func (s *AccountPeopleService) ResolveMentionGroup(ctx context.Context, userID, 
 	if !ValidMentionKey(hash) || (in.Kind != model.LinkKindMember && in.Kind != model.LinkKindContact) ||
 		!validLinkPlainID(in.ID) || strings.Contains(in.ID, ":") {
 		return nil, ErrInvalidInput
+	}
+	cur, err := decodePeopleCursor(accountID, in.Cursor, peopleCursorMention)
+	if err != nil {
+		return nil, err
+	}
+	if cur.S != "" {
+		parts := strings.Split(strings.TrimPrefix(cur.S, model.PrefixAccountMention), "#")
+		if len(parts) != 3 || parts[0] != hash ||
+			model.ValidatePeopleLinkKey(model.PeopleLinkKey{MeetingID: parts[1], ToKind: in.Kind, ToID: in.ID, Role: parts[2]}) != nil {
+			return nil, ErrInvalidInput
+		}
 	}
 	v, err := s.viewer(ctx, accountID, userID)
 	if err != nil {
@@ -202,11 +230,14 @@ func (s *AccountPeopleService) ResolveMentionGroup(ctx context.Context, userID, 
 		}
 		return nil, err
 	}
-	rows, more, err := s.visibleMentionRows(ctx, v, hash)
+	rows, next, err := s.visibleMentionRows(ctx, v, hash, cur.S)
 	if err != nil {
 		return nil, err
 	}
-	out := &model.ResolveMentionResult{Remaining: more}
+	out := &model.ResolveMentionResult{Remaining: next != ""}
+	if next != "" {
+		out.NextCursor = encodePeopleCursor(accountID, peopleCursorMention, next)
+	}
 	var written, stale []string
 	createdAt := s.now().UTC().Format(time.RFC3339)
 	for _, r := range rows {
@@ -270,7 +301,7 @@ func (s *AccountPeopleService) IgnoreMentionGroup(ctx context.Context, userID, a
 	if err := s.repo.PutMentionIgnore(ctx, accountID, userID, hash); err != nil {
 		return mapPeopleWriteError(err)
 	}
-	rows, _, err := s.visibleMentionRows(ctx, v, hash)
+	rows, _, err := s.visibleMentionRows(ctx, v, hash, "")
 	if err != nil {
 		return err
 	}
