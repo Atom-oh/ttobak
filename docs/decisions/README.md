@@ -42,3 +42,5 @@ rewritten.
 | [ADR-017](ADR-017-mac-meeting-detection-prompts.md) | Mac meeting detection prompts; the former ADR-061, renumbered |
 | [ADR-022](ADR-022-account-merge.md) | Account merge; the former ADR-072, renumbered |
 | [ADR-019](ADR-019-mac-app-distribution-and-updates.md) | Mac app distribution and in-app updates; the former ADR-073, renumbered |
+| [ADR-001](ADR-001-meeting-document-extraction.md) | Meeting document text extraction; the former ADR-039, renumbered |
+| [ADR-023](ADR-023-sa-performance-data-residency.md) | SA performance data residency; the former ADR-068, renumbered |

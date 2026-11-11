@@ -104,7 +104,7 @@ func init() {
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Owner-private SA performance data: every route reads only the JWT user's
-	// own USER# partition (ADR-068).
+	// own USER# partition (ADR-023).
 	performanceService := service.NewPerformanceService(repo, accountService)
 	performanceService.SetMissedSources(calendarService, meetingService)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
