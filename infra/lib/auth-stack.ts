@@ -109,7 +109,7 @@ export class AuthStack extends cdk.Stack {
       },
       // A changed email takes effect only after the user verifies it, so an unverified
       // address never becomes the sign-in identity (pool shared with cc-on-bedrock, whose
-      // own ADR-016 covers that; see ADR-007 here).
+      // own ADR-016 covers that; see ADR-057 here).
       keepOriginal: {
         email: true,
       },
@@ -211,7 +211,7 @@ export class AuthStack extends cdk.Stack {
     // role naming); those are set through Admin* APIs only. `email` must stay writable
     // because it is a required attribute (Cognito rejects a client that cannot write a
     // required attribute); keepOriginal below holds an email change until it is verified.
-    // The remaining self-service email change is an accepted risk (ADR-007).
+    // The remaining self-service email change is an accepted risk (ADR-057).
     const clientWriteAttributes = new cognito.ClientAttributes().withStandardAttributes({ fullname: true, email: true });
 
     this.userPoolClient = this.userPool.addClient('TtobakAppClient', {

@@ -93,7 +93,7 @@ python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
 ```
 
-- [Cognito app client write attributes and self-service email change](decisions/ADR-007-sign-up-identity-and-admin.md)
+- [Cognito app client write attributes and self-service email change](decisions/ADR-057-cognito-client-write-attributes.md)
 - [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
 - [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
 - [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)

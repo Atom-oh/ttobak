@@ -51,7 +51,7 @@ from the account-shared limit, which stays opportunity ID, name and stage.
   | `PERFASSIGN#` SFDC assignment | No TTL. A current-state row, removed when a complete assignment snapshot from the runner no longer lists it. It persists while the owner runs no sync. |
   | `PERFMAP#` automatic mapping | No TTL. Deleted (conditional on manual = false) right after any committed assignment batch that removes its assignment, complete or not; the complete-batch mapping pass also removes it when stale (no longer a unique name match). |
   | `PERFMAP#` manual mapping | No TTL and no deletion path: kept until the owner changes it, including after its assignment disappears. Accepted owner-scoped persistence: it holds only an SFDC account ID and a TTOBAK account ID, the mapping list shows it only while its assignment exists, and it is reused if the assignment returns. |
-  | `PERFSRC#` source revision | No TTL. Status and revision only (no customer fields), like the calendar source row; it lives with the user's partition like other `USER#` state, and user deletion does not remove it (ADR-007). |
+  | `PERFSRC#` source revision | No TTL. Status and revision only (no customer fields), like the calendar source row; it lives with the user's partition like other `USER#` state, and user deletion does not remove it (ADR-032). |
 
   Calendar events keep the calendar intake's own retention (90 days after the
   event ends).

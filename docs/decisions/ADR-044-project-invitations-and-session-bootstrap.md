@@ -2,7 +2,7 @@
 
 - Status: Accepted implementation; activation requires the rollout below.
 - Date: 2026-09-18.
-- Extends ADR-025 project membership and ADR-007 user administration.
+- Extends ADR-025 project membership and ADR-032 user administration.
 
 ## Decision
 
