@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 8aa0d143f446 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 60e57c5ec1f4 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -177,7 +177,7 @@ limit instead of claiming a Mac build passed.
   covers `/api/public/*`; API Gateway registers only the literal doc route.
   A new unauthenticated route is CRITICAL (ADR-020).
 - **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows
-  (ADR-044). Keep writers disabled until companion bootstrap and rollback guards
+  (ADR-025). Keep writers disabled until companion bootstrap and rollback guards
   are deployed. Account/meeting `PENDING_SHARE#`/`PENDING_ACCOUNT#`/
   `PENDING_MEETING#` rows bind the invited Cognito sub and require verified email
   before materialization. Enforce 30-day expiry synchronously and via
@@ -292,7 +292,7 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/040); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
+| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/013); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
