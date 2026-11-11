@@ -5,9 +5,9 @@ import { accountApi } from '@/lib/api';
 import { confirmDialog } from '@/lib/dialog';
 import { CONTACT_FIELDS, isContactAccessDenied } from '@/lib/contactImport';
 import type { AccountContact, ContactInput } from '@/types/meeting';
-import { ContactImport } from '@/components/ContactImport';
+import { ContactImport, type ImportTargetAccount } from '@/components/ContactImport';
 
-export function AccountContacts({ accountId, userId }: { accountId: string; userId: string }) {
+export function AccountContacts({ accountId, userId, account }: { accountId: string; userId: string; account: ImportTargetAccount }) {
   const [contacts, setContacts] = useState<AccountContact[]>([]);
   const [cursor, setCursor] = useState('');
   const [loading, setLoading] = useState(false);
@@ -106,7 +106,7 @@ export function AccountContacts({ accountId, userId }: { accountId: string; user
       </div>)}</div>
       {loading && <p className="mt-2 text-xs text-slate-500">불러오는 중…</p>}
       {cursor && <button type="button" disabled={loading} onClick={() => void load(cursor)} className="mt-3 text-sm text-primary disabled:opacity-40">연락처 더 보기</button>}
-      <ContactImport accountId={accountId} userId={userId} onImported={() => void load()} onDenied={denyAccess} />
+      <ContactImport accountId={accountId} userId={userId} account={account} onImported={() => void load()} onDenied={denyAccess} />
     </div>
   </section>;
 }

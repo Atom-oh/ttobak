@@ -423,6 +423,15 @@ members and untag for the uploader or an owner.
 Direct members manage a shared customer contact list on the Account's general
 tab. CSV and XLSX imports parse locally, map Remember and common Korean/English
 headers, show unmapped columns and a selectable preview, and report each row.
+The preview matches each row's company to the current Account
+(`matchRowToAccount`/`planAccountRows` in `src/lib/contactBulkImport.ts`): an
+exact name or alias (legal forms, case, spacing and a `KEB` prefix ignored), or
+the Account's mail domain when the company is blank, is labeled exact; one name holding
+the other with the shorter at least two characters and half the longer's length
+is labeled contained. Matching rows are preselected and listed first (exact, then
+contained, then the rest, each by normalized company); other rows start
+unselected. A file that maps neither company nor email keeps every row selected
+in file order. Import still runs only when the user confirms the selected rows.
 Existing and earlier imported rows are checked for matching email or phone;
 shared office numbers can cause skips, and concurrent imports can race. Import is
 scoped to the currently selected Account and authenticated user. Manual entry,
