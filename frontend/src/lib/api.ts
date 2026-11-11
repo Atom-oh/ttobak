@@ -1034,9 +1034,9 @@ export const accountApi = {
     mentions: (id: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.get<MentionGroupsPage>(`/api/accounts/${encodeURIComponent(id)}/people/mentions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
         { ...options, cache: 'no-store' }),
-    resolveMention: (id: string, key: string, target: { kind: 'member' | 'contact'; id: string }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    resolveMention: (id: string, key: string, target: { kind: 'member' | 'contact'; id: string; cursor?: string }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.post<ResolveMentionResult>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/resolve`,
-        { kind: target.kind, id: target.id }, options),
+        { kind: target.kind, id: target.id, ...(target.cursor ? { cursor: target.cursor } : {}) }, options),
     ignoreMention: (id: string, key: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/ignore`, undefined, options),
     edges: (id: string, meetingId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>

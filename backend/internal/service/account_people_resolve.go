@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,6 +90,7 @@ type PeopleDirectory struct {
 type PeopleMention struct {
 	Text, Role, SourceField, SourceRef, Evidence string
 	AllowEntities                                bool // insight entities only (rule 3)
+	PersonCandidate                              bool // explicitly classified insight person
 }
 
 // MentionResolution is the outcome of ResolveMention. Normalized is the
@@ -216,6 +218,37 @@ func hasControlOrFormat(s string) bool {
 	return false
 }
 
+// Speaker codes, including grouped codes emitted as an assignee, describe
+// acoustic tracks rather than identities. Do not guess a person from them.
+var peopleSpeakerCodes = regexp.MustCompile(`(?i)^(?:spk_[0-9]+|화자[A-Z])(?:\s*(?:[,/、，·;&+]|및|and)\s*(?:spk_[0-9]+|화자[A-Z]))*$`)
+
+func isPeopleSpeakerCode(text string) bool {
+	return peopleSpeakerCodes.MatchString(strings.TrimSpace(norm.NFKC.String(text)))
+}
+
+// insightPersonEntities accepts only a bounded, distinct subset of the
+// insight's original entities. Missing classification never becomes a name.
+func insightPersonEntities(in model.MeetingInsight) []string {
+	var names []string
+	for _, raw := range in.PersonEntities {
+		name := strings.TrimSpace(raw)
+		if name == "" || utf8.RuneCountInString(name) > model.MaxPeopleMentionRunes ||
+			hasControlOrFormat(name) || isPeopleSpeakerCode(name) || slices.Contains(names, name) {
+			continue
+		}
+		for _, entity := range in.Entities {
+			if strings.TrimSpace(entity) == name {
+				names = append(names, name)
+				break
+			}
+		}
+		if len(names) == 20 {
+			break
+		}
+	}
+	return names
+}
+
 // CollectMeetingMentions gathers mentions from participants, the speaker map,
 // action item assignees and insight entities, in that order, keeping the first
 // MaxPeopleMentionsPerMeeting.
@@ -225,7 +258,7 @@ func CollectMeetingMentions(meeting *model.Meeting) (mentions []PeopleMention, t
 	}
 	add := func(m PeopleMention) {
 		text := strings.TrimSpace(m.Text)
-		if text == "" || hasControlOrFormat(text) || len(m.SourceRef) > model.MaxPeopleSourceRefBytes {
+		if text == "" || isPeopleSpeakerCode(text) || hasControlOrFormat(text) || len(m.SourceRef) > model.MaxPeopleSourceRefBytes {
 			return
 		}
 		if len(mentions) >= model.MaxPeopleMentionsPerMeeting {
@@ -237,7 +270,7 @@ func CollectMeetingMentions(meeting *model.Meeting) (mentions []PeopleMention, t
 	}
 	speakerName := func(label string) string {
 		name := strings.TrimSpace(meeting.SpeakerMap[label])
-		if name == "" || defaultSpeakerLabel.MatchString(name) {
+		if name == "" || isPeopleSpeakerCode(name) {
 			return ""
 		}
 		return name
@@ -275,9 +308,22 @@ func CollectMeetingMentions(meeting *model.Meeting) (mentions []PeopleMention, t
 	if meeting.Insights != "" {
 		var insights []model.MeetingInsight
 		if json.Unmarshal([]byte(meeting.Insights), &insights) == nil {
+			// Prioritize explicitly classified people before generic entities
+			// consume the per-meeting bound.
+			for _, in := range insights {
+				for _, name := range insightPersonEntities(in) {
+					add(PeopleMention{Text: name, Role: model.PeopleRoleMentions, SourceField: model.PeopleSourceInsights,
+						SourceRef: in.ID, Evidence: capRunes(in.Type+": "+in.Text, model.MaxPeopleEvidenceRunes),
+						AllowEntities: true, PersonCandidate: true})
+				}
+			}
 			for _, in := range insights {
 				evidence := capRunes(in.Type+": "+in.Text, model.MaxPeopleEvidenceRunes)
+				people := insightPersonEntities(in)
 				for _, e := range in.Entities {
+					if slices.Contains(people, strings.TrimSpace(e)) {
+						continue
+					}
 					add(PeopleMention{Text: e, Role: model.PeopleRoleMentions, SourceField: model.PeopleSourceInsights,
 						SourceRef: in.ID, Evidence: evidence, AllowEntities: true})
 				}
@@ -297,7 +343,10 @@ func PlanMeetingPeople(accountID, meetingLinkID string, dir *PeopleDirectory, me
 	for _, m := range mentions {
 		res := ResolveMention(dir, m)
 		if !res.Resolved {
-			if res.Normalized == "" {
+			// Mixed insight entities may still resolve to a known person,
+			// account or project, but unknown terms are not person names.
+			if res.Normalized == "" || isPeopleSpeakerCode(m.Text) ||
+				(m.SourceField == model.PeopleSourceInsights && !m.PersonCandidate) {
 				continue
 			}
 			k := mentionKey{model.MentionHash(res.Normalized), m.Role}
@@ -308,6 +357,7 @@ func PlanMeetingPeople(accountID, meetingLinkID string, dir *PeopleDirectory, me
 			unresolved = append(unresolved, model.UnresolvedMention{
 				AccountID: accountID, Hash: k.hash, MeetingID: meetingLinkID, Role: m.Role,
 				SourceField: m.SourceField, Mention: m.Text, SourceRef: m.SourceRef, CreatedAt: createdAt,
+				PersonCandidate: true,
 			})
 			continue
 		}
