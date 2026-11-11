@@ -23,12 +23,27 @@ type sfdcSyncFake struct {
 	suppressed  map[string]bool
 	writes      []string
 	writeErr    func(c *model.AccountContact, op string) error
+	unreadable  map[string]bool
+	gets        int
+}
+
+func (r *sfdcSyncFake) GetAccountContact(ctx context.Context, account, id string) (*model.AccountContact, error) {
+	r.gets++
+	if r.unreadable[id] {
+		return nil, fmt.Errorf("%w: test", repository.ErrContactUnreadable)
+	}
+	return r.contactCRUDRepo.GetAccountContact(ctx, account, id)
+}
+
+// ListAccountContacts must not be used by the sync.
+func (r *sfdcSyncFake) ListAccountContacts(context.Context, string, int, string) ([]model.AccountContact, string, error) {
+	return nil, "", errors.New("sync must not list the whole account")
 }
 
 func newSfdcSyncFake() *sfdcSyncFake {
 	return &sfdcSyncFake{
 		contactCRUDRepo: contactCRUDRepo{contactTestRepo: contactTestRepo{account: true, member: true}, rows: map[string]model.AccountContact{}},
-		accountName:     "Acme Korea", index: map[string]string{}, suppressed: map[string]bool{},
+		accountName:     "Acme Korea", index: map[string]string{}, suppressed: map[string]bool{}, unreadable: map[string]bool{},
 	}
 }
 
@@ -98,6 +113,7 @@ func newSfdcSync(r *sfdcSyncFake) (*AccountContactSyncService, *[]model.PeopleRe
 	})
 	s := NewAccountContactSyncService(r, contacts)
 	s.now = func() time.Time { return time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC) }
+	s.start = func(int) int { return 0 }
 	return s, &published
 }
 
@@ -224,7 +240,7 @@ func TestSfdcContactSync(t *testing.T) {
 		if err != nil || out.Marked != 0 || out.Unmarked != 0 || len(r.writes) != 0 {
 			t.Fatalf("got %+v %v writes=%v", out, err, r.writes)
 		}
-		if _, err = s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SfdcAccountIDs: []string{sfAcct}, Present: []string{sfC2}}); !errors.Is(err, ErrInvalidInput) {
+		if _, err = s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {sfC2}}}); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("present without a complete snapshot: %v", err)
 		}
 	})
@@ -235,7 +251,7 @@ func TestSfdcContactSync(t *testing.T) {
 		back := r.put(model.AccountContact{Name: "Back", SfdcContactID: sfC2, SfdcAccountID: sfAcct, SfdcLeftAt: "2026-10-01T00:00:00Z"})
 		left := r.put(model.AccountContact{Name: "Left", SfdcContactID: sfC3, SfdcAccountID: sfAcct, SfdcLeftAt: "2026-10-01T00:00:00Z"})
 		s, _ := newSfdcSync(r)
-		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: []string{sfC2}})
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {sfC2}}})
 		if err != nil || out.Marked != 1 || out.Unmarked != 1 || len(out.Results) != 0 {
 			t.Fatalf("got %+v %v", out, err)
 		}
@@ -252,7 +268,7 @@ func TestSfdcContactSync(t *testing.T) {
 		r.put(model.AccountContact{Name: "Gone", SfdcContactID: sfC1, SfdcAccountID: sfAcct})
 		r.writeErr = func(*model.AccountContact, string) error { return repository.ErrConditionFailed }
 		s, _ := newSfdcSync(r)
-		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: []string{}})
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {}}})
 		if err != nil || out.Marked != 0 || len(r.writes) != 1 {
 			t.Fatalf("got %+v %v writes=%v", out, err, r.writes)
 		}
@@ -262,7 +278,7 @@ func TestSfdcContactSync(t *testing.T) {
 		r := newSfdcSyncFake()
 		other := r.put(model.AccountContact{Name: "Other", SfdcContactID: sfC1, SfdcAccountID: sfAcct2})
 		s, _ := newSfdcSync(r)
-		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: []string{}})
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {}}})
 		if err != nil || out.Marked != 0 || r.rows[other.ContactID].SfdcLeftAt != "" || len(r.writes) != 0 {
 			t.Fatalf("got %+v %v", out, err)
 		}
@@ -272,8 +288,10 @@ func TestSfdcContactSync(t *testing.T) {
 		r := newSfdcSyncFake()
 		s, _ := newSfdcSync(r)
 		for _, req := range []model.SfdcContactSyncRequest{
+			{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct, sfAcct2}, Present: map[string][]string{sfAcct: {}, sfAcct2: {sfC1}},
+				Items: []model.SfdcContactSyncItem{{SfdcContactID: sfC1, SfdcAccountID: sfAcct, Name: "Kim", Action: "create"}}},
 			{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}},
-			{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: []string{sfC2},
+			{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {sfC2}},
 				Items: []model.SfdcContactSyncItem{{SfdcContactID: sfC1, SfdcAccountID: sfAcct, Name: "Kim", Action: "create"}}},
 		} {
 			if _, err := s.Sync(ctx, "acc", "u1", req); !errors.Is(err, ErrInvalidInput) {
@@ -296,9 +314,17 @@ func TestSfdcContactSync(t *testing.T) {
 			tooMany[i] = ok
 			tooMany[i].SfdcContactID = fmt.Sprintf("003%015d", i)
 		}
-		present := make([]string, 20001)
-		for i := range present {
-			present[i] = fmt.Sprintf("003%015d", i)
+		ids := func(n, from int) []string {
+			out := make([]string, n)
+			for i := range out {
+				out[i] = fmt.Sprintf("003%015d", from+i)
+			}
+			return out
+		}
+		five := []string{"001000000000011AAA", "001000000000012AAA", "001000000000013AAA", "001000000000014AAA", "001000000000015AAA"}
+		tooManyTotal := map[string][]string{}
+		for i, a := range five {
+			tooManyTotal[a] = ids(4001, i*5000)
 		}
 		accounts := make([]string, 21)
 		for i := range accounts {
@@ -315,8 +341,12 @@ func TestSfdcContactSync(t *testing.T) {
 			"link without rev":   {SfdcAccountIDs: []string{sfAcct}, Items: with(func(i *model.SfdcContactSyncItem) { i.Action, i.ContactID = "link", uuid.NewString() })},
 			"create with id":     {SfdcAccountIDs: []string{sfAcct}, Items: with(func(i *model.SfdcContactSyncItem) { i.ContactID = uuid.NewString() })},
 			"duplicate item":     {SfdcAccountIDs: []string{sfAcct}, Items: append(with(func(*model.SfdcContactSyncItem) {}), ok)},
-			"bad present id":     {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: []string{"x"}},
-			"too many present":   {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: present},
+			"bad present id":     {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {"x"}}},
+			"over 5000 per acct": {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: ids(5001, 0)}},
+			"over 20000 total":   {SnapshotComplete: true, SfdcAccountIDs: five, Present: tooManyTotal},
+			"missing account":    {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct, sfAcct2}, Present: map[string][]string{sfAcct: {}}},
+			"foreign present":    {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct2: {}}},
+			"null present list":  {SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: nil}},
 			"duplicate accounts": {SfdcAccountIDs: []string{sfAcct, sfAcct}},
 		} {
 			if _, err := s.Sync(ctx, "acc", "u1", req); !errors.Is(err, ErrInvalidInput) {
@@ -325,6 +355,100 @@ func TestSfdcContactSync(t *testing.T) {
 		}
 		if len(r.writes) != 0 {
 			t.Fatalf("invalid requests wrote %v", r.writes)
+		}
+	})
+
+	t.Run("link_to_unreadable_contact_is_invalid", func(t *testing.T) {
+		r := newSfdcSyncFake()
+		c := r.put(model.AccountContact{Name: "Kim"})
+		r.unreadable[c.ContactID] = true
+		s, _ := newSfdcSync(r)
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SfdcAccountIDs: []string{sfAcct}, Items: []model.SfdcContactSyncItem{
+			{SfdcContactID: sfC1, SfdcAccountID: sfAcct, Name: "Kim", Action: "link", ContactID: c.ContactID, Revision: c.Revision},
+			{SfdcContactID: sfC2, SfdcAccountID: sfAcct, Name: "Lee", Action: "create"}}})
+		if err != nil || out.Results[0].Result != model.SfdcSyncInvalid || out.Results[1].Result != model.SfdcSyncCreated {
+			t.Fatalf("got %+v %v", out, err)
+		}
+	})
+
+	t.Run("departure_unreadable_contact_is_skipped_and_counted", func(t *testing.T) {
+		r := newSfdcSyncFake()
+		bad := r.put(model.AccountContact{Name: "Bad", SfdcContactID: sfC1, SfdcAccountID: sfAcct})
+		gone := r.put(model.AccountContact{Name: "Gone", SfdcContactID: sfC2, SfdcAccountID: sfAcct})
+		r.unreadable[bad.ContactID] = true
+		s, _ := newSfdcSync(r)
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {}}})
+		if err != nil || out.Skipped != 1 || out.Marked != 1 || r.rows[gone.ContactID].SfdcLeftAt == "" {
+			t.Fatalf("got %+v %v", out, err)
+		}
+	})
+
+	manyLinks := func(r *sfdcSyncFake, n int) {
+		for i := 0; i < n; i++ {
+			r.put(model.AccountContact{Name: fmt.Sprint("C", i), SfdcContactID: fmt.Sprintf("003%015d", i), SfdcAccountID: sfAcct})
+		}
+	}
+	countLeft := func(r *sfdcSyncFake) int {
+		n := 0
+		for _, c := range r.rows {
+			if c.SfdcLeftAt != "" {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("departure_write_cap_converges_across_runs", func(t *testing.T) {
+		r := newSfdcSyncFake()
+		manyLinks(r, 450)
+		s, _ := newSfdcSync(r)
+		s.start = func(n int) int { return n / 3 }
+		req := model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {}}}
+		for run, want := range []int{200, 200, 50, 0} {
+			out, err := s.Sync(ctx, "acc", "u1", req)
+			if err != nil || out.Marked != want {
+				t.Fatalf("run %d: %+v %v", run, out, err)
+			}
+		}
+		if countLeft(r) != 450 {
+			t.Fatalf("marked %d of 450", countLeft(r))
+		}
+	})
+
+	t.Run("departure_deadline_stops_early_without_error", func(t *testing.T) {
+		r := newSfdcSyncFake()
+		manyLinks(r, 100)
+		s, _ := newSfdcSync(r)
+		t0, calls := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC), 0
+		s.now = func() time.Time { calls++; return t0.Add(time.Duration(calls) * time.Second) }
+		req := model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {}}}
+		out, err := s.Sync(ctx, "acc", "u1", req)
+		if err != nil || out.Marked == 0 || out.Marked >= 100 {
+			t.Fatalf("deadline run: %+v %v", out, err)
+		}
+		first := out.Marked
+		s.now = func() time.Time { return t0 }
+		if out, err = s.Sync(ctx, "acc", "u1", req); err != nil || out.Marked != 100-first || countLeft(r) != 100 {
+			t.Fatalf("next run: %+v %v", out, err)
+		}
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if out, err = s.Sync(cancelled, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {"003000000000000000"}}}); err != nil || out.Unmarked != 0 {
+			t.Fatalf("cancelled: %+v %v", out, err)
+		}
+	})
+
+	t.Run("departure_reads_only_linked_contacts", func(t *testing.T) {
+		r := newSfdcSyncFake()
+		for i := 0; i < 50; i++ {
+			r.put(model.AccountContact{Name: fmt.Sprint("Plain", i)})
+		}
+		r.put(model.AccountContact{Name: "Gone", SfdcContactID: sfC1, SfdcAccountID: sfAcct})
+		r.put(model.AccountContact{Name: "Other", SfdcContactID: sfC2, SfdcAccountID: sfAcct2})
+		s, _ := newSfdcSync(r)
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {}}})
+		if err != nil || out.Marked != 1 || r.gets != 1 {
+			t.Fatalf("got %+v %v gets=%d", out, err, r.gets)
 		}
 	})
 
@@ -342,7 +466,7 @@ func TestSfdcContactSync(t *testing.T) {
 		r := newSfdcSyncFake()
 		r.put(model.AccountContact{Name: "Gone", SfdcContactID: sfC3, SfdcAccountID: sfAcct})
 		s, published := newSfdcSync(r)
-		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: []string{sfC1, sfC2},
+		out, err := s.Sync(ctx, "acc", "u1", model.SfdcContactSyncRequest{SnapshotComplete: true, SfdcAccountIDs: []string{sfAcct}, Present: map[string][]string{sfAcct: {sfC1, sfC2}},
 			Items: []model.SfdcContactSyncItem{{SfdcContactID: sfC1, SfdcAccountID: sfAcct, Name: "A", Action: "create"}, {SfdcContactID: sfC2, SfdcAccountID: sfAcct, Name: "B", Action: "create"}}})
 		if err != nil || out.Marked != 1 || len(*published) != 1 || (*published)[0] != (model.PeopleResolveRequested{AccountID: "acc", Reason: model.PeopleResolveReasonContacts}) {
 			t.Fatalf("got %+v %v published=%+v", out, err, *published)

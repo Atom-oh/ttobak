@@ -22,12 +22,13 @@ const (
 )
 
 // SfdcContactSyncRequest is one bounded batch for one TTOBAK Account.
-// Present lists every SFDC contact ID read from SfdcAccountIDs; it is
-// required when, and only allowed when, SnapshotComplete is true.
+// Present maps each SFDC account ID in SfdcAccountIDs to every SFDC contact
+// ID read from it; it is required when, and only allowed when,
+// SnapshotComplete is true.
 type SfdcContactSyncRequest struct {
 	SnapshotComplete bool                  `json:"snapshotComplete"`
 	SfdcAccountIDs   []string              `json:"sfdcAccountIds"`
-	Present          []string              `json:"present,omitempty"`
+	Present          map[string][]string   `json:"present,omitempty"`
 	Items            []SfdcContactSyncItem `json:"items"`
 }
 
@@ -50,9 +51,11 @@ type SfdcContactSyncResult struct {
 	ContactID     string `json:"contactId,omitempty"`
 }
 
-// SfdcContactSyncResponse counts departure marks set and cleared.
+// SfdcContactSyncResponse counts departure marks set and cleared, and the
+// linked contacts the departure pass could not open.
 type SfdcContactSyncResponse struct {
 	Results  []SfdcContactSyncResult `json:"results"`
 	Marked   int                     `json:"marked"`
 	Unmarked int                     `json:"unmarked"`
+	Skipped  int                     `json:"skipped"`
 }

@@ -1016,7 +1016,7 @@ larger body are 400):
 ```json
 {"snapshotComplete": true,
  "sfdcAccountIds": ["001..."],
- "present": ["003..."],
+ "present": {"001...": ["003..."]},
  "items": [{"sfdcContactId": "003...", "sfdcAccountId": "001...", "name": "...",
             "title": "...", "action": "create|link", "contactId": "...", "revision": "..."}]}
 ```
@@ -1024,15 +1024,17 @@ larger body are 400):
 - SFDC IDs match `^[A-Za-z0-9]{15,18}$`. `sfdcAccountIds` has 1 to 20 distinct
   IDs; `items` at most 200 with distinct `sfdcContactId`, each `sfdcAccountId`
   listed in `sfdcAccountIds`.
-- `present` (at most 20,000) is required when `snapshotComplete` is true and
-  forbidden otherwise; with a complete snapshot every item must be in it.
+- `present` maps every ID in `sfdcAccountIds` (no other key) to the SFDC
+  contact IDs read from that account: at most 5,000 per account and 20,000 in
+  total. It is required when `snapshotComplete` is true and forbidden
+  otherwise; with a complete snapshot every item must be in its account's list.
 - `link` requires `contactId` and the observed `revision`; `create` takes
   neither. Any of these failures rejects the whole request with 400.
 - `create` stores `name`, `title`, `company` (the Account name), `source: "sfdc"`
   and the IDs. `link` fills only an empty `title` or `company` and sets the link
   when none exists; it never changes `name` or another non-empty field.
 
-The response is `{results:[{sfdcContactId, result, contactId?}], marked, unmarked}`
+The response is `{results:[{sfdcContactId, result, contactId?}], marked, unmarked, skipped}`
 with results in item order:
 
 | `result` | Meaning |
@@ -1042,13 +1044,16 @@ with results in item order:
 | `alreadyLinked` | another contact holds this SFDC ID |
 | `suppressed` | a member deleted the linked contact; never recreated |
 | `conflict` | stale or missing contact, another link on it, or a transient transaction conflict; retry next run |
-| `invalid` | `name` blank or `name`/`title` over 256 bytes |
+| `invalid` | `name` blank, `name`/`title` over 256 bytes, or the linked contact cannot be opened |
 
-Only a complete snapshot updates departures: links of the listed SFDC
-accounts absent from `present` get `sfdcLeftAt` (counted in `marked`), and
-present ones lose it (`unmarked`). Concurrently changed contacts are skipped.
-At most 200 marks change per request and at most 10,000 contacts are read; later
-runs continue. One people resolve request is queued when anything changed.
+Only a complete snapshot updates departures. The pass reads the Account's
+`SFDCCONTACT#` links of the listed SFDC accounts and opens only those linked
+contacts: a contact absent from its account's `present` list gets `sfdcLeftAt`
+(counted in `marked`), a present one loses it (`unmarked`). Concurrently changed
+contacts are skipped; linked contacts that cannot be opened are counted in
+`skipped`. The pass starts at a random link and stops after 200 mark changes or
+15 seconds into the request; correct contacts need no write, so later runs
+continue. One people resolve request is queued when anything changed.
 Access, merge (409 `ACCOUNT_MERGING`), encryption (503) and unexpected errors
 fail the request.
 

@@ -44,7 +44,7 @@
     ["api.accountContacts.create", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/accounts/{accountId}/contacts"],
     ["api.accountContacts.update", "ttobak-api-bridge", ["read", "write"], false, "PUT", "/api/accounts/{accountId}/contacts/{contactId}"],
     ["api.accountContacts.delete", "ttobak-api-bridge", ["delete", "read"], false, "DELETE", "/api/accounts/{accountId}/contacts/{contactId}"],
-    ["api.accounts.contacts.sfdcSync", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/contacts/sfdc-sync"],
+    ["api.accountContacts.sfdcSync", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/contacts/sfdc-sync"],
     ["api.accountContacts.speakerTeam", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/speaker-team"],
     ["api.accountEvents.list", "ttobak-api-bridge", ["read"], true, "GET", "/api/accounts/{accountId}/events"],
     ["api.accountEvents.create", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/accounts/{accountId}/events"],

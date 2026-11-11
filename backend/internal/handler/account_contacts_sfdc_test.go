@@ -62,6 +62,28 @@ func sfdcItems(n int) string {
 	return `{"snapshotComplete":false,"sfdcAccountIds":["001000000000001AAA"],"items":[` + strings.Join(items, ",") + `]}`
 }
 
+// sfdcFullSnapshot is a valid request at the ID caps: 4 SFDC accounts with
+// 5,000 present IDs each (20,000 total) and 200 create items whose name and
+// title have the given length.
+func sfdcFullSnapshot(textLen int) string {
+	present := make([]string, 4)
+	accounts := make([]string, 4)
+	for a := range present {
+		accounts[a] = fmt.Sprintf(`"001%015d"`, a)
+		ids := make([]string, 5000)
+		for i := range ids {
+			ids[i] = fmt.Sprintf(`"003%015d"`, a*5000+i)
+		}
+		present[a] = accounts[a] + ":[" + strings.Join(ids, ",") + "]"
+	}
+	text := strings.Repeat("x", textLen)
+	items := make([]string, 200)
+	for i := range items {
+		items[i] = fmt.Sprintf(`{"sfdcContactId":"003%015d","sfdcAccountId":"001%015d","name":"N%s","title":"%s","action":"create"}`, i, 0, text[:max(textLen-1, 0)], text)
+	}
+	return `{"snapshotComplete":true,"sfdcAccountIds":[` + strings.Join(accounts, ",") + `],"present":{` + strings.Join(present, ",") + `},"items":[` + strings.Join(items, ",") + `]}`
+}
+
 func TestSfdcSyncHTTP(t *testing.T) {
 	t.Run("creates_and_returns_results", func(t *testing.T) {
 		r := &sfdcHandlerRepo{member: true}
@@ -72,7 +94,15 @@ func TestSfdcSyncHTTP(t *testing.T) {
 		}
 	})
 	t.Run("caps_and_strict_body_rejected", func(t *testing.T) {
-		big := `{"snapshotComplete":true,"sfdcAccountIds":["001000000000001AAA"],"present":[` + strings.Repeat(`"003000000000001AAA",`, 26000) + `"003000000000001AAA"],"items":[]}`
+		big, small := sfdcFullSnapshot(256), sfdcFullSnapshot(0)
+		if len(big) <= 512*1024 || len(small) >= 512*1024 {
+			t.Fatalf("bodies must straddle the cap: %d %d", len(big), len(small))
+		}
+		// The same shape under the cap is accepted, so the cap alone rejects big.
+		r := &sfdcHandlerRepo{member: true}
+		if w := contactRequest(sfdcRouter(r), "POST", "/accounts/a/contacts/sfdc-sync", small); w.Code != 200 || r.writes != 200 {
+			t.Fatalf("valid full snapshot: %d %s writes=%d", w.Code, w.Body, r.writes)
+		}
 		for name, body := range map[string]string{
 			"201 items":     sfdcItems(201),
 			"unknown field": `{"snapshotComplete":false,"sfdcAccountIds":["001000000000001AAA"],"items":[],"extra":1}`,
@@ -80,15 +110,13 @@ func TestSfdcSyncHTTP(t *testing.T) {
 			"bad sfdc id":   strings.Replace(sfdcItems(1), `"003000000000000000"`, `"003#BAD"`, 1),
 			"trailing":      sfdcItems(1) + ` {}`,
 			"over 512 KiB":  big,
+			"present list":  `{"snapshotComplete":true,"sfdcAccountIds":["001000000000001AAA"],"present":["003000000000001AAA"],"items":[]}`,
 		} {
 			r := &sfdcHandlerRepo{member: true}
 			w := contactRequest(sfdcRouter(r), "POST", "/accounts/a/contacts/sfdc-sync", body)
 			if w.Code != 400 || r.writes != 0 || w.Header().Get("Cache-Control") != "no-store" {
 				t.Errorf("%s: %d %s writes=%d", name, w.Code, w.Body, r.writes)
 			}
-		}
-		if len(big) <= 512*1024 {
-			t.Fatalf("test body must exceed the cap: %d", len(big))
 		}
 	})
 	t.Run("non_member_forbidden", func(t *testing.T) {

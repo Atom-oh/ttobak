@@ -65,12 +65,14 @@ DynamoDB data needs KMS encryption and a retention design.
     deleted.
   - An Account merge carries links and suppression rows to the surviving
     Account (`backend/internal/service/account_merge_contacts.go`).
-  - Departure marking runs only for a complete snapshot of every listed SFDC
-    account: links of those accounts absent from it get `sfdcLeftAt`, returning
-    ones lose it. An incomplete read marks and unmarks nobody.
-  - Bounds per request: 20 SFDC accounts, 200 items, 20,000 present IDs,
-    512 KiB body; departure handling reads at most 10,000 contacts and writes
-    at most 200 marks, and later runs continue.
+  - Departure marking runs only for a complete snapshot, which lists the
+    present contact IDs per SFDC account: links of those accounts absent from
+    it get `sfdcLeftAt`, returning ones lose it. An incomplete read marks and
+    unmarks nobody. The pass walks the in-scope index rows from a random start
+    and opens only linked contacts; it stops after 200 mark changes or 15
+    seconds, and later runs continue because correct contacts need no write.
+  - Bounds per request: 20 SFDC accounts, 200 items, 5,000 present IDs per
+    SFDC account and 20,000 in total, 512 KiB body.
 
 - Account events (`EVENT#{startAt}#{eventId}` with an `EVENTREF#{eventId}`
   pointer) seal title, location, attendees, notes and end time with purpose
@@ -90,8 +92,10 @@ DynamoDB data needs KMS encryption and a retention design.
 - Known limit: a contact delete reads every `SFDCCONTACT#` row in the Account
   (a filtered query), so its cost grows with the Account's links, and a
   malformed index row blocks contact deletes in that Account until repaired.
-- A sync departure pass lists and opens the Account's contacts (one KMS
-  `Decrypt` each) when any in-scope link exists.
+- A sync departure pass opens each in-scope linked contact (one KMS `Decrypt`
+  each). A linked contact that cannot be opened is skipped and counted, and a
+  link item targeting one returns `invalid`; a malformed index row still fails
+  the whole request, because the link listing rejects it.
 
 ## Account relationship links, signals and KB references
 

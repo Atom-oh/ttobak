@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
@@ -11,15 +12,16 @@ import (
 
 // SFDC contact sync bounds (ADR-021, SFDC contacts).
 const (
-	sfdcSyncMaxAccounts = 20
-	sfdcSyncMaxItems    = 200
-	sfdcSyncMaxPresent  = 20000
+	sfdcSyncMaxAccounts          = 20
+	sfdcSyncMaxItems             = 200
+	sfdcSyncMaxPresentPerAccount = 5000
+	sfdcSyncMaxPresent           = 20000
 	// sfdcDepartureMaxWrites bounds departure marks set or cleared per
 	// request; marking is idempotent, so the rest follow on later runs.
 	sfdcDepartureMaxWrites = 200
-	// sfdcDepartureMaxContacts bounds the contacts read to find departures.
-	sfdcDepartureMaxContacts = 10000
-	sfdcDeparturePageSize    = 100
+	// sfdcDepartureBudget stops the departure pass this long after the
+	// request started, well inside the API Gateway timeout.
+	sfdcDepartureBudget = 15 * time.Second
 )
 
 type sfdcSyncRepo interface {
@@ -34,17 +36,20 @@ type AccountContactSyncService struct {
 	repo     sfdcSyncRepo
 	contacts *AccountContactsService
 	now      func() time.Time
+	// start picks the first link the departure pass visits; a pass stopped
+	// by its budget therefore covers a different part of the links next run.
+	start func(n int) int
 }
 
 func NewAccountContactSyncService(repo sfdcSyncRepo, contacts *AccountContactsService) *AccountContactSyncService {
-	return &AccountContactSyncService{repo: repo, contacts: contacts, now: time.Now}
+	return &AccountContactSyncService{repo: repo, contacts: contacts, now: time.Now, start: rand.IntN}
 }
 
 // validateSfdcSync checks the whole request before any read. Malformed IDs,
 // caps and contradictions reject the request; a name or title over the
 // contact limits only marks its item invalid.
-func validateSfdcSync(req model.SfdcContactSyncRequest) (accounts, present map[string]bool, err error) {
-	if len(req.SfdcAccountIDs) < 1 || len(req.SfdcAccountIDs) > sfdcSyncMaxAccounts || len(req.Items) > sfdcSyncMaxItems || len(req.Present) > sfdcSyncMaxPresent {
+func validateSfdcSync(req model.SfdcContactSyncRequest) (accounts map[string]bool, present map[string]map[string]bool, err error) {
+	if len(req.SfdcAccountIDs) < 1 || len(req.SfdcAccountIDs) > sfdcSyncMaxAccounts || len(req.Items) > sfdcSyncMaxItems {
 		return nil, nil, ErrInvalidInput
 	}
 	if req.SnapshotComplete != (req.Present != nil) {
@@ -57,12 +62,26 @@ func validateSfdcSync(req model.SfdcContactSyncRequest) (accounts, present map[s
 		}
 		accounts[id] = true
 	}
-	present = map[string]bool{}
-	for _, id := range req.Present {
-		if !model.ValidSfdcID(id) {
+	// A complete snapshot lists every SFDC account, even one with no contacts.
+	if req.SnapshotComplete && len(req.Present) != len(accounts) {
+		return nil, nil, ErrInvalidInput
+	}
+	present, total := map[string]map[string]bool{}, 0
+	for account, ids := range req.Present {
+		if !accounts[account] || ids == nil || len(ids) > sfdcSyncMaxPresentPerAccount {
 			return nil, nil, ErrInvalidInput
 		}
-		present[id] = true
+		if total += len(ids); total > sfdcSyncMaxPresent {
+			return nil, nil, ErrInvalidInput
+		}
+		set := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			if !model.ValidSfdcID(id) {
+				return nil, nil, ErrInvalidInput
+			}
+			set[id] = true
+		}
+		present[account] = set
 	}
 	seen := map[string]bool{}
 	for _, it := range req.Items {
@@ -70,7 +89,7 @@ func validateSfdcSync(req model.SfdcContactSyncRequest) (accounts, present map[s
 			return nil, nil, ErrInvalidInput
 		}
 		seen[it.SfdcContactID] = true
-		if req.SnapshotComplete && !present[it.SfdcContactID] {
+		if req.SnapshotComplete && !present[it.SfdcAccountID][it.SfdcContactID] {
 			return nil, nil, ErrInvalidInput
 		}
 		switch it.Action {
@@ -99,7 +118,7 @@ func sfdcItemResult(err error) (string, error) {
 		return model.SfdcSyncSuppressed, nil
 	case errors.Is(err, ErrContactConflict), errors.Is(err, ErrNotFound), isTransactionConflict(err): // transient; next run retries
 		return model.SfdcSyncConflict, nil
-	case errors.Is(err, ErrInvalidInput), errors.Is(err, repository.ErrInvalidSfdcLink):
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, repository.ErrInvalidSfdcLink), errors.Is(err, repository.ErrContactUnreadable):
 		return model.SfdcSyncInvalid, nil
 	}
 	return "", err
@@ -110,19 +129,14 @@ func sfdcItemResult(err error) (string, error) {
 // and clears the mark of those that returned. One people resolve request is
 // published at the end when anything changed.
 func (s *AccountContactSyncService) Sync(ctx context.Context, account, user string, req model.SfdcContactSyncRequest) (*model.SfdcContactSyncResponse, error) {
+	deadline := s.now().Add(sfdcDepartureBudget)
 	accounts, present, err := validateSfdcSync(req)
 	if err != nil {
 		return nil, err
 	}
-	if err = s.contacts.authorize(ctx, account, user); err != nil {
-		return nil, err
-	}
-	acct, err := s.repo.GetAccount(ctx, account)
+	acct, err := s.contacts.authorizedAccount(ctx, account, user)
 	if err != nil {
 		return nil, err
-	}
-	if acct == nil {
-		return nil, ErrForbidden
 	}
 	out := &model.SfdcContactSyncResponse{Results: make([]model.SfdcContactSyncResult, 0, len(req.Items))}
 	changed := false
@@ -137,7 +151,7 @@ func (s *AccountContactSyncService) Sync(ctx context.Context, account, user stri
 		out.Results = append(out.Results, res)
 	}
 	if req.SnapshotComplete {
-		if out.Marked, out.Unmarked, err = s.markDepartures(ctx, account, user, accounts, present); err != nil {
+		if out.Marked, out.Unmarked, out.Skipped, err = s.markDepartures(ctx, account, user, deadline, accounts, present); err != nil {
 			return nil, err
 		}
 		changed = changed || out.Marked > 0 || out.Unmarked > 0
@@ -167,6 +181,10 @@ func (s *AccountContactSyncService) applyItem(ctx context.Context, account, user
 	}
 	res.ContactID = it.ContactID
 	current, err := s.repo.GetAccountContact(ctx, account, it.ContactID)
+	if errors.Is(err, repository.ErrContactUnreadable) {
+		res.Result = model.SfdcSyncInvalid
+		return res, nil
+	}
 	if err != nil {
 		return res, err
 	}
@@ -202,66 +220,75 @@ func (s *AccountContactSyncService) applyItem(ctx context.Context, account, user
 }
 
 // markDepartures only sets or clears SfdcLeftAt, through the same sealed
-// update with the observed revision. A contact that changed concurrently is
-// skipped, not retried.
-func (s *AccountContactSyncService) markDepartures(ctx context.Context, account, user string, accounts, present map[string]bool) (marked, unmarked int, err error) {
+// update with the observed revision. It walks the in-scope links, opening
+// only linked contacts, from a varying start, and stops at the write budget,
+// the deadline or a cancelled context; contacts already correct cost one read
+// and no write, so later runs continue the pass. A contact that changed
+// concurrently is skipped, not retried; one that cannot be opened is counted
+// in skipped.
+func (s *AccountContactSyncService) markDepartures(ctx context.Context, account, user string, deadline time.Time, accounts map[string]bool, present map[string]map[string]bool) (marked, unmarked, skipped int, err error) {
 	links, err := s.repo.ListSfdcContactLinks(ctx, account)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	scope := map[string]string{} // contactId -> sfdcContactId
+	scoped := links[:0:0]
 	for _, l := range links {
 		if accounts[l.SfdcAccountID] {
-			scope[l.ContactID] = l.SfdcContactID
+			scoped = append(scoped, l)
 		}
 	}
-	if len(scope) == 0 {
-		return 0, 0, nil
+	if len(scoped) == 0 {
+		return 0, 0, 0, nil
 	}
 	now := s.now().UTC().Format(time.RFC3339)
-	after, read := "", 0
-	for read < sfdcDepartureMaxContacts && marked+unmarked < sfdcDepartureMaxWrites {
-		page, next, err := s.repo.ListAccountContacts(ctx, account, sfdcDeparturePageSize, after)
-		if err != nil {
-			return 0, 0, err
-		}
-		read += len(page)
-		for _, c := range page {
-			sfdcID, ok := scope[c.ContactID]
-			if !ok || c.SfdcContactID != sfdcID || !accounts[c.SfdcAccountID] {
-				continue
-			}
-			target := c.SfdcLeftAt
-			if !present[sfdcID] && c.SfdcLeftAt == "" {
-				target = now
-			} else if present[sfdcID] && c.SfdcLeftAt != "" {
-				target = ""
-			}
-			if target == c.SfdcLeftAt {
-				continue
-			}
-			if marked+unmarked >= sfdcDepartureMaxWrites {
-				break
-			}
-			base, nextContact := c, c
-			nextContact.SfdcLeftAt = target
-			_, werr := s.contacts.MutateWith(ctx, account, user, "update", c.ContactID, nextContact, ContactMutateOptions{DeferPeopleResolve: true, sfdc: &sfdcWrite{base: &base}})
-			if werr != nil {
-				if _, werr = sfdcItemResult(werr); werr != nil {
-					return 0, 0, werr
-				}
-				continue
-			}
-			if target == "" {
-				unmarked++
-			} else {
-				marked++
-			}
-		}
-		if next == "" {
+	first := s.start(len(scoped))
+	for i := range scoped {
+		if marked+unmarked >= sfdcDepartureMaxWrites || ctx.Err() != nil || !s.now().Before(deadline) {
 			break
 		}
-		after = next
+		l := scoped[(first+i)%len(scoped)]
+		c, err := s.repo.GetAccountContact(ctx, account, l.ContactID)
+		if errors.Is(err, repository.ErrContactUnreadable) {
+			skipped++
+			continue
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			return 0, 0, 0, err
+		}
+		if c == nil || c.SfdcContactID != l.SfdcContactID || c.SfdcAccountID != l.SfdcAccountID {
+			continue
+		}
+		isPresent := present[l.SfdcAccountID][l.SfdcContactID]
+		target := c.SfdcLeftAt
+		if !isPresent && c.SfdcLeftAt == "" {
+			target = now
+		} else if isPresent && c.SfdcLeftAt != "" {
+			target = ""
+		}
+		if target == c.SfdcLeftAt {
+			continue
+		}
+		base, next := *c, *c
+		next.SfdcLeftAt = target
+		_, werr := s.contacts.MutateWith(ctx, account, user, "update", c.ContactID, next, ContactMutateOptions{DeferPeopleResolve: true, sfdc: &sfdcWrite{base: &base}})
+		if werr != nil {
+			res, werr := sfdcItemResult(werr)
+			if werr != nil {
+				return 0, 0, 0, werr
+			}
+			if res == model.SfdcSyncInvalid {
+				skipped++
+			}
+			continue
+		}
+		if target == "" {
+			unmarked++
+		} else {
+			marked++
+		}
 	}
-	return marked, unmarked, nil
+	return marked, unmarked, skipped, nil
 }
