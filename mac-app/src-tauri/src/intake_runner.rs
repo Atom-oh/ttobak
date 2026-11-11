@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -465,6 +465,8 @@ pub enum RunKind {
     Run,
     Setup,
     Login,
+    /// `intake_launch_agent_off`: tracked and exclusive, but not a run.
+    ScheduleOff,
 }
 
 /// What a finished run is recorded against.
@@ -487,6 +489,8 @@ pub struct IntakeState {
     /// Process group of the current run (0 = none); killed on app exit.
     pgid: AtomicI32,
     progress: Mutex<ProgressLog>,
+    /// Bumped per begun run; a reader of an older run never writes progress.
+    run_gen: AtomicU64,
     last_result: Mutex<Option<Value>>,
     update_available: Mutex<Option<bool>>,
     adapter_busy: AtomicBool,
@@ -512,6 +516,7 @@ impl IntakeState {
             cancel: Mutex::new(None),
             pgid: AtomicI32::new(0),
             progress: Mutex::new(ProgressLog::default()),
+            run_gen: AtomicU64::new(0),
             last_result: Mutex::new(None),
             update_available: Mutex::new(None),
             adapter_busy: AtomicBool::new(false),
@@ -548,16 +553,37 @@ impl IntakeState {
         Ok(())
     }
 
+    /// Claims the run slot. Refused while another run or an adapter update
+    /// is going; both checks happen under the `running` lock, which
+    /// `begin_adapter_update` also takes, so the two never overlap.
     fn try_begin(&self, kind: RunKind) -> Result<oneshot::Receiver<()>, String> {
         let mut running = self.running.lock();
         if running.is_some() {
             return Err("RUN_IN_PROGRESS".into());
         }
+        if self.adapter_busy.load(Ordering::SeqCst) {
+            return Err("ADAPTER_UPDATING".into());
+        }
         *running = Some(kind);
         let (tx, rx) = oneshot::channel();
         *self.cancel.lock() = Some(tx);
-        self.progress.lock().lines.clear();
+        self.run_gen.fetch_add(1, Ordering::SeqCst);
+        if kind != RunKind::ScheduleOff {
+            self.progress.lock().lines.clear();
+        }
         Ok(rx)
+    }
+
+    /// Claims the adapter update; refused while a run holds the slot.
+    fn begin_adapter_update(&self) -> Result<AdapterGuard<'_>, String> {
+        let running = self.running.lock();
+        if running.is_some() {
+            return Err("RUN_IN_PROGRESS".into());
+        }
+        if self.adapter_busy.swap(true, Ordering::SeqCst) {
+            return Err("busy".into());
+        }
+        Ok(AdapterGuard(self))
     }
 
     fn end(&self) {
@@ -678,14 +704,15 @@ async fn capture_login_path(home: &Path) -> Option<String> {
     }
 }
 
-/// Runs one CLI action to completion. Progress lines are emitted when
-/// `track` is set (and its pgid recorded for app-exit cleanup).
+/// Runs one CLI action to completion in the claimed run slot (its pgid is
+/// recorded for app-exit cleanup). Progress lines are kept and emitted when
+/// `progress` is set.
 async fn execute(
     app: &AppHandle,
     action: &IntakeAction,
     timeout: Duration,
     cancel: Option<oneshot::Receiver<()>>,
-    track: bool,
+    progress: bool,
 ) -> Outcome {
     let state = app.state::<IntakeState>();
     let Some(home) = home_dir() else {
@@ -725,12 +752,11 @@ async fn execute(
         }
     };
     let pgid = child.id().map_or(0, |p| p as i32);
-    if track {
-        state.pgid.store(pgid, Ordering::SeqCst);
-    }
+    state.pgid.store(pgid, Ordering::SeqCst);
+    let gen = state.run_gen.load(Ordering::SeqCst);
 
     let stdout = child.stdout.take();
-    let out_task = tokio::spawn(async move {
+    let mut out_task = tokio::spawn(async move {
         let mut last = LastLine::default();
         if let Some(mut s) = stdout {
             let mut buf = vec![0u8; 8192];
@@ -745,7 +771,7 @@ async fn execute(
     });
     let stderr = child.stderr.take();
     let err_app = app.clone();
-    let err_task = tokio::spawn(async move {
+    let mut err_task = tokio::spawn(async move {
         let Some(mut s) = stderr else {
             return;
         };
@@ -754,7 +780,7 @@ async fn execute(
             let Some(line) = cap_progress_line(&String::from_utf8_lossy(raw)) else {
                 return;
             };
-            if track {
+            if progress && state.run_gen.load(Ordering::SeqCst) == gen {
                 let _ = err_app.emit(PROGRESS_EVENT, json!({ "line": line }));
                 state.progress.lock().push(line);
             }
@@ -799,22 +825,23 @@ async fn execute(
             (None, Some(code))
         }
     };
-    // Orphans left in the group can hold the pipes open.
+    // Orphans left in the group can hold the pipes open; their readers are
+    // aborted so nothing reaches a later run.
     let readers = async {
-        let out = out_task.await.unwrap_or_default();
-        let _ = err_task.await;
+        let out = (&mut out_task).await.unwrap_or_default();
+        let _ = (&mut err_task).await;
         out
     };
     let stdout_last = match tokio::time::timeout(READER_GRACE, readers).await {
         Ok(out) => out,
         Err(_) => {
             kill_group(pgid, libc::SIGKILL);
+            out_task.abort();
+            err_task.abort();
             Vec::new()
         }
     };
-    if track {
-        state.pgid.store(0, Ordering::SeqCst);
-    }
+    state.pgid.store(0, Ordering::SeqCst);
     let result = final_json(&stdout_last);
     let code = forced
         .map(str::to_string)
@@ -923,7 +950,7 @@ async fn scheduler(app: AppHandle) {
                     Origin::Scheduled(slot),
                 ) {
                     Ok(()) => log::info!("intake scheduled run started"),
-                    Err(e) if e == "RUN_IN_PROGRESS" => {
+                    Err(e) if e == "RUN_IN_PROGRESS" || e == "ADAPTER_UPDATING" => {
                         state.retry_after_run.store(true, Ordering::SeqCst);
                     }
                     Err(e) => log::warn!("intake scheduled run not started: {e}"),
@@ -976,8 +1003,10 @@ async fn fetch_adapter() -> Result<Vec<u8>, &'static str> {
     Ok(body)
 }
 
-/// Writes `server.mjs.tmp`, moves the old file to the single `server.mjs.bak`,
-/// then renames the new file into place.
+/// Writes `server.mjs.tmp`, makes the single `server.mjs.bak` a link (or
+/// copy) of the current file, then renames the new file over it. The
+/// current file is never absent: the only change to `server.mjs` is the
+/// final atomic rename.
 fn install_adapter(dir: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     std::fs::DirBuilder::new()
@@ -988,19 +1017,22 @@ fn install_adapter(dir: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = dir.join("server.mjs");
     let bak = dir.join("server.mjs.bak");
     write_new_private(&tmp, bytes)?;
-    let had_old = std::fs::symlink_metadata(&target).is_ok();
-    if had_old {
-        if let Err(e) = std::fs::rename(&target, &bak) {
+    let backup = || -> std::io::Result<()> {
+        if std::fs::symlink_metadata(&target).is_err() {
+            return Ok(());
+        }
+        match std::fs::remove_file(&bak) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        std::fs::hard_link(&target, &bak).or_else(|_| std::fs::copy(&target, &bak).map(|_| ()))
+    };
+    backup()
+        .and_then(|()| std::fs::rename(&tmp, &target))
+        .inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
-            return Err(e);
-        }
-    }
-    std::fs::rename(&tmp, &target).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-        if had_old {
-            let _ = std::fs::rename(&bak, &target);
-        }
-    })
+        })
 }
 
 fn local_adapter(home: &Path) -> Option<Vec<u8>> {
@@ -1035,6 +1067,12 @@ pub struct IntakeStateView {
     progress: Vec<String>,
 }
 
+/// The CLI's LaunchAgent plist exists (the UI warns when the app schedule is
+/// also on).
+fn launch_agent_present(home: &Path) -> bool {
+    std::fs::symlink_metadata(home.join(LAUNCH_AGENT_PLIST)).is_ok()
+}
+
 fn adapter_view(state: &IntakeState, home: Option<&Path>) -> AdapterView {
     AdapterView {
         present: home.is_some_and(|h| h.join(".ttobak").join("server.mjs").is_file()),
@@ -1058,10 +1096,7 @@ pub async fn intake_get_state(state: State<'_, IntakeState>) -> Result<IntakeSta
     let node = home
         .as_deref()
         .and_then(|h| resolve_node(settings.node_path.as_deref(), h));
-    let launch_agent_installed = settings.schedule != Schedule::Off
-        && home
-            .as_ref()
-            .is_some_and(|h| std::fs::symlink_metadata(h.join(LAUNCH_AGENT_PLIST)).is_ok());
+    let launch_agent_installed = home.as_deref().is_some_and(launch_agent_present);
     Ok(IntakeStateView {
         adapter: adapter_view(&state, home.as_deref()),
         node_missing: node.is_none(),
@@ -1103,15 +1138,21 @@ pub async fn intake_set_node_path(
 /// CLI's JSON result or its code.
 #[tauri::command]
 pub async fn intake_launch_agent_off(app: AppHandle) -> Result<Value, String> {
-    app.state::<IntakeState>().available()?;
+    let state = app.state::<IntakeState>();
+    state.available()?;
+    let cancel = state.try_begin(RunKind::ScheduleOff)?;
     let outcome = execute(
         &app,
         &IntakeAction::ScheduleOff,
         SCHEDULE_OFF_TIMEOUT,
-        None,
+        Some(cancel),
         false,
     )
     .await;
+    state.end();
+    if state.retry_after_run.swap(false, Ordering::SeqCst) {
+        state.poke(true);
+    }
     match outcome.code {
         None => Ok(outcome.result.unwrap_or(Value::Null)),
         Some(code) => Err(code),
@@ -1187,11 +1228,15 @@ pub async fn intake_check_adapter(state: State<'_, IntakeState>) -> Result<Adapt
     Ok(adapter_view(&state, home.as_deref()))
 }
 
-struct BusyGuard<'a>(&'a AtomicBool);
+/// Clears `adapter_busy`; a slot that came due meanwhile is re-evaluated.
+struct AdapterGuard<'a>(&'a IntakeState);
 
-impl Drop for BusyGuard<'_> {
+impl Drop for AdapterGuard<'_> {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        self.0.adapter_busy.store(false, Ordering::SeqCst);
+        if self.0.retry_after_run.swap(false, Ordering::SeqCst) {
+            self.0.poke(true);
+        }
     }
 }
 
@@ -1199,18 +1244,9 @@ impl Drop for BusyGuard<'_> {
 #[tauri::command]
 pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterView, String> {
     state.available()?;
-    if state.running.lock().is_some() {
-        return Err("RUN_IN_PROGRESS".into());
-    }
-    if state.adapter_busy.swap(true, Ordering::SeqCst) {
-        return Err("busy".into());
-    }
-    let _busy = BusyGuard(&state.adapter_busy);
+    let _busy = state.begin_adapter_update()?;
     let home = home_dir().ok_or("unavailable")?;
     let served = fetch_adapter().await.map_err(str::to_string)?;
-    if state.running.lock().is_some() {
-        return Err("RUN_IN_PROGRESS".into());
-    }
     install_adapter(&home.join(".ttobak"), &served).map_err(|e| {
         log::warn!("adapter install failed: {:?}", e.kind());
         "save-failed".to_string()
@@ -1513,6 +1549,10 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("server.mjs")).expect("read"), b"v1");
         assert!(!dir.join("server.mjs.bak").exists());
         install_adapter(&dir, b"v2").expect("second");
+        assert_eq!(
+            std::fs::read(dir.join("server.mjs.bak")).expect("bak"),
+            b"v1"
+        );
         install_adapter(&dir, b"v3").expect("third");
         assert_eq!(std::fs::read(dir.join("server.mjs")).expect("read"), b"v3");
         assert_eq!(
@@ -1525,5 +1565,101 @@ mod tests {
             .collect();
         assert_eq!(names.len(), 2, "{names:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adapter_install_never_removes_the_current_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "ttobak-adapter-swap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        install_adapter(&dir, b"old").expect("first");
+        let target = dir.join("server.mjs");
+        // The old file stays at its path while the backup is made: the bak is
+        // a second link to the same inode, not a moved file.
+        let before = std::fs::metadata(&target).expect("meta");
+        install_adapter(&dir, b"new").expect("second");
+        let bak = std::fs::metadata(dir.join("server.mjs.bak")).expect("bak");
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(bak.ino(), before.ino(), "bak links the replaced file");
+        }
+        assert_eq!(std::fs::read(&target).expect("read"), b"new");
+        // A stale tmp or bak is replaced, never followed.
+        std::fs::write(dir.join("server.mjs.tmp"), b"stale").expect("tmp");
+        install_adapter(&dir, b"newer").expect("third");
+        assert_eq!(std::fs::read(&target).expect("read"), b"newer");
+        assert_eq!(
+            std::fs::read(dir.join("server.mjs.bak")).expect("bak"),
+            b"new"
+        );
+        assert!(!dir.join("server.mjs.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_and_adapter_update_exclude_each_other() {
+        let state = IntakeState::new(None);
+        {
+            let _guard = state.begin_adapter_update().expect("update");
+            assert_eq!(
+                state.try_begin(RunKind::Run).err().as_deref(),
+                Some("ADAPTER_UPDATING")
+            );
+            assert_eq!(state.running.lock().clone(), None, "nothing claimed");
+            assert_eq!(state.begin_adapter_update().err().as_deref(), Some("busy"));
+        }
+        let _rx = state.try_begin(RunKind::ScheduleOff).expect("free again");
+        assert_eq!(
+            state.begin_adapter_update().err().as_deref(),
+            Some("RUN_IN_PROGRESS")
+        );
+        assert_eq!(
+            state.try_begin(RunKind::Run).err().as_deref(),
+            Some("RUN_IN_PROGRESS")
+        );
+        state.end();
+        assert!(state.begin_adapter_update().is_ok());
+    }
+
+    #[test]
+    fn schedule_off_keeps_the_last_runs_progress() {
+        let state = IntakeState::new(None);
+        let _rx = state.try_begin(RunKind::Run).expect("run");
+        state.progress.lock().push("진행".into());
+        let gen = state.run_gen.load(Ordering::SeqCst);
+        state.end();
+        let _rx = state.try_begin(RunKind::ScheduleOff).expect("off");
+        assert_eq!(state.progress.lock().lines.len(), 1);
+        assert_ne!(
+            state.run_gen.load(Ordering::SeqCst),
+            gen,
+            "older readers are fenced"
+        );
+        state.end();
+        let _rx = state.try_begin(RunKind::Setup).expect("setup");
+        assert!(state.progress.lock().lines.is_empty());
+    }
+
+    #[test]
+    fn launch_agent_presence_ignores_the_app_schedule() {
+        let home = std::env::temp_dir().join(format!(
+            "ttobak-la-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        assert!(!launch_agent_present(&home));
+        let plist = home.join(LAUNCH_AGENT_PLIST);
+        std::fs::create_dir_all(plist.parent().expect("parent")).expect("dir");
+        std::fs::write(&plist, b"<plist/>").expect("write");
+        assert!(launch_agent_present(&home));
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
