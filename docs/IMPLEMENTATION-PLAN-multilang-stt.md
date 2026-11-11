@@ -47,7 +47,7 @@ browser service access, so the old suggestion that its removal blocks streaming
 is not the current declared architecture.
 
 Web Speech remains Korean-default and has mobile recording-protection restrictions
-under [ADR-030](decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md).
+under [ADR-006](decisions/ADR-006-browser-and-mobile-recording.md).
 Do not disable those restrictions or force a competing microphone stream to satisfy
 this older plan. Optional selectors, badges, and batch-language storage must be
 verified separately rather than inferred from streaming support.

@@ -200,7 +200,7 @@ SFDC.
 These are search and read tools with no change feed, so there is nothing
 deterministic to poll. A scheduled AI that "finds relevant docs per account" and
 uploads them would copy internal or confidential content into team-shared account
-KBs (ADR-022, roadmap access rules). It would also give an unattended agent broad
+KBs (ADR-020, roadmap access rules). It would also give an unattended agent broad
 read access. Its value is low and its risk high. **Verdict: neither A nor B as a
 scheduled intake.** Use these servers on demand in the user's interactive host
 (prep, QA), where the user sees what is pulled. The existing
@@ -257,7 +257,7 @@ launchd LaunchAgent → runs the runner on an interval (also when app closed)
 
 Why the runner is Node in `mcp-server`, not Rust:
 
-- Rust must not own Cognito tokens (mac-app CLAUDE.md, ADR-024/046). The Node
+- Rust must not own Cognito tokens (mac-app CLAUDE.md, ADR-024). The Node
   package already owns verified stdio login, the refresh cache under
   `~/.ttobak/tokens/` and the calendar validators (`src/calendar.ts`).
 - The MCP TypeScript SDK already ships a client and stdio transport. Rust would

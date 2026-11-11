@@ -161,15 +161,25 @@ func (svc *CalendarService) ShareDirectory(ctx context.Context, userID string) (
 		accountIDs = append(accountIDs, membership.AccountID)
 	}
 	sort.Strings(accountIDs)
+	lookups := newCalendarShareLookups()
 	for _, accountID := range accountIDs {
 		if len(directory.Accounts) == calendarShareDirectoryMax {
 			break
+		}
+		// GSI1 is eventually consistent: revalidate the canonical membership
+		// row before reading account metadata, as ListAccounts does.
+		member, err := svc.directMember(ctx, lookups, accountID, userID)
+		if err != nil {
+			return nil, err
+		}
+		if member == nil {
+			continue
 		}
 		account, err := svc.membership.GetAccount(ctx, accountID)
 		if err != nil {
 			return nil, err
 		}
-		if account == nil || account.AccountID != "" && account.AccountID != accountID {
+		if account == nil || account.AccountID != "" && account.AccountID != accountID || account.MergedInto != "" {
 			continue
 		}
 		directory.Accounts = append(directory.Accounts, model.CalendarShareDirectoryAccount{

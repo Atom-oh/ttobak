@@ -84,7 +84,7 @@ describe('StorageStack', () => {
     expect(JSON.stringify(statement)).not.toContain('transcripts');
   });
 
-  test('ADR-062 playback copies transition to IA like their audio sources', () => {
+  test('ADR-014 playback copies transition to IA like their audio sources', () => {
     template.hasResourceProperties('AWS::S3::Bucket', {
       LifecycleConfiguration: {
         Rules: Match.arrayWith([

@@ -738,7 +738,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	learnFromCorrections(ctx, current, glossary, parsed.Corrections)
 	transcript, segments := parsed.Text, parsed.Segments
 
-	// Archive the merged transcript to S3 (ADR-014 design.md §5.1 step 7).
+	// Archive the merged transcript to S3 (multi-file audio design, ADR-014).
 	// AudioPlayer uses presigned URLs from `audioKeys` so playback doesn't
 	// depend on this object, but the archival copy preserves the merged
 	// timeline for KB re-ingest, support debugging, and future re-summary.
@@ -933,8 +933,8 @@ func emitAllPartsTranscribedEvent(ctx context.Context, meetingID, userID string,
 
 // archiveMergedTranscript writes the merged multi-part transcript to
 // `transcripts/{meetingID}.json` so the archival shape mirrors a
-// single-file transcript. This is debug/replay scaffolding per ADR-014
-// design.md §5.1; the live playback path uses presigned URLs from the
+// single-file transcript. This is debug/replay scaffolding for the
+// multi-file audio design (ADR-014); the live playback path uses presigned URLs from the
 // `audioKeys` slice, so a failed write here must NOT block summarization.
 func archiveMergedTranscript(ctx context.Context, bucket, meetingID, transcript string, segments []TranscriptSegmentOut) error {
 	payload := struct {

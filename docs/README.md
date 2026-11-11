@@ -26,7 +26,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [MCP adapter](../mcp-server/README.md) | Stdio/HTTP transports, OAuth, local recording and Mac app control | `mcp-server/src/`, `mcp-server/test/` |
 | [Local Outlook sync](runbooks/local-outlook-calendar-sync.md) | Local reader prerequisites, explicit lifecycle/checkpoints, user-local scheduling and acceptance limits | Calendar handler/service/model, `mcp-server/src/calendar.ts`, guide and protocol tests |
 | [Local MCP intake](runbooks/local-mcp-intake.md) | `ttobak-mcp intake` calendar runner over a local `aws-outlook-mcp`, meeting SpecReq task step, acceptance and LaunchAgent template | `mcp-server/src/intake/`, ADR-065, `test/intake.test.mjs`, `test/intake-tasks.test.mjs` |
-| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-046, ADR-061, ADR-069 |
+| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-024, ADR-061, ADR-069 |
 | [Mac app release](runbooks/mac-app-release.md) | Updater key setup, one-command tagged release, verification, resume, restore and key loss | ADR-067, `mac-app/scripts/release.sh`, `install.sh`, `release_manifest.py`, `scripts/publish-frontend.sh` |
 | [Mac distribution and updates](decisions/ADR-073-mac-app-distribution-and-updates.md) | Self-signed certificate, curl installer, Tauri updater, busy guard; Developer ID triggers | `mac-app/src-tauri/src/update*.rs`, `tauri.conf.json`, `frontend/src/components/MacAppInstall.tsx` |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
@@ -50,7 +50,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Self-service Account invitations](decisions/ADR-054-self-service-account-invitations.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
 | [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
 | [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
-| [Seekable audio playback copies](decisions/ADR-062-seekable-audio-playback-copies.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
+| [Meeting audio files and lookup](decisions/ADR-014-meeting-audio-files-and-lookup.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
 | [Local MCP intake](decisions/ADR-065-local-mcp-intake.md) | Deterministic local connectors over host MCP servers; references not copies; calendar first, AI proposals only; amended for the SpecReq task step's two provider writes | `mcp-server/src/intake/`; calendar and task acceptance pending |
 | [Account-shared calendar](decisions/ADR-066-account-shared-calendar.md) | Direct-member Account calendar, one-veto rule, overrides, excluded consumers | `backend/internal/service/calendar_share.go`, `mcp-server/src/intake/match.ts`; Mac acceptance pending |
 | [Account contact encryption and retention](decisions/ADR-063-account-contact-encryption-and-retention.md) | Contact fields KMS envelope-encrypted per row, bound to account/contact; kept until deleted, PITR window disclosed | `backend/internal/sealing`, contact repository, `KMS_KEY_ID` |
@@ -94,12 +94,12 @@ python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
 ```
 
-- [Cognito app client write attributes and self-service email change](decisions/ADR-057-cognito-client-write-attributes.md)
+- [Cognito app client write attributes and self-service email change](decisions/ADR-007-sign-up-identity-and-admin.md)
 - [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
 - [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
-- [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
+- [Browser and mobile recording, recovery and retention](decisions/ADR-006-browser-and-mobile-recording.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
-- [Private audio crops and activation](decisions/ADR-047-private-audio-crops.md)
+- [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
 - [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)
 - [Shared speaker correction and account publication](decisions/ADR-051-shared-speaker-correction-and-account-publication.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-050-http-origin-proof-rotation.md)

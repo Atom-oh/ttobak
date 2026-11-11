@@ -3,7 +3,7 @@
 - Status: Accepted (2026-11-10); implementation pending owner acceptance (key
   setup, first release, teammate Mac).
 - Decision date: 2026-11-10.
-- Builds on: ADR-024 and ADR-046 (Mac app, signing and local control path).
+- Builds on: ADR-024 (Mac app, signing and local control path).
 
 ## Context
 

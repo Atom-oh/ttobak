@@ -24,7 +24,7 @@
 //! `evaluateJavaScript` as one giant JS array literal. JavaScriptCore fatally
 //! asserted while bytecode-compiling it, killing the WebContent process
 //! (surfacing to the user as the whole app freezing). See
-//! `docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md`.
+//! `docs/decisions/ADR-024-mac-native-capture-and-upload.md`.
 
 mod audio;
 mod aws_profiles;
@@ -822,7 +822,7 @@ pub fn run() {
         .setup(|app| {
             // Caption translation; failure only disables it.
             caption_translate::manage(app);
-            // MCP control channel (ADR-046); failure only disables it.
+            // MCP control channel (ADR-024); failure only disables it.
             control::start(app.handle().clone());
             // Meeting detection prompts (ADR-061); failure only disables them.
             meeting_detect::start(app.handle().clone());

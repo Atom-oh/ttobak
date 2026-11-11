@@ -54,9 +54,8 @@ but not these document relationship sets.
 [router](../../../backend/cmd/api/main.go) retains `share-account` and lacks the
 proposed document-link routes. The upload entry point is
 [CompleteUpload](../../../backend/internal/service/upload.go), not the draft's
-`ConfirmUpload` name. [ADR-022](../../decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)
-keeps copied account documents; [ADR-029](../../decisions/ADR-029-per-user-document-sharing-by-reference.md)
-adds a separate read-only email reference share.
+`ConfirmUpload` name. [ADR-020](../../decisions/ADR-020-personal-documents.md)
+keeps copied account documents and adds a separate read-only email reference share.
 
 Current references: [documentation map](../../README.md), [API](../../API-SPEC.md),
 and [project policy](../../../CLAUDE.md).

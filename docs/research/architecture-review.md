@@ -32,8 +32,7 @@ are implemented. The old ALB/ECS live-STT diagram and claims that these features
 are absent must not guide current PR review.
 
 Use [architecture](../architecture.md), [infrastructure](../INFRA-SPEC.md),
-[ADR-009](../decisions/ADR-009-batch-stt-and-diarization.md),
-[ADR-012](../decisions/ADR-012-gsi3-sort-key-for-meeting-lookup.md), and
-[ADR-009](../decisions/ADR-009-batch-stt-and-diarization.md).
+[ADR-009](../decisions/ADR-009-batch-stt-and-diarization.md), and
+[ADR-014](../decisions/ADR-014-meeting-audio-files-and-lookup.md).
 Current code/configuration still needs scrutiny for new regressions; historical
 improvement proposals are neither blanket exemptions nor active requirements.

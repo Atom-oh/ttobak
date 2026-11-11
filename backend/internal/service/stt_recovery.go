@@ -11,7 +11,7 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-// SttRecoveryAction is the scheduled tick's per-meeting decision (ADR-031 amendment).
+// SttRecoveryAction is the scheduled tick's per-meeting decision (ADR-013, scheduled STT recovery).
 type SttRecoveryAction string
 
 const (
@@ -90,7 +90,7 @@ func SttRecoveryAudioKeyAllowed(userID, meetingID, key string) bool {
 }
 
 // IsSttCheckpointObjectName matches only the exact allowlisted checkpoint
-// basenames (ADR-048); it is not a suffix match.
+// basenames (ADR-006); it is not a suffix match.
 func IsSttCheckpointObjectName(name string) bool {
 	return isCheckpointFileName(name)
 }
