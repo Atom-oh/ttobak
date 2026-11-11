@@ -3,7 +3,7 @@
 Tauri 2/Rust wraps the remote TTOBAK SPA and supplies native capture: a Core Audio
 process tap of system audio mixed with the default microphone (macOS 14.2+). Auth,
 presigning, upload-complete and retry orchestration remain in the SPA. Rust owns
-finished WAV transport, not Cognito tokens. See ADR-006/024/046.
+finished WAV transport, not Cognito tokens. See ADR-024.
 
 ## Build and validation
 

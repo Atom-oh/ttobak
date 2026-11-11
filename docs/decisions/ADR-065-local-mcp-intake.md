@@ -6,7 +6,7 @@
   pending).
 - Decision date: 2026-11-09.
 - Runbook: [local MCP intake](../runbooks/local-mcp-intake.md).
-- Related: ADR-045 (stdio-only calendar tools), ADR-046 (Mac control path).
+- Related: ADR-045 (stdio-only calendar tools), ADR-024 (Mac control path).
 
 ## Context
 

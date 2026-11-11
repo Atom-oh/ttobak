@@ -8,7 +8,7 @@ import { clearQueuedNativeControl, dispatchNativeControl } from '@/lib/nativeCon
 import { isTauri, markNativeControlReady, onNativeControlRequest, replyNativeControl } from '@/lib/tauri';
 
 /** Mac app only: receives MCP control requests forwarded by the app's local
- * socket and routes them to the record page (ADR-046). Renders nothing and
+ * socket and routes them to the record page (ADR-024). Renders nothing and
  * does nothing in a browser or an older app build. */
 export function NativeControlBridge() {
   const { isAuthenticated, isLoading } = useAuth();

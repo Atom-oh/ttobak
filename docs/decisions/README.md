@@ -27,3 +27,5 @@ rewritten.
 | [ADR-011](ADR-011-interactive-deep-research.md) | Rewritten in place |
 | [ADR-014](ADR-014-meeting-audio-files-and-lookup.md) | Meeting audio files and lookup; absorbs the former ADR-012 (GSI3 lookup), ADR-047 (private audio crops) and ADR-062 (seekable playback copies) |
 | [ADR-007](ADR-007-sign-up-identity-and-admin.md) | Sign-up, identity attributes and user administration; absorbs the former ADR-032 (admin panel) and ADR-057 (client write attributes) |
+| [ADR-006](ADR-006-browser-and-mobile-recording.md) | Browser and mobile recording; absorbs the former ADR-001 (system audio capture), ADR-030 (mobile live captions) and ADR-048 (browser recording backups) |
+| [ADR-024](ADR-024-mac-native-capture-and-upload.md) | Mac native capture and upload; absorbs the Mac parts of the former ADR-006 and the former ADR-046 (Core Audio tap and microphone) |

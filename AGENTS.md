@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: aa6e03420134 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 79f445f20d71 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -256,11 +256,11 @@ limit instead of claiming a Mac build passed.
   progress, not total duration; delete WAV only after upload-complete succeeds.
   Release recorder locks around blocking Core Audio FFI; the real-time IOProc only
   mixes and enqueues, and taps/aggregates tear down after `AudioDeviceStop`
-  (ADR-046). Update transition state in the same critical section; `StartGuard` clears abandoned starts.
+  (ADR-024). Update transition state in the same critical section; `StartGuard` clears abandoned starts.
   Check path containment before canonicalization to avoid existence probes.
 - **Mobile:** keep recording when captions fail. Wake-lock/reconnect/watchdog and
   manual recovery are implemented mitigations. Gesture-backed `resumeAudio()` and
-  `manualStallRecovery()` must run synchronously before any `await` (ADR-030).
+  `manualStallRecovery()` must run synchronously before any `await` (ADR-006).
 
 ## Security requirements and accepted limits
 
