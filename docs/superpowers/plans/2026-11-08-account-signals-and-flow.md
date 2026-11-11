@@ -364,7 +364,7 @@ Covers spec bug 4.
   - `OPEN_ACTIONS`: any open item age ≥ 14d. An item's age is measured from its meeting's date, because `ActionItem` has no `createdAt`.
   - `NO_UPCOMING`: no event linked to the project via `LINK#event#…#project#{id}` with `StartAt > now`.
   - Open actions come from `Meeting.ActionItems` (`storedActionItems`) of meetings that are both in `projectIds` and published to the account.
-  - Calendar events are excluded because they are per-user. This deviates from the spec's "calendar entry", and the reason is recorded in ADR-064 (Task 15).
+  - Calendar events are excluded because they are per-user. This deviates from the spec's "calendar entry", and the reason is recorded in ADR-021 (Task 15).
   - Route: `GET /api/accounts/{accountId}/signals`, `Cache-Control: no-store`. Response ≤ 64 KiB; cap text fields at 280 code points.
 
 - [ ] **Step 1: Tests**
@@ -637,14 +637,14 @@ Covers spec bug 4.
 ### Task 15: Documentation and ADR
 
 **Files:**
-- Create: `docs/decisions/ADR-064-account-relationship-links.md`
+- Create: `docs/decisions/ADR-021-account-contacts-links-and-people.md`
 - Modify:
   - `docs/API-SPEC.md` (`### Accounts and projects` :721; new routes in `## Go route inventory` :1469)
   - `docs/DESIGN-SPEC.md` (`## Accounts, filters and sharing` :251)
   - `docs/architecture.md` (summarize → account links)
   - `docs/README.md` (index the ADR)
 
-- [ ] **Step 1: Write ADR-064.** It records:
+- [ ] **Step 1: Write ADR-021.** It records:
   - The link row grammar and the allowed pairs.
   - Manual versus auto origin, the evidence rule and deny rows.
   - Read-time revalidation.

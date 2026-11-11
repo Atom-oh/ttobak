@@ -94,7 +94,7 @@ for SFDC.
 - [ ] **Step 1: Write ADR-068.**
   - Use the existing ADR format: `# ADR-068: SA performance data residency`, a
     bullet header (Status Accepted, Decision date 2026-11-10, Design = the spec,
-    Related = ADR-003 local MCP intake and ADR-067 account people edges by
+    Related = ADR-003 local MCP intake and ADR-021 account people edges by
     title), then Context, Decision and Consequences.
   - The Decision section records:
     - the spec's residency table, as owner-private and separate from the

@@ -27,7 +27,7 @@ const (
 var ErrEventAccess = errors.New("account event access revoked")
 
 // ErrEventEncryptionUnavailable shares the contact sentinel: both hold
-// third-party personal data and fail closed without a key (ADR-063).
+// third-party personal data and fail closed without a key (ADR-021, contact encryption).
 var ErrEventEncryptionUnavailable = ErrContactEncryptionUnavailable
 
 // ErrEventUnreadable means one stored event (or its reference row) cannot be

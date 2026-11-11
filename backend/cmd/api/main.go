@@ -82,7 +82,7 @@ func init() {
 	// Initialize repository with S3 support for large transcript storage
 	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	// Account contacts are third-party personal data: envelope-encrypted with
-	// the KMS key, and unavailable (503) when it is not configured (ADR-063).
+	// the KMS key, and unavailable (503) when it is not configured (ADR-021, contact encryption).
 	if sealer := sealing.NewEnvelope(kmsClient, os.Getenv("KMS_KEY_ID")); sealer != nil {
 		repo.SetRecordSealer(sealer)
 	}

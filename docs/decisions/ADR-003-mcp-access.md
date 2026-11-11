@@ -344,7 +344,7 @@ source revisions. The API's dedicated HTTP read boundary now receives the same
 atomic grant resolver. Its private mutations are the personal-note executor below
 and, since 2026-11-08, account contact creation: a separate executor with direct
 membership, current approval and an arguments-bound receipt in one transaction,
-storing contacts sealed under ADR-063 (contract in `docs/API-SPEC.md`). Account
+storing contacts sealed under ADR-021 (contract in `docs/API-SPEC.md`). Account
 event creation uses an equivalent executor that also writes the event's
 reference row in the same transaction.
 
