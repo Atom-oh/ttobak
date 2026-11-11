@@ -212,7 +212,7 @@ enum RecordDecision {
 /// `ALL_FAILED` (an attempt only), e.g. a wake run before the network is up.
 fn slot_outcome(exit_ok: bool, code: Option<&str>, result: Option<&Value>) -> RecordDecision {
     match code {
-        Some("RUN_IN_PROGRESS" | "ADAPTER_UPDATING") => RecordDecision::Skip,
+        Some("RUN_IN_PROGRESS" | "ADAPTER_UPDATING" | "SHUTTING_DOWN") => RecordDecision::Skip,
         None if exit_ok => RecordDecision::Record(None),
         None => RecordDecision::Record(Some("EXIT_FAILED".into())),
         Some("PARTIAL_FAILURE") => {
@@ -488,6 +488,13 @@ fn resolve_node(stored: Option<&str>, home: &Path) -> Option<PathBuf> {
     )
 }
 
+/// A cancelled or timed-out run always ends with a group SIGKILL after the
+/// grace period: provider grandchildren own their pipes, so the leader exiting
+/// proves nothing about them. Normal completion leaves the group alone.
+fn should_group_kill(forced: Option<&str>) -> bool {
+    matches!(forced, Some("TIMEOUT" | "CANCELLED"))
+}
+
 fn kill_group(pgid: i32, signal: libc::c_int) {
     if pgid > 1 {
         // SAFETY: killpg has no memory preconditions; pgid is our child's group.
@@ -528,6 +535,8 @@ pub struct IntakeState {
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     /// Process group of the current run (0 = none); killed on app exit.
     pgid: AtomicI32,
+    /// Set by the app-exit path before `kill_running`; no new child spawns.
+    shutting_down: AtomicBool,
     progress: Mutex<ProgressLog>,
     /// Bumped per begun run; a reader of an older run never writes progress.
     run_gen: AtomicU64,
@@ -557,6 +566,7 @@ impl IntakeState {
             running: Mutex::new(None),
             cancel: Mutex::new(None),
             pgid: AtomicI32::new(0),
+            shutting_down: AtomicBool::new(false),
             progress: Mutex::new(ProgressLog::default()),
             run_gen: AtomicU64::new(0),
             last_result: Mutex::new(None),
@@ -660,6 +670,7 @@ pub fn kill_running(app: &AppHandle) {
     let Some(state) = app.try_state::<IntakeState>() else {
         return;
     };
+    state.shutting_down.store(true, Ordering::SeqCst);
     let pgid = state.pgid.swap(0, Ordering::SeqCst);
     if pgid > 1 {
         kill_group(pgid, libc::SIGTERM);
@@ -787,6 +798,11 @@ async fn execute(
         .stderr(Stdio::piped())
         .process_group(0)
         .kill_on_drop(true);
+    // Checked right before spawn: the PATH capture above can outlast the
+    // app-exit kill.
+    if state.shutting_down.load(Ordering::SeqCst) {
+        return Outcome::failed("SHUTTING_DOWN");
+    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -864,6 +880,11 @@ async fn execute(
             {
                 kill_group(pgid, libc::SIGKILL);
                 let _ = child.wait().await;
+            }
+            // Even if the leader exited, a provider that ignored SIGTERM may
+            // live on in the group (ESRCH is ignored).
+            if should_group_kill(Some(code)) {
+                kill_group(pgid, libc::SIGKILL);
             }
             (None, Some(code))
         }
@@ -1338,6 +1359,22 @@ pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<Adap
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn group_kill_follows_cancel_and_timeout_only() {
+        assert!(should_group_kill(Some("TIMEOUT")));
+        assert!(should_group_kill(Some("CANCELLED")));
+        assert!(!should_group_kill(None));
+        assert!(!should_group_kill(Some("WAIT_FAILED")));
+    }
+
+    #[test]
+    fn shutdown_refusal_does_not_record_a_slot_attempt() {
+        assert!(matches!(
+            slot_outcome(false, Some("SHUTTING_DOWN"), None),
+            RecordDecision::Skip
+        ));
+    }
 
     #[test]
     fn progress_lines_are_capped() {
