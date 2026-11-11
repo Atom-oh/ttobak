@@ -20,10 +20,11 @@ to GitHub Pages, not AWS.
   Infra deploys share one concurrency group and are never cancelled in progress.
 - The release discards CDK output, because a diff can expose the origin proof,
   and reports fixed error categories only.
-- Stacks deploy one at a time with `--exclusively`, in dependency order, through
-  `scripts/operations/http_origin_release.py` (`release`, then an always-run
+- Stacks deploy one at a time with `--exclusively`, in dependency order. The
+  main infra release goes through `scripts/operations/http_origin_release.py` (`release`, then an always-run
   `retighten`). Never use `cdk deploy --all`: KnowledgeStack holds a staged,
-  undeployed teardown and is left out of the release list.
+  undeployed teardown and is left out of the release list. The Billing stack
+  has its own workflow and its own exclusive deploy.
 - Storage is deployed again after Frontend so the OAC policy is tightened. The
   Storage custom resource's changing `Timestamp` forces that refresh; keep it.
 - The infra workflow builds all eight Go zip entry points for Linux ARM64.
@@ -33,7 +34,7 @@ to GitHub Pages, not AWS.
   and HTML last with no-cache headers, then invalidates CloudFront.
 - Mac app builds are local and outside these workflows.
 
-**PR review.** CI runs specialist review (`ROLE_REVIEW=1`): each supported model
+**PR review.** Since 2026-09-13 CI runs specialist review (`ROLE_REVIEW=1`): each supported model
 gets one responsibility instead of every lens.
 
 - Codex and Claude roles give independent OpenAI and Anthropic primary coverage.
@@ -52,11 +53,12 @@ gets one responsibility instead of every lens.
   base-approved input policy excludes completes as NOT_APPLICABLE only with
   the explicit opt-in and a policy file whose hash matches; the report lists
   the excluded paths and says no model reviewed them. Any reviewable source,
-  unknown exclusion or failed collector blocks.
+  unknown exclusion, omitted source or failed collector blocks.
 - A complete report with no blocking candidate or uncertainty gets a
   deterministic summary. The chair adjudicates substantive candidates and cannot
   waive missing or invalid coverage.
-- Review limits, quotas and budgets are not raised to obtain a pass. New input
+- Review limits, context caps, quotas and budgets are not raised to obtain a
+  pass. New input
   exclusions need their own reviewed policy change. English output is requested,
   not validated.
 - The review job uses `pull_request_target`, runs for same-repository PRs only,
@@ -68,7 +70,13 @@ gets one responsibility instead of every lens.
   private repository does not remove the risk of running modified workflow code
   with deployment privileges.
 - Workflow source shows configuration, not a successful run or deployed state.
-- Model IDs are configuration; they do not attest model weights.
+- Model IDs are configuration; they do not attest model weights. Model access
+  and production execution need their own evidence.
+- A Kiro reviewer can be steered by a diff into reading an absolute path, and
+  a credential it prints could reach the chair and the PR comment. Secret
+  scrubbing acts only after a value appears in output; it is the last line of
+  defense, not prevention, so this residual risk remains whenever Kiro roles
+  are enabled.
 - The legacy model-by-lens matrix remains in `run-panel.sh` for runs without
   `ROLE_REVIEW=1`; CI does not use it.
 

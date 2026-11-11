@@ -17,11 +17,15 @@
   sort keys. They have no TTL.
 - A sub-page is a child report with `parentId`. It needs an owned parent in
   status `done`. Sections of one report are not child executions.
-- Every research action checks that the caller owns the research. Chat input is
-  bounded to 10,000 bytes (about 3,300 Hangul characters) and the research ID may not contain path
-  separators.
-- The UI polls chat every three seconds while a report is planning or running
-  and for a bounded time after a message on a finished report.
+- Approving a plan, triggering the agent and creating a sub-page require the
+  caller to own the research. Chat input is bounded to 10,000 bytes (about
+  3,300 Hangul characters), and a research ID containing `..` or `/` is
+  rejected.
+- Progress is delivered by REST polling over a Step Functions run; the
+  WebSocket transport is for live QA only.
+- The chat polls every three seconds while a report is planning or running and
+  for a bounded time after a message on a finished report; the detail page
+  polls every ten seconds while active.
 
 ## Not implemented or off by default
 
@@ -36,6 +40,12 @@
 
 ## Limits and accepted risks
 
+- Chat reading and sending are gated by the research detail check, which also
+  admits share recipients. A recipient can therefore read the chat, and a
+  message they send is stored before the owner-only agent trigger refuses it.
+  This is a known gap, not an accepted policy.
+- The table TTL sweeps only `pendingShareExpiresAt`, which chat rows do not
+  carry.
 - Stored chat text is later sent to the agent as user input.
 - The research workflow is one Lambda task with a 20-minute state-machine
   timeout and no configured retry or catch.
