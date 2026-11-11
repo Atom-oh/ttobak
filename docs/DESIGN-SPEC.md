@@ -44,6 +44,27 @@ Mermaid/Shiki consume JS theme values through the hook; keep Mermaid's explicit
 light/dark palettes aligned when changing CSS tokens. Purely styled components
 use CSS variants.
 
+## Workspace sizing
+
+`AppLayout` uses the dynamic viewport height and a shrinking main column beside
+the 256px desktop sidebar. Its mobile main area reserves the same height and
+safe-area inset as `MobileNav`; chat inputs and independently scrolling detail
+panes must stay above that navigation.
+
+`globals.css` owns `--workspace-gutter` (16px below 1024px, 24px above it) and
+`.workspace-page` / `.workspace-inline-gutter`. Workspace list, dashboard and
+detail wrappers fill the available width instead of using a global reading cap.
+Use `.workspace-card-grid` for adaptive project cards and
+`.workspace-settings-grid` for independent settings sections. Administration
+tables span all settings columns. Article prose and the document editor keep a
+76ch reading width inside the full-width page; focused login/profile forms and
+upload/empty-state controls keep their purpose-specific constraints.
+
+The sidebar keeps its actions separate from its scrollable navigation. Long
+breadcrumbs truncate inside the header without displacing search and actions.
+See the [2026-11-11 design review](reviews/2026-11-11-workspace-design-review.md)
+for viewport evidence and remaining design recommendations.
+
 ## Screens and components
 
 | Area | Current responsibilities / code pointers |
