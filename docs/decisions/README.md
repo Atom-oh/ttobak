@@ -30,3 +30,4 @@ rewritten.
 | [ADR-006](ADR-006-browser-and-mobile-recording.md) | Browser and mobile recording; absorbs the former ADR-001 (system audio capture), ADR-030 (mobile live captions) and ADR-048 (browser recording backups) |
 | [ADR-024](ADR-024-mac-native-capture-and-upload.md) | Mac native capture and upload; absorbs the Mac parts of the former ADR-006 and the former ADR-046 (Core Audio tap and microphone) |
 | [ADR-013](ADR-013-summary-generation-and-publication.md) | Summary generation, recovery and publication; absorbs the former ADR-031 (summarize timeout resilience and STT recovery), ADR-037 (immutable spills) and ADR-040 (guarded summary publication) |
+| [ADR-016](ADR-016-meeting-account-sharing.md) | Meeting-account linking, publication and team management; absorbs the former ADR-023 (share-origin provenance) and ADR-051 (shared speaker correction and account publication) |

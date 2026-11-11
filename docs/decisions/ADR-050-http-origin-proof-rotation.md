@@ -1,4 +1,4 @@
-# ADR-050: Versioned HTTP origin proof rotation
+# ADR-027: Versioned HTTP origin proof rotation
 
 - Date: 2026-10-12
 - Status: Accepted; staged implementation

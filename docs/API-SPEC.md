@@ -749,7 +749,7 @@ Restricted account views never write their hidden content/action fields.
 Unchanged derived fields are also omitted, preserving safe summary clearance
 for attribution-only corrections. Action-item updates target JSON text/assignee
 fields and preserve task IDs, completion and other metadata.
-See ADR-051.
+See ADR-016.
 
 `POST /api/kb/upload` `{fileName, fileType, accountId?}` returns `{uploadUrl,
 key, expiresIn, headers?}`. An empty `accountId` is a personal file and the

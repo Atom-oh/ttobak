@@ -1,4 +1,4 @@
-# ADR-044: Project invitations and authenticated session bootstrap
+# ADR-025: Project invitations and authenticated session bootstrap
 
 - Status: Accepted implementation; activation requires the rollout below.
 - Date: 2026-09-18.
