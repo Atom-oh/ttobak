@@ -66,7 +66,7 @@ interface MeetingHeaderProps {
   onUnshare: (userId: string) => void;
   onTitleChange?: (newTitle: string) => void | Promise<void>;
   onTitleDirtyChange?: (dirty: boolean) => void;
-  /** ADR-014 Phase 6: called with the updated linked id list after the picker saves. */
+  /** Linked meetings (ADR-014): called with the updated linked id list after the picker saves. */
   onLinkedMeetingsChange?: (linkedMeetingIds: string[]) => void;
 }
 
@@ -157,7 +157,7 @@ export function MeetingHeader({ meeting, isCreator = true, canManage = true, onS
         )}
         {titleError && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{titleError}</p>}
 
-        {/* Linked predecessor meetings (ADR-014 Phase 6) — chips for existing
+        {/* Linked predecessor meetings (ADR-014) — chips for existing
             links + a "+ 연결" button to open the picker. Links are navigation
             only, letting the user jump back to earlier meetings. */}
         <div className="flex flex-wrap items-center gap-1.5 mb-4 text-xs">

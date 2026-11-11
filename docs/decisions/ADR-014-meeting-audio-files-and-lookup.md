@@ -30,7 +30,8 @@
 - Each part transcript is `transcripts/{meetingId}_part_{NNN}.json`. Summarize
   records ready parts in an idempotent number set and merges only when the
   count matches and the indexes are contiguous. Speaker labels are namespaced by
-  part index (ADR-009). Single-file meetings use the same path.
+  part index (ADR-009). Only multi-part output uses the part keys; a
+  single-file meeting keeps `transcripts/{meetingId}.json`.
 - A meeting may link up to three predecessors. The link endpoint rejects empty
   input, self-links and a one-hop reverse link. A non-creator member may link only
   predecessors published to the same account, through a fenced write.
@@ -50,11 +51,17 @@
   shares, earlier transcripts, human summary edits and derived analyses are not
   carried over.
 - Cropped audio is immutable: it cannot be replaced by an upload, and the
-  worker's result key is excluded from ordinary STT.
+  worker's result key is excluded from ordinary STT. The source audio is never
+  replaced; a failed crop leaves the original recording unchanged.
+- A repeated request with the same request ID returns the same copy; a
+  different range for that ID is rejected.
+- The worker downloads the source with a precondition on the pinned ETag,
+  checks its length, and records the run and result key before uploading the
+  candidate.
 - Limits: 6 hours selected, a 24-hour end offset and a 2 GiB source.
 - The worker heartbeats every 30 seconds from before the download through
-  conversion, transcription and upload. FFmpeg runs with a file and pipe
-  protocol whitelist and a 900-second timeout; an overrun or short output fails
+  conversion, transcription and upload. FFmpeg runs with protocol and
+  format whitelists and a 900-second timeout; an overrun or short output fails
   instead of shortening the range. Crop and copy writes
   are conditional and tied to a run. A definite rejection deletes only the
   unique candidate object, an ambiguous binding keeps it, and a cleanup failure
@@ -82,7 +89,13 @@
   is not a correctness dependency. A copy never replaces the original, and STT
   reads only `audio/`.
 - The remux role reads `audio/*` and `audio-playback/*` and writes only
-  `audio-playback/*`. The prefix is in the OAC allowlist, moves to infrequent
+  `audio-playback/*`, has no DynamoDB access and runs in an isolated subnet.
+  Its writes are conditional without SDK retries, because a stale precondition
+  must not be retried.
+- The copy prefix is separate from `audio/`, so a copy's own S3 event cannot
+  match the transcription rule; the remux rule matches only WebM and Ogg under
+  `audio/`.
+- The prefix is in the OAC allowlist, moves to infrequent
   access after 90 days, and is covered by failed-recording cleanup.
 
 ## Not implemented or off by default
@@ -125,7 +138,9 @@
 ## Source
 
 `infra/lib/storage-stack.ts`, `ai-stack.ts`, `gateway-stack.ts`,
-`backend/internal/repository/dynamodb.go`, `backend/internal/model/meeting.go`,
+`backend/internal/repository/dynamodb.go`, `audio_crop.go`,
+`backend/internal/model/meeting.go`, `backend/cmd/transcribe/main.go`,
+`backend/whisper/AUDIO_CROP.md`, `scripts/audio_playback_backfill.py`,
 `backend/internal/service/upload.go`,
 `meeting_manager.go`, `audio_crop.go`, `audio_playback.go`,
 `backend/internal/audioplayback/`, `backend/cmd/summarize/merge.go`,
