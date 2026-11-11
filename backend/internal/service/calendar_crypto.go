@@ -32,30 +32,56 @@ const (
 )
 
 func (crypto *CalendarCipher) Encrypt(ctx context.Context, userID, sourceID, eventID string, plaintext []byte) (string, error) {
-	return crypto.encryptWithContext(ctx, calendarEventPurpose, userID, sourceID, eventID, plaintext)
+	if userID == "" || sourceID == "" || eventID == "" {
+		return "", ErrCalendarEncryption
+	}
+	return crypto.encrypt(ctx, calendarEncryptionContext(calendarEventPurpose, userID, sourceID, eventID), plaintext)
 }
 
 func (crypto *CalendarCipher) Decrypt(ctx context.Context, userID, sourceID, eventID string, ciphertext string) ([]byte, error) {
-	return crypto.decryptWithContext(ctx, calendarEventPurpose, userID, sourceID, eventID, ciphertext)
+	if userID == "" || sourceID == "" || eventID == "" {
+		return nil, ErrCalendarEncryption
+	}
+	return crypto.decrypt(ctx, calendarEncryptionContext(calendarEventPurpose, userID, sourceID, eventID), ciphertext)
 }
 
 // SealTaskText encrypts a SpecReq task title under its own KMS purpose, so a
 // calendar-event ciphertext cannot be opened as task text or the reverse.
 func (crypto *CalendarCipher) SealTaskText(ctx context.Context, userID, sourceID, eventID string, plaintext []byte) (string, error) {
-	return crypto.encryptWithContext(ctx, specReqTaskPurpose, userID, sourceID, eventID, plaintext)
+	if userID == "" || sourceID == "" || eventID == "" {
+		return "", ErrCalendarEncryption
+	}
+	return crypto.encrypt(ctx, calendarEncryptionContext(specReqTaskPurpose, userID, sourceID, eventID), plaintext)
 }
 
 func (crypto *CalendarCipher) OpenTaskText(ctx context.Context, userID, sourceID, eventID string, ciphertext string) ([]byte, error) {
-	return crypto.decryptWithContext(ctx, specReqTaskPurpose, userID, sourceID, eventID, ciphertext)
+	if userID == "" || sourceID == "" || eventID == "" {
+		return nil, ErrCalendarEncryption
+	}
+	return crypto.decrypt(ctx, calendarEncryptionContext(specReqTaskPurpose, userID, sourceID, eventID), ciphertext)
 }
 
-func (crypto *CalendarCipher) encryptWithContext(ctx context.Context, purpose, userID, sourceID, eventID string, plaintext []byte) (string, error) {
-	if !crypto.configured() || userID == "" || sourceID == "" || eventID == "" || len(plaintext) == 0 || len(plaintext) > 4096 {
+// EncryptShare encrypts one sharer's display projection of a meeting for an account partition.
+func (crypto *CalendarCipher) EncryptShare(ctx context.Context, accountID, meetingKey, userID string, plaintext []byte) (string, error) {
+	if accountID == "" || meetingKey == "" || userID == "" {
+		return "", ErrCalendarEncryption
+	}
+	return crypto.encrypt(ctx, calendarShareEncryptionContext(accountID, meetingKey, userID), plaintext)
+}
+
+func (crypto *CalendarCipher) DecryptShare(ctx context.Context, accountID, meetingKey, userID string, ciphertext string) ([]byte, error) {
+	if accountID == "" || meetingKey == "" || userID == "" {
+		return nil, ErrCalendarEncryption
+	}
+	return crypto.decrypt(ctx, calendarShareEncryptionContext(accountID, meetingKey, userID), ciphertext)
+}
+
+func (crypto *CalendarCipher) encrypt(ctx context.Context, encryptionContext map[string]string, plaintext []byte) (string, error) {
+	if !crypto.configured() || len(plaintext) == 0 || len(plaintext) > 4096 {
 		return "", ErrCalendarEncryption
 	}
 	result, err := crypto.client.Encrypt(ctx, &kms.EncryptInput{
-		KeyId: aws.String(crypto.keyID), Plaintext: plaintext,
-		EncryptionContext: calendarEncryptionContext(purpose, userID, sourceID, eventID),
+		KeyId: aws.String(crypto.keyID), Plaintext: plaintext, EncryptionContext: encryptionContext,
 	})
 	if err != nil || result == nil || len(result.CiphertextBlob) == 0 || len(result.CiphertextBlob) > 6144 {
 		return "", ErrCalendarEncryption
@@ -63,8 +89,8 @@ func (crypto *CalendarCipher) encryptWithContext(ctx context.Context, purpose, u
 	return base64.StdEncoding.EncodeToString(result.CiphertextBlob), nil
 }
 
-func (crypto *CalendarCipher) decryptWithContext(ctx context.Context, purpose, userID, sourceID, eventID string, ciphertext string) ([]byte, error) {
-	if !crypto.configured() || userID == "" || sourceID == "" || eventID == "" || len(ciphertext) == 0 || len(ciphertext) > 8192 {
+func (crypto *CalendarCipher) decrypt(ctx context.Context, encryptionContext map[string]string, ciphertext string) ([]byte, error) {
+	if !crypto.configured() || len(ciphertext) == 0 || len(ciphertext) > 8192 {
 		return nil, ErrCalendarEncryption
 	}
 	blob, err := base64.StdEncoding.Strict().DecodeString(ciphertext)
@@ -72,8 +98,7 @@ func (crypto *CalendarCipher) decryptWithContext(ctx context.Context, purpose, u
 		return nil, ErrCalendarEncryption
 	}
 	result, err := crypto.client.Decrypt(ctx, &kms.DecryptInput{
-		KeyId: aws.String(crypto.keyID), CiphertextBlob: blob,
-		EncryptionContext: calendarEncryptionContext(purpose, userID, sourceID, eventID),
+		KeyId: aws.String(crypto.keyID), CiphertextBlob: blob, EncryptionContext: encryptionContext,
 	})
 	if err != nil || result == nil || len(result.Plaintext) == 0 || len(result.Plaintext) > 4096 {
 		return nil, ErrCalendarEncryption
@@ -89,5 +114,12 @@ func calendarEncryptionContext(purpose, userID, sourceID, eventID string) map[st
 	return map[string]string{
 		"purpose": purpose,
 		"userId":  userID, "sourceId": sourceID, "eventId": eventID,
+	}
+}
+
+func calendarShareEncryptionContext(accountID, meetingKey, userID string) map[string]string {
+	return map[string]string{
+		"purpose":   "ttobak-calendar-share-v1",
+		"accountId": accountID, "meetingKey": meetingKey, "userId": userID,
 	}
 }
