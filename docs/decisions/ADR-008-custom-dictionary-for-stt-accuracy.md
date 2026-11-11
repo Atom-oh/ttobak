@@ -1,7 +1,7 @@
 # ADR-008: Dictionaries for speech recognition
 
 - Status: Accepted. Automatic term extraction and the Account, KB, research,
-  news and correction layers ship off by default.
+  news, tech and correction layers ship off by default.
 - Implementation checked: 2026-11-11. The sections below are the rules in
   force; dates inside them mark owner decisions.
 
@@ -135,7 +135,8 @@ and the per-rule drop counts (`TermFilterCounts`) hold numbers only, never text.
 Rules, in order:
 
 - **Confidence** at least the configured minimum (default 0.85; values outside
-  (0, 1] use the default).
+  (0, 1] use the default). `infra/cdk.json` sets 0.7 (2026-11-11, owner
+  decision to collect more uncommon domain terms; grounding still applies).
 - **Blocklist.** The embedded `terms_blocklist.txt` (common Korean and English
   meeting and function words plus fillers, about 550 entries) is matched on an
   automatic candidate's term key and on every heardAs. For manual terms,
@@ -171,7 +172,7 @@ Rules, in order:
   acronyms keep `TranscribeKo=false` until a live ko-KR build records that
   Transcribe accepts them. A term without a phrase is still kept.
 - **Duplicates** by term key keep the best-ranked candidate.
-- **Cap.** At most 15 terms per run, ranked by confidence, then source-type count.
+- **Cap.** At most 40 terms per run (`AutoTermsMaxNewPerRun`), ranked by confidence, then source-type count.
 
 ## Run state and merge rules
 
@@ -218,7 +219,7 @@ caller.
   undercounted, never double-counted. A
   leftover observation without a term (failed eviction cleanup) is deleted
   before the create is retried.
-- **Caps.** Unedited automatic terms (active or suggested) are capped at 300 per
+- **Caps.** Unedited automatic terms (active or suggested) are capped at 1000 per
   scope; `EvictAutoTerm` (now also accepting `suggested`) removes the lowest
   `hits*2 + (lastSeen within 30 days ? 1 : 0)` first, oldest `lastSeenAt` on
   ties. When its version and `userEditedAt` guards fail, the row is re-read: a
@@ -388,7 +389,7 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
 
 - **Layers and partitions.** Common `DICT#COMMON`, Account `ACCOUNT#{accountId}`
   and Personal `USER#{userId}`. Term rows stay `DICTTERM#{termKey}` with the
-  unchanged `termKey` rules. Caps per scope: 300 automatic terms
+  unchanged `termKey` rules. Caps per scope: 1000 automatic terms
   (`MaxAutoTermsPerScope`), 500 manual terms (`MaxManualTermsPerScope`), 10
   observations per term; Common keeps at most 20 audit rows per term, the
   oldest (create or first system) row pinned and the newest 19 others kept.
@@ -408,7 +409,8 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   unit of retry); it logs `layer=account outcome=<code>` and is counted.
 - **L2 (Common).** Any signed-in user may edit or delete Common terms; every
   write records `updatedBy`/`updatedAt` and an audit row, and system writes
-  (news creates and evictions, actor `system:news`) are audited too. Deletes
+  (news and tech creates and evictions, actors `system:news` and
+  `system:tech`) are audited too. Deletes
   are tombstones that can be restored from the audit snapshot.
 - **R17 (edited Common terms).** A Common term a user edited (`userEditedAt`
   set) is left out of the transcript-correction glossary; vocabulary and the
@@ -421,16 +423,48 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   (`accountAcceptedTerms`, which can hold keys the personal merge skipped) in
   one update before the Account merge; the deletion sweep cleans each recorded
   Account for `acceptedTerms` plus `accountAcceptedTerms`.
+- **Meeting relink and the Account layer (FU4, 2026-11-11).** After a change of
+  the meeting's `accountId` commits (private link, `share-account`, account
+  merge in the worker and the CLI's link-only move),
+  `SweepMeetingAccountTerms` cleans every recorded Account other than the
+  current one: per key it deletes the meeting's observation, then deletes an
+  unedited auto term left without observations or removes the meeting from
+  `sources` and `firstSourceMeetingId` of a term that stays (manual and edited
+  terms included), version-guarded with re-reads. A clean Account leaves
+  `accountIds` only while `accountRecords` is unchanged and the meeting is not
+  linked to it again. `hits` is not decremented. The sweep is best effort and
+  idempotent: failures log `trigger`, outcome, an error code and counts only;
+  it re-runs on a repeated link call and on the next terms run, and deletion
+  still sweeps every recorded Account. Race guard: `RecordTermsAccount` and
+  every Account observation write require the meeting to still be linked to
+  that Account in the same transaction (`outcome=UNLINKED` otherwise). Each
+  Account observation write also updates the run state in that transaction:
+  it needs the Account in `accountIds` and bumps `accountRecords`, as
+  `RecordTermsAccount` does. So no write lands in an Account the sweep already
+  dropped, and a write after the sweep read the run state (for example during
+  two relinks inside one merge pass) fails the drop guard and keeps the
+  Account recorded for the next relink's sweep. A relink straight back during
+  a sweep can still drop the meeting's evidence from the Account it returned
+  to (an undercount until a changed source runs again); every Account
+  observation stays recorded. For an account merge the source's dictionary layer stays on the
+  retired source (an unmoved category, ADR-022) and is not copied: moved
+  meetings' evidence leaves it like on any relink, other evidence and manual
+  rows stay. The new Account gets a meeting's terms only from its next run
+  with a changed source (an unchanged `sourceHash` queues none).
 - **L3 (corrections).** Glossary corrections to the transcript are applied
   silently; the records are stored on the meeting and never shown in the UI. A
   refined segment in which a glossary form appears more often than in its source
   lines without a kept record explaining it is re-run on the plain prompt, then
   falls back to the raw text, so a correction pass cannot invent terms. Automatic
   `heardAs` appends do not set `userEditedAt`; Common counters are not written.
+  `infra/cdk.json` turns `ttobak:transcriptCorrection` on (2026-11-11, owner
+  goal of meeting quality). Before that, every summarize run in the week
+  logged `outcome=DISABLED reason=flag_off`.
 - **L4 (sources).** A KB upload asks for an Account (none means Personal); the
   choice is stored as S3 object metadata `account-id`. KB documents (plain text
   only: `.md`, `.markdown`, `.txt`) and research reports feed the owner's
-  Account or Personal layer. Daily news feeds Common only. By default only crawler
+  Account or Personal layer. Daily news and daily AWS technical documents feed
+  Common only. By default only crawler
   sources an operator marked global and that carry no sticky `userTiedAt` are
   read; the repeat threshold counts distinct sources, and Common sources are
   public news references, never meeting or KB references.
@@ -449,9 +483,33 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   documents are public search results (custom URLs excluded), terms are
   recognition hints written as `system:news` with audit rows, and signed-in
   users can edit or delete Common terms.
+  **AWS technical documents (2026-11-11).** `ProcessTechDaily` reads the
+  title and summary (never the S3 body) of the documents the reserved
+  `__tech__` crawler wrote in the news day (GSI4 `DOC#tech`). They have no
+  ingest source, quality status or second crawler source, so the news rule
+  can never admit them. Replacement threshold: a term qualifies only when at
+  least two distinct technical documents (by document hash) named it within
+  the seven days ending that day; one document counts once however often it
+  is re-crawled or re-run. Rationale: every tech row comes from one
+  operator-reserved source, so counting sources would admit nothing or (with
+  a one-source rule) every single mention, while two independent documents
+  still filter one-off phrasing; production volume is about ten documents a
+  day, so a same-day-only rule would also admit little. Stricter evidence
+  rules make up for the single source: only `https` documents on
+  `aws.amazon.com` or its subdomains count (the crawler also stores
+  web-search results from other sites, which never count), the row must
+  carry the crawler's `shared/aws-docs/{service}/{hash}.md` body key, and
+  only Hangul or ASCII-Latin terms qualify (titles are multilingual; other
+  scripts are also ineligible for Transcribe). The writer is a distinct
+  actor `system:tech` with source kind `tech` (ref = day), so tech and news
+  evidence for the same day are separate observations and the audit names
+  the job; creations and evictions are audited, user-edited and tombstoned
+  Common terms are untouched, and the Common cap applies as for news. The run
+  is idempotent per day (run row with a content hash, history as a set),
+  makes at most four model calls, and logs codes and counts only.
 - **Flags.** `ttobak:accountTermsMode`, `ttobak:transcriptCorrection`,
-  `ttobak:kbTermsMode`, `ttobak:researchTermsMode` and `ttobak:newsTermsMode`
-  (`off|on`) all default off; a run skipped by a flag logs `outcome=DISABLED`.
+  `ttobak:kbTermsMode`, `ttobak:researchTermsMode`, `ttobak:newsTermsMode`
+  and `ttobak:techTermsMode` (`off|on`) all default off; a run skipped by a flag logs `outcome=DISABLED`.
   Rollout is one flag per deployment, each after a deployment with it off.
 - **Observability.** Metric filters on the summarize log group and the
   `TermsSourcesSilent` alarm are described in
@@ -466,9 +524,15 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   unlinked from or relinked to an Account (a meeting's `accountId` change, a
   research report's `accountIds` change, a KB object's `account-id` change):
   remove that source's observations, its `sources` references on the term and
-  auto terms left without observations in the old Account. Today only meeting
-  deletion sweeps an Account. FU4 is required before `accountTermsMode`,
-  `kbTermsMode` or `researchTermsMode` is turned on. Those two flags also
+  auto terms left without observations in the old Account. The meeting part
+  is done (2026-11-11, see meeting relink above) and is the part
+  `accountTermsMode` needs; that cleanup was deployed with the flag off and
+  `infra/cdk.json` turned the flag on in its own deployment (2026-11-11). The
+  research `accountIds` and KB `account-id` parts remain and still gate
+  `kbTermsMode` and `researchTermsMode` `on`. Transcript-correction rows in an
+  Account (`TERMS_CORRECTION#` meeting sets, TTL-bounded, and automatic
+  `heardAs` appends) are L3 feedback, not observations, and are not swept on
+  relink. Those two flags also
   accept `personal` (2026-11-09): Personal-layer writes only, which FU4 does not
   gate. FU5: promote and demote
   terms between Personal and Account (spec section 4.5); not implemented. FU6:

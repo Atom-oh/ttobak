@@ -96,6 +96,17 @@ class TestNewsStoreBoundaries(unittest.TestCase):
         self.assertTrue(client.batch_get_item.call_args.kwargs[
             "RequestItems"]["table"]["ConsistentRead"])
 
+    def test_config_guard_binds_search_scope_presence_and_value(self):
+        store = NewsStore(mock.Mock(), "table")
+        absent = store._config_guard(attempt(), CONFIG)["ConditionCheck"]
+        alias = next(key for key, value in absent["ExpressionAttributeNames"].items()
+                     if value == "searchDomains")
+        self.assertIn(f"attribute_not_exists({alias})", absent["ConditionExpression"])
+        present = store._config_guard(attempt(), dict(CONFIG, searchDomains=["fss.or.kr"]))
+        present = present["ConditionCheck"]
+        self.assertIn(f"{alias} = ", present["ConditionExpression"])
+        self.assertIn(["fss.or.kr"], present["ExpressionAttributeValues"].values())
+
     def test_deleted_disabled_or_changed_config_prevents_any_transaction(self):
         client = mock.Mock()
         store, job = NewsStore(client, "table"), attempt()
@@ -219,6 +230,50 @@ class TestNewsStoreTransactions(unittest.TestCase):
                 self.reserve()
         self.assertIsNone(self.row(self.job.sk))
         self.assertIsNone(self.row("NEWSBUDGET#2026-10"))
+
+    def test_search_scope_added_after_read_rolls_back_claim_and_budget(self):
+        # searchDomains is outside the revision, so only the guard catches it.
+        original = self.store._transaction
+
+        def changed(operations):
+            self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
+                                   UpdateExpression="SET searchDomains = :d",
+                                   ExpressionAttributeValues={":d": ["fss.or.kr"]})
+            original(operations)
+
+        with mock.patch.object(self.store, "_transaction", side_effect=changed):
+            with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+                self.reserve()
+        self.assertIsNone(self.row(self.job.sk))
+        self.assertIsNone(self.row("NEWSBUDGET#2026-10"))
+
+    def test_invalid_search_scope_is_a_changed_source_not_an_exception(self):
+        self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
+                               UpdateExpression="SET searchDomains = :d",
+                               ExpressionAttributeValues={":d": ["Not A Domain"]})
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.store.current_config(self.job.source_id, self.job.revision)
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.reserve()
+
+    def test_scope_narrowed_after_the_worker_check_blocks_reservation_and_publication(self):
+        # The worker checked an empty scope; an operator then adds an allowlist.
+        self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
+                               UpdateExpression="SET searchDomains = :d",
+                               ExpressionAttributeValues={":d": ["fss.or.kr"]})
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.reserve(scope=())
+        self.assertIsNone(self.row(self.job.sk))
+        self.reserve(scope=("fss.or.kr",))
+        self.table.update_item(Key={"PK": self.job.pk, "SK": "CONFIG"},
+                               UpdateExpression="SET searchDomains = :d",
+                               ExpressionAttributeValues={":d": ["yna.co.kr"]})
+        with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
+            self.finish(status="PUBLISHED", document=document(self.job), reason="",
+                        scope=("fss.or.kr",))
+        self.assertIsNone(self.row("DOC#" + self.job.doc_hash))
+        # Settlement without a document never depends on the scope.
+        self.finish(status="FAILED", reason="SOURCE_CHANGED")
 
     def test_rejected_usage_is_settled_once_and_retry_returns_same_receipt(self):
         self.reserve()

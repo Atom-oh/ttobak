@@ -28184,6 +28184,7 @@ function item(person, contact) {
 }
 function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) {
   const result = { items: [], ambiguous: 0, unchanged: 0, suppressed: 0, invalid: 0, deferred: 0 };
+  const others = [];
   const linked = /* @__PURE__ */ new Map();
   const byEmail = /* @__PURE__ */ new Map();
   const byName = /* @__PURE__ */ new Map();
@@ -28207,11 +28208,13 @@ function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) 
     }
     const current = linked.get(person.id);
     if (current) {
+      others.push(person);
       if (fillable(current, person)) links.push(item(person, current));
       else result.unchanged++;
       continue;
     }
     if (suppressed.has(person.id)) {
+      others.push(person);
       result.suppressed++;
       continue;
     }
@@ -28223,11 +28226,15 @@ function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) 
     return result;
   }
   const sfdcEmails = /* @__PURE__ */ new Map();
-  for (const person of remaining) {
+  for (const person of [...remaining, ...others]) {
     const email3 = emailKey(person.email);
     if (email3) sfdcEmails.set(email3, (sfdcEmails.get(email3) ?? 0) + 1);
   }
   const claimed = /* @__PURE__ */ new Set();
+  for (const person of others) {
+    const email3 = emailKey(person.email);
+    for (const contact of email3 ? byEmail.get(email3) ?? [] : []) claimed.add(contact.contactId);
+  }
   const byNameOnly = [];
   for (const person of remaining) {
     const email3 = emailKey(person.email);
@@ -28245,6 +28252,7 @@ function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) 
     links.push(item(person, targets[0]));
   }
   const nameClaims = /* @__PURE__ */ new Map();
+  const contested = /* @__PURE__ */ new Set();
   for (const person of byNameOnly) {
     const email3 = emailKey(person.email);
     const candidates = /* @__PURE__ */ new Map();
@@ -28257,8 +28265,10 @@ function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) 
       }
     }
     if (candidates.size === 0) creates.push(item(person));
-    else if (candidates.size > 1) result.ambiguous++;
-    else {
+    else if (candidates.size > 1) {
+      for (const id of candidates.keys()) contested.add(id);
+      result.ambiguous++;
+    } else {
       const [contact] = candidates.values();
       const claim = nameClaims.get(contact.contactId) ?? { contact, people: [] };
       claim.people.push(person);
@@ -28266,7 +28276,7 @@ function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) 
     }
   }
   for (const { contact, people } of nameClaims.values()) {
-    if (people.length > 1) result.ambiguous += people.length;
+    if (people.length > 1 || contested.has(contact.contactId)) result.ambiguous += people.length;
     else links.push(item(people[0], contact));
   }
   result.items = [...links.sort(byId), ...creates.sort(byId)];
@@ -28495,7 +28505,7 @@ async function runSfdcContacts(options2) {
         counts.accountMismatch += read.mismatch;
         people.push(...read.people);
         present[sfdcAccountId] = read.ids;
-        if (!read.complete) complete = false;
+        if (!read.complete || read.invalidIds) complete = false;
         if (read.failure) fail(read.failure);
       }
       if (Object.values(present).reduce((sum, ids) => sum + ids.length, 0) > MAX_PRESENT_TOTAL) complete = false;

@@ -1,7 +1,7 @@
 """Invocation and recovery contracts; synthetic data only, no live services."""
 
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from email.message import Message
 import http.client
@@ -126,6 +126,42 @@ class TestSearchAdapter(unittest.TestCase):
                 self.assertIn("Authorization", kwargs["headers"])
             response.close.assert_called_once()
             connection.close.assert_called_once()
+
+    def sent_arguments(self, *args, **kwargs):
+        value = {"jsonrpc": "2.0", "id": 1, "result": {"content": [{
+            "type": "text", "text": json.dumps({"results": []})}]}}
+        response, connection = self.response(json.dumps(value).encode()), mock.Mock()
+        with mock.patch.object(search, "_target", return_value=(
+                urlsplit(ENV["WEB_SEARCH_GATEWAY_URL"]), [])), \
+                mock.patch.object(search, "_open_response", return_value=(connection, response)) as opened:
+            self.assertEqual(self.make_search()(*args, **kwargs), ([], None))
+        return json.loads(opened.call_args.kwargs["body"])["params"]["arguments"]
+
+    def test_date_window_and_domains_use_connector_filters(self):
+        after = datetime(2026, 11, 4, 19, 10, tzinfo=timezone.utc)
+        before = datetime(2026, 11, 12, 4, 10, tzinfo=timezone(timedelta(hours=9)))
+        arguments = self.sent_arguments("금융감독원", 25, published_after=after,
+                                        published_before=before, domains=("fss.or.kr", "yna.co.kr"))
+        self.assertEqual(arguments, {"query": "금융감독원", "maxResults": 25, "filters": {
+            "publishedDateFilter": {"from": "2026-11-04T19:10:00Z", "to": "2026-11-11T19:10:00Z"},
+            "domainFilter": {"include": ["fss.or.kr", "yna.co.kr"]}}})
+        self.assertEqual(self.sent_arguments("공개 뉴스", 5), {"query": "공개 뉴스", "maxResults": 5})
+
+    def test_invalid_filters_fail_before_credentials_or_network(self):
+        credentials = mock.Mock()
+        adapter = search.NewsSearch(ENV["WEB_SEARCH_GATEWAY_URL"], credentials, lambda: 100)
+        now = datetime(2026, 11, 11, tzinfo=timezone.utc)
+        for kwargs in ({"published_after": datetime(2026, 11, 4)},
+                       {"published_after": now, "published_before": now - timedelta(days=1)},
+                       {"published_after": "2026-11-04"},
+                       {"domains": ("https://fss.or.kr",)}, {"domains": ("fss.or.kr/",)},
+                       {"domains": ("FSS.or.kr",)}, {"domains": ("localhost",)},
+                       {"domains": ("10.0.0.1",)}, {"domains": ("a.com", "a.com")},
+                       {"domains": tuple(f"d{i}.com" for i in range(101))}):
+            with self.subTest(kwargs=kwargs), mock.patch.object(search, "_open_response") as opened:
+                self.assertEqual(adapter("query", 5, **kwargs), ([], "INVALID_SEARCH_REQUEST"))
+                opened.assert_not_called()
+        credentials.assert_not_called()
 
     def test_endpoint_changes_and_short_deadlines_never_send_credentials(self):
         for url in ("http://example.com/mcp", "https://evil.example/mcp",
@@ -253,7 +289,7 @@ class TestRuntimeTransactions(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def test_discovery_to_finalization_and_duplicate_delivery(self):
-        with mock.patch.object(runtime, "NewsSearch", return_value=lambda query, maximum: ([], None)) as gateway:
+        with mock.patch.object(runtime, "NewsSearch", return_value=lambda query, maximum, **filters: ([], None)) as gateway:
             result = runtime.discover_handler({"sourceId": "source", "runId": "run"}, context())
             self.assertEqual(result["candidates"], [])
             self.assertEqual(self.store._get("CRAWLER#source", "NEWSRUN#run")["runState"], "OPEN")
@@ -275,7 +311,7 @@ class TestRuntimeTransactions(unittest.TestCase):
     def test_discovery_candidate_reaches_worker_and_atomic_publication(self):
         config = {**CONFIG, "customUrls": ["https://example.com/a"]}
         self.table.put_item(Item=config)
-        with mock.patch.object(runtime, "NewsSearch", return_value=lambda query, maximum: ([], None)):
+        with mock.patch.object(runtime, "NewsSearch", return_value=lambda query, maximum, **filters: ([], None)):
             discovery = runtime.discover_handler({"sourceId": "source", "runId": "run"}, context())
         self.assertEqual(len(discovery["candidates"]), 1)
         model = mock.Mock()
@@ -309,7 +345,7 @@ class TestRuntimeTransactions(unittest.TestCase):
         self.table.put_item(Item={**CONFIG, "customUrls": ["http://example.com/manual"]})
         values = [{"url": "http://example.com/news", "title": "Public news",
                    "publishedDate": datetime.fromtimestamp(NOW, timezone.utc).date().isoformat()}]
-        with mock.patch.object(runtime, "NewsSearch", return_value=lambda query, maximum: (values, None)), \
+        with mock.patch.object(runtime, "NewsSearch", return_value=lambda query, maximum, **filters: (values, None)), \
                 mock.patch.object(runtime, "WorkerDeps") as worker:
             discovery = runtime.discover_handler({"sourceId": "source", "runId": "http"}, context())
             self.assertEqual(discovery["candidates"], [])
