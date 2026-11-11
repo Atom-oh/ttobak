@@ -22,6 +22,8 @@ alone. CSS tokens share names across themes and are exposed through `@theme inli
 Background-light/background-dark remain separate tokens. Material Symbols
 Outlined supply icons. Legacy glass/glow/neon class names remain compatibility
 hooks with flat/no-glow styling; their presence is not a request to restore neon.
+`glass-panel` is also registered as a Tailwind utility so its `dark:` variant
+uses the theme surface/border tokens instead of leaving white cards under light text.
 Typography and component dimensions come from CSS/layout components, not DESIGN.md.
 Body and headline utilities share an installed system font stack in both themes;
 their font choice must not depend on download timing or the browser font cache.
@@ -43,6 +45,30 @@ intentional hydration handling. `layout.tsx` applies the pre-hydration preferenc
 Mermaid/Shiki consume JS theme values through the hook; keep Mermaid's explicit
 light/dark palettes aligned when changing CSS tokens. Purely styled components
 use CSS variants.
+
+## Workspace sizing
+
+`AppLayout` uses the dynamic viewport height and a shrinking main column beside
+the 256px desktop sidebar. Its mobile main area reserves the same height and
+safe-area inset as `MobileNav`. The bounded content wrapper owns page scrolling;
+the header and main shell remain outside that scroll region. List continuation
+controls, chat inputs, and independently scrolling detail panes must stay above
+the navigation.
+
+`globals.css` owns `--workspace-gutter` (16px below the `64rem` desktop breakpoint,
+24px at and above it, matching Tailwind's `lg`) and
+`.workspace-page` / `.workspace-inline-gutter`. Workspace list, dashboard and
+detail wrappers fill the available width instead of using a global reading cap.
+Use `.workspace-card-grid` for adaptive project cards and
+`.workspace-settings-grid` for independent settings sections. Administration
+tables span all settings columns. Article prose and the document editor keep a
+76ch reading width inside the full-width page; focused login/profile forms and
+upload/empty-state controls keep their purpose-specific constraints.
+
+The sidebar keeps its actions separate from its scrollable navigation. Long
+breadcrumbs truncate inside the header without displacing search and actions.
+See the [2026-11-11 design review](reviews/2026-11-11-workspace-design-review.md)
+for viewport evidence and remaining design recommendations.
 
 ## Screens and components
 
@@ -142,6 +168,10 @@ missing, selected servers, schedule (off, hourly, daily, twice daily) with a
 warning when the CLI LaunchAgent is also installed, per-source status, setup with
 private-calendar consent and skip toggles, run now, login, cancel and a live
 progress log. A failed state read shows a one-line error. 
+In Mic mode, `MicSelector` remembers the chosen device; when that device no
+longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
+rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
+cleared and an amber notice asks the user to reselect.
 In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
@@ -313,6 +343,13 @@ addition without silently resending. Show pending members with paginated refresh
 and cancellation. Admins can follow the existing settings resend path. Email
 request acceptance is not inbox delivery.
 
+Display names are edited inline with `UserNameEditor` (no native text dialog,
+which the Mac WebView lacks): on the Profile page for the signed-in user, and in
+the admin user table's name column. `lib/userName.ts` mirrors the server's 1-64
+character and control-character rules for early feedback; errors show inline.
+After a self rename, AuthProvider's `applySavedName` updates the shown name and
+refreshes the session so the ID token carries it.
+
 User management distinguishes invitation pending, reset required, unverified,
 unknown-schema and disabled states. Unknown readiness provides a refresh control. Do not offer an admin reset for RESET_REQUIRED, disabled or
 unverified users. Existing account/member and sharing notices explicitly say that
@@ -412,6 +449,15 @@ members and untag for the uploader or an owner.
 Direct members manage a shared customer contact list on the Account's general
 tab. CSV and XLSX imports parse locally, map Remember and common Korean/English
 headers, show unmapped columns and a selectable preview, and report each row.
+The preview matches each row's company to the current Account
+(`matchRowToAccount`/`planAccountRows` in `src/lib/contactBulkImport.ts`): an
+exact name or alias (legal forms, case, spacing and a `KEB` prefix ignored), or
+the Account's mail domain when the company is blank, is labeled exact; one name holding
+the other with the shorter at least two characters and half the longer's length
+is labeled contained. Matching rows are preselected and listed first (exact, then
+contained, then the rest, each by normalized company); other rows start
+unselected. A file that maps neither company nor email keeps every row selected
+in file order. Import still runs only when the user confirms the selected rows.
 Existing and earlier imported rows are checked for matching email or phone;
 shared office numbers can cause skips, and concurrent imports can race. Import is
 scoped to the currently selected Account and authenticated user. Manual entry,

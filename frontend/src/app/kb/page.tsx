@@ -77,8 +77,8 @@ export default function KnowledgeBasePage() {
       </header>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        <div className="p-4 lg:px-16 lg:pt-16 lg:pb-8 max-w-5xl w-full">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="workspace-page">
           {/* Page Header */}
           <div className="hidden lg:block mb-8">
             <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">

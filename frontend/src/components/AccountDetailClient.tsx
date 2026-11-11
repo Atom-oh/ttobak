@@ -64,7 +64,7 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
     router.push(`/accounts/${encodeURIComponent(next)}${params.size ? `?${params}` : ''}`, { scroll: false });
   };
   return (
-    <div className="w-full min-w-0 p-4 lg:p-8">
+    <div className="workspace-page">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight text-text-main">고객 Accounts</h1>
         <a href={`/accounts${searchParams.size ? `?${searchParams}` : ''}`} className="text-sm font-semibold text-primary hover:underline">고객 생성 · 계층 관리</a>
@@ -782,7 +782,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                   </section>
 
                   {account.accountId === accountId && user?.userId && account.members.some((member) => member.userId === user.userId) && (
-                    <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId} />
+                    <AccountContacts key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
+                      account={{ name: account.name, aliases: account.aliases ?? [], domains: account.domains ?? [] }} />
                   )}
                 </>
               )}

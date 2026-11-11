@@ -4,6 +4,7 @@ import { confirmDialog } from '@/lib/dialog';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { adminUsersApi, type AdminUserSummary } from '@/lib/api';
+import { UserNameEditor } from '@/components/UserNameEditor';
 
 // Dormancy is server-computed (see backend AdminUserSummary.dormant) — a
 // missing lastLoginAt never counts as dormant, since on day one after this
@@ -58,7 +59,7 @@ function formatDate(value: string | null): string {
 }
 
 export function UserManagement() {
-  const { membershipRevision } = useAuth();
+  const { membershipRevision, user: currentUser, applySavedName } = useAuth();
   const requestGeneration = useRef(0);
   const [users, setUsers] = useState<AdminUserSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -141,6 +142,24 @@ export function UserManagement() {
     );
   };
 
+  // Rename errors are shown inline by UserNameEditor, so this rethrows instead
+  // of going through runAction's page-level error banner.
+  const handleRename = async (user: AdminUserSummary, name: string) => {
+    setActingOn(user.userId);
+    setError(null);
+    setSuccess(null);
+    setWarning(null);
+    try {
+      const saved = await adminUsersApi.updateName(user.userId, name);
+      setUsers(current => current.map(u => (u.userId === saved.userId ? { ...u, name: saved.name } : u)));
+      if (user.userId === currentUser?.userId) await applySavedName(user.userId, saved.name);
+      setSuccess(`${user.email} 이름을 '${saved.name}'(으)로 변경했습니다.`);
+      return saved.name;
+    } finally {
+      setActingOn(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -152,7 +171,7 @@ export function UserManagement() {
   return (
     <div className="dark:glass-panel dark:p-5 space-y-4">
       <p className="text-sm text-slate-600 dark:text-text-muted">
-        가입한 사용자 목록과 최종 로그인 시각을 확인하고, 계정 활성화/비활성화, 삭제, 초대 재발송, 비밀번호 재설정을 관리할 수 있습니다.
+        가입한 사용자 목록과 최종 로그인 시각을 확인하고, 이름 수정, 계정 활성화/비활성화, 삭제, 초대 재발송, 비밀번호 재설정을 관리할 수 있습니다.
       </p>
 
       {error && (
@@ -210,7 +229,14 @@ export function UserManagement() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-slate-600 dark:text-text-secondary">{user.name || '-'}</td>
+                      <td className="px-4 py-3">
+                        <UserNameEditor
+                          name={user.name}
+                          label={`${user.email} 이름`}
+                          disabled={busy}
+                          onSave={(name) => handleRename(user, name)}
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <StatusBadge user={user} />
                       </td>
