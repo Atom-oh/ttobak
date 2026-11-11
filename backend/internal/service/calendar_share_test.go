@@ -468,6 +468,33 @@ func TestSetEventSharingRetriesOnceOnShareStateChange(test *testing.T) {
 	}
 }
 
+// A concurrent hidden call replaces the override between this call's plan and its retry;
+// the retry must follow the stored override, never this request's stale one.
+func TestSetEventSharingRetryRereadsOverride(test *testing.T) {
+	svc, store, _, _, membership := calendarShareFixture()
+	membership.addMember("acc_1", "owner", "owner@example.com")
+	eventID := calendarStoredShareEvent(test, svc, store, func(event *model.CalendarEventInput) {})
+	store.stateErrors = []error{repository.ErrCalendarShareStateChanged}
+	store.onOverrideRead = func() {
+		for _, row := range store.overrides {
+			row.Mode, row.AccountID = "hidden", ""
+		}
+	}
+	event, err := svc.SetEventSharing(context.Background(), "owner", calendarSourceID, eventID, model.CalendarSharingRequest{Mode: "account", AccountID: "acc_1"})
+	if err != nil || len(store.shareStates) != 2 {
+		test.Fatalf("one retry expected: %v calls=%d", err, len(store.shareStates))
+	}
+	if first := store.shareStates[0]; first.Share == nil || first.Share.State != "shared" {
+		test.Fatalf("first attempt plans the request's override: %+v", first)
+	}
+	if retry := store.shareStates[1]; retry.Share != nil && retry.Share.State == "shared" {
+		test.Fatalf("retry must not share against the stored hidden override: %+v", retry.Share)
+	}
+	if event.SharingMode != "hidden" {
+		test.Fatalf("owner view must report the stored override: %+v", event)
+	}
+}
+
 func TestListEventsOwnerViewIncludesSharing(test *testing.T) {
 	svc, store, _, _, membership := calendarShareFixture()
 	membership.addMember("acc_1", "owner", "owner@example.com")

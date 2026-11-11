@@ -235,6 +235,8 @@ func writeCalendarJSON(writer http.ResponseWriter, value any) {
 
 func writeCalendarError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, repository.ErrCalendarBatchTooLarge):
+		writeError(writer, http.StatusRequestEntityTooLarge, model.ErrCodeCalendarBatchTooLarge, "Calendar batch too large; resend fewer mutations")
 	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, repository.ErrInvalidCalendarBatch),
 		errors.Is(err, repository.ErrInvalidCalendarQuery), errors.Is(err, repository.ErrInvalidCalendarCursor):
 		writeError(writer, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid calendar request")

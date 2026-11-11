@@ -387,6 +387,11 @@ func (svc *CalendarService) SetEventSharing(ctx context.Context, userID, sourceI
 		return nil, err
 	}
 	for attempt := 0; ; attempt++ {
+		// Each attempt plans from the stored override, not this request's: a concurrent call
+		// may have replaced it, and the last override written must decide the share state.
+		if override, err = svc.store.GetCalendarOverride(ctx, userID, normalizedSource, calendarScopeKey(input, eventID)); err != nil {
+			return nil, err
+		}
 		// The change carries the row version this plan was read from; a newer row fails it.
 		previous, recorded := calendarGrantedShareKey(row, userID)
 		decision, member, extraMember, err := svc.resolveCalendarShare(ctx, lookups, userID, decideCalendarShare(input, override, recorded, false))
