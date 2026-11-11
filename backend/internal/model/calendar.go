@@ -103,6 +103,12 @@ type CalendarSourcePage struct {
 	NextCursor *string                `json:"nextCursor"`
 }
 
+// CalendarSharingRequest sets the owner's manual sharing mode: auto, account (with AccountID) or hidden.
+type CalendarSharingRequest struct {
+	Mode      string `json:"mode"`
+	AccountID string `json:"accountId,omitempty"`
+}
+
 type CalendarQuery struct {
 	From      time.Time
 	To        time.Time

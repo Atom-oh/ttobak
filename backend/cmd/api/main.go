@@ -100,6 +100,7 @@ func init() {
 		repository.NewCalendarRepository(dynamoClient, tableName),
 		service.NewCalendarCipher(kmsClient, os.Getenv("KMS_KEY_ID")),
 		accountService,
+		repo,
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Owner-private SA performance data: every route reads only the JWT user's

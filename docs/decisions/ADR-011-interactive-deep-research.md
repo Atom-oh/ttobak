@@ -16,7 +16,9 @@
 - Chat messages are rows under `RESEARCH#{id}` with `MSG#{createdAt}#{msgId}`
   sort keys. They have no TTL.
 - A sub-page is a child report with `parentId`. It needs an owned parent in
-  status `done`. Sections of one report are not child executions.
+  status `done`. A report is stored as
+  sections split at its second-level headings (`save_report`); sections of one
+  report are not child executions.
 - Approving a plan, triggering the agent and creating a sub-page require the
   caller to own the research. Chat input is bounded to 10,000 bytes (about
   3,300 Hangul characters), and a research ID containing `..` or `/` is

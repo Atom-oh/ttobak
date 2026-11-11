@@ -44,7 +44,7 @@ compatibility was proven by the mockups.
 
 ## Current evidence
 
-[ADR-010](../../decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) records
+[ADR-020](../../decisions/ADR-020-personal-documents.md) records
 the decision. The [markdown components](../../../frontend/src/components/markdown)
 use dynamic imports, sanitized Markdown, and explicit Mermaid strict mode.
 [save_report](../../../backend/python/research-agent/tools.py) writes h2 sections;

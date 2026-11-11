@@ -271,7 +271,7 @@ func TestApplyBatchRejectsOver100Items(test *testing.T) {
 			}
 			_, err := calendarTestRepo(test, mock).ApplyCalendarBatch(context.Background(), "owner", calendarTestSource, calendarTestObserved(test, mock, batch))
 			if scenario.rejected {
-				if !errors.Is(err, ErrInvalidCalendarBatch) || calls != 0 {
+				if !errors.Is(err, ErrCalendarBatchTooLarge) || calls != 0 {
 					test.Fatalf("over-limit batch must be rejected before the transaction: %v calls=%d", err, calls)
 				}
 				return

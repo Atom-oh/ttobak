@@ -429,6 +429,8 @@ const (
 	// ErrCodeContactIndexTooLarge marks a merge start whose source and
 	// target contacts together exceed the contact dedupe index.
 	ErrCodeContactIndexTooLarge = "CONTACT_INDEX_TOO_LARGE"
+	// ErrCodeCalendarBatchTooLarge: a calendar sync batch exceeds one transaction.
+	ErrCodeCalendarBatchTooLarge = "CALENDAR_BATCH_TOO_LARGE"
 	// ErrCodeReplayAccountMerging marks a connector replay whose receipt exists
 	// on an account that has since begun merging: the original write committed,
 	// so the client must not recreate it (HTTP 409).

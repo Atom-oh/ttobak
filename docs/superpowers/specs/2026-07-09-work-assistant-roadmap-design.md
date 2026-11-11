@@ -39,8 +39,7 @@ The roadmap did not authorize copying account membership into external file ACLs
 
 ## Current mapping and supersession
 
-- [ADR-020](../../decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) and
-  [ADR-022](../../decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)
+- [ADR-020](../../decisions/ADR-020-personal-documents.md)
   describe later document work. PPT conversion now exists; the current public
   exception is file-backed personal-document access through
   `GET /api/public/docs/{token}`, not generic public meeting/note pages.
