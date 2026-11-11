@@ -34,6 +34,20 @@ type AccountContactsService struct {
 // people resolve request; a bulk import sends one request at its end instead.
 type ContactMutateOptions struct {
 	DeferPeopleResolve bool
+	// sfdc is set only by the SFDC sync; every other path cannot set or
+	// change the SFDC fields (ADR-021, SFDC contacts).
+	sfdc *sfdcWrite
+}
+
+// sfdcWrite lets one write carry SFDC fields. base is the stored contact an
+// update was computed from; it pins the existing link, which never changes.
+type sfdcWrite struct {
+	base *model.AccountContact
+}
+
+// copySfdcFields copies the four SFDC fields from src to dst.
+func copySfdcFields(dst *model.AccountContact, src model.AccountContact) {
+	dst.Source, dst.SfdcContactID, dst.SfdcAccountID, dst.SfdcLeftAt = src.Source, src.SfdcContactID, src.SfdcAccountID, src.SfdcLeftAt
 }
 
 // SetPeopleResolvePublisher wires the contact-change people resolve publisher.
@@ -179,6 +193,9 @@ func (s *AccountContactsService) MutateWith(ctx context.Context, account, user, 
 	if err := s.authorize(ctx, account, user); err != nil {
 		return nil, err
 	}
+	if err := s.guardSfdcFields(ctx, account, op, id, &c, opt.sfdc); err != nil {
+		return nil, err
+	}
 	if op == "create" {
 		id = uuid.NewString()
 		c.Revision = uuid.NewString()
@@ -216,6 +233,50 @@ func (s *AccountContactsService) MutateWith(ctx context.Context, account, user, 
 		publishPeopleResolve(ctx, s.peopleResolve, model.PeopleResolveRequested{AccountID: account, Reason: model.PeopleResolveReasonContacts})
 	}
 	return &c, nil
+}
+
+// guardSfdcFields keeps the SFDC fields server-owned. Generic creates drop
+// them; generic updates carry the stored values over, read here and pinned by
+// the revision condition of the same write. The sync may set a link only where
+// none exists, and never changes or clears one: a changed link would orphan
+// its index row. IDs compare in canonical form.
+func (s *AccountContactsService) guardSfdcFields(ctx context.Context, account, op, id string, c *model.AccountContact, sync *sfdcWrite) error {
+	if op == "delete" {
+		return nil
+	}
+	if sync == nil {
+		var stored model.AccountContact
+		if op == "update" {
+			current, err := s.repo.GetAccountContact(ctx, account, id)
+			if err != nil {
+				return err
+			}
+			// A missing contact or another revision fails the conditional write.
+			if current != nil && current.Revision == c.Revision {
+				stored = *current
+			}
+		}
+		copySfdcFields(c, stored)
+		return nil
+	}
+	if op == "create" {
+		return nil
+	}
+	base := sync.base
+	if base == nil || base.ContactID != id || base.Revision != c.Revision {
+		return ErrInvalidInput
+	}
+	if base.SfdcContactID != "" && (!sameSfdcID(c.SfdcContactID, base.SfdcContactID) || base.SfdcAccountID != "" && !sameSfdcID(c.SfdcAccountID, base.SfdcAccountID)) {
+		return ErrContactConflict
+	}
+	return nil
+}
+
+// sameSfdcID reports whether a and b are valid spellings of one SFDC ID.
+func sameSfdcID(a, b string) bool {
+	ca, okA := model.CanonicalSfdcID(a)
+	cb, okB := model.CanonicalSfdcID(b)
+	return okA && okB && ca == cb
 }
 
 func (s *AccountContactsService) SpeakerTeamPage(ctx context.Context, account, user string, limit int, cursor string) (*model.SpeakerTeam, error) {

@@ -333,7 +333,7 @@ func decodeNewsDocument(row map[string]types.AttributeValue, sourceID, docHash s
 			document.Tags[i] = strings.TrimSpace(tag)
 		}
 	}
-	texts := []string{document.Title, document.URL, document.Source, document.Summary, document.PubDate, document.AWSRelevance}
+	texts := []string{document.Title, document.URL, document.Source, document.Summary, document.PubDate, document.AWSRelevance, document.MatchedTerm}
 	texts = append(texts, document.Tags...)
 	texts = append(texts, document.AWSServices...)
 	for _, value := range texts {

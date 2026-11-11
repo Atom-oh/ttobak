@@ -18,8 +18,10 @@ import (
 
 const (
 	calendarShareDirectoryMax = 200
-	calendarSharedByMax       = 5
-	calendarSharerEmailMax    = 320
+	// calendarShareDirectoryPageBytes leaves room under the handler's 64 KiB cap.
+	calendarShareDirectoryPageBytes = 60 * 1024
+	calendarSharedByMax             = 5
+	calendarSharerEmailMax          = 320
 
 	calendarModeAuto    = "auto"
 	calendarModeAccount = "account"

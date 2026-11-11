@@ -9,7 +9,9 @@ import {
 
 // Bridge to the Mac app's floating caption windows. Nothing here runs unless
 // called, and caption text is never logged. Decision record: ADR-018 (Mac
-// caption overlay windows).
+// caption overlay windows). A window can sit over another app's full-screen
+// Space only if the native side created it for that; one opened by an older
+// app build has to be closed and opened again.
 
 export type CaptionLang = 'ko' | 'en' | 'ja' | 'zh';
 export type CaptionPushKind = 'entry' | 'clear' | 'preview';

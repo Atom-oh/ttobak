@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -23,7 +25,14 @@ type CalendarAPI interface {
 	Sync(context.Context, string, string, model.CalendarSyncRequest) (*model.CalendarSyncReceipt, error)
 	ListEvents(context.Context, string, model.CalendarQuery) (*model.CalendarEventPage, error)
 	ListSources(context.Context, string, string, int32) (*model.CalendarSourcePage, error)
+	ListAccountCalendar(context.Context, string, string, model.CalendarQuery) (*model.AccountCalendarPage, error)
+	SetEventSharing(context.Context, string, string, string, model.CalendarSharingRequest) (*model.CalendarEvent, error)
+	ShareDirectory(context.Context, string, string) (*model.CalendarShareDirectory, error)
 }
+
+const calendarShareDirectoryMaxBytes = 64 * 1024
+
+var calendarHTTPIdentifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 type CalendarHandler struct {
 	service CalendarAPI
@@ -132,6 +141,94 @@ func (handler *CalendarHandler) ListSources(writer http.ResponseWriter, request 
 	writeCalendarJSON(writer, page)
 }
 
+func (handler *CalendarHandler) ListAccountCalendar(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	values, err := calendarHTTPQuery(request, "from", "to", "limit", "cursor")
+	if err != nil {
+		writeCalendarError(writer, err)
+		return
+	}
+	from, fromErr := time.Parse(time.RFC3339Nano, values.Get("from"))
+	to, toErr := time.Parse(time.RFC3339Nano, values.Get("to"))
+	limit, limitErr := calendarHTTPLimit(values)
+	if fromErr != nil || toErr != nil || limitErr != nil {
+		writeCalendarError(writer, service.ErrInvalidInput)
+		return
+	}
+	page, err := handler.service.ListAccountCalendar(request.Context(), userID, chi.URLParam(request, "accountId"), model.CalendarQuery{
+		From: from, To: to, Limit: limit, Cursor: values.Get("cursor"),
+	})
+	if err != nil {
+		writeCalendarError(writer, err)
+		return
+	}
+	writeCalendarJSON(writer, page)
+}
+
+func (handler *CalendarHandler) SetEventSharing(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writeCalendarError(writer, err)
+		return
+	}
+	sourceID, eventID := chi.URLParam(request, "sourceId"), chi.URLParam(request, "eventId")
+	if parsed, err := uuid.Parse(sourceID); err != nil || parsed == uuid.Nil || !calendarHTTPIdentifier.MatchString(eventID) {
+		writeCalendarError(writer, service.ErrInvalidInput)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 4*1024))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(writer, http.StatusRequestEntityTooLarge, model.ErrCodeBadRequest, "Calendar request exceeds 4 KiB")
+		} else {
+			writeCalendarError(writer, service.ErrInvalidInput)
+		}
+		return
+	}
+	var input model.CalendarSharingRequest
+	if !utf8.Valid(body) || !validCalendarJSONWith(json.NewDecoder(bytes.NewReader(body)), 0, validCalendarSharingField) {
+		writeCalendarError(writer, service.ErrInvalidInput)
+		return
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF || input.Mode == "" {
+		writeCalendarError(writer, service.ErrInvalidInput)
+		return
+	}
+	event, err := handler.service.SetEventSharing(request.Context(), userID, sourceID, eventID, input)
+	if err != nil {
+		writeCalendarError(writer, err)
+		return
+	}
+	writeCalendarJSON(writer, event)
+}
+
+func (handler *CalendarHandler) ShareDirectory(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	query, err := calendarHTTPQuery(request, "cursor")
+	if err != nil {
+		writeCalendarError(writer, err)
+		return
+	}
+	directory, err := handler.service.ShareDirectory(request.Context(), userID, query.Get("cursor"))
+	if err != nil {
+		writeCalendarError(writer, err)
+		return
+	}
+	writeCalendarJSONLimit(writer, directory, calendarShareDirectoryMaxBytes)
+}
+
 func calendarHTTPUser(writer http.ResponseWriter, request *http.Request) string {
 	writer.Header().Set("Cache-Control", "private, no-store")
 	userID := middleware.GetUserID(request.Context())
@@ -173,6 +270,14 @@ func calendarHTTPLimit(values url.Values) (int32, error) {
 }
 
 func validCalendarJSON(decoder *json.Decoder, depth int) bool {
+	return validCalendarJSONWith(decoder, depth, validCalendarJSONField)
+}
+
+func validCalendarSharingField(depth int, name string) bool {
+	return depth == 0 && (name == "mode" || name == "accountId")
+}
+
+func validCalendarJSONWith(decoder *json.Decoder, depth int, allowed func(int, string) bool) bool {
 	if depth > 8 {
 		return false
 	}
@@ -192,12 +297,12 @@ func validCalendarJSON(decoder *json.Decoder, depth int) bool {
 		if delimiter == '{' {
 			key, err := decoder.Token()
 			name, isString := key.(string)
-			if err != nil || !isString || seen[name] || !validCalendarJSONField(depth, name) {
+			if err != nil || !isString || seen[name] || !allowed(depth, name) {
 				return false
 			}
 			seen[name] = true
 		}
-		if !validCalendarJSON(decoder, depth+1) {
+		if !validCalendarJSONWith(decoder, depth+1, allowed) {
 			return false
 		}
 	}
@@ -223,8 +328,12 @@ func validCalendarJSONField(depth int, name string) bool {
 }
 
 func writeCalendarJSON(writer http.ResponseWriter, value any) {
+	writeCalendarJSONLimit(writer, value, service.CalendarResponseMaxBytes)
+}
+
+func writeCalendarJSONLimit(writer http.ResponseWriter, value any, limit int) {
 	encoded, err := json.Marshal(value)
-	if err != nil || len(encoded) > service.CalendarResponseMaxBytes {
+	if err != nil || len(encoded) > limit {
 		writeCalendarError(writer, repository.ErrCalendarCorruptData)
 		return
 	}
