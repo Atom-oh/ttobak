@@ -67,7 +67,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | intake_cancel / intake_launch_agent_off | cancel returns whether a run was cancelled; launch-agent-off runs `intake schedule off` in the same exclusive run slot (killed on quit) and returns its JSON or code |
 | intake_check_adapter / intake_update_adapter | compare or install `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (no redirects, at most 8 MiB, must contain `intake setup`) against `~/.ttobak/server.mjs`, keeping one `server.mjs.bak` (a link to the replaced file; `server.mjs` changes only by an atomic rename); refused while a run is going |
 
-Intake commands spawn node with argv only (no shell; the login PATH is captured once with `$SHELL -l -c`), a cleared environment (HOME, LANG, PATH) and their own process group, killed on timeout, cancel and app exit. The scheduler runs due slots and catches up at launch and on wake (`native-system-wake` or a wall-clock jump).
+Intake commands spawn node with argv only (no shell; the login PATH is captured once with `$SHELL -l -c`), a cleared environment (HOME, LANG, PATH) and their own process group, killed on timeout, cancel and app exit. The scheduler runs due slots and catches up at launch and about 45 s after a wake (`native-system-wake` or a wall-clock jump); a `PARTIAL_FAILURE` run satisfies its slot only when a connector succeeded.
 
 Caption command errors carry a fixed `code`: profile-missing, credentials-expired,
 model-access, rate-limited, invalid-input, invalid-output, timeout, aws-error,

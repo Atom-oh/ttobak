@@ -66,6 +66,8 @@ const LAUNCH_AGENT_PLIST: &str = "Library/LaunchAgents/click.atomai.ttobak.intak
 /// Scheduler tick; a wall-clock jump beyond `WAKE_JUMP_SECS` counts as a wake.
 const TICK: Duration = Duration::from_secs(60);
 const WAKE_JUMP_SECS: i64 = 120;
+/// A wake re-evaluates slots only after this, so the network can come back.
+const WAKE_CATCH_UP_DELAY: Duration = Duration::from_secs(45);
 
 const SETTINGS_FILE: &str = "intake.json";
 const WAKE_EVENT: &str = "native-system-wake";
@@ -194,6 +196,44 @@ fn outcome_code(exit_ok: bool, json: Option<&Value>) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|c| is_code(c));
     Some(code.unwrap_or("EXIT_FAILED").to_string())
+}
+
+/// What a finished run records against its slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecordDecision {
+    /// The run never started (another run or an adapter update held the slot).
+    Skip,
+    /// Passed to `record_result`; `None` and `PARTIAL_FAILURE` satisfy the slot.
+    Record(Option<String>),
+}
+
+/// `PARTIAL_FAILURE` satisfies the slot only when a connector in
+/// `result.results` succeeded; with none, the run is recorded as
+/// `ALL_FAILED` (an attempt only), e.g. a wake run before the network is up.
+fn slot_outcome(exit_ok: bool, code: Option<&str>, result: Option<&Value>) -> RecordDecision {
+    match code {
+        Some("RUN_IN_PROGRESS" | "ADAPTER_UPDATING") => RecordDecision::Skip,
+        None if exit_ok => RecordDecision::Record(None),
+        None => RecordDecision::Record(Some("EXIT_FAILED".into())),
+        Some("PARTIAL_FAILURE") => {
+            let any_ok = result
+                .and_then(|v| v.get("results"))
+                .and_then(Value::as_object)
+                .is_some_and(|m| {
+                    m.values()
+                        .any(|r| r.get("result").and_then(Value::as_str) == Some("ok"))
+                });
+            RecordDecision::Record(Some(
+                if any_ok {
+                    "PARTIAL_FAILURE"
+                } else {
+                    "ALL_FAILED"
+                }
+                .into(),
+            ))
+        }
+        Some(c) => RecordDecision::Record(Some(c.to_string())),
+    }
 }
 
 /// One connector as the web may see it: names only.
@@ -500,6 +540,8 @@ pub struct IntakeState {
     schedule_changed: AtomicBool,
     /// A due slot found the runner busy; re-evaluate when that run ends.
     retry_after_run: AtomicBool,
+    /// A delayed wake re-evaluation is pending.
+    wake_pending: AtomicBool,
 }
 
 impl IntakeState {
@@ -524,6 +566,7 @@ impl IntakeState {
             reevaluate: AtomicBool::new(false),
             schedule_changed: AtomicBool::new(false),
             retry_after_run: AtomicBool::new(false),
+            wake_pending: AtomicBool::new(false),
         }
     }
 
@@ -873,11 +916,15 @@ fn start_job(
             Origin::Unrecorded => None,
         };
         if let Some(slot) = slot {
-            if outcome.code.as_deref() != Some("RUN_IN_PROGRESS") {
-                let code = outcome.code.as_deref();
-                if let Err(e) = state
-                    .update_settings(|s| intake_plan::record_result(&mut s.slot_state, slot, code))
-                {
+            let decision = slot_outcome(
+                outcome.exit_code == Some(0),
+                outcome.code.as_deref(),
+                outcome.result.as_ref(),
+            );
+            if let RecordDecision::Record(code) = decision {
+                if let Err(e) = state.update_settings(|s| {
+                    intake_plan::record_result(&mut s.slot_state, slot, code.as_deref())
+                }) {
                     log::warn!("intake slot state not saved: {e}");
                 }
             }
@@ -910,9 +957,27 @@ pub fn start(app: AppHandle) {
     }
     let wake_app = app.clone();
     app.listen(WAKE_EVENT, move |_| {
-        wake_app.state::<IntakeState>().poke(true);
+        poke_after_wake(&wake_app);
     });
     tauri::async_runtime::spawn(scheduler(app));
+}
+
+/// Re-evaluates slots `WAKE_CATCH_UP_DELAY` after a wake; one pending at a time.
+fn poke_after_wake(app: &AppHandle) {
+    if app
+        .state::<IntakeState>()
+        .wake_pending
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(WAKE_CATCH_UP_DELAY).await;
+        let state = app.state::<IntakeState>();
+        state.wake_pending.store(false, Ordering::SeqCst);
+        state.poke(true);
+    });
 }
 
 async fn scheduler(app: AppHandle) {
@@ -924,7 +989,14 @@ async fn scheduler(app: AppHandle) {
     loop {
         let now = now_secs();
         let mono = last_mono.elapsed().as_secs() as i64;
-        if wall_jumped(now - last_wall, mono) || state.reevaluate.swap(false, Ordering::SeqCst) {
+        let woke = wall_jumped(now - last_wall, mono);
+        if woke {
+            // A slot that passed during sleep waits for the delayed catch-up
+            // instead of firing before the network is back.
+            deadline = None;
+            poke_after_wake(&app);
+        }
+        if state.reevaluate.swap(false, Ordering::SeqCst) {
             catch_up = true;
         }
         last_wall = now;
@@ -952,6 +1024,13 @@ async fn scheduler(app: AppHandle) {
                     Ok(()) => log::info!("intake scheduled run started"),
                     Err(e) if e == "RUN_IN_PROGRESS" || e == "ADAPTER_UPDATING" => {
                         state.retry_after_run.store(true, Ordering::SeqCst);
+                        // The busy run may have ended before the flag was set;
+                        // its finisher then missed it, so re-poke here.
+                        let idle = state.running.lock().is_none()
+                            && !state.adapter_busy.load(Ordering::SeqCst);
+                        if idle && state.retry_after_run.swap(false, Ordering::SeqCst) {
+                            state.poke(true);
+                        }
                     }
                     Err(e) => log::warn!("intake scheduled run not started: {e}"),
                 }
@@ -1417,6 +1496,46 @@ mod tests {
         let mut big = vec![b' '; MAX_ADAPTER_BYTES + 1];
         big[..12].copy_from_slice(ADAPTER_MARKER);
         assert_eq!(validate_adapter(&big), Err("adapter-invalid"));
+    }
+
+    #[test]
+    fn slot_outcome_needs_one_ok_connector_for_partial_failure() {
+        use RecordDecision::{Record, Skip};
+        let rec = |c: &str| Record(Some(c.to_string()));
+        assert_eq!(slot_outcome(true, None, None), Record(None));
+        assert_eq!(slot_outcome(false, None, None), rec("EXIT_FAILED"));
+        assert_eq!(slot_outcome(false, Some("RUN_IN_PROGRESS"), None), Skip);
+        assert_eq!(slot_outcome(false, Some("ADAPTER_UPDATING"), None), Skip);
+        let some_ok = json!({"ok": false, "code": "PARTIAL_FAILURE", "results": {
+            "calendar": {"result": "ok", "created": 1},
+            "sfdc": {"result": "TTOBAK_UNAVAILABLE"}}});
+        assert_eq!(
+            slot_outcome(true, Some("PARTIAL_FAILURE"), Some(&some_ok)),
+            rec("PARTIAL_FAILURE")
+        );
+        let none_ok = json!({"ok": false, "code": "PARTIAL_FAILURE", "results": {
+            "calendar": {"result": "TTOBAK_UNAVAILABLE"},
+            "sfdc": {"result": "TTOBAK_UNAVAILABLE"}}});
+        assert_eq!(
+            slot_outcome(true, Some("PARTIAL_FAILURE"), Some(&none_ok)),
+            rec("ALL_FAILED")
+        );
+        assert_eq!(
+            slot_outcome(true, Some("PARTIAL_FAILURE"), None),
+            rec("ALL_FAILED")
+        );
+        assert_eq!(
+            slot_outcome(false, Some("AUTH_EXPIRED_MIDWAY"), None),
+            rec("AUTH_EXPIRED_MIDWAY")
+        );
+    }
+
+    #[test]
+    fn all_failed_run_does_not_satisfy_the_slot() {
+        let mut state = intake_plan::SlotState::default();
+        intake_plan::record_result(&mut state, 10, Some("ALL_FAILED"));
+        assert_eq!(state.last_satisfied_slot, None);
+        assert_eq!(state.attempts_on_last_slot, 1);
     }
 
     #[test]

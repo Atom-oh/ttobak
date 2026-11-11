@@ -204,7 +204,8 @@ pub fn should_catch_up(
     (unsatisfied && attempts < MAX_SLOT_ATTEMPTS).then_some(slot)
 }
 
-/// Record a run for `slot`. No error code or `PARTIAL_FAILURE` satisfies the
+/// Record a run for `slot`. No error code or `PARTIAL_FAILURE` (the runner
+/// passes it only when a connector succeeded) satisfies the
 /// slot; every other code (e.g. `AUTH_EXPIRED_MIDWAY`) only counts an attempt.
 pub fn record_result(state: &mut SlotState, slot: i64, code: Option<&str>) {
     if state.last_attempted_slot == Some(slot) {
