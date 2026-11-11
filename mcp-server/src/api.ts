@@ -228,6 +228,16 @@ function performanceSource(source: string): string {
   return source;
 }
 
+// Period keys of `/api/performance/reports/{periodKey}`; the server checks bounds.
+const PERFORMANCE_REPORT_KEY = /^(W\d{4}-\d{2}|Q\d{4}-[1-4]|Y\d{4}|C\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2})$/;
+/** A stored report is at most 256 KiB; the response adds only JSON framing. */
+const MAX_PERFORMANCE_REPORT_BYTES = 300_000;
+
+function performanceReportKey(key: string): string {
+  if (!PERFORMANCE_REPORT_KEY.test(key)) throw new Error('performance report period key is invalid');
+  return key;
+}
+
 export class ApiResponseError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
@@ -299,6 +309,22 @@ export class TtobakApi {
   /** The owner's SFDC assignments; local intake reads only the IDs. */
   async performanceMappings() {
     return this.request('GET', '/api/performance/mappings', undefined, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
+  }
+
+  /** Owner-private SA performance report of one period; replaces an earlier one. */
+  async putPerformanceReport(periodKey: string, report: unknown) {
+    return this.request('PUT', `/api/performance/reports/${performanceReportKey(periodKey)}`, report,
+      MAX_PERFORMANCE_API_BYTES, false, true);
+  }
+
+  /** The owner's reports, newest first: `{items: [{periodKey, label, generatedAt, partial}], truncated}`. */
+  async listPerformanceReports() {
+    return this.request('GET', '/api/performance/reports', undefined, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
+  }
+
+  async getPerformanceReport(periodKey: string) {
+    return this.request('GET', `/api/performance/reports/${performanceReportKey(periodKey)}`, undefined,
+      MAX_PERFORMANCE_REPORT_BYTES, false, true);
   }
 
   async listCalendarEvents(options: CalendarEventQuery) {
