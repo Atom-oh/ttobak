@@ -5,7 +5,7 @@
   `docs/superpowers/plans/2026-11-11-mac-intake-ui-copy.json`.
 - Follows: the [SA performance dashboard design](2026-11-10-sa-performance-dashboard-design.md)
   and `ttobak-mcp intake setup|run|schedule` (PR #824).
-- Decisions touched: ADR-065 (local MCP intake), ADR-068 (SA performance data
+- Decisions touched: ADR-003 (local MCP intake), ADR-068 (SA performance data
   residency), ADR-061 (Mac settings surface precedent). Part B needs a new ADR.
 
 ## Intent
@@ -90,7 +90,7 @@ Two parts, delivered in order:
 
 ### Constraints
 
-- **Process spawn.** Rust spawns with argv, never a shell, as ADR-065 requires.
+- **Process spawn.** Rust spawns with argv, never a shell, as ADR-003 requires.
   The node path is resolved once from a fixed candidate list (Homebrew,
   `/usr/local/bin`, nvm current) or a path the user picks, and stored in app
   settings. GUI apps do not inherit the shell PATH.

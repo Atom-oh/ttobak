@@ -1,4 +1,4 @@
-//! Local intake runner (ADR-065): runs `node ~/.ttobak/server.mjs intake ...`
+//! Local intake runner (ADR-003): runs `node ~/.ttobak/server.mjs intake ...`
 //! from the app, schedules runs, catches up missed slots at launch and wake,
 //! and updates the adapter bundle from the app's own origin.
 //!

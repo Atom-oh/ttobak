@@ -103,7 +103,7 @@ spec and this plan ship with part 1 code.
 | 4 | Tasks 6–7 | Summarize hook, `PeopleResolveRequested` consumer + CDK rule/DLQ + INFRA-SPEC; backfill CLI |
 | 5 | Tasks 8–10 | People read/write services, publishers, handlers, routes, connector contract, API-SPEC route inventory |
 | 6 | Tasks 11–12 | Graph people edges and member-node change; flow people |
-| 7 | Tasks 13–16 | Frontend people panel, speaker binding, graph roles; ADR-065 and doc updates |
+| 7 | Tasks 13–16 | Frontend people panel, speaker binding, graph roles; ADR-067 and doc updates |
 
 If a part's diff exceeds 95,000 bytes, split it at the task boundary inside it
 (for example part 5 into Tasks 8–9 and Task 10). Never split inside a task.
@@ -1102,13 +1102,13 @@ about 15,000 bytes of code and tests. If it does not fit, move the
 - [ ] **Step 2–4: Run FAIL → implement → PASS** (lint, unit, build).
 - [ ] **Step 5: Commit** `feat(web): role-labelled people edges in the account graph`
 
-### Task 16: ADR-065 and documentation (part 7)
+### Task 16: ADR-067 and documentation (part 7)
 
 **Files:**
-- Create: `docs/decisions/ADR-065-account-people-edges.md`
-- Modify: `docs/API-SPEC.md` (account section prose for the 7 routes and the `graph`/`flow` field additions), `docs/DESIGN-SPEC.md` (`## Accounts, filters and sharing`: people panel, speaker binding), `docs/architecture.md` (summarize → people resolver, `PeopleResolveRequested`), `docs/README.md` (index ADR-065), `docs/decisions/ADR-064-account-relationship-links.md` (one "Related" line pointing to ADR-065; no other change)
+- Create: `docs/decisions/ADR-067-account-people-edges.md`
+- Modify: `docs/API-SPEC.md` (account section prose for the 7 routes and the `graph`/`flow` field additions), `docs/DESIGN-SPEC.md` (`## Accounts, filters and sharing`: people panel, speaker binding), `docs/architecture.md` (summarize → people resolver, `PeopleResolveRequested`), `docs/README.md` (index ADR-067), `docs/decisions/ADR-064-account-relationship-links.md` (one "Related" line pointing to ADR-067; no other change)
 
-- [ ] **Step 1: Write ADR-065.** It records:
+- [ ] **Step 1: Write ADR-067.** It records:
   - the people key grammar and why the role is in the key;
   - the role → kind table;
   - the resolver rules, the stop-on-ambiguity ruling and the
@@ -1126,7 +1126,7 @@ about 15,000 bytes of code and tests. If it does not fit, move the
     a bulk contact import publishes one event per contact, and the lease only
     coalesces events that overlap a running pass.
 - [ ] **Step 2: Run** `python3 scripts/docs/check_docs.py`. Expected: `Documentation checks passed` with 192 Go routes.
-- [ ] **Step 3: Commit** `docs: account people edges (ADR-065)`
+- [ ] **Step 3: Commit** `docs: account people edges (ADR-067)`
 
 ## Spec rulings made in this plan
 
