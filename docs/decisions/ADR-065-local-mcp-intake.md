@@ -1,6 +1,6 @@
 # ADR-065: Local MCP intake
 
-- Status: Accepted; Phase 1 (calendar runner, CLI only) implemented. Calendar
+- Status: Accepted; the CLI runner, Mac Settings UI and app-managed schedule are implemented. Calendar
   acceptance on the user's Mac is pending (see the runbook). Amended
   2026-11-10 for the meeting SpecReq task step (code only; Mac acceptance
   pending).
@@ -104,8 +104,12 @@ configuration.
   `calendar_view` lacks. A private meeting gets no task, and an unknown flag or
   attendee list means no task.
 - Codex TOML is read by a bounded in-repo parser (`toml.ts`); no new dependency.
-- The Mac Settings UI and app-managed schedule are Phase 2.
-- Phase 2: the Mac app owns the schedule (launch and wake catch-up, at most two
+- The Mac Settings UI and the app-managed schedule exist. The Mac app owns the schedule (launch and wake catch-up, at most two
   attempts per slot) and runs the CLI itself; the LaunchAgent stays optional, and one CLI run
   lock covers both. The app spawns node with argv only and a cleared environment
-  (`HOME`, `LANG`, `PATH` from a one-time login-shell probe).
+  (`HOME`, `LANG`, `PATH` from a one-time login-shell probe). Cancel, timeout and app exit SIGTERM the run's process group and always SIGKILL it after a grace period, even if the CLI leader exited; app exit also blocks later spawns.
+- Adapter update channel: the Settings button fetches the exact https URL
+  `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (the setup guide's URL; no
+  redirects, at most 8 MiB, must contain `intake setup`) and swaps it in
+  atomically, keeping one `server.mjs.bak`. Update is refused during a run;
+  check is allowed.

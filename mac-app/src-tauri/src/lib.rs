@@ -938,6 +938,9 @@ pub fn run() {
                         log::error!("stop_and_finalize on exit failed: {e}");
                     }
                 }
+                // A job that passed try_begin before the first kill is refused at
+                // spawn; this second pass catches one that spawned meanwhile.
+                intake_runner::kill_running(app_handle);
                 #[cfg(not(target_os = "macos"))]
                 let _ = handle;
             }
