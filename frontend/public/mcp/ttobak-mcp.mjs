@@ -28161,6 +28161,8 @@ function emptyCounts() {
     skippedCap: 0,
     skippedAccountCap: 0,
     incomplete: 0,
+    deferredIncomplete: 0,
+    accountMismatch: 0,
     marked: 0,
     unmarked: 0,
     skipped: 0,
@@ -28187,8 +28189,8 @@ function item(person, contact) {
   const base = { sfdcContactId: person.id, sfdcAccountId: person.accountId, name: person.name, title: person.title };
   return contact ? { action: "link", ...base, contactId: contact.contactId, revision: contact.revision } : { action: "create", ...base };
 }
-function matchContacts(sfdc2, existing, suppressed) {
-  const result = { items: [], ambiguous: 0, unchanged: 0, suppressed: 0, invalid: 0 };
+function matchContacts(sfdc2, existing, suppressed, { inferLinks = true } = {}) {
+  const result = { items: [], ambiguous: 0, unchanged: 0, suppressed: 0, invalid: 0, deferred: 0 };
   const linked = /* @__PURE__ */ new Map();
   const byEmail = /* @__PURE__ */ new Map();
   const byName = /* @__PURE__ */ new Map();
@@ -28221,6 +28223,11 @@ function matchContacts(sfdc2, existing, suppressed) {
       continue;
     }
     remaining.push(person);
+  }
+  if (!inferLinks) {
+    result.deferred = remaining.length;
+    result.items = links.sort(byId);
+    return result;
   }
   const sfdcEmails = /* @__PURE__ */ new Map();
   for (const person of remaining) {
@@ -28279,6 +28286,7 @@ function internalEmail(email3) {
 function contactPerson(value, accountId) {
   const id = canonicalSfdcId(value.id);
   if (!id) return "invalid";
+  if (canonicalSfdcId(value.accountId) !== accountId) return "mismatch";
   if (!(value.recordType === void 0 || value.recordType === null || record17(value.recordType))) {
     throw parseFailed("contact record has an unexpected record type");
   }
@@ -28293,11 +28301,14 @@ function contactPerson(value, accountId) {
   return { id, name, names, title: text(value, "title", FIELD_BYTES), accountId, ...email3 ? { email: email3 } : {} };
 }
 async function readAccount(source, accountId) {
-  const read = { people: [], ids: [], fetched: 0, internal: 0, invalidIds: 0, complete: false };
+  const read = { people: [], ids: [], fetched: 0, internal: 0, invalidIds: 0, mismatch: 0, complete: false };
   const seen = /* @__PURE__ */ new Set();
+  const cursors = /* @__PURE__ */ new Set();
   let after;
   try {
-    while (read.fetched < MAX_READ_PER_ACCOUNT) {
+    for (let index = 0; ; index++) {
+      if (read.fetched >= MAX_READ_PER_ACCOUNT) break;
+      if (index >= MAX_PAGES2) throw parseFailed(`search_contacts exceeded ${MAX_PAGES2} pages`);
       const page2 = parsePage(await source.call(SFDC_CONTACTS_TOOL.name, {
         condition: { field: "accountId", operator: "EXACT_MATCH", value: accountId },
         limit: PAGE_LIMIT2,
@@ -28313,6 +28324,7 @@ async function readAccount(source, accountId) {
       for (const person of people) {
         if (person === "internal") read.internal++;
         else if (person === "invalid") read.invalidIds++;
+        else if (person === "mismatch") read.mismatch++;
         else {
           read.people.push(person);
           read.ids.push(person.id);
@@ -28321,10 +28333,16 @@ async function readAccount(source, accountId) {
       if (!page2.hasNextPage) {
         if (read.fetched < page2.totalCount) throw parseFailed("search_contacts result is incomplete");
         read.complete = true;
-        return read;
+        break;
       }
-      if (page2.cursor === after) throw parseFailed("search_contacts cursor did not advance");
+      if (!page2.records.length) throw parseFailed("search_contacts returned an empty page with more pages");
+      if (cursors.size === cursors.add(page2.cursor).size) throw parseFailed("search_contacts repeated a cursor");
       after = page2.cursor;
+    }
+    if (read.ids.length > MAX_READ_PER_ACCOUNT) {
+      read.complete = false;
+      read.ids = read.ids.slice(0, MAX_READ_PER_ACCOUNT);
+      read.people = read.people.slice(0, MAX_READ_PER_ACCOUNT);
     }
     return read;
   } catch (error3) {
@@ -28490,6 +28508,7 @@ async function runSfdcContacts(options2) {
         counts.fetched += read.fetched;
         counts.skippedInternal += read.internal;
         counts.invalidIds += read.invalidIds;
+        counts.accountMismatch += read.mismatch;
         people.push(...read.people);
         present[sfdcAccountId] = read.ids;
         if (!read.complete) complete = false;
@@ -28500,13 +28519,14 @@ async function runSfdcContacts(options2) {
       const ledger = readLedger(store, scope, accountId);
       if (ledger.reset) counts.ledgerReset++;
       const suppressed = ledger.ids;
-      const match = matchContacts(people, current, suppressed);
+      const match = matchContacts(people, current, suppressed, { inferLinks: complete });
       for (const person of people) delete person.email;
       for (const contact of current) contact.email = "";
       counts.ambiguous += match.ambiguous;
       counts.unchanged += match.unchanged;
       counts.suppressed += match.suppressed;
       counts.invalid += match.invalid;
+      counts.deferredIncomplete += match.deferred;
       counts.skippedCap += Math.max(0, match.items.length - MAX_ITEMS2);
       const body = {
         snapshotComplete: complete,
@@ -28560,7 +28580,7 @@ async function runSfdcContacts(options2) {
   }
   return { result: failure2 ?? "ok", counts };
 }
-var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, SFDC_CONTACTS_BUDGET_MS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
+var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_PAGES2, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, SFDC_CONTACTS_BUDGET_MS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
 var init_sfdc_contacts = __esm({
   "src/intake/sfdc-contacts.ts"() {
     "use strict";
@@ -28571,6 +28591,7 @@ var init_sfdc_contacts = __esm({
     init_sfdc_id();
     PAGE_LIMIT2 = 500;
     MAX_READ_PER_ACCOUNT = 5e3;
+    MAX_PAGES2 = Math.ceil(MAX_READ_PER_ACCOUNT / PAGE_LIMIT2) + 1;
     MAX_SFDC_ACCOUNTS = 20;
     MAX_ITEMS2 = 200;
     MAX_PRESENT_TOTAL = 2e4;
