@@ -66,3 +66,27 @@ test('single-account import sorts matching companies first and preselects only t
     assert.deepEqual([...created].sort(), ['Ib', 'Keb', 'Mail']);
   } finally { screen.unmount(); }
 });
+
+test('remapping keeps manual choices except for the matching columns', async () => {
+  const table = [['회사', '이름', '전화'], ['신한은행', 'Shin', '1'], ['KEB하나은행', 'Keb', '2']];
+  const screen = fixture(table, []);
+  const checks = () => nodes(screen.draw()).filter(node => node.type === 'tr').slice(1)
+    .map(row => nodes(row).find(node => node.type === 'input').props.checked);
+  const select = (label) => nodes(nodes(screen.draw()).find(node => node.type === 'label' && nodes(node).some(n => n.type === 'select')
+    && [node.props.children].flat()[0] === label)).find(node => node.type === 'select');
+  try {
+    nodes(screen.draw()).find(node => node.type === 'input' && node.props.type === 'file').props.onChange({ target: { files: [{}], value: '' } });
+    await settle();
+    assert.deepEqual(checks(), [true, false]);
+    // A manual choice survives remapping a column that matching does not read.
+    nodes(nodes(screen.draw()).filter(node => node.type === 'tr').slice(1)[1]).find(node => node.type === 'input').props.onChange({ target: { checked: true } });
+    assert.deepEqual(checks(), [true, true]);
+    select('휴대폰').props.onChange({ target: { value: '' } });
+    assert.deepEqual(checks(), [true, true]);
+    // Dropping the company column redoes the automatic selection: nothing to judge, so all rows.
+    select('회사').props.onChange({ target: { value: '' } });
+    assert.deepEqual(checks(), [true, true]);
+    select('회사').props.onChange({ target: { value: '0' } });
+    assert.deepEqual(checks(), [true, false]);
+  } finally { screen.unmount(); }
+});

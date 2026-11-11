@@ -13,6 +13,12 @@ export interface ImportTargetAccount { name: string; aliases: string[]; domains:
 
 const statusLabel: Record<ImportStatus, string> = { created: '추가됨', duplicate: '중복으로 건너뜀', failed: '실패 또는 저장 여부 확인 필요', invalid: '이름 없음' };
 
+function planFor(table: string[][], mapping: ContactMapping, account: ImportTargetAccount) {
+  const columns = { company: mapping.company, email: mapping.email };
+  return planAccountRows(table.slice(1).map((row) => contactFromRow(row, columns)), account,
+    mapping.company !== undefined || mapping.email !== undefined);
+}
+
 export function ContactImport({ accountId, userId, account, onImported, onDenied }: { accountId: string; userId: string; account: ImportTargetAccount; onImported: () => void; onDenied: () => void }) {
   const [table, setTable] = useState<string[][]>([]);
   const [mapping, setMapping] = useState<ContactMapping>({});
@@ -27,11 +33,8 @@ export function ContactImport({ accountId, userId, account, onImported, onDenied
   const accountKey = JSON.stringify([account.name, account.aliases, account.domains]);
   const plan = useMemo(() => {
     const [name, aliases, domains] = JSON.parse(accountKey) as [string, string[], string[]];
-    const columns = { company: companyColumn, email: emailColumn };
-    return planAccountRows(table.slice(1).map((row) => contactFromRow(row, columns)), { name, aliases, domains },
-      companyColumn !== undefined || emailColumn !== undefined);
+    return planFor(table, { company: companyColumn, email: emailColumn }, { name, aliases, domains });
   }, [table, companyColumn, emailColumn, accountKey]);
-  useEffect(() => { setSelected(new Set(plan.selected)); }, [plan]);
   const fileGeneration = useRef(0);
   useEffect(() => {
     const current = new AbortController();
@@ -49,8 +52,11 @@ export function ContactImport({ accountId, userId, account, onImported, onDenied
       const rows = await readContactFile(file);
       if (!current()) return;
       const headers = rows[0];
-      setTable([headers, ...rows.slice(1)]);
-      setMapping(mapContactHeaders(headers));
+      const nextTable = [headers, ...rows.slice(1)];
+      const nextMapping = mapContactHeaders(headers);
+      setTable(nextTable);
+      setMapping(nextMapping);
+      setSelected(new Set(planFor(nextTable, nextMapping, account).selected));
     } catch (err) {
       if (current()) setError(err instanceof Error ? err.message : '파일을 읽지 못했습니다.');
     }
@@ -105,11 +111,15 @@ export function ContactImport({ accountId, userId, account, onImported, onDenied
     {table.length > 0 && <>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {CONTACT_FIELDS.map(([field, label]) => <label key={field} className="text-xs text-slate-600 dark:text-slate-300">{label}{field === 'name' && ' *'}
-          <select value={mapping[field] ?? ''} disabled={busy} onChange={(e) => setMapping((old) => {
-            const next = { ...old };
+          <select value={mapping[field] ?? ''} disabled={busy} onChange={(e) => {
+            const next = { ...mapping };
             if (e.target.value === '') delete next[field as ContactField]; else next[field as ContactField] = Number(e.target.value);
-            return next;
-          })} className="mt-1 w-full rounded border border-slate-200 bg-white p-1.5 dark:border-white/10 dark:bg-slate-900">
+            setMapping(next);
+            // A new company or email column redoes the automatic selection; rows already added stay unselected.
+            if (field === 'company' || field === 'email') {
+              setSelected(new Set([...planFor(table, next, account).selected].filter((i) => statuses[i] !== 'created')));
+            }
+          }} className="mt-1 w-full rounded border border-slate-200 bg-white p-1.5 dark:border-white/10 dark:bg-slate-900">
             <option value="">가져오지 않음</option>{headers.map((header, i) => <option key={i} value={i}>{header}</option>)}
           </select>
         </label>)}
