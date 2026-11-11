@@ -962,6 +962,35 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     expect(template.toJSON().Resources[apiId].DependsOn ?? []).toContain(ruleId);
   });
 
+  test('customer brief requests reach only summarize through a bounded rule, DLQ and alarm', () => {
+    const summarizeId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-summarize');
+    const apiId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-api');
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-customer-brief-dlq');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-customer-brief-requested');
+    const rule = template.findResources('AWS::Events::Rule')[ruleId].Properties;
+    expect(rule.EventPattern).toEqual({ source: ['ttobak.analysis'], 'detail-type': ['CustomerBriefRequested'] });
+    expect(rule.Targets).toEqual([{
+      Arn: { 'Fn::GetAtt': [summarizeId, 'Arn'] },
+      Id: expect.any(String),
+      DeadLetterConfig: { Arn: { 'Fn::GetAtt': [queueId, 'Arn'] } },
+      RetryPolicy: { MaximumEventAgeInSeconds: 300, MaximumRetryAttempts: 3 },
+    }]);
+    expect(template.findResources('AWS::SQS::Queue')[queueId].Properties).toMatchObject({
+      SqsManagedSseEnabled: true, MessageRetentionPeriod: 604800,
+      RedriveAllowPolicy: { redrivePermission: 'denyAll' },
+    });
+    const statements = Object.values(template.findResources('AWS::SQS::QueuePolicy'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement)
+      .filter((statement) => JSON.stringify(statement.Resource) === JSON.stringify({ 'Fn::GetAtt': [queueId, 'Arn'] }));
+    expect(statements).toHaveLength(1);
+    expect(statements[0].Condition).toEqual({ ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } });
+    const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm'))
+      .filter((alarm) => JSON.stringify(alarm.Properties.Dimensions ?? []).includes(queueId));
+    expect(alarms.length).toBeGreaterThan(0);
+    // A later producer deploy must find its consumer rule already in place.
+    expect(template.toJSON().Resources[apiId].DependsOn ?? []).toContain(ruleId);
+  });
+
   test('automatic term extraction is off by default and its flags come from validated context', () => {
     const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
       .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;

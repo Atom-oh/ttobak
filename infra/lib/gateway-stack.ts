@@ -1336,6 +1336,27 @@ export class GatewayStack extends cdk.Stack {
     }));
     pipelineFailures.watchQueue('AccountMerge', accountMergeDlq);
 
+    // Per-member customer briefs run in summarize invocations (consumer
+    // first; the API producer ships separately). The event carries only
+    // account, user and run identifiers.
+    const customerBriefDlq = new sqs.Queue(this, 'CustomerBriefDlq', {
+      queueName: 'ttobak-customer-brief-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const customerBriefRule = new events.Rule(this, 'CustomerBriefRequestedRule', {
+      ruleName: 'ttobak-customer-brief-requested',
+      description: 'Write the requested per-member customer brief run',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['CustomerBriefRequested'] },
+    });
+    customerBriefRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: customerBriefDlq,
+    }));
+    pipelineFailures.watchQueue('CustomerBrief', customerBriefDlq);
+
     // KB documents and research reports as term sources (layered dictionary
     // 4.2). The KB bucket already sends S3 events to EventBridge; summarize
     // maps kb/{uid}/... and shared/research/{id}.md to TermsSourceRequested
@@ -1398,7 +1419,7 @@ export class GatewayStack extends cdk.Stack {
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
-    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, peopleResolveRule, accountMergeRule, this.qaFunction);
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, peopleResolveRule, accountMergeRule, customerBriefRule, this.qaFunction);
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like
