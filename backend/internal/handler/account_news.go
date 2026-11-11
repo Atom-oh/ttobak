@@ -17,6 +17,8 @@ type accountNewsAPI interface {
 	Create(ctx context.Context, userID, accountID string, req *model.CreateAccountNewsSourceRequest) (*model.CrawlerSource, error)
 	List(ctx context.Context, userID, accountID string) ([]model.CrawlerSource, error)
 	Delete(ctx context.Context, userID, accountID, sourceID string) error
+	Update(ctx context.Context, userID, accountID, sourceID string, req *model.UpdateAccountNewsSourceRequest) (*model.NewsSourceItem, error)
+	ListAll(ctx context.Context, userID string) (*model.NewsSourcesResponse, error)
 }
 
 // AccountNewsHandler serves account-owned news sources (direct members only).
@@ -92,4 +94,46 @@ func (h *AccountNewsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListAll handles GET /api/news-sources: the caller's common and account sources.
+func (h *AccountNewsHandler) ListAll(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.RawQuery != "" {
+		accountNewsError(w, service.ErrInvalidInput)
+		return
+	}
+	resp, err := h.service.ListAll(r.Context(), middleware.GetUserID(r.Context()))
+	if err != nil {
+		accountNewsError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// Update handles PUT /api/accounts/{accountId}/news-sources/{sourceId}.
+func (h *AccountNewsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.RawQuery != "" {
+		accountNewsError(w, service.ErrInvalidInput)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var req model.UpdateAccountNewsSourceRequest
+	if err := decoder.Decode(&req); err != nil {
+		accountNewsError(w, service.ErrInvalidInput)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		accountNewsError(w, service.ErrInvalidInput)
+		return
+	}
+	item, err := h.service.Update(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "accountId"), chi.URLParam(r, "sourceId"), &req)
+	if err != nil {
+		accountNewsError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }

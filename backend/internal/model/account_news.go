@@ -37,6 +37,46 @@ type AccountNewsSourcesResponse struct {
 	Sources []CrawlerSource `json:"sources"`
 }
 
+// UpdateAccountNewsSourceRequest edits an account-owned news source. An
+// absent or null field is unchanged; a present field replaces the stored value.
+type UpdateAccountNewsSourceRequest struct {
+	SourceName  *string   `json:"sourceName,omitempty"`
+	NewsQueries *[]string `json:"newsQueries,omitempty"`
+	Aliases     *[]string `json:"aliases,omitempty"`
+}
+
+// News source kinds in NewsSourceItem.Kind.
+const (
+	NewsSourceKindCommon  = "common"
+	NewsSourceKindAccount = "account"
+)
+
+// NewsSourceItem is one of the caller's news sources: a subscribed common
+// source or a source owned by an account the caller is a direct member of.
+// Internal CONFIG fields (owner, subscribers, operator markers) are omitted.
+type NewsSourceItem struct {
+	SourceID      string   `json:"sourceId"`
+	SourceName    string   `json:"sourceName"`
+	Kind          string   `json:"kind"`
+	AccountID     string   `json:"accountId,omitempty"`
+	AccountName   string   `json:"accountName,omitempty"`
+	NewsQueries   []string `json:"newsQueries"`
+	Aliases       []string `json:"aliases"`
+	CustomUrls    []string `json:"customUrls"`
+	NewsSources   []string `json:"newsSources"`
+	Status        string   `json:"status"`
+	LastCrawledAt string   `json:"lastCrawledAt"`
+	DocumentCount int      `json:"documentCount"`
+	CanEdit       bool     `json:"canEdit"`
+}
+
+// NewsSourcesResponse lists the caller's news sources. Truncated reports that
+// a membership or subscription cap left some sources out.
+type NewsSourcesResponse struct {
+	Sources   []NewsSourceItem `json:"sources"`
+	Truncated bool             `json:"truncated,omitempty"`
+}
+
 // NewOpportunityScoreMin is the minimum QualityScore for a news row to count
 // as a new-opportunity candidate.
 const NewOpportunityScoreMin = 0.75

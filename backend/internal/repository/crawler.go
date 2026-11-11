@@ -82,11 +82,15 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 
 	var item crawlerItem
 	if err := attributevalue.UnmarshalMap(result.Item, &item); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal crawler source: %w", err)
+		return nil, fmt.Errorf("%w: failed to unmarshal crawler source: %w", ErrInvalidSource, err)
 	}
 
 	return &item.CrawlerSource, nil
 }
+
+// ErrInvalidSource means a CONFIG row exists but does not decode as a
+// CrawlerSource, for example a legacy scalar value in a list attribute.
+var ErrInvalidSource = errors.New("invalid crawler source row")
 
 // GetSourceOrigin reads only a CONFIG row's sourceName and accountId, so
 // legacy scalar list values cannot fail it as they can GetSource. A string

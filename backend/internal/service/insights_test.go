@@ -1177,3 +1177,57 @@ func TestDocOriginApplyToBoundsNames(t *testing.T) {
 		t.Fatalf("short names changed: %q %q", doc.SourceName, doc.AccountName)
 	}
 }
+
+func TestListInsights_KindAndAccountScope(t *testing.T) {
+	const secondSource = "acct_acct-3_00112233"
+	type view struct {
+		titles, services, sources []string
+		total                     int
+	}
+	empty := view{[]string{}, []string{}, []string{}, 0}
+	for _, tc := range []struct {
+		name, user, source string
+		scope              InsightsScope
+		want               view
+	}{
+		{"common only", "member", "", InsightsScope{Kind: "common"},
+			view{[]string{"Common", "Tech"}, []string{"Amazon EKS", "AWS Lambda"}, []string{"__tech__", "hanabank"}, 2}},
+		{"every readable account", "member", "", InsightsScope{Kind: "account"},
+			view{[]string{"Account", "Second"}, []string{"Amazon Bedrock", "Amazon SQS"}, []string{visibleAccountSource, secondSource}, 2}},
+		{"one account", "member", "", InsightsScope{AccountID: "acct-1"},
+			view{[]string{"Account"}, []string{"Amazon Bedrock"}, []string{visibleAccountSource}, 1}},
+		{"account with explicit kind", "member", "", InsightsScope{Kind: "account", AccountID: "acct-3"},
+			view{[]string{"Second"}, []string{"Amazon SQS"}, []string{secondSource}, 1}},
+		{"contradictory kind", "member", "", InsightsScope{Kind: "common", AccountID: "acct-1"}, empty},
+		{"unknown kind is ignored", "outsider", "", InsightsScope{Kind: "other"},
+			view{[]string{"Common", "Tech"}, []string{"Amazon EKS", "AWS Lambda"}, []string{"__tech__", "hanabank"}, 2}},
+		{"non-member account is an empty page", "outsider", "", InsightsScope{AccountID: "acct-1"}, empty},
+		{"unknown account is an empty page", "member", "", InsightsScope{AccountID: "acct-9"}, empty},
+		{"source outside the kind", "member", "hanabank", InsightsScope{Kind: "account"},
+			view{[]string{}, []string{}, []string{visibleAccountSource, secondSource}, 0}},
+		{"source inside the account", "member", visibleAccountSource, InsightsScope{AccountID: "acct-1"},
+			view{[]string{"Account"}, []string{"Amazon Bedrock"}, []string{visibleAccountSource}, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			members := &insightsMembers{members: map[string]bool{"acct-1/member": true, "acct-3/member": true}}
+			svc, repo, _ := insightsVisibilityFixture(members)
+			repo.sources[secondSource] = &model.CrawlerSource{SourceID: secondSource, SourceName: "Second", AccountID: "acct-3"}
+			doc := model.CrawledDocument{DocHash: "s1", SourceID: secondSource, Type: "tech", Title: "Second", AWSServices: []string{"Amazon SQS"}, CrawledAt: 5}
+			repo.allDocuments = append([]model.CrawledDocument{doc}, repo.allDocuments...)
+			repo.documents[secondSource] = []model.CrawledDocument{doc}
+			// Sort by title so the expected order does not depend on crawledAt.
+			resp, err := svc.ListInsightsInScope(context.Background(), tc.user, tc.scope, "tech", tc.source, "", nil, "title", 1, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := view{insightsTitles(resp.Documents), resp.Services, resp.SourceIDs, resp.TotalCount}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	// The shared scan cache keeps the unfiltered set.
+	if docs, _, ok := scanCache.get("scan:tech"); !ok || len(docs) != 5 {
+		t.Fatalf("scan cache = %d docs (hit %v)", len(docs), ok)
+	}
+}

@@ -1069,6 +1069,35 @@ account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 unknown source. Per-user crawler routes (subscribe/AddSource, update,
 unsubscribe) refuse account-owned sources like operator-curated ones, in the
 service and in the `attribute_not_exists(accountId)` write condition.
+
+`PUT /api/accounts/{accountId}/news-sources/{sourceId}` edits an account-owned
+source for a direct member. The body takes optional `sourceName`, `newsQueries`
+and `aliases` (unknown fields are 400); an absent or null field is unchanged, a
+present one replaces the stored value with POST's cleaning and limits. An empty
+name, an empty query list or a body with no field is 400. The source must have
+the account's ref and a CONFIG naming the account that is not disabled; anything
+else is 404. One transaction updates the CONFIG on those conditions and checks the
+ref, the open account and the caller's `MEMBER#` row, so an edit racing a delete
+returns 404 and never revives the source; a revoked member gets 403. The ID, ref
+and `accountId` never change. Returns 200 with the item shape below. Editing the
+name, queries or aliases changes the CONFIG fingerprint that current-news reads
+compare with each article's `sourceRevision`, so previously published articles
+of that source stop listing until it is crawled again; tombstone deletion does
+not depend on the fingerprint.
+
+`GET /api/news-sources` returns `{ "sources": [...], "truncated"?: true }`: the
+account-owned sources of every account the caller is a current direct member of
+(membership index rows are re-checked against the account and `MEMBER#` row,
+and each CONFIG against its ref, as in the account GET), sorted by account name
+then source name, followed by the caller's subscribed common sources by name.
+Operator-curated sources, sources with `accountId` and `acct_` IDs never appear
+as common. Each item has `sourceId`, `sourceName`, `kind` (`account` or
+`common`), `accountId` and `accountName` (account kind only), `newsQueries`,
+`aliases`, `customUrls`, `newsSources` (the CONFIG values), `status`,
+`lastCrawledAt`, `documentCount` and `canEdit` (always true here). Names are cut
+to 200 code points. At most 200 accounts (by ID) and 500 subscriptions are read;
+`truncated` reports that more exist. A CONFIG row that does not decode (legacy
+scalar list values) is skipped rather than failing the list.
 `DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
 document is allowed only for admins or a current direct member of that account
 (read per request); the stored source creator grants nothing. A non-admin
@@ -1089,7 +1118,11 @@ row without one is common. With no row, a
 source ID starting `acct_` is hidden and any other ID (such as `__tech__`) is
 common. Hidden documents are removed before `totalCount`, the `services` and
 `sourceIds` facets, sorting and paging; `source={hidden}` returns an empty
-page. A hidden detail returns the same 404 as a missing document. Each
+page. The list also takes `kind=common|account` (other values are ignored) and
+`account={accountId}` (account kind; with `kind=common` nothing matches), applied
+with visibility before the same totals, facets and paging; an account the caller
+cannot read returns an empty page. The shared 30-second scan cache stays
+unfiltered. A hidden detail returns the same 404 as a missing document. Each
 returned document adds `sourceName` (the CONFIG name, omitted without a row),
 `sourceKind` (`common` or `account`), `accountId` and `accountName` for the
 account kind, and `matchedTerm` (the search query that found a news article,
@@ -2178,6 +2211,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | DELETE | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Delete` |
 | GET | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.List` |
 | POST | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.Create` |
+| PUT | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Delete` |
 | GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
 | POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
@@ -2305,6 +2339,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/dictionary/layers/{layer}/terms/{termId}/log/{logId}/restore` | `dictHandler.RestoreTerm` |
 | POST | `/api/translate` | `translateHandler.Translate` |
 | POST | `/api/meetings/{meetingId}/summarize` | `summarizeLiveHandler.SummarizeLive` |
+| GET | `/api/news-sources` | `accountNewsHandler.ListAll` |
 | GET | `/api/crawler/sources` | `crawlerHandler.ListSources` |
 | POST | `/api/crawler/sources` | `crawlerHandler.AddSource` |
 | PUT | `/api/crawler/sources/{sourceId}` | `crawlerHandler.UpdateSource` |
