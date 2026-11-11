@@ -717,6 +717,29 @@ period control (this week / quarter / this year, default this week) drives
   Asia/Seoul time; a never-completed source shows `ttobak-mcp intake sfdc` or
   `ttobak-mcp intake calendar`.
 
+Two tabs sit under the header: Dashboard (the sections above, with the period
+control) and Report (`ReportTab`, [ADR-023](decisions/ADR-023-sa-performance-data-residency.md);
+helpers in `lib/performanceReport.ts`). The report tab lists the owner's stored
+reports newest first (`ReportList`, a partial badge per row) and renders the
+selected one natively from its JSON (`ReportView`): every string is a React text
+node, with no HTML, Markdown or links built from content. The view shows the
+period, generation time and model, a partial badge naming the missing sources,
+the summary, ledger tiles, sections in stored order (lede, paragraphs, tables,
+cards), actions grouped high/medium/low, and the data basis collapsed at the end.
+Delete uses an inline confirm (not a browser dialog) and reloads the list.
+
+Generation is Mac app only (`ReportGenerateDialog`, an in-page dialog; a browser
+shows a hint). It takes a period (this week, this quarter, this year, custom
+start/end of at most 400 days, ending no more than two calendar years ago) and four highlight lists, one item per line,
+prefilled from the newest stored report of the same period kind and checked
+like the Mac runner before `report_generate`. An advanced section holds the
+Bedrock toggle and AWS profile picker (`report_settings_get/set`). While a run
+goes, the dialog shows elapsed time, progress lines and Cancel; closing it keeps
+the run going. A successful `report://finished` reloads the list and opens the
+new report; a failure shows the Korean label of its code (report labels, then the shared runner labels). The report tab stays
+mounted (hidden) while the dashboard shows, so a finish event is not lost and is
+handled when the user returns. A failed cancel shows its error inline.
+
 ## Verification
 
 Run frontend lint/build for code changes and targeted browser checks for affected

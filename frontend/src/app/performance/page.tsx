@@ -8,6 +8,8 @@ import { GoalsEditor } from '@/components/performance/GoalsEditor';
 import { MappingQueue } from '@/components/performance/MappingQueue';
 import { MissedList } from '@/components/performance/MissedList';
 import { IntakeRunControl } from '@/components/performance/IntakeRunControl';
+import { ReportTab } from '@/components/performance/ReportTab';
+import { REPORT_COPY } from '@/lib/performanceReport';
 import { accountApi, performanceApi } from '@/lib/api';
 import {
   accountListState, describeFreshness, PERFORMANCE_PERIODS, periodLabel, type AccountListResult,
@@ -31,6 +33,7 @@ export default function PerformancePage() {
   const { isLoading, isAuthenticated, user, membershipRevision } = useAuth();
   const router = useRouter();
   const userId = user?.userId ?? '';
+  const [tab, setTab] = useState<'dashboardTab' | 'reportTab'>('dashboardTab');
   const [period, setPeriod] = useState<PerformancePeriod>('week');
   const [reloadKey, setReloadKey] = useState(0);
   // Results are tagged with the request that produced them, so a period
@@ -117,7 +120,7 @@ export default function PerformancePage() {
               <h2 className="hidden lg:block text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">SA 활동</h2>
               <p className="text-slate-600 dark:text-text-muted mt-2">나만 볼 수 있는 활동 점검 페이지입니다. 다른 사람과 공유되지 않습니다.</p>
             </div>
-            <div role="group" aria-label="기간" className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-white/10 dark:bg-surface-lowest">
+            {tab === 'dashboardTab' && <div role="group" aria-label="기간" className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-white/10 dark:bg-surface-lowest">
               {PERFORMANCE_PERIODS.map(option => (
                 <button key={option.value} type="button" aria-pressed={period === option.value}
                   onClick={() => {
@@ -131,8 +134,25 @@ export default function PerformancePage() {
                   {option.label}
                 </button>
               ))}
-            </div>
+            </div>}
           </div>
+
+          <div role="tablist" aria-label="SA 활동 보기" className="flex gap-1 border-b border-slate-200 dark:border-white/10">
+            {([['dashboardTab', REPORT_COPY.dashboardTab], ['reportTab', REPORT_COPY.reportTab]] as const).map(([value, label]) => (
+              <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)}
+                className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold ${tab === value
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-text-muted dark:hover:text-text-main'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* The report tab stays mounted (hidden) so a finish event while the dashboard shows is handled. */}
+          <div hidden={tab !== 'reportTab'}>
+            <ReportTab userId={userId} membershipRevision={membershipRevision} reloadKey={reloadKey} />
+          </div>
+          {tab === 'dashboardTab' && <>
 
           <section className={cardClass} aria-labelledby="perf-scorecard">
             <h3 id="perf-scorecard" className={headingClass}>스코어카드</h3>
@@ -177,6 +197,7 @@ export default function PerformancePage() {
                 );
               })}
           </section>
+          </>}
         </div>
       </div>
     </AppLayout>

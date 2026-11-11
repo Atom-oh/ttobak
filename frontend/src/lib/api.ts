@@ -14,6 +14,7 @@ import type { AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEd
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
+import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -217,6 +218,13 @@ export const performanceApi = {
     }),
   sources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     apiFetch<PerformanceSourceList>('/api/performance/sources', { ...options, cache: 'no-store' }),
+  // Reports are written only by the owner's Mac CLI (PUT); the web lists, reads and deletes.
+  reports: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<PerformanceReportList>('/api/performance/reports', { ...options, cache: 'no-store' }),
+  report: (periodKey: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<PerformanceReport>(`/api/performance/reports/${encodeURIComponent(periodKey)}`, { ...options, cache: 'no-store' }),
+  deleteReport: (periodKey: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<void>(`/api/performance/reports/${encodeURIComponent(periodKey)}`, { ...options, method: 'DELETE', cache: 'no-store' }),
 };
 
 type PrivateRequest = { signal?: AbortSignal; expectedUserId?: string };
