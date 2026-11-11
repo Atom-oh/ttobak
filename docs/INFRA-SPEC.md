@@ -709,6 +709,8 @@ READY vocabulary for live caption streams.
 `infra/cdk.json` sets `ttobak:transcriptCorrection` to `on` (2026-11-11).
 `infra/cdk.json` sets `ttobak:accountTermsMode` to `on` (2026-11-11), after the
 meeting relink cleanup (ADR-008 FU4) was deployed with the flag off.
+`infra/cdk.json` sets `ttobak:techTermsMode` to `on` (2026-11-11), after the
+tech-daily job was deployed with the flag off.
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
