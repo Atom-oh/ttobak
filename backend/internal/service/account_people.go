@@ -51,6 +51,9 @@ type accountPeopleRepo interface {
 	GetMember(context.Context, string, string) (*model.AccountMember, error)
 	GetAccountContact(context.Context, string, string) (*model.AccountContact, error)
 	GetMeetingPublication(context.Context, string, string) (*model.Meeting, error)
+	GetMeetingFocusState(context.Context, string, string) (*model.Meeting, error)
+	ListPeopleLinksToTarget(context.Context, string, string, string, int) ([]model.PeopleLink, bool, error)
+	ListProjectMeetingRefsForProject(context.Context, string) ([]model.ProjectMeetingRef, error)
 	ListPeopleLinksByTarget(context.Context, string, string, string, int) ([]model.PeopleLink, string, error)
 	ListUnresolvedMentions(context.Context, string, string, int) ([]model.UnresolvedMention, string, error)
 

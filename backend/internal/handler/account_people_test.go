@@ -40,6 +40,10 @@ func (s *accountPeopleStub) MeetingEdges(_ context.Context, user, account, meeti
 	s.hit(user, account, meeting)
 	return &model.MeetingPeopleEdges{Edges: []model.PeopleLink{}, Labels: map[string]string{}}, s.err
 }
+func (s *accountPeopleStub) Focus(_ context.Context, user, account, focus, cursor string) (*model.AccountFocusGraph, error) {
+	s.hit(user, account, focus+"|"+cursor)
+	return &model.AccountFocusGraph{Meetings: []model.FocusMeeting{}, Techs: []model.FocusTech{}, Other: []model.FocusTag{}}, s.err
+}
 func (s *accountPeopleStub) BindEdge(_ context.Context, user, account string, in model.PeopleEdgeInput) (*model.PeopleLink, error) {
 	s.hit(user, account, "")
 	s.edge = in
@@ -72,6 +76,7 @@ func accountPeopleRouter(s *accountPeopleStub) http.Handler {
 	r.Post("/accounts/{accountId}/people/mentions/{mentionKey}/resolve", h.ResolveMention)
 	r.Post("/accounts/{accountId}/people/mentions/{mentionKey}/ignore", h.IgnoreMention)
 	r.Get("/accounts/{accountId}/people/edges", h.Edges)
+	r.Get("/accounts/{accountId}/people/focus", h.Focus)
 	r.Post("/accounts/{accountId}/people/edges", h.Bind)
 	r.Delete("/accounts/{accountId}/people/edges", h.Unbind)
 	r.Post("/accounts/{accountId}/people/resolve", h.Resolve)
@@ -98,6 +103,7 @@ func TestAccountPeopleHandler_RoutesAndErrors(t *testing.T) {
 		{"POST", "/accounts/a1/people/mentions/" + peopleHandlerKey + "/resolve", `{"kind":"contact","id":"c1"}`, 200},
 		{"POST", "/accounts/a1/people/mentions/" + peopleHandlerKey + "/ignore", "", 204},
 		{"GET", "/accounts/a1/people/edges?meetingId=o:m", "", 200},
+		{"GET", "/accounts/a1/people/focus?focus=contact:c1&cursor=x", "", 200},
 		{"POST", "/accounts/a1/people/edges", `{"meetingId":"o:m","toKind":"contact","toId":"c1","role":"speaker","sourceRef":"spk_0"}`, 201},
 		{"DELETE", "/accounts/a1/people/edges?meetingId=o:m&toKind=contact&toId=c1&role=speaker", "", 204},
 		{"POST", "/accounts/a1/people/resolve", "", 202},
@@ -160,5 +166,28 @@ func TestAccountPeopleHandler_ResolveReturnsJSONBody(t *testing.T) {
 	var body struct{ Accepted bool }
 	if rec.Code != 202 || json.Unmarshal(rec.Body.Bytes(), &body) != nil || !body.Accepted {
 		t.Fatalf("%d %q", rec.Code, rec.Body)
+	}
+}
+
+func TestAccountPeopleHandler_FocusQuery(t *testing.T) {
+	s := &accountPeopleStub{}
+	rec := servePeople(s, "GET", "/accounts/a1/people/focus?focus=project:p1", "")
+	if rec.Code != 200 || s.arg != "project:p1|" {
+		t.Fatalf("%d %q", rec.Code, s.arg)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["meetings"] == nil || body["techs"] == nil {
+		t.Fatalf("body = %s", rec.Body)
+	}
+	for _, target := range []string{
+		"/accounts/a1/people/focus",
+		"/accounts/a1/people/focus?focus=a:b&focus=c:d",
+		"/accounts/a1/people/focus?focus=contact:c1&extra=1",
+		"/accounts/a1/people/focus?focus=contact:c1&cursor=a&cursor=b",
+	} {
+		s := &accountPeopleStub{}
+		if rec := servePeople(s, "GET", target, ""); rec.Code != 400 || s.calls != 0 {
+			t.Fatalf("%s: %d calls=%d", target, rec.Code, s.calls)
+		}
 	}
 }
