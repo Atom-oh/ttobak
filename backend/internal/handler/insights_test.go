@@ -216,14 +216,9 @@ func TestInsights_AccountSourceHiddenFromNonMember(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.TotalCount != 1 || len(resp.Documents) != 1 || resp.Documents[0].Title != "Common" ||
-		resp.Documents[0].SourceKind != "common" || resp.Documents[0].SourceName != "Hana Bank" {
+	if resp.TotalCount != 1 || len(resp.Documents) != 1 || resp.Documents[0].SourceKind != "common" ||
+		resp.Documents[0].SourceName != "Hana Bank" || len(resp.SourceIDs) != 1 {
 		t.Fatalf("unexpected list: %+v", resp)
-	}
-	for _, id := range resp.SourceIDs {
-		if id == "acct_acct-1_0123abcd" {
-			t.Fatalf("hidden source in facet: %v", resp.SourceIDs)
-		}
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/insights/acct_acct-1_0123abcd/a1", nil)

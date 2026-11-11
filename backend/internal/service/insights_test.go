@@ -685,13 +685,15 @@ func TestListInsights_ReturnsSourceIDsFacet(t *testing.T) {
 // insightsMembers is an account and direct-membership reader for
 // account-source reads and deletes.
 type insightsMembers struct {
-	members  map[string]bool   // accountID + "/" + userID
-	accounts map[string]string // accountID -> name; nil means every account exists
-	calls    int
-	err      error
+	members      map[string]bool   // accountID + "/" + userID
+	accounts     map[string]string // accountID -> name; nil means every account exists
+	calls        int               // GetMember calls
+	accountCalls int               // GetAccount calls
+	err          error
 }
 
 func (m *insightsMembers) GetAccount(_ context.Context, accountID string) (*model.Account, error) {
+	m.accountCalls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -953,52 +955,22 @@ func insightsTitles(docs []model.CrawledDocument) []string {
 }
 
 func TestListInsights_AccountSourceVisibility(t *testing.T) {
+	type view struct{ titles, services, sources []string }
+	all := view{[]string{"Account", "Common", "Tech"}, []string{"Amazon Bedrock", "Amazon EKS", "AWS Lambda"},
+		[]string{"__tech__", visibleAccountSource, "hanabank"}}
+	commonOnly := view{[]string{"Common", "Tech"}, []string{"Amazon EKS", "AWS Lambda"}, []string{"__tech__", "hanabank"}}
+	member := map[string]bool{"acct-1/member": true}
 	for _, tc := range []struct {
-		name         string
-		members      *insightsMembers
-		user         string
-		wantTitles   []string
-		wantServices []string
-		wantSources  []string
+		name    string
+		members *insightsMembers
+		user    string
+		want    view
 	}{
-		{
-			name:         "member sees account documents",
-			members:      &insightsMembers{members: map[string]bool{"acct-1/member": true}, accounts: map[string]string{"acct-1": "Hana Financial Group"}},
-			user:         "member",
-			wantTitles:   []string{"Account", "Common", "Tech"},
-			wantServices: []string{"Amazon Bedrock", "Amazon EKS", "AWS Lambda"},
-			wantSources:  []string{"__tech__", visibleAccountSource, "hanabank"},
-		},
-		{
-			name:         "non-member sees common documents only",
-			members:      &insightsMembers{members: map[string]bool{"acct-1/member": true}},
-			user:         "outsider",
-			wantTitles:   []string{"Common", "Tech"},
-			wantServices: []string{"Amazon EKS", "AWS Lambda"},
-			wantSources:  []string{"__tech__", "hanabank"},
-		},
-		{
-			name:         "nil member reader hides account documents",
-			user:         "member",
-			wantTitles:   []string{"Common", "Tech"},
-			wantServices: []string{"Amazon EKS", "AWS Lambda"},
-			wantSources:  []string{"__tech__", "hanabank"},
-		},
-		{
-			name:         "missing account hides its documents",
-			members:      &insightsMembers{members: map[string]bool{"acct-1/member": true}, accounts: map[string]string{}},
-			user:         "member",
-			wantTitles:   []string{"Common", "Tech"},
-			wantServices: []string{"Amazon EKS", "AWS Lambda"},
-			wantSources:  []string{"__tech__", "hanabank"},
-		},
-		{
-			name:         "empty caller hides account documents",
-			members:      &insightsMembers{members: map[string]bool{"acct-1/": true}},
-			wantTitles:   []string{"Common", "Tech"},
-			wantServices: []string{"Amazon EKS", "AWS Lambda"},
-			wantSources:  []string{"__tech__", "hanabank"},
-		},
+		{"member sees account documents", &insightsMembers{members: member, accounts: map[string]string{"acct-1": "Hana Financial Group"}}, "member", all},
+		{"non-member sees common documents only", &insightsMembers{members: member}, "outsider", commonOnly},
+		{"nil member reader hides account documents", nil, "member", commonOnly},
+		{"missing account hides its documents", &insightsMembers{members: member, accounts: map[string]string{}}, "member", commonOnly},
+		{"empty caller hides account documents", &insightsMembers{members: map[string]bool{"acct-1/": true}}, "", commonOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, _ := insightsVisibilityFixture(tc.members)
@@ -1006,17 +978,9 @@ func TestListInsights_AccountSourceVisibility(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := insightsTitles(resp.Documents); !reflect.DeepEqual(got, tc.wantTitles) {
-				t.Fatalf("titles = %v, want %v", got, tc.wantTitles)
-			}
-			if resp.TotalCount != len(tc.wantTitles) {
-				t.Fatalf("totalCount = %d, want %d", resp.TotalCount, len(tc.wantTitles))
-			}
-			if !reflect.DeepEqual(resp.Services, tc.wantServices) {
-				t.Fatalf("services = %v, want %v", resp.Services, tc.wantServices)
-			}
-			if !reflect.DeepEqual(resp.SourceIDs, tc.wantSources) {
-				t.Fatalf("sourceIds = %v, want %v", resp.SourceIDs, tc.wantSources)
+			got := view{insightsTitles(resp.Documents), resp.Services, resp.SourceIDs}
+			if !reflect.DeepEqual(got, tc.want) || resp.TotalCount != len(tc.want.titles) {
+				t.Fatalf("got %+v total=%d, want %+v", got, resp.TotalCount, tc.want)
 			}
 			for _, doc := range resp.Documents {
 				switch doc.SourceID {
@@ -1046,11 +1010,11 @@ func TestListInsights_SourceFilterVisibility(t *testing.T) {
 		name, user, source string
 		wantTitles         []string
 	}{
-		{name: "member reads account source", user: "member", source: visibleAccountSource, wantTitles: []string{"Account"}},
-		{name: "non-member gets an empty page", user: "outsider", source: visibleAccountSource, wantTitles: []string{}},
-		{name: "account-shaped source without a row is hidden", user: "member", source: orphanAccountSource, wantTitles: []string{}},
-		{name: "tech source without a row is common", user: "outsider", source: "__tech__", wantTitles: []string{"Tech"}},
-		{name: "common source for a non-member", user: "outsider", source: "hanabank", wantTitles: []string{"Common"}},
+		{"member reads account source", "member", visibleAccountSource, []string{"Account"}},
+		{"non-member gets an empty page", "outsider", visibleAccountSource, []string{}},
+		{"account-shaped source without a row is hidden", "member", orphanAccountSource, []string{}},
+		{"tech source without a row is common", "outsider", "__tech__", []string{"Tech"}},
+		{"common source for a non-member", "outsider", "hanabank", []string{"Common"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, _ := insightsVisibilityFixture(members)
@@ -1082,11 +1046,11 @@ func TestGetDocumentDetail_AccountSourceVisibility(t *testing.T) {
 		name, user, source, hash string
 		wantKind                 string
 	}{
-		{name: "member reads account document", user: "member", source: visibleAccountSource, hash: "a1", wantKind: "account"},
-		{name: "non-member is not found", user: "outsider", source: visibleAccountSource, hash: "a1"},
-		{name: "account-shaped source without a row is not found", user: "member", source: orphanAccountSource, hash: "o1"},
-		{name: "tech document without a row is readable", user: "outsider", source: "__tech__", hash: "t1", wantKind: "common"},
-		{name: "common document is readable", user: "outsider", source: "hanabank", hash: "c1", wantKind: "common"},
+		{"member reads account document", "member", visibleAccountSource, "a1", "account"},
+		{"non-member is not found", "outsider", visibleAccountSource, "a1", ""},
+		{"account-shaped source without a row is not found", "member", orphanAccountSource, "o1", ""},
+		{"tech document without a row is readable", "outsider", "__tech__", "t1", "common"},
+		{"common document is readable", "outsider", "hanabank", "c1", "common"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, repo, object := insightsVisibilityFixture(members)
@@ -1119,6 +1083,51 @@ func TestInsightsVisibilityLookupErrorsPropagate(t *testing.T) {
 	if _, err := svc.GetDocumentDetail(context.Background(), "member", visibleAccountSource, "a1"); !errors.Is(err, failure) || errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
 		t.Fatalf("detail hid a membership failure: %v", err)
 	}
+
+	// A failed source read is returned too, even for a common source.
+	sourceFailure := errors.New("source read unavailable")
+	svc, repo, object := insightsVisibilityFixture(&insightsMembers{members: map[string]bool{}})
+	repo.originErr = sourceFailure
+	if _, err := svc.ListInsights(context.Background(), "member", "tech", "", "", nil, "newest", 1, 20); !errors.Is(err, sourceFailure) {
+		t.Fatalf("list hid a source read failure: %v", err)
+	}
+	if _, err := svc.GetDocumentDetail(context.Background(), "member", "hanabank", "c1"); !errors.Is(err, sourceFailure) || errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
+		t.Fatalf("detail hid a source read failure: %v", err)
+	}
+}
+
+// Many sources of one account read that account and the caller's membership
+// once per request, whether or not the caller is a member.
+func TestListInsights_AccountLookupsOncePerAccount(t *testing.T) {
+	for _, tc := range []struct {
+		user      string
+		wantTotal int
+	}{
+		{user: "member", wantTotal: 10},
+		{user: "outsider", wantTotal: 0},
+	} {
+		t.Run(tc.user, func(t *testing.T) {
+			scanCache.clear()
+			repo := newMockCrawlerRepo()
+			for i := 0; i < 10; i++ {
+				id := fmt.Sprintf("acct_acct-1_%08x", i)
+				repo.sources[id] = &model.CrawlerSource{SourceID: id, SourceName: "Source", AccountID: "acct-1"}
+				repo.allDocuments = append(repo.allDocuments, model.CrawledDocument{
+					DocHash: fmt.Sprintf("d%d", i), SourceID: id, Type: "tech", Title: "Doc", CrawledAt: int64(i),
+				})
+			}
+			members := &insightsMembers{members: map[string]bool{"acct-1/member": true}}
+			svc := &InsightsService{repo: repo}
+			svc.SetAccountMemberReader(members)
+			resp, err := svc.ListInsights(context.Background(), tc.user, "tech", "", "", nil, "newest", 1, 20)
+			if err != nil || resp.TotalCount != tc.wantTotal {
+				t.Fatalf("list: %+v %v", resp, err)
+			}
+			if members.accountCalls != 1 || members.calls != 1 || repo.originReads != 10 {
+				t.Fatalf("lookups: account=%d member=%d sources=%d", members.accountCalls, members.calls, repo.originReads)
+			}
+		})
+	}
 }
 
 // The shared scan cache holds the unfiltered scan; each caller's view is
@@ -1134,15 +1143,11 @@ func TestListInsights_CachedScanIsFilteredPerCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := svc.ListInsights(context.Background(), "member", "tech", "", "", nil, "newest", 1, 20)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(repo.scanLimits) != 1 {
 		t.Fatalf("expected one cached scan, got %d scans", len(repo.scanLimits))
 	}
-	if member.TotalCount != 3 || outsider.TotalCount != 2 || again.TotalCount != 3 {
-		t.Fatalf("totals member=%d outsider=%d again=%d", member.TotalCount, outsider.TotalCount, again.TotalCount)
+	if member.TotalCount != 3 || outsider.TotalCount != 2 {
+		t.Fatalf("totals member=%d outsider=%d", member.TotalCount, outsider.TotalCount)
 	}
 	cached, _, _ := scanCache.get("scan:tech")
 	for _, doc := range cached {

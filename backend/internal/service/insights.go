@@ -159,23 +159,26 @@ func (o docOrigin) applyTo(doc *model.CrawledDocument) {
 	doc.AccountID, doc.AccountName = o.accountID, boundedOriginName(o.accountName)
 }
 
-// originResolver resolves each distinct source once per request for one
+// originResolver resolves each source and account once per request for one
 // caller. It is never shared across requests or stored in scanCache.
 type originResolver struct {
 	svc     *InsightsService
 	userID  string
 	origins map[string]docOrigin
+	// accounts maps an account ID to the account when the caller may read
+	// it, or nil when not. Lookup errors are not memoized.
+	accounts map[string]*model.Account
 }
 
 func (s *InsightsService) newOriginResolver(userID string) *originResolver {
-	return &originResolver{svc: s, userID: userID, origins: map[string]docOrigin{}}
+	return &originResolver{svc: s, userID: userID, origins: map[string]docOrigin{}, accounts: map[string]*model.Account{}}
 }
 
 func (r *originResolver) resolve(ctx context.Context, sourceID string) (docOrigin, error) {
 	if origin, ok := r.origins[sourceID]; ok {
 		return origin, nil
 	}
-	origin, err := r.svc.sourceOrigin(ctx, r.userID, sourceID)
+	origin, err := r.sourceOrigin(ctx, sourceID)
 	if err != nil {
 		return docOrigin{}, err
 	}
@@ -201,37 +204,49 @@ func (r *originResolver) filter(ctx context.Context, docs []model.CrawledDocumen
 	return out, nil
 }
 
-// sourceOrigin applies the Insights read rule to one source. A source row
-// with an AccountID requires the caller's current direct membership of that
-// account; any other row is common. Without a row, an account-shaped ID
-// (accountNewsSourcePrefix) is hidden and any other ID (for example the
-// synthetic __tech__ source) is common with no source name. Lookup failures
-// are returned, never treated as a grant.
-func (s *InsightsService) sourceOrigin(ctx context.Context, userID, sourceID string) (docOrigin, error) {
+// sourceOrigin applies the Insights read rule to one source. A row with an
+// accountId requires the caller's direct membership; any other row is common.
+// Without a row, an acct_-shaped ID is hidden and any other ID (__tech__) is
+// common. GetSourceOrigin decodes only sourceName and accountId, leniently.
+// Lookup failures are returned, never treated as a grant.
+func (r *originResolver) sourceOrigin(ctx context.Context, sourceID string) (docOrigin, error) {
 	common := docOrigin{visible: true, kind: sourceKindCommon}
 	if sourceID == "" {
 		return common, nil
 	}
-	source, err := s.repo.GetSource(ctx, sourceID)
+	sourceName, accountID, found, err := r.svc.repo.GetSourceOrigin(ctx, sourceID)
 	if err != nil {
 		return docOrigin{}, fmt.Errorf("failed to get document source: %w", err)
 	}
-	if source == nil {
+	if !found {
 		if strings.HasPrefix(sourceID, accountNewsSourcePrefix) {
 			return docOrigin{}, nil
 		}
 		return common, nil
 	}
-	if source.AccountID == "" {
-		common.sourceName = source.SourceName
+	if accountID == "" {
+		common.sourceName = sourceName
 		return common, nil
 	}
-	account, err := s.readableAccount(ctx, source.AccountID, userID)
+	account, err := r.readableAccount(ctx, accountID)
 	if err != nil || account == nil {
 		return docOrigin{}, err
 	}
-	return docOrigin{visible: true, sourceName: source.SourceName, kind: sourceKindAccount,
-		accountID: source.AccountID, accountName: account.Name}, nil
+	return docOrigin{visible: true, sourceName: sourceName, kind: sourceKindAccount,
+		accountID: accountID, accountName: account.Name}, nil
+}
+
+// readableAccount memoizes InsightsService.readableAccount per account.
+func (r *originResolver) readableAccount(ctx context.Context, accountID string) (*model.Account, error) {
+	if account, ok := r.accounts[accountID]; ok {
+		return account, nil
+	}
+	account, err := r.svc.readableAccount(ctx, accountID, r.userID)
+	if err != nil {
+		return nil, err
+	}
+	r.accounts[accountID] = account
+	return account, nil
 }
 
 // readableAccount mirrors AccountNewsService.authorize: the account exists and
@@ -285,7 +300,7 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, userID, sourceI
 	if sourceID == "__tech__" && meta.Type != "tech" {
 		return nil, ErrNotFound
 	}
-	origin, err := s.sourceOrigin(ctx, userID, sourceID)
+	origin, err := s.newOriginResolver(userID).resolve(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}

@@ -1062,10 +1062,13 @@ fenced at that claim (or unpublish) commit: a membership revoked before it
 returns 403; the object and metadata removal that follows is not re-fenced.
 
 `GET /api/insights` and `GET /api/insights/{sourceId}/{docHash}` are
-caller-scoped. Origin resolution is memoized per distinct source within a
-request, and `sourceName`/`accountName` are cut to 200 code points. A
-row with `accountId` makes its documents visible only to a current direct
-member of an existing account; a row without one is common. With no row, a
+caller-scoped. Origin resolution is memoized per distinct source, and the
+account and membership reads per distinct account, within a request;
+`sourceName`/`accountName` are cut to 200 code points. Only the CONFIG row's
+`sourceName` and `accountId` are read (projected; a non-string value counts as
+absent), so legacy scalar list values do not fail the read. A row with a string `accountId` makes its
+documents visible only to a current direct member of an existing account; a
+row without one is common. With no row, a
 source ID starting `acct_` is hidden and any other ID (such as `__tech__`) is
 common. Hidden documents are removed before `totalCount`, the `services` and
 `sourceIds` facets, sorting and paging; `source={hidden}` returns an empty
