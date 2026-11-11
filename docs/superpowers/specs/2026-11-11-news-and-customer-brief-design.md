@@ -1,8 +1,10 @@
 # News registration, customer news and the pre-meeting customer brief
 
-- Status: Draft for owner review, 2026-11-11.
+Status: Historical design record (2026-11-11), not yet implemented; the owning
+records below hold the decisions in force.
+
 - Owning records: [ADR-004](../../decisions/ADR-004-insights-crawler-and-news.md)
-  (crawler and news), [ADR-008](../../decisions/ADR-008-custom-dictionary.md)
+  (crawler and news), [ADR-008](../../decisions/ADR-008-custom-dictionary-for-stt-accuracy.md)
   (dictionary). New decisions from this design are written into those records,
   not into a new one.
 - Mockup the owner reviewed: three screens (source registration, Insights news
