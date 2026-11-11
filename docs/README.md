@@ -26,7 +26,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [MCP adapter](../mcp-server/README.md) | Stdio/HTTP transports, OAuth, local recording and Mac app control | `mcp-server/src/`, `mcp-server/test/` |
 | [Local Outlook sync](runbooks/local-outlook-calendar-sync.md) | Local reader prerequisites, explicit lifecycle/checkpoints, user-local scheduling and acceptance limits | Calendar handler/service/model, `mcp-server/src/calendar.ts`, guide and protocol tests |
 | [Local MCP intake](runbooks/local-mcp-intake.md) | `ttobak-mcp intake` calendar runner over a local `aws-outlook-mcp`, meeting SpecReq task step, acceptance and LaunchAgent template | `mcp-server/src/intake/`, ADR-065, `test/intake.test.mjs`, `test/intake-tasks.test.mjs` |
-| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-046, ADR-061, ADR-069 |
+| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-024, ADR-061, ADR-069 |
 | [Mac app release](runbooks/mac-app-release.md) | Updater key setup, one-command tagged release, verification, resume, restore and key loss | ADR-067, `mac-app/scripts/release.sh`, `install.sh`, `release_manifest.py`, `scripts/publish-frontend.sh` |
 | [Mac distribution and updates](decisions/ADR-073-mac-app-distribution-and-updates.md) | Self-signed certificate, curl installer, Tauri updater, busy guard; Developer ID triggers | `mac-app/src-tauri/src/update*.rs`, `tauri.conf.json`, `frontend/src/components/MacAppInstall.tsx` |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
@@ -93,10 +93,10 @@ python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
 ```
 
-- [Cognito app client write attributes and self-service email change](decisions/ADR-057-cognito-client-write-attributes.md)
+- [Cognito app client write attributes and self-service email change](decisions/ADR-007-sign-up-identity-and-admin.md)
 - [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
 - [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
-- [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
+- [Browser and mobile recording, recovery and retention](decisions/ADR-006-browser-and-mobile-recording.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
 - [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)

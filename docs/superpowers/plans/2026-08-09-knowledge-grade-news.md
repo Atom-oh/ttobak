@@ -2,7 +2,7 @@
 
 - Original plan date: 2026-08-09; preservation note dated 2026-09-11.
 - Historical proposal, not an execution checklist or current review mandate. Source comparison: 2026-09-13.
-- Original design reference: `8e86b39`, [knowledge-enrichment design](../specs/2026-08-07-knowledge-enrichment-pipeline-design.md). The plan's ADR-030 suggestion conflicts with the existing mobile-caption ADR.
+- Original design reference: `8e86b39`, [knowledge-enrichment design](../specs/2026-08-07-knowledge-enrichment-pipeline-design.md). The plan's ADR-006 suggestion conflicts with the existing mobile-caption ADR.
 
 ## Proposed scope and rationale
 

@@ -190,7 +190,7 @@ limit instead of claiming a Mac build passed.
 - **Admin:** `RequireAdmin` checks verified JWT `cognito:groups`; frontend `isAdmin`
   is cosmetic. Delete/disable reject self/last-admin targets, with a post-write
   warning for races. PostAuthentication tracking must fail open: short abort
-  timeout, try/catch, no reserved concurrency, `DISABLED=1` switch (ADR-032).
+  timeout, try/catch, no reserved concurrency, `DISABLED=1` switch (ADR-007).
 - **QA search:** SigV4/MCP transport is deliberately repeated in three
   artifacts: crawler/news_crawler.py, research-agent/tools.py, qa/web_search.py.
   Keep fixes aligned. Hash-redact queries in logs. Manual and opt-in proactive
@@ -259,11 +259,11 @@ limit instead of claiming a Mac build passed.
   progress, not total duration; delete WAV only after upload-complete succeeds.
   Release recorder locks around blocking Core Audio FFI; the real-time IOProc only
   mixes and enqueues, and taps/aggregates tear down after `AudioDeviceStop`
-  (ADR-046). Update transition state in the same critical section; `StartGuard` clears abandoned starts.
+  (ADR-024). Update transition state in the same critical section; `StartGuard` clears abandoned starts.
   Check path containment before canonicalization to avoid existence probes.
 - **Mobile:** keep recording when captions fail. Wake-lock/reconnect/watchdog and
   manual recovery are implemented mitigations. Gesture-backed `resumeAudio()` and
-  `manualStallRecovery()` must run synchronously before any `await` (ADR-030).
+  `manualStallRecovery()` must run synchronously before any `await` (ADR-006).
 
 ## Security requirements and accepted limits
 
@@ -299,8 +299,8 @@ exposure:
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-022; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
-| Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-032; refresh revocation differs from access/ID token expiry. |
-| User deletion preserves old profile/data | ADR-032; removes email GSI keys; refresh-token use does not update lastLoginAt. |
+| Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-007; refresh revocation differs from access/ID token expiry. |
+| User deletion preserves old profile/data | ADR-007; removes email GSI keys; refresh-token use does not update lastLoginAt. |
 | Some QA rows use an unswept `TTL` field | `storage-stack.ts`, `qa/handler.py`; a sweep would be a separate data-retention change. |
 | Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-013); do not generalize the legacy window to that path. |
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |

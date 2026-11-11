@@ -90,7 +90,7 @@ func SttRecoveryAudioKeyAllowed(userID, meetingID, key string) bool {
 }
 
 // IsSttCheckpointObjectName matches only the exact allowlisted checkpoint
-// basenames (ADR-048); it is not a suffix match.
+// basenames (ADR-006); it is not a suffix match.
 func IsSttCheckpointObjectName(name string) bool {
 	return isCheckpointFileName(name)
 }

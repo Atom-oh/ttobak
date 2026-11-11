@@ -64,7 +64,7 @@ aws ecs list-tasks --cluster ttobak-whisper --desired-status STOPPED --region ap
 | `redrive_stt` | Stuck past its size-based deadline; claims attempt n (max 2) and runs Whisper with a claim-bound `ClientToken` and `StartedBy sttrec-{id}` |
 | `redrive_summary` | `transcripts/{id}.json` exists, is strictly newer than the latest restart (newest audio-prefix object such as a `rediarize_` copy, last STT claim, or `updatedAt` while transcribing, excluding the tick's own summary claim) and was never published; self-copy emits a real S3 event (max 2). A previous re-drive claim younger than 20 minutes defers it (`summary_redrive_in_flight`) |
 | `mark_exhausted` | Both attempts used for this audio key; marks `RECOVERY_EXHAUSTED` |
-| `report_checkpoint_only` | Only `recording_progress.*` exists; the owner recovers it (ADR-048) |
+| `report_checkpoint_only` | Only `recording_progress.*` exists; the owner recovers it (ADR-006) |
 | `report_multipart`, `report_unsupported`, `report` | Not processed automatically; investigate |
 | `terminal`, `would_delete`, `delete` | `AUDIO_CORRUPT`/`NO_SPEECH` mark; deletion after seven untouched days |
 | `cluster_busy`, `stt_deferred` | Another task holds the GPU pool or the one-run budget is used |
