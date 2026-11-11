@@ -728,7 +728,7 @@ Conditional transcript/speaker edits publish new immutable
 matching database update. Conflicts return 409; ambiguous database failures retain
 new objects because the write may have committed. Existing referenced objects
 remain intact. Go and QA readers accept strictly validated legacy and versioned
-keys; deploy compatible readers before writers (ADR-037).
+keys; deploy compatible readers before writers (ADR-013).
 
 `PUT /api/meetings/{meetingId}/speakers` permits owners, direct read/edit
 recipients and current members of the published account team to correct speaker

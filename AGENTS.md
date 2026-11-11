@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 79f445f20d71 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 92bceb15b639 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -114,7 +114,7 @@ limit instead of claiming a Mac build passed.
   for new-spill writes. Reader-compatible code must be deployed before writers.
   Go/Python readers accept exact legacy or immutable keys for the configured bucket,
   authorized lookup meeting and allowed field, rejecting encoded/traversal suffixes
-  (ADR-037). Unconditional writers retain their separate fixed-key behavior.
+  (ADR-013). Unconditional writers retain their separate fixed-key behavior.
 - Item budgets use UTF-8 bytes; `inlineFieldSize.utf16Units` serves only the
   empirically observed DynamoDB String `size()` condition behavior, a recorded
   runtime observation, not an AWS-documented unit contract; see
@@ -154,7 +154,7 @@ limit instead of claiming a Mac build passed.
 - **Recovery:** checkpoints overwrite exact `recording_progress.{webm|m4a|ogg}`
   names, other uploads stay unique; never loosen `isCheckpointFileName`. Summarize
   retry claims (20 min) differ from 60-minute stuck expiry; Lambda timeout is 15
-  min. The ADR-031 `ttobak-stt-recovery` tick re-drives only untranscribed
+  min. The ADR-013 `ttobak-stt-recovery` tick re-drives only untranscribed
   single-file audio via two conditional claims, never via `GetMeetingDetail` or
   checkpoints; marked-failure deletion spares user data.
 - **Accounts:** members add/change non-owner roles (ADR-034/054). Creation permits
@@ -206,7 +206,7 @@ limit instead of claiming a Mac build passed.
   origin proof. `$connect` requires that proof and a verified Cognito JWT;
   ws-authorizer reads the proof from Secrets Manager using only an ARN in env.
   Never expose the proof in public config or restore a direct-origin URL fallback.
-- **Batch summaries ([ADR-040](docs/decisions/ADR-040-guarded-summary-publication.md)):**
+- **Batch summaries ([ADR-013](docs/decisions/ADR-013-summary-generation-and-publication.md)):**
   CAS pins source presence/bytes and human text. Fresh runs reset the two-retry
   budget when `!pending || status != summarizing`; resumed runs never reset it.
   Busy errors retain delivery; run errors release owned claims, ending at
@@ -299,7 +299,7 @@ exposure:
 | Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-007; refresh revocation differs from access/ID token expiry. |
 | User deletion preserves old profile/data | ADR-007; removes email GSI keys; refresh-token use does not update lastLoginAt. |
 | Some QA rows use an unswept `TTL` field | `storage-stack.ts`, `qa/handler.py`; a sweep would be a separate data-retention change. |
-| Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-037); do not generalize the legacy window to that path. |
+| Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-013); do not generalize the legacy window to that path. |
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
 | Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |

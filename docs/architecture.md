@@ -175,7 +175,7 @@ retired. Its data moves in a one-time cutover
    only when the GPU cluster is idle, re-drives an unpublished transcript through
    summarize, records `AUDIO_CORRUPT`/`NO_SPEECH`/`WORKER_FAILED` marks, and after
    seven untouched days deletes marked meetings that hold no user data. Checkpoint-only
-   and multipart meetings are reported, not processed (ADR-031 amendment).
+   and multipart meetings are reported, not processed (ADR-013, scheduled STT recovery).
 3. Refine text while preserving acoustic speakers; summarize the selected source,
    saved notes and supported context into editable meeting content. Transcript
    spill objects are rehydrated by repository reads. Stale segments must not
@@ -562,4 +562,4 @@ The new API-only writer defaults off until compatible Go and QA readers deploy.
 - [Documentation and ADR navigation](README.md)
 - [Deployment](runbooks/deployment.md), [STT recovery](runbooks/stt-pipeline-troubleshooting.md)
 - [PR review](runbooks/pr-review.md)
-- [Batch summary CAS/retries](decisions/ADR-040-guarded-summary-publication.md)
+- [Batch summary CAS/retries](decisions/ADR-013-summary-generation-and-publication.md)

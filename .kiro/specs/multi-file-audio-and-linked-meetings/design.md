@@ -73,7 +73,7 @@ needed focused tests and explicit recovery.
 - The current predecessor-context gate re-reads sharing state and omits private
   linked context for collaborative targets. The link handler rejects direct
   reverse links, not arbitrary graph-wide cycles.
-- [ADR-031](../../../docs/decisions/ADR-031-summarize-timeout-resilience.md) supersedes
+- [ADR-013](../../../docs/decisions/ADR-013-summary-generation-and-publication.md) supersedes
   the old unconditional skip of stale `summarizing` jobs: retry eligibility after
   20 minutes differs from the 60-minute stuck threshold.
 

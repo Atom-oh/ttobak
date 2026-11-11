@@ -22,7 +22,7 @@
   omitted. AZRebalance is suspended through a custom resource with a constant
   physical ID; deleting the resource resumes it.
   `ECS_ENABLE_SPOT_INSTANCE_DRAINING=true` stops new placement on an interrupted
-  host. Tasks already running there still die; scheduled recovery (ADR-031)
+  host. Tasks already running there still die; scheduled recovery (ADR-013)
   re-drives eligible single-file meetings.
 - The production image entry point is `python3 transcribe.py` with
   `PYTHONUNBUFFERED=1`, so a killed worker's progress lines reach the log.

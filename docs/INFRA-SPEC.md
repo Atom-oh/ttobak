@@ -222,7 +222,7 @@ Conditional transcript writers use immutable `{field}.{32-lowercase-hex}.txt`
 keys under the authorized meeting's transcripts/ prefix; legacy fixed keys remain
 readable. Bucket versioning is not what makes those new keys immutable. Failed
 definite conditional writes clean only new spills; ambiguous writes retain them.
-Deploy Go/QA reader compatibility before writers (ADR-037).
+Deploy Go/QA reader compatibility before writers (ADR-013).
 
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
@@ -440,7 +440,7 @@ cluster-only ListTasks call does not match a container-instance resource);
 RunTask and PassRole are unchanged. Existing AiStack table and bucket grants cover
 the scan, claims, transactional deletes, transcript self-copy and object deletes.
 Deletions leave noncurrent object versions in the versioned bucket. See the
-[ADR-031 amendment](decisions/ADR-031-summarize-timeout-resilience.md#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention).
+[ADR-013 (scheduled STT recovery)](decisions/ADR-013-summary-generation-and-publication.md).
 
 Audio cropping uses the private `ttobak.audio` / `AudioCropRequested` EventBridge
 rule to the existing transcribe Lambda and production Whisper task. It adds no
