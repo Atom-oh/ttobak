@@ -87,8 +87,9 @@ never opens a browser; the LaunchAgent uses it.
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
 
 `run`, `setup`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
-(`{pid, startedAt}`). A second concurrent run exits 2 with `RUN_IN_PROGRESS` and
-touches no state; a lock whose process is gone is reclaimed. `status`, `hosts`,
+(`<pid> <random token>`, the same `IntakeStore.lock` as the per-connector locks).
+A second concurrent run exits 2 with `RUN_IN_PROGRESS` and touches no state; a lock
+whose process is gone is reclaimed under a serializing `run.lock.break` lock. `status`, `hosts`,
 `schedule`, `login` and `select` do not take it.
 
 The window is the past 7 days through the next 30 days in the Mac's time zone,

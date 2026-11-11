@@ -16,7 +16,6 @@ import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
 import { SFDC_TOOLS, runSfdc, type SfdcCounts } from './sfdc.js';
 import { resolveMe } from './specreq.js';
-import { acquireRunLock } from './lock.js';
 import { IntakeStore } from './store.js';
 import { runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
 
@@ -309,8 +308,12 @@ async function login(environment: IntakeEnvironment, store: IntakeStore): Promis
 
 /** Runs one command under the single-run lock; a second concurrent run is rejected before touching state. */
 async function withRunLock<T>(store: IntakeStore, body: () => Promise<T>): Promise<T> {
-  const lock = await acquireRunLock(store.directory);
-  try { return await body(); } finally { await lock.release(); }
+  let release: () => void;
+  try { release = store.lock('run'); } catch (error) {
+    if (error instanceof IntakeError && error.code === 'LOCKED') throw new IntakeError('RUN_IN_PROGRESS');
+    throw error;
+  }
+  try { return await body(); } finally { release(); }
 }
 
 /**

@@ -174,10 +174,20 @@ pub struct SlotState {
     pub last_satisfied_slot: Option<i64>,
     #[serde(default)]
     pub last_attempted_slot: Option<i64>,
+    /// Attempts recorded for `last_attempted_slot`.
+    #[serde(default)]
+    pub attempts_on_last_slot: u8,
 }
 
-/// The slot to run now, if the latest slot is unsatisfied and not yet
-/// attempted. Each slot is tried at most once.
+/// Attempts allowed per slot: the scheduled (or first catch-up) run plus one
+/// launch/wake retry.
+pub const MAX_SLOT_ATTEMPTS: u8 = 2;
+
+/// The slot to run now, if the latest slot is unsatisfied and has fewer than
+/// [`MAX_SLOT_ATTEMPTS`] recorded attempts. A slot whose first attempt failed
+/// without satisfying it (e.g. `AUTH_EXPIRED_MIDWAY`) is retried by a launch or
+/// wake at most once; a slot missed while the app was closed gets its catch-up
+/// run plus at most one more.
 pub fn should_catch_up(
     schedule: &Schedule,
     state: &SlotState,
@@ -186,13 +196,23 @@ pub fn should_catch_up(
 ) -> Option<i64> {
     let slot = latest_slot_at_or_before(schedule, now_epoch_min, utc_offset_min)?;
     let unsatisfied = state.last_satisfied_slot.is_none_or(|s| slot > s);
-    (unsatisfied && state.last_attempted_slot != Some(slot)).then_some(slot)
+    let attempts = if state.last_attempted_slot == Some(slot) {
+        state.attempts_on_last_slot
+    } else {
+        0
+    };
+    (unsatisfied && attempts < MAX_SLOT_ATTEMPTS).then_some(slot)
 }
 
 /// Record a run for `slot`. No error code or `PARTIAL_FAILURE` satisfies the
-/// slot; every other code (e.g. `AUTH_EXPIRED_MIDWAY`) only marks it attempted.
+/// slot; every other code (e.g. `AUTH_EXPIRED_MIDWAY`) only counts an attempt.
 pub fn record_result(state: &mut SlotState, slot: i64, code: Option<&str>) {
-    state.last_attempted_slot = Some(slot);
+    if state.last_attempted_slot == Some(slot) {
+        state.attempts_on_last_slot = state.attempts_on_last_slot.saturating_add(1);
+    } else {
+        state.last_attempted_slot = Some(slot);
+        state.attempts_on_last_slot = 1;
+    }
     if matches!(code, None | Some("PARTIAL_FAILURE")) {
         state.last_satisfied_slot = Some(slot);
     }
@@ -419,21 +439,58 @@ mod tests {
         let s = Schedule::Daily(hm(8, 30));
         let mut st = SlotState::default();
         let now = now_utc(100, 9, 0);
-        let slot = should_catch_up(&s, &st, now, OFF).unwrap();
+        let slot = now_utc(100, 8, 30);
+        // The scheduled attempt fails midway.
         record_result(&mut st, slot, Some("AUTH_EXPIRED_MIDWAY"));
         assert_eq!(st.last_satisfied_slot, None);
         assert_eq!(st.last_attempted_slot, Some(slot));
+        assert_eq!(st.attempts_on_last_slot, 1);
+        // A launch or wake retries it once.
+        assert_eq!(should_catch_up(&s, &st, now, OFF), Some(slot));
+        record_result(&mut st, slot, Some("AUTH_EXPIRED_MIDWAY"));
+        assert_eq!(st.attempts_on_last_slot, 2);
         assert_eq!(should_catch_up(&s, &st, now, OFF), None);
         // A later slot is due again.
-        assert!(should_catch_up(&s, &st, now_utc(101, 9, 0), OFF).is_some());
+        assert_eq!(
+            should_catch_up(&s, &st, now_utc(101, 9, 0), OFF),
+            Some(now_utc(101, 8, 30))
+        );
+        record_result(&mut st, now_utc(101, 8, 30), None);
+        assert_eq!(st.attempts_on_last_slot, 1);
+        assert_eq!(st.last_satisfied_slot, Some(now_utc(101, 8, 30)));
     }
 
     #[test]
     fn partial_failure_satisfies_slot() {
+        let s = Schedule::Daily(hm(8, 30));
         let mut st = SlotState::default();
-        record_result(&mut st, 50, Some("PARTIAL_FAILURE"));
-        assert_eq!(st.last_satisfied_slot, Some(50));
-        assert_eq!(st.last_attempted_slot, Some(50));
+        let slot = now_utc(100, 8, 30);
+        record_result(&mut st, slot, Some("PARTIAL_FAILURE"));
+        assert_eq!(st.last_satisfied_slot, Some(slot));
+        assert_eq!(st.last_attempted_slot, Some(slot));
+        assert_eq!(should_catch_up(&s, &st, now_utc(100, 9, 0), OFF), None);
+    }
+
+    #[test]
+    fn slot_state_serde_roundtrip() {
+        let st = SlotState {
+            last_satisfied_slot: Some(10),
+            last_attempted_slot: Some(20),
+            attempts_on_last_slot: 1,
+        };
+        let json = serde_json::to_string(&st).unwrap();
+        assert_eq!(
+            json,
+            r#"{"lastSatisfiedSlot":10,"lastAttemptedSlot":20,"attemptsOnLastSlot":1}"#
+        );
+        assert_eq!(serde_json::from_str::<SlotState>(&json).unwrap(), st);
+        let legacy: SlotState =
+            serde_json::from_str(r#"{"lastSatisfiedSlot":10,"lastAttemptedSlot":20}"#).unwrap();
+        assert_eq!(legacy.attempts_on_last_slot, 0);
+        assert_eq!(
+            serde_json::from_str::<SlotState>("{}").unwrap(),
+            SlotState::default()
+        );
     }
 
     fn argv_strs(a: &IntakeAction) -> Vec<String> {

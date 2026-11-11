@@ -15214,11 +15214,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants5);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -15235,10 +15235,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants5);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -15299,8 +15299,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants5) {
-        this.code = optimizeExpr(this.code, names, constants5);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -15329,12 +15329,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants5))
+          if (n.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -15387,12 +15387,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         var _a2;
-        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants5);
-        if (!(super.optimizeNames(names, constants5) || this.else))
+        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants5);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -15415,10 +15415,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants5);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -15454,10 +15454,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants5);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -15499,11 +15499,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         var _a2, _b;
-        super.optimizeNames(names, constants5);
-        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants5);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
+        super.optimizeNames(names, constants4);
+        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -15804,7 +15804,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants5) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -15819,14 +15819,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants5[n.str];
+        const c = constants4[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants5[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -28366,112 +28366,42 @@ var init_specreq = __esm({
   }
 });
 
-// src/intake/lock.ts
-import { mkdirSync as mkdirSync5, openSync as openSync2, closeSync as closeSync2, readFileSync as readFileSync6, writeSync, unlinkSync as unlinkSync3, statSync as statSync3, constants as constants3 } from "node:fs";
-import { join as join7 } from "node:path";
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error3) {
-    return error3.code !== "ESRCH";
-  }
-}
-function holderIsLive(path2, now) {
-  let pid;
-  try {
-    pid = JSON.parse(readFileSync6(path2, "utf8")).pid;
-  } catch {
-    try {
-      return now() - statSync3(path2).mtimeMs < UNREADABLE_GRACE_MS;
-    } catch {
-      return false;
-    }
-  }
-  return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && alive(pid);
-}
-async function acquireRunLock(dir, now = Date.now) {
-  mkdirSync5(dir, { recursive: true, mode: 448 });
-  const path2 = join7(dir, LOCK_FILE);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let fd;
-    try {
-      fd = openSync2(path2, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL, 384);
-    } catch (error3) {
-      if (error3.code !== "EEXIST") throw new IntakeError("STORE_INVALID", "run lock could not be created");
-      if (holderIsLive(path2, now)) throw new IntakeError("RUN_IN_PROGRESS");
-      try {
-        unlinkSync3(path2);
-      } catch {
-      }
-      continue;
-    }
-    try {
-      writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date(now()).toISOString() }));
-    } finally {
-      closeSync2(fd);
-    }
-    let released = false;
-    return {
-      async release() {
-        if (released) return;
-        released = true;
-        try {
-          const held = JSON.parse(readFileSync6(path2, "utf8"));
-          if (held.pid === process.pid) unlinkSync3(path2);
-        } catch {
-        }
-      }
-    };
-  }
-  throw new IntakeError("RUN_IN_PROGRESS");
-}
-var LOCK_FILE, UNREADABLE_GRACE_MS;
-var init_lock = __esm({
-  "src/intake/lock.ts"() {
-    "use strict";
-    init_errors4();
-    LOCK_FILE = "run.lock";
-    UNREADABLE_GRACE_MS = 5e3;
-  }
-});
-
 // src/intake/store.ts
 import {
   chmodSync as chmodSync3,
-  closeSync as closeSync3,
-  constants as constants4,
+  closeSync as closeSync2,
+  constants as constants3,
   fstatSync as fstatSync2,
   fsyncSync as fsyncSync2,
   lstatSync as lstatSync3,
-  mkdirSync as mkdirSync6,
-  openSync as openSync3,
-  readFileSync as readFileSync7,
+  mkdirSync as mkdirSync5,
+  openSync as openSync2,
+  readFileSync as readFileSync6,
   renameSync as renameSync4,
-  unlinkSync as unlinkSync4,
-  writeSync as writeSync2
+  unlinkSync as unlinkSync3,
+  writeSync
 } from "node:fs";
-import { join as join8 } from "node:path";
+import { join as join7 } from "node:path";
 import { randomBytes as randomBytes3 } from "node:crypto";
 function createExclusive(path2, content) {
   let descriptor;
   try {
-    descriptor = openSync3(path2, "wx", 384);
+    descriptor = openSync2(path2, "wx", 384);
   } catch (error3) {
     if (error3.code === "EEXIST") return false;
     throw new IntakeError("STORE_INVALID", "lock unavailable");
   }
   try {
-    writeSync2(descriptor, content);
+    writeSync(descriptor, content);
     fsyncSync2(descriptor);
   } finally {
-    closeSync3(descriptor);
+    closeSync2(descriptor);
   }
   return true;
 }
 function lockContent(path2) {
   try {
-    return readFileSync7(path2, "utf8");
+    return readFileSync6(path2, "utf8");
   } catch {
     return null;
   }
@@ -28480,7 +28410,7 @@ function stale(path2) {
   const content = lockContent(path2);
   if (content === null) return true;
   const owner = Number.parseInt(content.split(" ")[0] ?? "", 10);
-  if (Number.isSafeInteger(owner) && owner > 0) return !alive2(owner);
+  if (Number.isSafeInteger(owner) && owner > 0) return !alive(owner);
   try {
     return Date.now() - lstatSync3(path2).mtimeMs > EMPTY_LOCK_GRACE_MS;
   } catch {
@@ -28492,7 +28422,7 @@ function removeIfUnchanged(path2) {
   if (before === null) return true;
   if (!stale(path2) || lockContent(path2) !== before) return false;
   try {
-    unlinkSync4(path2);
+    unlinkSync3(path2);
   } catch {
   }
   return true;
@@ -28500,7 +28430,7 @@ function removeIfUnchanged(path2) {
 function removeIfOwned(path2, token) {
   if (lockContent(path2) !== token) return;
   try {
-    unlinkSync4(path2);
+    unlinkSync3(path2);
   } catch {
   }
 }
@@ -28508,12 +28438,12 @@ function clearAbandoned(breaker) {
   try {
     const stat = lstatSync3(breaker);
     const owner = Number.parseInt(lockContent(breaker) ?? "", 10);
-    const dead = Number.isSafeInteger(owner) && owner > 0 ? !alive2(owner) : true;
-    if (dead && Date.now() - stat.mtimeMs > ABANDONED_BREAK_MS) unlinkSync4(breaker);
+    const dead = Number.isSafeInteger(owner) && owner > 0 ? !alive(owner) : true;
+    if (dead && Date.now() - stat.mtimeMs > ABANDONED_BREAK_MS) unlinkSync3(breaker);
   } catch {
   }
 }
-function alive2(pid) {
+function alive(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -28531,11 +28461,11 @@ var init_store = __esm({
     IntakeStore = class {
       directory;
       constructor(home) {
-        this.directory = join8(home, ".ttobak", "intake");
+        this.directory = join7(home, ".ttobak", "intake");
       }
       ensureDirectory(path2) {
         try {
-          mkdirSync6(path2, { recursive: true, mode: 448 });
+          mkdirSync5(path2, { recursive: true, mode: 448 });
         } catch {
           throw new IntakeError("STORE_INVALID", "state directory could not be created");
         }
@@ -28552,7 +28482,7 @@ var init_store = __esm({
             throw new IntakeError("STORE_INVALID", "invalid state path");
           }
         }
-        return join8(this.directory, ...relative);
+        return join7(this.directory, ...relative);
       }
       read(...relative) {
         const path2 = this.path(relative);
@@ -28566,7 +28496,7 @@ var init_store = __esm({
         const uid = process.getuid?.();
         if (!stat.isFile() || stat.isSymbolicLink() || uid !== void 0 && stat.uid !== uid || stat.size > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state file rejected");
         try {
-          return JSON.parse(readFileSync7(path2, "utf8"));
+          return JSON.parse(readFileSync6(path2, "utf8"));
         } catch {
           throw new IntakeError("STORE_INVALID", "state file is not valid JSON");
         }
@@ -28581,18 +28511,18 @@ var init_store = __esm({
         for (let index = 1; index < relative.length; index++) this.ensureDirectory(this.path(relative.slice(0, index)));
         if (Buffer.byteLength(data) > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state too large");
         const temporary = `${path2}.${randomBytes3(6).toString("hex")}.tmp`;
-        const descriptor = openSync3(temporary, "wx", 384);
+        const descriptor = openSync2(temporary, "wx", 384);
         try {
-          writeSync2(descriptor, data);
+          writeSync(descriptor, data);
           fsyncSync2(descriptor);
         } finally {
-          closeSync3(descriptor);
+          closeSync2(descriptor);
         }
         try {
           renameSync4(temporary, path2);
         } catch (error3) {
           try {
-            unlinkSync4(temporary);
+            unlinkSync3(temporary);
           } catch {
           }
           throw error3;
@@ -28611,7 +28541,7 @@ var init_store = __esm({
         const uid = process.getuid?.();
         if (!stat.isFile() || stat.isSymbolicLink() || uid !== void 0 && stat.uid !== uid || stat.size > MAX_STATE_BYTES) throw new IntakeError("STORE_INVALID", "state file rejected");
         try {
-          return readFileSync7(path2, "utf8");
+          return readFileSync6(path2, "utf8");
         } catch {
           throw new IntakeError("STORE_INVALID", "state file unreadable");
         }
@@ -28639,16 +28569,16 @@ var init_store = __esm({
         }
         let descriptor;
         try {
-          descriptor = openSync3(path2, constants4.O_APPEND | constants4.O_CREAT | constants4.O_WRONLY | constants4.O_NOFOLLOW, 384);
+          descriptor = openSync2(path2, constants3.O_APPEND | constants3.O_CREAT | constants3.O_WRONLY | constants3.O_NOFOLLOW, 384);
         } catch {
           throw new IntakeError("STORE_INVALID", "state file rejected");
         }
         try {
           check2(fstatSync2(descriptor));
-          writeSync2(descriptor, line + "\n");
+          writeSync(descriptor, line + "\n");
           fsyncSync2(descriptor);
         } finally {
-          closeSync3(descriptor);
+          closeSync2(descriptor);
         }
       }
       /** Size in bytes of a state file, or 0 when absent. */
@@ -28683,7 +28613,7 @@ var init_store = __esm({
             }
           } finally {
             try {
-              unlinkSync4(breaker);
+              unlinkSync3(breaker);
             } catch {
             }
           }
@@ -29804,7 +29734,7 @@ __export(setup_exports, {
   setup: () => setup
 });
 import { rmSync as rmSync3 } from "node:fs";
-import { join as join9, resolve as resolve2 } from "node:path";
+import { join as join8, resolve as resolve2 } from "node:path";
 function parseArgs(args) {
   const options = { yes: false, noninteractive: false, acceptUnknownSensitivity: false, skip: /* @__PURE__ */ new Set() };
   const seen = /* @__PURE__ */ new Set();
@@ -29861,7 +29791,7 @@ async function setup(args, environment, store) {
   const restore = () => {
     try {
       if (before !== null) store.writeText(before, "selection.json");
-      else rmSync3(join9(store.directory, "selection.json"), { force: true });
+      else rmSync3(join8(store.directory, "selection.json"), { force: true });
     } catch {
     }
   };
@@ -29974,7 +29904,7 @@ async function setup(args, environment, store) {
   if (wanted) {
     if (wanted.kind !== "off" && !selected.length) say("\uACBD\uACE0: \uC218\uC9D1\uD560 \uCE98\uB9B0\uB354/SFDC \uC120\uD0DD\uC774 \uC5C6\uC5B4 \uC608\uC57D \uC2E4\uD589\uC740 NOT_SELECTED\uB85C \uB05D\uB0A9\uB2C8\uB2E4.");
     const cliPath = environment.cliPath ?? process.argv[1] ?? "";
-    if (wanted.kind !== "off" && !resolve2(cliPath).startsWith(join9(environment.home, ".ttobak") + "/")) {
+    if (wanted.kind !== "off" && !resolve2(cliPath).startsWith(join8(environment.home, ".ttobak") + "/")) {
       say("\uACBD\uACE0: CLI\uAC00 ~/.ttobak \uBC16\uC5D0 \uC788\uC2B5\uB2C8\uB2E4. CLI\uB97C \uC62E\uAE30\uAC70\uB098 \uB2E4\uC2DC \uC124\uCE58\uD558\uBA74 `intake setup --schedule ...`\uC744 \uB2E4\uC2DC \uC2E4\uD589\uD558\uC138\uC694.");
     }
     try {
@@ -30242,11 +30172,17 @@ async function login2(environment, store) {
   return { email: tokenEmail(idToken) };
 }
 async function withRunLock(store, body) {
-  const lock = await acquireRunLock(store.directory);
+  let release;
+  try {
+    release = store.lock("run");
+  } catch (error3) {
+    if (error3 instanceof IntakeError && error3.code === "LOCKED") throw new IntakeError("RUN_IN_PROGRESS");
+    throw error3;
+  }
   try {
     return await body();
   } finally {
-    await lock.release();
+    release();
   }
 }
 async function openTaskSessions(environment, selection) {
@@ -30581,7 +30517,6 @@ var init_run = __esm({
     init_schedule();
     init_sfdc();
     init_specreq();
-    init_lock();
     init_store();
     init_tasks();
     USAGE = `Usage:
