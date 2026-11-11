@@ -1,12 +1,26 @@
 // Live-caption vocabulary selection and start-of-stream fallback (import-free for node:test).
 
 /**
- * READY vocabulary names by Transcribe language code. No API supplies these
- * yet (ADR-008 rollout check 5), so callers pass none and every helper below is inert.
+ * READY vocabulary names by Transcribe language code. The dictionary GET names
+ * the caller's own READY vocabulary as `liveName` when the server enables live
+ * vocabularies (ADR-008 rollout check 5); otherwise callers pass none and every
+ * helper below is inert.
  */
 export type LiveVocabularyNames = Partial<Record<'ko-KR' | 'en-US', string>>;
 
 const isName = (name: unknown): name is string => typeof name === 'string' && /^[0-9A-Za-z._-]{1,200}$/.test(name);
+
+/** Live names from dictionary GET vocabulary views; undefined when none is valid. */
+export function liveVocabularyNamesFrom(views: unknown): LiveVocabularyNames | undefined {
+  if (!views || typeof views !== 'object') return undefined;
+  const pick = (lang: 'ko' | 'en') => (views as Record<string, { liveName?: unknown } | undefined>)[lang]?.liveName;
+  const names: LiveVocabularyNames = {};
+  const ko = pick('ko');
+  const en = pick('en');
+  if (isName(ko)) names['ko-KR'] = ko;
+  if (isName(en)) names['en-US'] = en;
+  return Object.keys(names).length ? names : undefined;
+}
 
 /**
  * StartStreamTranscription vocabulary fields. IdentifyMultipleLanguages takes

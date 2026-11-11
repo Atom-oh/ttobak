@@ -89,3 +89,21 @@ test('no inline retry without vocabulary, after an event, or for unrelated error
     f.s.stop();
   }
 });
+
+test('dictionary vocabulary views yield only valid live names', () => {
+  assert.equal(live.liveVocabularyNamesFrom(undefined), undefined);
+  assert.equal(live.liveVocabularyNamesFrom({ ko: { status: 'READY', activeReady: true, termCount: 3 } }), undefined,
+    'a READY view without liveName (server flag off) sends no vocabulary');
+  assert.deepEqual(plain(live.liveVocabularyNamesFrom({ ko: { liveName: 'ttobak-vocab-0123456789abcdef' }, en: { status: 'NONE' } })),
+    { 'ko-KR': 'ttobak-vocab-0123456789abcdef' });
+  assert.equal(live.liveVocabularyNamesFrom({ ko: { liveName: 'bad name/../x' } }), undefined);
+  assert.equal(live.liveVocabularyNamesFrom({ ko: { liveName: 42 } }), undefined);
+  assert.deepEqual(plain(live.liveVocabularyNamesFrom({ ko: { liveName: 'k1' }, en: { liveName: 'e1' } })), { 'ko-KR': 'k1', 'en-US': 'e1' });
+});
+
+test('a ko-KR live name reaches a multi-language stream as VocabularyNames, never VocabularyName', () => {
+  const names = live.liveVocabularyNamesFrom({ ko: { liveName: 'ttobak-vocab-0123456789abcdef' } });
+  assert.deepEqual(plain(live.vocabularyRequestFields({ vocabularies: names, multiLanguage: true, languageOptions: 'ko-KR,en-US' })),
+    { VocabularyNames: 'ttobak-vocab-0123456789abcdef' });
+  assert.deepEqual(plain(live.vocabularyRequestFields({ vocabularies: names, multiLanguage: false, languageCode: 'en-US' })), {});
+});
