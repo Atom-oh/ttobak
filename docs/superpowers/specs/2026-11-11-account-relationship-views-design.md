@@ -1,6 +1,6 @@
 # Account relationship graph: person and project focus
 
-- Status: draft design record; revised after owner feedback on 2026-11-11, not
+- Status: historical design record (draft); revised after owner feedback on 2026-11-11, not
   yet approved.
 - Replaces: the whole-account view of `AccountGraph`
   (`frontend/src/components/account/AccountGraph.tsx`,
