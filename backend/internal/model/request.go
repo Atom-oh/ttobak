@@ -384,6 +384,18 @@ type AdminUserListResponse struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
+// UpdateUserNameRequest is the body of PUT /api/settings/profile/name (self)
+// and PUT /api/settings/users/{userId}/name (admin).
+type UpdateUserNameRequest struct {
+	Name string `json:"name"`
+}
+
+// UserNameResponse returns the normalized display name that was saved.
+type UserNameResponse struct {
+	UserID string `json:"userId"`
+	Name   string `json:"name"`
+}
+
 // AdminUserActionResponse represents the response for a single admin action
 // (delete, enable, disable) on a user.
 type AdminUserActionResponse struct {

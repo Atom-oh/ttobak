@@ -26,6 +26,7 @@ func (stubUserAdminRepo) BatchGetUserLastLogins(context.Context, []string) (map[
 	return map[string]time.Time{}, nil
 }
 func (stubUserAdminRepo) DetachDeletedUserProfile(context.Context, string) error { return nil }
+func (stubUserAdminRepo) UpdateUserProfileName(context.Context, string, string) error { return nil }
 
 // stubCognitoAdminAPI is a minimal service.CognitoAdminAPI. adminGroup is the
 // current membership of "admins" (drives the self/last-admin guards);
@@ -34,6 +35,7 @@ func (stubUserAdminRepo) DetachDeletedUserProfile(context.Context, string) error
 type stubCognitoAdminAPI struct {
 	adminGroup    []string
 	getUserStatus cognitoidptypes.UserStatusType
+	updatedUsers  []string
 }
 
 func (s *stubCognitoAdminAPI) ListUsers(_ context.Context, _ *cognitoidp.ListUsersInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.ListUsersOutput, error) {
@@ -84,6 +86,11 @@ func (s *stubCognitoAdminAPI) AdminEnableUser(_ context.Context, _ *cognitoidp.A
 func (s *stubCognitoAdminAPI) AdminResetUserPassword(_ context.Context, _ *cognitoidp.AdminResetUserPasswordInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.AdminResetUserPasswordOutput, error) {
 	return &cognitoidp.AdminResetUserPasswordOutput{}, nil
 }
+func (s *stubCognitoAdminAPI) AdminUpdateUserAttributes(_ context.Context, in *cognitoidp.AdminUpdateUserAttributesInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.AdminUpdateUserAttributesOutput, error) {
+	s.updatedUsers = append(s.updatedUsers, aws.ToString(in.Username))
+	return &cognitoidp.AdminUpdateUserAttributesOutput{}, nil
+}
+
 func (s *stubCognitoAdminAPI) AdminUserGlobalSignOut(_ context.Context, _ *cognitoidp.AdminUserGlobalSignOutInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.AdminUserGlobalSignOutOutput, error) {
 	return &cognitoidp.AdminUserGlobalSignOutOutput{}, nil
 }

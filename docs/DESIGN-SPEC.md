@@ -340,6 +340,13 @@ addition without silently resending. Show pending members with paginated refresh
 and cancellation. Admins can follow the existing settings resend path. Email
 request acceptance is not inbox delivery.
 
+Display names are edited inline with `UserNameEditor` (no native text dialog,
+which the Mac WebView lacks): on the Profile page for the signed-in user, and in
+the admin user table's name column. `lib/userName.ts` mirrors the server's 1-64
+character and control-character rules for early feedback; errors show inline.
+After a self rename, AuthProvider's `applySavedName` updates the shown name and
+refreshes the session so the ID token carries it.
+
 User management distinguishes invitation pending, reset required, unverified,
 unknown-schema and disabled states. Unknown readiness provides a refresh control. Do not offer an admin reset for RESET_REQUIRED, disabled or
 unverified users. Existing account/member and sharing notices explicitly say that
