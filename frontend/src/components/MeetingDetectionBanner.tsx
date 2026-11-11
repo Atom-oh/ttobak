@@ -31,7 +31,7 @@ function meetingTitle(label: string): string {
 
 /** Mac app only: offers to record when the app detects a meeting, and when
  * that meeting ends stops the running recording after a short countdown the
- * user can cancel (ADR-061). Nothing records until the user confirms; start
+ * user can cancel (ADR-017). Nothing records until the user confirms; start
  * and stop follow the normal control path to the record page. Renders
  * nothing in a browser or an older app build. */
 export function MeetingDetectionBanner() {
@@ -61,7 +61,7 @@ export function MeetingDetectionBanner() {
   }, [endedId]);
 
   // The automatic path can only stop, and only the ended detection it counted
-  // for; it never confirms any other prompt (ADR-061: no unconfirmed start).
+  // for; it never confirms any other prompt (ADR-017: no unconfirmed start).
   useEffect(() => {
     if (!countdown || countdown.remaining > 0 || countdown.id !== endedId) return;
     if (autoStopped.current.has(countdown.id)) return;

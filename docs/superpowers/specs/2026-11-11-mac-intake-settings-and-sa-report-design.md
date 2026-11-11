@@ -6,7 +6,7 @@
 - Follows: the [SA performance dashboard design](2026-11-10-sa-performance-dashboard-design.md)
   and `ttobak-mcp intake setup|run|schedule` (PR #824).
 - Decisions touched: ADR-003 (local MCP intake), ADR-068 (SA performance data
-  residency), ADR-061 (Mac settings surface precedent). Part B needs a new ADR.
+  residency), ADR-017 (Mac settings surface precedent). Part B needs a new ADR.
 
 ## Intent
 

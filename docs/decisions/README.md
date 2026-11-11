@@ -39,3 +39,4 @@ rewritten.
 | [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) | Accounts, roles, hierarchy and ownership; absorbs the former ADR-034 (member permissions), ADR-036 (hierarchy and meeting filters), ADR-054 (self-service invitations), ADR-055 (designated initial Owner), ADR-058 (descendant read sharing) and ADR-071 (owner transfer) |
 | [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) | Accounts, roles, hierarchy and ownership; absorbs the former ADR-034 (member permissions), ADR-036 (hierarchy and meeting filters) and ADR-054 (self-service invitations) |
 | [ADR-003](ADR-003-mcp-access.md) | MCP access: transports, tools, connector delegation and local intake; absorbs the former ADR-018 (back-data tools), ADR-045 (dual transports), ADR-053 (connector capabilities and private delegation) and ADR-065 (local intake) |
+| [ADR-017](ADR-017-mac-meeting-detection-prompts.md) | Mac meeting detection prompts; the former ADR-061, renumbered |

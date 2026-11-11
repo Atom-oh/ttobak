@@ -136,10 +136,10 @@ counts down 30 seconds before stopping and uploading, with keep recording and st
 now actions. The native waveform is drawn on a -60..-10 dBFS scale. Nothing records without the user's confirmation; the
 start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
-(ADR-061). In System Audio mode, `NativeMicSelector` offers automatic (follow the
+(ADR-017). In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
-supports it (ADR-061, #621), the record page also reacts to native events: the
+supports it (ADR-017, #621), the record page also reacts to native events: the
 picker stays available during a recording only when the start response reports
 `can_switch_input` (also for a start without a microphone); a failed switch shows
 Korean guidance with the app's reason, and says so when `recording_status`

@@ -1,4 +1,4 @@
-//! Meeting detection rules (ADR-061): which microphone users count as a
+//! Meeting detection rules (ADR-017): which microphone users count as a
 //! meeting, and when to announce a detected or ended meeting.
 //!
 //! Pure logic only, so it is unit tested off macOS. `meeting_detect.rs` feeds

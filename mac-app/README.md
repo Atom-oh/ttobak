@@ -49,7 +49,7 @@ the record screen if needed. Switching microphones mid-recording is not supporte
 Browser detection asks for Automation permission per browser; its script keeps
 only meeting URLs and discards the rest; Firefox is not detected. Turn it off in Settings. Reset browser
 permission with `tccutil reset AppleEvents click.atomai.ttobak.mac`. See
-[ADR-061](../docs/decisions/ADR-061-mac-meeting-detection-prompts.md).
+[ADR-017](../docs/decisions/ADR-017-mac-meeting-detection-prompts.md).
 
 ## Recovery and limits
 

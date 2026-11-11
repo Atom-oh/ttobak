@@ -1,4 +1,4 @@
-//! Microphone choice for a recording (ADR-061): a device the user picked, or
+//! Microphone choice for a recording (ADR-017): a device the user picked, or
 //! by default the input device a meeting app is capturing from, so the
 //! recording hears the same microphone as Zoom/Teams/Meet even with several
 //! microphones or in clamshell mode. Pure, so the rules are unit tested.
