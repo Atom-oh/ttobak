@@ -32,7 +32,7 @@ was necessary was a scale assumption, not a prohibition on future optimization.
 ## Current evidence and supersession
 
 [accountTree.ts](../../../frontend/src/lib/accountTree.ts) sorts visible tree nodes
-by Korean-aware name and ID. [ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md)
+by Korean-aware name and ID. [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md)
 replaces the flat-list model with a visible hierarchy.
 The current [Account model](../../../backend/internal/model/account.go) and
 [create API](../../../frontend/src/lib/api.ts) do not define the proposed icon

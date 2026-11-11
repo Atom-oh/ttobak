@@ -705,7 +705,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
                       {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
                         const isOwnerRow = m.userId === account.ownerUserId;
                         // Any member (not just the owner) may change another
-                        // member's role -- removal stays owner-only (ADR-034).
+                        // member's role -- removal stays owner-only (ADR-015, member permissions).
                         const isMember = canEdit;
                         return (
                           <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
