@@ -561,7 +561,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 
 	// Same fallback chain as the multi-part merge path (merge.go): the raw
 	// audioDuration comes only from whisper_metadata.duration_seconds, which is
-	// absent for AWS-Transcribe-fallback, Nova Sonic and pre-ADR-019
+	// absent for AWS-Transcribe-fallback, Nova Sonic and pre-diarization
 	// transcripts -- passing it straight through silently persisted 0 for all
 	// of those (updateMeetingTranscript drops durationSeconds <= 0).
 	// Computed AFTER the refinement block so it sees the reassigned `segments`.
@@ -975,8 +975,8 @@ func archiveMergedTranscript(ctx context.Context, bucket, meetingID, transcript 
 // that the last segment's EndTime omits.
 //
 // `duration_seconds` is the actual decoded audio length (faster_whisper's
-// `info.duration`), not processing time -- see ADR-019. A transcript written
-// by a pre-ADR-019 container image instead has Whisper's wall-clock
+// `info.duration`), not processing time -- see ADR-009. A transcript written
+// by a pre-diarization container image instead has Whisper's wall-clock
 // transcription time in this field, since the field's meaning changed
 // without a rename; there is no reliable way to detect that from the JSON
 // alone, so such historical transcripts may report an inaccurate value here.

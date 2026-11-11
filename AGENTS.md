@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 86f9b85ede4e · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: fe399bd39d24 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -11,8 +11,8 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 - Verify implementation claims against the reviewed revision's code, tests,
   manifests, and CDK. Documentation records intent, not proof of deployment.
   Keep security requirements even when existing code has a documented gap.
-- `docs/README.md` indexes current references. ADRs record decisions and name
-  superseding decisions explicitly. Plans, research, benchmarks, and old
+- `docs/README.md` indexes current references. ADRs are topic records of
+  the rules in force. Plans, research, benchmarks, and old
   review reports are historical evidence, not current acceptance criteria.
 - Report a PR defect only with a changed path/line, a concrete failing scenario,
   and code evidence. Model agreement is not evidence. Missing context is an
@@ -146,7 +146,7 @@ limit instead of claiming a Mac build passed.
   task IDs/human completion and conditional checkbox updates; absent legacy metadata
   is unknown, expired leases are interrupted failures.
 - **Whisper:** keep production ASR pins consistent with `verify_pins.py`.
-  Diarization uses pyannote 4.x/community-1 (ADR-035). The image, not CDK, owns
+  Diarization uses pyannote 4.x/community-1 (ADR-009). The image, not CDK, owns
   the bundle key, avoiding independent deploy races. WhisperX's dispatcher
   is `ENTRYPOINT ["python3", "run_engine.py"]`; engine selection uses `ENGINE`.
   Adding task-definition `entryPoint`/`command` overrides or bypassing the image
@@ -302,7 +302,7 @@ exposure:
 | Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-037); do not generalize the legacy window to that path. |
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
-| Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009/035, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
+| Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |
 | Billing BFF IamAuth endpoint is internet-reachable; `/billing-upload/*` has no OAC | ADR-056; OAC + one-statement resource policy (`aws:SourceArn`); BFF verifies JWTs; uploads need a presign + router path check. |
 
 JWT verification and document file-key ownership checks exist:

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     # Scoped to only what the production Dockerfile actually consumes: it
-    # COPYs transcribe.py + verify_pins.py, and since ADR-035 every ASR-path
+    # COPYs transcribe.py + verify_pins.py, and since ADR-009 every ASR-path
     # pip dep is exact-pinned (verify_pins.py fails the build if a pin
     # doesn't survive resolution; boto3/pyyaml, off that path, still
     # float) -- rebuilding on unrelated sibling-file changes (e.g. the
@@ -68,7 +68,7 @@ jobs:
           for c in td['containerDefinitions']:
               if c['name'] == 'whisper':
                   c['image'] = '${ECR_URI}:${IMAGE_TAG::8}'
-                  # ADR-035 image-owned-key invariant: the diarization bundle
+                  # ADR-009 image-owned-key invariant: the diarization bundle
                   # key's source of truth is transcribe.py's in-image default.
                   # This clone step copies the CURRENT revision's environment,
                   # so without this strip a stale CDK-era DIARIZATION_S3_KEY

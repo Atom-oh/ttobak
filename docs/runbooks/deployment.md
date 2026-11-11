@@ -29,7 +29,7 @@ Preserve the OAC custom resource's changing Timestamp so policy tightening runs.
 Whisper image and infra workflows can run independently. Keep diarization bundle
 selection in the image and preserve the WhisperX dispatcher entrypoint. Rollback
 of pyannote major versions requires a coherent image/pins/bundle pairing, not a
-key-only or one-package revert; see ADR-035.
+key-only or one-package revert; see ADR-009.
 
 ## Frontend
 

@@ -3,7 +3,7 @@
 // here -- rather than inline in each path -- is what makes the two agree by
 // construction instead of by convention (the single-transcript path silently
 // dropped duration to 0 for AWS-Transcribe-fallback, Nova Sonic and
-// pre-ADR-019 transcripts, all of which lack whisper_metadata.duration_seconds,
+// pre-diarization transcripts, all of which lack whisper_metadata.duration_seconds,
 // while the merge path already had the fallback).
 package duration
 

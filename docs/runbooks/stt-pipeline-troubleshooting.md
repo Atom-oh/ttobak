@@ -141,7 +141,7 @@ a bulk run needs `--run --all`; `--num-speakers` requires a single meeting ID. I
 claims each meeting with a conditional update, prints no titles, and starts a
 second task if one is still in flight, so check `list-tasks` first. Do not
 fabricate an event with reserved `aws.s3` source via PutEvents or
-blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-035).
+blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-009).
 
 For an operator-authorized saved-source recovery, `backend/cmd/resummary` defaults
 to read-only diagnostics (state, byte counts, hashes and source-object validation;

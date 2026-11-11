@@ -43,7 +43,7 @@ alignment support, model failures, and shared-capacity cost remain relevant.
 
 ## Current successor and evidence
 
-[ADR-035](../../decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) chose
+[ADR-009](../../decisions/ADR-009-batch-stt-and-diarization.md) chose
 community-1 diarization with the production faster-whisper ASR, not a WhisperX
 cutover. Production pins remain fixed with the documented benchmarked-security-update
 process. Model identity is now specified by the staging script and image defaults;
