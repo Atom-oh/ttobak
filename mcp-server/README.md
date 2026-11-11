@@ -83,7 +83,7 @@ executable/path templates require user testing. Provider tokens, checkpoints and
 mailbox mappings stay local. Never copy browser tokens or Outlook passwords.
 
 `ttobak-mcp intake` is a built-in reader for a local `aws-outlook-mcp`
-(ADR-065). It reads host MCP configuration by reference and syncs with this
+(ADR-003, local intake). It reads host MCP configuration by reference and syncs with this
 contract; see the [local MCP intake runbook](../docs/runbooks/local-mcp-intake.md).
 Start with `ttobak-mcp intake setup`, then `ttobak-mcp intake run`.
 
@@ -311,7 +311,7 @@ IDs through FrontendStack after deployment acceptance. Validate each client's ex
 resource binding, refresh and representative operations. Access tokens need not
 carry email/verified-email claims: do not fabricate them or weaken pending-invite
 checks. Source wiring and synthetic tests do not prove live client acceptance.
-See [ADR-045](../docs/decisions/ADR-045-dual-mcp-transports.md).
+See [ADR-003, transports](../docs/decisions/ADR-003-mcp-access.md).
 
 ### HTTP MCP from code-server
 
@@ -490,7 +490,7 @@ export, projects and links.
   selection across pages; hierarchy does not grant access.
 - Project lists include owner, direct-member and linked-account membership paths.
   Link/mutation permissions remain server-enforced. Any existing account member
-  can add another member to an assignable non-owner role (ADR-034).
+  can add another member to an assignable non-owner role (ADR-015, member permissions).
 - Account detail, meeting, insight and brief tools use
   `/api/accounts/{accountId}/reading`. Detail traverses metadata and members;
   brief also traverses meetings and insights. Follow the opaque page cursor
@@ -505,7 +505,7 @@ export, projects and links.
 
 `ttobak_list_audio_devices`, `ttobak_start_recording`, `ttobak_recording_status`,
 `ttobak_stop_recording` and `ttobak_upload_audio` exist only on stdio; the HTTP
-transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
+transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-003 transports).
 
 - Requires macOS and ffmpeg (`brew install ffmpeg`, or set `TTOBAK_FFMPEG`).
   `src/recorder.ts` records the microphone only (avfoundation, 16 kHz mono WAV,
@@ -683,7 +683,7 @@ artifact; CI's byte comparison verifies the committed copy.
 For connection failures, first verify the executable path, target configuration,
 OAuth callback/scopes and current user login. Do not solve authorization failures
 by granting anonymous API access. See [API reference](../docs/API-SPEC.md) and
-[ADR-003](../docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md).
+[ADR-003](../docs/decisions/ADR-003-mcp-access.md).
 
 KB file discovery uses bounded `/api/kb/files/reading` pages. Preserve opaque
 continuations until complete and restart stale anchors. File IDs stay exact;

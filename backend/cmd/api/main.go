@@ -82,7 +82,7 @@ func init() {
 	// Initialize repository with S3 support for large transcript storage
 	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	// Account contacts are third-party personal data: envelope-encrypted with
-	// the KMS key, and unavailable (503) when it is not configured (ADR-063).
+	// the KMS key, and unavailable (503) when it is not configured (ADR-021, contact encryption).
 	if sealer := sealing.NewEnvelope(kmsClient, os.Getenv("KMS_KEY_ID")); sealer != nil {
 		repo.SetRecordSealer(sealer)
 	}
@@ -104,7 +104,7 @@ func init() {
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Owner-private SA performance data: every route reads only the JWT user's
-	// own USER# partition (ADR-068).
+	// own USER# partition (ADR-023).
 	performanceService := service.NewPerformanceService(repo, accountService)
 	performanceService.SetMissedSources(calendarService, meetingService)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
@@ -245,7 +245,7 @@ func init() {
 	researchChatRepo := repository.NewChatRepository(dynamoClient, tableName)
 	researchChatHandler := handler.NewResearchChatHandler(researchChatRepo, researchService)
 
-	// Cost/sizing simulator (ADR-033). bedrockService reuses the api
+	// Cost/sizing simulator (ADR-010). bedrockService reuses the api
 	// Lambda's own Bedrock client (bedrockRuntimeClient2) for the
 	// synchronous Haiku extraction call; the async run itself is handed off
 	// to the ttobak-sim Lambda, not run inline here.
@@ -354,6 +354,10 @@ func init() {
 		r.Get("/api/performance/mappings", performanceHandler.ListMappings)
 		r.Put("/api/performance/mappings/{sfdcAccountId}", performanceHandler.PutMapping)
 		r.Get("/api/performance/missed", performanceHandler.ListMissed)
+		r.Get("/api/performance/reports", performanceHandler.ListReports)
+		r.Get("/api/performance/reports/{periodKey}", performanceHandler.GetReport)
+		r.Put("/api/performance/reports/{periodKey}", performanceHandler.PutReport)
+		r.Delete("/api/performance/reports/{periodKey}", performanceHandler.DeleteReport)
 		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
 		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
 		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
@@ -470,7 +474,7 @@ func init() {
 		// Re-run speaker diarization with an updated speaker-count hint
 		r.Post("/api/meetings/{meetingId}/rediarize", meetingHandler.RediarizeMeeting)
 
-		// Cost/sizing simulator (ADR-033)
+		// Cost/sizing simulator (ADR-010)
 		r.Post("/api/meetings/{meetingId}/sim/extract", simHandler.ExtractRequirements)
 		r.Post("/api/meetings/{meetingId}/sim", simHandler.CreateSimulation)
 

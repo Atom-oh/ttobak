@@ -42,10 +42,10 @@ func (r *DynamoDBRepository) PublishMeetingToAccount(ctx context.Context, ownerI
 // PublishMeetingToAccountAs publishes the owner's meeting on behalf of actorID
 // (the creator or a managing account member), pinning the actor's direct
 // membership in accountID. Only the creator may mint the owner disclosure
-// approval (ADR-059). A member can act only on a meeting currently published
+// approval (ADR-029, owner approval). A member can act only on a meeting currently published
 // to that same account (actorAccountCondition), so its republish never
 // widens the audience and takes the existing-publication path without an
-// approval; account readers no longer depend on approval (ADR-049 amendment).
+// approval; account readers no longer depend on approval (ADR-029, source provenance amendment).
 func (r *DynamoDBRepository) PublishMeetingToAccountAs(ctx context.Context, ownerID, actorID, meetingID, accountID string) error {
 	return r.updateMeetingFieldsAs(ctx, ownerID, actorID, meetingID, actorAccountCondition(ownerID, actorID, accountID),
 		map[string]interface{}{"accountId": accountID, "sharedToAccount": true}, false, nil,

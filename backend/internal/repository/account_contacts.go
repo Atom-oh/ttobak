@@ -43,7 +43,7 @@ func openingError(unreadable, err error) error {
 }
 
 // storedContact is the at-rest form: identity and revision stay plaintext for
-// keys and conditions; every contact field is sealed together (ADR-063).
+// keys and conditions; every contact field is sealed together (ADR-021, contact encryption).
 type storedContact struct {
 	PK        string `dynamodbav:"PK"`
 	SK        string `dynamodbav:"SK"`

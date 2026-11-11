@@ -23,7 +23,7 @@ note mutation had begun. Preserve that failed run and its pending authorization
 intent. The [dated activation record](connector-activation-2026-10-21.md) binds
 the separately deployed repair source, artifacts and successor acceptance.
 Main integration of enabled flags requires that record to be complete and reviewed;
-deployment from main then follows ADR-053's integration and activation order.
+deployment from main then follows ADR-003 connector delegation's integration and activation order.
 
 The [2026-10-21 disabled-staging record](connector-staging-2026-10-21.md) records
 the prerequisite four-stack rollout and first-party acceptance with both flags
@@ -84,7 +84,7 @@ Deploy the independently reviewed activation branch and frozen artifacts before
 merging that branch to main. Keep the PR unmerged while private acceptance is
 pending. After actual activation and rollback acceptance complete, attach a dated
 public-safe result bound to the reviewed source and artifacts, then integrate
-main under ADR-053's integration and activation order; the exact merged commit
+main under ADR-003 connector delegation's integration and activation order; the exact merged commit
 is attested before any later deployment from main. The disabled-staging record
 is a prerequisite, not that completion result.
 
@@ -132,7 +132,7 @@ is a prerequisite, not that completion result.
    fixtures under a reviewed, bounded read-only inventory with fresh matching
    before/after boundaries. Keep cleanup incomplete and do not infer token
    revocation. Record deployed versions and provider outcomes. Merging enabled
-   flags to main follows ADR-053's integration and activation order.
+   flags to main follows ADR-003 connector delegation's integration and activation order.
 
 Once main carries enabled flags, treat every AuthStack, EdgeAuthStack,
 GatewayStack or FrontendStack deployment from main as an activation, including

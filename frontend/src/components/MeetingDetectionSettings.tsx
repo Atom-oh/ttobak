@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { getMeetingDetection, isTauri, setMeetingDetectionEnabled } from '@/lib/tauri';
 
-/** Mac app only: turns meeting detection prompts on or off (ADR-061).
+/** Mac app only: turns meeting detection prompts on or off (ADR-017).
  * Hidden in a browser or an app build without detection. */
 export function MeetingDetectionSettings() {
   const [enabled, setEnabled] = useState<boolean | null>(null);

@@ -36,7 +36,7 @@ type AccountEventInput struct {
 }
 
 // AccountEventsService manages events for direct account members only, like
-// contacts: attendee data is third-party personal data (ADR-063).
+// contacts: attendee data is third-party personal data (ADR-021, contact encryption).
 type AccountEventsService struct {
 	repo accountEventsRepo
 	now  func() time.Time

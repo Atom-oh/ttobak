@@ -47,7 +47,7 @@ def needs_summary_guard(member, cutoff=None):
 
 def enforce_summary_guard(member):
     # Account-team publication shares current derived content with members
-    # (ADR-049 2026-11-06 amendment); mirrors the Go accountMemberNeedsSummaryGuard.
+    # (ADR-029 source provenance, 2026-11-06 amendment); mirrors the Go accountMemberNeedsSummaryGuard.
     return False
 
 

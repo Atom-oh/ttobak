@@ -13,6 +13,7 @@ import { InviteUser } from '@/components/InviteUser';
 import { UserManagement } from '@/components/UserManagement';
 import { ConnectorSettings } from '@/components/ConnectorSettings';
 import { MeetingDetectionSettings } from '@/components/MeetingDetectionSettings';
+import { IntakeSettings } from '@/components/IntakeSettings';
 import { BulkContactImport } from '@/components/BulkContactImport';
 
 export default function SettingsPage() {
@@ -122,6 +123,7 @@ export default function SettingsPage() {
           </section>
 
           <MeetingDetectionSettings />
+          <IntakeSettings />
 
           {/* Crawler Sources Section */}
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">

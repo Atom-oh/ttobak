@@ -10,7 +10,7 @@
 
 - Amazon Transcribe, batch and streaming, identifies multiple languages from
   the candidates `ko-KR` and `en-US`; streaming prefers `ko-KR`. The Mac caption
-  overlay may add one extra live language (ADR-069). The streaming client still
+  overlay may add one extra live language (ADR-018). The streaming client still
   supports a single fixed language as an explicit opt-out.
 - A batch Transcribe job attaches its vocabulary through the Korean entry of
   the language settings (ADR-008). The legacy Nova Sonic method is a Transcribe
@@ -20,7 +20,7 @@
 - Final and regenerated notes are written in Korean. `Meeting.noteLanguage`
   accepts only `""`, `ko` and `en` and is pinned in summary source conditions,
   but it does not select the prompt language; English notes come only from the
-  separate English-note generation (ADR-070).
+  separate English-note generation (ADR-029).
 
 ### Live interpretation
 

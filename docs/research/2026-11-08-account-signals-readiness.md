@@ -31,4 +31,4 @@ record does not show that account-source news is being produced or accepted.
 5. Deploy changed stacks individually with `--exclusively`, in dependency order.
    This record performs no deployment.
 
-Design and decisions: [ADR-064](../decisions/ADR-064-account-relationship-links.md).
+Design and decisions: [ADR-021](../decisions/ADR-021-account-contacts-links-and-people.md).

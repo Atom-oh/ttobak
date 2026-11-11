@@ -491,7 +491,7 @@ function handler(event) {
             },
           ],
         },
-        // HTTP MCP public discovery (RFC 9728), ADR-045. Exactly these two
+        // HTTP MCP public discovery (RFC 9728), ADR-003, transports. Exactly these two
         // paths, never '/.well-known/*'. They return a static document naming
         // the Cognito issuer and scopes and expose no data; the MCP endpoint
         // itself stays under '/api/*' with the edge check and API authorizer.
@@ -511,7 +511,7 @@ function handler(event) {
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         },
-        // Billing (ADR-056), before '/api/public/*' and '/api/*' so
+        // Billing (ADR-012), before '/api/public/*' and '/api/*' so
         // '/api/billing/*' wins over '/api/*'. Empty without Billing props.
         ...this.billingBehaviors(props, s3Origin, applicationCache, dataBucket.bucketName),
         // Public slide-share redirects — MUST be defined before '/api/*'
@@ -632,7 +632,7 @@ function handler(event) {
     if (billingPolicy) configDeployment.node.addDependency(billingPolicy);
   }
 
-  // The three Billing behaviors (ADR-056), or none without props.billing.
+  // The three Billing behaviors (ADR-012), or none without props.billing.
   private billingBehaviors(
     props: FrontendStackProps, siteOrigin: cloudfront.IOrigin, siteCache: cloudfront.ICachePolicy,
     assetsBucketName: string,

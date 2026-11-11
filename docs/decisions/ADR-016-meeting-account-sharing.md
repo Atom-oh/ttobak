@@ -11,7 +11,7 @@ Linking a meeting to an account and publishing it to the account's team are sepa
 ### Status and dated amendments
 
 - Status: Accepted; provenance hardened by the share-provenance section below.
-  Membership permissions and hierarchy follow ADR-034 and ADR-036.
+  Membership permissions and hierarchy follow ADR-015 and ADR-015.
 - Decision date: Not recorded in the original ADR.
 - Implementation checked: 2026-09-13.
 - Amendment (2026-09-13): the SA workflow's private relink supersedes the former preservation
@@ -21,7 +21,7 @@ Linking a meeting to an account and publishing it to the account's team are sepa
 - Amendment (2026-11-06, accepted following explicit user authorization in the
   delivery session, including inherited members): publication grants members **edit**,
   not read. Every live member of the published account, including inherited
-  ancestor-account members (amending ADR-058), resolves to `edit` on the meeting:
+  ancestor-account members (amending ADR-015), resolves to `edit` on the meeting:
   notes/transcript edits, live summarize, resummary and action items, like the
   creator. Delete remains creator-only; other creator-only management actions are
   unchanged by this amendment. A read-only direct share yields to team edit while
@@ -31,7 +31,7 @@ Linking a meeting to an account and publishing it to the account's team are sepa
   or inherited) also get every creator management action except delete. Linking a meeting to an account and
   publishing it there still require the actor's direct membership of that
   account; inherited access never classifies a meeting into another account. For
-  inherited members this supersedes ADR-058's invitation/linking restriction for
+  inherited members this supersedes ADR-015's invitation/linking restriction for
   meetings only (see its 2026-11-06 amendment).
   `resolveMeetingManager` returns the creator's canonical meeting; writes keep
   the creator's partition, S3 prefix (`audio|images|files/{creator}/...`) and
@@ -49,7 +49,7 @@ Linking a meeting to an account and publishing it to the account's team are sepa
     transaction conditions, with the actor's direct `MEMBER#` row pinned whether or
     not summary-privacy writers are enabled); moving
     to another account or publishing an unpublished meeting stays creator-only.
-    Only the creator mints the ADR-059 owner approval; a member republish changes
+    Only the creator mints the ADR-029 owner approval; a member republish changes
     no audience and publishes without approval.
   - Predecessor links must be the creator's meetings. A member may link only
     predecessors published to the same account (never one readable only through
@@ -112,9 +112,9 @@ direct member of the target account; ownership of the account is unnecessary.
 
 ### Supersession and remaining limits
 
-ADR-034 permits any member to add members/change assignable roles; removal and
-pending-invite revocation stay owner-only. ADR-036 adds organization hierarchy;
-inherited (ancestor-account) reads and team management follow ADR-058 and the
+ADR-015 permits any member to add members/change assignable roles; removal and
+pending-invite revocation stay owner-only. ADR-015 adds organization hierarchy;
+inherited (ancestor-account) reads and team management follow ADR-015 and the
 2026-11-06 amendment. `accountIds` meeting filtering uses an explicit
 OR set; selecting only a parent ID does not implicitly include descendants.
 
@@ -158,7 +158,7 @@ Account-wide insight DTOs omit near-verbatim meeting `Evidence` by design.
 
 ## Meeting-share provenance and legacy removal safeguards
 
-_Earlier status notes: Status: Accepted; extends ADR-016. [ADR-034](ADR-034-account-member-permission-democratization.md) changes member-add/role-update authority, not removal authority or provenance. Original decision date: Not recorded; originally associated with `feat/account-team-members`. Code checked: 2026-09-13. No migration execution is implied._
+_Earlier status notes: Status: Accepted; extends ADR-016. [ADR-015](ADR-015-accounts-roles-and-hierarchy.md) changes member-add/role-update authority, not removal authority or provenance. Original decision date: Not recorded; originally associated with `feat/account-team-members`. Code checked: 2026-09-13. No migration execution is implied._
 
 ### Original decision and rationale
 
@@ -187,7 +187,7 @@ Rejected alternatives were treating every empty origin as revocable, always remo
 
 ## Shared Speaker Correction and Account Publication
 
-_Earlier status notes: Status: Accepted; implementation requires deployment. Decision date: 2026-10-20. Supersedes: ADR-016's separate meeting-detail link/share controls only. Inherited (ancestor-account) members may correct speakers under the ADR-058 amendment. Amended 2026-11-06 by the ADR-016 management amendment: account-team members (not direct read recipients) may also restart diarization and change associations._
+_Earlier status notes: Status: Accepted; implementation requires deployment. Decision date: 2026-10-20. Supersedes: ADR-016's separate meeting-detail link/share controls only. Inherited (ancestor-account) members may correct speakers under the ADR-015 amendment. Amended 2026-11-06 by the ADR-016 management amendment: account-team members (not direct read recipients) may also restart diarization and change associations._
 
 ### Context
 

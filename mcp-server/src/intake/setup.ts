@@ -15,7 +15,7 @@ import type { IntakeStore } from './store.js';
 
 const ORDER: readonly ConnectorId[] = ['calendar', 'sfdc', 'meetings', 'specreq', 'slack'];
 
-/** The only server name probed per connector (ADR-065); unrelated servers never start. */
+/** The only server name probed per connector (ADR-003, local intake); unrelated servers never start. */
 export const DEFAULT_SERVERS: Record<ConnectorId, string> = {
   calendar: 'aws-outlook-mcp',
   sfdc: 'aws-sentral-mcp',
@@ -126,7 +126,7 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
       say(`${label}: ${server} 서버를 찾지 못해 건너뜁니다.`);
       continue;
     }
-    // 2. Calendar consent: private items are included (ADR-065/068).
+    // 2. Calendar consent: private items are included (ADR-003 local intake, ADR-023).
     let accept = false;
     let consentReused = false;
     if (connector === 'calendar') {

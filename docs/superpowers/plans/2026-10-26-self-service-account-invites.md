@@ -1,7 +1,7 @@
 # Self-service Account invitations implementation plan
 
 Status: Historical implementation record. Execution is in progress; current
-behavior is specified by ADR-054 and deployment requires a separate receipt.
+behavior is specified by ADR-015 and deployment requires a separate receipt.
 
 > **For agentic workers:** Use superpowers:executing-plans to implement this plan
 > inline. Existing user authorization covers implementation, current-HEAD review,
@@ -15,7 +15,7 @@ The client uses the API's invitation receipt rather than an admin-only fallback.
 
 **Tech Stack:** Go, Cognito, DynamoDB transactions, Next.js and node:test.
 
-**Spec:** [ADR-054](../../decisions/ADR-054-self-service-account-invitations.md).
+**Spec:** [ADR-015](../../decisions/ADR-015-accounts-roles-and-hierarchy.md).
 
 ## Global constraints
 
@@ -57,7 +57,7 @@ Interfaces: `addMemberWithInvite` consumes only add-member API responses carryin
 - [x] Add failing tests for server invitation receipts and partial failure.
 - [x] Implement both callers and remove administrator-request guidance.
 - [x] Run frontend unit tests, lint and production build.
-- [x] Update current API/UI references and ADR-034 supersession notes.
+- [x] Update current API/UI references and ADR-015 supersession notes.
 
 ## Task 3: Reviewed release
 

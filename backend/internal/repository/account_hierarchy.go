@@ -19,7 +19,7 @@ import (
 // 100-item limit (at most 64 ancestors + child/owner/parent-member + two refs = 69).
 const AccountHierarchyMaxAncestors = 64
 
-// AccountDescendantReadsEnv enables ADR-058 ancestor-member access. Every
+// AccountDescendantReadsEnv enables ADR-015 (descendant reads) ancestor-member access. Every
 // process that resolves or fences that access must receive the same value.
 const AccountDescendantReadsEnv = "ACCOUNT_DESCENDANT_READS_ENABLED"
 

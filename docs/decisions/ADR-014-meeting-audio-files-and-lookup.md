@@ -36,7 +36,7 @@
   input, self-links and a one-hop reverse link. A non-creator member may link only
   predecessors published to the same account, through a fenced write.
 - Linked predecessors are navigation only. Their summaries are never generation
-  evidence for the successor's notes (ADR-070).
+  evidence for the successor's notes (ADR-029).
 
 ### Private audio crops
 

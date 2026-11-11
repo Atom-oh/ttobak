@@ -3,7 +3,7 @@
 > Historical design record. Status: Draft; owner decisions D1–D5 recorded
 > 2026-10-26/27, implementation not started. Date: 2026-10-26. Author: Junseok Oh,
 > with Claude. This is design intent, not proof of delivery or deployment.
-> Successor: [ADR-056](../../decisions/ADR-056-billing-service-origin-and-identity.md)
+> Successor: [ADR-012](../../decisions/ADR-012-billing-origin-identity-and-team-access.md)
 > replaces §5 step 3, §7's token transport and the "exactly as today" Account
 > filtering (direct membership only).
 > Scope: move the AWS Billing Insight companion (today a separate app at
@@ -348,7 +348,7 @@ kind of insight. Proposed grouping by what the user is doing:
   file that came in, filterable by source (meeting attachment / uploaded),
   type, and whether it is indexed for Q&A. `/files` redirects to
   `/kb?source=meeting`. Owner intent (2026-10-26): meeting attachments are
-  indexed for Q&A automatically, subject to the ADR-028/039 indexing and
+  indexed for Q&A automatically, subject to the ADR-028/001 indexing and
   extraction rollout gates; this spec does not activate it.
 - Existing `/insights/...` URLs keep working; only labels and grouping change.
 - The hand-off button is removed; Billing is a normal menu item, shown only to

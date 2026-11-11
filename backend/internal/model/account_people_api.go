@@ -47,11 +47,13 @@ type PeopleEdgeInput struct {
 
 // ResolveMentionInput names the member or contact a mention group refers to.
 type ResolveMentionInput struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Cursor string `json:"cursor,omitempty"`
 }
 
 type ResolveMentionResult struct {
-	Written   int  `json:"written"`
-	Remaining bool `json:"remaining"`
+	Written    int    `json:"written"`
+	Remaining  bool   `json:"remaining"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }

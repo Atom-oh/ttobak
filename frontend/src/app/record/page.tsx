@@ -86,7 +86,7 @@ function RecordPageInner() {
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   // Mac app capture notes (silent source, no microphone); reset per recording.
   const [nativeWarnings, setNativeWarnings] = useState<string[]>([]);
-  // Mac app microphone: '' follows the meeting app's microphone (ADR-061).
+  // Mac app microphone: '' follows the meeting app's microphone (ADR-017).
   const [nativeInputUid, setNativeInputUid] = useState('');
   const [nativeInput, setNativeInput] = useState<NativeSelectedInput | null>(null);
   // Only app builds with `switch_recording_input` offer the live picker.

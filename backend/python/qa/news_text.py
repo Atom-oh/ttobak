@@ -1,4 +1,4 @@
-"""Read only current, conditionally published news Markdown (ADR-052).
+"""Read only current, conditionally published news Markdown (ADR-004, news publication).
 
 The crawler and QA are separate deployment artifacts. The source fingerprint
 contract is deliberately repeated here and checked against crawler test vectors.

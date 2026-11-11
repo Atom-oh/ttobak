@@ -1,5 +1,5 @@
 //! Reads the SpecReq task notification queue written by the local MCP intake
-//! runner (`mcp-server/src/intake/notify.ts`, ADR-065) and posts each unseen
+//! runner (`mcp-server/src/intake/notify.ts`, ADR-003 local intake) and posts each unseen
 //! notice as an informational desktop notification. Notices never navigate the
 //! app; the task strip on the meetings page shows the task.
 //!

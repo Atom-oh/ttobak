@@ -10,7 +10,7 @@ Markdown for English language and historical/current status.
 
 ## Current references
 
-Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) supersedes the direct-membership-only Billing policy. [Billing release](runbooks/billing-release.md) covers the BFF, static pages and separate companion worker image.
+Billing team access: [ADR-012](decisions/ADR-012-billing-origin-identity-and-team-access.md) supersedes the direct-membership-only Billing policy. [Billing release](runbooks/billing-release.md) covers the BFF, static pages and separate companion worker image.
 
 | Reference | Purpose | Verify against |
 |---|---|---|
@@ -25,41 +25,41 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Connector inventory](../contracts/connector/v1/README.md) | Current operation classification; eligibility is not availability | API routes, assembled QA tool registry and coverage tests |
 | [MCP adapter](../mcp-server/README.md) | Stdio/HTTP transports, OAuth, local recording and Mac app control | `mcp-server/src/`, `mcp-server/test/` |
 | [Local Outlook sync](runbooks/local-outlook-calendar-sync.md) | Local reader prerequisites, explicit lifecycle/checkpoints, user-local scheduling and acceptance limits | Calendar handler/service/model, `mcp-server/src/calendar.ts`, guide and protocol tests |
-| [Local MCP intake](runbooks/local-mcp-intake.md) | `ttobak-mcp intake` calendar runner over a local `aws-outlook-mcp`, meeting SpecReq task step, acceptance and LaunchAgent template | `mcp-server/src/intake/`, ADR-065, `test/intake.test.mjs`, `test/intake-tasks.test.mjs` |
-| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-024, ADR-061, ADR-069 |
-| [Mac app release](runbooks/mac-app-release.md) | Updater key setup, one-command tagged release, verification, resume, restore and key loss | ADR-067, `mac-app/scripts/release.sh`, `install.sh`, `release_manifest.py`, `scripts/publish-frontend.sh` |
-| [Mac distribution and updates](decisions/ADR-073-mac-app-distribution-and-updates.md) | Self-signed certificate, curl installer, Tauri updater, busy guard; Developer ID triggers | `mac-app/src-tauri/src/update*.rs`, `tauri.conf.json`, `frontend/src/components/MacAppInstall.tsx` |
+| [Local MCP intake](runbooks/local-mcp-intake.md) | `ttobak-mcp intake` calendar runner over a local `aws-outlook-mcp`, meeting SpecReq task step, acceptance and LaunchAgent template | `mcp-server/src/intake/`, ADR-003, `test/intake.test.mjs`, `test/intake-tasks.test.mjs` |
+| [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket, meeting detection prompts, caption overlay windows | `mac-app/src-tauri/`, ADR-024, ADR-017, ADR-018 |
+| [Mac app release](runbooks/mac-app-release.md) | Updater key setup, one-command tagged release, verification, resume, restore and key loss | ADR-021, `mac-app/scripts/release.sh`, `install.sh`, `release_manifest.py`, `scripts/publish-frontend.sh` |
+| [Mac distribution and updates](decisions/ADR-019-mac-app-distribution-and-updates.md) | Self-signed certificate, curl installer, Tauri updater, busy guard; Developer ID triggers | `mac-app/src-tauri/src/update*.rs`, `tauri.conf.json`, `frontend/src/components/MacAppInstall.tsx` |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
-| [Descendant Account sharing](runbooks/account-descendant-sharing.md) | Read-only inheritance, conditional relation bootstrap, activation and rollback | ADR-058, API/QA feature parameter |
+| [Descendant Account sharing](runbooks/account-descendant-sharing.md) | Read-only inheritance, conditional relation bootstrap, activation and rollback | ADR-015, API/QA feature parameter |
 | [Model deployment](runbooks/model-deployment.md) | Environment/preset selection, exact model grants, acceptance and rollback | Model configuration, AI/Gateway stacks and infrastructure workflow |
 | [Observability](runbooks/observability.md) | OTel collector, ClickHouse PrivateLink, credentials and activation | ObservabilityStack and AWS-Demo-Platform ClickHouse |
 | [Frontend release](runbooks/frontend-release.md) | Dependency acceptance, CSP/cache, ordered publication and recovery | FrontendStack, npm lockfiles and shared publisher |
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 | [Pipeline recovery](runbooks/pipeline-failure-recovery.md) | Failure queues, alarm routing and controlled replay | GatewayStack, failure construct and replay tool |
-| [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Canary acceptance, retained-legacy archive, verified prices and rollback | News runtime/recovery, ADR-052 |
+| [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Canary acceptance, retained-legacy archive, verified prices and rollback | News runtime/recovery, ADR-004 |
 | [HTTP origin proof migration](runbooks/http-origin-secret-migration.md) | Consumer contract and coordinated rotation gates | Go/QA/MCP origin verifiers and deployment configuration |
-| [Connector capabilities](decisions/ADR-053-connector-capability-private-delegation.md) | Operation policy and recorded private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
+| [Connector capabilities](decisions/ADR-003-mcp-access.md) | Operation policy and recorded private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
 | [Connector delegation wire](security/connector-delegation-v1.md) | Canonical signed bytes, key pinning and lifetime limits | Go/TypeScript/Python verifiers and dated connector acceptance |
 | [Connector release](runbooks/connector-release.md) | Dedicated clients, private IAM/KMS, ARM64 packaging and provider acceptance | Reviewed CDK artifacts and dated deployed evidence |
 | [Connector activation acceptance](runbooks/connector-activation-2026-10-21.md) | Dated source/artifact-bound provider, grant, rollback, fixture disposition and guide evidence | Private receipt hashes; native-host limitations remain explicit |
 | [Summary privacy release](runbooks/summary-privacy-release.md) | Reader/writer targets, immutable cutoff, drain and cross-user acceptance | Exact deployed versions, parameters and dated acceptance evidence |
-| [Account merge operator](runbooks/account-merge.md) | `merge-accounts` CLI dry run, apply, status, resume, post-merge rows, abort and `REQUESTER_REVOKED` recovery | `backend/cmd/merge-accounts/`, ADR-072, `backend/internal/service/account_merge_job.go` |
-| [Self-service Account invitations](decisions/ADR-054-self-service-account-invitations.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
-| [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
-| [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
+| [Account merge operator](runbooks/account-merge.md) | `merge-accounts` CLI dry run, apply, status, resume, post-merge rows, abort and `REQUESTER_REVOKED` recovery | `backend/cmd/merge-accounts/`, ADR-022, `backend/internal/service/account_merge_job.go` |
+| [Self-service Account invitations](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
+| [Designated initial Account Owner](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
+| [Billing service origin and identity](decisions/ADR-012-billing-origin-identity-and-team-access.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-012), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
 | [Meeting audio files and lookup](decisions/ADR-014-meeting-audio-files-and-lookup.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
-| [Local MCP intake](decisions/ADR-065-local-mcp-intake.md) | Deterministic local connectors over host MCP servers; references not copies; calendar first, AI proposals only; amended for the SpecReq task step's two provider writes | `mcp-server/src/intake/`; calendar and task acceptance pending |
-| [Account contact encryption and retention](decisions/ADR-063-account-contact-encryption-and-retention.md) | Contact fields KMS envelope-encrypted per row, bound to account/contact; kept until deleted, PITR window disclosed | `backend/internal/sealing`, contact repository, `KMS_KEY_ID` |
-| [Account relationship links, signals and KB references](decisions/ADR-064-account-relationship-links.md) | Typed account links with manual/auto origin and read-time revalidation, account news sources, KB refs, bounded overview reads; QA retrieval unchanged | `backend/internal/service/account_links.go`, `account_overview.go`, `account_kb.go`, `account_news.go` |
-| [Account people edges](decisions/ADR-067-account-people-edges.md) | Deterministic member/contact/entity resolution into role-keyed `LINK#meeting#` edges; manual wins, mention review, leased runs | `backend/internal/service/account_people*.go`, `backend/cmd/backfill-account-people` |
-| [SA performance data residency](decisions/ADR-068-sa-performance-data-residency.md) | Owner-private `PERF*` field table, default-encryption exception, per-row retention (year+2 TTL for dated rows), organizer-domain calendar counterpart | `backend/internal/model/performance.go`, `backend/internal/repository/performance.go` |
-| [Mac caption overlay](decisions/ADR-069-mac-caption-overlay.md) | Floating per-language caption windows (PR 2/4); translation on the user's own AWS profile (Bedrock Luna finals, Amazon Translate interims) and a native confirmation of profile changes; seven validated remote commands (three in 1/4, four overlay commands in 2/4); listen-only overlay capability (2/4); Zoom whole-screen limit | `mac-app/src-tauri/src/caption_*.rs`, `capabilities/caption-overlay.json` (2/4), `frontend/src/lib/captionOverlay.ts` (3/4) |
-| [Shareable-by-default note provenance](decisions/ADR-070-shareable-default-note-provenance.md) | No linked-predecessor evidence, human edits keep `safe` provenance, first live draft safe, own image analyses safe, Korean-only final notes, owner-only sharing-safe reset | `backend/internal/repository/summary_privacy.go`, `backend/internal/service/bedrock.go` |
-| [Account owner transfer](decisions/ADR-071-account-owner-transfer.md) | Dual owner condition, confirmed direct-member target, previous Owner to SA, cleared initial-owner designation, non-delegable route | `backend/internal/service/account_owner_transfer.go`, `backend/internal/repository/account_owner_transfer.go` |
-| [Account merge](decisions/ADR-072-account-merge.md) | Owner-of-source and direct-member-of-target eligibility, dedicated meeting writer, write fence, unmoved categories need acceptance, readable tombstone, no undo; eligibility and preview only so far | `backend/internal/service/account_merge_preview.go`, `backend/internal/handler/account_merge.go` |
+| [Local MCP intake](decisions/ADR-003-mcp-access.md) | Deterministic local connectors over host MCP servers; references not copies; calendar first, AI proposals only; amended for the SpecReq task step's two provider writes | `mcp-server/src/intake/`; calendar and task acceptance pending |
+| [Account contact encryption and retention](decisions/ADR-021-account-contacts-links-and-people.md) | Contact fields KMS envelope-encrypted per row, bound to account/contact; kept until deleted, PITR window disclosed | `backend/internal/sealing`, contact repository, `KMS_KEY_ID` |
+| [Account relationship links, signals and KB references](decisions/ADR-021-account-contacts-links-and-people.md) | Typed account links with manual/auto origin and read-time revalidation, account news sources, KB refs, bounded overview reads; QA retrieval unchanged | `backend/internal/service/account_links.go`, `account_overview.go`, `account_kb.go`, `account_news.go` |
+| [Account people edges](decisions/ADR-021-account-contacts-links-and-people.md) | Deterministic member/contact/entity resolution into role-keyed `LINK#meeting#` edges; manual wins, mention review, leased runs | `backend/internal/service/account_people*.go`, `backend/cmd/backfill-account-people` |
+| [SA performance data residency](decisions/ADR-023-sa-performance-data-residency.md) | Owner-private `PERF*` field table, default-encryption exception, per-row retention (year+2 TTL for dated rows), organizer-domain calendar counterpart | `backend/internal/model/performance.go`, `backend/internal/repository/performance.go` |
+| [Mac caption overlay](decisions/ADR-018-mac-caption-overlay.md) | Floating per-language caption windows; translation on the user's own AWS profile (Bedrock Luna finals, Amazon Translate interims) and a native confirmation of profile changes; seven validated remote commands; listen-only overlay capability; Zoom whole-screen limit | `mac-app/src-tauri/src/caption_*.rs`, `capabilities/caption-overlay.json`, `frontend/src/lib/captionOverlay.ts` |
+| [Shareable-by-default note provenance](decisions/ADR-029-note-provenance-and-sharing-safety.md) | No linked-predecessor evidence, human edits keep `safe` provenance, first live draft safe, own image analyses safe, Korean-only final notes, owner-only sharing-safe reset | `backend/internal/repository/summary_privacy.go`, `backend/internal/service/bedrock.go` |
+| [Account owner transfer](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Dual owner condition, confirmed direct-member target, previous Owner to SA, cleared initial-owner designation, non-delegable route | `backend/internal/service/account_owner_transfer.go`, `backend/internal/repository/account_owner_transfer.go` |
+| [Account merge](decisions/ADR-022-account-merge.md) | Owner-of-source and direct-member-of-target eligibility, dedicated meeting writer, write fence, unmoved categories need acceptance, readable tombstone, no undo; eligibility and preview only so far | `backend/internal/service/account_merge_preview.go`, `backend/internal/handler/account_merge.go` |
 
 ## Feature workflows
 
@@ -94,12 +94,12 @@ python3 scripts/docs/check_docs.py
 ```
 
 - [Cognito app client write attributes and self-service email change](decisions/ADR-007-sign-up-identity-and-admin.md)
-- [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
-- [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
+- [Descendant Account read sharing](decisions/ADR-015-accounts-roles-and-hierarchy.md)
+- [Owner-approved Account sharing](decisions/ADR-029-note-provenance-and-sharing-safety.md)
 - [Browser and mobile recording, recovery and retention](decisions/ADR-006-browser-and-mobile-recording.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Meeting audio files, crops and activation](decisions/ADR-014-meeting-audio-files-and-lookup.md)
-- [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)
+- [Conditional news publication and cost reservations](decisions/ADR-004-insights-crawler-and-news.md)
 - [Shared speaker correction and account publication](decisions/ADR-016-meeting-account-sharing.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-027-edge-delivery-and-origin-proof.md)
-- [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)
+- [Summary sharing and source provenance](decisions/ADR-029-note-provenance-and-sharing-safety.md)
