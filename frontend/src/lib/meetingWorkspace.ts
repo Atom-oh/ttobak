@@ -70,7 +70,13 @@ export interface MeetingRowGroup {
  * Account and unassigned groups keep first-seen order; internal groups follow
  * them in the fixed category order so they render under one Internal section.
  */
-export function groupMeetingRows(meetings: Meeting[]): MeetingRowGroup[] {
+// Account groups are ordered by account name (Korean collation), never by
+// which account holds the newest meeting, so a selection or filter keeps a
+// stable order. Accounts without a known name follow, then unassigned meetings.
+// Rows inside each group keep the caller's (date) order.
+export function groupMeetingRows(
+  meetings: Meeting[], accountName: (accountId: string) => string | undefined = () => undefined,
+): MeetingRowGroup[] {
   const groups = new Map<string | null, Meeting[]>();
   const internal = new Map<MeetingCategory, Meeting[]>();
   for (const meeting of meetings) {
@@ -86,8 +92,13 @@ export function groupMeetingRows(meetings: Meeting[]): MeetingRowGroup[] {
     if (group) group.push(meeting);
     else groups.set(accountId, [meeting]);
   }
+  const rank = (accountId: string | null) => accountId === null ? 2 : accountName(accountId) === undefined ? 1 : 0;
+  const accountGroups = Array.from(groups, ([accountId, rows]) => ({ accountId, category: null, meetings: rows }))
+    .sort((left, right) => rank(left.accountId) - rank(right.accountId)
+      || (accountName(left.accountId ?? '') ?? '').localeCompare(accountName(right.accountId ?? '') ?? '', 'ko')
+      || (left.accountId ?? '').localeCompare(right.accountId ?? ''));
   return [
-    ...Array.from(groups, ([accountId, rows]) => ({ accountId, category: null, meetings: rows })),
+    ...accountGroups,
     ...INTERNAL_CATEGORIES.flatMap(({ value }) => {
       const rows = internal.get(value);
       return rows ? [{ accountId: null, category: value, meetings: rows }] : [];
