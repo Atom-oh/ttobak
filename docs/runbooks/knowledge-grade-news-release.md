@@ -358,7 +358,7 @@ nested-workflow IAM, canary selection, duplicate execution behavior and failure
 isolation, then record normal source counts and the enabled rule. Keep the
 publication, recovery and archive evidence above bound to the release.
 
-## Search filters
+## Search filters and seeded regulatory sources
 
 Evidence (2026-11-10 child executions, `ttobak-news-publication`): every source
 dropped 82-177 search results as stale, and the 38 candidates that passed were
@@ -402,11 +402,28 @@ PY
 ```
 
 Then confirm a SigV4 `tools/list` on the Gateway shows `filters` in the
-`ttobak-web-search-tool___WebSearch` input schema and deploy CrawlerStack alone
-with `--exclusively`. An operator source may carry a `searchDomains` list (at
-most 100 lowercase hosts) sent as `filters.domainFilter.include`; it is part of
-the source revision only when present. Acceptance is a later daily execution with
-`docsAdded > 0` and matching `GSI4PK=DOC#news` rows; a deployment alone is not.
+`ttobak-web-search-tool___WebSearch` input schema, deploy CrawlerStack alone with
+`--exclusively`, and seed the regulatory sources from `backend/`:
+
+```bash
+TABLE_NAME=ttobak-main go run ./cmd/seed-news-sources          # dry run: CREATE/UPDATE/UNCHANGED
+TABLE_NAME=ttobak-main go run ./cmd/seed-news-sources -apply
+```
+
+An operator source may carry a `searchDomains` list (at most 100 lowercase hosts)
+sent as `filters.domainFilter.include`; it is part of the source revision only
+when present. The seed (`cmd/seed-news-sources/sources.go`) creates `fss-kr`
+(Financial Supervisory Service), `fsc-kr` (Financial Services Commission),
+`fsec-kr` (Financial Security Institute) and `kr-finance-law` (financial law,
+enforcement decree and supervisory regulation amendments) as operator-curated
+global sources with English aliases and a Korean outlet/regulator
+`searchDomains` allowlist. The managed index returned no dated pages from the
+regulator domains themselves on 2026-11-11, so coverage comes from outlets
+reporting their notices. Reruns are idempotent, never touch user-owned rows
+(`REFUSED`) and keep an operator-disabled source disabled. The daily schedule
+includes the rows from its next run (10 active sources of the 30-source limit).
+Acceptance is a later daily execution with `docsAdded > 0` and matching
+`GSI4PK=DOC#news` rows; a successful seed or deployment alone is not.
 
 ## Rollback and retention
 
