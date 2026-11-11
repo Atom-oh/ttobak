@@ -81,7 +81,9 @@ DynamoDB data needs KMS encryption and a retention design.
     `suppressed`.
   - Departure marking runs only for a complete snapshot, which lists the
     present contact IDs per SFDC account: links of those accounts absent from
-    it get `sfdcLeftAt`, returning ones lose it, and an incomplete read marks
+    the union of the request's present lists get `sfdcLeftAt` (a link keeps
+    the `sfdcAccountId` it was first created under, so a contact moved between
+    listed accounts stays present), returning ones lose it, and an incomplete read marks
     nobody. The pass walks the in-scope `SFDCCONTACT#` rows from a random
     start, opens only linked contacts, and stops after 200 mark changes or 15
     seconds; later runs continue because correct contacts need no write.

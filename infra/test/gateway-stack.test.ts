@@ -1095,6 +1095,19 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       .toThrow(/ttobak:transcriptCorrection/);
   });
 
+  test('liveVocabularyMode: live caption vocabulary names are off by default, API-only and validated', () => {
+    const apiEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect(apiEnv(template).LIVE_VOCABULARY_MODE).toBe('off');
+    const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:liveVocabularyMode': 'on' });
+    expect(apiEnv(on).LIVE_VOCABULARY_MODE).toBe('on');
+    const withFlag = Object.values(on.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.LIVE_VOCABULARY_MODE !== undefined);
+    expect(withFlag.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:liveVocabularyMode': 'true' }))
+      .toThrow(/ttobak:liveVocabularyMode/);
+  });
+
   test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
     const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
     const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');
