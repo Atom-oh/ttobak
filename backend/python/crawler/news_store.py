@@ -163,9 +163,15 @@ class NewsStore:
             raise StateRejected("INVALID_IDENTITY")
         _match(revision, _REVISION)
         row = self._get("CRAWLER#" + source_id, "CONFIG")
+        try:
+            current = source_revision(row) if row else None
+        except DiscoveryRejected:
+            # An invalid configuration (for example a malformed searchDomains
+            # allowlist) is a changed source, settled rather than raised.
+            current = None
         if (not row or row.get("sourceId") != source_id
                 or row.get("status") == "disabled"
-                or source_revision(row) != revision):
+                or current != revision):
             raise StateRejected("SOURCE_CHANGED")
         return row
 

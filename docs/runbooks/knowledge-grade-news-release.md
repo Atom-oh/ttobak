@@ -401,6 +401,9 @@ print(c.get_gateway_target(gatewayIdentifier=gw, targetId=t["targetId"])
 PY
 ```
 
+The target is shared by the QA, research-agent and news callers, so after the
+upgrade also run one authenticated QA web search and one research-agent search
+and confirm they still return results.
 Then confirm a SigV4 `tools/list` on the Gateway shows `filters` in the
 `ttobak-web-search-tool___WebSearch` input schema and deploy CrawlerStack alone
 with `--exclusively`. An operator source may carry a `searchDomains` list (at

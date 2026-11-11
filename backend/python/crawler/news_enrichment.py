@@ -85,8 +85,10 @@ def _number_tokens(text):
         if percent:
             yield raw + percent, None
             continue
-        if not _PLAIN_NUMBER.fullmatch(digits):
-            yield raw, None  # dotted dates, versions and other sequences
+        if not _PLAIN_NUMBER.fullmatch(digits) or text[match.start() - 1:match.start()] in (".", ","):
+            # Dotted dates, versions and other sequences, and partial numbers
+            # such as the 5 of ".5 million": only the raw form can ground them.
+            yield raw, None
             continue
         value = Decimal(raw)
         if month and not (english or korean):

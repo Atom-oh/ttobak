@@ -216,6 +216,10 @@ class TestStructuredQuality(unittest.TestCase):
             ("50만 명", "500 thousand million people", "50"),
             ("5월 발표", "Jane announced it", "5"),
             ("3월 발표", "Mary announced it", "3"),
+            # Third review: a partial leading-decimal number has no scaled value.
+            ("500만 명", "about .5 million people", "500"),
+            ("50억 원", "a .5 billion won fund", "50"),
+            ("5,000만 원", "rose by 1,5 million", "5000"),
         ]
         for fact, excerpt in grounded:
             with self.subTest(fact=fact):
