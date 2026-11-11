@@ -42,6 +42,8 @@ func TestNewsPublicListIsolatesUnsupportedIdentitiesThroughRepository(t *testing
 				HTTPClient: newsMetadataHTTP(func(req *http.Request) (*http.Response, error) {
 					var body map[string]any
 					switch req.Header.Get("X-Amz-Target") {
+					case "DynamoDB_20120810.GetItem":
+						body = map[string]any{} // no source CONFIG row: a common source
 					case "DynamoDB_20120810.Scan":
 						body = map[string]any{"Items": []any{bad, good}}
 					case "DynamoDB_20120810.BatchGetItem":
@@ -76,12 +78,12 @@ func TestNewsPublicListIsolatesUnsupportedIdentitiesThroughRepository(t *testing
 			})
 			repo := repository.NewCrawlerRepository(client, "news")
 			svc := &InsightsService{repo: repo, news: repo}
-			got, err := svc.ListInsights(context.Background(), "news", "", "", nil, "newest", 1, 20)
+			got, err := svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "newest", 1, 20)
 			if err != nil || len(got.Documents) != 1 || got.Documents[0].Title != "Valid neighbor" || got.TotalCount != 1 || batches != 1 {
 				t.Fatalf("unsupported identity hid valid neighbor: %+v %v batches=%d", got, err, batches)
 			}
 			failRead = true
-			if _, err := svc.ListInsights(context.Background(), "news", "", "", nil, "newest", 1, 20); !errors.Is(err, storageFailure) {
+			if _, err := svc.ListInsights(context.Background(), "user-1", "news", "", "", nil, "newest", 1, 20); !errors.Is(err, storageFailure) {
 				t.Fatalf("real storage failure hidden: %v", err)
 			}
 			priorBatches := batches
@@ -113,6 +115,8 @@ func TestNewsPublicListIsolatesMetadataThroughRepository(t *testing.T) {
 				HTTPClient: newsMetadataHTTP(func(req *http.Request) (*http.Response, error) {
 					var body map[string]any
 					switch req.Header.Get("X-Amz-Target") {
+					case "DynamoDB_20120810.GetItem":
+						body = map[string]any{} // no source CONFIG row: a common source
 					case "DynamoDB_20120810.Query", "DynamoDB_20120810.Scan":
 						body = map[string]any{"Items": []any{bad, good}}
 					case "DynamoDB_20120810.BatchGetItem":
@@ -130,7 +134,7 @@ func TestNewsPublicListIsolatesMetadataThroughRepository(t *testing.T) {
 			})
 			repo := repository.NewCrawlerRepository(client, "news")
 			svc := &InsightsService{repo: repo, news: repo}
-			got, err := svc.ListInsights(context.Background(), "news", scope, "", nil, "newest", 1, 20)
+			got, err := svc.ListInsights(context.Background(), "user-1", "news", scope, "", nil, "newest", 1, 20)
 			if err != nil || len(got.Documents) != 1 || got.Documents[0].Title != "Valid neighbor" || got.TotalCount != 1 {
 				t.Fatalf("public list hid valid neighbor: %+v %v", got, err)
 			}
@@ -148,7 +152,7 @@ func TestNewsLegacyDetailRejectsUnrenderableCurrentMetadataBeforeS3(t *testing.T
 			row["summary"] = &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{}}
 		}
 		fixture.rows[keys[0]] = row
-		got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+		got, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16))
 		if got != nil || !errors.Is(err, ErrNotFound) || len(object.gets) != 0 {
 			t.Fatalf("unrenderable current metadata reached S3: %+v %v %v", got, err, object.gets)
 		}
@@ -168,9 +172,83 @@ func TestNewsDetailInitialMetadataFailureClassification(t *testing.T) {
 			}),
 		})
 		svc := &InsightsService{repo: repository.NewCrawlerRepository(client, "news")}
-		got, err := svc.GetDocumentDetail(context.Background(), "source", "hash")
+		got, err := svc.GetDocumentDetail(context.Background(), "user-1", "source", "hash")
 		if got != nil || err == nil || errors.Is(err, ErrNotFound) == failed {
 			t.Fatalf("data/transport classification lost: %+v %v", got, err)
 		}
+	}
+}
+
+// A CONFIG row with legacy scalar list values or a non-string accountId still
+// lists and reads its documents as common.
+func TestInsightsOriginToleratesLegacySourceRows(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		accountID any
+	}{
+		{name: "legacy scalar lists"},
+		{name: "numeric accountId", accountID: map[string]string{"N": "7"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scanCache.clear()
+			defer scanCache.clear()
+			config := map[string]any{
+				"PK": map[string]string{"S": "CRAWLER#legacy"}, "SK": map[string]string{"S": "CONFIG"},
+				"sourceName": map[string]string{"S": "Legacy Bank"},
+				"aliases":    map[string]bool{"BOOL": false}, "newsQueries": map[string]string{"N": "0"},
+				"customUrls": map[string]string{"S": ""}, "subscribers": map[string]bool{"BOOL": false},
+			}
+			if tc.accountID != nil {
+				config["accountId"] = tc.accountID
+			}
+			doc := map[string]any{
+				"PK": map[string]string{"S": "CRAWLER#legacy"}, "SK": map[string]string{"S": "DOC#legacydoc"},
+				"type": map[string]string{"S": "tech"}, "title": map[string]string{"S": "Legacy article"},
+				"s3Key": map[string]string{"S": "shared/aws-docs/legacy/legacydoc.md"},
+			}
+			client := dynamodb.New(dynamodb.Options{
+				Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+				HTTPClient: newsMetadataHTTP(func(req *http.Request) (*http.Response, error) {
+					var body map[string]any
+					switch req.Header.Get("X-Amz-Target") {
+					case "DynamoDB_20120810.Query", "DynamoDB_20120810.Scan":
+						body = map[string]any{"Items": []any{doc}}
+					case "DynamoDB_20120810.GetItem":
+						var input struct{ Key map[string]map[string]string }
+						if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+							t.Error(err)
+						}
+						body = map[string]any{"Item": doc}
+						if input.Key["SK"]["S"] == "CONFIG" {
+							body = map[string]any{"Item": config}
+						}
+					default:
+						t.Errorf("unexpected storage request %s", req.Header.Get("X-Amz-Target"))
+						body = map[string]any{}
+					}
+					data, err := json.Marshal(body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+						Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+				}),
+			})
+			repo := repository.NewCrawlerRepository(client, "news")
+			svc := &InsightsService{repo: repo, news: repo, s3: &newsS3Fixture{data: "# Legacy"}, kbBucketName: "knowledge"}
+			for _, scope := range []string{"", "legacy"} {
+				got, err := svc.ListInsights(context.Background(), "user-1", "tech", scope, "", nil, "newest", 1, 20)
+				if err != nil || got.TotalCount != 1 || len(got.Documents) != 1 {
+					t.Fatalf("source=%q legacy row failed the list: %+v %v", scope, got, err)
+				}
+				if doc := got.Documents[0]; doc.SourceKind != "common" || doc.SourceName != "Legacy Bank" || doc.AccountID != "" {
+					t.Fatalf("source=%q origin = %+v", scope, doc)
+				}
+			}
+			detail, err := svc.GetDocumentDetail(context.Background(), "user-1", "legacy", "legacydoc")
+			if err != nil || detail.SourceKind != "common" || detail.Content != "# Legacy" {
+				t.Fatalf("legacy row failed the detail: %+v %v", detail, err)
+			}
+		})
 	}
 }

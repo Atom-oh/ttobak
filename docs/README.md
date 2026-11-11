@@ -20,6 +20,7 @@ Billing team access: [ADR-012](decisions/ADR-012-billing-origin-identity-and-tea
 | [API](API-SPEC.md) | Routes and contracts | `backend/cmd/api/main.go`, handlers/models, Python QA |
 | [Infrastructure](INFRA-SPEC.md) | Stack roles and safe deployment | `infra/lib/`, `.github/workflows/` |
 | [UI](DESIGN-SPEC.md) | Current components and interaction rules | `frontend/src/` |
+| [Workspace design review](reviews/2026-11-11-workspace-design-review.md) | Dated whole-menu density review and actual before/after UI evidence | Workspace sizing classes, browser measurements and screenshots |
 | [Product](PRD.md) | Implemented product scope and remaining work | API/frontend and accepted decisions |
 | [Onboarding](onboarding.md) | Local setup | Dependency manifests and project guide |
 | [Connector inventory](../contracts/connector/v1/README.md) | Current operation classification; eligibility is not availability | API routes, assembled QA tool registry and coverage tests |

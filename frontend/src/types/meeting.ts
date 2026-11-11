@@ -905,6 +905,23 @@ export interface AccountGraph { nodes: AccountGraphNode[]; edges: AccountGraphEd
 
 export type PeopleRole = 'participant' | 'speaker' | 'assignee' | 'mentions';
 
+/** Focus graph (GET /api/accounts/{id}/people/focus). Meeting ids are `{ownerUserId}:{meetingId}`. */
+export type FocusKind = 'contact' | 'member' | 'project';
+export interface FocusRef { kind: FocusKind; id: string }
+export interface FocusCard { kind: FocusKind; id: string; label: string; detail?: string; meetings: number }
+export interface FocusPerson { kind: 'member' | 'contact'; id: string; label: string; detail?: string; roles: PeopleRole[] }
+export interface FocusMeeting { id: string; title: string; date: string; roles: PeopleRole[]; techs: string[]; people: FocusPerson[] }
+export interface FocusTech { id: string; label: string; group: string; meetings: number }
+export interface FocusTag { tag: string; meetings: number }
+export interface AccountFocusGraph {
+  focus: FocusCard;
+  meetings: FocusMeeting[];
+  techs: FocusTech[];
+  other: FocusTag[];
+  nextCursor?: string;
+  truncated: boolean;
+}
+
 /** One resolved member or contact of the account people panel. */
 export interface AccountPerson { kind: 'member' | 'contact'; id: string; label: string; meetings: number; roles: Record<string, number> }
 export interface AccountPeoplePage { people: AccountPerson[]; nextCursor?: string; truncated: boolean }

@@ -341,6 +341,16 @@ type CrawledDocument struct {
 	AWSRelevance     string  `dynamodbav:"awsRelevance,omitempty" json:"awsRelevance,omitempty"`
 	OpportunityCount int     `dynamodbav:"opportunityCount,omitempty" json:"opportunityCount"`
 	QualityScore     float64 `dynamodbav:"qualityScore,omitempty" json:"qualityScore"`
+	// MatchedTerm is the search query that found a news article (at most 200
+	// code points); custom-URL and older rows omit it.
+	MatchedTerm string `dynamodbav:"matchedTerm,omitempty" json:"matchedTerm,omitempty"`
+	// SourceName, SourceKind ("common" or "account"), AccountID and
+	// AccountName describe the document's origin. They are computed per
+	// request for the caller and never stored.
+	SourceName  string `dynamodbav:"-" json:"sourceName,omitempty"`
+	SourceKind  string `dynamodbav:"-" json:"sourceKind,omitempty"`
+	AccountID   string `dynamodbav:"-" json:"accountId,omitempty"`
+	AccountName string `dynamodbav:"-" json:"accountName,omitempty"`
 }
 
 // CrawlHistory represents a crawl execution history entry
