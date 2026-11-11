@@ -55,7 +55,7 @@ use CSS variants.
 | Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links. AccountSection gives the creator a meeting-category control; an internal meeting hides account linking, and Internal is disabled while an account is linked |
 | Markdown | MarkdownRenderer, MermaidBlock, CodeBlock, DataTable, DiagramLightbox |
 | Documents | Personal document hub, editor/preview, share dialogs and public document viewer |
-| Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents. The members table shows an owner-only "Transfer owner" button on each non-owner row with a `userId` (never on pending rows or for AM/inherited viewers); it confirms with the target email and the note that the previous owner becomes SA, calls `POST /api/accounts/{id}/owner-transfer`, reloads, and maps 409 to a refresh-and-retry message. The Account Owner also sees a "merge into another Account" action (`AccountMergeDialog`, ADR-072): it picks a target from directly editable Accounts (never the source), calls `GET merge-preview`, and shows move counts (`-1` means capped), the categories that do not move (billing is marked as not checkable), the CLI-only categories (labelled as rows an operator moves with the CLI after the merge) and who gains access. Start stays disabled until the unmoved-items checkbox is checked and never fires unconfirmed. Progress polls `GET merge` every 5 s (doubling after failed polls, 30 s cap) and stops on `done`, `failed` or `aborted`; failure codes map to plain Korean copy, a failed or stalled job offers retry (`POST merge` again to resume), and an operator-aborted job shows that moved items stay on the target, with no retry. A merging Account (`mergingInto`) shows a read-only banner, hides write controls and keeps a progress link for the Owner; a tombstone (`mergedInto`) stays read-only with a banner linking to the target, so its unmoved categories remain reachable; writes answered with 409 `ACCOUNT_MERGING` show a merge-specific message. |
+| Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents. The members table shows an owner-only "Transfer owner" button on each non-owner row with a `userId` (never on pending rows or for AM/inherited viewers); it confirms with the target email and the note that the previous owner becomes SA, calls `POST /api/accounts/{id}/owner-transfer`, reloads, and maps 409 to a refresh-and-retry message. The Account Owner also sees a "merge into another Account" action (`AccountMergeDialog`, ADR-022): it picks a target from directly editable Accounts (never the source), calls `GET merge-preview`, and shows move counts (`-1` means capped), the categories that do not move (billing is marked as not checkable), the CLI-only categories (labelled as rows an operator moves with the CLI after the merge) and who gains access. Start stays disabled until the unmoved-items checkbox is checked and never fires unconfirmed. Progress polls `GET merge` every 5 s (doubling after failed polls, 30 s cap) and stops on `done`, `failed` or `aborted`; failure codes map to plain Korean copy, a failed or stalled job offers retry (`POST merge` again to resume), and an operator-aborted job shows that moved items stay on the target, with no retry. A merging Account (`mergingInto`) shows a read-only banner, hides write controls and keeps a progress link for the Owner; a tombstone (`mergedInto`) stays read-only with a banner linking to the target, so its unmoved categories remain reachable; writes answered with 409 `ACCOUNT_MERGING` show a merge-specific message. |
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
@@ -124,7 +124,7 @@ hidden on any failure. The Mac app's own update UI is native, not the SPA: the
 TTOBAK app menu has a check-for-updates item (a manual check reports up-to-date or
 failure by notification, and opens the popup when an update exists) that becomes an
 update-available item with the version once an update is known. The small local popup
-(`update-prompt.html`, ADR-073) has Update and Later buttons, shows a static
+(`update-prompt.html`, ADR-019) has Update and Later buttons, shows a static
 downloading status (not progress) after Update, stays open until install succeeds, and
 asks the user to retry after the recording when work is in progress. Copy is Korean; see
 `update.rs` and the page for exact strings. No popup appears while recording, finalizing or
@@ -136,15 +136,16 @@ counts down 30 seconds before stopping and uploading, with keep recording and st
 now actions. The native waveform is drawn on a -60..-10 dBFS scale. Nothing records without the user's confirmation; the
 start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
-(ADR-061). Settings also shows `IntakeSettings` (Mac local intake, ADR-003) only in
+(ADR-017). Settings also shows `IntakeSettings` (Mac local intake, ADR-003) only in
 an app build with the intake commands: adapter state and update, node path when
 missing, selected servers, schedule (off, hourly, daily, twice daily) with a
 warning when the CLI LaunchAgent is also installed, per-source status, setup with
 private-calendar consent and skip toggles, run now, login, cancel and a live
-progress log. A failed state read shows a one-line error. In System Audio mode, `NativeMicSelector` offers automatic (follow the
+progress log. A failed state read shows a one-line error. 
+In System Audio mode, `NativeMicSelector` offers automatic (follow the
 meeting app's microphone) or a specific device, remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
-supports it (ADR-061, #621), the record page also reacts to native events: the
+supports it (ADR-017, #621), the record page also reacts to native events: the
 picker stays available during a recording only when the start response reports
 `can_switch_input` (also for a start without a microphone); a failed switch shows
 Korean guidance with the app's reason, and says so when `recording_status`

@@ -25,7 +25,7 @@ func validMergeJob(job *model.AccountMergeJob) bool {
 }
 
 // MoveMeetingForAccountMerge re-points the owner's meeting from the source
-// account to the target under the merge fence (ADR-072). The owner, the
+// account to the target under the merge fence (ADR-022). The owner, the
 // publication flag and the summary are unchanged: the update is conditioned
 // on the exact summary privacy snapshot read here (which pins
 // sharedToAccount and the approval as observed) and on accountId still

@@ -753,7 +753,7 @@ own 30-second bound.
 
 Rule `ttobak-account-merge-requested` routes default-bus `ttobak.analysis` events
 with detail-type `AccountMergeRequested` (`{sourceAccountId}`) to the summarize
-Lambda (ADR-072). The API publishes one after starting or resuming a job; the
+Lambda (ADR-022). The API publishes one after starting or resuming a job; the
 worker claims a five-minute job lease under a per-invocation ID, runs the job's
 steps in `model.MergeSteps` order, saves step, cursor and counts after every
 bounded mover call, and three minutes before its deadline releases the lease and

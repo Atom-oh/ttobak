@@ -1,4 +1,4 @@
-# ADR-061: Mac meeting detection prompts
+# ADR-017: Mac meeting detection prompts
 
 - Status: Accepted for implementation; detection needs macOS verification with
   real Zoom, Teams and browser meetings.
@@ -35,7 +35,7 @@ without a user confirmation.
 - Native meeting apps (Zoom including its capture host, Teams, Webex, Slack,
   FaceTime, Amazon Chime, Discord) are matched by bundle ID or helper ID.
 - A browser using the microphone counts only when one of its tabs is a meeting
-  URL (`meet.google.com/<code>`, Teams web, Zoom web client). A fixed
+  URL (`meet.google.com/<code>`, any Teams web page, Zoom web client). A fixed
   script run through `osascript` receives the browser's tab URLs, discards
   non-meeting ones inside that child process, and returns only meeting URLs to
   the app, which classifies and never logs them. The script addresses the
@@ -74,7 +74,7 @@ without a user confirmation.
   reliably. Its only command, `meeting_prompt_choose`, goes through
   `meeting_detection_respond`, and `native-meeting-answered` closes the banner.
   It closes after 30 s unanswered, on an answer in the banner, or at the end.
-  An end still posts a local notification. The SPA banner's confirmation calls
+  An end posts a local notification only while a recording is in progress. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same
   `native-control-request` path as ADR-024, so busy and sign-in checks are
   unchanged. Detection starts do not post the MCP "started" notification.

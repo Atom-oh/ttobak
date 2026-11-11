@@ -375,7 +375,7 @@ or partial lines, `v` other than 1, keys or paths that do not match the 64-hex
 event ID, entries older than 24 hours or more than 5 minutes ahead, and over-long
 text. It dedupes on `key` in `intake-notified.json` (app data directory, 0600,
 pruned after 48 hours) and posts at most 5 per cycle. Notification delivery has
-not been verified on a Mac; ADR-061 found app notifications unreliable for the
+not been verified on a Mac; ADR-017 found app notifications unreliable for the
 meeting prompt. Check by hand with the packaged app running:
 
 1. Append one synthetic line with a fresh 64-hex ID and a current `createdAt`

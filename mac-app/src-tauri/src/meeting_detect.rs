@@ -1,4 +1,4 @@
-//! Meeting detection runtime (ADR-061): watches which processes use the
+//! Meeting detection runtime (ADR-017): watches which processes use the
 //! microphone and offers to record when a meeting app or a web-meeting tab
 //! is active.
 //!
