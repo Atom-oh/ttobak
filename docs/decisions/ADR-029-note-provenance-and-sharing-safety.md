@@ -133,8 +133,9 @@ tracks remaining deployment acceptance separately.
   owner Account publication of private or unknown generated output. Its
   provenance, direct-email and pending grant, and conditional source
   publication rules remain in force.
-The 2026-11-06 amendment to the source provenance section removes protected membership views: published
-meetings show current output to all members, so approval no longer gates reads.
+- The 2026-11-06 amendment to the source provenance section removes protected
+  membership views: published meetings show current output to all members, so
+  approval no longer gates reads.
 
 ### Context
 
