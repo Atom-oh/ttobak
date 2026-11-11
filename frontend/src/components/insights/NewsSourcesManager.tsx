@@ -17,13 +17,7 @@ export interface NewsSourcesState extends DirectoryState {
   loadMore: () => void;
 }
 
-/**
- * Pages through `GET /api/news-sources`. The first `autoPages` pages load on
- * their own (the scope select uses a small fixed number); further pages only
- * through `loadMore`. Every response is tied to the generation that started
- * it (see the pure reducers in lib/newsRegistration), so a late load-more
- * never touches a reloaded list.
- */
+/** Pages `GET /api/news-sources`: `autoPages` load on their own, more via `loadMore`; responses are generation-tagged. */
 export function useNewsSources(userId: string | undefined, enabled: boolean, autoPages = 1): NewsSourcesState {
   const [state, setState] = useState<DirectoryState>(INITIAL_DIRECTORY);
   const [attempt, setAttempt] = useState(0);
@@ -137,10 +131,8 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
       if (account && accountBody?.input) {
         await accountApi.newsSources.create(account.accountId, accountBody.input, { expectedUserId: userId });
       } else if (commonBody?.request) {
-        // AddSource resolves the name to an existing source and replaces the
-        // caller's whole subscription (AWS services included). Best effort:
-        // skip names matching a subscription seen just now; one created
-        // concurrently elsewhere is not visible to this check.
+        // AddSource would replace an existing subscription (AWS services too).
+        // Best effort: a concurrent subscription is not visible here.
         let subscribed: string[];
         try {
           subscribed = ((await crawlerApi.listSources({ expectedUserId: userId })).sources ?? []).map((item) => item.source.sourceId);
@@ -246,8 +238,7 @@ function RegisterForm({ userId, initialAccountId, onRegistered }: { userId: stri
 
 function EditRow({ item, userId, onDone, onCancel }: { item: NewsSourceItem; userId: string; onDone: () => void; onCancel: () => void }) {
   const id = useId();
-  // Prefilled from the full per-account source (directory lists may be cut);
-  // only fields whose text differs from this prefill are sent.
+  // Full per-account source (directory lists may be cut); only text changes are sent.
   const [prefilled, setPrefilled] = useState<AccountEditForm | null>(null);
   const [form, setForm] = useState<AccountEditForm>({ sourceName: '', queries: '', aliases: '' });
   const { accountId, sourceId } = item;
