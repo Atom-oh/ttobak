@@ -500,7 +500,8 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   remove that source's observations, its `sources` references on the term and
   auto terms left without observations in the old Account. The meeting part
   is done (2026-11-11, see meeting relink above) and is the part
-  `accountTermsMode` needs; the flag stays off until its own deployment. The
+  `accountTermsMode` needs; that cleanup was deployed with the flag off and
+  `infra/cdk.json` turned the flag on in its own deployment (2026-11-11). The
   research `accountIds` and KB `account-id` parts remain and still gate
   `kbTermsMode` and `researchTermsMode` `on`. Transcript-correction rows in an
   Account (`TERMS_CORRECTION#` meeting sets, TTL-bounded, and automatic
