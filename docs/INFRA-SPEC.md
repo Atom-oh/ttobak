@@ -668,6 +668,12 @@ operator CLI `backend/cmd/backfill-terms-sources` (dry run by default) passes
 every `kb/` and `shared/research/` key to the same mapper and spaces the
 published requests (`-interval`, default 5s). The worker's run row makes a rerun
 a no-op for unchanged content.
+Meetings re-qualify when `termsExtractorVersion` (part of the terms source
+identity in `service/terms_analysis.go`) changes; the operator CLI
+`backend/cmd/backfill-meeting-terms` (dry run by default; apply mode needs
+`TABLE_NAME` and `AUTO_TERMS_MODE=personal`) scans done meetings and calls the
+production `Enqueue` (reason `backfill`), spacing queued runs (`-interval`,
+default 15s). Unchanged sources report `UNCHANGED`; output is outcome counts only.
 
 Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
 (`cron(0 21 * * ? *)`, after the 19:00 crawl) invokes summarize with
