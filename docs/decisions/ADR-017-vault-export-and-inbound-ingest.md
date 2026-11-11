@@ -1,4 +1,4 @@
-# ADR-017: Portable Vault Export and Inbound Markdown
+# ADR-020: Portable Vault Export and Inbound Markdown
 
 - Status: Accepted; document export extended beyond the original meetings-only scope.
 - Decision date: Not recorded in the original ADR.

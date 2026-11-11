@@ -1,6 +1,6 @@
-# ADR-029: Read-only personal-document sharing by reference
+# ADR-020: Read-only personal-document sharing by reference
 
-- Status: Accepted; extends ADR-020/022 without replacing account copies or public links.
+- Status: Accepted; extends ADR-020 without replacing account copies or public links.
 - Decision date: 2026-08-04.
 - Code checked: 2026-09-13.
 
@@ -15,7 +15,7 @@ Allow an owner to share a personal document with one person. Choose a read-only 
 - Owner-only operations first look up the authenticated caller's personal partition. A non-owner cannot use another owner's `docId` there and gets not-found; this does not mean every validation or infrastructure failure is a 404.
 - Recipient responses omit `PublicShareToken` and mark `sharedBy`. Recipients must already resolve through the user-profile lookup; this path does not queue the account/meeting PendingShare mechanism.
 - Use dedicated `SHAREDDOC#` / `DOCSHARE_TO#` keys and `DOC_SHARE`, not `SHARED#`. Meeting shared-list pagination consumes `SHARED#` rows without a document filter; reusing it would consume page capacity and corrupt discovery. Document-share lists paginate internally.
-- **Account sharing remains a copy:** `ShareUserDocumentToAccount` creates another document and copies a file to a fresh S3 key. Public sharing remains the token-gated file redirect of ADR-022, delivered under ADR-027.
+- **Account sharing remains a copy:** `ShareUserDocumentToAccount` creates another document and copies a file to a fresh S3 key. Public sharing remains the token-gated file redirect of ADR-020, delivered under ADR-027.
 
 ## Tradeoffs and accepted residual risks
 

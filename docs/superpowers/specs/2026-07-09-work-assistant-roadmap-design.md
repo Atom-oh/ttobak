@@ -44,7 +44,7 @@ The roadmap did not authorize copying account membership into external file ACLs
   describe later document work. PPT conversion now exists; the current public
   exception is file-backed personal-document access through
   `GET /api/public/docs/{token}`, not generic public meeting/note pages.
-- [ADR-025](../../decisions/ADR-025-project-entity-sfdc-oppty.md) and the
+- [ADR-025](../../decisions/ADR-025-projects-and-invitations.md) and the
   [Project service](../../../backend/internal/service/project.go) define Project
   metadata and links, not the proposed `OPPTY#` intake API or a Salesforce sync.
 - [AccountDocument](../../../backend/internal/model/account.go) stores parsed

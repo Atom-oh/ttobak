@@ -1,7 +1,7 @@
-# ADR-022: Slide conversion and public document links
+# ADR-020: Slide conversion and public document links
 
 - Status: Accepted; supersedes ADR-020's download-only PPTX decision.
-  [ADR-027](ADR-027-cloudfront-signed-media-urls.md) supersedes raw-S3 download
+  [ADR-027](ADR-027-edge-delivery-and-origin-proof.md) supersedes raw-S3 download
   delivery and direct-PDF preview assumptions.
 - Original decision date: Not recorded. Source-binding amendment: 2026-09-12.
 - Code checked: 2026-09-13; configuration does not prove deployment.
@@ -10,7 +10,7 @@
 
 Convert PPT/PPTX asynchronously with LibreOffice and reuse the native PDF
 viewer. File-backed personal documents may have bearer-token public links.
-Account sharing creates independent copies; [ADR-029](ADR-029-per-user-document-sharing-by-reference.md)
+Account sharing creates independent copies; [ADR-020](ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md)
 adds a separate read-only reference-sharing path.
 
 `convert-doc` is an ARM64 container-image Lambda, triggered by S3 creation

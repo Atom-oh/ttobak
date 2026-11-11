@@ -17,4 +17,4 @@ Those write sketches were later hardened; they are not precedents for stale whol
 
 - [ADR-016](../../decisions/ADR-016-meeting-account-linking-and-sharing.md), [meeting service](../../../backend/internal/service/meeting.go): `LinkMeetingToAccount`, `ShareMeetingToAccount`, `resolveSharedAccess`; [account service](../../../backend/internal/service/account.go): `ResolveAccountByAlias`.
 - [ADR-023](../../decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) supersedes the initial share loop/removal assumptions with provenance, membership-conditioned transactions, live access checks, and legacy ambiguity handling.
-- [ADR-025](../../decisions/ADR-025-project-entity-sfdc-oppty.md) adds a separate Project sharing channel; [ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md) adds multi-account filtering without making hierarchy a grant.
+- [ADR-025](../../decisions/ADR-025-projects-and-invitations.md) adds a separate Project sharing channel; [ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md) adds multi-account filtering without making hierarchy a grant.

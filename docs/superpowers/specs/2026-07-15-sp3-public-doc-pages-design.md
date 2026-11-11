@@ -43,7 +43,7 @@ correct behavior routing. No historical approval generalizes the public exceptio
 ## Current disposition
 
 [ADR-022](../../decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)
-and [ADR-027](../../decisions/ADR-027-cloudfront-signed-media-urls.md) define the
+and [ADR-027](../../decisions/ADR-027-edge-delivery-and-origin-proof.md) define the
 narrower implementation: file-backed **personal** documents, conditional
 `PublicShareToken` minting, `PUBSHARE#` lookup, and five-minute signed downloads.
 The [router](../../../backend/cmd/api/main.go) registers `/public-share` management

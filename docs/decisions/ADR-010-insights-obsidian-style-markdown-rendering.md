@@ -1,4 +1,4 @@
-# ADR-010: Rich Markdown Reading Without Content Migration
+# ADR-020: Rich Markdown Reading Without Content Migration
 
 - Status: Accepted; later document features extend the original reading surface.
 - Decision date: Not recorded; design specification dated 2026-04-25.
