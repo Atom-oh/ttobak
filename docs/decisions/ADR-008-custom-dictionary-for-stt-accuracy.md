@@ -428,6 +428,9 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   lines without a kept record explaining it is re-run on the plain prompt, then
   falls back to the raw text, so a correction pass cannot invent terms. Automatic
   `heardAs` appends do not set `userEditedAt`; Common counters are not written.
+  `infra/cdk.json` turns `ttobak:transcriptCorrection` on (2026-11-11, owner
+  goal of meeting quality). Before that, every summarize run in the week
+  logged `outcome=DISABLED reason=flag_off`.
 - **L4 (sources).** A KB upload asks for an Account (none means Personal); the
   choice is stored as S3 object metadata `account-id`. KB documents (plain text
   only: `.md`, `.markdown`, `.txt`) and research reports feed the owner's
