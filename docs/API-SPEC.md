@@ -1070,8 +1070,10 @@ with results in item order:
 
 Only a complete snapshot updates departures. The pass reads the Account's
 `SFDCCONTACT#` links of the listed SFDC accounts and opens only those linked
-contacts: a contact absent from its account's `present` list gets `sfdcLeftAt`
-(counted in `marked`), a present one loses it (`unmarked`). Concurrently changed
+contacts: a contact absent from the union of the request's `present` lists gets
+`sfdcLeftAt` (counted in `marked`), a present one loses it (`unmarked`). A
+contact that moved between two listed SFDC accounts stays present; its link
+keeps the `sfdcAccountId` it was first created under. Concurrently changed
 contacts are skipped; linked contacts that cannot be opened are counted in
 `skipped`. The pass starts at a random link and stops after 200 mark changes or
 15 seconds into the request; correct contacts need no write, so later runs
