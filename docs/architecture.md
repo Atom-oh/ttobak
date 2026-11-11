@@ -189,7 +189,7 @@ retired. Its data moves in a one-time cutover
    Refinement and auxiliary calls keep their independent model selection.
    Authorized shared readers can correct known speaker names through the bounded
    speaker endpoint with the existing version comparison. General editing and
-   owner-only re-diarization retain their separate permissions (ADR-051).
+   owner-only re-diarization retain their separate permissions (ADR-016).
 4. Derive account/project material using explicit relations and current access.
    Hierarchy classifies accounts; it never grants membership. Project lists union
    owner, direct membership and linked-account access.
