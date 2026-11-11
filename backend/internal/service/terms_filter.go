@@ -24,8 +24,8 @@ const (
 	transcribeAcronymMaxLetters   = 6
 )
 
-// transcribeKoDottedAcronymsAccepted stays false until rollout acceptance
-// item 2 records that ko-KR custom vocabularies accept dotted acronyms.
+// transcribeKoDottedAcronymsAccepted stays false until ADR-008 rollout
+// check 2 records that ko-KR custom vocabularies accept dotted acronyms.
 const transcribeKoDottedAcronymsAccepted = false
 
 // Evidence source types named by an extraction candidate.

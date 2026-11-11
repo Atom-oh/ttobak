@@ -679,7 +679,7 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
 crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
-searched, non-synthetic source (ADR-008 amendment, 2026-11-09). Invalid values
+searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global

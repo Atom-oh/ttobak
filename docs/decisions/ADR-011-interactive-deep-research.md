@@ -1,58 +1,60 @@
-# ADR-011: Conversational Research Planning and Child Reports
+# ADR-011: Interactive deep research
 
-- Status: Accepted; implementation differences and unfinished limits noted below.
-- Decision date: Not recorded; design specification dated 2026-04-25.
-- Implementation checked: 2026-09-13.
+- Status: Accepted. The design specification is dated 2026-04-25; the decision
+  date was not recorded.
+- Implementation checked: 2026-11-11.
 
-## Context and decision
+## Decisions
 
-A one-shot research request gave users no chance to refine scope before an
-expensive run or explore a focused follow-up. Persist research chat in DynamoDB,
-use REST plus polling for planning, and launch agent work through Step Functions.
-Child research records reference their parent with `parentId`.
+- Research is a conversation before it is a report. A new request starts in
+  `planning` and starts a planning run; the agent proposes a plan and answers
+  in chat until the owner approves it. If that run cannot start, the request
+  is marked `error`.
+- Approval is a conditional write from `planning` to `running`, so a plan runs
+  at most once, and it then starts the execution state machine.
+- The agent runs in four modes: `plan`, `respond`, `execute` and `subpage`.
+- Chat messages are rows under `RESEARCH#{id}` with `MSG#{createdAt}#{msgId}`
+  sort keys. They have no TTL.
+- A sub-page is a child report with `parentId`. It needs an owned parent in
+  status `done`. Sections of one report are not child executions.
+- Approving a plan, triggering the agent and creating a sub-page require the
+  caller to own the research. Chat input is bounded to 10,000 bytes (about
+  3,300 Hangul characters), and a research ID containing `..` or `/` is
+  rejected.
+- Progress is delivered by REST polling over a Step Functions run; the
+  WebSocket transport is for live QA only.
+- The chat polls every three seconds while a report is planning or running and
+  for a bounded time after a message on a finished report; the detail page
+  polls every ten seconds while active.
 
-A WebSocket-only research chat or hybrid REST/push design would add coordination
-across asynchronous agent invocations. Polling fit the slower planning cadence
-and persisted conversations across page reloads. This choice is specific to
-research: authenticated live-QA WebSockets are implemented elsewhere.
+## Not implemented or off by default
 
-## Current implementation and superseded details
+- Child depth is not limited: a sub-page can have its own sub-pages.
+- Chat rows are not paginated or expired. A conversation larger than one query
+  page is truncated on read.
+- If starting execution fails after approval, the status stays `running` and no
+  retry path exists; recovery is manual. The API answers 202 with a warning
+  that the trigger will be retried, but nothing retries it.
+- The `approved` status is not written by the backend and survives only in
+  frontend status maps.
 
-- New research starts in `planning`. Approval conditionally changes `planning`
-  directly to `running`, then triggers execution. The old mandatory `approved`
-  intermediate state is not the service's current transition, although the UI
-  still recognizes it.
-- Chat rows use `PK=RESEARCH#{id}`, `SK=MSG#{timestamp}#{msgId}`. The agent
-  implements `plan`, `respond`, `execute`, and `subpage` modes.
-- `ResearchChat` polls active conversations every three seconds and performs
-  bounded polling after a question on a completed report. The detail page polls
-  active research every ten seconds. "No polling during done" was too broad.
-- `CreateSubPage` requires an owned, completed parent and starts a deep research
-  child. It does not reject a parent that already has its own `parentId`; the
-  original one-level hierarchy is not an enforced backend depth limit.
-- Report sections written by `save_report` are navigable pieces of one report,
-  not separate child research executions.
+## Limits and accepted risks
 
-## Consequences and remaining limits
+- Chat reading and sending are gated by the research detail check, which also
+  admits share recipients. A recipient can therefore read the chat, and a
+  message they send is stored before the owner-only agent trigger refuses it.
+  This is a known gap, not an accepted policy.
+- The table TTL sweeps only `pendingShareExpiresAt`, which chat rows do not
+  carry.
+- Stored chat text is later sent to the agent as user input.
+- The research workflow is one Lambda task with a 20-minute state-machine
+  timeout and no configured retry or catch.
 
-Users can refine scope, retain chat history, and start focused follow-ups. Costs
-include polling delay, agent/Step Functions invocations, chat UI state, and stored
-messages. Approval and starting the external workflow are separate operations;
-a conditional status write alone does not guarantee execution starts.
+## Source
 
-The old claim that TTL or periodic cleanup mitigates research-chat accumulation
-was a plan. Current research `MSG#` writers do not set an expiry, and the table
-sweeps `pendingShareExpiresAt`, not arbitrary chat rows. Retention and a hard
-child-depth bound, if required, remain separate implementation work; this ADR does
-not claim those safeguards exist.
-
-## Evidence
-
-- [research.go](../../backend/internal/service/research.go): creation, approval,
-  response, and child-report gates.
-- [chat.go](../../backend/internal/repository/chat.go),
-  [agent.py](../../backend/python/research-agent/agent.py): chat persistence/modes.
-- [ResearchChat.tsx](../../frontend/src/components/ResearchChat.tsx),
-  [ResearchDetailClient.tsx](../../frontend/src/app/insights/research/[researchId]/ResearchDetailClient.tsx): polling.
-- [gateway-stack.ts](../../infra/lib/gateway-stack.ts): implemented live-QA WebSockets.
-- [storage-stack.ts](../../infra/lib/storage-stack.ts): actual TTL attribute.
+`backend/internal/service/research.go`,
+`backend/internal/repository/research.go`, `chat.go`,
+`backend/internal/handler/chat_research.go`, `backend/cmd/research-worker/`,
+`backend/python/research-agent/` (`agent.py`, `tools.py`),
+`frontend/src/components/ResearchChat.tsx`, `infra/lib/gateway-stack.ts`,
+`ai-stack.ts`.

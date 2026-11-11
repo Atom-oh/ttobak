@@ -1,6 +1,6 @@
 # Mac app release
 
-Release procedure for the TTOBAK Mac app ([ADR-071](../decisions/ADR-071-mac-app-distribution-and-updates.md)).
+Release procedure for the TTOBAK Mac app ([ADR-073](../decisions/ADR-073-mac-app-distribution-and-updates.md)).
 It runs on the owner's Mac; no CI, runner or new IAM is involved. Passing it does not
 prove a teammate's Mac accepts the app: record manual acceptance separately.
 
@@ -61,7 +61,7 @@ placeholder, the app disables update checks and `npm run release` refuses.
 
 Mac changes have no CI. The menu item, popup, notifications, install and restart are
 manual-only checks. If MDM or binary authorization blocks the app, stop and revisit
-Developer ID (ADR-071).
+Developer ID (ADR-073).
 
 ## Failed upload (resume)
 
@@ -86,7 +86,7 @@ higher version.
   release; installed apps cannot verify the new key, so users must reinstall with the
   curl command.
 - "TTOBAK Dev" expires 2036-06-01 or is replaced: the designated requirement changes
-  and every user re-grants permissions once; plan the Developer ID move (ADR-071).
+  and every user re-grants permissions once; plan the Developer ID move (ADR-073).
 
 ## Installer limits
 

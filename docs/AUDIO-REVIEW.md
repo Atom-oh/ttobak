@@ -52,7 +52,7 @@ Rust streaming, with small PCM events for captions (ADR-024).
 Summarize timeout/retry policy is now ADR-031. Transcript-family spill budgets and
 UTF-16 condition guards live in repository code. Upload timeouts track stalled
 progress, not the historical proposed file-size-based total timeout. Current
-diarization/ASR pins are ADR-035. Do not reapply old code snippets or assert that
+diarization/ASR pins are ADR-009. Do not reapply old code snippets or assert that
 any candidate above is still unfixed without a present-revision reproduction.
 
 Inspect `frontend/src/components/RecordButton.tsx`, `frontend/src/lib/sttManager.ts`,

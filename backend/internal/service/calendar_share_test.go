@@ -226,6 +226,56 @@ func TestSyncOverrideHiddenBeatsMatch(test *testing.T) {
 	}
 }
 
+// A hide that lands after one occurrence's override read must reach the next occurrence of
+// the same series in the batch; a batch-wide override cache would share it.
+func TestSyncReadsOverridePerOccurrence(test *testing.T) {
+	svc, store, _, _, membership := calendarShareFixture()
+	membership.addMember("acc_1", "owner", "owner@example.com")
+	request := calendarShareRequest(func(event *model.CalendarEventInput) {
+		event.ShareAccountID, event.ShareEvidence = "acc_1", []string{"title"}
+	})
+	second := *request.Mutations[0].Event
+	second.ExternalID, second.StartsAt, second.EndsAt = "series/occurrence-2", calendarNow.Add(7*24*time.Hour), calendarNow.Add(7*24*time.Hour+time.Hour)
+	request.Mutations = append(request.Mutations, model.CalendarMutation{Op: "upsert", Event: &second})
+	store.onOverrideRead = func() {
+		store.overrides = map[string]*repository.CalendarOverrideRow{
+			"owner/" + calendarSourceID + "/" + calendarTestSeriesKey: {Mode: "hidden"},
+		}
+	}
+	if _, err := svc.Sync(context.Background(), "owner", calendarSourceID, request); err != nil {
+		test.Fatal(err)
+	}
+	mutations := store.batches[0].Mutations
+	if mutations[0].Share == nil || mutations[0].Share.State != "shared" {
+		test.Fatalf("first occurrence was planned before the hide: %+v", mutations[0].Share)
+	}
+	if mutations[1].Share == nil || mutations[1].Share.State != "veto" {
+		test.Fatalf("second occurrence must follow the hide: %+v", mutations[1].Share)
+	}
+}
+
+// The owner view reports a share only when the stored row holds it granted.
+func TestOwnerViewOmitsUngrantedShare(test *testing.T) {
+	svc, store, _, _, membership := calendarShareFixture()
+	membership.addMember("acc_1", "owner", "owner@example.com")
+	calendarStoredEvents(test, svc, store, calendarShareRequest(func(event *model.CalendarEventInput) {
+		event.ShareAccountID, event.ShareEvidence = "acc_1", []string{"title"}
+	}))
+	query := model.CalendarQuery{From: calendarNow, To: calendarNow.Add(24 * time.Hour)}
+	if page, err := svc.ListEvents(context.Background(), "owner", query); err != nil || len(page.Events) != 1 || page.Events[0].ShareAccountID != "acc_1" {
+		test.Fatalf("a granted share must be reported: %+v %v", page, err)
+	}
+	row := &store.rows.Rows[0]
+	row.ShareAccountID, row.MeetingKey, row.ShareState = "", "", ""
+	page, err := svc.ListEvents(context.Background(), "owner", query)
+	if err != nil || len(page.Events) != 1 {
+		test.Fatalf("%+v %v", page, err)
+	}
+	if event := page.Events[0]; event.ShareAccountID != "" || event.ShareEvidence != nil {
+		test.Fatalf("an ungranted share was reported: %+v", event)
+	}
+}
+
 func TestSyncPrivateWritesVetoForPreviouslySharedAccount(test *testing.T) {
 	svc, store, _, _, membership := calendarShareFixture()
 	membership.addMember("acc_1", "owner", "owner@example.com")

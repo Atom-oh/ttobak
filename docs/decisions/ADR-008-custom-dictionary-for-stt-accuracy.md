@@ -1,49 +1,37 @@
-# ADR-008: Per-User Dictionaries for Speech Recognition
+# ADR-008: Dictionaries for speech recognition
 
-- Status: Accepted; phonetic TSV uploads remain an original plan, not current
-  behavior. Automatic term extraction ships off by default (`AUTO_TERMS_MODE=off`).
-- Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
-- Implementation checked: 2026-09-13; v2 storage, term CRUD, filter, terms
-  run-state/merge, extraction job and A/B vocabulary builder amendments checked
-  2026-10-18; layered dictionary amendment 2026-10-26.
+- Status: Accepted. Automatic term extraction and the Account, KB, research,
+  news and correction layers ship off by default.
+- Implementation checked: 2026-11-11. The sections below are the rules in
+  force; dates inside them mark owner decisions.
 
-## Context and decision
+## Purpose and consumers
 
-General speech recognition misrecognized service names, acronyms, and
-customer-specific terminology. A fixed system vocabulary could not cover each
-user's meetings. Store a personal dictionary and use it for Transcribe custom
-vocabularies, with prompt guidance as the complementary Whisper path.
+General speech recognition misrecognizes service names, acronyms and
+customer-specific terms, and a fixed system vocabulary cannot cover each user's
+meetings. Terms are stored per user, with shared Account and Common layers
+beside the personal one (see the layered dictionary section), and feed two
+consumers:
 
-A shared organization dictionary was rejected as insufficiently personalized.
-Whisper-only prompting avoided resource management but did not serve Transcribe
-and could not guarantee term recognition.
+- A personal `ko-KR` Transcribe custom vocabulary built by the A/B builder.
+  Batch Transcribe attaches the caller's vocabulary name, else the fixed base
+  vocabulary `ttobak-aws-tech-terms`, through `LanguageIdSettings["ko-KR"]`. The
+  legacy Nova Sonic provider path attaches none.
+- Whisper's `INITIAL_PROMPT`, built from `displayAs` or, when absent, the
+  phrase, combined with the optional S3 vocabulary prompt.
 
-## Current implementation
+Live streams receive no vocabulary name: no server response names one until
+the multi-language stream check below is recorded.
 
-- Dictionary data uses `PK=USER#{userId}`, `SK=DICTIONARY`; terms retain
-  `phrase`, `soundsLike`, and `displayAs`, plus vocabulary name/status.
-- Authenticated settings routes support GET/PUT `/api/settings/dictionary` and
-  DELETE `/api/settings/dictionary/term`.
-- Superseded for migrated users by the A/B builder amendment below (four-column
-  table file, ko-KR builds). Originally, and still for an unmigratable legacy
-  item: `DictionaryService` creates/updates a Korean Transcribe vocabulary using the
-  **`Phrases` list**. It does not upload the proposed four-column TSV, send
-  `soundsLike`/`displayAs` mappings to Transcribe, or merge system base terms into
-  that list. The resource name uses `vocabSuffix(userID)`, not the full literal
-  user ID promised in the old example.
-- Reads refresh pending vocabulary status with a conditional update (see the
-  2026-10-18 amendment); they no longer rewrite the dictionary item. Batch Transcribe selects a ready
-  personal vocabulary or its configured base fallback through
-  `LanguageIdSettings["ko-KR"]`. Live streaming can also receive a vocabulary name.
-- The transcribe Lambda constructs Whisper's `INITIAL_PROMPT` from `displayAs`
-  or, when absent, `phrase`. Production Whisper combines it with its optional
-  S3 vocabulary prompt.
+The legacy dictionary item (`PK=USER#{userId}`, `SK=DICTIONARY`) remains for
+users who cannot be migrated; for such an item `DictionaryService` still builds
+a Korean vocabulary from the phrase list only, named with `vocabSuffix(userID)`.
+Settings routes are GET and PUT `/api/settings/dictionary` and DELETE
+`/api/settings/dictionary/term`. Stored pronunciations are not proof that either
+engine uses them. Phonetic TSV uploads, an approval inbox and CSV import were
+plans and are not built.
 
-The old crawler/research extraction Lambda, approval inbox, CSV import, and
-fixed vocabulary build time were plans or estimates. They are not requirements
-that current PRs must implement, nor evidence that phonetic mappings affect ASR.
-
-## Amendment 2026-10-18: v2 storage and union readers
+## Storage and union readers
 
 Per-term rows now sit beside the legacy `SK=DICTIONARY` item so automatic terms
 can be added later without rewriting a shared list. This covers storage and
@@ -93,14 +81,13 @@ readers only: no extraction, term CRUD route, vocabulary builder or UI change.
   `GetVocabularyForTranscription` reads `VOCAB#` first, falls back to the blob
   and never writes; the transcribe Lambda uses both readers.
 
-## Amendment 2026-10-18: term CRUD, shared validator and legacy semantics
+## Term writes, validator and legacy semantics
 
-Migration now has callers; this replaces the previous amendment's "no caller
-yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
+Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
 
 - **Validator.** `ValidateTermInput` applies to manual terms and the legacy PUT
   now, and to automatic terms when extraction lands; its blocklist is a seed
-  (grown by the automatic-term filters amendment below).
+  (grown by the automatic-term filters below).
 - **User actions.** Delete tombstones any origin. Edit sets `userEditedAt` under
   the caller's `version` and keeps `origin`; keep is `aliasMode=always`;
   accepting a suggestion sets `state=active`. Renaming to another key is a new
@@ -130,24 +117,6 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   oldest first, bounding the guessable-hash retention noted above. `termKey`
   stays unsalted: a salt in the same table does not stop a table reader, who can
   already read live terms and meetings.
-- **Vocabulary handoff** (historical: superseded by the A/B builder amendment
-  below, which removed this in-place rebuild). Recognition-affecting manual changes keep the pre-v2
-  in-place rebuild of the derived name, recorded in `VOCAB#personal#ko-KR`.
-  Each attempt reads that row before listing terms and writes only if its
-  version is unchanged, so any rebuild recorded since that read rejects the
-  stale write; a conflict recomputes from a fresh row and term listing (three
-  attempts, then a warning without a write). The Transcribe call precedes the
-  guarded write, so an exhausted or failed attempt can leave the provider ahead
-  of the record until the next change. While Transcribe reports a pending
-  build, the update is skipped with a warning and the next change rebuilds.
-  A row with an inactive slot is left to the A/B builder.
-  When that row is missing (no legacy item ever existed), the rebuild creates
-  it in a transaction whose ConditionCheck requires the legacy item to be
-  absent or already migrated, so only migration creates it for an unmigrated
-  item.
-  Pending updates are skipped by batch jobs (`GetVocabularyForTranscription`
-  requires READY); the response still has no `vocabularyName`, so the live
-  client passes none.
 - **Legacy item copies.** The PUT writes only manual terms to the legacy item, so
   automatic (meeting-derived) terms never gain a second copy there. A manual term
   later tombstoned through the v2 DELETE keeps its text in the legacy item until
@@ -158,7 +127,7 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   older API would also read the legacy item's retained manual copies, including
   terms since deleted through v2.
 
-## Amendment 2026-10-18: automatic-term filters
+## Automatic-term filters
 
 `FilterCandidates` in `service/terms_filter.go` is pure; the extraction job
 below calls it. A candidate failing a rule is dropped alone,
@@ -204,10 +173,10 @@ Rules, in order:
 - **Duplicates** by term key keep the best-ranked candidate.
 - **Cap.** At most 15 terms per run, ranked by confidence, then source-type count.
 
-## Amendment 2026-10-18: terms run state and merge rules
+## Run state and merge rules
 
-Storage and merge code for automatic terms; the extraction job amendment below
-is its caller.
+Storage and merge code for automatic terms; the extraction job below is its
+caller.
 
 - **Run state** `MEETING#{mid}/ANALYSIS#terms` (`model.TermsAnalysis`) follows the
   action-items CAS: `runId`, `status` queued|running|succeeded|failed,
@@ -226,7 +195,7 @@ is its caller.
   (design A8) can find a meeting's `DICTOBS#` rows only through it. The merger
   writes a new key only while the list has room, checked per candidate so
   skipped candidates take no slot, and returns the list even on failure so
-  Fail can record it. Deletion cleanup is in the extraction job amendment.
+  Fail can record it. Deletion cleanup is in the extraction job section.
 - **Merge** (`TermsMerger.MergeExtractedTerms`, owner's personal scope only):
   no row creates an auto term with hits 1 (`suggested` when the meeting is
   tainted); tombstones, manual rows, rows with `userEditedAt` and unknown
@@ -257,9 +226,9 @@ is its caller.
   may already have evicted it), and only a still-evictable newer row moves on
   to the next candidate. Each term keeps its ten newest observations; `hits` is never
   decremented. Cleanup failures are surfaced. Account scope is not implemented; the
-  manual 500-term cap and tombstone pruning belong to the term CRUD amendment.
+  manual 500-term cap and tombstone pruning belong to the term writes section.
 
-## Amendment 2026-10-18: extraction job (off by default)
+## Extraction job (off by default)
 
 - **Provenance.** A non-owner write that changes content, transcriptA/B, the
   selected transcript, saved notes (including the `expectedNotes`
@@ -298,7 +267,7 @@ is its caller.
   `personal` is a separate, explicit context change made after a deployment with
   `off`; synth is not deployment.
 
-## Amendment 2026-10-18: A/B vocabulary builder
+## A/B vocabulary builder
 
 `EnsureVocabularies` ([vocabulary_build.go](../../backend/internal/service/vocabulary_build.go))
 replaces the in-place rebuild. Only the API Lambda enables it; the shared
@@ -318,7 +287,7 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   `Phrase\tSoundsLike\tIPA\tDisplayAs`, four fields per row, at most 1,500 rows
   and 48 KB; invalid rows are dropped individually. The phrase validator is
   minimal (spaces become `-`, AWS table rules), separate from `terms_filter.go`.
-  ko-KR drops dotted acronyms until acceptance item 2. en-US
+  ko-KR drops dotted acronyms until rollout check 2. en-US
   needs five Latin-only phrases. The file is deleted after READY, FAILED or quota.
 - **Plan.** Every state-machine step reads the VOCAB# row and only then lists
   the terms, so a step never acts on a listing older than the row it read; a
@@ -359,7 +328,7 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   a row with A/B fields to the builder. Live streams receive no vocabulary
   name (below).
 - **No vocabulary name in responses:** the live client would send it on a
-  ko-KR/en-US multi-language stream, which may fail; it waits for item 5.
+  ko-KR/en-US multi-language stream, which may fail; it waits for rollout check 5.
 - **Empty language** stops advertising at once (`activeReady` false,
   `emptySince` set), also while a build is claimed or submitted: the claim is
   dropped and its provider result is never flipped or served. Both slots are
@@ -370,7 +339,7 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   of `VOCAB_REBUILD_MIN_INTERVAL`. An unmigratable legacy item keeps the pre-v2
   `Phrases` rebuild.
 
-## Amendment 2026-10-18: settings UI v2 and live vocabulary client
+## Settings UI and live vocabulary client
 
 - **UI** uses only the per-term routes; the legacy PUT stays for older clients.
   Duplicates use the `termKey` normalization (the old lowercase-phrase check let
@@ -378,7 +347,7 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   half runs in `npm run test:unit`, in CI only for `frontend/**` changes). An unmigratable legacy
   item's terms cannot be edited; the UI marks the conflicting ones and deletes
   them through the legacy DELETE-by-phrase, which retries migration.
-- **No live name.** The A/B amendment's wait for item 5 stands: there is no
+- **No live name.** The A/B builder's wait for rollout check 5 stands: there is no
   live-config route and no response names a vocabulary, so the recording page
   only calls the dictionary GET (a flip opportunity) and live streams send none.
 - **Client plumbing.** `liveVocabulary.ts` sends one name per `LanguageOptions`
@@ -388,7 +357,7 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
 - Not covered: live-config, source meeting titles, account dictionaries, live
   aliases, backfill.
 
-Rollout acceptance (record each with a date):
+Rollout checks (record each with a date):
 
 1. Vocabulary quota usage (default 100 per account; up to three ko-KR names per
    user at rest, as in Slots).
@@ -403,10 +372,10 @@ Rollout acceptance (record each with a date):
 6. That `GetVocabulary` `LastModifiedTime` advances on each accepted Create
    and Update, which the submit verification relies on.
 
-## Amendment 2026-10-26: layered dictionary
+## Layered dictionary
 
-This partly supersedes the rejection of a shared dictionary above: shared layers
-are added next to the personal one, which stays the only layer a user owns.
+Shared layers sit next to the personal one, which stays the only layer a user
+owns. An organisation-only dictionary was rejected as insufficiently personal.
 
 - **Layers and partitions.** Common `DICT#COMMON`, Account `ACCOUNT#{accountId}`
   and Personal `USER#{userId}`. Term rows stay `DICTTERM#{termKey}` with the
@@ -456,7 +425,7 @@ are added next to the personal one, which stays the only layer a user owns.
   sources an operator marked global and that carry no sticky `userTiedAt` are
   read; the repeat threshold counts distinct sources, and Common sources are
   public news references, never meeting or KB references.
-  **Amendment (owner, 2026-11-09):** no source was ever marked global, so news
+  **Owner decision, 2026-11-09:** no source was ever marked global, so news
   never reached Common. The owner chose to share news terms with every user,
   because the dictionary exists to improve STT recognition of public technical
   terms and names. `ttobak:newsTermsSources` (`global` by default, or `all`)

@@ -16,5 +16,5 @@ Intended checks covered cross-part collisions, out-of-range labels, non-acoustic
 ## Current references and supersession
 
 - [Speaker helper](../../../backend/internal/speaker/label.go), [label tests](../../../backend/internal/speaker/label_test.go), [multipart merge](../../../backend/cmd/summarize/merge.go), [refinement](../../../backend/internal/service/bedrock.go), [Python tests](../../../backend/whisper/test_transcribe.py).
-- [ADR-019](../../decisions/ADR-019-acoustic-speaker-diarization-pyannote.md) also requires structural label remapping and cross-speaker-merge fallback; [ADR-035](../../decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) supersedes model/dependency choices.
+- [ADR-009](../../decisions/ADR-009-batch-stt-and-diarization.md) also requires structural label remapping and cross-speaker-merge fallback, and it supersedes model/dependency choices.
 - [Current review-context generator](../../../scripts/docs/sync_review_context.py) replaces the archived plugin-path instructions. Historical dependency/checksum deferrals are not exemptions from current security review.
