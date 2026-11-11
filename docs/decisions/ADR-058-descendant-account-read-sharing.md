@@ -16,7 +16,7 @@
   and account invitations keep the inherited restrictions.
 - Supersedes ADR-015's no-inheritance policy only. Its meeting classification,
   explicit multi-filter semantics and owner-only hierarchy writes remain.
-- (Superseded 2026-11-06 for meetings by the amendment above.) Narrowed ADR-051's
+- (Superseded 2026-11-06 for meetings by the amendment above.) Narrowed ADR-016's
   reader speaker-correction permission: inherited-only readers could not correct
   speakers. Its direct-member and independent-share grants remain.
 - Deployment is a separate gate in `docs/runbooks/account-descendant-sharing.md`,

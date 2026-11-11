@@ -81,7 +81,7 @@ and retention/TTL policy for new or changed PII storage.
 
 ### Status notes
 
-- Status: Accepted; supersedes owner-only authorization for these two operations. ADR-023's removal safeguards remain in force.
+- Status: Accepted; supersedes owner-only authorization for these two operations. ADR-016's removal safeguards remain in force.
 - Decision date: 2026-08-25.
 - Code checked: 2026-09-13. The hierarchy section adds separate owner-only reparenting, without inherited membership.
 - The invitations section supersedes the earlier

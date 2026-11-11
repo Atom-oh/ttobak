@@ -187,7 +187,7 @@ sticky. A new ADR records this and the predecessor removal; ADR-049 gains a
 
 ## Constraints
 
-- ADR-049/040/042 guarantees, CAS rules and reader projections remain.
+- ADR-049/013/028 guarantees, CAS rules and reader projections remain.
 - Inline item budget: the English field counts against the ~300KB item budget
   like `content`, or gets its own overflow; publication must fail cleanly
   rather than exceed the item limit.

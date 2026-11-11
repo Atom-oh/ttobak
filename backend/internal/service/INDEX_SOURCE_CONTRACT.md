@@ -89,7 +89,7 @@ vectors are absent after owner deletion; Put/Delete still reject original keys.
 Existing QA validation is in [SOURCE_CONTRACT.md](../../python/qa/SOURCE_CONTRACT.md)
 and the registered `manual_kb.py` reader. Verified snapshots and public strict-QA
 acceptance remain prerequisites for canonical activation.
-[ADR-038](../../../docs/decisions/ADR-038-canonical-note-indexing.md)
+[ADR-028](../../../docs/decisions/ADR-028-qa-search-indexing-and-sources.md)
 defines the manual-only → snapshot verification → strict QA → all-mode rollout.
 
 Implementation and verification: `index_source.go`, `index_provider.go`,

@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: c09b0fe66029 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e23e990c0084 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -196,7 +196,7 @@ limit instead of claiming a Mac build passed.
   it fails open on DynamoDB errors and is an abuse brake, not an access boundary.
 - **Indexing and extraction rollout:** canonical `all` mode may be checked in
   only after recorded manual snapshot/provider verification and actual
-  current-source QA acceptance (ADR-038). Keep the KB schedule enabled for
+  current-source QA acceptance (ADR-028). Keep the KB schedule enabled for
   reconciliation. A draft configuration, deployed package or successful WS
   connection is not consumer acceptance. Use the bootstrap runbook's dated
   readiness record and verify the deployed mode independently.
@@ -235,7 +235,7 @@ limit instead of claiming a Mac build passed.
   remain visible but nonreplayable; creation receipts never replay a mutation.
   Registration status lives in `qa/SOURCE_CONTRACT.md` and must match handler
   imports. Helper installation alone does not wire either transport.
-  Code readiness and deployed acceptance are separate gates (ADR-042; QA contracts).
+  Code readiness and deployed acceptance are separate gates (ADR-028; QA contracts).
 - **Bounded meeting/MCP reads:** the authenticated reading endpoint uses
   metadata-only authorization for notes and binds continuation to source revision,
   selection and access. API JSON is capped at 14,000 encoded bytes. MCP forwards

@@ -19,4 +19,4 @@ Intended checks included Python route tests for missing query/default/custom res
 
 The three proposed tool names/API client methods and `/api/qa/search-kb` route are absent from the reviewed [MCP registry](../../../mcp-server/src/index.ts), [API client](../../../mcp-server/src/api.ts), and [QA handler](../../../backend/python/qa/handler.py). Existing `ttobak_ask` and KB-management tools do not establish that this proposal shipped.
 
-[ADR-003](../../decisions/ADR-003-mcp-server-for-external-meeting-access.md) and [ADR-018](../../decisions/ADR-018-mcp-back-data-tools.md) describe implemented MCP foundations. [ADR-028](../../decisions/ADR-028-qa-web-search-and-proactive-question-search.md) concerns QA web search, a different tool and trust boundary.
+[ADR-003](../../decisions/ADR-003-mcp-server-for-external-meeting-access.md) and [ADR-018](../../decisions/ADR-018-mcp-back-data-tools.md) describe implemented MCP foundations. [ADR-028](../../decisions/ADR-028-qa-search-indexing-and-sources.md) concerns QA web search, a different tool and trust boundary.

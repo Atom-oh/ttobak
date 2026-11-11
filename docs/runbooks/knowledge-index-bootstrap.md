@@ -225,4 +225,4 @@ Existing invocations may finish; preserve coordinator state and snapshots.
 Re-enable both delivery paths through a reviewed change after resolution.
 
 See [migration details](../../backend/cmd/kb/KNOWLEDGE_MIGRATION.md) and
-[ADR-038](../decisions/ADR-038-canonical-note-indexing.md).
+[ADR-028](../decisions/ADR-028-qa-search-indexing-and-sources.md).

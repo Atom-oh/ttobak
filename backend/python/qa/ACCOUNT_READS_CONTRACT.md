@@ -2,7 +2,7 @@
 
 `StrictAccountReader` implements callbacks for
 [tool-history proof](TOOL_HISTORY_CONTRACT.md) and
-[ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md).
+[ADR-028](../../../docs/decisions/ADR-028-qa-search-indexing-and-sources.md).
 For handler registration and deployment acceptance status, see
 [SOURCE_CONTRACT.md](SOURCE_CONTRACT.md).
 
