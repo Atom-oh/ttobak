@@ -382,6 +382,7 @@ func TestReplaceUnresolvedMentions_DeletesOnlyStale(t *testing.T) {
 	var items []interface{}
 	repo := capturePeopleTx(t, &items)
 	rows := []model.UnresolvedMention{testUnresolved(b, "participant"), testUnresolved(c, "participant")}
+	rows[0].PersonCandidate = true
 	if err := repo.ReplaceUnresolvedMentions(context.Background(), "acc", "o:m1", rows, []string{skA, skB}, testRunFence); err != nil {
 		t.Fatal(err)
 	}
@@ -391,6 +392,9 @@ func TestReplaceUnresolvedMentions_DeletesOnlyStale(t *testing.T) {
 	}
 	if put := items[0].(wireMap)["Put"].(wireMap); wireS(put["Item"], "entityType") != "ACCOUNT_PEOPLE_MENTION" {
 		t.Fatalf("item %#v", put["Item"])
+	}
+	if item := items[0].(wireMap)["Put"].(wireMap)["Item"].(wireMap); item["personCandidate"].(wireMap)["BOOL"] != true {
+		t.Fatal("person classification must survive the fenced DynamoDB write")
 	}
 	if !wireValues(items[4].(wireMap)["ConditionCheck"].(wireMap))["value:tok"] {
 		t.Fatal("lease check does not pin the token")
@@ -610,8 +614,36 @@ func TestListUnresolvedMentions_GroupsContiguous(t *testing.T) {
 		}
 		return `{"Items":[],"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"` + after + `"}}}`
 	})
-	if _, truncated, err := repo.ListUnresolvedMentionsByHash(context.Background(), "acc", a, 1); err != nil || !truncated || prefix != "MENTION#"+a+"#" {
-		t.Fatalf("by hash %v %v %q", truncated, err, prefix)
+	if _, next, err := repo.ListUnresolvedMentionsByHash(context.Background(), "acc", a, "", 1); err != nil || next != after || prefix != "MENTION#"+a+"#" {
+		t.Fatalf("by hash %q %v %q", next, err, prefix)
+	}
+}
+
+func TestListUnresolvedMentionsByHash_ResumesAfterUndecodableRow(t *testing.T) {
+	hash := testMentionHash('a')
+	after := model.MentionSortKey(hash, "o:m1", model.PeopleRoleMentions)
+	last := model.MentionSortKey(hash, "o:m2", model.PeopleRoleMentions)
+	calls := 0
+	repo := indexingWire(t, func(_ string, body map[string]interface{}) string {
+		calls++
+		start, _ := body["ExclusiveStartKey"].(wireMap)
+		if wireS(start, "PK") != "ACCOUNT#acc" || wireS(start, "SK") != after || body["Limit"].(float64) != 1 {
+			t.Fatalf("exclusive hash continuation missing: %#v", body)
+		}
+		return `{"Items":[{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"` + last + `"},"mention":{"M":{"invalid":{"S":"shape"}}}}],
+			"LastEvaluatedKey":{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"` + last + `"}}}`
+	})
+	rows, next, err := repo.ListUnresolvedMentionsByHash(context.Background(), "acc", hash, after, 1)
+	if err != nil || len(rows) != 0 || next != last || calls != 1 {
+		t.Fatalf("an undecodable row must not stall continuation: rows=%+v next=%q calls=%d err=%v", rows, next, calls, err)
+	}
+	for _, invalid := range []string{"LINK#other", model.MentionSortKey(testMentionHash('b'), "o:m1", model.PeopleRoleMentions)} {
+		if _, _, err := repo.ListUnresolvedMentionsByHash(context.Background(), "acc", hash, invalid, 1); err == nil {
+			t.Fatal("cursor outside the hash range accepted")
+		}
+	}
+	if calls != 1 {
+		t.Fatal("invalid cursors must not query")
 	}
 }
 

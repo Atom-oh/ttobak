@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -52,17 +53,19 @@ func (f *fakePeopleRepo) DeletePeopleLink(_ context.Context, _, actor string, k 
 func (f *fakePeopleRepo) GetPeopleLink(_ context.Context, _ string, k model.PeopleLinkKey) (*model.PeopleLink, error) {
 	return f.stored[k], nil
 }
-func (f *fakePeopleRepo) ListUnresolvedMentionsByHash(_ context.Context, _, hash string, maxRows int) ([]model.UnresolvedMention, bool, error) {
+func (f *fakePeopleRepo) ListUnresolvedMentionsByHash(_ context.Context, _, hash, after string, maxRows int) ([]model.UnresolvedMention, string, error) {
+	sk := func(m model.UnresolvedMention) string { return model.MentionSortKey(m.Hash, m.MeetingID, m.Role) }
 	var rows []model.UnresolvedMention
 	for _, m := range f.mentionRows {
-		if m.Hash == hash {
+		if m.Hash == hash && sk(m) > after {
 			rows = append(rows, m)
 		}
 	}
+	sort.Slice(rows, func(i, j int) bool { return sk(rows[i]) < sk(rows[j]) })
 	if len(rows) > maxRows {
-		return rows[:maxRows], true, nil
+		return rows[:maxRows], sk(rows[maxRows-1]), nil
 	}
-	return rows, false, nil
+	return rows, "", nil
 }
 func (f *fakePeopleRepo) DeleteUnresolvedMention(_ context.Context, _, hash, meetingID, role, _ string) error {
 	if f.staleMentions[meetingID] {
