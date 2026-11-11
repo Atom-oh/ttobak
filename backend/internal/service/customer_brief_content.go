@@ -33,7 +33,8 @@ const (
 	briefNewsSummary     = 400                 // news summary, code points
 	briefEventMax        = 5                   // upcoming events: at most 5
 	briefCalendarWindow  = 30 * 24 * time.Hour // synced calendar look-ahead
-	briefCalendarScan    = 20                  // calendar rows read per run
+	briefCalendarScan    = 20                  // calendar rows per page
+	briefCalendarPages   = 11                  // first page plus at most 10 continuations
 	briefAliasMax        = 10                  // account aliases
 	briefLabel           = 80                  // source chip label, code points
 	briefRefsMax         = 4                   // citations per statement
@@ -101,6 +102,9 @@ func (s *CustomerBriefService) gather(ctx context.Context, state *model.Customer
 		return nil, errors.New("customer brief sources unavailable")
 	}
 	// Windows are pinned to the request time so both reads hash alike.
+	// Insights, meetings, news sources and documents, and dictionary terms are
+	// read to the end of their pages by their repositories; only the calendar
+	// read below returns a continuation.
 	at := state.RequestedAt.UTC().Truncate(time.Second)
 	account, err := s.repo.GetAccount(ctx, accountID)
 	if err != nil {
@@ -187,6 +191,8 @@ func (s *CustomerBriefService) gather(ctx context.Context, state *model.Customer
 			Title: title, Text: briefText(doc.Summary, briefNewsSummary), Detail: briefText(doc.Source, briefNewsPublisher)})
 	}
 
+	// Account events: one ascending key-range query with Limit 5 and no
+	// filter, so its first page is exactly the earliest five from "at".
 	events, err := src.Events(ctx, accountID, userID, at, briefEventMax)
 	if err != nil {
 		return nil, err
@@ -200,16 +206,31 @@ func (s *CustomerBriefService) gather(ctx context.Context, state *model.Customer
 		title := briefText(e.Title, briefTitle)
 		upcoming = append(upcoming, briefItem{Kind: "event", ID: e.EventID, Label: title, Date: start.UTC().Format(time.RFC3339), Title: title})
 	}
-	calendar, err := src.Calendar(ctx, userID, accountID, at, at.Add(briefCalendarWindow), briefCalendarScan)
-	if err != nil {
-		return nil, err
-	}
-	for _, e := range calendar {
-		if e.AccountID != accountID || e.StartsAt.Before(at) {
-			continue
+	// Calendar pages are in start order but filtered after the read, so a page
+	// can be empty with more to come: follow the continuation until five
+	// matching future events are found or the rows end. Hitting the page bound
+	// first fails the run instead of publishing without the next meeting.
+	cursor, found := "", 0
+	for page := 0; ; page++ {
+		if page == briefCalendarPages {
+			return nil, ErrCustomerBriefIncomplete
 		}
-		title := briefText(e.Title, briefTitle)
-		upcoming = append(upcoming, briefItem{Kind: "event", ID: "calendar:" + e.EventID, Label: title, Date: e.StartsAt.UTC().Format(time.RFC3339), Title: title})
+		rows, next, err := src.Calendar(ctx, userID, accountID, at, at.Add(briefCalendarWindow), briefCalendarScan, cursor)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range rows {
+			if e.AccountID != accountID || e.StartsAt.Before(at) || found == briefEventMax {
+				continue
+			}
+			found++
+			title := briefText(e.Title, briefTitle)
+			upcoming = append(upcoming, briefItem{Kind: "event", ID: "calendar:" + e.EventID, Label: title, Date: e.StartsAt.UTC().Format(time.RFC3339), Title: title})
+		}
+		if next == "" || found == briefEventMax {
+			break
+		}
+		cursor = next
 	}
 	sort.SliceStable(upcoming, func(i, j int) bool {
 		if upcoming[i].Date != upcoming[j].Date {
@@ -359,7 +380,8 @@ func briefSources(items []briefItem) []model.CustomerBriefSource {
 // all resolve are dropped; terms must occur literally in their cited items.
 func (in *briefInputs) validate(output string) (*model.CustomerBrief, string, error) {
 	raw := stripCodeFences(output)
-	if len(raw) > briefModelOutputSize || !utf8.ValidString(raw) {
+	// Only a JSON object is the contract; null, arrays and scalars are not.
+	if len(raw) > briefModelOutputSize || !utf8.ValidString(raw) || !strings.HasPrefix(raw, "{") {
 		return nil, "", ErrInvalidAnalysisResponse
 	}
 	decoder := json.NewDecoder(strings.NewReader(raw))

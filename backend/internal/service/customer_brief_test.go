@@ -19,6 +19,8 @@ type fakeBriefRepo struct {
 	state     *model.CustomerBriefState
 	completes int
 	cleared   bool
+	// beforeCommit runs when a completion reaches the repository.
+	beforeCommit func()
 }
 
 func (f *fakeBriefRepo) GetAccount(context.Context, string) (*model.Account, error) {
@@ -70,6 +72,9 @@ func (f *fakeBriefRepo) FailCustomerBrief(_ context.Context, s *model.CustomerBr
 	return nil
 }
 func (f *fakeBriefRepo) CompleteCustomerBrief(_ context.Context, s *model.CustomerBriefState, content []byte, hash, modelID string, now time.Time) error {
+	if f.beforeCommit != nil {
+		f.beforeCommit()
+	}
 	if !f.matches(s) || !f.members[s.UserID] {
 		return repository.ErrConditionFailed
 	}
@@ -90,11 +95,16 @@ type briefFixture struct {
 	onModel   func()
 	news      []model.CrawledDocument
 	prompt    string
+	// calendar holds the pages a cursor walk returns; endless keeps
+	// returning a continuation after them.
+	calendar [][]model.CalendarEvent
+	endless  bool
 }
 
 func newBriefFixture(t *testing.T) *briefFixture {
 	t.Helper()
 	f := &briefFixture{now: time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)}
+	f.calendar = [][]model.CalendarEvent{{{EventID: "c1", AccountID: "acct", Title: "킥오프", StartsAt: f.now.Add(48 * time.Hour)}}}
 	f.repo = &fakeBriefRepo{account: &model.Account{AccountID: "acct", Name: "하나은행"}, members: map[string]bool{"user": true}}
 	f.news = []model.CrawledDocument{{SourceID: "src", DocHash: "doc1", Title: "하나은행 클라우드 전환", Summary: "하나은행이 EKS 기반 MSA 전환을 발표했다.", Source: "전자신문", CrawledAt: f.now.Add(-time.Hour).Unix()}}
 	sources := CustomerBriefSources{
@@ -113,8 +123,19 @@ func newBriefFixture(t *testing.T) *briefFixture {
 		Events: func(context.Context, string, string, time.Time, int) ([]model.AccountEvent, error) {
 			return []model.AccountEvent{{EventID: "ev1", Title: "분기 리뷰", StartAt: f.now.Add(24 * time.Hour).Format(time.RFC3339)}}, nil
 		},
-		Calendar: func(context.Context, string, string, time.Time, time.Time, int32) ([]model.CalendarEvent, error) {
-			return []model.CalendarEvent{{EventID: "c1", AccountID: "acct", Title: "킥오프", StartsAt: f.now.Add(48 * time.Hour)}}, nil
+		Calendar: func(_ context.Context, _, _ string, _, _ time.Time, _ int32, cursor string) ([]model.CalendarEvent, string, error) {
+			page := 0
+			if cursor != "" {
+				fmt.Sscanf(cursor, "p%d", &page)
+			}
+			var rows []model.CalendarEvent
+			if page < len(f.calendar) {
+				rows = f.calendar[page]
+			}
+			if page+1 < len(f.calendar) || f.endless {
+				return rows, fmt.Sprintf("p%d", page+1), nil
+			}
+			return rows, "", nil
 		},
 		Terms: func(_ context.Context, pk string) ([]model.DictTerm, error) {
 			if pk == "ACCOUNT#acct" {
@@ -265,8 +286,16 @@ func TestCustomerBriefFailuresKeepPreviousBrief(t *testing.T) {
 		"truncated": {func(f *briefFixture) { f.genErr = fmt.Errorf("%w: max_tokens", ErrInvalidAnalysisResponse) }, model.AnalysisInvalidOutput},
 		"non-json":  {func(f *briefFixture) { f.output = "브리프입니다" }, model.AnalysisInvalidOutput},
 		"unknown":   {func(f *briefFixture) { f.output = `{"situation":null,"extra":1}` }, model.AnalysisInvalidOutput},
-		"trailing":  {func(f *briefFixture) { f.output = `{"situation":null} {}` }, model.AnalysisInvalidOutput},
-		"revoked":   {func(f *briefFixture) { f.onModel = func() { f.repo.members = map[string]bool{} } }, "ACCESS_REVOKED"},
+		"null":      {func(f *briefFixture) { f.output = "null" }, model.AnalysisInvalidOutput},
+		"array":     {func(f *briefFixture) { f.output = "[]" }, model.AnalysisInvalidOutput},
+		"calendar-incomplete": {func(f *briefFixture) {
+			f.calendar, f.endless = nil, true
+		}, "SOURCE_UNAVAILABLE"},
+		"revoked-at-commit": {func(f *briefFixture) {
+			f.repo.beforeCommit = func() { delete(f.repo.members, "user") }
+		}, "ACCESS_REVOKED"},
+		"trailing": {func(f *briefFixture) { f.output = `{"situation":null} {}` }, model.AnalysisInvalidOutput},
+		"revoked":  {func(f *briefFixture) { f.onModel = func() { f.repo.members = map[string]bool{} } }, "ACCESS_REVOKED"},
 		"changed": {func(f *briefFixture) {
 			f.onModel = func() {
 				f.news = append(f.news, model.CrawledDocument{SourceID: "src", DocHash: "doc2", Title: "새 기사", CrawledAt: f.now.Add(-time.Minute).Unix()})
@@ -297,7 +326,9 @@ func TestCustomerBriefFailuresKeepPreviousBrief(t *testing.T) {
 			previous := f.repo.state.Sealed
 			tc.setup(f)
 			f.repo.members["user"] = true
-			if err := f.svc.Process(context.Background(), "acct", "user", f.queue(t)); err != nil {
+			// A refused completion also returns its write error, as in re-summary.
+			if err := f.svc.Process(context.Background(), "acct", "user", f.queue(t)); err != nil &&
+				!(name == "revoked-at-commit" && errors.Is(err, repository.ErrConditionFailed)) {
 				t.Fatal(err)
 			}
 			if f.repo.state.Status != model.AnalysisFailed || f.repo.state.ErrorCode != tc.code {
@@ -327,5 +358,37 @@ func TestCustomerBriefExpiredRowReadsAsAbsent(t *testing.T) {
 	f.repo.state.ExpiresAt = f.now.Unix()
 	if err := f.svc.Process(context.Background(), "acct", "user", f.repo.state.RunID); err != nil || f.repo.state.Status != model.AnalysisQueued {
 		t.Fatalf("an expired row is absent to the worker: %v %+v", err, f.repo.state)
+	}
+}
+
+func TestCustomerBriefFollowsCalendarContinuation(t *testing.T) {
+	f := newBriefFixture(t)
+	f.calendar = [][]model.CalendarEvent{
+		{},
+		{{EventID: "x", AccountID: "other", Title: "다른 고객", StartsAt: f.now.Add(time.Hour)}},
+		{{EventID: "past", AccountID: "acct", Title: "지난 회의", StartsAt: f.now.Add(-time.Hour)}},
+		{{EventID: "c9", AccountID: "acct", Title: "킥오프", StartsAt: f.now.Add(2 * time.Hour)}},
+	}
+	if err := f.svc.Process(context.Background(), "acct", "user", f.queue(t)); err != nil {
+		t.Fatal(err)
+	}
+	brief := f.brief(t)
+	if f.repo.state.Status != model.AnalysisSucceeded || brief.NextMeeting == nil || brief.NextMeeting.Source.ID != "calendar:c9" {
+		t.Fatalf("filtered-out pages must not hide the next meeting: %s %+v", f.repo.state.Status, brief.NextMeeting)
+	}
+	if strings.Contains(f.prompt, "다른 고객") || strings.Contains(f.prompt, "지난 회의") {
+		t.Fatal("other-account or past events reached the prompt")
+	}
+}
+
+func TestCustomerBriefQueueFloorsInheritedExpiry(t *testing.T) {
+	f := newBriefFixture(t)
+	if err := f.svc.Process(context.Background(), "acct", "user", f.queue(t)); err != nil {
+		t.Fatal(err)
+	}
+	f.repo.state.ExpiresAt = f.now.Add(time.Minute).Unix()
+	f.queue(t)
+	if floor := f.now.Add(customerBriefRunFloor).Unix(); f.repo.state.ExpiresAt < floor || f.repo.state.Sealed == "" {
+		t.Fatalf("queued expiry %d below run floor %d", f.repo.state.ExpiresAt, floor)
 	}
 }

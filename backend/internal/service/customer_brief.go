@@ -7,21 +7,25 @@ import (
 	"log"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
-var ErrCustomerBriefPublish = errors.New("customer brief request delivery failed")
+var (
+	ErrCustomerBriefPublish = errors.New("customer brief request delivery failed")
+	// ErrCustomerBriefIncomplete means a paged source still had more rows
+	// when its read bound was reached, so an input may be missing.
+	ErrCustomerBriefIncomplete = errors.New("customer brief source incomplete")
+)
 
 // Leases and budgets mirror the saved re-summary run.
 const (
 	customerBriefQueuedLease  = 5 * time.Minute
 	customerBriefRunningLease = 10 * time.Minute
 	customerBriefWorkBudget   = 8 * time.Minute
+	// A queued row expires no sooner than a full run could take.
+	customerBriefRunFloor = customerBriefQueuedLease + customerBriefRunningLease + customerBriefWorkBudget + 5*time.Minute
 )
 
 type customerBriefRepo interface {
@@ -43,7 +47,8 @@ type CustomerBriefSources struct {
 	Meetings func(ctx context.Context, userID, accountID string) ([]model.MeetingRefDTO, error)
 	News     func(ctx context.Context, accountID string, from, to time.Time) ([]model.CrawledDocument, error)
 	Events   func(ctx context.Context, accountID, userID string, from time.Time, limit int) ([]model.AccountEvent, error)
-	Calendar func(ctx context.Context, userID, accountID string, from, to time.Time, limit int32) ([]model.CalendarEvent, error)
+	// Calendar returns one page and its continuation ("" when complete).
+	Calendar func(ctx context.Context, userID, accountID string, from, to time.Time, limit int32, cursor string) ([]model.CalendarEvent, string, error)
 	Terms    func(ctx context.Context, pk string) ([]model.DictTerm, error)
 }
 
@@ -63,12 +68,16 @@ func NewCustomerBriefSources(accounts *AccountService, news *AccountNewsService,
 			}
 			return page.Events, nil
 		},
-		Calendar: func(ctx context.Context, userID, accountID string, from, to time.Time, limit int32) ([]model.CalendarEvent, error) {
-			page, err := calendar.ListEvents(ctx, userID, model.CalendarQuery{From: from, To: to, AccountID: accountID, Limit: limit})
+		Calendar: func(ctx context.Context, userID, accountID string, from, to time.Time, limit int32, cursor string) ([]model.CalendarEvent, string, error) {
+			page, err := calendar.ListEvents(ctx, userID, model.CalendarQuery{From: from, To: to, AccountID: accountID, Limit: limit, Cursor: cursor})
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
-			return page.Events, nil
+			next := ""
+			if page.NextCursor != nil {
+				next = *page.NextCursor
+			}
+			return page.Events, next, nil
 		},
 		Terms: dict.ListDictTerms,
 	}
@@ -93,25 +102,6 @@ func (s *BedrockService) GenerateCustomerBrief(ctx context.Context, system, prom
 	request := ClaudeRequest{AnthropicVersion: "bedrock-2023-05-31", MaxTokens: 4096, System: system,
 		Messages: []ClaudeMessage{{Role: "user", Content: []ContentBlock{{Type: "text", Text: prompt}}}}}
 	return s.invokeCompleteAnalysisWithID(ctx, PrepareClaudeRequest(request, ClaudeOpusModelID), ClaudeOpusModelID)
-}
-
-func CustomerBriefPublisher(client actionEventClient) func(context.Context, model.CustomerBriefRequested) error {
-	return func(ctx context.Context, event model.CustomerBriefRequested) error {
-		if client == nil {
-			return ErrCustomerBriefPublish
-		}
-		body, err := json.Marshal(event)
-		if err != nil {
-			return ErrCustomerBriefPublish
-		}
-		out, err := client.PutEvents(ctx, &eventbridge.PutEventsInput{Entries: []ebtypes.PutEventsRequestEntry{{
-			Source: aws.String("ttobak.analysis"), DetailType: aws.String("CustomerBriefRequested"), Detail: aws.String(string(body)),
-		}}})
-		if err != nil || out == nil || out.FailedEntryCount != 0 || len(out.Entries) != 1 || aws.ToString(out.Entries[0].ErrorCode) != "" || aws.ToString(out.Entries[0].EventId) == "" {
-			return ErrCustomerBriefPublish
-		}
-		return nil
-	}
 }
 
 // requireDirectMember accepts only a current MEMBER row on an existing
@@ -162,8 +152,9 @@ func (s *CustomerBriefService) Request(ctx context.Context, userID, accountID st
 		RequestedAt: now, LeaseUntil: now.Add(customerBriefQueuedLease).UnixMilli(), UpdatedAt: now,
 		ExpiresAt: now.Add(model.CustomerBriefTTL).Unix()}
 	if prior != nil && !expired && prior.Sealed != "" {
-		// Keep the last good brief's own expiry; only success extends it.
-		next.ExpiresAt = prior.ExpiresAt
+		// Keep the last good brief's own expiry, floored so the sweep cannot
+		// remove the row while this run may still be working.
+		next.ExpiresAt = max(prior.ExpiresAt, now.Add(customerBriefRunFloor).Unix())
 	}
 	if err := s.repo.QueueCustomerBrief(ctx, prior, next, prior != nil && expired); err != nil {
 		return nil, err
@@ -235,6 +226,8 @@ func customerBriefErrorCode(work context.Context, err error) string {
 		return model.AnalysisSourceChanged
 	case errors.Is(err, ErrInvalidAnalysisResponse):
 		return model.AnalysisInvalidOutput
+	case errors.Is(err, ErrCustomerBriefIncomplete):
+		return "SOURCE_UNAVAILABLE"
 	default:
 		return "SOURCE_UNAVAILABLE"
 	}
@@ -314,6 +307,11 @@ func (s *CustomerBriefService) Process(ctx context.Context, accountID, userID, r
 		code := model.AnalysisPersistenceFail
 		if errors.Is(err, repository.ErrConditionFailed) {
 			code = model.AnalysisSourceChanged
+			// The transaction also requires the MEMBER row: name a revoked
+			// membership distinctly from a run or input change.
+			if access := s.requireDirectMember(work, userID, accountID); errors.Is(access, ErrForbidden) || errors.Is(access, ErrNotFound) {
+				code = "ACCESS_REVOKED"
+			}
 		}
 		return errors.Join(err, failed(code))
 	}

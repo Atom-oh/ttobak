@@ -448,7 +448,10 @@ this change.
   most recent readable meetings, current customer news (30 days, 30 items),
   the earliest five upcoming account or synced-calendar events, and the account
   and personal dictionary term keys. Changed inputs at publication fail the run
-  with `SOURCE_CHANGED`.
+  with `SOURCE_CHANGED`. The synced-calendar read follows its continuation for
+  at most ten more pages; reaching that bound before five matching events fails
+  the run (`SOURCE_UNAVAILABLE`) rather than omitting the next meeting. A
+  completion refused for revoked membership records `ACCESS_REVOKED`.
 - `BEDROCK_MODEL_ID` writes Korean JSON through the strict complete-response
   helper. Every statement must cite opaque input references; a statement whose
   citations do not all resolve is dropped. Source kind, ID and label come from
@@ -463,6 +466,10 @@ this change.
   makes it unreadable.
 - Account merge does not move brief rows.
 - Inherited readers cannot generate a brief.
+- A published brief is a snapshot. It is not revalidated when a meeting or
+  insight it cites is later unpublished or re-restricted: the reader had access
+  at generation time, and the brief can show that text until it expires or is
+  regenerated.
 
 ### Evidence
 
