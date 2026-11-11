@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -21,6 +22,13 @@ const (
 	translateGlossaryMaxEntries = 20
 	translateGlossaryMaxHeard   = 3
 	translateGlossaryMinRunes   = 2
+	// translateGlossaryReadTimeout bounds the optional dictionary read so a
+	// slow or throttled table never spends the live caption's deadline
+	// (the browser abandons a final translation after ten seconds).
+	translateGlossaryReadTimeout = 800 * time.Millisecond
+	// translateGlossaryFailureTTL caches a failed or timed-out read as an
+	// empty glossary, so a struggling table is not retried on every segment.
+	translateGlossaryFailureTTL = 30 * time.Second
 )
 
 // TranslateGlossarySource reads a user's glossary; *DictionaryService
@@ -38,10 +46,11 @@ type TranslateGlossaryEntry struct {
 }
 
 type translateGlossaryCache struct {
-	source TranslateGlossarySource
-	now    func() time.Time
-	mu     sync.Mutex
-	users  map[string]translateGlossaryCacheEntry
+	source  TranslateGlossarySource
+	now     func() time.Time
+	timeout time.Duration
+	mu      sync.Mutex
+	users   map[string]translateGlossaryCacheEntry
 }
 
 type translateGlossaryCacheEntry struct {
@@ -56,11 +65,12 @@ func (s *TranslateService) SetGlossarySource(source TranslateGlossarySource) {
 		s.glossary = nil
 		return
 	}
-	s.glossary = &translateGlossaryCache{source: source, now: time.Now, users: map[string]translateGlossaryCacheEntry{}}
+	s.glossary = &translateGlossaryCache{source: source, now: time.Now, timeout: translateGlossaryReadTimeout, users: map[string]translateGlossaryCacheEntry{}}
 }
 
-// terms returns the cached glossary of userID. A read failure yields no
-// glossary for that segment (and is not cached); it never fails translation.
+// terms returns the cached glossary of userID. The read has its own short
+// deadline; a failed or timed-out read yields no glossary and is cached as
+// empty for translateGlossaryFailureTTL. It never fails translation.
 func (c *translateGlossaryCache) terms(ctx context.Context, userID string) []GlossaryTerm {
 	now := c.now()
 	c.mu.Lock()
@@ -69,10 +79,17 @@ func (c *translateGlossaryCache) terms(ctx context.Context, userID string) []Glo
 		return entry.terms
 	}
 	c.mu.Unlock()
-	terms, err := c.source.GlossaryForMeeting(ctx, userID, "")
+	readCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	terms, err := c.source.GlossaryForMeeting(readCtx, userID, "")
+	cancel()
+	ttl := translateGlossaryTTL
 	if err != nil {
-		log.Printf("translate glossary: read failed for user %s", userID)
-		return nil
+		reason := "error"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "timeout"
+		}
+		log.Printf("translate glossary: read %s for user %s", reason, userID)
+		terms, ttl = nil, translateGlossaryFailureTTL
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -86,7 +103,7 @@ func (c *translateGlossaryCache) terms(ctx context.Context, userID string) []Glo
 			c.users = map[string]translateGlossaryCacheEntry{}
 		}
 	}
-	c.users[userID] = translateGlossaryCacheEntry{terms: terms, expires: now.Add(translateGlossaryTTL)}
+	c.users[userID] = translateGlossaryCacheEntry{terms: terms, expires: now.Add(ttl)}
 	return terms
 }
 

@@ -1947,7 +1947,9 @@ the text exceeds 3,000 bytes. On the interpreter path the request also carries a
 (`SelectTranslateGlossary`: Personal then Common active rows from
 `GlossaryForMeeting` without an Account, Latin forms on word boundaries, at most
 20 terms with up to three matched heardAs spellings, cached per user for five
-minutes); a failed dictionary read sends none and never fails the translation.
+minutes per API instance); the read has its own 800 ms deadline, and a failed or
+timed-out read sends none, is cached as empty for 30 seconds and never fails the
+translation.
 `validateInterpretation` rejects output that starts
 with a translation label (English or Korean `Translation:` labels, `Here is the translation`…; see `interpreterMetaPrefixes`),
 starts with `{` or echoes `current_segment`/`previous_segments`, is longer than

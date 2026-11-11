@@ -108,8 +108,39 @@ func TestTranslateGlossaryCache(t *testing.T) {
 		t.Fatalf("a failed read must yield no glossary, got %v", got)
 	}
 	svc.glossary.terms(ctx, "u1")
+	if failing.calls != 1 {
+		t.Fatalf("a failed read must be cached briefly as empty: %d calls", failing.calls)
+	}
+	now = now.Add(translateGlossaryFailureTTL)
+	svc.glossary.terms(ctx, "u1")
 	if failing.calls != 2 {
-		t.Fatalf("a failed read must not be cached: %d calls", failing.calls)
+		t.Fatalf("the failure cache must expire after %s: %d calls", translateGlossaryFailureTTL, failing.calls)
+	}
+}
+
+type blockingGlossarySource struct{ deadline bool }
+
+func (b *blockingGlossarySource) GlossaryForMeeting(ctx context.Context, _, _ string) ([]GlossaryTerm, error) {
+	_, b.deadline = ctx.Deadline()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestTranslateGlossaryReadHasItsOwnDeadline(t *testing.T) {
+	src := &blockingGlossarySource{}
+	svc := &TranslateService{}
+	svc.SetGlossarySource(src)
+	svc.glossary.timeout = 20 * time.Millisecond
+	started := time.Now()
+	// The request context has no deadline; the read must still end quickly.
+	if got := svc.glossary.terms(context.Background(), "u1"); got != nil {
+		t.Fatalf("a timed-out read must yield no glossary, got %v", got)
+	}
+	if !src.deadline || time.Since(started) > time.Second {
+		t.Fatalf("glossary read deadline=%v took %s", src.deadline, time.Since(started))
+	}
+	if svc.glossary.timeout >= 10*time.Second || translateGlossaryReadTimeout >= 2*time.Second {
+		t.Fatalf("the read timeout must stay well inside the client's ten-second final budget")
 	}
 }
 
