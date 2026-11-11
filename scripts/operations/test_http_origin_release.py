@@ -618,6 +618,39 @@ class ReleaseTests(unittest.TestCase):
             release.read_with_retry(always_closed, attempts=3, sleep=lambda _: None)
         self.assertEqual(len(calls), 3)  # Bounded.
 
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                super().__init__(code)
+                self.response = {"Error": {"Code": code}}
+
+        pauses = []
+        def throttled_twice(**arguments):
+            calls.append(arguments)
+            if len(calls) <= 2:
+                raise FakeClientError("Throttling")
+            return {"Distribution": {}}
+        calls.clear()
+        self.assertEqual(release.read_with_retry(throttled_twice, sleep=pauses.append, Id="E1"),
+                         {"Distribution": {}})
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(pauses, [1.0, 2.0])  # Exponential backoff.
+
+        def client_denied(**arguments):
+            calls.append(arguments)
+            raise FakeClientError("AccessDenied")
+        calls.clear()
+        with self.assertRaises(FakeClientError):
+            release.read_with_retry(client_denied, sleep=lambda _: None)
+        self.assertEqual(len(calls), 1)  # Other AWS error codes never retry.
+
+        def always_throttled(**arguments):
+            calls.append(arguments)
+            raise FakeClientError("ThrottlingException")
+        calls.clear()
+        with self.assertRaises(FakeClientError):
+            release.read_with_retry(always_throttled, sleep=lambda _: None)
+        self.assertEqual(len(calls), 5)  # Default bound.
+
     def test_unexpected_failure_diagnostic_reports_type_and_site_without_messages(self):
         import http_origin_release as release
 

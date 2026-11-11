@@ -73,3 +73,41 @@ func TestListDocumentsCrawledBetweenQueriesTheWindow(t *testing.T) {
 		t.Fatalf("an empty window reads nothing: %v %v", empty, err)
 	}
 }
+
+// The daily tech job reads the DOC#tech partition of GSI4 the same way.
+func TestListTechDocumentsCrawledBetweenQueriesTheTechPartition(t *testing.T) {
+	var partitions []string
+	client := dynamodb.New(dynamodb.Options{
+		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+		HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("X-Amz-Target") != "DynamoDB_20120810.Query" {
+				t.Fatalf("only Query is allowed, got %s", req.Header.Get("X-Amz-Target"))
+			}
+			var input struct {
+				IndexName                 string
+				ExpressionAttributeValues map[string]map[string]string
+			}
+			if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			for _, v := range input.ExpressionAttributeValues {
+				if strings.HasPrefix(v["S"], "DOC#") {
+					partitions = append(partitions, v["S"])
+				}
+			}
+			if input.IndexName != "GSI4" {
+				t.Fatalf("index %s", input.IndexName)
+			}
+			body := `{"Items":[{"PK":{"S":"CRAWLER#__tech__"},"SK":{"S":"DOC#t1"},"type":{"S":"tech"},"title":{"S":"t"},"url":{"S":"u"},"crawledAt":{"N":"1500"},"s3Key":{"S":"shared/aws-docs/eks/t1.md"}}]}`
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+				Body: io.NopCloser(strings.NewReader(body))}, nil
+		}),
+	})
+	docs, err := NewCrawlerRepository(client, "t").ListTechDocumentsCrawledBetween(context.Background(), 1000, 2000)
+	if err != nil || len(docs) != 1 || docs[0].SourceID != "__tech__" || docs[0].DocHash != "t1" || docs[0].S3Key != "shared/aws-docs/eks/t1.md" {
+		t.Fatalf("docs=%+v err=%v", docs, err)
+	}
+	if len(partitions) != 1 || partitions[0] != "DOC#tech" {
+		t.Fatalf("partitions %v", partitions)
+	}
+}

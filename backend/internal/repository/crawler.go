@@ -768,10 +768,20 @@ func (r *CrawlerRepository) QueryDocumentsByType(ctx context.Context, docType st
 // QueryDocumentsByType it has no scan fallback and returns the read error.
 // Deleted rows and unreadable metadata are dropped as in every listing.
 func (r *CrawlerRepository) ListDocumentsCrawledBetween(ctx context.Context, from, to int64) ([]model.CrawledDocument, error) {
+	return r.listDocumentsCrawledBetween(ctx, "DOC#news", from, to)
+}
+
+// ListTechDocumentsCrawledBetween is ListDocumentsCrawledBetween for the AWS
+// technical documents (GSI4PK = "DOC#tech", written by tech_crawler.py).
+func (r *CrawlerRepository) ListTechDocumentsCrawledBetween(ctx context.Context, from, to int64) ([]model.CrawledDocument, error) {
+	return r.listDocumentsCrawledBetween(ctx, "DOC#tech", from, to)
+}
+
+func (r *CrawlerRepository) listDocumentsCrawledBetween(ctx context.Context, partition string, from, to int64) ([]model.CrawledDocument, error) {
 	if to <= from {
 		return nil, nil
 	}
-	keyEx := expression.Key("GSI4PK").Equal(expression.Value("DOC#news")).
+	keyEx := expression.Key("GSI4PK").Equal(expression.Value(partition)).
 		And(expression.Key("GSI4SK").Between(expression.Value(from), expression.Value(to-1)))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
 	if err != nil {
