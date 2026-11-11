@@ -402,7 +402,7 @@ func (r *DynamoDBRepository) DeleteSttFailedMeeting(ctx context.Context, ownerID
 			}
 		}
 	}
-	// A server-side checkpoint is the owner's recovery source (ADR-048): its
+	// A server-side checkpoint is the owner's recovery source (ADR-006): its
 	// presence makes the meeting user data, never auto-deleted.
 	if r.s3Client != nil && safeSttPathSegment.MatchString(ownerID) && safeSttPathSegment.MatchString(meetingID) {
 		keys, err := r.listSttObjectKeys(ctx, "audio/"+ownerID+"/"+meetingID+"/")
@@ -482,7 +482,7 @@ func (r *DynamoDBRepository) DeleteSttFailedMeetingObjects(ctx context.Context, 
 		return result, ErrSummaryObject
 	}
 	var keys []string
-	// audio-playback holds ADR-062 remuxed copies of the same recordings.
+	// audio-playback holds ADR-014 remuxed copies of the same recordings.
 	for _, category := range []string{"audio", "audio-playback", "images", "files"} {
 		prefix := category + "/" + ownerID + "/" + meetingID + "/"
 		listed, err := r.listSttObjectKeys(ctx, prefix)

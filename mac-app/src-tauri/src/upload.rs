@@ -8,12 +8,11 @@
 //! WebView loads the remote production SPA rather than a local `tauri://`
 //! origin, Tauri delivers IPC binary responses via `evaluateJavaScript` as
 //! one giant JS array literal, and the bytecode compiler fatally asserted on
-//! it. See `docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md`.
+//! it. See `docs/decisions/ADR-024-mac-native-capture-and-upload.md`.
 //!
 //! The fix: bulk audio bytes never cross the IPC bridge again. Presign,
-//! auth, and completion-notification still live in the SPA (unchanged from
-//! ADR-006's original "upload lives in the SPA" boundary) — only the byte
-//! *transport* moves here.
+//! auth, and completion-notification still live in the SPA (ADR-024) — only
+//! the byte *transport* moves here.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};

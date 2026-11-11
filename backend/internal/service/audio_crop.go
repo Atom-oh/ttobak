@@ -126,7 +126,7 @@ func (s *UploadService) CropMeeting(ctx context.Context, userID, meetingID strin
 
 // cropTeamAccount is the account a member's cropped copy is published to:
 // the source's current account. The creator's own copy stays private
-// (ADR-047); returns "" then.
+// (ADR-014); returns "" then.
 func cropTeamAccount(actorID string, source *model.Meeting) string {
 	if source == nil || actorID == source.UserID || !source.SharedToAccount {
 		return ""

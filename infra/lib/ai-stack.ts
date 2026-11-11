@@ -461,7 +461,7 @@ export class AiStack extends cdk.Stack {
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
     );
 
-    // ==================== Audio Remux Role (ADR-062) ====================
+    // ==================== Audio Remux Role (ADR-014) ====================
     // Reads meeting audio (including the pinned source version) and writes
     // only playback copies. No DynamoDB access: copies bind to the source
     // object's ETag/VersionId, not to meeting rows.

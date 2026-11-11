@@ -18,7 +18,7 @@ import (
 // API request deadline.
 var playbackLookupTimeout = 2 * time.Second
 
-// PlaybackAudioKey returns the ADR-062 seekable copy of sourceKey when it
+// PlaybackAudioKey returns the ADR-014 seekable copy of sourceKey when it
 // exists and is bound to the source's current ETag and VersionId; otherwise
 // sourceKey itself. Lookup failures fall back to the original, never fail
 // the request: the copy is an optimization, not the record of the audio.

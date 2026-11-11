@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * ADR-014 Phase 6 — picker modal that lets the user pick previous meetings
+ * Linked meetings (ADR-014) — picker modal that lets the user pick previous meetings
  * as predecessors of the current meeting. On save, calls
  * `meetingsApi.link()`. Links are navigation only; linked meetings never
  * feed note generation.

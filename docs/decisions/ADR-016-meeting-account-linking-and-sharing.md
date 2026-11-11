@@ -46,7 +46,7 @@
     and the member's live grant.
     A member's project link or unlink requires project access and a project
     linked to the meeting's current account (links are fenced on both rows).
-  - Image/file uploads, rediarize, simulator, crop (ADR-047 note) and recovery
+  - Image/file uploads, rediarize, simulator, crop (ADR-014 note) and recovery
     work for members; recovery requires a checkpoint quiet for 10 minutes (409
     `RECORDING_STILL_ACTIVE`). Audio upload is creator-only (403): the S3
     trigger transcribes any object under `audio/{creator}/{meeting}/` before

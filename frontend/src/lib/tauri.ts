@@ -477,7 +477,7 @@ export function onNativePcmChunk(handler: (chunk: Uint8Array) => void): () => vo
 }
 
 /** A request from the Mac app's local control socket (MCP), forwarded by
- * Rust as `native-control-request`. See mac-app `control.rs` / ADR-046. */
+ * Rust as `native-control-request`. See mac-app `control.rs` / ADR-024. */
 export interface NativeControlRequest {
   requestId: string;
   action: 'start' | 'stop';
