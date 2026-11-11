@@ -81,17 +81,33 @@ class State:
 # closed by the endpoint during a long CDK deploy). Only idempotent reads retry.
 TRANSIENT_READ_ERRORS = {"ConnectionClosedError", "EndpointConnectionError", "ReadTimeoutError",
                          "ConnectTimeoutError"}
+# AWS throttling error codes. The SDK client runs with a single attempt, so a
+# throttled read (for example CloudFront GetDistribution while a concurrent
+# frontend deploy polls the same API) would otherwise fail the release.
+THROTTLING_ERROR_CODES = {"Throttling", "ThrottlingException", "ThrottledException",
+                          "RequestLimitExceeded", "TooManyRequestsException",
+                          "RequestThrottled", "RequestThrottledException", "SlowDown"}
 
 
-def read_with_retry(call, attempts=3, pause=1.0, sleep=time.sleep, **arguments):
-    """Run an idempotent read, retrying only transient transport errors."""
+def transient_read_error(error):
+    """True for a transport failure or an AWS throttling response."""
+    if type(error).__name__ in TRANSIENT_READ_ERRORS:
+        return True
+    response = getattr(error, "response", None)
+    code = response.get("Error", {}).get("Code") if isinstance(response, dict) else None
+    return code in THROTTLING_ERROR_CODES
+
+
+def read_with_retry(call, attempts=5, pause=1.0, sleep=time.sleep, **arguments):
+    """Run an idempotent read, retrying transport errors and throttling with
+    exponential backoff (1, 2, 4, 8 seconds by default)."""
     for attempt in range(attempts):
         try:
             return call(**arguments)
         except Exception as error:
-            if type(error).__name__ not in TRANSIENT_READ_ERRORS or attempt == attempts - 1:
+            if not transient_read_error(error) or attempt == attempts - 1:
                 raise
-            sleep(pause * (attempt + 1))
+            sleep(pause * (2 ** attempt))
 
 
 def failure_diagnostic(error, client_error_type=None):
