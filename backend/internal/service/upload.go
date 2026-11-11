@@ -768,7 +768,7 @@ func validateRediarizeEligibility(meeting *model.Meeting, userID string, speaker
 // ECS) via a same-bucket S3 copy rather than calling ECS RunTask directly, so
 // this needs no new IAM grants on the api Lambda — see cmd/transcribe/main.go's
 // use of Meeting.DiarizationSpeakerHint. Whisper-only (pyannote diarization,
-// ADR-019); AWS Transcribe fallback meetings have no acoustic diarization to
+// ADR-009); AWS Transcribe fallback meetings have no acoustic diarization to
 // re-run. Multi-part audio is out of scope for v1 (would need per-part ECS
 // retriggers and an AudioPartsReady reset).
 func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {

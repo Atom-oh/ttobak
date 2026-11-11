@@ -1,6 +1,6 @@
 # ADR-031: Summary timeout budget and stale-attempt recovery
 
-- Status: Accepted; extends the refinement pipeline described in ADR-019. Amended 2026-10-17 by [scheduled STT recovery](#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention).
+- Status: Accepted; extends the refinement pipeline described in ADR-009. Amended 2026-10-17 by [scheduled STT recovery](#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention).
 - Decision date: 2026-08-19.
 - Code checked: 2026-09-13; historical recovery outcomes are not a current runtime guarantee.
 

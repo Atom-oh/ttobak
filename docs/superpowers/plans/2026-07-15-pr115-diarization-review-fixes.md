@@ -1,7 +1,7 @@
 # Historical review record: PR #115 initial diarization fixes
 
 - Original plan date: 2026-07-15; subject: `feat/pyannote-speaker-diarization`.
-- Historical review plan, not an execution checklist or current review mandate. Current model configuration is governed by ADR-035.
+- Historical review plan, not an execution checklist or current review mandate. Current model configuration is governed by ADR-009.
 
 ## Findings and proposed response
 
@@ -20,4 +20,4 @@ Planned checks included mocked ffmpeg failure, Python speaker tests, Go builds/t
 ## Current references and supersession
 
 - [Transcription](../../../backend/whisper/transcribe.py), [Python tests](../../../backend/whisper/test_transcribe.py), [multipart offsets](../../../backend/cmd/summarize/merge.go), [legacy staging](../../../backend/whisper/upload-diarization-model.sh).
-- [Round 2](2026-07-16-pr115-review-round2-fixes.md) adds maximum-speaker semantics and label preservation. [ADR-019](../../decisions/ADR-019-acoustic-speaker-diarization-pyannote.md) defines the behavior; [ADR-035](../../decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) supersedes the pyannote 3.1/CDK-owned bundle default with community-1 and image-owned configuration.
+- [Round 2](2026-07-16-pr115-review-round2-fixes.md) adds maximum-speaker semantics and label preservation. [ADR-009](../../decisions/ADR-009-batch-stt-and-diarization.md) defines the behavior and supersedes the pyannote 3.1/CDK-owned bundle default with community-1 and image-owned configuration.
