@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 86f9b85ede4e · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e0c93ee417da · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -11,8 +11,8 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 - Verify implementation claims against the reviewed revision's code, tests,
   manifests, and CDK. Documentation records intent, not proof of deployment.
   Keep security requirements even when existing code has a documented gap.
-- `docs/README.md` indexes current references. ADRs record decisions and name
-  superseding decisions explicitly. Plans, research, benchmarks, and old
+- `docs/README.md` indexes current references. ADRs are topic records of
+  the rules in force. Plans, research, benchmarks, and old
   review reports are historical evidence, not current acceptance criteria.
 - Report a PR defect only with a changed path/line, a concrete failing scenario,
   and code evidence. Model agreement is not evidence. Missing context is an

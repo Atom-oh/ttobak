@@ -14,8 +14,8 @@ documentation stays English.
 - Verify implementation claims against the reviewed revision's code, tests,
   manifests, and CDK. Documentation records intent, not proof of deployment.
   Keep security requirements even when existing code has a documented gap.
-- `docs/README.md` indexes current references. ADRs record decisions and name
-  superseding decisions explicitly. Plans, research, benchmarks, and old
+- `docs/README.md` indexes current references. ADRs are topic records of
+  the rules in force. Plans, research, benchmarks, and old
   review reports are historical evidence, not current acceptance criteria.
 - Report a PR defect only with a changed path/line, a concrete failing scenario,
   and code evidence. Model agreement is not evidence. Missing context is an
@@ -352,7 +352,10 @@ the session; a generic skill cannot invent another approval loop.
 
 Update only affected current references: API handlers to `docs/API-SPEC.md`, CDK to
 `docs/INFRA-SPEC.md`, UI to `docs/DESIGN-SPEC.md`, cross-component changes to
-`docs/architecture.md`, durable decisions to ADRs. Keep historical records labeled
+`docs/architecture.md`, durable decisions to ADRs. ADRs are at most 30 topic
+records (`docs/decisions/README.md`): put a new decision into the record that owns
+its topic and rewrite the affected rules in place, without dated amendments or a
+new numbered file per decision. Keep historical records labeled
 and link successors rather than restating abandoned plans as rules. Use paths and
 symbols instead of fragile line numbers or copied implementation blocks.
 

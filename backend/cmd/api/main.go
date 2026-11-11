@@ -267,7 +267,7 @@ func init() {
 	actionItemsService := service.NewMetadataActionItemsAnalysisService(repo, bedrockService, service.ActionItemsPublisher(ebClient))
 	readingService := service.NewMeetingReadingService(repo, actionItemsService)
 	readingHandler := handler.NewMeetingReadingHandler(readingService)
-	// On-demand meeting translation (ADR-005 amendment): off unless exactly "true".
+	// On-demand meeting translation (ADR-005): off unless exactly "true".
 	meetingTranslationEnabled := os.Getenv("MEETING_TRANSLATION_ENABLED") == "true"
 	meetingTranslationHandler := handler.NewMeetingTranslationHandler(service.NewMeetingTranslationService(
 		readingService, translateService,
