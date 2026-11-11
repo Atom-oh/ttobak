@@ -32,7 +32,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
-| [Descendant Account sharing](runbooks/account-descendant-sharing.md) | Read-only inheritance, conditional relation bootstrap, activation and rollback | ADR-058, API/QA feature parameter |
+| [Descendant Account sharing](runbooks/account-descendant-sharing.md) | Read-only inheritance, conditional relation bootstrap, activation and rollback | ADR-015, API/QA feature parameter |
 | [Model deployment](runbooks/model-deployment.md) | Environment/preset selection, exact model grants, acceptance and rollback | Model configuration, AI/Gateway stacks and infrastructure workflow |
 | [Observability](runbooks/observability.md) | OTel collector, ClickHouse PrivateLink, credentials and activation | ObservabilityStack and AWS-Demo-Platform ClickHouse |
 | [Frontend release](runbooks/frontend-release.md) | Dependency acceptance, CSP/cache, ordered publication and recovery | FrontendStack, npm lockfiles and shared publisher |
@@ -48,7 +48,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Summary privacy release](runbooks/summary-privacy-release.md) | Reader/writer targets, immutable cutoff, drain and cross-user acceptance | Exact deployed versions, parameters and dated acceptance evidence |
 | [Account merge operator](runbooks/account-merge.md) | `merge-accounts` CLI dry run, apply, status, resume, post-merge rows, abort and `REQUESTER_REVOKED` recovery | `backend/cmd/merge-accounts/`, ADR-072, `backend/internal/service/account_merge_job.go` |
 | [Self-service Account invitations](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
-| [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
+| [Designated initial Account Owner](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
 | [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
 | [Meeting audio files and lookup](decisions/ADR-014-meeting-audio-files-and-lookup.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, cleanup, `ttobak-audio-remux` worker, `GET /audio` selection and `scripts/audio_playback_backfill.py` |
 | [Local MCP intake](decisions/ADR-065-local-mcp-intake.md) | Deterministic local connectors over host MCP servers; references not copies; calendar first, AI proposals only; amended for the SpecReq task step's two provider writes | `mcp-server/src/intake/`; calendar and task acceptance pending |
@@ -58,7 +58,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [SA performance data residency](decisions/ADR-068-sa-performance-data-residency.md) | Owner-private `PERF*` field table, default-encryption exception, per-row retention (year+2 TTL for dated rows), organizer-domain calendar counterpart | `backend/internal/model/performance.go`, `backend/internal/repository/performance.go` |
 | [Mac caption overlay](decisions/ADR-069-mac-caption-overlay.md) | Floating per-language caption windows (PR 2/4); translation on the user's own AWS profile (Bedrock Luna finals, Amazon Translate interims) and a native confirmation of profile changes; seven validated remote commands (three in 1/4, four overlay commands in 2/4); listen-only overlay capability (2/4); Zoom whole-screen limit | `mac-app/src-tauri/src/caption_*.rs`, `capabilities/caption-overlay.json` (2/4), `frontend/src/lib/captionOverlay.ts` (3/4) |
 | [Shareable-by-default note provenance](decisions/ADR-070-shareable-default-note-provenance.md) | No linked-predecessor evidence, human edits keep `safe` provenance, first live draft safe, own image analyses safe, Korean-only final notes, owner-only sharing-safe reset | `backend/internal/repository/summary_privacy.go`, `backend/internal/service/bedrock.go` |
-| [Account owner transfer](decisions/ADR-071-account-owner-transfer.md) | Dual owner condition, confirmed direct-member target, previous Owner to SA, cleared initial-owner designation, non-delegable route | `backend/internal/service/account_owner_transfer.go`, `backend/internal/repository/account_owner_transfer.go` |
+| [Account owner transfer](decisions/ADR-015-accounts-roles-and-hierarchy.md) | Dual owner condition, confirmed direct-member target, previous Owner to SA, cleared initial-owner designation, non-delegable route | `backend/internal/service/account_owner_transfer.go`, `backend/internal/repository/account_owner_transfer.go` |
 | [Account merge](decisions/ADR-072-account-merge.md) | Owner-of-source and direct-member-of-target eligibility, dedicated meeting writer, write fence, unmoved categories need acceptance, readable tombstone, no undo; eligibility and preview only so far | `backend/internal/service/account_merge_preview.go`, `backend/internal/handler/account_merge.go` |
 
 ## Feature workflows
@@ -94,7 +94,7 @@ python3 scripts/docs/check_docs.py
 ```
 
 - [Cognito app client write attributes and self-service email change](decisions/ADR-007-sign-up-identity-and-admin.md)
-- [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
+- [Descendant Account read sharing](decisions/ADR-015-accounts-roles-and-hierarchy.md)
 - [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
 - [Browser and mobile recording, recovery and retention](decisions/ADR-006-browser-and-mobile-recording.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)

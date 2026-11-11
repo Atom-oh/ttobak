@@ -81,7 +81,7 @@ The "Rulings" section below overrides the spec where it says so.
    `LinkAuto`). v1 only emits `PeopleResolveRequested{AccountID: B, Reason: contacts}`;
    A's links stay on the tombstone.
 10. **Audience is symmetric.** The spec's anti-goal names only A's members gaining B's
-    content, but option ① also gives B's direct members (and ADR-058 ancestor readers of
+    content, but option ① also gives B's direct members (and ADR-015 ancestor readers of
     B) A's moved meetings. Preview returns `newAudience` and the UI shows it; no further
     flag. ADR-072 records this.
 11. **Write fence** is a META condition `attribute_not_exists(mergingInto) AND
@@ -119,7 +119,7 @@ The "Rulings" section below overrides the spec where it says so.
 
 ## Part A — Owner transfer
 
-### PR A1: backend, route, contract, ADR-071 (~45 KB)
+### PR A1: backend, route, contract, ADR-015 (~45 KB)
 
 ### Task A1: Repository transfer transaction
 
@@ -187,20 +187,20 @@ The "Rulings" section below overrides the spec where it says so.
   `go test ./internal/connectorinventory ./internal/handler ./internal/service -count=1` — PASS.
 - [ ] **Step 6: Commit** `feat(accounts): add owner transfer route`.
 
-### Task A3: ADR-071 and current references
+### Task A3: ADR-015 and current references
 
 **Files:**
-- Create: `docs/decisions/ADR-071-account-owner-transfer.md`
-- Modify: `docs/decisions/ADR-015-accounts-roles-and-hierarchy.md`, `docs/decisions/ADR-055-designated-account-owner.md` (one "Amended by ADR-071" bullet each), `docs/README.md` (ADR table row), `docs/API-SPEC.md` (Accounts section + Go route inventory), `CLAUDE.md` Accounts line, regenerated `AGENTS.md`
+- Create: `docs/decisions/ADR-015-accounts-roles-and-hierarchy.md`
+- Modify: `docs/decisions/ADR-015-accounts-roles-and-hierarchy.md`, `docs/decisions/ADR-015-accounts-roles-and-hierarchy.md` (one "Amended by ADR-015" bullet each), `docs/README.md` (ADR table row), `docs/API-SPEC.md` (Accounts section + Go route inventory), `CLAUDE.md` Accounts line, regenerated `AGENTS.md`
 
-- [ ] **Step 1:** Write ADR-071 (Status: Accepted for implementation; Decision date
-  2026-11-10; Amends ADR-015 and ADR-055): dual owner condition, target identity rule,
+- [ ] **Step 1:** Write ADR-015 (Status: Accepted for implementation; Decision date
+  2026-11-10; Amends ADR-015): dual owner condition, target identity rule,
   previous owner → SA, cleared initial-owner designation, generic routes stay owner-free,
   non-delegable route.
 - [ ] **Step 2:** Update `CLAUDE.md` Accounts bullet to: "Removal/revocation/reparenting
-  are owner-only; Owner changes only through owner transfer (ADR-071)." Run
+  are owner-only; Owner changes only through owner transfer (ADR-015)." Run
   `python3 scripts/docs/sync_review_context.py && python3 scripts/docs/check_docs.py` — PASS.
-- [ ] **Step 3: Commit** `docs: record account owner transfer (ADR-071)`. Open PR A1.
+- [ ] **Step 3: Commit** `docs: record account owner transfer (ADR-015)`. Open PR A1.
 
 ### PR A2: web UI (~15 KB)
 
