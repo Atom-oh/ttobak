@@ -8,7 +8,7 @@ exist yet. Acceptance on the user's Mac is pending; nothing here proves it.
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
 contract for one reader, `aws-outlook-mcp` `calendar_view`. The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
-SA performance data of [ADR-068](../decisions/ADR-068-sa-performance-data-residency.md).
+SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md).
 
 ## Quick start: `ttobak-mcp intake setup`, then `ttobak-mcp intake run`
 
@@ -287,7 +287,7 @@ or partial lines, `v` other than 1, keys or paths that do not match the 64-hex
 event ID, entries older than 24 hours or more than 5 minutes ahead, and over-long
 text. It dedupes on `key` in `intake-notified.json` (app data directory, 0600,
 pruned after 48 hours) and posts at most 5 per cycle. Notification delivery has
-not been verified on a Mac; ADR-061 found app notifications unreliable for the
+not been verified on a Mac; ADR-017 found app notifications unreliable for the
 meeting prompt. Check by hand with the packaged app running:
 
 1. Append one synthetic line with a fresh 64-hex ID and a current `createdAt`

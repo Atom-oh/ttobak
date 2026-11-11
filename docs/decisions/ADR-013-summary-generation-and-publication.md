@@ -150,7 +150,7 @@
 - Note-only claims are separated by prompt rules; no validator checks each
   generated assertion.
 - Verified document text stays separate from transcript evidence, and default
-  KB parsing still needs PowerPoint conversion (ADR-039).
+  KB parsing still needs PowerPoint conversion (ADR-001).
 - An attachment or share created between the child query and the deletion
   transaction can be orphaned, as in ordinary meeting deletion.
 - Someone resuming AZRebalance by hand causes drift; the STT troubleshooting

@@ -77,7 +77,7 @@ model. Browsers also use authenticated Cognito/Transcribe SDK calls and signed S
 PUTs. The Mac app records a Core Audio system-audio tap mixed with the microphone
 (ADR-024); native finished audio uploads stream directly from disk in Rust; live
 PCM crosses IPC for captions. It also polls Core Audio microphone users to offer,
-never start, a recording for detected meetings (ADR-061). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-073). The public-document route is the single intentional
+never start, a recording for detected meetings (ADR-017). Teammates install it with a curl script and it updates itself from static `mac/` files on the frontend bucket (ADR-019). The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.
 Extraction's event target/worker, API producers and summary consumer are wired;
 QA/UI activation remains separate. The KB activation configuration retains the
@@ -416,7 +416,7 @@ the same Lambda, and `backend/cmd/backfill-account-people` replays older meeting
 Runs hold a per-meeting lease that fences their writes. The people panel, graph
 and flow read the rows back with read-time revalidation.
 
-Account merge (ADR-072) is a resumable summarize-worker job: the owner starts it
+Account merge (ADR-022) is a resumable summarize-worker job: the owner starts it
 from the web dialog (preview, explicit unmoved-items acceptance, then
 `POST /merge`) and the page polls `GET /merge` until `done` or `failed`. A merging
 Account is fenced (writes return 409 `ACCOUNT_MERGING`) and the web page turns

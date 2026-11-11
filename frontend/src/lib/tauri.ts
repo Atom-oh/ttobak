@@ -148,7 +148,7 @@ export interface TauriUploadProgress {
 }
 
 /** `inputDeviceUid` from `listNativeInputDevices`; omit to follow the
- * meeting app's microphone, else the system default (ADR-061). Older app
+ * meeting app's microphone, else the system default (ADR-017). Older app
  * builds ignore it and record the system default. */
 export function startNativeRecording(meetingId: string, inputDeviceUid?: string): Promise<TauriStartResponse> {
   return invoke<TauriStartResponse>('start_recording', { meetingId, inputDeviceUid: inputDeviceUid || null });
@@ -546,7 +546,7 @@ export function reportNativeControlState(state: {
   return invoke<void>('control_report_state', { state }).catch(() => undefined);
 }
 
-/** A meeting the Mac app noticed using the microphone (ADR-061). */
+/** A meeting the Mac app noticed using the microphone (ADR-017). */
 export interface NativeMeetingDetection {
   detectionId: string;
   kind: string;
@@ -618,7 +618,7 @@ export function onNativeMeetingAnswered(handler: (d: NativeMeetingDetection) => 
   );
 }
 
-/** The recording follows a meeting app's own mute (ADR-061): while `muted`,
+/** The recording follows a meeting app's own mute (ADR-017): while `muted`,
  * the microphone is mixed silent. */
 export interface NativeMicMuted {
   muted: boolean;
@@ -640,7 +640,7 @@ export function onNativeMicMuted(handler: (m: NativeMicMuted) => void): () => vo
   );
 }
 
-/** The Mac woke from sleep (ADR-061): a recording stopped for sleep may
+/** The Mac woke from sleep (ADR-017): a recording stopped for sleep may
  * have an interrupted upload to resume. */
 export function onNativeSystemWake(handler: () => void): () => void {
   return subscribeTauriEvent<unknown, true>('native-system-wake', () => true, () => handler());

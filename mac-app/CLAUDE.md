@@ -39,7 +39,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | Command | Contract |
 |---|---|
 | start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
-| list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
+| list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-017) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, capture_lost (a failed mic switch stopped capture), optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
@@ -49,7 +49,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
 | control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
-| meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-061) |
+| meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-017) |
 | meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 | update_prompt_choose | action `install`/`later`, version (the shown one; a stale version reloads the popup and acts on nothing); local update popup only (`update-prompt` capability, never remote); returns `busy` or a short Korean error message |
@@ -156,7 +156,7 @@ ACL for every command called from the remote SPA: each command must be listed in
   log from the IOProc.
 - `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
   within its deadline, recording or not.
-- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-073): update
+- Updates (`update.rs`, `update_policy.rs`, `update_prompt.rs`; ADR-019): update
   commands are never in the remote capability (`command_acl_tests` enforces it), and
   nothing installs or restarts while `app_busy`. Update checks are disabled while the
   `tauri.conf.json` updater pubkey is the placeholder. The archive download is bounded

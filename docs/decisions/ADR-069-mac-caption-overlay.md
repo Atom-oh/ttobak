@@ -5,9 +5,9 @@
   `caption_translate` round in that local session.
 - Decision date: 2026-11-10.
 - Numbering: ADR-069 because ADR-066 is reserved by the account-shared
-  calendar work and ADR-068 is SA performance data residency.
+  calendar work and ADR-023 is SA performance data residency.
 - Builds on: ADR-024 (Mac app, system-audio captions and Core Audio capture),
-  ADR-061 (floating prompt window pattern).
+  ADR-017 (floating prompt window pattern).
 - Design: the working design and plan documents were not merged; this ADR is
   the durable decision.
 - Delivery: four stacked PRs. 1/4: caption model, profile discovery, interpreter,

@@ -1,4 +1,4 @@
-//! The "new version available" popup (ADR-061 window pattern, like
+//! The "new version available" popup (ADR-017 window pattern, like
 //! `meeting_prompt.rs`). It loads the bundled `update-prompt.html`, a local
 //! origin, and may call only `update_prompt_choose`. Choosing 업데이트 is the
 //! user's confirmation; nothing downloads or installs without it.

@@ -829,7 +829,7 @@ function MeetingDetailContent() {
             onProjectsChanged={onProjectsChanged}
             onAddReference={canEditNotes ? onAddReference : undefined} />
 
-          {/* Cost/sizing simulator (ADR-033) — only once the note itself is
+          {/* Cost/sizing simulator (ADR-010) — only once the note itself is
               done; simRun has its own lifecycle independent of meeting.status
               (see useSimulation's doc comment), never written back onto it. */}
           {meeting.status === 'done' && (

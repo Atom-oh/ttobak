@@ -45,7 +45,7 @@ interface RecordButtonProps {
    * buffers). Newer app builds only. */
   onNativeWarnings?: (warnings: string[]) => void;
   /** Mac app microphone for System Audio mode; empty follows the meeting
-   * app's microphone (ADR-061). */
+   * app's microphone (ADR-017). */
   nativeInputDeviceUid?: string;
   /** The microphone the Mac app actually records (newer app builds). */
   onNativeInput?: (input: NativeSelectedInput | null, canSwitch: boolean) => void;

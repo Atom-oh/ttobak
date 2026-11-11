@@ -59,7 +59,7 @@ The "Rulings" section below overrides the spec where it says so.
    `actorAccountCondition` lets a non-creator act only on a meeting already published to
    the target account, and the generic writer rejects unsafe summaries
    (`ErrSummarySharingUnsafe`) on a new-account publish. Merge adds a dedicated writer
-   `MoveMeetingForAccountMerge` (Task B5.1) governed by ADR-072.
+   `MoveMeetingForAccountMerge` (Task B5.1) governed by ADR-022.
 4. **Account-origin Share rows are tagged with `accountId=A`.** `CreateShareIfMember(B)`
    will not overwrite them (condition `accountId = :B`), so the meeting mover retags
    them A→B explicitly, then grants B members.
@@ -83,7 +83,7 @@ The "Rulings" section below overrides the spec where it says so.
 10. **Audience is symmetric.** The spec's anti-goal names only A's members gaining B's
     content, but option ① also gives B's direct members (and ADR-015 ancestor readers of
     B) A's moved meetings. Preview returns `newAudience` and the UI shows it; no further
-    flag. ADR-072 records this.
+    flag. ADR-022 records this.
 11. **Write fence** is a META condition `attribute_not_exists(mergingInto) AND
     attribute_not_exists(mergedInto)` added to every transaction that already checks
     A's META, plus new META checks on member add and meeting classification/publication.
@@ -231,7 +231,7 @@ The "Rulings" section below overrides the spec where it says so.
 Dependency order: B1 → B2 → B3 → B4 → B5 → B6 → B7 → B8. B1–B5 ship inert
 (no route starts a job until B6).
 
-### PR B1: model, tombstone readers, preview, ADR-072 (~70 KB)
+### PR B1: model, tombstone readers, preview, ADR-022 (~70 KB)
 
 ### Task B1.1: Merge model and tombstone readers
 
@@ -264,7 +264,7 @@ Dependency order: B1 → B2 → B3 → B4 → B5 → B6 → B7 → B8. B1–B5 s
 ### Task B1.2: Eligibility and preview
 
 **Files:**
-- Create: `backend/internal/service/account_merge_preview.go`, `backend/internal/service/account_merge_preview_test.go`, `backend/internal/handler/account_merge.go`, `backend/internal/handler/account_merge_test.go`, `docs/decisions/ADR-072-account-merge.md`
+- Create: `backend/internal/service/account_merge_preview.go`, `backend/internal/service/account_merge_preview_test.go`, `backend/internal/handler/account_merge.go`, `backend/internal/handler/account_merge_test.go`, `docs/decisions/ADR-022-account-merge.md`
 - Modify: `backend/cmd/api/main.go`, contract generator + generated files, `docs/API-SPEC.md`, `docs/README.md`
 
 **Interfaces:**
@@ -295,7 +295,7 @@ Dependency order: B1 → B2 → B3 → B4 → B5 → B6 → B7 → B8. B1–B5 s
 - [ ] **Step 4: Handler test** `TestMergePreviewHandler` (missing `into` → 400, mapping of
   each error); register route; contract regen; run
   `go test ./internal/... -run 'Merge|Inventory' -count=1` — PASS.
-- [ ] **Step 5: ADR-072** (Accepted for implementation): ruling 3, 4, 5, 6, 7, 10, 11, 12, 14;
+- [ ] **Step 5: ADR-022** (Accepted for implementation): ruling 3, 4, 5, 6, 7, 10, 11, 12, 14;
   meetings move with owner unchanged; approval bound to A rebinds to B; unmoved categories
   require `acceptUnmoved`; tombstone stays readable; no undo. API-SPEC + README row.
   Run `python3 scripts/docs/check_docs.py` — PASS.
@@ -409,7 +409,7 @@ All movers share one signature and one transaction fence.
 
 **Interfaces:**
 - Produces:
-  - `func (r *DynamoDBRepository) MoveMeetingForAccountMerge(ctx context.Context, job *model.AccountMergeJob, ownerID, meetingID string, ref *model.MeetingRef) error` — captures `CaptureSummaryPrivacy`; meeting Update condition: `accountId = A`, `sharedToAccount` equals observed, `summaryCondition(snapshot.Checks[0])`; sets `accountId = B`, `ADD authorizationRevision 1`, and when `summaryAccountApproval.accountId = A` sets `summaryAccountApproval.accountId = B` (other approval fields unchanged); never sets `sharedToAccount` true if it was false. Extra items: put `ACCOUNT#B/MEETINGREF#…` (same SK), delete A ref, plus fence. B stays open by ruling 12, so no B META check is needed. Does not call the generic sharing-safe gate (ADR-072).
+  - `func (r *DynamoDBRepository) MoveMeetingForAccountMerge(ctx context.Context, job *model.AccountMergeJob, ownerID, meetingID string, ref *model.MeetingRef) error` — captures `CaptureSummaryPrivacy`; meeting Update condition: `accountId = A`, `sharedToAccount` equals observed, `summaryCondition(snapshot.Checks[0])`; sets `accountId = B`, `ADD authorizationRevision 1`, and when `summaryAccountApproval.accountId = A` sets `summaryAccountApproval.accountId = B` (other approval fields unchanged); never sets `sharedToAccount` true if it was false. Extra items: put `ACCOUNT#B/MEETINGREF#…` (same SK), delete A ref, plus fence. B stays open by ruling 12, so no B META check is needed. Does not call the generic sharing-safe gate (ADR-022).
   - `func (r *DynamoDBRepository) RetagAccountShareForMerge(ctx, job *model.AccountMergeJob, meetingID, sharedToID string) error` — both rows (`USER#u/SHARE#m`, `MEETING#m/SHARETO#u`) conditioned `origin = account AND accountId = A`, set `accountId = B`; condition failure → `nil`.
   - `func (r *DynamoDBRepository) ListMeetingSharesTo(ctx, meetingID string) ([]model.Share, error)` (if no equivalent exists; check `dynamodb.go` first and reuse).
   - Service `moveMeetings`: per ref page → `GetMeetingByID`; skip when `AccountID != A`; move; retag A-origin shares; `CreateShareIfMember(B)` for B members lacking a share (published meetings only); `BuildAccountInsights(B, meeting)` → `PutAccountInsights`.

@@ -105,7 +105,7 @@ earlier sections. Mail reading is dropped.
    `post_draft`" line.
 6. **Auto-ack off** posts one `ack_needed` notice; a later `WORKING` read moves
    the task to `acked`.
-7. **No new ADR.** ADR-003 (local MCP intake) is amended. ADR-068 stays free.
+7. **No new ADR.** ADR-003 (local MCP intake) is amended. ADR-023 stays free.
 
 ## Delivery parts (stacked PRs, each diff <= 95,000 bytes)
 
@@ -690,7 +690,7 @@ continues with independent steps, ending as `TASKS_PARTIAL`):
   - `open_target_expires_and_is_consumed_once`.
 - [ ] **Step 2: Run** `(cd mac-app/src-tauri && cargo test intake_notify)`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` on macOS, then the runbook's manual check (one synthetic queue line posts once; clicking brings TTOBAK to `/meetings?task=...`). ADR-061 found app notifications unreliable for the meeting prompt; record the observed behaviour in the runbook instead of claiming delivery.
+- [ ] **Step 4: Run** `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` on macOS, then the runbook's manual check (one synthetic queue line posts once; clicking brings TTOBAK to `/meetings?task=...`). ADR-017 found app notifications unreliable for the meeting prompt; record the observed behaviour in the runbook instead of claiming delivery.
 - [ ] **Step 5: Commit** `feat(mac): post SpecReq task notifications`
 
 ## Self-review notes

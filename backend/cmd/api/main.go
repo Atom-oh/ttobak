@@ -104,7 +104,7 @@ func init() {
 	)
 	calendarHandler := handler.NewCalendarHandler(calendarService)
 	// Owner-private SA performance data: every route reads only the JWT user's
-	// own USER# partition (ADR-068).
+	// own USER# partition (ADR-023).
 	performanceService := service.NewPerformanceService(repo, accountService)
 	performanceService.SetMissedSources(calendarService, meetingService)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
@@ -245,7 +245,7 @@ func init() {
 	researchChatRepo := repository.NewChatRepository(dynamoClient, tableName)
 	researchChatHandler := handler.NewResearchChatHandler(researchChatRepo, researchService)
 
-	// Cost/sizing simulator (ADR-033). bedrockService reuses the api
+	// Cost/sizing simulator (ADR-010). bedrockService reuses the api
 	// Lambda's own Bedrock client (bedrockRuntimeClient2) for the
 	// synchronous Haiku extraction call; the async run itself is handed off
 	// to the ttobak-sim Lambda, not run inline here.
@@ -470,7 +470,7 @@ func init() {
 		// Re-run speaker diarization with an updated speaker-count hint
 		r.Post("/api/meetings/{meetingId}/rediarize", meetingHandler.RediarizeMeeting)
 
-		// Cost/sizing simulator (ADR-033)
+		// Cost/sizing simulator (ADR-010)
 		r.Post("/api/meetings/{meetingId}/sim/extract", simHandler.ExtractRequirements)
 		r.Post("/api/meetings/{meetingId}/sim", simHandler.CreateSimulation)
 

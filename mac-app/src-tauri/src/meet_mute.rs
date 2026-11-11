@@ -1,4 +1,4 @@
-//! Follow Google Meet's microphone mute in a Chromium browser (ADR-061).
+//! Follow Google Meet's microphone mute in a Chromium browser (ADR-017).
 //!
 //! Meet keeps the microphone open while muted, so Core Audio cannot tell.
 //! The state comes from the page's own toggle through the Accessibility API:
