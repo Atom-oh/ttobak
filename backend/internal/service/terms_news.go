@@ -115,6 +115,12 @@ func newsWindow(day string) (int64, int64, bool) {
 	return end.Add(-24 * time.Hour).Unix(), end.Unix(), true
 }
 
+// validDay reports a well-formed YYYY-MM-DD day.
+func validDay(day string) bool {
+	_, _, ok := newsWindow(day)
+	return ok
+}
+
 type newsDocument struct {
 	hash   string
 	source string // crawler source ID (from the item's partition key)
@@ -192,6 +198,11 @@ func newsSighting(day, source string) string { return day + "#" + source }
 // newsBatches packs documents into at most newsMaxCalls calls of at most
 // termsSourceMaxBytes; documents past the last call are dropped (counted).
 func newsBatches(docs []newsDocument) ([][]termsDocumentText, int) {
+	return documentBatches(docs, "news")
+}
+
+// documentBatches is newsBatches with prompt document IDs {prefix}-{n}.
+func documentBatches(docs []newsDocument, prefix string) ([][]termsDocumentText, int) {
 	var batches [][]termsDocumentText
 	size := 0
 	for i, d := range docs {
@@ -203,7 +214,7 @@ func newsBatches(docs []newsDocument) ([][]termsDocumentText, int) {
 			size = 0
 		}
 		size += len(d.text)
-		batches[len(batches)-1] = append(batches[len(batches)-1], termsDocumentText{ID: fmt.Sprintf("news-%d", i+1), Text: d.text})
+		batches[len(batches)-1] = append(batches[len(batches)-1], termsDocumentText{ID: fmt.Sprintf("%s-%d", prefix, i+1), Text: d.text})
 	}
 	return batches, 0
 }
@@ -225,6 +236,54 @@ type newsCandidate struct {
 	term    FilteredTerm
 	docs    []string // hashes of today's documents naming the term
 	sources []string // their distinct source IDs
+}
+
+// extractDailyCandidates runs the source extraction prompt over the day's
+// batches (news or tech) and folds the filtered candidates by term key. A
+// batch whose answer broke the schema is counted in invalid and skipped; any
+// other failure returns its code (retryable) and stops the remaining calls.
+func (s *TermsAnalysisService) extractDailyCandidates(ctx context.Context, batches [][]termsDocumentText) ([]newsCandidate, termsRunStats, int, string) {
+	var stats termsRunStats
+	invalid := 0
+	byKey := map[string]int{}
+	var candidates []newsCandidate
+	for i, batch := range batches {
+		raw, callStats, code := s.extractDocuments(ctx, batch, i+1, len(batches))
+		stats.calls += callStats.calls
+		stats.inputTokens += callStats.inputTokens
+		stats.outputTokens += callStats.outputTokens
+		switch code {
+		case "":
+		case model.AnalysisInvalidOutput:
+			invalid++ // a model that broke the schema is not retried
+			continue
+		default:
+			return candidates, stats, invalid, code
+		}
+		// No transcript grounds aliases: heardAs is dropped, as for KB sources.
+		for j := range raw {
+			raw[j].HeardAs = nil
+		}
+		texts := make([]TermSourceDocumentText, 0, len(batch))
+		for _, d := range batch {
+			texts = append(texts, TermSourceDocumentText{ID: d.ID, Text: d.Text})
+		}
+		filtered, _ := FilterCandidates(raw, TermSources{Documents: texts}, s.cfg.MinConfidence)
+		for _, f := range filtered {
+			if at, ok := byKey[f.TermKey]; ok {
+				prev := &candidates[at].term
+				sources := unionStrings(prev.SourceTypes, f.SourceTypes)
+				if betterTerm(f, *prev) {
+					*prev = f
+				}
+				prev.SourceTypes = sources
+				continue
+			}
+			byKey[f.TermKey] = len(candidates)
+			candidates = append(candidates, newsCandidate{term: f})
+		}
+	}
+	return candidates, stats, invalid, ""
 }
 
 // ProcessNewsDaily extracts terms from the news documents of day (YYYY-MM-DD,
@@ -276,45 +335,9 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 	}
 
 	batches, dropped := newsBatches(docs)
-	var stats termsRunStats
-	invalid := 0
-	byKey := map[string]int{}
-	var candidates []newsCandidate
-	for i, batch := range batches {
-		raw, callStats, code := s.extractDocuments(ctx, batch, i+1, len(batches))
-		stats.calls += callStats.calls
-		stats.inputTokens += callStats.inputTokens
-		stats.outputTokens += callStats.outputTokens
-		switch code {
-		case "":
-		case model.AnalysisInvalidOutput:
-			invalid++ // a model that broke the schema is not retried
-			continue
-		default:
-			return done(code, fmt.Errorf("news terms extraction failed: %s", code))
-		}
-		// No transcript grounds aliases: heardAs is dropped, as for KB sources.
-		for j := range raw {
-			raw[j].HeardAs = nil
-		}
-		texts := make([]TermSourceDocumentText, 0, len(batch))
-		for _, d := range batch {
-			texts = append(texts, TermSourceDocumentText{ID: d.ID, Text: d.Text})
-		}
-		filtered, _ := FilterCandidates(raw, TermSources{Documents: texts}, s.cfg.MinConfidence)
-		for _, f := range filtered {
-			if at, ok := byKey[f.TermKey]; ok {
-				prev := &candidates[at].term
-				sources := unionStrings(prev.SourceTypes, f.SourceTypes)
-				if betterTerm(f, *prev) {
-					*prev = f
-				}
-				prev.SourceTypes = sources
-				continue
-			}
-			byKey[f.TermKey] = len(candidates)
-			candidates = append(candidates, newsCandidate{term: f})
-		}
+	candidates, stats, invalid, code := s.extractDailyCandidates(ctx, batches)
+	if code != "" {
+		return done(code, fmt.Errorf("news terms extraction failed: %s", code))
 	}
 
 	// Count today's documents and sources naming each candidate, then apply
@@ -405,6 +428,12 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 // the repeat threshold, so a replayed or concurrent run for the same day is
 // a no-op however many documents named the term.
 func (s *TermsAnalysisService) mergeNews(ctx context.Context, day string, kept []newsCandidate) (model.TermsCounters, error) {
+	return s.mergeCommonDay(ctx, "terms news:", TermsSourceRef{Kind: model.DictSourceNews, Ref: day, OwnerID: model.DictNewsActor}, kept)
+}
+
+// mergeCommonDay is the one Common merge of a daily system job (news or
+// tech) with ref naming its kind, day and actor.
+func (s *TermsAnalysisService) mergeCommonDay(ctx context.Context, label string, ref TermsSourceRef, kept []newsCandidate) (model.TermsCounters, error) {
 	if len(kept) == 0 {
 		return model.TermsCounters{}, nil
 	}
@@ -416,13 +445,12 @@ func (s *TermsAnalysisService) mergeNews(ctx context.Context, day string, kept [
 			Confidence: f.Confidence, TranscribeKo: f.TranscribeKo, TranscribeEn: f.TranscribeEn,
 		})
 	}
-	res, err := s.merger.MergeScoped(ctx, TermsScope{PK: model.PrefixDictCommon}, terms,
-		TermsSourceRef{Kind: model.DictSourceNews, Ref: day, OwnerID: model.DictNewsActor})
+	res, err := s.merger.MergeScoped(ctx, TermsScope{PK: model.PrefixDictCommon}, terms, ref)
 	var total model.TermsCounters
 	if res != nil {
 		total = res.Counters
 		if res.CleanupErr != nil {
-			log.Printf("terms news: cleanup=failed")
+			log.Printf("%s cleanup=failed", label)
 		}
 	}
 	return total, err

@@ -221,6 +221,8 @@ func init() {
 	dictService.SetLiveVocabulary(os.Getenv("LIVE_VOCABULARY_MODE") == "on")
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
+	// Live translation keeps the speaker's dictionary spellings (high quality only).
+	translateService.SetGlossarySource(dictService)
 	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.
 	translateHandler.SetRateLimits(
 		service.NewWindowCounter(repository.NewRateCounterRepository(dynamoClient, tableName)),

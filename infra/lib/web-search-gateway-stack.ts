@@ -59,7 +59,10 @@ export class WebSearchGatewayStack extends cdk.Stack {
 
     // L2 GatewayTarget doesn't support connector targets yet — use the L1
     // CfnGatewayTarget directly, matching AWS's documented CLI/boto3 payload
-    // shape for the Web Search Tool connector.
+    // shape for the Web Search Tool connector. CloudFormation's ConnectorSource
+    // has no version property: news discovery's request filters need connector
+    // 1.2.0+, pinned out of band (sticky across stack updates) per
+    // docs/runbooks/knowledge-grade-news-release.md.
     new agentcore.CfnGatewayTarget(this, 'WebSearchTarget', {
       gatewayIdentifier: this.gateway.gatewayId,
       name: 'ttobak-web-search-tool',

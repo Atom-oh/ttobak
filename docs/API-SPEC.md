@@ -1504,6 +1504,11 @@ is defined by the summary-privacy writer state in INFRA-SPEC.
 The meeting-detail UI uses that publication endpoint directly for its single
 link-and-share action: no preliminary private link request is needed. Existing
 private links and recording preparation remain private until explicit publication.
+After either write commits, the service removes the meeting's automatic-term
+evidence from Account dictionaries it is no longer linked to (ADR-008 FU4). This
+sweep is best effort: a failure is logged and never changes the response, and
+repeating the request retries it. Its version bump can make a concurrent Account
+term PATCH return 409 `VERSION_CONFLICT`.
 
 Account meeting lists and meeting-sourced insights, including the registered QA
 account insight/brief tools, revalidate the exact
@@ -1942,7 +1947,15 @@ capped at 32KB; violations return 400.
 model configured by `BEDROCK_TRANSLATE_MODEL_ID` first, then falls back to Amazon
 Translate on any model error, timeout (`TRANSLATE_HIGH_TIMEOUT_MS`, default 6000,
 accepted 500–8000), truncated or rejected output, or when the model is unset or
-the text exceeds 3,000 bytes. `validateInterpretation` rejects output that starts
+the text exceeds 3,000 bytes. On the interpreter path the request also carries a
+`glossary` of the caller's own dictionary terms that occur in the segment
+(`SelectTranslateGlossary`: Personal then Common active rows from
+`GlossaryForMeeting` without an Account, Latin forms on word boundaries, at most
+20 terms with up to three matched heardAs spellings, cached per user for five
+minutes per API instance); the read has its own 800 ms deadline, and a failed or
+timed-out read sends none, is cached as empty for 30 seconds and never fails the
+translation.
+`validateInterpretation` rejects output that starts
 with a translation label (English or Korean `Translation:` labels, `Here is the translation`…; see `interpreterMetaPrefixes`),
 starts with `{` or echoes `current_segment`/`previous_segments`, is longer than
 `4*len(text)+200` bytes, has a Hangul letter share below 0.3 for a `ko` target
@@ -2097,7 +2110,8 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   Every edit sets `userEditedAt`, blocking automatic writes; `origin` is kept.
 - `DELETE .../terms/{termId}[?version=]` tombstones any origin; failed observation
   cleanup or pruning (beyond 2,000 tombstones, oldest first) is a `warnings` entry.
-- Legacy `PUT` (at most 256 KB and 1,000 entries; `soundsLike` splits on commas)
+- Legacy `PUT` (at most 256 KB, and at most 1,000 entries besides live automatic
+  terms passed through, `MaxLegacyTerms`; `soundsLike` splits on commas)
   accepts the GET `terms` unchanged. Entries whose key belongs to a live auto or
   suggested row are passed through without validation and never written; if one
   differs from that row, or names a suggestion, the response carries a
@@ -2150,7 +2164,7 @@ a membership ConditionCheck in its transaction, so a membership removed after
 that check is still 403. `termId` is the 32-hex `termKey`, validated as in the
 personal routes, and request bodies have the same bounds and validation.
 Term items (here and in the personal GET `items`) gain `layer` and `sources` (`[{kind, ref, at}]`, newest first, at
-most 10, `kind` `meeting|kb|research|news`; `ref` is empty on Account and
+most 10, `kind` `meeting|kb|research|news|tech`; `ref` is empty on Account and
 Common items, which name other users' content); Common items also carry
 `updatedBy`. These routes do not rebuild vocabularies, except personal writes
 (which behave as the personal routes above).

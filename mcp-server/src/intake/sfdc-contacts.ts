@@ -160,8 +160,10 @@ const byId = (first: { sfdcContactId: string }, second: { sfdcContactId: string 
  * (filled only when a field is empty); then a one-to-one, case-insensitive
  * email match; then a unique normalized name match without a conflicting
  * email. A contact linked to another SFDC ID, or already matched by email, is
- * another person for a name match. Several candidates, or several SFDC
- * contacts for one candidate, are ambiguous and skipped; no match is a create.
+ * another person for a name match, and so is a contact holding a linked or
+ * suppressed SFDC person's email. Several candidates, or several SFDC contacts
+ * for one candidate (including a candidate of an ambiguous person), are
+ * ambiguous and skipped; no match is a create.
  * With `inferLinks: false` (an incomplete SFDC read, where a missing person
  * could make a match ambiguous) only existing links are filled; every other
  * unsuppressed contact is `deferred`.
@@ -169,6 +171,7 @@ const byId = (first: { sfdcContactId: string }, second: { sfdcContactId: string 
 export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], suppressed: Set<string>,
   { inferLinks = true }: { inferLinks?: boolean } = {}): MatchResult {
   const result: MatchResult = { items: [], ambiguous: 0, unchanged: 0, suppressed: 0, invalid: 0, deferred: 0 };
+  const others: SfdcPerson[] = [];
   const linked = new Map<string, ExistingContact>();
   const byEmail = new Map<string, ExistingContact[]>();
   const byName = new Map<string, ExistingContact[]>();
@@ -189,11 +192,12 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
     if (!person.name.trim()) { result.invalid++; continue; }
     const current = linked.get(person.id);
     if (current) {
+      others.push(person);
       if (fillable(current, person)) links.push(item(person, current));
       else result.unchanged++;
       continue;
     }
-    if (suppressed.has(person.id)) { result.suppressed++; continue; }
+    if (suppressed.has(person.id)) { others.push(person); result.suppressed++; continue; }
     remaining.push(person);
   }
   if (!inferLinks) {
@@ -202,12 +206,19 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
     return result;
   }
 
+  // Emails of every SFDC person, including linked and suppressed ones: an email two people
+  // share identifies neither of them.
   const sfdcEmails = new Map<string, number>();
-  for (const person of remaining) {
+  for (const person of [...remaining, ...others]) {
     const email = emailKey(person.email);
     if (email) sfdcEmails.set(email, (sfdcEmails.get(email) ?? 0) + 1);
   }
   const claimed = new Set<string>();
+  // A contact holding the email of a linked or suppressed SFDC person is that person's, never a name candidate.
+  for (const person of others) {
+    const email = emailKey(person.email);
+    for (const contact of email ? byEmail.get(email) ?? [] : []) claimed.add(contact.contactId);
+  }
   const byNameOnly: SfdcPerson[] = [];
   for (const person of remaining) {
     const email = emailKey(person.email);
@@ -224,6 +235,8 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
   }
 
   const nameClaims = new Map<string, { contact: ExistingContact; people: SfdcPerson[] }>();
+  // Candidates of an ambiguous person are contested: no other person may claim them uniquely.
+  const contested = new Set<string>();
   for (const person of byNameOnly) {
     const email = emailKey(person.email);
     const candidates = new Map<string, ExistingContact>();
@@ -236,8 +249,10 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
       }
     }
     if (candidates.size === 0) creates.push(item(person));
-    else if (candidates.size > 1) result.ambiguous++;
-    else {
+    else if (candidates.size > 1) {
+      for (const id of candidates.keys()) contested.add(id);
+      result.ambiguous++;
+    } else {
       const [contact] = candidates.values();
       const claim = nameClaims.get(contact.contactId) ?? { contact, people: [] };
       claim.people.push(person);
@@ -245,7 +260,7 @@ export function matchContacts(sfdc: SfdcPerson[], existing: ExistingContact[], s
     }
   }
   for (const { contact, people } of nameClaims.values()) {
-    if (people.length > 1) result.ambiguous += people.length;
+    if (people.length > 1 || contested.has(contact.contactId)) result.ambiguous += people.length;
     else links.push(item(people[0], contact));
   }
   result.items = [...links.sort(byId), ...creates.sort(byId)];
@@ -537,7 +552,8 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
         counts.accountMismatch += read.mismatch;
         people.push(...read.people);
         present[sfdcAccountId] = read.ids;
-        if (!read.complete) complete = false;
+        // A record with a malformed ID might be a present person, so it never proves a departure.
+        if (!read.complete || read.invalidIds) complete = false;
         if (read.failure) fail(read.failure);
       }
       if (Object.values(present).reduce((sum, ids) => sum + ids.length, 0) > MAX_PRESENT_TOTAL) complete = false;
