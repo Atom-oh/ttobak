@@ -318,7 +318,11 @@ the application never silently verifies the address or changes credentials.
 
 ## Accounts, filters and sharing
 
-Render accessible accounts as a collapsible hierarchy. An inaccessible parent
+Render accessible accounts as a collapsible hierarchy. On `/accounts` and
+`/accounts/{id}` that hierarchy is the customer selector: a left tree in the app
+nav style (`AccountWorkspaceSelector` → `AccountHierarchyList`), sorted by Korean
+name order, children nested under their group, the selection's group expanded,
+and no separate flat list; mobile uses a select in the same order. An inaccessible parent
 makes a visible child a display root; do not fetch the hidden parent's name.
 Creation can select a parent. Only the child owner sees the parent editor; server
 validation still enforces parent membership, cycles and concurrent ancestry changes.

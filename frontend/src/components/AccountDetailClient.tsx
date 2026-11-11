@@ -62,12 +62,12 @@ function AccountDetailWorkspace({ accountId, userId }: { accountId: string; user
     router.push(`/accounts/${encodeURIComponent(next)}${params.size ? `?${params}` : ''}`, { scroll: false });
   };
   return (
-    <div className="mx-auto w-full max-w-7xl min-w-0 p-4 lg:p-8">
+    <div className="w-full min-w-0 p-4 lg:p-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight text-text-main">고객 Accounts</h1>
         <a href={`/accounts${searchParams.size ? `?${searchParams}` : ''}`} className="text-sm font-semibold text-primary hover:underline">고객 생성 · 계층 관리</a>
       </div>
-      <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-6">
         <AccountWorkspaceSidebar key={membershipRevision} userId={userId} selectedId={selectedId} onSelect={selectAccount} />
         <div className="min-w-0 rounded-2xl border border-border-subtle bg-surface p-4 lg:p-6">
           {selectedId && selectedId !== '_' ? <AccountDetailContent key={selectedId} accountId={selectedId} />

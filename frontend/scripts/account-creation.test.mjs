@@ -52,7 +52,7 @@ function fixture(overrides = {}) {
     } },
     '@/lib/accountInvite': loadHelper('accountInvite'), '@/lib/accountCreation': loadHelper('accountCreation'),
     '@/components/MemberPicker': { MemberPicker },
-    '@/components/AccountHierarchyList': { AccountHierarchyList: empty },
+    '@/lib/accountTree': loadHelper('accountTree'),
     '@/components/AccountParentSelect': { AccountParentSelect: empty },
     '@/components/AccountDetailClient': { AccountDetailContent: empty },
     '@/components/workspace/AccountWorkspaceSelector': { AccountWorkspaceSelector: empty },
