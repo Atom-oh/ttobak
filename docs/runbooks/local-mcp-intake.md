@@ -36,6 +36,11 @@ Install and update the adapter:
   executable regular file named `node`; any other value is rejected with one
   generic message.
 
+Sync options (copy key `syncOptionsTitle`) set which calendar events sync, by
+your own response, and whether the SFDC contacts step runs. Save runs
+`intake options` in the exclusive run slot; see
+[Sync options](#sync-options).
+
 Connect sources (the setup button runs `intake setup`):
 
 - Setup lists the selected server per connector, as in the Quick start below.
@@ -110,6 +115,7 @@ Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
 intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
 intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
 intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
 intake login
 ```
@@ -176,8 +182,9 @@ never opens a browser; the LaunchAgent uses it.
 | `intake login` | Interactive Cognito sign-in (a browser may open; use it only from an explicit user action). Prints `{ok:true,email}`; exits 2 with `{ok:false,code}` on failure. It does not take the run lock. |
 | `intake status` | Shows the selection (names only) and the last calendar and task results and counts. |
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
+| `intake options [--calendar-responses <csv>] [--sfdc-contacts on\|off]` | Stores the given [sync options](#sync-options) and prints `{ok, options:{calendarResponses, sfdcContacts}}`; with no flags it only prints them. An unknown value exits 2 with `INVALID_ARGUMENT`. |
 
-`run`, `setup`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
+`run`, `setup`, `options`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
 (`<pid> <random token>`, the same `IntakeStore.lock` as the per-connector locks).
 A second concurrent run exits 2 with `RUN_IN_PROGRESS` and touches no state; a lock
 whose process is gone is reclaimed under a serializing `run.lock.break` lock. `status`, `hosts`,
@@ -185,6 +192,36 @@ whose process is gone is reclaimed under a serializing `run.lock.break` lock. `s
 
 The window is the past 7 days through the next 30 days in the Mac's time zone,
 read as 7-day `calendar_view` requests.
+
+### Sync options
+
+Stored in the top-level `options` object of `~/.ttobak/intake/selection.json`,
+apart from the connector entries, so a value set before a connector is selected
+is kept. Absent fields mean the defaults; the first selection stores them.
+
+- `calendarResponses`: any of `accept`, `organizer`, `tentative`, `none`;
+  default `accept,organizer,tentative`; an empty list syncs no events. The
+  `calendar_view` `response` maps `Accept`, `Organizer`, `Tentative` or
+  `TentativelyAccepted`, and `NoResponseReceived` or `None`; any other or
+  missing value counts as `none`. `Decline` is always excluded.
+- `sfdcContacts`: default on. Off skips the [contacts step](#sfdc-contacts-step)
+  with result `disabled`, which is not a failure.
+
+An event whose response is not selected is excluded like a private one: it is
+not sent, and a tracked copy is removed on the next real run. Dry runs report
+`excludedByResponse`. The response itself never reaches TTOBAK.
+
+After the update, the first real run (possibly a scheduled one, before you open
+Settings) removes previously synced events that are declined, unanswered, or
+have a missing or unknown response. Settings shows copy key
+`defaultsRemoveNote` while the defaults apply. To keep the unanswered ones,
+check the no-response box (copy key `responseNone`) in Settings, or run
+`intake options --calendar-responses accept,organizer,tentative,none`, before
+the next run. Declined events cannot be kept.
+
+The options take effect only with an updated adapter (`~/.ttobak/server.mjs`).
+An older adapter has no `intake options` and Settings shows the `adapterTooOld`
+message on save; update the adapter first.
 
 ## Behavior
 
@@ -499,7 +536,8 @@ same `aws-sentral-mcp` session, runs `sfdc-contacts`
 (`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`.
 `intake sfdc` still exits 0 when this step fails, like the calendar's task
 step: the failure is in its `sfdcContacts.result` and in `status.json`; only
-`intake run` turns it into `PARTIAL_FAILURE`.
+`intake run` turns it into `PARTIAL_FAILURE`. With `sfdcContacts` off in the
+[sync options](#sync-options) the step makes no call and records `disabled`.
 
 - **IDs.** Every SFDC ID (contact and account IDs from `search_contacts`,
   mapped SFDC account IDs, stored `sfdcContactId` links and ledger entries) is

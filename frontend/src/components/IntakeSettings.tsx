@@ -4,12 +4,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { useIntake } from '@/hooks/useIntake';
 import {
   errorCode, finishedMessage, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
-  scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows, type IntakeConnector, type IntakeFinished,
-  type IntakeScheduleKind,
+  optionsSaveErrorText, savedOptions, scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows,
+  SYNC_OPTIONS_COPY, syncOptionsValue, syncOptionsView, type IntakeConnector, type IntakeFinished, type IntakeScheduleKind, type SyncOptionsView,
 } from '@/lib/intake';
 import {
   cancelIntake, checkIntakeAdapter, isTauri, runIntakeLogin, runIntakeNow, runIntakeSetup, setIntakeNodePath,
-  setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter,
+  setIntakeOptions, setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter,
 } from '@/lib/tauri';
 
 const buttonClass = 'rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-white/10 dark:text-text-main dark:hover:bg-white/5';
@@ -35,6 +35,7 @@ export function IntakeSettings() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [acceptPrivate, setAcceptPrivate] = useState(false);
   const [skip, setSkip] = useState<IntakeConnector[]>([]);
+  const [optionsForm, setOptionsForm] = useState<SyncOptionsView | null>(null);
 
   // Best effort, once the state is loaded: offline leaves updateAvailable null.
   const loaded = state !== null;
@@ -63,8 +64,11 @@ export function IntakeSettings() {
   const scheduleValue = scheduleFromForm(schedule.kind, schedule.first, schedule.second);
   const rows = sourceRows(state.status, state.selection);
   const setupRows = running ? [] : setupConnectorRows(state.lastResult);
+  // Background commands without a progress log or cancel.
+  const quiet = state.running === 'scheduleOff' || state.running === 'options';
+  const syncOptions = optionsForm ?? syncOptionsView(state.options);
 
-  const act = async (work: () => Promise<unknown>, after?: (value: unknown) => void) => {
+  const act = async (work: () => Promise<unknown>, after?: (value: unknown) => void, errorText = intakeCodeLabel) => {
     setBusy(true);
     setMessage(null);
     try {
@@ -72,7 +76,7 @@ export function IntakeSettings() {
       after?.(value);
     } catch (err) {
       const code = errorCode(err);
-      setMessage(code === 'invalid-node-path' ? 'node 경로가 올바르지 않아요.' : intakeCodeLabel(code));
+      setMessage(code === 'invalid-node-path' ? 'node 경로가 올바르지 않아요.' : errorText(code));
     } finally {
       setBusy(false);
       await refresh();
@@ -181,6 +185,42 @@ export function IntakeSettings() {
           </table>
         )}
 
+        {state.options && (
+          <fieldset className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 dark:border-white/10">
+            <legend className="px-1 text-sm font-semibold">{SYNC_OPTIONS_COPY.title}</legend>
+            <p className={mutedClass}>{SYNC_OPTIONS_COPY.calendarResponsesLabel}</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {syncOptions.responses.map(row => (
+                <label key={row.response} className="flex items-center gap-2">
+                  <input type="checkbox" checked={row.checked} disabled={busy || running}
+                    onChange={event => setOptionsForm({ ...syncOptions, responses: syncOptions.responses.map(item =>
+                      item.response === row.response ? { ...item, checked: event.target.checked } : item) })} />
+                  <span>{row.label}</span>
+                </label>
+              ))}
+            </div>
+            <p className={mutedClass}>{SYNC_OPTIONS_COPY.declinedNote}</p>
+            {syncOptions.defaults && <p className={mutedClass}>{SYNC_OPTIONS_COPY.defaultsRemoveNote}</p>}
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={syncOptions.sfdcContacts} disabled={busy || running}
+                onChange={event => setOptionsForm({ ...syncOptions, sfdcContacts: event.target.checked })} />
+              <span>{SYNC_OPTIONS_COPY.sfdcContactsToggle}</span>
+            </label>
+            <p className={mutedClass}>{SYNC_OPTIONS_COPY.uncheckedRemovedNote}</p>
+            <div>
+              <button type="button" className={buttonClass} disabled={busy || running || !optionsForm}
+                onClick={() => optionsForm && void act(() => setIntakeOptions(syncOptionsValue(optionsForm)), value => {
+                  // Show the saved values at once instead of the stale state until the refresh resolves.
+                  const saved = savedOptions(value);
+                  if (saved) setState(current => current ? { ...current, options: saved } : current);
+                  setOptionsForm(null);
+                }, optionsSaveErrorText)}>
+                {SYNC_OPTIONS_COPY.save}
+              </button>
+            </div>
+          </fieldset>
+        )}
+
         <div className="flex flex-wrap gap-2">
           <button type="button" className={buttonClass} disabled={busy || running} aria-expanded={setupOpen}
             onClick={() => setSetupOpen(open => !open)}>{INTAKE_COPY.connectSetup}</button>
@@ -190,7 +230,7 @@ export function IntakeSettings() {
             <button type="button" className={buttonClass} disabled={busy || running}
               onClick={() => start('login', runIntakeLogin)}>{INTAKE_COPY.ttobakLogin}</button>
           )}
-          {running && state.running !== 'scheduleOff' && (
+          {running && !quiet && (
             <button type="button" className={buttonClass} onClick={() => void act(cancelIntake)}>{INTAKE_COPY.cancel}</button>
           )}
         </div>
@@ -240,7 +280,7 @@ export function IntakeSettings() {
 
         {message && <p role="status" className="text-sm text-red-600 dark:text-red-400">{message}</p>}
 
-        {running && state.running !== 'scheduleOff' && (
+        {running && !quiet && (
           <details open className="rounded-lg border border-slate-200 p-3 dark:border-white/10">
             <summary className="cursor-pointer text-sm font-semibold">수집 중… 진행 기록</summary>
             <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-slate-600 dark:text-text-muted">

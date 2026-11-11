@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{oneshot, Notify};
 
-use crate::intake_plan::{self, Connector, IntakeAction, Schedule, SlotState};
+use crate::intake_plan::{self, CalendarResponse, Connector, IntakeAction, Schedule, SlotState};
 use crate::report_runner::ReportSettings;
 
 /// The only adapter source: the app's own origin, exact path, no redirects.
@@ -280,6 +280,48 @@ fn selection_view(selection: &Value) -> Vec<SelectionEntry> {
         .collect()
 }
 
+/// The sync options stored in `selection.json`, as names only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptionsView {
+    calendar_responses: Vec<CalendarResponse>,
+    sfdc_contacts: bool,
+    /// No calendar responses are stored: the defaults apply, so previously
+    /// synced unanswered events are removed on the next run.
+    defaults: bool,
+}
+
+/// The top-level `options` object: `calendarResponses` (known names, canonical
+/// order; absent or not a list: the CLI default accept/organizer/tentative)
+/// and `sfdcContacts` (only `false` turns it off), mirroring the CLI's
+/// `syncOptions`.
+fn options_view(selection: &Value) -> OptionsView {
+    let options = selection.get("options");
+    let stored = options
+        .and_then(|o| o.get("calendarResponses"))
+        .and_then(Value::as_array);
+    let calendar_responses = match stored {
+        Some(stored) => CalendarResponse::ALL
+            .into_iter()
+            .filter(|r| stored.iter().any(|v| v.as_str() == Some(r.as_str())))
+            .collect(),
+        None => vec![
+            CalendarResponse::Accept,
+            CalendarResponse::Organizer,
+            CalendarResponse::Tentative,
+        ],
+    };
+    let sfdc_contacts = options
+        .and_then(|o| o.get("sfdcContacts"))
+        .and_then(Value::as_bool)
+        != Some(false);
+    OptionsView {
+        calendar_responses,
+        sfdc_contacts,
+        defaults: stored.is_none(),
+    }
+}
+
 fn is_executable_file(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -529,6 +571,8 @@ pub enum RunKind {
     Login,
     /// `intake_launch_agent_off`: tracked and exclusive, but not a run.
     ScheduleOff,
+    /// `intake_set_options`: tracked and exclusive, but not a run.
+    Options,
 }
 
 /// What a finished run is recorded against.
@@ -639,7 +683,7 @@ impl IntakeState {
         let (tx, rx) = oneshot::channel();
         *self.cancel.lock() = Some(tx);
         self.run_gen.fetch_add(1, Ordering::SeqCst);
-        if kind != RunKind::ScheduleOff {
+        if !matches!(kind, RunKind::ScheduleOff | RunKind::Options) {
             self.progress.lock().lines.clear();
         }
         Ok(rx)
@@ -1282,6 +1326,8 @@ pub struct IntakeStateView {
     last_result: Option<Value>,
     status: Value,
     selection: Vec<SelectionEntry>,
+    /// Sync options from `selection.json` (names only).
+    options: OptionsView,
     launch_agent_installed: bool,
     /// Progress lines of the current or last run (not persisted).
     progress: Vec<String>,
@@ -1317,6 +1363,7 @@ pub async fn intake_get_state(state: State<'_, IntakeState>) -> Result<IntakeSta
         .as_deref()
         .and_then(|h| resolve_node(settings.node_path.as_deref(), h));
     let launch_agent_installed = home.as_deref().is_some_and(launch_agent_present);
+    let selection = read_json("selection.json", MAX_SELECTION_BYTES);
     Ok(IntakeStateView {
         adapter: adapter_view(&state, home.as_deref()),
         node_missing: node.is_none(),
@@ -1325,7 +1372,8 @@ pub async fn intake_get_state(state: State<'_, IntakeState>) -> Result<IntakeSta
         running: *state.running.lock(),
         last_result: state.last_result.lock().clone(),
         status: read_json("status.json", MAX_STATUS_BYTES),
-        selection: selection_view(&read_json("selection.json", MAX_SELECTION_BYTES)),
+        selection: selection_view(&selection),
+        options: options_view(&selection),
         launch_agent_installed,
         progress: state.progress.lock().lines.iter().cloned().collect(),
     })
@@ -1369,6 +1417,32 @@ pub async fn intake_launch_agent_off(app: AppHandle) -> Result<Value, String> {
         false,
     )
     .await;
+    state.end();
+    if state.retry_after_run.swap(false, Ordering::SeqCst) {
+        state.poke(true);
+    }
+    match outcome.code {
+        None => Ok(outcome.result.unwrap_or(Value::Null)),
+        Some(code) => Err(code),
+    }
+}
+
+/// Runs `intake options` with typed values in the exclusive run slot; returns
+/// the CLI's JSON result (`{ok, options}`) or its code.
+#[tauri::command]
+pub async fn intake_set_options(
+    app: AppHandle,
+    calendar_responses: Vec<CalendarResponse>,
+    sfdc_contacts: bool,
+) -> Result<Value, String> {
+    let state = app.state::<IntakeState>();
+    state.available()?;
+    let action = IntakeAction::Options {
+        calendar_responses: calendar_responses.into_iter().collect(),
+        sfdc_contacts,
+    };
+    let cancel = state.try_begin(RunKind::Options)?;
+    let outcome = execute(&app, &action, SCHEDULE_OFF_TIMEOUT, Some(cancel), false).await;
     state.end();
     if state.retry_after_run.swap(false, Ordering::SeqCst) {
         state.poke(true);
@@ -1604,6 +1678,39 @@ mod tests {
             assert!(!text.contains(leaked), "{leaked} leaked");
         }
         assert!(selection_view(&json!(null)).is_empty());
+    }
+
+    #[test]
+    fn options_view_reads_names_with_defaults() {
+        use CalendarResponse::*;
+        let legacy = options_view(&json!({"calendar": {"server": "x"}, "sfdc": {"server": "y"}}));
+        assert_eq!(
+            legacy.calendar_responses,
+            vec![Accept, Organizer, Tentative]
+        );
+        assert!(legacy.sfdc_contacts);
+        assert!(legacy.defaults);
+        assert_eq!(options_view(&json!(null)), legacy);
+        let set = options_view(&json!({
+            "calendar": {"pathDirs": ["/secret"]},
+            "options": {"calendarResponses": ["none", "bogus", 7, "accept"], "sfdcContacts": false}
+        }));
+        assert_eq!(set.calendar_responses, vec![Accept, None]);
+        assert!(!set.sfdc_contacts);
+        assert!(!set.defaults);
+        assert!(options_view(&json!({"options": {"calendarResponses": []}}))
+            .calendar_responses
+            .is_empty());
+        assert!(options_view(&json!({"options": {"sfdcContacts": "no"}})).sfdc_contacts);
+        // The per-connector fields are not read.
+        let old =
+            options_view(&json!({"calendar": {"responses": []}, "sfdc": {"contacts": false}}));
+        assert_eq!(old, legacy);
+        let text = serde_json::to_string(&set).expect("json");
+        assert_eq!(
+            text,
+            r#"{"calendarResponses":["accept","none"],"sfdcContacts":false,"defaults":false}"#
+        );
     }
 
     #[cfg(unix)]

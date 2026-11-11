@@ -33,7 +33,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
     start: `${date}T10:00:00+09:00`, end: `${date}T11:00:00+09:00`,
     location: 'Room 1; https://example.invalid/j/1?pwd=abc', status: 'Busy', categories: [],
     organizer: { name: 'Fixture', email: 'fixture@example.invalid' },
-    isCanceled: false, isRecurring: false, isAllDay: false,
+    isCanceled: false, isRecurring: false, isAllDay: false, response: 'Accept',
   }];
   return { content: [{ type: 'text', text: JSON.stringify(items) }] };
 });

@@ -21,6 +21,23 @@ const LEDGER_RETENTION_DAYS = 120;
 const MAX_BATCH = 12;
 const UNTITLED = '(제목 없음)';
 
+/** The owner's own response, as selected in `calendar.responses`. Declined events are never synced. */
+export const CALENDAR_RESPONSES = ['accept', 'organizer', 'tentative', 'none'] as const;
+export type CalendarResponse = typeof CALENDAR_RESPONSES[number];
+/** New and legacy selections: everything except events the owner has not answered. */
+export const DEFAULT_CALENDAR_RESPONSES: readonly CalendarResponse[] = ['accept', 'organizer', 'tentative'];
+
+/** Maps the `calendar_view` `response` field; any other or missing value is `none`. */
+export function responseOf(value: string | undefined): CalendarResponse | 'decline' {
+  switch (value) {
+    case 'Accept': return 'accept';
+    case 'Organizer': return 'organizer';
+    case 'Tentative': case 'TentativelyAccepted': return 'tentative';
+    case 'Decline': return 'decline';
+    default: return 'none';
+  }
+}
+
 export interface OutlookItem {
   meetingId: string;
   subject?: string;
@@ -30,6 +47,8 @@ export interface OutlookItem {
   isCanceled?: boolean;
   isAllDay?: boolean;
   sensitivity?: string;
+  /** The owner's own response (`Accept`, `Organizer`, ...); never sent to TTOBAK. */
+  response?: string;
   /** Only the email is kept; the organizer's name never leaves the parser. */
   organizer?: { email?: string };
 }
@@ -59,6 +78,8 @@ export interface CalendarCounts {
   removals: number;
   unchanged: number;
   excluded: number;
+  /** Events whose owner response is not selected (declined events always). */
+  excludedByResponse: number;
   skippedLong: number;
   skippedInvalid: number;
   cancelledUntracked: number;
@@ -169,6 +190,8 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
       ...(typeof value.isCanceled === 'boolean' ? { isCanceled: value.isCanceled } : {}),
       ...(typeof value.isAllDay === 'boolean' ? { isAllDay: value.isAllDay } : {}),
       ...(typeof value.sensitivity === 'string' ? { sensitivity: value.sensitivity } : {}),
+      // A non-string response is treated as missing (`none`), never as a failed page.
+      ...(typeof value.response === 'string' ? { response: value.response } : {}),
       ...(typeof email === 'string' ? { organizer: { email } } : {}),
     };
   });
@@ -264,9 +287,15 @@ export interface Plan {
   preview: { title: string; startsAt: string; op: 'upsert' | 'remove' | 'unchanged' }[];
 }
 
-/** Computes the mutations for one complete read of the window. */
-export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string): Plan {
-  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, skippedLong: 0,
+/**
+ * Computes the mutations for one complete read of the window. An event whose
+ * owner response is not in `responses` is excluded like a private one: a
+ * tracked copy is removed explicitly.
+ */
+export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string,
+  responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES): Plan {
+  const wanted = new Set<string>(responses);
+  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, excludedByResponse: 0, skippedLong: 0,
     skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0 };
   const mutations: Mutation[] = [];
   const set: Ledger = {};
@@ -295,6 +324,11 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     if (item.isCanceled) {
       if (!removeTracked(item.meetingId)) counts.cancelledUntracked++;
       else preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
+      continue;
+    }
+    if (!wanted.has(responseOf(item.response))) {
+      counts.excludedByResponse++;
+      if (removeTracked(item.meetingId)) preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
     if (excludedSensitivity(item)) {
@@ -448,6 +482,8 @@ export interface CalendarRunOptions {
   reconcile?: boolean;
   /** The user confirmed the source hides or flags private items itself. */
   acceptUnknownSensitivity?: boolean;
+  /** Selected owner responses; defaults to `DEFAULT_CALENDAR_RESPONSES`. */
+  responses?: readonly CalendarResponse[];
 }
 
 export async function runCalendar(options: CalendarRunOptions): Promise<CalendarRunResult> {
@@ -470,7 +506,7 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const window = syncWindow(now, zone);
   const items: OutlookItem[] = [];
   for (const request of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request)));
-  const plan = planCalendar(items, state.ledger, window, zone);
+  const plan = planCalendar(items, state.ledger, window, zone, options.responses);
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {
     throw new IntakeError('SENSITIVITY_UNKNOWN',

@@ -167,3 +167,42 @@ test('sfdcContacts row has its label and a counts summary', () => {
   const selected = plain(intake.sourceRows({}, [{ connector: 'sfdcContacts', disabled: false }]));
   assert.equal(selected[0].label, 'SFDC 연락처');
 });
+
+test('syncOptionsView shows the defaults and the fixed labels', () => {
+  const labels = ['수락함', '내가 주최함', '잠정 수락', '아직 응답 안 함'];
+  const defaults = plain(intake.syncOptionsView(undefined));
+  assert.deepEqual(defaults.responses.map(row => row.label), labels);
+  assert.deepEqual(defaults.responses.map(row => [row.response, row.checked]),
+    [['accept', true], ['organizer', true], ['tentative', true], ['none', false]]);
+  assert.equal(defaults.sfdcContacts, true);
+  assert.deepEqual(plain(intake.syncOptionsView('garbage')), defaults);
+  assert.deepEqual(plain(intake.syncOptionsView({ calendarResponses: 'accept', sfdcContacts: 'no' })), defaults);
+  const set = plain(intake.syncOptionsView({ calendarResponses: ['none', 'bogus', 'accept'], sfdcContacts: false }));
+  assert.deepEqual(set.responses.filter(row => row.checked).map(row => row.response), ['accept', 'none']);
+  assert.equal(set.sfdcContacts, false);
+  assert.equal(plain(intake.syncOptionsView({ calendarResponses: [], sfdcContacts: true })).responses.some(row => row.checked), false);
+  assert.equal(intake.SYNC_OPTIONS_COPY.title, '동기화 옵션');
+  assert.equal(intake.SYNC_OPTIONS_COPY.uncheckedRemovedNote, '선택을 끈 항목은 다음 동기화 때 TTOBAK에서 지워져요.');
+  assert.equal(intake.SYNC_OPTIONS_COPY.declinedNote, '거절한 일정은 항상 제외돼요.');
+});
+
+test('a disabled step result is kept and labelled', () => {
+  const rows = plain(intake.sourceRows({ sfdcContacts: { lastRunAt: '2026-11-10T00:00:00Z', result: 'disabled' } }, []));
+  assert.equal(rows[0].result, 'disabled');
+  assert.equal(rows[0].counts, null);
+  assert.equal(intake.intakeCodeLabel('disabled'), '꺼짐');
+});
+
+test('sync options: defaults note, saved result and adapter-too-old text', () => {
+  assert.equal(intake.syncOptionsView({ calendarResponses: ['accept'], sfdcContacts: true, defaults: true }).defaults, true);
+  assert.equal(intake.syncOptionsView({ calendarResponses: ['accept'], sfdcContacts: true }).defaults, false);
+  assert.equal(intake.syncOptionsView(undefined).defaults, false);
+  assert.equal(intake.SYNC_OPTIONS_COPY.defaultsRemoveNote, '기본 설정에서는 아직 응답하지 않은 일정이 다음 동기화 때 TTOBAK에서 지워져요.');
+  assert.deepEqual(plain(intake.savedOptions({ ok: true, options: { calendarResponses: ['none', 'accept', 'x'], sfdcContacts: false } })),
+    { calendarResponses: ['accept', 'none'], sfdcContacts: false, defaults: false });
+  assert.equal(intake.savedOptions(null), null);
+  assert.equal(intake.savedOptions({ ok: true, options: { calendarResponses: 'accept', sfdcContacts: true } }), null);
+  assert.equal(intake.optionsSaveErrorText('EXIT_FAILED'), '수집 도구를 업데이트한 뒤 다시 시도하세요.');
+  assert.equal(intake.optionsSaveErrorText('INVALID_ARGUMENT'), '수집 도구를 업데이트한 뒤 다시 시도하세요.');
+  assert.equal(intake.optionsSaveErrorText('RUN_IN_PROGRESS'), '이미 수집 중이에요.');
+});

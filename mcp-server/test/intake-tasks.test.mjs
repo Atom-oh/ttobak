@@ -734,7 +734,8 @@ const ATTENDEE_CANARY = 'attendee-canary-4e7a@example.com';
 const SLACK_ID_CANARY = 'UCANARY4E7A';
 const DM_CANARY = 'DCANARY4E7A';
 const occurrence = (over = {}) => ({ meetingId: 'occ-1', subject: 'Customer sync', start: '2026-11-12T10:00:00+09:00',
-  end: '2026-11-12T11:00:00+09:00', sensitivity: 'Normal', isCanceled: false, isAllDay: false, ...over });
+  end: '2026-11-12T11:00:00+09:00', sensitivity: 'Normal', isCanceled: false, isAllDay: false,
+  response: 'Accept', ...over });
 const MEETING_LIST = { meetings: [{ meetingId: 'i:1', subject: 'Customer sync', startTime: '2026-11-12T01:00:00Z',
   endTime: '2026-11-12T02:00:00Z' }] };
 // One customer attendee by default: only a customer meeting produces a task.

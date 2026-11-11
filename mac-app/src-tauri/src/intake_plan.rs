@@ -250,6 +250,35 @@ impl Connector {
     }
 }
 
+/// The owner's own calendar response that `intake options` syncs; declined
+/// events are always excluded by the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CalendarResponse {
+    Accept,
+    Organizer,
+    Tentative,
+    None,
+}
+
+impl CalendarResponse {
+    pub const ALL: [CalendarResponse; 4] = [
+        CalendarResponse::Accept,
+        CalendarResponse::Organizer,
+        CalendarResponse::Tentative,
+        CalendarResponse::None,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CalendarResponse::Accept => "accept",
+            CalendarResponse::Organizer => "organizer",
+            CalendarResponse::Tentative => "tentative",
+            CalendarResponse::None => "none",
+        }
+    }
+}
+
 /// One `intake` CLI invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntakeAction {
@@ -264,6 +293,11 @@ pub enum IntakeAction {
     Status,
     /// `intake schedule off`: removes the LaunchAgent.
     ScheduleOff,
+    /// `intake options`: stores the sync options (an empty set is allowed).
+    Options {
+        calendar_responses: BTreeSet<CalendarResponse>,
+        sfdc_contacts: bool,
+    },
 }
 
 /// Arguments for the node binary: `[server_mjs, "intake", ...]`. Never adds
@@ -287,6 +321,23 @@ pub fn argv(action: &IntakeAction, server_mjs: &Path) -> Vec<OsString> {
         IntakeAction::Login => v.push("login".into()),
         IntakeAction::Status => v.push("status".into()),
         IntakeAction::ScheduleOff => v.extend(["schedule".into(), "off".into()]),
+        IntakeAction::Options {
+            calendar_responses,
+            sfdc_contacts,
+        } => {
+            let csv = calendar_responses
+                .iter()
+                .map(|r| r.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            v.extend([
+                "options".into(),
+                "--calendar-responses".into(),
+                csv.into(),
+                "--sfdc-contacts".into(),
+                if *sfdc_contacts { "on" } else { "off" }.into(),
+            ]);
+        }
     }
     v
 }
@@ -550,6 +601,62 @@ mod tests {
                 "--skip",
                 "slack"
             ]
+        );
+    }
+
+    #[test]
+    fn argv_options_maps_typed_values() {
+        let some = IntakeAction::Options {
+            calendar_responses: [CalendarResponse::None, CalendarResponse::Accept]
+                .into_iter()
+                .collect(),
+            sfdc_contacts: false,
+        };
+        assert_eq!(
+            argv_strs(&some),
+            [
+                "/x/server.mjs",
+                "intake",
+                "options",
+                "--calendar-responses",
+                "accept,none",
+                "--sfdc-contacts",
+                "off"
+            ]
+        );
+        let empty = IntakeAction::Options {
+            calendar_responses: BTreeSet::new(),
+            sfdc_contacts: true,
+        };
+        assert_eq!(
+            argv_strs(&empty),
+            [
+                "/x/server.mjs",
+                "intake",
+                "options",
+                "--calendar-responses",
+                "",
+                "--sfdc-contacts",
+                "on"
+            ]
+        );
+        let all: BTreeSet<CalendarResponse> = CalendarResponse::ALL.into_iter().collect();
+        assert_eq!(
+            argv_strs(&IntakeAction::Options {
+                calendar_responses: all,
+                sfdc_contacts: true
+            })[4],
+            "accept,organizer,tentative,none"
+        );
+        for bad in ["\"Accept\"", "\"decline\"", "\"\""] {
+            assert!(
+                serde_json::from_str::<CalendarResponse>(bad).is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<CalendarResponse>("\"tentative\"").unwrap(),
+            CalendarResponse::Tentative
         );
     }
 
