@@ -30,7 +30,7 @@ features remove this kind of duplicate:
 - Route: `POST /api/accounts/{accountId}/owner-transfer` `{targetUserId}`,
   authenticated and non-delegable for connectors. The web UI adds a "Transfer owner"
   action (Korean UI label) on a member row for the owner.
-- New ADR amending ADR-034 and ADR-055.
+- New ADR amending ADR-015 and ADR-055.
 
 ## B. Account merge (A into B)
 
