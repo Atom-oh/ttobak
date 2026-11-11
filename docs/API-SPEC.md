@@ -1127,6 +1127,50 @@ account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 unknown source. Per-user crawler routes (subscribe/AddSource, update,
 unsubscribe) refuse account-owned sources like operator-curated ones, in the
 service and in the `attribute_not_exists(accountId)` write condition.
+
+`PUT /api/accounts/{accountId}/news-sources/{sourceId}` edits an account-owned
+source for a direct member. The body takes optional `sourceName`, `newsQueries`
+and `aliases` (unknown fields are 400); an absent or null field is unchanged, a
+present one replaces the stored value with POST's cleaning and limits. An empty
+name, an empty query list or a body with no field is 400. The source must have
+the account's ref and a CONFIG naming the account that is not disabled; anything
+else is 404. One transaction updates the CONFIG on those conditions and checks the
+ref, account and `MEMBER#` row: a racing delete gives 404 (never a revival), a
+revoked member 403. The ID, ref
+and `accountId` never change. Returns 200 with the (bounded) item shape below.
+On the versioned news publication path (`NEWS_PIPELINE_MODE`, `off` by default
+in code), current-news reads require each article's `sourceRevision` to equal
+the CONFIG fingerprint over `sourceName`, `aliases`, `newsQueries` and
+`customUrls`; after an edit, articles published under the previous configuration
+stop being listed and are not republished automatically, because discovery skips
+already-published hashes. Legacy (unversioned) news rows are not fingerprinted
+and stay listed. Tombstone deletion does not depend on the fingerprint.
+
+`GET /api/news-sources?limit=&cursor=` returns
+`{ "sources": [...], "nextCursor"?: "...", "truncated"?: true }`: the
+account-owned sources of every account the caller is a current direct member of
+(membership index rows are re-checked against the account and `MEMBER#` row,
+and each CONFIG against its ref, as in the account GET), sorted by account name
+then source name, followed by the caller's subscribed common sources by name.
+Operator-curated sources, sources with `accountId` and `acct_` IDs never appear
+as common. Each item has `sourceId`, `sourceName`, `kind` (`account` or
+`common`), `accountId` and `accountName` (account kind only), `newsQueries`,
+`aliases`, `customUrls`, `newsSources` (the CONFIG values), `status`,
+`lastCrawledAt`, `documentCount`, `canEdit` (always true) and `listsTruncated`
+when cut; full values come from the per-account GET and the crawler list. Names
+are cut to 200 code points, `status` to 32, `lastCrawledAt` to 64; queries keep
+at most 32 x 200 code points in 8,192 serialized bytes, `aliases`/`newsSources`
+20 x 100 in 4,096/2,048, `customUrls` 20 x 1,000 in 6,144; common IDs over 128
+code points are skipped. At 6 JSON bytes per code point an item is under 25,000
+bytes, so a page at the maximum `limit` (default 50, max 100; 0, non-numeric,
+repeated or unknown parameters are 400) plus cursor is under 2,520,000 bytes,
+within the 6 MB Lambda limit even if proxy escaping doubles it. Each request
+reads the whole bounded directory (200 accounts by ID, 10 sources each, 500
+subscriptions across all Query pages) under a 20-second deadline and returns the
+items after the cursor, so pages keep the order without gaps or duplicates while
+it is unchanged. The cursor is the last item's sort key bound to the caller;
+malformed, oversized or foreign cursors are 400. `truncated` means a cap left
+sources out. Undecodable CONFIG rows (legacy scalar lists) are skipped.
 `DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
 document is allowed only for admins or a current direct member of that account
 (read per request); the stored source creator grants nothing. A non-admin
@@ -1147,7 +1191,11 @@ row without one is common. With no row, a
 source ID starting `acct_` is hidden and any other ID (such as `__tech__`) is
 common. Hidden documents are removed before `totalCount`, the `services` and
 `sourceIds` facets, sorting and paging; `source={hidden}` returns an empty
-page. A hidden detail returns the same 404 as a missing document. Each
+page. The list also takes `kind=common|account` (other values are ignored) and
+`account={accountId}` (account kind; with `kind=common` nothing matches), applied
+with visibility before the same totals, facets and paging; an account the caller
+cannot read returns an empty page. The shared 30-second scan cache stays
+unfiltered. A hidden detail returns the same 404 as a missing document. Each
 returned document adds `sourceName` (the CONFIG name, omitted without a row),
 `sourceKind` (`common` or `account`), `accountId` and `accountName` for the
 account kind, and `matchedTerm` (the search query that found a news article,
@@ -2076,14 +2124,15 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   `EnsureVocabularies`, which polls, flips or starts the personal ko-KR build
   (en-US is deferred and reports `NONE`); failures are `warnings` and the
   active vocabulary keeps serving.
-  `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount}`
+  `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount, liveName?}`
   per language (`status` `READY|BUILDING|FAILED|QUOTA_EXCEEDED|NONE` is the
   latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `PENDING`
   while a ko-KR build is in flight (so the settings UI keeps polling the GET,
   which flips it), otherwise `READY` whenever the active vocabulary is ready.
-  No response carries a
-  vocabulary name yet: the live client would send a ko-KR-only
-  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 rollout check 5).
+  `liveName` is the caller's own READY active vocabulary name, present only
+  when `LIVE_VOCABULARY_MODE=on` and the active slot is READY and not emptied.
+  The recording page sends it as `VocabularyNames` on live streams, including
+  the ko-KR/en-US multi-language stream (ADR-008 rollout check 5).
   The builder replaces the earlier in-place rebuild of the derived ko-KR
   vocabulary, including its pending-build deferral warning and bounded
   conflict recomputation; that path no longer exists.
@@ -2237,6 +2286,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | DELETE | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Delete` |
 | GET | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.List` |
 | POST | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.Create` |
+| PUT | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Delete` |
 | GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
 | POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
@@ -2364,6 +2414,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/dictionary/layers/{layer}/terms/{termId}/log/{logId}/restore` | `dictHandler.RestoreTerm` |
 | POST | `/api/translate` | `translateHandler.Translate` |
 | POST | `/api/meetings/{meetingId}/summarize` | `summarizeLiveHandler.SummarizeLive` |
+| GET | `/api/news-sources` | `accountNewsHandler.ListAll` |
 | GET | `/api/crawler/sources` | `crawlerHandler.ListSources` |
 | POST | `/api/crawler/sources` | `crawlerHandler.AddSource` |
 | PUT | `/api/crawler/sources/{sourceId}` | `crawlerHandler.UpdateSource` |
