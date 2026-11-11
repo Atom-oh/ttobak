@@ -150,7 +150,7 @@ enum Origin {
     Detection,
 }
 
-/// Runs a start/stop confirmed from a meeting-detection prompt (ADR-061)
+/// Runs a start/stop confirmed from a meeting-detection prompt (ADR-017)
 /// through the same SPA path as socket requests, returning the response in
 /// control-protocol shape.
 pub async fn dispatch_local(app: &AppHandle, id: &str, action: Action) -> Value {
