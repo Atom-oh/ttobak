@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: aa6e03420134 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: a0711786f8af · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -170,12 +170,12 @@ limit instead of claiming a Mac build passed.
   document shares reference the owner's document, always read-only.
   Owner-only mutations use partition isolation; recipients read through the
   share row. Inaccessible docs 404. Use `SHAREDDOC#`/`DOCSHARE_TO#`, never
-  meeting `SHARED#` keys (ADR-022/029).
+  meeting `SHARED#` keys (ADR-020).
 - **Public routes:** `GET /api/public/docs/{token}` and ADR-045's two static MCP
   discovery GETs are the only unauthenticated routes. Revalidate `PublicShareToken`;
   conditional minting prevents orphans; downloads last 5 minutes. Edge bypass
   covers `/api/public/*`; API Gateway registers only the literal doc route.
-  A new unauthenticated route is CRITICAL (ADR-022).
+  A new unauthenticated route is CRITICAL (ADR-020).
 - **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows
   (ADR-044). Keep writers disabled until companion bootstrap and rollback guards
   are deployed. Account/meeting `PENDING_SHARE#`/`PENDING_ACCOUNT#`/
@@ -226,7 +226,7 @@ limit instead of claiming a Mac build passed.
   Partial/retained text is explicit and failed-current results are not model evidence.
   Code wiring does not prove deployed acceptance; QA/UI cutover is separate. Preview PDFs bind
   exact source ETag/version and conditionally replace the observed preview; legacy
-  previews need regeneration before canonical use (ADR-022).
+  previews need regeneration before canonical use (ADR-020).
 - **Current-source QA foundation:** helpers verify present authorization/revisions
   before bytes and replay, including immutable manual/shared snapshots and bounded
   legacy text. Metadata and cached vectors never grant access. ToolHistory uses
@@ -293,7 +293,7 @@ exposure:
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
 | Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/040); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
-| convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-022; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
+| convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-020; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. No account binding. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
 | Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-007; refresh revocation differs from access/ID token expiry. |

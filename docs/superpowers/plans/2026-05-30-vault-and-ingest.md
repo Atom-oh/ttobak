@@ -19,5 +19,5 @@ Export is not permission to reimport product-generated content into the source c
 
 ## Current references and extensions
 
-- [ADR-017](../../decisions/ADR-017-vault-export-and-inbound-ingest.md), [vault service](../../../backend/internal/service/vault.go), [vault tests](../../../backend/internal/service/vault_test.go), [document core](../../../backend/internal/service/account.go).
-- [ADR-020](../../decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) extends export to personal/account Markdown documents and adds file-backed documents. [ADR-022](../../decisions/ADR-022-slide-preview-conversion-and-public-share-links.md), [ADR-027](../../decisions/ADR-027-cloudfront-signed-media-urls.md), and [ADR-029](../../decisions/ADR-029-per-user-document-sharing-by-reference.md) govern later previews, delivery, and sharing.
+- [ADR-020](../../decisions/ADR-020-personal-documents.md), [vault service](../../../backend/internal/service/vault.go), [vault tests](../../../backend/internal/service/vault_test.go), [document core](../../../backend/internal/service/account.go).
+- [ADR-020](../../decisions/ADR-020-personal-documents.md) extends export to personal/account Markdown documents and adds file-backed documents. [ADR-027](../../decisions/ADR-027-cloudfront-signed-media-urls.md) governs later previews, delivery, and sharing.

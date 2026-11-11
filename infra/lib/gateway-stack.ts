@@ -59,8 +59,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   convertDocRole?: iam.IRole;
   /** ADR-014 playback-copy worker; optional so unit tests skip the Docker asset. */
   audioRemuxRole?: iam.IRole;
-  // VPC ID for convert-doc's network isolation (ADR-022 residual-risk
-  // follow-up) -- same pre-existing VPC WhisperStack already uses
+  // VPC ID for convert-doc's network isolation (ADR-020)
+  // -- same pre-existing VPC WhisperStack already uses
   // (ec2.Vpc.fromLookup, not a stack this one depends on). Optional so
   // unit tests that omit convertDocRole don't need a VPC context lookup.
   vpcId?: string;
@@ -1375,7 +1375,7 @@ export class GatewayStack extends cdk.Stack {
     // researchWorkerRole above) so unit tests that omit convertDocRole don't
     // trigger a Docker build during `npm test`.
     if (props.convertDocRole) {
-      // Network-isolate convert-doc (ADR-022 residual-risk follow-up):
+      // Network-isolate convert-doc (ADR-020):
       // LibreOffice parses untrusted, attacker-controllable PPTX/PPT
       // content, and app-layer mitigations (AWS_* env stripping) can't
       // close an SSRF/RCE-via-linked-content vector -- only removing the

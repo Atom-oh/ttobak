@@ -27,3 +27,4 @@ rewritten.
 | [ADR-011](ADR-011-interactive-deep-research.md) | Rewritten in place |
 | [ADR-014](ADR-014-meeting-audio-files-and-lookup.md) | Meeting audio files and lookup; absorbs the former ADR-012 (GSI3 lookup), ADR-047 (private audio crops) and ADR-062 (seekable playback copies) |
 | [ADR-007](ADR-007-sign-up-identity-and-admin.md) | Sign-up, identity attributes and user administration; absorbs the former ADR-032 (admin panel) and ADR-057 (client write attributes) |
+| [ADR-020](ADR-020-personal-documents.md) | Personal documents, previews, public links and sharing; absorbs the former ADR-010 (Markdown rendering), ADR-017 (vault export and ingest), ADR-022 (slide previews and public links) and ADR-029 (document sharing by reference) |

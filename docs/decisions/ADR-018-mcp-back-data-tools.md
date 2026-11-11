@@ -18,7 +18,7 @@ MCP tools read-only would prevent the intended contribution workflow.
 | Tool group | Backend contract |
 | --- | --- |
 | Account brief/insights/meetings | Account-member-gated REST reads |
-| Vault export | Caller-scoped export and limits in ADR-017 |
+| Vault export | Caller-scoped export and limits in ADR-020 |
 | Put/list/get/update document | Personal partition when `accountId` is omitted; account scope when supplied; backend ownership/member gates apply |
 | Upload document | Local file to a signed upload URL, then document creation; separate from inline Markdown |
 | KB upload/list/delete | Authenticated user's `kb/{userID}/` objects |

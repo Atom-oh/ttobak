@@ -105,7 +105,7 @@ func vaultPath(meeting *model.Meeting, accountName string) string {
 }
 
 // buildDocFrontmatter mirrors buildFrontmatter for a note/blog document.
-// ttobak_id closes the ADR-017 loop guard: re-ingesting this exported file
+// ttobak_id closes the ADR-020 loop guard: re-ingesting this exported file
 // via PutDocument/UpdateDocument is rejected as TTOBAK-origin.
 func buildDocFrontmatter(doc *model.AccountDocument) string {
 	var b strings.Builder
