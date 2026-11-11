@@ -155,7 +155,13 @@ function countsText(source: IntakeSourceRow['source'], raw: unknown): string | n
   if (!counts) return null;
   if (source === 'calendar') return summary([['가져옴', counts.fetched], ['반영', counts.upserts], ['삭제', counts.removals]]);
   if (source === 'sfdc') return summary([['담당 고객', record(counts.assignments)?.fetched], ['활동', record(counts.tasks)?.fetched]]);
-  if (source === 'sfdcContacts') return summary([['가져옴', counts.fetched], ['생성', counts.created], ['보강', counts.filled], ['빠짐', counts.marked], ['복귀', counts.unmarked]]);
+  if (source === 'sfdcContacts') {
+    // Problem counts are shown only when non-zero.
+    const nonZero = (label: string, value: unknown): [string, unknown][] => count(value) ? [[label, value]] : [];
+    return summary([['가져옴', counts.fetched], ['생성', counts.created], ['보강', counts.filled], ['빠짐', counts.marked], ['복귀', counts.unmarked],
+      ...nonZero('건너뜀', counts.skipped), ...nonZero('애매함', counts.ambiguous), ...nonZero('권한 없음', counts.forbidden),
+      ...nonZero('불완전', counts.incomplete)]);
+  }
   return summary([['할 일', counts.tasks], ['생성', counts.created]]);
 }
 
@@ -183,7 +189,9 @@ export function sourceRows(status: unknown, selection: unknown): IntakeSourceRow
       lastRunAt: timestamp(entry?.lastRunAt),
       lastSuccessAt: timestamp(entry?.lastSuccessAt),
       result,
-      counts: result === 'ok' ? countsText(source, entry?.counts) : null,
+      // A failed contacts step still records what it did for the other Accounts (partial result).
+      counts: result === 'ok' || (source === 'sfdcContacts' && result !== null && result !== 'disabled')
+        ? countsText(source, entry?.counts) : null,
     }];
   });
 }

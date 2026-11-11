@@ -18,5 +18,9 @@
  "adapterTooOld": "수집 도구를 업데이트한 뒤 다시 시도하세요.",
  "internalEventsToggle": "사내 일정 {count}건",
  "autoLinkedFromCalendar": "고객사: {name} (일정에서 자동 연결)",
- "changeLink": "변경"
+ "changeLink": "변경",
+ "countSkipped": "건너뜀",
+ "countAmbiguous": "애매함",
+ "countForbidden": "권한 없음",
+ "countIncomplete": "불완전"
 }
