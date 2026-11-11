@@ -703,7 +703,9 @@ READY vocabulary for live caption streams.
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
-crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
+crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
+`backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
+regulator sources as such); `all` reads every
 searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
