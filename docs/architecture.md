@@ -438,10 +438,10 @@ falling back to the legacy list/export. Collection groups are individually curre
 meeting consumers union overlapping access paths by meeting ID.
 The installed adapter also provides stateless, authenticated HTTP with caller-supplied
 file bytes. Remote hosting and OAuth client acceptance remain separate from code
-readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
+readiness; see [ADR-003, transports](decisions/ADR-003-mcp-access.md).
 Stdio alone can record the Mac microphone through a local ffmpeg child and upload
 the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
-The local intake runner (ADR-065) appends SpecReq task notices to
+The local intake runner (ADR-003, local intake) appends SpecReq task notices to
 `~/.ttobak/intake/notify.jsonl`. The Mac app polls that file every 60 seconds
 (`mac-app/src-tauri/src/intake_notify.rs`), validates each line, dedupes on `key`
 in its own seen store and posts a desktop notification. The file is read only
@@ -462,7 +462,7 @@ OAuth issuance and private HTTP transport; HTTP hosts must sign in with a
 dedicated client, while stdio keeps its first-party credentials. Edge challenges
 and resource discovery require the same read scope. Deployed provider, IAM,
 consumer and rollback acceptance are separate from these source flags; see
-[ADR-053](decisions/ADR-053-connector-capability-private-delegation.md).
+[ADR-003, connector delegation](decisions/ADR-003-mcp-access.md).
 
 Billing MCP reads use the caller's own JWT through the existing CloudFront
 Billing Web Function route (ADR-056), separate from Go/QA private delegation.

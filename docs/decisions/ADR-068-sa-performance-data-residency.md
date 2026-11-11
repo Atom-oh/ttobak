@@ -6,14 +6,14 @@
 - Decision date: 2026-11-10.
 - Design: [SA performance dashboard](../superpowers/specs/2026-11-10-sa-performance-dashboard-design.md),
   [SA performance report](../superpowers/specs/2026-11-11-mac-intake-settings-and-sa-report-design.md).
-- Related: ADR-065 (Local MCP intake), ADR-067 (Account people edges and
+- Related: ADR-003 (Local MCP intake), ADR-067 (Account people edges and
   deterministic entity resolution), ADR-063 (account contact encryption).
 
 ## Context
 
 The owner-only SA performance dashboard aggregates the user's own activity from
 SFDC, Outlook mail and calendar, Slack, SpecReq and TFC Hub. Local MCP intake
-(ADR-065) limits what SFDC data may reach TTOBAK and stores only calendar
+(ADR-003) limits what SFDC data may reach TTOBAK and stores only calendar
 titles and times. The dashboard needs more fields, and they must stay distinct
 from the account-shared limit, which stays opportunity ID, name and stage.
 
@@ -59,7 +59,7 @@ from the account-shared limit, which stays opportunity ID, name and stage.
 - **Report run configuration on the Mac.** For the report run, the Mac writes
   the selected MCP server entries to a temporary configuration file with mode
   0600 and deletes it after the run. This is an accepted exception to
-  ADR-065's rule that host configuration is referenced, never copied to disk.
+  ADR-003 (local intake)'s rule that host configuration is referenced, never copied to disk.
   Raw MCP results stay in the run's working directory on the Mac, which the
   runner deletes after the run.
 - **Encryption exception.** `PERF*` rows use the table's default encryption at

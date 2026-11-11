@@ -5,7 +5,7 @@
   [readiness record](../research/2026-11-08-account-signals-readiness.md).
 - Decision date: 2026-11-09.
 - Related: ADR-015 (Account entity), ADR-016 (meeting publication), ADR-020
-  (document previews), ADR-045 (connector delegation), ADR-063 (account contact
+  (document previews), ADR-003 (connector delegation), ADR-063 (account contact
   encryption). Design record:
   [spec](../superpowers/specs/2026-11-08-account-signals-and-flow-design.md).
 - Related: ADR-067 adds people edges in the `LINK#meeting#` range.

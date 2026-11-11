@@ -42,8 +42,8 @@ The current [MCP registry](../../../mcp-server/src/index.ts) and
 [API client](../../../mcp-server/src/api.ts) do not expose these three proposed tool
 names. The [gateway routes](../../../infra/lib/gateway-stack.ts) do not register the
 proposed retrieval-only QA endpoint. KB upload/list/delete/sync and `ttobak_ask`
-exist, but are different contracts. [ADR-003](../../decisions/ADR-003-mcp-server-for-external-meeting-access.md)
-and [ADR-018](../../decisions/ADR-018-mcp-back-data-tools.md) describe current stdio,
+exist, but are different contracts. [ADR-003](../../decisions/ADR-003-mcp-access.md)
+describe current stdio,
 HTTPS, authentication, and write scope.
 
 Current references: [documentation map](../../README.md), [API](../../API-SPEC.md),

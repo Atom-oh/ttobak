@@ -281,7 +281,7 @@ in unmatched or encoded URLs. Public-share cleanup failures also omit tokens
 and provider error text. Existing logs and previously exposed links require
 separate operational review; changing the logger does not revoke a public link.
 
-The connector API consumer (ADR-053) is a service-IAM Lambda invocation,
+The connector API consumer (ADR-003, connector delegation) is a service-IAM Lambda invocation,
 not an additional HTTP route. Its top-level `ttobak.connector.invoke.v1` frame
 binds the operation, request ID and exact argument bytes to a signed delegation.
 When `CONNECTOR_SIGNING_KEY_ARN` is configured, the consumer loads that exact
@@ -867,7 +867,7 @@ after authorization. Storage references are never returned. Source:
 `handler/meeting_reading.go`, `service/meeting_reading*.go`; MCP usage:
 [adapter README](../mcp-server/README.md).
 
-HTTP MCP (ADR-045) is served by the `ttobak-mcp` Lambda, not the Go API:
+HTTP MCP (ADR-003, transports) is served by the `ttobak-mcp` Lambda, not the Go API:
 `ANY /api/mcp` (JWT authorizer; POST JSON-RPC, stateless, other methods 405) and
 the unauthenticated static discovery documents
 `GET /.well-known/oauth-protected-resource` and

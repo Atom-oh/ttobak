@@ -94,7 +94,7 @@ for SFDC.
 - [ ] **Step 1: Write ADR-068.**
   - Use the existing ADR format: `# ADR-068: SA performance data residency`, a
     bullet header (Status Accepted, Decision date 2026-11-10, Design = the spec,
-    Related = ADR-065 local MCP intake and ADR-067 account people edges by
+    Related = ADR-003 local MCP intake and ADR-067 account people edges by
     title), then Context, Decision and Consequences.
   - The Decision section records:
     - the spec's residency table, as owner-private and separate from the
@@ -112,7 +112,7 @@ for SFDC.
   - State that a calendar event maps to an account by organizer domain, or by a
     unique title match on the account name or aliases.
 - [ ] **Step 3: Check the docs and commit.** Run
-  `python3 scripts/docs/check_docs.py`. Expected: no new errors. The ADR-065
+  `python3 scripts/docs/check_docs.py`. Expected: no new errors. The ADR-003
   broken link that already exists on main is the only error left.
   `git commit -m "docs: ADR-068 SA performance data residency"`
 

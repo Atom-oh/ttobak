@@ -4,7 +4,7 @@
   account events follow the same rule.
 - Decision date: 2026-11-08.
 - Related: ADR-015 (Account entity; its member-email exception is not a waiver
-  for new personal data), ADR-045 (connector writes).
+  for new personal data), ADR-003 (connector writes).
 
 ## Context
 
