@@ -219,7 +219,7 @@ caller.
   undercounted, never double-counted. A
   leftover observation without a term (failed eviction cleanup) is deleted
   before the create is retried.
-- **Caps.** Unedited automatic terms (active or suggested) are capped at 300 per
+- **Caps.** Unedited automatic terms (active or suggested) are capped at 1000 per
   scope; `EvictAutoTerm` (now also accepting `suggested`) removes the lowest
   `hits*2 + (lastSeen within 30 days ? 1 : 0)` first, oldest `lastSeenAt` on
   ties. When its version and `userEditedAt` guards fail, the row is re-read: a

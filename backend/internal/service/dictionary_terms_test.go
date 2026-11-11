@@ -345,6 +345,31 @@ func TestLegacyPutNeverTombstonesOrTouchesAutoRows(t *testing.T) {
 	}
 }
 
+func TestLegacyPutRoundTripsFullAutoScope(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	for i := 0; i < MaxAutoTermsPerScope; i++ {
+		store.seedRow(fmt.Sprintf("Auto %04d", i), fmt.Sprintf("Auto-%04d", i), model.TermOriginAuto, model.TermStateActive, 1)
+	}
+	for i := 0; i < 450; i++ {
+		store.seedRow(fmt.Sprintf("Manual %03d", i), fmt.Sprintf("Manual-%03d", i), model.TermOriginManual, model.TermStateActive, 1)
+	}
+	svc := newTestDictService(store, nil)
+	got, err := svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || len(got.Terms) != MaxAutoTermsPerScope+450 {
+		t.Fatalf("GET = %d terms %v", len(got.Terms), err)
+	}
+	if len(got.Terms) <= 1000 {
+		t.Fatalf("the round trip must exercise more than the former 1000-entry bound, got %d", len(got.Terms))
+	}
+	if _, err := svc.UpdateDictionary(ctx, "u1", got.Terms); err != nil {
+		t.Fatalf("a full GET at the auto cap must round-trip through the legacy PUT: %v", err)
+	}
+	if MaxLegacyTerms < MaxAutoTermsPerScope+MaxManualTermsPerScope {
+		t.Fatalf("MaxLegacyTerms %d is below the auto plus manual ceiling", MaxLegacyTerms)
+	}
+}
+
 func TestLegacyPutRoundTripsGetOutput(t *testing.T) {
 	ctx := context.Background()
 	store := migratedStore()
