@@ -73,8 +73,19 @@ change, so review it as such.
 **Window level.** Each overlay is lifted with `setLevel: 1000`
 (`NSScreenSaverWindowLevel`) and collection behavior `canJoinAllSpaces |
 stationary | fullScreenAuxiliary` on the main thread, in addition to
-`always_on_top`. Whether this stays above a full-screen PowerPoint or Keynote
-slideshow is not verified.
+`always_on_top`. Level and collection behavior alone did not let the window
+enter another app's full-screen Space (owner report, 2026-11-11: the window
+could not be moved to the display showing a full-screen app), because an
+ordinary window of a regular app is kept out of such a Space. Each overlay is
+therefore also turned into a non-activating panel at creation
+(`become_panel` in `caption_overlay.rs`): its class is swapped to an `NSPanel`
+subclass that can become key but not main, with
+`NSWindowStyleMaskNonactivatingPanel`, `hidesOnDeactivate` off and
+`becomesKeyOnlyIfNeeded` on, so clicking or dragging a caption does not
+activate TTOBAK and switch away from the slideshow. If the panel class is
+unavailable or larger than the window's allocation the window is left as it
+was and a warning is logged. Whether this stays above a full-screen PowerPoint
+or Keynote slideshow is not verified.
 
 **Zoom limit.** macOS screen sharing includes the overlay only when the whole
 screen is shared. Sharing a single window (for example only PowerPoint) excludes
