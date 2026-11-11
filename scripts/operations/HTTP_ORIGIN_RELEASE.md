@@ -136,7 +136,10 @@ exception class (`errorType`), an AWS error code and operation when present,
 and the raising function and line in this script (`errorSite`). Messages and
 SDK payloads are never printed.
 
-Idempotent Lambda configuration and alias reads retry up to three times on
-transient transport errors (`read_with_retry`), because the SDK client runs
-with a single attempt and its pooled connection can be closed during a long
-CDK deploy. Mutations and canary invocations are never retried.
+Idempotent reads (stack, Lambda configuration and alias, CloudFront
+distribution, secret) retry up to five attempts with exponential backoff on
+transient transport errors and AWS throttling codes (`read_with_retry`),
+because the SDK client runs with a single attempt, its pooled connection can be
+closed during a long CDK deploy, and CloudFront `GetDistribution` was throttled
+twice on 2026-11-11 while a frontend deploy ran. Mutations and canary
+invocations are never retried.

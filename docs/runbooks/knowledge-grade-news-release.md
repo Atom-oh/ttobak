@@ -358,6 +358,82 @@ nested-workflow IAM, canary selection, duplicate execution behavior and failure
 isolation, then record normal source counts and the enabled rule. Keep the
 publication, recovery and archive evidence above bound to the release.
 
+## Search filters and seeded regulatory sources
+
+Evidence (2026-11-10 child executions, `ttobak-news-publication`): every source
+dropped 82-177 search results as stale, and the 38 candidates that passed were
+mostly pages ranked for the literal `after:YYYY-MM-DD` text (Wikipedia `2026`,
+`Deaths_in_2026`) or quote aggregators. Workers rejected them all (11
+`BODY_TOO_LARGE`, 10 `HTTP_403`, 9 `NOT_RELEVANT`, 5 `SCHEMA_INVALID`, 3
+`JS_SHELL`, 3 `NUMERIC_CLAIM_UNGROUNDED`, 1 `EVIDENCE_NOT_FOUND`, 1 `HTTP_404`).
+Local reproductions of the real-article rejections showed visible planning text
+before or between JSON objects, single-sentence English excerpts over 180
+characters, and Korean restatement of English figures (`236.8 billion won` as
+2,368 eok won). Discovery now passes the freshness window as
+`filters.publishedDateFilter`, the worker requests reasoning effort `low`, the
+excerpt bound is 300 characters (total still 1,000), and the prompt requires numbers
+copied verbatim (or omitted) while grounding stays verbatim-only; equivalence
+grounding (Korean units, month names, number words) was removed after review
+because every variant accepted figures the source did not state. Numeric errors
+name the failing fact for the repair. Rejected worker results carry `validationErrors`
+(validator locations and measured lengths only) in the execution history.
+HTTP 403, script-only pages and oversized bodies remain rejections.
+
+Before deploying CrawlerStack, upgrade the Gateway target's connector version;
+CloudFormation cannot express it and later stack updates keep it. With an older
+target the filters are silently ignored. Use an AWS CLI or SDK whose
+`bedrock-agentcore-control` model has `connector.source.version` (boto3 1.44.0
+does; AWS CLI 2.35.11 does not):
+
+```bash
+python3 - <<'PY'
+import boto3
+c = boto3.client("bedrock-agentcore-control", region_name="us-east-1")
+gw = next(g["gatewayId"] for g in c.list_gateways()["items"]
+          if g["name"] == "ttobak-web-search-gateway")
+t = next(t for t in c.list_gateway_targets(gatewayIdentifier=gw)["items"]
+         if t["name"] == "ttobak-web-search-tool")
+cur = c.get_gateway_target(gatewayIdentifier=gw, targetId=t["targetId"])
+cfg = cur["targetConfiguration"]
+cfg["mcp"]["connector"]["source"]["version"] = "1.3.0"
+c.update_gateway_target(gatewayIdentifier=gw, targetId=t["targetId"], name=cur["name"],
+                        targetConfiguration=cfg,
+                        credentialProviderConfigurations=cur["credentialProviderConfigurations"])
+print(c.get_gateway_target(gatewayIdentifier=gw, targetId=t["targetId"])
+      ["targetConfiguration"]["mcp"]["connector"]["source"])
+PY
+```
+
+The target is shared by the QA, research-agent and news callers, so after the
+upgrade also run one authenticated QA web search and one research-agent search
+and confirm they still return results.
+Then confirm a SigV4 `tools/list` on the Gateway shows `filters` in the
+`ttobak-web-search-tool___WebSearch` input schema, deploy CrawlerStack alone with
+`--exclusively`, and seed the regulatory sources from `backend/`:
+
+```bash
+TABLE_NAME=ttobak-main go run ./cmd/seed-news-sources          # dry run: CREATE/UPDATE/UNCHANGED
+TABLE_NAME=ttobak-main go run ./cmd/seed-news-sources -apply
+```
+
+An operator source may carry a `searchDomains` list (at most 100 lowercase hosts)
+sent as `filters.domainFilter.include` and also applied locally. It is not part
+of the source revision (published rows keep the reader contract). The worker
+checks candidate, final and corroborating URLs against the current scope, and
+reservation and publication fail with `SOURCE_CHANGED` when the scope changed
+after that check. The seed (`cmd/seed-news-sources/sources.go`) creates `fss-kr`
+(Financial Supervisory Service), `fsc-kr` (Financial Services Commission),
+`fsec-kr` (Financial Security Institute) and `kr-finance-law` (financial law,
+enforcement decree and supervisory regulation amendments) as operator-curated
+global sources with English aliases and a Korean outlet/regulator
+`searchDomains` allowlist. The managed index returned no dated pages from the
+regulator domains themselves on 2026-11-11, so coverage comes from outlets
+reporting their notices. Reruns are idempotent, never touch user-owned rows
+(`REFUSED`) and keep an operator-disabled source disabled. The daily schedule
+includes the rows from its next run (10 active sources of the 30-source limit).
+Acceptance is a later daily execution with `docsAdded > 0` and matching
+`GSI4PK=DOC#news` rows; a successful seed or deployment alone is not.
+
 ## Rollback and retention
 
 Rollback disables new writers first and leaves readers, finalization and recovery

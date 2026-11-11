@@ -1255,7 +1255,7 @@ fn install_adapter(dir: &Path, bytes: &[u8]) -> std::io::Result<()> {
         })
 }
 
-fn local_adapter(home: &Path) -> Option<Vec<u8>> {
+pub(crate) fn local_adapter(home: &Path) -> Option<Vec<u8>> {
     read_capped(
         &home.join(".ttobak").join("server.mjs"),
         MAX_ADAPTER_BYTES as u64 + 1,

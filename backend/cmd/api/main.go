@@ -180,6 +180,7 @@ func init() {
 	accountContactsService := service.NewAccountContactsService(repo)
 	accountContactsService.SetPeopleResolvePublisher(peopleResolvePublisher)
 	accountContactsHandler := handler.NewAccountContactsHandler(accountContactsService)
+	accountContactSyncHandler := handler.NewAccountContactSyncHandler(service.NewAccountContactSyncService(repo, accountContactsService))
 	accountPeopleService := service.NewAccountPeopleService(repo.MetadataView())
 	accountPeopleService.SetPeopleResolvePublisher(peopleResolvePublisher)
 	accountPeopleHandler := handler.NewAccountPeopleHandler(accountPeopleService)
@@ -215,8 +216,13 @@ func init() {
 	dictService.SetMembershipBatchReader(service.BatchMembershipReader(repo))
 	// Account terms join the personal vocabulary in meeting-recency order.
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
+	// Live caption streams receive the owner's READY vocabulary name only when
+	// enabled (ADR-008 rollout check 5); "off" is the kill switch.
+	dictService.SetLiveVocabulary(os.Getenv("LIVE_VOCABULARY_MODE") == "on")
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
+	// Live translation keeps the speaker's dictionary spellings (high quality only).
+	translateService.SetGlossarySource(dictService)
 	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.
 	translateHandler.SetRateLimits(
 		service.NewWindowCounter(repository.NewRateCounterRepository(dynamoClient, tableName)),
@@ -232,6 +238,7 @@ func init() {
 	insightsService.SetAccountMemberReader(repo)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo, insightsService)
+	accountNewsService.SetNewsSourceDirectory(crawlerRepo, repo)
 	accountNewsHandler := handler.NewAccountNewsHandler(accountNewsService)
 	accountLinksHandler := handler.NewAccountLinksHandler(service.NewAccountLinksService(repo, crawlerRepo, accountNewsService))
 	accountOverviewHandler := handler.NewAccountOverviewHandler(service.NewAccountOverviewService(repo, crawlerRepo, accountNewsService, accountService))
@@ -385,6 +392,7 @@ func init() {
 		r.Post("/api/accounts/{accountId}/contacts", accountContactsHandler.Create)
 		r.Put("/api/accounts/{accountId}/contacts/{contactId}", accountContactsHandler.Update)
 		r.Delete("/api/accounts/{accountId}/contacts/{contactId}", accountContactsHandler.Delete)
+		r.Post("/api/accounts/{accountId}/contacts/sfdc-sync", accountContactSyncHandler.Sync)
 		r.Get("/api/accounts/{accountId}/speaker-team", accountContactsHandler.SpeakerTeam)
 		r.Get("/api/accounts/{accountId}/events", accountEventsHandler.List)
 		r.Post("/api/accounts/{accountId}/events", accountEventsHandler.Create)
@@ -393,6 +401,7 @@ func init() {
 		r.Delete("/api/accounts/{accountId}/events/{eventId}", accountEventsHandler.Delete)
 		r.Get("/api/accounts/{accountId}/news-sources", accountNewsHandler.List)
 		r.Post("/api/accounts/{accountId}/news-sources", accountNewsHandler.Create)
+		r.Put("/api/accounts/{accountId}/news-sources/{sourceId}", accountNewsHandler.Update)
 		r.Delete("/api/accounts/{accountId}/news-sources/{sourceId}", accountNewsHandler.Delete)
 		r.Get("/api/accounts/{accountId}/links", accountLinksHandler.List)
 		r.Post("/api/accounts/{accountId}/links", accountLinksHandler.Create)
@@ -572,6 +581,7 @@ func init() {
 		r.Post("/api/meetings/{meetingId}/summarize", summarizeLiveHandler.SummarizeLive)
 
 		// Crawler settings
+		r.Get("/api/news-sources", accountNewsHandler.ListAll)
 		r.Get("/api/crawler/sources", crawlerHandler.ListSources)
 		r.Post("/api/crawler/sources", crawlerHandler.AddSource)
 		r.Put("/api/crawler/sources/{sourceId}", crawlerHandler.UpdateSource)

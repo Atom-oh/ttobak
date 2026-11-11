@@ -159,6 +159,7 @@ function loadComponent(path, stubs = {}) {
     react: React, 'react/jsx-runtime': jsxRuntime,
     '@/lib/api': { accountApi: { links: {}, newsSources: { list: () => new Promise(() => {}) } }, projectApi: {} },
     '@/lib/dialog': { confirmDialog: async () => true },
+    'next/link': { __esModule: true, default: ({ href, children, ...rest }) => React.createElement('a', { href, ...rest }, children) },
     ...stubs,
   };
   const cache = new Map();
@@ -199,7 +200,7 @@ test('signals_render_empty_state_candidate_and_plain_text', () => {
   assert.ok(html.includes(overview.DURATION_UNKNOWN_TEXT), 'absent daysInStage is unknown');
   assert.ok(html.includes(overview.STALL_STAGE_STALE_LABEL));
   assert.ok(html.includes('&lt;b&gt;21&lt;/b&gt;') && !html.includes('<b>21</b>'), 'detail is escaped text');
-  assert.ok(html.includes('뉴스 소스 추가'), 'NO_SOURCE offers source creation (enabled after load)');
+  assert.ok(html.includes('href="/insights?tab=news&amp;sources=1&amp;account=A"'), 'NO_SOURCE links to the Insights registration view');
 
   const withNews = renderToStaticMarkup(React.createElement(AccountSignals, { ...actions, accountName: 'Acme', signals: {
     newsState: 'OK', opportunities: [{ projectId: 'p1', name: 'Migration', stage: 'Qualified', stageMapped: true, daysInStage: 4, terminal: false, stall: [] }],
@@ -265,7 +266,7 @@ test('icon_checker_allowlists_only_non_icon_wire_literals', () => {
   const script = read('./update-icon-font.mjs');
   const list = script.match(/NON_ICON_LITERALS = new Set\(\[([\s\S]*?)\]\)/);
   assert.ok(list, 'allowlist defined');
-  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map(match => match[1]), ['task', 'event', 'clear', 'preview', 'message', 'storage', 'login']);
+  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map(match => match[1]), ['task', 'event', 'clear', 'preview', 'message', 'storage', 'login', 'radio']);
   assert.match(script, /catalog\.has\(value\) && !NON_ICON_LITERALS\.has\(value\)/);
   assert.equal(overview.LINK_KIND_EVENT, 'event');
   assert.match(read('../src/types/meeting.ts'), /AccountLinkKind = 'news' \| 'tech' \| 'event' \| 'meeting' \| 'project'/);
@@ -273,6 +274,7 @@ test('icon_checker_allowlists_only_non_icon_wire_literals', () => {
   assert.match(read('../src/components/layout/UserGuideButton.tsx'), /window\.addEventListener\('message', closeFromGuide\)/);
   assert.match(read('../src/lib/intake.ts'), /IntakeAction = 'run' \| 'setup' \| 'login'/);
   assert.match(read('../src/lib/releaseNotes.ts'), /window\.addEventListener\('storage', onStorage\)/);
+  assert.match(read('../src/components/insights/NewsSourcesManager.tsx'), /<input type="radio"/);
 });
 
 test('links_panel_pages_links_shows_auto_evidence_and_unlinks', async () => {

@@ -428,3 +428,94 @@ func (r *DynamoDBRepository) deleteAccountNewsSourceOnce(ctx context.Context, ac
 	}
 	return false, fmt.Errorf("delete account news source: %w", err)
 }
+
+// AccountNewsSourceFields lists the CONFIG fields an account news source edit
+// replaces; nil fields are unchanged. The source ID, the ref and accountId
+// have no field and never change.
+type AccountNewsSourceFields struct {
+	SourceName  *string
+	NewsQueries *[]string
+	Aliases     *[]string
+}
+
+// UpdateAccountNewsSource replaces the given CONFIG fields of an account-owned
+// source in one transaction that also requires the NEWSSRC# ref, a CONFIG that
+// still names accountID, is not disabled and is not operator-curated, the open
+// account META row and the caller's direct MEMBER# row. Delete disables the
+// CONFIG and removes the ref atomically, so an edit racing a delete cannot
+// revive the source. ErrConditionFailed means the ref or a matching enabled
+// CONFIG is absent; ErrAccountNewsAccess means the account or membership was
+// gone at commit.
+func (r *DynamoDBRepository) UpdateAccountNewsSource(ctx context.Context, accountID, userID, sourceID string, fields AccountNewsSourceFields) error {
+	names, values := []string{}, []interface{}{}
+	if fields.SourceName != nil {
+		names, values = append(names, "sourceName"), append(values, *fields.SourceName)
+	}
+	if fields.NewsQueries != nil {
+		names, values = append(names, "newsQueries"), append(values, *fields.NewsQueries)
+	}
+	if fields.Aliases != nil {
+		names, values = append(names, "aliases"), append(values, *fields.Aliases)
+	}
+	if accountID == "" || sourceID == "" || len(names) == 0 {
+		return fmt.Errorf("invalid account news source update")
+	}
+	update := expression.Set(expression.Name(names[0]), expression.Value(values[0]))
+	for i := 1; i < len(names); i++ {
+		update = update.Set(expression.Name(names[i]), expression.Value(values[i]))
+	}
+	configExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK")).
+			And(expression.Name("accountId").Equal(expression.Value(accountID))).
+			And(expression.Name("status").NotEqual(expression.Value(accountNewsSourceDisabled))).
+			And(expression.AttributeNotExists(expression.Name("globalNewsSource")))).
+		WithUpdate(update).Build()
+	if err != nil {
+		return err
+	}
+	refCond, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return err
+	}
+	ref := &types.ConditionCheck{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, model.PrefixAccountNewsSource+sourceID)}
+	ref.ConditionExpression, ref.ExpressionAttributeNames = refCond.Condition(), refCond.Names()
+	config := &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixCrawler+sourceID, model.PrefixConfig)}
+	config.UpdateExpression, config.ConditionExpression = configExpr.Update(), configExpr.Condition()
+	config.ExpressionAttributeNames, config.ExpressionAttributeValues = configExpr.Names(), configExpr.Values()
+	access, err := accountAccessChecks(r.tableName, accountID, userID)
+	if err != nil {
+		return err
+	}
+	items := append([]types.TransactWriteItem{{ConditionCheck: ref}, {Update: config}}, access...)
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err == nil {
+		return nil
+	}
+	if merging := mergeFenceError(err); merging != nil {
+		return merging
+	}
+	var cancelled *types.TransactionCanceledException
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == len(items) {
+		missing, revoked := false, false
+		for i, reason := range cancelled.CancellationReasons {
+			switch aws.ToString(reason.Code) {
+			case "None":
+			case "ConditionalCheckFailed":
+				if i < 2 {
+					missing = true
+				} else {
+					revoked = true
+				}
+			default:
+				return fmt.Errorf("update account news source: %w", err)
+			}
+		}
+		switch {
+		case revoked:
+			return ErrAccountNewsAccess
+		case missing:
+			return fmt.Errorf("%w: account news source %s", ErrConditionFailed, sourceID)
+		}
+	}
+	return fmt.Errorf("update account news source: %w", err)
+}

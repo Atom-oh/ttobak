@@ -126,3 +126,34 @@ func TestHandlerRoutesNewsDaily(t *testing.T) {
 		t.Fatalf("only the bare schedule input runs the news job: %v", days)
 	}
 }
+
+// The tech schedule's {"kind":"tech-daily"} input reaches the tech worker
+// with the news day, never the news worker, and an enveloped event never
+// reaches it.
+func TestHandlerRoutesTechDaily(t *testing.T) {
+	restoreNews, restoreTech, restoreNow := processNewsDaily, processTechDaily, newsNow
+	defer func() { processNewsDaily, processTechDaily, newsNow = restoreNews, restoreTech, restoreNow }()
+	newsNow = func() time.Time { return time.Date(2026, 10, 18, 21, 30, 0, 0, time.UTC) }
+	var news, tech []string
+	processNewsDaily = func(_ context.Context, day string) error {
+		news = append(news, day)
+		return nil
+	}
+	processTechDaily = func(_ context.Context, day string) error {
+		tech = append(tech, day)
+		return nil
+	}
+	if err := Handler(context.Background(), json.RawMessage(`{"kind":"tech-daily"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(tech) != 1 || tech[0] != "2026-10-18" || len(news) != 0 {
+		t.Fatalf("tech days %v news days %v", tech, news)
+	}
+	raw := `{"source":"aws.s3","detail-type":"Object Created","kind":"tech-daily","detail":{"bucket":{"name":"b"},"object":{"key":"images/x.png"}}}`
+	if err := Handler(context.Background(), json.RawMessage(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if len(tech) != 1 {
+		t.Fatalf("only the bare schedule input runs the tech job: %v", tech)
+	}
+}

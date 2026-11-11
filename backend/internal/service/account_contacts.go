@@ -66,24 +66,30 @@ func NewAccountContactsService(repo accountContactsRepo) *AccountContactsService
 }
 
 func (s *AccountContactsService) authorize(ctx context.Context, account, user string) error {
+	_, err := s.authorizedAccount(ctx, account, user)
+	return err
+}
+
+// authorizedAccount checks direct membership and returns the account row.
+func (s *AccountContactsService) authorizedAccount(ctx context.Context, account, user string) (*model.Account, error) {
 	if validateAccountHierarchyIDs(account, "") != nil || validateAccountHierarchyIDs(user, "") != nil {
-		return ErrInvalidInput
+		return nil, ErrInvalidInput
 	}
 	a, err := s.repo.GetAccount(ctx, account)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if a == nil {
-		return ErrForbidden
+		return nil, ErrForbidden
 	}
 	m, err := s.repo.GetMember(ctx, account, user)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if m == nil {
-		return ErrForbidden
+		return nil, ErrForbidden
 	}
-	return nil
+	return a, nil
 }
 
 type contactCursor struct {

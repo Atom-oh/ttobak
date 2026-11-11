@@ -87,3 +87,46 @@ func (r *DynamoDBRepository) PutTermsNewsRun(ctx context.Context, run *model.Ter
 	row.PK, row.SK, row.EntityType = model.PrefixDictCommon, model.TermsNewsRunSK(run.Day), model.EntityTypeTermsNewsRun
 	return r.putCommonRow(ctx, row)
 }
+
+// GetTermsTechHistory reads a term's tech candidate history; nil means the
+// term was never a tech candidate (or its row expired).
+func (r *DynamoDBRepository) GetTermsTechHistory(ctx context.Context, termKey string) (*model.TermsTechHistory, error) {
+	var h model.TermsTechHistory
+	ok, err := r.getCommonRow(ctx, model.TermsTechSK(termKey), &h)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return &h, nil
+}
+
+// PutTermsTechHistory overwrites a term's tech candidate history. The daily
+// tech job is the only writer and its day/document sets are idempotent, so a
+// plain Put suffices.
+func (r *DynamoDBRepository) PutTermsTechHistory(ctx context.Context, h *model.TermsTechHistory) error {
+	if h == nil || h.TermKey == "" || len(h.Days) == 0 || h.ExpiresAt <= 0 {
+		return fmt.Errorf("%w: tech history needs a term, days and an expiry", ErrInvalidInput)
+	}
+	row := *h
+	row.PK, row.SK, row.EntityType = model.PrefixDictCommon, model.TermsTechSK(h.TermKey), model.EntityTypeTermsTech
+	return r.putCommonRow(ctx, row)
+}
+
+// GetTermsTechRun reads a day's tech run row; nil means no run succeeded.
+func (r *DynamoDBRepository) GetTermsTechRun(ctx context.Context, day string) (*model.TermsTechRun, error) {
+	var run model.TermsTechRun
+	ok, err := r.getCommonRow(ctx, model.TermsTechRunSK(day), &run)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return &run, nil
+}
+
+// PutTermsTechRun records a succeeded tech day.
+func (r *DynamoDBRepository) PutTermsTechRun(ctx context.Context, run *model.TermsTechRun) error {
+	if run == nil || run.Day == "" || run.ContentHash == "" || run.ExpiresAt <= 0 {
+		return fmt.Errorf("%w: tech run needs a day, a hash and an expiry", ErrInvalidInput)
+	}
+	row := *run
+	row.PK, row.SK, row.EntityType = model.PrefixDictCommon, model.TermsTechRunSK(run.Day), model.EntityTypeTermsTechRun
+	return r.putCommonRow(ctx, row)
+}
