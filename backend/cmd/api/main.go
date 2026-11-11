@@ -236,6 +236,7 @@ func init() {
 	insightsService.SetAccountMemberReader(repo)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo, insightsService)
+	accountNewsService.SetNewsSourceDirectory(crawlerRepo, repo)
 	accountNewsHandler := handler.NewAccountNewsHandler(accountNewsService)
 	accountLinksHandler := handler.NewAccountLinksHandler(service.NewAccountLinksService(repo, crawlerRepo, accountNewsService))
 	accountOverviewHandler := handler.NewAccountOverviewHandler(service.NewAccountOverviewService(repo, crawlerRepo, accountNewsService, accountService))
@@ -398,6 +399,7 @@ func init() {
 		r.Delete("/api/accounts/{accountId}/events/{eventId}", accountEventsHandler.Delete)
 		r.Get("/api/accounts/{accountId}/news-sources", accountNewsHandler.List)
 		r.Post("/api/accounts/{accountId}/news-sources", accountNewsHandler.Create)
+		r.Put("/api/accounts/{accountId}/news-sources/{sourceId}", accountNewsHandler.Update)
 		r.Delete("/api/accounts/{accountId}/news-sources/{sourceId}", accountNewsHandler.Delete)
 		r.Get("/api/accounts/{accountId}/links", accountLinksHandler.List)
 		r.Post("/api/accounts/{accountId}/links", accountLinksHandler.Create)
@@ -577,6 +579,7 @@ func init() {
 		r.Post("/api/meetings/{meetingId}/summarize", summarizeLiveHandler.SummarizeLive)
 
 		// Crawler settings
+		r.Get("/api/news-sources", accountNewsHandler.ListAll)
 		r.Get("/api/crawler/sources", crawlerHandler.ListSources)
 		r.Post("/api/crawler/sources", crawlerHandler.AddSource)
 		r.Put("/api/crawler/sources/{sourceId}", crawlerHandler.UpdateSource)

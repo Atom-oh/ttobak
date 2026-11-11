@@ -168,6 +168,27 @@ type originResolver struct {
 	// accounts maps an account ID to the account when the caller may read
 	// it, or nil when not. Lookup errors are not memoized.
 	accounts map[string]*model.Account
+	// scope narrows the visible set for one list request.
+	scope InsightsScope
+}
+
+// InsightsScope narrows a list to one origin kind ("common" or "account";
+// anything else is no filter) or to one account, which implies the account
+// kind. It is applied together with caller visibility.
+type InsightsScope struct {
+	Kind      string
+	AccountID string
+}
+
+// admits reports whether a resolved origin is visible and inside the scope.
+func (r *originResolver) admits(o docOrigin) bool {
+	if !o.visible {
+		return false
+	}
+	if r.scope.AccountID != "" {
+		return r.scope.Kind != sourceKindCommon && o.kind == sourceKindAccount && o.accountID == r.scope.AccountID
+	}
+	return (r.scope.Kind != sourceKindCommon && r.scope.Kind != sourceKindAccount) || o.kind == r.scope.Kind
 }
 
 func (s *InsightsService) newOriginResolver(userID string) *originResolver {
@@ -186,8 +207,8 @@ func (r *originResolver) resolve(ctx context.Context, sourceID string) (docOrigi
 	return origin, nil
 }
 
-// filter returns copies of the caller-visible documents with origin fields
-// set. It never modifies docs, which may be the shared cached scan.
+// filter returns copies of the caller-visible documents inside the scope with
+// origin fields set. It never modifies docs, which may be the shared cached scan.
 func (r *originResolver) filter(ctx context.Context, docs []model.CrawledDocument) ([]model.CrawledDocument, error) {
 	out := make([]model.CrawledDocument, 0, len(docs))
 	for _, doc := range docs {
@@ -195,7 +216,7 @@ func (r *originResolver) filter(ctx context.Context, docs []model.CrawledDocumen
 		if err != nil {
 			return nil, err
 		}
-		if !origin.visible {
+		if !r.admits(origin) {
 			continue
 		}
 		origin.applyTo(&doc)
@@ -502,6 +523,13 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 // only documents the caller may see.
 // sortBy: "newest" (default), "oldest", "title"
 func (s *InsightsService) ListInsights(ctx context.Context, userID, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {
+	return s.ListInsightsInScope(ctx, userID, InsightsScope{}, docType, source, service, tags, sortBy, page, limit)
+}
+
+// ListInsightsInScope is ListInsights narrowed by scope before totals,
+// facets, sorting and paging. An account the caller cannot read, like a
+// hidden source, yields an empty page.
+func (s *InsightsService) ListInsightsInScope(ctx context.Context, userID string, scope InsightsScope, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	if page < 1 {
@@ -519,6 +547,7 @@ func (s *InsightsService) ListInsights(ctx context.Context, userID, docType, sou
 	var totalCount int
 	var err error
 	origins := s.newOriginResolver(userID)
+	origins.scope = scope
 
 	if source != "" {
 		docs, services, totalCount, err = s.listBySource(ctx, origins, source, docType, service, tags, sortBy, page, limit)
@@ -605,7 +634,7 @@ func (s *InsightsService) listBySource(ctx context.Context, origins *originResol
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if !origin.visible {
+	if !origins.admits(origin) {
 		return []model.CrawledDocument{}, []string{}, 0, nil
 	}
 	docs, _, count, err := s.repo.ListDocuments(ctx, source, docType, 0, nil)
