@@ -1,6 +1,6 @@
 # Mac Caption Overlay Implementation Plan
 
-Status: Historical implementation plan (2026-11-10), implemented; [ADR-069](../../decisions/ADR-069-mac-caption-overlay.md) is the current reference.
+Status: Historical implementation plan (2026-11-10), implemented; [ADR-018](../../decisions/ADR-018-mac-caption-overlay.md) is the current reference.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
