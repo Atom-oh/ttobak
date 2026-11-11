@@ -44,7 +44,7 @@ DynamoDB data needs KMS encryption and a retention design.
 - SFDC contact links (`backend/internal/repository/account_contacts_sfdc.go`):
   - Inside the sealed contact, `source: "sfdc"`, `sfdcContactId`,
     `sfdcAccountId` and `sfdcLeftAt` (departure mark) use the same envelope
-    encryption. Only the SFDC sync (a later change) may set them: generic
+    encryption. Only the SFDC sync may set them: generic
     creates (web, bulk import, connector) drop them, and generic updates carry
     the stored values over under the same revision condition. An unexported
     service option gates the sync path; no link is ever changed or cleared.
@@ -66,6 +66,27 @@ DynamoDB data needs KMS encryption and a retention design.
   - Retention: the index row goes with its contact. Suppression rows have no
     TTL; merge moves them to the surviving Account, and with no Account
     deletion routine they persist indefinitely.
+- SFDC contact sync: the Mac intake sends contacts of the SFDC accounts mapped
+  to a TTOBAK Account to `POST /api/accounts/{accountId}/contacts/sfdc-sync`
+  (`backend/internal/service/account_contacts_sfdc.go`):
+  - Only name, title and company (the TTOBAK Account name) are stored as
+    contact fields; email and phone never leave the Mac.
+  - Every SFDC ID in the request (items, `sfdcAccountIds`, `present` keys and
+    values) is canonicalized during validation, so duplicates, keys and the
+    departure scope use the 18-character form and results echo it. An invalid
+    request-level ID rejects the request; an invalid item ID only fails its item.
+  - Fill-empty-only: a sync fills an empty title or company and sets a link
+    only where none exists; it never changes the name or a non-empty field.
+    A second creator of one SFDC ID gets `alreadyLinked`, a suppressed ID
+    `suppressed`.
+  - Departure marking runs only for a complete snapshot, which lists the
+    present contact IDs per SFDC account: links of those accounts absent from
+    it get `sfdcLeftAt`, returning ones lose it, and an incomplete read marks
+    nobody. The pass walks the in-scope `SFDCCONTACT#` rows from a random
+    start, opens only linked contacts, and stops after 200 mark changes or 15
+    seconds; later runs continue because correct contacts need no write.
+  - Bounds per request: 20 SFDC accounts, 200 items, 5,000 present IDs per
+    SFDC account and 20,000 in total, 512 KiB body.
 
 - Account events (`EVENT#{startAt}#{eventId}` with an `EVENTREF#{eventId}`
   pointer) seal title, location, attendees, notes and end time with purpose
@@ -85,6 +106,10 @@ DynamoDB data needs KMS encryption and a retention design.
 - Known limit: a contact delete reads every `SFDCCONTACT#` row in the Account
   (a filtered query), so its cost grows with the Account's links, and a
   malformed index row blocks contact deletes in that Account until repaired.
+- A sync departure pass opens each in-scope linked contact (one KMS `Decrypt`
+  each). A linked contact that cannot be opened is skipped and counted, and a
+  link item targeting one returns `invalid`; a malformed index row still fails
+  the whole request, because the link listing rejects it.
 
 ## Account relationship links, signals and KB references
 
@@ -230,7 +255,8 @@ teammate's calendar-only follow-up can still raise the flag.
 #### Data-residency boundary for projects 2 to 4
 
 The graph is shared with the team, so edges live in TTOBAK cloud. From SFDC only
-the opportunity ID, name and stage may be stored there. Amounts, contact details
+the opportunity ID, name and stage may be stored there, apart from the sealed
+SFDC contacts in the contact encryption section. Amounts, contact details
 and mail or Slack bodies are fetched on demand on the user's Mac and never
 persisted in the cloud. This project ingests no SFDC data. Later suggested links
 must stay distinct from manual links, which remain authoritative.

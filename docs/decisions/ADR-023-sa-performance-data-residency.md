@@ -45,8 +45,8 @@ contacts below.
 - **Account-shared SFDC contacts.** The one account-shared exception. Fields
   are sealed with the Account's contacts (ADR-021, contact encryption) and
   visible to its direct members; plain `SFDCCONTACT#`/`SFDCSUPPRESS#` rows
-  hold only canonical 18-character SFDC IDs. Only the SFDC sync, a later
-  change, writes them.
+  hold only canonical 18-character SFDC IDs. Only the SFDC sync
+  (`POST /api/accounts/{accountId}/contacts/sfdc-sync`) writes them.
 
   | Source | Stored (account-shared) | Not stored |
   |---|---|---|
