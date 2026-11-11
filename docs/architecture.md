@@ -449,6 +449,15 @@ when it is a private regular file of at most 1 MiB. Notifications are
 informational and never navigate the app; the task strip on the meetings page
 shows the task.
 
+SA performance reports (ADR-023) follow the same local-first pattern. The Mac app
+(`report_runner.rs`) or `ttobak-mcp report run` starts the owner's own Claude Code
+CLI headless with the `sa-performance-report` skill, a read-only tool allowlist and
+a Seatbelt sandbox for Bash (no network, writes only in the run's work directory).
+The CLI output is validated as JSON by the adapter, which then uploads it with the
+owner's own token to `PUT /api/performance/reports/{periodKey}`. The owner-private
+report routes store and serve it; the web report tab renders it as React text. No
+report generation runs in AWS, and TTOBAK holds no Claude credentials for it.
+
 The private connector transport signs verified request identities and exact arguments,
 then invokes private API and QA consumers through service IAM. Atomic current client
 policy and per-user approval reads bound both ingress and consumers. First-party

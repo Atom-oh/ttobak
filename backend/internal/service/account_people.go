@@ -61,7 +61,7 @@ type accountPeopleRepo interface {
 	PutPeopleLink(context.Context, *model.PeopleLink, string) error
 	DeletePeopleLink(context.Context, string, string, model.PeopleLinkKey, string, bool) error
 	GetPeopleLink(context.Context, string, model.PeopleLinkKey) (*model.PeopleLink, error)
-	ListUnresolvedMentionsByHash(context.Context, string, string, int) ([]model.UnresolvedMention, bool, error)
+	ListUnresolvedMentionsByHash(context.Context, string, string, string, int) ([]model.UnresolvedMention, string, error)
 	DeleteUnresolvedMention(context.Context, string, string, string, string, string) error
 	AddPeopleLinkAlias(context.Context, string, string, model.PeopleLinkKey, string) error
 	PutMentionIgnore(context.Context, string, string, string) error

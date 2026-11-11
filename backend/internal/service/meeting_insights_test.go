@@ -68,9 +68,10 @@ func TestMeetingDetailInsightsAreBoundedAndFailuresVisible(t *testing.T) {
 	manyJSON, _ := json.Marshal(many)
 	long := model.MeetingInsight{ID: "original-id", Type: "risk", Text: strings.Repeat("😀", 6000),
 		Evidence: strings.Repeat("한", 6000), Implication: strings.Repeat("<", 6000), NextAction: strings.Repeat(">", 6000),
-		TsMarker: strings.Repeat("T", 300), Entities: make([]string, 30)}
+		TsMarker: strings.Repeat("T", 300), Entities: make([]string, 30), PersonEntities: make([]string, 30)}
 	for i := range long.Entities {
 		long.Entities[i] = strings.Repeat("고객", 300)
+		long.PersonEntities[i] = strings.Repeat("name", 100)
 	}
 	longJSON, _ := json.Marshal([]model.MeetingInsight{long})
 	large := make([]model.MeetingInsight, 50)
@@ -117,7 +118,9 @@ func TestMeetingDetailInsightsAreBoundedAndFailuresVisible(t *testing.T) {
 				t.Fatalf("unbounded/invalid encoded insight payload: %d bytes", len(encoded))
 			}
 			if tc.name == "field caps" && (utf8.RuneCountInString(got.Insights[0].Text) > 2000 ||
-				utf8.RuneCountInString(got.Insights[0].Evidence) > 2000 || len(got.Insights[0].Entities) > 20) {
+				utf8.RuneCountInString(got.Insights[0].Evidence) > 2000 || len(got.Insights[0].Entities) > 20 ||
+				len(got.Insights[0].PersonEntities) != 20 ||
+				utf8.RuneCountInString(got.Insights[0].PersonEntities[0]) != 128) {
 				t.Fatal("long source fields bypassed display bounds")
 			}
 			if tc.name == "encoded budget" && len(got.Insights) == 0 {

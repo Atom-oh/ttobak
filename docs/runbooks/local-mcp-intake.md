@@ -488,3 +488,176 @@ counts with AWSentral, then run `intake sfdc` and re-run to confirm empty
 batches. The scheduled `intake run` includes SFDC whenever it is selected, so
 schedule only after that, or pass `--skip sfdc` to setup, which disables
 SFDC and keeps its ledger.
+
+## SA report
+
+`ttobak-mcp report run` generates the owner's SA performance report
+([ADR-023](../decisions/ADR-023-sa-performance-data-residency.md)) on the Mac.
+It runs the owner's own Claude Code CLI headless with the unchanged
+`sa-performance-report` skill, validates the JSON result and uploads it to
+`PUT /api/performance/reports/{periodKey}`.
+
+```text
+report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD]
+  [--highlights-file <path>] [--noninteractive]
+```
+
+Prerequisites:
+
+- The `claude` CLI is installed (`$TTOBAK_CLAUDE_BIN`, `~/.local/bin`,
+  `/opt/homebrew/bin`, `/usr/local/bin` or `~/.claude/local`) and works:
+  either logged in (`claude`, then `/login`) or Bedrock through the `env` of
+  `~/.claude/settings.json` (only the model-auth keys are carried over;
+  `TTOBAK_REPORT_USE_BEDROCK=1|0` and `TTOBAK_REPORT_AWS_PROFILE` override them).
+- The skill is the internal-mcp-setup v1.4.0 layout, installed at
+  `~/.claude/skills/sa-performance-report` (or in a plugin cache). A copy without
+  `scripts/calendar_count.py` and `references/report-structure.md` fails with
+  `SKILL_OUTDATED` before the CLI starts.
+- SFDC assignments were synced (`intake run`), and the TTOBAK login is valid.
+
+Behavior:
+
+- The period comes from the arguments; the CLI owns `periodKey`, `period`,
+  `alias` (the TTOBAK login's local part), `generatedAt`, `model` and
+  `highlights` and overwrites them in the model output.
+- The run directory is a fresh 0700 temp directory (`ttobak-report-XXXXXX`
+  in `$TMPDIR`, else `/tmp`; the app passes its own `TMPDIR`). The CLI runs in
+  its `work/` subdirectory; the 0600 MCP config and the 0600 run settings stay
+  outside it. `work/` is the CLI's project settings root, so the run writes
+  only in `work/out/`. The run directory holds a 0600 MCP config
+  (only `aws-sentral-mcp`, `aws-outlook-mcp`, `slack-mcp`, `spec-req-mcp` and
+  `aws-tfc-hub-mcp` when present) and, unless the skill has
+  `config/customers.<alias>.json`, a customers file in the skill's
+  `customers.example.json` format (in `work/`) built from the synced
+  assignments. The directory and the CLI session directory of this run under
+  `~/.claude/projects/` (saved tool results) are removed after every run,
+  also from the cancel path. Right after taking `report.lock` (no live run can
+  exist then), the CLI removes stale `ttobak-report-XXXXXX` run directories in
+  the temp root and `/tmp` and their `*-ttobak-report-XXXXXX-work` session
+  directories: real directories owned by the user only, links skipped.
+  Server values are never printed.
+- The CLI runs with `--permission-mode dontAsk`, `--strict-mcp-config`,
+  `--setting-sources project,local` (no user permission rules) and an explicit
+  read-only `--allowedTools` list (`mcp-server/src/report/tools.ts`): the read
+  tools of the skill's data-sources, file reads only in the skill, `work/` and
+  session directories, writes only in `work/out/` (Write, Edit and MultiEdit
+  of `work/.claude/**` are denied), no sub-agents, and Bash only for
+  the three counting scripts. Bash runs only in Claude Code's sandbox, set by
+  the run's `--settings` file: `sandbox.enabled`, `failIfUnavailable`,
+  `allowUnsandboxedCommands: false`, no network, writes only in `work/out/`
+  (`work/.claude` is in `denyWrite`) and
+  never in the skill, and no reads of HOME except the skill, the run's session
+  folder and a home-installed `python3`, nor of the run's own config files.
+  Without a usable sandbox, or with a `claude` older than 2.1.322 (the version
+  whose settings schema was verified) or of unknown version, the run fails with
+  `REPORT_SANDBOX_UNAVAILABLE` and nothing runs unsandboxed. Writes to SFDC, Slack, Outlook, SpecReq and TFC Hub are
+  denied by the CLI. The environment is HOME, PATH, LANG, USER, LOGNAME and the
+  model-auth keys.
+- A server with allowed tools that is absent or fails to connect becomes a
+  `missingSources` entry and the report is stored with `partial: true`. The
+  timeout is 45 minutes; SIGTERM or SIGINT cancels: before the CLI starts,
+  nothing is spawned; afterwards claude's process group gets SIGTERM at once
+  and SIGKILL after 1.5 s. A custom period whose end year + 3 is not after the
+  current UTC year is past the server's retention and fails with
+  `REPORT_PERIOD_EXPIRED` before any run (also in the app and web dialog).
+- stderr carries Korean progress and one `toolCallLine` (tool name only) per tool use, never tool
+  input or results. stdout is one JSON line: `{ok, periodKey, partial, missingSources}`.
+
+### Prerequisites in short
+
+- Claude Code CLI 2.1.322 or newer, logged in (`claude`, then `/login`), or
+  Bedrock: the `env` of `~/.claude/settings.json`, or the generate dialog's
+  Bedrock toggle plus an AWS profile (the app passes
+  `TTOBAK_REPORT_USE_BEDROCK=1` and `TTOBAK_REPORT_AWS_PROFILE`).
+- The internal-mcp-setup v1.4.0 `sa-performance-report` skill installed.
+- A valid Midway session (`mwinit`) for the internal MCP servers, synced SFDC
+  assignments and a valid TTOBAK login.
+
+### Running it
+
+- From the app: Performance, Report tab, "Make report". Pick a period and
+  optional highlights; Bedrock settings are under Advanced. Closing the dialog
+  keeps the run going; Cancel stops it. Quitting the app sends the CLI SIGTERM
+  and waits up to 2 s for it (only while a report runs) before SIGKILL; in
+  that time the CLI stops claude and removes its directories. Anything a quit
+  still leaves behind is removed by the next report run's sweep. At launch the
+  app sweeps its own stale `$TMPDIR/ttobak-report-hl-<pid>-<nanos>-<seq>`
+  highlight directories of dead processes.
+- From a shell: `ttobak-mcp report run --period week`, or `--period custom
+  --start 2026-01-01 --end 2026-03-31` (at most 400 days). Add
+  `--highlights-file <path>` for highlights and `--noninteractive` to never
+  prompt for login.
+
+### Sandbox: allowed and denied
+
+- Allowed: reads of the skill, the run's session folder and `work/`, plus a
+  home-installed `python3` (a manager folder such as `~/.pyenv`, an install
+  prefix, or for `~/.local` only `bin` and `lib/python3*`); writes only in
+  `work/out/`.
+- Denied: any write elsewhere (including `work/` itself and its `.claude/`,
+  `--out ~/x.json` and anything in the skill folder), reads of the rest of HOME (for example `~/.ssh`,
+  `~/.claude.json`) and of the run's own config files, all network, and
+  unsandboxed Bash.
+
+### Codes and actions (exit 2)
+
+| Code | Meaning and action |
+|---|---|
+| `CLAUDE_CLI_MISSING` | No `claude` binary found; install it or set `TTOBAK_CLAUDE_BIN`. |
+| `CLAUDE_CLI_AUTH` | The CLI is not logged in or Bedrock is misconfigured; run `claude` and `/login`, or fix the profile. |
+| `SKILL_MISSING` | The skill is not installed; install internal-mcp-setup v1.4.0. |
+| `SKILL_OUTDATED` | The skill lacks `scripts/calendar_count.py` or `references/report-structure.md`; update it. |
+| `REPORT_INVALID` | The model output failed validation; nothing was uploaded. Re-run. |
+| `REPORT_NO_SFDC` | No synced SFDC assignments; run `intake run` first. |
+| `REPORT_TIMEOUT` | The 45-minute CLI limit (50 in the app) passed; re-run, optionally with a shorter period. |
+| `REPORT_CANCELLED` | Cancelled by the user, SIGTERM or SIGINT. |
+| `REPORT_PERIOD_EXPIRED` | The custom period ended more than two calendar years ago (server retention); pick a later period. |
+| `REPORT_SANDBOX_UNAVAILABLE` | No usable sandbox, or a CLI older than 2.1.322 or of unknown version (a pre-release suffix is rejected); update the CLI. |
+| `RUN_IN_PROGRESS` | Another report run holds `report.lock`; wait for it. |
+| `TTOBAK_LOGIN_REQUIRED` | Sign in again with the TTOBAK login. |
+| `TTOBAK_UNAVAILABLE` | The TTOBAK API or local state could not be reached. |
+| `INVALID_ARGUMENT` | A bad period, date, highlights file or run path; fix the input. |
+
+### Mac acceptance checklist
+
+Automated tests use a fake CLI, so these need a real run on the owner's Mac.
+Record the date and result of each before calling the feature accepted.
+
+Sandbox and CLI:
+
+- [ ] `calendar_count.py --out ~/x.json` is denied.
+- [ ] `--out <skill>/scripts/x.py` (a write into the skill) is denied.
+- [ ] A Write to `work/.claude/settings.local.json` is denied (Write tool and
+  sandboxed Bash), and `--out work/out/x.json` works.
+- [ ] Unknown tool names in the `--disallowedTools` path rules (`MultiEdit`)
+  do not fail startup.
+- [ ] Reading `~/.ssh` or `~/.claude.json` from a sandboxed command is denied.
+- [ ] Sandboxed commands have no network.
+- [ ] `failIfUnavailable` exits at startup when Seatbelt is unavailable.
+- [ ] A denied write really fails, proving Bash ran sandboxed (the init event
+  has no sandbox field).
+- [ ] The rule forms parse and do not fail startup: the comma-joined,
+  space-containing `Bash(...)` list and `Read`/`Glob`/`Grep`/`Write(//abs/**)`.
+- [ ] The session folder name matches `claudeProjectDir(<tmp>/work)` and tool
+  results land in its `tool-results/`.
+- [ ] A Keychain login works with only HOME, PATH, LANG, USER, LOGNAME and the
+  model-auth keys.
+- [ ] `python3` runs with HOME denied: `/usr/bin/python3` works, and a
+  home-installed python3 works through its re-allowed prefix; the shell starts
+  without reading `~/.zshrc`.
+- [ ] The `--add-dir` skill folder's own settings files are not loaded as a
+  settings source.
+- [ ] The Read tool reaches the skill files.
+- [ ] A weekly report for this week, then a year report, complete; inspect the
+  stored JSON for forbidden content.
+
+App:
+
+- [ ] Generate from the dialog; progress lines appear and the new report opens
+  on finish, including when the dashboard tab was shown at that moment.
+- [ ] Cancel stops the run and the dialog reflects it.
+- [ ] Quit the app mid-run: the CLI and claude stop, and the run directory
+  (with its `mcp.json`) and session directory are gone, at the latest after the
+  next report run; no stale `ttobak-report-hl-*` directory remains after the
+  next launch.
+- [ ] The report appears in the list and renders; Delete removes it.

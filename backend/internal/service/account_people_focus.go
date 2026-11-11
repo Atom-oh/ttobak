@@ -19,6 +19,12 @@ const (
 	maxFocusMeetings     = 60
 	maxFocusLinkRows     = 600
 	maxFocusCursorBytes  = 512
+	// Each uncached contact label is a consistent read plus a KMS open, so a
+	// page reads at most this many distinct labels and lists at most
+	// maxFocusPeoplePerMeeting people per meeting; either bound sets truncated.
+	maxFocusLabelReads       = 120
+	maxFocusPeoplePerMeeting = 20
+	maxFocusTitleRunes       = 200
 )
 
 // focusRoleOrder is the display order of people roles.
@@ -189,9 +195,9 @@ func (s *AccountPeopleService) Focus(ctx context.Context, userID, accountID, foc
 		return meetings[i].id < meetings[j].id
 	})
 	out.Focus.Meetings = len(meetings)
-	if offset > 0 && offset >= len(meetings) {
-		return nil, ErrInvalidInput
-	}
+	// A valid cursor past the end (meetings unpublished between pages) yields
+	// an empty final page.
+	offset = min(offset, len(meetings))
 
 	techCounts := map[string]int{}
 	otherCounts := map[string]int{}
@@ -232,11 +238,12 @@ func (s *AccountPeopleService) Focus(ctx context.Context, userID, accountID, foc
 	end := min(offset+focusMeetingsPerPage, len(meetings))
 	for i := offset; i < end; i++ {
 		f := meetings[i]
-		people, err := s.focusPeople(ctx, v, f.m, f.id)
+		people, cut, err := s.focusPeople(ctx, v, f.m, f.id)
 		if err != nil {
 			return nil, err
 		}
-		out.Meetings = append(out.Meetings, model.FocusMeeting{ID: f.id, Title: f.m.Title, Date: f.m.Date.UTC().Format(time.RFC3339),
+		out.Truncated = out.Truncated || cut
+		out.Meetings = append(out.Meetings, model.FocusMeeting{ID: f.id, Title: capRunes(f.m.Title, maxFocusTitleRunes), Date: f.m.Date.UTC().Format(time.RFC3339),
 			Roles: f.roles, Techs: techsByMeeting[i], People: people})
 	}
 	if end < len(meetings) {
@@ -281,7 +288,8 @@ func (s *AccountPeopleService) focusCard(ctx context.Context, v *peopleViewer, k
 }
 
 // focusCandidates lists the stored rows that connect the focus to meetings:
-// people links to a person, or project meeting refs (newest first).
+// people links to a person (reverse-index order, not date order), or
+// project meeting refs (the repository returns them newest first).
 func (s *AccountPeopleService) focusCandidates(ctx context.Context, accountID, kind, id string) ([]focusCandidate, bool, error) {
 	var out []focusCandidate
 	if kind == model.LinkKindProject {
@@ -290,8 +298,7 @@ func (s *AccountPeopleService) focusCandidates(ctx context.Context, accountID, k
 			return nil, false, err
 		}
 		seen := map[string]bool{}
-		for i := len(refs) - 1; i >= 0; i-- {
-			ref := refs[i]
+		for _, ref := range refs {
 			if ref.ProjectID != id || !validLinkPlainID(ref.OwnerUserID) || !validLinkPlainID(ref.MeetingID) {
 				continue
 			}
@@ -325,10 +332,10 @@ func (s *AccountPeopleService) focusCandidates(ctx context.Context, accountID, k
 
 // focusPeople returns the readable members and contacts of one meeting with
 // their visible roles: contacts first, then members, each by label.
-func (s *AccountPeopleService) focusPeople(ctx context.Context, v *peopleViewer, m *model.Meeting, linkID string) ([]model.FocusPerson, error) {
-	links, _, err := s.repo.ListPeopleLinksForMeeting(ctx, v.accountID, linkID, maxPeopleExistingEdges)
+func (s *AccountPeopleService) focusPeople(ctx context.Context, v *peopleViewer, m *model.Meeting, linkID string) ([]model.FocusPerson, bool, error) {
+	links, cut, err := s.repo.ListPeopleLinksForMeeting(ctx, v.accountID, linkID, maxPeopleExistingEdges)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	rows := map[string][]model.PeopleLink{}
 	var keys []string
@@ -349,9 +356,20 @@ func (s *AccountPeopleService) focusPeople(ctx context.Context, v *peopleViewer,
 		if len(roles) == 0 {
 			continue
 		}
+		if len(people) == maxFocusPeoplePerMeeting {
+			cut = true
+			break
+		}
+		if _, cached := v.labels[key]; !cached {
+			if v.focusLabelReads == maxFocusLabelReads {
+				cut = true
+				continue
+			}
+			v.focusLabelReads++
+		}
 		label, ok, err := v.label(ctx, kind, id)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !ok || label == "" {
 			continue
@@ -370,7 +388,7 @@ func (s *AccountPeopleService) focusPeople(ctx context.Context, v *peopleViewer,
 		}
 		return people[i].Label < people[j].Label
 	})
-	return people, nil
+	return people, cut, nil
 }
 
 func joinNonEmpty(sep string, parts ...string) string {
