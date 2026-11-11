@@ -622,6 +622,17 @@ export const settingsApi = {
     api.post<InviteUserResponse>('/api/settings/invite-user', data),
 };
 
+// Self-service display name. The server always targets the signed-in user.
+export const profileApi = {
+  updateName: (name: string) =>
+    api.put<UserNameResponse>('/api/settings/profile/name', { name }),
+};
+
+export interface UserNameResponse {
+  userId: string;
+  name: string;
+}
+
 export interface InviteUserResponse {
   email: string;
   invited: boolean;
@@ -648,6 +659,9 @@ export const adminUsersApi = {
 
   resetPassword: (userId: string) =>
     api.post<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/reset-password`),
+
+  updateName: (userId: string, name: string) =>
+    api.put<UserNameResponse>(`/api/settings/users/${encodeURIComponent(userId)}/name`, { name }),
 };
 
 export interface AdminUserSummary {

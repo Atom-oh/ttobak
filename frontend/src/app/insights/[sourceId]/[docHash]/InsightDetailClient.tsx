@@ -229,7 +229,7 @@ export default function InsightDetailPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        <div className="mx-auto w-full max-w-7xl p-4 lg:px-8 lg:pb-8 lg:pt-10">
+        <div className="workspace-page">
 
           {/* Back button (desktop) */}
           <button

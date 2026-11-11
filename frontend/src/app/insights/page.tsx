@@ -42,7 +42,7 @@ export default function InsightsPage() {
 
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        <div className="mx-auto w-full max-w-7xl p-4 lg:px-8 lg:pb-8 lg:pt-12">
+        <div className="workspace-page">
           {/* Page Header */}
           <div className="hidden lg:block mb-8">
             <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">
