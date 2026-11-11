@@ -10,6 +10,8 @@ interface Options {
   /** The record page's `referenceAccountId`. */
   accountId: string;
   setAccountId: (accountId: string) => void;
+  /** The record page's current title. */
+  title: string;
   /** Functional updates keep a title set while the lookup was pending. */
   setTitle: Dispatch<SetStateAction<string>>;
   /** Account already chosen for the recording in progress, if any. */
@@ -23,15 +25,25 @@ interface Options {
   enabled: boolean;
 }
 
+/** Overrides for a draft that must not inherit an auto link. */
+export interface DroppedAutoLink {
+  accountId: string;
+  title?: string;
+}
+
 /** Links a recording to the Account of the ongoing calendar event, unless an
- * Account came from the URL, an MCP request or the user. Calendar or Account
- * failures do nothing; creation still validates membership. */
-export function useCalendarAutoLink({ userId, accountId, setAccountId, setTitle, recordingAccountId, isRecordingActive, applyToRecording, initialSource, enabled }: Options) {
+ * Account came from the URL, an MCP request or the user. It is applied only by
+ * `check()` at recording start, never on mount, so a leftover upload or an
+ * unrelated draft is not linked. Calendar or Account failures do nothing;
+ * creation still validates membership. */
+export function useCalendarAutoLink({ userId, accountId, setAccountId, title, setTitle, recordingAccountId, isRecordingActive, applyToRecording, initialSource, enabled }: Options) {
   const sourceRef = useRef<AccountLinkSource>(initialSource);
-  const latestRef = useRef({ userId, accountId, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled });
+  const latestRef = useRef({ userId, accountId, title, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled });
   useEffect(() => {
-    latestRef.current = { userId, accountId, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled };
+    latestRef.current = { userId, accountId, title, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled };
   });
+  /** The title the auto link filled, while it may still be on the page. */
+  const autoTitleRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
   const [autoLink, setAutoLink] = useState<{ accountId: string; name: string } | null>(null);
 
@@ -54,6 +66,7 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, setTitle,
       const latest = latestRef.current;
       sourceRef.current = 'auto';
       latest.setAccountId(account.accountId);
+      if (!latest.title.trim()) autoTitleRef.current = event.title;
       latest.setTitle(previous => previous.trim() ? previous : event.title);
       if (latest.isRecordingActive()) latest.applyToRecording(account.accountId);
       setAutoLink({ accountId: account.accountId, name: account.name });
@@ -62,21 +75,25 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, setTitle,
     }).finally(() => { inFlightRef.current = false; });
   }, []);
 
-  // Once per page while enabled, as soon as the signed-in user is known.
-  const checkedUserRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (!enabled || !userId || checkedUserRef.current === userId) return;
-    checkedUserRef.current = userId;
-    check();
-  }, [enabled, userId, check]);
+  /** Clears the auto-linked Account and reverts the title it filled, unless
+   * the title was edited since. Returns whether that title was still shown. */
+  const clearAuto = useCallback((source: AccountLinkSource): boolean => {
+    const latest = latestRef.current;
+    const autoTitle = autoTitleRef.current;
+    const titleIsAuto = autoTitle !== null && latest.title === autoTitle;
+    sourceRef.current = source;
+    autoTitleRef.current = null;
+    latest.setAccountId('');
+    if (autoTitle !== null) latest.setTitle(previous => previous === autoTitle ? '' : previous);
+    return titleIsAuto;
+  }, []);
 
   // Switching to upload mode drops an auto link: the file is not this meeting.
+  // The chip is hidden while disabled and never matches the cleared Account.
   useEffect(() => {
     if (enabled || sourceRef.current !== 'auto') return;
-    sourceRef.current = 'none';
-    checkedUserRef.current = undefined;
-    latestRef.current.setAccountId('');
-  }, [enabled]);
+    clearAuto('none');
+  }, [enabled, clearAuto]);
 
   /** URL, MCP or a user choice: auto-link never applies afterwards. */
   const markSource = useCallback((source: Exclude<AccountLinkSource, 'none' | 'auto'>) => {
@@ -86,12 +103,22 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, setTitle,
 
   /** The chip's change button: clear the auto link and let the user pick. */
   const dismiss = useCallback(() => {
-    sourceRef.current = 'user';
+    clearAuto('user');
     setAutoLink(null);
     const latest = latestRef.current;
-    latest.setAccountId('');
     if (latest.isRecordingActive()) latest.applyToRecording('');
-  }, []);
+  }, [clearAuto]);
 
-  return { autoLink: enabled ? autoLink : null, check, markSource, dismiss };
+  /** A leftover upload is not the ongoing meeting: drop an auto link and its
+   * title. Returns draft overrides, or undefined when nothing was auto-linked. */
+  const dropAutoLink = useCallback((): DroppedAutoLink | undefined => {
+    if (sourceRef.current !== 'auto') return undefined;
+    const titleIsAuto = clearAuto('none');
+    setAutoLink(null);
+    return titleIsAuto ? { accountId: '', title: '' } : { accountId: '' };
+  }, [clearAuto]);
+
+  const source = useCallback(() => sourceRef.current, []);
+
+  return { autoLink: enabled ? autoLink : null, check, markSource, dismiss, dropAutoLink, source };
 }

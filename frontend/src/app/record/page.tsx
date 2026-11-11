@@ -285,8 +285,9 @@ function RecordPageInner() {
   useEffect(() => { serverMeetingIdRef.current = serverMeetingId; }, [serverMeetingId]);
 
   // Calendar auto-link (owner request 2026-11-11): an empty Account nobody
-  // chose is filled from the ongoing calendar event, on mount and again at
-  // recording start. URL, MCP and user choices are never overwritten.
+  // chose is filled from the ongoing calendar event at recording start only
+  // (never on mount, so a leftover upload is not linked). URL, MCP and user
+  // choices are never overwritten.
   const autoLinkRecordingRef = useRef(false);
   useEffect(() => { if (postRecording.step !== null) autoLinkRecordingRef.current = false; }, [postRecording.step]);
   const { changeRecordingAccount } = postRecording;
@@ -294,6 +295,7 @@ function RecordPageInner() {
     userId: user?.userId,
     accountId: referenceAccountId,
     setAccountId: setReferenceAccountId,
+    title: meetingTitle,
     setTitle: setMeetingTitle,
     recordingAccountId: postRecording.recordingLinks.accountId,
     isRecordingActive: () => autoLinkRecordingRef.current,
@@ -388,8 +390,11 @@ function RecordPageInner() {
       // (falls back to create-at-upload inside resumeUploadFlow if this
       // fails), then hand the on-disk path to the notes step → upload →
       // cleanupRecording flow that already handles native files.
+      // A leftover WAV is not the ongoing calendar meeting: it never inherits
+      // an auto-linked Account or the title filled from that event.
+      const dropped = calendarLink.dropAutoLink();
       resetSessionStateForNewMeeting();
-      await postRecording.createDraftMeeting();
+      await postRecording.createDraftMeeting(dropped);
       postRecording.handleNativeFileReady(item.path, item.byte_size);
       leftovers.remove(item.path);
     } finally {

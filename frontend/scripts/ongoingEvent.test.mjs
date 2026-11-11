@@ -138,7 +138,7 @@ function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', e
     const [accountId, setAccountId] = harness.react.useState('');
     const [title, setTitle] = harness.react.useState(initialTitle);
     seen.result = runAutoLink({
-      userId: 'owner', accountId, setAccountId, setTitle, recordingAccountId: undefined,
+      userId: 'owner', accountId, setAccountId, title, setTitle, recordingAccountId: undefined,
       isRecordingActive: () => false, applyToRecording: id => recording.push(id), initialSource, enabled: props.enabled,
     });
     seen.page = { accountId, setAccountId, title, setTitle };
@@ -146,12 +146,25 @@ function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', e
   }
   const render = () => harness.render(probe);
   render();
+  // Recording start: the only place the auto link is applied.
+  const start = () => { seen.result.check(); render(); };
   const resolveCalendar = async () => { pending.splice(0).forEach(resolve => resolve()); await settle(); await settle(); render(); };
-  return { render, resolveCalendar, calls, recording, props, result: () => seen.result, page: () => seen.page };
+  return { render, start, resolveCalendar, calls, recording, props, result: () => seen.result, page: () => seen.page };
 }
 
-test('auto-link fills an empty Account and title from the ongoing event', async context => {
+test('mount alone reads and links nothing', async context => {
   const f = autoLinkFixture(context);
+  f.render();
+  await f.resolveCalendar();
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.page().accountId, '');
+  assert.equal(f.page().title, '');
+  assert.equal(f.result().autoLink, null);
+});
+
+test('auto-link fills an empty Account and title from the ongoing event at recording start', async context => {
+  const f = autoLinkFixture(context);
+  f.start();
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0][2].expectedUserId, 'owner');
   await f.resolveCalendar();
@@ -162,6 +175,7 @@ test('auto-link fills an empty Account and title from the ongoing event', async 
 
 test('a user choice made while the calendar read is pending is never overwritten', async context => {
   const f = autoLinkFixture(context);
+  f.start();
   f.result().markSource('user');
   f.page().setAccountId('acc-user');
   f.render();
@@ -172,6 +186,7 @@ test('a user choice made while the calendar read is pending is never overwritten
 
 test('a user who cleared the Account while the read was pending is not re-linked', async context => {
   const f = autoLinkFixture(context);
+  f.start();
   f.result().markSource('user');
   f.page().setAccountId('');
   f.render();
@@ -181,6 +196,7 @@ test('a user who cleared the Account while the read was pending is not re-linked
 
 test('a title set while the read was pending is kept', async context => {
   const f = autoLinkFixture(context);
+  f.start();
   f.page().setTitle('MCP title');
   f.render();
   await f.resolveCalendar();
@@ -189,7 +205,9 @@ test('a title set while the read was pending is kept', async context => {
 });
 
 test('URL and MCP sources and upload mode never read the calendar', async context => {
-  assert.equal(autoLinkFixture(context, { initialSource: 'url' }).calls.length, 0);
+  const url = autoLinkFixture(context, { initialSource: 'url' });
+  url.start();
+  assert.equal(url.calls.length, 0);
   const upload = autoLinkFixture(context, { enabled: false });
   assert.equal(upload.calls.length, 0);
   upload.result().check();
@@ -198,26 +216,70 @@ test('URL and MCP sources and upload mode never read the calendar', async contex
 
 test('switching to upload mode while the read is pending links nothing; an applied link is dropped', async context => {
   const pendingSwitch = autoLinkFixture(context);
+  pendingSwitch.start();
   pendingSwitch.props.enabled = false;
   pendingSwitch.render();
   await pendingSwitch.resolveCalendar();
   assert.equal(pendingSwitch.page().accountId, '');
   const applied = autoLinkFixture(context);
+  applied.start();
   await applied.resolveCalendar();
   assert.equal(applied.page().accountId, 'acc-1');
   applied.props.enabled = false;
   applied.render();
+  applied.render();
   assert.equal(applied.page().accountId, '');
+  assert.equal(applied.page().title, '', 'the auto-filled title is reverted');
   assert.equal(applied.result().autoLink, null);
 });
 
 test('the change button clears the auto link for the rest of the session', async context => {
   const f = autoLinkFixture(context);
+  f.start();
   await f.resolveCalendar();
   f.result().dismiss();
   f.render();
   assert.equal(f.page().accountId, '');
+  assert.equal(f.page().title, '', 'the auto-filled title is reverted');
   assert.equal(f.result().autoLink, null);
   f.result().check();
   assert.equal(f.calls.length, 1, 'not re-applied');
+});
+
+test('an edited title survives removing the auto link', async context => {
+  const f = autoLinkFixture(context);
+  f.start();
+  await f.resolveCalendar();
+  f.page().setTitle('Edited title');
+  f.render();
+  f.result().dismiss();
+  f.render();
+  assert.equal(f.page().accountId, '');
+  assert.equal(f.page().title, 'Edited title');
+});
+
+test('a leftover upload never carries an auto link', async context => {
+  const none = autoLinkFixture(context);
+  assert.equal(none.result().dropAutoLink(), undefined, 'nothing auto-linked: no overrides');
+  const f = autoLinkFixture(context);
+  f.start();
+  await f.resolveCalendar();
+  assert.equal(f.result().source(), 'auto');
+  assert.deepEqual({ ...f.result().dropAutoLink() }, { accountId: '', title: '' });
+  f.render();
+  assert.equal(f.page().accountId, '');
+  assert.equal(f.page().title, '');
+  assert.equal(f.result().autoLink, null);
+  assert.equal(f.result().dropAutoLink(), undefined, 'already dropped');
+  const edited = autoLinkFixture(context);
+  edited.start();
+  await edited.resolveCalendar();
+  edited.page().setTitle('My leftover');
+  edited.render();
+  assert.deepEqual({ ...edited.result().dropAutoLink() }, { accountId: '' }, 'an edited title is kept');
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /const dropped = calendarLink\.dropAutoLink\(\);\s*resetSessionStateForNewMeeting\(\);\s*await postRecording\.createDraftMeeting\(dropped\);/,
+    'handleLeftoverUpload drops the auto link before creating its draft');
+  const hook = readFileSync(new URL('../src/hooks/useCalendarAutoLink.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(hook, /checkedUserRef/, 'no mount-time application');
 });

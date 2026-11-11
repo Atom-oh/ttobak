@@ -158,16 +158,18 @@ asks the user to retry after the recording when work is in progress. Copy is Kor
 uploading.
 
 The record page links a recording to the ongoing customer meeting
-(`useCalendarAutoLink`, `lib/ongoingEvent.ts`). On mount and again at recording
-start, if no Account was set by the URL, an MCP start request or the user, it reads
+(`useCalendarAutoLink`, `lib/ongoingEvent.ts`). Only at recording start (never on
+mount), if no Account was set by the URL, an MCP start request or the user, it reads
 calendar events for one hour either side of now without blocking the start.
-Upload mode never auto-links, and switching to it drops an auto link.
+Upload mode never auto-links, and switching to it drops an auto link. A Mac
+leftover upload drops an auto link and its auto-filled title (`dropAutoLink`)
+before creating its draft.
 `ongoingEventFor` picks a timed event with `startsAt - 10 min <= now < endsAt`,
 preferring events with an `accountId` and then the closest start; a tie between
 different Accounts links nothing. The Account must be in the user's direct, editable
 Account list. The page then sets the Account (and the title, only if still empty) and
 shows an `AutoLinkChip` with a change button that clears the link for the rest of
-the page session; once a draft is bound to that Account the button is hidden and
+the page session and reverts the auto-filled title unless it was edited; once a draft is bound to that Account the button is hidden and
 RecordingLinkControls switches Accounts. During a recording the link goes through
 `changeRecordingAccount`. Creation still validates membership; calendar or Account
 failures show nothing.

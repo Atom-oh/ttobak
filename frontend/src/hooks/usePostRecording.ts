@@ -192,7 +192,11 @@ export function usePostRecording({
   }, [notesWriter]);
 
   /** Create a draft meeting at recording start for crash recovery */
-  const createDraftMeeting = useCallback(async (): Promise<string | null> => {
+  // `overrides` replace this render's title/Account, e.g. a leftover upload
+  // that dropped a calendar auto link in the same event handler.
+  const createDraftMeeting = useCallback(async (overrides?: { title?: string; accountId?: string }): Promise<string | null> => {
+    const draftAccountId = overrides?.accountId ?? accountId;
+    const draftTitle = overrides?.title ?? meetingTitle;
     notesUserIdRef.current = userId;
     setCanKeepLocally(false);
     // A stale pending payload from a previous, never-resolved recording
@@ -217,11 +221,11 @@ export function usePostRecording({
     try {
       // Retain the selection for a failed-lookup retry; mutation payloads below
       // replace this candidate with the freshly validated Account ID.
-      preparationRef.current = { notes: preparationNotes(preparationContext || ''), accountId: accountId || undefined };
+      preparationRef.current = { notes: preparationNotes(preparationContext || ''), accountId: draftAccountId || undefined };
       setPendingAccountValue(preparationRef.current.accountId || null);
       publishLinks();
       const creationAccountId = await withTimeout(
-        resolveRecordingAccountId(accountId, notesUserIdRef.current), 15000, 'Validate preparation account',
+        resolveRecordingAccountId(draftAccountId, notesUserIdRef.current), 15000, 'Validate preparation account',
       );
       if (!mountedRef.current || flowGenerationRef.current !== generation) return null;
       const prepared = { ...preparationRef.current, accountId: creationAccountId };
@@ -229,7 +233,7 @@ export function usePostRecording({
       setPendingAccountValue(prepared.accountId || null);
       const result = await withTimeout(
         meetingsApi.create({
-          title: meetingTitle || formatDefaultTitle(new Date()),
+          title: draftTitle || formatDefaultTitle(new Date()),
           status: 'recording',
           ...prepared,
         }, { expectedUserId: notesUserIdRef.current }),
