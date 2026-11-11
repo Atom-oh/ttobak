@@ -126,11 +126,11 @@
 
 ## Not implemented or off by default
 
-- `STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` both ship as `report`;
-  an unknown value fails closed to off. Turn deletion to active only after
-  reviewing the would-delete log lines. Activation is a separate change: deploy
-  WhisperStack, then GatewayStack with both modes at `report`, then the Whisper
-  image that writes the marks.
+- `STT_RECOVERY_MODE` is `active` since 2026-11-11, after report-mode ticks
+  identified the meetings whose Whisper tasks died on reclaimed Spot hosts and the
+  mark-writing Whisper image was deployed. `STT_RECOVERY_DELETE_MODE` stays
+  `report`; turn deletion to active only after reviewing the would-delete log
+  lines. An unknown value fails closed to off.
 - Owners are not warned before grace deletion.
 - Automatic replay and reuse of an already refined transcript are not built.
 - Multi-part and checkpoint-only meetings are recovered by an operator or the
