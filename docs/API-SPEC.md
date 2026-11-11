@@ -472,7 +472,7 @@ Member removal and legacy direct addition retire it atomically; cleanup conflict
 remain retryable. A durable control row also gates queue/claim transactions and bootstrap
 capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
 continuation. Project user queues are isolated from old readers; transactional rows, TTL and
-the required incompatible-API rollback drain are specified in ADR-044.
+the required incompatible-API rollback drain are specified in ADR-025.
 
 Admin user summaries include `emailVerified`. Password reset requires an enabled,
 CONFIRMED user with verified email; missing verification returns 409
