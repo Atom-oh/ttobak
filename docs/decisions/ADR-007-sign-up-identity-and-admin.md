@@ -14,7 +14,8 @@
 - The pre-sign-up domain allowlist is supplemental. An empty list means no
   domain restriction; a storage error or missing e-mail fails the request. It
   is stored as the `CONFIG` / `ALLOWED_DOMAINS` row, and domain membership is
-  never an authorization grant.
+  never an authorization grant. Saving the list lowercases and trims entries
+  and drops empty ones.
 - The address `demo@atomai.click` (case-insensitive exact match) is exempt only on
   `PreSignUp_AdminCreateUser`, with no group grant and no domain-wide exception.
   The trigger's `index.mjs` and `policy.mjs` ship together.
@@ -35,7 +36,11 @@
   administrator, and warn after the write if a race left none.
 - Resending an invitation uses the e-mail stored in Cognito and requires
   `FORCE_CHANGE_PASSWORD`; a forced password reset requires a confirmed user
-  with a verified e-mail.
+  with a verified e-mail. The sign-in screen's password-recovery form is the
+  only UI that consumes such a reset.
+- The admin panel marks a user dormant only when the last recorded login is
+  more than 90 days old. A missing timestamp is not dormant, and a failed
+  lookup shows the data as unavailable, not inactive.
 - Deleting a user keeps the profile and data, sets `deletedAt`, and removes the
   e-mail index keys so the address no longer resolves to that user.
 - The Cognito user-management permissions are scoped to the user pool.
@@ -46,7 +51,10 @@
 ## Not implemented or off by default
 
 - The profile's e-mail and its index key are written only when the profile is
-  created. Nothing reconciles them after a verified e-mail change.
+  created. Nothing reconciles them after a verified e-mail change; updating
+  them in `GetOrCreateUser` when the verified claim differs is the intended
+  follow-up. Until then a reported e-mail change is an administrator task:
+  update the profile, or delete and invite the user again.
 - Refresh-only use does not update the last-login time.
 - Profiles and data kept after deletion have no retention or cleanup rule yet;
   that decision is open.
@@ -58,10 +66,19 @@
 
 - Sign-out, disable and delete revoke refresh tokens only. Access and ID tokens
   already issued stay valid until they expire, because they are verified
-  locally. Access and ID tokens last one hour and refresh tokens 30 days.
+  locally. On the app and web clients access and ID tokens last one hour and
+  refresh tokens 30 days; the companion and connector clients use shorter
+  lifetimes set in `auth-stack.ts`. If the global sign-out itself fails, the
+  delete or disable still succeeds with a warning.
+- `GET /api/auth/allowed-domains` is registered outside the Go auth group and
+  its handler comment calls it public, but the gateway's JWT-protected proxy
+  route covers it; it is not an unauthenticated route.
 - `PUT /api/settings/allowed-domains` requires sign-in but not the admin group.
   No frontend calls it. This gap is known and not accepted as policy.
-- A self-service e-mail change does not pass the pre-sign-up domain check.
+- No TTOBAK screen changes a user's e-mail; the verification panel only
+  verifies one, and a CloudTrail review on 2026-10-29 found no such call in 90
+  days. A self-service e-mail change through Cognito does not pass the
+  pre-sign-up domain check.
   After a change the old address still resolves to the user and the new one
   fails e-mail-keyed grants until the profile is updated. If an administrator
   later invites someone with the old address, two profiles can share one e-mail
