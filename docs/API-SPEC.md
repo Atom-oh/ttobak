@@ -101,7 +101,7 @@ veto hides the meeting from the Account calendar. `AccountCalendarEvent` contain
 `startDate`, `endDate`, `location`, `sharedBy` (at most five emails) and
 `sharedByMe`. Account reads are limited to direct members (others get `403`),
 use the same query, limit and 14,000-byte rules as personal reads, and
-return `503` when a page has no decryptable share row. Shared events are not
+return `503` when any shared meeting on the page has no decryptable row. Shared events are not
 exposed to QA, briefs, insights, KB, vault export or any MCP tool.
 
 Account-sharing fields (ADR-066) are validated and stored encrypted with the
