@@ -10,7 +10,7 @@ import type { AccountCreationRequest, AccountCreationResponse } from '@/types/me
 import type { MeetingCategory } from '@/types/meeting';
 import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
 import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
-import type { AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
+import type { AccountFocusGraph, AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
@@ -1061,6 +1061,9 @@ export const accountApi = {
         { kind: target.kind, id: target.id, ...(target.cursor ? { cursor: target.cursor } : {}) }, options),
     ignoreMention: (id: string, key: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/ignore`, undefined, options),
+    focus: (id: string, focus: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<AccountFocusGraph>(`/api/accounts/${encodeURIComponent(id)}/people/focus?${new URLSearchParams(cursor ? { focus, cursor } : { focus })}`,
+        { ...options, cache: 'no-store' }),
     edges: (id: string, meetingId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.get<MeetingPeopleEdges>(`/api/accounts/${encodeURIComponent(id)}/people/edges?${new URLSearchParams({ meetingId })}`,
         { ...options, cache: 'no-store' }),
