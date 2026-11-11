@@ -1,7 +1,7 @@
 # ADR-008: Dictionaries for speech recognition
 
 - Status: Accepted. Automatic term extraction and the Account, KB, research,
-  news and correction layers ship off by default.
+  news, tech and correction layers ship off by default.
 - Implementation checked: 2026-11-11. The sections below are the rules in
   force; dates inside them mark owner decisions.
 
@@ -409,7 +409,8 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   unit of retry); it logs `layer=account outcome=<code>` and is counted.
 - **L2 (Common).** Any signed-in user may edit or delete Common terms; every
   write records `updatedBy`/`updatedAt` and an audit row, and system writes
-  (news creates and evictions, actor `system:news`) are audited too. Deletes
+  (news and tech creates and evictions, actors `system:news` and
+  `system:tech`) are audited too. Deletes
   are tombstones that can be restored from the audit snapshot.
 - **R17 (edited Common terms).** A Common term a user edited (`userEditedAt`
   set) is left out of the transcript-correction glossary; vocabulary and the
@@ -462,7 +463,8 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
 - **L4 (sources).** A KB upload asks for an Account (none means Personal); the
   choice is stored as S3 object metadata `account-id`. KB documents (plain text
   only: `.md`, `.markdown`, `.txt`) and research reports feed the owner's
-  Account or Personal layer. Daily news feeds Common only. By default only crawler
+  Account or Personal layer. Daily news and daily AWS technical documents feed
+  Common only. By default only crawler
   sources an operator marked global and that carry no sticky `userTiedAt` are
   read; the repeat threshold counts distinct sources, and Common sources are
   public news references, never meeting or KB references.
@@ -481,9 +483,33 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   documents are public search results (custom URLs excluded), terms are
   recognition hints written as `system:news` with audit rows, and signed-in
   users can edit or delete Common terms.
+  **AWS technical documents (2026-11-11).** `ProcessTechDaily` reads the
+  title and summary (never the S3 body) of the documents the reserved
+  `__tech__` crawler wrote in the news day (GSI4 `DOC#tech`). They have no
+  ingest source, quality status or second crawler source, so the news rule
+  can never admit them. Replacement threshold: a term qualifies only when at
+  least two distinct technical documents (by document hash) named it within
+  the seven days ending that day; one document counts once however often it
+  is re-crawled or re-run. Rationale: every tech row comes from one
+  operator-reserved source, so counting sources would admit nothing or (with
+  a one-source rule) every single mention, while two independent documents
+  still filter one-off phrasing; production volume is about ten documents a
+  day, so a same-day-only rule would also admit little. Stricter evidence
+  rules make up for the single source: only `https` documents on
+  `aws.amazon.com` or its subdomains count (the crawler also stores
+  web-search results from other sites, which never count), the row must
+  carry the crawler's `shared/aws-docs/{service}/{hash}.md` body key, and
+  only Hangul or ASCII-Latin terms qualify (titles are multilingual; other
+  scripts are also ineligible for Transcribe). The writer is a distinct
+  actor `system:tech` with source kind `tech` (ref = day), so tech and news
+  evidence for the same day are separate observations and the audit names
+  the job; creations and evictions are audited, user-edited and tombstoned
+  Common terms are untouched, and the Common cap applies as for news. The run
+  is idempotent per day (run row with a content hash, history as a set),
+  makes at most four model calls, and logs codes and counts only.
 - **Flags.** `ttobak:accountTermsMode`, `ttobak:transcriptCorrection`,
-  `ttobak:kbTermsMode`, `ttobak:researchTermsMode` and `ttobak:newsTermsMode`
-  (`off|on`) all default off; a run skipped by a flag logs `outcome=DISABLED`.
+  `ttobak:kbTermsMode`, `ttobak:researchTermsMode`, `ttobak:newsTermsMode`
+  and `ttobak:techTermsMode` (`off|on`) all default off; a run skipped by a flag logs `outcome=DISABLED`.
   Rollout is one flag per deployment, each after a deployment with it off.
 - **Observability.** Metric filters on the summarize log group and the
   `TermsSourcesSilent` alarm are described in
@@ -500,7 +526,8 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   remove that source's observations, its `sources` references on the term and
   auto terms left without observations in the old Account. The meeting part
   is done (2026-11-11, see meeting relink above) and is the part
-  `accountTermsMode` needs; the flag stays off until its own deployment. The
+  `accountTermsMode` needs; that cleanup was deployed with the flag off and
+  `infra/cdk.json` turned the flag on in its own deployment (2026-11-11). The
   research `accountIds` and KB `account-id` parts remain and still gate
   `kbTermsMode` and `researchTermsMode` `on`. Transcript-correction rows in an
   Account (`TERMS_CORRECTION#` meeting sets, TTL-bounded, and automatic

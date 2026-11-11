@@ -41,6 +41,7 @@
     "ttobak:newsTermsMode": "on",
     "ttobak:newsTermsSources": "all",
     "ttobak:transcriptCorrection": "on",
+    "ttobak:accountTermsMode": "on",
     "ttobak:kbTermsMode": "personal",
     "ttobak:researchTermsMode": "personal",
     "ttobak:liveVocabularyMode": "on",

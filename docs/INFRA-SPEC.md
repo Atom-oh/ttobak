@@ -692,7 +692,14 @@ Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
 `{"kind":"news-daily"}`; two retries and a one-hour event age lead into the
 SSE-SQS `ttobak-terms-news-dlq`, which `PipelineFailures` watches. Summarize
 receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
-`off` each run logs `outcome=DISABLED`. The same pattern applies to
+`off` each run logs `outcome=DISABLED`. Daily AWS technical document terms
+use rule `ttobak-terms-tech-daily` (`cron(30 21 * * ? *)`, input
+`{"kind":"tech-daily"}`, the same news day, two retries and a one-hour event
+age into the SSE-SQS `ttobak-terms-tech-dlq`, watched by `PipelineFailures`)
+and `TECH_TERMS_MODE` from `ttobak:techTermsMode` (`off` by default; invalid
+values fail synth). The job reads GSI4 `DOC#tech` titles and summaries only,
+so it needs no S3 grant; the threshold and evidence rules are in ADR-008 L4.
+The same pattern applies to
 `ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
 (`TRANSCRIPT_CORRECTION_MODE`). The API Lambda alone receives
 `LIVE_VOCABULARY_MODE` from `ttobak:liveVocabularyMode` (`off` by default;
@@ -700,6 +707,8 @@ receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 READY vocabulary for live caption streams.
 
 `infra/cdk.json` sets `ttobak:transcriptCorrection` to `on` (2026-11-11).
+`infra/cdk.json` sets `ttobak:accountTermsMode` to `on` (2026-11-11), after the
+meeting relink cleanup (ADR-008 FU4) was deployed with the flag off.
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
@@ -727,11 +736,12 @@ so deploy after the function has run once) publishing count-1 metrics to the
 | --- | --- |
 | `TermsLayerPersonal` | `terms run:` with `status=succeeded` |
 | `TermsLayerAccount` | `layer=account` with `outcome=MERGED` (runs and sources) |
-| `TermsLayerCommon` | `terms news:` with `outcome=SUCCEEDED` |
+| `TermsLayerCommon` | `terms news:` or `terms tech:` with `outcome=SUCCEEDED` (two filters, summed) |
 | `TermsAccountFailures` | `layer=account` with `outcome=FAILED`, `MEMBERS_FAILED` or `RECORD_FAILED` (three filters, summed) |
 | `TermsSourceSucceeded`, `Disabled`, `Unsupported`, `NotReady`, `NotFound`, `Unchanged` | `terms source:` with the matching `outcome=` |
 | `TermsSourceTriggered` | `terms source trigger:` with `outcome=QUEUED` |
 | `TermsNewsRuns`, `TermsNewsDisabled`, `TermsNewsFailed` | `terms news:` with `outcome=SUCCEEDED`, `DISABLED`, `FAILED` |
+| `TermsTechRuns`, `TermsTechDisabled`, `TermsTechFailed` | `terms tech:` with `outcome=SUCCEEDED`, `DISABLED`, `FAILED` |
 | `TranscriptCorrectionApplied` | `transcript correction outcome=APPLIED` (one per corrected-path meeting) |
 | `TranscriptCorrectionNone` | `transcript correction outcome=APPLIED` with `corrections=0` |
 | `TranscriptCorrectionUnavailable` | `transcript correction outcome=GLOSSARY_UNAVAILABLE` |
@@ -742,8 +752,8 @@ corrections=<n>`. A metric filter cannot extract `<n>` from the
 meetings with at least one correction are `Applied - None`.
 
 Failed Account merges are not retried, so `TermsAccountFailures` is the signal
-that some linked meetings missed the Account layer. Alarms `TermsAccountFailures`
-and `TermsNewsFailed` fire when the daily sum of the metric of the same name is
+that some linked meetings missed the Account layer. Alarms `TermsAccountFailures`,
+`TermsNewsFailed` and `TermsTechFailed` fire when the daily sum of the metric of the same name is
 at least 1 (one daily period, `notBreaching` on missing data, same
 `PipelineAlarmTopicArn` action as the other alarms).
 

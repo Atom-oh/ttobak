@@ -73,6 +73,10 @@ var (
 	// input runs the day ending at the last 21:00 UTC cutoff.
 	processNewsDaily = func(context.Context, string) error { return nil }
 	newsNow          = time.Now
+
+	// Daily AWS technical document terms into Common: the schedule's
+	// {"kind":"tech-daily"} input runs the same day as the news job.
+	processTechDaily = func(context.Context, string) error { return nil }
 )
 
 func init() {
@@ -172,6 +176,10 @@ func init() {
 	// take Common terms at their next scheduled ensure.
 	termsService.SetNewsReader(service.TermsNewsDeps{Documents: repository.NewCrawlerRepository(dynamoClient, tableName), Store: repo})
 	processNewsDaily = termsService.ProcessNewsDaily
+	// AWS technical documents use the same GSI4 (DOC#tech) and keep their
+	// own candidate history and run rows under DICT#COMMON.
+	termsService.SetTechReader(service.TermsTechDeps{Documents: repository.NewCrawlerRepository(dynamoClient, tableName), Store: repo})
+	processTechDaily = termsService.ProcessTechDaily
 
 	// Automatic news links read the account's current news rows and write
 	// link rows in the same table (DynamoDB grant on the summarize role).
@@ -364,13 +372,19 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return fmt.Errorf("failed to unmarshal event envelope: %w", err)
 	}
 
-	// The daily news schedule sends a bare {"kind":"news-daily"} object.
+	// The daily news and tech schedules send a bare {"kind":"news-daily"} or
+	// {"kind":"tech-daily"} object.
 	if envelope.Source == "" && envelope.DetailType == "" {
 		var scheduled struct {
 			Kind string `json:"kind"`
 		}
-		if json.Unmarshal(raw, &scheduled) == nil && scheduled.Kind == "news-daily" {
-			return processNewsDaily(ctx, service.NewsDayFor(newsNow()))
+		if json.Unmarshal(raw, &scheduled) == nil {
+			switch scheduled.Kind {
+			case "news-daily":
+				return processNewsDaily(ctx, service.NewsDayFor(newsNow()))
+			case "tech-daily":
+				return processTechDaily(ctx, service.NewsDayFor(newsNow()))
+			}
 		}
 	}
 
