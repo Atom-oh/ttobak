@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from '../dist/intake/toml.js';
 import { listHosts, resolveServer, resolveCommand, hostTtobakEndpoints } from '../dist/intake/hosts.js';
-import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent, parseOutlookItems }
+import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent, parseOutlookItems, directoryCursor }
   from '../dist/intake/calendar.js';
 import { AttendeeFacts, meetingFacts } from '../dist/intake/attendees.js';
 import { validateCalendarSync } from '../dist/calendar.js';
@@ -237,8 +237,9 @@ function fakeApi({ fail = [], directory } = {}) {
   return {
     calls,
     directory,
-    async calendarShareDirectory() {
+    async calendarShareDirectory(cursor = '') {
       if (this.directory === undefined || this.directory instanceof Error) throw this.directory ?? new Error('no directory');
+      if (typeof this.directory === 'function') return structuredClone(this.directory(cursor));
       return structuredClone(this.directory);
     },
     async calendarSyncStatus() { return { sources: [], nextCursor: null }; },
@@ -1045,6 +1046,20 @@ test('sync: Private category added after sharing re-sends the event as private',
   const resent = upsertsOf(api.calls.slice(before));
   assert.equal(resent.length, 6);
   assert.ok(resent.every(event => event.private === true && !('shareAccountId' in event)));
+});
+
+test('sync: the share directory is read across server pages', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const pages = { '': { accounts: [DIRECTORY.accounts[1]], nextCursor: 'acct-kb' }, 'acct-kb': { accounts: [DIRECTORY.accounts[0]] } };
+  const api = fakeApi({ directory: cursor => pages[cursor] });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const result = await runCalendar({ ...base, source: source(request => twoEvents(request).map(entry => ({ ...entry, subject: 'HNB sync' }))) });
+  assert.equal(result.counts.shared, 6);
+  assert.ok(upsertsOf(api.calls).every(event => event.shareAccountId === 'acct-hana'));
+  // A cursor that does not move forward makes the directory unavailable, so nothing is shared.
+  assert.equal(directoryCursor({ nextCursor: 'acct-a' }, 'acct-b'), null);
+  assert.equal(directoryCursor({ nextCursor: 'bad id!' }, ''), null);
+  assert.equal(directoryCursor({}, 'acct-a'), '');
 });
 
 test('sync: an unavailable directory keeps previous share fields and never removes shares', async t => {

@@ -362,9 +362,10 @@ export class TtobakApi {
       : []);
   }
 
-  /** Accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
-  async calendarShareDirectory() {
-    return this.request('GET', '/api/calendar/share-directory', undefined, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
+  /** One page of accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
+  async calendarShareDirectory(cursor = '') {
+    const query = cursor ? `?${new URLSearchParams({ cursor })}` : '';
+    return this.request('GET', `/api/calendar/share-directory${query}`, undefined, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
   }
 
   async calendarSyncStatus(options: CalendarPageQuery) {
