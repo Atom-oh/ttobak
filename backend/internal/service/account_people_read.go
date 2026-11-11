@@ -71,9 +71,13 @@ type peopleViewer struct {
 	userID    string
 	member    *model.AccountMember
 
-	meetings  map[string]*model.Meeting
-	reads     int
-	truncated bool
+	meetings map[string]*model.Meeting
+	// focusMeetings caches focus-state reads (a superset of publication).
+	focusMeetings map[string]*model.Meeting
+	// focusLabelReads counts uncached label reads of one focus request.
+	focusLabelReads int
+	reads           int
+	truncated       bool
 
 	members map[string]*model.AccountMember
 	labels  map[string]string

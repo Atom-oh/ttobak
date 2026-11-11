@@ -560,6 +560,8 @@ export interface CalendarRunOptions {
 
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_DIRECTORY_ACCOUNTS = 1000;
+// At most 200 accounts per server page; stop at ten pages (2,000 accounts).
+const MAX_DIRECTORY_PAGES = 10;
 
 /** Validates the share directory; malformed entries are dropped, a malformed whole is null. */
 export function parseDirectory(value: unknown): DirectoryAccount[] | null {
@@ -580,9 +582,30 @@ export function parseDirectory(value: unknown): DirectoryAccount[] | null {
   return result;
 }
 
+/** The server pages the directory; a cursor must be a later accountId. */
+export function directoryCursor(value: unknown, previous: string): string | null {
+  const next = value && typeof value === 'object' ? (value as Record<string, unknown>).nextCursor : undefined;
+  if (next === undefined || next === '') return '';
+  return typeof next === 'string' && IDENTIFIER.test(next) && next > previous ? next : null;
+}
+
+/** Reads every directory page; any bad page makes the whole directory unavailable. */
 async function readDirectory(api: TtobakApi | undefined): Promise<DirectoryAccount[] | null> {
   if (!api) return null;
-  try { return parseDirectory(await api.calendarShareDirectory()); } catch { return null; }
+  const all: DirectoryAccount[] = [];
+  let cursor = '';
+  try {
+    for (let page = 0; page < MAX_DIRECTORY_PAGES; page++) {
+      const value = await api.calendarShareDirectory(cursor);
+      const accounts = parseDirectory(value);
+      const next = directoryCursor(value, cursor);
+      if (!accounts || next === null) return null;
+      all.push(...accounts);
+      if (!next) return all;
+      cursor = next;
+    }
+  } catch { return null; }
+  return null;
 }
 
 export async function runCalendar(options: CalendarRunOptions): Promise<CalendarRunResult> {

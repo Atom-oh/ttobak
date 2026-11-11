@@ -24105,9 +24105,10 @@ var init_api2 = __esm({
         const result = await this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/projects`);
         return (result?.projects ?? []).flatMap((project) => typeof project?.projectId === "string" ? [{ projectId: project.projectId, ...typeof project.sfdcOpptyId === "string" && project.sfdcOpptyId ? { sfdcOpptyId: project.sfdcOpptyId } : {} }] : []);
       }
-      /** Accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
-      async calendarShareDirectory() {
-        return this.request("GET", "/api/calendar/share-directory", void 0, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
+      /** One page of accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
+      async calendarShareDirectory(cursor = "") {
+        const query = cursor ? `?${new URLSearchParams({ cursor })}` : "";
+        return this.request("GET", `/api/calendar/share-directory${query}`, void 0, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
       }
       async calendarSyncStatus(options) {
         const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
@@ -25690,13 +25691,29 @@ function parseDirectory(value) {
   }
   return result;
 }
+function directoryCursor(value, previous) {
+  const next = value && typeof value === "object" ? value.nextCursor : void 0;
+  if (next === void 0 || next === "") return "";
+  return typeof next === "string" && IDENTIFIER2.test(next) && next > previous ? next : null;
+}
 async function readDirectory(api) {
   if (!api) return null;
+  const all = [];
+  let cursor = "";
   try {
-    return parseDirectory(await api.calendarShareDirectory());
+    for (let page2 = 0; page2 < MAX_DIRECTORY_PAGES; page2++) {
+      const value = await api.calendarShareDirectory(cursor);
+      const accounts = parseDirectory(value);
+      const next = directoryCursor(value, cursor);
+      if (!accounts || next === null) return null;
+      all.push(...accounts);
+      if (!next) return all;
+      cursor = next;
+    }
   } catch {
     return null;
   }
+  return null;
 }
 async function runCalendar(options) {
   const { store, source, sourceId, zone, now, dryRun } = options;
@@ -25762,7 +25779,7 @@ async function runCalendar(options) {
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, LONG_EVENT_MS, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS, MAX_DIRECTORY_PAGES;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
@@ -25781,6 +25798,7 @@ var init_calendar2 = __esm({
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
     IDENTIFIER2 = /^[A-Za-z0-9_-]{1,128}$/;
     MAX_DIRECTORY_ACCOUNTS = 1e3;
+    MAX_DIRECTORY_PAGES = 10;
   }
 });
 

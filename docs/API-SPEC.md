@@ -24,7 +24,7 @@ meeting. See the [local reader runbook](runbooks/local-outlook-calendar-sync.md)
 | `GET /api/calendar/sources` | Optional `limit`, `cursor` | `{sources:[...],nextCursor:string|null}` |
 | `GET /api/accounts/{accountId}/calendar` | Required `from`, `to`; optional `limit`, `cursor` | `{events:[AccountCalendarEvent],nextCursor:string|null}` |
 | `PUT /api/calendar/sources/{sourceId}/events/{eventId}/sharing` | Nonzero UUID source, `[A-Za-z0-9_-]{1,128}` event; JSON `mode` (`auto`, `account` or `hidden`), optional `accountId`; at most 4 KiB | `200` owner event view |
-| `GET /api/calendar/share-directory` | No parameters | `{accounts:[{accountId,name,aliases,domains}]}`, at most 64 KiB; accounts whose canonical membership row confirms direct membership, merge tombstones excluded |
+| `GET /api/calendar/share-directory` | Optional `cursor` (an accountId) | `{accounts:[{accountId,name,aliases,domains}], nextCursor?}`: at most 200 accounts by accountId and 60 KiB of entries per page, continued by `nextCursor`; accounts whose canonical membership row confirms direct membership, merge tombstones excluded |
 
 Sync JSON is limited to 64 KiB. Unknown, duplicate or incorrectly cased fields,
 null values, invalid types and unsupported query parameters are rejected.
@@ -1148,6 +1148,25 @@ and only meetings currently published to the account count:
   label or a default diarization label (`spk_N` or the Korean speaker letter form). `DELETE /people/edges` takes the four
   key fields as query parameters, returns 204, and for an auto edge writes a
   deny row.
+- `GET /people/focus?focus={contact|member|project}:{id}&cursor=` returns the
+  focus graph `{focus, meetings, techs, other, nextCursor?, truncated}`.
+  `focus` is `{kind, id, label, detail?, meetings}`. `meetings` holds at most 12
+  meetings still published to the account, newest first, each
+  `{id, title, date, roles, techs, people}`. `id` is `{ownerUserId}:{meetingId}`.
+  `roles` are the focus person's roles (empty for a project). `techs` are
+  catalog IDs from the meeting's stored tags (`tech_catalog.go`, exact alias
+  match). `people` are readable members and contacts with their roles. `techs`
+  counts and `other` (uncatalogued tags) cover every read focus meeting, at most
+  60; reaching that bound, the link row bound, a meeting's people row bound,
+  20 people per meeting or 120 distinct person label reads per page sets
+  `truncated`. Titles are capped at 200 code points. Person focus uses the person's people links; past 60, which
+  meetings are read follows reverse-index order, not date. Project focus uses
+  project meeting refs newest first and requires the meeting's `projectIds` to
+  still list the project. A focus not readable in the account returns 404. A
+  malformed focus, an unknown query key or a cursor of another account or focus
+  returns 400. A valid cursor past the end, after meetings were unpublished,
+  returns an empty final page. Under the summary guard,
+  the meeting's tags and its assignee and insight rows are left out.
 - `POST /people/resolve` (no body, no query) returns 202 `{accepted: true}` and queues one resolve
   request for the account. Bulk and CSV contact imports write rows with
   `?peopleResolve=defer` and call it once per account with saved rows; a failed
@@ -2140,6 +2159,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/people/mentions/{mentionKey}/resolve` | `accountPeopleHandler.ResolveMention` |
 | POST | `/api/accounts/{accountId}/people/mentions/{mentionKey}/ignore` | `accountPeopleHandler.IgnoreMention` |
 | GET | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Edges` |
+| GET | `/api/accounts/{accountId}/people/focus` | `accountPeopleHandler.Focus` |
 | POST | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Bind` |
 | DELETE | `/api/accounts/{accountId}/people/edges` | `accountPeopleHandler.Unbind` |
 | POST | `/api/accounts/{accountId}/people/resolve` | `accountPeopleHandler.Resolve` |
