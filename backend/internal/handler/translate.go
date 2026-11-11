@@ -184,7 +184,7 @@ func (h *TranslateHandler) Translate(w http.ResponseWriter, r *http.Request) {
 	started := h.now()
 	result, err := h.translateService.TranslateSegment(r.Context(), service.TranslateRequest{
 		Text: req.Text, SourceLang: req.SourceLang, TargetLang: req.TargetLang,
-		Context: req.Context, Quality: req.Quality,
+		Context: req.Context, Quality: req.Quality, OwnerID: middleware.GetUserID(r.Context()),
 	})
 	if err != nil {
 		// Segment text is meeting content: log the failure, never the input.
