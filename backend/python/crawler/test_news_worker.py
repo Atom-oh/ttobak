@@ -305,6 +305,30 @@ class TestCandidateWorker(unittest.TestCase):
         with self.assertRaisesRegex(StateRejected, "SOURCE_CHANGED"):
             process_candidate(self.candidate, self.deps)
 
+    def test_corroborating_sources_must_stay_in_current_scope(self):
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["example.com"])
+        candidate = dict(self.candidate, corroboratingSources=[
+            {"url": "https://outside.test/b"}, {"url": "https://example.com/c"}])
+        redirected = replace(valid_body(url="https://elsewhere.test/c"))
+        self.fetch.side_effect = [valid_body(), redirected]
+        result = process_candidate(candidate, self.deps)
+        self.assertEqual(result["status"], "PUBLISHED")
+        # The out-of-scope URL is never fetched; the redirected one is unused.
+        self.assertEqual([call.args[0] for call in self.fetch.call_args_list],
+                         ["https://example.com/a", "https://example.com/c"])
+        finish = self.store.finish.call_args.kwargs
+        self.assertEqual(finish["warnings"], ["CORROBORATION_UNUSABLE", "CORROBORATION_UNUSABLE"])
+        self.assertEqual(finish["document"]["corroboratingSourceCount"], 0)
+
+    def test_checked_scope_is_bound_to_reservation_and_publication(self):
+        self.store.current_config.return_value = dict(CONFIG, searchDomains=["example.com"])
+        process_candidate(self.candidate, self.deps)
+        self.assertEqual(self.store.reserve.call_args.kwargs["scope"], ("example.com",))
+        self.assertEqual(self.store.finish.call_args.kwargs["scope"], ("example.com",))
+        self.store.current_config.return_value = dict(CONFIG)
+        process_candidate(self.candidate, self.deps)
+        self.assertEqual(self.store.finish.call_args.kwargs["scope"], ())
+
     def test_quality_rejection_reports_validator_locations_without_content(self):
         invalid = valid_enrichment_json(executive_summary="짧은 요약")
         self.client.converse.return_value = bedrock_response(invalid)

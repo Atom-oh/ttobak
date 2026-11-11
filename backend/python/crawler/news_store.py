@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 
 from botocore.exceptions import ClientError
 
-from news_discovery import source_revision, valid_source_id
+from news_discovery import DiscoveryRejected, search_domains, source_revision, valid_source_id
 
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _HASH = re.compile(r"[0-9a-f]{16}")
@@ -263,7 +263,20 @@ class NewsStore:
                 attempt.lease_until - LEASE_SECONDS + ACCOUNTING_RETENTION_SECONDS)
         return operation
 
-    def reserve(self, attempt, *, now, month_limit, run_limit):
+    @staticmethod
+    def _require_scope(config, scope):
+        """Bind the caller's checked search scope to the config row the guard
+        then pins; None (custom URLs, settlement) skips the comparison."""
+        if scope is None:
+            return
+        try:
+            current = search_domains(config)
+        except DiscoveryRejected:
+            raise StateRejected("SOURCE_CHANGED") from None
+        if current != tuple(scope):
+            raise StateRejected("SOURCE_CHANGED")
+
+    def reserve(self, attempt, *, now, month_limit, run_limit, scope=None):
         """Reserve once before model calls; each Lambda invocation has a new token.
 
         Expired attempts retain their full reservation. Taking over a lease
@@ -276,6 +289,7 @@ class NewsStore:
                 or datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m") != attempt.month):
             raise StateRejected("INVALID_LEASE")
         config = self.current_config(attempt.source_id, attempt.revision)
+        self._require_scope(config, scope)
         row = {
             "PK": attempt.pk, "SK": attempt.sk, "attemptToken": attempt.token,
             "runId": attempt.run_id, "docHash": attempt.doc_hash,
@@ -334,7 +348,7 @@ class NewsStore:
         return operation
 
     def finish(self, attempt, *, now, status, known_cost, usage_complete, usage,
-               document=None, reason="", warnings=()):
+               document=None, reason="", warnings=(), scope=None):
         """Atomically settle usage, release the owned lease, and optionally publish.
 
         A retry returns the recorded receipt only for the same completion digest.
@@ -424,6 +438,9 @@ class NewsStore:
         ]
         if row is not None:
             config = self.current_config(attempt.source_id, attempt.revision)
+            # The scope is outside the revision: the reread must still equal the
+            # scope the worker checked, and the guard pins it through commit.
+            self._require_scope(config, scope)
             operations.extend([
                 self._config_guard(attempt, config),
                 {"Put": {

@@ -412,8 +412,10 @@ TABLE_NAME=ttobak-main go run ./cmd/seed-news-sources -apply
 
 An operator source may carry a `searchDomains` list (at most 100 lowercase hosts)
 sent as `filters.domainFilter.include` and also applied locally. It is not part
-of the source revision (published rows keep the reader contract); the config
-guard and a worker recheck reject a scope change mid-run. The seed (`cmd/seed-news-sources/sources.go`) creates `fss-kr`
+of the source revision (published rows keep the reader contract). The worker
+checks candidate, final and corroborating URLs against the current scope, and
+reservation and publication fail with `SOURCE_CHANGED` when the scope changed
+after that check. The seed (`cmd/seed-news-sources/sources.go`) creates `fss-kr`
 (Financial Supervisory Service), `fsc-kr` (Financial Services Commission),
 `fsec-kr` (Financial Security Institute) and `kr-finance-law` (financial law,
 enforcement decree and supervisory regulation amendments) as operator-curated

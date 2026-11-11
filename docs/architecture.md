@@ -247,15 +247,19 @@ Search freshness accepts ISO-8601 and the web-search gateway's
 the connector's published-date filter (and an operator source's optional
 `searchDomains` allowlist) instead of a literal `after:` query clause, then still
 checks each result's date and scope locally. `searchDomains` stays outside the
-seven-field source revision shared with the QA and Go readers; the transactional
-config guard includes it and the worker rechecks each candidate and its final URL
-against the current scope (`OUT_OF_SCOPE`).
+seven-field source revision shared with the QA and Go readers. The worker checks
+the candidate, its final URL and each corroborating URL against the current scope
+(`OUT_OF_SCOPE`, unusable corroboration), and reservation and publication require
+the reread config to have that same scope, which the transactional config guard
+then pins through commit.
 `news_enrichment.py` accepts only bounded schema-v1
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts
 retain token accounting. A fact number must appear in its cited excerpt either as
 written or as the exact same value with Korean units, a month number or a small
-English number word (`236.8 billion` restated as 2,368 eok); worker results list only the
+English number word (`236.8 billion` restated as 2,368 eok; consecutive Korean units
+multiply, and words inside English compounds such as `twenty-six` do not count);
+worker results list only the
 validator locations of a rejection. One repair may reuse the complete original sources.
 An explicit negative or valid below-threshold relevance verdict ends the attempt even
 if other fields are malformed; the relevance gate requires a boolean.
