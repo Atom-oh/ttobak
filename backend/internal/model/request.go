@@ -56,7 +56,7 @@ type UpdateMeetingRequest struct {
 	// through UpdateMeeting's whole-item PutItem. A concurrent PutItem
 	// carrying a read-time snapshot from before this field's write would
 	// silently revert it -- the exact class of pre-existing, cross-cutting
-	// issue ADR-025's Consequences section already tracks for AccountID/
+	// issue ADR-025's accepted residual risks already track for AccountID/
 	// SharedToAccount (fixed there only for ProjectIDs, via a
 	// ConditionExpression + retry). Real-world exposure here is small: the
 	// writers above run at points in a meeting's lifecycle that rarely

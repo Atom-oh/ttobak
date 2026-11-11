@@ -298,7 +298,7 @@ function handler(event) {
       `),
     });
 
-    // Security headers for /media/* (ADR-027 follow-up): moving downloads to
+    // Security headers for /media/* (ADR-027): moving downloads to
     // the site's own origin means an uploaded file with an attacker-chosen
     // Content-Type (upload.go sets it from client-supplied req.FileType with
     // no allowlist) is now same-origin with the app, not a separate S3
