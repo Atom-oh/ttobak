@@ -95,7 +95,7 @@ export function MeetingList({
   }
   const start = page * windowSize;
   const visibleMeetings = filteredMeetings.slice(start, start + windowSize);
-  const groups = grouped ? groupMeetingRows(visibleMeetings)
+  const groups = grouped ? groupMeetingRows(visibleMeetings, accountId => accountNames.get(accountId))
     : visibleMeetings.length ? [{ accountId: null, category: null, meetings: visibleMeetings }] : [];
   const customerGroups = groups.filter(group => !group.category);
   const internalGroups = groups.filter(group => group.category);
@@ -216,7 +216,7 @@ export function MeetingList({
       <div role="status" className="space-y-1 text-xs text-text-secondary">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p>불러온 {loadedMeetings.length}개 미팅 · 조건 일치 {filteredMeetings.length}개</p>
-          <p>{grouped ? '고객·Internal 구분 · 각 그룹 안에서 일시순' : '미팅 일시순'} · 브라우저 현지 시간</p>
+          <p>{grouped ? '고객 가나다순 · Internal 구분 · 각 그룹 안에서 일시순' : '미팅 일시순'} · 브라우저 현지 시간</p>
         </div>
         {hasMore && <p>검색·정렬·상태·기간 필터는 불러온 결과에만 적용됩니다. Load More로 다음 서버 결과를 불러오세요.</p>}
         {(fromDate || toDate) && <p>날짜 미정 미팅도 함께 표시합니다.</p>}

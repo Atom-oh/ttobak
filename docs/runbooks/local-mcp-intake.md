@@ -575,7 +575,9 @@ Behavior:
 
 ### Running it
 
-- From the app: Performance, Report tab, "Make report". Pick a period and
+- From the app: Performance, Report tab, "Make report". The app first checks
+  that `~/.ttobak/server.mjs` contains the `report run` command and otherwise
+  stops with `ADAPTER_OUTDATED` (update the adapter in the intake settings). Pick a period and
   optional highlights; Bedrock settings are under Advanced. Closing the dialog
   keeps the run going; Cancel stops it. Quitting the app sends the CLI SIGTERM
   and waits up to 2 s for it (only while a report runs) before SIGKILL; in
@@ -614,6 +616,7 @@ Behavior:
 | `REPORT_PERIOD_EXPIRED` | The custom period ended more than two calendar years ago (server retention); pick a later period. |
 | `REPORT_SANDBOX_UNAVAILABLE` | No usable sandbox, or a CLI older than 2.1.322 or of unknown version (a pre-release suffix is rejected); update the CLI. |
 | `RUN_IN_PROGRESS` | Another report run holds `report.lock`; wait for it. |
+| `ADAPTER_OUTDATED` | App only, before any spawn: `~/.ttobak/server.mjs` predates the `report run` command; press Update in the app's intake settings. |
 | `TTOBAK_LOGIN_REQUIRED` | Sign in again with the TTOBAK login. |
 | `TTOBAK_UNAVAILABLE` | The TTOBAK API or local state could not be reached. |
 | `INVALID_ARGUMENT` | A bad period, date, highlights file or run path; fix the input. |

@@ -17,7 +17,7 @@ import (
 // deterministic; FilterCandidates is not wired to any caller yet.
 const (
 	DefaultAutoTermsMinConfidence = 0.85
-	AutoTermsMaxNewPerRun         = 15
+	AutoTermsMaxNewPerRun         = 40
 	autoTermMaxWords              = 6
 	transcribePhraseMaxChars      = 256
 	transcribeAcronymMinLetters   = 2

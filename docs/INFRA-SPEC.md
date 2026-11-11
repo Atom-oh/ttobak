@@ -623,7 +623,7 @@ Claude model. The API function depends on the rule, as for saved summaries.
 
 Summarize receives `AUTO_TERMS_MODE` (`off` by default, or `personal`),
 `AUTO_TERMS_USERS` (comma-separated Cognito subs, empty means every owner),
-`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]) and
+`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]; `infra/cdk.json` sets `0.7`) and
 `BEDROCK_TERMS_MODEL_ID` (default `global.anthropic.claude-sonnet-5-5`; a
 `global.`/`apac.` Claude profile) from CDK context `ttobak:autoTermsMode`,
 `ttobak:autoTermsUsers`, `ttobak:autoTermsMinConfidence` and
@@ -676,7 +676,10 @@ SSE-SQS `ttobak-terms-news-dlq`, which `PipelineFailures` watches. Summarize
 receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
 `off` each run logs `outcome=DISABLED`. The same pattern applies to
 `ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
-(`TRANSCRIPT_CORRECTION_MODE`).
+(`TRANSCRIPT_CORRECTION_MODE`). The API Lambda alone receives
+`LIVE_VOCABULARY_MODE` from `ttobak:liveVocabularyMode` (`off` by default;
+`infra/cdk.json` sets `on`), which lets the dictionary GET name the caller's
+READY vocabulary for live caption streams.
 
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
