@@ -6,14 +6,14 @@ import { ApiResponseError } from '../api.js';
 const MAX_BATCH = 20;
 const MAX_BATCH_BYTES = 60_000;
 
-/** Splits mutations into batches of at most 20 within the request byte budget. */
-export function batches<T>(mutations: T[]): T[][] {
+/** Splits mutations into batches of at most `max` (default 20) within the request byte budget. */
+export function batches<T>(mutations: T[], max = MAX_BATCH): T[][] {
   const result: T[][] = [];
   let current: T[] = [];
   let bytes = 0;
   for (const mutation of mutations) {
     const size = Buffer.byteLength(JSON.stringify(mutation)) + 1;
-    if (current.length && (current.length >= MAX_BATCH || bytes + size > MAX_BATCH_BYTES)) {
+    if (current.length && (current.length >= Math.min(max, MAX_BATCH) || bytes + size > MAX_BATCH_BYTES)) {
       result.push(current);
       current = [];
       bytes = 0;

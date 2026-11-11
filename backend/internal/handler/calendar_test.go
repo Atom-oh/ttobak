@@ -282,6 +282,8 @@ func TestCalendarHTTPErrorsAreShapedAndPrivate(test *testing.T) {
 	}{
 		{service.ErrInvalidInput, 400, "BAD_REQUEST"},
 		{repository.ErrInvalidCalendarCursor, 400, "BAD_REQUEST"},
+		{repository.ErrInvalidCalendarBatch, 400, "BAD_REQUEST"},
+		{repository.ErrCalendarBatchTooLarge, 413, "CALENDAR_BATCH_TOO_LARGE"},
 		{service.ErrForbidden, 403, "FORBIDDEN"},
 		{service.ErrNotFound, 404, "NOT_FOUND"},
 		{repository.ErrConditionFailed, 409, "CONFLICT"},

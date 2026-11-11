@@ -102,11 +102,18 @@ use the same query, limit and 14,000-byte rules as personal reads, and
 return `503` when a page has no decryptable share row. Shared events are not
 exposed to QA, briefs, insights, KB, vault export or any MCP tool.
 
-Account-sharing fields (ADR-066) are validated and stored encrypted with the
+Account-sharing fields are validated and stored encrypted with the
 event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
 use the Account ID format and differ from each other; `shareEvidence` holds up to
 three distinct kinds (`title`, `location`, `domain`) and requires
 `shareAccountId`; `private` excludes both; `seriesKey` is 64 lowercase hex.
+Sync writes a share row only when the user is a direct member of
+`shareAccountId`; otherwise it returns `403 FORBIDDEN`. A `Private` event or a
+hidden owner override writes a veto row for the matched or previously shared
+account instead. Owner
+event views report `sharingMode` (`auto`, `account` or `hidden`),
+`candidateAccountIds` and `private`; `shareAccountId` and `shareEvidence` appear
+only once a stored share is granted.
 
 Rollback boundary: API builds older than this contract reject a stored event
 carrying any of these fields as corrupt, failing every event page that contains
@@ -116,7 +123,9 @@ sharing fields.
 Errors use `{error:{code,message}}`: `400 BAD_REQUEST` for invalid input/cursor,
 `401 UNAUTHORIZED` for missing authentication, `403 FORBIDDEN` for denied access,
 `404 NOT_FOUND` for missing resources, `409 CONFLICT` for revision/batch conflict,
-`413 BAD_REQUEST` for oversized sync bodies, and `503 INTERNAL_ERROR` when
+`413 BAD_REQUEST` for oversized sync bodies, `413 CALENDAR_BATCH_TOO_LARGE` when a
+batch's planned share writes exceed one 100-item transaction (resend fewer
+mutations; the intake runner sends at most 12), and `503 INTERNAL_ERROR` when
 calendar encryption is unavailable. Other failures use `500 INTERNAL_ERROR`.
 Sensitive event payloads use context-bound encryption; event retention is
 scheduled at 90 days after event end and receipts at seven days. TTL is
@@ -1359,18 +1368,21 @@ concurrent transaction conflicted) during the start.
 
 `GET /api/accounts/{accountId}/merge` returns the job view to a direct member of the
 source or of the job's target: `fromAccountId`, `intoAccountId`, `state`
-(`running`, `failed`, `done`), `step`, `errorCode` (`REQUESTER_REVOKED`,
+(`running`, `failed`, `done`, or `aborted` after an operator abort), `step`, `errorCode` (`REQUESTER_REVOKED`,
 `CONTACT_INDEX_TOO_LARGE`, `MERGE_CONFLICT`, `STEP_FAILED` or `DISPATCH_FAILED`), `counts` keyed
-`{step}.{moved|skipped|resumed|unreadable|keptSeparate}`, `startedAt`, `updatedAt`
-and `finishedAt`. Lease and cursor state are not exposed. 404 when a source member
+`{step}.{moved|skipped|resumed|unreadable|keptSeparate}`, `startedAt`, `updatedAt`,
+`finishedAt` and `abortedAt`. Lease and cursor state are not exposed. 404 when a source member
 asks and no job exists; 403 otherwise. Both routes disable connector delegation.
 
 Account writes are fenced while an Account merges (ADR-072). Writers that check the
 Account META row also require `mergingInto` and `mergedInto` to be absent in the same
-transaction: member add and removal, owner transfer, parent changes (child and new
-parent), contact and event writes, link create and delete, project and research
-linking, and meeting classification or publication into the Account (a write that
-only names the stored Account reads it first and stays bound to it). Notes and other
+transaction: member add, removal and role change, owner transfer, parent changes
+(child and new parent), contact and event writes, link create and delete, project and
+research linking, Account document creation (including sharing a personal document
+to the Account), the Account KB upload presign, a member's team audio-crop copy, and
+meeting classification or publication into the Account (a write that only names the
+stored Account reads it first and stays bound to it). Calendar sync rejects an event
+classified to a merging or merged Account with the same 409. Notes and other
 meeting writes carry no Account check. A rejected write returns 409 `ACCOUNT_MERGING`
 instead of the generic conflict. A pending Account grant for a merging Account stays
 queued and is redirected to the merge target after the merge finishes.
