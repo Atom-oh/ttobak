@@ -189,7 +189,7 @@ function RecordPageInner() {
   // Hoisted so the desktop aside and mobile bottom sheet ReferencePanel
   // instances share one selection -- the mobile sheet unmounts on close.
   const [referenceAccountId, setReferenceAccountId] = useState(() => searchParams.get('accountId') || '');
-  const [referenceTab, setReferenceTab] = useState<'qa' | 'ref'>('ref');
+  const [referenceTab, setReferenceTab] = useState<'qa' | 'ref'>('qa');
   const [questionDraft, setQuestionDraft] = useState<QuestionDraft>();
   const [sourceMessage, setSourceMessage] = useState('');
   const [finalNotesError, setFinalNotesError] = useState('');
@@ -225,7 +225,7 @@ function RecordPageInner() {
   };
 
   // --- Hooks ---
-  const summary = useLiveSummary({ summaryInterval });
+  const summary = useLiveSummary({ summaryInterval, meetingTitle, meetingContext: contextText });
 
   // Mac caption windows. Their hook reads the session's recording state, so
   // it runs after useRecordingSession; the session reaches it through this
@@ -271,6 +271,10 @@ function RecordPageInner() {
   useEffect(() => {
     captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
   }, [captionExtraLanguage, captionOnSegment]);
+  const { stopDetection } = summary;
+  useEffect(() => {
+    if (!session.isRecording && !isNativeRecording) stopDetection();
+  }, [session.isRecording, isNativeRecording, stopDetection]);
 
   const postRecording = usePostRecording({
     meetingTitle,
@@ -852,9 +856,11 @@ function RecordPageInner() {
   }, [isNativeRecording, session.isRecording, recordStartInFlight, uploadProgress, browserFinalizing, flowBusy, postRecording.hasPendingAudio, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
 
   // Q&A context = user-provided meeting context + live transcript
-  const qaContext = contextText.trim()
-    ? `[미팅 배경 정보]\n${contextText.trim()}\n\n${session.transcriptContext || ''}`
-    : session.transcriptContext;
+  const qaContext = [
+    meetingTitle.trim() ? `[미팅 제목]\n${meetingTitle.trim().slice(0, 120)}` : '',
+    contextText.trim() ? `[미팅 배경 정보]\n${contextText.trim().slice(0, 3000)}` : '',
+    session.transcriptContext || '',
+  ].filter(Boolean).join('\n\n');
 
   const appendReferenceNote = useCallback((block: string) => {
     if (session.isRecording || isNativeRecordingRef.current) {
@@ -1523,7 +1529,7 @@ function RecordPageInner() {
                 initialDocumentId={searchParams.get('prepDocId') || undefined} disabled={meetingFlowBusy} />
               <PreparationReferences>
                 <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
-                  qaPanel={<LiveQAPanel transcriptContext={qaContext} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
+                  qaPanel={<LiveQAPanel transcriptContext={qaContext} meetingTitle={meetingTitle} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
                   referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={browseReferenceAccount} transcriptTail={contextText}
                     onAddReference={handleAddReference} onPrepareQuestion={handlePrepareQuestion} />} />
               </PreparationReferences>
@@ -1999,6 +2005,7 @@ function RecordPageInner() {
             qaPanel={
               <LiveQAPanel
                 transcriptContext={qaContext}
+                meetingTitle={meetingTitle}
                 questionDraft={questionDraft}
                 meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
@@ -2072,6 +2079,7 @@ function RecordPageInner() {
                 qaPanel={
                   <LiveQAPanel
                     transcriptContext={qaContext}
+                    meetingTitle={meetingTitle}
                 questionDraft={questionDraft}
                     meetingId={postRecording.serverMeetingId || undefined}
                     onDetectedQuestionsChange={setDetectedCount}

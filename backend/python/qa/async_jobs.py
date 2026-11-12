@@ -134,10 +134,17 @@ def identity(user_id, job_id):
 
 
 def request_data(body):
-    if type(body) is not dict or set(body) - {'requestId', 'mode', 'question', 'context', 'meetingId', 'sessionId'}:
+    if type(body) is not dict or set(body) - {
+            'requestId', 'mode', 'question', 'context', 'meetingId', 'sessionId',
+            'automatic', 'allowWebSearch'}:
         raise JobError('INVALID_JOB_REQUEST', 'Invalid asynchronous QA request.', 400)
     request = {key: body.get(key) for key in ('question', 'context', 'meetingId', 'sessionId')}
     request['mode'] = body.get('mode', 'ask')
+    for key in ('automatic', 'allowWebSearch'):
+        if key in body:
+            if type(body[key]) is not bool:
+                raise JobError('INVALID_JOB_REQUEST', f'{key} must be boolean.', 400)
+            request[key] = body[key]
     if type(request['question']) is not str or not request['question'].strip():
         raise JobError('INVALID_JOB_REQUEST', 'question is required.', 400)
     request['question'] = request['question'].strip()
@@ -151,6 +158,8 @@ def request_data(body):
     if (request['mode'] not in ('ask', 'meeting') or request['mode'] == 'meeting'
             and (not request['meetingId'] or request['context'] is not None)):
         raise JobError('INVALID_JOB_REQUEST', 'Invalid meeting QA request.', 400)
+    if request['mode'] == 'meeting' and request.get('automatic'):
+        raise JobError('INVALID_JOB_REQUEST', 'Automatic answers require live QA mode.', 400)
     return request
 
 

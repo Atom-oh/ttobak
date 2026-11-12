@@ -21,7 +21,9 @@ from news_enrichment import (
     QualityRejected, enrich_article, FINAL_MODEL_ID, MAX_TOKENS,
     QUALITY_GATE_VERSION, PROMPT_VERSION,
 )
-from news_pipeline import canonicalize_url, document_hash, in_search_scope, is_within_days
+from news_pipeline import (
+    canonicalize_url, document_hash, in_search_scope, is_within_days, matched_term,
+)
 from news_renderer import render_news_markdown
 from news_store import Attempt, LEASE_SECONDS, StateRejected, _money
 
@@ -402,6 +404,11 @@ def _process_candidate(candidate, deps):
         "corroboratingSourceCount": len(bodies) - 1,
         "crawledAt": deps.now(), "GSI4PK": "DOC#news", "GSI4SK": deps.now(), "inKB": True,
     }
+    # Display-only search term: search candidates only, revalidated here; an
+    # absent or invalid value writes nothing and never fails publication.
+    term = None if custom else matched_term(candidate.get("matchedTerm"))
+    if term:
+        row["matchedTerm"] = term
     try:
         return deps.store.finish(job, now=deps.now(), status="PUBLISHED",
                                  known_cost=deps.policy.cost(model.usage),
