@@ -28499,6 +28499,22 @@ function readLedger(store, scope, accountId) {
     return { ids: /* @__PURE__ */ new Set(), reset: true };
   }
 }
+function resumePath(scope) {
+  return ["sfdc-contacts", scope, "resume.json"];
+}
+function rotated(accounts, store, scope) {
+  const entries3 = [...accounts];
+  if (!store || !scope) return entries3;
+  let after = null;
+  try {
+    after = store.read(...resumePath(scope))?.after ?? null;
+  } catch {
+    after = null;
+  }
+  if (typeof after !== "string") return entries3;
+  const start = entries3.findIndex(([id]) => id > after);
+  return start <= 0 ? entries3 : [...entries3.slice(start), ...entries3.slice(0, start)];
+}
 async function runSfdcContacts(options2) {
   const { session, api, dryRun, store } = options2;
   const now = options2.now ?? Date.now;
@@ -28514,12 +28530,15 @@ async function runSfdcContacts(options2) {
     const mappings = await mappedAccounts(api);
     counts.invalidIds += mappings.invalidIds;
     let index = 0;
-    for (const [accountId, group] of mappings.accounts) {
+    let last = null;
+    const order = rotated(mappings.accounts, store, scope);
+    for (const [accountId, group] of order) {
       if (now() - startedAt >= budgetMs) {
-        counts.deferred = mappings.accounts.size - index;
+        counts.deferred = order.length - index;
         break;
       }
       index++;
+      last = accountId;
       counts.accounts++;
       let current;
       try {
@@ -28609,6 +28628,14 @@ async function runSfdcContacts(options2) {
         } catch {
           fail("STORE_INVALID");
         }
+      }
+    }
+    if (!dryRun && store && scope) {
+      const point = { version: 1, after: counts.deferred ? last : null };
+      try {
+        store.write(point, ...resumePath(scope));
+      } catch {
+        fail("STORE_INVALID");
       }
     }
   } catch (error3) {

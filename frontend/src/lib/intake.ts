@@ -161,7 +161,7 @@ function countsText(source: IntakeSourceRow['source'], raw: unknown): string | n
     return summary([['가져옴', counts.fetched], ['생성', counts.created], ['보강', counts.filled], ['빠짐', counts.marked], ['복귀', counts.unmarked],
       ...nonZero('건너뜀', counts.skipped), ...nonZero('애매함', counts.ambiguous), ...nonZero('권한 없음', counts.forbidden),
       ...nonZero('불완전', counts.incomplete), ...nonZero('다음 실행으로 미룸', counts.deferredIncomplete),
-      ...nonZero('계정 불일치', counts.accountMismatch)]);
+      ...nonZero('계정 불일치', counts.accountMismatch), ...nonZero('시간 초과로 미룬 계정', counts.deferred)]);
   }
   return summary([['할 일', counts.tasks], ['생성', counts.created]]);
 }

@@ -525,8 +525,10 @@ configuration.
   `search_contacts` is allowed and checked only while the step is on (off, the
   session does not allow it at all), so a missing or changed contacts tool
   fails only the step (`SCHEMA_CHANGED`). No new Account starts after 8
-  minutes; the rest are `deferred` to the next run, so the step always records
-  its status before the app's 20-minute run timeout.
+  minutes; the rest are `deferred`, and a stored resume point (an Account ID)
+  starts the next run after the last Account begun, so every Account is
+  reached in turn. The budget does not bound an Account already begun, so it
+  makes a status write before the app's 20-minute timeout likely, not certain.
 - **Sync options (amendment, 2026-11-11).** `intake options` stores a
   top-level `options` object in `selection.json`: `calendarResponses` (the
   owner's own responses to sync; default accept, organizer and tentative;
