@@ -847,8 +847,13 @@ CrawlerStack rule `ttobak-news-collect-requested` routes default-bus
 (`{sourceId,accountId,requestId}`, identifiers only; `sourceId` must start with
 `acct_`) to `ttobak-crawler-news` as `{"manualCollect":{sourceId,accountId,requestId}}`
 (ADR-004). Neither EventBridge (`retryAttempts: 0`, one-hour event age) nor
-Lambda (async `MaximumRetryAttempts: 0`, one-hour age) retries, so one request
-is charged at most once. Delivery failures and failed async invocations land in
+Lambda (async `MaximumRetryAttempts: 0`, one-hour age) retries a failure, so there
+are no retry-driven repeats. Before any search, fetch or model call the worker
+claims the request with a conditional `UpdateItem` on the CONFIG row: it runs only
+when `lastCollectRequestId` (set by the request route) equals the event's
+`requestId` and `lastCollectStartedRequestId` does not, so a duplicate delivery of
+the same request is refused. A manual run can still overlap a scheduled run of the
+same source. Delivery failures and failed async invocations land in
 SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied);
 the crawler stack owns the `sqs:SendMessage` policy on the imported crawler role
 and alarms on rule `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, function

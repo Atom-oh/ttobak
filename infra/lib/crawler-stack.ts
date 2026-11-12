@@ -171,9 +171,10 @@ export class CrawlerStack extends cdk.Stack {
     });
 
     // Manual "collect now" for one account-owned source (ADR-004). The event
-    // carries only IDs; the handler rereads CONFIG, skips a source crawled in
-    // the last 30 minutes and caps one run at 40 model calls. Neither
-    // EventBridge nor Lambda retries, so one failed request is charged once.
+    // carries only IDs; the handler conditionally claims the request on the
+    // CONFIG row (only API-claimed, not-yet-started request IDs run), skips a
+    // source crawled in the last 30 minutes and caps one run at 40 model
+    // calls. Neither EventBridge nor Lambda retries a failure.
     // The async invoke config below applies only to asynchronous invocations:
     // the workflow's CrawlNews task invokes synchronously (RequestResponse)
     // and keeps its own Step Functions retry behavior.

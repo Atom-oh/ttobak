@@ -70,11 +70,15 @@ over `shared/news/` is unchanged and remains a known limit: it can still
 surface another account's public article.
 
 2026-11-12: manual collection exists for account-owned (`acct_`) sources only.
-`NewsCollectRequested` carries IDs; `ttobak-crawler-news` rereads the CONFIG row
-consistently, requires the event's account, a non-disabled, non-operator source,
-and builds the run from the row, then runs the scheduled collection path and
-history. It skips a source crawled in the last 30 minutes and stops at 40 model
-calls per run, recording the limit in the result and HISTORY row. It is a legacy
+`NewsCollectRequested` carries IDs; `ttobak-crawler-news` runs only requests the
+request route claimed on the CONFIG row and refuses duplicates: one conditional
+claim requires the event's account, a non-disabled, non-operator source, the
+route's `lastCollectRequestId` and a not-yet-started request. It builds the run
+from the claimed row, then runs the scheduled collection path and history. It
+skips a source crawled in the last 30 minutes (after the claim, so a skipped
+request is consumed) and stops at 40 model calls per run, recording the limit in
+the result and HISTORY row. A manual run can still overlap a scheduled run of the
+same source. It is a legacy
 writer: `NEWS_LEGACY_WRITES` disables it, and it must be drained with the other
 legacy writers before the versioned path's `all` mode. Articles appear in
 Insights lists immediately but reach Q&A/KB retrieval only at the next

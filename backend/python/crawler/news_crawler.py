@@ -943,22 +943,81 @@ def _recently_crawled(value) -> bool:
     return (datetime.now(timezone.utc) - crawled).total_seconds() < MANUAL_RECENT_SECONDS
 
 
+# The request route claims a request by setting lastCollectRequestId (and
+# lastCollectRequestedAt) on the CONFIG row; the worker marks it started with
+# lastCollectStartedRequestId/lastCollectStartedAt. These four attributes are
+# outside the source fingerprint: news_discovery.source_snapshot and Go
+# newsSourceRevision hash only an allowlist (sourceId, sourceName, ownerId,
+# status, aliases, newsQueries, customUrls). The scheduled path neither reads
+# nor writes them.
+_MANUAL_CLAIM_CONDITION = (
+    'attribute_exists(PK) AND accountId = :acc '
+    'AND (attribute_not_exists(#status) OR #status <> :disabled) '
+    'AND attribute_not_exists(globalNewsSource) '
+    'AND lastCollectRequestId = :rid '
+    'AND (attribute_not_exists(lastCollectStartedRequestId) '
+    'OR lastCollectStartedRequestId <> :rid)'
+)
+_MANUAL_CLAIM_UPDATE = 'SET lastCollectStartedRequestId = :rid, lastCollectStartedAt = :now'
+
+
+def _manual_claim(source_id: str, account_id: str, request_id: str):
+    """Atomically start one claimed request; the claimed row, or None if refused."""
+    try:
+        return table.update_item(
+            Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'},
+            ConditionExpression=_MANUAL_CLAIM_CONDITION,
+            UpdateExpression=_MANUAL_CLAIM_UPDATE,
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':acc': account_id, ':rid': request_id, ':disabled': 'disabled',
+                ':now': datetime.now(timezone.utc).isoformat(),
+            },
+            ReturnValues='ALL_NEW',
+        ).get('Attributes') or {}
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            raise
+        return None
+
+
+def _manual_refusal_code(source_id: str, account_id: str, request_id: str) -> str:
+    """Classify a failed claim for the result/log only; never starts work."""
+    try:
+        item = table.get_item(
+            Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'}, ConsistentRead=True,
+        ).get('Item')
+    except Exception:
+        return 'CLAIM_REJECTED'
+    if not item:
+        return 'NOT_FOUND'
+    if item.get('lastCollectStartedRequestId') == request_id:
+        return 'DUPLICATE_REQUEST'
+    if item.get('lastCollectRequestId') != request_id:
+        return 'NOT_CLAIMED'
+    if item.get('accountId') != account_id:
+        return 'ACCOUNT_MISMATCH'
+    if item.get('status') == 'disabled':
+        return 'SOURCE_DISABLED'
+    if 'globalNewsSource' in item:
+        return 'OPERATOR_SOURCE'
+    return 'CLAIM_REJECTED'
+
+
 def _manual_collect(event):
     request, code = _manual_request(event)
     if request is None:
         return _manual_result('REFUSED', code)
     source_id, account_id, request_id = request
-    item = table.get_item(
-        Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'}, ConsistentRead=True,
-    ).get('Item')
-    if not item:
-        return _manual_result('REFUSED', 'NOT_FOUND', request_id)
-    if item.get('accountId') != account_id:
-        return _manual_result('REFUSED', 'ACCOUNT_MISMATCH', request_id)
-    if item.get('status') == 'disabled':
-        return _manual_result('REFUSED', 'SOURCE_DISABLED', request_id)
-    if 'globalNewsSource' in item:
-        return _manual_result('REFUSED', 'OPERATOR_SOURCE', request_id)
+    # Claim before any search, fetch or model call. The recency skip runs on
+    # the claimed row, after the claim, so a skipped request is consumed and a
+    # duplicate delivery of it is refused as DUPLICATE_REQUEST rather than
+    # running once the 30 minutes have passed. Claim errors other than a
+    # failed condition propagate: no work, recorded by the failure destination.
+    item = _manual_claim(source_id, account_id, request_id)
+    if item is None:
+        return _manual_result('REFUSED', _manual_refusal_code(source_id, account_id, request_id),
+                              request_id)
     name = item.get('sourceName') or ''
     queries = _manual_strings(item.get('newsQueries'), MANUAL_MAX_QUERIES)
     urls = _manual_strings(item.get('customUrls'), MANUAL_MAX_CUSTOM_URLS)
