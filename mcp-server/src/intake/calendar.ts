@@ -396,10 +396,13 @@ function decideSharing(event: CalendarEvent, item: OutlookItem, previous: Ledger
   // Match the untruncated subject and location: a byte cut could turn a longer word into an
   // alias hit or drop a second account's alias, and a single match may be shared automatically.
   const subject = item.subject?.trim() ? item.subject : event.title;
+  // Sanitizing can lengthen a location (parts are rejoined with "; "), so the bound is
+  // measured on the sanitized, untruncated text.
+  const location = sanitizeLocation(item.location, Number.POSITIVE_INFINITY) ?? '';
   const matched = sharing.matcher.match({ title: truncateBytes(subject, MATCH_TEXT_BYTES),
-    location: sanitizeLocation(item.location, MATCH_TEXT_BYTES), domains });
+    location: truncateBytes(location, MATCH_TEXT_BYTES), domains });
   // Text beyond even that bound is still cut, so its single match is only a candidate.
-  const overlong = Buffer.byteLength(subject) > MATCH_TEXT_BYTES || Buffer.byteLength(item.location ?? '') > MATCH_TEXT_BYTES;
+  const overlong = Buffer.byteLength(subject) > MATCH_TEXT_BYTES || Buffer.byteLength(location) > MATCH_TEXT_BYTES;
   const result: typeof matched = overlong && matched.kind === 'matched'
     ? { kind: 'candidate', accountIds: [matched.accountId] } : matched;
   // A lookup without an answer must not drop a share that rested on attendee domains.

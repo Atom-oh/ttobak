@@ -971,6 +971,16 @@ test('planner: Private category, private meetings, matches, candidates, domain e
   const huge = sharingPlan([at('z', '13', { subject: `HNB ${'b'.repeat(9000)}` })], {}, new Map([['z', facts([])]]));
   assert.equal('shareAccountId' in huge.mutations[0].event, false, 'text beyond the match bound is a candidate only');
   assert.deepEqual(huge.mutations[0].event.candidateAccountIds, ['acct-hana']);
+  // A location that passes the bound raw but not after sanitizing ("a;b" becomes "a; b") is a candidate only.
+  const rooms = `Hana Bank;${Array.from({ length: 1300 }, (_, i) => `q${1000 + i};`).join('')}KB Card`;
+  assert.ok(Buffer.byteLength(rooms) <= 8192 && Buffer.byteLength(sanitizeLocation(rooms, Infinity)) > 8192);
+  const grown = sharingPlan([at('g', '14', { subject: 'sync', location: rooms })], {}, new Map([['g', facts([])]]));
+  assert.equal('shareAccountId' in grown.mutations[0].event, false);
+  assert.deepEqual(grown.mutations[0].event.candidateAccountIds, ['acct-hana']);
+  // A kept domain share is not replaced by a match to another account while lookups have no answer.
+  const moved = sharingPlan([at('d', '14', { subject: 'KB Card sync' })], ledger, new Map([['d', null]]));
+  assert.deepEqual([moved.mutations[0].event.shareAccountId, moved.mutations[0].event.shareEvidence], ['acct-hana', ['domain']]);
+  assert.equal('candidateAccountIds' in moved.mutations[0].event, false);
   // Without a privacy answer a title match is only a candidate, unless already shared to that account.
   const titleItem = [at('t', '11', { subject: 'HNB weekly' })];
   const unknown = sharingPlan(titleItem, {}, new Map());

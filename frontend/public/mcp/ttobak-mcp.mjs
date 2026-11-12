@@ -25551,12 +25551,13 @@ function decideSharing(event, item2, previous, sharing) {
   }
   const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
   const subject = item2.subject?.trim() ? item2.subject : event.title;
+  const location = sanitizeLocation(item2.location, Number.POSITIVE_INFINITY) ?? "";
   const matched = sharing.matcher.match({
     title: truncateBytes(subject, MATCH_TEXT_BYTES),
-    location: sanitizeLocation(item2.location, MATCH_TEXT_BYTES),
+    location: truncateBytes(location, MATCH_TEXT_BYTES),
     domains
   });
-  const overlong = Buffer.byteLength(subject) > MATCH_TEXT_BYTES || Buffer.byteLength(item2.location ?? "") > MATCH_TEXT_BYTES;
+  const overlong = Buffer.byteLength(subject) > MATCH_TEXT_BYTES || Buffer.byteLength(location) > MATCH_TEXT_BYTES;
   const result = overlong && matched.kind === "matched" ? { kind: "candidate", accountIds: [matched.accountId] } : matched;
   if (facts == null && previous?.share?.shareEvidence?.includes("domain") && !!previous.share.shareAccountId && sharing.matcher.lists(previous.share.shareAccountId) && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);

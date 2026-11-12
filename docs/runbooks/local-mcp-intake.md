@@ -330,7 +330,9 @@ message on save; update the adapter first.
   `get_meeting` reads run per sync, and three consecutive failures stop them.
   More than 50 distinct domains is no domain answer (the private flag still
   counts). A lookup without an answer counts in `attendeesUnavailable` and keeps a
-  previous private flag or a previous share that rested on domain evidence.
+  previous private flag or a previous share that rested on domain evidence;
+  while it is kept, a match to another account or a candidate list is not sent
+  until a lookup answers again.
 - **No privacy answer, no new share.** A match is sent as `shareAccountId` only
   when the joined meeting answered `isPrivate: false`. Without that answer
   (connector not selected, the 25-read budget spent, or a failed lookup) a match
