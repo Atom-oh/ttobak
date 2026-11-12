@@ -24062,7 +24062,7 @@ var init_api2 = __esm({
       /** Owner-private SA performance report of one period; replaces an earlier one. */
       /** Org and personal skill packages of the signed-in user (docs/API-SPEC.md "Skill packages"). */
       async skillPackages() {
-        return this.request("GET", "/api/skill-packages", void 0, 64 * 1024, false, true);
+        return this.request("GET", "/api/skill-packages", void 0, 1024 * 1024, false, true);
       }
       async putPerformanceReport(periodKey, report2) {
         return this.request(
@@ -33064,6 +33064,9 @@ function parseManifest(raw, manifest) {
   } catch {
     fail("bad-manifest");
   }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) if (value[key] === null && key !== "version") delete value[key];
+  }
   const keys2 = ["version", "toolboxRegistries", "toolboxServers", "aimServers", "httpServers"];
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !keys2.includes(key))) fail("bad-manifest");
   const lists = ["toolboxRegistries", "toolboxServers", "aimServers"];
@@ -33327,9 +33330,9 @@ async function planServers(env, servers) {
       unavailable.push(`toolbox:${name}`);
       continue;
     }
-    if (register && !claude && !install) {
+    if (register && !claude) {
       unavailable.push(`claude:${name}`);
-      continue;
+      if (!install) continue;
     }
     add(`toolbox:${name}`, `toolbox \uC11C\uBC84 ${name}`, [
       install ? [toolbox, "install", name] : null,
@@ -33382,7 +33385,8 @@ async function applyServers(env, plan, approve) {
     }
   }
   if (failed.length) return { id: "servers", status: "failed", code: "INSTALL_FAILED", items: failed };
-  return pending.length ? asking : { id: "servers", status: "ok" };
+  if (pending.length) return asking;
+  return plan.unavailable.length ? { id: "servers", status: "ok", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "ok" };
 }
 var LIST_TIMEOUT_MS, INSTALL_TIMEOUT_MS, MAX_CONFIG_BYTES2;
 var init_servers = __esm({
@@ -33537,6 +33541,7 @@ function commandRunner(environment) {
 }
 function failureCode(error3) {
   if (error3 instanceof SetupError) return error3.code;
+  if (error3 instanceof IntakeError) return error3.code === "INVALID_ARGUMENT" ? "TTOBAK_LOGIN_REQUIRED" : error3.code;
   const message = error3 instanceof Error ? error3.message : "";
   return message.startsWith("TTOBAK_LOGIN_REQUIRED") ? "TTOBAK_LOGIN_REQUIRED" : "TTOBAK_UNAVAILABLE";
 }
@@ -33610,7 +33615,8 @@ async function setup2(args, environment, store) {
       servers = await applyServers(env, plan, approve);
     } else {
       const pending = plan.actions.filter((action) => !action.approved);
-      servers = pending.length ? { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) } : plan.actions.length ? { id: "servers", status: "ok", items: plan.actions.map((action) => action.key) } : plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING" } : { id: "servers", status: "current" };
+      servers = pending.length ? { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) } : plan.actions.length ? { id: "servers", status: "ok", items: plan.actions.map((action) => action.key) } : plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "current" };
+      if (servers.status !== "skipped" && plan.unavailable.length) servers.code = "TOOLBOX_MISSING";
     }
     steps.push(servers);
     const needsApproval = servers.status === "needs-approval" ? plan.actions.filter((action) => servers.items?.includes(action.key)).map((action) => ({ key: action.key, label: action.label })) : [];
@@ -33637,6 +33643,7 @@ var USAGE3, MAX_APPROVALS, MAX_KEY_BYTES, KNOWN_TOOLS;
 var init_run3 = __esm({
   "src/setup/run.ts"() {
     "use strict";
+    init_errors4();
     init_run();
     init_store();
     init_tools();

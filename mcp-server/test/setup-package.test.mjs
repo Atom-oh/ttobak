@@ -80,3 +80,9 @@ test('the report skill needs its layout files', () => {
   entries.push({ name: 'pkg-v9.9.9/skills/sa-performance-report/references/report-structure.md', data: 'x' });
   assert.deepEqual(validatePackage(makeZip(entries)).skills, ['demo-skill', 'sa-performance-report']);
 });
+
+test('null manifest lists read as empty, as on the server', () => {
+  const manifest = '{"version":"1.0.0","toolboxRegistries":null,"toolboxServers":null,"aimServers":["a-mcp"],"httpServers":null}';
+  const got = validatePackage(makeZip([{ name: 'pkg/skills/a-skill/SKILL.md', data: 'x' }, { name: 'pkg/ttobak-manifest.json', data: manifest }]));
+  assert.deepEqual(got.servers, { toolboxRegistries: [], toolboxServers: [], aimServers: ['a-mcp'], httpServers: {} });
+});

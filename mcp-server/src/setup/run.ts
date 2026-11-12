@@ -4,6 +4,7 @@
 // servers that are present-approved or approved with --approve.
 
 import { execFile } from 'node:child_process';
+import { IntakeError } from '../intake/errors.js';
 import { signIn, type IntakeEnvironment, type Selection } from '../intake/run.js';
 import { IntakeStore } from '../intake/store.js';
 import { READ_TOOLS, SKILL_SCRIPTS } from '../report/tools.js';
@@ -56,6 +57,8 @@ function commandRunner(environment: SetupEnvironment): SetupEnv['run'] {
 
 function failureCode(error: unknown): string {
   if (error instanceof SetupError) return error.code;
+  // A missing TTOBAK selection or endpoint means the user has to sign in first.
+  if (error instanceof IntakeError) return error.code === 'INVALID_ARGUMENT' ? 'TTOBAK_LOGIN_REQUIRED' : error.code;
   const message = error instanceof Error ? error.message : '';
   return message.startsWith('TTOBAK_LOGIN_REQUIRED') ? 'TTOBAK_LOGIN_REQUIRED' : 'TTOBAK_UNAVAILABLE';
 }
@@ -137,7 +140,9 @@ async function setup(args: string[], environment: SetupEnvironment, store: Intak
       const pending = plan.actions.filter(action => !action.approved);
       servers = pending.length ? { id: 'servers', status: 'needs-approval', items: pending.map(action => action.key) }
         : plan.actions.length ? { id: 'servers', status: 'ok', items: plan.actions.map(action => action.key) }
-        : plan.unavailable.length ? { id: 'servers', status: 'skipped', code: 'TOOLBOX_MISSING' } : { id: 'servers', status: 'current' };
+        : plan.unavailable.length ? { id: 'servers', status: 'skipped', code: 'TOOLBOX_MISSING', items: plan.unavailable }
+        : { id: 'servers', status: 'current' };
+      if (servers.status !== 'skipped' && plan.unavailable.length) servers.code = 'TOOLBOX_MISSING';
     }
     steps.push(servers);
     const needsApproval = servers.status === 'needs-approval'

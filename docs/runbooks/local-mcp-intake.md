@@ -139,7 +139,8 @@ name. Server lists are unioned.
     when passed back with `--approve` (up to 400 keys; approved items run while
     others still wait); approvals live in
     `~/.ttobak/setup/approvals.json` (0600).
-- Without toolbox or aim the server step is skipped (`TOOLBOX_MISSING`); a
+- Without toolbox, aim or claude the work they would do is listed under
+  `TOOLBOX_MISSING` (the step is skipped when nothing else ran); a
   missing `~/.midway/cookie` or an authentication failure stops it with
   `AUTH_EXPIRED_MIDWAY` (`mwinit -o`). Nothing from a package is executed, and
   installed skills or servers are never removed.

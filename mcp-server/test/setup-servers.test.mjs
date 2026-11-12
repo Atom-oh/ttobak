@@ -142,3 +142,15 @@ test('items that need claude are reported when claude is missing', async t => {
   assert.deepEqual(plan.actions, []);
   assert.deepEqual(plan.unavailable, ['claude:builder-mcp', 'http:docs-mcp=https://docs.example.com/mcp']);
 });
+
+test('unavailable items are reported even when other items install', async t => {
+  const e = env(t, { claude: false });
+  const plan = await planServers(e, { toolboxRegistries: [], toolboxServers: ['beta-mcp'], aimServers: [],
+    httpServers: { 'docs-mcp': 'https://docs.example.com/mcp' } });
+  // beta-mcp installs with toolbox but cannot be registered without claude.
+  assert.deepEqual(plan.unavailable, ['claude:beta-mcp', 'http:docs-mcp=https://docs.example.com/mcp']);
+  const result = await applyServers(e, plan, plan.actions.map(action => action.key));
+  assert.equal(result.status, 'ok');
+  assert.equal(result.code, 'TOOLBOX_MISSING');
+  assert.deepEqual(result.items, ['claude:beta-mcp', 'http:docs-mcp=https://docs.example.com/mcp']);
+});

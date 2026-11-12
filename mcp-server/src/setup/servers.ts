@@ -79,7 +79,10 @@ export async function planServers(env: SetupEnv, servers: PackageServers): Promi
     const register = name !== 'aim' && !registered.has(name);
     if (!install && !register) continue;
     if (install && !toolbox) { unavailable.push(`toolbox:${name}`); continue; }
-    if (register && !claude && !install) { unavailable.push(`claude:${name}`); continue; }
+    if (register && !claude) {
+      unavailable.push(`claude:${name}`);
+      if (!install) continue;
+    }
     add(`toolbox:${name}`, `toolbox 서버 ${name}`, [install ? [toolbox as string, 'install', name] : null,
       register && claude ? [claude, 'mcp', 'add', '-s', 'user', name, '--', name] : null], install);
   }
@@ -129,5 +132,8 @@ export async function applyServers(env: SetupEnv, plan: ServerPlan, approve: str
     }
   }
   if (failed.length) return { id: 'servers', status: 'failed', code: 'INSTALL_FAILED', items: failed };
-  return pending.length ? asking : { id: 'servers', status: 'ok' };
+  if (pending.length) return asking;
+  // Work left out for a missing toolbox, aim or claude is always reported.
+  return plan.unavailable.length ? { id: 'servers', status: 'ok', code: 'TOOLBOX_MISSING', items: plan.unavailable }
+    : { id: 'servers', status: 'ok' };
 }

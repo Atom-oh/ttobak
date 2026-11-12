@@ -339,7 +339,8 @@ export class TtobakApi {
   /** Owner-private SA performance report of one period; replaces an earlier one. */
   /** Org and personal skill packages of the signed-in user (docs/API-SPEC.md "Skill packages"). */
   async skillPackages() {
-    return this.request('GET', '/api/skill-packages', undefined, 64 * 1024, false, true);
+    // Two rows and the merge, each with up to 400 server entries.
+    return this.request('GET', '/api/skill-packages', undefined, 1024 * 1024, false, true);
   }
 
   async putPerformanceReport(periodKey: string, report: unknown) {
