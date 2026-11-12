@@ -346,6 +346,11 @@ function decideSharing(event: CalendarEvent, item: OutlookItem, previous: Ledger
   if (facts === null && previous?.share?.shareEvidence?.includes('domain') &&
       !(result.kind === 'matched' && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);
+  } else if (result.kind === 'matched' && facts == null) {
+    // Without a privacy answer a new automatic share is withheld: an event already
+    // shared to this account keeps its share, otherwise the match is only a candidate.
+    if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
+    else applyShare(event, { candidateAccountIds: [result.accountId] });
   } else if (result.kind === 'matched') {
     applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
   } else if (result.kind === 'candidate') {

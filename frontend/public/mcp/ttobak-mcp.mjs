@@ -23655,7 +23655,7 @@ var init_calendar = __esm({
       mutations: {
         type: "array",
         maxItems: 20,
-        description: "At most 20 distinct occurrence IDs, or at most 12 when any upsert carries share fields (the server rejects transactions over 100 items with HTTP 400). Only explicit removals delete events.",
+        description: "At most 20 distinct occurrence IDs, or at most 12 when any upsert carries share fields (the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE). Only explicit removals delete events.",
         items: { oneOf: [
           { type: "object", properties: { op: { const: "upsert" }, event: {
             type: "object",
@@ -23691,7 +23691,7 @@ var init_calendar = __esm({
     CALENDAR_TOOLS = [
       {
         name: "ttobak_sync_calendar_events",
-        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; the server rejects transactions over 100 items with HTTP 400. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
+        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
         inputSchema: { type: "object", properties: syncFields, required: Object.keys(syncFields), additionalProperties: false }
       },
@@ -25511,6 +25511,9 @@ function decideSharing(event, item, previous, sharing) {
   const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
   if (facts === null && previous?.share?.shareEvidence?.includes("domain") && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);
+  } else if (result.kind === "matched" && facts == null) {
+    if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
+    else applyShare(event, { candidateAccountIds: [result.accountId] });
   } else if (result.kind === "matched") {
     applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
   } else if (result.kind === "candidate") {
@@ -25865,7 +25868,8 @@ function meetingFacts(payload) {
     const domain2 = organizerDomain(address);
     if (domain2) domains.add(domain2);
   }
-  return { domains: [...domains].sort().slice(0, MAX_DOMAINS), isPrivate: parsed.isPrivate };
+  if (domains.size > MAX_DOMAINS) return parsed.isPrivate ? { domains: [], isPrivate: true } : null;
+  return { domains: [...domains].sort(), isPrivate: parsed.isPrivate };
 }
 var MAX_LIST, MAX_ATTENDEES, MAX_DOMAINS, MAX_FACT_READS, MAX_FACT_FAILURES, AttendeeFacts;
 var init_attendees = __esm({

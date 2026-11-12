@@ -901,6 +901,8 @@ const DIRECTORY = { accounts: [
 const sha = value => createHash('sha256').update(value).digest('hex');
 const upsertsOf = calls => calls.flatMap(call => call.mutations).filter(m => m.op === 'upsert').map(m => m.event);
 const facts = (domains, isPrivate = false) => ({ domains, isPrivate });
+// A meetings connector that answers every lookup: public, no attendee domains.
+const publicAttendees = () => ({ async factsFor() { return { domains: [], isPrivate: false }; }, save() {}, unavailable: 0 });
 
 function sharingPlan(items, ledger = {}, factMap = new Map(), directory = DIRECTORY) {
   return planCalendar(parseOutlookItems(items), ledger, syncWindow(NOW, ZONE), ZONE, {
@@ -920,7 +922,7 @@ test('planner: Private category, private meetings, matches, candidates, domain e
     at('o', '16', { subject: 'sync', organizer: { name: CANARY, email: `${CANARY}@hanabank.example` } }),
     at('m', '17', { subject: 'HNB weekly' }),
   ], {}, new Map([['d', facts(['ops.hanabank.example', 'amazon.com'])], ['n', facts(['amazon.com'])],
-    ['m', facts(['hanabank.example'], true)]]));
+    ['m', facts(['hanabank.example'], true)], ['t', facts([])], ['l', facts([])], ['c', facts([])], ['o', facts([])]]));
   const byId = Object.fromEntries(upsertsOf([{ mutations: plan.mutations }]).map(event => [event.externalId, event]));
   for (const id of ['p', 'm']) {
     assert.equal(byId[id].private, true, id);
@@ -955,6 +957,14 @@ test('planner: Private category, private meetings, matches, candidates, domain e
   const decided = sharingPlan(items, ledger, new Map([['d', facts([])], ['m', facts([])]]));
   assert.equal('shareAccountId' in decided.mutations[0].event, false);
   assert.equal(decided.mutations[1].event.shareAccountId, 'acct-hana');
+  // Without a privacy answer a title match is only a candidate, unless already shared to that account.
+  const titleItem = [at('t', '11', { subject: 'HNB weekly' })];
+  const unknown = sharingPlan(titleItem, {}, new Map());
+  assert.equal('shareAccountId' in unknown.mutations[0].event, false);
+  assert.deepEqual(unknown.mutations[0].event.candidateAccountIds, ['acct-hana']);
+  const stillShared = sharingPlan(titleItem, { t: { fp: 'old', startsAt: '2026-11-11T01:00:00.000Z',
+    endsAt: '2026-11-11T02:00:00.000Z', share: { shareAccountId: 'acct-hana', shareEvidence: ['title'] } } }, new Map([['t', null]]));
+  assert.equal(stillShared.mutations[0].event.shareAccountId, 'acct-hana');
   // With no lookup attempted (meetings connector deselected), the private flag is still kept.
   const unattempted = sharingPlan(items, ledger, new Map());
   assert.equal(unattempted.mutations[1].event.private, true);
@@ -972,6 +982,10 @@ test('get_meeting facts keep domains and the private flag only; attendee-less pa
     optionalAttendees: ['c@kbcard.example'] };
   assert.deepEqual(meetingFacts(payload), { domains: ['amazon.com', 'kbcard.example', 'ops.hanabank.example'], isPrivate: false });
   assert.deepEqual(meetingFacts({ isPrivate: true, requiredAttendees: [] }), { domains: [], isPrivate: true });
+  // More than 50 domains is no domain answer; the private flag still holds.
+  const wide = Array.from({ length: 51 }, (_, i) => `a@d${i}.example`);
+  assert.equal(meetingFacts({ isPrivate: false, requiredAttendees: wide }), null);
+  assert.deepEqual(meetingFacts({ isPrivate: true, requiredAttendees: wide }), { domains: [], isPrivate: true });
   for (const bad of [{}, { isPrivate: false }, { meetingId: 'x', isPrivate: false }, { requiredAttendees: ['a@x.example'] },
     { isPrivate: 'no', requiredAttendees: [] }, 'not json', null]) {
     assert.equal(meetingFacts(bad), null, JSON.stringify(bad));
@@ -1037,7 +1051,8 @@ test('meeting facts: joined lookups, change-key cache, failure stop and no addre
 test('sync: Private category added after sharing re-sends the event as private', async t => {
   const store = new IntakeStore(tempHome(t));
   const api = fakeApi({ directory: DIRECTORY });
-  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
+    attendees: publicAttendees() };
   const titled = categories => request => twoEvents(request).map(entry => ({ ...entry, subject: 'HNB sync', categories }));
   const first = await runCalendar({ ...base, source: source(titled([])) });
   assert.equal(first.counts.shared, 6);
@@ -1056,7 +1071,8 @@ test('sync: the share directory is read across server pages', async t => {
   const store = new IntakeStore(tempHome(t));
   const pages = { '': { accounts: [DIRECTORY.accounts[1]], nextCursor: 'acct-kb' }, 'acct-kb': { accounts: [DIRECTORY.accounts[0]] } };
   const api = fakeApi({ directory: cursor => pages[cursor] });
-  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
+    attendees: publicAttendees() };
   const result = await runCalendar({ ...base, source: source(request => twoEvents(request).map(entry => ({ ...entry, subject: 'HNB sync' }))) });
   assert.equal(result.counts.shared, 6);
   assert.ok(upsertsOf(api.calls).every(event => event.shareAccountId === 'acct-hana'));
@@ -1069,7 +1085,8 @@ test('sync: the share directory is read across server pages', async t => {
 test('sync: an unavailable directory keeps previous share fields and never removes shares', async t => {
   const store = new IntakeStore(tempHome(t));
   const api = fakeApi({ directory: DIRECTORY });
-  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
+    attendees: publicAttendees() };
   const titled = subject => request => twoEvents(request).map(entry => ({ ...entry, subject }));
   await runCalendar({ ...base, source: source(titled('HNB sync')) });
   api.directory = new Error('HTTP 503');

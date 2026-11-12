@@ -100,7 +100,10 @@ export function meetingFacts(payload: unknown): MeetingFacts | null {
     const domain = organizerDomain(address);
     if (domain) domains.add(domain);
   }
-  return { domains: [...domains].sort().slice(0, MAX_DOMAINS), isPrivate: parsed.isPrivate };
+  // Too many domains to keep is no domain answer: a truncated list could turn an
+  // ambiguous match into an automatic share. The private flag still holds.
+  if (domains.size > MAX_DOMAINS) return parsed.isPrivate ? { domains: [], isPrivate: true } : null;
+  return { domains: [...domains].sort(), isPrivate: parsed.isPrivate };
 }
 
 /** The meetings connector calls used for facts; `list` covers the whole sync window. */

@@ -263,9 +263,15 @@ read as 7-day `calendar_view` requests.
   answer. Facts are cached in `calendar/<sourceId>/meeting-facts.json` by
   `meetingId` and `meetingChangeKey`, pruned with the ledger. At most 25
   `get_meeting` reads run per sync, and three consecutive failures stop them.
-  A lookup without an answer counts in `attendeesUnavailable` and keeps a
+  More than 50 distinct domains is no domain answer (the private flag still
+  counts). A lookup without an answer counts in `attendeesUnavailable` and keeps a
   previous private flag or a previous share that rested on domain evidence.
-  Without the connector, matching uses title, location and organizer domain.
+- **No privacy answer, no new share.** A match is sent as `shareAccountId` only
+  when the joined meeting answered `isPrivate: false`. Without that answer
+  (connector not selected, the 25-read budget spent, or a failed lookup) a match
+  is sent as a single candidate, unless the event is already shared to that
+  account. Without the connector, matching uses title, location and organizer
+  domain and therefore yields candidates only.
 
 ## SpecReq task step
 
