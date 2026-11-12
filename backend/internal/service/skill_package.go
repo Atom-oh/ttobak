@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,6 +24,8 @@ var ErrInvalidPackage = errors.New("invalid skill package")
 const (
 	skillPackageUploadTTL   = 10 * time.Minute
 	skillPackageDownloadTTL = 5 * time.Minute
+	// Fixed width, so history sort keys order by time.
+	skillPackageTimeLayout = "2006-01-02T15:04:05.000000000Z"
 )
 
 var (
@@ -45,7 +48,7 @@ type SkillPackageStore interface {
 	PresignUpload(ctx context.Context, key string, maxBytes int64, ttl time.Duration) (string, map[string]string, error)
 	Size(ctx context.Context, key string) (int64, error)
 	Read(ctx context.Context, key string, max int64) ([]byte, error)
-	Copy(ctx context.Context, from, to string) error
+	Put(ctx context.Context, key string, data []byte) error
 	Delete(ctx context.Context, key string) error
 	PresignDownload(ctx context.Context, key string, ttl time.Duration) (string, error)
 }
@@ -185,13 +188,15 @@ func (s *SkillPackageService) CompleteUpload(ctx context.Context, userID, scope,
 	sum := sha256.Sum256(data)
 	sha := hex.EncodeToString(sum[:])
 	key := packageKey(scope, userID, sha)
-	if err := s.store.Copy(ctx, staged, key); err != nil {
+	// Publish the validated bytes themselves, never a copy of the staged
+	// object: the presigned POST stays valid and could replace it meanwhile.
+	if err := s.store.Put(ctx, key, data); err != nil {
 		return nil, err
 	}
 	dropStaged()
 	pk, sk := packageRowKey(scope, userID)
 	row := model.SkillPackage{PK: pk, SK: sk, Scope: scope, Version: manifest.Version, SHA256: sha, Size: int64(len(data)),
-		UploadedBy: userID, UploadedAt: s.now().UTC().Format(time.RFC3339Nano), Skills: manifest.Skills,
+		UploadedBy: userID, UploadedAt: s.now().UTC().Format(skillPackageTimeLayout), Skills: manifest.Skills,
 		Servers: manifest.Servers, ObjectKey: key}
 	previous, err := s.repo.GetSkillPackage(ctx, pk, sk)
 	if err != nil {
@@ -236,6 +241,14 @@ func (s *SkillPackageService) pruneOrgVersions(ctx context.Context, currentKey s
 		return nil
 	}
 	inUse := map[string]bool{currentKey: true}
+	// A rollback may have pointed the current row at an older version.
+	current, err := s.repo.GetSkillPackage(ctx, model.SkillPackageOrgPK, model.SkillPackageCurrentSK)
+	if err != nil {
+		return []string{"old org versions not pruned"}
+	}
+	if current != nil {
+		inUse[current.ObjectKey] = true
+	}
 	for _, kept := range versions[:model.SkillPackageOrgVersionsKept] {
 		inUse[kept.ObjectKey] = true
 	}
@@ -311,11 +324,17 @@ type s3SkillPackageStore struct {
 	client  *s3.Client
 	presign *s3.PresignClient
 	bucket  string
+	sign    DownloadSigner
 }
 
+// DownloadSigner mints a download URL for an asset key: the shared signed
+// CloudFront /media/* URL when signing material is available, else an S3
+// presign (UploadService.GeneratePresignedDownloadURLWithTTL, ADR-027).
+type DownloadSigner func(ctx context.Context, key string, ttl time.Duration) (string, error)
+
 // NewS3SkillPackageStore stores packages under skillpkg/ in bucket.
-func NewS3SkillPackageStore(client *s3.Client, bucket string) SkillPackageStore {
-	return &s3SkillPackageStore{client: client, presign: s3.NewPresignClient(client), bucket: bucket}
+func NewS3SkillPackageStore(client *s3.Client, bucket string, sign DownloadSigner) SkillPackageStore {
+	return &s3SkillPackageStore{client: client, presign: s3.NewPresignClient(client), bucket: bucket, sign: sign}
 }
 
 func (s *s3SkillPackageStore) PresignUpload(ctx context.Context, key string, maxBytes int64, ttl time.Duration) (string, map[string]string, error) {
@@ -355,11 +374,11 @@ func (s *s3SkillPackageStore) Read(ctx context.Context, key string, max int64) (
 	return io.ReadAll(io.LimitReader(object.Body, max))
 }
 
-func (s *s3SkillPackageStore) Copy(ctx context.Context, from, to string) error {
-	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(to),
-		CopySource: aws.String(s.bucket + "/" + from)})
+func (s *s3SkillPackageStore) Put(ctx context.Context, key string, data []byte) error {
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key),
+		Body: bytes.NewReader(data), ContentLength: aws.Int64(int64(len(data))), ContentType: aws.String("application/zip")})
 	if err != nil {
-		return fmt.Errorf("copy package: %w", err)
+		return fmt.Errorf("store package: %w", err)
 	}
 	return nil
 }
@@ -372,10 +391,5 @@ func (s *s3SkillPackageStore) Delete(ctx context.Context, key string) error {
 }
 
 func (s *s3SkillPackageStore) PresignDownload(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	request, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)},
-		s3.WithPresignExpires(ttl))
-	if err != nil {
-		return "", fmt.Errorf("presign package download: %w", err)
-	}
-	return request.URL, nil
+	return s.sign(ctx, key, ttl)
 }

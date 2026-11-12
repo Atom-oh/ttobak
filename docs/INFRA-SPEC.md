@@ -231,9 +231,11 @@ one day, current and noncurrent; the API deletes each after READY, FAILED or quo
 prefix is not in the OAC allowlist and is never served by CloudFront.
 Skill package zips live under skillpkg/ (`skillpkg/org/{sha256}.zip`,
 `skillpkg/user/{userId}/{sha256}.zip`); uploads in progress under
-`skillpkg/staging/` expire after one day, current and noncurrent. The prefix is
-not in the OAC allowlist: downloads are 5-minute S3 presigned GETs, and the
-API role's existing bucket read/write grant covers it.
+`skillpkg/staging/` expire after one day, current and noncurrent.
+`skillpkg/org/` and `skillpkg/user/` are in the OAC read allowlist and are
+downloaded through the shared signed `/media/*` URLs (S3 presign fallback);
+the staging prefix is not served. The API role's existing bucket read/write
+grant covers the prefix.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.

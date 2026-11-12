@@ -81,8 +81,8 @@ func (f *fakeSkillPackageStore) Read(_ context.Context, key string, max int64) (
 	return data, nil
 }
 
-func (f *fakeSkillPackageStore) Copy(_ context.Context, from, to string) error {
-	f.objects[to] = f.objects[from]
+func (f *fakeSkillPackageStore) Put(_ context.Context, key string, data []byte) error {
+	f.objects[key] = data
 	return nil
 }
 
@@ -281,5 +281,83 @@ func TestStartUploadScopesTheKey(t *testing.T) {
 	}
 	if _, err := svc.StartUpload(t.Context(), "alice", "other"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("scope: %v", err)
+	}
+}
+
+// swappingStore replaces the staged object right after it is read, as an
+// uploader reusing the still-valid presigned POST could.
+type swappingStore struct {
+	*fakeSkillPackageStore
+	swap []byte
+}
+
+func (s *swappingStore) Read(ctx context.Context, key string, max int64) ([]byte, error) {
+	data, err := s.fakeSkillPackageStore.Read(ctx, key, max)
+	s.objects[key] = s.swap
+	return data, err
+}
+
+func TestCompleteUploadPublishesTheValidatedBytes(t *testing.T) {
+	svc, _, store := newSkillPackageFixture(t)
+	swapping := &swappingStore{fakeSkillPackageStore: store, swap: []byte("not the validated zip")}
+	svc.store = swapping
+	data := packageZip(t, "demo-skill")
+	stage(store, "alice", data)
+	result, err := svc.CompleteUpload(t.Context(), "alice", model.SkillPackageScopePersonal, testUploadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.objects[result.Package.ObjectKey]; shaOf(got) != result.Package.SHA256 {
+		t.Fatalf("published object does not match the recorded sha256")
+	}
+}
+
+// rollbackDuringUpload runs an admin rollback right after an upload's
+// current-row write, before that upload prunes old versions.
+type rollbackDuringUpload struct {
+	*fakeSkillPackageRepo
+	after func()
+}
+
+func (r *rollbackDuringUpload) PutSkillPackage(ctx context.Context, row model.SkillPackage, previousSHA string) error {
+	if err := r.fakeSkillPackageRepo.PutSkillPackage(ctx, row, previousSHA); err != nil {
+		return err
+	}
+	if row.SK == model.SkillPackageCurrentSK && r.after != nil {
+		after := r.after
+		r.after = nil
+		after()
+	}
+	return nil
+}
+
+func TestPruneKeepsTheCurrentObjectAfterRollback(t *testing.T) {
+	svc, repo, store := newSkillPackageFixture(t)
+	upload := func(skill string) []byte {
+		data := packageZip(t, skill)
+		stage(store, "admin", data)
+		if _, err := svc.CompleteUpload(t.Context(), "admin", model.SkillPackageScopeOrg, testUploadID); err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	first := upload("v-one")
+	for _, skill := range []string{"v-two", "v-three", "v-four", "v-five"} {
+		upload(skill)
+	}
+	hooked := &rollbackDuringUpload{fakeSkillPackageRepo: repo}
+	svc.repo = hooked
+	hooked.after = func() {
+		if _, err := svc.RollbackOrg(t.Context(), "admin", shaOf(first)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upload("v-six")
+	current, _ := repo.GetSkillPackage(t.Context(), model.SkillPackageOrgPK, model.SkillPackageCurrentSK)
+	if current.SHA256 != shaOf(first) {
+		t.Fatalf("rollback did not land: %s", current.SHA256)
+	}
+	if _, ok := store.objects[current.ObjectKey]; !ok {
+		t.Fatal("the prune deleted the object the current row points to")
 	}
 }

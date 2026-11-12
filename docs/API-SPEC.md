@@ -300,11 +300,12 @@ app's one-click setup installs (ADR-003, local intake). Code:
 
 | Method | Path | Who | Result |
 |---|---|---|---|
-| GET | `/api/skill-packages` | any user | `{org, personal, effective, downloads}`: the org row, the caller's personal row, their merge and 5-minute presigned GETs for those two zips only |
+| GET | `/api/skill-packages` | any user | `{org, personal, effective, downloads}`: the org row, the caller's personal row, their merge and 5-minute download URLs (signed `/media/*`, S3 presign fallback) for those two zips only |
 | POST | `/api/skill-packages/personal/upload` | any user | presigned POST `{url, fields, uploadId, expiresIn}` for `skillpkg/staging/{caller}/{uploadId}.zip`, `content-length-range` 1 to 20 MiB, 10 minutes |
 | POST | `/api/skill-packages/personal/complete` | any user | body `{uploadId}`; validates the staged zip, stores it by sha256 and replaces the caller's personal package |
 | DELETE | `/api/skill-packages/personal` | any user | deletes the row, then its object; `404` when none |
-| POST | `/api/skill-packages/org/upload`, `/api/skill-packages/org/complete` | admin | the same for the org package; keeps the newest 5 versions |
+| POST | `/api/skill-packages/org/upload` | admin | the same presigned POST for the org package |
+| POST | `/api/skill-packages/org/complete` | admin | the same completion for the org package; keeps the newest 5 versions |
 | GET | `/api/skill-packages/org/versions` | admin | `{versions}` newest first |
 | POST | `/api/skill-packages/org/rollback` | admin | body `{sha256}` of a kept version; makes it current |
 
@@ -321,8 +322,10 @@ arrays (no expansion; `*_EXTRA` ignored); registries are `s3://`, HTTP servers
 Merge: a personal skill replaces the org skill of the same name, other org
 skills stay, server lists are unioned and an HTTP name conflict keeps the org
 URL (`effective.conflicts`). An `uploadId` is 32 lowercase hex characters under
-the caller's own staging prefix (another user's is `404`). A concurrent change
-of the same current row is `409`. Bodies are at most 4 KiB with no unknown
+the caller's own staging prefix (another user's is `404`). Completion stores
+the validated bytes themselves, never a copy of the staged object. A concurrent
+upload or rollback of the same current row is `409`; deleting the personal
+package is unconditional. Bodies are at most 4 KiB with no unknown
 fields; responses use `Cache-Control: private, no-store`. Failed best-effort
 object deletes are listed in `warnings`.
 
@@ -2336,6 +2339,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/performance/reports/{periodKey}` | `performanceHandler.GetReport` |
 | PUT | `/api/performance/reports/{periodKey}` | `performanceHandler.PutReport` |
 | DELETE | `/api/performance/reports/{periodKey}` | `performanceHandler.DeleteReport` |
+| GET | `/api/skill-packages` | `skillPackageHandler.Get` |
+| POST | `/api/skill-packages/personal/upload` | `skillPackageHandler.StartPersonalUpload` |
+| POST | `/api/skill-packages/personal/complete` | `skillPackageHandler.CompletePersonalUpload` |
+| DELETE | `/api/skill-packages/personal` | `skillPackageHandler.DeletePersonal` |
 | GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
@@ -2483,6 +2490,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/users/{userId}/resend-invite` | `userAdminHandler.ResendInvite` |
 | POST | `/api/settings/users/{userId}/reset-password` | `userAdminHandler.ResetPassword` |
 | PUT | `/api/settings/users/{userId}/name` | `userAdminHandler.UpdateUserName` |
+| POST | `/api/skill-packages/org/upload` | `skillPackageHandler.StartOrgUpload` |
+| POST | `/api/skill-packages/org/complete` | `skillPackageHandler.CompleteOrgUpload` |
+| GET | `/api/skill-packages/org/versions` | `skillPackageHandler.ListOrgVersions` |
+| POST | `/api/skill-packages/org/rollback` | `skillPackageHandler.RollbackOrg` |
 | GET | `/api/settings/dictionary` | `dictHandler.GetDictionary` |
 | PUT | `/api/settings/dictionary` | `dictHandler.UpdateDictionary` |
 | DELETE | `/api/settings/dictionary/term` | `dictHandler.DeleteTerm` |

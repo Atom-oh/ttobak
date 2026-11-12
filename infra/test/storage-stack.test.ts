@@ -78,7 +78,7 @@ describe('StorageStack', () => {
             Sid: 'AllowCloudFrontOACRead',
             Action: 's3:GetObject',
             Resource: Match.arrayWith(
-              ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf'].map((prefix) =>
+              ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf', 'skillpkg/org', 'skillpkg/user'].map((prefix) =>
                 Match.objectLike({
                   'Fn::Join': Match.arrayWith([
                     Match.arrayWith([Match.stringLikeRegexp(`/${prefix}/\\*$`)]),

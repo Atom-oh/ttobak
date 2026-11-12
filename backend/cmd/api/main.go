@@ -108,8 +108,6 @@ func init() {
 	performanceService := service.NewPerformanceService(repo, accountService)
 	performanceService.SetMissedSources(calendarService, meetingService)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
-	// Org and personal skill packages for the Mac app's one-click setup.
-	skillPackageHandler := handler.NewSkillPackageHandler(service.NewSkillPackageService(repo, service.NewS3SkillPackageStore(s3Client, bucketName)))
 	calendarRepo := repository.NewCalendarRepository(dynamoClient, tableName)
 	specReqTaskHandler := handler.NewSpecReqTaskHandler(service.NewSpecReqTaskService(
 		repository.NewSpecReqTaskRepository(dynamoClient, tableName),
@@ -125,6 +123,9 @@ func init() {
 	projectService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
+	// Org and personal skill packages for the Mac app's one-click setup; downloads use
+	// the shared signed /media/* path (S3 presign fallback).
+	skillPackageHandler := handler.NewSkillPackageHandler(service.NewSkillPackageService(repo, service.NewS3SkillPackageStore(s3Client, bucketName, uploadService.GeneratePresignedDownloadURLWithTTL)))
 	uploadService.SetAudioCropEnabled(os.Getenv("AUDIO_CROP_ENABLED") == "1")
 	// Same-domain CloudFront-signed download URLs (ADR-027). Loaded once at
 	// cold start in the background (two SSM reads, no longer on the init
