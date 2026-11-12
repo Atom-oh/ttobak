@@ -886,6 +886,21 @@ error) leaves it unset, so a replay within the hour would start a paid run. The
 legacy `ttobak-crawler-news` function no longer has an async invoke
 configuration or queue permission, and its manual branch is removed.
 
+The API's advisory admission check for the collect route uses AiStack's API role
+statement `SfnListNewsExecutions`: `states:ListExecutions` on exactly
+`ttobak-news-daily` and `ttobak-news-publication`, ARNs built from those names
+with the stack's partition, region and account (no wildcard, no CrawlerStack
+reference). GatewayStack gives the API function the starter's
+`NEWS_DAILY_HOUR_UTC`, `NEWS_DAILY_MINUTE_UTC`, `NEWS_DAILY_LEAD_SECONDS` and
+`NEWS_DAILY_GRACE_SECONDS` from the same exported constants
+(`newsDailyWindowEnvironment` in `news-publication.ts`) plus
+`NEWS_DAILY_STATE_MACHINE_ARN` and `NEWS_PUBLICATION_STATE_MACHINE_ARN` built the
+same way. No stack edge changes. Deploy AiStack (the role) before GatewayStack
+(the function that calls it), each with `--exclusively`, and the frontend
+(which shows the button again) after GatewayStack. A GatewayStack deployed
+first fails the lookups with access denied, so the route answers 503 rather
+than accepting unchecked.
+
 ## Summary privacy writer activation
 
 GatewayStack also declares `AccountDescendantReadsEnabled` (`0` or `1`, default

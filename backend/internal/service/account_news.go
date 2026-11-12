@@ -32,6 +32,8 @@ type accountNewsRepo interface {
 
 type accountNewsCrawler interface {
 	GetSource(ctx context.Context, sourceID string) (*model.CrawlerSource, error)
+	// GetSourceConsistent is GetSource with a strongly consistent read.
+	GetSourceConsistent(ctx context.Context, sourceID string) (*model.CrawlerSource, error)
 	ListDocuments(ctx context.Context, sourceID, docType string, limit int32, lastKey map[string]types.AttributeValue) ([]model.CrawledDocument, map[string]types.AttributeValue, int, error)
 }
 
@@ -65,6 +67,8 @@ type AccountNewsService struct {
 	memberships   newsSourceMemberships
 	// publishCollect sends NewsCollectRequested; nil fails CollectNow closed.
 	publishCollect func(context.Context, model.NewsCollectRequested) error
+	// collectAdmission mirrors the starter's refusals; nil fails CollectNow closed.
+	collectAdmission *NewsCollectAdmission
 }
 
 func NewAccountNewsService(repo accountNewsRepo, crawler accountNewsCrawler, insights *InsightsService) *AccountNewsService {

@@ -21,6 +21,30 @@ export const NEWS_CHILD_TIMEOUT = cdk.Duration.minutes(45);
 /** After the schedule, manual starts stay refused while a delayed daily start may still arrive. */
 export const NEWS_DAILY_GRACE = cdk.Duration.minutes(15);
 export const NEWS_DISCOVERY_TIMEOUT = cdk.Duration.seconds(600);
+export const NEWS_PUBLICATION_STATE_MACHINE_NAME = 'ttobak-news-publication';
+export const NEWS_DAILY_STATE_MACHINE_NAME = 'ttobak-news-daily';
+
+/**
+ * The daily-window configuration the manual starter refuses on; the API's
+ * advisory admission check receives the same values (GatewayStack).
+ */
+export function newsDailyWindowEnvironment(): Record<string, string> {
+  return {
+    NEWS_DAILY_HOUR_UTC: String(NEWS_DAILY_HOUR_UTC),
+    NEWS_DAILY_MINUTE_UTC: String(NEWS_DAILY_MINUTE_UTC),
+    NEWS_DAILY_LEAD_SECONDS: String(NEWS_CHILD_TIMEOUT.toSeconds()),
+    NEWS_DAILY_GRACE_SECONDS: String(NEWS_DAILY_GRACE.toSeconds()),
+  };
+}
+
+/**
+ * A news state machine's ARN in the current stack's partition, region and
+ * account, built from its fixed name so a consumer needs no cross-stack
+ * reference to CrawlerStack.
+ */
+export function newsStateMachineArn(name: string): string {
+  return `arn:${cdk.Aws.PARTITION}:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:${name}`;
+}
 /**
  * Discovery has reserved concurrency 1. A throttled invocation never ran, so
  * retrying it has no side effects and cannot double-charge. The total wait
@@ -227,7 +251,7 @@ export class NewsPublication extends Construct {
       .when(sfn.Condition.stringEquals('$.status', 'FINALIZED'), alreadyFinalized)
       .otherwise(candidates.next(compact).next(finish));
     this.stateMachine = new sfn.StateMachine(this, 'Workflow', {
-      stateMachineName: 'ttobak-news-publication',
+      stateMachineName: NEWS_PUBLICATION_STATE_MACHINE_NAME,
       definitionBody: sfn.DefinitionBody.fromChainable(discoverTask.next(choose)),
       timeout: NEWS_CHILD_TIMEOUT,
     });
@@ -325,7 +349,7 @@ export class NewsPublication extends Construct {
         new sfn.Fail(this, 'DailyPublicationFailed', { error: 'NEWS_DAILY_SOURCE_FAILED' }))
       .otherwise(new sfn.Succeed(this, 'DailyComplete'));
     const daily = new sfn.StateMachine(this, 'DailyWorkflow', {
-      stateMachineName: 'ttobak-news-daily',
+      stateMachineName: NEWS_DAILY_STATE_MACHINE_NAME,
       definitionBody: sfn.DefinitionBody.fromChainable(
         listDaily.next(eachSource).next(summarizeDaily).next(dailyStatus)),
       timeout: cdk.Duration.hours(23),
@@ -337,10 +361,7 @@ export class NewsPublication extends Construct {
     const manual = makeFunction('Manual', 'news_manual.handler', 30, 1, {
       PUBLICATION_STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
       DAILY_STATE_MACHINE_ARN: daily.stateMachineArn,
-      NEWS_DAILY_HOUR_UTC: String(NEWS_DAILY_HOUR_UTC),
-      NEWS_DAILY_MINUTE_UTC: String(NEWS_DAILY_MINUTE_UTC),
-      NEWS_DAILY_LEAD_SECONDS: String(NEWS_CHILD_TIMEOUT.toSeconds()),
-      NEWS_DAILY_GRACE_SECONDS: String(NEWS_DAILY_GRACE.toSeconds()),
+      ...newsDailyWindowEnvironment(),
     });
     manual.role.addToPolicy(new iam.PolicyStatement({
       // PutItem/Query only for the COLLECTREFUSAL# receipts of refused requests.

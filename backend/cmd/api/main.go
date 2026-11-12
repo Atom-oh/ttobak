@@ -243,16 +243,23 @@ func init() {
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName, bucketName)
 	insightsService.SetAccountMemberReader(repo)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
+	sfnClient := sfn.NewFromConfig(cfg, func(o *sfn.Options) { o.TracerProvider = awsTracing })
 	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo, insightsService)
 	accountNewsService.SetNewsSourceDirectory(crawlerRepo, repo)
 	accountNewsService.SetCollectPublisher(service.NewsCollectPublisher(ebClient))
+	// The starter's admission conditions, from the same CDK constants and
+	// state machine names (GatewayStack); missing values refuse with 503.
+	accountNewsService.SetCollectAdmission(service.NewNewsCollectAdmission(
+		os.Getenv("NEWS_DAILY_HOUR_UTC"), os.Getenv("NEWS_DAILY_MINUTE_UTC"),
+		os.Getenv("NEWS_DAILY_LEAD_SECONDS"), os.Getenv("NEWS_DAILY_GRACE_SECONDS"),
+		os.Getenv("NEWS_DAILY_STATE_MACHINE_ARN"), os.Getenv("NEWS_PUBLICATION_STATE_MACHINE_ARN"),
+		service.NewSFNRunChecker(sfnClient)))
 	accountNewsHandler := handler.NewAccountNewsHandler(accountNewsService)
 	accountLinksHandler := handler.NewAccountLinksHandler(service.NewAccountLinksService(repo, crawlerRepo, accountNewsService))
 	accountOverviewHandler := handler.NewAccountOverviewHandler(service.NewAccountOverviewService(repo, crawlerRepo, accountNewsService, accountService))
 	accountKBHandler := handler.NewAccountKBHandler(service.NewAccountKBService(repo, service.NewKBObjectStore(s3Client, kbBucketName), accountService, accountNewsService, crawlerRepo))
 	insightsHandler := handler.NewInsightsHandler(insightsService, kbService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
-	sfnClient := sfn.NewFromConfig(cfg, func(o *sfn.Options) { o.TracerProvider = awsTracing })
 	researchService := service.NewResearchService(researchRepo, repo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
 	researchHandler := handler.NewResearchHandler(researchService, notionService, repo, cryptoService)
 	researchShareHandler := handler.NewResearchShareHandler(researchService)
