@@ -52,6 +52,9 @@ func (f *fakeBriefRepo) QueueCustomerBrief(_ context.Context, prior, next *model
 	stored := *next
 	if f.state != nil && !clear {
 		stored.Sealed, stored.GeneratedAt, stored.ResultHash, stored.ModelID = f.state.Sealed, f.state.GeneratedAt, f.state.ResultHash, f.state.ModelID
+		if next.BriefExpiresAt == 0 {
+			stored.BriefExpiresAt = f.state.BriefExpiresAt
+		}
 	}
 	f.cleared = clear
 	f.state = &stored
@@ -82,6 +85,7 @@ func (f *fakeBriefRepo) CompleteCustomerBrief(_ context.Context, s *model.Custom
 	f.state.Status, f.state.ErrorCode, f.state.LeaseUntil = model.AnalysisSucceeded, "", 0
 	f.state.Sealed, f.state.ResultHash, f.state.ModelID, f.state.GeneratedAt = string(content), hash, modelID, now
 	f.state.ExpiresAt = now.Add(model.CustomerBriefTTL).Unix()
+	f.state.BriefExpiresAt = f.state.ExpiresAt
 	return nil
 }
 
@@ -174,7 +178,7 @@ func (f *briefFixture) queue(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return res.RunID
+	return res.Run.RunID
 }
 
 func (f *briefFixture) brief(t *testing.T) *model.CustomerBrief {
@@ -272,7 +276,7 @@ func TestCustomerBriefPublishesOnlyCitedStatements(t *testing.T) {
 		t.Fatalf("prompt must use opaque refs only")
 	}
 	got, err := f.svc.Get(context.Background(), "user", "acct")
-	if err != nil || got.Brief == nil || got.Status != model.AnalysisSucceeded || got.GeneratedAt == nil {
+	if err != nil || got.Brief == nil || got.Brief.Content == nil || got.Run.Status != model.AnalysisSucceeded || got.Brief.GeneratedAt.IsZero() {
 		t.Fatalf("get: %v %+v", err, got)
 	}
 }
@@ -348,7 +352,7 @@ func TestCustomerBriefExpiredRowReadsAsAbsent(t *testing.T) {
 	}
 	f.now = f.now.Add(model.CustomerBriefTTL + time.Second)
 	got, err := f.svc.Get(context.Background(), "user", "acct")
-	if err != nil || got.Brief != nil || got.Status != model.AnalysisUnknown {
+	if err != nil || got.Brief != nil || got.Run.Status != "none" {
 		t.Fatalf("expired row must read as absent: %v %+v", err, got)
 	}
 	f.queue(t)

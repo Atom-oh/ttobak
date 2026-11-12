@@ -123,6 +123,9 @@ func init() {
 	projectService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
+	// Org and personal skill packages for the Mac app's one-click setup; downloads use
+	// the shared signed /media/* path (S3 presign fallback).
+	skillPackageHandler := handler.NewSkillPackageHandler(service.NewSkillPackageService(repo, service.NewS3SkillPackageStore(s3Client, bucketName, uploadService.GeneratePresignedDownloadURLWithTTL)))
 	uploadService.SetAudioCropEnabled(os.Getenv("AUDIO_CROP_ENABLED") == "1")
 	// Same-domain CloudFront-signed download URLs (ADR-027). Loaded once at
 	// cold start in the background (two SSM reads, no longer on the init
@@ -185,6 +188,9 @@ func init() {
 	accountPeopleService.SetPeopleResolvePublisher(peopleResolvePublisher)
 	accountPeopleHandler := handler.NewAccountPeopleHandler(accountPeopleService)
 	accountEventsHandler := handler.NewAccountEventsHandler(service.NewAccountEventsService(repo))
+	// Customer brief producer: the summarize worker runs the requested brief
+	// (GatewayStack rule); the API only claims runs and reads the sealed row.
+	customerBriefHandler := handler.NewCustomerBriefHandler(service.NewCustomerBriefService(repo, service.CustomerBriefSources{}, nil, service.CustomerBriefPublisher(ebClient)))
 	accountReadingHandler := handler.NewAccountReadingHandler(service.NewAccountReadingService(repo.MetadataView()))
 	meetingCatalogHandler := handler.NewMeetingCatalogHandler(service.NewMeetingCatalogService(repo.MetadataView()))
 	vaultReadingHandler := handler.NewVaultReadingHandler(service.NewVaultReadingService(repo.MetadataView()))
@@ -239,6 +245,7 @@ func init() {
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo, insightsService)
 	accountNewsService.SetNewsSourceDirectory(crawlerRepo, repo)
+	accountNewsService.SetCollectPublisher(service.NewsCollectPublisher(ebClient))
 	accountNewsHandler := handler.NewAccountNewsHandler(accountNewsService)
 	accountLinksHandler := handler.NewAccountLinksHandler(service.NewAccountLinksService(repo, crawlerRepo, accountNewsService))
 	accountOverviewHandler := handler.NewAccountOverviewHandler(service.NewAccountOverviewService(repo, crawlerRepo, accountNewsService, accountService))
@@ -369,6 +376,10 @@ func init() {
 		r.Get("/api/performance/reports/{periodKey}", performanceHandler.GetReport)
 		r.Put("/api/performance/reports/{periodKey}", performanceHandler.PutReport)
 		r.Delete("/api/performance/reports/{periodKey}", performanceHandler.DeleteReport)
+		r.Get("/api/skill-packages", skillPackageHandler.Get)
+		r.Post("/api/skill-packages/personal/upload", skillPackageHandler.StartPersonalUpload)
+		r.Post("/api/skill-packages/personal/complete", skillPackageHandler.CompletePersonalUpload)
+		r.Delete("/api/skill-packages/personal", skillPackageHandler.DeletePersonal)
 		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
 		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
 		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
@@ -403,6 +414,7 @@ func init() {
 		r.Post("/api/accounts/{accountId}/news-sources", accountNewsHandler.Create)
 		r.Put("/api/accounts/{accountId}/news-sources/{sourceId}", accountNewsHandler.Update)
 		r.Delete("/api/accounts/{accountId}/news-sources/{sourceId}", accountNewsHandler.Delete)
+		r.Post("/api/accounts/{accountId}/news-sources/{sourceId}/collect", accountNewsHandler.Collect)
 		r.Get("/api/accounts/{accountId}/links", accountLinksHandler.List)
 		r.Post("/api/accounts/{accountId}/links", accountLinksHandler.Create)
 		r.Delete("/api/accounts/{accountId}/links", accountLinksHandler.Delete)
@@ -429,6 +441,8 @@ func init() {
 		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
 		r.Get("/api/accounts/{accountId}/insights", accountHandler.ListAccountInsights)
 		r.Get("/api/accounts/{accountId}/brief", accountHandler.GetAccountBrief)
+		r.Get("/api/accounts/{accountId}/customer-brief", customerBriefHandler.Get)
+		r.Post("/api/accounts/{accountId}/customer-brief", customerBriefHandler.Request)
 		r.Get("/api/accounts/{accountId}/research", researchHandler.ListAccountResearch)
 		r.Get("/api/accounts/{accountId}/projects", projectHandler.ListAccountProjects)
 		r.Post("/api/accounts/{accountId}/documents", accountHandler.PutDocument)
@@ -557,6 +571,12 @@ func init() {
 			r.Post("/api/settings/users/{userId}/resend-invite", userAdminHandler.ResendInvite)
 			r.Post("/api/settings/users/{userId}/reset-password", userAdminHandler.ResetPassword)
 			r.Put("/api/settings/users/{userId}/name", userAdminHandler.UpdateUserName)
+
+			// Organization skill package (default for every user).
+			r.Post("/api/skill-packages/org/upload", skillPackageHandler.StartOrgUpload)
+			r.Post("/api/skill-packages/org/complete", skillPackageHandler.CompleteOrgUpload)
+			r.Get("/api/skill-packages/org/versions", skillPackageHandler.ListOrgVersions)
+			r.Post("/api/skill-packages/org/rollback", skillPackageHandler.RollbackOrg)
 		})
 
 		// Dictionary routes

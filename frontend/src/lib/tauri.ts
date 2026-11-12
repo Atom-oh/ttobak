@@ -1,6 +1,6 @@
 'use client';
 
-import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView } from './intake';
+import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView } from './performanceReport';
 
 interface TauriEvent<T> {
@@ -721,12 +721,26 @@ export function turnOffIntakeLaunchAgent(): Promise<unknown> {
   return invoke<unknown>('intake_launch_agent_off');
 }
 
+/** Stores the sync options (`intake options`); resolves to the CLI's `{ok, options}`. */
+export function setIntakeOptions(options: IntakeSyncOptions): Promise<unknown> {
+  return invoke<unknown>('intake_set_options', {
+    calendarResponses: options.calendarResponses, sfdcContacts: options.sfdcContacts,
+  });
+}
+
 export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {
   return invoke<IntakeStateView['adapter']>('intake_check_adapter');
 }
 
-export function updateIntakeAdapter(): Promise<IntakeStateView['adapter']> {
-  return invoke<IntakeStateView['adapter']>('intake_update_adapter');
+export interface IntakeAdapterUpdate {
+  adapter: IntakeStateView['adapter'];
+  /** False when the installed adapter already matched the served one. */
+  changed: boolean;
+}
+
+/** Older apps resolve with the bare adapter view; use `normalizeAdapterUpdate`. */
+export function updateIntakeAdapter(): Promise<IntakeAdapterUpdate | IntakeStateView['adapter']> {
+  return invoke<IntakeAdapterUpdate | IntakeStateView['adapter']>('intake_update_adapter');
 }
 
 export function onIntakeProgress(handler: (line: string) => void): () => void {

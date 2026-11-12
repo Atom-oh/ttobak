@@ -135,7 +135,7 @@ test('insights wires the view, scope filter and old entry points', () => {
   const manager = read('../src/components/insights/NewsSourcesManager.tsx');
   assert.match(manager, /type="radio"/);
   assert.match(manager, /이렇게 찾습니다/);
-  assert.match(manager, /수정하면 이전 설정으로 수집된 기사 일부가 목록에서 빠질 수 있어요\./);
+  assert.match(manager, /이 소스로 지금까지 수집된 기사가 목록에서 사라지고 다시 나타나지 않아요\./);
   // Edit forms start from the full per-account source, never the directory item.
   assert.match(manager, /accountApi\.newsSources\.list\(accountId!/);
   assert.match(manager, /setForm\(initial\)/);
@@ -155,7 +155,9 @@ test('insights wires the view, scope filter and old entry points', () => {
   assert.doesNotMatch(manager, /confirm\(|dangerouslySetInnerHTML/);
   const account = read('../src/components/account/AccountNewsSources.tsx');
   assert.match(account, /newsSourcesHref\(accountId\)/);
-  assert.doesNotMatch(account, /newsSources\.create/);
+  // Full registration stays in Insights; the account page only creates the one-click default source.
+  assert.equal(account.match(/newsSources\.create\(/g)?.length, 1);
+  assert.match(account, /const input = startCollectingInput\(accountName\)/);
 });
 
 test('directory terms show an ellipsis when the lists were cut', () => {

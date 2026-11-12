@@ -14,9 +14,11 @@ import type { AccountFocusGraph, AccountPeoplePage, MeetingPeopleEdges, MentionG
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
+import type { CustomerBriefResponse } from '@/types/customerBrief';
 import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
 import type { NewsSourceItem, NewsSourcesPage } from '@/lib/newsRegistration';
+import type { NewsCollectResponse } from '@/lib/newsCollect';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -64,7 +66,8 @@ interface FetchOptions extends RequestInit {
 }
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, public readonly code: string, message: string) {
+  // body is the parsed error JSON when the server sent one (e.g. a 429's nextAllowedAt).
+  constructor(public readonly status: number, public readonly code: string, message: string, public readonly body?: unknown) {
     super(message);
     this.name = 'ApiError';
   }
@@ -161,7 +164,7 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: { code: 'UNKNOWN', message: 'Request failed' } }));
-    throw new ApiError(response.status, errorData?.error?.code || 'UNKNOWN', errorData?.error?.message || `HTTP ${response.status}`);
+    throw new ApiError(response.status, errorData?.error?.code || 'UNKNOWN', errorData?.error?.message || `HTTP ${response.status}`, errorData);
   }
 
   if (response.status === 204 || response.headers.get('content-length') === '0') {
@@ -485,6 +488,7 @@ function retryableQAError(error: unknown): boolean {
 
 async function askQA(request: {
   mode: 'ask' | 'meeting'; question: string; context?: string; sessionId?: string; meetingId?: string;
+  automatic?: boolean; allowWebSearch?: boolean;
 }, onSubmit?: (jobId?: string) => void): Promise<QAResponse> {
   const auth = await getAuthHeaders();
   const userId = tokenUserId(auth.Authorization?.slice(7) || null);
@@ -574,16 +578,18 @@ async function askQA(request: {
 
 export const qaApi = {
   ask: (question: string, context?: string, sessionId?: string, meetingId?: string,
-        onSubmit?: (jobId?: string) => void) =>
-    askQA({ mode: 'ask', question, context, sessionId, meetingId }, onSubmit),
+        onSubmit?: (jobId?: string) => void,
+        policy?: { automatic: boolean; allowWebSearch: boolean }) =>
+    askQA({ mode: 'ask', question, context, sessionId, meetingId, ...policy }, onSubmit),
 
   askMeeting: (meetingId: string, question: string, sessionId?: string) =>
     askQA({ mode: 'meeting', question, sessionId, meetingId }),
 
-  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
-    api.post<{ questions: string[]; proactive?: string[] }>(
+  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string,
+                    meetingTitle?: string, meetingContext?: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/lib/liveQuestionDetector').LiveDetectionResult>(
       '/api/qa/detect-questions',
-      { transcript, previousQuestions, summary }
+      { transcript, previousQuestions, summary, meetingTitle, meetingContext }, options
     ),
 };
 
@@ -814,14 +820,14 @@ export const dictionaryApi = {
     api.delete<void>(`${DICT}/term`, { body: JSON.stringify({ phrase }) }),
 
   // Layer routes: `personal`, `common`, `account:{id}`.
-  listLayer: (layer: DictionaryLayer) =>
-    api.get<{ items: DictTermItem[] }>(`${layerPath(layer)}/terms`),
+  listLayer: (layer: DictionaryLayer, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.get<{ items: DictTermItem[] }>(`${layerPath(layer)}/terms`, options),
   listDeletedCommon: () =>
     api.get<{ items: DeletedCommonTerm[] }>(`${layerPath('common')}/terms?deleted=1`),
-  createLayerTerm: (layer: DictionaryLayer, input: CreateDictTermInput) =>
-    api.post<DictTermMutationResponse>(`${layerPath(layer)}/terms`, input),
-  updateLayerTerm: (layer: DictionaryLayer, termId: string, patch: TermPatch, version: number) =>
-    api.patch<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}`, { ...patch, version }),
+  createLayerTerm: (layer: DictionaryLayer, input: CreateDictTermInput, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.post<DictTermMutationResponse>(`${layerPath(layer)}/terms`, input, options),
+  updateLayerTerm: (layer: DictionaryLayer, termId: string, patch: TermPatch, version: number, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.patch<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}`, { ...patch, version }, options),
   deleteLayerTerm: (layer: DictionaryLayer, termId: string, version: number) =>
     api.delete<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}?version=${version}`),
   updateCommon: (termId: string, patch: TermPatch, version: number) =>
@@ -1050,6 +1056,13 @@ export const accountApi = {
     api.get<AccountSignals>(`/api/accounts/${encodeURIComponent(id)}/signals`, { ...options, cache: 'no-store' }),
   flow: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<AccountFlow>(`/api/accounts/${encodeURIComponent(id)}/flow`, { ...options, cache: 'no-store' }),
+  // The caller's private pre-meeting brief (direct members only; 404 otherwise).
+  customerBrief: {
+    get: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<CustomerBriefResponse>(`/api/accounts/${encodeURIComponent(id)}/customer-brief`, { ...options, cache: 'no-store' }),
+    request: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<CustomerBriefResponse>(`/api/accounts/${encodeURIComponent(id)}/customer-brief`, undefined, { ...options, cache: 'no-store' }),
+  },
   graph: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<AccountGraph>(`/api/accounts/${encodeURIComponent(id)}/graph`, { ...options, cache: 'no-store' }),
   links: {
@@ -1108,6 +1121,9 @@ export const accountApi = {
       api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, options),
     update: (id: string, sourceId: string, input: { sourceName?: string; newsQueries?: string[]; aliases?: string[] }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.put<NewsSourceItem>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, input, options),
+    // Empty body; 202 means the crawler has the request, not that it ran.
+    collect: (id: string, sourceId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<NewsCollectResponse>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}/collect`, undefined, options),
   },
 };
 

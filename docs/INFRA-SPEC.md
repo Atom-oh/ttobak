@@ -30,7 +30,7 @@ The account KB reference rows live in `ttobak-main` (ADR-021, relationship links
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
 | TtobakObservabilityStack | OTLP collector (Fargate, internal ALB) writing to the mgmt ClickHouse PrivateLink | None |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
-| TtobakCrawlerStack | Crawling/ingestion workflow and workers; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
+| TtobakCrawlerStack | Crawling/ingestion workflow and workers; manual account news collection rule; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU On-Demand/Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
@@ -229,6 +229,14 @@ version expiry; a delete marker is not immediate physical deletion of all versio
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
 one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
+Skill package zips live under skillpkg/ (`skillpkg/org/{sha256}.zip`,
+`skillpkg/user/{userId}/{sha256}.zip`); uploads in progress under
+`skillpkg/staging/` expire after one day, current and noncurrent.
+`skillpkg/org/` and `skillpkg/user/` are in the OAC read allowlist and are
+downloaded through the shared signed `/media/*` URLs (S3 presign fallback);
+the staging prefix is not served. Org package objects are not deleted when old
+history rows are pruned (no lifecycle rule; a cleanup pass is a follow-up). The API role's existing bucket read/write
+grant covers the prefix.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.
@@ -718,7 +726,9 @@ ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
 `backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
 regulator sources as such); `all` reads every
-searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
+searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Both modes
+exclude account-owned sources (CONFIG `accountId`, or a row-less `acct_` ID;
+ADR-008, 2026-11-12). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global
@@ -839,6 +849,28 @@ function depends on the rule so the consumer exists before a producer route
 ships; no route publishes yet. No IAM change: the summarize role already has the
 table grant, `kms:Decrypt`/`kms:GenerateDataKey` for sealing and calendar
 decryption, and the `BEDROCK_MODEL_ID` model resources.
+
+## Manual news collection delivery
+
+CrawlerStack rule `ttobak-news-collect-requested` routes default-bus
+`ttobak.crawler` events with detail-type `NewsCollectRequested`
+(`{sourceId,accountId,requestId}`, identifiers only; `sourceId` must start with
+`acct_`) to `ttobak-crawler-news` as `{"manualCollect":{sourceId,accountId,requestId}}`
+(ADR-004). Neither EventBridge (`retryAttempts: 0`, one-hour event age) nor
+Lambda (async `MaximumRetryAttempts: 0`, one-hour age) retries a failure, so there
+are no retry-driven repeats. Before any search, fetch or model call the worker
+claims the request with a conditional `UpdateItem` on the CONFIG row: it runs only
+when `lastCollectRequestId` (set by the request route) equals the event's
+`requestId` and `lastCollectStartedRequestId` does not, so a duplicate delivery of
+the same request is refused. A manual run can still overlap a scheduled run of the
+same source. Delivery failures and failed async invocations land in
+SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied);
+the crawler stack owns the `sqs:SendMessage` policy on the imported crawler role
+and alarms on rule `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, function
+`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. The async
+configuration does not affect the workflow's synchronous `CrawlNews` task. No
+route publishes the event yet; the API role already has default-bus
+`events:PutEvents`.
 
 ## Summary privacy writer activation
 

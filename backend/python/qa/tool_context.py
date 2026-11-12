@@ -5,6 +5,7 @@ from source_tools import SOURCE_TOOL_NAMES
 from tool_history import READONLY_TOOLS, HistoryLimit
 from manual_kb import selected_source_keys
 from canonical_selection import selected_resource_ids
+from live_assistant import automatic_tool_names
 
 SOURCE_HISTORY_TOOLS = SOURCE_TOOL_NAMES | {'search_knowledge_base', 'get_meeting_detail', 'search_transcript'}
 PUBLIC_HISTORY_TOOLS = frozenset(('search_web', 'search_aws_docs', 'get_aws_recommendation'))
@@ -130,6 +131,8 @@ def build_tool_context(user_id, text, source_state, source_details, *, source_ac
         'check_web_search_limit': check_web_search_limit,
         'user_id': user_id,
     })
+    if source_state.get('automaticAnswer') is True:
+        context['allowed_tools'] = automatic_tool_names(source_state.get('allowAutomaticWebSearch'))
     return context
 
 

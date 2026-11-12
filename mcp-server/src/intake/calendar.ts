@@ -2,14 +2,18 @@
 // normalized occurrences to the private TTOBAK calendar, following
 // docs/runbooks/local-outlook-calendar-sync.md. Only explicit cancellations and
 // exclusions of tracked occurrences become removals; absence never does.
+// Account sharing: a matcher built from the TTOBAK share directory adds the
+// matched account (with evidence kinds), candidate accounts or the `private`
+// flag to each upsert. Matched text, attendees and categories never leave the Mac.
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { TtobakApi } from '../api.js';
 import { callCalendarTool, validateCalendarReceipt, validateCalendarSync,
   type CalendarSyncRequest } from '../calendar.js';
 import { batches as splitBatches, deliveryFailure } from './batch.js';
+import type { AttendeeFacts, MeetingFacts } from './attendees.js';
 import { IntakeError } from './errors.js';
-import { resultJson } from './mcp-client.js';
+import { buildMatcher, DEFAULT_OWN_DOMAINS, type DirectoryAccount, type Matcher } from './match.js';
 import type { IntakeStore } from './store.js';
 
 export const CALENDAR_TOOL = { name: 'calendar_view', properties: ['start_date', 'end_date'] };
@@ -21,6 +25,40 @@ const LEDGER_RETENTION_DAYS = 120;
 const MAX_BATCH = 12;
 const UNTITLED = '(제목 없음)';
 
+/** The owner's own response, as selected in `options.calendarResponses`. Declined events are never synced. */
+export const CALENDAR_RESPONSES = ['accept', 'organizer', 'tentative', 'none'] as const;
+export type CalendarResponse = typeof CALENDAR_RESPONSES[number];
+/** New and legacy selections: everything except events the owner has not answered. */
+export const DEFAULT_CALENDAR_RESPONSES: readonly CalendarResponse[] = ['accept', 'organizer', 'tentative'];
+
+/**
+ * Maps the `calendar_view` `response` field. A missing or unrecognised value is
+ * `unknown`, which fails the calendar step closed (`SCHEMA_CHANGED`), so a
+ * provider change never silently stops syncing or mass-removes events.
+ */
+export function responseOf(value: string | undefined): CalendarResponse | 'decline' | 'unknown' {
+  switch (value) {
+    case 'Accept': case 'Accepted': return 'accept';
+    case 'Organizer': return 'organizer';
+    case 'Tentative': case 'TentativelyAccepted': return 'tentative';
+    case 'None': case 'NoResponseReceived': case 'NotResponded': return 'none';
+    case 'Decline': case 'Declined': return 'decline';
+    default: return 'unknown';
+  }
+}
+
+/**
+ * A complete read where no item carries a string `response` means the field
+ * was renamed or dropped: mapped to `none`, the default filter would remove
+ * every synced event. The step fails instead, before any upsert or removal
+ * (a dry run reports the same code).
+ */
+export function assertResponsesPresent(items: readonly OutlookItem[]): void {
+  if (items.length > 0 && !items.some(item => typeof item.response === 'string')) {
+    throw new IntakeError('SCHEMA_CHANGED', 'calendar_view items carry no response field');
+  }
+}
+
 export interface OutlookItem {
   meetingId: string;
   subject?: string;
@@ -30,8 +68,14 @@ export interface OutlookItem {
   isCanceled?: boolean;
   isAllDay?: boolean;
   sensitivity?: string;
+  /** The owner's own response (`Accept`, `Organizer`, ...); never sent to TTOBAK. */
+  response?: string;
   /** Only the email is kept; the organizer's name never leaves the parser. */
   organizer?: { email?: string };
+  meetingChangeKey?: string;
+  seriesId?: string;
+  /** Only whether a `Private` category exists is kept. */
+  privateCategory?: boolean;
 }
 
 export interface CalendarEvent {
@@ -46,9 +90,15 @@ export interface CalendarEvent {
   location?: string;
   /** Lowercase organizer email domain; never the name or local part. */
   organizerDomain?: string;
+  seriesKey?: string;
+  private?: boolean;
+  shareAccountId?: string;
+  shareEvidence?: string[];
+  candidateAccountIds?: string[];
 }
 
-export interface LedgerEntry { fp: string; startsAt: string; endsAt: string }
+export interface ShareFields { shareAccountId?: string; shareEvidence?: string[]; candidateAccountIds?: string[]; private?: boolean }
+export interface LedgerEntry { fp: string; startsAt: string; endsAt: string; share?: ShareFields }
 export type Ledger = Record<string, LedgerEntry>;
 
 export type Mutation = { op: 'upsert'; event: CalendarEvent } | { op: 'remove'; externalId: string };
@@ -59,11 +109,20 @@ export interface CalendarCounts {
   removals: number;
   unchanged: number;
   excluded: number;
+  /** Events whose owner response is not selected (declined events always). */
+  excludedByResponse: number;
+  /** Events with a missing or unrecognised response: neither added nor removed. */
+  responseUnknown: number;
   skippedLong: number;
   skippedInvalid: number;
   cancelledUntracked: number;
   unresolved: number;
   sensitivityUnknown: number;
+  shared: number;
+  candidates: number;
+  private: number;
+  attendeesUnavailable: number;
+  directoryUnavailable: boolean;
 }
 
 export interface Window { start: Date; end: Date }
@@ -77,6 +136,12 @@ export interface CalendarState {
   ledger: Ledger;
   reconcileRequired: boolean;
   pending: null | { request: Record<string, unknown>; set: Ledger; remove: string[] };
+  /**
+   * Occurrences of the last complete read excluded only by an unselected
+   * response (never declined ones). Their SpecReq tasks stay open, so an event
+   * the owner answers later, or a response selected again, keeps its task.
+   */
+  held?: Ledger;
 }
 
 // ---------- time helpers (pure) ----------
@@ -156,9 +221,14 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
     if (typeof value.meetingId !== 'string' || !value.meetingId || typeof value.start !== 'string' ||
         typeof value.end !== 'string' || !optionalType(value, 'subject', 'string') ||
         !optionalType(value, 'location', 'string') || !optionalType(value, 'isCanceled', 'boolean') ||
-        !optionalType(value, 'isAllDay', 'boolean') || !optionalType(value, 'sensitivity', 'string')) {
+        !optionalType(value, 'isAllDay', 'boolean') || !optionalType(value, 'sensitivity', 'string') ||
+        !optionalType(value, 'meetingChangeKey', 'string') || !optionalType(value, 'seriesId', 'string') ||
+        !(value.categories === undefined || value.categories === null ||
+          (Array.isArray(value.categories) && value.categories.every(category => typeof category === 'string')))) {
       throw new IntakeError('PARSE_FAILED', 'calendar item has unexpected field types');
     }
+    const privateCategory = Array.isArray(value.categories) &&
+      value.categories.some(category => (category as string).trim().toLowerCase() === 'private');
     const organizer = value.organizer;
     const email = organizer && typeof organizer === 'object' && !Array.isArray(organizer)
       ? (organizer as Record<string, unknown>).email : undefined;
@@ -169,7 +239,12 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
       ...(typeof value.isCanceled === 'boolean' ? { isCanceled: value.isCanceled } : {}),
       ...(typeof value.isAllDay === 'boolean' ? { isAllDay: value.isAllDay } : {}),
       ...(typeof value.sensitivity === 'string' ? { sensitivity: value.sensitivity } : {}),
+      // A non-string response is treated as missing (`unknown`); the run then fails closed.
+      ...(typeof value.response === 'string' ? { response: value.response } : {}),
       ...(typeof email === 'string' ? { organizer: { email } } : {}),
+      ...(typeof value.meetingChangeKey === 'string' && value.meetingChangeKey ? { meetingChangeKey: value.meetingChangeKey } : {}),
+      ...(typeof value.seriesId === 'string' && value.seriesId ? { seriesId: value.seriesId } : {}),
+      ...(privateCategory ? { privateCategory: true } : {}),
     };
   });
 }
@@ -256,21 +331,100 @@ function validEvent(event: CalendarEvent, window: Window): boolean {
   }
 }
 
+export interface PlanSharing {
+  sourceId: string;
+  /** Null when the share directory could not be read: previous share fields are kept. */
+  matcher: Matcher | null;
+  /** Meeting facts per meetingId; null when the lookup had no answer. Missing means not looked up. */
+  facts: Map<string, MeetingFacts | null>;
+}
+
+/** Items that would be upserted with a sharing decision (and so need meeting facts). */
+export function sharingCandidates(items: OutlookItem[], window: Window): OutlookItem[] {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    if (seen.has(item.meetingId)) return false;
+    const start = instantOf(item.start), end = instantOf(item.end);
+    if (!start || !end || !(end > window.start && start < window.end)) return false;
+    seen.add(item.meetingId);
+    return !item.isCanceled && !excludedSensitivity(item) && !item.privateCategory &&
+      end.getTime() - start.getTime() <= LONG_EVENT_MS;
+  });
+}
+
+function shareFields(event: CalendarEvent): ShareFields | undefined {
+  const fields: ShareFields = {
+    ...(event.shareAccountId ? { shareAccountId: event.shareAccountId } : {}),
+    ...(event.shareEvidence ? { shareEvidence: [...event.shareEvidence] } : {}),
+    ...(event.candidateAccountIds ? { candidateAccountIds: [...event.candidateAccountIds] } : {}),
+    ...(event.private ? { private: true } : {}),
+  };
+  return Object.keys(fields).length ? fields : undefined;
+}
+
+function applyShare(event: CalendarEvent, fields: ShareFields | undefined): void {
+  if (fields?.private) {
+    event.private = true;
+    return;
+  }
+  if (fields?.shareAccountId) {
+    event.shareAccountId = fields.shareAccountId;
+    if (fields.shareEvidence?.length) event.shareEvidence = [...fields.shareEvidence].sort();
+  }
+  const candidates = (fields?.candidateAccountIds ?? []).filter(id => id !== fields?.shareAccountId);
+  if (candidates.length) event.candidateAccountIds = [...new Set(candidates)].sort().slice(0, 5);
+}
+
+function decideSharing(event: CalendarEvent, item: OutlookItem, previous: LedgerEntry | undefined, sharing: PlanSharing): void {
+  // seriesKey is not sent yet: the server keys overrides by it, and a series hide does
+  // not reach already-synced occurrences, so overrides stay per occurrence for now.
+  const facts = sharing.facts.get(item.meetingId);
+  // Fail closed: a private meeting, or one that was private when its lookup failed or was not
+  // attempted (for example with the meetings connector deselected), is never shared.
+  if (item.privateCategory || facts?.isPrivate || (facts == null && previous?.share?.private)) {
+    event.private = true;
+    return;
+  }
+  // This runner proposes Accounts only: a match is sent as a candidate, never as an
+  // automatic share. The owner shares from TTOBAK (an account override).
+  if (!sharing.matcher) {
+    applyShare(event, { candidateAccountIds: previous?.share?.candidateAccountIds });
+    return;
+  }
+  const domains = [...(facts?.domains ?? []), ...(event.organizerDomain ? [event.organizerDomain] : [])];
+  const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
+  if (result.kind === 'matched') applyShare(event, { candidateAccountIds: [result.accountId] });
+  else if (result.kind === 'candidate') applyShare(event, { candidateAccountIds: result.accountIds });
+}
+
 export interface Plan {
   mutations: Mutation[];
   set: Ledger;
   remove: string[];
+  /** Occurrences this read excluded only by an unselected response; see `CalendarState.held`. */
+  held: Ledger;
+  /** Occurrences this read observed cancelled, private or declined: their holds end. */
+  released: string[];
   counts: CalendarCounts;
   preview: { title: string; startsAt: string; op: 'upsert' | 'remove' | 'unchanged' }[];
 }
 
-/** Computes the mutations for one complete read of the window. */
-export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string): Plan {
-  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, skippedLong: 0,
-    skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0 };
+/**
+ * Computes the mutations for one complete read of the window. An event whose
+ * owner response is not in `responses` is excluded like a private one: a
+ * tracked copy is removed explicitly.
+ */
+export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string,
+  responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES, sharing?: PlanSharing): Plan {
+  const wanted = new Set<string>(responses);
+  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, excludedByResponse: 0, responseUnknown: 0, skippedLong: 0,
+    skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0, shared: 0, candidates: 0, private: 0,
+    attendeesUnavailable: 0, directoryUnavailable: sharing ? sharing.matcher === null : false };
   const mutations: Mutation[] = [];
   const set: Ledger = {};
   const remove: string[] = [];
+  const held: Ledger = {};
+  const released: string[] = [];
   const preview: Plan['preview'] = [];
   const seen = new Set<string>();
   const removeTracked = (id: string) => {
@@ -293,13 +447,29 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     counts.fetched++;
     if (item.sensitivity === undefined) counts.sensitivityUnknown++;
     if (item.isCanceled) {
+      released.push(item.meetingId);
       if (!removeTracked(item.meetingId)) counts.cancelledUntracked++;
       else preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
+    // Privacy first, so a private title never reaches a response-removal preview.
     if (excludedSensitivity(item)) {
       counts.excluded++;
+      released.push(item.meetingId);
       removeTracked(item.meetingId);
+      continue;
+    }
+    const response = responseOf(item.response);
+    if (response === 'unknown') {
+      // runCalendar fails the step on any unknown response; nothing is planned for it.
+      counts.responseUnknown++;
+      continue;
+    }
+    if (!wanted.has(response)) {
+      counts.excludedByResponse++;
+      if (response === 'decline') released.push(item.meetingId);
+      else held[item.meetingId] = { fp: '', startsAt: start.toISOString(), endsAt: end.toISOString() };
+      if (removeTracked(item.meetingId)) preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
     if (end.getTime() - start.getTime() > LONG_EVENT_MS) {
@@ -307,10 +477,15 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
       continue;
     }
     const event = toEvent(item, zone);
+    if (event && sharing) decideSharing(event, item, ledger[item.meetingId], sharing);
+    else if (event && item.privateCategory) event.private = true;
     if (!event || !validEvent(event, window)) {
       counts.skippedInvalid++;
       continue;
     }
+    if (event.private) counts.private++;
+    if (event.shareAccountId) counts.shared++;
+    else if (event.candidateAccountIds) counts.candidates++;
     const fp = fingerprint(event);
     if (ledger[event.externalId]?.fp === fp) {
       counts.unchanged++;
@@ -318,7 +493,9 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
       continue;
     }
     mutations.push({ op: 'upsert', event });
-    set[event.externalId] = { fp, startsAt: new Date(event.startsAt).toISOString(), endsAt: new Date(event.endsAt).toISOString() };
+    const share = shareFields(event);
+    set[event.externalId] = { fp, startsAt: new Date(event.startsAt).toISOString(), endsAt: new Date(event.endsAt).toISOString(),
+      ...(share ? { share } : {}) };
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: 'upsert' });
   }
@@ -329,7 +506,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   }
   const key = (mutation: Mutation) => mutation.op === 'upsert' ? mutation.event.externalId : mutation.externalId;
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
-  return { mutations, set, remove, counts, preview };
+  return { mutations, set, remove, held, released, counts, preview };
 }
 
 /** Splits mutations into batches of at most 12 within the request byte budget. */
@@ -337,7 +514,7 @@ export function batches(mutations: Mutation[]): Mutation[][] {
   return splitBatches(mutations, MAX_BATCH);
 }
 
-export function pruneLedger(ledger: Ledger, now: Date): Ledger {
+export function pruneLedger<T extends { endsAt: string }>(ledger: Record<string, T>, now: Date): Record<string, T> {
   const cutoff = now.getTime() - LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   return Object.fromEntries(Object.entries(ledger).filter(([, entry]) => new Date(entry.endsAt).getTime() >= cutoff));
 }
@@ -378,7 +555,8 @@ export function loadState(store: IntakeStore, sourceId: string, scope: string): 
   const state = store.read<CalendarState>(...statePath({ sourceId, scope }));
   if (state === null) return emptyState(sourceId, scope);
   if (state.version !== 1 || state.sourceId !== sourceId || state.scope !== scope ||
-      typeof state.ledger !== 'object' || state.ledger === null) {
+      typeof state.ledger !== 'object' || state.ledger === null ||
+      (state.held !== undefined && (typeof state.held !== 'object' || state.held === null))) {
     throw new IntakeError('STORE_INVALID', 'calendar state does not match its source');
   }
   return state;
@@ -448,6 +626,62 @@ export interface CalendarRunOptions {
   reconcile?: boolean;
   /** The user confirmed the source hides or flags private items itself. */
   acceptUnknownSensitivity?: boolean;
+  /** Optional meeting facts; without them matching uses title, location and organizer domain. */
+  attendees?: AttendeeFacts;
+  ownDomains?: string[];
+  /** Selected owner responses; defaults to `DEFAULT_CALENDAR_RESPONSES`. */
+  responses?: readonly CalendarResponse[];
+}
+
+const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
+const MAX_DIRECTORY_ACCOUNTS = 1000;
+// The server sends at most 200 accounts per page; stop after ten pages. A page over
+// 1,000 entries is malformed.
+const MAX_DIRECTORY_PAGES = 10;
+
+/** Validates the share directory; malformed entries are dropped, a malformed whole is null. */
+export function parseDirectory(value: unknown): DirectoryAccount[] | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const accounts = (value as Record<string, unknown>).accounts;
+  if (!Array.isArray(accounts) || accounts.length > MAX_DIRECTORY_ACCOUNTS) return null;
+  const strings = (list: unknown) => Array.isArray(list) && list.length <= 100 &&
+    list.every(entry => typeof entry === 'string' && entry.length <= 256);
+  const result: DirectoryAccount[] = [];
+  for (const entry of accounts) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const account = entry as Record<string, unknown>;
+    const aliases = account.aliases ?? [], domains = account.domains ?? [];
+    if (typeof account.accountId !== 'string' || !IDENTIFIER.test(account.accountId) ||
+        typeof account.name !== 'string' || account.name.length > 256 || !strings(aliases) || !strings(domains)) continue;
+    result.push({ accountId: account.accountId, name: account.name, aliases: aliases as string[], domains: domains as string[] });
+  }
+  return result;
+}
+
+/** The server pages the directory; a cursor must be a later accountId. */
+export function directoryCursor(value: unknown, previous: string): string | null {
+  const next = value && typeof value === 'object' ? (value as Record<string, unknown>).nextCursor : undefined;
+  if (next === undefined || next === '') return '';
+  return typeof next === 'string' && IDENTIFIER.test(next) && next > previous ? next : null;
+}
+
+/** Reads every directory page; any bad page makes the whole directory unavailable. */
+async function readDirectory(api: TtobakApi | undefined): Promise<DirectoryAccount[] | null> {
+  if (!api) return null;
+  const all: DirectoryAccount[] = [];
+  let cursor = '';
+  try {
+    for (let page = 0; page < MAX_DIRECTORY_PAGES; page++) {
+      const value = await api.calendarShareDirectory(cursor);
+      const accounts = parseDirectory(value);
+      const next = directoryCursor(value, cursor);
+      if (!accounts || next === null) return null;
+      all.push(...accounts);
+      if (!next) return all;
+      cursor = next;
+    }
+  } catch { return null; }
+  return null;
 }
 
 export async function runCalendar(options: CalendarRunOptions): Promise<CalendarRunResult> {
@@ -470,13 +704,34 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const window = syncWindow(now, zone);
   const items: OutlookItem[] = [];
   for (const request of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request)));
-  const plan = planCalendar(items, state.ledger, window, zone);
+  assertResponsesPresent(items);
+  // One directory read per run. Without it, events keep their previous share fields.
+  const directory = await readDirectory(options.api);
+  const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
+  const facts = new Map<string, MeetingFacts | null>();
+  if (matcher && options.attendees) {
+    for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
+    options.attendees.save(now);
+  }
+  const plan = planCalendar(items, state.ledger, window, zone, options.responses, { sourceId, matcher, facts });
+  plan.counts.attendeesUnavailable = options.attendees?.unavailable ?? 0;
+  // Fail closed, dry runs included: an unmapped or missing response would otherwise stop syncing
+  // silently (nothing new is added) or, if read as unanswered, remove synced events.
+  if (plan.counts.responseUnknown > 0) {
+    throw new IntakeError('SCHEMA_CHANGED', `${plan.counts.responseUnknown} calendar_view items carry no known response`);
+  }
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {
     throw new IntakeError('SENSITIVITY_UNKNOWN',
       'items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity');
   }
 
+  // Holds accumulate: new ones are stored before any removal is sent, so the task step never
+  // closes a held occurrence's task. A hold ends only when the occurrence is observed cancelled,
+  // private or declined (now), when its upsert is acknowledged into the ledger, or by retention.
+  state.held = { ...(state.held ?? {}), ...plan.held };
+  for (const id of plan.released) delete state.held[id];
+  store.write(state, ...statePath(state));
   const api = options.api!;
   const groups = batches(plan.mutations);
   if (!groups.length) groups.push([]);
@@ -497,6 +752,8 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
+  for (const id of Object.keys(state.held)) if (Object.hasOwn(state.ledger, id)) delete state.held[id];
+  state.held = pruneLedger(state.held, now);
   store.write(state, ...statePath(state));
   const upserted = new Map<string, OutlookItem>();
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);

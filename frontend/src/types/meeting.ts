@@ -424,6 +424,8 @@ export interface CrawlerSource {
   lastCrawledAt: string;
   status: string;
   documentCount: number;
+  /** Account sources: when "collect now" is allowed again; absent when allowed now. */
+  nextCollectAllowedAt?: string;
 }
 
 export interface CrawlerSubscription {
@@ -575,7 +577,15 @@ export interface ContactInput {
   notes?: string;
 }
 
-export interface AccountContact extends ContactInput { contactId: string; revision: string }
+export interface AccountContact extends ContactInput {
+  contactId: string;
+  revision: string;
+  /** Server-owned SFDC link fields; never shown or edited in the form. */
+  source?: string;
+  sfdcContactId?: string;
+  sfdcAccountId?: string;
+  sfdcLeftAt?: string;
+}
 
 /** A shared event (schedule) of an account; direct members only (ADR-021, contact encryption). */
 export interface EventAttendee { contactId?: string; name: string; email?: string }

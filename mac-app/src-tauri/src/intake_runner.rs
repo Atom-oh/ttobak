@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{oneshot, Notify};
 
-use crate::intake_plan::{self, Connector, IntakeAction, Schedule, SlotState};
+use crate::intake_plan::{self, CalendarResponse, Connector, IntakeAction, Schedule, SlotState};
 use crate::report_runner::ReportSettings;
 
 /// The only adapter source: the app's own origin, exact path, no redirects.
@@ -280,6 +280,48 @@ fn selection_view(selection: &Value) -> Vec<SelectionEntry> {
         .collect()
 }
 
+/// The sync options stored in `selection.json`, as names only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptionsView {
+    calendar_responses: Vec<CalendarResponse>,
+    sfdc_contacts: bool,
+    /// No calendar responses are stored: the defaults apply, so previously
+    /// synced unanswered events are removed on the next run.
+    defaults: bool,
+}
+
+/// The top-level `options` object: `calendarResponses` (known names, canonical
+/// order; absent or not a list: the CLI default accept/organizer/tentative)
+/// and `sfdcContacts` (only `false` turns it off), mirroring the CLI's
+/// `syncOptions`.
+fn options_view(selection: &Value) -> OptionsView {
+    let options = selection.get("options");
+    let stored = options
+        .and_then(|o| o.get("calendarResponses"))
+        .and_then(Value::as_array);
+    let calendar_responses = match stored {
+        Some(stored) => CalendarResponse::ALL
+            .into_iter()
+            .filter(|r| stored.iter().any(|v| v.as_str() == Some(r.as_str())))
+            .collect(),
+        None => vec![
+            CalendarResponse::Accept,
+            CalendarResponse::Organizer,
+            CalendarResponse::Tentative,
+        ],
+    };
+    let sfdc_contacts = options
+        .and_then(|o| o.get("sfdcContacts"))
+        .and_then(Value::as_bool)
+        != Some(false);
+    OptionsView {
+        calendar_responses,
+        sfdc_contacts,
+        defaults: stored.is_none(),
+    }
+}
+
 fn is_executable_file(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -342,6 +384,31 @@ fn parse_login_path(out: &[u8]) -> Option<String> {
         return None;
     }
     Some(s.to_string())
+}
+
+/// Directories the app appends to the login PATH when they exist and are
+/// missing: `aim` lives in `~/.toolbox/bin` (often added only by `~/.zshrc`,
+/// which a login shell does not read) and the AIM server wrappers in
+/// `~/.aim/mcp-servers` exec it.
+const PATH_REPAIR_DIRS: [&str; 3] = [".toolbox/bin", ".aim/mcp-servers", ".local/bin"];
+
+/// `path` with each existing, absent `PATH_REPAIR_DIRS` entry appended in
+/// order. Entries that would not be absolute are never added.
+pub(crate) fn repair_path(path: &str, home: &Path, is_dir: impl Fn(&Path) -> bool) -> String {
+    let mut out = path.to_string();
+    if !home.is_absolute() {
+        return out;
+    }
+    for rel in PATH_REPAIR_DIRS {
+        let dir = home.join(rel);
+        let Some(entry) = dir.to_str() else { continue };
+        if entry.contains(':') || out.split(':').any(|e| e == entry) || !is_dir(&dir) {
+            continue;
+        }
+        out.push(':');
+        out.push_str(entry);
+    }
+    out
 }
 
 /// `$SHELL` when it is an absolute path to an existing file, else zsh.
@@ -529,6 +596,8 @@ pub enum RunKind {
     Login,
     /// `intake_launch_agent_off`: tracked and exclusive, but not a run.
     ScheduleOff,
+    /// `intake_set_options`: tracked and exclusive, but not a run.
+    Options,
 }
 
 /// What a finished run is recorded against.
@@ -639,7 +708,7 @@ impl IntakeState {
         let (tx, rx) = oneshot::channel();
         *self.cancel.lock() = Some(tx);
         self.run_gen.fetch_add(1, Ordering::SeqCst);
-        if kind != RunKind::ScheduleOff {
+        if !matches!(kind, RunKind::ScheduleOff | RunKind::Options) {
             self.progress.lock().lines.clear();
         }
         Ok(rx)
@@ -762,12 +831,15 @@ impl Outcome {
 }
 
 /// The stored login PATH, captured once on first need.
+/// The stored login PATH (captured once when absent), repaired on every use
+/// so a value cached before the toolbox or AIM install still finds them.
 async fn login_path(state: &IntakeState, home: &Path) -> String {
     if let Some(p) = state.snapshot().login_path {
-        return p;
+        return repair_path(&p, home, Path::is_dir);
     }
     match capture_login_path(home).await {
         Some(p) => {
+            let p = repair_path(&p, home, Path::is_dir);
             if let Err(e) = state.update_settings(|s| s.login_path = Some(p.clone())) {
                 log::warn!("login PATH not stored: {e}");
             }
@@ -775,9 +847,44 @@ async fn login_path(state: &IntakeState, home: &Path) -> String {
         }
         None => {
             log::warn!("login shell PATH unavailable; using the fallback PATH");
-            FALLBACK_PATH.to_string()
+            repair_path(FALLBACK_PATH, home, Path::is_dir)
         }
     }
+}
+
+/// Result of a forced PATH recapture: the directories the repair appended and
+/// whether the login shell answered (otherwise the fallback PATH was used).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathRefresh {
+    pub added: Vec<String>,
+    pub captured: bool,
+}
+
+/// Recaptures the login PATH (ignoring the stored value), repairs and stores it.
+pub(crate) async fn refresh_login_path(
+    state: &IntakeState,
+    home: &Path,
+) -> Result<PathRefresh, &'static str> {
+    let captured = capture_login_path(home).await;
+    let base = captured
+        .clone()
+        .unwrap_or_else(|| FALLBACK_PATH.to_string());
+    let repaired = repair_path(&base, home, Path::is_dir);
+    let added = repaired
+        .split(':')
+        .skip(base.split(':').count())
+        .map(str::to_string)
+        .collect();
+    if captured.is_some() {
+        state
+            .update_settings(|s| s.login_path = Some(repaired.clone()))
+            .map_err(|_| "save-failed")?;
+    }
+    Ok(PathRefresh {
+        added,
+        captured: captured.is_some(),
+    })
 }
 
 /// `$SHELL -l -c 'printf %s "$PATH"'`: the only shell use. Fixed script, no
@@ -1282,6 +1389,8 @@ pub struct IntakeStateView {
     last_result: Option<Value>,
     status: Value,
     selection: Vec<SelectionEntry>,
+    /// Sync options from `selection.json` (names only).
+    options: OptionsView,
     launch_agent_installed: bool,
     /// Progress lines of the current or last run (not persisted).
     progress: Vec<String>,
@@ -1317,6 +1426,7 @@ pub async fn intake_get_state(state: State<'_, IntakeState>) -> Result<IntakeSta
         .as_deref()
         .and_then(|h| resolve_node(settings.node_path.as_deref(), h));
     let launch_agent_installed = home.as_deref().is_some_and(launch_agent_present);
+    let selection = read_json("selection.json", MAX_SELECTION_BYTES);
     Ok(IntakeStateView {
         adapter: adapter_view(&state, home.as_deref()),
         node_missing: node.is_none(),
@@ -1325,7 +1435,8 @@ pub async fn intake_get_state(state: State<'_, IntakeState>) -> Result<IntakeSta
         running: *state.running.lock(),
         last_result: state.last_result.lock().clone(),
         status: read_json("status.json", MAX_STATUS_BYTES),
-        selection: selection_view(&read_json("selection.json", MAX_SELECTION_BYTES)),
+        selection: selection_view(&selection),
+        options: options_view(&selection),
         launch_agent_installed,
         progress: state.progress.lock().lines.iter().cloned().collect(),
     })
@@ -1369,6 +1480,32 @@ pub async fn intake_launch_agent_off(app: AppHandle) -> Result<Value, String> {
         false,
     )
     .await;
+    state.end();
+    if state.retry_after_run.swap(false, Ordering::SeqCst) {
+        state.poke(true);
+    }
+    match outcome.code {
+        None => Ok(outcome.result.unwrap_or(Value::Null)),
+        Some(code) => Err(code),
+    }
+}
+
+/// Runs `intake options` with typed values in the exclusive run slot; returns
+/// the CLI's JSON result (`{ok, options}`) or its code.
+#[tauri::command]
+pub async fn intake_set_options(
+    app: AppHandle,
+    calendar_responses: Vec<CalendarResponse>,
+    sfdc_contacts: bool,
+) -> Result<Value, String> {
+    let state = app.state::<IntakeState>();
+    state.available()?;
+    let action = IntakeAction::Options {
+        calendar_responses: calendar_responses.into_iter().collect(),
+        sfdc_contacts,
+    };
+    let cancel = state.try_begin(RunKind::Options)?;
+    let outcome = execute(&app, &action, SCHEDULE_OFF_TIMEOUT, Some(cancel), false).await;
     state.end();
     if state.retry_after_run.swap(false, Ordering::SeqCst) {
         state.poke(true);
@@ -1460,19 +1597,58 @@ impl Drop for AdapterGuard<'_> {
     }
 }
 
-/// Downloads and installs the served adapter, keeping one `server.mjs.bak`.
+/// Recaptures and repairs the login PATH that intake and report runs use.
 #[tauri::command]
-pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterView, String> {
+pub async fn intake_refresh_path(state: State<'_, IntakeState>) -> Result<PathRefresh, String> {
     state.available()?;
-    let _busy = state.begin_adapter_update()?;
     let home = home_dir().ok_or("unavailable")?;
-    let served = fetch_adapter().await.map_err(str::to_string)?;
-    install_adapter(&home.join(".ttobak"), &served).map_err(|e| {
-        log::warn!("adapter install failed: {:?}", e.kind());
-        "save-failed".to_string()
+    refresh_login_path(&state, &home)
+        .await
+        .map_err(str::to_string)
+}
+
+/// The served bundle differs from the installed one (or none is installed).
+pub(crate) fn adapter_changed(current: Option<&[u8]>, served: &[u8]) -> bool {
+    current != Some(served)
+}
+
+/// Result of [Update]: the new adapter view and whether the file changed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterUpdate {
+    adapter: AdapterView,
+    changed: bool,
+}
+
+/// Fetches the served adapter and installs it when it differs, keeping one
+/// `server.mjs.bak`. Returns whether anything changed.
+pub(crate) async fn update_adapter(state: &IntakeState, home: &Path) -> Result<bool, String> {
+    let _busy = state.begin_adapter_update()?;
+    let served = fetch_adapter().await.map_err(|e| {
+        log::info!("adapter fetch failed: {e}");
+        e.to_string()
     })?;
+    let changed = adapter_changed(local_adapter(home).as_deref(), &served);
+    if changed {
+        install_adapter(&home.join(".ttobak"), &served).map_err(|e| {
+            log::warn!("adapter install failed: {:?}", e.kind());
+            "save-failed".to_string()
+        })?;
+    }
     *state.update_available.lock() = Some(false);
-    Ok(adapter_view(&state, Some(&home)))
+    Ok(changed)
+}
+
+/// Downloads and installs the served adapter; always reports the outcome.
+#[tauri::command]
+pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterUpdate, String> {
+    state.available()?;
+    let home = home_dir().ok_or("unavailable")?;
+    let changed = update_adapter(&state, &home).await?;
+    Ok(AdapterUpdate {
+        adapter: adapter_view(&state, Some(&home)),
+        changed,
+    })
 }
 
 #[cfg(test)]
@@ -1604,6 +1780,39 @@ mod tests {
             assert!(!text.contains(leaked), "{leaked} leaked");
         }
         assert!(selection_view(&json!(null)).is_empty());
+    }
+
+    #[test]
+    fn options_view_reads_names_with_defaults() {
+        use CalendarResponse::*;
+        let legacy = options_view(&json!({"calendar": {"server": "x"}, "sfdc": {"server": "y"}}));
+        assert_eq!(
+            legacy.calendar_responses,
+            vec![Accept, Organizer, Tentative]
+        );
+        assert!(legacy.sfdc_contacts);
+        assert!(legacy.defaults);
+        assert_eq!(options_view(&json!(null)), legacy);
+        let set = options_view(&json!({
+            "calendar": {"pathDirs": ["/secret"]},
+            "options": {"calendarResponses": ["none", "bogus", 7, "accept"], "sfdcContacts": false}
+        }));
+        assert_eq!(set.calendar_responses, vec![Accept, None]);
+        assert!(!set.sfdc_contacts);
+        assert!(!set.defaults);
+        assert!(options_view(&json!({"options": {"calendarResponses": []}}))
+            .calendar_responses
+            .is_empty());
+        assert!(options_view(&json!({"options": {"sfdcContacts": "no"}})).sfdc_contacts);
+        // The per-connector fields are not read.
+        let old =
+            options_view(&json!({"calendar": {"responses": []}, "sfdc": {"contacts": false}}));
+        assert_eq!(old, legacy);
+        let text = serde_json::to_string(&set).expect("json");
+        assert_eq!(
+            text,
+            r#"{"calendarResponses":["accept","none"],"sfdcContacts":false,"defaults":false}"#
+        );
     }
 
     #[cfg(unix)]
@@ -1754,6 +1963,48 @@ mod tests {
         assert_eq!(parse_login_path(b"/usr/bin\n/bin"), None);
         assert_eq!(parse_login_path(&[b'/'; 9000]), None);
         assert_eq!(parse_login_path(b"/usr/\xffbin"), None);
+    }
+
+    #[test]
+    fn adapter_update_reports_unchanged_bytes() {
+        assert!(!adapter_changed(Some(b"same"), b"same"));
+        assert!(adapter_changed(Some(b"old"), b"new"));
+        assert!(adapter_changed(None, b"new"));
+    }
+
+    #[test]
+    fn repair_path_appends_missing_existing_dirs() {
+        let home = Path::new("/Users/u");
+        let exists = |p: &Path| p.ends_with(".toolbox/bin") || p.ends_with(".local/bin");
+        assert_eq!(
+            repair_path("/usr/bin:/bin", home, exists),
+            "/usr/bin:/bin:/Users/u/.toolbox/bin:/Users/u/.local/bin"
+        );
+    }
+
+    #[test]
+    fn repair_path_keeps_present_dirs_once() {
+        let home = Path::new("/Users/u");
+        let path = "/Users/u/.toolbox/bin:/usr/bin:/Users/u/.aim/mcp-servers";
+        assert_eq!(
+            repair_path(path, home, |_| true),
+            format!("{path}:/Users/u/.local/bin")
+        );
+        assert_eq!(repair_path(path, home, |_| false), path);
+    }
+
+    #[test]
+    fn repair_path_result_still_parses() {
+        let repaired = repair_path("/usr/bin", Path::new("/Users/u"), |_| true);
+        assert_eq!(
+            parse_login_path(repaired.as_bytes()).as_deref(),
+            Some(repaired.as_str())
+        );
+        // A HOME that would make an invalid entry adds nothing.
+        assert_eq!(
+            repair_path("/usr/bin", Path::new("rel"), |_| true),
+            "/usr/bin"
+        );
     }
 
     #[test]

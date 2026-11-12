@@ -157,3 +157,80 @@ test('setup rows show each connector with its skip reason', () => {
   assert.deepEqual(plain(intake.setupConnectorRows({ action: 'setup', result: null })), []);
   assert.deepEqual(plain(intake.setupConnectorRows(null)), []);
 });
+
+test('sfdcContacts row has its label and a counts summary', () => {
+  const rows = plain(intake.sourceRows({ sfdcContacts: { lastRunAt: '2026-11-10T00:00:00Z', result: 'ok',
+    counts: { fetched: 30, created: 4, filled: 2, marked: 1, unmarked: 0, unchanged: 20 } } }, []));
+  assert.equal(rows[0].source, 'sfdcContacts');
+  assert.equal(rows[0].label, 'SFDC 연락처');
+  assert.equal(rows[0].counts, '가져옴 30 · 생성 4 · 보강 2 · 빠짐 1 · 복귀 0');
+  const problems = plain(intake.sourceRows({ sfdcContacts: { result: 'ok', counts: { fetched: 3, created: 1, filled: 0,
+    marked: 0, unmarked: 0, skipped: 2, ambiguous: 1, forbidden: 0, incomplete: 1, deferredIncomplete: 2, accountMismatch: 1, deferred: 3 } } }, []));
+  assert.equal(problems[0].counts, '가져옴 3 · 생성 1 · 보강 0 · 빠짐 0 · 복귀 0 · 건너뜀 2 · 애매함 1 · 불완전 1 · 다음 실행으로 미룸 2 · 계정 불일치 1 · 시간 초과로 미룬 계정 3');
+  const partial = plain(intake.sourceRows({ sfdcContacts: { result: 'TTOBAK_UNAVAILABLE', counts: { fetched: 5, created: 2,
+    filled: 1, marked: 0, unmarked: 0, forbidden: 1 } } }, []));
+  assert.equal(partial[0].result, 'TTOBAK_UNAVAILABLE');
+  assert.equal(partial[0].counts, '가져옴 5 · 생성 2 · 보강 1 · 빠짐 0 · 복귀 0 · 권한 없음 1', 'a partial result keeps its counts');
+  const failedSfdc = plain(intake.sourceRows({ sfdc: { result: 'SOURCE_ERROR', counts: { tasks: { fetched: 1 } } } }, []));
+  assert.equal(failedSfdc[0].counts, null, 'other sources show counts only on success');
+  const selected = plain(intake.sourceRows({}, [{ connector: 'sfdcContacts', disabled: false }]));
+  assert.equal(selected[0].label, 'SFDC 연락처');
+});
+
+test('syncOptionsView shows the defaults and the fixed labels', () => {
+  const labels = ['수락함', '내가 주최함', '잠정 수락', '아직 응답 안 함'];
+  const defaults = plain(intake.syncOptionsView(undefined));
+  assert.deepEqual(defaults.responses.map(row => row.label), labels);
+  assert.deepEqual(defaults.responses.map(row => [row.response, row.checked]),
+    [['accept', true], ['organizer', true], ['tentative', true], ['none', false]]);
+  assert.equal(defaults.sfdcContacts, true);
+  assert.deepEqual(plain(intake.syncOptionsView('garbage')), defaults);
+  assert.deepEqual(plain(intake.syncOptionsView({ calendarResponses: 'accept', sfdcContacts: 'no' })), defaults);
+  const set = plain(intake.syncOptionsView({ calendarResponses: ['none', 'bogus', 'accept'], sfdcContacts: false }));
+  assert.deepEqual(set.responses.filter(row => row.checked).map(row => row.response), ['accept', 'none']);
+  assert.equal(set.sfdcContacts, false);
+  assert.equal(plain(intake.syncOptionsView({ calendarResponses: [], sfdcContacts: true })).responses.some(row => row.checked), false);
+  assert.equal(intake.SYNC_OPTIONS_COPY.title, '동기화 옵션');
+  assert.equal(intake.SYNC_OPTIONS_COPY.uncheckedRemovedNote, '선택을 끈 응답의 일정은 다음 동기화 때 TTOBAK에서 지워져요.');
+  assert.equal(intake.SYNC_OPTIONS_COPY.declinedNote, '거절한 일정은 항상 제외돼요.');
+});
+
+test('a disabled step result is kept and labelled', () => {
+  const rows = plain(intake.sourceRows({ sfdcContacts: { lastRunAt: '2026-11-10T00:00:00Z', result: 'disabled' } }, []));
+  assert.equal(rows[0].result, 'disabled');
+  assert.equal(rows[0].counts, null);
+  assert.equal(intake.intakeCodeLabel('disabled'), '꺼짐');
+});
+
+test('sync options: defaults note, saved result and adapter-too-old text', () => {
+  assert.equal(intake.syncOptionsView({ calendarResponses: ['accept'], sfdcContacts: true, defaults: true }).defaults, true);
+  assert.equal(intake.syncOptionsView({ calendarResponses: ['accept'], sfdcContacts: true }).defaults, false);
+  assert.equal(intake.syncOptionsView(undefined).defaults, false);
+  assert.equal(intake.SYNC_OPTIONS_COPY.defaultsRemoveNote, '지금 설정에서는 아직 응답하지 않은 일정이 다음 동기화 때 TTOBAK에서 지워져요.');
+  assert.deepEqual(plain(intake.savedOptions({ ok: true, options: { calendarResponses: ['none', 'accept', 'x'], sfdcContacts: false } })),
+    { calendarResponses: ['accept', 'none'], sfdcContacts: false, defaults: false });
+  assert.equal(intake.savedOptions(null), null);
+  assert.equal(intake.savedOptions({ ok: true, options: { calendarResponses: 'accept', sfdcContacts: true } }), null);
+  assert.equal(intake.optionsSaveErrorText('EXIT_FAILED'), '수집 도구를 업데이트한 뒤 다시 시도하세요.');
+  assert.equal(intake.optionsSaveErrorText('INVALID_ARGUMENT'), '수집 도구를 업데이트한 뒤 다시 시도하세요.');
+  assert.equal(intake.optionsSaveErrorText('RUN_IN_PROGRESS'), '이미 수집 중이에요.');
+});
+
+test('adapter update always reports a result', () => {
+  assert.equal(intake.adapterUpdateMessage(true), '수집 도구를 최신 버전으로 바꿨어요.');
+  assert.equal(intake.adapterUpdateMessage(false), '수집 도구가 이미 최신이에요.');
+  for (const code of ['network', 'adapter-invalid', 'save-failed', 'unavailable', 'busy', 'RUN_IN_PROGRESS']) {
+    const label = intake.intakeCodeLabel(code);
+    assert.ok(label && label !== code, `label for ${code}`);
+  }
+});
+
+test('adapter update accepts the legacy response of older apps', () => {
+  const adapter = { present: true, updateAvailable: false };
+  assert.deepEqual(plain(intake.normalizeAdapterUpdate({ adapter, changed: true })), { adapter, changed: true });
+  // Apps before the result shape return the bare adapter view.
+  assert.deepEqual(plain(intake.normalizeAdapterUpdate(adapter)), { adapter, changed: null });
+  assert.equal(intake.adapterUpdateMessage(null), '수집 도구 업데이트를 마쳤어요.');
+  assert.equal(intake.normalizeAdapterUpdate(null), null);
+  assert.equal(intake.normalizeAdapterUpdate({ adapter: 'x' }), null);
+});

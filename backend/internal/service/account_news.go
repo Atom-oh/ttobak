@@ -26,6 +26,8 @@ type accountNewsRepo interface {
 	UpdateAccountNewsSource(ctx context.Context, accountID, userID, sourceID string, fields repository.AccountNewsSourceFields) error
 	ReconcileAccountNewsSourceCount(ctx context.Context, accountID string) (int, error)
 	GetAccountNewsSourceCount(ctx context.Context, accountID string) (count int, exists bool, err error)
+	ClaimAccountNewsCollect(ctx context.Context, accountID, userID, sourceID, requestID string, requestedAt, cutoff time.Time) error
+	ReleaseAccountNewsCollect(ctx context.Context, sourceID, requestID string) error
 }
 
 type accountNewsCrawler interface {
@@ -61,6 +63,8 @@ type AccountNewsService struct {
 	// subscriptions and memberships back ListAll; nil fails it closed.
 	subscriptions newsSourceSubscriptions
 	memberships   newsSourceMemberships
+	// publishCollect sends NewsCollectRequested; nil fails CollectNow closed.
+	publishCollect func(context.Context, model.NewsCollectRequested) error
 }
 
 func NewAccountNewsService(repo accountNewsRepo, crawler accountNewsCrawler, insights *InsightsService) *AccountNewsService {
@@ -325,7 +329,15 @@ func (s *AccountNewsService) List(ctx context.Context, userID, accountID string)
 	if _, err := s.authorize(ctx, accountID, userID); err != nil {
 		return nil, err
 	}
-	return s.accountSources(ctx, accountID)
+	sources, err := s.accountSources(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	for i := range sources {
+		sources[i].NextCollectAllowedAt = nextCollectAllowedAt(sources[i].LastCollectRequestedAt, now)
+	}
+	return sources, nil
 }
 
 // Delete removes the ref and disables the CONFIG so the scheduler stops

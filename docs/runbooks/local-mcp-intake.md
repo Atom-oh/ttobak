@@ -7,9 +7,13 @@ commands from Settings and the SA activity page ([Mac app](#mac-app)); the
 command line stays available. Acceptance on the user's Mac is pending; nothing here proves it.
 
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
-contract for one reader, `aws-outlook-mcp` `calendar_view`. The
+contract for one reader, `aws-outlook-mcp` `calendar_view`. It also proposes
+candidate accounts for account-shared calendars (see
+[Account matching](#account-matching)). The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
-SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md).
+SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md),
+and its [contacts step](#sfdc-contacts-step) syncs customer contacts into the
+mapped TTOBAK Accounts.
 
 ## Mac app
 
@@ -18,14 +22,18 @@ The Mac app runs the adapter for you: a Settings section (copy key
 a browser and in an app build without intake. The app spawns `node` with an
 argument list (no shell) and a cleared environment: `HOME`, `LANG` and a `PATH`
 taken once from the login shell (`$SHELL -l -c`), with the node directory
-prepended. Nothing else from your shell reaches the run.
+prepended. On every use the app appends `~/.toolbox/bin`, `~/.aim/mcp-servers`
+and `~/.local/bin` when they exist and are missing, so the AIM wrappers find
+`aim` even when only `~/.zshrc` adds it; `intake_refresh_path` recaptures the
+login PATH. Nothing else from your shell reaches the run.
 
 Install and update the adapter:
 
 - The adapter is `~/.ttobak/server.mjs`. Settings shows whether it is present and
   whether a newer one is available; the update button downloads
   `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (https only, no redirects, at
-  most 8 MiB, must contain `intake setup`).
+  most 8 MiB, must contain `intake setup`) and always reports whether it replaced
+  the file or it was already current.
 - One `server.mjs.bak` keeps the replaced file. `server.mjs` changes only by an
   atomic rename, so it is never missing.
 - An update is refused while a run is going (`RUN_IN_PROGRESS`), and a run
@@ -33,6 +41,11 @@ Install and update the adapter:
 - If node is not found, Settings asks for its path. The path must be an
   executable regular file named `node`; any other value is rejected with one
   generic message.
+
+Sync options (copy key `syncOptionsTitle`) set which calendar events sync, by
+your own response, and whether the SFDC contacts step runs. Save runs
+`intake options` in the exclusive run slot; see
+[Sync options](#sync-options).
 
 Connect sources (the setup button runs `intake setup`):
 
@@ -108,6 +121,7 @@ Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
 intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
 intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
 intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
 intake login
 ```
@@ -152,10 +166,11 @@ selections stay saved and no schedule is installed.
 
 `intake run` runs the selected connectors in order, calendar (with its task
 step) then SFDC, with one shared TTOBAK sign-in. The JSON line is
-`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts}}}`.
-It exits 0 only when every attempted connector succeeded. Otherwise it exits 2
+`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts, sfdcContacts?}}}`.
+It exits 0 only when every attempted connector and the SFDC contacts step
+succeeded. Otherwise it exits 2
 with `PARTIAL_FAILURE`; `AUTH_EXPIRED_MIDWAY` anywhere, including the
-calendar's task step (`tasks.failures`), stops the run before later
+calendar's task step (`tasks.failures`) and the SFDC contacts step, stops the run before later
 connectors, because they share Midway, and is the code. Setup's first sync
 follows the same rule. Disabled selections are skipped. `--noninteractive` never prompts and
 never opens a browser; the LaunchAgent uses it.
@@ -165,23 +180,67 @@ never opens a browser; the LaunchAgent uses it.
 | Command | Effect |
 |---|---|
 | `intake hosts` | Lists servers in `~/.claude.json`, `~/.codex/config.toml` and `~/.kiro/settings/mcp.json`: name, transport, disabled, command found. Never values. |
-| `intake select calendar --host <claude\|codex\|kiro> --server <name> [--accept-unknown-sensitivity]` | Starts that server once and checks the `calendar_view` schema. It stores the reference, the current terminal's `PATH` directories and the TTOBAK endpoints: `TTOBAK_*` env first, else the four endpoint keys of the host's own `ttobak` entry (no other values are read). |
-| `intake calendar --dry-run [--preview]` | Reads the window, plans mutations and prints counts. It makes no TTOBAK calls. `--preview` also prints titles locally. |
+| `intake select calendar --host <claude\|codex\|kiro> --server <name> [--accept-unknown-sensitivity] [--own-domain <domain>]...` | Starts that server once and checks the `calendar_view` schema. It stores the reference, the current terminal's `PATH` directories and the TTOBAK endpoints: `TTOBAK_*` env first, else the four endpoint keys of the host's own `ttobak` entry (no other values are read). `--own-domain` is repeatable (default `amazon.com`, at most 20); those domains never match an account. |
+| `intake calendar --dry-run [--preview]` | Reads the window, plans mutations and prints counts. Its only TTOBAK call is the share directory read with a stored session, never a browser login; without one the directory counts as unavailable. `--preview` also prints titles locally. |
 | `intake calendar [--noninteractive] [--reconcile]` | Syncs. `--noninteractive` fails with `TTOBAK_LOGIN_REQUIRED` instead of opening a browser. `--reconcile` adopts the server revision after a 409. |
 | `intake select meetings\|specreq\|slack --host <claude\|codex\|kiro> --server <name>` | Starts that server once and checks every allowlisted tool schema. It stores only the reference and `PATH` directories; TTOBAK endpoints still come from the calendar selection or `TTOBAK_*` env. |
 | `intake select specreq ... --auto-ack on\|off` | `on` (default) lets the runner acknowledge an eligible assignment; `off` queues an `ack_needed` notice instead. |
 | `intake login` | Interactive Cognito sign-in (a browser may open; use it only from an explicit user action). Prints `{ok:true,email}`; exits 2 with `{ok:false,code}` on failure. It does not take the run lock. |
 | `intake status` | Shows the selection (names only) and the last calendar and task results and counts. |
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
+| `intake options [--calendar-responses <csv>] [--sfdc-contacts on\|off]` | Stores the given [sync options](#sync-options) and prints `{ok, options:{calendarResponses, sfdcContacts}}`; with no flags it only prints them. An unknown value exits 2 with `INVALID_ARGUMENT`. |
 
-`run`, `setup`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
+`run`, `setup`, `select`, `options`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
 (`<pid> <random token>`, the same `IntakeStore.lock` as the per-connector locks).
 A second concurrent run exits 2 with `RUN_IN_PROGRESS` and touches no state; a lock
 whose process is gone is reclaimed under a serializing `run.lock.break` lock. `status`, `hosts`,
-`schedule`, `login` and `select` do not take it.
+`schedule` and `login` do not take it.
 
 The window is the past 7 days through the next 30 days in the Mac's time zone,
 read as 7-day `calendar_view` requests.
+
+### Sync options
+
+Stored in the top-level `options` object of `~/.ttobak/intake/selection.json`,
+apart from the connector entries, so a value set before a connector is selected
+is kept. Absent fields mean the defaults; the first selection stores them.
+
+- `calendarResponses`: any of `accept`, `organizer`, `tentative`, `none`;
+  default `accept,organizer,tentative`; an empty list syncs no events. The
+  `calendar_view` `response` maps `Accept` or `Accepted`, `Organizer`,
+  `Tentative` or `TentativelyAccepted`, and `NoResponseReceived`, `NotResponded`
+  or `None`. `Decline` or `Declined` is always excluded. Any item with a
+  missing or unrecognised value fails the calendar step, dry runs included,
+  with `SCHEMA_CHANGED` before any change, so a provider change can neither
+  stop syncing silently nor mass-remove synced events.
+- `sfdcContacts`: default on. Off skips the [contacts step](#sfdc-contacts-step)
+  with result `disabled`, which is not a failure.
+
+An event whose response is not selected is excluded like a private one: it is
+not sent, and a tracked copy is removed on the next real run. Dry runs report
+`excludedByResponse`. A private event is excluded before the response is
+checked, so its title never appears in a removal preview. An occurrence
+excluded only by an unselected response (not a declined one) is recorded as
+held in the calendar state, and its SpecReq task stays open: when the owner
+answers the invitation or selects the response again, the event syncs again
+with the same task. Holds accumulate across runs and end only when the
+occurrence is observed cancelled, private or declined, when its upsert is
+acknowledged into the ledger, or when the calendar retention prunes it. A read
+that does not return the occurrence, a skipped re-upsert (too long, invalid)
+or a rejected batch keeps the hold. A held occurrence stays tracked, so a
+decline still closes its task even past the task list cap. A declined, cancelled or deleted occurrence closes its task as
+before. The response itself never reaches TTOBAK.
+
+After the update, the first real run (possibly a scheduled one, before you open
+Settings) removes previously synced events that are declined or unanswered. Settings shows copy key
+`defaultsRemoveNote` while the no-response box is unchecked. To keep the unanswered ones,
+check the no-response box (copy key `responseNone`) in Settings, or run
+`intake options --calendar-responses accept,organizer,tentative,none`, before
+the next run. Declined events cannot be kept.
+
+The options take effect only with an updated adapter (`~/.ttobak/server.mjs`).
+An older adapter has no `intake options` and Settings shows the `adapterTooOld`
+message on save; update the adapter first.
 
 ## Behavior
 
@@ -191,14 +250,23 @@ read as 7-day `calendar_view` requests.
   lowercase email domain (`organizerDomain`) go to TTOBAK. Locations have join
   URLs and passcodes removed. The organizer's name and email local part,
   attendees, body, categories and response are dropped.
+  `seriesKey` is not sent yet, so sharing overrides apply per occurrence; a
+  series-wide hide needs a server fan-out to already-synced occurrences first.
 - **Exclusions.** Items flagged `Private` or `Confidential` are excluded, and
   removed if they were tracked. Events longer than 93 days are skipped. Real
   runs fail with `SENSITIVITY_UNKNOWN` when any item lacks a sensitivity flag,
   unless the selection was made with `--accept-unknown-sensitivity`.
+- **Private.** An item with the Outlook category `Private` (any case), or
+  whose joined `get_meeting` says `isPrivate: true`, is sent with
+  `private: true` and no share fields. The server then writes no share for it,
+  except that an owner `account` override set in TTOBAK still beats `private`
+  (`decideCalendarShare`): such an event stays shared until the owner clears
+  the override.
 - **Removals.** Only a cancelled or excluded *tracked* occurrence is removed.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
-  - Each batch (at most 20 mutations, about 60 KB or less) is journaled in
+  - Each batch (at most 12 mutations, so that share-bearing upserts stay
+    within the server's 100-item transaction, and about 60 KB or less) is journaled in
     `~/.ttobak/intake/calendar/<sourceId>/<scope>/state.json` before sending.
     `<scope>` is a digest of the TTOBAK deployment and the signed-in user, so
     a batch built for one account is never sent after signing in to another;
@@ -207,6 +275,9 @@ read as 7-day `calendar_view` requests.
   - An ambiguous failure keeps it for an identical retry on the next run.
   - A 4xx drops it. A 409 also blocks later runs until `--reconcile`.
   - The last batch of a run is `complete:true`.
+- **Counts.** Besides the plan counts: `shared`, `candidates` and `private`
+  (events in the window, sent or unchanged), `attendeesUnavailable` and
+  `directoryUnavailable` (boolean).
 - **Errors.**
   - `AUTH_EXPIRED_MIDWAY`: run `mwinit -o`.
   - Also `SERVER_START_FAILED`, `SCHEMA_CHANGED`, `PARSE_FAILED`, `LOCKED`
@@ -216,6 +287,10 @@ read as 7-day `calendar_view` requests.
 
 ## Deploy order and rollback
 
+- Deploy the API with the account-sharing contract (`candidateAccountIds`,
+  `private`, the share directory route) before publishing a runner that sends
+  them. An older API rejects those fields with 400, so a misordered window fails
+  the calendar run.
 - Deploy the API before any runner that sends `organizerDomain`. The calendar
   request decoder is strict, so an API that predates `organizerDomain` rejects
   such batches with 400 and every calendar run fails until the API is updated.
@@ -229,6 +304,31 @@ read as 7-day `calendar_view` requests.
   already declares `organizerDomain` still reads them.
 - Re-running `intake calendar` backfills `organizerDomain` only for events in
   the intake window (past 7 days through the next 30), not the full year.
+
+## Account matching
+
+- **Directory.** Each run reads `GET /api/calendar/share-directory` once
+  (accounts the user directly belongs to: ID, name, aliases, domains). If the
+  read fails, `directoryUnavailable` is `true` and every event keeps the
+  candidates recorded in the ledger; unchanged events are not re-sent.
+- **Matching.** The deterministic matcher (`intake/match.ts`) compares title
+  and location with names and aliases, and attendee and organizer domains with
+  account domains, excluding own domains. Matched accounts (up to five) are sent
+  as `candidateAccountIds`; the runner never sends `shareAccountId`, so it never
+  shares an event by itself. The owner shares from TTOBAK. Fingerprints cover
+  these fields, so a match or category change re-sends the event.
+- **Meeting facts.** When the `meetings` connector is selected, each event that
+  may be matched is joined to its meeting exactly like the task step (one
+  `list_meetings` per run, then `get_meeting` with the recorded SpecReq login
+  address, else the TTOBAK email). Only the address domains and `isPrivate` are
+  kept; a payload without `isPrivate` or any attendee or organizer field is no
+  answer. Facts are cached in `calendar/<sourceId>/meeting-facts.json` by
+  `meetingId` and `meetingChangeKey`, pruned with the ledger. At most 25
+  `get_meeting` reads run per sync, and three consecutive failures stop them.
+  More than 50 distinct domains is no domain answer (the private flag still
+  counts). A lookup without an answer counts in `attendeesUnavailable` and keeps a
+  previous private flag. Without the connector, matching uses title, location
+  and organizer domain.
 
 ## SpecReq task step
 
@@ -331,15 +431,22 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 
 ## Acceptance on the Mac (required before scheduling)
 
-1. Sign in once interactively: `intake calendar --dry-run` does not need TTOBAK;
-   a first non-dry run without `--noninteractive` opens the TTOBAK login.
-2. `intake select calendar --host claude --server aws-outlook-mcp`, then
-   `intake calendar --dry-run`. Check that the counts are plausible.
+1. Sign in once interactively: a first non-dry run without `--noninteractive`
+   opens the TTOBAK login. `intake calendar --dry-run` never opens a login; it
+   reads the share directory only when a TTOBAK session exists, and otherwise
+   reports `directoryUnavailable: true`.
+2. `intake select calendar --host claude --server aws-outlook-mcp`, optionally
+   `intake select meetings --host claude --server amazon-meetings-mcp`, then
+   `intake calendar --dry-run`. Check that the counts are plausible, including
+   `shared`, `candidates`, `private` and `attendeesUnavailable`.
 3. Create synthetic test events and verify each case:
    - a **private** event: is it hidden by the server, or does it carry a
      sensitivity flag? Observed 2026-11-09: neither; it arrives like a public
      event. `--accept-unknown-sensitivity` therefore accepts that private
      items reach the private TTOBAK calendar;
+   - an event whose title contains an account alias, one with an attendee
+     from an account domain only, one matching two accounts, a `Private`
+     category added after a match, and a title edited after a match;
    - a **moved occurrence** of a recurring event keeps its `meetingId`;
    - a **cancelled occurrence** arrives with `isCanceled: true`, or disappears
      (then it stays `unresolved`);
@@ -441,7 +548,8 @@ assignments are reconciled (see below).
 
 `intake select sfdc --host <claude|codex|kiro> --server aws-sentral-mcp` checks
 the input schemas of `get_my_personal_details`, `get_registry_assignments` and
-`search_tasks`, and keeps the calendar selection. `intake sfdc [--dry-run]
+`search_tasks`, and keeps the calendar selection. `search_contacts` is allowed
+and checked only by the contacts step while it is on. `intake sfdc [--dry-run]
 [--noninteractive] [--reconcile]` then reads and syncs; a dry run prints counts
 only and makes no TTOBAK calls. It holds `sfdc.lock`.
 
@@ -489,6 +597,100 @@ batches. The scheduled `intake run` includes SFDC whenever it is selected, so
 schedule only after that, or pass `--skip sfdc` to setup, which disables
 SFDC and keeps its ledger.
 
+### SFDC contacts step
+
+After a successful SFDC sync, the same `intake sfdc` or `intake run`, on the
+same `aws-sentral-mcp` session, runs `sfdc-contacts`
+(`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`,
+which is on the session allowlist only while the step is on. A missing or
+changed `search_contacts` fails the step with `SCHEMA_CHANGED`; the SFDC
+performance sync keeps its result.
+`intake sfdc` still exits 0 when this step fails, like the calendar's task
+step: the failure is in its `sfdcContacts.result` and in `status.json`; only
+`intake run` turns it into `PARTIAL_FAILURE`. With `sfdcContacts` off in the
+[sync options](#sync-options) the step makes no call and records `disabled`.
+
+- **IDs.** Every SFDC ID (contact and account IDs from `search_contacts`,
+  mapped SFDC account IDs, stored `sfdcContactId` links and ledger entries) is
+  canonicalized as the server does (`mcp-server/src/intake/sfdc-id.ts`): a
+  15-character ID gains its 3-character case checksum, an 18-character ID is
+  kept only if its checksum matches. Other values are dropped and counted as
+  `invalidIds`. All matching, `present` and items use the 18-character form.
+  A record whose own canonical `accountId` is not the queried SFDC account is
+  dropped (`accountMismatch`).
+- **Accounts.** `GET /api/performance/mappings` groups the mapped SFDC
+  accounts by TTOBAK Account. A `truncated` listing may miss an Account's
+  other SFDC accounts, so then no Account gets a departure snapshot. Each Account's TTOBAK contacts are listed first,
+  every page; a 403 counts as `forbidden` and the Account is skipped.
+- **Reads.** Per SFDC account, `search_contacts` with
+  `{field: accountId, operator: EXACT_MATCH}` and `limit: 500`, following
+  `cursor` through `after`, up to 5,000 contacts and 11 pages. An empty page
+  that claims more pages, any repeated cursor, or a 12th page fails the read
+  (`PARSE_FAILED`). More than 5,000 kept IDs (uneven pages) make the read
+  incomplete; only the first 5,000 are kept. At most 20 SFDC accounts per
+  TTOBAK Account are read (sorted by ID); the rest count as
+  `skippedAccountCap`.
+- **Filter.** Record types `Stakeholder Map - Internal Contacts` and
+  `Project Resource`, and emails at `amazon.com` (or a subdomain),
+  `amazon.co.kr` or `aws.com`, are dropped (`skippedInternal`). Phone fields
+  are never read.
+- **Match.** An existing `sfdcContactId` link always wins and is sent only
+  when the contact's title or company is exactly empty (as the server fills;
+  whitespace-only is not empty). Otherwise a one-to-one,
+  case-insensitive email match links the contact. Otherwise a unique
+  normalized name (NFKC, lower case, `.`/`,` dropped, whitespace collapsed;
+  spaces ignored for Hangul and other CJK names, which also match with given
+  and family name in either order; Latin names match only as given) without
+  a conflicting email links it. A contact already
+  linked to another SFDC ID, already matched by email, or whose email is
+  ambiguous (for example shared by two SFDC people) is not a name candidate.
+  Several candidates, or several SFDC contacts for one candidate, are
+  `ambiguous` and skipped this run. No match creates a contact. When the
+  Account's read is incomplete (a failed page, a cap, a truncated mapping
+  listing or more than 20 SFDC accounts), a missing person could make a match
+  ambiguous, so only contacts that already carry the SFDC link are filled;
+  every other unsuppressed SFDC contact is `deferredIncomplete` (no email or
+  name link and no create) until a complete run.
+- **Batch.** One `POST /api/accounts/{id}/contacts/sfdc-sync` per Account: links
+  first, then creates, each ordered by SFDC ID, at most 200 items and 512 KiB;
+  the rest count as `skippedCap` and follow on later runs. Items carry only the
+  SFDC IDs, name, title, and the observed `contactId`/`revision` for a link.
+  `present` (all kept SFDC IDs per SFDC account) is sent only when every page of
+  every mapped SFDC account was read, within 5,000 per account, 20,000 in total
+  and 20 accounts; otherwise `snapshotComplete` is false (`incomplete`) and the
+  server marks nobody.
+- **Results.** `alreadyLinked` and `conflict` are retried on the next run from
+  fresh state. `suppressed` IDs (a member deleted the contact) are kept, IDs
+  only, in `~/.ttobak/intake/sfdc-contacts/<scope>/<hash>.json` and no longer
+  sent. A corrupt ledger is treated as empty (`ledgerReset`); an unwritable one
+  sets the step result to `STORE_INVALID`. Neither stops later Accounts. The step needs TTOBAK reads, so `--dry-run`, which signs in to
+  nothing, skips it. Given an API (the test seam), a dry run reads and plans,
+  counts planned creates and links as `created`/`filled`, and sends nothing.
+- **Status.** `status.json` key `sfdcContacts` holds only `lastRunAt`,
+  `lastSuccessAt`, `result` and `counts`: `accounts`, `fetched`, `created`,
+  `filled`, `unchanged`, `alreadyLinked`, `suppressed`, `conflict`, `invalid`,
+  `ambiguous`, `skippedInternal`, `skippedCap`, `skippedAccountCap`,
+  `incomplete`, `deferredIncomplete`, `accountMismatch`, `marked`,
+  `unmarked`, `skipped`, `forbidden`, `invalidIds`, `ledgerReset`, `deferred`.
+  Settings shows the counts also when the result is a failure code, with
+  `skipped`, `ambiguous`, `forbidden`, `incomplete`, `deferredIncomplete`,
+  `accountMismatch` and `deferred` only when non-zero.
+- **Time budget.** No new Account starts once the step has run 8 minutes
+  (`SFDC_CONTACTS_BUDGET_MS`); the rest count as `deferred` and the result
+  stays `ok`. The step stores where it stopped (`sfdc-contacts/<scope>/resume.json`,
+  a TTOBAK Account ID only), and the next run starts after that Account, so
+  every Account is reached in turn; a full pass clears it. The budget only
+  stops a new Account from starting: an Account already begun may still take
+  several bounded MCP calls (each up to 120 seconds), so it usually, but not
+  provably, finishes before the app's 20-minute run timeout.
+- **Failures.** A failed page or a failed Account request becomes the step's
+  `result` while later Accounts still run, so `intake run` reports
+  `PARTIAL_FAILURE`; the SFDC sources keep their own result.
+  `AUTH_EXPIRED_MIDWAY` stops the step and the run.
+- **Privacy.** SFDC and TTOBAK emails are compared in memory only and cleared
+  before the request is built. No email or phone is written to a request body,
+  stdout, stderr, the status file or a ledger.
+
 ## SA report
 
 `ttobak-mcp report run` generates the owner's SA performance report
@@ -509,7 +711,8 @@ Prerequisites:
   either logged in (`claude`, then `/login`) or Bedrock through the `env` of
   `~/.claude/settings.json` (only the model-auth keys are carried over;
   `TTOBAK_REPORT_USE_BEDROCK=1|0` and `TTOBAK_REPORT_AWS_PROFILE` override them).
-- The skill is the internal-mcp-setup v1.4.0 layout, installed at
+- The skill is the internal-mcp-setup v1.4.0 layout or later (v1.5.0 is the
+  reviewed allowlist), installed at
   `~/.claude/skills/sa-performance-report` (or in a plugin cache). A copy without
   `scripts/calendar_count.py` and `references/report-structure.md` fails with
   `SKILL_OUTDATED` before the CLI starts.
@@ -539,10 +742,14 @@ Behavior:
 - The CLI runs with `--permission-mode dontAsk`, `--strict-mcp-config`,
   `--setting-sources project,local` (no user permission rules) and an explicit
   read-only `--allowedTools` list (`mcp-server/src/report/tools.ts`): the read
-  tools of the skill's data-sources, file reads only in the skill, `work/` and
+  tools that the v1.5.0 skill's data-sources call (v1.5.0 added the PFR,
+  Customer Influence and detail reads of `aws-sentral-mcp` and Outlook
+  `email_search` for interviews; `ccmt-mcp` and `search_campaigns` stay out), file reads only in the skill, `work/` and
   session directories, writes only in `work/out/` (Write, Edit and MultiEdit
   of `work/.claude/**` are denied), no sub-agents, and Bash only for
-  the three counting scripts. Bash runs only in Claude Code's sandbox, set by
+  the five counting scripts of the v1.5.0 skill (`calendar_count.py`,
+  `extract_tool_json.py`, `slack_threads.py`, `interview_count.py`,
+  `pfr_ci_summary.py`). Bash runs only in Claude Code's sandbox, set by
   the run's `--settings` file: `sandbox.enabled`, `failIfUnavailable`,
   `allowUnsandboxedCommands: false`, no network, writes only in `work/out/`
   (`work/.claude` is in `denyWrite`) and
@@ -607,6 +814,7 @@ Behavior:
 |---|---|
 | `CLAUDE_CLI_MISSING` | No `claude` binary found; install it or set `TTOBAK_CLAUDE_BIN`. |
 | `CLAUDE_CLI_AUTH` | The CLI is not logged in or Bedrock is misconfigured; run `claude` and `/login`, or fix the profile. |
+| `CLAUDE_CLI_BEDROCK` | Bedrock was on and the CLI's request timed out; choose an AWS profile in the report settings or turn Bedrock off. The app refuses Bedrock without a profile (`profile-required`). |
 | `SKILL_MISSING` | The skill is not installed; install internal-mcp-setup v1.4.0. |
 | `SKILL_OUTDATED` | The skill lacks `scripts/calendar_count.py` or `references/report-structure.md`; update it. |
 | `REPORT_INVALID` | The model output failed validation; nothing was uploaded. Re-run. |

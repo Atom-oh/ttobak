@@ -84,7 +84,7 @@ for viewport evidence and remaining design recommendations.
 | Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents. The members table shows an owner-only "Transfer owner" button on each non-owner row with a `userId` (never on pending rows or for AM/inherited viewers); it confirms with the target email and the note that the previous owner becomes SA, calls `POST /api/accounts/{id}/owner-transfer`, reloads, and maps 409 to a refresh-and-retry message. The Account Owner also sees a "merge into another Account" action (`AccountMergeDialog`, ADR-022): it picks a target from directly editable Accounts (never the source), calls `GET merge-preview`, and shows move counts (`-1` means capped), the categories that do not move (billing is marked as not checkable), the CLI-only categories (labelled as rows an operator moves with the CLI after the merge) and who gains access. Start stays disabled until the unmoved-items checkbox is checked and never fires unconfirmed. Progress polls `GET merge` every 5 s (doubling after failed polls, 30 s cap) and stops on `done`, `failed` or `aborted`; failure codes map to plain Korean copy, a failed or stalled job offers retry (`POST merge` again to resume), and an operator-aborted job shows that moved items stay on the target, with no retry. A merging Account (`mergingInto`) shows a read-only banner, hides write controls and keeps a progress link for the Owner; a tombstone (`mergedInto`) stays read-only with a banner linking to the target, so its unmoved categories remain reachable; writes answered with 409 `ACCOUNT_MERGING` show a merge-specific message. |
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | Insights news | InsightsList, InsightsTableView, insights/NewsOrigin, `lib/newsOrigin.ts`: news cards and table rows keep publisher and date and add, only when the optional fields exist, a text kind badge (Common, or the customer name linked to `/accounts/{id}`, with a generic customer label when the name is missing), the registered source name, the matched search query and a relevance percentage from a `qualityScore` above 0 and at most 1 (the API sends 0 when no score is stored, so 0 shows nothing). Long values truncate with the full text in `title`. An All / Grouped switch (`aria-pressed`; per-browser storage guarded by try/catch; flat by default) groups the loaded page only: Common first, then customers sorted by Korean-aware name, each heading counted as items on this page. Pagination, totals and filters are unchanged. The source filter prefers a document's `sourceName` label. A Scope select (All, Common, All customers, then customers from up to three directory pages) sets `kind`/`account` on `GET /api/insights` and resets to page 1. It renders only after `GET /api/news-sources` succeeded this session (they ship together); otherwise nothing is sent and the scope resets to All, as it does when a settled reload no longer lists the chosen customer. Tech and research tabs are unchanged |
-| Insights news sources | insights/NewsSourcesManager, `lib/newsRegistration.ts`: opened by the news tab's Manage news sources button or `/insights?tab=news&sources=1[&account={id}]` (no new route). A radio group picks customer-only (that customer's members see it; customer from the user's direct accounts, name prefilled until typed; account news-source create) or common (every signed-in user; name, terms, aliases, custom URLs via the Settings add request, no AWS services). Common registration first loads the caller's subscriptions and, if the name normalizes (port of `normalizeSourceID`) to one, links to Settings instead of submitting, since the add would replace that subscription (best effort; a failed load blocks the submit). The list pages `GET /api/news-sources` (`limit`/`cursor` only, More button, generation-tagged responses) with kind badge, terms (marked when cut), last collection and count. Customer rows edit inline from the full per-account source, one term per line, sending only fields whose text changed, after a warning that older articles may drop out; common rows link to Settings. Removal uses an in-row confirmation; 404 shows an explanatory empty state; errors are Korean text. Account detail and Settings link here |
+| Insights news sources | insights/NewsSourcesManager, `lib/newsRegistration.ts`: opened by the news tab's Manage news sources button or `/insights?tab=news&sources=1[&account={id}]` (no new route). A radio group picks customer-only (that customer's members see it; customer from the user's direct accounts, name prefilled until typed; account news-source create) or common (every signed-in user; name, terms, aliases, custom URLs via the Settings add request, no AWS services). Common registration first loads the caller's subscriptions and, if the name normalizes (port of `normalizeSourceID`) to one, links to Settings instead of submitting, since the add would replace that subscription (best effort; a failed load blocks the submit). The list pages `GET /api/news-sources` (`limit`/`cursor` only, More button, generation-tagged responses) with kind badge, terms (marked when cut), last collection and count. Customer rows edit inline from the full per-account source, one term per line, sending only fields whose text changed, after a warning that the source's earlier articles disappear from lists for good (readers list only articles published under the current source configuration, and published articles are not republished); common rows link to Settings. Removal uses an in-row confirmation; 404 shows an explanatory empty state; errors are Korean text. The Collect now button described next is hidden (`COLLECT_NOW_AVAILABLE` is false) because the deployed crawler runs with legacy writes off and the manual collection worker does nothing there. Customer rows also have a Collect now button (`lib/newsCollect.ts`), disabled while in flight, after an accepted request until the list reloads, and while `nextCollectAllowedAt` (or a 429's `nextAllowedAt`) is in the future, with a secondary line naming that time and a timer that re-enables it (no polling). A 202 shows an inline confirmation and keeps the button disabled until the response's next allowed time, without reloading the list (a reload would remount the row and drop the message); 404 reloads it, other failures show a retry line; one line under the list heading states the hourly and roughly 40-article limits. Only after the customer's source list has loaded successfully and is empty, the account detail news block offers a one-click start that creates a customer-only source named after the customer with no terms (the server defaults to the account name and aliases; a name over 200 code points is cut and also sent as the term), beside the registration link. A failed load never offers it. Account detail and Settings link here |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
 | Settings | Mac app install (`MacAppInstall`, section `#mac-app`), integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
@@ -168,8 +168,9 @@ start reuses the native control path to the record page. Settings shows the
 an app build with the intake commands: adapter state and update, node path when
 missing, selected servers, schedule (off, hourly, daily, twice daily) with a
 warning when the CLI LaunchAgent is also installed, per-source status, setup with
-private-calendar consent and skip toggles, run now, login, cancel and a live
-progress log. A failed state read shows a one-line error. 
+private-calendar consent and skip toggles, sync options (calendar responses
+to sync and the SFDC contacts switch, when the app build reports them), run
+now, login, cancel and a live progress log. A failed state read shows a one-line error. 
 In Mic mode, `MicSelector` remembers the chosen device; when that device no
 longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
 rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
@@ -410,7 +411,33 @@ account's contacts or free text; times are entered in the viewer's zone and sent
 as UTC RFC 3339; limits mirror the API (`src/lib/accountEvents.ts`), and deletes
 confirm with the shared dialog. Inherited readers do not see the tab.
 
-For direct members the general tab starts with **AWS signals** and then the
+For direct members the general tab opens with the **customer brief** card
+(`components/account/CustomerBriefCard.tsx`, pure logic in `src/lib/customerBrief.ts`):
+the caller's private one-page pre-meeting summary from
+`GET/POST /api/accounts/{id}/customer-brief`. A 404 (not a direct member, or the
+API not deployed) hides the card. Without a brief it shows one explanatory line
+and a create button. While a run is queued or running it shows a polite live
+in-progress line above the previous brief and polls GET every 5 seconds, pausing
+while the tab is hidden and stopping on any terminal state, on unmount or after
+10 minutes (then a slow-run notice with a manual recheck). A failed run keeps the
+previous brief under a per-error-code message with retry; POST 409 polls, 503
+shows the generic failure. Sections render in order and are omitted when empty:
+next meeting, one-line situation, since the last meeting, recent news with a
+"why it matters" line, questions to ask, unfamiliar terms with an in/not in
+dictionary text badge. A term not in the dictionary has an add action that
+creates it as a manual term in this customer's Account layer through the
+existing layer term endpoint, bound to the signed-in user. If the term already
+exists, an active row counts as added and a suggested row is activated with its
+version; a full dictionary, a refused write or a term the server cannot accept
+is stated in one line. The action is keyed by the term, so a regenerated brief
+does not inherit another term's state. The footer shows the generation time (relative within a
+day; invalid times show nothing) and a regenerate button. Every statement lists
+source chips with a kind word and a CSS-truncated label (full text in `title`);
+meeting chips link to the meeting and news chips to `/insights/{sourceId}/{docHash}`
+(id split at the last colon, each segment validated and encoded); insight, event
+and unknown kinds are plain chips. All brief text renders as text nodes only.
+
+Below the brief come **AWS signals** and then the
 **engagement flow**, above members and contacts (`components/account/`). Signals
 show the account's recent news (with a new-opportunity-candidate badge, linked
 opportunities and unlink) or an explicit no-source / no-recent-news state with

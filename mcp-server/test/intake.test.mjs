@@ -8,8 +8,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from '../dist/intake/toml.js';
 import { listHosts, resolveServer, resolveCommand, hostTtobakEndpoints } from '../dist/intake/hosts.js';
-import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent, parseOutlookItems }
+import { syncWindow, viewRequests, planCalendar, batches, sanitizeLocation, runCalendar, fingerprint, toEvent, parseOutlookItems, directoryCursor }
   from '../dist/intake/calendar.js';
+import { AttendeeFacts, meetingFacts } from '../dist/intake/attendees.js';
+import { validateCalendarSync } from '../dist/calendar.js';
+import { buildMatcher } from '../dist/intake/match.js';
+import { createHash } from 'node:crypto';
 import { IntakeStore } from '../dist/intake/store.js';
 import { SFDC_TOOLS, parseAssignments, parseTasks, runSfdc } from '../dist/intake/sfdc.js';
 import { runIntake } from '../dist/intake/run.js';
@@ -19,6 +23,7 @@ const CANARY = 'SECRET-CANARY-7f3a9c';
 const ZONE = 'Asia/Seoul';
 const NOW = new Date('2026-11-09T03:00:00Z');
 const FIXTURE = fileURLToPath(new URL('./fixtures/intake-outlook-server.mjs', import.meta.url));
+const WORK_FIXTURE = fileURLToPath(new URL('./fixtures/intake-work-server.mjs', import.meta.url));
 
 function tempHome(t) {
   const home = mkdtempSync(join(tmpdir(), 'ttobak-intake-'));
@@ -129,7 +134,7 @@ test('server resolution re-reads one entry in memory and classifies unusable ent
 });
 
 function item(id, start, end, extra = {}) {
-  return { meetingId: id, subject: `t-${id}`, start, end, isCanceled: false, isAllDay: false, ...extra };
+  return { meetingId: id, subject: `t-${id}`, start, end, isCanceled: false, isAllDay: false, response: 'Accept', ...extra };
 }
 
 test('calendar sends organizer domain only', () => {
@@ -158,7 +163,7 @@ test('calendar organizer name and local part never leave the parser', async t =>
     return { meetings: [{
       meetingId: `org-${year}${month}${day}`, subject: 'Quarterly review', sensitivity: 'Normal',
       start: `${year}-${month}-${day}T10:00:00+09:00`, end: `${year}-${month}-${day}T11:00:00+09:00`,
-      isCanceled: false, isAllDay: false,
+      isCanceled: false, isAllDay: false, response: 'Organizer',
       organizer: { name: CANARY, email: `${local}@Customer.Example.COM`, address: `${local}@customer.example.com` },
       attendees: [{ name: CANARY, email: `${local}@customer.example.com` }], body: CANARY,
     }] };
@@ -226,11 +231,17 @@ test('calendar planning: window, exclusions, explicit removals only, sanitized l
   assert.deepEqual(batches(many).map(group => group.length), [12, 12, 12, 9]);
 });
 
-function fakeApi({ fail = [] } = {}) {
+function fakeApi({ fail = [], directory } = {}) {
   const calls = [];
   let revision = 0;
   return {
     calls,
+    directory,
+    async calendarShareDirectory(cursor = '') {
+      if (this.directory === undefined || this.directory instanceof Error) throw this.directory ?? new Error('no directory');
+      if (typeof this.directory === 'function') return structuredClone(this.directory(cursor));
+      return structuredClone(this.directory);
+    },
     async calendarSyncStatus() { return { sources: [], nextCursor: null }; },
     async syncCalendarEvents(sourceId, body) {
       calls.push(structuredClone(body));
@@ -879,4 +890,323 @@ test('sfdc registry keeps newest sales hierarchy version', async t => {
     { field: 'activityDate', operator: 'GTE', value: '2025-01-01' },
     { field: 'activityDate', operator: 'LTE', value: '2027-11-09' }]);
   assert.ok(!SFDC_TOOLS[1].properties.includes('hierarchyId'));
+});
+
+// ---------- account sharing (synthetic directory and meeting facts) ----------
+
+const DIRECTORY = { accounts: [
+  { accountId: 'acct-hana', name: 'Hana Bank', aliases: ['HNB'], domains: ['hanabank.example'] },
+  { accountId: 'acct-kb', name: 'KB Card', aliases: [], domains: ['kbcard.example', 'amazon.com'] },
+] };
+const sha = value => createHash('sha256').update(value).digest('hex');
+const upsertsOf = calls => calls.flatMap(call => call.mutations).filter(m => m.op === 'upsert').map(m => m.event);
+const facts = (domains, isPrivate = false) => ({ domains, isPrivate });
+// A meetings connector that answers every lookup: public, no attendee domains.
+const publicAttendees = () => ({ async factsFor() { return { domains: [], isPrivate: false }; }, save() {}, unavailable: 0 });
+
+function sharingPlan(items, ledger = {}, factMap = new Map(), directory = DIRECTORY) {
+  return planCalendar(parseOutlookItems(items), ledger, syncWindow(NOW, ZONE), ZONE, undefined, {
+    sourceId: SOURCE_ID, facts: factMap, matcher: directory ? buildMatcher(directory.accounts, ['amazon.com']) : null,
+  });
+}
+
+test('planner: Private category and private meetings stay private; matches are candidates only', () => {
+  const at = (id, day, extra) => item(id, `2026-11-${day}T10:00:00+09:00`, `2026-11-${day}T11:00:00+09:00`, extra);
+  const plan = sharingPlan([
+    at('p', '10', { subject: 'HNB weekly', categories: ['Blue', 'PRIVATE'] }),
+    at('t', '11', { subject: 'HNB weekly', seriesId: 'series-1' }),
+    at('l', '12', { subject: 'sync', location: 'Hana Bank HQ' }),
+    at('c', '13', { subject: 'HNB and KB Card joint review' }),
+    at('d', '14', { subject: 'sync' }),
+    at('n', '15', { subject: 'internal 1:1' }),
+    at('o', '16', { subject: 'sync', organizer: { name: CANARY, email: `${CANARY}@hanabank.example` } }),
+    at('m', '17', { subject: 'HNB weekly' }),
+  ], {}, new Map([['d', facts(['ops.hanabank.example', 'amazon.com'])], ['n', facts(['amazon.com'])],
+    ['m', facts(['hanabank.example'], true)], ['t', facts([])], ['l', facts([])], ['c', facts([])], ['o', facts([])]]));
+  const byId = Object.fromEntries(upsertsOf([{ mutations: plan.mutations }]).map(event => [event.externalId, event]));
+  for (const id of ['p', 'm']) {
+    assert.equal(byId[id].private, true, id);
+    for (const field of ['shareAccountId', 'shareEvidence', 'candidateAccountIds']) assert.equal(field in byId[id], false);
+  }
+  for (const event of Object.values(byId)) {
+    assert.equal('shareAccountId' in event, false, `${event.externalId} is never auto-shared`);
+    assert.equal('seriesKey' in event, false, 'seriesKey is not sent yet');
+  }
+  for (const id of ['t', 'l', 'd', 'o']) assert.deepEqual(byId[id].candidateAccountIds, ['acct-hana'], id);
+  assert.deepEqual(byId.c.candidateAccountIds, ['acct-hana', 'acct-kb']);
+  assert.equal('candidateAccountIds' in byId.n, false, 'an own-company domain never matches');
+  assert.equal('private' in byId.n, false);
+  assert.deepEqual([plan.counts.shared, plan.counts.candidates, plan.counts.private], [0, 5, 2]);
+  assert.equal(plan.set.m.share.private, true);
+  assert.equal(plan.set.n.share, undefined);
+  assert.ok(!JSON.stringify(plan).includes(CANARY));
+
+  // A previous private flag holds when the lookup fails or is not attempted; an answer re-decides.
+  const ledger = {
+    m: { fp: 'old', startsAt: '2026-11-17T01:00:00.000Z', endsAt: '2026-11-17T02:00:00.000Z', share: { private: true } },
+  };
+  const items = [at('m', '17', { subject: 'HNB weekly' })];
+  assert.equal(sharingPlan(items, ledger, new Map([['m', null]])).mutations[0].event.private, true);
+  assert.equal(sharingPlan(items, ledger, new Map()).mutations[0].event.private, true);
+  assert.deepEqual(sharingPlan(items, ledger, new Map([['m', facts([])]])).mutations[0].event.candidateAccountIds, ['acct-hana']);
+  // Without a directory the private flag and previous candidates are kept.
+  const offline = sharingPlan([...items, at('c', '13', { subject: 'HNB and KB Card joint review' })], {
+    ...ledger, c: { fp: 'old', startsAt: '2026-11-13T01:00:00.000Z', endsAt: '2026-11-13T02:00:00.000Z',
+      share: { candidateAccountIds: ['acct-hana', 'acct-kb'] } } }, new Map(), null);
+  assert.equal(offline.counts.directoryUnavailable, true);
+  const offlineById = Object.fromEntries(offline.mutations.map(m => [m.event.externalId, m.event]));
+  assert.equal(offlineById.m.private, true);
+  assert.deepEqual(offlineById.c.candidateAccountIds, ['acct-hana', 'acct-kb']);
+});
+
+test('get_meeting facts keep domains and the private flag only; attendee-less payloads are no answer', () => {
+  const payload = { isPrivate: false, organizer: `${CANARY}@Amazon.com`,
+    requiredAttendees: [`a-${CANARY}@Ops.HanaBank.example`, 'b@ops.hanabank.example', 'no address', 42],
+    optionalAttendees: ['c@kbcard.example'] };
+  assert.deepEqual(meetingFacts(payload), { domains: ['amazon.com', 'kbcard.example', 'ops.hanabank.example'], isPrivate: false });
+  assert.deepEqual(meetingFacts({ isPrivate: true, requiredAttendees: [] }), { domains: [], isPrivate: true });
+  // More than 50 domains is no domain answer; the private flag still holds.
+  const wide = Array.from({ length: 51 }, (_, i) => `a@d${i}.example`);
+  assert.equal(meetingFacts({ isPrivate: false, requiredAttendees: wide }), null);
+  assert.deepEqual(meetingFacts({ isPrivate: true, requiredAttendees: wide }), { domains: [], isPrivate: true });
+  // Over the 500-address cap the private flag still holds; a public one is no answer.
+  const crowd = Array.from({ length: 501 }, (_, i) => `p${i}@hanabank.example`);
+  assert.deepEqual(meetingFacts({ isPrivate: true, requiredAttendees: crowd }), { domains: [], isPrivate: true });
+  assert.equal(meetingFacts({ isPrivate: false, requiredAttendees: crowd }), null);
+  for (const bad of [{}, { isPrivate: false }, { meetingId: 'x', isPrivate: false }, { requiredAttendees: ['a@x.example'] },
+    { isPrivate: 'no', requiredAttendees: [] }, 'not json', null]) {
+    assert.equal(meetingFacts(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('meeting facts: joined lookups, change-key cache, failure stop and no addresses stored', async t => {
+  const home = tempHome(t);
+  const store = new IntakeStore(home);
+  const window = syncWindow(NOW, ZONE);
+  const occurrence = (id, day) => item(id, `2026-11-${day}T10:00:00+09:00`, `2026-11-${day}T11:00:00+09:00`,
+    { meetingChangeKey: 'k1' });
+  const listed = days => ({ meetings: days.map(day => ({ meetingId: `amz-${day}`, subject: `t-m${day}`,
+    startTime: `2026-11-${day}T01:00:00Z`, endTime: `2026-11-${day}T02:00:00Z` })) });
+  const calls = [];
+  const reader = (details, days = ['10', '11', '12', '13', '14', '15', '16']) => ({
+    async list(range) { calls.push(['list', range.start.toISOString()]); return listed(days); },
+    async get(meetingId) { calls.push(['get', meetingId]); return details(meetingId); },
+  });
+  const ok = new AttendeeFacts(store, SOURCE_ID, reader(() => ({ isPrivate: false,
+    requiredAttendees: [`${CANARY}@ops.hanabank.example`] })), window);
+  assert.deepEqual(await ok.factsFor(occurrence('m10', '10')), facts(['ops.hanabank.example']));
+  assert.equal(await ok.factsFor(occurrence('unlisted', '20')), null, 'no unique join is no answer');
+  assert.equal(ok.unavailable, 1);
+  ok.save(NOW);
+  assert.deepEqual(calls, [['list', window.start.toISOString()], ['get', 'amz-10']]);
+
+  calls.length = 0;
+  const cached = new AttendeeFacts(store, SOURCE_ID, reader(() => ({ isPrivate: true, requiredAttendees: [] })), window);
+  assert.deepEqual(await cached.factsFor(occurrence('m10', '10')), facts(['ops.hanabank.example']));
+  assert.equal(calls.length, 0, 'an unchanged change key reads the cache');
+  assert.deepEqual(await cached.factsFor({ ...occurrence('m10', '10'), meetingChangeKey: 'k2' }), facts([], true));
+  cached.save(NOW);
+  const text = allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
+  const entry = store.read('calendar', SOURCE_ID, 'meeting-facts.json').entries.m10;
+  assert.deepEqual([entry.changeKey, entry.isPrivate, entry.domains], ['k2', true, []]);
+  assert.ok(!text.includes(CANARY), 'addresses never reach local state');
+
+  // Attendee-less or failing answers stop lookups after three in a row and are never cached.
+  calls.length = 0;
+  const brokenStore = new IntakeStore(tempHome(t));
+  const broken = new AttendeeFacts(brokenStore, SOURCE_ID, reader(id => {
+    if (id === 'amz-11') throw new Error('provider failure');
+    return { isPrivate: false };
+  }), window);
+  for (const day of ['10', '11', '12', '13', '14']) assert.equal(await broken.factsFor(occurrence(`m${day}`, day)), null);
+  assert.equal(calls.filter(([kind]) => kind === 'get').length, 3);
+  assert.equal(broken.unavailable, 5);
+  broken.save(NOW);
+  assert.equal(brokenStore.read('calendar', SOURCE_ID, 'meeting-facts.json'), null);
+
+  // No reader, or an over-cap list, answers nothing.
+  const none = new AttendeeFacts(new IntakeStore(tempHome(t)), SOURCE_ID, null, window);
+  assert.equal(await none.factsFor(occurrence('m10', '10')), null);
+  const overflow = new AttendeeFacts(new IntakeStore(tempHome(t)), SOURCE_ID, {
+    async list() { return { meetings: Array.from({ length: 5001 }, (_, i) => ({ meetingId: `i${i}`, subject: 's',
+      startTime: '2026-11-10T01:00:00Z', endTime: '2026-11-10T02:00:00Z' })) }; },
+    async get() { throw new Error('not called'); },
+  }, window);
+  assert.equal(await overflow.factsFor(occurrence('m10', '10')), null);
+});
+
+test('sync: Private category added after a match re-sends the event as private', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi({ directory: DIRECTORY });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
+    attendees: publicAttendees() };
+  const titled = categories => request => twoEvents(request).map(entry => ({ ...entry, subject: 'HNB sync', categories }));
+  const first = await runCalendar({ ...base, source: source(titled([])) });
+  assert.equal(first.counts.candidates, 6);
+  assert.ok(upsertsOf(api.calls).every(event => JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('shareAccountId' in event)));
+  const unchanged = await runCalendar({ ...base, source: source(titled([])) });
+  assert.equal(unchanged.counts.unchanged, 6);
+  const before = api.calls.length;
+  const second = await runCalendar({ ...base, source: source(titled(['private'])) });
+  assert.deepEqual([second.counts.upserts, second.counts.private], [6, 6]);
+  const resent = upsertsOf(api.calls.slice(before));
+  assert.equal(resent.length, 6);
+  assert.ok(resent.every(event => event.private === true && !('candidateAccountIds' in event)));
+});
+
+test('sync: the share directory is read across server pages', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const pages = { '': { accounts: [DIRECTORY.accounts[1]], nextCursor: 'acct-kb' }, 'acct-kb': { accounts: [DIRECTORY.accounts[0]] } };
+  const api = fakeApi({ directory: cursor => pages[cursor] });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
+    attendees: publicAttendees() };
+  const result = await runCalendar({ ...base, source: source(request => twoEvents(request).map(entry => ({ ...entry, subject: 'HNB sync' }))) });
+  assert.equal(result.counts.candidates, 6);
+  assert.ok(upsertsOf(api.calls).every(event => JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('shareAccountId' in event)));
+  // A cursor that does not move forward makes the directory unavailable, so nothing is matched.
+  assert.equal(directoryCursor({ nextCursor: 'acct-a' }, 'acct-b'), null);
+  assert.equal(directoryCursor({ nextCursor: 'bad id!' }, ''), null);
+  assert.equal(directoryCursor({}, 'acct-a'), '');
+});
+
+test('sync: an unavailable directory keeps previous candidates', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi({ directory: DIRECTORY });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
+    attendees: publicAttendees() };
+  const titled = subject => request => twoEvents(request).map(entry => ({ ...entry, subject }));
+  await runCalendar({ ...base, source: source(titled('HNB sync')) });
+  api.directory = new Error('HTTP 503');
+  const before = api.calls.length;
+  const quiet = await runCalendar({ ...base, source: source(titled('HNB sync')) });
+  assert.equal(quiet.counts.directoryUnavailable, true);
+  assert.equal(quiet.counts.unchanged, 6);
+  assert.deepEqual(upsertsOf(api.calls.slice(before)), []);
+  const renamed = await runCalendar({ ...base, source: source(titled('HNB sync v2')) });
+  assert.equal(renamed.counts.upserts, 6);
+  assert.ok(upsertsOf(api.calls.slice(before)).every(event => JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('shareAccountId' in event)));
+  api.directory = DIRECTORY;
+  const back = await runCalendar({ ...base, source: source(titled('internal')) });
+  assert.equal(back.counts.directoryUnavailable, false);
+  assert.ok(upsertsOf(api.calls.slice(-1)).every(event => !('candidateAccountIds' in event)));
+});
+
+test('sync: share-bearing runs send at most 12 mutations per batch', async t => {
+  const api = fakeApi({ directory: DIRECTORY });
+  const many = request => {
+    const [month, day, year] = request.start_date.split('-');
+    return Array.from({ length: 10 }, (_, index) => item(`m-${year}${month}${day}-${index}`,
+      `${year}-${month}-${day}T1${index}:00:00+09:00`, `${year}-${month}-${day}T1${index}:30:00+09:00`,
+      { subject: `HNB ${index}`, seriesId: `s${index}` }));
+  };
+  const result = await runCalendar({ store: new IntakeStore(tempHome(t)), api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE,
+    now: NOW, dryRun: false, acceptUnknownSensitivity: true, source: source(many) });
+  assert.equal(result.counts.upserts, 60);
+  assert.ok(api.calls.length >= 5);
+  assert.ok(api.calls.every(call => call.mutations.length <= 12));
+});
+
+test('sync validation accepts share fields and rejects invalid combinations', () => {
+  const event = { externalId: 'e1', title: 'x', startsAt: '2026-11-10T01:00:00Z', endsAt: '2026-11-10T02:00:00Z',
+    timeZone: 'UTC' };
+  const ok = extra => validateCalendarSync({ sourceId: SOURCE_ID, batchId: '22222222-2222-4222-8222-222222222222',
+    expectedRevision: 0, windowStart: '2026-11-01T00:00:00Z', windowEnd: '2026-12-01T00:00:00Z', complete: true,
+    mutations: [{ op: 'upsert', event: { ...event, ...extra } }] });
+  ok({ shareAccountId: 'acct-1', shareEvidence: ['domain', 'title'], seriesKey: 'a'.repeat(64) });
+  ok({ candidateAccountIds: ['a', 'b'] });
+  ok({ private: true });
+  ok({ private: false, shareAccountId: 'acct-1', candidateAccountIds: ['acct-2'] });
+  for (const bad of [
+    { shareAccountId: 'acct-1', shareEvidence: ['body'] },
+    { shareAccountId: 'acct-1', shareEvidence: ['title', 'title'] },
+    { shareEvidence: ['title'] },
+    { shareAccountId: 'bad id' },
+    { candidateAccountIds: ['a', 'b', 'c', 'd', 'e', 'f'] },
+    { candidateAccountIds: ['a', 'a'] },
+    { shareAccountId: 'a', candidateAccountIds: ['a'] },
+    { private: true, shareAccountId: 'a' },
+    { private: true, candidateAccountIds: ['a'] },
+    { private: 'yes' },
+    { seriesKey: 'A'.repeat(64) },
+    { seriesKey: 'a'.repeat(63) },
+  ]) assert.throws(() => ok(bad), /INVALID_ARGUMENT/, JSON.stringify(bad));
+});
+
+function sharingHosts(home, { category = '', subject = '', details = {}, meetings = [] } = {}) {
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: {
+    outlook: { command: process.execPath, args: [FIXTURE],
+      env: { TOKEN: CANARY, FAKE_OUTLOOK_CATEGORY: category, FAKE_OUTLOOK_SUBJECT: subject } },
+    work: { command: process.execPath, args: [WORK_FIXTURE],
+      env: { FAKE_WORK_MEETINGS: JSON.stringify({ meetings }), FAKE_WORK_DETAILS: JSON.stringify(details) } },
+  } }));
+}
+
+test('CLI: own domains, meetings-connector attendee domains and no attendee data anywhere', async t => {
+  const home = tempHome(t);
+  // The outlook fixture yields one 10:00-11:00 Seoul occurrence per weekly request.
+  const days = ['11-02', '11-09', '11-16', '11-23', '11-30', '12-07'];
+  const meetings = days.map(day => ({ meetingId: `amz-${day}`, subject: `Synthetic 2026-${day}`,
+    startTime: `2026-${day}T01:00:00Z`, endTime: `2026-${day}T02:00:00Z` }));
+  const details = Object.fromEntries(days.map((day, index) => [`amz-${day}`, index === 0
+    ? { isPrivate: true, requiredAttendees: [`${CANARY}@ops.hanabank.example`] }
+    : { isPrivate: false, organizer: `${CANARY}@amazon.com`, requiredAttendees: [`p-${CANARY}@ops.hanabank.example`] }]));
+  sharingHosts(home, { meetings, details });
+  const lines = [];
+  const environment = cliEnvironment(home, lines);
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook', '--own-domain', 'bad domain'],
+    environment), 2);
+  assert.equal(JSON.parse(lines.at(-1)).code, 'INVALID_ARGUMENT');
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook', '--accept-unknown-sensitivity',
+    '--own-domain', 'amazon.com', '--own-domain', '@AWS.example'], environment), 0);
+  assert.equal(await runIntake(['select', 'meetings', '--host', 'claude', '--server', 'work'], environment), 0);
+  const stored = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8'));
+  assert.deepEqual(stored.calendar.ownDomains, ['amazon.com', 'aws.example']);
+  // Reselecting without --own-domain keeps the stored domains.
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook', '--accept-unknown-sensitivity'],
+    environment), 0);
+  const reselected = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8'));
+  assert.deepEqual(reselected.calendar.ownDomains, ['amazon.com', 'aws.example']);
+
+  // A dry run without a stored TTOBAK session reports the directory as unavailable.
+  delete environment.scope;
+  assert.equal(await runIntake(['calendar', '--dry-run'], environment), 0);
+  assert.equal(JSON.parse(lines.at(-1)).counts.directoryUnavailable, true);
+
+  const api = fakeApi({ directory: DIRECTORY });
+  Object.assign(environment, { api, scope: 'c'.repeat(32), me: { email: 'someone@amazon.com', userId: 'user-1' } });
+  assert.equal(await runIntake(['calendar', '--noninteractive'], environment), 0);
+  const run = JSON.parse(lines.at(-1));
+  assert.deepEqual([run.counts.shared, run.counts.candidates, run.counts.private, run.counts.attendeesUnavailable,
+    run.counts.directoryUnavailable], [0, 5, 1, 0, false]);
+  const events = upsertsOf(api.calls);
+  assert.equal(events.filter(event => event.private === true && !('candidateAccountIds' in event)).length, 1);
+  assert.ok(events.filter(event => !event.private).every(event => !('shareAccountId' in event) &&
+    JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('seriesKey' in event)));
+  assert.equal(await runIntake(['status'], environment), 0);
+  assert.equal(JSON.parse(lines.at(-1)).status.calendar.counts.candidates, 5);
+
+  const outputs = lines.join('\n') + JSON.stringify(api.calls) +
+    allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
+  assert.ok(!outputs.includes(CANARY), 'attendee addresses never leave the lookup');
+});
+
+test('CLI: unknown meetings and a failing directory leave a successful private-only run', async t => {
+  const home = tempHome(t);
+  sharingHosts(home);
+  const lines = [];
+  const environment = cliEnvironment(home, lines);
+  assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook', '--accept-unknown-sensitivity'],
+    environment), 0);
+  assert.equal(await runIntake(['select', 'meetings', '--host', 'claude', '--server', 'work'], environment), 0);
+  environment.api = fakeApi({ directory: new Error('HTTP 503') });
+  environment.me = { email: 'someone@amazon.com', userId: 'user-1' };
+  assert.equal(await runIntake(['calendar', '--noninteractive'], environment), 0);
+  const run = JSON.parse(lines.at(-1));
+  assert.deepEqual([run.counts.directoryUnavailable, run.counts.shared, run.counts.upserts], [true, 0, 6]);
+
+  environment.api = fakeApi({ directory: DIRECTORY });
+  assert.equal(await runIntake(['calendar', '--noninteractive', '--reconcile'], environment), 0);
+  const second = JSON.parse(lines.at(-1));
+  assert.equal(second.counts.attendeesUnavailable, 6, 'list_meetings joins nothing');
+  assert.equal(second.counts.directoryUnavailable, false);
 });

@@ -14,7 +14,7 @@ import type { MeetingCatalogOptions } from './meeting-catalog.js';
 import type { VaultReadingOptions } from './vault-reading.js';
 import { billingReadingOptions, type BillingReadingOptions } from './billing-reading.js';
 import { canonicalContact, type ContactInput, type ContactListOptions } from './account-contacts.js';
-import { MAX_CALENDAR_API_BYTES, type CalendarSyncRequest, type CalendarPageQuery, type CalendarEventQuery } from './calendar.js';
+import { MAX_CALENDAR_API_BYTES, MAX_CALENDAR_DIRECTORY_BYTES, type CalendarSyncRequest, type CalendarPageQuery, type CalendarEventQuery } from './calendar.js';
 import { canonicalEvent, type EventInput, type EventListOptions } from './account-events.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
@@ -214,6 +214,27 @@ export const PERFORMANCE_SOURCES = ['sfdc-assignments', 'sfdc-tasks'] as const;
 export type PerformanceSource = typeof PERFORMANCE_SOURCES[number];
 const MAX_PERFORMANCE_API_BYTES = 14_000;
 const MAX_PERFORMANCE_MAPPINGS_BYTES = 2_000_000;
+/** 200 results of at most a few hundred bytes each, plus counts. */
+const MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES = 256 * 1024;
+
+/** One `create` or `link` item of `POST /api/accounts/{accountId}/contacts/sfdc-sync`. */
+export interface SfdcContactSyncItem {
+  action: 'create' | 'link';
+  sfdcContactId: string;
+  sfdcAccountId: string;
+  name: string;
+  title: string;
+  contactId?: string;
+  revision?: string;
+}
+
+/** `present` is required exactly when `snapshotComplete` is true (API-SPEC). */
+export interface SfdcContactSyncBody {
+  snapshotComplete: boolean;
+  sfdcAccountIds: string[];
+  present?: Record<string, string[]>;
+  items: SfdcContactSyncItem[];
+}
 
 /** `POST /api/performance/sources/{source}/sync` body; the server rejects unknown fields. */
 export interface PerformanceSyncBody {
@@ -362,6 +383,12 @@ export class TtobakApi {
       : []);
   }
 
+  /** One page of accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
+  async calendarShareDirectory(cursor = '') {
+    const query = cursor ? `?${new URLSearchParams({ cursor })}` : '';
+    return this.request('GET', `/api/calendar/share-directory${query}`, undefined, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
+  }
+
   async calendarSyncStatus(options: CalendarPageQuery) {
     const query = new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]));
     return this.request('GET', `/api/calendar/sources${query.size ? '?' + query : ''}`,
@@ -421,10 +448,17 @@ export class TtobakApi {
     return this.get('/api/accounts');
   }
 
-  async listAccountContacts(accountId: string, options: ContactListOptions) {
+  /** One contact page; `maxResponseBytes` lets local intake read full 25-contact pages (each contact at most 12,000 bytes). */
+  async listAccountContacts(accountId: string, options: ContactListOptions, maxResponseBytes = MAX_READING_BYTES) {
     const query = new URLSearchParams({ limit: String(options.limit) });
     if (options.cursor !== undefined) query.set('cursor', options.cursor);
-    return this.request('GET', `/api/accounts/${identifier(accountId, 'accountId')}/contacts?${query}`, undefined, MAX_READING_BYTES);
+    return this.request('GET', `/api/accounts/${identifier(accountId, 'accountId')}/contacts?${query}`, undefined, maxResponseBytes);
+  }
+
+  /** One bounded SFDC contact batch of the Mac intake; the body carries no email or phone. */
+  async syncSfdcContacts(accountId: string, body: SfdcContactSyncBody) {
+    return this.request('POST', `/api/accounts/${identifier(accountId, 'accountId')}/contacts/sfdc-sync`, body,
+      MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES);
   }
 
   get requiresContactIdempotency() { return !!this.options.privateTransport; }

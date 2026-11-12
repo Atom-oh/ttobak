@@ -37,6 +37,8 @@ const COMMANDS: &[&str] = &[
     "intake_cancel",
     "intake_check_adapter",
     "intake_update_adapter",
+    "intake_refresh_path",
+    "intake_set_options",
     "report_generate",
     "report_cancel",
     "report_get_state",
