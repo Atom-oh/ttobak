@@ -158,6 +158,32 @@ asks the user to retry after the recording when work is in progress. Copy is Kor
 `update.rs` and the page for exact strings. No popup appears while recording, finalizing or
 uploading.
 
+The record page links a recording to the ongoing customer meeting
+(`useCalendarAutoLink`, `lib/ongoingEvent.ts`). Only at recording start (never on
+mount), if no Account was set by the URL, an MCP start request or the user, it reads
+calendar events for one hour either side of now without blocking the start.
+It follows at most five calendar pages (`readOngoingEvents`) and links nothing if a
+cursor remains. Each lookup carries a generation that stop, failure, return to idle,
+a leftover upload or a newer start advances; a late result applies nothing.
+Upload mode never auto-links, and switching to it drops an auto link. A Mac
+leftover upload drops an auto link and its auto-filled title (`dropAutoLink`)
+before creating its draft.
+`ongoingEventFor` picks a timed event with `startsAt - 10 min <= now < endsAt`,
+preferring events with an `accountId` and then the closest start; a tie between
+different Accounts links nothing. The Account must be in the user's direct, editable
+Account list. The page then sets the Account (and the title, only if still empty) and
+shows an `AutoLinkChip` with a change button that clears the link for the rest of
+the page session and reverts the auto-filled title unless it was edited; once a draft is bound to that Account the button is hidden and
+RecordingLinkControls switches Accounts. During a recording the link goes through
+`changeRecordingAccount`; the change button waits only while a link request is in
+flight and is hidden while a draft is created or a stopped browser recording finalizes. A choice made before the draft exists stays local (replaceable or clearable)
+until save links it. The hook owns the Account and title it filled (subject trimmed
+to 200 code points) until someone changes them; a user or MCP choice (MCP releases
+before writing its own), a new start, a leftover upload or settling back to idle
+without a save clears whatever it still owns. Browsing ReferencePanel while
+auto-linked keeps the chip and title. Creation still validates membership; calendar or Account
+failures show nothing.
+
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
 the app detects a meeting, and after that meeting ends during a native recording
 counts down 30 seconds before stopping and uploading, with keep recording and stop
@@ -900,6 +926,17 @@ Follow-up documents are private snapshots built from bounded saved note/summary
 reads and current action items. Creating a document does not publish it to a team.
 Project linking and account sharing remain explicit operations with server-side
 permissions. Owner-only association controls are hidden from shared viewers.
+
+## Upcoming meetings
+
+`UpcomingMeetings` lists customer meetings first in the workspace views: a timed
+event with an `accountId` is a customer meeting, everything else, including every
+all-day event, is internal (`partitionCustomerEvents` in `lib/calendarDisplay.ts`,
+start-time order kept). Internal events sit under a toggle labelled with their count (`internalEventsToggleLabel`),
+collapsed by default and remembered per browser in `localStorage`
+(`ttobak-calendar-internal-collapsed`). A customer event shows its Account name as a
+chip only when an already loaded Account list has it. The Account page lists events
+ungrouped, since they all belong to that Account.
 
 ## SpecReq task strip
 

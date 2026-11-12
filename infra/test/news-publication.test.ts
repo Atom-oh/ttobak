@@ -2,7 +2,10 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import { NewsPublication } from '../lib/news-publication';
+import {
+  NEWS_CHILD_TIMEOUT, NEWS_DAILY_GRACE, NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC,
+  NEWS_DISCOVERY_TIMEOUT, NewsPublication,
+} from '../lib/news-publication';
 
 // Resolve only the token shapes used by this isolated template, without a
 // context lookup, deployment, or credentials. Unknown shapes fail the test.
@@ -217,7 +220,8 @@ describe('private news publication release', () => {
     expect(scan.filter(s => s.Condition?.['ForAllValues:StringEquals']?.['dynamodb:Attributes']
       ?.includes('newsQueries'))).toHaveLength(1);
     const scoped = all.filter(s => actions(s).includes('dynamodb:UpdateItem'));
-    expect(scoped).toHaveLength(4);
+    // Discover, worker, finalize, recover and the manual starter.
+    expect(scoped).toHaveLength(5);
     for (const s of scoped) {
       expect(s.Condition).toEqual({
         'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CRAWLER#*'] },
@@ -251,6 +255,69 @@ describe('private news publication release', () => {
     expect(worker.Properties.Environment.Variables.NEWS_OUTPUT_USD_PER_MTOK).toBe('0.50');
     expect(resolved(model[0].Resource).filter((r: string) => r.endsWith(':project/default'))).toHaveLength(1);
     expect(resolved(model[0].Resource).some((r: string) => r.includes('*'))).toBe(false);
+  });
+
+  test('manual starter can only claim, check both state machines and start the child', () => {
+    const starter = Object.entries(json.Resources).find(([, r]: [string, any]) =>
+      r.Properties?.Handler === 'news_manual.handler') as [string, any];
+    expect(starter).toBeDefined();
+    const [, fn] = starter;
+    const roleId = fn.Properties.Role['Fn::GetAtt'][0];
+    const env = fn.Properties.Environment.Variables;
+    const childId = Object.keys(json.Resources).find(id =>
+      json.Resources[id].Properties?.StateMachineName === 'ttobak-news-publication');
+    const dailyId = Object.keys(json.Resources).find(id =>
+      json.Resources[id].Properties?.StateMachineName === 'ttobak-news-daily');
+    expect(env.PUBLICATION_STATE_MACHINE_ARN).toEqual({ Ref: childId });
+    expect(env.DAILY_STATE_MACHINE_ARN).toEqual({ Ref: dailyId });
+    expect(fn.Properties.ReservedConcurrentExecutions).toBe(1);
+    // The pre-daily window comes from the same constants as the rule and the child timeout.
+    const dailyRule = resources.find(r => r.Properties?.Name === 'ttobak-news-daily');
+    expect(dailyRule.Properties.ScheduleExpression)
+      .toBe(`cron(${NEWS_DAILY_MINUTE_UTC} ${NEWS_DAILY_HOUR_UTC} * * ? *)`);
+    expect(definition.TimeoutSeconds).toBe(NEWS_CHILD_TIMEOUT.toSeconds());
+    expect([env.NEWS_DAILY_HOUR_UTC, env.NEWS_DAILY_MINUTE_UTC, env.NEWS_DAILY_LEAD_SECONDS,
+      env.NEWS_DAILY_GRACE_SECONDS]).toEqual([NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC,
+      NEWS_CHILD_TIMEOUT.toSeconds(), NEWS_DAILY_GRACE.toSeconds()].map(String));
+    const statements = resources.filter(r => r.Type === 'AWS::IAM::Policy'
+      && r.Properties.Roles.some((role: any) => role.Ref === roleId))
+      .flatMap(p => p.Properties.PolicyDocument.Statement);
+    const actions = statements.flatMap(s => Array.isArray(s.Action) ? s.Action : [s.Action]).sort();
+    expect(actions).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem',
+      'logs:CreateLogStream', 'logs:PutLogEvents', 'states:ListExecutions', 'states:StartExecution']);
+    const byAction = (action: string) => statements.find(s =>
+      (Array.isArray(s.Action) ? s.Action : [s.Action]).includes(action));
+    expect(byAction('states:StartExecution').Resource).toEqual({ Ref: childId });
+    expect(byAction('states:ListExecutions').Resource).toEqual([{ Ref: dailyId }, { Ref: childId }]);
+    expect(statements.filter(s => [].concat(s.Action).includes('states:ListExecutions' as never)))
+      .toHaveLength(1);
+    expect(byAction('dynamodb:UpdateItem').Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CRAWLER#*'] },
+      Null: { 'dynamodb:LeadingKeys': 'false' },
+    });
+    expect(Object.keys(env).filter(k => /GATEWAY|MODEL|BUCKET/.test(k))).toEqual([]);
+  });
+
+  test('discovery retries only a throttle, long enough to outlast one discovery', () => {
+    const retry = definition.States.DiscoverArticles.Retry;
+    expect(retry).toEqual([{
+      ErrorEquals: ['Lambda.TooManyRequestsException'],
+      IntervalSeconds: 30, BackoffRate: 1, MaxAttempts: 24,
+    }]);
+    const wait = retry[0].IntervalSeconds * retry[0].MaxAttempts;
+    const discoveryFn = resources.find(r => r.Properties?.Handler === 'news_runtime.discover_handler');
+    expect(discoveryFn.Properties.Timeout).toBe(NEWS_DISCOVERY_TIMEOUT.toSeconds());
+    expect(wait).toBeGreaterThan(NEWS_DISCOVERY_TIMEOUT.toSeconds());
+    // Worst-case wait plus one full discovery stays inside the child timeout.
+    expect(wait + NEWS_DISCOVERY_TIMEOUT.toSeconds()).toBeLessThan(definition.TimeoutSeconds);
+    const states = (graph: any): [string, any][] => Object.entries(graph.States)
+      .flatMap(([name, state]: [string, any]) => [[name, state] as [string, any],
+        ...(state.ItemProcessor ? states(state.ItemProcessor) : [])]);
+    expect(states(definition).filter(([, state]) => state.Retry).map(([name]) => name))
+      .toEqual(['DiscoverArticles']);
+    const daily = resources.find(r => r.Properties?.StateMachineName === 'ttobak-news-daily');
+    expect(states(JSON.parse(resolved(daily.Properties.DefinitionString)))
+      .filter(([, state]) => state.Retry)).toEqual([]);
   });
 
   test('daily children are serialized, deduplicated and isolated from sibling failures', () => {
@@ -429,7 +496,9 @@ describe('private news publication release', () => {
     expect(prepare.Parameters.discovery.candidates).toBeUndefined();
     expect(prepare.Parameters.discovery['sourceRevision.$']).toBe('$.sourceRevision');
     const tasks = states.filter(s => s.Type === 'Task');
-    expect(tasks.every(s => s.Retry === undefined)).toBe(true);
+    // Only discovery retries, and only a throttle (see the retry test).
+    expect(tasks.slice(1).every(s => s.Retry === undefined)).toBe(true);
+    expect(tasks[0].Retry.map((r: any) => r.ErrorEquals)).toEqual([['Lambda.TooManyRequestsException']]);
     expect(tasks[0].Parameters).toMatchObject({
       'sourceId.$': '$.sourceId', 'runId.$': '$$.Execution.Name',
     });

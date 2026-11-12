@@ -14,6 +14,25 @@ import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
 import { NEWS_MODEL_ID, extractionModelResources } from './model-config';
 
+/** Daily schedule (UTC) and child timeout; the manual starter derives its window from them. */
+export const NEWS_DAILY_HOUR_UTC = 19;
+export const NEWS_DAILY_MINUTE_UTC = 10;
+export const NEWS_CHILD_TIMEOUT = cdk.Duration.minutes(45);
+/** After the schedule, manual starts stay refused while a delayed daily start may still arrive. */
+export const NEWS_DAILY_GRACE = cdk.Duration.minutes(15);
+export const NEWS_DISCOVERY_TIMEOUT = cdk.Duration.seconds(600);
+/**
+ * Discovery has reserved concurrency 1. A throttled invocation never ran, so
+ * retrying it has no side effects and cannot double-charge. The total wait
+ * outlasts one full discovery (its timeout) with two minutes of margin.
+ */
+export const NEWS_DISCOVERY_THROTTLE_RETRY = {
+  errors: ['Lambda.TooManyRequestsException'],
+  interval: cdk.Duration.seconds(30),
+  backoffRate: 1,
+  maxAttempts: Math.ceil((NEWS_DISCOVERY_TIMEOUT.toSeconds() + 120) / 30),
+};
+
 interface NewsPublicationProps {
   table: dynamodb.ITable;
   kbBucket: s3.IBucket;
@@ -29,6 +48,8 @@ interface NewsPublicationProps {
  */
 export class NewsPublication extends Construct {
   readonly stateMachine: sfn.StateMachine;
+  /** Starts one manual-{requestId} child run; CrawlerStack routes requests to it. */
+  readonly manualStarter: lambda.Function;
 
   constructor(scope: Construct, id: string, props: NewsPublicationProps) {
     super(scope, id);
@@ -97,7 +118,8 @@ export class NewsPublication extends Construct {
       });
       return { fn, role };
     };
-    const discover = makeFunction('Discover', 'news_runtime.discover_handler', 600, 1, {
+    const discover = makeFunction('Discover', 'news_runtime.discover_handler',
+      NEWS_DISCOVERY_TIMEOUT.toSeconds(), 1, {
       WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl,
     });
     const worker = makeFunction('Worker', 'news_runtime.worker_handler', 840, 2, {
@@ -159,6 +181,10 @@ export class NewsPublication extends Construct {
       }),
       // Discard arbitrary caller fields; discovery's own result is bounded.
     });
+    // Only a reserved-concurrency throttle is retried (no other error): a
+    // daily child meeting a running manual discovery, or the reverse, waits
+    // for the slot instead of failing before its run row exists.
+    discoverTask.addRetry(NEWS_DISCOVERY_THROTTLE_RETRY);
     const failedWorker = new sfn.Pass(this, 'RecordWorkerFailure', {
       parameters: {
         'sourceId.$': '$.sourceId', 'runId.$': '$.runId',
@@ -203,7 +229,7 @@ export class NewsPublication extends Construct {
     this.stateMachine = new sfn.StateMachine(this, 'Workflow', {
       stateMachineName: 'ttobak-news-publication',
       definitionBody: sfn.DefinitionBody.fromChainable(discoverTask.next(choose)),
-      timeout: cdk.Duration.minutes(45),
+      timeout: NEWS_CHILD_TIMEOUT,
     });
     const schedule = makeFunction('Schedule', 'news_schedule.handler', 120, 1);
     schedule.role.addToPolicy(new iam.PolicyStatement({
@@ -304,6 +330,32 @@ export class NewsPublication extends Construct {
         listDaily.next(eachSource).next(summarizeDaily).next(dailyStatus)),
       timeout: cdk.Duration.hours(23),
     });
+    // Manual collection (ADR-004): claims an API-claimed request and starts
+    // the child once. No search, fetch or model access; refuses from the child
+    // timeout before the daily schedule until its grace after, and (cost and
+    // fairness) while any daily or publication run is active.
+    const manual = makeFunction('Manual', 'news_manual.handler', 30, 1, {
+      PUBLICATION_STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
+      DAILY_STATE_MACHINE_ARN: daily.stateMachineArn,
+      NEWS_DAILY_HOUR_UTC: String(NEWS_DAILY_HOUR_UTC),
+      NEWS_DAILY_MINUTE_UTC: String(NEWS_DAILY_MINUTE_UTC),
+      NEWS_DAILY_LEAD_SECONDS: String(NEWS_CHILD_TIMEOUT.toSeconds()),
+      NEWS_DAILY_GRACE_SECONDS: String(NEWS_DAILY_GRACE.toSeconds()),
+    });
+    manual.role.addToPolicy(new iam.PolicyStatement({
+      // PutItem/Query only for the COLLECTREFUSAL# receipts of refused requests.
+      actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+      resources: [props.table.tableArn], conditions: crawlerKeys,
+    }));
+    manual.role.addToPolicy(new iam.PolicyStatement({
+      actions: ['states:StartExecution'], resources: [this.stateMachine.stateMachineArn],
+    }));
+    // Refuse while the daily parent or any publication child runs.
+    manual.role.addToPolicy(new iam.PolicyStatement({
+      actions: ['states:ListExecutions'],
+      resources: [daily.stateMachineArn, this.stateMachine.stateMachineArn],
+    }));
+    this.manualStarter = manual.fn;
     const normal = new cdk.CfnCondition(stack, 'NewsAllSourcesEnabled', {
       expression: cdk.Fn.conditionEquals(mode.valueAsString, 'all'),
     });
@@ -330,7 +382,9 @@ export class NewsPublication extends Construct {
     });
     const dailyRule = new events.Rule(this, 'DailySchedule', {
       ruleName: 'ttobak-news-daily',
-      schedule: events.Schedule.cron({ hour: '19', minute: '10' }),
+      schedule: events.Schedule.cron({
+        hour: String(NEWS_DAILY_HOUR_UTC), minute: String(NEWS_DAILY_MINUTE_UTC),
+      }),
       targets: [new targets.SfnStateMachine(daily, {
         input: events.RuleTargetInput.fromObject({
           scheduledAt: events.EventField.fromPath('$.time'),

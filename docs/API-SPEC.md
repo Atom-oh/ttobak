@@ -1226,7 +1226,7 @@ checks the ref, account and `MEMBER#` row and sets the CONFIG's
 `lastCollectRequestedAt` (UTC RFC3339, seconds) and `lastCollectRequestId` (the
 event's `requestId`) only when the previous request is absent or at least 3,600
 seconds old. Both writes are update expressions touching only these attributes;
-they and the crawler's own `lastCollectStarted*` markers are outside the source
+they and the starter's own `lastCollectStarted*` markers are outside the source
 revision fingerprint. Then a
 `NewsCollectRequested` event (`ttobak.crawler`, detail `sourceId`, `accountId`,
 `requestId` only) goes to the default bus and the route returns 202
@@ -1236,10 +1236,17 @@ revision fingerprint. Then a
 deleted or disabled meanwhile is 404. If the event is not accepted, the claim is
 released (both attributes removed, conditional on its request ID, so a late
 event for it is refused as unclaimed) and the route returns 503; if the
-release also fails the claim expires after the hour. The collection itself is
-asynchronous and bounded by the crawler (it skips a source crawled in the last
-30 minutes and stops at 40 model calls); its outcome is visible only as the
-source's `lastCrawledAt`, HISTORY row and new articles. Account-kind items of
+release also fails the claim expires after the hour. A 202 means the request was
+accepted and queued, not that it will run: the starter may still refuse it with
+`PIPELINE_DISABLED`, `LEGACY_WRITER_ENABLED`, `INVALID_PRICING`,
+`INVALID_CONFIGURATION`, `DAILY_WINDOW` (from 45 minutes before until 15
+minutes after the 19:10 UTC daily schedule), `DAILY_RUNNING` or
+`RUN_IN_PROGRESS`. It then releases the hourly claim, records a non-history
+`COLLECTREFUSAL#` receipt (at most one per source per five minutes) and
+collects nothing (ADR-004); the route does not yet check these conditions
+before answering. Otherwise the collection is one asynchronous versioned
+publication run named `manual-{requestId}` with that run's limits; its outcome
+is visible only as the source's HISTORY receipt and new articles. Account-kind items of
 `GET /api/news-sources`, the PUT response and the per-account GET carry
 `nextCollectAllowedAt` (UTC RFC3339) while a request is within the hour; it is
 omitted when collection may be requested now.
