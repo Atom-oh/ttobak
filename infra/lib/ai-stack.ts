@@ -880,6 +880,14 @@ export class AiStack extends cdk.Stack {
       exportName: 'TtobakQaRoleArn',
     });
 
+    // Keep the automatic cross-stack export of the crawler role's name. The
+    // deployed CrawlerStack still imports it (a policy attached there in an
+    // earlier revision), and CloudFormation refuses to delete an export that
+    // another stack uses, which fails this stack's update and blocks every
+    // later stack. Remove only after a CrawlerStack deployment that no longer
+    // imports it has been confirmed.
+    this.exportValue(this.crawlerRole.roleName);
+
     new cdk.CfnOutput(this, 'CrawlerRoleArn', {
       value: this.crawlerRole.roleArn,
       exportName: 'TtobakCrawlerRoleArn',
