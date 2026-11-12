@@ -42,7 +42,7 @@ export const NON_ICON_LITERALS = new Set([
   'radio', // <input type="radio"> (components/insights/NewsSourcesManager.tsx)
 ]);
 
-function collectIcons(sources, codepoints) {
+export function collectIcons(sources, codepoints) {
   const catalog = new Map(codepoints.trim().split(/\r?\n|\t/).map(entry => entry.split(/\s+/)));
   const icons = new Set();
   for (const { path, text } of sources) {
@@ -59,7 +59,8 @@ function collectIcons(sources, codepoints) {
       // and shared lookup tables are covered without evaluating application code.
       if (ts.isStringLiteralLike(node) || ts.isJsxText(node)) {
         const value = node.text.trim();
-        if (catalog.has(value) && !NON_ICON_LITERALS.has(value)) icons.add(value);
+        const isRole = ts.isJsxAttribute(node.parent) && node.parent.name.getText(source) === 'role';
+        if (!isRole && catalog.has(value) && !NON_ICON_LITERALS.has(value)) icons.add(value);
       }
       ts.forEachChild(node, visit);
     }
@@ -150,6 +151,8 @@ Checked-in catalog SHA-256: \`${digest(codepoints)}\`.
   console.log(`Bundled ${icons.length} symbols in ${font.length} WOFF2 bytes.`);
 }
 
-const sources = await readSources(join(root, 'src'));
-if (process.argv.includes('--check')) await check(sources);
-else await update(sources);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const sources = await readSources(join(root, 'src'));
+  if (process.argv.includes('--check')) await check(sources);
+  else await update(sources);
+}

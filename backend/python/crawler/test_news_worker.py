@@ -162,6 +162,37 @@ class TestCandidateWorker(unittest.TestCase):
         row = self.store.finish.call_args.kwargs["document"]
         self.assertEqual(len(row["awsRelevance"]), 280)
 
+    def test_search_row_carries_valid_matched_term_without_changing_other_fields(self):
+        process_candidate(self.candidate, self.deps)
+        plain = self.store.finish.call_args.kwargs["document"]
+        self.assertNotIn("matchedTerm", plain)
+        tagged_candidate = dict(self.candidate, matchedTerm="우리은행 AI")
+        result = process_candidate(tagged_candidate, self.deps)
+        self.assertEqual(result["status"], "PUBLISHED")
+        tagged = self.store.finish.call_args.kwargs["document"]
+        self.assertEqual(tagged["matchedTerm"], "우리은행 AI")
+        self.assertEqual({k: v for k, v in tagged.items() if k != "matchedTerm"}, plain)
+        # A retry of the same attempt builds the identical row, so the
+        # store's completion digest matches.
+        process_candidate(tagged_candidate, self.deps)
+        self.assertEqual(self.store.finish.call_args.kwargs["document"], tagged)
+
+    def test_invalid_matched_term_writes_nothing_and_still_publishes(self):
+        for value in ("", "가" * 201, "a\x00b", "a\x9fb", 7, ["우리은행"], None):
+            with self.subTest(value=value):
+                result = process_candidate(dict(self.candidate, matchedTerm=value), self.deps)
+                self.assertEqual(result["status"], "PUBLISHED")
+                self.assertNotIn("matchedTerm", self.store.finish.call_args.kwargs["document"])
+
+    def test_custom_candidate_never_writes_matched_term(self):
+        self.store.current_config.return_value = {**CONFIG, "customUrls": ["https://example.com/a"]}
+        value = {**self.candidate, "ingestSource": "custom", "requireRelevance": False,
+                 "matchedTerm": "우리은행"}
+        self.assertEqual(process_candidate(value, self.deps)["status"], "PUBLISHED")
+        row = self.store.finish.call_args.kwargs["document"]
+        self.assertEqual(row["ingestSource"], "custom")
+        self.assertNotIn("matchedTerm", row)
+
     def test_unicode_source_identity_survives_the_full_worker(self):
         for source_id in ("우리은행", "école-١", "news_source"):
             with self.subTest(source_id=source_id):
