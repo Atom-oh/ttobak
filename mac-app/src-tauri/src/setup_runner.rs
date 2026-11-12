@@ -224,10 +224,27 @@ pub(crate) fn skipped_after(ids: &[&str]) -> Vec<StepView> {
         .collect()
 }
 
-/// `intake setup` runs unless new servers wait for approval or the user
-/// cancelled the package step.
+/// `intake setup` runs unless new servers wait for approval, the user
+/// cancelled the package step, or TTOBAK needs a login (intake needs it too).
 pub(crate) fn should_run_intake(cli: &CliSteps, cli_code: Option<&str>) -> bool {
-    cli.run_intake() && cli_code != Some("CANCELLED")
+    cli.run_intake() && cli_code != Some("CANCELLED") && !needs_login(cli)
+}
+
+fn needs_login(cli: &CliSteps) -> bool {
+    cli.steps
+        .iter()
+        .any(|s| s.code.as_deref() == Some("TTOBAK_LOGIN_REQUIRED"))
+}
+
+/// Why `intake setup` did not run.
+pub(crate) fn intake_skip_reason(cli: &CliSteps, cli_code: Option<&str>) -> &'static str {
+    if cli_code == Some("CANCELLED") {
+        "CANCELLED"
+    } else if needs_login(cli) {
+        "TTOBAK_LOGIN_REQUIRED"
+    } else {
+        "AWAITING_APPROVAL"
+    }
 }
 
 fn intake_step(outcome: &Outcome) -> StepView {
@@ -363,11 +380,7 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
         run.push(intake_step(&outcome));
         let _ = app.emit(intake::FINISHED_EVENT, payload);
     } else {
-        let reason = if cli_code.as_deref() == Some("CANCELLED") {
-            "CANCELLED"
-        } else {
-            "AWAITING_APPROVAL"
-        };
+        let reason = intake_skip_reason(&cli, cli_code.as_deref());
         run.push(StepView::new("intake", StepStatus::Skipped, Some(reason)));
     }
     state.finish_run();
@@ -599,6 +612,17 @@ mod tests {
         let parsed = cli_steps(None, Some("CANCELLED"));
         assert!(!should_run_intake(&parsed, Some("CANCELLED")));
         assert!(should_run_intake(&parsed, Some("TIMEOUT")));
+    }
+
+    #[test]
+    fn login_required_skips_intake() {
+        let out = json!({ "ok": false, "steps": [
+            { "id": "packages", "status": "failed", "code": "TTOBAK_LOGIN_REQUIRED" },
+            { "id": "skills", "status": "skipped" }, { "id": "servers", "status": "skipped" }],
+            "needsApproval": [], "warnings": [] });
+        let parsed = cli_steps(Some(&out), None);
+        assert!(!should_run_intake(&parsed, None));
+        assert_eq!(intake_skip_reason(&parsed, None), "TTOBAK_LOGIN_REQUIRED");
     }
 
     #[test]

@@ -248,3 +248,9 @@ test('one-click setup steps and statuses have fixed copy', () => {
   assert.equal(intake.setupCodeText('CANCELLED'), '취소했어요.');
   assert.equal(intake.setupStepLabel('other'), 'other');
 });
+
+test('a login-required setup step offers the TTOBAK login', () => {
+  assert.equal(intake.setupNeedsLogin([{ id: 'packages', status: 'failed', code: 'TTOBAK_LOGIN_REQUIRED' }]), true);
+  assert.equal(intake.setupNeedsLogin([{ id: 'intake', status: 'skipped', code: 'TTOBAK_LOGIN_REQUIRED' }]), true);
+  assert.equal(intake.setupNeedsLogin([{ id: 'packages', status: 'ok' }]), false);
+});

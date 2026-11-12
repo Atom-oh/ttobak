@@ -295,6 +295,11 @@ const SETUP_CODE_TEXT: Record<string, string> = {
   CANCELLED: '취소했어요.',
 };
 
+/** A step stopped because TTOBAK needs a login: the panel offers the login. */
+export function setupNeedsLogin(steps: SetupStep[]): boolean {
+  return steps.some(step => step.code === 'TTOBAK_LOGIN_REQUIRED');
+}
+
 export function setupStepLabel(id: string): string {
   return Object.prototype.hasOwnProperty.call(SETUP_STEP_LABELS, id) ? SETUP_STEP_LABELS[id] : id;
 }

@@ -96,7 +96,7 @@ export function IntakeSettings() {
     <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
       <h3 className="section-header mb-4">{INTAKE_COPY.sectionTitle}</h3>
       <div className="flex flex-col gap-5 text-sm text-slate-700 dark:text-text-secondary">
-        <OneClickSetup disabled={busy || running} onDone={refreshAfterSetup} />
+        <OneClickSetup disabled={busy || running} onDone={refreshAfterSetup} onLogin={() => start('login', runIntakeLogin)} />
         <div className="flex flex-wrap items-center gap-3">
           <span>
             {state.adapter.present ? '수집 도구 설치됨' : intakeCodeLabel('ADAPTER_MISSING')}

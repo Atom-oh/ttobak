@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  errorCode, setupCodeText, setupStatusLabel, setupStepLabel, type SetupFinished, type SetupStep,
+  errorCode, INTAKE_COPY, setupCodeText, setupNeedsLogin, setupStatusLabel, setupStepLabel, type SetupFinished, type SetupStep,
 } from '@/lib/intake';
 import { getSetupState, onSetupFinished, onSetupRunning, onSetupStep, startSetup } from '@/lib/tauri';
 
@@ -21,7 +21,7 @@ const statusClass: Record<SetupStep['status'], string> = {
 /** [한 번에 설정] of the intake section (onDone refreshes the intake state): PATH, adapter, skill packages, MCP
  * servers and `intake setup`, with a live result per step. Hidden in an app
  * build without the setup commands. */
-export function OneClickSetup({ disabled, onDone }: { disabled: boolean; onDone: () => void }) {
+export function OneClickSetup({ disabled, onDone, onLogin }: { disabled: boolean; onDone: () => void; onLogin: () => void }) {
   const [supported, setSupported] = useState(false);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<SetupStep[]>([]);
@@ -97,6 +97,12 @@ export function OneClickSetup({ disabled, onDone }: { disabled: boolean; onDone:
           {running && <li className={mutedClass}>진행 중…</li>}
         </ol>
       )}
+      {!running && setupNeedsLogin(steps) && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className={primaryClass} disabled={disabled} onClick={onLogin}>{INTAKE_COPY.ttobakLogin}</button>
+          <span className={mutedClass}>로그인한 뒤 다시 [한 번에 설정]을 누르세요.</span>
+        </div>
+      )}
       {approvals.length > 0 && !running && (
         <div role="alert" className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200">
           <p>이 Mac에 처음 설치하는 항목이에요. 설치할까요?</p>
@@ -104,7 +110,7 @@ export function OneClickSetup({ disabled, onDone }: { disabled: boolean; onDone:
             {approvals.map(item => <li key={item.key} className="font-mono text-xs">{item.label}</li>)}
           </ul>
           <div className="flex gap-2">
-            <button type="button" className={primaryClass} onClick={() => void start(approvals.map(item => item.key))}>설치</button>
+            <button type="button" className={primaryClass} disabled={disabled} onClick={() => void start(approvals.map(item => item.key))}>설치</button>
             <button type="button" className={buttonClass} onClick={() => setFinished(current => current ? { ...current, needsApproval: [] } : current)}>취소</button>
           </div>
         </div>
