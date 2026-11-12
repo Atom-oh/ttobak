@@ -483,6 +483,28 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   documents are public search results (custom URLs excluded), terms are
   recognition hints written as `system:news` with audit rows, and signed-in
   users can edit or delete Common terms.
+  **Account-owned sources excluded (2026-11-12).** The accepted risk above
+  covers user-subscribed sources only. Account-owned (customer-only) sources
+  (`acct_{accountId}_{hex8}`, CONFIG `accountId`) are visible in Insights only
+  to that account's direct members, yet under `all` their terms could reach
+  Common, and one customer with two such sources could meet the two-source
+  threshold alone. In both `all` and `global` modes the news run now excludes
+  them, decided as Insights does (`GetSourceOrigin`): a CONFIG row with a
+  non-empty `accountId`, or a row-less `acct_` ID, is account-owned. Their
+  documents never reach the model, never count as a source that day, and
+  their earlier sightings are dropped from the seven-day history (and from the
+  row when it is rewritten). Each distinct source is resolved once per run; a
+  lookup failure fails the run (`SOURCE_READ_FAILED`, retryable), never a pass.
+  A rerun of an already processed day sees a new content hash and repeats the
+  model calls, but the merge is per day (one observation per term and day),
+  so it cannot count a term twice. Common terms created before this change
+  may include customer-source terms; news observations are keyed by day, not
+  source, so they cannot be attributed and nothing is purged automatically.
+  **Open operator action:** no existing maintenance command fits a read-only
+  report, so an operator reviews Common automatic terms with `createdBy`
+  `system:news` (and their `DICTLOG#` audit rows, action `create`) added since
+  the owner's 2026-11-09 `all` decision, and deletes any customer-specific
+  term through the existing Common term delete path.
   **AWS technical documents (2026-11-11).** `ProcessTechDaily` reads the
   title and summary (never the S3 body) of the documents the reserved
   `__tech__` crawler wrote in the news day (GSI4 `DOC#tech`). They have no

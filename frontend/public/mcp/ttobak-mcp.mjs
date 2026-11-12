@@ -17039,8 +17039,8 @@ var require_resolve = __commonJS({
       }
       return count;
     }
-    function getFullPath(resolver, id = "", normalize) {
-      if (normalize !== false)
+    function getFullPath(resolver, id = "", normalize2) {
+      if (normalize2 !== false)
         id = normalizeId(id);
       const p = resolver.parse(id);
       return _getFullPath(resolver, p);
@@ -18635,7 +18635,7 @@ var require_fast_uri = __commonJS({
       }
       return decodedScheme;
     }
-    function normalize(uri, options2) {
+    function normalize2(uri, options2) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
         normalizeString(uri, options2);
@@ -19013,7 +19013,7 @@ var require_fast_uri = __commonJS({
     }
     var fastUri = {
       SCHEMES,
-      normalize,
+      normalize: normalize2,
       resolve: resolve4,
       resolveComponent,
       equal,
@@ -23443,6 +23443,7 @@ function eventInput(value) {
   if ("location" in value && !validText(value.location, 256, false)) invalid("location");
   if ("organizerDomain" in value && (typeof value.organizerDomain !== "string" || !/^[a-z0-9.-]{1,253}$/.test(value.organizerDomain))) invalid("organizerDomain");
   if ("accountId" in value && (typeof value.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.accountId))) invalid("accountId");
+  sharingInput(value);
   if (!validText(value.timeZone, 128) || value.timeZone === "Local" || /^[+-]/.test(value.timeZone)) invalid("timeZone");
   if ("isAllDay" in value && typeof value.isAllDay !== "boolean") invalid("isAllDay");
   let formatter;
@@ -23476,6 +23477,19 @@ function eventInput(value) {
   const encoded = JSON.stringify(payload) + "\n";
   const separatorBytes = Array.from(encoded).filter((character) => [8232, 8233].includes(character.charCodeAt(0))).length * 3;
   if (Buffer.byteLength(encoded) + separatorBytes > 4096) invalid("encrypted event payload byte limit");
+}
+function sharingInput(value) {
+  const share = value.shareAccountId;
+  if (share !== void 0 && (typeof share !== "string" || !IDENTIFIER.test(share))) invalid("shareAccountId");
+  const evidence = value.shareEvidence, candidates = value.candidateAccountIds;
+  if (evidence !== void 0 && (!Array.isArray(evidence) || evidence.length > 3 || evidence.some((kind) => typeof kind !== "string" || !EVIDENCE.includes(kind)) || new Set(evidence).size !== evidence.length)) invalid("shareEvidence");
+  if (candidates !== void 0 && (!Array.isArray(candidates) || candidates.length > 5 || candidates.some((id) => typeof id !== "string" || !IDENTIFIER.test(id) || id === share) || new Set(candidates).size !== candidates.length)) invalid("candidateAccountIds");
+  if (value.private !== void 0 && typeof value.private !== "boolean") invalid("private");
+  if (value.seriesKey !== void 0 && (typeof value.seriesKey !== "string" || !/^[0-9a-f]{64}$/.test(value.seriesKey))) invalid("seriesKey");
+  if (Array.isArray(evidence) && evidence.length > 0 && share === void 0) invalid("shareEvidence without shareAccountId");
+  if (value.private === true && (share !== void 0 || Array.isArray(candidates) && candidates.length > 0)) {
+    invalid("private event sharing");
+  }
 }
 function syncInput(args) {
   exact(args, Object.keys(syncFields), Object.keys(syncFields));
@@ -23575,13 +23589,14 @@ async function callCalendarTool(name, args, api) {
     return readingError("Calendar sync is unconfirmed. Retry the identical batch ID and expected revision with unchanged source and full payload. " + message);
   }
 }
-var MAX_CALENDAR_API_BYTES, MAX_RESULT_BYTES, MAX_REVISION, UUID_PATTERN, uuidSchema, timestampSchema, identifierSchema, textSchema, eventFields, requiredEventFields, syncFields, pageFields, CALENDAR_TOOLS, CALENDAR_TOOL_NAMES;
+var MAX_CALENDAR_API_BYTES, MAX_CALENDAR_DIRECTORY_BYTES, MAX_RESULT_BYTES, MAX_REVISION, UUID_PATTERN, uuidSchema, timestampSchema, identifierSchema, textSchema, eventFields, requiredEventFields, syncFields, pageFields, CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, IDENTIFIER, EVIDENCE;
 var init_calendar = __esm({
   "src/calendar.ts"() {
     "use strict";
     init_api2();
     init_reading();
     MAX_CALENDAR_API_BYTES = 14e3;
+    MAX_CALENDAR_DIRECTORY_BYTES = 64 * 1024;
     MAX_RESULT_BYTES = 32e3;
     MAX_REVISION = Number.MAX_SAFE_INTEGER - 1;
     UUID_PATTERN = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
@@ -23605,7 +23620,24 @@ var init_calendar = __esm({
       endDate: { type: "string", format: "date", description: "All-day exclusive local end date at midnight." },
       location: textSchema(256, false),
       accountId: identifierSchema,
-      organizerDomain: { type: "string", pattern: "^[a-z0-9.-]{1,253}$", description: "Lowercase organizer email domain only; never a name or local part." }
+      organizerDomain: { type: "string", pattern: "^[a-z0-9.-]{1,253}$", description: "Lowercase organizer email domain only; never a name or local part." },
+      shareAccountId: { ...identifierSchema, description: "Account to share this occurrence with; the caller must be a direct member." },
+      shareEvidence: {
+        type: "array",
+        maxItems: 3,
+        uniqueItems: true,
+        items: { enum: ["domain", "location", "title"] },
+        description: "Evidence kinds for shareAccountId, never matched text."
+      },
+      candidateAccountIds: {
+        type: "array",
+        maxItems: 5,
+        uniqueItems: true,
+        items: identifierSchema,
+        description: "Owner-only account suggestions; must not repeat shareAccountId."
+      },
+      private: { type: "boolean", description: "Never shared (Outlook Private category or private meeting); forbids shareAccountId and candidates." },
+      seriesKey: { type: "string", pattern: "^[0-9a-f]{64}$", description: "Opaque series key (64 lowercase hex)." }
     };
     requiredEventFields = ["externalId", "title", "startsAt", "endsAt", "timeZone"];
     syncFields = {
@@ -23623,7 +23655,7 @@ var init_calendar = __esm({
       mutations: {
         type: "array",
         maxItems: 20,
-        description: "At most 20 distinct occurrence IDs. Only explicit removals delete events.",
+        description: "At most 20 distinct occurrence IDs, or at most 12 when any upsert carries share fields (the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE). Only explicit removals delete events.",
         items: { oneOf: [
           { type: "object", properties: { op: { const: "upsert" }, event: {
             type: "object",
@@ -23659,7 +23691,7 @@ var init_calendar = __esm({
     CALENDAR_TOOLS = [
       {
         name: "ttobak_sync_calendar_events",
-        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
+        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
         inputSchema: { type: "object", properties: syncFields, required: Object.keys(syncFields), additionalProperties: false }
       },
@@ -23682,6 +23714,8 @@ var init_calendar = __esm({
       }
     ];
     CALENDAR_TOOL_NAMES = CALENDAR_TOOLS.map((tool) => tool.name);
+    IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
+    EVIDENCE = ["domain", "location", "title"];
   }
 });
 
@@ -24071,6 +24105,11 @@ var init_api2 = __esm({
       async listAccountProjects(accountId) {
         const result = await this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/projects`);
         return (result?.projects ?? []).flatMap((project) => typeof project?.projectId === "string" ? [{ projectId: project.projectId, ...typeof project.sfdcOpptyId === "string" && project.sfdcOpptyId ? { sfdcOpptyId: project.sfdcOpptyId } : {} }] : []);
+      }
+      /** One page of accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
+      async calendarShareDirectory(cursor = "") {
+        const query = cursor ? `?${new URLSearchParams({ cursor })}` : "";
+        return this.request("GET", `/api/calendar/share-directory${query}`, void 0, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
       }
       async calendarSyncStatus(options2) {
         const query = new URLSearchParams(Object.entries(options2).map(([key, value]) => [key, String(value)]));
@@ -25194,6 +25233,82 @@ var init_errors4 = __esm({
   }
 });
 
+// src/intake/match.ts
+function normalize(s) {
+  return String(s ?? "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+function normalizeDomain(s) {
+  return normalize(s).replace(/^@+/, "").replace(/\.+$/, "");
+}
+function domainMatches(domain2, d) {
+  return domain2 === d || domain2.endsWith("." + d);
+}
+function containsTerm(text4, term) {
+  if (!text4) return false;
+  if (HANGUL.test(term)) return text4.includes(term);
+  let from = 0;
+  for (; ; ) {
+    const i = text4.indexOf(term, from);
+    if (i < 0) return false;
+    const before = [...text4.slice(0, i)].pop();
+    const after = [...text4.slice(i + term.length)][0];
+    if ((before === void 0 || !LETTER_OR_DIGIT.test(before)) && (after === void 0 || !LETTER_OR_DIGIT.test(after))) {
+      return true;
+    }
+    from = i + 1;
+  }
+}
+function buildMatcher(accounts, ownDomains2) {
+  const own = ownDomains2.map(normalizeDomain).filter(Boolean);
+  const isOwn = (d) => own.some((o) => domainMatches(d, o));
+  const compiled = accounts.map((a) => ({
+    accountId: a.accountId,
+    terms: [...new Set([a.name, ...a.aliases].map(normalize))].filter(
+      (t) => [...t].length >= MIN_TERM_POINTS
+    ),
+    domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d))
+  }));
+  return {
+    match(input) {
+      const title = normalize(input.title);
+      const location = normalize(input.location ?? "");
+      const attendees = [...new Set(input.domains.map(normalizeDomain))].filter(
+        (d) => d && !isOwn(d)
+      );
+      const hits = [];
+      for (const c of compiled) {
+        const evidence = /* @__PURE__ */ new Set();
+        if (c.terms.some((t) => containsTerm(title, t))) evidence.add("title");
+        if (c.terms.some((t) => containsTerm(location, t))) evidence.add("location");
+        if (attendees.some((d) => c.domains.some((cd) => domainMatches(d, cd)))) {
+          evidence.add("domain");
+        }
+        if (evidence.size > 0) {
+          hits.push({ accountId: c.accountId, evidence: [...evidence].sort() });
+        }
+      }
+      const ids = [...new Set(hits.map((h) => h.accountId))].sort();
+      if (ids.length === 0) return { kind: "none" };
+      if (ids.length === 1) {
+        const evidence = [...new Set(hits.filter((h) => h.accountId === ids[0]).flatMap((h) => h.evidence))].sort();
+        return { kind: "matched", accountId: ids[0], evidence };
+      }
+      return { kind: "candidate", accountIds: ids.slice(0, MAX_CANDIDATES) };
+    }
+  };
+}
+var DEFAULT_OWN_DOMAINS, MAX_CANDIDATES, MIN_TERM_POINTS, HANGUL, LETTER_OR_DIGIT;
+var init_match = __esm({
+  "src/intake/match.ts"() {
+    "use strict";
+    DEFAULT_OWN_DOMAINS = ["amazon.com"];
+    MAX_CANDIDATES = 5;
+    MIN_TERM_POINTS = 2;
+    HANGUL = new RegExp("\\p{Script=Hangul}", "u");
+    LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+  }
+});
+
 // src/intake/calendar.ts
 import { createHash as createHash4, randomUUID as randomUUID3 } from "node:crypto";
 function responseOf(value) {
@@ -25286,9 +25401,10 @@ function parseOutlookItems(payload) {
   return list2.map((item2) => {
     if (!item2 || typeof item2 !== "object" || Array.isArray(item2)) throw new IntakeError("PARSE_FAILED", "calendar item is not an object");
     const value = item2;
-    if (typeof value.meetingId !== "string" || !value.meetingId || typeof value.start !== "string" || typeof value.end !== "string" || !optionalType2(value, "subject", "string") || !optionalType2(value, "location", "string") || !optionalType2(value, "isCanceled", "boolean") || !optionalType2(value, "isAllDay", "boolean") || !optionalType2(value, "sensitivity", "string")) {
+    if (typeof value.meetingId !== "string" || !value.meetingId || typeof value.start !== "string" || typeof value.end !== "string" || !optionalType2(value, "subject", "string") || !optionalType2(value, "location", "string") || !optionalType2(value, "isCanceled", "boolean") || !optionalType2(value, "isAllDay", "boolean") || !optionalType2(value, "sensitivity", "string") || !optionalType2(value, "meetingChangeKey", "string") || !optionalType2(value, "seriesId", "string") || !(value.categories === void 0 || value.categories === null || Array.isArray(value.categories) && value.categories.every((category) => typeof category === "string"))) {
       throw new IntakeError("PARSE_FAILED", "calendar item has unexpected field types");
     }
+    const privateCategory = Array.isArray(value.categories) && value.categories.some((category) => category.trim().toLowerCase() === "private");
     const organizer = value.organizer;
     const email3 = organizer && typeof organizer === "object" && !Array.isArray(organizer) ? organizer.email : void 0;
     return {
@@ -25302,7 +25418,10 @@ function parseOutlookItems(payload) {
       ...typeof value.sensitivity === "string" ? { sensitivity: value.sensitivity } : {},
       // A non-string response is treated as missing (`unknown`); the run then fails closed.
       ...typeof value.response === "string" ? { response: value.response } : {},
-      ...typeof email3 === "string" ? { organizer: { email: email3 } } : {}
+      ...typeof email3 === "string" ? { organizer: { email: email3 } } : {},
+      ...typeof value.meetingChangeKey === "string" && value.meetingChangeKey ? { meetingChangeKey: value.meetingChangeKey } : {},
+      ...typeof value.seriesId === "string" && value.seriesId ? { seriesId: value.seriesId } : {},
+      ...privateCategory ? { privateCategory: true } : {}
     };
   });
 }
@@ -25385,7 +25504,53 @@ function validEvent(event, window) {
     return false;
   }
 }
-function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES) {
+function sharingCandidates(items, window) {
+  const seen = /* @__PURE__ */ new Set();
+  return items.filter((item2) => {
+    if (seen.has(item2.meetingId)) return false;
+    const start = instantOf(item2.start), end = instantOf(item2.end);
+    if (!start || !end || !(end > window.start && start < window.end)) return false;
+    seen.add(item2.meetingId);
+    return !item2.isCanceled && !excludedSensitivity(item2) && !item2.privateCategory && end.getTime() - start.getTime() <= LONG_EVENT_MS;
+  });
+}
+function shareFields(event) {
+  const fields2 = {
+    ...event.shareAccountId ? { shareAccountId: event.shareAccountId } : {},
+    ...event.shareEvidence ? { shareEvidence: [...event.shareEvidence] } : {},
+    ...event.candidateAccountIds ? { candidateAccountIds: [...event.candidateAccountIds] } : {},
+    ...event.private ? { private: true } : {}
+  };
+  return Object.keys(fields2).length ? fields2 : void 0;
+}
+function applyShare(event, fields2) {
+  if (fields2?.private) {
+    event.private = true;
+    return;
+  }
+  if (fields2?.shareAccountId) {
+    event.shareAccountId = fields2.shareAccountId;
+    if (fields2.shareEvidence?.length) event.shareEvidence = [...fields2.shareEvidence].sort();
+  }
+  const candidates = (fields2?.candidateAccountIds ?? []).filter((id) => id !== fields2?.shareAccountId);
+  if (candidates.length) event.candidateAccountIds = [...new Set(candidates)].sort().slice(0, 5);
+}
+function decideSharing(event, item2, previous, sharing) {
+  const facts = sharing.facts.get(item2.meetingId);
+  if (item2.privateCategory || facts?.isPrivate || facts == null && previous?.share?.private) {
+    event.private = true;
+    return;
+  }
+  if (!sharing.matcher) {
+    applyShare(event, { candidateAccountIds: previous?.share?.candidateAccountIds });
+    return;
+  }
+  const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
+  const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
+  if (result.kind === "matched") applyShare(event, { candidateAccountIds: [result.accountId] });
+  else if (result.kind === "candidate") applyShare(event, { candidateAccountIds: result.accountIds });
+}
+function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES, sharing) {
   const wanted = new Set(responses);
   const counts = {
     fetched: 0,
@@ -25399,7 +25564,12 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     skippedInvalid: 0,
     cancelledUntracked: 0,
     unresolved: 0,
-    sensitivityUnknown: 0
+    sensitivityUnknown: 0,
+    shared: 0,
+    candidates: 0,
+    private: 0,
+    attendeesUnavailable: 0,
+    directoryUnavailable: sharing ? sharing.matcher === null : false
   };
   const mutations = [];
   const set2 = {};
@@ -25455,10 +25625,15 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
       continue;
     }
     const event = toEvent(item2, zone);
+    if (event && sharing) decideSharing(event, item2, ledger[item2.meetingId], sharing);
+    else if (event && item2.privateCategory) event.private = true;
     if (!event || !validEvent(event, window)) {
       counts.skippedInvalid++;
       continue;
     }
+    if (event.private) counts.private++;
+    if (event.shareAccountId) counts.shared++;
+    else if (event.candidateAccountIds) counts.candidates++;
     const fp = fingerprint(event);
     if (ledger[event.externalId]?.fp === fp) {
       counts.unchanged++;
@@ -25466,7 +25641,13 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
       continue;
     }
     mutations.push({ op: "upsert", event });
-    set2[event.externalId] = { fp, startsAt: new Date(event.startsAt).toISOString(), endsAt: new Date(event.endsAt).toISOString() };
+    const share = shareFields(event);
+    set2[event.externalId] = {
+      fp,
+      startsAt: new Date(event.startsAt).toISOString(),
+      endsAt: new Date(event.endsAt).toISOString(),
+      ...share ? { share } : {}
+    };
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: "upsert" });
   }
@@ -25547,6 +25728,45 @@ async function send(api, store, state) {
   state.pending = null;
   store.write(state, ...statePath(state));
 }
+function parseDirectory(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const accounts = value.accounts;
+  if (!Array.isArray(accounts) || accounts.length > MAX_DIRECTORY_ACCOUNTS) return null;
+  const strings2 = (list2) => Array.isArray(list2) && list2.length <= 100 && list2.every((entry2) => typeof entry2 === "string" && entry2.length <= 256);
+  const result = [];
+  for (const entry2 of accounts) {
+    if (!entry2 || typeof entry2 !== "object" || Array.isArray(entry2)) continue;
+    const account = entry2;
+    const aliases = account.aliases ?? [], domains = account.domains ?? [];
+    if (typeof account.accountId !== "string" || !IDENTIFIER2.test(account.accountId) || typeof account.name !== "string" || account.name.length > 256 || !strings2(aliases) || !strings2(domains)) continue;
+    result.push({ accountId: account.accountId, name: account.name, aliases, domains });
+  }
+  return result;
+}
+function directoryCursor(value, previous) {
+  const next = value && typeof value === "object" ? value.nextCursor : void 0;
+  if (next === void 0 || next === "") return "";
+  return typeof next === "string" && IDENTIFIER2.test(next) && next > previous ? next : null;
+}
+async function readDirectory(api) {
+  if (!api) return null;
+  const all = [];
+  let cursor = "";
+  try {
+    for (let page2 = 0; page2 < MAX_DIRECTORY_PAGES; page2++) {
+      const value = await api.calendarShareDirectory(cursor);
+      const accounts = parseDirectory(value);
+      const next = directoryCursor(value, cursor);
+      if (!accounts || next === null) return null;
+      all.push(...accounts);
+      if (!next) return all;
+      cursor = next;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 async function runCalendar(options2) {
   const { store, source, sourceId, zone, now, dryRun } = options2;
   if (!dryRun && !options2.scope) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK account scope is required");
@@ -25567,7 +25787,15 @@ async function runCalendar(options2) {
   const items = [];
   for (const request2 of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request2)));
   assertResponsesPresent(items);
-  const plan = planCalendar(items, state.ledger, window, zone, options2.responses);
+  const directory = await readDirectory(options2.api);
+  const matcher = directory ? buildMatcher(directory, options2.ownDomains?.length ? options2.ownDomains : DEFAULT_OWN_DOMAINS) : null;
+  const facts = /* @__PURE__ */ new Map();
+  if (matcher && options2.attendees) {
+    for (const item2 of sharingCandidates(items, window)) facts.set(item2.meetingId, await options2.attendees.factsFor(item2));
+    options2.attendees.save(now);
+  }
+  const plan = planCalendar(items, state.ledger, window, zone, options2.responses, { sourceId, matcher, facts });
+  plan.counts.attendeesUnavailable = options2.attendees?.unavailable ?? 0;
   if (plan.counts.responseUnknown > 0) {
     throw new IntakeError("SCHEMA_CHANGED", `${plan.counts.responseUnknown} calendar_view items carry no known response`);
   }
@@ -25612,13 +25840,14 @@ async function runCalendar(options2) {
   for (const item2 of items) if (Object.hasOwn(plan.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, CALENDAR_RESPONSES, DEFAULT_CALENDAR_RESPONSES, LONG_EVENT_MS, SCOPE_PATTERN;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, CALENDAR_RESPONSES, DEFAULT_CALENDAR_RESPONSES, LONG_EVENT_MS, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS, MAX_DIRECTORY_PAGES;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
     init_calendar();
     init_batch();
     init_errors4();
+    init_match();
     CALENDAR_TOOL = { name: "calendar_view", properties: ["start_date", "end_date"] };
     PAST_DAYS = 7;
     FUTURE_DAYS = 30;
@@ -25630,6 +25859,164 @@ var init_calendar2 = __esm({
     DEFAULT_CALENDAR_RESPONSES = ["accept", "organizer", "tentative"];
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
+    IDENTIFIER2 = /^[A-Za-z0-9_-]{1,128}$/;
+    MAX_DIRECTORY_ACCOUNTS = 1e3;
+    MAX_DIRECTORY_PAGES = 10;
+  }
+});
+
+// src/intake/attendees.ts
+function records(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === "object") {
+    const meetings = payload.meetings;
+    if (Array.isArray(meetings)) return meetings;
+  }
+  return [];
+}
+function parseMeetingList(payload) {
+  const all = records(payload);
+  if (all.length > MAX_LIST) return null;
+  const out = [];
+  for (const raw of all) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw;
+    if (typeof r.meetingId !== "string" || !r.meetingId || typeof r.subject !== "string" || typeof r.startTime !== "string" || typeof r.endTime !== "string") continue;
+    out.push({
+      meetingId: r.meetingId,
+      subject: r.subject,
+      start: r.startTime,
+      end: r.endTime,
+      isRecurring: r.isRecurring === true
+    });
+  }
+  return out;
+}
+function joinMeeting(item2, list2) {
+  if (typeof item2.subject !== "string") return null;
+  const start = Date.parse(item2.start);
+  const end = Date.parse(item2.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const matches2 = list2.filter((m) => m.subject === item2.subject && Date.parse(m.start) === start && Date.parse(m.end) === end);
+  return matches2.length === 1 ? matches2[0] : null;
+}
+function parseAttendees(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const r = payload;
+  if (typeof r.isPrivate !== "boolean") return null;
+  const seen = /* @__PURE__ */ new Set();
+  const add = (value) => {
+    if (typeof value !== "string") return;
+    const address = value.trim().toLowerCase();
+    if (address) seen.add(address);
+  };
+  for (const key of ["requiredAttendees", "optionalAttendees"]) {
+    const list2 = r[key];
+    if (Array.isArray(list2)) list2.forEach(add);
+  }
+  add(r.organizer);
+  if (seen.size > MAX_ATTENDEES) return null;
+  return { addresses: [...seen], isPrivate: r.isPrivate };
+}
+function meetingFacts(payload) {
+  const parsed = parseAttendees(payload);
+  if (!parsed) return payload && typeof payload === "object" && payload.isPrivate === true ? { domains: [], isPrivate: true } : null;
+  const r = payload;
+  if (!Array.isArray(r.requiredAttendees) && !Array.isArray(r.optionalAttendees) && typeof r.organizer !== "string") return null;
+  const domains = /* @__PURE__ */ new Set();
+  for (const address of parsed.addresses) {
+    const domain2 = organizerDomain(address);
+    if (domain2) domains.add(domain2);
+  }
+  if (domains.size > MAX_DOMAINS) return parsed.isPrivate ? { domains: [], isPrivate: true } : null;
+  return { domains: [...domains].sort(), isPrivate: parsed.isPrivate };
+}
+var MAX_LIST, MAX_ATTENDEES, MAX_DOMAINS, MAX_FACT_READS, MAX_FACT_FAILURES, AttendeeFacts;
+var init_attendees = __esm({
+  "src/intake/attendees.ts"() {
+    "use strict";
+    init_calendar2();
+    MAX_LIST = 5e3;
+    MAX_ATTENDEES = 500;
+    MAX_DOMAINS = 50;
+    MAX_FACT_READS = 25;
+    MAX_FACT_FAILURES = 3;
+    AttendeeFacts = class {
+      constructor(store, sourceId, reader, window) {
+        this.store = store;
+        this.sourceId = sourceId;
+        this.reader = reader;
+        this.window = window;
+        let stored = null;
+        try {
+          stored = store.read("calendar", sourceId, "meeting-facts.json");
+        } catch {
+          stored = null;
+        }
+        this.cache = stored && stored.version === 1 && stored.entries && typeof stored.entries === "object" ? stored : { version: 1, entries: {} };
+      }
+      store;
+      sourceId;
+      reader;
+      window;
+      cache;
+      list;
+      failures = 0;
+      reads = 0;
+      changed = false;
+      /** Lookups without an answer: no reader, no unique join, failed, or over the per-run budget. */
+      unavailable = 0;
+      async factsFor(item2) {
+        const cached2 = this.cache.entries[item2.meetingId];
+        if (item2.meetingChangeKey && cached2?.changeKey === item2.meetingChangeKey && Array.isArray(cached2.domains) && typeof cached2.isPrivate === "boolean") {
+          return { domains: [...cached2.domains], isPrivate: cached2.isPrivate };
+        }
+        const facts = await this.read(item2);
+        if (!facts) {
+          this.unavailable++;
+          return null;
+        }
+        const end = new Date(item2.end);
+        if (item2.meetingChangeKey && Number.isFinite(end.getTime())) {
+          this.cache.entries[item2.meetingId] = { changeKey: item2.meetingChangeKey, ...facts, endsAt: end.toISOString() };
+          this.changed = true;
+        }
+        return facts;
+      }
+      async read(item2) {
+        if (!this.reader || this.failures >= MAX_FACT_FAILURES || this.reads >= MAX_FACT_READS) return null;
+        if (this.list === void 0) {
+          try {
+            this.list = parseMeetingList(await this.reader.list(this.window));
+          } catch {
+            this.list = null;
+          }
+        }
+        if (!this.list) return null;
+        const joined = joinMeeting(item2, this.list);
+        if (!joined) return null;
+        this.reads++;
+        let facts;
+        try {
+          facts = meetingFacts(await this.reader.get(joined.meetingId));
+        } catch {
+          facts = null;
+        }
+        if (!facts) {
+          this.failures++;
+          return null;
+        }
+        this.failures = 0;
+        return facts;
+      }
+      save(now) {
+        const pruned = pruneLedger(this.cache.entries, now);
+        if (!this.changed && Object.keys(pruned).length === Object.keys(this.cache.entries).length) return;
+        this.cache = { version: 1, entries: pruned };
+        this.store.write(this.cache, "calendar", this.sourceId, "meeting-facts.json");
+        this.changed = false;
+      }
+    };
   }
 });
 
@@ -29266,68 +29653,6 @@ var init_store = __esm({
   }
 });
 
-// src/intake/attendees.ts
-function records(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (payload && typeof payload === "object") {
-    const meetings = payload.meetings;
-    if (Array.isArray(meetings)) return meetings;
-  }
-  return [];
-}
-function parseMeetingList(payload) {
-  const all = records(payload);
-  if (all.length > MAX_LIST) return null;
-  const out = [];
-  for (const raw of all) {
-    if (!raw || typeof raw !== "object") continue;
-    const r = raw;
-    if (typeof r.meetingId !== "string" || !r.meetingId || typeof r.subject !== "string" || typeof r.startTime !== "string" || typeof r.endTime !== "string") continue;
-    out.push({
-      meetingId: r.meetingId,
-      subject: r.subject,
-      start: r.startTime,
-      end: r.endTime,
-      isRecurring: r.isRecurring === true
-    });
-  }
-  return out;
-}
-function joinMeeting(item2, list2) {
-  if (typeof item2.subject !== "string") return null;
-  const start = Date.parse(item2.start);
-  const end = Date.parse(item2.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const matches2 = list2.filter((m) => m.subject === item2.subject && Date.parse(m.start) === start && Date.parse(m.end) === end);
-  return matches2.length === 1 ? matches2[0] : null;
-}
-function parseAttendees(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const r = payload;
-  if (typeof r.isPrivate !== "boolean") return null;
-  const seen = /* @__PURE__ */ new Set();
-  const add = (value) => {
-    if (typeof value !== "string") return;
-    const address = value.trim().toLowerCase();
-    if (address) seen.add(address);
-  };
-  for (const key of ["requiredAttendees", "optionalAttendees"]) {
-    const list2 = r[key];
-    if (Array.isArray(list2)) list2.forEach(add);
-  }
-  add(r.organizer);
-  if (seen.size > MAX_ATTENDEES) return null;
-  return { addresses: [...seen], isPrivate: r.isPrivate };
-}
-var MAX_LIST, MAX_ATTENDEES;
-var init_attendees = __esm({
-  "src/intake/attendees.ts"() {
-    "use strict";
-    MAX_LIST = 5e3;
-    MAX_ATTENDEES = 500;
-  }
-});
-
 // src/intake/classify.ts
 function classifyOccurrence(input) {
   if (input.isPrivate) return { kind: "skip" };
@@ -30603,7 +30928,7 @@ __export(run_exports, {
   tokenEmail: () => tokenEmail
 });
 import { homedir as homedir6 } from "node:os";
-import { resolve as resolve3 } from "node:path";
+import { join as join9, resolve as resolve3 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { createHash as createHash8, randomUUID as randomUUID5 } from "node:crypto";
 function enabled(entry2) {
@@ -30634,12 +30959,15 @@ function flags(args, allowed) {
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
     const kind = allowed[name];
-    if (!kind || name in result) throw new IntakeError("INVALID_ARGUMENT", `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
+    if (!kind || name in result && kind !== "list") {
+      throw new IntakeError("INVALID_ARGUMENT", `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
+    }
     if (kind === "flag") result[name] = true;
     else {
       const value = args[++index];
       if (value === void 0 || value.startsWith("--")) throw new IntakeError("INVALID_ARGUMENT", `${name} needs a value`);
-      result[name] = value;
+      if (kind === "list") result[name] = [...result[name] ?? [], value];
+      else result[name] = value;
     }
   }
   return result;
@@ -30667,6 +30995,13 @@ async function openSession(environment, host, server, pathDirs, tools, optional4
     throw error3;
   }
   return session;
+}
+function ownDomains(values) {
+  const domains = [...new Set((values ?? DEFAULT_OWN_DOMAINS).map((domain2) => domain2.trim().toLowerCase().replace(/^@+/, "")))];
+  if (domains.length > 20 || domains.some((domain2) => domain2.length > 253 || !OWN_DOMAIN.test(domain2))) {
+    throw new IntakeError("INVALID_ARGUMENT", "--own-domain must be a domain name");
+  }
+  return domains;
 }
 async function selectTaskConnector(connector, request2, environment, store) {
   const { host, server } = request2;
@@ -30714,7 +31049,7 @@ async function select(args, environment, store) {
   }
   const allowed = { "--host": "value", "--server": "value" };
   if (connector === "specreq") allowed["--auto-ack"] = "value";
-  if (connector === "calendar") allowed["--accept-unknown-sensitivity"] = "flag";
+  if (connector === "calendar") Object.assign(allowed, { "--accept-unknown-sensitivity": "flag", "--own-domain": "list" });
   const options2 = flags(args.slice(1), allowed);
   const autoAckValue = options2["--auto-ack"] ?? "on";
   if (autoAckValue !== "on" && autoAckValue !== "off") throw new IntakeError("INVALID_ARGUMENT", "--auto-ack must be on or off");
@@ -30724,7 +31059,8 @@ async function select(args, environment, store) {
       host: options2["--host"],
       server: options2["--server"],
       autoAck: autoAckValue === "on",
-      acceptUnknownSensitivity: options2["--accept-unknown-sensitivity"] === true
+      acceptUnknownSensitivity: options2["--accept-unknown-sensitivity"] === true,
+      ...connector === "calendar" && options2["--own-domain"] !== void 0 ? { ownDomains: ownDomains(options2["--own-domain"]) } : {}
     },
     environment,
     store
@@ -30769,6 +31105,7 @@ async function selectConnector(connector, request2, environment, store) {
       sourceId,
       pathDirs,
       selectedAt: environment.now().toISOString(),
+      ownDomains: request2.ownDomains ?? previous?.calendar?.ownDomains ?? ownDomains(void 0),
       ...request2.acceptUnknownSensitivity ? { acceptUnknownSensitivity: true } : {}
     },
     options: syncOptions(previous),
@@ -30802,6 +31139,44 @@ async function signIn(selection, environment, dryRun, noninteractive) {
     }
   }
   return { api, scope, me };
+}
+function directoryOnlyApi(selection, environment) {
+  try {
+    const config2 = ttobakConfig(selection, environment.env);
+    return new TtobakApi(
+      new CognitoAuth2(config2, { interactive: false, tokenDirectory: join9(environment.home, ".ttobak") }),
+      config2.apiUrl
+    );
+  } catch {
+    return void 0;
+  }
+}
+async function openMeetingFacts(environment, store, selection, scope, me, now) {
+  const selected = enabled(selection.meetings);
+  let session;
+  try {
+    session = await openSession(environment, selected.host, selected.server, selected.pathDirs, CONNECTOR_TOOLS.meetings);
+  } catch {
+    session = void 0;
+  }
+  let login3 = "";
+  try {
+    login3 = scope ? loadIdentity(store, scope)?.login ?? "" : "";
+  } catch {
+    login3 = "";
+  }
+  const userEmail = login3 ? `${login3}@amazon.com` : me?.email ?? "";
+  const active = session;
+  const reader = active && userEmail ? {
+    list: async (window) => resultJson(await active.call("list_meetings", {
+      startTime: window.start.toISOString(),
+      endTime: window.end.toISOString(),
+      userEmail
+    }), "list_meetings"),
+    get: async (meetingId) => resultJson(await active.call("get_meeting", { meetingId, getMaster: false, userEmail }), "get_meeting")
+  } : null;
+  const sourceId = selection.calendar.sourceId;
+  return { session, facts: new AttendeeFacts(store, sourceId, reader, syncWindow(now, environment.zone)) };
 }
 async function login2(environment, store) {
   const selection = store.read("selection.json");
@@ -30872,6 +31247,7 @@ async function calendarRun(options2, environment, store, signedIn) {
   const release = store.lock("calendar");
   const startedAt = environment.now();
   let session;
+  let meetings;
   let status = {};
   try {
     status = store.read("status.json") ?? {};
@@ -30879,11 +31255,18 @@ async function calendarRun(options2, environment, store, signedIn) {
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
+    const runApi = api ?? (dryRun ? directoryOnlyApi(selection, environment) : void 0);
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, [CALENDAR_TOOL]);
     const active = session;
+    let attendees;
+    if (enabled(selection.meetings)) {
+      const opened = await openMeetingFacts(environment, store, selection, scope, me, startedAt);
+      meetings = opened.session;
+      attendees = opened.facts;
+    }
     const result = await runCalendar({
       store,
-      api,
+      api: runApi,
       sourceId: selected.sourceId,
       scope,
       zone: environment.zone,
@@ -30891,9 +31274,13 @@ async function calendarRun(options2, environment, store, signedIn) {
       dryRun,
       reconcile: options2.reconcile === true,
       acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
+      attendees,
+      ownDomains: Array.isArray(selected.ownDomains) ? selected.ownDomains : DEFAULT_OWN_DOMAINS,
       responses: syncOptions(selection).calendarResponses,
       source: { view: async (request2) => resultJson(await active.call(CALENDAR_TOOL.name, request2), CALENDAR_TOOL.name) }
     });
+    await meetings?.close();
+    meetings = void 0;
     status.calendar = {
       lastRunAt: startedAt.toISOString(),
       result: "ok",
@@ -30965,6 +31352,7 @@ async function calendarRun(options2, environment, store, signedIn) {
     throw error3;
   } finally {
     await session?.close();
+    await meetings?.close();
     release();
   }
 }
@@ -31236,12 +31624,13 @@ async function terminalPrompt(question) {
     reader.close();
   }
 }
-var USAGE, SYNC_CONNECTORS;
+var USAGE, OWN_DOMAIN, SYNC_CONNECTORS;
 var init_run = __esm({
   "src/intake/run.ts"() {
     "use strict";
     init_api2();
     init_auth();
+    init_attendees();
     init_calendar2();
     init_connectors();
     init_errors4();
@@ -31251,11 +31640,13 @@ var init_run = __esm({
     init_sfdc();
     init_sfdc_contacts();
     init_specreq();
+    init_match();
     init_store();
     init_tasks();
     USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
+      [--own-domain <domain>]...
   ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
   ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
@@ -31268,6 +31659,7 @@ var init_run = __esm({
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake login
   ttobak-mcp intake status`;
+    OWN_DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$/;
     SYNC_CONNECTORS = ["calendar", "sfdc"];
   }
 });
@@ -31370,7 +31762,7 @@ var init_tools = __esm({
 import { execFile as execFile4, spawn as spawn3 } from "node:child_process";
 import { accessSync as accessSync2, constants as constants4, existsSync as existsSync3, lstatSync as lstatSync4, readFileSync as readFileSync7, readdirSync as readdirSync2, realpathSync as realpathSync2, statSync as statSync3 } from "node:fs";
 import { userInfo } from "node:os";
-import { delimiter as delimiter2, dirname as dirname3, isAbsolute as isAbsolute4, join as join9, relative, sep as sep2 } from "node:path";
+import { delimiter as delimiter2, dirname as dirname3, isAbsolute as isAbsolute4, join as join10, relative, sep as sep2 } from "node:path";
 function executable2(path2) {
   try {
     accessSync2(path2, constants4.X_OK);
@@ -31385,10 +31777,10 @@ function findClaude(home, env) {
     throw new ReportError("CLAUDE_CLI_MISSING", "TTOBAK_CLAUDE_BIN is not an executable file");
   }
   for (const candidate of [
-    join9(home, ".local/bin/claude"),
+    join10(home, ".local/bin/claude"),
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
-    join9(home, ".claude/local/claude")
+    join10(home, ".claude/local/claude")
   ]) {
     if (executable2(candidate)) return candidate;
   }
@@ -31396,7 +31788,7 @@ function findClaude(home, env) {
 }
 function skillAt(directory) {
   try {
-    const file2 = join9(directory, "SKILL.md");
+    const file2 = join10(directory, "SKILL.md");
     if (!statSync3(file2).isFile()) return null;
     const path2 = realpathSync2(directory);
     return SAFE_PATH.test(path2) ? { path: path2, mtime: statSync3(file2).mtimeMs } : null;
@@ -31413,14 +31805,14 @@ function pluginSkills(root, depth, found) {
     return;
   }
   for (const name of entries3) {
-    const path2 = join9(root, name);
+    const path2 = join10(root, name);
     try {
       if (!lstatSync4(path2).isDirectory()) continue;
     } catch {
       continue;
     }
     if (name === "skills") {
-      const skill = skillAt(join9(path2, SKILL));
+      const skill = skillAt(join10(path2, SKILL));
       if (skill) found.push(skill);
       continue;
     }
@@ -31428,17 +31820,17 @@ function pluginSkills(root, depth, found) {
   }
 }
 function findSkill(home) {
-  let path2 = skillAt(join9(home, ".claude", "skills", SKILL))?.path;
+  let path2 = skillAt(join10(home, ".claude", "skills", SKILL))?.path;
   if (!path2) {
     const found = [];
-    pluginSkills(join9(home, ".claude", "plugins", "cache"), 5, found);
+    pluginSkills(join10(home, ".claude", "plugins", "cache"), 5, found);
     found.sort((a, b) => b.mtime - a.mtime);
     path2 = found[0]?.path;
   }
   if (!path2) throw new ReportError("SKILL_MISSING", `${SKILL} is not installed`);
   for (const file2 of SKILL_LAYOUT) {
     try {
-      if (statSync3(join9(path2, file2)).isFile()) continue;
+      if (statSync3(join10(path2, file2)).isFile()) continue;
     } catch {
     }
     throw new ReportError("SKILL_OUTDATED", `${SKILL} lacks ${file2}; update it with the internal-mcp-setup v1.4.0 installer`);
@@ -31446,12 +31838,12 @@ function findSkill(home) {
   return path2;
 }
 function claudeProjectDir(home, cwd) {
-  return join9(home, ".claude", "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+  return join10(home, ".claude", "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
 }
 function reportMcpConfig(home) {
   let servers = {};
   try {
-    const path2 = join9(home, ".claude.json");
+    const path2 = join10(home, ".claude.json");
     if (statSync3(path2).size <= MAX_CONFIG_BYTES) {
       const parsed = JSON.parse(readFileSync7(path2, "utf8"));
       if (parsed && typeof parsed.mcpServers === "object" && parsed.mcpServers && !Array.isArray(parsed.mcpServers)) {
@@ -31487,7 +31879,7 @@ function reportEnv(home, env) {
     result.LOGNAME = env.LOGNAME && ENV_VALUE.test(env.LOGNAME) ? env.LOGNAME : user;
   }
   try {
-    const path2 = join9(home, ".claude", "settings.json");
+    const path2 = join10(home, ".claude", "settings.json");
     if (statSync3(path2).size <= MAX_CONFIG_BYTES) {
       const settings = JSON.parse(readFileSync7(path2, "utf8"));
       const source = settings && typeof settings.env === "object" && settings.env ? settings.env : {};
@@ -31528,7 +31920,7 @@ function homePythonPrefix(home, path2) {
   };
   for (const directory of path2.split(delimiter2)) {
     if (!directory.startsWith("/")) continue;
-    const candidate = join9(directory, "python3");
+    const candidate = join10(directory, "python3");
     if (!executable2(candidate)) continue;
     let real;
     try {
@@ -31538,18 +31930,18 @@ function homePythonPrefix(home, path2) {
     }
     for (const rest of [inHome(candidate), inHome(real)]) {
       const top = rest?.split(sep2)[0];
-      if (top && PYTHON_MANAGERS.includes(top)) return [join9(home, top)];
+      if (top && PYTHON_MANAGERS.includes(top)) return [join10(home, top)];
     }
     if (inHome(real)) {
       const prefix = dirname3(dirname3(real));
       if (!inHome(prefix)) return [];
-      if (prefix === join9(home, ".local")) {
+      if (prefix === join10(home, ".local")) {
         let libs = [];
         try {
-          libs = readdirSync2(join9(prefix, "lib")).filter((name) => /^python3/.test(name)).map((name) => join9(prefix, "lib", name));
+          libs = readdirSync2(join10(prefix, "lib")).filter((name) => /^python3/.test(name)).map((name) => join10(prefix, "lib", name));
         } catch {
         }
-        return [join9(prefix, "bin"), ...libs];
+        return [join10(prefix, "bin"), ...libs];
       }
       return [prefix];
     }
@@ -31579,7 +31971,7 @@ function reportSettings(options2) {
 }
 function sandboxSupported(platform = process.platform, path2 = process.env.PATH ?? "") {
   if (platform === "darwin") return existsSync3("/usr/bin/sandbox-exec");
-  if (platform === "linux") return path2.split(":").some((directory) => directory.startsWith("/") && executable2(join9(directory, "bwrap")));
+  if (platform === "linux") return path2.split(":").some((directory) => directory.startsWith("/") && executable2(join10(directory, "bwrap")));
   return false;
 }
 function claudeArgs(options2) {
@@ -32122,7 +32514,7 @@ var init_schema = __esm({
 
 // src/report/sweep.ts
 import { lstatSync as lstatSync5, readdirSync as readdirSync3, realpathSync as realpathSync3, rmSync as rmSync4 } from "node:fs";
-import { basename as basename3, join as join10 } from "node:path";
+import { basename as basename3, join as join11 } from "node:path";
 function ownedDirectory(path2, uid) {
   try {
     const stat = lstatSync5(path2);
@@ -32140,7 +32532,7 @@ function entries2(directory) {
 }
 function sweepStaleRuns(home, roots) {
   const uid = process.getuid?.();
-  const projects = join10(home, ".claude", "projects");
+  const projects = join11(home, ".claude", "projects");
   const realRoots = [...new Set(roots.flatMap((root) => {
     try {
       return [realpathSync3(root)];
@@ -32158,10 +32550,10 @@ function sweepStaleRuns(home, roots) {
     }
   };
   for (const root of realRoots) {
-    for (const name of entries2(root)) if (RUN_DIR.test(name)) remove(join10(root, name));
-    const prefix = basename3(claudeProjectDir(home, join10(root, RUN_DIR_PREFIX)));
+    for (const name of entries2(root)) if (RUN_DIR.test(name)) remove(join11(root, name));
+    const prefix = basename3(claudeProjectDir(home, join11(root, RUN_DIR_PREFIX)));
     for (const name of entries2(projects)) {
-      if (name.startsWith(prefix) && SESSION_SUFFIX.test(name.slice(prefix.length))) remove(join10(projects, name));
+      if (name.startsWith(prefix) && SESSION_SUFFIX.test(name.slice(prefix.length))) remove(join11(projects, name));
     }
   }
   return removed;
@@ -32185,7 +32577,7 @@ __export(run_exports2, {
 });
 import { existsSync as existsSync4, mkdirSync as mkdirSync6, mkdtempSync, readFileSync as readFileSync8, realpathSync as realpathSync4, rmSync as rmSync5, statSync as statSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 function flags2(args) {
   const allowed = {
     "--period": "value",
@@ -32231,7 +32623,7 @@ function readHighlights(path2) {
 }
 function exampleDefaults(skillDir) {
   try {
-    const path2 = join11(skillDir, "config", "customers.example.json");
+    const path2 = join12(skillDir, "config", "customers.example.json");
     if (statSync4(path2).size <= MAX_HIGHLIGHTS_FILE_BYTES) {
       const example = JSON.parse(readFileSync8(path2, "utf8"));
       const domains = example.partner_domains;
@@ -32332,22 +32724,22 @@ async function report(args, environment, store) {
     cancelled();
     if (!accounts.length) throw new ReportError("REPORT_NO_SFDC", "no synced SFDC assignments");
     progress(`SFDC \uB2F4\uB2F9 \uACE0\uAC1D ${accounts.length}\uACF3\uC744 \uD655\uC778\uD588\uC5B4\uC694.`);
-    directory = realpathSync4(mkdtempSync(join11(tempRoot, RUN_DIR_PREFIX)));
+    directory = realpathSync4(mkdtempSync(join12(tempRoot, RUN_DIR_PREFIX)));
     environment.signal?.addEventListener("abort", onAbort, { once: true });
-    const workDir = join11(directory, "work");
+    const workDir = join12(directory, "work");
     mkdirSync6(workDir, { mode: 448 });
-    const outDir = join11(workDir, "out");
+    const outDir = join12(workDir, "out");
     mkdirSync6(outDir, { mode: 448 });
     sessionDir = claudeProjectDir(environment.home, workDir);
     for (const path2 of [directory, workDir, outDir, sessionDir]) {
       if (!SAFE_PATH.test(path2)) throw new ReportError("INVALID_ARGUMENT", "the run directory path has unsupported characters");
     }
-    const ownMapping = join11(skillDir, "config", `customers.${alias2}.json`);
+    const ownMapping = join12(skillDir, "config", `customers.${alias2}.json`);
     let customersFile = ownMapping;
     try {
       if (!statSync4(ownMapping).isFile()) throw new Error("not a file");
     } catch {
-      customersFile = join11(workDir, `customers.${alias2}.json`);
+      customersFile = join12(workDir, `customers.${alias2}.json`);
       writePrivate(customersFile, JSON.stringify({
         customers: accounts,
         domain_map: {},
@@ -32356,9 +32748,9 @@ async function report(args, environment, store) {
       }, null, 2) + "\n");
     }
     const mcp = reportMcpConfig(environment.home);
-    const mcpConfigPath = join11(directory, "mcp.json");
+    const mcpConfigPath = join12(directory, "mcp.json");
     writePrivate(mcpConfigPath, JSON.stringify(mcp.config));
-    const settingsPath = join11(directory, "settings.json");
+    const settingsPath = join12(directory, "settings.json");
     writePrivate(settingsPath, JSON.stringify(reportSettings({
       home: environment.home,
       workDir,

@@ -27,7 +27,10 @@ import (
 // NEWS_TERMS_SOURCES=all every searched, non-synthetic source is eligible:
 // the owner's choice (2026-11-09) so public news terms reach every user's
 // recognition vocabulary; the two-source threshold still applies (it counts
-// sources, not people: an accepted risk recorded in ADR-008). The only
+// sources, not people: an accepted risk recorded in ADR-008). In both modes
+// account-owned (customer-only) sources are excluded, decided as the
+// Insights visibility rule does (accountOwnedNewsSource): their documents,
+// today's source count and past history sightings never feed Common. The only
 // evidence on a term is the public document hash, the
 // writer is model.DictNewsActor, creations and evictions are audited (R14),
 // and user-edited Common terms are left alone by the merge rules. Logs carry
@@ -59,12 +62,13 @@ const (
 	newsDayLayout = "2006-01-02"
 )
 
-// TermsNewsDocuments lists crawled news documents by crawl time and tells
-// operator-curated global sources apart; *repository.CrawlerRepository
-// implements it.
+// TermsNewsDocuments lists crawled news documents by crawl time, tells
+// operator-curated global sources apart and reads a source's owning account;
+// *repository.CrawlerRepository implements it.
 type TermsNewsDocuments interface {
 	ListDocumentsCrawledBetween(ctx context.Context, from, to int64) ([]model.CrawledDocument, error)
 	IsGlobalNewsSource(ctx context.Context, sourceID string) (bool, error)
+	GetSourceOrigin(ctx context.Context, sourceID string) (sourceName, accountID string, found bool, err error)
 }
 
 var _ TermsNewsDocuments = (*repository.CrawlerRepository)(nil)
@@ -156,28 +160,85 @@ func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 	return out
 }
 
-// globalNewsDocuments keeps the documents of eligible sources (global ones,
-// looking each distinct source up once, or every source in all mode), then
+// accountOwnedNewsSource applies the Insights ownership rule (sourceOrigin
+// in insights.go) to one GetSourceOrigin result: a CONFIG row with a
+// non-empty accountId is account-owned; without a row, an acct_-shaped ID is
+// treated as account-owned and any other ID is not.
+func accountOwnedNewsSource(sourceID, accountID string, found bool) bool {
+	if !found {
+		return strings.HasPrefix(sourceID, accountNewsSourcePrefix)
+	}
+	return accountID != ""
+}
+
+// newsSourceGate resolves each distinct source at most once per run: its
+// ownership (GetSourceOrigin) and, in global mode, its operator marker
+// (IsGlobalNewsSource). Lookup errors are returned and never memoized, so a
+// failed read is never taken as "not account-owned".
+type newsSourceGate struct {
+	docs         TermsNewsDocuments
+	allSources   bool
+	accountOwned map[string]bool
+	global       map[string]bool
+}
+
+func (s *TermsAnalysisService) newNewsSourceGate() *newsSourceGate {
+	return &newsSourceGate{docs: s.news.Documents, allSources: s.cfg.NewsSources == NewsTermsSourcesAll,
+		accountOwned: map[string]bool{}, global: map[string]bool{}}
+}
+
+// isAccountOwned reports whether sourceID belongs to one customer account.
+func (g *newsSourceGate) isAccountOwned(ctx context.Context, sourceID string) (bool, error) {
+	if owned, ok := g.accountOwned[sourceID]; ok {
+		return owned, nil
+	}
+	_, accountID, found, err := g.docs.GetSourceOrigin(ctx, sourceID)
+	if err != nil {
+		return false, err
+	}
+	owned := accountOwnedNewsSource(sourceID, accountID, found)
+	g.accountOwned[sourceID] = owned
+	return owned, nil
+}
+
+// eligible reports whether sourceID may feed Common and, when it may not,
+// whether the reason is account ownership. Ownership is checked first, so an
+// account-owned source is excluded even if it were marked global.
+func (g *newsSourceGate) eligible(ctx context.Context, sourceID string) (ok, accountOwned bool, err error) {
+	if accountOwned, err = g.isAccountOwned(ctx, sourceID); err != nil || accountOwned {
+		return false, accountOwned, err
+	}
+	if g.allSources {
+		return true, false, nil
+	}
+	if ok, cached := g.global[sourceID]; cached {
+		return ok, false, nil
+	}
+	if ok, err = g.docs.IsGlobalNewsSource(ctx, sourceID); err != nil {
+		return false, false, err
+	}
+	g.global[sourceID] = ok
+	return ok, false, nil
+}
+
+// globalNewsDocuments keeps the documents of eligible sources (never an
+// account-owned one; global ones, or every other source in all mode), then
 // keeps each article (hash) once. Filtering first means a user source that
-// crawled a shared URL earlier never hides a global source's copy. A lookup
-// failure is returned (retryable).
-func (s *TermsAnalysisService) globalNewsDocuments(ctx context.Context, docs []newsDocument) ([]newsDocument, int, error) {
-	allSources := s.cfg.NewsSources == NewsTermsSourcesAll
-	global := map[string]bool{}
+// crawled a shared URL earlier never hides a global source's copy. It returns
+// the counts of documents excluded as not global and as account-owned. A
+// lookup failure is returned (retryable).
+func globalNewsDocuments(ctx context.Context, gate *newsSourceGate, docs []newsDocument) ([]newsDocument, int, int, error) {
 	seen := map[string]bool{}
 	var out []newsDocument
-	excluded := 0
+	excluded, excludedAccount := 0, 0
 	for _, d := range docs {
-		ok, cached := global[d.source]
-		if allSources {
-			ok, cached = true, true
+		ok, accountOwned, err := gate.eligible(ctx, d.source)
+		if err != nil {
+			return nil, 0, 0, err
 		}
-		if !cached {
-			var err error
-			if ok, err = s.news.Documents.IsGlobalNewsSource(ctx, d.source); err != nil {
-				return nil, 0, err
-			}
-			global[d.source] = ok
+		if accountOwned {
+			excludedAccount++
+			continue
 		}
 		if !ok {
 			excluded++
@@ -189,7 +250,7 @@ func (s *TermsAnalysisService) globalNewsDocuments(ctx context.Context, docs []n
 		seen[d.hash] = true
 		out = append(out, d)
 	}
-	return out, excluded, nil
+	return out, excluded, excludedAccount, nil
 }
 
 // newsSighting is one history entry: a day and a source that named the term.
@@ -315,12 +376,13 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 	if err != nil {
 		return done("READ_FAILED", fmt.Errorf("list news documents: %w", err))
 	}
-	docs, excluded, err := s.globalNewsDocuments(ctx, newsDocuments(rows))
+	gate := s.newNewsSourceGate()
+	docs, excluded, excludedAccount, err := globalNewsDocuments(ctx, gate, newsDocuments(rows))
 	if err != nil {
 		return done("SOURCE_READ_FAILED", fmt.Errorf("read news source: %w", err))
 	}
-	if excluded > 0 {
-		log.Printf("%s excludedNonGlobal=%d", label, excluded)
+	if excluded > 0 || excludedAccount > 0 {
+		log.Printf("%s excludedNonGlobal=%d excludedAccount=%d", label, excluded, excludedAccount)
 	}
 	if len(docs) == 0 {
 		return done("NO_DOCUMENTS", nil)
@@ -343,7 +405,8 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 	// Count today's documents and sources naming each candidate, then apply
 	// the repeat threshold against the candidate history. Sightings within
 	// the seven days ending at day count; later ones (a re-run of an older
-	// day) are kept, older ones dropped.
+	// day) are kept, older ones dropped, and so are sightings of
+	// account-owned sources (recorded before they were excluded).
 	now := s.now().UTC()
 	start, _ := time.Parse(newsDayLayout, day) // validated by newsWindow
 	oldest := start.AddDate(0, 0, -(newsRepeatDays - 1)).Format(newsDayLayout)
@@ -368,7 +431,15 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 		var sightings []string
 		if h != nil {
 			for _, e := range h.Sources {
-				if d, src, ok := strings.Cut(e, "#"); ok && d >= oldest && validNewsSourceID(src) {
+				d, src, ok := strings.Cut(e, "#")
+				if !ok || d < oldest || !validNewsSourceID(src) {
+					continue
+				}
+				owned, err := gate.isAccountOwned(ctx, src)
+				if err != nil {
+					return done("SOURCE_READ_FAILED", fmt.Errorf("read news source: %w", err))
+				}
+				if !owned {
 					sightings = append(sightings, e)
 				}
 			}

@@ -726,7 +726,9 @@ ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
 `backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
 regulator sources as such); `all` reads every
-searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
+searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Both modes
+exclude account-owned sources (CONFIG `accountId`, or a row-less `acct_` ID;
+ADR-008, 2026-11-12). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global
