@@ -187,3 +187,19 @@ test('the card renders text nodes only and sits at the top of the general tab', 
   const api = read('../src/lib/api.ts');
   assert.match(api, /customer-brief`, \{ \.\.\.options, cache: 'no-store' \}\)/);
 });
+
+test('adding a brief term maps outcomes and builds a bounded request', () => {
+  assert.deepEqual(plain(brief.addTermInput('  망분리 ')), { displayAs: '망분리' });
+  for (const bad of ['', '   ', '···', null, 42]) assert.equal(brief.addTermInput(bad), null);
+  // An existing term is what the user wanted.
+  assert.equal(brief.addTermOutcome({ status: 409, code: 'TERM_EXISTS' }), 'added');
+  assert.equal(brief.addTermOutcome({ status: 409, code: 'DICTIONARY_FULL' }), 'full');
+  assert.equal(brief.addTermOutcome({ status: 403, code: 'FORBIDDEN' }), 'denied');
+  assert.equal(brief.addTermOutcome({ status: 404 }), 'denied');
+  for (const other of [{ status: 500 }, { status: 409, code: 'CONFLICT' }, null, undefined, 'x']) {
+    assert.equal(brief.addTermOutcome(other), 'failed');
+  }
+  const card = read('../src/components/account/CustomerBriefCard.tsx');
+  assert.match(card, /createLayerTerm\(`account:\$\{accountId\}`, input\)/);
+  assert.match(card, /!item\.inDictionary && <AddTermButton/);
+});

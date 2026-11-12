@@ -424,7 +424,10 @@ previous brief under a per-error-code message with retry; POST 409 polls, 503
 shows the generic failure. Sections render in order and are omitted when empty:
 next meeting, one-line situation, since the last meeting, recent news with a
 "why it matters" line, questions to ask, unfamiliar terms with an in/not in
-dictionary text badge. The footer shows the generation time (relative within a
+dictionary text badge. A term not in the dictionary has an add action that
+creates it as a manual term in this customer's Account layer through the
+existing layer term endpoint; an already existing term counts as added, and a
+full dictionary or a refused write is stated in one line. The footer shows the generation time (relative within a
 day; invalid times show nothing) and a regenerate button. Every statement lists
 source chips with a kind word and a CSS-truncated label (full text in `title`);
 meeting chips link to the meeting and news chips to `/insights/{sourceId}/{docHash}`

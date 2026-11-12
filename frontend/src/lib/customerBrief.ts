@@ -21,7 +21,35 @@ export const BRIEF_COPY = {
   inDictionary: '사전에 있음',
   notInDictionary: '사전에 없음',
   sourcesLabel: '근거',
+  addTerm: '고객 사전에 추가',
+  addingTerm: '추가하는 중…',
+  termAdded: '고객 사전에 추가했어요',
+  termFull: '고객 사전이 가득 찼어요. 사전 설정에서 정리해 주세요.',
+  termDenied: '이 고객 사전에 추가할 권한이 없어요.',
+  termFailed: '추가하지 못했어요. 다시 시도해 주세요.',
 } as const;
+
+/** Outcome of adding a brief term to the customer's dictionary layer. */
+export type AddTermOutcome = 'added' | 'full' | 'denied' | 'failed';
+
+/**
+ * Maps a failed create to what the row shows. A term that already exists is
+ * the result the user wanted, so it counts as added.
+ */
+export function addTermOutcome(failure: unknown): AddTermOutcome {
+  const { status, code } = (failure ?? {}) as { status?: unknown; code?: unknown };
+  if (code === 'TERM_EXISTS') return 'added';
+  if (code === 'DICTIONARY_FULL') return 'full';
+  if (status === 403 || status === 404) return 'denied';
+  return 'failed';
+}
+
+/** The create request for a brief term, or null when the term has no letters or digits. */
+export function addTermInput(term: unknown): { displayAs: string } | null {
+  if (typeof term !== 'string') return null;
+  const displayAs = term.trim();
+  return /[\p{L}\p{N}]/u.test(displayAs) ? { displayAs } : null;
+}
 
 export const SECTION_TITLES = {
   nextMeeting: '다음 미팅',

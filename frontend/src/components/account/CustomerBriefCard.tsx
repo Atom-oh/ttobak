@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { accountApi } from '@/lib/api';
+import { accountApi, dictionaryApi } from '@/lib/api';
 import {
   BRIEF_COPY, GENERIC_FAILURE, POLL_INTERVAL_MS, SECTION_TITLES,
-  applyResponse, formatGeneratedAt, formatLocalDateTime, hidesCard, pollDecision, postErrorAction,
+  addTermInput, addTermOutcome, applyResponse, formatGeneratedAt, formatLocalDateTime, hidesCard, pollDecision, postErrorAction,
   sourceHref, sourceKindLabel,
-  type Brief, type BriefSource, type BriefState, type BriefStatement,
+  type AddTermOutcome, type Brief, type BriefSource, type BriefState, type BriefStatement,
 } from '@/lib/customerBrief';
 
 type View =
@@ -188,7 +188,7 @@ export function CustomerBriefCard({ accountId, userId }: { accountId: string; us
       <button type="button" className={primaryButton} onClick={() => void requestBrief()} disabled={disabled}>{BRIEF_COPY.create}</button>
     </div>}
 
-    {brief && <BriefBody brief={brief} />}
+    {brief && <BriefBody brief={brief} accountId={accountId} />}
 
     {brief && <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
       <span className="text-xs text-text-secondary">{generated ? `${generated} 생성` : ''}</span>
@@ -197,7 +197,33 @@ export function CustomerBriefCard({ accountId, userId }: { accountId: string; us
   </section>;
 }
 
-function BriefBody({ brief }: { brief: Brief }) {
+/** Adds one unfamiliar term to this customer's dictionary layer. */
+function AddTermButton({ accountId, term }: { accountId: string; term: string }) {
+  const [phase, setPhase] = useState<'idle' | 'saving' | AddTermOutcome>('idle');
+  const input = addTermInput(term);
+  if (!input) return null;
+  const add = async () => {
+    if (phase === 'saving' || phase === 'added') return;
+    setPhase('saving');
+    try {
+      await dictionaryApi.createLayerTerm(`account:${accountId}`, input);
+      setPhase('added');
+    } catch (failure) {
+      setPhase(addTermOutcome(failure));
+    }
+  };
+  if (phase === 'added') return <span role="status" className="text-xs text-text-secondary">{BRIEF_COPY.termAdded}</span>;
+  const note = phase === 'full' ? BRIEF_COPY.termFull : phase === 'denied' ? BRIEF_COPY.termDenied : phase === 'failed' ? BRIEF_COPY.termFailed : '';
+  return <>
+    <button type="button" disabled={phase === 'saving' || phase === 'full' || phase === 'denied'} onClick={() => void add()}
+      aria-label={`${term} ${BRIEF_COPY.addTerm}`}
+      className="rounded-sm text-xs font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50">
+      {phase === 'saving' ? BRIEF_COPY.addingTerm : BRIEF_COPY.addTerm}</button>
+    {note && <span role="alert" className="text-xs text-error">{note}</span>}
+  </>;
+}
+
+function BriefBody({ brief, accountId }: { brief: Brief; accountId: string }) {
   const { nextMeeting, situation, sinceLast, news, questions, terms } = brief.content;
   const startsAt = nextMeeting ? formatLocalDateTime(nextMeeting.startsAt) : null;
   return <div className="space-y-4 text-sm text-text-main">
@@ -229,6 +255,7 @@ function BriefBody({ brief }: { brief: Brief }) {
             <span className="rounded-full border border-border-subtle px-2 py-0.5 text-xs text-text-secondary">
               {item.inDictionary ? BRIEF_COPY.inDictionary : BRIEF_COPY.notInDictionary}
             </span>
+            {!item.inDictionary && <AddTermButton accountId={accountId} term={item.term} />}
           </p>
           {item.gloss && <p className="mt-0.5 break-words text-text-secondary">{item.gloss}</p>}
           <SourceChips sources={item.sources} />
