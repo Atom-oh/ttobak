@@ -555,8 +555,10 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
       'items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity');
   }
 
-  // Recorded before any removal is sent, so the task step never closes a held occurrence's task.
-  state.held = plan.held;
+  // New holds are recorded before any removal is sent, so the task step never closes a held
+  // occurrence's task. Prior holds are released only after every batch is acknowledged: a
+  // re-selected occurrence keeps its hold until its upsert is in the ledger.
+  state.held = { ...(state.held ?? {}), ...plan.held };
   store.write(state, ...statePath(state));
   const api = options.api!;
   const groups = batches(plan.mutations);
@@ -578,7 +580,7 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
-  state.held = pruneLedger(state.held ?? {}, now);
+  state.held = pruneLedger(plan.held, now);
   store.write(state, ...statePath(state));
   const upserted = new Map<string, OutlookItem>();
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
