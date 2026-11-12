@@ -13,7 +13,7 @@ const SERVERS = {
   httpServers: { 'docs-mcp': 'https://docs.example.com/mcp' },
 };
 
-function env(t, { toolbox = true, aim = true, claude = true, cookie = true, fail } = {}) {
+function env(t, { toolbox = true, aim = true, claude = true, cookie = true, fail, aimInstalled = true } = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'ttobak-servers-')));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const bin = join(home, 'bin');
@@ -34,7 +34,10 @@ function env(t, { toolbox = true, aim = true, claude = true, cookie = true, fail
       calls.push(argv.map(part => part.replace(bin + '/', '')));
       const [command, ...rest] = argv.map(part => part.replace(bin + '/', ''));
       if (command === 'toolbox' && rest.join(' ') === 'registry list') return { code: 0, stdout: fixture('toolbox-registry-list.txt'), stderr: '' };
-      if (command === 'toolbox' && rest.join(' ') === 'list --installed') return { code: 0, stdout: fixture('toolbox-list-installed.txt'), stderr: '' };
+      if (command === 'toolbox' && rest.join(' ') === 'list --installed') {
+        const listing = fixture('toolbox-list-installed.txt');
+        return { code: 0, stdout: aimInstalled ? listing : listing.replace(/^aim .*\n/m, ''), stderr: '' };
+      }
       if (fail && fail(command, rest)) return { code: 1, stdout: '', stderr: fail(command, rest) };
       return { code: 0, stdout: '', stderr: '' };
     },
@@ -153,4 +156,16 @@ test('unavailable items are reported even when other items install', async t => 
   assert.equal(result.status, 'ok');
   assert.equal(result.code, 'TOOLBOX_MISSING');
   assert.deepEqual(result.items, ['claude:beta-mcp', 'http:docs-mcp=https://docs.example.com/mcp']);
+});
+
+test('an AIM server installs aim first when aim is missing', async t => {
+  const e = env(t, { aim: false, aimInstalled: false });
+  const plan = await planServers(e, { toolboxRegistries: [], toolboxServers: [], aimServers: ['delta-mcp', 'eps-mcp'], httpServers: {} });
+  assert.deepEqual(plan.actions.map(action => action.key), ['aim:delta-mcp', 'aim:eps-mcp']);
+  await applyServers(e, plan, ['aim:delta-mcp', 'aim:eps-mcp']);
+  assert.deepEqual(installs(e.calls), [
+    ['toolbox', 'install', 'aim'],
+    ['aim', 'mcp', 'install', '--clients', 'claude-code', 'delta-mcp'],
+    ['aim', 'mcp', 'install', '--clients', 'claude-code', 'eps-mcp'],
+  ]);
 });

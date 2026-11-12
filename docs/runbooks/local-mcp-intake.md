@@ -137,7 +137,8 @@ name. Server lists are unioned.
     `toolBundles`. A registry, server or URL never approved on this Mac is
     reported in `needsApproval` (keys such as `aim:slack-mcp`) and installed only
     when passed back with `--approve` (up to 400 keys; approved items run while
-    others still wait); approvals live in
+    others still wait, and waiting items are listed even when an install failed;
+    without aim each AIM item first runs `toolbox install aim`, once); approvals live in
     `~/.ttobak/setup/approvals.json` (0600).
 - Without toolbox, aim or claude the work they would do is listed under
   `TOOLBOX_MISSING` (the step is skipped when nothing else ran); a

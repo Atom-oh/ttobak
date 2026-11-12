@@ -10,7 +10,7 @@ import { makeZip } from './helpers/zip.mjs';
 
 const SCRIPT = 'AIM_MCPS_BASE=(new-mcp)\n';
 
-function fixture(t, { skills = { 'demo/SKILL.md': '# demo' }, api } = {}) {
+function fixture(t, { skills = { 'demo/SKILL.md': '# demo' }, api, script = SCRIPT, fail } = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'ttobak-setup-')));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   mkdirSync(join(home, '.aim'));
@@ -20,7 +20,7 @@ function fixture(t, { skills = { 'demo/SKILL.md': '# demo' }, api } = {}) {
   const bin = join(home, 'bin');
   mkdirSync(bin);
   for (const name of ['toolbox', 'aim', 'claude']) writeFileSync(join(bin, name), '#!/bin/sh\n', { mode: 0o755 });
-  const zip = makeZip([{ name: 'pkg/setup-internal-mcp.sh', data: SCRIPT },
+  const zip = makeZip([{ name: 'pkg/setup-internal-mcp.sh', data: script },
     ...Object.entries(skills).map(([name, data]) => ({ name: `pkg/skills/${name}`, data }))]);
   const sha = createHash('sha256').update(zip).digest('hex');
   const names = [...new Set(Object.keys(skills).map(name => name.split('/')[0]))];
@@ -34,7 +34,11 @@ function fixture(t, { skills = { 'demo/SKILL.md': '# demo' }, api } = {}) {
     stdout: line => stdout.push(line), stderr: () => {},
     api: api ?? { skillPackages: async () => view }, me: { email: 'owner@example.com', userId: 'u1' },
     download: async () => zip,
-    runCommand: async argv => { commands.push(argv.map(part => part.replace(bin + '/', ''))); return { code: 0, stdout: '', stderr: '' }; },
+    runCommand: async argv => {
+      const parts = argv.map(part => part.replace(bin + '/', ''));
+      commands.push(parts);
+      return fail?.(parts) ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+    },
   };
   return { home, stdout, commands, view, run: args => runSetup(args, environment), output: () => JSON.parse(stdout.at(-1)) };
 }
@@ -128,4 +132,19 @@ test('servers come from the re-validated packages, never from the view', async t
 test('the zip reader does not need zlib.crc32 (Node 18)', async () => {
   const source = readFileSync(new URL('../src/setup/zip.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\bcrc32\b[^(]*from 'node:zlib'|import \{[^}]*crc32[^}]*\} from 'node:zlib'/);
+});
+
+test('a failed install still reports pending approvals', async t => {
+  const ctx = fixture(t, { script: 'AIM_MCPS_BASE=(new-mcp other-mcp)\n', fail: parts => parts.includes('new-mcp') });
+  assert.equal(await ctx.run(['apply', '--approve', 'aim:new-mcp']), 0);
+  const out = ctx.output();
+  assert.equal(out.steps.find(step => step.id === 'servers').status, 'failed');
+  assert.deepEqual(out.needsApproval.map(item => item.key), ['aim:other-mcp']);
+});
+
+test('unavailable work is reported as a warning whatever the status', async t => {
+  const ctx = fixture(t, { script: 'AIM_MCPS_BASE=(new-mcp)\nHTTP_MCPS=("docs-mcp=https://docs.example.com/mcp")\n' });
+  rmSync(join(ctx.home, 'bin', 'claude'));
+  await ctx.run(['apply']);
+  assert.ok(ctx.output().warnings.some(line => line.includes('http:docs-mcp=https://docs.example.com/mcp')), JSON.stringify(ctx.output()));
 });

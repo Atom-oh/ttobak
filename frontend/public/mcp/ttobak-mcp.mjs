@@ -33065,7 +33065,7 @@ function parseManifest(raw, manifest) {
     fail("bad-manifest");
   }
   if (value && typeof value === "object" && !Array.isArray(value)) {
-    for (const key of Object.keys(value)) if (value[key] === null && key !== "version") delete value[key];
+    for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
   }
   const keys2 = ["version", "toolboxRegistries", "toolboxServers", "aimServers", "httpServers"];
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !keys2.includes(key))) fail("bad-manifest");
@@ -33320,11 +33320,9 @@ async function planServers(env, servers) {
     }
     add(`registry:${registry3}`, `toolbox \uB808\uC9C0\uC2A4\uD2B8\uB9AC ${registry3}`, [[toolbox, "registry", "add", registry3]], true);
   }
-  const wantAim = servers.aimServers.some((name) => !aimInstalled.has(name));
-  const toolboxNames = wantAim && !aim ? ["aim", ...servers.toolboxServers] : servers.toolboxServers;
-  for (const name of toolboxNames) {
+  for (const name of servers.toolboxServers) {
     const install = !tools.includes(name);
-    const register = name !== "aim" && !registered.has(name);
+    const register = !registered.has(name);
     if (!install && !register) continue;
     if (install && !toolbox) {
       unavailable.push(`toolbox:${name}`);
@@ -33340,13 +33338,14 @@ async function planServers(env, servers) {
     ], install);
   }
   const aimBinary = aim ?? (toolbox ? join14(dirname4(toolbox), "aim") : null);
+  const installAim = !aim && toolbox && !tools.includes("aim") ? [toolbox, "install", "aim"] : null;
   for (const name of servers.aimServers) {
     if (aimInstalled.has(name)) continue;
     if (!aimBinary) {
       unavailable.push(`aim:${name}`);
       continue;
     }
-    add(`aim:${name}`, `AIM \uC11C\uBC84 ${name}`, [[aimBinary, "mcp", "install", "--clients", "claude-code", name]], true);
+    add(`aim:${name}`, `AIM \uC11C\uBC84 ${name}`, [installAim, [aimBinary, "mcp", "install", "--clients", "claude-code", name]], true);
   }
   for (const [name, url2] of Object.entries(servers.httpServers)) {
     if (registered.has(name)) continue;
@@ -33375,10 +33374,15 @@ async function applyServers(env, plan, approve) {
   }
   addApprovals(env.home, runnable.filter((action) => confirmed.has(action.key)).map((action) => action.key));
   const failed = [];
+  const done = /* @__PURE__ */ new Set();
   for (const action of runnable) {
     for (const command of action.commands) {
+      if (done.has(command.join("\0"))) continue;
       const result = await env.run(command, INSTALL_TIMEOUT_MS);
-      if (result.code === 0) continue;
+      if (result.code === 0) {
+        done.add(command.join("\0"));
+        continue;
+      }
       if (AUTH_PATTERN.test(result.stderr)) return { id: "servers", status: "failed", code: "AUTH_EXPIRED_MIDWAY", items: [action.key] };
       failed.push(action.key);
       break;
@@ -33619,7 +33623,9 @@ async function setup2(args, environment, store) {
       if (servers.status !== "skipped" && plan.unavailable.length) servers.code = "TOOLBOX_MISSING";
     }
     steps.push(servers);
-    const needsApproval = servers.status === "needs-approval" ? plan.actions.filter((action) => servers.items?.includes(action.key)).map((action) => ({ key: action.key, label: action.label })) : [];
+    const confirmed = new Set(approve);
+    const needsApproval = plan.actions.filter((action) => !action.approved && !confirmed.has(action.key)).map((action) => ({ key: action.key, label: action.label }));
+    if (plan.unavailable.length) warnings.push(`toolbox, aim \uB610\uB294 claude\uAC00 \uC5C6\uC5B4 \uAC74\uB108\uB6F4 \uD56D\uBAA9: ${plan.unavailable.join(", ")}`);
     return { ok: !steps.some((step) => step.status === "failed"), dryRun: !options2.apply, steps, needsApproval, warnings };
   } finally {
     release();

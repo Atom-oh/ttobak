@@ -72,11 +72,9 @@ export async function planServers(env: SetupEnv, servers: PackageServers): Promi
     if (!toolbox) { unavailable.push(`registry:${registry}`); continue; }
     add(`registry:${registry}`, `toolbox 레지스트리 ${registry}`, [[toolbox, 'registry', 'add', registry]], true);
   }
-  const wantAim = servers.aimServers.some(name => !aimInstalled.has(name));
-  const toolboxNames = wantAim && !aim ? ['aim', ...servers.toolboxServers] : servers.toolboxServers;
-  for (const name of toolboxNames) {
+  for (const name of servers.toolboxServers) {
     const install = !tools.includes(name);
-    const register = name !== 'aim' && !registered.has(name);
+    const register = !registered.has(name);
     if (!install && !register) continue;
     if (install && !toolbox) { unavailable.push(`toolbox:${name}`); continue; }
     if (register && !claude) {
@@ -86,12 +84,14 @@ export async function planServers(env: SetupEnv, servers: PackageServers): Promi
     add(`toolbox:${name}`, `toolbox 서버 ${name}`, [install ? [toolbox as string, 'install', name] : null,
       register && claude ? [claude, 'mcp', 'add', '-s', 'user', name, '--', name] : null], install);
   }
-  // aim installs next to toolbox (~/.toolbox/bin) when the toolbox step adds it.
+  // Without aim on PATH, each AIM action first installs aim with toolbox
+  // (into ~/.toolbox/bin); the install runs once per apply.
   const aimBinary = aim ?? (toolbox ? join(dirname(toolbox), 'aim') : null);
+  const installAim = !aim && toolbox && !tools.includes('aim') ? [toolbox, 'install', 'aim'] : null;
   for (const name of servers.aimServers) {
     if (aimInstalled.has(name)) continue;
     if (!aimBinary) { unavailable.push(`aim:${name}`); continue; }
-    add(`aim:${name}`, `AIM 서버 ${name}`, [[aimBinary, 'mcp', 'install', '--clients', 'claude-code', name]], true);
+    add(`aim:${name}`, `AIM 서버 ${name}`, [installAim, [aimBinary, 'mcp', 'install', '--clients', 'claude-code', name]], true);
   }
   for (const [name, url] of Object.entries(servers.httpServers)) {
     if (registered.has(name)) continue;
@@ -122,10 +122,13 @@ export async function applyServers(env: SetupEnv, plan: ServerPlan, approve: str
   }
   addApprovals(env.home, runnable.filter(action => confirmed.has(action.key)).map(action => action.key));
   const failed: string[] = [];
+  const done = new Set<string>();
   for (const action of runnable) {
     for (const command of action.commands) {
+      // A shared prerequisite (toolbox install aim) runs once.
+      if (done.has(command.join('\0'))) continue;
       const result = await env.run(command, INSTALL_TIMEOUT_MS);
-      if (result.code === 0) continue;
+      if (result.code === 0) { done.add(command.join('\0')); continue; }
       if (AUTH_PATTERN.test(result.stderr)) return { id: 'servers', status: 'failed', code: 'AUTH_EXPIRED_MIDWAY', items: [action.key] };
       failed.push(action.key);
       break;

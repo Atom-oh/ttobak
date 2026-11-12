@@ -145,8 +145,11 @@ async function setup(args: string[], environment: SetupEnvironment, store: Intak
       if (servers.status !== 'skipped' && plan.unavailable.length) servers.code = 'TOOLBOX_MISSING';
     }
     steps.push(servers);
-    const needsApproval = servers.status === 'needs-approval'
-      ? plan.actions.filter(action => servers.items?.includes(action.key)).map(action => ({ key: action.key, label: action.label })) : [];
+    // Reported whatever the step status: a failed install must not hide what still waits.
+    const confirmed = new Set(approve);
+    const needsApproval = plan.actions.filter(action => !action.approved && !confirmed.has(action.key))
+      .map(action => ({ key: action.key, label: action.label }));
+    if (plan.unavailable.length) warnings.push(`toolbox, aim 또는 claude가 없어 건너뛴 항목: ${plan.unavailable.join(', ')}`);
     return { ok: !steps.some(step => step.status === 'failed'), dryRun: !options.apply, steps, needsApproval, warnings };
   } finally {
     release();

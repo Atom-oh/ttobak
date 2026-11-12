@@ -82,7 +82,7 @@ test('the report skill needs its layout files', () => {
 });
 
 test('null manifest lists read as empty, as on the server', () => {
-  const manifest = '{"version":"1.0.0","toolboxRegistries":null,"toolboxServers":null,"aimServers":["a-mcp"],"httpServers":null}';
+  const manifest = '{"version":null,"toolboxRegistries":null,"toolboxServers":null,"aimServers":["a-mcp"],"httpServers":null}';
   const got = validatePackage(makeZip([{ name: 'pkg/skills/a-skill/SKILL.md', data: 'x' }, { name: 'pkg/ttobak-manifest.json', data: manifest }]));
   assert.deepEqual(got.servers, { toolboxRegistries: [], toolboxServers: [], aimServers: ['a-mcp'], httpServers: {} });
 });

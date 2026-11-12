@@ -101,7 +101,7 @@ function parseManifest(raw: string, manifest: PackageManifest): void {
   try { value = JSON.parse(raw); } catch { fail('bad-manifest'); }
   // JSON null decodes to an empty list or map on the server (Go): the same here.
   if (value && typeof value === 'object' && !Array.isArray(value)) {
-    for (const key of Object.keys(value)) if (value[key] === null && key !== 'version') delete value[key];
+    for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
   }
   const keys = ['version', 'toolboxRegistries', 'toolboxServers', 'aimServers', 'httpServers'];
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !keys.includes(key))) fail('bad-manifest');
