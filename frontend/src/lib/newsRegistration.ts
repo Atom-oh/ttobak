@@ -27,6 +27,8 @@ export interface NewsSourceItem {
   canEdit?: boolean;
   // The directory cut this item's lists; never prefill an edit form from it.
   listsTruncated?: boolean;
+  /** Account kind: when "collect now" is allowed again; absent when allowed now. */
+  nextCollectAllowedAt?: string;
 }
 
 /** One page of `GET /api/news-sources`. */
