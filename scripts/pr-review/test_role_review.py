@@ -677,6 +677,59 @@ VERDICT: PASS
         self.assertIn("also AWS, IAM, network and service constraints", claude)
         self.assertEqual(self.finish()["mode"], "deterministic")
 
+    def sized_patch(self, path, size):
+        head = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+"
+        return head + "x" * (size - len(head) - 1) + "\n"
+
+    def lined_patch(self, path, lines):
+        head = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1 @@\n"
+        return head + "+x\n" * (lines - 4)
+
+    def size_failures(self, diff, kiro):
+        with mock_patch.dict(os.environ):
+            if not kiro:
+                os.environ.pop("ROLE_REVIEW_KIRO", None)
+            self.assertEqual(len(diff.encode()), len(diff))
+            self.diff.write_text(diff)
+            role_review.prepare(SimpleNamespace(
+                diff=self.diff, context=self.context, head=HEAD, base=BASE, work=self.work,
+                context_cap=role_review.MAX_CONTEXT_BYTES, paths=None,
+                allow_exclusions_only=False, policy=None, provenance=None))
+            plan = self.read("role-plan.json")
+        return [f for f in plan["input_failures"] if f.startswith(("diff_", "request_"))]
+
+    def test_diff_cap_is_larger_when_no_kiro_role_is_active(self):
+        path = "infra/lib/stack.ts"
+        self.assertEqual(self.size_failures(self.sized_patch(path, 200000), False), [])
+        self.assertEqual(self.size_failures(self.sized_patch(path, 200001), False), ["diff_byte_limit"])
+        self.assertEqual(self.size_failures(self.lined_patch(path, 6000), False), [])
+        self.assertEqual(self.size_failures(self.lined_patch(path, 6001), False), ["diff_line_limit"])
+        # Enabled Kiro that routing leaves inactive does not impose its argv-derived cap.
+        self.assertEqual(self.size_failures(self.sized_patch(FRONTEND, 200000), True), [])
+
+    def test_active_kiro_keeps_the_argv_derived_diff_cap(self):
+        path = "infra/lib/stack.ts"
+        self.assertEqual(self.size_failures(self.sized_patch(path, 95000), True), [])
+        self.assertEqual(self.size_failures(self.sized_patch(path, 95001), True), ["diff_byte_limit"])
+        self.assertEqual(self.size_failures(self.lined_patch(path, 3000), True), [])
+        self.assertEqual(self.size_failures(self.lined_patch(path, 3001), True), ["diff_line_limit"])
+
+    def test_request_bounds_follow_delivery_channel(self):
+        diff = self.sized_patch("infra/lib/stack.ts", 90000)
+        with mock_patch.object(role_review, "MAX_ARGV_BYTES", 80000):
+            self.assertEqual(self.size_failures(diff, True),
+                             ["request_byte_limit:kiro-fable", "request_byte_limit:kiro-sol"])
+            self.assertEqual(self.size_failures(diff, False), [])
+        with mock_patch.object(role_review, "MAX_ARGV_BYTES", 1000):
+            # The claude-self instruction alone is an argv string.
+            self.assertEqual(self.size_failures(diff, False), ["request_byte_limit:claude-self"])
+        with mock_patch.object(role_review, "MAX_STDIN_REQUEST_BYTES", 80000):
+            self.assertEqual(self.size_failures(diff, False),
+                             ["request_byte_limit:claude-self", "request_byte_limit:codex"])
+        self.assertEqual(role_review.MAX_ARGV_BYTES, 131072)
+        self.assertGreaterEqual(role_review.MAX_STDIN_REQUEST_BYTES,
+                                role_review.MAX_DIFF_BYTES + role_review.MAX_CONTEXT_BYTES + 32768)
+
     def test_aws_semantics_in_frontend_and_unknown_paths_are_conservative(self):
         for raw in (
             patch(after='import { S3Client } from "@aws-sdk/client-s3";'),
@@ -1592,8 +1645,13 @@ VERDICT: PASS
                 self.assert_blocked()
 
     def test_utf8_byte_limit_is_not_a_character_limit(self):
-        self.prepare(patch(after="é" * 48000), expected=2)
+        self.prepare(patch("infra/lib/stack.ts", after="é" * 48000), expected=2)
         self.assert_blocked()
+        self.assertIn("diff_byte_limit", self.read("role-plan.json")["input_failures"])
+        with mock_patch.dict(os.environ):
+            os.environ.pop("ROLE_REVIEW_KIRO", None)
+            self.prepare(patch("infra/lib/stack.ts", after="é" * 100001), expected=2)
+        self.assertIn("diff_byte_limit", self.read("role-plan.json")["input_failures"])
 
     def test_empty_context_blocks_preparation(self):
         self.context.write_text("")
@@ -1759,7 +1817,7 @@ VERDICT: PASS
         plan = self.prepare(patch("infra/lib/stack.ts"))
         self.schema_rejection()
         role_review.issue_request(self.work, "kiro-fable", role_review.CURRENT_SCHEMA_CORRECTION)
-        (self.work / "requests/kiro-fable.prompt").write_bytes(b"x" * (role_review.MAX_REQUEST_BYTES + 1))
+        (self.work / "requests/kiro-fable.prompt").write_bytes(b"x" * (role_review.MAX_ARGV_BYTES + 1))
         with self.assertRaisesRegex(role_review.Invalid, "^output_byte_limit$"):
             role_review.issued_request(self.work, plan, "kiro-fable")
 
@@ -1884,7 +1942,7 @@ VERDICT: PASS
     def test_current_correction_rejects_overflow_before_archiving(self):
         self.prepare(patch("infra/lib/stack.ts"))
         prior = self.schema_rejection()
-        with mock_patch.object(role_review, "MAX_REQUEST_BYTES", 64):
+        with mock_patch.object(role_review, "MAX_ARGV_BYTES", 64):
             with self.assertRaisesRegex(role_review.Invalid, "output_byte_limit"):
                 role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
         self.assertEqual(self.read("slot/kiro-fable-result.json"), prior)

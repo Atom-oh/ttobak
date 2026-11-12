@@ -35,10 +35,20 @@ from review_format import (FORMAT_INSTRUCTIONS, format_violation,
                            FENCE as REVIEW_FENCE, REFERENCE as REVIEW_REFERENCE)
 
 
-MAX_DIFF_BYTES = 95000
-MAX_DIFF_LINES = 3000
+# Diff limits when no Kiro role is active. Codex, claude-self and the chair read
+# the diff from stdin, so only the request bound below applies to them.
+MAX_DIFF_BYTES = 200000
+MAX_DIFF_LINES = 6000
+# Kiro passes its complete request as one argv string, so any active Kiro role
+# keeps the diff within the per-argument limit.
+KIRO_MAX_DIFF_BYTES = 95000
+KIRO_MAX_DIFF_LINES = 3000
 MAX_CONTEXT_BYTES = 24000
-MAX_REQUEST_BYTES = 131072
+# Linux MAX_ARG_STRLEN: bounds every string passed as one argv element.
+MAX_ARGV_BYTES = 131072
+# Stdin-delivered request: 200,000 diff + 24,000 context bytes plus instructions,
+# framing and schema.
+MAX_STDIN_REQUEST_BYTES = 256 * 1024
 MAX_OUTPUT_BYTES = 1024 * 1024
 ROLES = {
     "codex": ("implementation", "OpenAI", "global.openai.gpt-6-astra",
@@ -418,6 +428,22 @@ def role_description(tag, description):
     return f"{description}; also {KIRO_RESPONSIBILITIES[tag]}"
 
 
+def kiro_active(routes):
+    return any(routes[tag][0] for tag in ROLES if tag.startswith("kiro-"))
+
+
+def diff_limits(routes):
+    """Byte and line caps: the Kiro argv-derived cap applies only while Kiro runs."""
+    if kiro_active(routes):
+        return KIRO_MAX_DIFF_BYTES, KIRO_MAX_DIFF_LINES
+    return MAX_DIFF_BYTES, MAX_DIFF_LINES
+
+
+def request_limit(tag):
+    """Kiro receives the whole request as argv; other roles receive it on stdin."""
+    return MAX_ARGV_BYTES if tag.startswith("kiro-") else MAX_STDIN_REQUEST_BYTES
+
+
 def routing(paths, diff):
     clear_frontend = bool(paths) and all(
         FRONTEND_PATH.search(p) and not (
@@ -553,11 +579,7 @@ def prepare(args):
         failures.append("context_unavailable_or_not_utf8")
     if not SHA.fullmatch(args.head) or not SHA.fullmatch(args.base):
         failures.append("invalid_revision")
-    if len(raw) > MAX_DIFF_BYTES:
-        failures.append("diff_byte_limit")
     lines = len(raw.split(b"\n")) - int(raw.endswith(b"\n")) if raw else 0
-    if lines > MAX_DIFF_LINES:
-        failures.append("diff_line_limit")
     if not context.strip() or len(context.encode()) > args.context_cap:
         failures.append("context_size")
     provenance = {}
@@ -615,6 +637,11 @@ def prepare(args):
     routes = routing(paths, diff)
     if policy_hash:
         routes = {tag: (False, "approved_exclusions_only") for tag in ROLES}
+    max_bytes, max_lines = diff_limits(routes)
+    if len(raw) > max_bytes:
+        failures.append("diff_byte_limit")
+    if lines > max_lines:
+        failures.append("diff_line_limit")
     for tag, (slug, family, model, description) in ROLES.items():
         required, reason = routes[tag]
         role = {"required": required, "role": slug, "family": family, "model": model,
@@ -629,7 +656,9 @@ def prepare(args):
             remove(work / "roles" / f"{tag}.{suffix}")
         if required:
             instruction, payload = frame_request(body.decode("utf-8"), diff, "0" * 32)
-            if len((instruction + "\n" + payload).encode()) >= MAX_REQUEST_BYTES:
+            # claude-self also receives its instruction as one argv string.
+            if (len((instruction + "\n" + payload).encode()) >= request_limit(tag)
+                    or (tag == "claude-self" and len(instruction.encode()) >= MAX_ARGV_BYTES)):
                 failures.append(f"request_byte_limit:{tag}")
             write(work / "roles" / f"{tag}.txt", body)
             write(work / "roles" / f"{tag}.diff", raw)
@@ -824,7 +853,7 @@ def _issue_request(work, tag, correction_mode=None):
     if any(result["invocation_nonce"] == nonce for result in history):
         raise Invalid("invalid_invocation_nonce")
     receipt, instruction, payload = request_contract(work, plan, tag, nonce, history)
-    if required_mode is not None and len((instruction + "\n" + payload).encode()) >= MAX_REQUEST_BYTES:
+    if required_mode is not None and len((instruction + "\n" + payload).encode()) >= request_limit(tag):
         raise Invalid("output_byte_limit")
     if prior is not None:
         write_json(work / "slot" / f"{tag}-attempts.json", history)
@@ -850,10 +879,11 @@ def issued_request(work, plan, tag):
         expected, instruction, payload = request_contract(work, plan, tag, nonce, history)
         if receipt != expected:
             raise Invalid("invalid_issued_request")
-        if (text_file(work / "requests" / f"{tag}.prompt", MAX_REQUEST_BYTES) != instruction
-                or text_file(work / "requests" / f"{tag}.input", MAX_REQUEST_BYTES) != payload):
+        limit = request_limit(tag)
+        if (text_file(work / "requests" / f"{tag}.prompt", limit) != instruction
+                or text_file(work / "requests" / f"{tag}.input", limit) != payload):
             raise Invalid("invalid_issued_request")
-        if expected.get("correction_mode") is not None and len((instruction + "\n" + payload).encode()) >= MAX_REQUEST_BYTES:
+        if expected.get("correction_mode") is not None and len((instruction + "\n" + payload).encode()) >= limit:
             raise Invalid("output_byte_limit")
         return receipt
     except (KeyError, TypeError, OSError):
