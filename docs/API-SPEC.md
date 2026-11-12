@@ -1173,6 +1173,33 @@ items after the cursor, so pages keep the order without gaps or duplicates while
 it is unchanged. The cursor is the last item's sort key bound to the caller;
 malformed, oversized or foreign cursors are 400. `truncated` means a cap left
 sources out. Undecodable CONFIG rows (legacy scalar lists) are skipped.
+
+`POST /api/accounts/{accountId}/news-sources/{sourceId}/collect` asks the news
+crawler to collect one account-owned source now. It takes no query parameters
+and an empty body (anything else, or over 1 KiB, is 400). Authorization matches
+PUT: a non-member gets 403, and a source without the account's ref, a CONFIG
+naming the account, an enabled status and a user-created origin is 404, as is
+one whose IDs do not fit the crawler contract (`accountId` and the request ID
+`[A-Za-z0-9-]{1,64}`, `sourceId` = `acct_{accountId}_{8 lowercase hex}`). Each
+source accepts at most one request per hour, from any member: one transaction
+checks the ref, account and `MEMBER#` row and sets the CONFIG's
+`lastCollectRequestedAt` (UTC RFC3339, seconds) and `lastCollectRequestId` only
+when the previous request is absent or at least 3,600 seconds old. These two
+attributes are outside the source revision fingerprint. Then a
+`NewsCollectRequested` event (`ttobak.crawler`, detail `sourceId`, `accountId`,
+`requestId` only) goes to the default bus and the route returns 202
+`{ "requestId", "requestedAt", "nextAllowedAt" }`. Within the hour it returns
+429 `RATE_LIMITED` with the standard error body plus `nextAllowedAt` (no
+`Retry-After` header); after a refused claim the CONFIG is re-read, so a source
+deleted or disabled meanwhile is 404. If the event is not accepted, the claim is
+released (conditional on its request ID) and the route returns 503; if the
+release also fails the claim expires after the hour. The collection itself is
+asynchronous and bounded by the crawler (it skips a source crawled in the last
+30 minutes and stops at 40 model calls); its outcome is visible only as the
+source's `lastCrawledAt`, HISTORY row and new articles. Account-kind items of
+`GET /api/news-sources`, the PUT response and the per-account GET carry
+`nextCollectAllowedAt` (UTC RFC3339) while a request is within the hour; it is
+omitted when collection may be requested now.
 `DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
 document is allowed only for admins or a current direct member of that account
 (read per request); the stored source creator grants nothing. A non-admin
@@ -2304,6 +2331,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.Create` |
 | PUT | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Delete` |
+| POST | `/api/accounts/{accountId}/news-sources/{sourceId}/collect` | `accountNewsHandler.Collect` |
 | GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
 | POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
 | DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
