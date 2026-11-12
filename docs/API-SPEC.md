@@ -110,7 +110,9 @@ three distinct kinds (`title`, `location`, `domain`) and requires
 Sync writes a share row only when the user is a direct member of
 `shareAccountId`; otherwise it returns `403 FORBIDDEN`. A `Private` event or a
 hidden owner override writes a veto row for the matched or previously shared
-account instead. Owner
+account instead. Overrides are keyed by `seriesKey` when present, falling back to
+the occurrence's event ID (where events synced without `seriesKey` stored them);
+`auto` clears both. Owner
 event views report `sharingMode` (`auto`, `account` or `hidden`),
 `candidateAccountIds` and `private`; `shareAccountId` and `shareEvidence` appear
 only once a stored share is granted.

@@ -25509,7 +25509,7 @@ function decideSharing(event, item, previous, sharing) {
   }
   const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
   const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
-  if (facts === null && previous?.share?.shareEvidence?.includes("domain") && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
+  if (facts == null && previous?.share?.shareEvidence?.includes("domain") && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);
   } else if (result.kind === "matched" && facts == null) {
     if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
@@ -25860,7 +25860,7 @@ function parseAttendees(payload) {
 }
 function meetingFacts(payload) {
   const parsed = parseAttendees(payload);
-  if (!parsed) return null;
+  if (!parsed) return payload && typeof payload === "object" && payload.isPrivate === true ? { domains: [], isPrivate: true } : null;
   const r = payload;
   if (!Array.isArray(r.requiredAttendees) && !Array.isArray(r.optionalAttendees) && typeof r.organizer !== "string") return null;
   const domains = /* @__PURE__ */ new Set();

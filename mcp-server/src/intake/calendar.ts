@@ -343,7 +343,7 @@ function decideSharing(event: CalendarEvent, item: OutlookItem, previous: Ledger
   const domains = [...(facts?.domains ?? []), ...(event.organizerDomain ? [event.organizerDomain] : [])];
   const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
   // A lookup without an answer must not drop a share that rested on attendee domains.
-  if (facts === null && previous?.share?.shareEvidence?.includes('domain') &&
+  if (facts == null && previous?.share?.shareEvidence?.includes('domain') &&
       !(result.kind === 'matched' && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);
   } else if (result.kind === 'matched' && facts == null) {

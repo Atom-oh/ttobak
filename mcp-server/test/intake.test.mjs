@@ -986,6 +986,10 @@ test('get_meeting facts keep domains and the private flag only; attendee-less pa
   const wide = Array.from({ length: 51 }, (_, i) => `a@d${i}.example`);
   assert.equal(meetingFacts({ isPrivate: false, requiredAttendees: wide }), null);
   assert.deepEqual(meetingFacts({ isPrivate: true, requiredAttendees: wide }), { domains: [], isPrivate: true });
+  // Over the 500-address cap the private flag still holds; a public one is no answer.
+  const crowd = Array.from({ length: 501 }, (_, i) => `p${i}@hanabank.example`);
+  assert.deepEqual(meetingFacts({ isPrivate: true, requiredAttendees: crowd }), { domains: [], isPrivate: true });
+  assert.equal(meetingFacts({ isPrivate: false, requiredAttendees: crowd }), null);
   for (const bad of [{}, { isPrivate: false }, { meetingId: 'x', isPrivate: false }, { requiredAttendees: ['a@x.example'] },
     { isPrivate: 'no', requiredAttendees: [] }, 'not json', null]) {
     assert.equal(meetingFacts(bad), null, JSON.stringify(bad));

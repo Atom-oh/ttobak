@@ -92,7 +92,9 @@ export interface MeetingFacts { domains: string[]; isPrivate: boolean }
  */
 export function meetingFacts(payload: unknown): MeetingFacts | null {
   const parsed = parseAttendees(payload);
-  if (!parsed) return null;
+  // An explicit private flag holds even when the attendee list is over its cap.
+  if (!parsed) return payload && typeof payload === 'object' && (payload as Record<string, unknown>).isPrivate === true
+    ? { domains: [], isPrivate: true } : null;
   const r = payload as Record<string, unknown>;
   if (!Array.isArray(r.requiredAttendees) && !Array.isArray(r.optionalAttendees) && typeof r.organizer !== 'string') return null;
   const domains = new Set<string>();
