@@ -7,11 +7,11 @@ export const COLLECT_STARTED = '수집을 시작했어요. 몇 분 뒤 새 기�
 export const COLLECT_FAILED = '수집을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.';
 export const COLLECT_LIMITS = '고객사 전용 소스는 소스마다 한 시간에 한 번 바로 수집할 수 있고, 한 번에 새 기사를 40건 정도까지 가져와요.';
 
-/** Row state: `requested` lasts until the list is reloaded; `limited` keeps the 429 time. */
+/** Row state: `requested` keeps the 202's next allowed time; `limited` keeps the 429 time. */
 export type CollectState =
   | { phase: 'ready' }
   | { phase: 'inFlight' }
-  | { phase: 'requested' }
+  | { phase: 'requested'; until: string }
   | { phase: 'limited'; until: string }
   | { phase: 'refused' };
 
@@ -33,18 +33,16 @@ export function limitLine(at: number): string {
 }
 
 /**
- * What the row shows. `nextCollectAllowedAt` comes from the list; `reloaded`
- * is true once the list has been reloaded since the request was accepted.
+ * What the row shows. `nextCollectAllowedAt` comes from the list. An accepted
+ * request keeps its confirmation and stays disabled until the hour passes; the
+ * list is not reloaded for it, so the row and its message stay in place.
  */
-export function collectView(state: CollectState, nextCollectAllowedAt: string | undefined, now: number, reloaded: boolean): {
+export function collectView(state: CollectState, nextCollectAllowedAt: string | undefined, now: number): {
   disabled: boolean; note: string; alert: boolean;
 } {
   if (state.phase === 'inFlight') return { disabled: true, note: '', alert: false };
-  if (state.phase === 'requested') {
-    const listed = futureTime(nextCollectAllowedAt, now);
-    return { disabled: !reloaded || listed !== null, note: COLLECT_STARTED, alert: false };
-  }
   const until = nextLimitAt(state, nextCollectAllowedAt, now);
+  if (state.phase === 'requested') return { disabled: until !== null, note: COLLECT_STARTED, alert: false };
   if (until !== null) return { disabled: true, note: limitLine(until), alert: false };
   if (state.phase === 'refused') return { disabled: false, note: COLLECT_FAILED, alert: true };
   return { disabled: false, note: '', alert: false };
@@ -52,7 +50,8 @@ export function collectView(state: CollectState, nextCollectAllowedAt: string | 
 
 /** When the shown limit lifts (ms), or null when nothing is limited. */
 export function nextLimitAt(state: CollectState, nextCollectAllowedAt: string | undefined, now: number): number | null {
-  return futureTime(state.phase === 'limited' ? state.until : undefined, now) ?? futureTime(nextCollectAllowedAt, now);
+  const own = state.phase === 'limited' || state.phase === 'requested' ? state.until : undefined;
+  return futureTime(own, now) ?? futureTime(nextCollectAllowedAt, now);
 }
 
 /** Maps a failed request to the next state and whether to reload the list. */
@@ -66,11 +65,15 @@ export function collectFailure(failure: unknown, now: number): { state: CollectS
 }
 
 /**
- * The one-click customer source: the customer's name (cut to the server's
- * 200 code points) and no queries or aliases, so the server searches the
- * account name and aliases. Null when there is no usable name.
+ * The one-click customer source: the customer's name and no queries or
+ * aliases, so the server searches the account name and aliases. A name over
+ * the server's 200 code points is cut, and the cut name is also sent as the
+ * query: the server drops an over-long account name from its defaults, which
+ * would otherwise leave no query at all. Null when there is no usable name.
  */
-export function startCollectingInput(accountName: string): { sourceName: string } | null {
-  const sourceName = Array.from(accountName.trim()).slice(0, 200).join('').trim();
-  return sourceName ? { sourceName } : null;
+export function startCollectingInput(accountName: string): { sourceName: string; newsQueries?: string[] } | null {
+  const trimmed = accountName.trim();
+  const sourceName = Array.from(trimmed).slice(0, 200).join('').trim();
+  if (!sourceName) return null;
+  return sourceName === trimmed ? { sourceName } : { sourceName, newsQueries: [sourceName] };
 }

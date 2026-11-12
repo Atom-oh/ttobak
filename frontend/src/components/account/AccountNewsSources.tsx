@@ -21,6 +21,9 @@ export function AccountNewsSources({ accountId, userId, accountName, onChanged, 
   onAccessLost: () => void;
 }) {
   const [sources, setSources] = useState<CrawlerSource[] | null>(null);
+  // True only after a successful list: an empty list from a failed load must
+  // not offer the one-click create, which would add a second source.
+  const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -30,11 +33,11 @@ export function AccountNewsSources({ accountId, userId, accountName, onChanged, 
   useEffect(() => {
     const controller = new AbortController();
     accountApi.newsSources.list(accountId, { signal: controller.signal, expectedUserId: userId })
-      .then(page => { if (!controller.signal.aborted) setSources(page.sources ?? []); })
+      .then(page => { if (!controller.signal.aborted) { setSources(page.sources ?? []); setLoaded(true); } })
       .catch(failure => {
         if (controller.signal.aborted) return;
         if (failure?.status === 403) { onAccessLost(); return; }
-        setSources([]); setError('뉴스 소스를 불러오지 못했습니다.');
+        setSources([]); setLoaded(false); setError('뉴스 소스를 불러오지 못했습니다.');
       });
     return () => controller.abort();
   }, [accountId, userId, attempt, onAccessLost]);
@@ -57,7 +60,7 @@ export function AccountNewsSources({ accountId, userId, accountName, onChanged, 
 
   const start = async () => {
     const input = startCollectingInput(accountName);
-    if (saving || !input) return;
+    if (saving || !input || !loaded || sources?.length !== 0) return;
     setSaving(true); setError('');
     try {
       await accountApi.newsSources.create(accountId, input, { expectedUserId: userId });
@@ -77,7 +80,7 @@ export function AccountNewsSources({ accountId, userId, accountName, onChanged, 
         <button type="button" disabled={saving} aria-label={`${source.sourceName} 뉴스 소스 삭제`} onClick={() => void remove(source)}
           className="text-text-muted hover:text-error disabled:opacity-40">×</button>
       </span>)}
-      {sources?.length === 0 && <button type="button" disabled={saving || !startCollectingInput(accountName)} onClick={() => void start()}
+      {loaded && sources?.length === 0 && <button type="button" disabled={saving || !startCollectingInput(accountName)} onClick={() => void start()}
         className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50">
         {saving ? '시작하는 중…' : '이 고객 뉴스 수집 시작'}</button>}
       <Link href={newsSourcesHref(accountId)} aria-label={`${accountName} 뉴스 소스 등록`}

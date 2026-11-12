@@ -304,12 +304,11 @@ function EditRow({ item, userId, onDone, onCancel }: { item: NewsSourceItem; use
   );
 }
 
-/** "Collect now" state for a customer-only row; `requestedFrom` is the list item the 202 answered. */
+/** "Collect now" state for a customer-only row. */
 function useCollectNow(item: NewsSourceItem, userId: string, onChanged: () => void) {
   const [state, setState] = useState<CollectState>(COLLECT_READY);
-  const [requestedFrom, setRequestedFrom] = useState<NewsSourceItem | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const view = collectView(state, item.nextCollectAllowedAt, now, requestedFrom !== item);
+  const view = collectView(state, item.nextCollectAllowedAt, now);
   const until = nextLimitAt(state, item.nextCollectAllowedAt, now);
   // Re-enable when the limit lifts; no polling of the server.
   useEffect(() => {
@@ -321,9 +320,9 @@ function useCollectNow(item: NewsSourceItem, userId: string, onChanged: () => vo
     if (view.disabled) return;
     setState({ phase: 'inFlight' });
     try {
-      await accountApi.newsSources.collect(item.accountId!, item.sourceId, { expectedUserId: userId });
-      setRequestedFrom(item); setState({ phase: 'requested' }); setNow(Date.now());
-      onChanged();
+      const accepted = await accountApi.newsSources.collect(item.accountId!, item.sourceId, { expectedUserId: userId });
+      // No reload here: it would remount the row and drop this confirmation.
+      setState({ phase: 'requested', until: accepted.nextAllowedAt }); setNow(Date.now());
     } catch (failure) {
       const next = collectFailure(failure, Date.now());
       setState(next.state); setNow(Date.now());
