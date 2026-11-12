@@ -13,13 +13,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
+	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
-// Copied from backend/python/crawler/news_crawler.py (_MANUAL_ID_RE,
-// _MANUAL_SOURCE_SUFFIX_RE and the acct_ prefix rule in _manual_request):
-// every emitted event must pass the worker's validation.
+// Copied from backend/python/crawler/news_manual.py (_ID_RE,
+// _SOURCE_SUFFIX_RE and the acct_ prefix rule in parse_request): every
+// emitted event must pass the starter's validation.
 var (
 	workerIDRE     = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 	workerSuffixRE = regexp.MustCompile(`^[0-9a-f]{8}$`)
@@ -35,12 +37,36 @@ const collectSource = "acct_acc-a_0000abcd"
 
 var collectNow = time.Date(2026, 11, 12, 1, 0, 0, 0, time.UTC)
 
+const (
+	collectDailyARN       = "arn:aws:states:ap-northeast-2:123456789012:stateMachine:ttobak-news-daily"
+	collectPublicationARN = "arn:aws:states:ap-northeast-2:123456789012:stateMachine:ttobak-news-publication"
+)
+
+// fakeRunChecker answers Running per state machine ARN and records lookups.
+type fakeRunChecker struct {
+	running map[string]bool
+	err     error
+	calls   []string
+}
+
+func (c *fakeRunChecker) Running(_ context.Context, arn string) (bool, error) {
+	c.calls = append(c.calls, arn)
+	return c.running[arn], c.err
+}
+
 type collectFixture struct {
 	svc       *AccountNewsService
 	repo      *multiAccountNewsRepo
 	crawler   *newsSourceTestCrawler
+	runs      *fakeRunChecker
 	published []model.NewsCollectRequested
 	pubErr    error
+}
+
+// collectAdmission is the production configuration: daily run at 19:10 UTC,
+// 45-minute lead (the child timeout) and 15-minute grace.
+func collectAdmission(runs NewsRunChecker) *NewsCollectAdmission {
+	return NewNewsCollectAdmission("19", "10", "2700", "900", collectDailyARN, collectPublicationARN, runs)
 }
 
 // newCollectTest stores accepted claims on the source CONFIG, like the
@@ -49,6 +75,8 @@ func newCollectTest() *collectFixture {
 	f := &collectFixture{}
 	f.svc, f.repo, f.crawler = newNewsSourcesTest()
 	f.svc.now = func() time.Time { return collectNow }
+	f.runs = &fakeRunChecker{running: map[string]bool{}}
+	f.svc.SetCollectAdmission(collectAdmission(f.runs))
 	addAccountNewsSource(f.repo, f.crawler, newsAcctA, collectSource, "Beta news")
 	f.svc.SetCollectPublisher(func(_ context.Context, e model.NewsCollectRequested) error {
 		f.published = append(f.published, e)
@@ -127,7 +155,10 @@ func TestCollectNow_PublishesOneContractEvent(t *testing.T) {
 func TestCollectNow_ConcurrentClaimIsLimited(t *testing.T) {
 	f := newCollectTest()
 	// Another member's claim commits between the read and this claim.
+	// An eventually consistent read would still return the unclaimed row.
 	f.repo.claim = func(sourceID, _ string, at, _ time.Time) error {
+		before := *f.crawler.sources[sourceID]
+		f.crawler.stale = map[string]*model.CrawlerSource{sourceID: &before}
 		f.crawler.sources[sourceID].LastCollectRequestedAt = at.Add(-time.Minute).Format(time.RFC3339)
 		return repository.ErrConditionFailed
 	}
@@ -135,6 +166,9 @@ func TestCollectNow_ConcurrentClaimIsLimited(t *testing.T) {
 	var limited *NewsCollectLimitError
 	if !errors.As(err, &limited) || !limited.NextAllowedAt.Equal(collectNow.Add(59*time.Minute)) || len(f.published) != 0 {
 		t.Fatalf("concurrent claim: %v %d", err, len(f.published))
+	}
+	if f.crawler.consistentReads != 1 {
+		t.Fatalf("the refused claim must be classified by one consistent read, got %d", f.crawler.consistentReads)
 	}
 }
 
@@ -177,6 +211,188 @@ func TestCollectNow_Rejections(t *testing.T) {
 				t.Fatalf("rejected request published: %+v", f.published)
 			}
 		})
+	}
+}
+
+// Authorization and ownership refusals answer before any admission lookup,
+// so a non-member cannot learn the pipeline state.
+func TestCollectNow_OwnershipBeforeAdmission(t *testing.T) {
+	for name, tc := range map[string]struct {
+		setup  func(*collectFixture)
+		source string
+		want   error
+	}{
+		"non-member":     {func(f *collectFixture) { f.repo.members[newsAcctA] = false }, collectSource, ErrForbidden},
+		"foreign source": {func(f *collectFixture) { f.crawler.sources[collectSource].AccountID = newsAcctB }, collectSource, ErrNotFound},
+		"other account's": {func(f *collectFixture) {
+			addAccountNewsSource(f.repo, f.crawler, newsAcctB, "acct_acc-b_0000abcd", "x")
+		}, "acct_acc-b_0000abcd", ErrNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCollectTest()
+			tc.setup(f)
+			// Every admission condition would refuse.
+			f.svc.now = func() time.Time { return time.Date(2026, 11, 12, 19, 10, 0, 0, time.UTC) }
+			f.runs.running[collectDailyARN], f.runs.err = true, errors.New("lookup failed")
+			if _, err := f.svc.CollectNow(context.Background(), "user-1", newsAcctA, tc.source); !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+			if len(f.runs.calls) != 0 || len(f.repo.claims) != 0 || len(f.published) != 0 {
+				t.Fatalf("lookups %v claims %v published %v", f.runs.calls, f.repo.claims, f.published)
+			}
+		})
+	}
+}
+
+func TestCollectNow_AdmissionRefusals(t *testing.T) {
+	window := &NewsCollectWindowError{}
+	for name, tc := range map[string]struct {
+		now     time.Time
+		setup   func(*collectFixture)
+		want    error
+		next    string // daily-window end, RFC3339
+		lookups []string
+	}{
+		"daily window": {now: time.Date(2026, 11, 12, 19, 0, 0, 0, time.UTC), want: ErrNewsCollectDailyWindow, next: "2026-11-12T19:25:00Z"},
+		"daily running": {setup: func(f *collectFixture) { f.runs.running[collectDailyARN] = true },
+			want: ErrNewsCollectBusy, lookups: []string{collectDailyARN}},
+		"publication running": {setup: func(f *collectFixture) { f.runs.running[collectPublicationARN] = true },
+			want: ErrNewsCollectBusy, lookups: []string{collectDailyARN, collectPublicationARN}},
+		"lookup error": {setup: func(f *collectFixture) { f.runs.err = errors.New("throttled") },
+			want: ErrNewsCollectUnavailable, lookups: []string{collectDailyARN}},
+		"no admission": {setup: func(f *collectFixture) { f.svc.SetCollectAdmission(nil) }, want: ErrNewsCollectUnavailable},
+		"missing window value": {setup: func(f *collectFixture) {
+			f.svc.SetCollectAdmission(NewNewsCollectAdmission("19", "", "2700", "900", collectDailyARN, collectPublicationARN, f.runs))
+		}, want: ErrNewsCollectUnavailable},
+		"missing arn": {setup: func(f *collectFixture) {
+			f.svc.SetCollectAdmission(NewNewsCollectAdmission("19", "10", "2700", "900", "", collectPublicationARN, f.runs))
+		}, want: ErrNewsCollectUnavailable},
+		"no checker": {setup: func(f *collectFixture) {
+			f.svc.SetCollectAdmission(NewNewsCollectAdmission("19", "10", "2700", "900", collectDailyARN, collectPublicationARN, nil))
+		}, want: ErrNewsCollectUnavailable},
+		// Admission precedes the hourly limit.
+		"busy and limited": {setup: func(f *collectFixture) {
+			f.runs.running[collectDailyARN] = true
+			f.crawler.sources[collectSource].LastCollectRequestedAt = collectNow.Add(-time.Minute).Format(time.RFC3339)
+		}, want: ErrNewsCollectBusy, lookups: []string{collectDailyARN}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCollectTest()
+			if !tc.now.IsZero() {
+				f.svc.now = func() time.Time { return tc.now }
+			}
+			if tc.setup != nil {
+				tc.setup(f)
+			}
+			_, err := f.svc.CollectNow(context.Background(), "user-1", newsAcctA, collectSource)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+			if tc.next != "" {
+				if !errors.As(err, &window) || window.NextAllowedAt.Format(time.RFC3339) != tc.next {
+					t.Fatalf("window end: %v", err)
+				}
+			} else if errors.As(err, &window) {
+				t.Fatalf("unexpected window error: %v", err)
+			}
+			if !reflect.DeepEqual(f.runs.calls, tc.lookups) && !(len(f.runs.calls) == 0 && len(tc.lookups) == 0) {
+				t.Fatalf("lookups %v, want %v", f.runs.calls, tc.lookups)
+			}
+			if len(f.repo.claims) != 0 || len(f.repo.releases) != 0 || len(f.published) != 0 {
+				t.Fatalf("refusal claimed or published: claims %v releases %v published %v", f.repo.claims, f.repo.releases, f.published)
+			}
+		})
+	}
+}
+
+// The window boundaries equal the starter's test_news_manual cases.
+func TestNewsDailyWindowBoundaries(t *testing.T) {
+	prod, err := parseNewsDailyWindow("19", "10", "2700", "900")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrap, err := parseNewsDailyWindow("0", "10", "2700", "900")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := func(d, h, m, s int) time.Time { return time.Date(2026, 11, d, h, m, s, 0, time.UTC) }
+	for name, tc := range map[string]struct {
+		w    newsDailyWindow
+		now  time.Time
+		want string // window end, or "" when allowed
+	}{
+		"before lead":         {prod, day(12, 18, 24, 59), ""},
+		"lead start":          {prod, day(12, 18, 25, 0), "2026-11-12T19:25:00Z"},
+		"before schedule":     {prod, day(12, 19, 9, 59), "2026-11-12T19:25:00Z"},
+		"schedule":            {prod, day(12, 19, 10, 0), "2026-11-12T19:25:00Z"},
+		"last grace second":   {prod, day(12, 19, 24, 59), "2026-11-12T19:25:00Z"},
+		"grace end":           {prod, day(12, 19, 25, 0), ""},
+		"midday":              {prod, day(12, 7, 10, 0), ""},
+		"wrap before":         {wrap, day(11, 23, 24, 59), ""},
+		"wrap lead start":     {wrap, day(11, 23, 25, 0), "2026-11-12T00:25:00Z"},
+		"wrap after midnight": {wrap, day(12, 0, 0, 0), "2026-11-12T00:25:00Z"},
+		"wrap last second":    {wrap, day(12, 0, 24, 59), "2026-11-12T00:25:00Z"},
+		"wrap grace end":      {wrap, day(12, 0, 25, 0), ""},
+		"wrap noon":           {wrap, day(12, 12, 0, 0), ""},
+	} {
+		end := tc.w.end(tc.now)
+		got := ""
+		if !end.IsZero() {
+			got = end.Format(time.RFC3339)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: got %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// Configuration validation matches daily_window's: digits only (1-5),
+// hour <= 23, minute <= 59, 0 < lead, grace < 43200.
+func TestParseNewsDailyWindow(t *testing.T) {
+	for _, bad := range [][4]string{
+		{"", "10", "2700", "900"}, {"24", "10", "2700", "900"}, {"19", "60", "2700", "900"},
+		{"19", "10", "0", "900"}, {"19", "10", "2700", "0"}, {"19", "10", "43200", "900"},
+		{"19", "10", "2700", "43200"}, {"-1", "10", "2700", "900"}, {"19", "10", "+2700", "900"},
+		{"19", "10", "123456", "900"}, {"19", "10", " 2700", "900"}, {"19.5", "10", "2700", "900"},
+	} {
+		if _, err := parseNewsDailyWindow(bad[0], bad[1], bad[2], bad[3]); !errors.Is(err, ErrNewsCollectUnavailable) {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+	if _, err := parseNewsDailyWindow("23", "59", "43199", "1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type fakeExecutionLister struct {
+	in  *sfn.ListExecutionsInput
+	out *sfn.ListExecutionsOutput
+	err error
+}
+
+func (c *fakeExecutionLister) ListExecutions(_ context.Context, in *sfn.ListExecutionsInput, _ ...func(*sfn.Options)) (*sfn.ListExecutionsOutput, error) {
+	c.in = in
+	return c.out, c.err
+}
+
+func TestSFNRunChecker(t *testing.T) {
+	running := &fakeExecutionLister{out: &sfn.ListExecutionsOutput{Executions: []sfntypes.ExecutionListItem{{}}}}
+	got, err := NewSFNRunChecker(running).Running(context.Background(), collectDailyARN)
+	if err != nil || !got {
+		t.Fatalf("running: %v %v", got, err)
+	}
+	if aws.ToString(running.in.StateMachineArn) != collectDailyARN || running.in.StatusFilter != sfntypes.ExecutionStatusRunning || running.in.MaxResults != 1 {
+		t.Fatalf("input %+v", running.in)
+	}
+	if got, err := NewSFNRunChecker(&fakeExecutionLister{out: &sfn.ListExecutionsOutput{}}).Running(context.Background(), collectDailyARN); err != nil || got {
+		t.Fatalf("idle: %v %v", got, err)
+	}
+	for name, c := range map[string]sfnExecutionLister{
+		"error": &fakeExecutionLister{err: errors.New("denied")}, "nil output": &fakeExecutionLister{}, "nil client": nil,
+	} {
+		if _, err := NewSFNRunChecker(c).Running(context.Background(), collectDailyARN); err == nil {
+			t.Fatalf("%s: no error", name)
+		}
 	}
 }
 

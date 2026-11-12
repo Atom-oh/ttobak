@@ -447,6 +447,12 @@ const (
 	// on an account that has since begun merging: the original write committed,
 	// so the client must not recreate it (HTTP 409).
 	ErrCodeReplayAccountMerging = "CONNECTOR_REPLAY_ACCOUNT_MERGING"
+	// ErrCodeCollectDailyWindow refuses "collect now" around the daily news
+	// run (HTTP 409, with nextAllowedAt).
+	ErrCodeCollectDailyWindow = "COLLECT_DAILY_WINDOW"
+	// ErrCodeCollectBusy refuses "collect now" while another news run is in
+	// progress (HTTP 409).
+	ErrCodeCollectBusy = "COLLECT_BUSY"
 )
 
 // AskQuestionRequest represents the request body for asking a question about a meeting

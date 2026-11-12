@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
+	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -24,7 +28,7 @@ const newsCollectInterval = time.Hour
 // newsCollectReleaseTimeout bounds the claim release after a failed publish.
 const newsCollectReleaseTimeout = 5 * time.Second
 
-// The crawler's NewsCollectRequested contract (news_crawler._manual_request):
+// The starter's NewsCollectRequested contract (news_manual.parse_request):
 // accountId and requestId match newsCollectIDPattern and sourceId is
 // "acct_" + accountId + "_" + 8 lowercase hex. Other sources cannot be
 // collected on request.
@@ -34,6 +38,22 @@ var newsCollectSuffixPattern = regexp.MustCompile(`^[0-9a-f]{8}$`)
 // ErrNewsCollectUnavailable means the request was not handed to the crawler
 // (no publisher, or the event was not accepted); the caller may retry.
 var ErrNewsCollectUnavailable = errors.New("news collection is unavailable")
+
+// ErrNewsCollectDailyWindow refuses a request near the daily schedule;
+// errors.As a *NewsCollectWindowError for the window's end.
+var ErrNewsCollectDailyWindow = errors.New("news collection is paused around the daily run")
+
+// ErrNewsCollectBusy refuses a request while a daily or publication run is
+// in progress.
+var ErrNewsCollectBusy = errors.New("another news collection is in progress")
+
+// NewsCollectWindowError reports when the daily window ends.
+type NewsCollectWindowError struct{ NextAllowedAt time.Time }
+
+func (e *NewsCollectWindowError) Error() string { return ErrNewsCollectDailyWindow.Error() }
+func (e *NewsCollectWindowError) Is(target error) bool {
+	return target == ErrNewsCollectDailyWindow
+}
 
 // ErrNewsCollectTooSoon is the hourly limit; errors.As a
 // *NewsCollectLimitError for the time it lifts.
@@ -71,6 +91,142 @@ func NewsCollectPublisher(client actionEventClient) func(context.Context, model.
 	}
 }
 
+// newsCollectAdmissionTimeout bounds both execution lookups together.
+const newsCollectAdmissionTimeout = 5 * time.Second
+
+// NewsRunChecker reports whether a state machine has a RUNNING execution.
+type NewsRunChecker interface {
+	Running(ctx context.Context, stateMachineARN string) (bool, error)
+}
+
+// sfnExecutionLister is the Step Functions call NewsRunChecker needs.
+type sfnExecutionLister interface {
+	ListExecutions(ctx context.Context, in *sfn.ListExecutionsInput, optFns ...func(*sfn.Options)) (*sfn.ListExecutionsOutput, error)
+}
+
+type sfnRunChecker struct{ client sfnExecutionLister }
+
+// NewSFNRunChecker checks for a RUNNING execution exactly as the starter's
+// _running does (status RUNNING, max results 1). A nil client always errors.
+func NewSFNRunChecker(client sfnExecutionLister) NewsRunChecker {
+	return sfnRunChecker{client: client}
+}
+
+func (c sfnRunChecker) Running(ctx context.Context, stateMachineARN string) (bool, error) {
+	if c.client == nil {
+		return false, ErrNewsCollectUnavailable
+	}
+	out, err := c.client.ListExecutions(ctx, &sfn.ListExecutionsInput{
+		StateMachineArn: aws.String(stateMachineARN), StatusFilter: sfntypes.ExecutionStatusRunning, MaxResults: 1,
+	})
+	if err != nil {
+		return false, err
+	}
+	if out == nil {
+		return false, ErrNewsCollectUnavailable
+	}
+	return len(out.Executions) > 0, nil
+}
+
+// newsDailyWindow is the starter's daily window (news_manual.daily_window):
+// from lead before the daily schedule until grace after it, wrapping at
+// midnight. Its four values come from the same CDK constants.
+type newsDailyWindow struct {
+	scheduleSeconds, leadSeconds, graceSeconds int64
+}
+
+var newsWindowValuePattern = regexp.MustCompile(`^[0-9]{1,5}$`)
+
+// parseNewsDailyWindow validates the configuration as daily_window does.
+func parseNewsDailyWindow(hour, minute, leadSeconds, graceSeconds string) (newsDailyWindow, error) {
+	raw := []string{hour, minute, leadSeconds, graceSeconds}
+	values := make([]int64, len(raw))
+	for i, v := range raw {
+		if !newsWindowValuePattern.MatchString(v) {
+			return newsDailyWindow{}, ErrNewsCollectUnavailable
+		}
+		values[i], _ = strconv.ParseInt(v, 10, 64)
+	}
+	h, m, lead, grace := values[0], values[1], values[2], values[3]
+	if h > 23 || m > 59 || lead <= 0 || lead >= 43200 || grace <= 0 || grace >= 43200 {
+		return newsDailyWindow{}, ErrNewsCollectUnavailable
+	}
+	return newsDailyWindow{scheduleSeconds: h*3600 + m*60, leadSeconds: lead, graceSeconds: grace}, nil
+}
+
+// end is the window's end when now is inside it, else the zero time.
+func (w newsDailyWindow) end(now time.Time) time.Time {
+	unix := now.Unix()
+	// Signed seconds since the nearest schedule time, in [-43200, 43200).
+	shifted := (unix - w.scheduleSeconds + 43200) % 86400
+	if shifted < 0 {
+		shifted += 86400
+	}
+	offset := shifted - 43200
+	if offset < -w.leadSeconds || offset >= w.graceSeconds {
+		return time.Time{}
+	}
+	return time.Unix(unix-offset+w.graceSeconds, 0).UTC()
+}
+
+// NewsCollectAdmission is the starter's admission configuration as the API
+// sees it: the daily window and the two state machines whose RUNNING
+// executions make the starter refuse.
+type NewsCollectAdmission struct {
+	window                   newsDailyWindow
+	dailyARN, publicationARN string
+	runs                     NewsRunChecker
+	invalid                  bool
+}
+
+// NewNewsCollectAdmission builds the admission check from the API's
+// environment values. Invalid or missing values, or no checker, make every
+// request unavailable rather than unchecked.
+func NewNewsCollectAdmission(hour, minute, leadSeconds, graceSeconds, dailyARN, publicationARN string, runs NewsRunChecker) *NewsCollectAdmission {
+	window, err := parseNewsDailyWindow(hour, minute, leadSeconds, graceSeconds)
+	return &NewsCollectAdmission{
+		window: window, dailyARN: dailyARN, publicationARN: publicationARN, runs: runs,
+		invalid: err != nil || runs == nil || !validStateMachineARN(dailyARN) || !validStateMachineARN(publicationARN),
+	}
+}
+
+func validStateMachineARN(arn string) bool {
+	return strings.HasPrefix(arn, "arn:") && strings.Contains(arn, ":states:") && strings.Contains(arn, ":stateMachine:")
+}
+
+// check mirrors the starter's refusals before its claim, in its order. It is
+// advisory (check-then-publish): a run can begin after it, so the starter
+// stays the enforcement point and may still refuse after a 202, releasing the
+// claim. A lookup error is unavailable, never accepted.
+func (a *NewsCollectAdmission) check(ctx context.Context, now time.Time) error {
+	if a == nil || a.invalid {
+		return ErrNewsCollectUnavailable
+	}
+	if end := a.window.end(now); !end.IsZero() {
+		return &NewsCollectWindowError{NextAllowedAt: end}
+	}
+	ctx, cancel := context.WithTimeout(ctx, newsCollectAdmissionTimeout)
+	defer cancel()
+	for _, arn := range []string{a.dailyARN, a.publicationARN} {
+		running, err := a.runs.Running(ctx, arn)
+		if err != nil {
+			// The cause carries no names, queries or URLs.
+			log.Printf("news collect admission lookup failed: %v", err)
+			return ErrNewsCollectUnavailable
+		}
+		if running {
+			return ErrNewsCollectBusy
+		}
+	}
+	return nil
+}
+
+// SetCollectAdmission injects the admission check; without one CollectNow is
+// ErrNewsCollectUnavailable.
+func (s *AccountNewsService) SetCollectAdmission(admission *NewsCollectAdmission) {
+	s.collectAdmission = admission
+}
+
 // SetCollectPublisher injects the NewsCollectRequested publisher; without one
 // CollectNow is ErrNewsCollectUnavailable.
 func (s *AccountNewsService) SetCollectPublisher(publish func(context.Context, model.NewsCollectRequested) error) {
@@ -103,7 +259,10 @@ func collectableAccountSource(src *model.CrawlerSource, accountID, sourceID stri
 // source must belong to the account by its ref and CONFIG (else ErrNotFound,
 // as for Update). The claim is one fenced transaction
 // (repository.ClaimAccountNewsCollect); the run itself is asynchronous and
-// bounded by the crawler.
+// bounded by the crawler. Between ownership and the hourly limit it checks
+// the starter's admission conditions (daily window, running daily or
+// publication run), so a non-member never learns the pipeline state and a
+// refusal claims and publishes nothing.
 func (s *AccountNewsService) CollectNow(ctx context.Context, userID, accountID, sourceID string) (*model.NewsCollectResponse, error) {
 	if !validNewsSourceID(sourceID) {
 		return nil, ErrInvalidInput
@@ -134,12 +293,15 @@ func (s *AccountNewsService) CollectNow(ctx context.Context, userID, accountID, 
 	if !collectableAccountSource(src, accountID, sourceID) {
 		return nil, ErrNotFound
 	}
-	now := s.now().UTC().Truncate(time.Second)
-	if err := collectLimit(src, now); err != nil {
-		return nil, err
-	}
 	if s.publishCollect == nil {
 		return nil, ErrNewsCollectUnavailable
+	}
+	now := s.now().UTC().Truncate(time.Second)
+	if err := s.collectAdmission.check(ctx, now); err != nil {
+		return nil, err
+	}
+	if err := collectLimit(src, now); err != nil {
+		return nil, err
 	}
 	requestID := uuid.NewString()
 	err = s.repo.ClaimAccountNewsCollect(ctx, accountID, userID, sourceID, requestID, now, now.Add(-newsCollectInterval))
@@ -147,8 +309,9 @@ func (s *AccountNewsService) CollectNow(ctx context.Context, userID, accountID, 
 	case errors.Is(err, repository.ErrAccountNewsAccess):
 		return nil, ErrForbidden // membership revoked before the commit
 	case errors.Is(err, repository.ErrConditionFailed):
-		// Gone/disabled (404) or claimed by a concurrent request (429).
-		current, readErr := s.crawler.GetSource(ctx, sourceID)
+		// Gone/disabled (404) or claimed by a concurrent request (429). The
+		// re-read is strongly consistent so it sees the refusing write.
+		current, readErr := s.crawler.GetSourceConsistent(ctx, sourceID)
 		if readErr != nil {
 			return nil, readErr
 		}

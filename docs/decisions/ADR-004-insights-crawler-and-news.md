@@ -72,7 +72,12 @@ surface another account's public article.
 Manual collection ("collect now") runs on the versioned publication path
 (owner decision, 2026-11-12) and only for account-owned (`acct_`) sources. Any
 current direct member may request it through `POST
-/api/accounts/{accountId}/news-sources/{sourceId}/collect`; the API claims the
+/api/accounts/{accountId}/news-sources/{sourceId}/collect`. After authorization
+and source ownership, the API first checks the starter's window and running
+conditions below (same window values; `states:ListExecutions` on the two state
+machines) and refuses with 409 `COLLECT_DAILY_WINDOW` or `COLLECT_BUSY`, or 503
+when it cannot check, without claiming. This check is advisory, so the starter
+remains the enforcement point. Otherwise the API claims the
 request in one transaction that checks the source ref, account and membership
 and sets the CONFIG's `lastCollectRequestedAt`/`lastCollectRequestId` only when
 no request was accepted in the last hour, then publishes `NewsCollectRequested`
@@ -127,7 +132,9 @@ articles a manual run published are skipped by later runs, rejected ones are
 evaluated again, and two overlapping runs reserving the same article fail the
 later reservation. The
 legacy `ttobak-crawler-news` source still contains its former manual branch, but
-no rule targets it any more; a follow-up change removes it.
+no rule targets it any more; a follow-up change removes it. With the route's
+admission check in place the web Collect now button is shown again; its copy
+says a 202 is an accepted request, not a started run.
 
 ### Evidence
 

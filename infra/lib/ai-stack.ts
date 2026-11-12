@@ -6,6 +6,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Construct } from 'constructs';
 import { RESEARCH_SFN_NAME } from './gateway-stack';
+import { NEWS_DAILY_STATE_MACHINE_NAME, NEWS_PUBLICATION_STATE_MACHINE_NAME, newsStateMachineArn } from './news-publication';
 import { DEFAULT_MODEL_CONFIGURATION, IMAGE_MODEL_ID, NEWS_MODEL_ID, extractionModelResources, ModelConfiguration, validateModelConfiguration } from './model-config';
 
 export interface AiStackProps extends cdk.StackProps {
@@ -199,6 +200,19 @@ export class AiStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions: ['states:StartExecution'],
         resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:${RESEARCH_SFN_NAME}`],
+      })
+    );
+
+    // "Collect now" admission (ADR-004): the API checks, as the manual starter
+    // does, whether the daily parent or a publication child is RUNNING. Read
+    // only, on exactly those two state machines, by name (no CrawlerStack
+    // reference).
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'SfnListNewsExecutions',
+        effect: iam.Effect.ALLOW,
+        actions: ['states:ListExecutions'],
+        resources: [NEWS_DAILY_STATE_MACHINE_NAME, NEWS_PUBLICATION_STATE_MACHINE_NAME].map(newsStateMachineArn),
       })
     );
 
