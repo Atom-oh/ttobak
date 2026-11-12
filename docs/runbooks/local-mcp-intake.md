@@ -619,12 +619,16 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   `incomplete`, `deferredIncomplete`, `accountMismatch`, `marked`,
   `unmarked`, `skipped`, `forbidden`, `invalidIds`, `ledgerReset`, `deferred`.
   Settings shows the counts also when the result is a failure code, with
-  `skipped`, `ambiguous`, `forbidden`, `incomplete`, `deferredIncomplete` and
-  `accountMismatch` only when non-zero.
+  `skipped`, `ambiguous`, `forbidden`, `incomplete`, `deferredIncomplete`,
+  `accountMismatch` and `deferred` only when non-zero.
 - **Time budget.** No new Account starts once the step has run 8 minutes
-  (`SFDC_CONTACTS_BUDGET_MS`); the rest count as `deferred` and follow on the
-  next run, and the result stays `ok`. This keeps the step, and its status
-  write, well inside the app's 20-minute run timeout.
+  (`SFDC_CONTACTS_BUDGET_MS`); the rest count as `deferred` and the result
+  stays `ok`. The step stores where it stopped (`sfdc-contacts/<scope>/resume.json`,
+  a TTOBAK Account ID only), and the next run starts after that Account, so
+  every Account is reached in turn; a full pass clears it. The budget only
+  stops a new Account from starting: an Account already begun may still take
+  several bounded MCP calls (each up to 120 seconds), so it usually, but not
+  provably, finishes before the app's 20-minute run timeout.
 - **Failures.** A failed page or a failed Account request becomes the step's
   `result` while later Accounts still run, so `intake run` reports
   `PARTIAL_FAILURE`; the SFDC sources keep their own result.

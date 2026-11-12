@@ -165,8 +165,8 @@ test('sfdcContacts row has its label and a counts summary', () => {
   assert.equal(rows[0].label, 'SFDC 연락처');
   assert.equal(rows[0].counts, '가져옴 30 · 생성 4 · 보강 2 · 빠짐 1 · 복귀 0');
   const problems = plain(intake.sourceRows({ sfdcContacts: { result: 'ok', counts: { fetched: 3, created: 1, filled: 0,
-    marked: 0, unmarked: 0, skipped: 2, ambiguous: 1, forbidden: 0, incomplete: 1, deferredIncomplete: 2, accountMismatch: 1 } } }, []));
-  assert.equal(problems[0].counts, '가져옴 3 · 생성 1 · 보강 0 · 빠짐 0 · 복귀 0 · 건너뜀 2 · 애매함 1 · 불완전 1 · 다음 실행으로 미룸 2 · 계정 불일치 1');
+    marked: 0, unmarked: 0, skipped: 2, ambiguous: 1, forbidden: 0, incomplete: 1, deferredIncomplete: 2, accountMismatch: 1, deferred: 3 } } }, []));
+  assert.equal(problems[0].counts, '가져옴 3 · 생성 1 · 보강 0 · 빠짐 0 · 복귀 0 · 건너뜀 2 · 애매함 1 · 불완전 1 · 다음 실행으로 미룸 2 · 계정 불일치 1 · 시간 초과로 미룬 계정 3');
   const partial = plain(intake.sourceRows({ sfdcContacts: { result: 'TTOBAK_UNAVAILABLE', counts: { fetched: 5, created: 2,
     filled: 1, marked: 0, unmarked: 0, forbidden: 1 } } }, []));
   assert.equal(partial[0].result, 'TTOBAK_UNAVAILABLE');

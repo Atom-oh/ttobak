@@ -496,6 +496,24 @@ function readLedger(store: IntakeStore | undefined, scope: string | undefined, a
   }
 }
 
+/** Where a budget-limited run stopped: the next run starts after this TTOBAK Account (IDs only). */
+interface ResumePoint { version: 1; after: string | null }
+
+function resumePath(scope: string): string[] {
+  return ['sfdc-contacts', scope, 'resume.json'];
+}
+
+/** Accounts in ID order, rotated to start after the stored resume point, so deferred ones go first. */
+function rotated<T>(accounts: Map<string, T>, store: IntakeStore | undefined, scope: string | undefined): [string, T][] {
+  const entries = [...accounts];
+  if (!store || !scope) return entries;
+  let after: unknown = null;
+  try { after = store.read<ResumePoint>(...resumePath(scope))?.after ?? null; } catch { after = null; }
+  if (typeof after !== 'string') return entries;
+  const start = entries.findIndex(([id]) => id > after);
+  return start <= 0 ? entries : [...entries.slice(start), ...entries.slice(0, start)];
+}
+
 // ---------- orchestration ----------
 
 export interface SfdcContactsOptions {
@@ -530,10 +548,14 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
     const mappings = await mappedAccounts(api);
     counts.invalidIds += mappings.invalidIds;
     let index = 0;
-    for (const [accountId, group] of mappings.accounts) {
-      // Out of time: the remaining Accounts follow on the next run, and the result stays ok.
-      if (now() - startedAt >= budgetMs) { counts.deferred = mappings.accounts.size - index; break; }
+    let last: string | null = null;
+    const order = rotated(mappings.accounts, store, scope);
+    for (const [accountId, group] of order) {
+      // Out of time: the next run starts after the last Account begun here, so every Account is
+      // reached in turn; the result stays ok and `deferred` is shown in Settings.
+      if (now() - startedAt >= budgetMs) { counts.deferred = order.length - index; break; }
       index++;
+      last = accountId;
       counts.accounts++;
       let current: ExistingContact[];
       try { current = await existingContacts(api, accountId, counts); } catch (error) {
@@ -612,6 +634,11 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
           fail('STORE_INVALID');
         }
       }
+    }
+    if (!dryRun && store && scope) {
+      // A finished pass clears the resume point; a deferred one records where it stopped.
+      const point: ResumePoint = { version: 1, after: counts.deferred ? last : null };
+      try { store.write(point, ...resumePath(scope)); } catch { fail('STORE_INVALID'); }
     }
   } catch (error) {
     if (intakeCode(error) === 'AUTH_EXPIRED_MIDWAY') throw error;
