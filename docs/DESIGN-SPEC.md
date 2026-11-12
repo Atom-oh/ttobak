@@ -84,7 +84,7 @@ for viewport evidence and remaining design recommendations.
 | Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents. The members table shows an owner-only "Transfer owner" button on each non-owner row with a `userId` (never on pending rows or for AM/inherited viewers); it confirms with the target email and the note that the previous owner becomes SA, calls `POST /api/accounts/{id}/owner-transfer`, reloads, and maps 409 to a refresh-and-retry message. The Account Owner also sees a "merge into another Account" action (`AccountMergeDialog`, ADR-022): it picks a target from directly editable Accounts (never the source), calls `GET merge-preview`, and shows move counts (`-1` means capped), the categories that do not move (billing is marked as not checkable), the CLI-only categories (labelled as rows an operator moves with the CLI after the merge) and who gains access. Start stays disabled until the unmoved-items checkbox is checked and never fires unconfirmed. Progress polls `GET merge` every 5 s (doubling after failed polls, 30 s cap) and stops on `done`, `failed` or `aborted`; failure codes map to plain Korean copy, a failed or stalled job offers retry (`POST merge` again to resume), and an operator-aborted job shows that moved items stay on the target, with no retry. A merging Account (`mergingInto`) shows a read-only banner, hides write controls and keeps a progress link for the Owner; a tombstone (`mergedInto`) stays read-only with a banner linking to the target, so its unmoved categories remain reachable; writes answered with 409 `ACCOUNT_MERGING` show a merge-specific message. |
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | Insights news | InsightsList, InsightsTableView, insights/NewsOrigin, `lib/newsOrigin.ts`: news cards and table rows keep publisher and date and add, only when the optional fields exist, a text kind badge (Common, or the customer name linked to `/accounts/{id}`, with a generic customer label when the name is missing), the registered source name, the matched search query and a relevance percentage from a `qualityScore` above 0 and at most 1 (the API sends 0 when no score is stored, so 0 shows nothing). Long values truncate with the full text in `title`. An All / Grouped switch (`aria-pressed`; per-browser storage guarded by try/catch; flat by default) groups the loaded page only: Common first, then customers sorted by Korean-aware name, each heading counted as items on this page. Pagination, totals and filters are unchanged. The source filter prefers a document's `sourceName` label. A Scope select (All, Common, All customers, then customers from up to three directory pages) sets `kind`/`account` on `GET /api/insights` and resets to page 1. It renders only after `GET /api/news-sources` succeeded this session (they ship together); otherwise nothing is sent and the scope resets to All, as it does when a settled reload no longer lists the chosen customer. Tech and research tabs are unchanged |
-| Insights news sources | insights/NewsSourcesManager, `lib/newsRegistration.ts`: opened by the news tab's Manage news sources button or `/insights?tab=news&sources=1[&account={id}]` (no new route). A radio group picks customer-only (that customer's members see it; customer from the user's direct accounts, name prefilled until typed; account news-source create) or common (every signed-in user; name, terms, aliases, custom URLs via the Settings add request, no AWS services). Common registration first loads the caller's subscriptions and, if the name normalizes (port of `normalizeSourceID`) to one, links to Settings instead of submitting, since the add would replace that subscription (best effort; a failed load blocks the submit). The list pages `GET /api/news-sources` (`limit`/`cursor` only, More button, generation-tagged responses) with kind badge, terms (marked when cut), last collection and count. Customer rows edit inline from the full per-account source, one term per line, sending only fields whose text changed, after a warning that older articles may drop out; common rows link to Settings. Removal uses an in-row confirmation; 404 shows an explanatory empty state; errors are Korean text. Customer rows also have a Collect now button (`lib/newsCollect.ts`), disabled while in flight, after an accepted request until the list reloads, and while `nextCollectAllowedAt` (or a 429's `nextAllowedAt`) is in the future, with a secondary line naming that time and a timer that re-enables it (no polling). A 202 shows an inline confirmation and keeps the button disabled until the response's next allowed time, without reloading the list (a reload would remount the row and drop the message); 404 reloads it, other failures show a retry line; one line under the list heading states the hourly and roughly 40-article limits. Only after the customer's source list has loaded successfully and is empty, the account detail news block offers a one-click start that creates a customer-only source named after the customer with no terms (the server defaults to the account name and aliases; a name over 200 code points is cut and also sent as the term), beside the registration link. A failed load never offers it. Account detail and Settings link here |
+| Insights news sources | insights/NewsSourcesManager, `lib/newsRegistration.ts`: opened by the news tab's Manage news sources button or `/insights?tab=news&sources=1[&account={id}]` (no new route). A radio group picks customer-only (that customer's members see it; customer from the user's direct accounts, name prefilled until typed; account news-source create) or common (every signed-in user; name, terms, aliases, custom URLs via the Settings add request, no AWS services). Common registration first loads the caller's subscriptions and, if the name normalizes (port of `normalizeSourceID`) to one, links to Settings instead of submitting, since the add would replace that subscription (best effort; a failed load blocks the submit). The list pages `GET /api/news-sources` (`limit`/`cursor` only, More button, generation-tagged responses) with kind badge, terms (marked when cut), last collection and count. Customer rows edit inline from the full per-account source, one term per line, sending only fields whose text changed, after a warning that the source's earlier articles disappear from lists for good (readers list only articles published under the current source configuration, and published articles are not republished); common rows link to Settings. Removal uses an in-row confirmation; 404 shows an explanatory empty state; errors are Korean text. The Collect now button described next is hidden (`COLLECT_NOW_AVAILABLE` is false) because the deployed crawler runs with legacy writes off and the manual collection worker does nothing there. Customer rows also have a Collect now button (`lib/newsCollect.ts`), disabled while in flight, after an accepted request until the list reloads, and while `nextCollectAllowedAt` (or a 429's `nextAllowedAt`) is in the future, with a secondary line naming that time and a timer that re-enables it (no polling). A 202 shows an inline confirmation and keeps the button disabled until the response's next allowed time, without reloading the list (a reload would remount the row and drop the message); 404 reloads it, other failures show a retry line; one line under the list heading states the hourly and roughly 40-article limits. Only after the customer's source list has loaded successfully and is empty, the account detail news block offers a one-click start that creates a customer-only source named after the customer with no terms (the server defaults to the account name and aliases; a name over 200 code points is cut and also sent as the term), beside the registration link. A failed load never offers it. Account detail and Settings link here |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
 | Settings | Mac app install (`MacAppInstall`, section `#mac-app`), integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
@@ -158,6 +158,32 @@ asks the user to retry after the recording when work is in progress. Copy is Kor
 `update.rs` and the page for exact strings. No popup appears while recording, finalizing or
 uploading.
 
+The record page links a recording to the ongoing customer meeting
+(`useCalendarAutoLink`, `lib/ongoingEvent.ts`). Only at recording start (never on
+mount), if no Account was set by the URL, an MCP start request or the user, it reads
+calendar events for one hour either side of now without blocking the start.
+It follows at most five calendar pages (`readOngoingEvents`) and links nothing if a
+cursor remains. Each lookup carries a generation that stop, failure, return to idle,
+a leftover upload or a newer start advances; a late result applies nothing.
+Upload mode never auto-links, and switching to it drops an auto link. A Mac
+leftover upload drops an auto link and its auto-filled title (`dropAutoLink`)
+before creating its draft.
+`ongoingEventFor` picks a timed event with `startsAt - 10 min <= now < endsAt`,
+preferring events with an `accountId` and then the closest start; a tie between
+different Accounts links nothing. The Account must be in the user's direct, editable
+Account list. The page then sets the Account (and the title, only if still empty) and
+shows an `AutoLinkChip` with a change button that clears the link for the rest of
+the page session and reverts the auto-filled title unless it was edited; once a draft is bound to that Account the button is hidden and
+RecordingLinkControls switches Accounts. During a recording the link goes through
+`changeRecordingAccount`; the change button waits only while a link request is in
+flight and is hidden while a draft is created or a stopped browser recording finalizes. A choice made before the draft exists stays local (replaceable or clearable)
+until save links it. The hook owns the Account and title it filled (subject trimmed
+to 200 code points) until someone changes them; a user or MCP choice (MCP releases
+before writing its own), a new start, a leftover upload or settling back to idle
+without a save clears whatever it still owns. Browsing ReferencePanel while
+auto-linked keeps the chip and title. Creation still validates membership; calendar or Account
+failures show nothing.
+
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
 the app detects a meeting, and after that meeting ends during a native recording
 counts down 30 seconds before stopping and uploading, with keep recording and stop
@@ -171,6 +197,11 @@ warning when the CLI LaunchAgent is also installed, per-source status, setup wit
 private-calendar consent and skip toggles, sync options (calendar responses
 to sync and the SFDC contacts switch, when the app build reports them), run
 now, login, cancel and a live progress log. A failed state read shows a one-line error. 
+`SkillPackageSettings` (browser and app) shows the org and personal skill package
+versions, the effective skill list with an org or personal badge, personal zip
+upload and delete, and for admins org zip upload and the version list with
+rollback (the admin gate is cosmetic; the API enforces it). Validation failures
+show fixed Korean copy per rule plus the rule's detail only.
 In Mic mode, `MicSelector` remembers the chosen device; when that device no
 longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
 rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
@@ -424,7 +455,13 @@ previous brief under a per-error-code message with retry; POST 409 polls, 503
 shows the generic failure. Sections render in order and are omitted when empty:
 next meeting, one-line situation, since the last meeting, recent news with a
 "why it matters" line, questions to ask, unfamiliar terms with an in/not in
-dictionary text badge. The footer shows the generation time (relative within a
+dictionary text badge. A term not in the dictionary has an add action that
+creates it as a manual term in this customer's Account layer through the
+existing layer term endpoint, bound to the signed-in user. If the term already
+exists, an active row counts as added and a suggested row is activated with its
+version; a full dictionary, a refused write or a term the server cannot accept
+is stated in one line. The action is keyed by the term, so a regenerated brief
+does not inherit another term's state. The footer shows the generation time (relative within a
 day; invalid times show nothing) and a regenerate button. Every statement lists
 source chips with a kind word and a CSS-truncated label (full text in `title`);
 meeting chips link to the meeting and news chips to `/insights/{sourceId}/{docHash}`
@@ -819,7 +856,10 @@ shows a hint). It takes a period (this week, this quarter, this year, custom
 start/end of at most 400 days, ending no more than two calendar years ago) and four highlight lists, one item per line,
 prefilled from the newest stored report of the same period kind and checked
 like the Mac runner before `report_generate`. An advanced section holds the
-Bedrock toggle and AWS profile picker (`report_settings_get/set`). While a run
+Bedrock toggle and AWS profile picker (`report_settings_get/set`) and, in an app
+build that reports exclusions, a Slack channel checklist (posts in the last 90
+days, unchecked means excluded, stale exclusions stay listed) with a refresh
+button (`report_slack_channels_refresh`). While a run
 goes, the dialog shows elapsed time, progress lines and Cancel; closing it keeps
 the run going. A successful `report://finished` reloads the list and opens the
 new report; a failure shows the Korean label of its code (report labels, then the shared runner labels). The report tab stays
@@ -880,6 +920,17 @@ Follow-up documents are private snapshots built from bounded saved note/summary
 reads and current action items. Creating a document does not publish it to a team.
 Project linking and account sharing remain explicit operations with server-side
 permissions. Owner-only association controls are hidden from shared viewers.
+
+## Upcoming meetings
+
+`UpcomingMeetings` lists customer meetings first in the workspace views: a timed
+event with an `accountId` is a customer meeting, everything else, including every
+all-day event, is internal (`partitionCustomerEvents` in `lib/calendarDisplay.ts`,
+start-time order kept). Internal events sit under a toggle labelled with their count (`internalEventsToggleLabel`),
+collapsed by default and remembered per browser in `localStorage`
+(`ttobak-calendar-internal-collapsed`). A customer event shows its Account name as a
+chip only when an already loaded Account list has it. The Account page lists events
+ungrouped, since they all belong to that Account.
 
 ## SpecReq task strip
 

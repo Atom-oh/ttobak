@@ -2,7 +2,7 @@
 
 - Status: Accepted. Merges earlier records; each section below keeps one record's
   rules, and dates inside mark owner decisions.
-- Implementation checked: 2026-11-11.
+- Implementation checked: 2026-11-12.
 
 A shared daily crawl feeds the insights knowledge base; results pass a relevance gate and can be curated; versioned news publication is a separate, conditional pipeline. The sections below keep, in order, the crawler insights record, the pipeline repair and service discovery record, the relevance gate and curation record, and the conditional news publication record.
 
@@ -84,18 +84,33 @@ ID grammar (`INVALID_REQUEST` otherwise, with nothing written), then refuses
 before its own claim with: the publication handlers' activation gate
 (`PIPELINE_DISABLED`, `LEGACY_WRITER_ENABLED`) and pricing check
 (`INVALID_PRICING`); `DAILY_WINDOW` from the child timeout (45 minutes) before
-the daily schedule until it (18:25 to 19:10 UTC; hour, minute and lead come from
-the CDK schedule and timeout, and missing values refuse as
+the daily schedule until a 15-minute grace after it, for a delayed daily start
+(18:25 to 19:25 UTC; hour, minute, lead and grace come from the CDK schedule and
+constants, wrap at midnight, and missing values refuse as
 `INVALID_CONFIGURATION`); `DAILY_RUNNING` while `ttobak-news-daily` runs; and
-`RUN_IN_PROGRESS` while any `ttobak-news-publication` child runs. Discovery has
-reserved concurrency 1 and no invoke retries, so an overlapping run would be
-throttled at discovery before it creates a run row. Each of these refusals is
-not the request's fault: it releases the API's claim (conditionally removes
-both attributes for this request ID, only while not started) so the member can
-ask again, and writes one `COLLECTREFUSAL#{requestId}` item under the source
-(request ID, code, time, 400-day `pendingShareExpiresAt`) that no history or
-document reader matches; a failed release condition writes no receipt, and
-release or receipt errors are logged, not raised. Then one conditional claim on
+`RUN_IN_PROGRESS` while any `ttobak-news-publication` child runs. The last two
+are cost and fairness guards, so a manual run does not queue behind or inside
+the daily batch. Correctness against discovery's single reserved slot comes
+from the child workflow, which this change modifies with one retry policy on
+`DiscoverArticles`: only `Lambda.TooManyRequestsException`, every 30 seconds
+(backoff 1) for up to 24 attempts, 12 minutes in total, more than one full
+600-second discovery, and with that discovery still inside the 45-minute child
+timeout. A throttled invocation never ran, so the retry has no side effects and
+cannot charge twice; no other error or task is retried. A daily child that
+meets a running manual discovery therefore waits instead of failing, and so
+does a manual run that meets a daily one. What remains: if the daily start is
+delayed past the grace and no daily execution exists yet, a manual run can
+start, and the daily children then wait for the slot and start later. Each
+refusal above is not the request's fault: it releases the API's claim
+(conditionally removes both attributes for this request ID, only while not
+started) so the member can ask again, and writes one
+`COLLECTREFUSAL#{UTC second}#{requestId}` item under the source (request ID,
+code, time, 400-day `pendingShareExpiresAt`) that no history or document reader
+matches. Because each release lets the member ask again, at most one receipt per
+source is written per five minutes (one consistent newest-first Query on that
+prefix); later refusals in that interval still release. A failed release
+condition writes no receipt, and release, query or receipt errors are logged,
+not raised. Then one conditional claim on
 the CONFIG row (event account, non-disabled, non-operator source, the API's
 `lastCollectRequestId`, not yet started) sets
 `lastCollectStartedRequestId`/`lastCollectStartedAt`; its refusals do no work.
@@ -110,14 +125,9 @@ relevance gate and publication rules, the shared $25 monthly source budget,
 finalization, HISTORY receipt and scheduled recovery. Against the daily run:
 articles a manual run published are skipped by later runs, rejected ones are
 evaluated again, and two overlapping runs reserving the same article fail the
-later reservation. A residual race is unmitigated: a daily child or another run
-can begin in the seconds between the starter's checks and its run's discovery.
-The later discovery is then throttled; if it is the manual run, the request is
-spent with no run and no receipt; if it is a daily child, that source fails for
-the day. Retrying discovery on throttling in the child workflow would close it,
-but changes the publication workflow and needs its own release acceptance. The
-legacy `ttobak-crawler-news` manual branch was removed; it refuses a stray
-`manualCollect` event without writing.
+later reservation. The
+legacy `ttobak-crawler-news` manual branch was removed; that function refuses a
+stray `manualCollect` event without writing.
 
 ### Evidence
 
@@ -337,6 +347,19 @@ After activation, rollback must retain these publication-aware API/QA readers an
 the tombstone-preserving writer. Disable and drain writer executions before a
 writer rollback; never restore a reader that exposes `DELETED` rows. Record the
 minimum deployed reader/writer revisions in the activation acceptance record.
+
+2026-11-12: the versioned worker writes `matchedTerm` on search DOC rows. Discovery
+records the human term of the first query that found a URL (the query builder's
+quote marks removed, one line, at most 200 code points, otherwise omitted);
+near-duplicate grouping keeps the lead's term. Custom-URL rows never carry it,
+and an absent or invalid value writes nothing rather than failing publication.
+The field is display metadata outside `candidateId`, `documentHash`, the source
+revision, claims and cost budgets; it is part of the deterministic published row,
+so a same-attempt retry keeps the same completion digest. Readers already project
+it and tolerate its absence, so the change is additive and needs no reader-first
+ordering. The legacy writer's copy in `news_crawler.py` is inert while
+`NewsLegacyWrites=off`. Deployed acceptance is recorded separately in the
+[release contract](../runbooks/knowledge-grade-news-release.md#search-term-display-field-2026-11-12).
 
 The source fingerprint is repeated in Go with fixed crawler-produced vectors
 covering Korean, supplementary Unicode, U+2028/U+2029, literal escape sequences,

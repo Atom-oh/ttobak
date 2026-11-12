@@ -368,7 +368,7 @@ class RoleExecutionTests(unittest.TestCase):
         def issue(*args):
             nonce, prompt, payload = original(*args)
             if len(args) > 2 and args[2] is not None:
-                prompt += "x" * self.runner.MAX_REQUEST_BYTES
+                prompt += "x" * self.runner.MAX_ARGV_BYTES
             return nonce, prompt, payload
         with patch.dict(os.environ, PANEL_RETRIES="2"), \
                 patch.object(self.runner, "execute", return_value=(0,json.dumps(response),"")) as execute, \
@@ -381,10 +381,10 @@ class RoleExecutionTests(unittest.TestCase):
         work, startup, response = self.prepared_kiro()
         response["checks"] = [{}]
         def execute(command, cwd, environment, input_text, timeout):
-            role_review.MAX_REQUEST_BYTES = len(command[2].encode()) + 1
+            role_review.MAX_ARGV_BYTES = len(command[2].encode()) + 1
             return 0, json.dumps(response), ""
         with patch.dict(os.environ, PANEL_RETRIES="2"), \
-                patch.object(role_review, "MAX_REQUEST_BYTES", role_review.MAX_REQUEST_BYTES), \
+                patch.object(role_review, "MAX_ARGV_BYTES", role_review.MAX_ARGV_BYTES), \
                 patch.object(self.runner, "execute", side_effect=execute) as provider:
             self.runner.run(work, "kiro-fable", startup)
         self.assertEqual(provider.call_count, 1)

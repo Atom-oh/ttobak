@@ -433,6 +433,7 @@ test('browser restoration does not inherit a failed recording project selection'
   const published = fixtureState.states.filter(value => value && typeof value === 'object' && 'projectIds' in value);
   assert.deepEqual(plain(published.at(-1)), {
     accountId: 'restored-account', boundAccountId: 'restored-account', projectIds: [], linkedProjectIds: [],
+    accountLinkInFlight: false, accountUncertain: false,
   });
 });
 
@@ -593,4 +594,43 @@ test('an applied restore retires its deltas so a second restore cannot replay th
   await fixtureState.hook.handleNotesSubmit('');
   assert.equal(fixtureState.calls.slice(before).some(([kind]) => kind === 'unlinkProject'), false);
   assert.equal(fixtureState.serverProjects.has('old'), true);
+});
+
+test('an Account chosen before the draft exists stays a local, changeable choice until save links it', async () => {
+  const links = f => f.states.filter(value => value && typeof value === 'object' && 'projectIds' in value).at(-1);
+  const linked = fixture({ initialAccount: '' });
+  const draft = linked.hook.createDraftMeeting();
+  await linked.hook.changeRecordingAccount('auto-acc');
+  assert.equal(await draft, 'm1');
+  assert.equal(links(linked).accountId, 'auto-acc');
+  assert.equal(links(linked).accountLinkInFlight, false, 'nothing in flight: the choice can still change');
+  await linked.stopAndSave();
+  assert.deepEqual(linked.calls.filter(([kind]) => kind === 'linkAccount'), [['linkAccount', 'm1', 'auto-acc']]);
+
+  const cleared = fixture({ initialAccount: '' });
+  const clearedDraft = cleared.hook.createDraftMeeting();
+  await cleared.hook.changeRecordingAccount('auto-acc');
+  await clearedDraft;
+  await cleared.hook.changeRecordingAccount('');
+  assert.ok(!cleared.states.includes('이미 연결된 고객은 해제할 수 없습니다. 다른 고객으로 변경할 수 있습니다.'));
+  assert.equal(links(cleared).accountId, undefined);
+  await cleared.stopAndSave();
+  assert.deepEqual(cleared.calls.filter(([kind]) => kind === 'linkAccount'), [], 'a cleared deferred choice is never linked');
+});
+
+test('clearing is refused only while a link request is in flight', async () => {
+  const pending = deferred();
+  const f = fixture({ initialAccount: '', accountGate: () => pending.promise });
+  await f.hook.createDraftMeeting();
+  const link = f.hook.changeRecordingAccount('auto-acc');
+  await new Promise(resolve => setImmediate(resolve));
+  const published = f.states.filter(value => value && typeof value === 'object' && 'projectIds' in value);
+  assert.equal(published.at(-1).accountLinkInFlight, true);
+  await f.hook.changeRecordingAccount('');
+  assert.ok(f.states.includes('이미 연결된 고객은 해제할 수 없습니다. 다른 고객으로 변경할 수 있습니다.'));
+  pending.resolve();
+  await link;
+  const settled = f.states.filter(value => value && typeof value === 'object' && 'projectIds' in value).at(-1);
+  assert.equal(settled.accountLinkInFlight, false);
+  assert.equal(settled.boundAccountId, 'auto-acc');
 });

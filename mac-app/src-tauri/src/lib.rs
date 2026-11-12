@@ -835,12 +835,14 @@ pub fn run() {
             intake_runner::intake_cancel,
             intake_runner::intake_check_adapter,
             intake_runner::intake_update_adapter,
+            intake_runner::intake_refresh_path,
             intake_runner::intake_set_options,
             report_runner::report_generate,
             report_runner::report_cancel,
             report_runner::report_get_state,
             report_runner::report_settings_get,
             report_runner::report_settings_set,
+            report_runner::report_slack_channels_refresh,
         ])
         .setup(|app| {
             // Caption translation; failure only disables it.

@@ -3,7 +3,8 @@ import { Template } from 'aws-cdk-lib/assertions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import {
-  NEWS_CHILD_TIMEOUT, NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC, NewsPublication,
+  NEWS_CHILD_TIMEOUT, NEWS_DAILY_GRACE, NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC,
+  NEWS_DISCOVERY_TIMEOUT, NewsPublication,
 } from '../lib/news-publication';
 
 // Resolve only the token shapes used by this isolated template, without a
@@ -275,13 +276,14 @@ describe('private news publication release', () => {
     expect(dailyRule.Properties.ScheduleExpression)
       .toBe(`cron(${NEWS_DAILY_MINUTE_UTC} ${NEWS_DAILY_HOUR_UTC} * * ? *)`);
     expect(definition.TimeoutSeconds).toBe(NEWS_CHILD_TIMEOUT.toSeconds());
-    expect([env.NEWS_DAILY_HOUR_UTC, env.NEWS_DAILY_MINUTE_UTC, env.NEWS_DAILY_LEAD_SECONDS])
-      .toEqual([NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC, NEWS_CHILD_TIMEOUT.toSeconds()].map(String));
+    expect([env.NEWS_DAILY_HOUR_UTC, env.NEWS_DAILY_MINUTE_UTC, env.NEWS_DAILY_LEAD_SECONDS,
+      env.NEWS_DAILY_GRACE_SECONDS]).toEqual([NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC,
+      NEWS_CHILD_TIMEOUT.toSeconds(), NEWS_DAILY_GRACE.toSeconds()].map(String));
     const statements = resources.filter(r => r.Type === 'AWS::IAM::Policy'
       && r.Properties.Roles.some((role: any) => role.Ref === roleId))
       .flatMap(p => p.Properties.PolicyDocument.Statement);
     const actions = statements.flatMap(s => Array.isArray(s.Action) ? s.Action : [s.Action]).sort();
-    expect(actions).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+    expect(actions).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem',
       'logs:CreateLogStream', 'logs:PutLogEvents', 'states:ListExecutions', 'states:StartExecution']);
     const byAction = (action: string) => statements.find(s =>
       (Array.isArray(s.Action) ? s.Action : [s.Action]).includes(action));
@@ -294,6 +296,28 @@ describe('private news publication release', () => {
       Null: { 'dynamodb:LeadingKeys': 'false' },
     });
     expect(Object.keys(env).filter(k => /GATEWAY|MODEL|BUCKET/.test(k))).toEqual([]);
+  });
+
+  test('discovery retries only a throttle, long enough to outlast one discovery', () => {
+    const retry = definition.States.DiscoverArticles.Retry;
+    expect(retry).toEqual([{
+      ErrorEquals: ['Lambda.TooManyRequestsException'],
+      IntervalSeconds: 30, BackoffRate: 1, MaxAttempts: 24,
+    }]);
+    const wait = retry[0].IntervalSeconds * retry[0].MaxAttempts;
+    const discoveryFn = resources.find(r => r.Properties?.Handler === 'news_runtime.discover_handler');
+    expect(discoveryFn.Properties.Timeout).toBe(NEWS_DISCOVERY_TIMEOUT.toSeconds());
+    expect(wait).toBeGreaterThan(NEWS_DISCOVERY_TIMEOUT.toSeconds());
+    // Worst-case wait plus one full discovery stays inside the child timeout.
+    expect(wait + NEWS_DISCOVERY_TIMEOUT.toSeconds()).toBeLessThan(definition.TimeoutSeconds);
+    const states = (graph: any): [string, any][] => Object.entries(graph.States)
+      .flatMap(([name, state]: [string, any]) => [[name, state] as [string, any],
+        ...(state.ItemProcessor ? states(state.ItemProcessor) : [])]);
+    expect(states(definition).filter(([, state]) => state.Retry).map(([name]) => name))
+      .toEqual(['DiscoverArticles']);
+    const daily = resources.find(r => r.Properties?.StateMachineName === 'ttobak-news-daily');
+    expect(states(JSON.parse(resolved(daily.Properties.DefinitionString)))
+      .filter(([, state]) => state.Retry)).toEqual([]);
   });
 
   test('daily children are serialized, deduplicated and isolated from sibling failures', () => {
@@ -472,7 +496,9 @@ describe('private news publication release', () => {
     expect(prepare.Parameters.discovery.candidates).toBeUndefined();
     expect(prepare.Parameters.discovery['sourceRevision.$']).toBe('$.sourceRevision');
     const tasks = states.filter(s => s.Type === 'Task');
-    expect(tasks.every(s => s.Retry === undefined)).toBe(true);
+    // Only discovery retries, and only a throttle (see the retry test).
+    expect(tasks.slice(1).every(s => s.Retry === undefined)).toBe(true);
+    expect(tasks[0].Retry.map((r: any) => r.ErrorEquals)).toEqual([['Lambda.TooManyRequestsException']]);
     expect(tasks[0].Parameters).toMatchObject({
       'sourceId.$': '$.sourceId', 'runId.$': '$$.Execution.Name',
     });

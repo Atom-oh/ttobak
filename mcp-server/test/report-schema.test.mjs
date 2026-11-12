@@ -145,7 +145,7 @@ test('allowlist_is_read_only', () => {
     assert.doesNotMatch(name, writes, rule);
     assert.ok(!rule.includes('mcp_stdio'), rule);
     assert.ok(!/^mcp__.*\*/.test(rule), `no wildcard MCP rule: ${rule}`);
-    if (name === 'Bash') assert.match(rule, /^Bash\(python3 -I \/s\/skill\/scripts\/(calendar_count|extract_tool_json|slack_threads)\.py:\*\)$/);
+    if (name === 'Bash') assert.match(rule, /^Bash\(python3 -I \/s\/skill\/scripts\/(calendar_count|extract_tool_json|slack_threads|interview_count|pfr_ci_summary)\.py:\*\)$/);
     // File tools only inside the skill, run and session directories.
     if (['Read', 'Glob', 'Grep'].includes(name)) assert.ok(readDirs.some(dir => rule === `${name}(/${dir}/**)`), rule);
   }

@@ -7,7 +7,9 @@ commands from Settings and the SA activity page ([Mac app](#mac-app)); the
 command line stays available. Acceptance on the user's Mac is pending; nothing here proves it.
 
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
-contract for one reader, `aws-outlook-mcp` `calendar_view`. The
+contract for one reader, `aws-outlook-mcp` `calendar_view`. It also proposes
+candidate accounts for account-shared calendars (see
+[Account matching](#account-matching)). The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
 SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md),
 and its [contacts step](#sfdc-contacts-step) syncs customer contacts into the
@@ -20,14 +22,18 @@ The Mac app runs the adapter for you: a Settings section (copy key
 a browser and in an app build without intake. The app spawns `node` with an
 argument list (no shell) and a cleared environment: `HOME`, `LANG` and a `PATH`
 taken once from the login shell (`$SHELL -l -c`), with the node directory
-prepended. Nothing else from your shell reaches the run.
+prepended. On every use the app appends `~/.toolbox/bin`, `~/.aim/mcp-servers`
+and `~/.local/bin` when they exist and are missing, so the AIM wrappers find
+`aim` even when only `~/.zshrc` adds it; `intake_refresh_path` recaptures the
+login PATH. Nothing else from your shell reaches the run.
 
 Install and update the adapter:
 
 - The adapter is `~/.ttobak/server.mjs`. Settings shows whether it is present and
   whether a newer one is available; the update button downloads
   `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (https only, no redirects, at
-  most 8 MiB, must contain `intake setup`).
+  most 8 MiB, must contain `intake setup`) and always reports whether it replaced
+  the file or it was already current.
 - One `server.mjs.bak` keeps the replaced file. `server.mjs` changes only by an
   atomic rename, so it is never missing.
 - An update is refused while a run is going (`RUN_IN_PROGRESS`), and a run
@@ -105,6 +111,47 @@ Codes shown in the app, and what to do:
 If the state cannot be read, the section shows a one-line error instead of the
 controls. Acceptance on a real Mac is still pending.
 
+## Skill packages: `ttobak-mcp setup plan|apply`
+
+An app build with the one-click setup (`setup_start`) runs `setup apply` after
+PATH repair and the adapter update; both commands also work in a terminal. Packages come only from TTOBAK
+(`GET /api/skill-packages`, API-SPEC "Skill packages"): the org package for
+everyone and an optional personal package that replaces org skills of the same
+name. Server lists are unioned.
+
+- `setup plan` writes nothing and reports what `apply` would change.
+- `setup apply [--approve <key>]...` downloads each zip, checks its sha256
+  against TTOBAK's record, validates it again (`src/setup/package.ts`, the
+  server's rules), then, using only the server lists of those validated zips
+  (the API's merged copy is display data):
+  - installs each effective skill into `~/.claude/skills/<name>/` only when its
+    files differ, after copying the old folder to
+    `~/.claude/skills-backup/<name>-<YYYYMMDD-HHMMSS>/`. Files the package lacks
+    are kept; a link as the skills root, the skill folder or on the path of a
+    written file stops the step (`SKILL_PATH_UNSAFE`).
+  - installs missing MCP servers with fixed commands (no shell):
+    `toolbox registry add`, `toolbox install` plus `claude mcp add -s user <name>
+    -- <name>`, `aim mcp install --clients claude-code` and `claude mcp add -s user
+    -t http`. Presence comes from `toolbox registry list`, `toolbox list
+    --installed`, `~/.claude.json` `mcpServers` and `~/.aim/config.json`
+    `toolBundles`. A registry, server or URL never approved on this Mac is
+    reported in `needsApproval` (keys such as `aim:slack-mcp`) and installed only
+    when passed back with `--approve` (up to 400 keys; approved items run while
+    others still wait, and waiting items are listed even when an install failed;
+    without aim each AIM item first runs `toolbox install aim`, once); approvals live in
+    `~/.ttobak/setup/approvals.json` (0600).
+- Without toolbox, aim or claude the work they would do is listed under
+  `TOOLBOX_MISSING` (the step is skipped when nothing else ran); a
+  missing `~/.midway/cookie` or an authentication failure stops it with
+  `AUTH_EXPIRED_MIDWAY` (`mwinit -o`). Nothing from a package is executed, and
+  installed skills or servers are never removed.
+- A report skill whose data-sources name tools the report run does not allow
+  produces a warning; the allowlist changes only by code review (ADR-023).
+
+Output is one JSON line `{ok, dryRun, steps:[{id:packages|skills|servers,
+status:ok|current|skipped|failed|needs-approval, code?, items?}], needsApproval:
+[{key,label}], warnings}`; the command takes the intake run lock.
+
 ## Quick start: `ttobak-mcp intake setup`, then `ttobak-mcp intake run`
 
 Run with the stdio adapter (`~/.ttobak/server.mjs`) or `node mcp-server/dist/index.js`.
@@ -174,8 +221,8 @@ never opens a browser; the LaunchAgent uses it.
 | Command | Effect |
 |---|---|
 | `intake hosts` | Lists servers in `~/.claude.json`, `~/.codex/config.toml` and `~/.kiro/settings/mcp.json`: name, transport, disabled, command found. Never values. |
-| `intake select calendar --host <claude\|codex\|kiro> --server <name> [--accept-unknown-sensitivity]` | Starts that server once and checks the `calendar_view` schema. It stores the reference, the current terminal's `PATH` directories and the TTOBAK endpoints: `TTOBAK_*` env first, else the four endpoint keys of the host's own `ttobak` entry (no other values are read). |
-| `intake calendar --dry-run [--preview]` | Reads the window, plans mutations and prints counts. It makes no TTOBAK calls. `--preview` also prints titles locally. |
+| `intake select calendar --host <claude\|codex\|kiro> --server <name> [--accept-unknown-sensitivity] [--own-domain <domain>]...` | Starts that server once and checks the `calendar_view` schema. It stores the reference, the current terminal's `PATH` directories and the TTOBAK endpoints: `TTOBAK_*` env first, else the four endpoint keys of the host's own `ttobak` entry (no other values are read). `--own-domain` is repeatable (default `amazon.com`, at most 20); those domains never match an account. |
+| `intake calendar --dry-run [--preview]` | Reads the window, plans mutations and prints counts. Its only TTOBAK call is the share directory read with a stored session, never a browser login; without one the directory counts as unavailable. `--preview` also prints titles locally. |
 | `intake calendar [--noninteractive] [--reconcile]` | Syncs. `--noninteractive` fails with `TTOBAK_LOGIN_REQUIRED` instead of opening a browser. `--reconcile` adopts the server revision after a 409. |
 | `intake select meetings\|specreq\|slack --host <claude\|codex\|kiro> --server <name>` | Starts that server once and checks every allowlisted tool schema. It stores only the reference and `PATH` directories; TTOBAK endpoints still come from the calendar selection or `TTOBAK_*` env. |
 | `intake select specreq ... --auto-ack on\|off` | `on` (default) lets the runner acknowledge an eligible assignment; `off` queues an `ack_needed` notice instead. |
@@ -244,14 +291,23 @@ message on save; update the adapter first.
   lowercase email domain (`organizerDomain`) go to TTOBAK. Locations have join
   URLs and passcodes removed. The organizer's name and email local part,
   attendees, body, categories and response are dropped.
+  `seriesKey` is not sent yet, so sharing overrides apply per occurrence; a
+  series-wide hide needs a server fan-out to already-synced occurrences first.
 - **Exclusions.** Items flagged `Private` or `Confidential` are excluded, and
   removed if they were tracked. Events longer than 93 days are skipped. Real
   runs fail with `SENSITIVITY_UNKNOWN` when any item lacks a sensitivity flag,
   unless the selection was made with `--accept-unknown-sensitivity`.
+- **Private.** An item with the Outlook category `Private` (any case), or
+  whose joined `get_meeting` says `isPrivate: true`, is sent with
+  `private: true` and no share fields. The server then writes no share for it,
+  except that an owner `account` override set in TTOBAK still beats `private`
+  (`decideCalendarShare`): such an event stays shared until the owner clears
+  the override.
 - **Removals.** Only a cancelled or excluded *tracked* occurrence is removed.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
-  - Each batch (at most 20 mutations, about 60 KB or less) is journaled in
+  - Each batch (at most 12 mutations, so that share-bearing upserts stay
+    within the server's 100-item transaction, and about 60 KB or less) is journaled in
     `~/.ttobak/intake/calendar/<sourceId>/<scope>/state.json` before sending.
     `<scope>` is a digest of the TTOBAK deployment and the signed-in user, so
     a batch built for one account is never sent after signing in to another;
@@ -260,6 +316,9 @@ message on save; update the adapter first.
   - An ambiguous failure keeps it for an identical retry on the next run.
   - A 4xx drops it. A 409 also blocks later runs until `--reconcile`.
   - The last batch of a run is `complete:true`.
+- **Counts.** Besides the plan counts: `shared`, `candidates` and `private`
+  (events in the window, sent or unchanged), `attendeesUnavailable` and
+  `directoryUnavailable` (boolean).
 - **Errors.**
   - `AUTH_EXPIRED_MIDWAY`: run `mwinit -o`.
   - Also `SERVER_START_FAILED`, `SCHEMA_CHANGED`, `PARSE_FAILED`, `LOCKED`
@@ -269,6 +328,10 @@ message on save; update the adapter first.
 
 ## Deploy order and rollback
 
+- Deploy the API with the account-sharing contract (`candidateAccountIds`,
+  `private`, the share directory route) before publishing a runner that sends
+  them. An older API rejects those fields with 400, so a misordered window fails
+  the calendar run.
 - Deploy the API before any runner that sends `organizerDomain`. The calendar
   request decoder is strict, so an API that predates `organizerDomain` rejects
   such batches with 400 and every calendar run fails until the API is updated.
@@ -282,6 +345,31 @@ message on save; update the adapter first.
   already declares `organizerDomain` still reads them.
 - Re-running `intake calendar` backfills `organizerDomain` only for events in
   the intake window (past 7 days through the next 30), not the full year.
+
+## Account matching
+
+- **Directory.** Each run reads `GET /api/calendar/share-directory` once
+  (accounts the user directly belongs to: ID, name, aliases, domains). If the
+  read fails, `directoryUnavailable` is `true` and every event keeps the
+  candidates recorded in the ledger; unchanged events are not re-sent.
+- **Matching.** The deterministic matcher (`intake/match.ts`) compares title
+  and location with names and aliases, and attendee and organizer domains with
+  account domains, excluding own domains. Matched accounts (up to five) are sent
+  as `candidateAccountIds`; the runner never sends `shareAccountId`, so it never
+  shares an event by itself. The owner shares from TTOBAK. Fingerprints cover
+  these fields, so a match or category change re-sends the event.
+- **Meeting facts.** When the `meetings` connector is selected, each event that
+  may be matched is joined to its meeting exactly like the task step (one
+  `list_meetings` per run, then `get_meeting` with the recorded SpecReq login
+  address, else the TTOBAK email). Only the address domains and `isPrivate` are
+  kept; a payload without `isPrivate` or any attendee or organizer field is no
+  answer. Facts are cached in `calendar/<sourceId>/meeting-facts.json` by
+  `meetingId` and `meetingChangeKey`, pruned with the ledger. At most 25
+  `get_meeting` reads run per sync, and three consecutive failures stop them.
+  More than 50 distinct domains is no domain answer (the private flag still
+  counts). A lookup without an answer counts in `attendeesUnavailable` and keeps a
+  previous private flag. Without the connector, matching uses title, location
+  and organizer domain.
 
 ## SpecReq task step
 
@@ -384,15 +472,22 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
 
 ## Acceptance on the Mac (required before scheduling)
 
-1. Sign in once interactively: `intake calendar --dry-run` does not need TTOBAK;
-   a first non-dry run without `--noninteractive` opens the TTOBAK login.
-2. `intake select calendar --host claude --server aws-outlook-mcp`, then
-   `intake calendar --dry-run`. Check that the counts are plausible.
+1. Sign in once interactively: a first non-dry run without `--noninteractive`
+   opens the TTOBAK login. `intake calendar --dry-run` never opens a login; it
+   reads the share directory only when a TTOBAK session exists, and otherwise
+   reports `directoryUnavailable: true`.
+2. `intake select calendar --host claude --server aws-outlook-mcp`, optionally
+   `intake select meetings --host claude --server amazon-meetings-mcp`, then
+   `intake calendar --dry-run`. Check that the counts are plausible, including
+   `shared`, `candidates`, `private` and `attendeesUnavailable`.
 3. Create synthetic test events and verify each case:
    - a **private** event: is it hidden by the server, or does it carry a
      sensitivity flag? Observed 2026-11-09: neither; it arrives like a public
      event. `--accept-unknown-sensitivity` therefore accepts that private
      items reach the private TTOBAK calendar;
+   - an event whose title contains an account alias, one with an attendee
+     from an account domain only, one matching two accounts, a `Private`
+     category added after a match, and a title edited after a match;
    - a **moved occurrence** of a recurring event keeps its `meetingId`;
    - a **cancelled occurrence** arrives with `isCanceled: true`, or disappears
      (then it stays `unresolved`);
@@ -657,7 +752,8 @@ Prerequisites:
   either logged in (`claude`, then `/login`) or Bedrock through the `env` of
   `~/.claude/settings.json` (only the model-auth keys are carried over;
   `TTOBAK_REPORT_USE_BEDROCK=1|0` and `TTOBAK_REPORT_AWS_PROFILE` override them).
-- The skill is the internal-mcp-setup v1.4.0 layout, installed at
+- The skill is the internal-mcp-setup v1.4.0 layout or later (v1.5.0 is the
+  reviewed allowlist), installed at
   `~/.claude/skills/sa-performance-report` (or in a plugin cache). A copy without
   `scripts/calendar_count.py` and `references/report-structure.md` fails with
   `SKILL_OUTDATED` before the CLI starts.
@@ -687,10 +783,14 @@ Behavior:
 - The CLI runs with `--permission-mode dontAsk`, `--strict-mcp-config`,
   `--setting-sources project,local` (no user permission rules) and an explicit
   read-only `--allowedTools` list (`mcp-server/src/report/tools.ts`): the read
-  tools of the skill's data-sources, file reads only in the skill, `work/` and
+  tools that the v1.5.0 skill's data-sources call (v1.5.0 added the PFR,
+  Customer Influence and detail reads of `aws-sentral-mcp` and Outlook
+  `email_search` for interviews; `ccmt-mcp` and `search_campaigns` stay out), file reads only in the skill, `work/` and
   session directories, writes only in `work/out/` (Write, Edit and MultiEdit
   of `work/.claude/**` are denied), no sub-agents, and Bash only for
-  the three counting scripts. Bash runs only in Claude Code's sandbox, set by
+  the five counting scripts of the v1.5.0 skill (`calendar_count.py`,
+  `extract_tool_json.py`, `slack_threads.py`, `interview_count.py`,
+  `pfr_ci_summary.py`). Bash runs only in Claude Code's sandbox, set by
   the run's `--settings` file: `sandbox.enabled`, `failIfUnavailable`,
   `allowUnsandboxedCommands: false`, no network, writes only in `work/out/`
   (`work/.claude` is in `denyWrite`) and
@@ -726,7 +826,14 @@ Behavior:
 - From the app: Performance, Report tab, "Make report". The app first checks
   that `~/.ttobak/server.mjs` contains the `report run` command and otherwise
   stops with `ADAPTER_OUTDATED` (update the adapter in the intake settings). Pick a period and
-  optional highlights; Bedrock settings are under Advanced. Closing the dialog
+  optional highlights; Bedrock settings and the Slack channel picker are under
+  Advanced. The picker lists the channels where you posted in the last 90 days
+  (`report slack-channels [--days N]`, the selected Slack connector's `search`
+  at most 15 calls a minute and 40 pages; refreshing takes minutes and has its
+  own busy flag, separate from report runs, refused while a report runs). Unchecked
+  channels are stored in the app's intake settings and passed to every run as
+  `--exclude-slack-channel <name>` (at most 100); every channel not excluded is
+  counted, also those older than 90 days. Closing the dialog
   keeps the run going; Cancel stops it. Quitting the app sends the CLI SIGTERM
   and waits up to 2 s for it (only while a report runs) before SIGKILL; in
   that time the CLI stops claude and removes its directories. Anything a quit
@@ -755,12 +862,15 @@ Behavior:
 |---|---|
 | `CLAUDE_CLI_MISSING` | No `claude` binary found; install it or set `TTOBAK_CLAUDE_BIN`. |
 | `CLAUDE_CLI_AUTH` | The CLI is not logged in or Bedrock is misconfigured; run `claude` and `/login`, or fix the profile. |
+| `CLAUDE_CLI_BEDROCK` | Bedrock was on and the CLI's request timed out; choose an AWS profile in the report settings or turn Bedrock off. The app refuses Bedrock without a profile (`profile-required`). |
 | `SKILL_MISSING` | The skill is not installed; install internal-mcp-setup v1.4.0. |
 | `SKILL_OUTDATED` | The skill lacks `scripts/calendar_count.py` or `references/report-structure.md`; update it. |
 | `REPORT_INVALID` | The model output failed validation; nothing was uploaded. Re-run. |
 | `REPORT_NO_SFDC` | No synced SFDC assignments; run `intake run` first. |
 | `REPORT_TIMEOUT` | The 45-minute CLI limit (50 in the app) passed; re-run, optionally with a shorter period. |
 | `REPORT_CANCELLED` | Cancelled by the user, SIGTERM or SIGINT. |
+| `REPORT_EXCLUDED_CHANNEL` | The model output still names an excluded Slack channel (a string equal to the name, `#name` not followed by an ASCII name character, or the bare name followed by the Korean word for channel); nothing was uploaded. Remove the channel from the highlights if it is there, then re-run. |
+| `SLACK_NOT_SELECTED` | `report slack-channels` needs the Slack connector selected in intake setup. |
 | `REPORT_PERIOD_EXPIRED` | The custom period ended more than two calendar years ago (server retention); pick a later period. |
 | `REPORT_SANDBOX_UNAVAILABLE` | No usable sandbox, or a CLI older than 2.1.322 or of unknown version (a pre-release suffix is rejected); update the CLI. |
 | `RUN_IN_PROGRESS` | Another report run holds `report.lock`; wait for it. |

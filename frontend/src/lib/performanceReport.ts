@@ -48,11 +48,28 @@ const CODE_LABELS: Record<string, string> = {
   HOME_MISSING: '홈 폴더를 찾지 못했어요.',
   'save-failed': '강조 항목을 임시 파일에 저장하지 못했어요. 다시 시도하세요.',
   'profile-missing': '선택한 AWS 프로필을 이 Mac에서 찾을 수 없어요.',
+  // docs/superpowers/plans/2026-11-12-one-click-intake-setup-ui-copy.json
+  CLAUDE_CLI_BEDROCK: 'Bedrock 호출이 시간 안에 끝나지 않았어요. 리포트 설정에서 AWS 프로필을 고르거나 Bedrock을 끄세요.',
+  'profile-required': 'Bedrock을 쓰려면 AWS 프로필을 골라야 해요.',
+  REPORT_EXCLUDED_CHANNEL: '리포트에 제외한 Slack 채널 이름이 남아 있어 저장하지 않았어요. 강조할 항목에 그 채널이 있다면 지우고 다시 만드세요.',
+  SLACK_NOT_SELECTED: 'Slack 채널을 불러오려면 수집 설정에서 Slack을 먼저 연결하세요.',
 };
 
 /** Korean text for a report CLI or runner code; unknown codes show as-is. */
 export function reportCodeLabel(code: string): string {
   return Object.prototype.hasOwnProperty.call(CODE_LABELS, code) ? CODE_LABELS[code] : code;
+}
+
+/** Bedrock is on without a profile: such a setting cannot be saved or run. */
+export function bedrockNeedsProfile(settings: ReportSettings | null | undefined): boolean {
+  return Boolean(settings?.useBedrock && !settings.awsProfile);
+}
+
+/** Profile to save with a Bedrock toggle: the stored one only while it still
+ * exists on this Mac, so a removed profile never blocks turning Bedrock off. */
+export function bedrockToggleProfile(settings: ReportSettingsView | null | undefined): string | null {
+  const profile = settings?.awsProfile ?? null;
+  return profile && settings?.profiles.includes(profile) ? profile : null;
 }
 
 // ---------------------------------------------------------------- wire types
@@ -118,8 +135,37 @@ export interface ReportSettings {
   awsProfile: string | null;
 }
 
+/** Cached `report slack-channels` result: the owner's channels of the last 90 days. */
+export interface SlackChannelCandidates {
+  channels: { name: string; count: number }[];
+  partial?: boolean;
+  since?: string;
+}
+
+export interface SlackChannelRow {
+  name: string;
+  /** Posts in the window; null for an exclusion no longer among the candidates. */
+  count: number | null;
+  included: boolean;
+}
+
+/** Every candidate is included unless excluded; exclusions that dropped out
+ * of the candidates stay listed (unchecked) so they can be undone. */
+export function channelRows(candidates: SlackChannelCandidates | null | undefined, excluded: string[]): SlackChannelRow[] {
+  const listed = (candidates?.channels ?? []).map(channel => ({ name: channel.name, count: channel.count, included: !excluded.includes(channel.name) }));
+  const stale = excluded.filter(name => !listed.some(row => row.name === name)).map(name => ({ name, count: null, included: false }));
+  return [...listed, ...stale];
+}
+
+export function toggleExcluded(excluded: string[], name: string): string[] {
+  return excluded.includes(name) ? excluded.filter(item => item !== name) : [...excluded, name];
+}
+
 export interface ReportSettingsView extends ReportSettings {
   profiles: string[];
+  /** Absent in apps before Slack channel exclusions. */
+  excludedSlackChannels?: string[];
+  slackChannels?: SlackChannelCandidates | null;
 }
 
 export interface ReportStateView {
@@ -127,6 +173,8 @@ export interface ReportStateView {
   lastResult: ReportFinished | null;
   progress: string[];
   settings: ReportSettings;
+  /** Bedrock is on without a profile (saved before the guard); absent in older apps. */
+  settingsAttention?: boolean;
 }
 
 export interface ReportGenerateInput {

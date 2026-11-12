@@ -3,12 +3,13 @@
 // configuration values; only `--preview` prints titles, and only locally.
 
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { TtobakApi } from '../api.js';
 import { CognitoAuth } from '../auth.js';
-import { CALENDAR_RESPONSES, CALENDAR_TOOL, DEFAULT_CALENDAR_RESPONSES, SCOPE_PATTERN, runCalendar, type CalendarCounts,
+import { AttendeeFacts, type MeetingsReader } from './attendees.js';
+import { CALENDAR_RESPONSES, CALENDAR_TOOL, DEFAULT_CALENDAR_RESPONSES, SCOPE_PATTERN, runCalendar, syncWindow, type CalendarCounts,
   type CalendarResponse } from './calendar.js';
 import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type ConnectorId, type TaskConnectorId } from './connectors.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
@@ -18,8 +19,9 @@ import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner 
 import { SFDC_CONTACTS_TOOL, SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
 import { runSfdcContacts, type SfdcContactCounts } from './sfdc-contacts.js';
 import { resolveMe } from './specreq.js';
+import { DEFAULT_OWN_DOMAINS } from './match.js';
 import { IntakeStore } from './store.js';
-import { runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
+import { loadIdentity, runTasks, type TaskCounts, type TaskRunResult } from './tasks.js';
 
 /**
  * A task-runner provider connector: where it runs, never how it is launched.
@@ -34,7 +36,9 @@ export interface Selection {
   specreq?: ConnectorSelection & { autoAck: boolean };
   slack?: ConnectorSelection;
   calendar?: { host: HostId; server: string; sourceId: string; pathDirs: string[]; selectedAt: string;
-    acceptUnknownSensitivity?: boolean; disabled?: boolean };
+    acceptUnknownSensitivity?: boolean; disabled?: boolean;
+    /** The user's own company domains; they never match an account. */
+    ownDomains?: string[] };
   /** The SA performance connector keeps its own source and ledger, like calendar. */
   sfdc?: ConnectorSelection & { sourceId: string };
   /**
@@ -134,6 +138,7 @@ export function tokenEmail(idToken: string): string {
 const USAGE = `Usage:
   ttobak-mcp intake hosts
   ttobak-mcp intake select calendar --host claude|codex|kiro --server <name> [--accept-unknown-sensitivity]
+      [--own-domain <domain>]...
   ttobak-mcp intake select sfdc --host claude|codex|kiro --server <name>
   ttobak-mcp intake select meetings|specreq|slack --host claude|codex|kiro --server <name> [--auto-ack on|off]
   ttobak-mcp intake calendar [--dry-run [--preview]] [--noninteractive] [--reconcile]
@@ -147,17 +152,20 @@ const USAGE = `Usage:
   ttobak-mcp intake login
   ttobak-mcp intake status`;
 
-function flags(args: string[], allowed: Record<string, 'value' | 'flag'>): Record<string, string | true> {
-  const result: Record<string, string | true> = {};
+function flags(args: string[], allowed: Record<string, 'value' | 'flag' | 'list'>): Record<string, string | true | string[]> {
+  const result: Record<string, string | true | string[]> = {};
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
     const kind = allowed[name];
-    if (!kind || name in result) throw new IntakeError('INVALID_ARGUMENT', `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
+    if (!kind || (name in result && kind !== 'list')) {
+      throw new IntakeError('INVALID_ARGUMENT', `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
+    }
     if (kind === 'flag') result[name] = true;
     else {
       const value = args[++index];
       if (value === undefined || value.startsWith('--')) throw new IntakeError('INVALID_ARGUMENT', `${name} needs a value`);
-      result[name] = value;
+      if (kind === 'list') result[name] = [...(result[name] as string[] | undefined ?? []), value];
+      else result[name] = value;
     }
   }
   return result;
@@ -179,7 +187,7 @@ function definedTtobakEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /** `optional` tools are allowed but not required here; their step checks them itself. */
-async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
+export async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
   tools: readonly ToolExpectation[], optional: readonly ToolExpectation[] = []) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [...tools, ...optional].map(tool => tool.name) });
@@ -192,6 +200,16 @@ async function openSession(environment: IntakeEnvironment, host: HostId, server:
   return session;
 }
 
+const OWN_DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$/;
+
+function ownDomains(values: string[] | undefined): string[] {
+  const domains = [...new Set((values ?? DEFAULT_OWN_DOMAINS).map(domain => domain.trim().toLowerCase().replace(/^@+/, '')))];
+  if (domains.length > 20 || domains.some(domain => domain.length > 253 || !OWN_DOMAIN.test(domain))) {
+    throw new IntakeError('INVALID_ARGUMENT', '--own-domain must be a domain name');
+  }
+  return domains;
+}
+
 export interface SelectRequest {
   host: HostId;
   server: string;
@@ -199,6 +217,8 @@ export interface SelectRequest {
   autoAck?: boolean;
   /** calendar only. */
   acceptUnknownSensitivity?: boolean;
+  /** calendar only; absent keeps the stored domains, else the defaults. */
+  ownDomains?: string[];
   /** Setup: a Midway failure of the SpecReq identity read throws before anything is written. */
   identityAuthFatal?: boolean;
 }
@@ -237,14 +257,16 @@ async function select(args: string[], environment: IntakeEnvironment, store: Int
   if (!isTaskConnector(connector) && connector !== 'calendar' && connector !== 'sfdc') {
     throw new IntakeError('INVALID_ARGUMENT', 'connector must be calendar, sfdc, meetings, specreq or slack');
   }
-  const allowed: Record<string, 'value' | 'flag'> = { '--host': 'value', '--server': 'value' };
+  const allowed: Record<string, 'value' | 'flag' | 'list'> = { '--host': 'value', '--server': 'value' };
   if (connector === 'specreq') allowed['--auto-ack'] = 'value';
-  if (connector === 'calendar') allowed['--accept-unknown-sensitivity'] = 'flag';
+  if (connector === 'calendar') Object.assign(allowed, { '--accept-unknown-sensitivity': 'flag', '--own-domain': 'list' });
   const options = flags(args.slice(1), allowed);
   const autoAckValue = options['--auto-ack'] ?? 'on';
   if (autoAckValue !== 'on' && autoAckValue !== 'off') throw new IntakeError('INVALID_ARGUMENT', '--auto-ack must be on or off');
   return selectConnector(connector, { host: options['--host'] as HostId, server: options['--server'] as string,
-    autoAck: autoAckValue === 'on', acceptUnknownSensitivity: options['--accept-unknown-sensitivity'] === true },
+    autoAck: autoAckValue === 'on', acceptUnknownSensitivity: options['--accept-unknown-sensitivity'] === true,
+    ...(connector === 'calendar' && options['--own-domain'] !== undefined
+      ? { ownDomains: ownDomains(options['--own-domain'] as string[]) } : {}) },
   environment, store);
 }
 
@@ -280,6 +302,7 @@ export async function selectConnector(connector: ConnectorId, request: SelectReq
     ...(previous ?? {}),
     version: 1,
     calendar: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString(),
+      ownDomains: request.ownDomains ?? previous?.calendar?.ownDomains ?? ownDomains(undefined),
       ...(request.acceptUnknownSensitivity ? { acceptUnknownSensitivity: true } : {}) },
     options: syncOptions(previous),
     ttobak,
@@ -310,6 +333,42 @@ export async function signIn(selection: Selection | null, environment: IntakeEnv
     try { me = { email: tokenEmail(idToken), userId: subject }; } catch { me = undefined; }
   }
   return { api, scope, me };
+}
+
+/** A dry run reads the share directory with a stored session only; it never opens a browser. */
+function directoryOnlyApi(selection: Selection | null, environment: IntakeEnvironment): TtobakApi | undefined {
+  try {
+    const config = ttobakConfig(selection, environment.env);
+    return new TtobakApi(new CognitoAuth(config, { interactive: false, tokenDirectory: join(environment.home, '.ttobak') }),
+      config.apiUrl);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Meeting facts for account matching through the selected meetings connector,
+ * as the address the task step uses (the recorded SpecReq login first). A
+ * connector that does not open, or no known address, leaves every lookup unavailable.
+ */
+async function openMeetingFacts(environment: IntakeEnvironment, store: IntakeStore, selection: Selection,
+  scope: string | undefined, me: { email: string } | undefined, now: Date) {
+  const selected = enabled(selection.meetings)!;
+  let session: McpSession | undefined;
+  try { session = await openSession(environment, selected.host, selected.server, selected.pathDirs, CONNECTOR_TOOLS.meetings); } catch {
+    session = undefined;
+  }
+  let login = '';
+  try { login = scope ? loadIdentity(store, scope)?.login ?? '' : ''; } catch { login = ''; }
+  const userEmail = login ? `${login}@amazon.com` : me?.email ?? '';
+  const active = session;
+  const reader: MeetingsReader | null = active && userEmail ? {
+    list: async window => resultJson(await active.call('list_meetings', { startTime: window.start.toISOString(),
+      endTime: window.end.toISOString(), userEmail }), 'list_meetings'),
+    get: async meetingId => resultJson(await active.call('get_meeting', { meetingId, getMaster: false, userEmail }), 'get_meeting'),
+  } : null;
+  const sourceId = selection.calendar!.sourceId;
+  return { session, facts: new AttendeeFacts(store, sourceId, reader, syncWindow(now, environment.zone)) };
 }
 
 /** Interactive Cognito sign-in for an explicit user click; a browser may open. */
@@ -384,6 +443,7 @@ export async function calendarRun(options: ConnectorRunOptions, environment: Int
   const release = store.lock('calendar');
   const startedAt = environment.now();
   let session: McpSession | undefined;
+  let meetings: McpSession | undefined;
   let status: RunStatus = {};
   try {
     // Inside the try: an unreadable status file must still release the lock.
@@ -392,14 +452,26 @@ export async function calendarRun(options: ConnectorRunOptions, environment: Int
     if (dryRun && !scope && status.calendar?.scope && SCOPE_PATTERN.test(status.calendar.scope)) {
       scope = status.calendar.scope;
     }
+    // A dry run uses TTOBAK only for the share directory.
+    const runApi = api ?? (dryRun ? directoryOnlyApi(selection, environment) : undefined);
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, [CALENDAR_TOOL]);
     const active = session;
+    let attendees: AttendeeFacts | undefined;
+    if (enabled(selection.meetings)) {
+      const opened = await openMeetingFacts(environment, store, selection, scope, me, startedAt);
+      meetings = opened.session;
+      attendees = opened.facts;
+    }
     const result = await runCalendar({
-      store, api, sourceId: selected.sourceId, scope, zone: environment.zone, now: startedAt, dryRun,
+      store, api: runApi, sourceId: selected.sourceId, scope, zone: environment.zone, now: startedAt, dryRun,
       reconcile: options.reconcile === true, acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
+      attendees, ownDomains: Array.isArray(selected.ownDomains) ? selected.ownDomains : DEFAULT_OWN_DOMAINS,
       responses: syncOptions(selection).calendarResponses,
       source: { view: async request => resultJson(await active.call(CALENDAR_TOOL.name, request), CALENDAR_TOOL.name) },
     });
+    // The task step opens its own meetings session.
+    await meetings?.close();
+    meetings = undefined;
     status.calendar = {
       lastRunAt: startedAt.toISOString(), result: 'ok', dryRun, counts: result.counts, revision: result.revision,
       ...(scope ? { scope } : {}),
@@ -444,6 +516,7 @@ export async function calendarRun(options: ConnectorRunOptions, environment: Int
     throw error;
   } finally {
     await session?.close();
+    await meetings?.close();
     release();
   }
 }

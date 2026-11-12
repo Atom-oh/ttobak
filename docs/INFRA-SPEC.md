@@ -229,6 +229,14 @@ version expiry; a delete marker is not immediate physical deletion of all versio
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
 one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
+Skill package zips live under skillpkg/ (`skillpkg/org/{sha256}.zip`,
+`skillpkg/user/{userId}/{sha256}.zip`); uploads in progress under
+`skillpkg/staging/` expire after one day, current and noncurrent.
+`skillpkg/org/` and `skillpkg/user/` are in the OAC read allowlist and are
+downloaded through the shared signed `/media/*` URLs (S3 presign fallback);
+the staging prefix is not served. Org package objects are not deleted when old
+history rows are pruned (no lifecycle rule; a cleanup pass is a follow-up). The API role's existing bucket read/write
+grant covers the prefix.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.
@@ -718,7 +726,9 @@ ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
 `backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
 regulator sources as such); `all` reads every
-searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
+searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Both modes
+exclude account-owned sources (CONFIG `accountId`, or a row-less `acct_` ID;
+ADR-008, 2026-11-12). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global
@@ -853,16 +863,19 @@ the `NewsPublication` construct of the same stack, so no cross-stack edge) as
 claim release and claim are in ADR-004; it starts `ttobak-news-publication`
 once as `manual-{requestId}` with `{sourceId, runId}`, the input the daily
 parent passes. Its environment carries `NEWS_DAILY_HOUR_UTC`,
-`NEWS_DAILY_MINUTE_UTC` and `NEWS_DAILY_LEAD_SECONDS`, derived from the same
-constants as the daily rule and the child timeout, for the `DAILY_WINDOW`
-refusal. Its role has `GetItem`/`UpdateItem`/`PutItem` on `CRAWLER#*` keys of
-the table (`PutItem` only for the `COLLECTREFUSAL#` receipt),
+`NEWS_DAILY_MINUTE_UTC`, `NEWS_DAILY_LEAD_SECONDS` and
+`NEWS_DAILY_GRACE_SECONDS`, derived from the same constants as the daily rule,
+the child timeout and `NEWS_DAILY_GRACE` (15 minutes), for the `DAILY_WINDOW`
+refusal. Its role has `GetItem`/`UpdateItem`/`PutItem`/`Query` on `CRAWLER#*`
+keys of the table (`PutItem`/`Query` only for `COLLECTREFUSAL#` receipts),
 `states:StartExecution` on the publication state machine only,
 `states:ListExecutions` on the daily and publication state machines only, its
 own log group and, through the Lambda failure destination, `sqs:SendMessage` on
-the failure queue. Reserved concurrency is one. Discovery's reserved concurrency
-of one is why it refuses while either state machine runs; the race between these
-checks and discovery remains unmitigated (ADR-004). Delivery failures and failed
+the failure queue. Reserved concurrency is one. The publication child's
+`DiscoverArticles` task retries only `Lambda.TooManyRequestsException` (30
+seconds, backoff 1, 24 attempts, derived from the 600-second discovery timeout),
+so a run meeting discovery's single reserved slot waits instead of failing; the
+starter's running checks are cost and fairness guards. Delivery failures and failed
 async invocations land in SSE-SQS `ttobak-news-collect-failures` (seven-day
 retention, redrive denied), with alarms on rule
 `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, starter

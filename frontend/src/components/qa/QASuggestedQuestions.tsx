@@ -19,7 +19,7 @@ export function QASuggestedQuestions({ questions, isDetected = false, onAsk, dis
             psychology
           </span>
           <span className="text-xs font-semibold text-amber-600 dark:text-purple-300 uppercase tracking-wider">
-            AI가 감지한 질문 · {questions.length}
+            미팅 맞춤 질문 · {questions.length}
           </span>
         </div>
       )}
@@ -37,13 +37,13 @@ export function QASuggestedQuestions({ questions, isDetected = false, onAsk, dis
               hover:scale-[1.01] active:scale-[0.99]
               ${isDetected
                 ? 'bg-amber-50 dark:bg-purple-500/10 text-amber-700 dark:text-purple-200 border border-amber-200 dark:border-purple-500/20 hover:bg-amber-100 dark:hover:bg-purple-500/20 dark:hover:border-purple-500/40'
-                : 'bg-primary/5 text-primary/80 hover:bg-primary/10 dark:bg-cyan-500/5 dark:text-cyan-300 dark:hover:bg-cyan-500/10'
+                : 'bg-primary/5 text-primary/80 hover:bg-primary/10 dark:bg-primary/10 dark:text-primary dark:hover:bg-primary/20'
               }
             `}
           >
             <span className={`flex-shrink-0 w-2 h-2 rounded-full ${i === 0 && isDetected ? 'animate-pulse' : ''}`}
               style={{ background: isDetected ? 'var(--accent)' : 'var(--primary)' }} />
-            <span className="flex-1 truncate">{q}</span>
+            <span className="flex-1 min-w-0 break-words">{q}</span>
             <span className="material-symbols-outlined text-sm opacity-40 group-hover:opacity-100 transition-opacity flex-shrink-0">north_east</span>
           </button>
         ))}

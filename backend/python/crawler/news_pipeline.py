@@ -22,8 +22,10 @@ TRACKING_PARAMS = {"gclid", "fbclid", "msclkid"}
 _CANDIDATE_FIELDS = frozenset({
     "runId", "candidateId", "kind", "sourceId", "sourceName", "aliases", "keywords",
     "title", "url", "canonicalUrl", "publishedAt", "discoveredAt", "queryClass",
-    "searchResultRank", "ingestSource", "requireRelevance",
+    "searchResultRank", "ingestSource", "requireRelevance", "matchedTerm",
 })
+# matchedTerm is display metadata: one line of at most this many code points.
+MAX_MATCHED_TERM_CHARS = 200
 
 # Jaccard similarity threshold (whitespace-tokenized title) for two
 # candidates to be considered the same underlying event.
@@ -198,6 +200,29 @@ def expand_queries(source_name: str, aliases, keywords, after_date: date) -> lis
             add(query_class, f'"{anchor}" {term} {after_clause}')
 
     return queries[:MAX_QUERIES_PER_SOURCE]
+
+
+def matched_term(query_text):
+    """The human search term for a query built by expand_queries, or None.
+
+    Removes the quote marks expand_queries adds around an anchor (source
+    terms have their own quotes replaced, so every quote is syntax) and
+    collapses whitespace. An empty, over-long, control-character or
+    non-UTF-8 value returns None; it is never truncated. Idempotent, so a
+    worker may revalidate an already-stored term with the same function.
+    Display metadata only: never part of candidateId, documentHash or the
+    source revision."""
+    if not isinstance(query_text, str) or len(query_text) > 4 * MAX_MATCHED_TERM_CHARS:
+        return None
+    term = " ".join(query_text.replace('"', " ").split())
+    if (not term or len(term) > MAX_MATCHED_TERM_CHARS
+            or any(ord(char) < 32 or 127 <= ord(char) < 160 for char in term)):
+        return None
+    try:
+        term.encode("utf-8")
+    except UnicodeError:
+        return None
+    return term
 
 
 # ---------------------------------------------------------------------------

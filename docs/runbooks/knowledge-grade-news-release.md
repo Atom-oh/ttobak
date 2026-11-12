@@ -90,9 +90,12 @@ Discovery times out after ten minutes; each worker after fourteen minutes.
 The Map runs one worker at a time so a settled reservation can free allowance
 before the next candidate. The workflow has a 45-minute overall timeout; the
 runtime's original 30-minute admission window still rejects late reservations.
-Tasks have no implicit invocation retry. A caught worker invocation failure
-becomes a bounded failed outcome; execution termination or an unfinished lease
-leaves the run for scheduled recovery. Finalization does not pretend a live
+Tasks have no implicit invocation retry. The one exception is discovery, which
+retries only `Lambda.TooManyRequestsException` for up to 12 minutes (30-second
+interval, 24 attempts) so a run waits for its single reserved slot; a throttled
+invocation never ran, so this cannot duplicate work or charges. A caught
+worker invocation failure becomes a bounded failed outcome; execution
+termination or an unfinished lease leaves the run for scheduled recovery. Finalization does not pretend a live
 attempt completed.
 
 Recovery runs every five minutes with a two-minute Lambda timeout below its
@@ -311,14 +314,15 @@ original history and child/parent failure or timeout alarms on replay.
 
 `ttobak-news-manual` is a second entry point that starts the publication
 workflow (ADR-004); its `manual-{requestId}` runs are ordinary runs with the
-limits above. Before claiming it refuses `DAILY_WINDOW` within the child timeout
-before the daily schedule, `DAILY_RUNNING` while a daily parent runs and
-`RUN_IN_PROGRESS` while any publication child runs, since single discovery
-concurrency would throttle an overlapping run. These and the mode/pricing
-refusals release the API's hourly claim and write a `COLLECTREFUSAL#{requestId}`
-receipt. A run or daily child beginning between the checks and discovery is an
-unmitigated residual race: the later discovery is throttled, spending a manual
-request without a run or failing that daily source for the day.
+limits above. Before claiming it refuses `DAILY_WINDOW` from the child timeout
+before the daily schedule until a 15-minute grace after it, and, as cost and
+fairness guards, `DAILY_RUNNING` while a daily parent runs and
+`RUN_IN_PROGRESS` while any publication child runs. These and the mode/pricing
+refusals release the API's hourly claim and write at most one
+`COLLECTREFUSAL#` receipt per source per five minutes. Overlaps with
+discovery's single slot are handled by the discovery throttle retry above; if
+the daily start is delayed past the grace before any daily execution exists, a
+manual run can start and the daily children wait for the slot.
 
 A ListExecutions or claim error starts nothing and leaves the started marker
 unset; a StartExecution error leaves the request spent. Inspect failure-queue
@@ -330,7 +334,9 @@ Source tests and declared resources do not prove delivery. After a targeted,
 exclusive CrawlerStack deployment, record from the actual starter role: the
 refusal codes with the deployed mode, `DAILY_WINDOW`, `DAILY_RUNNING` and
 `RUN_IN_PROGRESS` refusals (or their ListExecutions calls on both state
-machines) with the released claim and receipt, one accepted request that
+machines) with the released claim and receipt, a throttled discovery retried
+and then succeeded with no duplicate attempt or charge (the observed error
+name must be `Lambda.TooManyRequestsException`), one accepted request that
 produced exactly one `manual-{requestId}` execution and a finalized receipt with
 its `NEWSRUN#` row, a duplicate delivery refused without a second execution,
 and the legacy news function's removed async configuration. Record the deployed
@@ -465,6 +471,25 @@ reporting their notices. Reruns are idempotent, never touch user-owned rows
 includes the rows from its next run (10 active sources of the 30-source limit).
 Acceptance is a later daily execution with `docsAdded > 0` and matching
 `GSI4PK=DOC#news` rows; a successful seed or deployment alone is not.
+
+## Search term display field (2026-11-12)
+
+The worker adds an optional `matchedTerm` string to search DOC rows (ADR-004).
+It is not part of candidate/document identity, the source revision or budgets.
+The current API reader projects it and checks it within the 24,000-byte record
+limit; QA ignores it; readers without it ignore the attribute. Release steps:
+
+1. Confirm the deployed API Lambda includes the `matchedTerm` projection
+   (PR #886 or later) so the term is visible; an older reader is safe but hides it.
+2. Deploy CrawlerStack alone with `--exclusively`; no parameter or flag changes.
+   Record the deployed worker and discovery code SHA-256 as the minimum writer
+   revision for this field.
+3. Acceptance is a later daily execution whose new search `DOC#` row carries
+   `matchedTerm` and whose Insights card shows it. Custom-URL rows have none.
+   Rows published earlier stay without the field; there is no backfill.
+
+Rollback is the normal writer rollback; rows already written keep the attribute
+and remain readable. Steps 1-3 have no recorded evidence yet.
 
 ## Rollback and retention
 

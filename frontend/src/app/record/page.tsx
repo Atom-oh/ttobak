@@ -29,6 +29,8 @@ import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
 import { SAPreparation } from '@/components/record/SAPreparation';
 import { RecordingLinkControls } from '@/components/record/RecordingLinkControls';
+import { AutoLinkChip } from '@/components/record/AutoLinkChip';
+import { useCalendarAutoLink } from '@/hooks/useCalendarAutoLink';
 import { PreparationReferences } from '@/components/record/PreparationReferences';
 import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown, type MeetingReference, type QAReferenceEvidence, type QuestionDraft, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
@@ -187,7 +189,7 @@ function RecordPageInner() {
   // Hoisted so the desktop aside and mobile bottom sheet ReferencePanel
   // instances share one selection -- the mobile sheet unmounts on close.
   const [referenceAccountId, setReferenceAccountId] = useState(() => searchParams.get('accountId') || '');
-  const [referenceTab, setReferenceTab] = useState<'qa' | 'ref'>('ref');
+  const [referenceTab, setReferenceTab] = useState<'qa' | 'ref'>('qa');
   const [questionDraft, setQuestionDraft] = useState<QuestionDraft>();
   const [sourceMessage, setSourceMessage] = useState('');
   const [finalNotesError, setFinalNotesError] = useState('');
@@ -223,7 +225,7 @@ function RecordPageInner() {
   };
 
   // --- Hooks ---
-  const summary = useLiveSummary({ summaryInterval });
+  const summary = useLiveSummary({ summaryInterval, meetingTitle, meetingContext: contextText });
 
   // Mac caption windows. Their hook reads the session's recording state, so
   // it runs after useRecordingSession; the session reaches it through this
@@ -269,6 +271,10 @@ function RecordPageInner() {
   useEffect(() => {
     captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
   }, [captionExtraLanguage, captionOnSegment]);
+  const { stopDetection } = summary;
+  useEffect(() => {
+    if (!session.isRecording && !isNativeRecording) stopDetection();
+  }, [session.isRecording, isNativeRecording, stopDetection]);
 
   const postRecording = usePostRecording({
     meetingTitle,
@@ -281,6 +287,54 @@ function RecordPageInner() {
 
   const serverMeetingId = postRecording.serverMeetingId;
   useEffect(() => { serverMeetingIdRef.current = serverMeetingId; }, [serverMeetingId]);
+
+  // Calendar auto-link (owner request 2026-11-11): an empty Account nobody
+  // chose is filled from the ongoing calendar event at recording start only
+  // (never on mount, so a leftover upload is not linked). URL, MCP and user
+  // choices are never overwritten.
+  const autoLinkRecordingRef = useRef(false);
+  const { changeRecordingAccount } = postRecording;
+  // Clearing is refused only while a link request is in flight or of unknown
+  // outcome; a deferred choice nothing has sent yet is local.
+  const recordingAccountPending = !!postRecording.recordingLinks.accountLinkInFlight;
+  const recordingAccountLocked = recordingAccountPending || !!postRecording.recordingLinks.accountUncertain;
+  const calendarLink = useCalendarAutoLink({
+    userId: user?.userId,
+    accountId: referenceAccountId,
+    setAccountId: setReferenceAccountId,
+    title: meetingTitle,
+    setTitle: setMeetingTitle,
+    recordingAccountId: postRecording.recordingLinks.accountId,
+    isRecordingActive: () => autoLinkRecordingRef.current,
+    applyToRecording: (id) => { void changeRecordingAccount(id); },
+    initialSource: searchParams.get('accountId') ? 'url' : 'none',
+    enabled: !isUploadMode,
+    canDismiss: !recordingAccountLocked,
+  });
+  const { markSource: markAccountSource, invalidate: invalidateAutoLink, dropAutoLink, source: autoLinkSource } = calendarLink;
+  // Stop, failure and return to idle end the recording's lookup: a late
+  // calendar result must not link or retitle anything afterwards.
+  const endAutoLinkRecording = useCallback(() => {
+    autoLinkRecordingRef.current = false;
+    invalidateAutoLink();
+  }, [invalidateAutoLink]);
+  useEffect(() => { if (postRecording.step !== null) endAutoLinkRecording(); }, [postRecording.step, endAutoLinkRecording]);
+  const recordingLive = session.isRecording || isNativeRecording;
+  const wasRecordingLiveRef = useRef(false);
+  useEffect(() => {
+    if (wasRecordingLiveRef.current && !recordingLive) endAutoLinkRecording();
+    wasRecordingLiveRef.current = recordingLive;
+  }, [recordingLive, endAutoLinkRecording]);
+  const chooseReferenceAccount = useCallback((id: string) => {
+    markAccountSource('user');
+    setReferenceAccountId(id);
+  }, [markAccountSource]);
+  // Browsing references while auto-linked does not change the recording link
+  // (RecordingLinkControls does), so it keeps the chip and the auto title.
+  const browseReferenceAccount = useCallback((id: string) => {
+    if (autoLinkSource() !== 'auto') markAccountSource('user');
+    setReferenceAccountId(id);
+  }, [autoLinkSource, markAccountSource]);
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
   const persistRecordingNotes = postRecording.persistNotes;
@@ -328,6 +382,26 @@ function RecordPageInner() {
   // WAV is handed off. Keep that reservation in the parent across mode
   // changes so another draft cannot replace this recording's meeting ID.
   const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording || browserFinalizing;
+  const autoLinkChip = calendarLink.autoLink && (calendarLink.autoLink.accountId === referenceAccountId
+    || calendarLink.autoLink.accountId === postRecording.recordingLinks.accountId)
+    // A draft already bound to it can only switch Accounts in RecordingLinkControls.
+    ? <AutoLinkChip name={calendarLink.autoLink.name}
+      // Hidden while a stopped browser recording finalizes or a draft is created.
+      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId || browserFinalizing || flowBusy
+        || (recordingAccountLocked && !recordingAccountPending) ? undefined : calendarLink.dismiss}
+      pending={recordingAccountPending} /> : null;
+  // A recording that settles back to idle without saving (failure, cancel,
+  // a dismissed flow) keeps no calendar values the auto link still owns.
+  const autoSessionOpenRef = useRef(false);
+  const pageIdle = nativeControlPhase({
+    recording: session.isRecording || isNativeRecording, step: postRecording.step, startInFlight: recordStartInFlight,
+    importing: uploadProgress !== null, finalizing: browserFinalizing, flowBusy, pendingAudio: postRecording.hasPendingAudio,
+  }) === 'idle';
+  useEffect(() => {
+    if (!pageIdle || !autoSessionOpenRef.current) return;
+    autoSessionOpenRef.current = false;
+    dropAutoLink();
+  }, [pageIdle, dropAutoLink]);
   const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current || isNativeRecordingRef.current || browserFinalizingRef.current;
 
   // Plain functions, like `handleRecordingStart` below (not useCallback):
@@ -358,8 +432,12 @@ function RecordPageInner() {
       // (falls back to create-at-upload inside resumeUploadFlow if this
       // fails), then hand the on-disk path to the notes step → upload →
       // cleanupRecording flow that already handles native files.
+      // A leftover WAV is not the ongoing calendar meeting: it never inherits
+      // an auto-linked Account or the title filled from that event.
+      autoLinkRecordingRef.current = false;
+      const dropped = calendarLink.dropAutoLink();
       resetSessionStateForNewMeeting();
-      await postRecording.createDraftMeeting();
+      await postRecording.createDraftMeeting(dropped);
       postRecording.handleNativeFileReady(item.path, item.byte_size);
       leftovers.remove(item.path);
     } finally {
@@ -665,6 +743,10 @@ function RecordPageInner() {
           request: { ...request, params: { ...request.params, title } },
           fired: false,
         };
+        // Release auto-owned values first: their queued clears then run
+        // before, never after, the requested title and Account.
+        dropAutoLink();
+        if (request.params.accountId) markAccountSource('mcp');
         setMeetingTitle(title);
         setAudioSource('system');
         if (request.params.accountId) setReferenceAccountId(request.params.accountId);
@@ -693,7 +775,7 @@ function RecordPageInner() {
       controlStopRef.current = { requestId: request.requestId, upload: request.params.upload !== false };
       void recordButtonRef.current?.stopExternal();
     });
-  }, [finishControlStart]); // The handler reads refs; it registers once.
+  }, [finishControlStart, markAccountSource, dropAutoLink]); // The handler reads refs; it registers once.
 
   useEffect(() => {
     const pending = controlStartRef.current;
@@ -775,9 +857,11 @@ function RecordPageInner() {
   }, [isNativeRecording, session.isRecording, recordStartInFlight, uploadProgress, browserFinalizing, flowBusy, postRecording.hasPendingAudio, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
 
   // Q&A context = user-provided meeting context + live transcript
-  const qaContext = contextText.trim()
-    ? `[미팅 배경 정보]\n${contextText.trim()}\n\n${session.transcriptContext || ''}`
-    : session.transcriptContext;
+  const qaContext = [
+    meetingTitle.trim() ? `[미팅 제목]\n${meetingTitle.trim().slice(0, 120)}` : '',
+    contextText.trim() ? `[미팅 배경 정보]\n${contextText.trim().slice(0, 3000)}` : '',
+    session.transcriptContext || '',
+  ].filter(Boolean).join('\n\n');
 
   const appendReferenceNote = useCallback((block: string) => {
     if (session.isRecording || isNativeRecordingRef.current) {
@@ -904,6 +988,10 @@ function RecordPageInner() {
 
   const handleRecordingStart = async (stream: MediaStream | null) => {
     setNativeWarnings([]);
+    // A previous recording's auto link (e.g. one that failed back to idle)
+    // never carries into this one; this start looks the calendar up again.
+    const released = calendarLink.dropAutoLink();
+    autoSessionOpenRef.current = true;
     if (stream && audioSource === 'tab') {
       const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
       setTabSharingLabel(label);
@@ -917,8 +1005,11 @@ function RecordPageInner() {
     // start a competing draft in this window (the mirror of the guard the
     // card's handlers hold against RecordButton).
     setFlowBusy(true);
+    autoLinkRecordingRef.current = true;
     try {
-      await postRecording.createDraftMeeting();
+      const draft = postRecording.createDraftMeeting(released);
+      calendarLink.check();
+      await draft;
     } finally {
       setFlowBusy(false);
     }
@@ -1433,13 +1524,14 @@ function RecordPageInner() {
               isRecording={session.isRecording}
             />
             <div className="mt-3 w-full max-w-3xl">
+              {autoLinkChip && <div className="mb-2 flex">{autoLinkChip}</div>}
               <SAPreparation value={contextText} onChange={setContextText} title={meetingTitle} onTitleChange={setMeetingTitle}
-                accountId={referenceAccountId} onAccountChange={setReferenceAccountId}
+                accountId={referenceAccountId} onAccountChange={chooseReferenceAccount}
                 initialDocumentId={searchParams.get('prepDocId') || undefined} disabled={meetingFlowBusy} />
               <PreparationReferences>
                 <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
-                  qaPanel={<LiveQAPanel transcriptContext={qaContext} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
-                  referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={setReferenceAccountId} transcriptTail={contextText}
+                  qaPanel={<LiveQAPanel transcriptContext={qaContext} meetingTitle={meetingTitle} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
+                  referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={browseReferenceAccount} transcriptTail={contextText}
                     onAddReference={handleAddReference} onPrepareQuestion={handlePrepareQuestion} />} />
               </PreparationReferences>
             </div>
@@ -1468,6 +1560,9 @@ function RecordPageInner() {
         {/* Customer/project links stay editable after recording starts
             (browser and native modes). Separate from ReferencePanel's
             account, which only browses references. */}
+        {(session.isRecording || isNativeRecording) && !postRecording.step && autoLinkChip && (
+          <div className="mb-2 flex justify-center">{autoLinkChip}</div>
+        )}
         {(session.isRecording || isNativeRecording) && !postRecording.step && (
           <RecordingLinkControls
             accountId={postRecording.recordingLinks.accountId}
@@ -1476,7 +1571,7 @@ function RecordPageInner() {
             linkedProjectIds={postRecording.recordingLinks.linkedProjectIds}
             meetingReady={!!postRecording.serverMeetingId}
             error={postRecording.linkError}
-            onAccountChange={(id) => { void postRecording.changeRecordingAccount(id); }}
+            onAccountChange={(id) => { markAccountSource('user'); void postRecording.changeRecordingAccount(id); }}
             onProjectsChange={(ids) => { void postRecording.changeRecordingProjects(ids); }}
           />
         )}
@@ -1575,6 +1670,7 @@ function RecordPageInner() {
             onNativeInput={(input, canSwitch) => { setNativeInput(input); setNativeCanSwitch(canSwitch); }}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
+              endAutoLinkRecording();
               finishControlStart({ ok: false, error: { code: 'start_failed', message: error } });
               if (opts?.terminal) {
                 setBrowserFinalizing(false);
@@ -1627,7 +1723,7 @@ function RecordPageInner() {
             onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); setNativeCanSwitch(false); }}
+            onRecordingStop={() => { endAutoLinkRecording(); session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); setNativeCanSwitch(false); }}
             onPermissionGranted={() => {
               refreshDevices();
               // Native capture is running: answer a pending MCP start.
@@ -1910,6 +2006,7 @@ function RecordPageInner() {
             qaPanel={
               <LiveQAPanel
                 transcriptContext={qaContext}
+                meetingTitle={meetingTitle}
                 questionDraft={questionDraft}
                 meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
@@ -1922,7 +2019,7 @@ function RecordPageInner() {
             referencePanel={
               <ReferencePanel
                 accountId={referenceAccountId}
-                onAccountChange={setReferenceAccountId}
+                onAccountChange={browseReferenceAccount}
                 transcriptTail={session.transcriptContext}
                 onAddReference={handleAddReference}
                 onPrepareQuestion={handlePrepareQuestion}
@@ -1983,6 +2080,7 @@ function RecordPageInner() {
                 qaPanel={
                   <LiveQAPanel
                     transcriptContext={qaContext}
+                    meetingTitle={meetingTitle}
                 questionDraft={questionDraft}
                     meetingId={postRecording.serverMeetingId || undefined}
                     onDetectedQuestionsChange={setDetectedCount}
@@ -1995,7 +2093,7 @@ function RecordPageInner() {
                 referencePanel={
                   <ReferencePanel
                     accountId={referenceAccountId}
-                    onAccountChange={setReferenceAccountId}
+                    onAccountChange={browseReferenceAccount}
                     transcriptTail={session.transcriptContext}
                 onAddReference={handleAddReference}
                 onPrepareQuestion={handlePrepareQuestion}

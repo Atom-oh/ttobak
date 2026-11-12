@@ -68,11 +68,31 @@ class KiroStartupTests(unittest.TestCase):
     def test_claude_schema_counts_toward_the_complete_request_limit(self):
         _, prompt, payload = role_review.issue_request(self.work, "claude-self")
         old_request_size = len(prompt.encode()) + len(payload.encode())
-        with patch.object(run_role, "MAX_REQUEST_BYTES", old_request_size + 1):
+        with patch.object(run_role, "MAX_STDIN_REQUEST_BYTES", old_request_size + 1):
             with patch.object(run_role, "execute", return_value=(0, "", "")) as execute:
                 run_role.run(self.work, "claude-self")
         self.assertEqual(execute.call_count, 0)
         result = json.loads((self.work / "slot/claude-self-result.json").read_text())
+        self.assertFalse(result["valid"])
+
+    def test_claude_instruction_keeps_the_argv_limit(self):
+        _, prompt, _ = role_review.issue_request(self.work, "claude-self")
+        self.assertLess(len(prompt.encode()), run_role.MAX_ARGV_BYTES)
+        with patch.object(run_role, "MAX_ARGV_BYTES", len(prompt.encode())):
+            with patch.object(run_role, "execute", return_value=(0, "", "")) as execute:
+                run_role.run(self.work, "claude-self")
+        self.assertEqual(execute.call_count, 0)
+        result = json.loads((self.work / "slot/claude-self-result.json").read_text())
+        self.assertFalse(result["valid"])
+
+    def test_codex_stdin_request_keeps_its_bound(self):
+        _, prompt, payload = role_review.issue_request(self.work, "codex")
+        size = len((prompt + "\n" + payload).encode())
+        with patch.object(run_role, "MAX_STDIN_REQUEST_BYTES", size):
+            with patch.object(run_role, "execute", return_value=(0, "", "")) as execute:
+                run_role.run(self.work, "codex")
+        self.assertEqual(execute.call_count, 0)
+        result = json.loads((self.work / "slot/codex-result.json").read_text())
         self.assertFalse(result["valid"])
 
     def test_plan_change_after_issuance_blocks_delivery(self):

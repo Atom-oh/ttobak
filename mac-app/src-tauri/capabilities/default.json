@@ -45,11 +45,13 @@
     "allow-intake-cancel",
     "allow-intake-check-adapter",
     "allow-intake-update-adapter",
+    "allow-intake-refresh-path",
     "allow-intake-set-options",
     "allow-report-generate",
     "allow-report-cancel",
     "allow-report-get-state",
     "allow-report-settings-get",
-    "allow-report-settings-set"
+    "allow-report-settings-set",
+    "allow-report-slack-channels-refresh"
   ]
 }

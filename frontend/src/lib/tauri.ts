@@ -1,7 +1,7 @@
 'use client';
 
 import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions } from './intake';
-import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView } from './performanceReport';
+import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 
 interface TauriEvent<T> {
   payload: T;
@@ -732,8 +732,15 @@ export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {
   return invoke<IntakeStateView['adapter']>('intake_check_adapter');
 }
 
-export function updateIntakeAdapter(): Promise<IntakeStateView['adapter']> {
-  return invoke<IntakeStateView['adapter']>('intake_update_adapter');
+export interface IntakeAdapterUpdate {
+  adapter: IntakeStateView['adapter'];
+  /** False when the installed adapter already matched the served one. */
+  changed: boolean;
+}
+
+/** Older apps resolve with the bare adapter view; use `normalizeAdapterUpdate`. */
+export function updateIntakeAdapter(): Promise<IntakeAdapterUpdate | IntakeStateView['adapter']> {
+  return invoke<IntakeAdapterUpdate | IntakeStateView['adapter']>('intake_update_adapter');
 }
 
 export function onIntakeProgress(handler: (line: string) => void): () => void {
@@ -776,8 +783,15 @@ export function getReportSettings(): Promise<ReportSettingsView> {
   return invoke<ReportSettingsView>('report_settings_get');
 }
 
-export function setReportSettings(useBedrock: boolean, awsProfile: string | null): Promise<ReportSettingsView> {
-  return invoke<ReportSettingsView>('report_settings_set', awsProfile ? { useBedrock, awsProfile } : { useBedrock });
+export function setReportSettings(useBedrock: boolean, awsProfile: string | null, excludedSlackChannels?: string[]): Promise<ReportSettingsView> {
+  return invoke<ReportSettingsView>('report_settings_set', {
+    useBedrock, ...(awsProfile ? { awsProfile } : {}), ...(excludedSlackChannels ? { excludedSlackChannels } : {}),
+  });
+}
+
+/** Re-reads the owner's Slack channels of the last 90 days (a few minutes). */
+export function refreshSlackChannels(): Promise<SlackChannelCandidates> {
+  return invoke<SlackChannelCandidates>('report_slack_channels_refresh');
 }
 
 export function onReportProgress(handler: (line: string) => void): () => void {

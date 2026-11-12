@@ -57,7 +57,7 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const SCHEDULE_OFF_TIMEOUT: Duration = Duration::from_secs(60);
 const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
 /// SIGTERM to SIGKILL.
-const KILL_GRACE: Duration = Duration::from_secs(3);
+pub(crate) const KILL_GRACE: Duration = Duration::from_secs(3);
 /// Wait for the pipes to close after the CLI exits (orphans may hold them).
 const READER_GRACE: Duration = Duration::from_secs(2);
 
@@ -386,6 +386,31 @@ fn parse_login_path(out: &[u8]) -> Option<String> {
     Some(s.to_string())
 }
 
+/// Directories the app appends to the login PATH when they exist and are
+/// missing: `aim` lives in `~/.toolbox/bin` (often added only by `~/.zshrc`,
+/// which a login shell does not read) and the AIM server wrappers in
+/// `~/.aim/mcp-servers` exec it.
+const PATH_REPAIR_DIRS: [&str; 3] = [".toolbox/bin", ".aim/mcp-servers", ".local/bin"];
+
+/// `path` with each existing, absent `PATH_REPAIR_DIRS` entry appended in
+/// order. Entries that would not be absolute are never added.
+pub(crate) fn repair_path(path: &str, home: &Path, is_dir: impl Fn(&Path) -> bool) -> String {
+    let mut out = path.to_string();
+    if !home.is_absolute() {
+        return out;
+    }
+    for rel in PATH_REPAIR_DIRS {
+        let dir = home.join(rel);
+        let Some(entry) = dir.to_str() else { continue };
+        if entry.contains(':') || out.split(':').any(|e| e == entry) || !is_dir(&dir) {
+            continue;
+        }
+        out.push(':');
+        out.push_str(entry);
+    }
+    out
+}
+
 /// `$SHELL` when it is an absolute path to an existing file, else zsh.
 fn login_shell(shell: Option<&std::ffi::OsStr>) -> PathBuf {
     shell
@@ -479,13 +504,13 @@ fn now_secs() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     home.is_absolute().then_some(home)
 }
 
 /// A regular, non-symlink file of at most `cap` bytes; `None` otherwise.
-fn read_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
+pub(crate) fn read_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -757,6 +782,7 @@ fn wait_group_gone(pgid: i32, max: Duration) {
 pub fn kill_running(app: &AppHandle) {
     let mut intake = 0;
     let mut report = 0;
+    let mut channels = 0;
     if let Some(state) = app.try_state::<IntakeState>() {
         state.shutting_down.store(true, Ordering::SeqCst);
         intake = state.pgid.swap(0, Ordering::SeqCst);
@@ -765,8 +791,12 @@ pub fn kill_running(app: &AppHandle) {
         let track = state.track();
         track.shutting_down.store(true, Ordering::SeqCst);
         report = track.pgid.swap(0, Ordering::SeqCst);
+        channels = state.channels_track().pgid.swap(0, Ordering::SeqCst);
     }
-    let groups: Vec<i32> = [intake, report].into_iter().filter(|&g| g > 1).collect();
+    let groups: Vec<i32> = [intake, report, channels]
+        .into_iter()
+        .filter(|&g| g > 1)
+        .collect();
     if groups.is_empty() {
         return;
     }
@@ -806,12 +836,15 @@ impl Outcome {
 }
 
 /// The stored login PATH, captured once on first need.
+/// The stored login PATH (captured once when absent), repaired on every use
+/// so a value cached before the toolbox or AIM install still finds them.
 async fn login_path(state: &IntakeState, home: &Path) -> String {
     if let Some(p) = state.snapshot().login_path {
-        return p;
+        return repair_path(&p, home, Path::is_dir);
     }
     match capture_login_path(home).await {
         Some(p) => {
+            let p = repair_path(&p, home, Path::is_dir);
             if let Err(e) = state.update_settings(|s| s.login_path = Some(p.clone())) {
                 log::warn!("login PATH not stored: {e}");
             }
@@ -819,9 +852,44 @@ async fn login_path(state: &IntakeState, home: &Path) -> String {
         }
         None => {
             log::warn!("login shell PATH unavailable; using the fallback PATH");
-            FALLBACK_PATH.to_string()
+            repair_path(FALLBACK_PATH, home, Path::is_dir)
         }
     }
+}
+
+/// Result of a forced PATH recapture: the directories the repair appended and
+/// whether the login shell answered (otherwise the fallback PATH was used).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathRefresh {
+    pub added: Vec<String>,
+    pub captured: bool,
+}
+
+/// Recaptures the login PATH (ignoring the stored value), repairs and stores it.
+pub(crate) async fn refresh_login_path(
+    state: &IntakeState,
+    home: &Path,
+) -> Result<PathRefresh, &'static str> {
+    let captured = capture_login_path(home).await;
+    let base = captured
+        .clone()
+        .unwrap_or_else(|| FALLBACK_PATH.to_string());
+    let repaired = repair_path(&base, home, Path::is_dir);
+    let added = repaired
+        .split(':')
+        .skip(base.split(':').count())
+        .map(str::to_string)
+        .collect();
+    if captured.is_some() {
+        state
+            .update_settings(|s| s.login_path = Some(repaired.clone()))
+            .map_err(|_| "save-failed")?;
+    }
+    Ok(PathRefresh {
+        added,
+        captured: captured.is_some(),
+    })
 }
 
 /// `$SHELL -l -c 'printf %s "$PATH"'`: the only shell use. Fixed script, no
@@ -1534,19 +1602,58 @@ impl Drop for AdapterGuard<'_> {
     }
 }
 
-/// Downloads and installs the served adapter, keeping one `server.mjs.bak`.
+/// Recaptures and repairs the login PATH that intake and report runs use.
 #[tauri::command]
-pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterView, String> {
+pub async fn intake_refresh_path(state: State<'_, IntakeState>) -> Result<PathRefresh, String> {
     state.available()?;
-    let _busy = state.begin_adapter_update()?;
     let home = home_dir().ok_or("unavailable")?;
-    let served = fetch_adapter().await.map_err(str::to_string)?;
-    install_adapter(&home.join(".ttobak"), &served).map_err(|e| {
-        log::warn!("adapter install failed: {:?}", e.kind());
-        "save-failed".to_string()
+    refresh_login_path(&state, &home)
+        .await
+        .map_err(str::to_string)
+}
+
+/// The served bundle differs from the installed one (or none is installed).
+pub(crate) fn adapter_changed(current: Option<&[u8]>, served: &[u8]) -> bool {
+    current != Some(served)
+}
+
+/// Result of [Update]: the new adapter view and whether the file changed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterUpdate {
+    adapter: AdapterView,
+    changed: bool,
+}
+
+/// Fetches the served adapter and installs it when it differs, keeping one
+/// `server.mjs.bak`. Returns whether anything changed.
+pub(crate) async fn update_adapter(state: &IntakeState, home: &Path) -> Result<bool, String> {
+    let _busy = state.begin_adapter_update()?;
+    let served = fetch_adapter().await.map_err(|e| {
+        log::info!("adapter fetch failed: {e}");
+        e.to_string()
     })?;
+    let changed = adapter_changed(local_adapter(home).as_deref(), &served);
+    if changed {
+        install_adapter(&home.join(".ttobak"), &served).map_err(|e| {
+            log::warn!("adapter install failed: {:?}", e.kind());
+            "save-failed".to_string()
+        })?;
+    }
     *state.update_available.lock() = Some(false);
-    Ok(adapter_view(&state, Some(&home)))
+    Ok(changed)
+}
+
+/// Downloads and installs the served adapter; always reports the outcome.
+#[tauri::command]
+pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterUpdate, String> {
+    state.available()?;
+    let home = home_dir().ok_or("unavailable")?;
+    let changed = update_adapter(&state, &home).await?;
+    Ok(AdapterUpdate {
+        adapter: adapter_view(&state, Some(&home)),
+        changed,
+    })
 }
 
 #[cfg(test)]
@@ -1861,6 +1968,48 @@ mod tests {
         assert_eq!(parse_login_path(b"/usr/bin\n/bin"), None);
         assert_eq!(parse_login_path(&[b'/'; 9000]), None);
         assert_eq!(parse_login_path(b"/usr/\xffbin"), None);
+    }
+
+    #[test]
+    fn adapter_update_reports_unchanged_bytes() {
+        assert!(!adapter_changed(Some(b"same"), b"same"));
+        assert!(adapter_changed(Some(b"old"), b"new"));
+        assert!(adapter_changed(None, b"new"));
+    }
+
+    #[test]
+    fn repair_path_appends_missing_existing_dirs() {
+        let home = Path::new("/Users/u");
+        let exists = |p: &Path| p.ends_with(".toolbox/bin") || p.ends_with(".local/bin");
+        assert_eq!(
+            repair_path("/usr/bin:/bin", home, exists),
+            "/usr/bin:/bin:/Users/u/.toolbox/bin:/Users/u/.local/bin"
+        );
+    }
+
+    #[test]
+    fn repair_path_keeps_present_dirs_once() {
+        let home = Path::new("/Users/u");
+        let path = "/Users/u/.toolbox/bin:/usr/bin:/Users/u/.aim/mcp-servers";
+        assert_eq!(
+            repair_path(path, home, |_| true),
+            format!("{path}:/Users/u/.local/bin")
+        );
+        assert_eq!(repair_path(path, home, |_| false), path);
+    }
+
+    #[test]
+    fn repair_path_result_still_parses() {
+        let repaired = repair_path("/usr/bin", Path::new("/Users/u"), |_| true);
+        assert_eq!(
+            parse_login_path(repaired.as_bytes()).as_deref(),
+            Some(repaired.as_str())
+        );
+        // A HOME that would make an invalid entry adds nothing.
+        assert_eq!(
+            repair_path("/usr/bin", Path::new("rel"), |_| true),
+            "/usr/bin"
+        );
     }
 
     #[test]
