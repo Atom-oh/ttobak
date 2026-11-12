@@ -178,8 +178,10 @@ RecordingLinkControls switches Accounts. During a recording the link goes throug
 `changeRecordingAccount`; the change button waits only while a link request is in
 flight. A choice made before the draft exists stays local (replaceable or clearable)
 until save links it. The hook owns the Account and title it filled (subject trimmed
-to 200 code points) until someone changes them; a user or MCP choice, a new start, a
-leftover upload or a dismissed flow clears whatever it still owns. Creation still validates membership; calendar or Account
+to 200 code points) until someone changes them; a user or MCP choice (MCP releases
+before writing its own), a new start, a leftover upload or settling back to idle
+without a save clears whatever it still owns. Browsing ReferencePanel while
+auto-linked keeps the chip and title. Creation still validates membership; calendar or Account
 failures show nothing.
 
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when

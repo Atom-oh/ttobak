@@ -112,7 +112,8 @@ test('lookup window and chip copy', () => {
 test('record page marks URL, MCP and user Account sources before auto-link', () => {
   const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /initialSource: searchParams\.get\('accountId'\) \? 'url' : 'none'/);
-  assert.match(page, /markAccountSource\('mcp'\);\s*setReferenceAccountId\(request\.params\.accountId\)/);
+  assert.match(page, /dropAutoLink\(\);\s*if \(request\.params\.accountId\) markAccountSource\('mcp'\);\s*setMeetingTitle\(title\);/,
+    'an MCP start releases auto values before writing its own');
   assert.doesNotMatch(page, /onAccountChange=\{setReferenceAccountId\}/, 'every picker marks a user choice');
   assert.match(page, /markAccountSource\('user'\); void postRecording\.changeRecordingAccount/);
   assert.match(page, /enabled: !isUploadMode/, 'upload mode never auto-links');
@@ -433,5 +434,35 @@ test('a recording that failed to idle does not carry its auto link into the next
   const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /const released = calendarLink\.dropAutoLink\(\);[\s\S]*?createDraftMeeting\(released\);\s*calendarLink\.check\(\);/,
     'handleRecordingStart releases before creating its draft');
-  assert.match(page, /previousStepRef\.current !== null && postRecording\.step === null\) dropAutoLink\(\)/, 'a dismissed flow releases too');
+  assert.match(page, /if \(!pageIdle \|\| !autoSessionOpenRef\.current\) return;\s*autoSessionOpenRef\.current = false;\s*dropAutoLink\(\);/,
+    'settling back to idle without a save releases too');
+});
+
+test('an MCP start titled like a retained auto title keeps it', async context => {
+  const f = autoLinkFixture(context);
+  f.start();
+  await f.resolveCalendar();
+  // The MCP branch order: release first, then write the requested values.
+  f.result().dropAutoLink();
+  f.result().markSource('mcp');
+  f.page().setTitle('Synthetic customer call');
+  f.page().setAccountId('acc-mcp');
+  f.render();
+  assert.equal(f.page().title, 'Synthetic customer call', 'the start gate sees its title');
+  assert.equal(f.page().accountId, 'acc-mcp');
+});
+
+test('browsing references while auto-linked keeps the chip and title', async context => {
+  const f = autoLinkFixture(context);
+  f.start();
+  await f.resolveCalendar();
+  f.page().setAccountId('acc-browse'); // browseReferenceAccount while source is auto
+  f.render();
+  assert.equal(f.result().source(), 'auto');
+  assert.equal(f.result().autoLink.accountId, 'acc-1');
+  assert.equal(f.page().title, 'Synthetic customer call');
+  assert.deepEqual({ ...f.result().dropAutoLink() }, { accountId: 'acc-browse', title: '' }, 'the browsed Account is the user\'s');
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /if \(autoLinkSource\(\) !== 'auto'\) markAccountSource\('user'\);/);
+  assert.equal(page.split('onAccountChange={browseReferenceAccount}').length - 1, 3);
 });

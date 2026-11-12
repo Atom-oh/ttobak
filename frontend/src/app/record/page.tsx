@@ -307,7 +307,7 @@ function RecordPageInner() {
     enabled: !isUploadMode,
     canDismiss: !recordingAccountLocked,
   });
-  const { markSource: markAccountSource, invalidate: invalidateAutoLink, dropAutoLink } = calendarLink;
+  const { markSource: markAccountSource, invalidate: invalidateAutoLink, dropAutoLink, source: autoLinkSource } = calendarLink;
   // Stop, failure and return to idle end the recording's lookup: a late
   // calendar result must not link or retitle anything afterwards.
   const endAutoLinkRecording = useCallback(() => {
@@ -315,12 +315,6 @@ function RecordPageInner() {
     invalidateAutoLink();
   }, [invalidateAutoLink]);
   useEffect(() => { if (postRecording.step !== null) endAutoLinkRecording(); }, [postRecording.step, endAutoLinkRecording]);
-  // A flow dismissed without saving (step back to null) keeps no calendar values.
-  const previousStepRef = useRef(postRecording.step);
-  useEffect(() => {
-    if (previousStepRef.current !== null && postRecording.step === null) dropAutoLink();
-    previousStepRef.current = postRecording.step;
-  }, [postRecording.step, dropAutoLink]);
   const recordingLive = session.isRecording || isNativeRecording;
   const wasRecordingLiveRef = useRef(false);
   useEffect(() => {
@@ -331,6 +325,12 @@ function RecordPageInner() {
     markAccountSource('user');
     setReferenceAccountId(id);
   }, [markAccountSource]);
+  // Browsing references while auto-linked does not change the recording link
+  // (RecordingLinkControls does), so it keeps the chip and the auto title.
+  const browseReferenceAccount = useCallback((id: string) => {
+    if (autoLinkSource() !== 'auto') markAccountSource('user');
+    setReferenceAccountId(id);
+  }, [autoLinkSource, markAccountSource]);
   const autoLinkChip = calendarLink.autoLink && (calendarLink.autoLink.accountId === referenceAccountId
     || calendarLink.autoLink.accountId === postRecording.recordingLinks.accountId)
     // A draft already bound to it can only switch Accounts in RecordingLinkControls.
@@ -385,6 +385,18 @@ function RecordPageInner() {
   // WAV is handed off. Keep that reservation in the parent across mode
   // changes so another draft cannot replace this recording's meeting ID.
   const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording || browserFinalizing;
+  // A recording that settles back to idle without saving (failure, cancel,
+  // a dismissed flow) keeps no calendar values the auto link still owns.
+  const autoSessionOpenRef = useRef(false);
+  const pageIdle = nativeControlPhase({
+    recording: session.isRecording || isNativeRecording, step: postRecording.step, startInFlight: recordStartInFlight,
+    importing: uploadProgress !== null, finalizing: browserFinalizing, flowBusy, pendingAudio: postRecording.hasPendingAudio,
+  }) === 'idle';
+  useEffect(() => {
+    if (!pageIdle || !autoSessionOpenRef.current) return;
+    autoSessionOpenRef.current = false;
+    dropAutoLink();
+  }, [pageIdle, dropAutoLink]);
   const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current || isNativeRecordingRef.current || browserFinalizingRef.current;
 
   // Plain functions, like `handleRecordingStart` below (not useCallback):
@@ -726,12 +738,13 @@ function RecordPageInner() {
           request: { ...request, params: { ...request.params, title } },
           fired: false,
         };
+        // Release auto-owned values first: their queued clears then run
+        // before, never after, the requested title and Account.
+        dropAutoLink();
+        if (request.params.accountId) markAccountSource('mcp');
         setMeetingTitle(title);
         setAudioSource('system');
-        if (request.params.accountId) {
-          markAccountSource('mcp');
-          setReferenceAccountId(request.params.accountId);
-        }
+        if (request.params.accountId) setReferenceAccountId(request.params.accountId);
         setControlTick((n) => n + 1);
         return;
       }
@@ -757,7 +770,7 @@ function RecordPageInner() {
       controlStopRef.current = { requestId: request.requestId, upload: request.params.upload !== false };
       void recordButtonRef.current?.stopExternal();
     });
-  }, [finishControlStart, markAccountSource]); // The handler reads refs; it registers once.
+  }, [finishControlStart, markAccountSource, dropAutoLink]); // The handler reads refs; it registers once.
 
   useEffect(() => {
     const pending = controlStartRef.current;
@@ -971,6 +984,7 @@ function RecordPageInner() {
     // A previous recording's auto link (e.g. one that failed back to idle)
     // never carries into this one; this start looks the calendar up again.
     const released = calendarLink.dropAutoLink();
+    autoSessionOpenRef.current = true;
     if (stream && audioSource === 'tab') {
       const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
       setTabSharingLabel(label);
@@ -1510,7 +1524,7 @@ function RecordPageInner() {
               <PreparationReferences>
                 <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
                   qaPanel={<LiveQAPanel transcriptContext={qaContext} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
-                  referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={chooseReferenceAccount} transcriptTail={contextText}
+                  referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={browseReferenceAccount} transcriptTail={contextText}
                     onAddReference={handleAddReference} onPrepareQuestion={handlePrepareQuestion} />} />
               </PreparationReferences>
             </div>
@@ -1997,7 +2011,7 @@ function RecordPageInner() {
             referencePanel={
               <ReferencePanel
                 accountId={referenceAccountId}
-                onAccountChange={chooseReferenceAccount}
+                onAccountChange={browseReferenceAccount}
                 transcriptTail={session.transcriptContext}
                 onAddReference={handleAddReference}
                 onPrepareQuestion={handlePrepareQuestion}
@@ -2070,7 +2084,7 @@ function RecordPageInner() {
                 referencePanel={
                   <ReferencePanel
                     accountId={referenceAccountId}
-                    onAccountChange={chooseReferenceAccount}
+                    onAccountChange={browseReferenceAccount}
                     transcriptTail={session.transcriptContext}
                 onAddReference={handleAddReference}
                 onPrepareQuestion={handlePrepareQuestion}
