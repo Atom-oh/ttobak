@@ -254,8 +254,10 @@ message on save; update the adapter first.
   unless the selection was made with `--accept-unknown-sensitivity`.
 - **Private.** An item with the Outlook category `Private` (any case), or
   whose joined `get_meeting` says `isPrivate: true`, is sent with
-  `private: true` and no share fields. If the owner shared it in TTOBAK, this
-  re-sends it and the server records a veto.
+  `private: true` and no share fields. The server then writes no share for it,
+  except that an owner `account` override set in TTOBAK still beats `private`
+  (`decideCalendarShare`): such an event stays shared until the owner clears
+  the override.
 - **Removals.** Only a cancelled or excluded *tracked* occurrence is removed.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
