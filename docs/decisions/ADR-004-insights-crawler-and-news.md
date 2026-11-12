@@ -126,8 +126,8 @@ finalization, HISTORY receipt and scheduled recovery. Against the daily run:
 articles a manual run published are skipped by later runs, rejected ones are
 evaluated again, and two overlapping runs reserving the same article fail the
 later reservation. The
-legacy `ttobak-crawler-news` source still contains its former manual branch, but
-no rule targets it any more; a follow-up change removes it.
+legacy `ttobak-crawler-news` manual branch was removed; that function refuses a
+stray `manualCollect` event without writing.
 
 ### Evidence
 

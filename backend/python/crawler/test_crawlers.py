@@ -5,7 +5,6 @@ Uses stdlib unittest + unittest.mock only -- no external test frameworks.
 
 import io
 import json
-from datetime import timedelta
 import os
 import unittest
 from unittest import mock
@@ -56,6 +55,15 @@ class TestLegacyNewsDrain(unittest.TestCase):
                                           "docsUpdated": 0, "errors": []})
                 search.assert_not_called()
                 history.assert_not_called()
+
+    def test_manual_event_is_refused_without_writes(self):
+        with mock.patch.dict(os.environ, {"NEWS_LEGACY_WRITES": "on"}), \
+                mock.patch.object(news_crawler, "_generate_search_queries") as search, \
+                mock.patch.object(news_crawler, "_record_history") as history:
+            result = news_crawler.handler({"manualCollect": {"sourceId": "acct_a_0123abcd"}}, None)
+        self.assertEqual(result["code"], "MANUAL_NOT_SUPPORTED")
+        search.assert_not_called()
+        history.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2196,305 +2204,6 @@ class TestSigv4PostHttpsGuard(unittest.TestCase):
             news_crawler.WEB_SEARCH_GATEWAY_URL = original
 
 
-# ---------------------------------------------------------------------------
-# Manual "collect now" (NewsCollectRequested)
-# ---------------------------------------------------------------------------
-
-_MANUAL_SOURCE = 'acct_8f14e45f-ceea-467a-9575-6d1b3c0a1e01_0a1b2c3d'
-_MANUAL_ACCOUNT = '8f14e45f-ceea-467a-9575-6d1b3c0a1e01'
-
-
-def _manual_event(**overrides):
-    request = {'sourceId': _MANUAL_SOURCE, 'accountId': _MANUAL_ACCOUNT,
-               'requestId': 'req-1'}
-    request.update(overrides)
-    return {'manualCollect': request}
-
-
-def _manual_row(**overrides):
-    row = {'PK': f'CRAWLER#{_MANUAL_SOURCE}', 'SK': 'CONFIG',
-           'accountId': _MANUAL_ACCOUNT, 'status': 'active',
-           'sourceName': 'Row Name', 'newsQueries': ['cloud'],
-           'customUrls': [], 'lastCrawledAt': '2020-01-01T00:00:00+00:00',
-           'lastCollectRequestId': 'req-1',
-           'lastCollectRequestedAt': '2020-01-01T00:00:00+00:00'}
-    row.update(overrides)
-    return row
-
-
-_CCF = ClientError({'Error': {'Code': 'ConditionalCheckFailedException', 'Message': 'x'}},
-                   'UpdateItem')
-
-
-class _ManualTable:
-    """Stub of the CONFIG row that evaluates the claim condition in Python."""
-
-    def __init__(self, row):
-        self.row = row
-        self.claims = []
-        self.history_updates = []
-        self.put_item = mock.MagicMock()
-        self.get_item = mock.MagicMock(side_effect=lambda **kw: (
-            {'Item': dict(self.row)} if self.row is not None else {}))
-        self.claim_error = None
-
-    def update_item(self, **kwargs):
-        if kwargs.get('ReturnValues') != 'ALL_NEW':
-            self.history_updates.append(kwargs)
-            return {}
-        self.claims.append(kwargs)
-        if self.claim_error:
-            raise self.claim_error
-        values = kwargs['ExpressionAttributeValues']
-        row = self.row
-        ok = (row is not None and row.get('accountId') == values[':acc']
-              and row.get('status') != values[':disabled']
-              and 'globalNewsSource' not in row
-              and row.get('lastCollectRequestId') == values[':rid']
-              and row.get('lastCollectStartedRequestId') != values[':rid'])
-        if not ok:
-            raise _CCF
-        row['lastCollectStartedRequestId'] = values[':rid']
-        row['lastCollectStartedAt'] = values[':now']
-        return {'Attributes': dict(row)}
-
-
-class TestManualCollect(unittest.TestCase):
-    def setUp(self):
-        self.table = _ManualTable(_manual_row())
-        patches = [
-            mock.patch.object(news_crawler, 'table', self.table),
-            mock.patch.dict(os.environ, {'NEWS_LEGACY_WRITES': 'on'}),
-            mock.patch.object(news_crawler, 'WEB_SEARCH_GATEWAY_URL', 'https://gw.example/mcp'),
-        ]
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
-        self.crawl = mock.patch.object(news_crawler, '_crawl', wraps=news_crawler._crawl)
-
-    def _run(self, event):
-        with self.crawl as crawl, \
-                mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None)) as search, \
-                mock.patch.object(news_crawler, '_summarize_and_tag') as model:
-            result = news_crawler.handler(event, None)
-        self.model = model
-        return result, crawl, search
-
-    def _assert_no_work(self, crawl, search):
-        crawl.assert_not_called()
-        search.assert_not_called()
-        self.model.assert_not_called()
-        self.table.put_item.assert_not_called()
-        self.assertEqual(self.table.history_updates, [])
-
-    def test_claim_condition_and_update_on_the_wire(self):
-        self._run(_manual_event())
-        [claim] = self.table.claims
-        self.assertEqual(claim['Key'], {'PK': f'CRAWLER#{_MANUAL_SOURCE}', 'SK': 'CONFIG'})
-        self.assertEqual(claim['ConditionExpression'], (
-            'attribute_exists(PK) AND accountId = :acc '
-            'AND (attribute_not_exists(#status) OR #status <> :disabled) '
-            'AND attribute_not_exists(globalNewsSource) '
-            'AND lastCollectRequestId = :rid '
-            'AND (attribute_not_exists(lastCollectStartedRequestId) '
-            'OR lastCollectStartedRequestId <> :rid)'))
-        self.assertEqual(claim['UpdateExpression'],
-                         'SET lastCollectStartedRequestId = :rid, lastCollectStartedAt = :now')
-        self.assertEqual(claim['ExpressionAttributeNames'], {'#status': 'status'})
-        values = claim['ExpressionAttributeValues']
-        self.assertEqual({k: values[k] for k in (':acc', ':rid', ':disabled')},
-                         {':acc': _MANUAL_ACCOUNT, ':rid': 'req-1', ':disabled': 'disabled'})
-        self.assertIsInstance(news_crawler.datetime.fromisoformat(values[':now']),
-                              news_crawler.datetime)
-        self.assertEqual(claim['ReturnValues'], 'ALL_NEW')
-
-    def test_builds_config_from_claimed_row_and_ignores_extra_event_fields(self):
-        event = _manual_event(sourceName='Event Name', newsQueries=['evil'],
-                              customUrls=['https://evil.example'])
-        result, crawl, search = self._run(event)
-        self.assertEqual(result['status'], 'COMPLETED')
-        self.assertEqual(result['requestId'], 'req-1')
-        config = crawl.call_args.args[0]
-        self.assertEqual(config, {'sourceId': _MANUAL_SOURCE, 'sourceName': 'Row Name',
-                                  'newsQueries': ['cloud'], 'customUrls': []})
-        queries = [c.args[0] for c in search.call_args_list]
-        self.assertTrue(queries)
-        self.assertFalse(any('evil' in q or 'Event' in q for q in queries))
-        history = self.table.put_item.call_args.kwargs['Item']
-        self.assertEqual(history['trigger'], 'manual')
-        self.assertEqual(history['requestId'], 'req-1')
-        self.assertEqual(history['summaryLimit'], 40)
-        self.assertFalse(history['summaryLimitReached'])
-        self.assertEqual(len(self.table.history_updates), 1)
-
-    def test_same_request_delivered_twice_runs_once(self):
-        first, _, _ = self._run(_manual_event())
-        self.assertEqual(first['status'], 'COMPLETED')
-        self.table.put_item.reset_mock()
-        self.table.history_updates.clear()
-        self.table.row['lastCrawledAt'] = '2020-01-01T00:00:00+00:00'
-        second, crawl, search = self._run(_manual_event())
-        self.assertEqual((second['status'], second['code']), ('REFUSED', 'DUPLICATE_REQUEST'))
-        self._assert_no_work(crawl, search)
-
-    def test_unclaimed_or_other_request_refused(self):
-        for row in (_manual_row(lastCollectRequestId='req-2'), _manual_row(lastCollectRequestId=None)):
-            for key in [k for k, v in row.items() if v is None]:
-                del row[key]
-            with self.subTest(claim=row.get('lastCollectRequestId')):
-                self.table.row = row
-                result, crawl, search = self._run(_manual_event())
-                self.assertEqual((result['status'], result['code']), ('REFUSED', 'NOT_CLAIMED'))
-                self._assert_no_work(crawl, search)
-
-    def test_claim_error_does_no_work(self):
-        self.table.claim_error = ClientError(
-            {'Error': {'Code': 'ProvisionedThroughputExceededException', 'Message': 'x'}}, 'UpdateItem')
-        with self.assertRaises(ClientError), \
-                mock.patch.object(news_crawler, '_crawl') as crawl, \
-                mock.patch.object(news_crawler, '_gateway_web_search') as search, \
-                mock.patch.object(news_crawler, '_summarize_and_tag') as model:
-            news_crawler.handler(_manual_event(), None)
-        crawl.assert_not_called()
-        search.assert_not_called()
-        model.assert_not_called()
-        self.table.put_item.assert_not_called()
-
-    def test_legacy_falsy_list_values_are_empty(self):
-        self.table.row = _manual_row(newsQueries='', customUrls=None)
-        result, crawl, _ = self._run(_manual_event())
-        self.assertEqual(result['status'], 'COMPLETED')
-        self.assertEqual(crawl.call_args.args[0]['newsQueries'], [])
-        self.assertEqual(crawl.call_args.args[0]['customUrls'], [])
-
-    def test_refusals_do_no_work(self):
-        cases = {
-            'NOT_FOUND': None,
-            'ACCOUNT_MISMATCH': _manual_row(accountId='other'),
-            'SOURCE_DISABLED': _manual_row(status='disabled'),
-            'OPERATOR_SOURCE': _manual_row(globalNewsSource=True),
-            'INVALID_CONFIG': _manual_row(newsQueries='scalar'),
-        }
-        for code, row in cases.items():
-            with self.subTest(code=code):
-                self.table.row = row
-                self.table.put_item.reset_mock()
-                result, crawl, search = self._run(_manual_event())
-                self.assertEqual((result['status'], result['code']), ('REFUSED', code))
-                self._assert_no_work(crawl, search)
-
-    def test_bad_shapes_refused_before_any_read(self):
-        too_long = 'a' * 65
-        events = {
-            'AMBIGUOUS_EVENT': [dict(_manual_event(), sourceId=_MANUAL_SOURCE),
-                                dict(_manual_event(), newsQueries=['x'])],
-            'INVALID_REQUEST': [
-                {'manualCollect': 'x'},
-                _manual_event(sourceId='wooribank'),
-                _manual_event(sourceId='acct_other_0a1b2c3d'),
-                _manual_event(sourceId=_MANUAL_SOURCE + '0'),
-                _manual_event(sourceId=f'acct_{_MANUAL_ACCOUNT}_0A1B2C3D'),
-                _manual_event(accountId='../x'),
-                _manual_event(accountId=too_long),
-                _manual_event(requestId=''),
-                _manual_event(requestId='a\nb'),
-                _manual_event(requestId='a/b'),
-                _manual_event(requestId=7),
-                _manual_event(sourceId=None),
-            ],
-        }
-        for code, cases in events.items():
-            for event in cases:
-                with self.subTest(code=code, event=event):
-                    self.table.claims.clear()
-                    self.table.get_item.reset_mock()
-                    result, crawl, _ = self._run(event)
-                    self.assertEqual((result['status'], result['code']), ('REFUSED', code))
-                    self.assertEqual(self.table.claims, [])
-                    self.table.get_item.assert_not_called()
-                    crawl.assert_not_called()
-
-    def test_disabled_when_legacy_writes_off(self):
-        with mock.patch.dict(os.environ, {'NEWS_LEGACY_WRITES': 'off'}):
-            result, crawl, _ = self._run(_manual_event())
-        self.assertEqual(result['status'], 'DISABLED')
-        self.assertEqual(self.table.claims, [])
-        crawl.assert_not_called()
-
-    def test_skipped_when_crawled_within_30_minutes(self):
-        now = news_crawler.datetime.now(news_crawler.timezone.utc)
-        for minutes, status in ((5, 'SKIPPED_RECENT'), (29, 'SKIPPED_RECENT'),
-                                (-10, 'SKIPPED_RECENT'), (31, 'COMPLETED')):
-            with self.subTest(minutes=minutes):
-                stamp = (now - timedelta(minutes=minutes)).isoformat()
-                self.table.row = _manual_row(lastCrawledAt=stamp)
-                self.table.put_item.reset_mock()
-                result, crawl, _ = self._run(_manual_event())
-                self.assertEqual(result['status'], status)
-                if status == 'SKIPPED_RECENT':
-                    crawl.assert_not_called()
-                    self.table.put_item.assert_not_called()
-
-    def test_skipped_request_is_consumed_and_not_replayed_later(self):
-        # The claim precedes the recency skip, so a duplicate delivery after
-        # the 30 minutes have passed is refused rather than run.
-        recent = news_crawler.datetime.now(news_crawler.timezone.utc).isoformat()
-        self.table.row = _manual_row(lastCrawledAt=recent)
-        first, _, _ = self._run(_manual_event())
-        self.assertEqual(first['status'], 'SKIPPED_RECENT')
-        self.assertEqual(self.table.row['lastCollectStartedRequestId'], 'req-1')
-        self.table.row['lastCrawledAt'] = '2020-01-01T00:00:00+00:00'
-        second, crawl, search = self._run(_manual_event())
-        self.assertEqual((second['status'], second['code']), ('REFUSED', 'DUPLICATE_REQUEST'))
-        self._assert_no_work(crawl, search)
-
-    @mock.patch.object(news_crawler, '_write_metadata')
-    @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
-    def test_summary_cap_stops_model_calls_and_is_reported(self, _exists, _s3, _meta):
-        self.table.row = _manual_row(newsQueries=['q1', 'q2', 'q3'])
-
-        def search(query, max_results=10):
-            return ([{'title': f'{query} {i}', 'url': f'https://ex.example/{query}/{i}',
-                      'text': 'x' * 150} for i in range(30)], None)
-
-        with mock.patch.object(news_crawler, '_gateway_web_search', side_effect=search) as gw, \
-                mock.patch.object(news_crawler, '_summarize_and_tag',
-                                  return_value=('p', '## b', [], True, 1.0)) as model:
-            result = news_crawler.handler(_manual_event(), None)
-        self.assertEqual(model.call_count, 40)
-        self.assertEqual(result['docsAdded'], 40)
-        self.assertTrue(result['summaryLimitReached'])
-        self.assertEqual(result['summariesUsed'], 40)
-        self.assertEqual(gw.call_count, 2)  # collection stops; later queries never search
-        history = self.table.put_item.call_args.kwargs['Item']
-        self.assertTrue(history['summaryLimitReached'])
-        self.assertEqual(history['summariesUsed'], 40)
-
-    @mock.patch.object(news_crawler, '_write_metadata')
-    @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
-    def test_scheduled_shape_has_no_cap_or_manual_fields(self, _exists, _s3, _meta):
-        def search(query, max_results=10):
-            return ([{'title': f'{query} {i}', 'url': f'https://ex.example/{query}/{i}',
-                      'text': 'x' * 150} for i in range(30)], None)
-
-        with mock.patch.object(news_crawler, '_gateway_web_search', side_effect=search), \
-                mock.patch.object(news_crawler, '_summarize_and_tag',
-                                  return_value=('p', '## b', [], True, 1.0)) as model:
-            result = news_crawler.handler({'sourceId': 'woori', 'sourceName': 'S',
-                                           'newsQueries': ['q1', 'q2']}, None)
-        self.assertGreater(model.call_count, 40)
-        self.assertEqual(set(result), {'docsAdded', 'docsUpdated', 'errors'})
-        self.table.get_item.assert_not_called()
-        self.assertEqual(self.table.claims, [])
-        for update in self.table.history_updates:
-            self.assertNotIn('lastCollect', update['UpdateExpression'])
-        history = self.table.put_item.call_args.kwargs['Item']
-        self.assertNotIn('trigger', history)
-        self.assertNotIn('summaryLimit', history)
-
-
 def load_tests(loader, tests, pattern):
     # Keep the established CI entry point complete as staged news modules land.
     tests.addTests(loader.loadTestsFromName("test_news_candidates"))
@@ -2509,7 +2218,6 @@ def load_tests(loader, tests, pattern):
     tests.addTests(loader.loadTestsFromName("test_news_schedule"))
     tests.addTests(loader.loadTestsFromName("test_news_manual"))
     return tests
-
 
 
 if __name__ == '__main__':
