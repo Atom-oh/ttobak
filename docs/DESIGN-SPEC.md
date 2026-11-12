@@ -168,8 +168,9 @@ start reuses the native control path to the record page. Settings shows the
 an app build with the intake commands: adapter state and update, node path when
 missing, selected servers, schedule (off, hourly, daily, twice daily) with a
 warning when the CLI LaunchAgent is also installed, per-source status, setup with
-private-calendar consent and skip toggles, run now, login, cancel and a live
-progress log. A failed state read shows a one-line error. 
+private-calendar consent and skip toggles, sync options (calendar responses
+to sync and the SFDC contacts switch, when the app build reports them), run
+now, login, cancel and a live progress log. A failed state read shows a one-line error. 
 In Mic mode, `MicSelector` remembers the chosen device; when that device no
 longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
 rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
