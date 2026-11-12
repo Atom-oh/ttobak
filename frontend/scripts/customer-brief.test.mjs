@@ -187,3 +187,40 @@ test('the card renders text nodes only and sits at the top of the general tab', 
   const api = read('../src/lib/api.ts');
   assert.match(api, /customer-brief`, \{ \.\.\.options, cache: 'no-store' \}\)/);
 });
+
+test('adding a brief term: request bounds, failure mapping and existing rows', () => {
+  assert.deepEqual(plain(brief.addTermInput('  망분리 ')), { displayAs: '망분리' });
+  // Rejected up front: what the server validator (2-40 code points, a letter or digit) refuses.
+  for (const bad of ['', '   ', '···', 'a', '가'.repeat(41), null, 42]) assert.equal(brief.addTermInput(bad), null);
+  assert.equal(Array.from(brief.addTermInput('가'.repeat(40)).displayAs).length, 40);
+
+  assert.equal(brief.addTermFailure({ status: 409, code: 'TERM_EXISTS' }), 'exists');
+  assert.equal(brief.addTermFailure({ status: 409, code: 'DICTIONARY_FULL' }), 'full');
+  assert.equal(brief.addTermFailure({ status: 403, code: 'FORBIDDEN' }), 'denied');
+  assert.equal(brief.addTermFailure({ status: 404 }), 'denied');
+  assert.equal(brief.addTermFailure({ status: 400, code: 'INVALID_INPUT' }), 'invalid');
+  for (const other of [{ status: 500 }, { status: 409, code: 'CONFLICT' }, null, undefined, 'x']) {
+    assert.equal(brief.addTermFailure(other), 'failed');
+  }
+
+  // TERM_EXISTS is "added" only for an active row; a suggested row is activated with its version.
+  const keyOf = (text) => text.toLowerCase();
+  const rows = [
+    { termId: 'mangbunri', displayAs: 'MangBunri', state: 'suggested', version: 3 },
+    { termId: 'cloud', displayAs: 'Cloud', state: 'active', version: 1 },
+  ];
+  assert.deepEqual(plain(brief.existingTermAction(rows, 'cloud', keyOf)), { action: 'added' });
+  assert.deepEqual(plain(brief.existingTermAction(rows, 'mangbunri', keyOf)), { action: 'activate', termId: 'mangbunri', version: 3 });
+  assert.deepEqual(plain(brief.existingTermAction(rows, 'other', keyOf)), { action: 'failed' });
+  assert.deepEqual(plain(brief.existingTermAction(null, 'cloud', keyOf)), { action: 'failed' });
+  assert.deepEqual(plain(brief.existingTermAction([{ displayAs: 'x', state: 'suggested' }], 'x', keyOf)), { action: 'failed' });
+
+  const card = read('../src/components/account/CustomerBriefCard.tsx');
+  // Keyed by the term so a regenerated brief cannot inherit another term's state.
+  assert.match(card, /<AddTermButton key=\{item\.term\} accountId=\{accountId\} userId=\{userId\}/);
+  // Every dictionary call is bound to the signed-in user.
+  assert.match(card, /const bound = \{ expectedUserId: userId \}/);
+  assert.match(card, /createLayerTerm\(layer, input, bound\)/);
+  assert.match(card, /listLayer\(layer, bound\)/);
+  assert.match(card, /updateLayerTerm\(layer, existing\.termId, \{ state: 'active' \}, existing\.version, bound\)/);
+});

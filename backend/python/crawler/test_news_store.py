@@ -319,6 +319,15 @@ class TestNewsStoreTransactions(unittest.TestCase):
             self.finish(status="PUBLISHED", document=changed, reason="")
         self.assertEqual(self.charge(), Decimal("0.1"))
 
+    def test_matched_term_publishes_and_retry_matches_completion_digest(self):
+        self.reserve()
+        tagged = {**document(self.job), "matchedTerm": "Synthetic source AI"}
+        first = self.finish(status="PUBLISHED", document=tagged, reason="")
+        self.assertEqual(first, self.finish(status="PUBLISHED", document=dict(tagged), reason=""))
+        self.assertEqual(self.row("DOC#" + self.job.doc_hash)["matchedTerm"], "Synthetic source AI")
+        with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+            self.finish(status="PUBLISHED", document=document(self.job), reason="")
+
     def test_incomplete_schema_one_document_can_be_replaced_by_valid_publication(self):
         self.table.put_item(Item={"PK": self.job.pk, "SK": "DOC#" + self.job.doc_hash,
                                   "schemaVersion": 1})

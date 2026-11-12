@@ -582,3 +582,21 @@ test('bedrock timeout maps to CLAUDE_CLI_BEDROCK', async t => {
   assert.equal(await direct.run(), 2);
   assert.equal(direct.output().code, 'REPORT_INVALID');
 });
+
+test('v1.5.0 read tools and scripts are allowed, nothing else is added', async t => {
+  const ctx = setup(t);
+  assert.equal(await ctx.run(), 0);
+  const { argv } = ctx.recorded();
+  const allowed = argv[argv.indexOf('--allowedTools') + 1].split(',');
+  for (const tool of ['search_pfrs', 'search_customer_influences', 'fetch_pfr_details', 'fetch_customer_influence_details',
+    'get_opportunity_details', 'fetch_account_details']) {
+    assert.ok(allowed.includes(`mcp__aws-sentral-mcp__${tool}`), tool);
+  }
+  assert.ok(allowed.includes('mcp__aws-outlook-mcp__email_search'));
+  for (const script of ['interview_count.py', 'pfr_ci_summary.py']) {
+    assert.ok(allowed.includes(`Bash(python3 -I ${ctx.skillDir}/scripts/${script}:*)`), script);
+  }
+  assert.ok(!allowed.some(rule => rule.includes('ccmt-mcp')));
+  assert.ok(!allowed.some(rule => rule.includes('search_campaigns')));
+  assert.ok(!allowed.some(rule => rule.includes('mcp_stdio')));
+});

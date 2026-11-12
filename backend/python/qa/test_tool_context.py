@@ -85,6 +85,25 @@ class TestToolContext(_SourceFixture, unittest.TestCase):
             context['create_research']('owner', 'topic', 'quick')
         self.assertEqual(create.call_count, 1)
 
+    def test_automatic_context_enforces_read_only_and_external_search_opt_in(self):
+        state = new_source_state()
+        state.update(automaticAnswer=True, allowAutomaticWebSearch=False)
+        create = mock.Mock()
+        context = self.context(state, create)
+        with mock.patch('tools.gateway_web_search') as web, mock.patch('tools.search_aws_docs') as docs:
+            for name in ('start_research', 'search_web', 'search_aws_docs'):
+                text, sources = tools.execute_tool(name, {'topic': 'private', 'query': 'private'}, context)
+                self.assertIn('자동 답변', text)
+                self.assertEqual(sources, [])
+            create.assert_not_called()
+            web.assert_not_called()
+            docs.assert_not_called()
+        state['allowAutomaticWebSearch'] = True
+        enabled = self.context(state)
+        self.assertIn('search_web', enabled['allowed_tools'])
+        self.assertNotIn('start_research', enabled['allowed_tools'])
+        self.assertNotIn('allowed_tools', self.context(new_source_state()))
+
     def test_ninth_empty_tool_search_keeps_result_and_eight_cumulative_proofs(self):
         state = new_source_state()
         context = self.context(state)
