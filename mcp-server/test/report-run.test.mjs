@@ -600,3 +600,33 @@ test('v1.5.0 read tools and scripts are allowed, nothing else is added', async t
   assert.ok(!allowed.some(rule => rule.includes('search_campaigns')));
   assert.ok(!allowed.some(rule => rule.includes('mcp_stdio')));
 });
+
+test('exclusions enter the prompt as data', async t => {
+  const ctx = setup(t);
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', '양국',
+    '--exclude-slack-channel', 'random']), 0);
+  const { argv } = ctx.recorded();
+  const prompt = argv[argv.indexOf('-p') + 1];
+  assert.ok(prompt.includes('["양국","random"]'), prompt.slice(-800));
+});
+
+test('a report mentioning an excluded channel is rejected', async t => {
+  const mentioned = content({ summary: '이번 분기 #random 채널에서 답변을 많이 했다.' });
+  const ctx = setup(t, { events: success(mentioned) });
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 2);
+  assert.equal(ctx.output().code, 'REPORT_EXCLUDED_CHANNEL');
+  assert.equal(ctx.puts.length, 0);
+  // A word that merely contains the name is not a mention.
+  const ok = setup(t, { events: success(content({ summary: 'randomized rollout' })) });
+  assert.equal(await ok.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 0);
+});
+
+test('invalid channel name is INVALID_ARGUMENT', async t => {
+  const ctx = setup(t);
+  for (const name of ['#random', 'Upper', 'a b', '', 'x'.repeat(81)]) {
+    assert.equal(await ctx.run(['run', '--period', 'quarter', '--exclude-slack-channel', name]), 2);
+    assert.equal(ctx.output().code, 'INVALID_ARGUMENT', name);
+  }
+  const many = Array.from({ length: 101 }, (_, i) => ['--exclude-slack-channel', `c${i}`]).flat();
+  assert.equal(await ctx.run(['run', '--period', 'quarter', ...many]), 2);
+});

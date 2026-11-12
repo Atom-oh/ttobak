@@ -179,7 +179,7 @@ function definedTtobakEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /** `optional` tools are allowed but not required here; their step checks them itself. */
-async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
+export async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
   tools: readonly ToolExpectation[], optional: readonly ToolExpectation[] = []) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [...tools, ...optional].map(tool => tool.name) });
