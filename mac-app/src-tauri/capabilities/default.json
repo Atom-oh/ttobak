@@ -53,6 +53,7 @@
     "allow-report-cancel",
     "allow-report-get-state",
     "allow-report-settings-get",
-    "allow-report-settings-set"
+    "allow-report-settings-set",
+    "allow-report-slack-channels-refresh"
   ]
 }

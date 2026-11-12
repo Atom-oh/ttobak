@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deliveryFailure } from '../intake/batch.js';
+import { IntakeError } from '../intake/errors.js';
 import { signIn, type IntakeEnvironment, type Selection } from '../intake/run.js';
 import { IntakeStore } from '../intake/store.js';
 import { MIN_CLAUDE_VERSION, SAFE_PATH, claudeArgs, claudeProjectDir, claudeVersion, findClaude, findSkill, homePythonPrefix,
@@ -40,14 +41,27 @@ export interface ReportEnvironment extends IntakeEnvironment {
 
 const USAGE = `Usage:
   ttobak-mcp report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD]
-    [--highlights-file <path>] [--noninteractive]`;
+    [--highlights-file <path>] [--exclude-slack-channel <name>]... [--noninteractive]
+  ttobak-mcp report slack-channels [--days 1-180]`;
+// The app's rule (report_runner.rs normalize_channels): Alphabetic but not Uppercase, or an ASCII digit.
+const CHANNEL = /^(?:(?!\p{Uppercase})[\p{Alphabetic}0-9])(?:(?!\p{Uppercase})[\p{Alphabetic}0-9._-]){0,79}$/u;
+const MAX_EXCLUDED_CHANNELS = 100;
 
-function flags(args: string[]): Record<string, string | true> {
+function flags(args: string[]): Record<string, string | true> & { excluded: string[] } {
   const allowed: Record<string, 'value' | 'flag'> = { '--period': 'value', '--start': 'value', '--end': 'value',
     '--highlights-file': 'value', '--noninteractive': 'flag' };
   const result: Record<string, string | true> = {};
+  const excluded: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
+    if (name === '--exclude-slack-channel') {
+      const channel = args[++index];
+      if (channel === undefined || !CHANNEL.test(channel) || excluded.length >= MAX_EXCLUDED_CHANNELS) {
+        throw new ReportError('INVALID_ARGUMENT', '--exclude-slack-channel needs a Slack channel name');
+      }
+      if (!excluded.includes(channel)) excluded.push(channel);
+      continue;
+    }
     const kind = allowed[name];
     if (!kind || name in result) throw new ReportError('INVALID_ARGUMENT', `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
     if (kind === 'flag') result[name] = true;
@@ -58,7 +72,7 @@ function flags(args: string[]): Record<string, string | true> {
     }
   }
   if (typeof result['--period'] !== 'string') throw new ReportError('INVALID_ARGUMENT', '--period is required');
-  return result;
+  return Object.assign(result, { excluded });
 }
 
 function today(now: Date, zone: string): string {
@@ -206,7 +220,8 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
     if (mcp.missing.length) progress(`설정에 없는 소스: ${mcp.missing.join(', ')}`);
 
     const argv = claudeArgs({
-      prompt: reportPrompt({ skillDir, outDir, alias, period, customersFile, ...(highlights ? { highlights } : {}) }),
+      prompt: reportPrompt({ skillDir, outDir, alias, period, customersFile, ...(highlights ? { highlights } : {}),
+        excludedChannels: options.excluded }),
       schema: REPORT_JSON_SCHEMA, mcpConfigPath, settingsPath, skillDir, workDir,
       allowedTools: allowedTools({ skillDir, outDir, readDirs: [skillDir, workDir, sessionDir], servers: mcp.present }),
     });
@@ -253,6 +268,7 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
       ...(highlights ? { highlights } : {}),
     };
     const validated = validateReport(period.periodKey, candidate);
+    if (mentionsChannel(validated, options.excluded)) throw new ReportError('REPORT_EXCLUDED_CHANNEL');
 
     try { await api.putPerformanceReport(period.periodKey, validated); } catch (error) {
       const failure = deliveryFailure(error);
@@ -270,9 +286,41 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
   }
 }
 
+/** Fields the CLI or the schema fixes (ids, identity, period, codes), not model prose. */
+const STRUCTURAL_KEYS = new Set(['schemaVersion', 'periodKey', 'period', 'alias', 'generatedAt', 'model', 'partial',
+  'highlights', 'id', 'severity']);
+
+/** A string equal to an excluded channel name, `#name` not followed by an
+ * ASCII name character (so `#양국에서` and `#random에서` count, `#random-ops`
+ * does not), or the bare name followed by 채널. */
+function mentionsChannel(value: unknown, excluded: string[]): boolean {
+  if (!excluded.length) return false;
+  const escape = (name: string) => name.replace(/[.]/g, '\\.');
+  const patterns = excluded.flatMap(name => [new RegExp(`#${escape(name)}(?![a-z0-9._-])`, 'u'),
+    new RegExp(`(?<![\\p{L}\\p{N}._-])${escape(name)}\\s*채널`, 'u')]);
+  const visit = (item: unknown): boolean => {
+    if (typeof item === 'string') return excluded.includes(item.trim()) || patterns.some(pattern => pattern.test(item));
+    if (Array.isArray(item)) return item.some(visit);
+    return !!item && typeof item === 'object' &&
+      Object.entries(item).some(([key, child]) => !STRUCTURAL_KEYS.has(key) && visit(child));
+  };
+  return visit(value);
+}
+
 export async function runReport(args: string[], environment: ReportEnvironment): Promise<number> {
   const store = new IntakeStore(environment.home);
   const [command, ...rest] = args;
+  if (command === 'slack-channels') {
+    const { slackChannels } = await import('./slack-channels.js');
+    try {
+      environment.stdout(JSON.stringify(await slackChannels(rest, environment, store)));
+      return 0;
+    } catch (error) {
+      const code = error instanceof IntakeError ? error.code : reportCode(error);
+      environment.stdout(JSON.stringify({ ok: false, code, message: error instanceof Error ? error.message.slice(0, 200) : code }));
+      return 2;
+    }
+  }
   if (command !== 'run') {
     environment.stdout(USAGE);
     return command === '--help' || command === 'help' ? 0 : 2;

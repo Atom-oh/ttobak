@@ -1,7 +1,7 @@
 'use client';
 
 import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
-import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView } from './performanceReport';
+import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 
 interface TauriEvent<T> {
   payload: T;
@@ -814,8 +814,15 @@ export function getReportSettings(): Promise<ReportSettingsView> {
   return invoke<ReportSettingsView>('report_settings_get');
 }
 
-export function setReportSettings(useBedrock: boolean, awsProfile: string | null): Promise<ReportSettingsView> {
-  return invoke<ReportSettingsView>('report_settings_set', awsProfile ? { useBedrock, awsProfile } : { useBedrock });
+export function setReportSettings(useBedrock: boolean, awsProfile: string | null, excludedSlackChannels?: string[]): Promise<ReportSettingsView> {
+  return invoke<ReportSettingsView>('report_settings_set', {
+    useBedrock, ...(awsProfile ? { awsProfile } : {}), ...(excludedSlackChannels ? { excludedSlackChannels } : {}),
+  });
+}
+
+/** Re-reads the owner's Slack channels of the last 90 days (a few minutes). */
+export function refreshSlackChannels(): Promise<SlackChannelCandidates> {
+  return invoke<SlackChannelCandidates>('report_slack_channels_refresh');
 }
 
 export function onReportProgress(handler: (line: string) => void): () => void {
