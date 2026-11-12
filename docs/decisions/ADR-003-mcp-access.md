@@ -576,7 +576,8 @@ configuration.
   (no meetings connector, the read budget spent, a failed lookup or over 50
   attendee domains) a match is sent only as a candidate, an event already shared
   to the same account keeps its share, and a previously private event stays
-  private.
+  private. The server ranks an owner `account` override above `private`, so an
+  event the owner shared in TTOBAK stays shared until that override is cleared.
 - The task step adds exactly two provider writes, both by the deterministic
   runner (this replaces "no unattended provider writes" for these two tools):
   - `acknowledge_request`, only when `get_request` shows `NEXT_UP` with me as

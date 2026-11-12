@@ -215,3 +215,22 @@ test('sync options: defaults note, saved result and adapter-too-old text', () =>
   assert.equal(intake.optionsSaveErrorText('INVALID_ARGUMENT'), '수집 도구를 업데이트한 뒤 다시 시도하세요.');
   assert.equal(intake.optionsSaveErrorText('RUN_IN_PROGRESS'), '이미 수집 중이에요.');
 });
+
+test('adapter update always reports a result', () => {
+  assert.equal(intake.adapterUpdateMessage(true), '수집 도구를 최신 버전으로 바꿨어요.');
+  assert.equal(intake.adapterUpdateMessage(false), '수집 도구가 이미 최신이에요.');
+  for (const code of ['network', 'adapter-invalid', 'save-failed', 'unavailable', 'busy', 'RUN_IN_PROGRESS']) {
+    const label = intake.intakeCodeLabel(code);
+    assert.ok(label && label !== code, `label for ${code}`);
+  }
+});
+
+test('adapter update accepts the legacy response of older apps', () => {
+  const adapter = { present: true, updateAvailable: false };
+  assert.deepEqual(plain(intake.normalizeAdapterUpdate({ adapter, changed: true })), { adapter, changed: true });
+  // Apps before the result shape return the bare adapter view.
+  assert.deepEqual(plain(intake.normalizeAdapterUpdate(adapter)), { adapter, changed: null });
+  assert.equal(intake.adapterUpdateMessage(null), '수집 도구 업데이트를 마쳤어요.');
+  assert.equal(intake.normalizeAdapterUpdate(null), null);
+  assert.equal(intake.normalizeAdapterUpdate({ adapter: 'x' }), null);
+});

@@ -22,14 +22,18 @@ The Mac app runs the adapter for you: a Settings section (copy key
 a browser and in an app build without intake. The app spawns `node` with an
 argument list (no shell) and a cleared environment: `HOME`, `LANG` and a `PATH`
 taken once from the login shell (`$SHELL -l -c`), with the node directory
-prepended. Nothing else from your shell reaches the run.
+prepended. On every use the app appends `~/.toolbox/bin`, `~/.aim/mcp-servers`
+and `~/.local/bin` when they exist and are missing, so the AIM wrappers find
+`aim` even when only `~/.zshrc` adds it; `intake_refresh_path` recaptures the
+login PATH. Nothing else from your shell reaches the run.
 
 Install and update the adapter:
 
 - The adapter is `~/.ttobak/server.mjs`. Settings shows whether it is present and
   whether a newer one is available; the update button downloads
   `https://ttobak.atomai.click/mcp/ttobak-mcp.mjs` (https only, no redirects, at
-  most 8 MiB, must contain `intake setup`).
+  most 8 MiB, must contain `intake setup`) and always reports whether it replaced
+  the file or it was already current.
 - One `server.mjs.bak` keeps the replaced file. `server.mjs` changes only by an
   atomic rename, so it is never missing.
 - An update is refused while a run is going (`RUN_IN_PROGRESS`), and a run
@@ -254,8 +258,10 @@ message on save; update the adapter first.
   unless the selection was made with `--accept-unknown-sensitivity`.
 - **Private.** An item with the Outlook category `Private` (any case), or
   whose joined `get_meeting` says `isPrivate: true`, is sent with
-  `private: true` and no share fields. If it was shared, this re-sends it and
-  the server records a veto.
+  `private: true` and no share fields. If the runner shared it, this re-sends
+  it and the server records a veto. An owner `account` override set in TTOBAK
+  still beats `private` (`decideCalendarShare`): such an event stays shared
+  until the owner clears the override.
 - **Removals.** Only a cancelled or excluded *tracked* occurrence is removed.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
@@ -712,7 +718,8 @@ Prerequisites:
   either logged in (`claude`, then `/login`) or Bedrock through the `env` of
   `~/.claude/settings.json` (only the model-auth keys are carried over;
   `TTOBAK_REPORT_USE_BEDROCK=1|0` and `TTOBAK_REPORT_AWS_PROFILE` override them).
-- The skill is the internal-mcp-setup v1.4.0 layout, installed at
+- The skill is the internal-mcp-setup v1.4.0 layout or later (v1.5.0 is the
+  reviewed allowlist), installed at
   `~/.claude/skills/sa-performance-report` (or in a plugin cache). A copy without
   `scripts/calendar_count.py` and `references/report-structure.md` fails with
   `SKILL_OUTDATED` before the CLI starts.
@@ -742,10 +749,14 @@ Behavior:
 - The CLI runs with `--permission-mode dontAsk`, `--strict-mcp-config`,
   `--setting-sources project,local` (no user permission rules) and an explicit
   read-only `--allowedTools` list (`mcp-server/src/report/tools.ts`): the read
-  tools of the skill's data-sources, file reads only in the skill, `work/` and
+  tools that the v1.5.0 skill's data-sources call (v1.5.0 added the PFR,
+  Customer Influence and detail reads of `aws-sentral-mcp` and Outlook
+  `email_search` for interviews; `ccmt-mcp` and `search_campaigns` stay out), file reads only in the skill, `work/` and
   session directories, writes only in `work/out/` (Write, Edit and MultiEdit
   of `work/.claude/**` are denied), no sub-agents, and Bash only for
-  the three counting scripts. Bash runs only in Claude Code's sandbox, set by
+  the five counting scripts of the v1.5.0 skill (`calendar_count.py`,
+  `extract_tool_json.py`, `slack_threads.py`, `interview_count.py`,
+  `pfr_ci_summary.py`). Bash runs only in Claude Code's sandbox, set by
   the run's `--settings` file: `sandbox.enabled`, `failIfUnavailable`,
   `allowUnsandboxedCommands: false`, no network, writes only in `work/out/`
   (`work/.claude` is in `denyWrite`) and
@@ -810,6 +821,7 @@ Behavior:
 |---|---|
 | `CLAUDE_CLI_MISSING` | No `claude` binary found; install it or set `TTOBAK_CLAUDE_BIN`. |
 | `CLAUDE_CLI_AUTH` | The CLI is not logged in or Bedrock is misconfigured; run `claude` and `/login`, or fix the profile. |
+| `CLAUDE_CLI_BEDROCK` | Bedrock was on and the CLI's request timed out; choose an AWS profile in the report settings or turn Bedrock off. The app refuses Bedrock without a profile (`profile-required`). |
 | `SKILL_MISSING` | The skill is not installed; install internal-mcp-setup v1.4.0. |
 | `SKILL_OUTDATED` | The skill lacks `scripts/calendar_count.py` or `references/report-structure.md`; update it. |
 | `REPORT_INVALID` | The model output failed validation; nothing was uploaded. Re-run. |
