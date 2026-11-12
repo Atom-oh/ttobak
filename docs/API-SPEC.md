@@ -2330,6 +2330,8 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/meetings` | `accountHandler.ListAccountMeetings` |
 | GET | `/api/accounts/{accountId}/insights` | `accountHandler.ListAccountInsights` |
 | GET | `/api/accounts/{accountId}/brief` | `accountHandler.GetAccountBrief` |
+| GET | `/api/accounts/{accountId}/customer-brief` | `customerBriefHandler.Get` |
+| POST | `/api/accounts/{accountId}/customer-brief` | `customerBriefHandler.Request` |
 | GET | `/api/accounts/{accountId}/research` | `researchHandler.ListAccountResearch` |
 | GET | `/api/accounts/{accountId}/projects` | `projectHandler.ListAccountProjects` |
 | POST | `/api/accounts/{accountId}/documents` | `accountHandler.PutDocument` |
@@ -2705,6 +2707,41 @@ Source conflicts preserve text and mark fresh-generation retry; unrelated metada
 changes do not invalidate generation. No source/model text appears in errors.
 Deployment prerequisites and runtime acceptance are recorded in
 [the rollout runbook](runbooks/meeting-document-release.md).
+
+## Customer brief
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/accounts/{accountId}/customer-brief` | Current direct member; `200` with the caller's run state and brief |
+| POST | `/api/accounts/{accountId}/customer-brief` | Current direct member; empty body or `{}` only (1 KiB cap); `202` with run state |
+
+Each member has a private brief; no route returns another member's brief.
+Response (both routes):
+`{"run":{"status","runId"?,"requestedAt"?,"errorCode"?},"brief":{"generatedAt","content"}|null}`.
+`status` is `none`, `queued`, `running`, `succeeded` or `failed`; `requestedAt` and
+`generatedAt` are RFC3339. `errorCode` is set only for `failed` and is one of
+`SOURCE_CHANGED`, `SOURCE_UNAVAILABLE`, `INVALID_OUTPUT`, `ACCESS_REVOKED`,
+`INTERRUPTED`, `TIMEOUT`, `PROVIDER_FAILED`, `PUBLISH_FAILED`, `PERSISTENCE_FAILED`,
+`OUTPUT_TOO_LARGE` or `FAILED` (any other stored code). A pending run past its lease
+reads as `failed/INTERRUPTED`. POST reuses a live run without a second event and
+always returns `brief:null`; GET returns the last good brief until its own 30-day
+expiry, including while a refresh runs or after it fails.
+
+`content` is the stored plain-text JSON (at most 24,000 bytes; the whole response
+at most 25,024): `nextMeeting {title,startsAt,source}|null`, `situation
+{text,sources}|null`, `sinceLast[]`, `news[] {text,why,sources}`, `questions[]`,
+`terms[] {term,gloss,inDictionary,sources}`. Each source is `{kind,id,label}`; ids are
+a meeting id (`meeting`), the underlying meeting or news id (`insight`),
+`{sourceId}:{docHash}` (`news`), and an account event id or `calendar:{eventId}`
+for a synced calendar event (`event`). `inDictionary` covers account terms and the
+personal dictionary, including unmigrated legacy terms.
+
+Errors: 400 for query strings, bodies or invalid IDs; 404 `NOT_FOUND` with one body
+for a missing account and for a caller who is not a current direct member
+(inherited readers included); 409 when a concurrent request claimed the run; 503
+`BRIEF_UNAVAILABLE` when the request event could not be delivered (the run is
+recorded as `failed/PUBLISH_FAILED` and may be retried) or the sealing key is
+unavailable. Neither route is connector-delegated.
 
 ## Re-summary from saved sources
 
