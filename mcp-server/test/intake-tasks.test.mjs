@@ -1080,11 +1080,9 @@ test('an occurrence excluded only by its response keeps its task; a declined one
   assert.equal(unanswered.output.counts.removals, 1);
   assert.equal(unanswered.output.tasks.counts.closed, 0);
   assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
-  // A missing response field next keeps the hold rather than releasing the task.
-  // A second, declined item keeps the read from looking like a dropped response field.
-  const unknown = await run(api, [occurrence({ response: undefined }),
-    occurrence({ meetingId: 'occ-2', response: 'Decline' })], work);
-  assert.equal(unknown.output.tasks.counts.closed, 0);
+  // A missing response field fails the calendar step closed and closes nothing.
+  const unknown = await run(api, [occurrence({ response: undefined })], work);
+  assert.notEqual(unknown.code, 0);
   assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
   // Answered again: synced again with the same open task.
   const accepted = await run(api, [occurrence()], work);

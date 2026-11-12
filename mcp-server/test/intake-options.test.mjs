@@ -34,6 +34,9 @@ const ITEMS = [
   item('missing', '16'), item('odd', '17', 'Weird'), item('dec', '18', 'Decline'),
 ];
 
+// What a provider with known responses returns; runCalendar fails closed on any unknown one.
+const KNOWN = ITEMS.filter(entry => !['missing', 'odd'].includes(entry.meetingId));
+
 const upserted = plan => plan.mutations.filter(m => m.op === 'upsert').map(m => m.event.externalId).sort();
 
 test('calendar_filter_excludes_unselected_responses', () => {
@@ -75,7 +78,7 @@ test('default_responses_exclude_no_response', async t => {
   // A legacy selection without `responses` uses the default; select stores it on a new selection.
   const home = tempHome(t);
   writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: {
-    outlook: { command: process.execPath, args: [OUTLOOK], env: { FAKE_OUTLOOK_ITEMS: JSON.stringify(ITEMS) } } } }));
+    outlook: { command: process.execPath, args: [OUTLOOK], env: { FAKE_OUTLOOK_ITEMS: JSON.stringify(KNOWN) } } } }));
   const lines = [];
   const env = cliEnvironment(home, lines);
   assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], env), 0, lines.at(-1));
@@ -88,7 +91,7 @@ test('default_responses_exclude_no_response', async t => {
   const dry = JSON.parse(lines.at(-1));
   assert.equal(dry.counts.upserts, 4);
   assert.equal(dry.counts.excludedByResponse, 3);
-  assert.equal(dry.counts.responseUnknown, 2);
+  assert.equal(dry.counts.responseUnknown, 0);
 });
 
 function fakeApi() {
@@ -106,6 +109,38 @@ function fakeApi() {
     },
   };
 }
+
+test('any unknown response fails the calendar step closed, dry runs included', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi();
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE, zone: ZONE, now: NOW };
+  for (const dryRun of [true, false]) {
+    await assert.rejects(runCalendar({ ...base, dryRun, source: { async view() { return [...KNOWN, item('odd', '17', 'Weird')]; } } }),
+      error => error.code === 'SCHEMA_CHANGED');
+  }
+  assert.equal(api.calls.length, 0, 'nothing is sent');
+});
+
+test('a hold survives a skipped re-upsert and ends on a decline seen while a batch fails', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi();
+  const source = items => ({ async view() { return items; } });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE, zone: ZONE, now: NOW, dryRun: false };
+  const held = () => Object.keys(loadState(store, SOURCE_ID, SCOPE).held ?? {}).sort();
+  await runCalendar({ ...base, source: source([item('x', '14', 'Accept'), item('y', '15', 'Accept')]) });
+  await runCalendar({ ...base, source: source([item('x', '14', 'None'), item('y', '15', 'None')]) });
+  assert.deepEqual(held(), ['x', 'y']);
+  // x is accepted again but edited to an over-long interval: not upserted, so still held.
+  const long = { ...item('x', '14', 'Accept'), end: '2027-03-01T10:00:00+09:00' };
+  await runCalendar({ ...base, source: source([long, item('y', '15', 'None')]) });
+  assert.deepEqual(held(), ['x', 'y']);
+  // y is declined while the batch is rejected: its hold ends anyway; x stays held.
+  const sync = api.syncCalendarEvents;
+  api.syncCalendarEvents = async () => { throw new ApiResponseError('HTTP 429', 429, 'THROTTLED'); };
+  await assert.rejects(runCalendar({ ...base, source: source([item('x', '14', 'Accept'), item('y', '15', 'Decline')]) }));
+  assert.deepEqual(held(), ['x']);
+  api.syncCalendarEvents = sync;
+});
 
 test('a hold is released only after the re-selected upsert is acknowledged', async t => {
   const store = new IntakeStore(tempHome(t));
@@ -131,7 +166,7 @@ test('turning_off_a_response_removes_synced_copies', async t => {
   const store = new IntakeStore(tempHome(t));
   const api = fakeApi();
   const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE, zone: ZONE, now: NOW, dryRun: false,
-    source: { async view() { return ITEMS; } } };
+    source: { async view() { return KNOWN; } } };
   const first = await runCalendar({ ...base, responses: ['accept', 'organizer', 'tentative', 'none'] });
   assert.equal(first.counts.upserts, 6, 'missing and unrecognised responses are not added');
   const second = await runCalendar({ ...base, responses: ['accept'] });
@@ -149,17 +184,18 @@ test('a read without any response field fails with SCHEMA_CHANGED and changes no
   const store = new IntakeStore(tempHome(t));
   const api = fakeApi();
   const withResponse = { store, api, sourceId: SOURCE_ID, scope: SCOPE, zone: ZONE, now: NOW, dryRun: false,
-    source: { async view() { return ITEMS; } } };
+    source: { async view() { return KNOWN; } } };
   assert.equal((await runCalendar(withResponse)).counts.upserts, 4);
   const sent = api.calls.length;
-  const stripped = ITEMS.map(({ response: _response, ...rest }) => rest);
+  const stripped = KNOWN.map(({ response: _response, ...rest }) => rest);
   const base = { ...withResponse, source: { async view() { return stripped; } } };
   for (const dryRun of [true, false]) {
     await assert.rejects(runCalendar({ ...base, dryRun }), error => error.code === 'SCHEMA_CHANGED', `dryRun=${dryRun}`);
   }
   assert.equal(api.calls.length, sent, 'no upsert or removal is sent');
-  // One item with a response is enough; an empty read is not a schema change.
-  await runCalendar({ ...base, dryRun: true, source: { async view() { return [...stripped, ITEMS[0]]; } } });
+  // A partly stripped read fails too; an empty read is not a schema change.
+  await assert.rejects(runCalendar({ ...base, dryRun: true, source: { async view() { return [...stripped, KNOWN[0]]; } } }),
+    error => error.code === 'SCHEMA_CHANGED');
   await runCalendar({ ...base, dryRun: true, source: { async view() { return []; } } });
 });
 
