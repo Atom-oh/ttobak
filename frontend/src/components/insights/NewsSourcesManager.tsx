@@ -10,6 +10,7 @@ import {
   type AccountEditForm, type DirectoryState, type NewsSourceItem, type NewsSourceKind,
 } from '@/lib/newsRegistration';
 import type { AccountSummary } from '@/types/meeting';
+import { COLLECT_LIMITS, COLLECT_READY, collectFailure, collectView, nextLimitAt, type CollectState } from '@/lib/newsCollect';
 import { NewsKindBadge } from './NewsOrigin';
 
 export interface NewsSourcesState extends DirectoryState {
@@ -303,11 +304,40 @@ function EditRow({ item, userId, onDone, onCancel }: { item: NewsSourceItem; use
   );
 }
 
+/** "Collect now" state for a customer-only row. */
+function useCollectNow(item: NewsSourceItem, userId: string, onChanged: () => void) {
+  const [state, setState] = useState<CollectState>(COLLECT_READY);
+  const [now, setNow] = useState(() => Date.now());
+  const view = collectView(state, item.nextCollectAllowedAt, now);
+  const until = nextLimitAt(state, item.nextCollectAllowedAt, now);
+  // Re-enable when the limit lifts; no polling of the server.
+  useEffect(() => {
+    if (until === null) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(until - Date.now() + 500, 2 ** 31 - 1));
+    return () => clearTimeout(timer);
+  }, [until]);
+  const collect = async () => {
+    if (view.disabled) return;
+    setState({ phase: 'inFlight' });
+    try {
+      const accepted = await accountApi.newsSources.collect(item.accountId!, item.sourceId, { expectedUserId: userId });
+      // No reload here: it would remount the row and drop this confirmation.
+      setState({ phase: 'requested', until: accepted.nextAllowedAt }); setNow(Date.now());
+    } catch (failure) {
+      const next = collectFailure(failure, Date.now());
+      setState(next.state); setNow(Date.now());
+      if (next.reload) onChanged();
+    }
+  };
+  return { view, inFlight: state.phase === 'inFlight', collect };
+}
+
 function SourceRow({ item, userId, onChanged }: { item: NewsSourceItem; userId: string; onChanged: () => void }) {
   const [mode, setMode] = useState<'view' | 'edit' | 'confirm'>('view');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const isAccount = item.kind === 'account' && !!item.accountId;
+  const collectNow = useCollectNow(item, userId, onChanged);
   const remove = async () => {
     setBusy(true); setError('');
     try {
@@ -334,6 +364,10 @@ function SourceRow({ item, userId, onChanged }: { item: NewsSourceItem; userId: 
           <p className="text-xs text-text-muted">
             마지막 수집 {formatCrawled(item.lastCrawledAt)} · 기사 {item.documentCount ?? 0}건
           </p>
+          {isAccount && collectNow.view.note && (
+            <p id={`collect-${item.sourceId}`} role={collectNow.view.alert ? 'alert' : 'status'}
+              className={`text-xs ${collectNow.view.alert ? 'text-error' : 'text-text-secondary'}`}>{collectNow.view.note}</p>
+          )}
         </div>
         {item.canEdit !== false && mode !== 'edit' && (
           <div className="flex shrink-0 flex-wrap items-center gap-1">
@@ -350,6 +384,11 @@ function SourceRow({ item, userId, onChanged }: { item: NewsSourceItem; userId: 
               </>
             ) : (
               <>
+                {isAccount && (
+                  <button type="button" onClick={() => void collectNow.collect()} disabled={collectNow.view.disabled}
+                    aria-label={`${item.sourceName} 지금 수집`} aria-describedby={collectNow.view.note ? `collect-${item.sourceId}` : undefined}
+                    className={`${quietButton} border border-border-subtle`}>{collectNow.inFlight ? '요청 중…' : '지금 수집'}</button>
+                )}
                 {isAccount ? (
                   <button type="button" onClick={() => setMode('edit')} className={quietButton} aria-label={`${item.sourceName} 수정`}>수정</button>
                 ) : (
@@ -392,6 +431,7 @@ export function NewsSourcesManager({ userId, initialAccountId, list, onClose }: 
 
       <div className="glass-panel rounded-xl p-5">
         <h4 className="text-base font-semibold text-text-main">등록한 소스</h4>
+        <p className="mt-1 text-xs text-text-secondary">{COLLECT_LIMITS}</p>
         {sources === null ? (
           <p className="mt-3 text-sm text-text-secondary" role="status">불러오는 중…</p>
         ) : unavailable ? (

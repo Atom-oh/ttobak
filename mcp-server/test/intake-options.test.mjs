@@ -6,7 +6,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_CALENDAR_RESPONSES, planCalendar, runCalendar, syncWindow } from '../dist/intake/calendar.js';
+import { DEFAULT_CALENDAR_RESPONSES, loadState, planCalendar, runCalendar, syncWindow } from '../dist/intake/calendar.js';
+import { ApiResponseError } from '../dist/api.js';
 import { IntakeStore } from '../dist/intake/store.js';
 import { runIntake } from '../dist/intake/run.js';
 
@@ -105,6 +106,26 @@ function fakeApi() {
     },
   };
 }
+
+test('a hold is released only after the re-selected upsert is acknowledged', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi();
+  const source = items => ({ async view() { return items; } });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE, zone: ZONE, now: NOW, dryRun: false };
+  await runCalendar({ ...base, source: source([item('x', '14', 'Accept')]) });
+  await runCalendar({ ...base, source: source([item('x', '14', 'None')]) });
+  assert.deepEqual(Object.keys(loadState(store, SOURCE_ID, SCOPE).held), ['x']);
+  // Accepted again, but the server rejects the batch: the hold stays.
+  const sync = api.syncCalendarEvents;
+  api.syncCalendarEvents = async () => { throw new ApiResponseError('HTTP 429', 429, 'THROTTLED'); };
+  await assert.rejects(runCalendar({ ...base, source: source([item('x', '14', 'Accept')]) }));
+  assert.deepEqual(Object.keys(loadState(store, SOURCE_ID, SCOPE).held), ['x']);
+  // Acknowledged: synced and released.
+  api.syncCalendarEvents = sync;
+  const ok = await runCalendar({ ...base, source: source([item('x', '14', 'Accept')]) });
+  assert.equal(ok.counts.upserts, 1);
+  assert.deepEqual(loadState(store, SOURCE_ID, SCOPE).held, {});
+});
 
 test('turning_off_a_response_removes_synced_copies', async t => {
   const store = new IntakeStore(tempHome(t));
