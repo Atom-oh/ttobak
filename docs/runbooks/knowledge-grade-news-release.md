@@ -434,6 +434,25 @@ includes the rows from its next run (10 active sources of the 30-source limit).
 Acceptance is a later daily execution with `docsAdded > 0` and matching
 `GSI4PK=DOC#news` rows; a successful seed or deployment alone is not.
 
+## Search term display field (2026-11-12)
+
+The worker adds an optional `matchedTerm` string to search DOC rows (ADR-004).
+It is not part of candidate/document identity, the source revision or budgets.
+The current API reader projects it and checks it within the 24,000-byte record
+limit; QA ignores it; readers without it ignore the attribute. Release steps:
+
+1. Confirm the deployed API Lambda includes the `matchedTerm` projection
+   (PR #886 or later) so the term is visible; an older reader is safe but hides it.
+2. Deploy CrawlerStack alone with `--exclusively`; no parameter or flag changes.
+   Record the deployed worker and discovery code SHA-256 as the minimum writer
+   revision for this field.
+3. Acceptance is a later daily execution whose new search `DOC#` row carries
+   `matchedTerm` and whose Insights card shows it. Custom-URL rows have none.
+   Rows published earlier stay without the field; there is no backfill.
+
+Rollback is the normal writer rollback; rows already written keep the attribute
+and remain readable. Steps 1-3 have no recorded evidence yet.
+
 ## Rollback and retention
 
 Rollback disables new writers first and leaves readers, finalization and recovery

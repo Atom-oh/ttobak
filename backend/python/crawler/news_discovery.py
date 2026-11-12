@@ -175,6 +175,7 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
                 result["errors"].append({"code": "SEARCH_FAILED",
                                          "queryHash": hashlib.sha256(query.text.encode()).hexdigest()[:12]})
                 continue
+            term = pipeline.matched_term(query.text)
             for rank, item in enumerate(values[:MAX_RESULTS_PER_QUERY], 1):
                 if inspected >= pipeline.MAX_CANDIDATES:
                     break
@@ -204,8 +205,12 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
                 if canonical in seen:
                     result["duplicateRejected"] += 1
                     continue
+                # First finder wins: queries run in expand_queries order and a
+                # later query's copy of a seen URL is rejected above, so the
+                # candidate keeps the term of the first query that found it.
+                # Near-duplicate grouping keeps the (earliest) lead's term.
                 seen.add(canonical)
-                batch.append({
+                entry = {
                     "runId": run_id, "candidateId": pipeline.candidate_id(config["sourceId"], canonical),
                     "kind": "news", "sourceId": config["sourceId"],
                     "sourceName": config["sourceName"], "aliases": config["aliases"],
@@ -213,7 +218,10 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
                     "canonicalUrl": canonical, "publishedAt": published,
                     "discoveredAt": discovered_at, "queryClass": query.query_class,
                     "searchResultRank": rank, "ingestSource": "search", "requireRelevance": True,
-                })
+                }
+                if term:
+                    entry["matchedTerm"] = term
+                batch.append(entry)
         grouped = pipeline.group_near_duplicates(batch)
         kept, duplicates = _unpublished(config["sourceId"], grouped, published_lookup)
         result["duplicateRejected"] += duplicates
