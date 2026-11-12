@@ -65,8 +65,9 @@ class TestManualStarter(unittest.TestCase):
     def test_happy_path_claims_and_starts_one_named_run(self):
         result = self.run_handler()
         self.assertEqual(result, {'status': 'STARTED', 'requestId': REQUEST})
-        self.sfn.list_executions.assert_called_once_with(
-            stateMachineArn=ENV['DAILY_STATE_MACHINE_ARN'], statusFilter='RUNNING', maxResults=1)
+        self.assertEqual(self.sfn.list_executions.call_args_list, [
+            mock.call(stateMachineArn=ENV[name], statusFilter='RUNNING', maxResults=1)
+            for name in ('DAILY_STATE_MACHINE_ARN', 'PUBLICATION_STATE_MACHINE_ARN')])
         update = self.table.update_item.call_args.kwargs
         self.assertEqual(update['Key'], {'PK': f'CRAWLER#{SOURCE}', 'SK': 'CONFIG'})
         self.assertEqual(update['ConditionExpression'], news_manual.CLAIM_CONDITION)
@@ -175,18 +176,32 @@ class TestManualStarter(unittest.TestCase):
             self.assertEqual(self.run_handler()['status'], 'STARTED')
         self.sfn.start_execution.assert_called_once()
 
-    def test_running_daily_parent_refuses_before_claim(self):
-        self.sfn.list_executions.return_value = {'executions': [{'executionArn': 'arn'}]}
-        result = self.run_handler()
-        self.assertEqual((result['status'], result['code']), ('REFUSED', 'DAILY_RUNNING'))
-        self.assert_no_work()
-        self.table.get_item.assert_not_called()
+    def running(self, daily, child):
+        def respond(stateMachineArn, **_):
+            busy = daily if stateMachineArn == ENV['DAILY_STATE_MACHINE_ARN'] else child
+            if isinstance(busy, Exception):
+                raise busy
+            return {'executions': [{'executionArn': 'arn'}] if busy else []}
+        self.sfn.list_executions.side_effect = respond
 
-    def test_list_executions_error_fails_closed(self):
-        self.sfn.list_executions.side_effect = client_error('AccessDeniedException')
-        with self.assertRaises(ClientError):
-            self.run_handler()
-        self.assert_no_work()
+    def test_running_daily_parent_or_child_refuses_before_claim(self):
+        for daily, child, code in ((True, False, 'DAILY_RUNNING'), (True, True, 'DAILY_RUNNING'),
+                                   (False, True, 'RUN_IN_PROGRESS')):
+            with self.subTest(code=code, daily=daily, child=child):
+                self.running(daily, child)
+                result = self.run_handler()
+                self.assertEqual((result['status'], result['code']), ('REFUSED', code))
+                self.assert_no_work()
+                self.table.get_item.assert_not_called()
+
+    def test_list_executions_error_on_either_machine_fails_closed(self):
+        for daily, child in ((client_error('AccessDeniedException'), False),
+                             (False, client_error('ThrottlingException'))):
+            with self.subTest(daily=daily, child=child):
+                self.running(daily, child)
+                with self.assertRaises(ClientError):
+                    self.run_handler()
+                self.assert_no_work()
 
     def test_start_error_raises_and_keeps_started_marker(self):
         self.sfn.start_execution.side_effect = client_error('ServiceUnavailable')

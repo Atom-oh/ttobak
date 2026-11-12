@@ -308,7 +308,7 @@ export class NewsPublication extends Construct {
     });
     // Manual collection (ADR-004): claims an API-claimed request and starts
     // the child once. No search, fetch or model access; refuses while the
-    // daily parent runs.
+    // daily parent or any child runs.
     const manual = makeFunction('Manual', 'news_manual.handler', 30, 1, {
       PUBLICATION_STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
       DAILY_STATE_MACHINE_ARN: daily.stateMachineArn,
@@ -320,8 +320,10 @@ export class NewsPublication extends Construct {
     manual.role.addToPolicy(new iam.PolicyStatement({
       actions: ['states:StartExecution'], resources: [this.stateMachine.stateMachineArn],
     }));
+    // Refuse while the daily parent or any publication child runs.
     manual.role.addToPolicy(new iam.PolicyStatement({
-      actions: ['states:ListExecutions'], resources: [daily.stateMachineArn],
+      actions: ['states:ListExecutions'],
+      resources: [daily.stateMachineArn, this.stateMachine.stateMachineArn],
     }));
     this.manualStarter = manual.fn;
     const normal = new cdk.CfnCondition(stack, 'NewsAllSourcesEnabled', {

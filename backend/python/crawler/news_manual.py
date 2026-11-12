@@ -82,9 +82,9 @@ def parse_request(event):
     return source_id, account_id, request_id
 
 
-def _daily_running(sfn):
+def _running(sfn, variable):
     # Errors propagate: no claim, no start; the failure queue records it.
-    response = sfn.list_executions(stateMachineArn=os.environ['DAILY_STATE_MACHINE_ARN'],
+    response = sfn.list_executions(stateMachineArn=os.environ[variable],
                                    statusFilter='RUNNING', maxResults=1)
     return bool(response.get('executions'))
 
@@ -147,8 +147,16 @@ def handler(event, context):
     # Backstop for the API's daily window: an overlapping daily run would fail
     # the later reservation of a shared article. Refused before the claim, so
     # nothing is consumed.
-    if _daily_running(sfn):
+    if _running(sfn, 'DAILY_STATE_MACHINE_ARN'):
         return _result('REFUSED', 'DAILY_RUNNING', request_id)
+    # Discovery has reserved concurrency 1 and no invoke retries, so a run
+    # started beside any discovering child would be throttled after the claim.
+    # This is check-then-start: two starters cannot interleave (reserved
+    # concurrency 1), but a daily child can still begin between this check and
+    # this run's discovery. That residual window is what the API's daily-window
+    # refusal covers.
+    if _running(sfn, 'PUBLICATION_STATE_MACHINE_ARN'):
+        return _result('REFUSED', 'RUN_IN_PROGRESS', request_id)
     table = _table()
     if not claim(table, source_id, account_id, request_id):
         return _result('REFUSED', refusal_code(table, source_id, account_id, request_id), request_id)

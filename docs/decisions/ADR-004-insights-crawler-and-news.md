@@ -83,7 +83,11 @@ starter `news_manual.handler` (`ttobak-news-manual`). The starter validates the
 ID grammar; applies the publication handlers' own activation gate (any source in
 `all` mode, only the canary source in `canary`, nothing when `off`) and pricing
 check; refuses with `DAILY_RUNNING` while the `ttobak-news-daily` parent has a
-running execution; then makes one conditional claim on the CONFIG row (event
+running execution and with `RUN_IN_PROGRESS` while any `ttobak-news-publication`
+child runs (discovery has reserved concurrency 1 and no invoke retries, so a
+concurrent run would be throttled after the claim; this check-then-start leaves
+only a daily child starting before the manual discovery, which the API's daily
+window covers); then makes one conditional claim on the CONFIG row (event
 account, non-disabled, non-operator source, the API's `lastCollectRequestId`, not
 yet started) that sets `lastCollectStartedRequestId`/`lastCollectStartedAt`.
 Every refusal before or at the claim does no work. Only then does it start

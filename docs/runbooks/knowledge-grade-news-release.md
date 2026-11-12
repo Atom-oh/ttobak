@@ -75,7 +75,7 @@ all mode unless legacy writes are off. See the dated activation contract below.
 
 Discovery, worker, finalization, recovery, scheduling and the manual starter each
 have a separate Lambda role and retained 30-day log group. The starter may only
-read/update `CRAWLER#*` items, list executions of `ttobak-news-daily`, start
+read/update `CRAWLER#*` items, list executions of both state machines, start
 `ttobak-news-publication` and send to `ttobak-news-collect-failures`. DynamoDB item/transaction operations are confined
 to `CRAWLER#*` keys on the existing table. Recovery and source scheduling receive
 exact-table Scan. Scheduling also has an IAM projection attribute allowlist;
@@ -311,18 +311,20 @@ original history and child/parent failure or timeout alarms on replay.
 
 `ttobak-news-manual` is a second entry point that starts the publication
 workflow (ADR-004); its `manual-{requestId}` runs are ordinary runs with the
-limits above. It refuses (`DAILY_RUNNING`) before claiming while a daily parent
-runs. A ListExecutions or claim error starts nothing; a StartExecution
-error leaves the request spent in the failure queue. Never redrive that queue:
-a replay is refused as `DUPLICATE_REQUEST`.
+limits above. Before claiming it refuses `DAILY_RUNNING` while a daily parent
+runs and `RUN_IN_PROGRESS` while any publication child runs, since single
+discovery concurrency would throttle an overlapping run. A ListExecutions or
+claim error starts nothing; a StartExecution error leaves the request spent in
+the failure queue. Never redrive that queue: a replay is refused as
+`DUPLICATE_REQUEST`.
 
 Source tests and declared resources do not prove delivery. After a targeted,
 exclusive CrawlerStack deployment, record from the actual starter role: the
-refusal codes with the deployed mode, a `DAILY_RUNNING` refusal or its
-ListExecutions call, one accepted request that produced exactly one
-`manual-{requestId}` execution and a finalized receipt with its `NEWSRUN#` row,
-a duplicate delivery refused without a second execution, and the legacy news
-function's removed async configuration. Record the deployed starter and child
+refusal codes with the deployed mode, `DAILY_RUNNING` and `RUN_IN_PROGRESS`
+refusals (or their ListExecutions calls on both state machines), one accepted
+request that produced exactly one `manual-{requestId}` execution and a finalized
+receipt with its `NEWSRUN#` row, a duplicate delivery refused without a second
+execution, and the legacy news function's removed async configuration. Record the deployed starter and child
 function revisions with that evidence.
 
 ### Daily admission retention and bounded replay

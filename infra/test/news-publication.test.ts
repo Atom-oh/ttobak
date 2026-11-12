@@ -254,7 +254,7 @@ describe('private news publication release', () => {
     expect(resolved(model[0].Resource).some((r: string) => r.includes('*'))).toBe(false);
   });
 
-  test('manual starter can only claim, check the daily parent and start the child', () => {
+  test('manual starter can only claim, check both state machines and start the child', () => {
     const starter = Object.entries(json.Resources).find(([, r]: [string, any]) =>
       r.Properties?.Handler === 'news_manual.handler') as [string, any];
     expect(starter).toBeDefined();
@@ -277,7 +277,9 @@ describe('private news publication release', () => {
     const byAction = (action: string) => statements.find(s =>
       (Array.isArray(s.Action) ? s.Action : [s.Action]).includes(action));
     expect(byAction('states:StartExecution').Resource).toEqual({ Ref: childId });
-    expect(byAction('states:ListExecutions').Resource).toEqual({ Ref: dailyId });
+    expect(byAction('states:ListExecutions').Resource).toEqual([{ Ref: dailyId }, { Ref: childId }]);
+    expect(statements.filter(s => [].concat(s.Action).includes('states:ListExecutions' as never)))
+      .toHaveLength(1);
     expect(byAction('dynamodb:UpdateItem').Condition).toEqual({
       'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CRAWLER#*'] },
       Null: { 'dynamodb:LeadingKeys': 'false' },

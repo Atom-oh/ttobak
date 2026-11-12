@@ -853,7 +853,9 @@ the `NewsPublication` construct of the same stack, so no cross-stack edge) as
 ADR-004; it starts `ttobak-news-publication` once as `manual-{requestId}` with
 `{sourceId, runId}`, the input the daily parent passes. Its role has `GetItem`/`UpdateItem` on `CRAWLER#*` keys of the table,
 `states:StartExecution` on the publication state machine only,
-`states:ListExecutions` on the daily state machine only, its own log group and,
+`states:ListExecutions` on the daily and publication state machines only (it
+refuses `DAILY_RUNNING`/`RUN_IN_PROGRESS` while either runs, because discovery's
+reserved concurrency of one would throttle an overlapping run), its own log group and,
 through the Lambda failure destination, `sqs:SendMessage` on the failure queue.
 Reserved concurrency is one. Delivery failures and failed async invocations land
 in SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied),
