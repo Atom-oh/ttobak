@@ -9,7 +9,9 @@ command line stays available. Acceptance on the user's Mac is pending; nothing h
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
 contract for one reader, `aws-outlook-mcp` `calendar_view`. The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
-SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md).
+SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md),
+and its [contacts step](#sfdc-contacts-step) syncs customer contacts into the
+mapped TTOBAK Accounts.
 
 ## Mac app
 
@@ -152,10 +154,11 @@ selections stay saved and no schedule is installed.
 
 `intake run` runs the selected connectors in order, calendar (with its task
 step) then SFDC, with one shared TTOBAK sign-in. The JSON line is
-`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts}}}`.
-It exits 0 only when every attempted connector succeeded. Otherwise it exits 2
+`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts, sfdcContacts?}}}`.
+It exits 0 only when every attempted connector and the SFDC contacts step
+succeeded. Otherwise it exits 2
 with `PARTIAL_FAILURE`; `AUTH_EXPIRED_MIDWAY` anywhere, including the
-calendar's task step (`tasks.failures`), stops the run before later
+calendar's task step (`tasks.failures`) and the SFDC contacts step, stops the run before later
 connectors, because they share Midway, and is the code. Setup's first sync
 follows the same rule. Disabled selections are skipped. `--noninteractive` never prompts and
 never opens a browser; the LaunchAgent uses it.
@@ -441,7 +444,8 @@ assignments are reconciled (see below).
 
 `intake select sfdc --host <claude|codex|kiro> --server aws-sentral-mcp` checks
 the input schemas of `get_my_personal_details`, `get_registry_assignments` and
-`search_tasks`, and keeps the calendar selection. `intake sfdc [--dry-run]
+`search_tasks`, and keeps the calendar selection. `search_contacts` is allowed
+and checked only by the contacts step. `intake sfdc [--dry-run]
 [--noninteractive] [--reconcile]` then reads and syncs; a dry run prints counts
 only and makes no TTOBAK calls. It holds `sfdc.lock`.
 
@@ -488,6 +492,86 @@ counts with AWSentral, then run `intake sfdc` and re-run to confirm empty
 batches. The scheduled `intake run` includes SFDC whenever it is selected, so
 schedule only after that, or pass `--skip sfdc` to setup, which disables
 SFDC and keeps its ledger.
+
+### SFDC contacts step
+
+After a successful SFDC sync, the same `intake sfdc` or `intake run`, on the
+same `aws-sentral-mcp` session, runs `sfdc-contacts`
+(`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`.
+A missing or changed `search_contacts` fails the step with `SCHEMA_CHANGED`;
+the SFDC performance sync keeps its result.
+`intake sfdc` still exits 0 when this step fails, like the calendar's task
+step: the failure is in its `sfdcContacts.result` and in `status.json`; only
+`intake run` turns it into `PARTIAL_FAILURE`.
+
+- **IDs.** Every SFDC ID (contact and account IDs from `search_contacts`,
+  mapped SFDC account IDs, stored `sfdcContactId` links and ledger entries) is
+  canonicalized as the server does (`mcp-server/src/intake/sfdc-id.ts`): a
+  15-character ID gains its 3-character case checksum, an 18-character ID is
+  kept only if its checksum matches. Other values are dropped and counted as
+  `invalidIds`. All matching, `present` and items use the 18-character form.
+  A record whose own canonical `accountId` is not the queried SFDC account is
+  dropped (`accountMismatch`).
+- **Accounts.** `GET /api/performance/mappings` groups the mapped SFDC
+  accounts by TTOBAK Account. A `truncated` listing may miss an Account's
+  other SFDC accounts, so then no Account gets a departure snapshot. Each Account's TTOBAK contacts are listed first,
+  every page; a 403 counts as `forbidden` and the Account is skipped.
+- **Reads.** Per SFDC account, `search_contacts` with
+  `{field: accountId, operator: EXACT_MATCH}` and `limit: 500`, following
+  `cursor` through `after`, up to 5,000 contacts and 11 pages. An empty page
+  that claims more pages, any repeated cursor, or a 12th page fails the read
+  (`PARSE_FAILED`). More than 5,000 kept IDs (uneven pages) make the read
+  incomplete; only the first 5,000 are kept. At most 20 SFDC accounts per
+  TTOBAK Account are read (sorted by ID); the rest count as
+  `skippedAccountCap`.
+- **Filter.** Record types `Stakeholder Map - Internal Contacts` and
+  `Project Resource`, and emails at `amazon.com` (or a subdomain),
+  `amazon.co.kr` or `aws.com`, are dropped (`skippedInternal`). Phone fields
+  are never read.
+- **Match.** An existing `sfdcContactId` link always wins and is sent only
+  when the contact's title or company is exactly empty (as the server fills;
+  whitespace-only is not empty). Otherwise a one-to-one,
+  case-insensitive email match links the contact. Otherwise a unique
+  normalized name (NFKC, lower case, `.`/`,` dropped, whitespace collapsed;
+  spaces ignored for Hangul and other CJK names, which also match with given
+  and family name in either order; Latin names match only as given) without
+  a conflicting email links it. A contact already
+  linked to another SFDC ID, already matched by email, or whose email is
+  ambiguous (for example shared by two SFDC people) is not a name candidate. Several candidates, or several SFDC contacts for one candidate,
+  are `ambiguous` and skipped this run. No match creates a contact. When the
+  Account's read is incomplete (a failed page, a cap, a truncated mapping
+  listing or more than 20 SFDC accounts), a missing person could make a match
+  ambiguous, so only contacts that already carry the SFDC link are filled;
+  every other unsuppressed SFDC contact is `deferredIncomplete` (no email or
+  name link and no create) until a complete run.
+- **Batch.** One `POST /api/accounts/{id}/contacts/sfdc-sync` per Account: links
+  first, then creates, each ordered by SFDC ID, at most 200 items and 512 KiB;
+  the rest count as `skippedCap` and follow on later runs. Items carry only the
+  SFDC IDs, name, title, and the observed `contactId`/`revision` for a link.
+  `present` (all kept SFDC IDs per SFDC account) is sent only when every page of
+  every mapped SFDC account was read, within 5,000 per account, 20,000 in total
+  and 20 accounts; otherwise `snapshotComplete` is false (`incomplete`) and the
+  server marks nobody.
+- **Results.** `alreadyLinked` and `conflict` are retried on the next run from
+  fresh state. `suppressed` IDs (a member deleted the contact) are kept, IDs
+  only, in `~/.ttobak/intake/sfdc-contacts/<scope>/<hash>.json` and no longer
+  sent. A corrupt ledger is treated as empty (`ledgerReset`); an unwritable one
+  sets the step result to `STORE_INVALID`. Neither stops later Accounts. The step needs TTOBAK reads, so `--dry-run`, which signs in to
+  nothing, skips it. Given an API (the test seam), a dry run reads and plans,
+  counts planned creates and links as `created`/`filled`, and sends nothing.
+- **Status.** `status.json` key `sfdcContacts` holds only `lastRunAt`,
+  `lastSuccessAt`, `result` and `counts`: `accounts`, `fetched`, `created`,
+  `filled`, `unchanged`, `alreadyLinked`, `suppressed`, `conflict`, `invalid`,
+  `ambiguous`, `skippedInternal`, `skippedCap`, `skippedAccountCap`,
+  `incomplete`, `deferredIncomplete`, `accountMismatch`, `marked`, `unmarked`, `skipped`, `forbidden`, `invalidIds`,
+  `ledgerReset`.
+- **Failures.** A failed page or a failed Account request becomes the step's
+  `result` while later Accounts still run, so `intake run` reports
+  `PARTIAL_FAILURE`; the SFDC sources keep their own result.
+  `AUTH_EXPIRED_MIDWAY` stops the step and the run.
+- **Privacy.** SFDC and TTOBAK emails are compared in memory only and cleared
+  before the request is built. No email or phone is written to a request body,
+  stdout, stderr, the status file or a ledger.
 
 ## SA report
 

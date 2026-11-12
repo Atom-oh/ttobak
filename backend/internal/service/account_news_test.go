@@ -41,6 +41,24 @@ type accountNewsTestRepo struct {
 	updateErr error
 	// One-shot hooks between reconcile's counter read, ref list and write.
 	afterReconcileRead, afterReconcileList func()
+	// claim decides each collect claim (nil: accepted); releases records
+	// released request IDs and releaseErr fails them.
+	claim      func(sourceID, requestID string, at, cutoff time.Time) error
+	claims     []string
+	releases   []string
+	releaseErr error
+}
+
+func (r *accountNewsTestRepo) ClaimAccountNewsCollect(_ context.Context, _, _, sourceID, requestID string, at, cutoff time.Time) error {
+	r.claims = append(r.claims, requestID)
+	if r.claim != nil {
+		return r.claim(sourceID, requestID, at, cutoff)
+	}
+	return nil
+}
+func (r *accountNewsTestRepo) ReleaseAccountNewsCollect(_ context.Context, _, requestID string) error {
+	r.releases = append(r.releases, requestID)
+	return r.releaseErr
 }
 
 func (r *accountNewsTestRepo) GetAccount(context.Context, string) (*model.Account, error) {

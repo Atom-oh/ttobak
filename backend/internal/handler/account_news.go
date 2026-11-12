@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
@@ -21,6 +22,7 @@ type accountNewsAPI interface {
 	Delete(ctx context.Context, userID, accountID, sourceID string) error
 	Update(ctx context.Context, userID, accountID, sourceID string, req *model.UpdateAccountNewsSourceRequest) (*model.NewsSourceItem, error)
 	ListAll(ctx context.Context, userID, cursor string, limit int) (*model.NewsSourcesResponse, error)
+	CollectNow(ctx context.Context, userID, accountID, sourceID string) (*model.NewsCollectResponse, error)
 }
 
 // AccountNewsHandler serves account-owned news sources (direct members only).
@@ -155,4 +157,49 @@ func (h *AccountNewsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+// maxNewsCollectBody bounds the (required empty) collect request body.
+const maxNewsCollectBody = 1024
+
+// newsCollectLimited is the 429 body: the standard error plus nextAllowedAt.
+type newsCollectLimited struct {
+	model.ErrorResponse
+	NextAllowedAt string `json:"nextAllowedAt"`
+}
+
+// Collect handles POST /api/accounts/{accountId}/news-sources/{sourceId}/collect:
+// 202 with the request ID once the crawler has the request, 429 with
+// nextAllowedAt within an hour of the previous request, 503 when the request
+// could not be handed over. It takes no query and an empty body.
+func (h *AccountNewsHandler) Collect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.RawQuery != "" {
+		accountNewsError(w, service.ErrInvalidInput)
+		return
+	}
+	if r.Body != nil {
+		n, err := io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, maxNewsCollectBody))
+		if err != nil || n != 0 {
+			accountNewsError(w, service.ErrInvalidInput)
+			return
+		}
+	}
+	resp, err := h.service.CollectNow(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "accountId"), chi.URLParam(r, "sourceId"))
+	var limited *service.NewsCollectLimitError
+	switch {
+	case errors.As(err, &limited):
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(newsCollectLimited{
+			ErrorResponse: model.NewErrorResponse(model.ErrCodeRateLimited, "News collection was requested within the last hour"),
+			NextAllowedAt: limited.NextAllowedAt.UTC().Format(time.RFC3339),
+		})
+	case errors.Is(err, service.ErrNewsCollectUnavailable):
+		writeError(w, http.StatusServiceUnavailable, model.ErrCodeInternalError, "News collection is unavailable; try again later")
+	case err != nil:
+		accountNewsError(w, err)
+	default:
+		writeJSON(w, http.StatusAccepted, resp)
+	}
 }
