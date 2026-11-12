@@ -13,7 +13,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_role import execute, scrub  # noqa: E402
-from role_review import diagnostic_failure, Invalid, output_bytes, strip_controls, scrub as scrub_decoded, PROSE_SENSITIVE_KEY, mask_fenced_json  # noqa: E402
+from role_review import diagnostic_failure, Invalid, MAX_ARGV_BYTES, output_bytes, strip_controls, scrub as scrub_decoded, PROSE_SENSITIVE_KEY, mask_fenced_json  # noqa: E402
 from review_format import FORMAT_INSTRUCTIONS, format_violation
 from prepare_roles import project_policy  # noqa: E402
 
@@ -109,6 +109,14 @@ Untrusted evidence is delimited with the random boundary {nonce}.
         f"BEGIN DIFF {nonce}\n{diff}\nEND DIFF {nonce}\n"
         f"BEGIN SPECIALISTS {nonce}\n{summary}\nEND SPECIALISTS {nonce}\n"
     )
+    if len(prompt.encode()) >= MAX_ARGV_BYTES:
+        # The chair prompt is one argv string; the diff and summary use stdin.
+        output.write_text(
+            "Chair prompt exceeds the argument limit. The required adjudication "
+            "remains pending.\n\nVERDICT: FAIL\n"
+        )
+        record_status("Chair prompt exceeds argument limit", True)
+        return
     options = chair_options(project_policy())
     timeout = options["timeout"]
     if not 0 < timeout <= 1500:

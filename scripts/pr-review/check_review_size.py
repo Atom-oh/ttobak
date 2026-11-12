@@ -2,7 +2,9 @@
 """Pre-check that a branch's AI review input fits the CI diff limits.
 
 Mirrors scripts/pr-review/prepare_roles.py: merge-base diff, same git options,
-and paths selected by the base revision's role-input-scope.json policy.
+and paths selected by the base revision's role-input-scope.json policy. The cap
+follows role routing: the smaller Kiro cap applies only when ROLE_REVIEW_KIRO=1
+routes a Kiro role. CI runs with Kiro off.
 Exit 0 within limits, 1 over a limit, 2 on usage or git errors.
 """
 
@@ -70,10 +72,12 @@ def measure(base, head):
     diff = git(*options, "--", *paths) if paths else b""
     lines = len(diff.split(b"\n")) - int(diff.endswith(b"\n")) if diff else 0
     largest = sorted(per_file_bytes(diff).items(), key=lambda item: -item[1])[:5]
+    routes = role_review.routing(paths, diff.decode("utf-8", "replace"))
+    max_bytes, max_lines = role_review.diff_limits(routes)
     return {
         "base": base, "head": head, "merge_base": merge_base,
-        "bytes": len(diff), "lines": lines,
-        "max_bytes": role_review.MAX_DIFF_BYTES, "max_lines": role_review.MAX_DIFF_LINES,
+        "bytes": len(diff), "lines": lines, "kiro_active": role_review.kiro_active(routes),
+        "max_bytes": max_bytes, "max_lines": max_lines,
         "kept_files": len(paths), "excluded_files": len(excluded),
         "largest": [{"path": p, "bytes": b} for p, b in largest],
     }

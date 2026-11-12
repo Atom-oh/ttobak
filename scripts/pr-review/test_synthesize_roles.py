@@ -59,6 +59,32 @@ class SynthesisTests(unittest.TestCase):
             self.assertIn("never wrap those fragments in inline backticks", prompt)
         self.assertTrue((self.root / "review.md").read_text().endswith("VERDICT: FAIL\n"))
 
+    def chair_inputs(self, context, diff):
+        (self.root / "chair-mode.txt").write_text("review\n")
+        (self.root / "role-summary.json").write_text('{"findings":[]}')
+        (self.root / "project-context.md").write_text(context)
+        (self.root / "roles").mkdir(exist_ok=True)
+        (self.root / "roles/codex.diff").write_text(diff)
+
+    def test_chair_argv_limit_fails_closed_without_a_call(self):
+        self.chair_inputs("x" * self.module.MAX_ARGV_BYTES, "Complete supplied diff.")
+        with patch.dict(os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                patch.object(self.module, "execute", side_effect=AssertionError("Unexpected call")):
+            self.module.synthesize(self.root, self.root / "review.md")
+        self.assertTrue((self.root / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+        self.assertIn("chair_failed=1", (self.root / "test-env").read_text())
+
+    def test_chair_diff_travels_on_stdin_not_argv(self):
+        diff = "+" + "y" * 199000 + "\n"
+        self.chair_inputs("Trusted base.", diff)
+        reply = (0, "No blocking issue.\nVERDICT: PASS\n", "")
+        with patch.dict(os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                patch.object(self.module, "execute", return_value=reply) as invoke:
+            self.module.synthesize(self.root, self.root / "review.md")
+        command, input_text = invoke.call_args.args[0], invoke.call_args.args[3]
+        self.assertIn(diff, input_text)
+        self.assertTrue(all(len(value.encode()) < self.module.MAX_ARGV_BYTES for value in command))
+
     def test_incomplete_review_cannot_be_waived_by_chair(self):
         (self.root / "chair-mode.txt").write_text("blocked\n")
         (self.root / "deterministic-review.md").write_text("Missing required role.\nVERDICT: FAIL\n")
