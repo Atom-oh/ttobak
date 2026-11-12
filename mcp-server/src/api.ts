@@ -337,6 +337,11 @@ export class TtobakApi {
   }
 
   /** Owner-private SA performance report of one period; replaces an earlier one. */
+  /** Org and personal skill packages of the signed-in user (docs/API-SPEC.md "Skill packages"). */
+  async skillPackages() {
+    return this.request('GET', '/api/skill-packages', undefined, 64 * 1024, false, true);
+  }
+
   async putPerformanceReport(periodKey: string, report: unknown) {
     return this.request('PUT', `/api/performance/reports/${performanceReportKey(periodKey)}`, report,
       MAX_PERFORMANCE_API_BYTES, false, true);
