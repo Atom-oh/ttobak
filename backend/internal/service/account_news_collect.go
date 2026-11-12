@@ -16,6 +16,7 @@ import (
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -210,8 +211,15 @@ func (a *NewsCollectAdmission) check(ctx context.Context, now time.Time) error {
 	for _, arn := range []string{a.dailyARN, a.publicationARN} {
 		running, err := a.runs.Running(ctx, arn)
 		if err != nil {
-			// The cause carries no names, queries or URLs.
-			log.Printf("news collect admission lookup failed: %v", err)
+			// Only the error code: no names, queries or URLs.
+			code := "UNKNOWN"
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				code = apiErr.ErrorCode()
+			} else if errors.Is(err, context.DeadlineExceeded) {
+				code = "TIMEOUT"
+			}
+			log.Printf("news collect admission lookup failed: code=%s", code)
 			return ErrNewsCollectUnavailable
 		}
 		if running {
