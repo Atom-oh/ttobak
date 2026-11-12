@@ -200,6 +200,8 @@ class TaskRun {
   readonly events = new Map<string, { accountId?: string; title: string; startsAt: string; endsAt: string }>();
   private readonly accounts = new Map<string, AccountInfo | null>();
   private seen!: SeenState;
+  /** Occurrences excluded only by an unselected response (`CalendarState.held`); their tasks stay open. */
+  private held = new Set<string>();
   /** My SpecReq login, confirmed this run. */
   private myLogin = '';
   /** The recorded login, used for addresses only when this run could not reach SpecReq. */
@@ -316,7 +318,9 @@ class TaskRun {
     // Occurrences a run synced without reaching this step (crash, no identity) are still evaluated.
     const window = syncWindow(now, zone);
     const tracked: Record<string, string> = {};
-    for (const [externalId, entry] of Object.entries(loadState(store, sourceId, scope).ledger)) {
+    const state = loadState(store, sourceId, scope);
+    this.held = new Set(Object.keys(state.held ?? {}).map(externalId => calendarEventId(sourceId, externalId)));
+    for (const [externalId, entry] of Object.entries(state.ledger)) {
       const eventId = calendarEventId(sourceId, externalId);
       tracked[eventId] = entry.endsAt;
       if (new Date(entry.endsAt) > window.start && new Date(entry.startsAt) < window.end && !this.seen.seen[eventId]) {
@@ -325,7 +329,9 @@ class TaskRun {
     }
     // Removed since the last task step (replayed batch, skipped step), even for a row past the list cap.
     for (const [eventId, endsAt] of Object.entries(this.seen.tracked ?? {})) {
-      if (!tracked[eventId] && new Date(endsAt) > window.start) this.seen.closing[eventId] ??= now.toISOString();
+      if (!tracked[eventId] && !this.held.has(eventId) && new Date(endsAt) > window.start) {
+        this.seen.closing[eventId] ??= now.toISOString();
+      }
     }
     this.seen.tracked = tracked;
     this.saveSeen();
@@ -406,15 +412,15 @@ class TaskRun {
     const window = syncWindow(now, zone);
     for (const task of this.tasks.values()) {
       if (task.sourceId === sourceId && task.state !== 'closed' && !this.seen.tracked?.[task.eventId]
-        && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
+        && !this.held.has(task.eventId) && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
         this.seen.closing[task.eventId] ??= now.toISOString();
       }
     }
     let failure: unknown;
     for (const eventId of Object.keys(this.seen.closing)) {
       try {
-        // Still synced to TTOBAK: not removed, whatever the local ledger says.
-        if (this.events.has(eventId)) {
+        // Still synced to TTOBAK, or excluded only by an unselected response: not removed.
+        if (this.events.has(eventId) || this.held.has(eventId)) {
           delete this.seen.closing[eventId];
           continue;
         }

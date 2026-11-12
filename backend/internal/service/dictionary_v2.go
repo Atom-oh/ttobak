@@ -84,6 +84,35 @@ func pristineLegacyRow(row model.DictTerm) bool {
 // key has no row (any other row, including a tombstone, hides the blob term).
 // Before migration pristine legacy copies are ignored, so a partial migration
 // never keeps a term the blob has since dropped or changed.
+// effectiveTermKeys is the key set of unionLegacyTerms without any write:
+// active rows (pristine legacy copies ignored before migration) plus blob
+// terms no row hides. Row keys are used as stored. Keys may repeat.
+func effectiveTermKeys(dict *model.UserDictionary, rows []model.DictTerm) []string {
+	premigration := dict != nil && dict.MigratedAt == ""
+	byKey := make(map[string]model.DictTerm, len(rows))
+	for _, row := range rows {
+		if !premigration || !pristineLegacyRow(row) {
+			byKey[row.TermKey] = row
+		}
+	}
+	keys := make([]string, 0, len(byKey))
+	for key, row := range byKey {
+		if row.State == model.TermStateActive {
+			keys = append(keys, key)
+		}
+	}
+	if premigration {
+		for _, t := range dict.Terms {
+			if key := legacyTermKey(t); key != "" {
+				if _, hidden := byKey[key]; !hidden {
+					keys = append(keys, key)
+				}
+			}
+		}
+	}
+	return keys
+}
+
 func unionLegacyTerms(dict *model.UserDictionary, rows []model.DictTerm) []model.DictionaryTerm {
 	premigration := dict != nil && dict.MigratedAt == ""
 	if premigration {

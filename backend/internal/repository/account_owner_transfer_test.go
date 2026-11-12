@@ -118,16 +118,17 @@ func TestDeleteMemberFencesTargetAndRequesterOwnership(t *testing.T) {
 	called := false
 	r := hierarchyWireRepo(t, func(items []hierarchyWireItem) {
 		called = true
-		if len(items) != 3 || items[0].ConditionCheck == nil || items[1].ConditionCheck == nil || items[2].Delete == nil {
-			t.Fatalf("want META check, owner check, delete: %+v", items)
+		if len(items) != 4 || items[0].ConditionCheck == nil || items[1].ConditionCheck == nil || items[2].Delete == nil || items[3].Delete == nil {
+			t.Fatalf("want META check, owner check, member delete, brief delete: %+v", items)
 		}
-		if items[0].ConditionCheck.Key["SK"]["S"] != "META" || items[1].ConditionCheck.Key["SK"]["S"] != "MEMBER#u-owner" || items[2].Delete.Key["SK"]["S"] != "MEMBER#u" {
+		if items[0].ConditionCheck.Key["SK"]["S"] != "META" || items[1].ConditionCheck.Key["SK"]["S"] != "MEMBER#u-owner" || items[2].Delete.Key["SK"]["S"] != "MEMBER#u" ||
+			items[3].Delete.Key["SK"]["S"] != "CUSTBRIEF#u" || items[3].Delete.Key["PK"]["S"] != "ACCOUNT#a" || items[3].Delete.ConditionExpression != "" {
 			t.Fatalf("wrong keys: %+v", items)
 		}
 		requireHierarchyCondition(t, items[0].ConditionCheck, `ownerUserId = "u-owner"`)
 		requireHierarchyCondition(t, items[1].ConditionCheck, `role = "owner"`)
 		requireHierarchyCondition(t, items[2].Delete, "attribute_exists(PK)", `role <> "owner"`)
-	}, 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]}`)
+	}, 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]}`)
 	if err := r.DeleteMember(context.Background(), "a", "u-owner", "u"); !called || !errors.Is(err, ErrConditionFailed) {
 		t.Fatalf("called=%v err=%v, want ErrConditionFailed", called, err)
 	}

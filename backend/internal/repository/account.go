@@ -204,7 +204,8 @@ func nonOwnerMemberCondition() expression.ConditionBuilder {
 // DeleteMember removes an existing non-owner member only while ownerID is
 // still the Owner (META ownerUserId and MEMBER role), in one transaction, so a
 // removal racing an owner transfer cannot land after the requester lost
-// ownership (ADR-015, owner transfer). Any failed condition surfaces ErrConditionFailed (the
+// ownership (ADR-015, owner transfer). The same transaction deletes the
+// member's CUSTBRIEF# row. Any failed condition surfaces ErrConditionFailed (the
 // service re-reads to map not-found vs conflict).
 func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, ownerID, userID string) error {
 	if accountID == "" || ownerID == "" || userID == "" || ownerID == userID {
@@ -229,7 +230,9 @@ func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, ownerI
 		TableName: aws.String(r.tableName), Key: accountHierarchyKey(accountID, model.PrefixMember+userID),
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
 	}}
-	if err := r.writeAccountHierarchy(ctx, []types.TransactWriteItem{meta, owner, del}); err != nil {
+	// The member's customer brief goes with the membership (absent is fine).
+	brief := types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: customerBriefKey(accountID, userID)}}
+	if err := r.writeAccountHierarchy(ctx, []types.TransactWriteItem{meta, owner, del, brief}); err != nil {
 		return fmt.Errorf("delete member: %w", err)
 	}
 	return nil

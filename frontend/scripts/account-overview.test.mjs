@@ -266,13 +266,14 @@ test('icon_checker_allowlists_only_non_icon_wire_literals', () => {
   const script = read('./update-icon-font.mjs');
   const list = script.match(/NON_ICON_LITERALS = new Set\(\[([\s\S]*?)\]\)/);
   assert.ok(list, 'allowlist defined');
-  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map(match => match[1]), ['task', 'event', 'clear', 'preview', 'message', 'login', 'radio']);
+  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map(match => match[1]), ['task', 'event', 'clear', 'preview', 'message', 'storage', 'login', 'radio']);
   assert.match(script, /catalog\.has\(value\) && !NON_ICON_LITERALS\.has\(value\)/);
   assert.equal(overview.LINK_KIND_EVENT, 'event');
   assert.match(read('../src/types/meeting.ts'), /AccountLinkKind = 'news' \| 'tech' \| 'event' \| 'meeting' \| 'project'/);
   assert.match(read('../src/lib/captionOverlay.ts'), /CaptionPushKind = 'entry' \| 'clear' \| 'preview'/);
   assert.match(read('../src/components/layout/UserGuideButton.tsx'), /window\.addEventListener\('message', closeFromGuide\)/);
   assert.match(read('../src/lib/intake.ts'), /IntakeAction = 'run' \| 'setup' \| 'login'/);
+  assert.match(read('../src/lib/releaseNotes.ts'), /window\.addEventListener\('storage', onStorage\)/);
   assert.match(read('../src/components/insights/NewsSourcesManager.tsx'), /<input type="radio"/);
 });
 

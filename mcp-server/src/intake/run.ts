@@ -72,7 +72,7 @@ export interface RunStatus {
   sfdcContacts?: {
     lastRunAt: string;
     lastSuccessAt?: string;
-    /** `disabled`: skipped because `sfdc.contacts` is off. */
+    /** `disabled`: skipped because `options.sfdcContacts` is off. */
     result: 'ok' | 'disabled' | IntakeCode;
     counts?: SfdcContactCounts;
   };

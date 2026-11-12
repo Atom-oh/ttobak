@@ -1069,6 +1069,27 @@ test('removed occurrence closes its task', async t => {
   assert.deepEqual(transitions(api).map(call => call[2]), [{ op: 'close', version: created.version }]);
 });
 
+test('an occurrence excluded only by its response keeps its task; a declined one closes it', async t => {
+  const { run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  await run(api, [occurrence()], work);
+  const [created] = api.tasks.values();
+  // Back to unanswered, which the default selection excludes: removed from TTOBAK, task kept.
+  const unanswered = await run(api, [occurrence({ response: 'None' })], work);
+  assert.equal(unanswered.output.counts.removals, 1);
+  assert.equal(unanswered.output.tasks.counts.closed, 0);
+  assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
+  // Answered again: synced again with the same open task.
+  const accepted = await run(api, [occurrence()], work);
+  assert.equal(accepted.output.counts.upserts, 1);
+  assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
+  // Declined: removed and the task closes.
+  const declined = await run(api, [occurrence({ response: 'Decline' })], work);
+  assert.equal(declined.output.tasks.counts.closed, 1);
+  assert.equal(api.tasks.get(created.eventId).state, 'closed');
+});
+
 test('cloud write failure after ack is retried next run without a second ack', async t => {
   const { home, run, log } = await taskHome(t);
   let failures = 1;
