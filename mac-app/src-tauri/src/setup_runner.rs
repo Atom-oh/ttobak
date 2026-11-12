@@ -21,9 +21,10 @@ const SETUP_MARKER: &[u8] = b"ttobak-mcp setup apply";
 const STEP_EVENT: &str = "setup://step";
 const FINISHED_EVENT: &str = "setup://finished";
 const CLI_TIMEOUT: Duration = Duration::from_secs(20 * 60);
-const MAX_APPROVALS: usize = 50;
+// The adapter's limit: four server lists of at most 100 entries each.
+const MAX_APPROVALS: usize = 400;
 const MAX_KEY_BYTES: usize = 600;
-const MAX_ITEMS: usize = 50;
+const MAX_ITEMS: usize = 400;
 const MAX_TEXT_CHARS: usize = 200;
 const CLI_STEPS: [&str; 3] = ["packages", "skills", "servers"];
 
@@ -230,7 +231,7 @@ fn intake_step(outcome: &Outcome) -> StepView {
     }
 }
 
-/// `--approve` keys: at most 50 of at most 600 printable bytes, never a flag.
+/// `--approve` keys: at most 400 of at most 600 printable bytes, never a flag.
 pub(crate) fn validate_approve(keys: &[String]) -> Result<(), &'static str> {
     let ok = keys.len() <= MAX_APPROVALS
         && keys.iter().all(|k| {
@@ -544,8 +545,9 @@ mod tests {
     #[test]
     fn approve_keys_are_bounded() {
         assert_eq!(validate_approve(&["aim:x".to_string()]), Ok(()));
-        let many: Vec<String> = (0..51).map(|i| format!("aim:s{i}")).collect();
+        let many: Vec<String> = (0..401).map(|i| format!("aim:s{i}")).collect();
         assert_eq!(validate_approve(&many), Err("invalid-argument"));
+        assert_eq!(validate_approve(&many[..400]), Ok(()));
         assert_eq!(
             validate_approve(&["x".repeat(601)]),
             Err("invalid-argument")
