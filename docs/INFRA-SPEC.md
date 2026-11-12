@@ -871,7 +871,8 @@ do not redrive: a request whose started marker is set is spent and a replay is
 refused as a duplicate, but a failure before the marker (ListExecutions or claim
 error) leaves it unset, so a replay within the hour would start a paid run. The
 legacy `ttobak-crawler-news` function no longer has an async invoke
-configuration or queue permission.
+configuration or queue permission; its former manual branch remains in
+`news_crawler.py`, untargeted, until a follow-up change removes it.
 
 ## Summary privacy writer activation
 

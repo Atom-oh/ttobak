@@ -116,8 +116,8 @@ The later discovery is then throttled; if it is the manual run, the request is
 spent with no run and no receipt; if it is a daily child, that source fails for
 the day. Retrying discovery on throttling in the child workflow would close it,
 but changes the publication workflow and needs its own release acceptance. The
-legacy `ttobak-crawler-news` manual consumer was removed; it refuses a stray
-`manualCollect` event without writing.
+legacy `ttobak-crawler-news` source still contains its former manual branch, but
+no rule targets it any more; a follow-up change removes it.
 
 ### Evidence
 
