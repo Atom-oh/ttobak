@@ -184,6 +184,9 @@ def execute_tool(tool_name, tool_input, context):
 
     Returns a tuple so the caller can collect sources without re-executing the search.
     """
+    allowed = context.get('allowed_tools')
+    if allowed is not None and tool_name not in allowed:
+        return '자동 답변에서는 이 도구를 사용할 수 없습니다. 허용된 읽기 전용 자료로 답하세요.', []
     try:
         if tool_name == "search_web":
             # Server-side per-user hourly cap (ADR-028 follow-up): checked
