@@ -105,6 +105,43 @@ Codes shown in the app, and what to do:
 If the state cannot be read, the section shows a one-line error instead of the
 controls. Acceptance on a real Mac is still pending.
 
+## Skill packages: `ttobak-mcp setup plan|apply`
+
+The Mac app's one-click setup runs these after PATH repair and the adapter
+update; they also work in a terminal. Packages come only from TTOBAK
+(`GET /api/skill-packages`, API-SPEC "Skill packages"): the org package for
+everyone and an optional personal package that replaces org skills of the same
+name. Server lists are unioned.
+
+- `setup plan` writes nothing and reports what `apply` would change.
+- `setup apply [--approve <key>]...` downloads each zip, checks its sha256
+  against TTOBAK's record, validates it again (`src/setup/package.ts`, the
+  server's rules), then:
+  - installs each effective skill into `~/.claude/skills/<name>/` only when its
+    files differ, after copying the old folder to
+    `~/.claude/skills-backup/<name>-<YYYYMMDD-HHMMSS>/`. Files the package lacks
+    are kept; a link anywhere under `~/.claude/skills` stops the step
+    (`SKILL_PATH_UNSAFE`).
+  - installs missing MCP servers with fixed commands (no shell):
+    `toolbox registry add`, `toolbox install` plus `claude mcp add -s user <name>
+    -- <name>`, `aim mcp install --clients claude-code` and `claude mcp add -s user
+    -t http`. Presence comes from `toolbox registry list`, `toolbox list
+    --installed`, `~/.claude.json` `mcpServers` and `~/.aim/config.json`
+    `toolBundles`. A registry, server or URL never approved on this Mac is
+    reported in `needsApproval` (keys such as `aim:slack-mcp`) and installed only
+    when passed back with `--approve`; approvals live in
+    `~/.ttobak/setup/approvals.json` (0600).
+- Without toolbox or aim the server step is skipped (`TOOLBOX_MISSING`); a
+  missing `~/.midway/cookie` or an authentication failure stops it with
+  `AUTH_EXPIRED_MIDWAY` (`mwinit -o`). Nothing from a package is executed, and
+  installed skills or servers are never removed.
+- A report skill whose data-sources name tools the report run does not allow
+  produces a warning; the allowlist changes only by code review (ADR-023).
+
+Output is one JSON line `{ok, dryRun, steps:[{id:packages|skills|servers,
+status:ok|current|skipped|failed|needs-approval, code?, items?}], needsApproval:
+[{key,label}], warnings}`; the command takes the intake run lock.
+
 ## Quick start: `ttobak-mcp intake setup`, then `ttobak-mcp intake run`
 
 Run with the stdio adapter (`~/.ttobak/server.mjs`) or `node mcp-server/dist/index.js`.
