@@ -29,6 +29,8 @@ interface NewsPublicationProps {
  */
 export class NewsPublication extends Construct {
   readonly stateMachine: sfn.StateMachine;
+  /** Starts one manual-{requestId} child run; CrawlerStack routes requests to it. */
+  readonly manualStarter: lambda.Function;
 
   constructor(scope: Construct, id: string, props: NewsPublicationProps) {
     super(scope, id);
@@ -304,6 +306,24 @@ export class NewsPublication extends Construct {
         listDaily.next(eachSource).next(summarizeDaily).next(dailyStatus)),
       timeout: cdk.Duration.hours(23),
     });
+    // Manual collection (ADR-004): claims an API-claimed request and starts
+    // the child once. No search, fetch or model access; refuses while the
+    // daily parent runs.
+    const manual = makeFunction('Manual', 'news_manual.handler', 30, 1, {
+      PUBLICATION_STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
+      DAILY_STATE_MACHINE_ARN: daily.stateMachineArn,
+    });
+    manual.role.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+      resources: [props.table.tableArn], conditions: crawlerKeys,
+    }));
+    manual.role.addToPolicy(new iam.PolicyStatement({
+      actions: ['states:StartExecution'], resources: [this.stateMachine.stateMachineArn],
+    }));
+    manual.role.addToPolicy(new iam.PolicyStatement({
+      actions: ['states:ListExecutions'], resources: [daily.stateMachineArn],
+    }));
+    this.manualStarter = manual.fn;
     const normal = new cdk.CfnCondition(stack, 'NewsAllSourcesEnabled', {
       expression: cdk.Fn.conditionEquals(mode.valueAsString, 'all'),
     });

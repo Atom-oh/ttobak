@@ -30,7 +30,7 @@ The account KB reference rows live in `ttobak-main` (ADR-021, relationship links
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
 | TtobakObservabilityStack | OTLP collector (Fargate, internal ALB) writing to the mgmt ClickHouse PrivateLink | None |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
-| TtobakCrawlerStack | Crawling/ingestion workflow and workers; manual account news collection rule; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
+| TtobakCrawlerStack | Crawling/ingestion workflow and workers; manual account news collection rule and versioned starter; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU On-Demand/Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
@@ -845,22 +845,23 @@ decryption, and the `BEDROCK_MODEL_ID` model resources.
 CrawlerStack rule `ttobak-news-collect-requested` routes default-bus
 `ttobak.crawler` events with detail-type `NewsCollectRequested`
 (`{sourceId,accountId,requestId}`, identifiers only; `sourceId` must start with
-`acct_`) to `ttobak-crawler-news` as `{"manualCollect":{sourceId,accountId,requestId}}`
-(ADR-004). Neither EventBridge (`retryAttempts: 0`, one-hour event age) nor
-Lambda (async `MaximumRetryAttempts: 0`, one-hour age) retries a failure, so there
-are no retry-driven repeats. Before any search, fetch or model call the worker
-claims the request with a conditional `UpdateItem` on the CONFIG row: it runs only
-when `lastCollectRequestId` (set by the request route) equals the event's
-`requestId` and `lastCollectStartedRequestId` does not, so a duplicate delivery of
-the same request is refused. A manual run can still overlap a scheduled run of the
-same source. Delivery failures and failed async invocations land in
-SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied);
-the crawler stack owns the `sqs:SendMessage` policy on the imported crawler role
-and alarms on rule `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, function
-`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. The async
-configuration does not affect the workflow's synchronous `CrawlNews` task. No
-route publishes the event yet; the API role already has default-bus
-`events:PutEvents`.
+`acct_`) to the starter `ttobak-news-manual` (`news_manual.handler`, declared in
+the `NewsPublication` construct of the same stack, so no cross-stack edge) as
+`{"manualCollect":{sourceId,accountId,requestId}}` (ADR-004). Neither EventBridge
+(`retryAttempts: 0`, one-hour event age) nor Lambda (async `MaximumRetryAttempts:
+0`, one-hour age) retries a failure. The starter's checks and claim are in
+ADR-004; it starts `ttobak-news-publication` once as `manual-{requestId}` with
+`{sourceId, runId}`, the input the daily parent passes. Its role has `GetItem`/`UpdateItem` on `CRAWLER#*` keys of the table,
+`states:StartExecution` on the publication state machine only,
+`states:ListExecutions` on the daily state machine only, its own log group and,
+through the Lambda failure destination, `sqs:SendMessage` on the failure queue.
+Reserved concurrency is one. Delivery failures and failed async invocations land
+in SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied),
+with alarms on rule `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, starter
+`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. A started
+request is spent: do not redrive it; a replay is refused as a duplicate. The
+legacy `ttobak-crawler-news` function no longer has an async invoke configuration
+or queue permission.
 
 ## Summary privacy writer activation
 

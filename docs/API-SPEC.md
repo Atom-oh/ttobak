@@ -1186,7 +1186,7 @@ checks the ref, account and `MEMBER#` row and sets the CONFIG's
 `lastCollectRequestedAt` (UTC RFC3339, seconds) and `lastCollectRequestId` (the
 event's `requestId`) only when the previous request is absent or at least 3,600
 seconds old. Both writes are update expressions touching only these attributes;
-they and the crawler's own `lastCollectStarted*` markers are outside the source
+they and the starter's own `lastCollectStarted*` markers are outside the source
 revision fingerprint. Then a
 `NewsCollectRequested` event (`ttobak.crawler`, detail `sourceId`, `accountId`,
 `requestId` only) goes to the default bus and the route returns 202
@@ -1197,9 +1197,9 @@ deleted or disabled meanwhile is 404. If the event is not accepted, the claim is
 released (both attributes removed, conditional on its request ID, so a late
 event for it is refused as unclaimed) and the route returns 503; if the
 release also fails the claim expires after the hour. The collection itself is
-asynchronous and bounded by the crawler (it skips a source crawled in the last
-30 minutes and stops at 40 model calls); its outcome is visible only as the
-source's `lastCrawledAt`, HISTORY row and new articles. Account-kind items of
+asynchronous: one versioned publication run named `manual-{requestId}` with
+that run's limits (ADR-004); its outcome is visible only as the source's
+HISTORY receipt and new articles. Account-kind items of
 `GET /api/news-sources`, the PUT response and the per-account GET carry
 `nextCollectAllowedAt` (UTC RFC3339) while a request is within the hour; it is
 omitted when collection may be requested now.

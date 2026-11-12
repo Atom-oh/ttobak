@@ -20,6 +20,7 @@ and accounting semantics.
 | `news_runtime.finalize_handler` | Exact `discovery`, `outcomes` object | Atomically writes final accounting/history; callable after disabling writers |
 | `news_recovery.handler` | Empty object | Recovers expired runs using a leased scan cursor; callable after disabling writers |
 | `news_schedule.handler` | `scheduledAt`, optionally `expectedSourcesSha256` | Lists current source identities with bounded strong pagination; pins the original UTC day and optionally the exact replay set; no writes or model calls |
+| `news_manual.handler` | Exact `{"manualCollect":{sourceId,accountId,requestId}}` from rule `ttobak-news-collect-requested` | Applies the activation and pricing gates, refuses while the daily parent runs, conditionally marks the API-claimed request started, then starts one `manual-{requestId}` publication execution; no search, fetch, model call or other write |
 
 These functions require private IAM invocation. They must not be exposed through
 an unauthenticated function URL or a new public application route.
@@ -72,8 +73,10 @@ installed with news writes disabled. `NewsPipelineMode` permits `off`, `canary`
 and `all`; CloudFormation rejects canary mode without a source ID and rejects
 all mode unless legacy writes are off. See the dated activation contract below.
 
-Discovery, worker, finalization, recovery and scheduling each have a separate Lambda role
-and retained 30-day log group. DynamoDB item/transaction operations are confined
+Discovery, worker, finalization, recovery, scheduling and the manual starter each
+have a separate Lambda role and retained 30-day log group. The starter may only
+read/update `CRAWLER#*` items, list executions of `ttobak-news-daily`, start
+`ttobak-news-publication` and send to `ttobak-news-collect-failures`. DynamoDB item/transaction operations are confined
 to `CRAWLER#*` keys on the existing table. Recovery and source scheduling receive
 exact-table Scan. Scheduling also has an IAM projection attribute allowlist;
 recovery bounds its projection in the request, without an IAM attribute condition.
@@ -303,6 +306,24 @@ durable finalization. Warning-only partial results and valid empty results remai
 successful. The short `FINALIZED` result and duplicate-start catch mean reuse of
 an existing execution, not proof that its historical crawl succeeded. Inspect the
 original history and child/parent failure or timeout alarms on replay.
+
+### Manual collection starter
+
+`ttobak-news-manual` is a second entry point that starts the publication
+workflow (ADR-004); its `manual-{requestId}` runs are ordinary runs with the
+limits above. It refuses (`DAILY_RUNNING`) before claiming while a daily parent
+runs. A ListExecutions or claim error starts nothing; a StartExecution
+error leaves the request spent in the failure queue. Never redrive that queue:
+a replay is refused as `DUPLICATE_REQUEST`.
+
+Source tests and declared resources do not prove delivery. After a targeted,
+exclusive CrawlerStack deployment, record from the actual starter role: the
+refusal codes with the deployed mode, a `DAILY_RUNNING` refusal or its
+ListExecutions call, one accepted request that produced exactly one
+`manual-{requestId}` execution and a finalized receipt with its `NEWSRUN#` row,
+a duplicate delivery refused without a second execution, and the legacy news
+function's removed async configuration. Record the deployed starter and child
+function revisions with that evidence.
 
 ### Daily admission retention and bounded replay
 

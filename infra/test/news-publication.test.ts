@@ -217,7 +217,8 @@ describe('private news publication release', () => {
     expect(scan.filter(s => s.Condition?.['ForAllValues:StringEquals']?.['dynamodb:Attributes']
       ?.includes('newsQueries'))).toHaveLength(1);
     const scoped = all.filter(s => actions(s).includes('dynamodb:UpdateItem'));
-    expect(scoped).toHaveLength(4);
+    // Discover, worker, finalize, recover and the manual starter.
+    expect(scoped).toHaveLength(5);
     for (const s of scoped) {
       expect(s.Condition).toEqual({
         'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CRAWLER#*'] },
@@ -251,6 +252,37 @@ describe('private news publication release', () => {
     expect(worker.Properties.Environment.Variables.NEWS_OUTPUT_USD_PER_MTOK).toBe('0.50');
     expect(resolved(model[0].Resource).filter((r: string) => r.endsWith(':project/default'))).toHaveLength(1);
     expect(resolved(model[0].Resource).some((r: string) => r.includes('*'))).toBe(false);
+  });
+
+  test('manual starter can only claim, check the daily parent and start the child', () => {
+    const starter = Object.entries(json.Resources).find(([, r]: [string, any]) =>
+      r.Properties?.Handler === 'news_manual.handler') as [string, any];
+    expect(starter).toBeDefined();
+    const [, fn] = starter;
+    const roleId = fn.Properties.Role['Fn::GetAtt'][0];
+    const env = fn.Properties.Environment.Variables;
+    const childId = Object.keys(json.Resources).find(id =>
+      json.Resources[id].Properties?.StateMachineName === 'ttobak-news-publication');
+    const dailyId = Object.keys(json.Resources).find(id =>
+      json.Resources[id].Properties?.StateMachineName === 'ttobak-news-daily');
+    expect(env.PUBLICATION_STATE_MACHINE_ARN).toEqual({ Ref: childId });
+    expect(env.DAILY_STATE_MACHINE_ARN).toEqual({ Ref: dailyId });
+    expect(fn.Properties.ReservedConcurrentExecutions).toBe(1);
+    const statements = resources.filter(r => r.Type === 'AWS::IAM::Policy'
+      && r.Properties.Roles.some((role: any) => role.Ref === roleId))
+      .flatMap(p => p.Properties.PolicyDocument.Statement);
+    const actions = statements.flatMap(s => Array.isArray(s.Action) ? s.Action : [s.Action]).sort();
+    expect(actions).toEqual(['dynamodb:GetItem', 'dynamodb:UpdateItem', 'logs:CreateLogStream',
+      'logs:PutLogEvents', 'states:ListExecutions', 'states:StartExecution']);
+    const byAction = (action: string) => statements.find(s =>
+      (Array.isArray(s.Action) ? s.Action : [s.Action]).includes(action));
+    expect(byAction('states:StartExecution').Resource).toEqual({ Ref: childId });
+    expect(byAction('states:ListExecutions').Resource).toEqual({ Ref: dailyId });
+    expect(byAction('dynamodb:UpdateItem').Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CRAWLER#*'] },
+      Null: { 'dynamodb:LeadingKeys': 'false' },
+    });
+    expect(Object.keys(env).filter(k => /GATEWAY|MODEL|BUCKET/.test(k))).toEqual([]);
   });
 
   test('daily children are serialized, deduplicated and isolated from sibling failures', () => {

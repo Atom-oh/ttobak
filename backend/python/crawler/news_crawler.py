@@ -705,8 +705,7 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 # ---------------------------------------------------------------------------
 
 def _record_history(source_id: str, docs_added: int, docs_updated: int,
-                    errors: list, start_time: float, update_status: bool = True,
-                    extra: dict = None) -> None:
+                    errors: list, start_time: float, update_status: bool = True) -> None:
     """Write a HISTORY# item so the Settings UI's crawl history list
     (previously always empty -- nothing wrote these) reflects real runs, and
     optionally flip the source's CONFIG status so its badge isn't stuck on
@@ -718,7 +717,7 @@ def _record_history(source_id: str, docs_added: int, docs_updated: int,
     """
     timestamp = datetime.now(timezone.utc).isoformat()
     try:
-        item = {
+        table.put_item(Item={
             'PK': f'CRAWLER#{source_id}',
             'SK': f'HISTORY#{timestamp}',
             'timestamp': timestamp,
@@ -728,11 +727,7 @@ def _record_history(source_id: str, docs_added: int, docs_updated: int,
             # milliseconds -- CrawlerSettings.tsx:462 renders this as
             # `(h.duration / 1000).toFixed(1)}s`
             'duration': int((time.time() - start_time) * 1000),
-        }
-        # Manual runs add trigger/requestId/summary-limit fields; key fields win.
-        for key, value in (extra or {}).items():
-            item.setdefault(key, value)
-        table.put_item(Item=item)
+        })
         if update_status:
             try:
                 table.update_item(
@@ -781,7 +776,7 @@ def _process_article(source_id: str, title: str, url: str,
                      pub_date: str, snippet: str = '',
                      crawler_source_name: str = '', keywords: list = None,
                      require_relevance: bool = True, seen_urls: set = None,
-                     matched_term: str = '', budget: '_SummaryBudget' = None) -> bool:
+                     matched_term: str = '') -> bool:
     if not url or not title:
         logger.info(f'Skipping result with missing url/title: url={url!r} title={title!r}')
         return False
@@ -805,11 +800,6 @@ def _process_article(source_id: str, title: str, url: str,
 
     if _doc_exists(source_id, doc_hash):
         logger.debug(f'Skipping duplicate: {url}')
-        return False
-
-    # A manual run spends at most budget.limit model calls; the scheduled
-    # path passes no budget and is unchanged.
-    if budget is not None and not budget.take():
         return False
 
     # From here on we're about to spend a Bedrock round-trip -- mark the url
@@ -855,187 +845,6 @@ def _extract_source_name(title: str) -> str:
     return ''
 
 
-# ---------------------------------------------------------------------------
-# Manual "collect now" (EventBridge NewsCollectRequested, one account source)
-# ---------------------------------------------------------------------------
-
-# The rule ttobak-news-collect-requested passes only
-# {"manualCollect": {"sourceId", "accountId", "requestId"}}; everything else
-# comes from the CONFIG row, never from the event.
-MANUAL_COLLECT_KEY = 'manualCollect'
-MANUAL_SUMMARY_LIMIT = 40
-MANUAL_RECENT_SECONDS = 30 * 60
-MANUAL_MAX_QUERIES = 32
-MANUAL_MAX_CUSTOM_URLS = 20
-_SCHEDULED_KEYS = ('sourceId', 'sourceName', 'newsQueries', 'customUrls', 'newsSources')
-_MANUAL_ID_RE = re.compile(r'[A-Za-z0-9-]{1,64}')
-_MANUAL_SOURCE_SUFFIX_RE = re.compile(r'[0-9a-f]{8}')
-
-
-class _SummaryBudget:
-    """Counts model calls of one run; take() refuses once the limit is spent."""
-
-    def __init__(self, limit: int):
-        self.limit = limit
-        self.used = 0
-
-    @property
-    def exhausted(self) -> bool:
-        return self.used >= self.limit
-
-    def take(self) -> bool:
-        if self.exhausted:
-            return False
-        self.used += 1
-        return True
-
-
-def _manual_result(status: str, code: str = '', request_id: str = '') -> dict:
-    logger.info(f'manual collect: outcome={status} code={code or "-"} '
-                f'requestId={request_id or "-"}')
-    result = {'status': status, 'docsAdded': 0, 'docsUpdated': 0, 'errors': []}
-    if code:
-        result['code'] = code
-    return result
-
-
-def _manual_request(event):
-    """Validated (sourceId, accountId, requestId) or a refusal code."""
-    if any(key in event for key in _SCHEDULED_KEYS):
-        return None, 'AMBIGUOUS_EVENT'
-    request = event.get(MANUAL_COLLECT_KEY)
-    if not isinstance(request, dict):
-        return None, 'INVALID_REQUEST'
-    ids = [request.get(k) for k in ('sourceId', 'accountId', 'requestId')]
-    if not all(isinstance(v, str) for v in ids):
-        return None, 'INVALID_REQUEST'
-    source_id, account_id, request_id = ids
-    if not _MANUAL_ID_RE.fullmatch(account_id) or not _MANUAL_ID_RE.fullmatch(request_id):
-        return None, 'INVALID_REQUEST'
-    prefix = f'acct_{account_id}_'
-    if (not source_id.startswith(prefix)
-            or not _MANUAL_SOURCE_SUFFIX_RE.fullmatch(source_id[len(prefix):])):
-        return None, 'INVALID_REQUEST'
-    return (source_id, account_id, request_id), ''
-
-
-def _manual_strings(value, maximum: int):
-    """List of stored strings; legacy falsy scalars mean empty, others refuse."""
-    if not value:
-        return []
-    if not isinstance(value, (list, tuple, set)) or len(value) > maximum:
-        return None
-    if not all(isinstance(item, str) for item in value):
-        return None
-    return [item for item in value if item.strip()]
-
-
-def _recently_crawled(value) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
-    try:
-        crawled = datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except ValueError:
-        return False
-    if crawled.tzinfo is None:
-        crawled = crawled.replace(tzinfo=timezone.utc)
-    # A future timestamp (clock skew) also counts as recent.
-    return (datetime.now(timezone.utc) - crawled).total_seconds() < MANUAL_RECENT_SECONDS
-
-
-# The request route claims a request by setting lastCollectRequestId (and
-# lastCollectRequestedAt) on the CONFIG row; the worker marks it started with
-# lastCollectStartedRequestId/lastCollectStartedAt. These four attributes are
-# outside the source fingerprint: news_discovery.source_snapshot and Go
-# newsSourceRevision hash only an allowlist (sourceId, sourceName, ownerId,
-# status, aliases, newsQueries, customUrls). The scheduled path neither reads
-# nor writes them.
-_MANUAL_CLAIM_CONDITION = (
-    'attribute_exists(PK) AND accountId = :acc '
-    'AND (attribute_not_exists(#status) OR #status <> :disabled) '
-    'AND attribute_not_exists(globalNewsSource) '
-    'AND lastCollectRequestId = :rid '
-    'AND (attribute_not_exists(lastCollectStartedRequestId) '
-    'OR lastCollectStartedRequestId <> :rid)'
-)
-_MANUAL_CLAIM_UPDATE = 'SET lastCollectStartedRequestId = :rid, lastCollectStartedAt = :now'
-
-
-def _manual_claim(source_id: str, account_id: str, request_id: str):
-    """Atomically start one claimed request; the claimed row, or None if refused."""
-    try:
-        return table.update_item(
-            Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'},
-            ConditionExpression=_MANUAL_CLAIM_CONDITION,
-            UpdateExpression=_MANUAL_CLAIM_UPDATE,
-            ExpressionAttributeNames={'#status': 'status'},
-            ExpressionAttributeValues={
-                ':acc': account_id, ':rid': request_id, ':disabled': 'disabled',
-                ':now': datetime.now(timezone.utc).isoformat(),
-            },
-            ReturnValues='ALL_NEW',
-        ).get('Attributes') or {}
-    except ClientError as e:
-        if e.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
-            raise
-        return None
-
-
-def _manual_refusal_code(source_id: str, account_id: str, request_id: str) -> str:
-    """Classify a failed claim for the result/log only; never starts work."""
-    try:
-        item = table.get_item(
-            Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'}, ConsistentRead=True,
-        ).get('Item')
-    except Exception:
-        return 'CLAIM_REJECTED'
-    if not item:
-        return 'NOT_FOUND'
-    if item.get('lastCollectStartedRequestId') == request_id:
-        return 'DUPLICATE_REQUEST'
-    if item.get('lastCollectRequestId') != request_id:
-        return 'NOT_CLAIMED'
-    if item.get('accountId') != account_id:
-        return 'ACCOUNT_MISMATCH'
-    if item.get('status') == 'disabled':
-        return 'SOURCE_DISABLED'
-    if 'globalNewsSource' in item:
-        return 'OPERATOR_SOURCE'
-    return 'CLAIM_REJECTED'
-
-
-def _manual_collect(event):
-    request, code = _manual_request(event)
-    if request is None:
-        return _manual_result('REFUSED', code)
-    source_id, account_id, request_id = request
-    # Claim before any search, fetch or model call. The recency skip runs on
-    # the claimed row, after the claim, so a skipped request is consumed and a
-    # duplicate delivery of it is refused as DUPLICATE_REQUEST rather than
-    # running once the 30 minutes have passed. Claim errors other than a
-    # failed condition propagate: no work, recorded by the failure destination.
-    item = _manual_claim(source_id, account_id, request_id)
-    if item is None:
-        return _manual_result('REFUSED', _manual_refusal_code(source_id, account_id, request_id),
-                              request_id)
-    name = item.get('sourceName') or ''
-    queries = _manual_strings(item.get('newsQueries'), MANUAL_MAX_QUERIES)
-    urls = _manual_strings(item.get('customUrls'), MANUAL_MAX_CUSTOM_URLS)
-    if not isinstance(name, str) or queries is None or urls is None:
-        return _manual_result('REFUSED', 'INVALID_CONFIG', request_id)
-    if _recently_crawled(item.get('lastCrawledAt')):
-        return _manual_result('SKIPPED_RECENT', '', request_id)
-    budget = _SummaryBudget(MANUAL_SUMMARY_LIMIT)
-    config = {'sourceId': source_id, 'sourceName': name,
-              'newsQueries': queries, 'customUrls': urls}
-    result = _crawl(config, time.time(), budget=budget,
-                    history_extra={'trigger': 'manual', 'requestId': request_id})
-    logger.info(f'manual collect: outcome=COMPLETED requestId={request_id} '
-                f'docsAdded={result["docsAdded"]} summaries={budget.used} '
-                f'limitReached={budget.exhausted} errors={len(result["errors"])}')
-    return {'status': 'COMPLETED', 'requestId': request_id, **result}
-
-
 def handler(event, context):
     """Process news articles via AgentCore Gateway Web Search + custom URLs.
 
@@ -1055,25 +864,12 @@ def handler(event, context):
 
     Search results come from the AgentCore Web Search connector (snippet
     only). Custom URLs are still fetched directly and their body extracted.
-
-    A manual request is {"manualCollect": {"sourceId", "accountId",
-    "requestId"}} with none of the keys above; see _manual_collect.
     """
     # Fail closed before search, model calls, object writes or history/status
     # changes. Deployment drains the old revision before archiving legacy data.
     if os.environ.get("NEWS_LEGACY_WRITES", "on") != "on":
         return {"status": "DISABLED", "docsAdded": 0, "docsUpdated": 0, "errors": []}
-    if isinstance(event, dict) and MANUAL_COLLECT_KEY in event:
-        return _manual_collect(event)
-    return _crawl(event, time.time())
-
-
-def _crawl(event, start_time, budget=None, history_extra=None):
-    """Collect one source: custom URLs, then one web search per query.
-
-    budget (manual runs only) caps model calls and stops collection once
-    reached; None keeps the scheduled behavior unchanged.
-    """
+    start_time = time.time()
     source_id = event.get('sourceId', 'unknown')
     source_name = event.get('sourceName', '')
     keywords = event.get('newsQueries') or []
@@ -1095,7 +891,7 @@ def _crawl(event, start_time, budget=None, history_extra=None):
         try:
             if _process_article(source_id, title, url, pub_date, snippet, source_name,
                                 keywords, require_relevance, seen_urls,
-                                matched_term=matched_term, budget=budget):
+                                matched_term=matched_term):
                 docs_added += 1
             # _process_article itself marks seen_urls once it's past the
             # cheap pre-checks (about to spend a Bedrock call) -- a rejected
@@ -1119,8 +915,6 @@ def _crawl(event, start_time, budget=None, history_extra=None):
     # _doc_exists sees a hash, the snippet version would otherwise "win"
     # and the fuller custom-URL body never gets a chance to be written.
     for entry in custom_urls:
-        if budget is not None and budget.exhausted:
-            break
         url = None  # set inside try; fall back to raw entry in the except below if unset
         try:
             # The real config shape (backend/internal/model/meeting.go's
@@ -1180,15 +974,11 @@ def _crawl(event, start_time, budget=None, history_extra=None):
 
     # 2. AgentCore Gateway Web Search — one search per generated query
     for query in all_queries:
-        if budget is not None and budget.exhausted:
-            break
         results, search_error = _gateway_web_search(query)
         if search_error:
             errors.append(f'web search "{query}": {search_error}')
         logger.info(f'Web search "{query}": {len(results)} result(s)')
         for r in results:
-            if budget is not None and budget.exhausted:
-                break
             _try_process(r.get('title', ''), r.get('url', ''),
                          r.get('publishedDate', ''), r.get('text', ''),
                          matched_term=query)
@@ -1198,14 +988,8 @@ def _crawl(event, start_time, budget=None, history_extra=None):
         'docsUpdated': docs_updated,
         'errors': errors,
     }
-    extra = dict(history_extra or {})
-    if budget is not None:
-        result['summariesUsed'] = budget.used
-        result['summaryLimitReached'] = budget.exhausted
-        extra.update(summaryLimit=budget.limit, summariesUsed=budget.used,
-                     summaryLimitReached=budget.exhausted)
     logger.info(f'News crawler complete: {json.dumps(result)}')
     is_synthetic_source = source_id.startswith('__')
     _record_history(source_id, docs_added, docs_updated, errors, start_time,
-                    update_status=not is_synthetic_source, extra=extra or None)
+                    update_status=not is_synthetic_source)
     return result

@@ -69,31 +69,37 @@ shape; any other row-less source, such as `__tech__`, is common. Q&A retrieval
 over `shared/news/` is unchanged and remains a known limit: it can still
 surface another account's public article.
 
-2026-11-12: manual collection exists for account-owned (`acct_`) sources only.
-`NewsCollectRequested` carries IDs; `ttobak-crawler-news` runs only requests the
-request route claimed on the CONFIG row and refuses duplicates: one conditional
-claim requires the event's account, a non-disabled, non-operator source, the
-route's `lastCollectRequestId` and a not-yet-started request. It builds the run
-from the claimed row, then runs the scheduled collection path and history. It
-skips a source crawled in the last 30 minutes (after the claim, so a skipped
-request is consumed) and stops at 40 model calls per run, recording the limit in
-the result and HISTORY row. A manual run can still overlap a scheduled run of the
-same source. It is a legacy
-writer: `NEWS_LEGACY_WRITES` disables it, and it must be drained with the other
-legacy writers before the versioned path's `all` mode. Articles appear in
-Insights lists immediately but reach Q&A/KB retrieval only at the next
-ingestion.
-
-2026-11-12: any current direct member may request manual collection of one of
-the account's own (`acct_`) sources through `POST
-/api/accounts/{accountId}/news-sources/{sourceId}/collect`. The API claims the
-request with one transaction that checks the source ref, account and membership
+Manual collection ("collect now") runs on the versioned publication path
+(owner decision, 2026-11-12) and only for account-owned (`acct_`) sources. Any
+current direct member may request it through `POST
+/api/accounts/{accountId}/news-sources/{sourceId}/collect`; the API claims the
+request in one transaction that checks the source ref, account and membership
 and sets the CONFIG's `lastCollectRequestedAt`/`lastCollectRequestId` only when
 no request was accepted in the last hour, then publishes `NewsCollectRequested`
 (`ttobak.crawler`) with IDs only. A failed publish releases its own claim; if the
-release also fails the claim expires after the hour. The claim attributes are
-outside the source revision fingerprint. The run is asynchronous; the consumer
-applies its own 30-minute skip and model-call limit.
+release also fails the claim expires after the hour. Rule
+`ttobak-news-collect-requested` delivers the IDs, without retries, to the
+starter `news_manual.handler` (`ttobak-news-manual`). The starter validates the
+ID grammar; applies the publication handlers' own activation gate (any source in
+`all` mode, only the canary source in `canary`, nothing when `off`) and pricing
+check; refuses with `DAILY_RUNNING` while the `ttobak-news-daily` parent has a
+running execution; then makes one conditional claim on the CONFIG row (event
+account, non-disabled, non-operator source, the API's `lastCollectRequestId`, not
+yet started) that sets `lastCollectStartedRequestId`/`lastCollectStartedAt`.
+Every refusal before or at the claim does no work. Only then does it start
+`ttobak-news-publication` once as `manual-{requestId}`; an existing execution of
+that name is success, and a failed start keeps the started marker so a duplicate
+delivery cannot create a second paid run. The claim attributes are outside the
+source revision fingerprint and the publication CONFIG fields. The starter never
+searches, fetches or calls a model. A manual run is an ordinary versioned run:
+its own `NEWSRUN#` row, 30-minute admission window, at most 20 candidates and 60
+attempts, the $2 run cap, the relevance gate and publication rules, the shared
+$25 monthly source budget, finalization, HISTORY receipt and scheduled recovery.
+Against the daily run: articles a manual run published are skipped by later runs,
+rejected ones are evaluated again, and two overlapping runs reserving the same
+article fail the later reservation, which is why the starter refuses while the
+daily parent runs (the API's daily window is a separate check). The legacy
+`ttobak-crawler-news` manual consumer was removed.
 
 ### Evidence
 
