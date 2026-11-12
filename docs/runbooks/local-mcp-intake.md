@@ -788,7 +788,8 @@ Behavior:
   optional highlights; Bedrock settings and the Slack channel picker are under
   Advanced. The picker lists the channels where you posted in the last 90 days
   (`report slack-channels [--days N]`, the selected Slack connector's `search`
-  at most 15 calls a minute and 40 pages; refreshing takes minutes). Unchecked
+  at most 15 calls a minute and 40 pages; refreshing takes minutes and has its
+  own busy flag, separate from report runs, refused while a report runs). Unchecked
   channels are stored in the app's intake settings and passed to every run as
   `--exclude-slack-channel <name>` (at most 100); every channel not excluded is
   counted, also those older than 90 days. Closing the dialog
@@ -827,7 +828,7 @@ Behavior:
 | `REPORT_NO_SFDC` | No synced SFDC assignments; run `intake run` first. |
 | `REPORT_TIMEOUT` | The 45-minute CLI limit (50 in the app) passed; re-run, optionally with a shorter period. |
 | `REPORT_CANCELLED` | Cancelled by the user, SIGTERM or SIGINT. |
-| `REPORT_EXCLUDED_CHANNEL` | The model output still names an excluded Slack channel (equal to the name or `#name`); nothing was uploaded. Re-run. |
+| `REPORT_EXCLUDED_CHANNEL` | The model output still names an excluded Slack channel (a string equal to the name, `#name` not followed by an ASCII name character, or the bare name followed by the Korean word for channel); nothing was uploaded. Remove the channel from the highlights if it is there, then re-run. |
 | `SLACK_NOT_SELECTED` | `report slack-channels` needs the Slack connector selected in intake setup. |
 | `REPORT_PERIOD_EXPIRED` | The custom period ended more than two calendar years ago (server retention); pick a later period. |
 | `REPORT_SANDBOX_UNAVAILABLE` | No usable sandbox, or a CLI older than 2.1.322 or of unknown version (a pre-release suffix is rejected); update the CLI. |

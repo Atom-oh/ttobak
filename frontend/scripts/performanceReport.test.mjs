@@ -212,3 +212,10 @@ test('Slack channel rows: candidates checked unless excluded, stale exclusions k
   assert.deepEqual(plain(report.toggleExcluded(['a'], 'b')), ['a', 'b']);
   assert.deepEqual(plain(report.toggleExcluded(['a', 'b'], 'a')), ['b']);
 });
+
+test('Slack exclusion codes have Korean copy', () => {
+  for (const code of ['REPORT_EXCLUDED_CHANNEL', 'SLACK_NOT_SELECTED']) {
+    assert.ok(/[가-힣]/.test(report.reportCodeLabel(code)), code);
+  }
+  assert.ok(report.reportCodeLabel('REPORT_EXCLUDED_CHANNEL').includes('강조'));
+});

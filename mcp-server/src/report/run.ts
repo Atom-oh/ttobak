@@ -43,7 +43,7 @@ const USAGE = `Usage:
   ttobak-mcp report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD]
     [--highlights-file <path>] [--exclude-slack-channel <name>]... [--noninteractive]
   ttobak-mcp report slack-channels [--days 1-180]`;
-const CHANNEL = /^[\p{Ll}\p{Lo}\p{Nd}][\p{Ll}\p{Lo}\p{Nd}._-]{0,79}$/u;
+const CHANNEL = /^[\p{Ll}\p{Lo}0-9][\p{Ll}\p{Lo}0-9._-]{0,79}$/u;
 const MAX_EXCLUDED_CHANNELS = 100;
 
 function flags(args: string[]): Record<string, string | true> & { excluded: string[] } {
@@ -285,10 +285,14 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
   }
 }
 
-/** A string equal to an excluded channel name or containing `#<name>` as a whole name. */
+/** A string equal to an excluded channel name, `#name` not followed by an
+ * ASCII name character (so `#양국에서` and `#random에서` count, `#random-ops`
+ * does not), or the bare name followed by 채널. */
 function mentionsChannel(value: unknown, excluded: string[]): boolean {
   if (!excluded.length) return false;
-  const patterns = excluded.map(name => new RegExp(`#${name.replace(/[.]/g, '\\.')}(?![\\p{L}\\p{N}._-])`, 'u'));
+  const escape = (name: string) => name.replace(/[.]/g, '\\.');
+  const patterns = excluded.flatMap(name => [new RegExp(`#${escape(name)}(?![a-z0-9._-])`, 'u'),
+    new RegExp(`(?<![\\p{L}\\p{N}._-])${escape(name)}\\s*채널`, 'u')]);
   const visit = (item: unknown): boolean => {
     if (typeof item === 'string') return excluded.includes(item.trim()) || patterns.some(pattern => pattern.test(item));
     if (Array.isArray(item)) return item.some(visit);

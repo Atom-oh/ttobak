@@ -32932,7 +32932,11 @@ async function report(args, environment, store) {
 }
 function mentionsChannel(value, excluded) {
   if (!excluded.length) return false;
-  const patterns = excluded.map((name) => new RegExp(`#${name.replace(/[.]/g, "\\.")}(?![\\p{L}\\p{N}._-])`, "u"));
+  const escape2 = (name) => name.replace(/[.]/g, "\\.");
+  const patterns = excluded.flatMap((name) => [
+    new RegExp(`#${escape2(name)}(?![a-z0-9._-])`, "u"),
+    new RegExp(`(?<![\\p{L}\\p{N}._-])${escape2(name)}\\s*\uCC44\uB110`, "u")
+  ]);
   const visit = (item2) => {
     if (typeof item2 === "string") return excluded.includes(item2.trim()) || patterns.some((pattern) => pattern.test(item2));
     if (Array.isArray(item2)) return item2.some(visit);
@@ -32992,7 +32996,7 @@ var init_run2 = __esm({
   ttobak-mcp report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD]
     [--highlights-file <path>] [--exclude-slack-channel <name>]... [--noninteractive]
   ttobak-mcp report slack-channels [--days 1-180]`;
-    CHANNEL = /^[\p{Ll}\p{Lo}\p{Nd}][\p{Ll}\p{Lo}\p{Nd}._-]{0,79}$/u;
+    CHANNEL = /^[\p{Ll}\p{Lo}0-9][\p{Ll}\p{Lo}0-9._-]{0,79}$/u;
     MAX_EXCLUDED_CHANNELS = 100;
     namePattern = (value) => value.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&").replace(/\s+/g, "\\s*");
     DEFAULT_PARTNER_DOMAINS = ["anthropic.com", "openai.com", "github.com", "mongodb.com", "megazone.com", "mz.co.kr"];

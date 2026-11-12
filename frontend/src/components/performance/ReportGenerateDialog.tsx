@@ -114,13 +114,17 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
   };
 
   const toggleChannel = async (name: string) => {
-    if (!settings) return;
+    if (!settings || channelsBusy) return;
     setSettingsError(null);
+    // One save at a time: each save replaces the whole stored list.
+    setChannelsBusy(true);
     try {
       setSettings(await setReportSettings(settings.useBedrock, bedrockToggleProfile(settings),
         toggleExcluded(settings.excludedSlackChannels ?? [], name)));
     } catch (err) {
       setSettingsError(reportMessage(errorCode(err)));
+    } finally {
+      setChannelsBusy(false);
     }
   };
 
@@ -262,7 +266,7 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
                       {channelRows(settings.slackChannels, settings.excludedSlackChannels).map(row => (
                         <li key={row.name}>
                           <label className="flex items-center gap-2 text-xs">
-                            <input type="checkbox" checked={row.included} onChange={() => void toggleChannel(row.name)} />
+                            <input type="checkbox" checked={row.included} disabled={channelsBusy} onChange={() => void toggleChannel(row.name)} />
                             <span className="font-mono">#{row.name}</span>
                             {row.count !== null && <span className="text-slate-500 dark:text-text-muted">{row.count}</span>}
                           </label>

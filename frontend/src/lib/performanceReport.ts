@@ -51,6 +51,8 @@ const CODE_LABELS: Record<string, string> = {
   // docs/superpowers/plans/2026-11-12-one-click-intake-setup-ui-copy.json
   CLAUDE_CLI_BEDROCK: 'Bedrock 호출이 시간 안에 끝나지 않았어요. 리포트 설정에서 AWS 프로필을 고르거나 Bedrock을 끄세요.',
   'profile-required': 'Bedrock을 쓰려면 AWS 프로필을 골라야 해요.',
+  REPORT_EXCLUDED_CHANNEL: '리포트에 제외한 Slack 채널 이름이 남아 있어 저장하지 않았어요. 강조할 항목에 그 채널이 있다면 지우고 다시 만드세요.',
+  SLACK_NOT_SELECTED: 'Slack 채널을 불러오려면 수집 설정에서 Slack을 먼저 연결하세요.',
 };
 
 /** Korean text for a report CLI or runner code; unknown codes show as-is. */

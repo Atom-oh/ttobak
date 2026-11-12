@@ -454,6 +454,19 @@ pub struct ReportState {
     /// Bumped per begun run; a reader of an older run never writes progress.
     run_gen: AtomicU64,
     last_result: Mutex<Option<Value>>,
+    /// The Slack channel list refresh: its own flag and process group, so it
+    /// never shows as a report run.
+    channels_busy: AtomicBool,
+    channels_pgid: AtomicI32,
+}
+
+/// Clears `channels_busy` when the refresh ends.
+pub(crate) struct ChannelsGuard<'a>(&'a ReportState);
+
+impl Drop for ChannelsGuard<'_> {
+    fn drop(&mut self) {
+        self.0.channels_busy.store(false, Ordering::SeqCst);
+    }
 }
 
 impl ReportState {
@@ -466,6 +479,26 @@ impl ReportState {
             progress: Mutex::new(ProgressLog::default()),
             run_gen: AtomicU64::new(0),
             last_result: Mutex::new(None),
+            channels_busy: AtomicBool::new(false),
+            channels_pgid: AtomicI32::new(0),
+        }
+    }
+
+    /// Claims the channel refresh; refused while a report runs or another refresh does.
+    pub(crate) fn begin_channels(&self) -> Result<ChannelsGuard<'_>, String> {
+        if *self.running.lock() {
+            return Err("RUN_IN_PROGRESS".into());
+        }
+        if self.channels_busy.swap(true, Ordering::SeqCst) {
+            return Err("busy".into());
+        }
+        Ok(ChannelsGuard(self))
+    }
+
+    pub(crate) fn channels_track(&self) -> ProcTrack<'_> {
+        ProcTrack {
+            pgid: &self.channels_pgid,
+            shutting_down: &self.shutting_down,
         }
     }
 
@@ -798,7 +831,7 @@ pub async fn report_slack_channels_refresh(app: AppHandle) -> Result<Value, Stri
     let intake = app.state::<IntakeState>();
     let path = slack_channels_path(&intake)?;
     let report = app.state::<ReportState>();
-    let cancel = report.try_begin()?;
+    let _busy = report.begin_channels()?;
     let outcome = match intake_runner::node_launch(&intake).await {
         Ok(launch) => {
             let args = vec![
@@ -809,17 +842,16 @@ pub async fn report_slack_channels_refresh(app: AppHandle) -> Result<Value, Stri
             let cmd = intake_runner::node_command(&launch, args);
             intake_runner::run_child(
                 cmd,
-                report.track(),
+                report.channels_track(),
                 SLACK_CHANNELS_TIMEOUT,
                 intake_runner::KILL_GRACE,
-                Some(cancel),
+                None,
                 |_| {},
             )
             .await
         }
         Err(code) => Outcome::failed(code),
     };
-    report.end();
     let result = outcome
         .result
         .filter(|v| v.get("ok").and_then(Value::as_bool) == Some(true))
@@ -982,6 +1014,21 @@ mod tests {
     }
 
     #[test]
+    fn channels_refresh_does_not_hold_the_report_slot() {
+        let state = ReportState::new();
+        let guard = state.begin_channels().expect("first refresh");
+        assert_eq!(state.begin_channels().err().as_deref(), Some("busy"));
+        // A report may start while the channel list refreshes.
+        let _rx = state.try_begin().expect("report");
+        drop(guard);
+        // A refresh waits for a running report (both use the Slack rate limit).
+        assert_eq!(
+            state.begin_channels().err().as_deref(),
+            Some("RUN_IN_PROGRESS")
+        );
+    }
+
+    #[test]
     fn report_args_include_exclusions() {
         let week = validate_period(ReportPeriod::Week, None, None).expect("week");
         let channels =
@@ -1005,7 +1052,7 @@ mod tests {
     fn exclusions_are_bounded() {
         let many: Vec<String> = (0..101).map(|i| format!("c{i}")).collect();
         assert_eq!(normalize_channels(many), Err("invalid-argument"));
-        for bad in ["#random", "Upper", "a b", "", &"x".repeat(81)] {
+        for bad in ["#random", "Upper", "a b", "", &"x".repeat(81), "team٣", "Ⅷ"] {
             assert_eq!(
                 normalize_channels(vec![bad.to_string()]),
                 Err("invalid-argument"),

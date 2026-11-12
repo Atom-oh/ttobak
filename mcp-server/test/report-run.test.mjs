@@ -630,3 +630,21 @@ test('invalid channel name is INVALID_ARGUMENT', async t => {
   const many = Array.from({ length: 101 }, (_, i) => ['--exclude-slack-channel', `c${i}`]).flat();
   assert.equal(await ctx.run(['run', '--period', 'quarter', ...many]), 2);
 });
+
+test('Korean mentions of an excluded channel are rejected too', async t => {
+  for (const summary of ['#양국에서 점심을 정했다.', '#random에서 답변했다.', '양국 채널에서 이야기했다.']) {
+    const ctx = setup(t, { events: success(content({ summary })) });
+    assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', '양국',
+      '--exclude-slack-channel', 'random']), 2, summary);
+    assert.equal(ctx.output().code, 'REPORT_EXCLUDED_CHANNEL', summary);
+  }
+  // Another channel whose name only extends an excluded ASCII name is not a mention.
+  const ok = setup(t, { events: success(content({ summary: '#random-ops 채널에서 답변했다.' })) });
+  assert.equal(await ok.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 0);
+});
+
+test('channel names use ASCII digits only, like the app', async t => {
+  const ctx = setup(t);
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--exclude-slack-channel', 'team٣']), 2);
+  assert.equal(ctx.output().code, 'INVALID_ARGUMENT');
+});

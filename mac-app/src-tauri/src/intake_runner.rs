@@ -782,6 +782,7 @@ fn wait_group_gone(pgid: i32, max: Duration) {
 pub fn kill_running(app: &AppHandle) {
     let mut intake = 0;
     let mut report = 0;
+    let mut channels = 0;
     if let Some(state) = app.try_state::<IntakeState>() {
         state.shutting_down.store(true, Ordering::SeqCst);
         intake = state.pgid.swap(0, Ordering::SeqCst);
@@ -790,8 +791,12 @@ pub fn kill_running(app: &AppHandle) {
         let track = state.track();
         track.shutting_down.store(true, Ordering::SeqCst);
         report = track.pgid.swap(0, Ordering::SeqCst);
+        channels = state.channels_track().pgid.swap(0, Ordering::SeqCst);
     }
-    let groups: Vec<i32> = [intake, report].into_iter().filter(|&g| g > 1).collect();
+    let groups: Vec<i32> = [intake, report, channels]
+        .into_iter()
+        .filter(|&g| g > 1)
+        .collect();
     if groups.is_empty() {
         return;
     }
