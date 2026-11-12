@@ -34,7 +34,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
     location: 'Room 1; https://example.invalid/j/1?pwd=abc', status: 'Busy',
     categories: process.env.FAKE_OUTLOOK_CATEGORY ? [process.env.FAKE_OUTLOOK_CATEGORY] : [], seriesId: 'series-fixture',
     organizer: { name: 'Fixture', email: 'fixture@example.invalid' },
-    isCanceled: false, isRecurring: false, isAllDay: false,
+    isCanceled: false, isRecurring: false, isAllDay: false, response: 'Accept',
   }];
   return { content: [{ type: 'text', text: JSON.stringify(items) }] };
 });

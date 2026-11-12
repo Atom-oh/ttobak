@@ -59,8 +59,9 @@ const (
 	// maxNewsSourceItemBytes bounds one serialized item: the four lists
 	// (8192+4096+2048+6144 = 20,480) plus sourceName and accountName
 	// (2 x 1,202), sourceId (770), accountId (130), status (194),
-	// lastCrawledAt (386), documentCount (20), kind (9), two booleans and
-	// keys/punctuation (under 300): 24,693 < 25,000. A page of 100 items plus
+	// lastCrawledAt (386), documentCount (20), kind (9), two booleans,
+	// nextCollectAllowedAt (an RFC3339 time the service formats; at most 23 with year 9999 plus an hour) and
+	// keys/punctuation (under 330): 24,746 < 25,000. A page of 100 items plus
 	// nextCursor (8,192) and the envelope is under maxNewsSourcePageBytes;
 	// even escaped again inside the API Gateway proxy body (at most 2x) it
 	// stays under the 6 MB Lambda response limit.
@@ -255,8 +256,11 @@ func (s *AccountNewsService) newsSourceDirectory(ctx context.Context, userID str
 		if err != nil {
 			return nil, false, err
 		}
+		now := s.now().UTC()
 		for i := range sources {
-			items = append(items, newsSourceItem(&sources[i], model.NewsSourceKindAccount, accountID, account.Name))
+			item := newsSourceItem(&sources[i], model.NewsSourceKindAccount, accountID, account.Name)
+			item.NextCollectAllowedAt = nextCollectAllowedAt(sources[i].LastCollectRequestedAt, now)
+			items = append(items, item)
 		}
 	}
 	subs, more, err := s.subscriptions.ListUserSubscriptionsBounded(ctx, userID, maxNewsSourceSubscriptions)
@@ -368,5 +372,6 @@ func (s *AccountNewsService) Update(ctx context.Context, userID, accountID, sour
 		src.Aliases = *fields.Aliases
 	}
 	item := newsSourceItem(src, model.NewsSourceKindAccount, accountID, account.Name)
+	item.NextCollectAllowedAt = nextCollectAllowedAt(src.LastCollectRequestedAt, s.now().UTC())
 	return &item, nil
 }

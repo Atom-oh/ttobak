@@ -25,6 +25,40 @@ const LEDGER_RETENTION_DAYS = 120;
 const MAX_BATCH = 12;
 const UNTITLED = '(제목 없음)';
 
+/** The owner's own response, as selected in `options.calendarResponses`. Declined events are never synced. */
+export const CALENDAR_RESPONSES = ['accept', 'organizer', 'tentative', 'none'] as const;
+export type CalendarResponse = typeof CALENDAR_RESPONSES[number];
+/** New and legacy selections: everything except events the owner has not answered. */
+export const DEFAULT_CALENDAR_RESPONSES: readonly CalendarResponse[] = ['accept', 'organizer', 'tentative'];
+
+/**
+ * Maps the `calendar_view` `response` field. A missing or unrecognised value is
+ * `unknown`, which fails the calendar step closed (`SCHEMA_CHANGED`), so a
+ * provider change never silently stops syncing or mass-removes events.
+ */
+export function responseOf(value: string | undefined): CalendarResponse | 'decline' | 'unknown' {
+  switch (value) {
+    case 'Accept': case 'Accepted': return 'accept';
+    case 'Organizer': return 'organizer';
+    case 'Tentative': case 'TentativelyAccepted': return 'tentative';
+    case 'None': case 'NoResponseReceived': case 'NotResponded': return 'none';
+    case 'Decline': case 'Declined': return 'decline';
+    default: return 'unknown';
+  }
+}
+
+/**
+ * A complete read where no item carries a string `response` means the field
+ * was renamed or dropped: mapped to `none`, the default filter would remove
+ * every synced event. The step fails instead, before any upsert or removal
+ * (a dry run reports the same code).
+ */
+export function assertResponsesPresent(items: readonly OutlookItem[]): void {
+  if (items.length > 0 && !items.some(item => typeof item.response === 'string')) {
+    throw new IntakeError('SCHEMA_CHANGED', 'calendar_view items carry no response field');
+  }
+}
+
 export interface OutlookItem {
   meetingId: string;
   subject?: string;
@@ -34,6 +68,8 @@ export interface OutlookItem {
   isCanceled?: boolean;
   isAllDay?: boolean;
   sensitivity?: string;
+  /** The owner's own response (`Accept`, `Organizer`, ...); never sent to TTOBAK. */
+  response?: string;
   /** Only the email is kept; the organizer's name never leaves the parser. */
   organizer?: { email?: string };
   meetingChangeKey?: string;
@@ -73,6 +109,10 @@ export interface CalendarCounts {
   removals: number;
   unchanged: number;
   excluded: number;
+  /** Events whose owner response is not selected (declined events always). */
+  excludedByResponse: number;
+  /** Events with a missing or unrecognised response: neither added nor removed. */
+  responseUnknown: number;
   skippedLong: number;
   skippedInvalid: number;
   cancelledUntracked: number;
@@ -96,6 +136,12 @@ export interface CalendarState {
   ledger: Ledger;
   reconcileRequired: boolean;
   pending: null | { request: Record<string, unknown>; set: Ledger; remove: string[] };
+  /**
+   * Occurrences of the last complete read excluded only by an unselected
+   * response (never declined ones). Their SpecReq tasks stay open, so an event
+   * the owner answers later, or a response selected again, keeps its task.
+   */
+  held?: Ledger;
 }
 
 // ---------- time helpers (pure) ----------
@@ -193,6 +239,8 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
       ...(typeof value.isCanceled === 'boolean' ? { isCanceled: value.isCanceled } : {}),
       ...(typeof value.isAllDay === 'boolean' ? { isAllDay: value.isAllDay } : {}),
       ...(typeof value.sensitivity === 'string' ? { sensitivity: value.sensitivity } : {}),
+      // A non-string response is treated as missing (`unknown`); the run then fails closed.
+      ...(typeof value.response === 'string' ? { response: value.response } : {}),
       ...(typeof email === 'string' ? { organizer: { email } } : {}),
       ...(typeof value.meetingChangeKey === 'string' && value.meetingChangeKey ? { meetingChangeKey: value.meetingChangeKey } : {}),
       ...(typeof value.seriesId === 'string' && value.seriesId ? { seriesId: value.seriesId } : {}),
@@ -364,19 +412,30 @@ export interface Plan {
   mutations: Mutation[];
   set: Ledger;
   remove: string[];
+  /** Occurrences this read excluded only by an unselected response; see `CalendarState.held`. */
+  held: Ledger;
+  /** Occurrences this read observed cancelled, private or declined: their holds end. */
+  released: string[];
   counts: CalendarCounts;
   preview: { title: string; startsAt: string; op: 'upsert' | 'remove' | 'unchanged' }[];
 }
 
-/** Computes the mutations for one complete read of the window. */
+/**
+ * Computes the mutations for one complete read of the window. An event whose
+ * owner response is not in `responses` is excluded like a private one: a
+ * tracked copy is removed explicitly.
+ */
 export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string,
-  sharing?: PlanSharing): Plan {
-  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, skippedLong: 0,
+  responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES, sharing?: PlanSharing): Plan {
+  const wanted = new Set<string>(responses);
+  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, excludedByResponse: 0, responseUnknown: 0, skippedLong: 0,
     skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0, shared: 0, candidates: 0, private: 0,
     attendeesUnavailable: 0, directoryUnavailable: sharing ? sharing.matcher === null : false };
   const mutations: Mutation[] = [];
   const set: Ledger = {};
   const remove: string[] = [];
+  const held: Ledger = {};
+  const released: string[] = [];
   const preview: Plan['preview'] = [];
   const seen = new Set<string>();
   const removeTracked = (id: string) => {
@@ -399,13 +458,29 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     counts.fetched++;
     if (item.sensitivity === undefined) counts.sensitivityUnknown++;
     if (item.isCanceled) {
+      released.push(item.meetingId);
       if (!removeTracked(item.meetingId)) counts.cancelledUntracked++;
       else preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
+    // Privacy first, so a private title never reaches a response-removal preview.
     if (excludedSensitivity(item)) {
       counts.excluded++;
+      released.push(item.meetingId);
       removeTracked(item.meetingId);
+      continue;
+    }
+    const response = responseOf(item.response);
+    if (response === 'unknown') {
+      // runCalendar fails the step on any unknown response; nothing is planned for it.
+      counts.responseUnknown++;
+      continue;
+    }
+    if (!wanted.has(response)) {
+      counts.excludedByResponse++;
+      if (response === 'decline') released.push(item.meetingId);
+      else held[item.meetingId] = { fp: '', startsAt: start.toISOString(), endsAt: end.toISOString() };
+      if (removeTracked(item.meetingId)) preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
     if (end.getTime() - start.getTime() > LONG_EVENT_MS) {
@@ -442,7 +517,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   }
   const key = (mutation: Mutation) => mutation.op === 'upsert' ? mutation.event.externalId : mutation.externalId;
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
-  return { mutations, set, remove, counts, preview };
+  return { mutations, set, remove, held, released, counts, preview };
 }
 
 /** Splits mutations into batches of at most 12 within the request byte budget. */
@@ -491,7 +566,8 @@ export function loadState(store: IntakeStore, sourceId: string, scope: string): 
   const state = store.read<CalendarState>(...statePath({ sourceId, scope }));
   if (state === null) return emptyState(sourceId, scope);
   if (state.version !== 1 || state.sourceId !== sourceId || state.scope !== scope ||
-      typeof state.ledger !== 'object' || state.ledger === null) {
+      typeof state.ledger !== 'object' || state.ledger === null ||
+      (state.held !== undefined && (typeof state.held !== 'object' || state.held === null))) {
     throw new IntakeError('STORE_INVALID', 'calendar state does not match its source');
   }
   return state;
@@ -564,6 +640,8 @@ export interface CalendarRunOptions {
   /** Optional meeting facts; without them matching uses title, location and organizer domain. */
   attendees?: AttendeeFacts;
   ownDomains?: string[];
+  /** Selected owner responses; defaults to `DEFAULT_CALENDAR_RESPONSES`. */
+  responses?: readonly CalendarResponse[];
 }
 
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
@@ -636,24 +714,38 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const window = syncWindow(now, zone);
   const items: OutlookItem[] = [];
   for (const request of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request)));
+  assertResponsesPresent(items);
   // One directory read per run. Without it, events keep their previous share fields.
   const directory = await readDirectory(options.api);
   const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
   const facts = new Map<string, MeetingFacts | null>();
-  // Privacy lookups do not depend on the directory: a private answer must reach even
-  // the run that keeps previous share fields.
-  if (options.attendees) {
-    for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
+  // Privacy lookups do not depend on the directory: without it, events that keep a
+  // previous share are still looked up, so a private answer reaches that run too.
+  const lookups = sharingCandidates(items, window)
+    .filter(item => matcher || state.ledger[item.meetingId]?.share?.shareAccountId);
+  if (options.attendees && (matcher || lookups.length)) {
+    for (const item of lookups) facts.set(item.meetingId, await options.attendees.factsFor(item));
     options.attendees.save(now);
   }
-  const plan = planCalendar(items, state.ledger, window, zone, { sourceId, matcher, facts });
+  const plan = planCalendar(items, state.ledger, window, zone, options.responses, { sourceId, matcher, facts });
   plan.counts.attendeesUnavailable = options.attendees?.unavailable ?? 0;
+  // Fail closed, dry runs included: an unmapped or missing response would otherwise stop syncing
+  // silently (nothing new is added) or, if read as unanswered, remove synced events.
+  if (plan.counts.responseUnknown > 0) {
+    throw new IntakeError('SCHEMA_CHANGED', `${plan.counts.responseUnknown} calendar_view items carry no known response`);
+  }
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {
     throw new IntakeError('SENSITIVITY_UNKNOWN',
       'items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity');
   }
 
+  // Holds accumulate: new ones are stored before any removal is sent, so the task step never
+  // closes a held occurrence's task. A hold ends only when the occurrence is observed cancelled,
+  // private or declined (now), when its upsert is acknowledged into the ledger, or by retention.
+  state.held = { ...(state.held ?? {}), ...plan.held };
+  for (const id of plan.released) delete state.held[id];
+  store.write(state, ...statePath(state));
   const api = options.api!;
   const groups = batches(plan.mutations);
   if (!groups.length) groups.push([]);
@@ -674,6 +766,8 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
+  for (const id of Object.keys(state.held)) if (Object.hasOwn(state.ledger, id)) delete state.held[id];
+  state.held = pruneLedger(state.held, now);
   store.write(state, ...statePath(state));
   const upserted = new Map<string, OutlookItem>();
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
