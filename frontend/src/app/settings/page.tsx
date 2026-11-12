@@ -14,6 +14,7 @@ import { UserManagement } from '@/components/UserManagement';
 import { ConnectorSettings } from '@/components/ConnectorSettings';
 import { MeetingDetectionSettings } from '@/components/MeetingDetectionSettings';
 import { IntakeSettings } from '@/components/IntakeSettings';
+import { SkillPackageSettings } from '@/components/SkillPackageSettings';
 import { BulkContactImport } from '@/components/BulkContactImport';
 
 export default function SettingsPage() {
@@ -125,6 +126,7 @@ export default function SettingsPage() {
 
             <MeetingDetectionSettings />
             <IntakeSettings />
+            <SkillPackageSettings isAdmin={isAdmin} />
 
             {/* Crawler Sources Section */}
             <section id="crawler-sources" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
