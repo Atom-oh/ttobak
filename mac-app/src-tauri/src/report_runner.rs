@@ -1060,6 +1060,8 @@ mod tests {
             );
         }
         assert!(normalize_channels((0..100).map(|i| format!("c{i}")).collect()).is_ok());
+        // Same rule as the CLI: Alphabetic and not Uppercase.
+        assert!(normalize_channels(vec!["ⅷ-team".into(), "양국".into()]).is_ok());
     }
 
     #[test]

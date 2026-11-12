@@ -32940,7 +32940,7 @@ function mentionsChannel(value, excluded) {
   const visit = (item2) => {
     if (typeof item2 === "string") return excluded.includes(item2.trim()) || patterns.some((pattern) => pattern.test(item2));
     if (Array.isArray(item2)) return item2.some(visit);
-    return !!item2 && typeof item2 === "object" && Object.values(item2).some(visit);
+    return !!item2 && typeof item2 === "object" && Object.entries(item2).some(([key, child]) => !STRUCTURAL_KEYS.has(key) && visit(child));
   };
   return visit(value);
 }
@@ -32972,7 +32972,7 @@ async function runReport(args, environment) {
     return 2;
   }
 }
-var UNAVAILABLE, REPORT_TIMEOUT_MS, MAX_HIGHLIGHTS_FILE_BYTES, ALIAS2, ID2, MAX_MISSING_SOURCES, USAGE2, CHANNEL, MAX_EXCLUDED_CHANNELS, namePattern, DEFAULT_PARTNER_DOMAINS;
+var UNAVAILABLE, REPORT_TIMEOUT_MS, MAX_HIGHLIGHTS_FILE_BYTES, ALIAS2, ID2, MAX_MISSING_SOURCES, USAGE2, CHANNEL, MAX_EXCLUDED_CHANNELS, namePattern, DEFAULT_PARTNER_DOMAINS, STRUCTURAL_KEYS;
 var init_run2 = __esm({
   "src/report/run.ts"() {
     "use strict";
@@ -32996,10 +32996,23 @@ var init_run2 = __esm({
   ttobak-mcp report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD]
     [--highlights-file <path>] [--exclude-slack-channel <name>]... [--noninteractive]
   ttobak-mcp report slack-channels [--days 1-180]`;
-    CHANNEL = /^[\p{Ll}\p{Lo}0-9][\p{Ll}\p{Lo}0-9._-]{0,79}$/u;
+    CHANNEL = new RegExp("^(?:(?!\\p{Uppercase})[\\p{Alphabetic}0-9])(?:(?!\\p{Uppercase})[\\p{Alphabetic}0-9._-]){0,79}$", "u");
     MAX_EXCLUDED_CHANNELS = 100;
     namePattern = (value) => value.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&").replace(/\s+/g, "\\s*");
     DEFAULT_PARTNER_DOMAINS = ["anthropic.com", "openai.com", "github.com", "mongodb.com", "megazone.com", "mz.co.kr"];
+    STRUCTURAL_KEYS = /* @__PURE__ */ new Set([
+      "schemaVersion",
+      "periodKey",
+      "period",
+      "alias",
+      "generatedAt",
+      "model",
+      "partial",
+      "missingSources",
+      "highlights",
+      "id",
+      "severity"
+    ]);
   }
 });
 

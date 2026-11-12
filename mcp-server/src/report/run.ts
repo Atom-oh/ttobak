@@ -43,7 +43,8 @@ const USAGE = `Usage:
   ttobak-mcp report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD]
     [--highlights-file <path>] [--exclude-slack-channel <name>]... [--noninteractive]
   ttobak-mcp report slack-channels [--days 1-180]`;
-const CHANNEL = /^[\p{Ll}\p{Lo}0-9][\p{Ll}\p{Lo}0-9._-]{0,79}$/u;
+// The app's rule (report_runner.rs normalize_channels): Alphabetic but not Uppercase, or an ASCII digit.
+const CHANNEL = /^(?:(?!\p{Uppercase})[\p{Alphabetic}0-9])(?:(?!\p{Uppercase})[\p{Alphabetic}0-9._-]){0,79}$/u;
 const MAX_EXCLUDED_CHANNELS = 100;
 
 function flags(args: string[]): Record<string, string | true> & { excluded: string[] } {
@@ -285,6 +286,10 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
   }
 }
 
+/** Fields the CLI or the schema fixes (ids, identity, period, codes), not model prose. */
+const STRUCTURAL_KEYS = new Set(['schemaVersion', 'periodKey', 'period', 'alias', 'generatedAt', 'model', 'partial',
+  'missingSources', 'highlights', 'id', 'severity']);
+
 /** A string equal to an excluded channel name, `#name` not followed by an
  * ASCII name character (so `#양국에서` and `#random에서` count, `#random-ops`
  * does not), or the bare name followed by 채널. */
@@ -296,7 +301,8 @@ function mentionsChannel(value: unknown, excluded: string[]): boolean {
   const visit = (item: unknown): boolean => {
     if (typeof item === 'string') return excluded.includes(item.trim()) || patterns.some(pattern => pattern.test(item));
     if (Array.isArray(item)) return item.some(visit);
-    return !!item && typeof item === 'object' && Object.values(item).some(visit);
+    return !!item && typeof item === 'object' &&
+      Object.entries(item).some(([key, child]) => !STRUCTURAL_KEYS.has(key) && visit(child));
   };
   return visit(value);
 }

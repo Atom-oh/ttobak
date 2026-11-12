@@ -285,7 +285,7 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
                 className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:text-slate-900 dark:text-text-muted dark:hover:text-text-main">
                 {REPORT_COPY.cancel}
               </button>
-              <button type="submit" disabled={bedrockPending || bedrockNeedsProfile(settings)}
+              <button type="submit" disabled={bedrockPending || bedrockNeedsProfile(settings) || channelsBusy}
                 className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
                 {REPORT_COPY.makeReport}
               </button>

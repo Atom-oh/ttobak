@@ -648,3 +648,19 @@ test('channel names use ASCII digits only, like the app', async t => {
   assert.equal(await ctx.run(['run', '--period', 'quarter', '--exclude-slack-channel', 'team٣']), 2);
   assert.equal(ctx.output().code, 'INVALID_ARGUMENT');
 });
+
+test('structural fields never count as a channel mention', async t => {
+  // Section ids such as sales and the owner's alias are not model prose.
+  const ctx = setup(t);
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'customers',
+    '--exclude-slack-channel', 'alice']), 0, JSON.stringify(ctx.output()));
+});
+
+test('channel names follow the app rule: letters that are not uppercase', async t => {
+  const ctx = setup(t);
+  // Ⅷ (an uppercase letter number) is refused; ⅷ (lowercase) is a letter, as in Rust.
+  for (const name of ['Ⅷ', 'Xy']) {
+    assert.equal(await ctx.run(['run', '--period', 'quarter', '--exclude-slack-channel', name]), 2, name);
+  }
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'ⅷ-team']), 0);
+});
