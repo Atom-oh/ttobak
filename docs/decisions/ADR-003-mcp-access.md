@@ -534,13 +534,15 @@ configuration.
   existing removal path. The response is read on the Mac only. The Mac app
   sets the options with typed values (`intake_set_options`). The first real
   run after the update, possibly scheduled, therefore removes synced events
-  that are declined or unanswered (an event with a missing or unrecognised
-  response is neither added nor removed); the
+  that are declined or unanswered (any missing or unrecognised response fails
+  the calendar step with `SCHEMA_CHANGED` before any change); the
   owner keeps unanswered ones by selecting `none` (Settings or `intake
   options`) before that run, and Settings shows that note while `none` is
   not selected. Declined events cannot be kept. A SpecReq task is not closed
   for an occurrence excluded only by an unselected response (held in the
-  calendar state), so answering the invitation later keeps its task.
+  calendar state), so answering the invitation later keeps its task. A hold
+  ends only on an observed cancel, private flag or decline, an acknowledged
+  re-upsert, or retention.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** is owned by the Mac app, which runs `intake run
   --noninteractive` (all selected sync connectors) itself, with launch and wake

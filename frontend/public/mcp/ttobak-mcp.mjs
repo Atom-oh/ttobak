@@ -25295,7 +25295,7 @@ function parseOutlookItems(payload) {
       ...typeof value.isCanceled === "boolean" ? { isCanceled: value.isCanceled } : {},
       ...typeof value.isAllDay === "boolean" ? { isAllDay: value.isAllDay } : {},
       ...typeof value.sensitivity === "string" ? { sensitivity: value.sensitivity } : {},
-      // A non-string response is treated as missing (`unknown`), never as a failed page.
+      // A non-string response is treated as missing (`unknown`); the run then fails closed.
       ...typeof value.response === "string" ? { response: value.response } : {},
       ...typeof email3 === "string" ? { organizer: { email: email3 } } : {}
     };
@@ -25380,7 +25380,7 @@ function validEvent(event, window) {
     return false;
   }
 }
-function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES, priorHeld = {}) {
+function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES) {
   const wanted = new Set(responses);
   const counts = {
     fetched: 0,
@@ -25400,6 +25400,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
   const set2 = {};
   const remove = [];
   const held = {};
+  const released = [];
   const preview = [];
   const seen = /* @__PURE__ */ new Set();
   const removeTracked = (id) => {
@@ -25421,24 +25422,26 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     counts.fetched++;
     if (item2.sensitivity === void 0) counts.sensitivityUnknown++;
     if (item2.isCanceled) {
+      released.push(item2.meetingId);
       if (!removeTracked(item2.meetingId)) counts.cancelledUntracked++;
       else preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
     if (excludedSensitivity(item2)) {
       counts.excluded++;
+      released.push(item2.meetingId);
       removeTracked(item2.meetingId);
       continue;
     }
     const response = responseOf(item2.response);
     if (response === "unknown") {
       counts.responseUnknown++;
-      if (priorHeld[item2.meetingId]) held[item2.meetingId] = { fp: "", startsAt: start.toISOString(), endsAt: end.toISOString() };
       continue;
     }
     if (!wanted.has(response)) {
       counts.excludedByResponse++;
-      if (response !== "decline") held[item2.meetingId] = { fp: "", startsAt: start.toISOString(), endsAt: end.toISOString() };
+      if (response === "decline") released.push(item2.meetingId);
+      else held[item2.meetingId] = { fp: "", startsAt: start.toISOString(), endsAt: end.toISOString() };
       if (removeTracked(item2.meetingId)) preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
@@ -25462,7 +25465,6 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: "upsert" });
   }
-  for (const [id, entry2] of Object.entries(priorHeld)) if (!seen.has(id)) held[id] = entry2;
   for (const [id, entry2] of Object.entries(ledger)) {
     if (seen.has(id)) continue;
     const start = new Date(entry2.startsAt), end = new Date(entry2.endsAt);
@@ -25470,7 +25472,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
   }
   const key = (mutation) => mutation.op === "upsert" ? mutation.event.externalId : mutation.externalId;
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
-  return { mutations, set: set2, remove, held, counts, preview };
+  return { mutations, set: set2, remove, held, released, counts, preview };
 }
 function batches2(mutations) {
   return batches(mutations, MAX_BATCH2);
@@ -25559,7 +25561,10 @@ async function runCalendar(options2) {
   const window = syncWindow(now, zone);
   const items = [];
   for (const request2 of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request2)));
-  const plan = planCalendar(items, state.ledger, window, zone, options2.responses, state.held);
+  const plan = planCalendar(items, state.ledger, window, zone, options2.responses);
+  if (plan.counts.responseUnknown > 0) {
+    throw new IntakeError("SCHEMA_CHANGED", `${plan.counts.responseUnknown} calendar_view items carry no known response`);
+  }
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options2.acceptUnknownSensitivity) {
     throw new IntakeError(
@@ -25568,6 +25573,7 @@ async function runCalendar(options2) {
     );
   }
   state.held = { ...state.held ?? {}, ...plan.held };
+  for (const id of plan.released) delete state.held[id];
   store.write(state, ...statePath(state));
   const api = options2.api;
   const groups = batches2(plan.mutations);
@@ -25593,7 +25599,8 @@ async function runCalendar(options2) {
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
-  state.held = pruneLedger(plan.held, now);
+  for (const id of Object.keys(state.held)) if (Object.hasOwn(state.ledger, id)) delete state.held[id];
+  state.held = pruneLedger(state.held, now);
   store.write(state, ...statePath(state));
   const upserted = /* @__PURE__ */ new Map();
   for (const item2 of items) if (Object.hasOwn(plan.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);

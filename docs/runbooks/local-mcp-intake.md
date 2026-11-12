@@ -203,9 +203,10 @@ is kept. Absent fields mean the defaults; the first selection stores them.
   default `accept,organizer,tentative`; an empty list syncs no events. The
   `calendar_view` `response` maps `Accept` or `Accepted`, `Organizer`,
   `Tentative` or `TentativelyAccepted`, and `NoResponseReceived`, `NotResponded`
-  or `None`. `Decline` or `Declined` is always excluded. A missing or unrecognised value is unknown:
-  the event is neither added nor removed (dry runs count `responseUnknown`),
-  so a provider change never mass-removes synced events.
+  or `None`. `Decline` or `Declined` is always excluded. Any item with a
+  missing or unrecognised value fails the calendar step, dry runs included,
+  with `SCHEMA_CHANGED` before any change, so a provider change can neither
+  stop syncing silently nor mass-remove synced events.
 - `sfdcContacts`: default on. Off skips the [contacts step](#sfdc-contacts-step)
   with result `disabled`, which is not a failure.
 
@@ -216,12 +217,12 @@ checked, so its title never appears in a removal preview. An occurrence
 excluded only by an unselected response (not a declined one) is recorded as
 held in the calendar state, and its SpecReq task stays open: when the owner
 answers the invitation or selects the response again, the event syncs again
-with the same task. A later unknown response, or a read that does not return
-the occurrence, keeps the hold until the calendar retention prunes it. A hold
-is released only after the run's batches are all acknowledged, so a rejected
-or unconfirmed re-upsert keeps it. A held
-occurrence stays tracked, so a decline still closes its task even past the
-task list cap. A declined, cancelled or deleted occurrence closes its task as
+with the same task. Holds accumulate across runs and end only when the
+occurrence is observed cancelled, private or declined, when its upsert is
+acknowledged into the ledger, or when the calendar retention prunes it. A read
+that does not return the occurrence, a skipped re-upsert (too long, invalid)
+or a rejected batch keeps the hold. A held occurrence stays tracked, so a
+decline still closes its task even past the task list cap. A declined, cancelled or deleted occurrence closes its task as
 before. The response itself never reaches TTOBAK.
 
 After the update, the first real run (possibly a scheduled one, before you open
