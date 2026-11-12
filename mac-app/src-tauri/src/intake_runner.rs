@@ -635,6 +635,8 @@ pub struct IntakeState {
     schedule_changed: AtomicBool,
     /// A due slot found the runner busy; re-evaluate when that run ends.
     retry_after_run: AtomicBool,
+    /// A cancel was asked for during the current run (also between phases).
+    cancel_requested: AtomicBool,
     /// A delayed wake re-evaluation is pending.
     wake_pending: AtomicBool,
 }
@@ -662,6 +664,7 @@ impl IntakeState {
             reevaluate: AtomicBool::new(false),
             schedule_changed: AtomicBool::new(false),
             retry_after_run: AtomicBool::new(false),
+            cancel_requested: AtomicBool::new(false),
             wake_pending: AtomicBool::new(false),
         }
     }
@@ -707,6 +710,7 @@ impl IntakeState {
             return Err("ADAPTER_UPDATING".into());
         }
         *running = Some(kind);
+        self.cancel_requested.store(false, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         *self.cancel.lock() = Some(tx);
         self.run_gen.fetch_add(1, Ordering::SeqCst);
@@ -743,6 +747,9 @@ impl IntakeState {
 
     /// Cancels the current run (phase); false when nothing listens.
     pub(crate) fn send_cancel(&self) -> bool {
+        if self.running.lock().is_some() {
+            self.cancel_requested.store(true, Ordering::SeqCst);
+        }
         self.cancel
             .lock()
             .take()
@@ -756,6 +763,10 @@ impl IntakeState {
         if self.retry_after_run.swap(false, Ordering::SeqCst) {
             self.poke(true);
         }
+    }
+
+    pub(crate) fn cancel_requested(&self) -> bool {
+        self.cancel_requested.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]

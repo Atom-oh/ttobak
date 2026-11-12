@@ -246,6 +246,7 @@ test('one-click setup steps and statuses have fixed copy', () => {
   assert.ok(/[가-힣]/.test(intake.setupCodeText('ADAPTER_OUTDATED')));
   assert.ok(/[가-힣]/.test(intake.setupCodeText('SKILL_PATH_UNSAFE')));
   assert.equal(intake.setupCodeText('CANCELLED'), '취소했어요.');
+  for (const code of ['EXIT_FAILED', 'INVALID_RESULT', 'TIMEOUT']) assert.ok(/[가-힣]/.test(intake.setupCodeText(code)), code);
   assert.equal(intake.setupStepLabel('other'), 'other');
 });
 

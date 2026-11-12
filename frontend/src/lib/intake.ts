@@ -293,6 +293,9 @@ const SETUP_CODE_TEXT: Record<string, string> = {
   LOGIN_SHELL_UNAVAILABLE: '로그인 셸의 PATH를 읽지 못해 기본 PATH를 썼어요.',
   AWAITING_APPROVAL: '새 MCP 서버 설치를 확인한 뒤 진행해요.',
   CANCELLED: '취소했어요.',
+  EXIT_FAILED: '단계를 마치지 못했어요. 다시 시도하세요.',
+  INVALID_RESULT: '수집 도구의 결과를 읽지 못했어요. 수집 도구를 업데이트한 뒤 다시 시도하세요.',
+  TIMEOUT: '시간이 너무 오래 걸려 멈췄어요. 다시 시도하세요.',
 };
 
 /** A step stopped because TTOBAK needs a login: the panel offers the login. */

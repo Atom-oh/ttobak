@@ -224,24 +224,22 @@ pub(crate) fn skipped_after(ids: &[&str]) -> Vec<StepView> {
         .collect()
 }
 
-/// `intake setup` runs unless new servers wait for approval, the user
-/// cancelled the package step, or TTOBAK needs a login (intake needs it too).
-pub(crate) fn should_run_intake(cli: &CliSteps, cli_code: Option<&str>) -> bool {
-    cli.run_intake() && cli_code != Some("CANCELLED") && !needs_login(cli)
-}
-
-fn needs_login(cli: &CliSteps) -> bool {
-    cli.steps
-        .iter()
-        .any(|s| s.code.as_deref() == Some("TTOBAK_LOGIN_REQUIRED"))
+/// `intake setup` runs unless new servers wait for approval or the user
+/// cancelled (during the package step or between phases). A TTOBAK login
+/// failure does not stop it: on a fresh Mac `intake setup` is what imports the
+/// TTOBAK endpoints, and the panel then offers the login.
+pub(crate) fn should_run_intake(cli: &CliSteps, cli_code: Option<&str>, cancelled: bool) -> bool {
+    cli.run_intake() && cli_code != Some("CANCELLED") && !cancelled
 }
 
 /// Why `intake setup` did not run.
-pub(crate) fn intake_skip_reason(cli: &CliSteps, cli_code: Option<&str>) -> &'static str {
-    if cli_code == Some("CANCELLED") {
+pub(crate) fn intake_skip_reason(
+    _cli: &CliSteps,
+    cli_code: Option<&str>,
+    cancelled: bool,
+) -> &'static str {
+    if cancelled || cli_code == Some("CANCELLED") {
         "CANCELLED"
-    } else if needs_login(cli) {
-        "TTOBAK_LOGIN_REQUIRED"
     } else {
         "AWAITING_APPROVAL"
     }
@@ -362,7 +360,8 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
     for step in cli.steps.clone() {
         run.push(step);
     }
-    if should_run_intake(&cli, cli_code.as_deref()) {
+    let cancelled = state.cancel_requested();
+    if should_run_intake(&cli, cli_code.as_deref(), cancelled) {
         let action = IntakeAction::Setup {
             accept_private_calendar,
             skip: BTreeSet::new(),
@@ -380,7 +379,7 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
         run.push(intake_step(&outcome));
         let _ = app.emit(intake::FINISHED_EVENT, payload);
     } else {
-        let reason = intake_skip_reason(&cli, cli_code.as_deref());
+        let reason = intake_skip_reason(&cli, cli_code.as_deref(), cancelled);
         run.push(StepView::new("intake", StepStatus::Skipped, Some(reason)));
     }
     state.finish_run();
@@ -610,8 +609,8 @@ mod tests {
     #[test]
     fn cancelled_cli_skips_intake() {
         let parsed = cli_steps(None, Some("CANCELLED"));
-        assert!(!should_run_intake(&parsed, Some("CANCELLED")));
-        assert!(should_run_intake(&parsed, Some("TIMEOUT")));
+        assert!(!should_run_intake(&parsed, Some("CANCELLED"), false));
+        assert!(should_run_intake(&parsed, Some("TIMEOUT"), false));
     }
 
     #[test]
@@ -621,8 +620,26 @@ mod tests {
             { "id": "skills", "status": "skipped" }, { "id": "servers", "status": "skipped" }],
             "needsApproval": [], "warnings": [] });
         let parsed = cli_steps(Some(&out), None);
-        assert!(!should_run_intake(&parsed, None));
-        assert_eq!(intake_skip_reason(&parsed, None), "TTOBAK_LOGIN_REQUIRED");
+        // intake setup imports the TTOBAK endpoints on a fresh Mac: it still runs.
+        assert!(should_run_intake(&parsed, None, false));
+        assert!(!should_run_intake(&parsed, None, true));
+        assert_eq!(intake_skip_reason(&parsed, None, true), "CANCELLED");
+    }
+
+    #[test]
+    fn a_cancel_between_phases_is_remembered() {
+        let state = crate::intake_runner::IntakeState::new(None);
+        let rx = state
+            .try_begin(crate::intake_runner::RunKind::OneClickSetup)
+            .expect("begin");
+        drop(rx); // the first phase ended and dropped its receiver
+        assert!(!state.send_cancel());
+        assert!(state.cancel_requested());
+        state.finish_run();
+        let _rx = state
+            .try_begin(crate::intake_runner::RunKind::Run)
+            .expect("again");
+        assert!(!state.cancel_requested());
     }
 
     #[test]
