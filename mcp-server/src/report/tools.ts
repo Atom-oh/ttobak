@@ -1,8 +1,9 @@
 // Read-only tool allowlist of a report run. The run uses
 // `--permission-mode dontAsk`, so every tool not listed here is denied by the
 // Claude CLI itself; the prompt is not the boundary. MCP names are the read
-// tools that references/data-sources.md of sa-performance-report v1.4.0
-// (internal-mcp-setup, 2026-11-07) calls. No server wildcard, no general Bash,
+// tools that references/data-sources.md of sa-performance-report v1.5.0
+// (internal-mcp-setup, 2026-11-10) calls. Installing a newer skill never widens
+// this list; each skill version's additions are reviewed here. No server wildcard, no general Bash,
 // file tools only inside the skill and run directories, and no `mcp_stdio.py`
 // (it could start any server and call any tool).
 
@@ -15,15 +16,20 @@ export const REPORT_SERVERS = ['aws-sentral-mcp', 'aws-outlook-mcp', 'slack-mcp'
 export type ReportServer = typeof REPORT_SERVERS[number];
 
 export const READ_TOOLS: Record<ReportServer, readonly string[]> = {
-  'aws-sentral-mcp': ['get_my_personal_details', 'search_users', 'search_tasks', 'search_opportunities', 'get_team_members'],
-  'aws-outlook-mcp': ['calendar_view'],
+  'aws-sentral-mcp': ['get_my_personal_details', 'search_users', 'search_tasks', 'search_opportunities', 'get_team_members',
+    // v1.5.0: own PFRs and Customer Influence records, and the details they point to.
+    'search_pfrs', 'search_customer_influences', 'fetch_pfr_details', 'fetch_customer_influence_details',
+    'get_opportunity_details', 'fetch_account_details'],
+  // v1.5.0: email_search finds interviews whose calendar invite was deleted.
+  'aws-outlook-mcp': ['calendar_view', 'email_search'],
   'slack-mcp': ['lookup_user', 'search', 'get_channel'],
   'spec-req-mcp': ['get_date_timestamp', 'search_requests_advanced'],
   'aws-tfc-hub-mcp': ['get_user_info', 'get_activities', 'get_progress', 'get_competency_by_id'],
 };
 
 /** Skill scripts the run may execute, always as `python3 -I <skill>/scripts/<name>`. */
-export const SKILL_SCRIPTS = ['calendar_count.py', 'extract_tool_json.py', 'slack_threads.py'] as const;
+export const SKILL_SCRIPTS = ['calendar_count.py', 'extract_tool_json.py', 'slack_threads.py', 'interview_count.py',
+  'pfr_ci_summary.py'] as const;
 
 /** Any tool name of this shape is a write and is never allowed. */
 export const WRITE_TOOL_PATTERN = /(create|update|add|remove|delete|post|send|inject|upsert|submit|enable_write|edit|archive|cancel|schedule)/;
