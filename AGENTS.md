@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d4b6d4fc1f1d · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d6785ba35d72 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
