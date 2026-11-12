@@ -289,8 +289,10 @@ function RecordPageInner() {
   // (never on mount, so a leftover upload is not linked). URL, MCP and user
   // choices are never overwritten.
   const autoLinkRecordingRef = useRef(false);
-  useEffect(() => { if (postRecording.step !== null) autoLinkRecordingRef.current = false; }, [postRecording.step]);
   const { changeRecordingAccount } = postRecording;
+  // Clearing is refused while a link to the existing draft is still pending.
+  const recordingAccountPending = !!postRecording.serverMeetingId && !!postRecording.recordingLinks.accountId
+    && postRecording.recordingLinks.accountId !== postRecording.recordingLinks.boundAccountId;
   const calendarLink = useCalendarAutoLink({
     userId: user?.userId,
     accountId: referenceAccountId,
@@ -302,8 +304,22 @@ function RecordPageInner() {
     applyToRecording: (id) => { void changeRecordingAccount(id); },
     initialSource: searchParams.get('accountId') ? 'url' : 'none',
     enabled: !isUploadMode,
+    canDismiss: !recordingAccountPending,
   });
-  const { markSource: markAccountSource } = calendarLink;
+  const { markSource: markAccountSource, invalidate: invalidateAutoLink } = calendarLink;
+  // Stop, failure and return to idle end the recording's lookup: a late
+  // calendar result must not link or retitle anything afterwards.
+  const endAutoLinkRecording = useCallback(() => {
+    autoLinkRecordingRef.current = false;
+    invalidateAutoLink();
+  }, [invalidateAutoLink]);
+  useEffect(() => { if (postRecording.step !== null) endAutoLinkRecording(); }, [postRecording.step, endAutoLinkRecording]);
+  const recordingLive = session.isRecording || isNativeRecording;
+  const wasRecordingLiveRef = useRef(false);
+  useEffect(() => {
+    if (wasRecordingLiveRef.current && !recordingLive) endAutoLinkRecording();
+    wasRecordingLiveRef.current = recordingLive;
+  }, [recordingLive, endAutoLinkRecording]);
   const chooseReferenceAccount = useCallback((id: string) => {
     markAccountSource('user');
     setReferenceAccountId(id);
@@ -312,7 +328,8 @@ function RecordPageInner() {
     || calendarLink.autoLink.accountId === postRecording.recordingLinks.accountId)
     // A draft already bound to it can only switch Accounts in RecordingLinkControls.
     ? <AutoLinkChip name={calendarLink.autoLink.name}
-      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId ? undefined : calendarLink.dismiss} /> : null;
+      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId ? undefined : calendarLink.dismiss}
+      pending={recordingAccountPending} /> : null;
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
   const persistRecordingNotes = postRecording.persistNotes;
@@ -392,6 +409,7 @@ function RecordPageInner() {
       // cleanupRecording flow that already handles native files.
       // A leftover WAV is not the ongoing calendar meeting: it never inherits
       // an auto-linked Account or the title filled from that event.
+      autoLinkRecordingRef.current = false;
       const dropped = calendarLink.dropAutoLink();
       resetSessionStateForNewMeeting();
       await postRecording.createDraftMeeting(dropped);
@@ -1620,6 +1638,7 @@ function RecordPageInner() {
             onNativeInput={(input, canSwitch) => { setNativeInput(input); setNativeCanSwitch(canSwitch); }}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
+              endAutoLinkRecording();
               finishControlStart({ ok: false, error: { code: 'start_failed', message: error } });
               if (opts?.terminal) {
                 setBrowserFinalizing(false);
@@ -1672,7 +1691,7 @@ function RecordPageInner() {
             onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); setNativeCanSwitch(false); }}
+            onRecordingStop={() => { endAutoLinkRecording(); session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); setNativeInput(null); setNativeCanSwitch(false); }}
             onPermissionGranted={() => {
               refreshDevices();
               // Native capture is running: answer a pending MCP start.

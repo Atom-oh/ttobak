@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { accountApi, calendarApi } from '@/lib/api';
 import { isEditableAccount } from '@/lib/accountAccess';
-import { ongoingEventFor, ongoingEventWindow, shouldAutoLink, type AccountLinkSource } from '@/lib/ongoingEvent';
+import { ongoingEventFor, ongoingEventWindow, readOngoingEvents, shouldAutoLink, type AccountLinkSource } from '@/lib/ongoingEvent';
 
 interface Options {
   userId?: string;
@@ -23,6 +23,9 @@ interface Options {
   initialSource: AccountLinkSource;
   /** False in upload mode: an uploaded file is not the ongoing meeting. */
   enabled: boolean;
+  /** False while clearing the recording's Account would be refused (a link
+   * to an existing draft is still pending); the change button then waits. */
+  canDismiss?: boolean;
 }
 
 /** Overrides for a draft that must not inherit an auto link. */
@@ -36,30 +39,41 @@ export interface DroppedAutoLink {
  * `check()` at recording start, never on mount, so a leftover upload or an
  * unrelated draft is not linked. Calendar or Account failures do nothing;
  * creation still validates membership. */
-export function useCalendarAutoLink({ userId, accountId, setAccountId, title, setTitle, recordingAccountId, isRecordingActive, applyToRecording, initialSource, enabled }: Options) {
+export function useCalendarAutoLink({ userId, accountId, setAccountId, title, setTitle, recordingAccountId, isRecordingActive, applyToRecording, initialSource, enabled, canDismiss = true }: Options) {
   const sourceRef = useRef<AccountLinkSource>(initialSource);
-  const latestRef = useRef({ userId, accountId, title, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled });
+  const latestRef = useRef({ userId, accountId, title, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled, canDismiss });
   useEffect(() => {
-    latestRef.current = { userId, accountId, title, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled };
+    latestRef.current = { userId, accountId, title, recordingAccountId, isRecordingActive, applyToRecording, setAccountId, setTitle, enabled, canDismiss };
   });
   /** The title the auto link filled, while it may still be on the page. */
   const autoTitleRef = useRef<string | null>(null);
-  const inFlightRef = useRef(false);
+  /** Each start owns one generation; stop, failure, a leftover upload and a
+   * newer start advance it, so a late lookup result applies nothing. */
+  const generationRef = useRef(0);
   const [autoLink, setAutoLink] = useState<{ accountId: string; name: string } | null>(null);
 
+  const invalidate = useCallback(() => { generationRef.current += 1; }, []);
+
   const check = useCallback(() => {
+    const generation = ++generationRef.current;
     const eligible = () => {
       const latest = latestRef.current;
-      return latest.enabled && !!latest.userId && shouldAutoLink({ accountId: latest.accountId, recordingAccountId: latest.recordingAccountId, source: sourceRef.current });
+      return latest.enabled && !!latest.userId && shouldAutoLink({
+        accountId: latest.accountId, recordingAccountId: latest.recordingAccountId, source: sourceRef.current,
+        generation, currentGeneration: generationRef.current,
+      });
     };
-    if (inFlightRef.current || !eligible()) return;
+    if (!eligible()) return;
     const requestUserId = latestRef.current.userId!;
-    inFlightRef.current = true;
     const now = new Date();
+    const window = ongoingEventWindow(now);
     void (async () => {
-      const page = await calendarApi.events({ ...ongoingEventWindow(now), limit: 50 }, { expectedUserId: requestUserId });
-      const event = ongoingEventFor(page.events, now);
-      if (!event?.accountId) return;
+      const events = await readOngoingEvents(
+        cursor => calendarApi.events({ ...window, limit: 50, cursor }, { expectedUserId: requestUserId }),
+        () => generation === generationRef.current,
+      );
+      const event = events && ongoingEventFor(events, now);
+      if (!event?.accountId || !eligible()) return;
       const { accounts } = await accountApi.list({ scope: 'direct', expectedUserId: requestUserId });
       const account = accounts.find(candidate => candidate.accountId === event.accountId && isEditableAccount(candidate));
       if (!account || latestRef.current.userId !== requestUserId || !eligible()) return;
@@ -72,7 +86,7 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, title, se
       setAutoLink({ accountId: account.accountId, name: account.name });
     })().catch(() => {
       // No calendar, no access or a failed read: nothing is linked.
-    }).finally(() => { inFlightRef.current = false; });
+    });
   }, []);
 
   /** Clears the auto-linked Account and reverts the title it filled, unless
@@ -103,6 +117,7 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, title, se
 
   /** The chip's change button: clear the auto link and let the user pick. */
   const dismiss = useCallback(() => {
+    if (!latestRef.current.canDismiss) return;
     clearAuto('user');
     setAutoLink(null);
     const latest = latestRef.current;
@@ -112,6 +127,7 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, title, se
   /** A leftover upload is not the ongoing meeting: drop an auto link and its
    * title. Returns draft overrides, or undefined when nothing was auto-linked. */
   const dropAutoLink = useCallback((): DroppedAutoLink | undefined => {
+    generationRef.current += 1;
     if (sourceRef.current !== 'auto') return undefined;
     const titleIsAuto = clearAuto('none');
     setAutoLink(null);
@@ -120,5 +136,5 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, title, se
 
   const source = useCallback(() => sourceRef.current, []);
 
-  return { autoLink: enabled ? autoLink : null, check, markSource, dismiss, dropAutoLink, source };
+  return { autoLink: enabled ? autoLink : null, check, invalidate, markSource, dismiss, dropAutoLink, source };
 }

@@ -162,6 +162,9 @@ The record page links a recording to the ongoing customer meeting
 (`useCalendarAutoLink`, `lib/ongoingEvent.ts`). Only at recording start (never on
 mount), if no Account was set by the URL, an MCP start request or the user, it reads
 calendar events for one hour either side of now without blocking the start.
+It follows at most five calendar pages (`readOngoingEvents`) and links nothing if a
+cursor remains. Each lookup carries a generation that stop, failure, return to idle,
+a leftover upload or a newer start advances; a late result applies nothing.
 Upload mode never auto-links, and switching to it drops an auto link. A Mac
 leftover upload drops an auto link and its auto-filled title (`dropAutoLink`)
 before creating its draft.
@@ -172,7 +175,8 @@ Account list. The page then sets the Account (and the title, only if still empty
 shows an `AutoLinkChip` with a change button that clears the link for the rest of
 the page session and reverts the auto-filled title unless it was edited; once a draft is bound to that Account the button is hidden and
 RecordingLinkControls switches Accounts. During a recording the link goes through
-`changeRecordingAccount`. Creation still validates membership; calendar or Account
+`changeRecordingAccount`; the change button waits while that link to an existing
+draft is pending. Creation still validates membership; calendar or Account
 failures show nothing.
 
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when

@@ -1,4 +1,4 @@
-import type { CalendarEvent } from '@/types/calendar';
+import type { CalendarEvent, CalendarEventPage } from '@/types/calendar';
 
 const EARLY_MS = 10 * 60_000;
 const WINDOW_MS = 60 * 60_000;
@@ -29,9 +29,37 @@ export function ongoingEventFor(events: CalendarEvent[], now: Date): CalendarEve
 export type AccountLinkSource = 'none' | 'url' | 'mcp' | 'user' | 'auto';
 
 /** Auto-link only fills an empty Account nobody chose. After the user's change
- * (`user`) or an earlier auto link (`auto`), it is not applied again. */
-export function shouldAutoLink(state: { accountId: string; recordingAccountId?: string; source: AccountLinkSource }): boolean {
-  return !state.accountId && !state.recordingAccountId && state.source === 'none';
+ * (`user`) or an earlier auto link (`auto`), it is not applied again. A lookup
+ * whose `generation` is no longer `currentGeneration` (stop, failure, leftover
+ * upload or a newer start) applies nothing. */
+export function shouldAutoLink(state: {
+  accountId: string; recordingAccountId?: string; source: AccountLinkSource;
+  generation?: number; currentGeneration?: number;
+}): boolean {
+  return state.generation === state.currentGeneration
+    && !state.accountId && !state.recordingAccountId && state.source === 'none';
+}
+
+export const ONGOING_EVENT_MAX_PAGES = 5;
+
+/** Reads every page of the lookup window, at most `maxPages`. Returns null
+ * (abstain) when a cursor remains after the bound or the lookup went stale:
+ * a partial set could pick the wrong event. */
+export async function readOngoingEvents(
+  fetchPage: (cursor?: string) => Promise<CalendarEventPage>,
+  isCurrent: () => boolean = () => true,
+  maxPages = ONGOING_EVENT_MAX_PAGES,
+): Promise<CalendarEvent[] | null> {
+  const events: CalendarEvent[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    if (!isCurrent()) return null;
+    const result = await fetchPage(cursor);
+    events.push(...result.events);
+    if (!result.nextCursor) return events;
+    cursor = result.nextCursor;
+  }
+  return null;
 }
 
 export function ongoingEventWindow(now: Date): { from: string; to: string } {

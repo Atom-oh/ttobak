@@ -65,6 +65,36 @@ test('manual_or_url_account_is_never_overwritten', () => {
   assert.equal(ongoing.shouldAutoLink({ accountId: '', recordingAccountId: 'acc', source: 'none' }), false);
 });
 
+test('a stale lookup generation never auto-links', () => {
+  assert.equal(ongoing.shouldAutoLink({ accountId: '', source: 'none', generation: 3, currentGeneration: 3 }), true);
+  assert.equal(ongoing.shouldAutoLink({ accountId: '', source: 'none', generation: 3, currentGeneration: 4 }), false);
+});
+
+test('calendar pages are followed within a bound; a remaining cursor abstains', async () => {
+  const pages = (count, last = null) => {
+    const seen = [];
+    const fetchPage = async cursor => {
+      seen.push(cursor);
+      const index = seen.length;
+      return { events: [event(`e${index}`, -5, 30)], nextCursor: index < count ? `c${index}` : last };
+    };
+    return { seen, fetchPage };
+  };
+  const three = pages(3);
+  assert.deepEqual([...(await ongoing.readOngoingEvents(three.fetchPage))].map(item => item.eventId), ['e1', 'e2', 'e3']);
+  assert.deepEqual(three.seen, [undefined, 'c1', 'c2']);
+  const bounded = pages(5);
+  assert.equal((await ongoing.readOngoingEvents(bounded.fetchPage)).length, 5);
+  const endless = pages(Infinity);
+  assert.equal(await ongoing.readOngoingEvents(endless.fetchPage), null, 'a partial set is never used');
+  assert.equal(endless.seen.length, ongoing.ONGOING_EVENT_MAX_PAGES);
+  let current = true;
+  const stale = pages(3);
+  const read = ongoing.readOngoingEvents(async cursor => { current = false; return stale.fetchPage(cursor); }, () => current);
+  assert.equal(await read, null, 'a stale lookup stops paging');
+  assert.equal(stale.seen.length, 1);
+});
+
 test('lookup window and chip copy', () => {
   const window = ongoing.ongoingEventWindow(now);
   assert.equal(window.from, '2026-11-11T04:00:00.000Z');
@@ -112,7 +142,7 @@ function hookLoader(dependencies) {
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', enabled = true } = {}) {
+function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', enabled = true, active = false, canDismiss = true, cursors = 0 } = {}) {
   const harness = accountComponentHarness();
   context.after(() => harness.unmount());
   const pending = [];
@@ -124,14 +154,18 @@ function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', e
     accountId: 'acc-1',
   };
   const api = {
-    calendarApi: { events: (query, options) => { calls.push(['events', query, options]); return new Promise(resolve => pending.push(() => resolve({ events: [liveEvent], nextCursor: null }))); } },
+    calendarApi: { events: (query, options) => {
+      calls.push(['events', query, options]);
+      const index = calls.filter(call => call[0] === 'events').length;
+      return new Promise(resolve => pending.push(() => resolve({ events: [liveEvent], nextCursor: index <= cursors ? `c${index}` : null })));
+    } },
     accountApi: { list: async () => ({ accounts: [{ accountId: 'acc-1', name: 'Synthetic Corp', role: 'SA' }] }) },
   };
   // The harness compares dependency arrays; an effect without one runs every render.
   const react = { ...harness.react, useEffect: (effect, deps) => harness.react.useEffect(effect, deps ?? [Symbol('every render')]) };
   const { useCalendarAutoLink: runAutoLink } = hookLoader({ react, '@/lib/api': api })('@/hooks/useCalendarAutoLink');
   const recording = [];
-  const props = { enabled };
+  const props = { enabled, canDismiss };
   const seen = {};
   // A plain test probe rendered by the stub harness, not a React component.
   function probe() {
@@ -139,7 +173,8 @@ function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', e
     const [title, setTitle] = harness.react.useState(initialTitle);
     seen.result = runAutoLink({
       userId: 'owner', accountId, setAccountId, title, setTitle, recordingAccountId: undefined,
-      isRecordingActive: () => false, applyToRecording: id => recording.push(id), initialSource, enabled: props.enabled,
+      isRecordingActive: () => active, applyToRecording: id => recording.push(id), initialSource, enabled: props.enabled,
+      canDismiss: props.canDismiss,
     });
     seen.page = { accountId, setAccountId, title, setTitle };
     return null;
@@ -148,7 +183,12 @@ function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', e
   render();
   // Recording start: the only place the auto link is applied.
   const start = () => { seen.result.check(); render(); };
-  const resolveCalendar = async () => { pending.splice(0).forEach(resolve => resolve()); await settle(); await settle(); render(); };
+  const resolveCalendar = async () => {
+    for (let round = 0; round < 10 && pending.length; round++) {
+      pending.splice(0).forEach(resolve => resolve()); await settle(); await settle();
+    }
+    render();
+  };
   return { render, start, resolveCalendar, calls, recording, props, result: () => seen.result, page: () => seen.page };
 }
 
@@ -282,4 +322,64 @@ test('a leftover upload never carries an auto link', async context => {
     'handleLeftoverUpload drops the auto link before creating its draft');
   const hook = readFileSync(new URL('../src/hooks/useCalendarAutoLink.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(hook, /checkedUserRef/, 'no mount-time application');
+});
+
+test('a calendar result arriving after stop or failure does nothing', async context => {
+  const f = autoLinkFixture(context, { active: true });
+  f.start();
+  f.result().invalidate();
+  await f.resolveCalendar();
+  assert.equal(f.page().accountId, '');
+  assert.equal(f.page().title, '', 'no title fill');
+  assert.deepEqual(f.recording, [], 'nothing applied to the recording');
+  assert.equal(f.result().autoLink, null);
+  const live = autoLinkFixture(context, { active: true });
+  live.start();
+  await live.resolveCalendar();
+  assert.deepEqual(live.recording, ['acc-1'], 'a current lookup still applies');
+});
+
+test('a leftover upload during a pending lookup is never linked by its late result', async context => {
+  const f = autoLinkFixture(context, { active: true });
+  f.start();
+  assert.equal(f.result().dropAutoLink(), undefined);
+  await f.resolveCalendar();
+  assert.equal(f.page().accountId, '');
+  assert.equal(f.page().title, '');
+  assert.deepEqual(f.recording, []);
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /onRecordingStop=\{\(\) => \{ endAutoLinkRecording\(\);/, 'stop ends the lookup');
+  assert.match(page, /onError=\{\(error, opts\) => \{\s*endAutoLinkRecording\(\);/, 'a failure ends the lookup');
+  assert.match(page, /wasRecordingLiveRef\.current && !recordingLive\) endAutoLinkRecording\(\)/, 'returning to idle ends the lookup');
+});
+
+test('the hook follows calendar pages and abstains past the bound', async context => {
+  const paged = autoLinkFixture(context, { cursors: 2 });
+  paged.start();
+  await paged.resolveCalendar();
+  assert.deepEqual(paged.calls.map(call => call[1].cursor), [undefined, 'c1', 'c2']);
+  assert.equal(paged.page().accountId, 'acc-1');
+  const endless = autoLinkFixture(context, { cursors: Infinity });
+  endless.start();
+  await endless.resolveCalendar();
+  assert.equal(endless.calls.length, 5);
+  assert.equal(endless.page().accountId, '', 'a partial set links nothing');
+});
+
+test('the change button waits while the draft link is pending', async context => {
+  const f = autoLinkFixture(context, { active: true, canDismiss: false });
+  f.start();
+  await f.resolveCalendar();
+  f.result().dismiss();
+  f.render();
+  assert.equal(f.page().accountId, 'acc-1', 'nothing cleared while clearing would be refused');
+  assert.deepEqual(f.recording, ['acc-1']);
+  f.props.canDismiss = true;
+  f.render();
+  f.result().dismiss();
+  f.render();
+  assert.equal(f.page().accountId, '');
+  assert.deepEqual(f.recording, ['acc-1', '']);
+  const chip = readFileSync(new URL('../src/components/record/AutoLinkChip.tsx', import.meta.url), 'utf8');
+  assert.match(chip, /disabled=\{pending\}/);
 });
