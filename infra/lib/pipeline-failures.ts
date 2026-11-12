@@ -112,6 +112,7 @@ export class PipelineFailures extends Construct {
     count('TermsLayerPersonal', 'TermsLayerPersonal', '"terms run:" "status=succeeded"');
     count('TermsLayerAccount', 'TermsLayerAccount', '"layer=account" "outcome=MERGED"');
     count('TermsLayerCommon', 'TermsLayerCommon', '"terms news:" "outcome=SUCCEEDED"');
+    count('TermsLayerCommonTech', 'TermsLayerCommon', '"terms tech:" "outcome=SUCCEEDED"');
     // Failed Account merges are best effort and not retried (ruling R8).
     for (const code of ['FAILED', 'MEMBERS_FAILED', 'RECORD_FAILED']) {
       count(`TermsAccountFailures${code}`, 'TermsAccountFailures', `"layer=account" "outcome=${code}"`);
@@ -124,6 +125,9 @@ export class PipelineFailures extends Construct {
     count('TermsNewsRuns', 'TermsNewsRuns', '"terms news:" "outcome=SUCCEEDED"');
     count('TermsNewsDisabled', 'TermsNewsDisabled', '"terms news:" "outcome=DISABLED"');
     count('TermsNewsFailed', 'TermsNewsFailed', '"terms news:" "outcome=FAILED"');
+    count('TermsTechRuns', 'TermsTechRuns', '"terms tech:" "outcome=SUCCEEDED"');
+    count('TermsTechDisabled', 'TermsTechDisabled', '"terms tech:" "outcome=DISABLED"');
+    count('TermsTechFailed', 'TermsTechFailed', '"terms tech:" "outcome=FAILED"');
     // Transcript corrections (L3) log counts only: "transcript correction
     // outcome=APPLIED meeting=<id> corrections=<n>". A filter cannot extract n
     // from "corrections=<n>", so meetings corrected are Applied minus None.
@@ -148,6 +152,10 @@ export class PipelineFailures extends Construct {
     this.alarm('TermsNewsFailed', daily('TermsNewsFailed'), 1, {
       alarmName: 'TermsNewsFailed', evaluationPeriods: 1, datapointsToAlarm: 1,
       description: 'The daily news-to-Common terms job failed. Check the summarize logs (terms news: outcome=FAILED); the next daily run retries.',
+    });
+    this.alarm('TermsTechFailed', daily('TermsTechFailed'), 1, {
+      alarmName: 'TermsTechFailed', evaluationPeriods: 1, datapointsToAlarm: 1,
+      description: 'The daily AWS-technical-document-to-Common terms job failed. Check the summarize logs (terms tech: outcome=FAILED); the next daily run retries.',
     });
     this.alarm('TermsAccountFailures', daily('TermsAccountFailures'), 1, {
       alarmName: 'TermsAccountFailures', evaluationPeriods: 1, datapointsToAlarm: 1,

@@ -76,6 +76,8 @@ function workspace(entry, options = {}) {
       return currentFrame.slots[slot].value;
     },
     useCallback(callback, dependencies) { return hooks.useMemo(() => callback, dependencies); },
+    // Static render reads the client snapshot; subscriptions never fire here.
+    useSyncExternalStore(_subscribe, getSnapshot) { return getSnapshot(); },
     useEffect(callback, dependencies) {
       const slot = slotIndex++;
       const previous = currentFrame.slots[slot];

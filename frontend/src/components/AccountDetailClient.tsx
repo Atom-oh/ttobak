@@ -22,6 +22,7 @@ import { AccountFlow } from '@/components/account/AccountFlow';
 import { AccountKB } from '@/components/account/AccountKB';
 import { AccountLinksPanel } from '@/components/account/AccountLinksPanel';
 import { AccountPeople, type MentionResolveProgress } from '@/components/account/AccountPeople';
+import { CustomerBriefCard } from '@/components/account/CustomerBriefCard';
 import { eventProjectLinks } from '@/lib/accountOverview';
 import { AccountWorkspaceSelector, useAccountWorkspaceAccounts } from '@/components/workspace/AccountWorkspaceSelector';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
@@ -664,6 +665,10 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
             <div role="tabpanel" id={`account-panel-${tab}`} aria-labelledby={`account-tab-${tab}`} tabIndex={0}>
               {tab === 'general' && (
                 <>
+                  {overviewVisible && user?.userId && (
+                    <CustomerBriefCard key={`${user.userId}:${accountId}`} accountId={accountId} userId={user.userId} />
+                  )}
+
                   {account.accountId === accountId && (
                     <AccountParentEditor key={accountId} account={account} canEdit={isOwner}
                       onCommitted={parentAccountId => {

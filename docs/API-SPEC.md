@@ -999,7 +999,10 @@ Account and membership deletion/revocation during a transaction prevents the wri
 
 The contact response contains exactly `contactId`, `revision`, `name`, `company`, `title`,
 `department`, `email`, `address`, `workPhone`, `fax`, `phone`,
-`cardRegisteredAt`, `cardBook`, `group`, and `notes`. POST creates a new UUID
+`cardRegisteredAt`, `cardBook`, `group`, and `notes`, plus `source`,
+`sfdcContactId`, `sfdcAccountId` and `sfdcLeftAt` when set. Those four are
+server-owned: POST and the connector create drop them, and PUT keeps the stored
+values whatever the client sends. POST creates a new UUID
 and returns 201 with the contact. PUT requires the observed `revision`, replaces
 the editable fields and returns 200 with a new revision; DELETE requires the
 observed `revision` query parameter and returns 204. A stale revision returns
@@ -1020,6 +1023,63 @@ available and otherwise the member's email. Team pages accept the same limit and
 cursor parameters and recheck the requester's access. Invalid input returns
 400, denied access 403, a missing contact on PUT/DELETE 404, a stale revision 409, and unexpected
 errors a generic 500. Responses are not cached and contact content is not logged.
+
+`POST /api/accounts/{accountId}/contacts/sfdc-sync` applies one SFDC contact
+batch from the Mac intake (ADR-021, SFDC contacts). It requires direct
+membership (403 otherwise), returns `Cache-Control: no-store`, and takes one
+strict JSON object of at most 512 KiB (unknown fields, trailing data or a
+larger body are 400):
+
+```json
+{"snapshotComplete": true,
+ "sfdcAccountIds": ["001..."],
+ "present": {"001...": ["003..."]},
+ "items": [{"sfdcContactId": "003...", "sfdcAccountId": "001...", "name": "...",
+            "title": "...", "action": "create|link", "contactId": "...", "revision": "..."}]}
+```
+
+- SFDC IDs are 15 or 18 ASCII alphanumerics; an 18-character ID must carry the
+  case-checksum suffix of its first 15 (`model.CanonicalSfdcID`). Every ID is
+  canonicalized to 18 characters before any comparison, key or departure scope,
+  so both spellings of one record are one ID, and results echo the canonical
+  `sfdcContactId`. An invalid ID in `sfdcAccountIds` or `present` is 400; an
+  item whose own `sfdcContactId` or `sfdcAccountId` is invalid gets `invalid`.
+- `sfdcAccountIds` has 1 to 20 distinct IDs; `items` at most 200 with distinct
+  `sfdcContactId`, each `sfdcAccountId` listed in `sfdcAccountIds`.
+- `present` maps every ID in `sfdcAccountIds` (no other key) to the SFDC
+  contact IDs read from that account: at most 5,000 per account and 20,000 in
+  total. It is required when `snapshotComplete` is true and forbidden
+  otherwise; with a complete snapshot every item must be in its account's list.
+- `link` requires `contactId` and the observed `revision`; `create` takes
+  neither. Any of these failures rejects the whole request with 400.
+- `create` stores `name`, `title`, `company` (the Account name), `source: "sfdc"`
+  and the IDs. `link` fills only an empty `title` or `company` and sets the link
+  when none exists; it never changes `name` or another non-empty field.
+
+The response is `{results:[{sfdcContactId, result, contactId?}], marked, unmarked, skipped}`
+with results in item order:
+
+| `result` | Meaning |
+|---|---|
+| `created` | new contact; `contactId` returned |
+| `filled` / `unchanged` | link written / nothing to write |
+| `alreadyLinked` | another contact holds this SFDC ID |
+| `suppressed` | a member deleted the linked contact; never recreated |
+| `conflict` | stale or missing contact, another link on it, or a transient transaction conflict; retry next run |
+| `invalid` | an item SFDC ID that does not canonicalize (echoed as sent), `name` blank, `name`/`title` over 256 bytes, or the linked contact cannot be opened |
+
+Only a complete snapshot updates departures. The pass reads the Account's
+`SFDCCONTACT#` links of the listed SFDC accounts and opens only those linked
+contacts: a contact absent from the union of the request's `present` lists gets
+`sfdcLeftAt` (counted in `marked`), a present one loses it (`unmarked`). A
+contact that moved between two listed SFDC accounts stays present; its link
+keeps the `sfdcAccountId` it was first created under. Concurrently changed
+contacts are skipped; linked contacts that cannot be opened are counted in
+`skipped`. The pass starts at a random link and stops after 200 mark changes or
+15 seconds into the request; correct contacts need no write, so later runs
+continue. One people resolve request is queued when anything changed.
+Access, merge (409 `ACCOUNT_MERGING`), encryption (503) and unexpected errors
+fail the request.
 
 Contact fields are KMS envelope-encrypted per row before storage and bound to
 the account and contact (ADR-021, contact encryption); without a configured key, contact routes
@@ -1069,6 +1129,80 @@ account or is disabled. DELETE removes the ref and sets the CONFIG `status` to
 unknown source. Per-user crawler routes (subscribe/AddSource, update,
 unsubscribe) refuse account-owned sources like operator-curated ones, in the
 service and in the `attribute_not_exists(accountId)` write condition.
+
+`PUT /api/accounts/{accountId}/news-sources/{sourceId}` edits an account-owned
+source for a direct member. The body takes optional `sourceName`, `newsQueries`
+and `aliases` (unknown fields are 400); an absent or null field is unchanged, a
+present one replaces the stored value with POST's cleaning and limits. An empty
+name, an empty query list or a body with no field is 400. The source must have
+the account's ref and a CONFIG naming the account that is not disabled; anything
+else is 404. One transaction updates the CONFIG on those conditions and checks the
+ref, account and `MEMBER#` row: a racing delete gives 404 (never a revival), a
+revoked member 403. The ID, ref
+and `accountId` never change. Returns 200 with the (bounded) item shape below.
+On the versioned news publication path (`NEWS_PIPELINE_MODE`, `off` by default
+in code), current-news reads require each article's `sourceRevision` to equal
+the CONFIG fingerprint over `sourceName`, `aliases`, `newsQueries` and
+`customUrls`; after an edit, articles published under the previous configuration
+stop being listed and are not republished automatically, because discovery skips
+already-published hashes. Legacy (unversioned) news rows are not fingerprinted
+and stay listed. Tombstone deletion does not depend on the fingerprint.
+
+`GET /api/news-sources?limit=&cursor=` returns
+`{ "sources": [...], "nextCursor"?: "...", "truncated"?: true }`: the
+account-owned sources of every account the caller is a current direct member of
+(membership index rows are re-checked against the account and `MEMBER#` row,
+and each CONFIG against its ref, as in the account GET), sorted by account name
+then source name, followed by the caller's subscribed common sources by name.
+Operator-curated sources, sources with `accountId` and `acct_` IDs never appear
+as common. Each item has `sourceId`, `sourceName`, `kind` (`account` or
+`common`), `accountId` and `accountName` (account kind only), `newsQueries`,
+`aliases`, `customUrls`, `newsSources` (the CONFIG values), `status`,
+`lastCrawledAt`, `documentCount`, `canEdit` (always true) and `listsTruncated`
+when cut; full values come from the per-account GET and the crawler list. Names
+are cut to 200 code points, `status` to 32, `lastCrawledAt` to 64; queries keep
+at most 32 x 200 code points in 8,192 serialized bytes, `aliases`/`newsSources`
+20 x 100 in 4,096/2,048, `customUrls` 20 x 1,000 in 6,144; common IDs over 128
+code points are skipped. At 6 JSON bytes per code point an item is under 25,000
+bytes, so a page at the maximum `limit` (default 50, max 100; 0, non-numeric,
+repeated or unknown parameters are 400) plus cursor is under 2,520,000 bytes,
+within the 6 MB Lambda limit even if proxy escaping doubles it. Each request
+reads the whole bounded directory (200 accounts by ID, 10 sources each, 500
+subscriptions across all Query pages) under a 20-second deadline and returns the
+items after the cursor, so pages keep the order without gaps or duplicates while
+it is unchanged. The cursor is the last item's sort key bound to the caller;
+malformed, oversized or foreign cursors are 400. `truncated` means a cap left
+sources out. Undecodable CONFIG rows (legacy scalar lists) are skipped.
+
+`POST /api/accounts/{accountId}/news-sources/{sourceId}/collect` asks the news
+crawler to collect one account-owned source now. It takes no query parameters
+and an empty body (anything else, or over 1 KiB, is 400). Authorization matches
+PUT: a non-member gets 403, and a source without the account's ref, a CONFIG
+naming the account, an enabled status and a user-created origin is 404, as is
+one whose IDs do not fit the crawler contract (`accountId` and the request ID
+`[A-Za-z0-9-]{1,64}`, `sourceId` = `acct_{accountId}_{8 lowercase hex}`). Each
+source accepts at most one request per hour, from any member: one transaction
+checks the ref, account and `MEMBER#` row and sets the CONFIG's
+`lastCollectRequestedAt` (UTC RFC3339, seconds) and `lastCollectRequestId` (the
+event's `requestId`) only when the previous request is absent or at least 3,600
+seconds old. Both writes are update expressions touching only these attributes;
+they and the crawler's own `lastCollectStarted*` markers are outside the source
+revision fingerprint. Then a
+`NewsCollectRequested` event (`ttobak.crawler`, detail `sourceId`, `accountId`,
+`requestId` only) goes to the default bus and the route returns 202
+`{ "requestId", "requestedAt", "nextAllowedAt" }`. Within the hour it returns
+429 `RATE_LIMITED` with the standard error body plus `nextAllowedAt` (no
+`Retry-After` header); after a refused claim the CONFIG is re-read, so a source
+deleted or disabled meanwhile is 404. If the event is not accepted, the claim is
+released (both attributes removed, conditional on its request ID, so a late
+event for it is refused as unclaimed) and the route returns 503; if the
+release also fails the claim expires after the hour. The collection itself is
+asynchronous and bounded by the crawler (it skips a source crawled in the last
+30 minutes and stops at 40 model calls); its outcome is visible only as the
+source's `lastCrawledAt`, HISTORY row and new articles. Account-kind items of
+`GET /api/news-sources`, the PUT response and the per-account GET carry
+`nextCollectAllowedAt` (UTC RFC3339) while a request is within the hour; it is
+omitted when collection may be requested now.
 `DELETE /api/insights/{sourceId}/{docHash}` on an account-owned source's
 document is allowed only for admins or a current direct member of that account
 (read per request); the stored source creator grants nothing. A non-admin
@@ -1089,7 +1223,11 @@ row without one is common. With no row, a
 source ID starting `acct_` is hidden and any other ID (such as `__tech__`) is
 common. Hidden documents are removed before `totalCount`, the `services` and
 `sourceIds` facets, sorting and paging; `source={hidden}` returns an empty
-page. A hidden detail returns the same 404 as a missing document. Each
+page. The list also takes `kind=common|account` (other values are ignored) and
+`account={accountId}` (account kind; with `kind=common` nothing matches), applied
+with visibility before the same totals, facets and paging; an account the caller
+cannot read returns an empty page. The shared 30-second scan cache stays
+unfiltered. A hidden detail returns the same 404 as a missing document. Each
 returned document adds `sourceName` (the CONFIG name, omitted without a row),
 `sourceKind` (`common` or `account`), `accountId` and `accountName` for the
 account kind, and `matchedTerm` (the search query that found a news article,
@@ -1396,6 +1534,11 @@ is defined by the summary-privacy writer state in INFRA-SPEC.
 The meeting-detail UI uses that publication endpoint directly for its single
 link-and-share action: no preliminary private link request is needed. Existing
 private links and recording preparation remain private until explicit publication.
+After either write commits, the service removes the meeting's automatic-term
+evidence from Account dictionaries it is no longer linked to (ADR-008 FU4). This
+sweep is best effort: a failure is logged and never changes the response, and
+repeating the request retries it. Its version bump can make a concurrent Account
+term PATCH return 409 `VERSION_CONFLICT`.
 
 Account meeting lists and meeting-sourced insights, including the registered QA
 account insight/brief tools, revalidate the exact
@@ -1834,7 +1977,15 @@ capped at 32KB; violations return 400.
 model configured by `BEDROCK_TRANSLATE_MODEL_ID` first, then falls back to Amazon
 Translate on any model error, timeout (`TRANSLATE_HIGH_TIMEOUT_MS`, default 6000,
 accepted 500–8000), truncated or rejected output, or when the model is unset or
-the text exceeds 3,000 bytes. `validateInterpretation` rejects output that starts
+the text exceeds 3,000 bytes. On the interpreter path the request also carries a
+`glossary` of the caller's own dictionary terms that occur in the segment
+(`SelectTranslateGlossary`: Personal then Common active rows from
+`GlossaryForMeeting` without an Account, Latin forms on word boundaries, at most
+20 terms with up to three matched heardAs spellings, cached per user for five
+minutes per API instance); the read has its own 800 ms deadline, and a failed or
+timed-out read sends none, is cached as empty for 30 seconds and never fails the
+translation.
+`validateInterpretation` rejects output that starts
 with a translation label (English or Korean `Translation:` labels, `Here is the translation`…; see `interpreterMetaPrefixes`),
 starts with `{` or echoes `current_segment`/`previous_segments`, is longer than
 `4*len(text)+200` bytes, has a Hangul letter share below 0.3 for a `ko` target
@@ -1989,7 +2140,8 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   Every edit sets `userEditedAt`, blocking automatic writes; `origin` is kept.
 - `DELETE .../terms/{termId}[?version=]` tombstones any origin; failed observation
   cleanup or pruning (beyond 2,000 tombstones, oldest first) is a `warnings` entry.
-- Legacy `PUT` (at most 256 KB and 1,000 entries; `soundsLike` splits on commas)
+- Legacy `PUT` (at most 256 KB, and at most 1,000 entries besides live automatic
+  terms passed through, `MaxLegacyTerms`; `soundsLike` splits on commas)
   accepts the GET `terms` unchanged. Entries whose key belongs to a live auto or
   suggested row are passed through without validation and never written; if one
   differs from that row, or names a suggestion, the response carries a
@@ -2018,14 +2170,15 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   `EnsureVocabularies`, which polls, flips or starts the personal ko-KR build
   (en-US is deferred and reports `NONE`); failures are `warnings` and the
   active vocabulary keeps serving.
-  `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount}`
+  `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount, liveName?}`
   per language (`status` `READY|BUILDING|FAILED|QUOTA_EXCEEDED|NONE` is the
   latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `PENDING`
   while a ko-KR build is in flight (so the settings UI keeps polling the GET,
   which flips it), otherwise `READY` whenever the active vocabulary is ready.
-  No response carries a
-  vocabulary name yet: the live client would send a ko-KR-only
-  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 rollout check 5).
+  `liveName` is the caller's own READY active vocabulary name, present only
+  when `LIVE_VOCABULARY_MODE=on` and the active slot is READY and not emptied.
+  The recording page sends it as `VocabularyNames` on live streams, including
+  the ko-KR/en-US multi-language stream (ADR-008 rollout check 5).
   The builder replaces the earlier in-place rebuild of the derived ko-KR
   vocabulary, including its pending-build deferral warning and bounded
   conflict recomputation; that path no longer exists.
@@ -2041,7 +2194,7 @@ a membership ConditionCheck in its transaction, so a membership removed after
 that check is still 403. `termId` is the 32-hex `termKey`, validated as in the
 personal routes, and request bodies have the same bounds and validation.
 Term items (here and in the personal GET `items`) gain `layer` and `sources` (`[{kind, ref, at}]`, newest first, at
-most 10, `kind` `meeting|kb|research|news`; `ref` is empty on Account and
+most 10, `kind` `meeting|kb|research|news|tech`; `ref` is empty on Account and
 Common items, which name other users' content); Common items also carry
 `updatedBy`. These routes do not rebuild vocabularies, except personal writes
 (which behave as the personal routes above).
@@ -2170,6 +2323,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/contacts` | `accountContactsHandler.Create` |
 | PUT | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/contacts/{contactId}` | `accountContactsHandler.Delete` |
+| POST | `/api/accounts/{accountId}/contacts/sfdc-sync` | `accountContactSyncHandler.Sync` |
 | GET | `/api/accounts/{accountId}/speaker-team` | `accountContactsHandler.SpeakerTeam` |
 | GET | `/api/accounts/{accountId}/events` | `accountEventsHandler.List` |
 | POST | `/api/accounts/{accountId}/events` | `accountEventsHandler.Create` |
@@ -2178,7 +2332,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | DELETE | `/api/accounts/{accountId}/events/{eventId}` | `accountEventsHandler.Delete` |
 | GET | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.List` |
 | POST | `/api/accounts/{accountId}/news-sources` | `accountNewsHandler.Create` |
+| PUT | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Update` |
 | DELETE | `/api/accounts/{accountId}/news-sources/{sourceId}` | `accountNewsHandler.Delete` |
+| POST | `/api/accounts/{accountId}/news-sources/{sourceId}/collect` | `accountNewsHandler.Collect` |
 | GET | `/api/accounts/{accountId}/links` | `accountLinksHandler.List` |
 | POST | `/api/accounts/{accountId}/links` | `accountLinksHandler.Create` |
 | DELETE | `/api/accounts/{accountId}/links` | `accountLinksHandler.Delete` |
@@ -2205,6 +2361,8 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts/{accountId}/meetings` | `accountHandler.ListAccountMeetings` |
 | GET | `/api/accounts/{accountId}/insights` | `accountHandler.ListAccountInsights` |
 | GET | `/api/accounts/{accountId}/brief` | `accountHandler.GetAccountBrief` |
+| GET | `/api/accounts/{accountId}/customer-brief` | `customerBriefHandler.Get` |
+| POST | `/api/accounts/{accountId}/customer-brief` | `customerBriefHandler.Request` |
 | GET | `/api/accounts/{accountId}/research` | `researchHandler.ListAccountResearch` |
 | GET | `/api/accounts/{accountId}/projects` | `projectHandler.ListAccountProjects` |
 | POST | `/api/accounts/{accountId}/documents` | `accountHandler.PutDocument` |
@@ -2305,6 +2463,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/dictionary/layers/{layer}/terms/{termId}/log/{logId}/restore` | `dictHandler.RestoreTerm` |
 | POST | `/api/translate` | `translateHandler.Translate` |
 | POST | `/api/meetings/{meetingId}/summarize` | `summarizeLiveHandler.SummarizeLive` |
+| GET | `/api/news-sources` | `accountNewsHandler.ListAll` |
 | GET | `/api/crawler/sources` | `crawlerHandler.ListSources` |
 | POST | `/api/crawler/sources` | `crawlerHandler.AddSource` |
 | PUT | `/api/crawler/sources/{sourceId}` | `crawlerHandler.UpdateSource` |
@@ -2579,6 +2738,41 @@ Source conflicts preserve text and mark fresh-generation retry; unrelated metada
 changes do not invalidate generation. No source/model text appears in errors.
 Deployment prerequisites and runtime acceptance are recorded in
 [the rollout runbook](runbooks/meeting-document-release.md).
+
+## Customer brief
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/accounts/{accountId}/customer-brief` | Current direct member; `200` with the caller's run state and brief |
+| POST | `/api/accounts/{accountId}/customer-brief` | Current direct member; empty body or `{}` only (1 KiB cap); `202` with run state |
+
+Each member has a private brief; no route returns another member's brief.
+Response (both routes):
+`{"run":{"status","runId"?,"requestedAt"?,"errorCode"?},"brief":{"generatedAt","content"}|null}`.
+`status` is `none`, `queued`, `running`, `succeeded` or `failed`; `requestedAt` and
+`generatedAt` are RFC3339. `errorCode` is set only for `failed` and is one of
+`SOURCE_CHANGED`, `SOURCE_UNAVAILABLE`, `INVALID_OUTPUT`, `ACCESS_REVOKED`,
+`INTERRUPTED`, `TIMEOUT`, `PROVIDER_FAILED`, `PUBLISH_FAILED`, `PERSISTENCE_FAILED`,
+`OUTPUT_TOO_LARGE` or `FAILED` (any other stored code). A pending run past its lease
+reads as `failed/INTERRUPTED`. POST reuses a live run without a second event and
+always returns `brief:null`; GET returns the last good brief until its own 30-day
+expiry, including while a refresh runs or after it fails.
+
+`content` is the stored plain-text JSON (at most 24,000 bytes; the whole response
+at most 25,024): `nextMeeting {title,startsAt,source}|null`, `situation
+{text,sources}|null`, `sinceLast[]`, `news[] {text,why,sources}`, `questions[]`,
+`terms[] {term,gloss,inDictionary,sources}`. Each source is `{kind,id,label}`; ids are
+a meeting id (`meeting`), the underlying meeting or news id (`insight`),
+`{sourceId}:{docHash}` (`news`), and an account event id or `calendar:{eventId}`
+for a synced calendar event (`event`). `inDictionary` covers account terms and the
+personal dictionary, including unmigrated legacy terms.
+
+Errors: 400 for query strings, bodies or invalid IDs; 404 `NOT_FOUND` with one body
+for a missing account and for a caller who is not a current direct member
+(inherited readers included); 409 when a concurrent request claimed the run; 503
+`BRIEF_UNAVAILABLE` when the request event could not be delivered (the run is
+recorded as `failed/PUBLISH_FAILED` and may be retried) or the sealing key is
+unavailable. Neither route is connector-delegated.
 
 ## Re-summary from saved sources
 

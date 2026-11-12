@@ -14,8 +14,11 @@ import type { AccountFocusGraph, AccountPeoplePage, MeetingPeopleEdges, MentionG
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
+import type { CustomerBriefResponse } from '@/types/customerBrief';
 import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
+import type { NewsSourceItem, NewsSourcesPage } from '@/lib/newsRegistration';
+import type { NewsCollectResponse } from '@/lib/newsCollect';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -63,7 +66,8 @@ interface FetchOptions extends RequestInit {
 }
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, public readonly code: string, message: string) {
+  // body is the parsed error JSON when the server sent one (e.g. a 429's nextAllowedAt).
+  constructor(public readonly status: number, public readonly code: string, message: string, public readonly body?: unknown) {
     super(message);
     this.name = 'ApiError';
   }
@@ -160,7 +164,7 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: { code: 'UNKNOWN', message: 'Request failed' } }));
-    throw new ApiError(response.status, errorData?.error?.code || 'UNKNOWN', errorData?.error?.message || `HTTP ${response.status}`);
+    throw new ApiError(response.status, errorData?.error?.code || 'UNKNOWN', errorData?.error?.message || `HTTP ${response.status}`, errorData);
   }
 
   if (response.status === 204 || response.headers.get('content-length') === '0') {
@@ -730,8 +734,8 @@ export const summaryApi = {
 
 // Crawler API
 export const crawlerApi = {
-  listSources: () =>
-    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources'),
+  listSources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources', options),
   addSource: (data: {
     sourceName: string;
     awsServices: string[];
@@ -739,7 +743,7 @@ export const crawlerApi = {
     customUrls?: string[];
     newsQueries?: string[];
     aliases?: string[];
-  }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data),
+  }, options?: { expectedUserId?: string }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data, options),
   updateSource: (sourceId: string, data: {
     awsServices: string[];
     newsSources: string[];
@@ -748,18 +752,32 @@ export const crawlerApi = {
     aliases?: string[];
     removeAliases?: string[];
   }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
-  unsubscribe: (sourceId: string) =>
-    api.delete(`/api/crawler/sources/${sourceId}`),
+  unsubscribe: (sourceId: string, options?: { expectedUserId?: string }) =>
+    api.delete(`/api/crawler/sources/${sourceId}`, options),
   getHistory: (sourceId: string) =>
     api.get<{ history: CrawlHistory[] }>(`/api/crawler/sources/${sourceId}/history`),
 };
 
+// Every news source the caller can manage: account-owned ones of their direct
+// accounts and their common subscriptions. 404 until the endpoint is deployed.
+export const newsSourcesApi = {
+  list: (query: { limit?: number; cursor?: string } = {}, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const q = new URLSearchParams();
+    if (query.limit) q.set('limit', String(query.limit));
+    if (query.cursor) q.set('cursor', query.cursor);
+    const suffix = q.toString();
+    return api.get<NewsSourcesPage>(`/api/news-sources${suffix ? `?${suffix}` : ''}`, { ...options, cache: 'no-store' });
+  },
+};
+
 // Insights API
 export const insightsApi = {
-  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number }) => {
+  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number; kind?: 'common' | 'account'; account?: string }) => {
     const q = new URLSearchParams();
     q.set('type', params.type);
     if (params.source) q.set('source', params.source);
+    if (params.kind) q.set('kind', params.kind);
+    if (params.account) q.set('account', params.account);
     if (params.service) q.set('service', params.service);
     if (params.tags && params.tags.length > 0) q.set('tags', params.tags.join(','));
     if (params.sort) q.set('sort', params.sort);
@@ -1038,6 +1056,13 @@ export const accountApi = {
     api.get<AccountSignals>(`/api/accounts/${encodeURIComponent(id)}/signals`, { ...options, cache: 'no-store' }),
   flow: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<AccountFlow>(`/api/accounts/${encodeURIComponent(id)}/flow`, { ...options, cache: 'no-store' }),
+  // The caller's private pre-meeting brief (direct members only; 404 otherwise).
+  customerBrief: {
+    get: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<CustomerBriefResponse>(`/api/accounts/${encodeURIComponent(id)}/customer-brief`, { ...options, cache: 'no-store' }),
+    request: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<CustomerBriefResponse>(`/api/accounts/${encodeURIComponent(id)}/customer-brief`, undefined, { ...options, cache: 'no-store' }),
+  },
   graph: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<AccountGraph>(`/api/accounts/${encodeURIComponent(id)}/graph`, { ...options, cache: 'no-store' }),
   links: {
@@ -1094,6 +1119,11 @@ export const accountApi = {
       api.post<CrawlerSource>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, input, options),
     remove: (id: string, sourceId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, options),
+    update: (id: string, sourceId: string, input: { sourceName?: string; newsQueries?: string[]; aliases?: string[] }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.put<NewsSourceItem>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, input, options),
+    // Empty body; 202 means the crawler has the request, not that it ran.
+    collect: (id: string, sourceId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<NewsCollectResponse>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}/collect`, undefined, options),
   },
 };
 

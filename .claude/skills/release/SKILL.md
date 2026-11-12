@@ -5,7 +5,8 @@ description: Validate and deliver an authorized TTOBAK release using the project
 
 # Release
 
-Use the root validation commands, `docs/runbooks/pr-review.md`, and
+Use the root validation commands, `docs/runbooks/pr-review.md`,
+`docs/runbooks/releases.md` (versions, tags, CHANGELOG and in-app notes) and
 `docs/runbooks/deployment.md`. Do not substitute a build for required tests.
 
 For assigned PR delivery, finish current-HEAD review/fixes and merge under the

@@ -23,8 +23,11 @@ type accountNewsRepo interface {
 	CreateAccountNewsSource(ctx context.Context, src *model.CrawlerSource, ref *model.AccountNewsSourceRef, observedCount, limit int) error
 	ListAccountNewsSources(context.Context, string) ([]model.AccountNewsSourceRef, error)
 	DeleteAccountNewsSource(context.Context, string, string, string) error
+	UpdateAccountNewsSource(ctx context.Context, accountID, userID, sourceID string, fields repository.AccountNewsSourceFields) error
 	ReconcileAccountNewsSourceCount(ctx context.Context, accountID string) (int, error)
 	GetAccountNewsSourceCount(ctx context.Context, accountID string) (count int, exists bool, err error)
+	ClaimAccountNewsCollect(ctx context.Context, accountID, userID, sourceID, requestID string, requestedAt, cutoff time.Time) error
+	ReleaseAccountNewsCollect(ctx context.Context, sourceID, requestID string) error
 }
 
 type accountNewsCrawler interface {
@@ -57,6 +60,11 @@ type AccountNewsService struct {
 	insights *InsightsService
 	now      func() time.Time
 	randHex  func() (string, error)
+	// subscriptions and memberships back ListAll; nil fails it closed.
+	subscriptions newsSourceSubscriptions
+	memberships   newsSourceMemberships
+	// publishCollect sends NewsCollectRequested; nil fails CollectNow closed.
+	publishCollect func(context.Context, model.NewsCollectRequested) error
 }
 
 func NewAccountNewsService(repo accountNewsRepo, crawler accountNewsCrawler, insights *InsightsService) *AccountNewsService {
@@ -285,6 +293,13 @@ func (s *AccountNewsService) repairLowCounter(ctx context.Context, accountID str
 // accountSources returns the account's sources whose CONFIG still names the
 // account and is not disabled. Refs alone never prove ownership.
 func (s *AccountNewsService) accountSources(ctx context.Context, accountID string) ([]model.CrawlerSource, error) {
+	return s.ownedSources(ctx, accountID, false)
+}
+
+// ownedSources is accountSources; with skipInvalid, a CONFIG row that does
+// not decode (legacy scalar list values) is left out instead of failing the
+// whole read.
+func (s *AccountNewsService) ownedSources(ctx context.Context, accountID string, skipInvalid bool) ([]model.CrawlerSource, error) {
 	refs, err := s.repo.ListAccountNewsSources(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -295,6 +310,9 @@ func (s *AccountNewsService) accountSources(ctx context.Context, accountID strin
 			continue
 		}
 		src, err := s.crawler.GetSource(ctx, ref.SourceID)
+		if skipInvalid && errors.Is(err, repository.ErrInvalidSource) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +329,15 @@ func (s *AccountNewsService) List(ctx context.Context, userID, accountID string)
 	if _, err := s.authorize(ctx, accountID, userID); err != nil {
 		return nil, err
 	}
-	return s.accountSources(ctx, accountID)
+	sources, err := s.accountSources(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	for i := range sources {
+		sources[i].NextCollectAllowedAt = nextCollectAllowedAt(sources[i].LastCollectRequestedAt, now)
+	}
+	return sources, nil
 }
 
 // Delete removes the ref and disables the CONFIG so the scheduler stops

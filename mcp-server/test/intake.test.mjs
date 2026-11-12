@@ -129,7 +129,7 @@ test('server resolution re-reads one entry in memory and classifies unusable ent
 });
 
 function item(id, start, end, extra = {}) {
-  return { meetingId: id, subject: `t-${id}`, start, end, isCanceled: false, isAllDay: false, ...extra };
+  return { meetingId: id, subject: `t-${id}`, start, end, isCanceled: false, isAllDay: false, response: 'Accept', ...extra };
 }
 
 test('calendar sends organizer domain only', () => {
@@ -158,7 +158,7 @@ test('calendar organizer name and local part never leave the parser', async t =>
     return { meetings: [{
       meetingId: `org-${year}${month}${day}`, subject: 'Quarterly review', sensitivity: 'Normal',
       start: `${year}-${month}-${day}T10:00:00+09:00`, end: `${year}-${month}-${day}T11:00:00+09:00`,
-      isCanceled: false, isAllDay: false,
+      isCanceled: false, isAllDay: false, response: 'Organizer',
       organizer: { name: CANARY, email: `${local}@Customer.Example.COM`, address: `${local}@customer.example.com` },
       attendees: [{ name: CANARY, email: `${local}@customer.example.com` }], body: CANARY,
     }] };

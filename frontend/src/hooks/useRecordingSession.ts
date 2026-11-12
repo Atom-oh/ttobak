@@ -135,16 +135,24 @@ export function useRecordingSession({
     getRuntimeConfig().then(async (cfg) => {
       if (cancelled) return;
       if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
-        // The dictionary GET is a vocabulary poll/flip opportunity (ADR-008).
-        // No response names a vocabulary for live streams until ADR-008
-        // rollout check 5, so live captions send none and the vocabulary retry is inert.
-        import('@/lib/api').then(({ dictionaryApi }) => dictionaryApi.get()).catch(() => {});
         const config: TranscribeStreamingConfig = {
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
           userPoolId: cfg.cognito.userPoolId,
         };
         transcribeConfigRef.current = config;
+        // The dictionary GET is a vocabulary poll/flip opportunity (ADR-008)
+        // and, when the server enables it, names the caller's READY vocabulary.
+        // Streams started after it resolves send that name as VocabularyNames;
+        // a rejected name is dropped for the recording (liveVocabulary.ts).
+        // An earlier stream keeps running without one rather than waiting.
+        Promise.all([import('@/lib/api'), import('@/lib/liveVocabulary')])
+          .then(([{ dictionaryApi }, { liveVocabularyNamesFrom }]) => dictionaryApi.get().then(response => {
+            const vocabularies = liveVocabularyNamesFrom(response.vocabularies);
+            if (cancelled || !vocabularies || transcribeConfigRef.current !== config) return;
+            transcribeConfigRef.current = { ...config, vocabularies };
+          }))
+          .catch(() => {});
         // A recording that started (createManager, below) before this fetch
         // resolved was permanently forced onto Web Speech -- or, on mobile,
         // blocked from live captions entirely (SttManager.fallbackToWebSpeech)

@@ -30,7 +30,7 @@ The account KB reference rows live in `ttobak-main` (ADR-021, relationship links
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
 | TtobakObservabilityStack | OTLP collector (Fargate, internal ALB) writing to the mgmt ClickHouse PrivateLink | None |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
-| TtobakCrawlerStack | Crawling/ingestion workflow and workers; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
+| TtobakCrawlerStack | Crawling/ingestion workflow and workers; manual account news collection rule; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU On-Demand/Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
@@ -267,7 +267,8 @@ retained-grant removal using deployed function timeout/last-modified metadata.
 Only the summary role receives the selected final-note model/profile grant.
 Images use GPT-6.1 Terra via independent `BEDROCK_IMAGE_MODEL_ID` in us-west-2.
 Legacy news briefings and the structured news worker use GPT-6 Luna in the stack
-region. Their exact model/profile grants retain outgoing Claude permissions for
+region; the structured worker requests reasoning effort `low` (`none` leaked
+planning text into the JSON answer). Their exact model/profile grants retain outgoing Claude permissions for
 rollout safety; runtime has no expensive-model fallback. Structured news prices
 are conservatively metered at USD 0.125 for all input (including separate
 cache-read/write tokens) / USD 0.50 output per million tokens. Verified
@@ -470,6 +471,14 @@ the pre-created ttobak-agentcore-research-role; absence from CDK creation is not
 that the role is missing. Web search calls the us-east-1 Gateway through SigV4 from
 three separately packaged callers.
 
+The Gateway's `ttobak-web-search-tool` target declares only `connectorId:
+web-search`. CloudFormation's `ConnectorSource` has no version property, so the
+connector version is pinned out of band and is sticky across later stack updates
+(see the news release runbook). News discovery sends `filters.publishedDateFilter`
+and an optional `filters.domainFilter.include`, which need connector 1.2.0 or later;
+an older target silently ignores them (observed 2026-11-11 on the target created
+2026-07-13, whose `tools/list` schema had only `query` and `maxResults`).
+
 The simulator interpreter role has no execution permissions and uses SANDBOX
 networking. Generated option text is untrusted; its prompt/import checks are not
 the security boundary. Verify role/network configuration when modifying execution.
@@ -538,7 +547,8 @@ PENDING placeholders.
 ## Frontend and deployment
 
 FrontendStack owns the static bucket, CloudFront SPA router, runtime config,
-signing key setup and media behavior. Dynamic routes are mapped by knownPages;
+signing key setup and media behavior. Static pages (including `/changelog`) and
+dynamic routes are mapped by knownPages;
 404 fallback alone is not the complete routing mechanism. config.json is deployed
 separately from next build. Both Chat and Live QA use its relative `wsUrl: "/ws"`;
 the client accepts only the same-site WS path. Local development defaults to REST;
@@ -623,7 +633,7 @@ Claude model. The API function depends on the rule, as for saved summaries.
 
 Summarize receives `AUTO_TERMS_MODE` (`off` by default, or `personal`),
 `AUTO_TERMS_USERS` (comma-separated Cognito subs, empty means every owner),
-`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]) and
+`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]; `infra/cdk.json` sets `0.7`) and
 `BEDROCK_TERMS_MODEL_ID` (default `global.anthropic.claude-sonnet-5-5`; a
 `global.`/`apac.` Claude profile) from CDK context `ttobak:autoTermsMode`,
 `ttobak:autoTermsUsers`, `ttobak:autoTermsMinConfidence` and
@@ -668,20 +678,46 @@ operator CLI `backend/cmd/backfill-terms-sources` (dry run by default) passes
 every `kb/` and `shared/research/` key to the same mapper and spaces the
 published requests (`-interval`, default 5s). The worker's run row makes a rerun
 a no-op for unchanged content.
+Meetings re-qualify when `termsExtractorVersion` (part of the terms source
+identity in `service/terms_analysis.go`) changes; the operator CLI
+`backend/cmd/backfill-meeting-terms` (dry run by default; apply mode needs
+`TABLE_NAME`, `BUCKET_NAME` so spilled transcripts hydrate as in the worker,
+`AUTO_TERMS_MODE=personal`, `AUTO_TERMS_USERS` copied from the deployed
+summarize function, and `events:PutEvents`; claim or publish failures exit
+nonzero) scans done meetings and calls the
+production `Enqueue` (reason `backfill`), spacing queued runs (`-interval`,
+default 15s). Unchanged sources report `UNCHANGED`; output is outcome counts only.
 
 Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
 (`cron(0 21 * * ? *)`, after the 19:00 crawl) invokes summarize with
 `{"kind":"news-daily"}`; two retries and a one-hour event age lead into the
 SSE-SQS `ttobak-terms-news-dlq`, which `PipelineFailures` watches. Summarize
 receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
-`off` each run logs `outcome=DISABLED`. The same pattern applies to
+`off` each run logs `outcome=DISABLED`. Daily AWS technical document terms
+use rule `ttobak-terms-tech-daily` (`cron(30 21 * * ? *)`, input
+`{"kind":"tech-daily"}`, the same news day, two retries and a one-hour event
+age into the SSE-SQS `ttobak-terms-tech-dlq`, watched by `PipelineFailures`)
+and `TECH_TERMS_MODE` from `ttobak:techTermsMode` (`off` by default; invalid
+values fail synth). The job reads GSI4 `DOC#tech` titles and summaries only,
+so it needs no S3 grant; the threshold and evidence rules are in ADR-008 L4.
+The same pattern applies to
 `ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
-(`TRANSCRIPT_CORRECTION_MODE`).
+(`TRANSCRIPT_CORRECTION_MODE`). The API Lambda alone receives
+`LIVE_VOCABULARY_MODE` from `ttobak:liveVocabularyMode` (`off` by default;
+`infra/cdk.json` sets `on`), which lets the dictionary GET name the caller's
+READY vocabulary for live caption streams.
 
+`infra/cdk.json` sets `ttobak:transcriptCorrection` to `on` (2026-11-11).
+`infra/cdk.json` sets `ttobak:accountTermsMode` to `on` (2026-11-11), after the
+meeting relink cleanup (ADR-008 FU4) was deployed with the flag off.
+`infra/cdk.json` sets `ttobak:techTermsMode` to `on` (2026-11-11), after the
+tech-daily job was deployed with the flag off.
 `infra/cdk.json` sets `ttobak:newsTermsMode` to `on` (one flag per deployment,
 ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 `NEWS_TERMS_SOURCES`: with `global`, news terms stay at `NO_DOCUMENTS` until a
-crawler source qualifies as global (`IsGlobalNewsSource`); `all` reads every
+crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
+`backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
+regulator sources as such); `all` reads every
 searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
@@ -703,11 +739,12 @@ so deploy after the function has run once) publishing count-1 metrics to the
 | --- | --- |
 | `TermsLayerPersonal` | `terms run:` with `status=succeeded` |
 | `TermsLayerAccount` | `layer=account` with `outcome=MERGED` (runs and sources) |
-| `TermsLayerCommon` | `terms news:` with `outcome=SUCCEEDED` |
+| `TermsLayerCommon` | `terms news:` or `terms tech:` with `outcome=SUCCEEDED` (two filters, summed) |
 | `TermsAccountFailures` | `layer=account` with `outcome=FAILED`, `MEMBERS_FAILED` or `RECORD_FAILED` (three filters, summed) |
 | `TermsSourceSucceeded`, `Disabled`, `Unsupported`, `NotReady`, `NotFound`, `Unchanged` | `terms source:` with the matching `outcome=` |
 | `TermsSourceTriggered` | `terms source trigger:` with `outcome=QUEUED` |
 | `TermsNewsRuns`, `TermsNewsDisabled`, `TermsNewsFailed` | `terms news:` with `outcome=SUCCEEDED`, `DISABLED`, `FAILED` |
+| `TermsTechRuns`, `TermsTechDisabled`, `TermsTechFailed` | `terms tech:` with `outcome=SUCCEEDED`, `DISABLED`, `FAILED` |
 | `TranscriptCorrectionApplied` | `transcript correction outcome=APPLIED` (one per corrected-path meeting) |
 | `TranscriptCorrectionNone` | `transcript correction outcome=APPLIED` with `corrections=0` |
 | `TranscriptCorrectionUnavailable` | `transcript correction outcome=GLOSSARY_UNAVAILABLE` |
@@ -718,8 +755,8 @@ corrections=<n>`. A metric filter cannot extract `<n>` from the
 meetings with at least one correction are `Applied - None`.
 
 Failed Account merges are not retried, so `TermsAccountFailures` is the signal
-that some linked meetings missed the Account layer. Alarms `TermsAccountFailures`
-and `TermsNewsFailed` fire when the daily sum of the metric of the same name is
+that some linked meetings missed the Account layer. Alarms `TermsAccountFailures`,
+`TermsNewsFailed` and `TermsTechFailed` fire when the daily sum of the metric of the same name is
 at least 1 (one daily period, `notBreaching` on missing data, same
 `PipelineAlarmTopicArn` action as the other alarms).
 
@@ -789,6 +826,41 @@ transaction leaves `resolvePending` on the job and a redelivered event republish
 The contacts and events steps re-seal moved rows with the target's binding, so
 the summarize role also gains `kms:GenerateDataKey` on the encryption key (AIStack;
 never `kms:Encrypt` or `kms:ReEncrypt*`). Deploy AIStack before GatewayStack.
+
+## Customer brief worker delivery
+
+Rule `ttobak-customer-brief-requested` routes default-bus `ttobak.analysis`
+events with detail-type `CustomerBriefRequested` (`{accountId,userId,runId}`,
+identifiers only) to the summarize Lambda (ADR-015, customer brief). Delivery
+expires after five minutes, with three retry attempts and the SSE-SQS
+`ttobak-customer-brief-dlq` (seven-day retention, redrive denied), scoped to the
+exact rule ARN; `PipelineFailures` watches the DLQ (`CustomerBrief`). The API
+function depends on the rule so the consumer exists before a producer route
+ships; no route publishes yet. No IAM change: the summarize role already has the
+table grant, `kms:Decrypt`/`kms:GenerateDataKey` for sealing and calendar
+decryption, and the `BEDROCK_MODEL_ID` model resources.
+
+## Manual news collection delivery
+
+CrawlerStack rule `ttobak-news-collect-requested` routes default-bus
+`ttobak.crawler` events with detail-type `NewsCollectRequested`
+(`{sourceId,accountId,requestId}`, identifiers only; `sourceId` must start with
+`acct_`) to `ttobak-crawler-news` as `{"manualCollect":{sourceId,accountId,requestId}}`
+(ADR-004). Neither EventBridge (`retryAttempts: 0`, one-hour event age) nor
+Lambda (async `MaximumRetryAttempts: 0`, one-hour age) retries a failure, so there
+are no retry-driven repeats. Before any search, fetch or model call the worker
+claims the request with a conditional `UpdateItem` on the CONFIG row: it runs only
+when `lastCollectRequestId` (set by the request route) equals the event's
+`requestId` and `lastCollectStartedRequestId` does not, so a duplicate delivery of
+the same request is refused. A manual run can still overlap a scheduled run of the
+same source. Delivery failures and failed async invocations land in
+SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied);
+the crawler stack owns the `sqs:SendMessage` policy on the imported crawler role
+and alarms on rule `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, function
+`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. The async
+configuration does not affect the workflow's synchronous `CrawlNews` task. No
+route publishes the event yet; the API role already has default-bus
+`events:PutEvents`.
 
 ## Summary privacy writer activation
 

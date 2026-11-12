@@ -37,6 +37,69 @@ type AccountNewsSourcesResponse struct {
 	Sources []CrawlerSource `json:"sources"`
 }
 
+// UpdateAccountNewsSourceRequest edits an account-owned news source. An
+// absent or null field is unchanged; a present field replaces the stored value.
+type UpdateAccountNewsSourceRequest struct {
+	SourceName  *string   `json:"sourceName,omitempty"`
+	NewsQueries *[]string `json:"newsQueries,omitempty"`
+	Aliases     *[]string `json:"aliases,omitempty"`
+}
+
+// News source kinds in NewsSourceItem.Kind.
+const (
+	NewsSourceKindCommon  = "common"
+	NewsSourceKindAccount = "account"
+)
+
+// NewsSourceItem is one of the caller's news sources: a subscribed common
+// source or a source owned by an account the caller is a direct member of.
+// Internal CONFIG fields (owner, subscribers, operator markers) are omitted.
+type NewsSourceItem struct {
+	SourceID      string   `json:"sourceId"`
+	SourceName    string   `json:"sourceName"`
+	Kind          string   `json:"kind"`
+	AccountID     string   `json:"accountId,omitempty"`
+	AccountName   string   `json:"accountName,omitempty"`
+	NewsQueries   []string `json:"newsQueries"`
+	Aliases       []string `json:"aliases"`
+	CustomUrls    []string `json:"customUrls"`
+	NewsSources   []string `json:"newsSources"`
+	Status        string   `json:"status"`
+	LastCrawledAt string   `json:"lastCrawledAt"`
+	DocumentCount int      `json:"documentCount"`
+	CanEdit       bool     `json:"canEdit"`
+	// ListsTruncated reports that a list or string was cut to item bounds.
+	ListsTruncated bool `json:"listsTruncated,omitempty"`
+	// NextCollectAllowedAt (account kind only) is when "collect now" may be
+	// requested again; omitted when it may be requested now.
+	NextCollectAllowedAt string `json:"nextCollectAllowedAt,omitempty"`
+}
+
+// NewsCollectRequested is the EventBridge detail of a "collect now" request
+// (source ttobak.crawler). It carries identifiers only; the crawler re-reads
+// the CONFIG row and refuses anything that does not match.
+type NewsCollectRequested struct {
+	SourceID  string `json:"sourceId"`
+	AccountID string `json:"accountId"`
+	RequestID string `json:"requestId"`
+}
+
+// NewsCollectResponse acknowledges an accepted "collect now" request. The run
+// itself is asynchronous; RequestedAt and NextAllowedAt are UTC RFC3339.
+type NewsCollectResponse struct {
+	RequestID     string `json:"requestId"`
+	RequestedAt   string `json:"requestedAt"`
+	NextAllowedAt string `json:"nextAllowedAt"`
+}
+
+// NewsSourcesResponse is one page of the caller's news sources. Truncated
+// reports that a membership or subscription cap left sources out.
+type NewsSourcesResponse struct {
+	Sources    []NewsSourceItem `json:"sources"`
+	NextCursor string           `json:"nextCursor,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+}
+
 // NewOpportunityScoreMin is the minimum QualityScore for a news row to count
 // as a new-opportunity candidate.
 const NewOpportunityScoreMin = 0.75

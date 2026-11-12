@@ -428,3 +428,171 @@ func (r *DynamoDBRepository) deleteAccountNewsSourceOnce(ctx context.Context, ac
 	}
 	return false, fmt.Errorf("delete account news source: %w", err)
 }
+
+// AccountNewsSourceFields lists the CONFIG fields an account news source edit
+// replaces; nil fields are unchanged. The source ID, the ref and accountId
+// have no field and never change.
+type AccountNewsSourceFields struct {
+	SourceName  *string
+	NewsQueries *[]string
+	Aliases     *[]string
+}
+
+// UpdateAccountNewsSource replaces the given CONFIG fields of an account-owned
+// source in one transaction that also requires the NEWSSRC# ref, a CONFIG that
+// still names accountID, is not disabled and is not operator-curated, the open
+// account META row and the caller's direct MEMBER# row. Delete disables the
+// CONFIG and removes the ref atomically, so an edit racing a delete cannot
+// revive the source. ErrConditionFailed means the ref or a matching enabled
+// CONFIG is absent; ErrAccountNewsAccess means the account or membership was
+// gone at commit.
+func (r *DynamoDBRepository) UpdateAccountNewsSource(ctx context.Context, accountID, userID, sourceID string, fields AccountNewsSourceFields) error {
+	names, values := []string{}, []interface{}{}
+	if fields.SourceName != nil {
+		names, values = append(names, "sourceName"), append(values, *fields.SourceName)
+	}
+	if fields.NewsQueries != nil {
+		names, values = append(names, "newsQueries"), append(values, *fields.NewsQueries)
+	}
+	if fields.Aliases != nil {
+		names, values = append(names, "aliases"), append(values, *fields.Aliases)
+	}
+	if accountID == "" || sourceID == "" || len(names) == 0 {
+		return fmt.Errorf("invalid account news source update")
+	}
+	update := expression.Set(expression.Name(names[0]), expression.Value(values[0]))
+	for i := 1; i < len(names); i++ {
+		update = update.Set(expression.Name(names[i]), expression.Value(values[i]))
+	}
+	configExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK")).
+			And(expression.Name("accountId").Equal(expression.Value(accountID))).
+			And(expression.Name("status").NotEqual(expression.Value(accountNewsSourceDisabled))).
+			And(expression.AttributeNotExists(expression.Name("globalNewsSource")))).
+		WithUpdate(update).Build()
+	if err != nil {
+		return err
+	}
+	return r.accountNewsSourceTx(ctx, accountID, userID, sourceID, configExpr, "update")
+}
+
+// accountNewsSourceTx runs one transaction of the NEWSSRC# ref check, the
+// given conditional CONFIG update, and the open-account and direct-member
+// checks. ErrConditionFailed means the ref or the CONFIG condition failed;
+// ErrAccountNewsAccess means the account or membership was gone at commit.
+func (r *DynamoDBRepository) accountNewsSourceTx(ctx context.Context, accountID, userID, sourceID string, configExpr expression.Expression, op string) error {
+	refCond, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return err
+	}
+	ref := &types.ConditionCheck{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixAccount+accountID, model.PrefixAccountNewsSource+sourceID)}
+	ref.ConditionExpression, ref.ExpressionAttributeNames = refCond.Condition(), refCond.Names()
+	config := &types.Update{TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixCrawler+sourceID, model.PrefixConfig)}
+	config.UpdateExpression, config.ConditionExpression = configExpr.Update(), configExpr.Condition()
+	config.ExpressionAttributeNames, config.ExpressionAttributeValues = configExpr.Names(), configExpr.Values()
+	access, err := accountAccessChecks(r.tableName, accountID, userID)
+	if err != nil {
+		return err
+	}
+	items := append([]types.TransactWriteItem{{ConditionCheck: ref}, {Update: config}}, access...)
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err == nil {
+		return nil
+	}
+	if merging := mergeFenceError(err); merging != nil {
+		return merging
+	}
+	var cancelled *types.TransactionCanceledException
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) == len(items) {
+		missing, revoked := false, false
+		for i, reason := range cancelled.CancellationReasons {
+			switch aws.ToString(reason.Code) {
+			case "None":
+			case "ConditionalCheckFailed":
+				if i < 2 {
+					missing = true
+				} else {
+					revoked = true
+				}
+			default:
+				return fmt.Errorf("%s account news source: %w", op, err)
+			}
+		}
+		switch {
+		case revoked:
+			return ErrAccountNewsAccess
+		case missing:
+			return fmt.Errorf("%w: account news source %s", ErrConditionFailed, sourceID)
+		}
+	}
+	return fmt.Errorf("%s account news source: %w", op, err)
+}
+
+// Attributes of the hourly "collect now" claim on an account source CONFIG.
+// Neither is part of the source revision (service.newsSourceRevision,
+// news_discovery.source_snapshot), so a claim never changes it.
+const (
+	newsCollectRequestedAtAttr = "lastCollectRequestedAt"
+	newsCollectRequestIDAttr   = "lastCollectRequestId"
+)
+
+// newsCollectTime is the claim's timestamp format: UTC RFC3339 at second
+// precision, so string order is time order in the claim condition.
+func newsCollectTime(t time.Time) string {
+	return t.UTC().Truncate(time.Second).Format(time.RFC3339)
+}
+
+// ClaimAccountNewsCollect records a "collect now" request on an
+// account-owned source in one fenced transaction (accountNewsSourceTx). The
+// CONFIG update sets lastCollectRequestedAt and lastCollectRequestId only if
+// the CONFIG exists, names accountID, is not disabled, is not operator-curated
+// and has no request later than cutoff. ErrConditionFailed covers both a gone
+// source and a recent claim; the caller re-reads to tell them apart.
+func (r *DynamoDBRepository) ClaimAccountNewsCollect(ctx context.Context, accountID, userID, sourceID, requestID string, requestedAt, cutoff time.Time) error {
+	if accountID == "" || userID == "" || sourceID == "" || requestID == "" || !cutoff.Before(requestedAt) {
+		return fmt.Errorf("invalid account news collect claim")
+	}
+	last := expression.Name(newsCollectRequestedAtAttr)
+	configExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK")).
+			And(expression.Name("accountId").Equal(expression.Value(accountID))).
+			And(expression.Name("status").NotEqual(expression.Value(accountNewsSourceDisabled))).
+			And(expression.AttributeNotExists(expression.Name("globalNewsSource"))).
+			And(last.AttributeNotExists().Or(last.LessThanEqual(expression.Value(newsCollectTime(cutoff)))))).
+		WithUpdate(expression.Set(last, expression.Value(newsCollectTime(requestedAt))).
+			Set(expression.Name(newsCollectRequestIDAttr), expression.Value(requestID))).
+		Build()
+	if err != nil {
+		return err
+	}
+	return r.accountNewsSourceTx(ctx, accountID, userID, sourceID, configExpr, "claim collect for")
+}
+
+// ReleaseAccountNewsCollect removes a claim whose event was not published, so
+// the member can retry at once. It only removes the claim with requestID;
+// ErrConditionFailed means that claim is no longer there.
+func (r *DynamoDBRepository) ReleaseAccountNewsCollect(ctx context.Context, sourceID, requestID string) error {
+	if sourceID == "" || requestID == "" {
+		return fmt.Errorf("invalid account news collect release")
+	}
+	expr, err := expression.NewBuilder().
+		WithCondition(expression.Name(newsCollectRequestIDAttr).Equal(expression.Value(requestID))).
+		WithUpdate(expression.Remove(expression.Name(newsCollectRequestedAtAttr)).Remove(expression.Name(newsCollectRequestIDAttr))).
+		Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixCrawler+sourceID, model.PrefixConfig),
+		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	})
+	var failed *types.ConditionalCheckFailedException
+	if errors.As(err, &failed) {
+		return fmt.Errorf("%w: collect claim %s", ErrConditionFailed, requestID)
+	}
+	if err != nil {
+		return fmt.Errorf("release account news collect: %w", err)
+	}
+	return nil
+}

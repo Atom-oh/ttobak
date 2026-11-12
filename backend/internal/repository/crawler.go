@@ -82,11 +82,15 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 
 	var item crawlerItem
 	if err := attributevalue.UnmarshalMap(result.Item, &item); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal crawler source: %w", err)
+		return nil, fmt.Errorf("%w: failed to unmarshal crawler source: %w", ErrInvalidSource, err)
 	}
 
 	return &item.CrawlerSource, nil
 }
+
+// ErrInvalidSource means a CONFIG row exists but does not decode as a
+// CrawlerSource, for example a legacy scalar value in a list attribute.
+var ErrInvalidSource = errors.New("invalid crawler source row")
 
 // GetSourceOrigin reads only a CONFIG row's sourceName and accountId, so
 // legacy scalar list values cannot fail it as they can GetSource. A string
@@ -530,6 +534,49 @@ func (r *CrawlerRepository) ListUserSubscriptions(ctx context.Context, userID st
 	return subs, nil
 }
 
+// ListUserSubscriptionsBounded reads the user's subscriptions across every
+// Query page until it holds limit+1 rows, and returns at most limit of them
+// (key order) with more=true when at least one further row exists.
+func (r *CrawlerRepository) ListUserSubscriptionsBounded(ctx context.Context, userID string, limit int) ([]model.CrawlerSubscription, bool, error) {
+	if limit < 1 {
+		return nil, false, fmt.Errorf("subscription limit must be positive")
+	}
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixCrawlSub))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to build expression: %w", err)
+	}
+	input := &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}
+	subs := []model.CrawlerSubscription{}
+	for {
+		input.Limit = aws.Int32(int32(limit + 1 - len(subs)))
+		result, err := r.client.Query(ctx, input)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to query subscriptions: %w", err)
+		}
+		var items []subscriptionItem
+		if err := attributevalue.UnmarshalListOfMaps(result.Items, &items); err != nil {
+			return nil, false, fmt.Errorf("failed to unmarshal subscriptions: %w", err)
+		}
+		for _, item := range items {
+			subs = append(subs, item.CrawlerSubscription)
+		}
+		if len(subs) > limit {
+			return subs[:limit], true, nil
+		}
+		if len(result.LastEvaluatedKey) == 0 {
+			return subs, false, nil
+		}
+		input.ExclusiveStartKey = result.LastEvaluatedKey
+	}
+}
+
 // ErrInvalidDocument identifies unreadable stored metadata, separately from an
 // AWS read failure. Consumers can make only this document unavailable.
 var ErrInvalidDocument = errors.New("invalid crawler document metadata")
@@ -721,10 +768,20 @@ func (r *CrawlerRepository) QueryDocumentsByType(ctx context.Context, docType st
 // QueryDocumentsByType it has no scan fallback and returns the read error.
 // Deleted rows and unreadable metadata are dropped as in every listing.
 func (r *CrawlerRepository) ListDocumentsCrawledBetween(ctx context.Context, from, to int64) ([]model.CrawledDocument, error) {
+	return r.listDocumentsCrawledBetween(ctx, "DOC#news", from, to)
+}
+
+// ListTechDocumentsCrawledBetween is ListDocumentsCrawledBetween for the AWS
+// technical documents (GSI4PK = "DOC#tech", written by tech_crawler.py).
+func (r *CrawlerRepository) ListTechDocumentsCrawledBetween(ctx context.Context, from, to int64) ([]model.CrawledDocument, error) {
+	return r.listDocumentsCrawledBetween(ctx, "DOC#tech", from, to)
+}
+
+func (r *CrawlerRepository) listDocumentsCrawledBetween(ctx context.Context, partition string, from, to int64) ([]model.CrawledDocument, error) {
 	if to <= from {
 		return nil, nil
 	}
-	keyEx := expression.Key("GSI4PK").Equal(expression.Value("DOC#news")).
+	keyEx := expression.Key("GSI4PK").Equal(expression.Value(partition)).
 		And(expression.Key("GSI4SK").Between(expression.Value(from), expression.Value(to-1)))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
 	if err != nil {
