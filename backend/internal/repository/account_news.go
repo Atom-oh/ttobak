@@ -473,6 +473,14 @@ func (r *DynamoDBRepository) UpdateAccountNewsSource(ctx context.Context, accoun
 	if err != nil {
 		return err
 	}
+	return r.accountNewsSourceTx(ctx, accountID, userID, sourceID, configExpr, "update")
+}
+
+// accountNewsSourceTx runs one transaction of the NEWSSRC# ref check, the
+// given conditional CONFIG update, and the open-account and direct-member
+// checks. ErrConditionFailed means the ref or the CONFIG condition failed;
+// ErrAccountNewsAccess means the account or membership was gone at commit.
+func (r *DynamoDBRepository) accountNewsSourceTx(ctx context.Context, accountID, userID, sourceID string, configExpr expression.Expression, op string) error {
 	refCond, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
 	if err != nil {
 		return err
@@ -507,7 +515,7 @@ func (r *DynamoDBRepository) UpdateAccountNewsSource(ctx context.Context, accoun
 					revoked = true
 				}
 			default:
-				return fmt.Errorf("update account news source: %w", err)
+				return fmt.Errorf("%s account news source: %w", op, err)
 			}
 		}
 		switch {
@@ -517,5 +525,74 @@ func (r *DynamoDBRepository) UpdateAccountNewsSource(ctx context.Context, accoun
 			return fmt.Errorf("%w: account news source %s", ErrConditionFailed, sourceID)
 		}
 	}
-	return fmt.Errorf("update account news source: %w", err)
+	return fmt.Errorf("%s account news source: %w", op, err)
+}
+
+// Attributes of the hourly "collect now" claim on an account source CONFIG.
+// Neither is part of the source revision (service.newsSourceRevision,
+// news_discovery.source_snapshot), so a claim never changes it.
+const (
+	newsCollectRequestedAtAttr = "lastCollectRequestedAt"
+	newsCollectRequestIDAttr   = "lastCollectRequestId"
+)
+
+// newsCollectTime is the claim's timestamp format: UTC RFC3339 at second
+// precision, so string order is time order in the claim condition.
+func newsCollectTime(t time.Time) string {
+	return t.UTC().Truncate(time.Second).Format(time.RFC3339)
+}
+
+// ClaimAccountNewsCollect records a "collect now" request on an
+// account-owned source in one fenced transaction (accountNewsSourceTx). The
+// CONFIG update sets lastCollectRequestedAt and lastCollectRequestId only if
+// the CONFIG exists, names accountID, is not disabled, is not operator-curated
+// and has no request later than cutoff. ErrConditionFailed covers both a gone
+// source and a recent claim; the caller re-reads to tell them apart.
+func (r *DynamoDBRepository) ClaimAccountNewsCollect(ctx context.Context, accountID, userID, sourceID, requestID string, requestedAt, cutoff time.Time) error {
+	if accountID == "" || userID == "" || sourceID == "" || requestID == "" || !cutoff.Before(requestedAt) {
+		return fmt.Errorf("invalid account news collect claim")
+	}
+	last := expression.Name(newsCollectRequestedAtAttr)
+	configExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK")).
+			And(expression.Name("accountId").Equal(expression.Value(accountID))).
+			And(expression.Name("status").NotEqual(expression.Value(accountNewsSourceDisabled))).
+			And(expression.AttributeNotExists(expression.Name("globalNewsSource"))).
+			And(last.AttributeNotExists().Or(last.LessThanEqual(expression.Value(newsCollectTime(cutoff)))))).
+		WithUpdate(expression.Set(last, expression.Value(newsCollectTime(requestedAt))).
+			Set(expression.Name(newsCollectRequestIDAttr), expression.Value(requestID))).
+		Build()
+	if err != nil {
+		return err
+	}
+	return r.accountNewsSourceTx(ctx, accountID, userID, sourceID, configExpr, "claim collect for")
+}
+
+// ReleaseAccountNewsCollect removes a claim whose event was not published, so
+// the member can retry at once. It only removes the claim with requestID;
+// ErrConditionFailed means that claim is no longer there.
+func (r *DynamoDBRepository) ReleaseAccountNewsCollect(ctx context.Context, sourceID, requestID string) error {
+	if sourceID == "" || requestID == "" {
+		return fmt.Errorf("invalid account news collect release")
+	}
+	expr, err := expression.NewBuilder().
+		WithCondition(expression.Name(newsCollectRequestIDAttr).Equal(expression.Value(requestID))).
+		WithUpdate(expression.Remove(expression.Name(newsCollectRequestedAtAttr)).Remove(expression.Name(newsCollectRequestIDAttr))).
+		Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName), Key: accountNewsKey(model.PrefixCrawler+sourceID, model.PrefixConfig),
+		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	})
+	var failed *types.ConditionalCheckFailedException
+	if errors.As(err, &failed) {
+		return fmt.Errorf("%w: collect claim %s", ErrConditionFailed, requestID)
+	}
+	if err != nil {
+		return fmt.Errorf("release account news collect: %w", err)
+	}
+	return nil
 }

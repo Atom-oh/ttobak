@@ -302,6 +302,13 @@ type CrawlerSource struct {
 	// AccountID marks an account-owned source (ACCOUNT#{accountId} / NEWSSRC#
 	// ref). It is written only at creation; readers revalidate it against the ref.
 	AccountID string `dynamodbav:"accountId,omitempty" json:"accountId,omitempty"`
+	// LastCollectRequestedAt (UTC RFC3339, seconds) and LastCollectRequestID
+	// are an account source's hourly "collect now" claim; both are internal.
+	// NextCollectAllowedAt is derived from the claim for account-source
+	// responses and never stored.
+	LastCollectRequestedAt string `dynamodbav:"lastCollectRequestedAt,omitempty" json:"-"`
+	LastCollectRequestID   string `dynamodbav:"lastCollectRequestId,omitempty" json:"-"`
+	NextCollectAllowedAt   string `dynamodbav:"-" json:"nextCollectAllowedAt,omitempty"`
 }
 
 // CrawlerSubscription represents a user's subscription to a crawler source
