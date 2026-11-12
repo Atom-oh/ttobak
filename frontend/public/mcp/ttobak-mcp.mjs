@@ -25404,6 +25404,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
   const mutations = [];
   const set2 = {};
   const remove = [];
+  const held = {};
   const preview = [];
   const seen = /* @__PURE__ */ new Set();
   const removeTracked = (id) => {
@@ -25441,6 +25442,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     }
     if (!wanted.has(response)) {
       counts.excludedByResponse++;
+      if (response !== "decline") held[item2.meetingId] = { fp: "", startsAt: start.toISOString(), endsAt: end.toISOString() };
       if (removeTracked(item2.meetingId)) preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
@@ -25471,7 +25473,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
   }
   const key = (mutation) => mutation.op === "upsert" ? mutation.event.externalId : mutation.externalId;
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
-  return { mutations, set: set2, remove, counts, preview };
+  return { mutations, set: set2, remove, held, counts, preview };
 }
 function batches2(mutations) {
   return batches(mutations, MAX_BATCH2);
@@ -25490,7 +25492,7 @@ function loadState(store, sourceId, scope) {
   if (!SCOPE_PATTERN.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "calendar state scope is invalid");
   const state = store.read(...statePath({ sourceId, scope }));
   if (state === null) return emptyState(sourceId, scope);
-  if (state.version !== 1 || state.sourceId !== sourceId || state.scope !== scope || typeof state.ledger !== "object" || state.ledger === null) {
+  if (state.version !== 1 || state.sourceId !== sourceId || state.scope !== scope || typeof state.ledger !== "object" || state.ledger === null || state.held !== void 0 && (typeof state.held !== "object" || state.held === null)) {
     throw new IntakeError("STORE_INVALID", "calendar state does not match its source");
   }
   return state;
@@ -25569,6 +25571,8 @@ async function runCalendar(options2) {
       "items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity"
     );
   }
+  state.held = plan.held;
+  store.write(state, ...statePath(state));
   const api = options2.api;
   const groups = batches2(plan.mutations);
   if (!groups.length) groups.push([]);
@@ -25593,6 +25597,7 @@ async function runCalendar(options2) {
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
+  state.held = pruneLedger(state.held ?? {}, now);
   store.write(state, ...statePath(state));
   const upserted = /* @__PURE__ */ new Map();
   for (const item2 of items) if (Object.hasOwn(plan.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);
@@ -29652,6 +29657,8 @@ var init_tasks = __esm({
       events = /* @__PURE__ */ new Map();
       accounts = /* @__PURE__ */ new Map();
       seen;
+      /** Occurrences excluded only by an unselected response (`CalendarState.held`); their tasks stay open. */
+      held = /* @__PURE__ */ new Set();
       /** My SpecReq login, confirmed this run. */
       myLogin = "";
       /** The recorded login, used for addresses only when this run could not reach SpecReq. */
@@ -29763,7 +29770,9 @@ var init_tasks = __esm({
         }
         const window = syncWindow(now, zone);
         const tracked = {};
-        for (const [externalId, entry2] of Object.entries(loadState(store, sourceId, scope).ledger)) {
+        const state = loadState(store, sourceId, scope);
+        this.held = new Set(Object.keys(state.held ?? {}).map((externalId) => calendarEventId(sourceId, externalId)));
+        for (const [externalId, entry2] of Object.entries(state.ledger)) {
           const eventId = calendarEventId(sourceId, externalId);
           tracked[eventId] = entry2.endsAt;
           if (new Date(entry2.endsAt) > window.start && new Date(entry2.startsAt) < window.end && !this.seen.seen[eventId]) {
@@ -29771,7 +29780,9 @@ var init_tasks = __esm({
           }
         }
         for (const [eventId, endsAt] of Object.entries(this.seen.tracked ?? {})) {
-          if (!tracked[eventId] && new Date(endsAt) > window.start) this.seen.closing[eventId] ??= now.toISOString();
+          if (!tracked[eventId] && !this.held.has(eventId) && new Date(endsAt) > window.start) {
+            this.seen.closing[eventId] ??= now.toISOString();
+          }
         }
         this.seen.tracked = tracked;
         this.saveSeen();
@@ -29853,14 +29864,14 @@ var init_tasks = __esm({
         const { sourceId, now, zone } = this.options;
         const window = syncWindow(now, zone);
         for (const task of this.tasks.values()) {
-          if (task.sourceId === sourceId && task.state !== "closed" && !this.seen.tracked?.[task.eventId] && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
+          if (task.sourceId === sourceId && task.state !== "closed" && !this.seen.tracked?.[task.eventId] && !this.held.has(task.eventId) && new Date(task.occurrenceEndsAt) > window.start && new Date(task.occurrenceStartsAt) < window.end) {
             this.seen.closing[task.eventId] ??= now.toISOString();
           }
         }
         let failure2;
         for (const eventId of Object.keys(this.seen.closing)) {
           try {
-            if (this.events.has(eventId)) {
+            if (this.events.has(eventId) || this.held.has(eventId)) {
               delete this.seen.closing[eventId];
               continue;
             }

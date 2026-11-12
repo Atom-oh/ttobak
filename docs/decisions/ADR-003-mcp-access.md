@@ -540,9 +540,11 @@ configuration.
   response is neither added nor removed); the
   owner keeps unanswered ones by selecting `none` (Settings or `intake
   options`) before that run, and Settings shows that note while `none` is
-  not selected. Declined events cannot be kept. A complete read with items but
-  no string `response` on any of them fails the calendar step with
-  `SCHEMA_CHANGED` before any mutation.
+  not selected. Declined events cannot be kept. A SpecReq task is not closed
+  for an occurrence excluded only by an unselected response (held in the
+  calendar state), so answering the invitation later keeps its task. A
+  complete read with items but no string `response` on any of them fails the
+  calendar step with `SCHEMA_CHANGED` before any mutation.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** is owned by the Mac app, which runs `intake run
   --noninteractive` (all selected sync connectors) itself, with launch and wake

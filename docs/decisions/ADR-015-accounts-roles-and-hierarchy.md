@@ -426,9 +426,11 @@ immediately. There is no transfer to a non-member and no multi-owner state.
 
 ### Status notes
 
-Worker side only: model, repository, service, summarize dispatch and the
-`ttobak-customer-brief-requested` rule. The API routes and UI are not shipped by
-this change.
+The worker (model, repository, service, summarize dispatch and the
+`ttobak-customer-brief-requested` rule) and the API producer (GET/POST
+`/api/accounts/{accountId}/customer-brief` and the EventBridge publisher in the API
+Lambda; see [API-SPEC](../API-SPEC.md) customer brief) are in code. The UI is not
+shipped.
 
 ### Decision
 
@@ -457,13 +459,28 @@ this change.
   citations do not all resolve is dropped. Source kind, ID and label come from
   the worker's inputs, the next meeting is computed, and terms must occur
   literally in their cited inputs. Output is plain text, at most 24,000 bytes.
-- A successful publish sets `pendingShareExpiresAt` 30 days ahead; reads treat
-  an expired row as absent.
+- A successful publish sets `briefExpiresAt` and `pendingShareExpiresAt` 30 days
+  ahead. Reads treat an expired row as absent and return the brief only while
+  `now < briefExpiresAt`. Queuing over a readable brief pins that expiry and
+  floors only the row TTL so a working run is not swept; it never extends the
+  brief. Queuing over a brief past its expiry clears the sealed content in the
+  same write. Rows written before `briefExpiresAt` existed use the row TTL as the
+  brief expiry (the next queue pins it).
+- The POST publishes `CustomerBriefRequested` after claiming the run. A delivery
+  failure records `failed/PUBLISH_FAILED` and returns 503, as re-summary does, so
+  the run never stays queued silently and can be retried.
+- Non-members and missing accounts get the same 404. Only allowlisted worker error
+  codes reach clients; anything else reads as `FAILED`.
+- `inDictionary` uses the effective personal term keys: rows plus, before
+  migration, legacy blob terms no row hides. The worker reads the blob with
+  GetItem only and never runs the migration write.
+- Removing a member deletes their `CUSTBRIEF#` row in the member-removal
+  transaction.
 
 ### Known limits
 
-- A removed member's row remains until expiry; the read-time membership check
-  makes it unreadable.
+- Other ways of losing membership (account merge, account deletion) leave the
+  row until expiry; the read-time membership check makes it unreadable.
 - Account merge does not move brief rows.
 - Inherited readers cannot generate a brief.
 - A published brief is a snapshot. It is not revalidated when a meeting or

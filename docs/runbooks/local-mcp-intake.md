@@ -201,9 +201,9 @@ is kept. Absent fields mean the defaults; the first selection stores them.
 
 - `calendarResponses`: any of `accept`, `organizer`, `tentative`, `none`;
   default `accept,organizer,tentative`; an empty list syncs no events. The
-  `calendar_view` `response` maps `Accept`, `Organizer`, `Tentative` or
-  `TentativelyAccepted`, and `NoResponseReceived`, `NotResponded` or `None`.
-  `Decline` is always excluded. A missing or unrecognised value is unknown:
+  `calendar_view` `response` maps `Accept` or `Accepted`, `Organizer`,
+  `Tentative` or `TentativelyAccepted`, and `NoResponseReceived`, `NotResponded`
+  or `None`. `Decline` or `Declined` is always excluded. A missing or unrecognised value is unknown:
   the event is neither added nor removed (dry runs count `responseUnknown`),
   so a provider change never mass-removes synced events. If a complete read
   has at least one item and none carries a string `response`, the field was
@@ -215,7 +215,12 @@ is kept. Absent fields mean the defaults; the first selection stores them.
 An event whose response is not selected is excluded like a private one: it is
 not sent, and a tracked copy is removed on the next real run. Dry runs report
 `excludedByResponse`. A private event is excluded before the response is
-checked, so its title never appears in a removal preview. The response itself never reaches TTOBAK.
+checked, so its title never appears in a removal preview. An occurrence
+excluded only by an unselected response (not a declined one) is recorded as
+held in the calendar state, and its SpecReq task stays open: when the owner
+answers the invitation or selects the response again, the event syncs again
+with the same task. A declined, cancelled or deleted occurrence closes its task
+as before. The response itself never reaches TTOBAK.
 
 After the update, the first real run (possibly a scheduled one, before you open
 Settings) removes previously synced events that are declined or unanswered. Settings shows copy key
