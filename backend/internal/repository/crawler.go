@@ -65,12 +65,23 @@ type historyItem struct {
 // GetSource retrieves a crawler source by sourceID
 // PK: CRAWLER#{sourceID}, SK: CONFIG
 func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*model.CrawlerSource, error) {
+	return r.getSource(ctx, sourceID, false)
+}
+
+// GetSourceConsistent is GetSource with a strongly consistent read, for a
+// caller classifying a just-refused conditional write on the row.
+func (r *CrawlerRepository) GetSourceConsistent(ctx context.Context, sourceID string) (*model.CrawlerSource, error) {
+	return r.getSource(ctx, sourceID, true)
+}
+
+func (r *CrawlerRepository) getSource(ctx context.Context, sourceID string, consistent bool) (*model.CrawlerSource, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
 		},
+		ConsistentRead: aws.Bool(consistent),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get crawler source: %w", err)

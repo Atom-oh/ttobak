@@ -339,7 +339,11 @@ and then succeeded with no duplicate attempt or charge (the observed error
 name must be `Lambda.TooManyRequestsException`), one accepted request that
 produced exactly one `manual-{requestId}` execution and a finalized receipt with
 its `NEWSRUN#` row, a duplicate delivery refused without a second execution,
-and the legacy news function's removed async configuration. Record the deployed
+the legacy news function's removed async configuration, and, after the targeted
+AiStack and then GatewayStack deployments, a 409 `COLLECT_DAILY_WINDOW` (with
+`nextAllowedAt`) from the collect route inside the window and a 409
+`COLLECT_BUSY` while a daily or publication run is in progress, each with no
+claim written and no `NewsCollectRequested` event. Record the deployed
 starter and child function revisions with that evidence.
 
 ### Daily admission retention and bounded replay

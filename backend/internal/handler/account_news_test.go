@@ -171,6 +171,7 @@ func TestAccountNews_NonMemberForbidden(t *testing.T) {
 func TestAccountNewsCollectHTTP(t *testing.T) {
 	const path = "/accounts/a/news-sources/acct_a_0000abcd/collect"
 	limited := &service.NewsCollectLimitError{NextAllowedAt: time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)}
+	window := &service.NewsCollectWindowError{NextAllowedAt: time.Date(2026, 11, 12, 19, 25, 0, 0, time.UTC)}
 	for name, tc := range map[string]struct {
 		path, body string
 		err        error
@@ -178,18 +179,20 @@ func TestAccountNewsCollectHTTP(t *testing.T) {
 		code       string
 		called     bool
 	}{
-		"accepted":    {path, "", nil, 202, "", true},
-		"query":       {path + "?force=1", "", nil, 400, "BAD_REQUEST", false},
-		"body":        {path, "{}", nil, 400, "BAD_REQUEST", false},
-		"huge body":   {path, strings.Repeat("x", 2048), nil, 400, "BAD_REQUEST", false},
-		"limited":     {path, "", limited, 429, "RATE_LIMITED", true},
-		"wrapped":     {path, "", fmt.Errorf("x: %w", limited), 429, "RATE_LIMITED", true},
-		"not found":   {path, "", service.ErrNotFound, 404, "NOT_FOUND", true},
-		"non-member":  {path, "", service.ErrForbidden, 403, "FORBIDDEN", true},
-		"invalid":     {path, "", service.ErrInvalidInput, 400, "BAD_REQUEST", true},
-		"merging":     {path, "", service.ErrAccountMerging, 409, model.ErrCodeAccountMerging, true},
-		"unavailable": {path, "", service.ErrNewsCollectUnavailable, 503, "INTERNAL_ERROR", true},
-		"internal":    {path, "", fmt.Errorf("boom"), 500, "INTERNAL_ERROR", true},
+		"accepted":     {path, "", nil, 202, "", true},
+		"query":        {path + "?force=1", "", nil, 400, "BAD_REQUEST", false},
+		"body":         {path, "{}", nil, 400, "BAD_REQUEST", false},
+		"huge body":    {path, strings.Repeat("x", 2048), nil, 400, "BAD_REQUEST", false},
+		"limited":      {path, "", limited, 429, "RATE_LIMITED", true},
+		"wrapped":      {path, "", fmt.Errorf("x: %w", limited), 429, "RATE_LIMITED", true},
+		"not found":    {path, "", service.ErrNotFound, 404, "NOT_FOUND", true},
+		"non-member":   {path, "", service.ErrForbidden, 403, "FORBIDDEN", true},
+		"invalid":      {path, "", service.ErrInvalidInput, 400, "BAD_REQUEST", true},
+		"merging":      {path, "", service.ErrAccountMerging, 409, model.ErrCodeAccountMerging, true},
+		"unavailable":  {path, "", service.ErrNewsCollectUnavailable, 503, "INTERNAL_ERROR", true},
+		"daily window": {path, "", window, 409, model.ErrCodeCollectDailyWindow, true},
+		"busy":         {path, "", fmt.Errorf("x: %w", service.ErrNewsCollectBusy), 409, model.ErrCodeCollectBusy, true},
+		"internal":     {path, "", fmt.Errorf("boom"), 500, "INTERNAL_ERROR", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := &accountNewsStub{err: tc.err}
@@ -215,8 +218,12 @@ func TestAccountNewsCollectHTTP(t *testing.T) {
 					t.Fatalf("limited: %s", w.Body.String())
 				}
 			default:
-				if body.NextAllowedAt != "" {
-					t.Fatalf("only 429 carries nextAllowedAt: %s", w.Body.String())
+				if tc.code == model.ErrCodeCollectDailyWindow {
+					if body.NextAllowedAt != "2026-11-12T19:25:00Z" {
+						t.Fatalf("daily window: %s", w.Body.String())
+					}
+				} else if body.NextAllowedAt != "" {
+					t.Fatalf("only 429 and the daily window carry nextAllowedAt: %s", w.Body.String())
 				}
 			}
 		})

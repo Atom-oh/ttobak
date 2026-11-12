@@ -1220,7 +1220,19 @@ and an empty body (anything else, or over 1 KiB, is 400). Authorization matches
 PUT: a non-member gets 403, and a source without the account's ref, a CONFIG
 naming the account, an enabled status and a user-created origin is 404, as is
 one whose IDs do not fit the crawler contract (`accountId` and the request ID
-`[A-Za-z0-9-]{1,64}`, `sourceId` = `acct_{accountId}_{8 lowercase hex}`). Each
+`[A-Za-z0-9-]{1,64}`, `sourceId` = `acct_{accountId}_{8 lowercase hex}`). Only
+after these checks, and before the hourly limit and claim, the route checks the
+manual starter's admission conditions in the starter's order, claiming and
+publishing nothing on a refusal: inside the daily window (from 45 minutes before
+until 15 minutes after the 19:10 UTC daily schedule; the API receives the same
+four values as the starter) it returns 409 `COLLECT_DAILY_WINDOW` with the
+standard error body plus `nextAllowedAt` (the window's end, UTC RFC3339); while
+`ttobak-news-daily` or any `ttobak-news-publication` execution is RUNNING
+(Step Functions `ListExecutions`, status RUNNING, max results 1) it returns 409
+`COLLECT_BUSY`. Missing or invalid window or state machine configuration, or a
+failed lookup, is 503. The check is advisory (check-then-publish): a run can
+begin after it, so the starter stays the enforcement point and may still refuse
+after a 202. Each
 source accepts at most one request per hour, from any member: one transaction
 checks the ref, account and `MEMBER#` row and sets the CONFIG's
 `lastCollectRequestedAt` (UTC RFC3339, seconds) and `lastCollectRequestId` (the
@@ -1232,8 +1244,9 @@ revision fingerprint. Then a
 `requestId` only) goes to the default bus and the route returns 202
 `{ "requestId", "requestedAt", "nextAllowedAt" }`. Within the hour it returns
 429 `RATE_LIMITED` with the standard error body plus `nextAllowedAt` (no
-`Retry-After` header); after a refused claim the CONFIG is re-read, so a source
-deleted or disabled meanwhile is 404. If the event is not accepted, the claim is
+`Retry-After` header); after a refused claim the CONFIG is re-read with a
+strongly consistent read, so a concurrent claim is 429 and a source deleted or
+disabled meanwhile is 404. If the event is not accepted, the claim is
 released (both attributes removed, conditional on its request ID, so a late
 event for it is refused as unclaimed) and the route returns 503; if the
 release also fails the claim expires after the hour. A 202 means the request was
@@ -1243,8 +1256,8 @@ accepted and queued, not that it will run: the starter may still refuse it with
 minutes after the 19:10 UTC daily schedule), `DAILY_RUNNING` or
 `RUN_IN_PROGRESS`. It then releases the hourly claim, records a non-history
 `COLLECTREFUSAL#` receipt (at most one per source per five minutes) and
-collects nothing (ADR-004); the route does not yet check these conditions
-before answering. Otherwise the collection is one asynchronous versioned
+collects nothing (ADR-004); the route's 409 checks above cover the window and
+running cases only at the moment it answers. Otherwise the collection is one asynchronous versioned
 publication run named `manual-{requestId}` with that run's limits; its outcome
 is visible only as the source's HISTORY receipt and new articles. Account-kind items of
 `GET /api/news-sources`, the PUT response and the per-account GET carry
