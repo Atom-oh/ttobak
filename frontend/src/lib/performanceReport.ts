@@ -63,6 +63,13 @@ export function bedrockNeedsProfile(settings: ReportSettings | null | undefined)
   return Boolean(settings?.useBedrock && !settings.awsProfile);
 }
 
+/** Profile to save with a Bedrock toggle: the stored one only while it still
+ * exists on this Mac, so a removed profile never blocks turning Bedrock off. */
+export function bedrockToggleProfile(settings: ReportSettingsView | null | undefined): string | null {
+  const profile = settings?.awsProfile ?? null;
+  return profile && settings?.profiles.includes(profile) ? profile : null;
+}
+
 // ---------------------------------------------------------------- wire types
 
 export interface PerformanceReportSummary {

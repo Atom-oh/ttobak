@@ -5,7 +5,7 @@ import { performanceApi } from '@/lib/api';
 import { errorCode, intakeCodeLabel } from '@/lib/intake';
 import {
   customRangeError, formatElapsed, HIGHLIGHT_FIELDS, highlightsText, newestReportOfKind, parseHighlightLines,
-  REPORT_COPY, REPORT_PERIOD_OPTIONS, bedrockNeedsProfile, reportCodeLabel,
+  REPORT_COPY, REPORT_PERIOD_OPTIONS, bedrockNeedsProfile, bedrockToggleProfile, reportCodeLabel,
   type PerformanceReportHighlights, type ReportPeriodKind, type ReportSettingsView, type ReportStateView, type ReportSummaryRow,
 } from '@/lib/performanceReport';
 import { cancelReport, generateReport, getReportSettings, setReportSettings } from '@/lib/tauri';
@@ -201,12 +201,13 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
                 </label>
               ))}
             </div>
-            <details className="rounded-lg border border-slate-200 p-3 dark:border-white/10">
+            <details open={bedrockPending || bedrockNeedsProfile(settings) || undefined}
+              className="rounded-lg border border-slate-200 p-3 dark:border-white/10">
               <summary className="cursor-pointer text-sm font-semibold text-slate-700 dark:text-text-main">고급 설정</summary>
               <div className="mt-3 space-y-3 text-sm">
                 <label className="flex items-center gap-2">
                   <input type="checkbox" disabled={!settings} checked={(settings?.useBedrock ?? false) || bedrockPending}
-                    onChange={event => void updateSettings(event.target.checked, settings?.awsProfile ?? null)} />
+                    onChange={event => void updateSettings(event.target.checked, bedrockToggleProfile(settings))} />
                   <span>Amazon Bedrock으로 Claude 실행</span>
                 </label>
                 {settings && (settings.useBedrock || bedrockPending) && (

@@ -190,3 +190,13 @@ test('Bedrock needs a profile', () => {
   assert.equal(report.bedrockNeedsProfile({ useBedrock: false, awsProfile: null }), false);
   assert.equal(report.bedrockNeedsProfile(null), false);
 });
+
+test('turning Bedrock off never sends a profile that is gone', () => {
+  const settings = { useBedrock: true, awsProfile: 'removed', profiles: ['cc-bedrock'] };
+  assert.equal(report.bedrockToggleProfile(settings), null);
+  assert.equal(report.bedrockToggleProfile(settings), null);
+  const present = { useBedrock: false, awsProfile: 'cc-bedrock', profiles: ['cc-bedrock'] };
+  assert.equal(report.bedrockToggleProfile(present), 'cc-bedrock');
+  assert.equal(report.bedrockToggleProfile(present), 'cc-bedrock');
+  assert.equal(report.bedrockToggleProfile(null), null);
+});
