@@ -7,8 +7,8 @@ commands from Settings and the SA activity page ([Mac app](#mac-app)); the
 command line stays available. Acceptance on the user's Mac is pending; nothing here proves it.
 
 The runner implements the [calendar sync runbook](local-outlook-calendar-sync.md)
-contract for one reader, `aws-outlook-mcp` `calendar_view`. It also proposes
-candidate accounts for account-shared calendars (see
+contract for one reader, `aws-outlook-mcp` `calendar_view`. It also matches each
+event to an account for account-shared calendars (see
 [Account matching](#account-matching)). The
 [SFDC connector](#sfdc-connector) reads `aws-sentral-mcp` for the owner-only
 SA performance data of [ADR-023](../decisions/ADR-023-sa-performance-data-residency.md),
@@ -254,8 +254,8 @@ message on save; update the adapter first.
   unless the selection was made with `--accept-unknown-sensitivity`.
 - **Private.** An item with the Outlook category `Private` (any case), or
   whose joined `get_meeting` says `isPrivate: true`, is sent with
-  `private: true` and no share fields. If the owner shared it in TTOBAK, this
-  re-sends it and the server records a veto.
+  `private: true` and no share fields. If it was shared, this re-sends it and
+  the server records a veto.
 - **Removals.** Only a cancelled or excluded *tracked* occurrence is removed.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
@@ -281,10 +281,10 @@ message on save; update the adapter first.
 
 ## Deploy order and rollback
 
-- Deploy the API with the account-sharing contract (`candidateAccountIds`,
-  `private`, the share directory route) before publishing a runner that sends
-  them. An older API rejects those fields with 400, so a misordered window fails
-  the calendar run.
+- Deploy the API with the account-sharing contract (`shareAccountId`,
+  `candidateAccountIds`, `private`, the share directory route) before publishing
+  a runner that sends share fields. An older API rejects those fields with 400,
+  so a misordered window fails the calendar run instead of granting shares.
 - Deploy the API before any runner that sends `organizerDomain`. The calendar
   request decoder is strict, so an API that predates `organizerDomain` rejects
   such batches with 400 and every calendar run fails until the API is updated.
@@ -303,16 +303,18 @@ message on save; update the adapter first.
 
 - **Directory.** Each run reads `GET /api/calendar/share-directory` once
   (accounts the user directly belongs to: ID, name, aliases, domains). If the
-  read fails, `directoryUnavailable` is `true` and every event keeps the
-  candidates recorded in the ledger; unchanged events are not re-sent.
+  read fails, `directoryUnavailable` is `true` and every event keeps the share
+  fields recorded in the ledger; unchanged events are not re-sent, so no share
+  is removed because of a missing directory.
 - **Matching.** The deterministic matcher (`intake/match.ts`) compares title
   and location with names and aliases, and attendee and organizer domains with
-  account domains, excluding own domains. Matched accounts (up to five) are sent
-  as `candidateAccountIds`; the runner never sends `shareAccountId`, so it never
-  shares an event by itself. The owner shares from TTOBAK. Fingerprints cover
-  these fields, so a match or category change re-sends the event.
+  account domains, excluding own domains. Exactly one account sends
+  `shareAccountId` with `shareEvidence` (`title`, `location`, `domain`; never
+  matched text). Several accounts send up to five `candidateAccountIds`. No
+  match sends neither, which unshares a previously shared event. Fingerprints
+  cover these fields, so a match or category change re-sends the event.
 - **Meeting facts.** When the `meetings` connector is selected, each event that
-  may be matched is joined to its meeting exactly like the task step (one
+  may be shared is joined to its meeting exactly like the task step (one
   `list_meetings` per run, then `get_meeting` with the recorded SpecReq login
   address, else the TTOBAK email). Only the address domains and `isPrivate` are
   kept; a payload without `isPrivate` or any attendee or organizer field is no
@@ -321,8 +323,13 @@ message on save; update the adapter first.
   `get_meeting` reads run per sync, and three consecutive failures stop them.
   More than 50 distinct domains is no domain answer (the private flag still
   counts). A lookup without an answer counts in `attendeesUnavailable` and keeps a
-  previous private flag. Without the connector, matching uses title, location
-  and organizer domain.
+  previous private flag or a previous share that rested on domain evidence.
+- **No privacy answer, no new share.** A match is sent as `shareAccountId` only
+  when the joined meeting answered `isPrivate: false`. Without that answer
+  (connector not selected, the 25-read budget spent, or a failed lookup) a match
+  is sent as a single candidate, unless the event is already shared to that
+  account. Without the connector, matching uses title, location and organizer
+  domain and therefore yields candidates only.
 
 ## SpecReq task step
 
@@ -440,7 +447,7 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
      items reach the private TTOBAK calendar;
    - an event whose title contains an account alias, one with an attendee
      from an account domain only, one matching two accounts, a `Private`
-     category added after a match, and a title edited after a match;
+     category added after sharing, and a title edited after sharing;
    - a **moved occurrence** of a recurring event keeps its `meetingId`;
    - a **cancelled occurrence** arrives with `isCanceled: true`, or disappears
      (then it stays `unresolved`);

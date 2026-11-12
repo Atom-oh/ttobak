@@ -910,7 +910,7 @@ function sharingPlan(items, ledger = {}, factMap = new Map(), directory = DIRECT
   });
 }
 
-test('planner: Private category and private meetings stay private; matches are candidates only', () => {
+test('planner: Private category, private meetings, matches, candidates, domain evidence and series key', () => {
   const at = (id, day, extra) => item(id, `2026-11-${day}T10:00:00+09:00`, `2026-11-${day}T11:00:00+09:00`, extra);
   const plan = sharingPlan([
     at('p', '10', { subject: 'HNB weekly', categories: ['Blue', 'PRIVATE'] }),
@@ -928,35 +928,54 @@ test('planner: Private category and private meetings stay private; matches are c
     assert.equal(byId[id].private, true, id);
     for (const field of ['shareAccountId', 'shareEvidence', 'candidateAccountIds']) assert.equal(field in byId[id], false);
   }
-  for (const event of Object.values(byId)) {
-    assert.equal('shareAccountId' in event, false, `${event.externalId} is never auto-shared`);
-    assert.equal('seriesKey' in event, false, 'seriesKey is not sent yet');
-  }
-  for (const id of ['t', 'l', 'd', 'o']) assert.deepEqual(byId[id].candidateAccountIds, ['acct-hana'], id);
+  assert.deepEqual([byId.t.shareAccountId, byId.t.shareEvidence], ['acct-hana', ['title']]);
+  assert.equal('seriesKey' in byId.t, false, 'seriesKey is not sent yet');
+  assert.deepEqual(byId.l.shareEvidence, ['location']);
   assert.deepEqual(byId.c.candidateAccountIds, ['acct-hana', 'acct-kb']);
-  assert.equal('candidateAccountIds' in byId.n, false, 'an own-company domain never matches');
+  assert.equal('shareAccountId' in byId.c, false);
+  assert.deepEqual([byId.d.shareAccountId, byId.d.shareEvidence], ['acct-hana', ['domain']]);
+  assert.deepEqual([byId.o.shareAccountId, byId.o.shareEvidence], ['acct-hana', ['domain']], 'organizer domain is evidence');
+  assert.equal('shareAccountId' in byId.n, false, 'an own-company domain never matches');
   assert.equal('private' in byId.n, false);
-  assert.deepEqual([plan.counts.shared, plan.counts.candidates, plan.counts.private], [0, 5, 2]);
+  assert.deepEqual([plan.counts.shared, plan.counts.candidates, plan.counts.private], [4, 1, 2]);
+  assert.equal(plan.set.t.share.shareAccountId, 'acct-hana');
   assert.equal(plan.set.m.share.private, true);
   assert.equal(plan.set.n.share, undefined);
   assert.ok(!JSON.stringify(plan).includes(CANARY));
 
-  // A previous private flag holds when the lookup fails or is not attempted; an answer re-decides.
+  // A lookup without an answer keeps a domain share and a private flag; an answer re-decides.
   const ledger = {
+    d: { fp: 'old', startsAt: '2026-11-14T01:00:00.000Z', endsAt: '2026-11-14T02:00:00.000Z',
+      share: { shareAccountId: 'acct-hana', shareEvidence: ['domain'] } },
     m: { fp: 'old', startsAt: '2026-11-17T01:00:00.000Z', endsAt: '2026-11-17T02:00:00.000Z', share: { private: true } },
   };
-  const items = [at('m', '17', { subject: 'HNB weekly' })];
-  assert.equal(sharingPlan(items, ledger, new Map([['m', null]])).mutations[0].event.private, true);
-  assert.equal(sharingPlan(items, ledger, new Map()).mutations[0].event.private, true);
-  assert.deepEqual(sharingPlan(items, ledger, new Map([['m', facts([])]])).mutations[0].event.candidateAccountIds, ['acct-hana']);
-  // Without a directory the private flag and previous candidates are kept.
-  const offline = sharingPlan([...items, at('c', '13', { subject: 'HNB and KB Card joint review' })], {
-    ...ledger, c: { fp: 'old', startsAt: '2026-11-13T01:00:00.000Z', endsAt: '2026-11-13T02:00:00.000Z',
-      share: { candidateAccountIds: ['acct-hana', 'acct-kb'] } } }, new Map(), null);
+  const items = [at('d', '14', { subject: 'sync' }), at('m', '17', { subject: 'HNB weekly' })];
+  const kept = sharingPlan(items, ledger, new Map([['d', null], ['m', null]]));
+  assert.deepEqual([kept.mutations[0].event.shareAccountId, kept.mutations[0].event.shareEvidence], ['acct-hana', ['domain']]);
+  assert.equal(kept.mutations[1].event.private, true);
+  const decided = sharingPlan(items, ledger, new Map([['d', facts([])], ['m', facts([])]]));
+  assert.equal('shareAccountId' in decided.mutations[0].event, false);
+  assert.equal(decided.mutations[1].event.shareAccountId, 'acct-hana');
+  // A directory that no longer lists the shared account drops a domain share kept without an answer.
+  const gone = sharingPlan(items, ledger, new Map([['d', null]]), { accounts: [DIRECTORY.accounts[1]] });
+  assert.equal('shareAccountId' in gone.mutations[0].event, false);
+  // Without a privacy answer a title match is only a candidate, unless already shared to that account.
+  const titleItem = [at('t', '11', { subject: 'HNB weekly' })];
+  const unknown = sharingPlan(titleItem, {}, new Map());
+  assert.equal('shareAccountId' in unknown.mutations[0].event, false);
+  assert.deepEqual(unknown.mutations[0].event.candidateAccountIds, ['acct-hana']);
+  const stillShared = sharingPlan(titleItem, { t: { fp: 'old', startsAt: '2026-11-11T01:00:00.000Z',
+    endsAt: '2026-11-11T02:00:00.000Z', share: { shareAccountId: 'acct-hana', shareEvidence: ['title'] } } }, new Map([['t', null]]));
+  assert.equal(stillShared.mutations[0].event.shareAccountId, 'acct-hana');
+  // With no lookup attempted (meetings connector deselected), the private flag is still kept.
+  const unattempted = sharingPlan(items, ledger, new Map());
+  assert.equal(unattempted.mutations[1].event.private, true);
+  assert.equal('shareAccountId' in unattempted.mutations[1].event, false);
+  // Without a directory, previous share fields (and the private flag) are kept.
+  const offline = sharingPlan(items, ledger, new Map(), null);
   assert.equal(offline.counts.directoryUnavailable, true);
-  const offlineById = Object.fromEntries(offline.mutations.map(m => [m.event.externalId, m.event]));
-  assert.equal(offlineById.m.private, true);
-  assert.deepEqual(offlineById.c.candidateAccountIds, ['acct-hana', 'acct-kb']);
+  assert.equal(offline.mutations[0].event.shareAccountId, 'acct-hana');
+  assert.equal(offline.mutations[1].event.private, true);
 });
 
 test('get_meeting facts keep domains and the private flag only; attendee-less payloads are no answer', () => {
@@ -1035,15 +1054,15 @@ test('meeting facts: joined lookups, change-key cache, failure stop and no addre
   assert.equal(await overflow.factsFor(occurrence('m10', '10')), null);
 });
 
-test('sync: Private category added after a match re-sends the event as private', async t => {
+test('sync: Private category added after sharing re-sends the event as private', async t => {
   const store = new IntakeStore(tempHome(t));
   const api = fakeApi({ directory: DIRECTORY });
   const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
     attendees: publicAttendees() };
   const titled = categories => request => twoEvents(request).map(entry => ({ ...entry, subject: 'HNB sync', categories }));
   const first = await runCalendar({ ...base, source: source(titled([])) });
-  assert.equal(first.counts.candidates, 6);
-  assert.ok(upsertsOf(api.calls).every(event => JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('shareAccountId' in event)));
+  assert.equal(first.counts.shared, 6);
+  assert.ok(upsertsOf(api.calls).every(event => event.shareAccountId === 'acct-hana'));
   const unchanged = await runCalendar({ ...base, source: source(titled([])) });
   assert.equal(unchanged.counts.unchanged, 6);
   const before = api.calls.length;
@@ -1051,7 +1070,23 @@ test('sync: Private category added after a match re-sends the event as private',
   assert.deepEqual([second.counts.upserts, second.counts.private], [6, 6]);
   const resent = upsertsOf(api.calls.slice(before));
   assert.equal(resent.length, 6);
-  assert.ok(resent.every(event => event.private === true && !('candidateAccountIds' in event)));
+  assert.ok(resent.every(event => event.private === true && !('shareAccountId' in event)));
+});
+
+test('sync: privacy lookups run while the directory is unavailable', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi({ directory: DIRECTORY });
+  const privateAttendees = () => ({ async factsFor() { return { domains: [], isPrivate: true }; }, save() {}, unavailable: 0 });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const titled = subject => request => twoEvents(request).map(entry => ({ ...entry, subject }));
+  await runCalendar({ ...base, attendees: publicAttendees(), source: source(titled('HNB sync')) });
+  api.directory = new Error('HTTP 503');
+  const before = api.calls.length;
+  const result = await runCalendar({ ...base, attendees: privateAttendees(), source: source(titled('HNB sync v2')) });
+  assert.equal(result.counts.directoryUnavailable, true);
+  const resent = upsertsOf(api.calls.slice(before));
+  assert.equal(resent.length, 6);
+  assert.ok(resent.every(event => event.private === true && !('shareAccountId' in event)));
 });
 
 test('sync: the share directory is read across server pages', async t => {
@@ -1061,15 +1096,15 @@ test('sync: the share directory is read across server pages', async t => {
   const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
     attendees: publicAttendees() };
   const result = await runCalendar({ ...base, source: source(request => twoEvents(request).map(entry => ({ ...entry, subject: 'HNB sync' }))) });
-  assert.equal(result.counts.candidates, 6);
-  assert.ok(upsertsOf(api.calls).every(event => JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('shareAccountId' in event)));
-  // A cursor that does not move forward makes the directory unavailable, so nothing is matched.
+  assert.equal(result.counts.shared, 6);
+  assert.ok(upsertsOf(api.calls).every(event => event.shareAccountId === 'acct-hana'));
+  // A cursor that does not move forward makes the directory unavailable, so nothing is shared.
   assert.equal(directoryCursor({ nextCursor: 'acct-a' }, 'acct-b'), null);
   assert.equal(directoryCursor({ nextCursor: 'bad id!' }, ''), null);
   assert.equal(directoryCursor({}, 'acct-a'), '');
 });
 
-test('sync: an unavailable directory keeps previous candidates', async t => {
+test('sync: an unavailable directory keeps previous share fields and never removes shares', async t => {
   const store = new IntakeStore(tempHome(t));
   const api = fakeApi({ directory: DIRECTORY });
   const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true,
@@ -1084,11 +1119,11 @@ test('sync: an unavailable directory keeps previous candidates', async t => {
   assert.deepEqual(upsertsOf(api.calls.slice(before)), []);
   const renamed = await runCalendar({ ...base, source: source(titled('HNB sync v2')) });
   assert.equal(renamed.counts.upserts, 6);
-  assert.ok(upsertsOf(api.calls.slice(before)).every(event => JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('shareAccountId' in event)));
+  assert.ok(upsertsOf(api.calls.slice(before)).every(event => event.shareAccountId === 'acct-hana'));
   api.directory = DIRECTORY;
   const back = await runCalendar({ ...base, source: source(titled('internal')) });
   assert.equal(back.counts.directoryUnavailable, false);
-  assert.ok(upsertsOf(api.calls.slice(-1)).every(event => !('candidateAccountIds' in event)));
+  assert.ok(upsertsOf(api.calls.slice(-1)).every(event => !('shareAccountId' in event)));
 });
 
 test('sync: share-bearing runs send at most 12 mutations per batch', async t => {
@@ -1176,14 +1211,14 @@ test('CLI: own domains, meetings-connector attendee domains and no attendee data
   Object.assign(environment, { api, scope: 'c'.repeat(32), me: { email: 'someone@amazon.com', userId: 'user-1' } });
   assert.equal(await runIntake(['calendar', '--noninteractive'], environment), 0);
   const run = JSON.parse(lines.at(-1));
-  assert.deepEqual([run.counts.shared, run.counts.candidates, run.counts.private, run.counts.attendeesUnavailable,
-    run.counts.directoryUnavailable], [0, 5, 1, 0, false]);
+  assert.deepEqual([run.counts.shared, run.counts.private, run.counts.attendeesUnavailable, run.counts.directoryUnavailable],
+    [5, 1, 0, false]);
   const events = upsertsOf(api.calls);
-  assert.equal(events.filter(event => event.private === true && !('candidateAccountIds' in event)).length, 1);
-  assert.ok(events.filter(event => !event.private).every(event => !('shareAccountId' in event) &&
-    JSON.stringify(event.candidateAccountIds) === '["acct-hana"]' && !('seriesKey' in event)));
+  assert.equal(events.filter(event => event.private === true && !('shareAccountId' in event)).length, 1);
+  assert.ok(events.filter(event => !event.private).every(event => event.shareAccountId === 'acct-hana' &&
+    JSON.stringify(event.shareEvidence) === '["domain"]' && !('seriesKey' in event)));
   assert.equal(await runIntake(['status'], environment), 0);
-  assert.equal(JSON.parse(lines.at(-1)).status.calendar.counts.candidates, 5);
+  assert.equal(JSON.parse(lines.at(-1)).status.calendar.counts.shared, 5);
 
   const outputs = lines.join('\n') + JSON.stringify(api.calls) +
     allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');

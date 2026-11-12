@@ -25268,7 +25268,11 @@ function buildMatcher(accounts, ownDomains2) {
     ),
     domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d))
   }));
+  const listed = new Set(accounts.map((a) => a.accountId));
   return {
+    lists(accountId) {
+      return listed.has(accountId);
+    },
     match(input) {
       const title = normalize(input.title);
       const location = normalize(input.location ?? "");
@@ -25542,13 +25546,21 @@ function decideSharing(event, item2, previous, sharing) {
     return;
   }
   if (!sharing.matcher) {
-    applyShare(event, { candidateAccountIds: previous?.share?.candidateAccountIds });
+    applyShare(event, previous?.share);
     return;
   }
   const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
   const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
-  if (result.kind === "matched") applyShare(event, { candidateAccountIds: [result.accountId] });
-  else if (result.kind === "candidate") applyShare(event, { candidateAccountIds: result.accountIds });
+  if (facts == null && previous?.share?.shareEvidence?.includes("domain") && !!previous.share.shareAccountId && sharing.matcher.lists(previous.share.shareAccountId) && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
+    applyShare(event, previous.share);
+  } else if (result.kind === "matched" && facts == null) {
+    if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
+    else applyShare(event, { candidateAccountIds: [result.accountId] });
+  } else if (result.kind === "matched") {
+    applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
+  } else if (result.kind === "candidate") {
+    applyShare(event, { candidateAccountIds: result.accountIds });
+  }
 }
 function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES, sharing) {
   const wanted = new Set(responses);
@@ -25790,8 +25802,9 @@ async function runCalendar(options2) {
   const directory = await readDirectory(options2.api);
   const matcher = directory ? buildMatcher(directory, options2.ownDomains?.length ? options2.ownDomains : DEFAULT_OWN_DOMAINS) : null;
   const facts = /* @__PURE__ */ new Map();
-  if (matcher && options2.attendees) {
-    for (const item2 of sharingCandidates(items, window)) facts.set(item2.meetingId, await options2.attendees.factsFor(item2));
+  const lookups = sharingCandidates(items, window).filter((item2) => matcher || state.ledger[item2.meetingId]?.share?.shareAccountId);
+  if (options2.attendees && (matcher || lookups.length)) {
+    for (const item2 of lookups) facts.set(item2.meetingId, await options2.attendees.factsFor(item2));
     options2.attendees.save(now);
   }
   const plan = planCalendar(items, state.ledger, window, zone, options2.responses, { sourceId, matcher, facts });
