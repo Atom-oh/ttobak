@@ -100,9 +100,32 @@ export function intakeCodeLabel(code: string): string {
   return Object.prototype.hasOwnProperty.call(CODE_LABELS, code) ? CODE_LABELS[code] : code;
 }
 
-/** Result line of [Update]: the adapter was replaced, or was already current. */
-export function adapterUpdateMessage(changed: boolean): string {
+/** Result line of [Update]; `null` (an older app) means the outcome is unknown. */
+export function adapterUpdateMessage(changed: boolean | null): string {
+  if (changed === null) return '수집 도구 업데이트를 마쳤어요.';
   return changed ? '수집 도구를 최신 버전으로 바꿨어요.' : '수집 도구가 이미 최신이에요.';
+}
+
+export interface AdapterViewShape {
+  present: boolean;
+  updateAvailable: boolean | null;
+}
+
+function adapterViewOf(value: unknown): AdapterViewShape | null {
+  const view = record(value);
+  return view && typeof view.present === 'boolean' ? (view as unknown as AdapterViewShape) : null;
+}
+
+/** The [Update] result of this app (`{adapter, changed}`) or of an older app
+ * (the bare adapter view, outcome unknown); `null` when neither. */
+export function normalizeAdapterUpdate(value: unknown): { adapter: AdapterViewShape; changed: boolean | null } | null {
+  const result = record(value);
+  if (result && 'adapter' in result) {
+    const adapter = adapterViewOf(result.adapter);
+    return adapter ? { adapter, changed: typeof result.changed === 'boolean' ? result.changed : null } : null;
+  }
+  const legacy = adapterViewOf(value);
+  return legacy ? { adapter: legacy, changed: null } : null;
 }
 
 /** The code of an invoke rejection (Tauri commands reject with a string code). */

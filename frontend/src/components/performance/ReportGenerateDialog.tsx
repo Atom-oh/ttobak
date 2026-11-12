@@ -114,6 +114,8 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
 
   const submit = async () => {
     setFormError(null);
+    // The shown Bedrock choice is not saved yet; the run would use the stored one.
+    if (bedrockPending || bedrockNeedsProfile(settings)) { setFormError(reportMessage('profile-required')); return; }
     if (kind === 'custom') {
       const rangeError = customRangeError(start, end);
       if (rangeError) { setFormError(rangeError); return; }
@@ -229,7 +231,8 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
                 className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:text-slate-900 dark:text-text-muted dark:hover:text-text-main">
                 {REPORT_COPY.cancel}
               </button>
-              <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+              <button type="submit" disabled={bedrockPending || bedrockNeedsProfile(settings)}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
                 {REPORT_COPY.makeReport}
               </button>
             </div>

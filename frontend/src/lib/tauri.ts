@@ -738,8 +738,9 @@ export interface IntakeAdapterUpdate {
   changed: boolean;
 }
 
-export function updateIntakeAdapter(): Promise<IntakeAdapterUpdate> {
-  return invoke<IntakeAdapterUpdate>('intake_update_adapter');
+/** Older apps resolve with the bare adapter view; use `normalizeAdapterUpdate`. */
+export function updateIntakeAdapter(): Promise<IntakeAdapterUpdate | IntakeStateView['adapter']> {
+  return invoke<IntakeAdapterUpdate | IntakeStateView['adapter']>('intake_update_adapter');
 }
 
 export function onIntakeProgress(handler: (line: string) => void): () => void {

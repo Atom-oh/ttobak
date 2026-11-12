@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useIntake } from '@/hooks/useIntake';
 import {
-  adapterUpdateMessage, errorCode, finishedMessage, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
+  adapterUpdateMessage, errorCode, finishedMessage, normalizeAdapterUpdate, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
   optionsSaveErrorText, savedOptions, scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows,
   SYNC_OPTIONS_COPY, syncOptionsValue, syncOptionsView, type IntakeConnector, type IntakeFinished, type IntakeScheduleKind, type SyncOptionsView,
 } from '@/lib/intake';
 import {
   cancelIntake, checkIntakeAdapter, isTauri, runIntakeLogin, runIntakeNow, runIntakeSetup, setIntakeNodePath,
-  setIntakeOptions, setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter, type IntakeAdapterUpdate,
+  setIntakeOptions, setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter,
 } from '@/lib/tauri';
 
 const buttonClass = 'rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-white/10 dark:text-text-main dark:hover:bg-white/5';
@@ -101,9 +101,10 @@ export function IntakeSettings() {
           </span>
           <button type="button" className={buttonClass} disabled={busy || running}
             onClick={() => void act(updateIntakeAdapter, value => {
-              const update = value as IntakeAdapterUpdate;
-              setState(current => current ? { ...current, adapter: update.adapter } : current);
-              setNotice(adapterUpdateMessage(update.changed));
+              // An older installed app answers with the bare adapter view.
+              const update = normalizeAdapterUpdate(value);
+              if (update) setState(current => current ? { ...current, adapter: update.adapter } : current);
+              setNotice(adapterUpdateMessage(update?.changed ?? null));
             })}>
             {INTAKE_COPY.update}
           </button>

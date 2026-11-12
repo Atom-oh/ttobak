@@ -224,3 +224,13 @@ test('adapter update always reports a result', () => {
     assert.ok(label && label !== code, `label for ${code}`);
   }
 });
+
+test('adapter update accepts the legacy response of older apps', () => {
+  const adapter = { present: true, updateAvailable: false };
+  assert.deepEqual(plain(intake.normalizeAdapterUpdate({ adapter, changed: true })), { adapter, changed: true });
+  // Apps before the result shape return the bare adapter view.
+  assert.deepEqual(plain(intake.normalizeAdapterUpdate(adapter)), { adapter, changed: null });
+  assert.equal(intake.adapterUpdateMessage(null), '수집 도구 업데이트를 마쳤어요.');
+  assert.equal(intake.normalizeAdapterUpdate(null), null);
+  assert.equal(intake.normalizeAdapterUpdate({ adapter: 'x' }), null);
+});
