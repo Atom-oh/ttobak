@@ -247,7 +247,8 @@ async function select(args: string[], environment: IntakeEnvironment, store: Int
   if (autoAckValue !== 'on' && autoAckValue !== 'off') throw new IntakeError('INVALID_ARGUMENT', '--auto-ack must be on or off');
   return selectConnector(connector, { host: options['--host'] as HostId, server: options['--server'] as string,
     autoAck: autoAckValue === 'on', acceptUnknownSensitivity: options['--accept-unknown-sensitivity'] === true,
-    ...(connector === 'calendar' ? { ownDomains: ownDomains(options['--own-domain'] as string[] | undefined) } : {}) },
+    ...(connector === 'calendar' && options['--own-domain'] !== undefined
+      ? { ownDomains: ownDomains(options['--own-domain'] as string[]) } : {}) },
   environment, store);
 }
 

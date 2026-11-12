@@ -64,6 +64,7 @@ func setupInsightsRouterWithSyncer(repo *mockCrawlerRepo, syncer kbSyncer) http.
 	r := chi.NewRouter()
 	r.Use(withUserContext)
 	r.Get("/api/insights", h.ListInsights)
+	r.Get("/api/insights/{sourceId}/{docHash}", h.GetDocumentContent)
 	r.Delete("/api/insights/{sourceId}/{docHash}", h.DeleteDocument)
 	return r
 }
@@ -188,5 +189,42 @@ func TestListInsights_Pagination(t *testing.T) {
 	}
 	if resp.TotalCount != 10 {
 		t.Errorf("expected totalCount 10, got %d", resp.TotalCount)
+	}
+}
+
+// Without a membership grant, account-owned documents are absent from the
+// list and their detail is the same 404 as a missing document.
+func TestInsights_AccountSourceHiddenFromNonMember(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["acct_acct-1_0123abcd"] = &model.CrawlerSource{SourceID: "acct_acct-1_0123abcd", SourceName: "Hana Financial", AccountID: "acct-1"}
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", SourceName: "Hana Bank"}
+	hidden := model.CrawledDocument{DocHash: "a1", SourceID: "acct_acct-1_0123abcd", Type: "whitepaper", Title: "Account"}
+	common := model.CrawledDocument{DocHash: "c1", SourceID: "hanabank", Type: "whitepaper", Title: "Common"}
+	repo.allDocuments = []model.CrawledDocument{hidden, common}
+	repo.documents["acct_acct-1_0123abcd"] = []model.CrawledDocument{hidden}
+	// A type no other handler test lists keeps the package-wide scan cache
+	// from serving another test's documents.
+	router := setupInsightsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/insights?type=whitepaper", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.InsightsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.TotalCount != 1 || len(resp.Documents) != 1 || resp.Documents[0].SourceKind != "common" ||
+		resp.Documents[0].SourceName != "Hana Bank" || len(resp.SourceIDs) != 1 {
+		t.Fatalf("unexpected list: %+v", resp)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/insights/acct_acct-1_0123abcd/a1", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a hidden document, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

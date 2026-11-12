@@ -10,7 +10,7 @@ import type { AccountCreationRequest, AccountCreationResponse } from '@/types/me
 import type { MeetingCategory } from '@/types/meeting';
 import type { AccountContact, AccountEvent, AccountEventInput, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
 import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountSignals, CreateAccountNewsSourceInput, CrawlerSource } from '@/types/meeting';
-import type { AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
+import type { AccountFocusGraph, AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
 import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
@@ -19,6 +19,7 @@ import type {
   AccountCalendarPage, CalendarEvent, CalendarEventPage, CalendarEventQuery, CalendarShareDirectoryAccount,
   CalendarSharingRequest, CalendarSourcePage,
 } from '@/types/calendar';
+import type { NewsSourceItem, NewsSourcesPage } from '@/lib/newsRegistration';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -639,6 +640,17 @@ export const settingsApi = {
     api.post<InviteUserResponse>('/api/settings/invite-user', data),
 };
 
+// Self-service display name. The server always targets the signed-in user.
+export const profileApi = {
+  updateName: (name: string) =>
+    api.put<UserNameResponse>('/api/settings/profile/name', { name }),
+};
+
+export interface UserNameResponse {
+  userId: string;
+  name: string;
+}
+
 export interface InviteUserResponse {
   email: string;
   invited: boolean;
@@ -665,6 +677,9 @@ export const adminUsersApi = {
 
   resetPassword: (userId: string) =>
     api.post<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/reset-password`),
+
+  updateName: (userId: string, name: string) =>
+    api.put<UserNameResponse>(`/api/settings/users/${encodeURIComponent(userId)}/name`, { name }),
 };
 
 export interface AdminUserSummary {
@@ -730,8 +745,8 @@ export const summaryApi = {
 
 // Crawler API
 export const crawlerApi = {
-  listSources: () =>
-    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources'),
+  listSources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources', options),
   addSource: (data: {
     sourceName: string;
     awsServices: string[];
@@ -739,7 +754,7 @@ export const crawlerApi = {
     customUrls?: string[];
     newsQueries?: string[];
     aliases?: string[];
-  }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data),
+  }, options?: { expectedUserId?: string }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data, options),
   updateSource: (sourceId: string, data: {
     awsServices: string[];
     newsSources: string[];
@@ -748,18 +763,32 @@ export const crawlerApi = {
     aliases?: string[];
     removeAliases?: string[];
   }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
-  unsubscribe: (sourceId: string) =>
-    api.delete(`/api/crawler/sources/${sourceId}`),
+  unsubscribe: (sourceId: string, options?: { expectedUserId?: string }) =>
+    api.delete(`/api/crawler/sources/${sourceId}`, options),
   getHistory: (sourceId: string) =>
     api.get<{ history: CrawlHistory[] }>(`/api/crawler/sources/${sourceId}/history`),
 };
 
+// Every news source the caller can manage: account-owned ones of their direct
+// accounts and their common subscriptions. 404 until the endpoint is deployed.
+export const newsSourcesApi = {
+  list: (query: { limit?: number; cursor?: string } = {}, options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const q = new URLSearchParams();
+    if (query.limit) q.set('limit', String(query.limit));
+    if (query.cursor) q.set('cursor', query.cursor);
+    const suffix = q.toString();
+    return api.get<NewsSourcesPage>(`/api/news-sources${suffix ? `?${suffix}` : ''}`, { ...options, cache: 'no-store' });
+  },
+};
+
 // Insights API
 export const insightsApi = {
-  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number }) => {
+  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number; kind?: 'common' | 'account'; account?: string }) => {
     const q = new URLSearchParams();
     q.set('type', params.type);
     if (params.source) q.set('source', params.source);
+    if (params.kind) q.set('kind', params.kind);
+    if (params.account) q.set('account', params.account);
     if (params.service) q.set('service', params.service);
     if (params.tags && params.tags.length > 0) q.set('tags', params.tags.join(','));
     if (params.sort) q.set('sort', params.sort);
@@ -1064,6 +1093,9 @@ export const accountApi = {
         { kind: target.kind, id: target.id, ...(target.cursor ? { cursor: target.cursor } : {}) }, options),
     ignoreMention: (id: string, key: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.post<void>(`/api/accounts/${encodeURIComponent(id)}/people/mentions/${encodeURIComponent(key)}/ignore`, undefined, options),
+    focus: (id: string, focus: string, cursor = '', options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<AccountFocusGraph>(`/api/accounts/${encodeURIComponent(id)}/people/focus?${new URLSearchParams(cursor ? { focus, cursor } : { focus })}`,
+        { ...options, cache: 'no-store' }),
     edges: (id: string, meetingId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.get<MeetingPeopleEdges>(`/api/accounts/${encodeURIComponent(id)}/people/edges?${new URLSearchParams({ meetingId })}`,
         { ...options, cache: 'no-store' }),
@@ -1091,6 +1123,8 @@ export const accountApi = {
       api.post<CrawlerSource>(`/api/accounts/${encodeURIComponent(id)}/news-sources`, input, options),
     remove: (id: string, sourceId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
       api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, options),
+    update: (id: string, sourceId: string, input: { sourceName?: string; newsQueries?: string[]; aliases?: string[] }, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.put<NewsSourceItem>(`/api/accounts/${encodeURIComponent(id)}/news-sources/${encodeURIComponent(sourceId)}`, input, options),
   },
 };
 

@@ -89,6 +89,62 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Workspace pages fill the window; reading surfaces keep their own line length. */
+:root {
+  --workspace-gutter: 1rem;
+  --mobile-nav-height: calc(4rem + env(safe-area-inset-bottom, 0px));
+}
+
+.workspace-page {
+  width: 100%;
+  min-width: 0;
+  padding: var(--workspace-gutter);
+}
+
+.workspace-inline-gutter {
+  padding-inline: var(--workspace-gutter);
+}
+
+.workspace-main-with-nav {
+  padding-bottom: var(--mobile-nav-height);
+}
+
+.workspace-mobile-nav {
+  height: var(--mobile-nav-height);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.workspace-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+}
+
+.workspace-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr));
+  align-items: start;
+  gap: 1.5rem;
+}
+
+.workspace-settings-grid > * {
+  min-width: 0;
+}
+
+.workspace-settings-wide {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 64rem) {
+  :root {
+    --workspace-gutter: 1.5rem;
+  }
+
+  .workspace-main-with-nav {
+    padding-bottom: 0;
+  }
+}
+
 .dark body {
   background: var(--background-dark);
   color: var(--text-main);
@@ -123,6 +179,12 @@ body {
    redefined as calm flat surfaces (no blur, no glow)
    ═══════════════════════════════════════════════ */
 .glass-panel {
+  background: var(--surface-lowest);
+  border: 1px solid var(--border-subtle);
+}
+
+/* Register the compatibility surface so Tailwind also emits dark:glass-panel. */
+@utility glass-panel {
   background: var(--surface-lowest);
   border: 1px solid var(--border-subtle);
 }

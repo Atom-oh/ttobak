@@ -38,7 +38,7 @@ const syncFields = {
   windowStart: timestampSchema, windowEnd: timestampSchema, complete: { type: 'boolean' },
   mutations: {
     type: 'array', maxItems: 20, description: 'At most 20 distinct occurrence IDs, or at most 12 when any upsert carries ' +
-      'share fields (the server rejects transactions over 100 items with HTTP 400). Only explicit removals delete events.',
+      'share fields (the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE). Only explicit removals delete events.',
     items: { oneOf: [
       { type: 'object', properties: { op: { const: 'upsert' }, event: {
         type: 'object', properties: eventFields, required: requiredEventFields, additionalProperties: false,
@@ -66,7 +66,7 @@ export const CALENDAR_TOOLS: Tool[] = [
       'Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. ' +
       'An empty complete batch reports progress without inferring deletions. ' +
       'A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; ' +
-      'the server rejects transactions over 100 items with HTTP 400. ' +
+      'the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE. ' +
       'On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. ' +
       'Returns the actual server receipt; never fetches Outlook or creates meetings.',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },

@@ -67,7 +67,7 @@ func TestNewsDeleteUnpublishesBeforeCleanupAndRetriesTombstone(t *testing.T) {
 	if state.writes != 1 || newsString(rows.rows[keys[0]], "qualityStatus") != "DELETED" {
 		t.Fatal("cleanup failure left the article published")
 	}
-	if _, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16)); !errors.Is(err, ErrNotFound) {
+	if _, err := svc.GetDocumentDetail(context.Background(), "user-1", keys[0].SourceID, strings.Repeat("a", 16)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unpublished object remained readable: %v", err)
 	}
 	// Configuration changes after publication do not strand cleanup.

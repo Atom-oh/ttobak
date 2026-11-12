@@ -399,7 +399,7 @@ func (svc *CalendarService) ListEvents(ctx context.Context, userID string, query
 		if err != nil {
 			return nil, err
 		}
-		override, err := svc.calendarOverride(ctx, lookups, userID, row.SourceID, calendarScopeKey(input, row.EventID))
+		override, err := svc.calendarOverride(ctx, lookups, userID, row.SourceID, input, row.EventID)
 		if err != nil {
 			return nil, err
 		}

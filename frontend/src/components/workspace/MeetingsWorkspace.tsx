@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -56,9 +56,35 @@ export function useWorkspaceAccounts(userId: string) {
   return { accounts, isLoading, error, retry };
 }
 
+// Meetings lead the page. Wide screens (xl) show the schedule as a sticky right
+// sidebar; narrower screens place it after the list, collapsed by default.
+// The panel stays mounted while collapsed (CSS-hidden), so expanding or resizing
+// never refetches, and a ?task= highlight link opens it. The sticky height
+// subtracts the 4rem DesktopHeader above AppLayout's scroll area plus margins.
 function MeetingsUpcoming() {
   const highlight = parseTaskHighlight(useSearchParams().get('task'));
-  return <PrivateUpcomingMeetings highlight={highlight} />;
+  const [expanded, setExpanded] = useState(Boolean(highlight));
+  const [seenHighlight, setSeenHighlight] = useState(highlight);
+  if (seenHighlight !== highlight) {
+    setSeenHighlight(highlight);
+    if (highlight) setExpanded(true);
+  }
+  const panelId = useId();
+  return (
+    <aside aria-label="내 일정" className="min-w-0 xl:sticky xl:top-6 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto">
+      <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded(open => !open)}
+        className="flex w-full items-center justify-between gap-2 rounded-xl border border-border-subtle bg-surface px-4 py-3 text-sm font-semibold text-text-main focus-visible:outline-2 focus-visible:outline-primary xl:hidden">
+        <span className="inline-flex items-center gap-2">
+          <span className="material-symbols-outlined text-lg text-primary" aria-hidden="true">calendar_today</span>
+          내 일정 · 할 일
+        </span>
+        <span className="material-symbols-outlined text-lg text-text-secondary" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
+      </button>
+      <div id={panelId} className={expanded ? 'mt-3 xl:mt-0' : 'hidden xl:block'}>
+        <PrivateUpcomingMeetings highlight={highlight} />
+      </div>
+    </aside>
+  );
 }
 
 export function WorkspaceActions() {
@@ -169,7 +195,7 @@ function MeetingsContent({ userId }: { userId: string }) {
 
   return (
     <AppLayout activePath="/meetings">
-      <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 pb-28 lg:px-8 lg:py-8">
+      <div className="workspace-page space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-text-main lg:text-3xl">미팅 기록</h1>
@@ -177,26 +203,30 @@ function MeetingsContent({ userId }: { userId: string }) {
           </div>
           <WorkspaceActions />
         </div>
-        <Suspense fallback={<SkeletonCard />}><MeetingsUpcoming /></Suspense>
-        <Suspense fallback={<SkeletonCard />}>
-          <MeetingList
-            meetings={meetings} isLoading={isFetching}
-            activeTab={activeTab} onTabChange={changeTab}
-            selectedAccountIds={selectedAccountIds} onAccountChange={changeAccounts}
-            accounts={accountList.accounts} isLoadingAccounts={accountList.isLoading}
-            accountsError={accountList.error} onRetryAccounts={accountList.retry}
-            hasMore={Boolean(nextCursor)} error={error} onRetry={retry}
-            onDeleteMeeting={meetingId => setMeetings(previous => previous.filter(meeting => meeting.meetingId !== meetingId))}
-          />
-        </Suspense>
-        {nextCursor && !isFetching && (
-          <div className="flex justify-center">
-            <button type="button" onClick={retry} disabled={isLoadingMore}
-              className="rounded-xl border border-border-subtle bg-surface px-6 py-2.5 text-sm font-semibold text-text-main focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50">
-              {isLoadingMore ? '불러오는 중…' : 'Load More'}
-            </button>
+        <div className="space-y-6 xl:grid xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start xl:gap-6 xl:space-y-0 2xl:grid-cols-[minmax(0,1fr)_24rem]">
+          <div className="min-w-0 space-y-6">
+            <Suspense fallback={<SkeletonCard />}>
+              <MeetingList
+                meetings={meetings} isLoading={isFetching}
+                activeTab={activeTab} onTabChange={changeTab}
+                selectedAccountIds={selectedAccountIds} onAccountChange={changeAccounts}
+                accounts={accountList.accounts} isLoadingAccounts={accountList.isLoading}
+                accountsError={accountList.error} onRetryAccounts={accountList.retry}
+                hasMore={Boolean(nextCursor)} error={error} onRetry={retry}
+                onDeleteMeeting={meetingId => setMeetings(previous => previous.filter(meeting => meeting.meetingId !== meetingId))}
+              />
+            </Suspense>
+            {nextCursor && !isFetching && (
+              <div className="flex justify-center">
+                <button type="button" onClick={retry} disabled={isLoadingMore}
+                  className="rounded-xl border border-border-subtle bg-surface px-6 py-2.5 text-sm font-semibold text-text-main focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50">
+                  {isLoadingMore ? '불러오는 중…' : 'Load More'}
+                </button>
+              </div>
+            )}
           </div>
-        )}
+          <Suspense fallback={<SkeletonCard />}><MeetingsUpcoming /></Suspense>
+        </div>
       </div>
     </AppLayout>
   );

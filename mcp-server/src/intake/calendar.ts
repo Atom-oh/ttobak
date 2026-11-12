@@ -330,8 +330,9 @@ function applyShare(event: CalendarEvent, fields: ShareFields | undefined): void
 function decideSharing(event: CalendarEvent, item: OutlookItem, previous: LedgerEntry | undefined, sharing: PlanSharing): void {
   if (item.seriesId) event.seriesKey = createHash('sha256').update(`${sharing.sourceId}|${item.seriesId}`).digest('hex');
   const facts = sharing.facts.get(item.meetingId);
-  // Fail closed: a private meeting, or one that was private when its lookup now fails, is never shared.
-  if (item.privateCategory || facts?.isPrivate || (facts === null && previous?.share?.private)) {
+  // Fail closed: a private meeting, or one that was private when its lookup failed or was not
+  // attempted (for example with the meetings connector deselected), is never shared.
+  if (item.privateCategory || facts?.isPrivate || (facts == null && previous?.share?.private)) {
     event.private = true;
     return;
   }
@@ -342,9 +343,16 @@ function decideSharing(event: CalendarEvent, item: OutlookItem, previous: Ledger
   const domains = [...(facts?.domains ?? []), ...(event.organizerDomain ? [event.organizerDomain] : [])];
   const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
   // A lookup without an answer must not drop a share that rested on attendee domains.
-  if (facts === null && previous?.share?.shareEvidence?.includes('domain') &&
+  // A directory that no longer lists the account (membership gone) drops the share instead.
+  if (facts == null && previous?.share?.shareEvidence?.includes('domain') &&
+      !!previous.share.shareAccountId && sharing.matcher.lists(previous.share.shareAccountId) &&
       !(result.kind === 'matched' && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);
+  } else if (result.kind === 'matched' && facts == null) {
+    // Without a privacy answer a new automatic share is withheld: an event already
+    // shared to this account keeps its share, otherwise the match is only a candidate.
+    if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
+    else applyShare(event, { candidateAccountIds: [result.accountId] });
   } else if (result.kind === 'matched') {
     applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
   } else if (result.kind === 'candidate') {
@@ -632,7 +640,9 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const directory = await readDirectory(options.api);
   const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
   const facts = new Map<string, MeetingFacts | null>();
-  if (matcher && options.attendees) {
+  // Privacy lookups do not depend on the directory: a private answer must reach even
+  // the run that keeps previous share fields.
+  if (options.attendees) {
     for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
     options.attendees.save(now);
   }

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -38,6 +39,12 @@ func contactError(w http.ResponseWriter, err error) {
 		writeAccountMerging(w)
 	case errors.Is(err, service.ErrContactConflict):
 		writeError(w, 409, model.ErrCodeConflict, "Contact changed; reload and retry")
+	case errors.Is(err, repository.ErrSfdcAlreadyLinked):
+		writeError(w, 409, model.ErrCodeConflict, "SFDC contact is already linked in this account")
+	case errors.Is(err, repository.ErrSfdcSuppressed):
+		writeError(w, 409, model.ErrCodeConflict, "SFDC contact was deleted in this account")
+	case errors.Is(err, repository.ErrInvalidSfdcLink):
+		writeError(w, 400, model.ErrCodeBadRequest, "Invalid SFDC contact link")
 	case errors.Is(err, service.ErrContactsUnavailable):
 		writeError(w, 503, "CONTACTS_UNAVAILABLE", "Contacts are temporarily unavailable")
 	default:

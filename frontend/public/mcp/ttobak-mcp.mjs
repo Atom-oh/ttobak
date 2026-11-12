@@ -23655,7 +23655,7 @@ var init_calendar = __esm({
       mutations: {
         type: "array",
         maxItems: 20,
-        description: "At most 20 distinct occurrence IDs, or at most 12 when any upsert carries share fields (the server rejects transactions over 100 items with HTTP 400). Only explicit removals delete events.",
+        description: "At most 20 distinct occurrence IDs, or at most 12 when any upsert carries share fields (the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE). Only explicit removals delete events.",
         items: { oneOf: [
           { type: "object", properties: { op: { const: "upsert" }, event: {
             type: "object",
@@ -23691,7 +23691,7 @@ var init_calendar = __esm({
     CALENDAR_TOOLS = [
       {
         name: "ttobak_sync_calendar_events",
-        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; the server rejects transactions over 100 items with HTTP 400. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
+        description: "Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. An empty complete batch reports progress without inferring deletions. A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE. On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. Returns the actual server receipt; never fetches Outlook or creates meetings.",
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
         inputSchema: { type: "object", properties: syncFields, required: Object.keys(syncFields), additionalProperties: false }
       },
@@ -25257,7 +25257,11 @@ function buildMatcher(accounts, ownDomains2) {
     ),
     domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d))
   }));
+  const listed = new Set(accounts.map((a) => a.accountId));
   return {
+    lists(accountId) {
+      return listed.has(accountId);
+    },
     match(input) {
       const title = normalize(input.title);
       const location = normalize(input.location ?? "");
@@ -25499,7 +25503,7 @@ function applyShare(event, fields2) {
 function decideSharing(event, item, previous, sharing) {
   if (item.seriesId) event.seriesKey = createHash4("sha256").update(`${sharing.sourceId}|${item.seriesId}`).digest("hex");
   const facts = sharing.facts.get(item.meetingId);
-  if (item.privateCategory || facts?.isPrivate || facts === null && previous?.share?.private) {
+  if (item.privateCategory || facts?.isPrivate || facts == null && previous?.share?.private) {
     event.private = true;
     return;
   }
@@ -25509,8 +25513,11 @@ function decideSharing(event, item, previous, sharing) {
   }
   const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
   const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
-  if (facts === null && previous?.share?.shareEvidence?.includes("domain") && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
+  if (facts == null && previous?.share?.shareEvidence?.includes("domain") && !!previous.share.shareAccountId && sharing.matcher.lists(previous.share.shareAccountId) && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);
+  } else if (result.kind === "matched" && facts == null) {
+    if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
+    else applyShare(event, { candidateAccountIds: [result.accountId] });
   } else if (result.kind === "matched") {
     applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
   } else if (result.kind === "candidate") {
@@ -25737,7 +25744,7 @@ async function runCalendar(options) {
   const directory = await readDirectory(options.api);
   const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
   const facts = /* @__PURE__ */ new Map();
-  if (matcher && options.attendees) {
+  if (options.attendees) {
     for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
     options.attendees.save(now);
   }
@@ -25857,7 +25864,7 @@ function parseAttendees(payload) {
 }
 function meetingFacts(payload) {
   const parsed = parseAttendees(payload);
-  if (!parsed) return null;
+  if (!parsed) return payload && typeof payload === "object" && payload.isPrivate === true ? { domains: [], isPrivate: true } : null;
   const r = payload;
   if (!Array.isArray(r.requiredAttendees) && !Array.isArray(r.optionalAttendees) && typeof r.organizer !== "string") return null;
   const domains = /* @__PURE__ */ new Set();
@@ -25865,7 +25872,8 @@ function meetingFacts(payload) {
     const domain2 = organizerDomain(address);
     if (domain2) domains.add(domain2);
   }
-  return { domains: [...domains].sort().slice(0, MAX_DOMAINS), isPrivate: parsed.isPrivate };
+  if (domains.size > MAX_DOMAINS) return parsed.isPrivate ? { domains: [], isPrivate: true } : null;
+  return { domains: [...domains].sort(), isPrivate: parsed.isPrivate };
 }
 var MAX_LIST, MAX_ATTENDEES, MAX_DOMAINS, MAX_FACT_READS, MAX_FACT_FAILURES, AttendeeFacts;
 var init_attendees = __esm({
@@ -30454,7 +30462,7 @@ async function select(args, environment, store) {
       server: options["--server"],
       autoAck: autoAckValue === "on",
       acceptUnknownSensitivity: options["--accept-unknown-sensitivity"] === true,
-      ...connector === "calendar" ? { ownDomains: ownDomains(options["--own-domain"]) } : {}
+      ...connector === "calendar" && options["--own-domain"] !== void 0 ? { ownDomains: ownDomains(options["--own-domain"]) } : {}
     },
     environment,
     store

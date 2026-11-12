@@ -18,7 +18,7 @@ import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { Construct } from 'constructs';
-import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
+import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME, WHISPER_ONDEMAND_CAPACITY_PROVIDER } from './whisper-stack';
 import { DocumentExtraction } from './document-extraction';
 import { WebSocketOriginVerification, WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_STAGE } from './websocket-origin';
 import { PipelineFailures } from './pipeline-failures';
@@ -161,6 +161,21 @@ export function autoTermsEnvironment(scope: Construct): Record<string, string> {
 }
 
 /**
+ * Live caption vocabulary for the API Lambda (ADR-008 rollout check 5). With
+ * `ttobak:liveVocabularyMode` on, the dictionary GET names the caller's own
+ * READY ko-KR vocabulary so live streams send it as VocabularyNames; off is
+ * the kill switch. Default off; invalid values fail synth.
+ */
+export function liveVocabularyEnvironment(scope: Construct): Record<string, string> {
+  const raw = scope.node.tryGetContext('ttobak:liveVocabularyMode');
+  const mode = raw === undefined || raw === null ? 'off' : String(raw).trim() || 'off';
+  if (mode !== 'off' && mode !== 'on') {
+    throw new Error(`ttobak:liveVocabularyMode must be off or on, got ${JSON.stringify(mode)}`);
+  }
+  return { LIVE_VOCABULARY_MODE: mode };
+}
+
+/**
  * Silent glossary-based transcript correction for the summarize Lambda
  * (layered dictionary, L3). CDK context `ttobak:transcriptCorrection`
  * (off|on, default off); invalid values fail synth.
@@ -178,7 +193,8 @@ export function transcriptCorrectionEnvironment(scope: Construct): Record<string
  * KB-document, research-report and daily news term extraction for the
  * summarize Lambda (layered dictionary 4.2). CDK context `ttobak:kbTermsMode` and
  * `ttobak:researchTermsMode` (off|personal|on; personal never writes an Account,
- * ADR-008 FU4), `ttobak:newsTermsMode` (off|on), all default off, plus
+ * ADR-008 FU4), `ttobak:newsTermsMode` and `ttobak:techTermsMode` (off|on;
+ * daily news and AWS technical documents into Common), all default off, plus
  * `ttobak:newsTermsSources` (global|all, default global); invalid values fail
  * synth.
  */
@@ -204,6 +220,7 @@ export function sourceTermsEnvironment(scope: Construct): Record<string, string>
     RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode', layered),
     NEWS_TERMS_MODE: read('ttobak:newsTermsMode'),
     NEWS_TERMS_SOURCES: newsSources,
+    TECH_TERMS_MODE: read('ttobak:techTermsMode'),
   };
 }
 
@@ -375,6 +392,7 @@ export class GatewayStack extends cdk.Stack {
       role: props.apiRole as iam.Role,
       environment: {
         ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
+        ...liveVocabularyEnvironment(this),
         PROJECT_INVITATIONS_ENABLED: projectInvitationsEnabled.valueAsString,
         SUMMARY_PRIVACY_WRITER_ENABLED: summaryPrivacyWriter.valueAsString,
         SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED: summaryOwnerAccountShare.valueAsString,
@@ -498,9 +516,13 @@ export class GatewayStack extends cdk.Stack {
         WHISPER_CLUSTER: WHISPER_CLUSTER_NAME,
         WHISPER_TASK_DEF: WHISPER_TASK_FAMILY,
         WHISPER_CONTAINER: WHISPER_CONTAINER_NAME,
-        // Scheduled STT recovery (ADR-013): off | report | active. Report
-        // logs decisions without writing; activate in a separate change.
-        STT_RECOVERY_MODE: 'report',
+        // First active worker runs On-Demand once the cluster lists this
+        // provider; until then every run stays on Spot (ADR-009).
+        WHISPER_ONDEMAND_CAPACITY_PROVIDER: WHISPER_ONDEMAND_CAPACITY_PROVIDER,
+        // Scheduled STT recovery (ADR-013): off | report | active. STT
+        // re-drives are active; deletion stays report until its would-delete
+        // lines are reviewed.
+        STT_RECOVERY_MODE: 'active',
         STT_RECOVERY_DELETE_MODE: 'report',
       },
       timeout: cdk.Duration.minutes(5),
@@ -542,6 +564,16 @@ export class GatewayStack extends cdk.Stack {
         conditions: {
           ArnEquals: { 'ecs:cluster': `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}` },
         },
+      })
+    );
+    // Placement reads only the Whisper cluster's capacity provider
+    // association, to use the On-Demand provider once it exists.
+    (props.transcribeRole as iam.Role).addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EcsDescribeWhisperCluster',
+        effect: iam.Effect.ALLOW,
+        actions: ['ecs:DescribeClusters'],
+        resources: [`arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}`],
       })
     );
 
@@ -1306,6 +1338,27 @@ export class GatewayStack extends cdk.Stack {
     }));
     pipelineFailures.watchQueue('AccountMerge', accountMergeDlq);
 
+    // Per-member customer briefs run in summarize invocations (consumer
+    // first; the API producer ships separately). The event carries only
+    // account, user and run identifiers.
+    const customerBriefDlq = new sqs.Queue(this, 'CustomerBriefDlq', {
+      queueName: 'ttobak-customer-brief-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const customerBriefRule = new events.Rule(this, 'CustomerBriefRequestedRule', {
+      ruleName: 'ttobak-customer-brief-requested',
+      description: 'Write the requested per-member customer brief run',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['CustomerBriefRequested'] },
+    });
+    customerBriefRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: customerBriefDlq,
+    }));
+    pipelineFailures.watchQueue('CustomerBrief', customerBriefDlq);
+
     // KB documents and research reports as term sources (layered dictionary
     // 4.2). The KB bucket already sends S3 events to EventBridge; summarize
     // maps kb/{uid}/... and shared/research/{id}.md to TermsSourceRequested
@@ -1364,11 +1417,32 @@ export class GatewayStack extends cdk.Stack {
       deadLetterQueue: termsNewsDlq,
     }));
     pipelineFailures.watchQueue('TermsNews', termsNewsDlq);
+    // Daily AWS technical document terms into the Common layer: at 21:30
+    // UTC summarize processes the same day's tech documents (GSI4 DOC#tech)
+    // in its own invocation. The rule is always enabled; with
+    // ttobak:techTermsMode off each run logs DISABLED.
+    const termsTechDlq = new sqs.Queue(this, 'TermsTechDlq', {
+      queueName: 'ttobak-terms-tech-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    new events.Rule(this, 'TermsTechDailyRule', {
+      ruleName: 'ttobak-terms-tech-daily',
+      description: 'Extract dictionary terms from the day of crawled AWS technical documents into the common layer',
+      schedule: events.Schedule.expression('cron(30 21 * * ? *)'),
+    }).addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      event: events.RuleTargetInput.fromObject({ kind: 'tech-daily' }),
+      maxEventAge: cdk.Duration.hours(1),
+      retryAttempts: 2,
+      deadLetterQueue: termsTechDlq,
+    }));
+    pipelineFailures.watchQueue('TermsTech', termsTechDlq);
 
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
-    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, peopleResolveRule, accountMergeRule, this.qaFunction);
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, peopleResolveRule, accountMergeRule, customerBriefRule, this.qaFunction);
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like

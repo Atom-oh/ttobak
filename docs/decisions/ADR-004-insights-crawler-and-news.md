@@ -61,6 +61,14 @@ Shared crawler knowledge is visible across users by design; it is not an
 account-private store. Relevance filters reduce noise but do not guarantee source
 accuracy. Original dollar estimates are historical, not a current budget.
 
+2026-11-11: documents of account-owned sources are listed and readable in
+Insights only by current direct members of that account; common-source
+documents stay visible to all signed-in users. A document whose source has no
+CONFIG row is hidden only when its source ID has the account-owned `acct_`
+shape; any other row-less source, such as `__tech__`, is common. Q&A retrieval
+over `shared/news/` is unchanged and remains a known limit: it can still
+surface another account's public article.
+
 ### Evidence
 
 - [crawler-stack.ts](../../infra/lib/crawler-stack.ts): scheduling, fan-out,

@@ -69,7 +69,13 @@ func (h *InsightsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.insightsService.ListInsights(ctx, docType, source, svc, tags, sortBy, page, limit)
+	// Unknown kind values are ignored like other unknown filter values.
+	scope := service.InsightsScope{AccountID: r.URL.Query().Get("account")}
+	if kind := r.URL.Query().Get("kind"); kind == "common" || kind == "account" {
+		scope.Kind = kind
+	}
+
+	result, err := h.insightsService.ListInsightsInScope(ctx, middleware.GetUserID(ctx), scope, docType, source, svc, tags, sortBy, page, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
@@ -94,7 +100,9 @@ func (h *InsightsHandler) GetDocumentContent(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	result, err := h.insightsService.GetDocumentDetail(ctx, sourceID, docHash)
+	// Missing, hidden and unreadable documents share one 404 so a caller
+	// cannot probe for another account's documents.
+	result, err := h.insightsService.GetDocumentDetail(ctx, middleware.GetUserID(ctx), sourceID, docHash)
 	if err != nil {
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "document content not found")
 		return

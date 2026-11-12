@@ -27,6 +27,7 @@ type accountMergeMoverRepo interface {
 	GetMergeContactMap(ctx context.Context, sourceAccountID, targetAccountID string, ids []string) (map[string]string, error)
 	MoveContactForMerge(ctx context.Context, job *model.AccountMergeJob, from model.AccountContact) error
 	MergeContactIntoExisting(ctx context.Context, job *model.AccountMergeJob, from model.AccountContact, into model.AccountContact) error
+	MoveSfdcSuppressionsForMerge(ctx context.Context, job *model.AccountMergeJob, limit int) (int, bool, error)
 
 	ListAccountEventsForMerge(ctx context.Context, accountID string, limit int, afterSK string) ([]repository.MergeEventRow, []string, string, error)
 	ExistingAccountContactIDs(ctx context.Context, accountID string, ids []string) (map[string]bool, error)

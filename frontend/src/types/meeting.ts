@@ -453,6 +453,14 @@ export interface CrawledDocument {
   crawledAt: number | string;
   inKB?: boolean;
   pubDate?: string;
+  // Optional news origin (absent on legacy and custom-URL documents).
+  // `sourceName` is the registered source; the publisher stays in `source`.
+  sourceName?: string;
+  sourceKind?: 'common' | 'account';
+  accountId?: string;
+  accountName?: string;
+  matchedTerm?: string;
+  qualityScore?: number;
 }
 
 export interface CrawlHistory {
@@ -896,6 +904,23 @@ export interface AccountGraphEdge { from: string; to: string; kind: string; orig
 export interface AccountGraph { nodes: AccountGraphNode[]; edges: AccountGraphEdge[]; truncated: boolean; memberCount?: number }
 
 export type PeopleRole = 'participant' | 'speaker' | 'assignee' | 'mentions';
+
+/** Focus graph (GET /api/accounts/{id}/people/focus). Meeting ids are `{ownerUserId}:{meetingId}`. */
+export type FocusKind = 'contact' | 'member' | 'project';
+export interface FocusRef { kind: FocusKind; id: string }
+export interface FocusCard { kind: FocusKind; id: string; label: string; detail?: string; meetings: number }
+export interface FocusPerson { kind: 'member' | 'contact'; id: string; label: string; detail?: string; roles: PeopleRole[] }
+export interface FocusMeeting { id: string; title: string; date: string; roles: PeopleRole[]; techs: string[]; people: FocusPerson[] }
+export interface FocusTech { id: string; label: string; group: string; meetings: number }
+export interface FocusTag { tag: string; meetings: number }
+export interface AccountFocusGraph {
+  focus: FocusCard;
+  meetings: FocusMeeting[];
+  techs: FocusTech[];
+  other: FocusTag[];
+  nextCursor?: string;
+  truncated: boolean;
+}
 
 /** One resolved member or contact of the account people panel. */
 export interface AccountPerson { kind: 'member' | 'contact'; id: string; label: string; meetings: number; roles: Record<string, number> }

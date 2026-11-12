@@ -15,21 +15,21 @@ interface AppLayoutProps {
 
 export function AppLayout({ activePath, children, showMobileNav = true, breadcrumbs, isRecording }: AppLayoutProps) {
   return (
-    <div className="flex h-screen overflow-hidden bg-background-light dark:bg-background-dark">
+    <div className="flex h-dvh overflow-hidden bg-background-light dark:bg-background-dark">
       {/* Desktop Sidebar */}
       <div className="hidden lg:block">
         <Sidebar activePath={activePath} />
       </div>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-h-0 overflow-x-hidden overflow-y-auto">
+      <main className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden ${showMobileNav ? 'workspace-main-with-nav' : ''}`}>
         {/* Desktop Header - hidden on mobile */}
-        <div className="hidden lg:block">
+        <div className="hidden lg:block shrink-0">
           <DesktopHeader activePath={activePath} breadcrumbs={breadcrumbs} isRecording={isRecording} />
         </div>
 
         {/* Page Content */}
-        <div className="flex-1 flex flex-col min-h-0 animate-in">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden overflow-y-auto animate-in">
           {children}
         </div>
       </main>

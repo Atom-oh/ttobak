@@ -23,6 +23,18 @@ export const WHISPER_CAPACITY_PROVIDER = 'ttobak-whisper-spot';
 export const WHISPERX_TASK_FAMILY = 'ttobak-whisperx';
 export const WHISPERX_CONTAINER_NAME = 'whisperx';
 export const WHISPER_ASG_NAME = 'ttobak-whisper-asg';
+export const WHISPER_ONDEMAND_CAPACITY_PROVIDER = 'ttobak-whisper-ondemand';
+export const WHISPER_ONDEMAND_ASG_NAME = 'ttobak-whisper-od-asg';
+
+interface GpuPool {
+  asgId: string;
+  asgName: string;
+  capacityProviderId: string;
+  capacityProviderName: string;
+  azRebalanceId: string;
+  maxCapacity: number;
+  distribution: autoscaling.CfnAutoScalingGroup.InstancesDistributionProperty;
+}
 
 export class WhisperStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
@@ -59,145 +71,176 @@ export class WhisperStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    // Auto Scaling Group: min=0 for zero-scale
-    const asg = new autoscaling.AutoScalingGroup(this, 'WhisperAsg', {
-      autoScalingGroupName: WHISPER_ASG_NAME,
-      vpc,
-      // The externally owned VPC has private egress subnets only in 2a/2b.
-      // Use both; instance-type diversification below makes 2b usable for
-      // GPU work without adding public subnets or changing the shared VPC.
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-      },
-      instanceType: new ec2.InstanceType('g4dn.xlarge'),
-      machineImage: ecs.EcsOptimizedImage.amazonLinux2(
-        ecs.AmiHardwareType.GPU,
-      ),
-      // The ECS GPU AL2 AMI's default root volume is 30 GiB, which is not
-      // enough headroom: the Whisper container image alone unpacks to ~15GB
-      // (CUDA 12.9 + torch cu124), and each task transiently needs a few more
-      // GB for the extracted faster-whisper model plus the source audio
-      // (transcribe.py stream-extracts the model tarball directly rather
-      // than downloading it to disk first, but extraction still needs room
-      // for the unpacked model). A prior task's stopped-but-not-yet-cleaned
-      // writable layer sharing the same instance was enough to push a second
-      // task over 30 GiB and fail with "[Errno 28] No space left on device"
-      // (disk-full incident, see CLAUDE.md Known Issues). 200 GiB gives
-      // enough margin for several concurrent tasks. This only takes effect
-      // on instances launched after deploy -- minCapacity is 0 (zero-scale),
-      // so there's no cost while idle and no need to refresh anything.
-      blockDevices: [{
-        deviceName: '/dev/xvda',
-        volume: autoscaling.BlockDeviceVolume.ebs(200, {
-          volumeType: autoscaling.EbsDeviceVolumeType.GP3,
-          deleteOnTermination: true,
-          encrypted: true,
-        }),
-      }],
-      securityGroup: instanceSg,
-      minCapacity: 0,
-      maxCapacity: 10,
-      desiredCapacity: 0,
-      newInstancesProtectedFromScaleIn: false,
-    });
+    // Two GPU pools share one host configuration (ADR-009): an On-Demand pool
+    // for the first active worker and a Spot pool for overlapping runs. The
+    // transcribe Lambda chooses the pool per run; a single mixed group cannot,
+    // because ECS places a task on whichever host registers first.
+    const addGpuPool = (pool: GpuPool): void => {
+      // Auto Scaling Group: min=0 for zero-scale
+      const asg = new autoscaling.AutoScalingGroup(this, pool.asgId, {
+        autoScalingGroupName: pool.asgName,
+        vpc,
+        // The externally owned VPC has private egress subnets only in 2a/2b.
+        // Use both; instance-type diversification below makes 2b usable for
+        // GPU work without adding public subnets or changing the shared VPC.
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        },
+        instanceType: new ec2.InstanceType('g4dn.xlarge'),
+        machineImage: ecs.EcsOptimizedImage.amazonLinux2(
+          ecs.AmiHardwareType.GPU,
+        ),
+        // The ECS GPU AL2 AMI's default root volume is 30 GiB, which is not
+        // enough headroom: the Whisper container image alone unpacks to ~15GB
+        // (CUDA 12.9 + torch cu124), and each task transiently needs a few more
+        // GB for the extracted faster-whisper model plus the source audio
+        // (transcribe.py stream-extracts the model tarball directly rather
+        // than downloading it to disk first, but extraction still needs room
+        // for the unpacked model). A prior task's stopped-but-not-yet-cleaned
+        // writable layer sharing the same instance was enough to push a second
+        // task over 30 GiB and fail with "[Errno 28] No space left on device"
+        // (disk-full incident, see CLAUDE.md Known Issues). 200 GiB gives
+        // enough margin for several concurrent tasks. This only takes effect
+        // on instances launched after deploy -- minCapacity is 0 (zero-scale),
+        // so there's no cost while idle and no need to refresh anything.
+        blockDevices: [{
+          deviceName: '/dev/xvda',
+          volume: autoscaling.BlockDeviceVolume.ebs(200, {
+            volumeType: autoscaling.EbsDeviceVolumeType.GP3,
+            deleteOnTermination: true,
+            encrypted: true,
+          }),
+        }],
+        securityGroup: instanceSg,
+        minCapacity: 0,
+        maxCapacity: pool.maxCapacity,
+        desiredCapacity: 0,
+        newInstancesProtectedFromScaleIn: false,
+      });
 
-    // Retain the generated launch template, instance role and ECS user data.
-    // A single g5 pool cannot start when 2a is exhausted: 2b has no g5 offering.
-    // Both one-GPU alternatives are offered in both private AZs; an unsupported
-    // type/AZ combination can reject the entire EC2 Fleet request.
-    // Market options belong on the mixed policy, not on its launch template.
-    const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
-    cfnAsg.mixedInstancesPolicy = {
-      launchTemplate: {
-        launchTemplateSpecification: cfnAsg.launchTemplate!,
-        overrides: [
-          { instanceType: 'g4dn.xlarge' },
-          { instanceType: 'g4dn.2xlarge' },
-        ],
-      },
-      instancesDistribution: {
-        // Keep the first active worker off Spot so a regional Spot shortage
-        // cannot strand every meeting. min/desired=0 still allows zero-scale.
-        onDemandBaseCapacity: 1,
+      // Retain the generated launch template, instance role and ECS user data.
+      // A single g5 pool cannot start when 2a is exhausted: 2b has no g5 offering.
+      // Both one-GPU alternatives are offered in both private AZs; an unsupported
+      // type/AZ combination can reject the entire EC2 Fleet request.
+      // Market options belong on the mixed policy, not on its launch template.
+      const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
+      cfnAsg.mixedInstancesPolicy = {
+        launchTemplate: {
+          launchTemplateSpecification: cfnAsg.launchTemplate!,
+          overrides: [
+            { instanceType: 'g4dn.xlarge' },
+            { instanceType: 'g4dn.2xlarge' },
+          ],
+        },
+        instancesDistribution: pool.distribution,
+      };
+      cfnAsg.launchTemplate = undefined;
+
+      // ECS Capacity Provider with managed scaling
+      const capacityProvider = new ecs.AsgCapacityProvider(this, pool.capacityProviderId, {
+        capacityProviderName: pool.capacityProviderName,
+        autoScalingGroup: asg,
+        enableManagedScaling: true,
+        enableManagedTerminationProtection: false,
+        minimumScalingStepSize: 1,
+        maximumScalingStepSize: 2,
+        targetCapacityPercent: 100,
+        // ECS managed draining (ADR-009 host lifecycle amendment). Left unset, aws-cdk-lib adds its own
+        // InstanceDrainHook Lambda, which cannot drain a host that has not yet
+        // registered with ECS: when AZRebalance picked a just-launched host,
+        // the hook logged "container instance ARN None", returned, and the
+        // host then received a RunTask task and was terminated ~300 s later
+        // with no STOPPED reason. Managed draining is ECS-native, tracks
+        // registration itself and makes CDK omit the hook entirely.
+        enableManagedDraining: true,
+      });
+
+      this.cluster.addAsgCapacityProvider(capacityProvider);
+
+      // Reclaim a stopped task's writable layer quickly instead of ECS's
+      // 3-hour default -- with the 30 GiB root volume this used to be, a
+      // just-finished task's layer sitting around that long was enough on its
+      // own to starve the next task's disk needs on an instance ECS reused for
+      // a second task within the same ~16-27 minute Spot lifetime (the
+      // disk-full incident above; instances always terminate within that
+      // window, so this only matters for back-to-back tasks landing on one
+      // still-warm instance, not long-lived idle capacity). 3m (just above the
+      // minimum of 1m) leaves a small margin for awslogs to flush the task's
+      // final log lines before its layer is removed. Deliberately NOT
+      // touching image cleanup here: the 15GB Whisper image is large enough
+      // that evicting it on an idle instance would make the next task on that
+      // (still-warm) instance re-pull it from ECR, and the 200 GiB volume
+      // above no longer needs the space. This line doesn't depend on running
+      // after addAsgCapacityProvider (above) -- they append distinct keys to
+      // the same ecs.config file -- but is kept below it for readability,
+      // grouped with the capacity provider it tunes.
+      asg.addUserData(
+        'echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m >> /etc/ecs/ecs.config',
+        // Stop placing new tasks on a Spot host that has received its
+        // two-minute interruption notice (ADR-009). Running tasks still die with
+        // the host; this setting does not re-run them.
+        'echo ECS_ENABLE_SPOT_INSTANCE_DRAINING=true >> /etc/ecs/ecs.config',
+      );
+
+      // Suspend AZRebalance (ADR-009): rebalancing terminates healthy hosts,
+      // including one that just accepted a Whisper task, to even out AZs --
+      // the root cause of silently killed transcriptions. CloudFormation has no
+      // suspended-processes property, so this follows the existing
+      // custom-resource precedent. Deleting the resource resumes the process.
+      // The constant physical ID means a redeploy does not re-suspend after a
+      // manual resume; docs/runbooks/stt-pipeline-troubleshooting.md checks
+      // SuspendedProcesses and re-suspends.
+      const azRebalanceCall = (action: 'suspendProcesses' | 'resumeProcesses'): cr.AwsSdkCall => ({
+        service: 'AutoScaling',
+        action,
+        parameters: { AutoScalingGroupName: asg.autoScalingGroupName, ScalingProcesses: ['AZRebalance'] },
+        physicalResourceId: cr.PhysicalResourceId.of(`${pool.asgName}-azrebalance-suspended`),
+      });
+      const azRebalance = new cr.AwsCustomResource(this, pool.azRebalanceId, {
+        onCreate: azRebalanceCall('suspendProcesses'),
+        onUpdate: azRebalanceCall('suspendProcesses'),
+        onDelete: azRebalanceCall('resumeProcesses'),
+        policy: cr.AwsCustomResourcePolicy.fromStatements([new iam.PolicyStatement({
+          actions: ['autoscaling:SuspendProcesses', 'autoscaling:ResumeProcesses'],
+          resources: [`arn:aws:autoscaling:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:autoScalingGroup:*:autoScalingGroupName/${pool.asgName}`],
+        })]),
+        installLatestAwsSdk: false,
+      });
+      azRebalance.node.addDependency(asg);
+    };
+
+    addGpuPool({
+      asgId: 'WhisperAsg',
+      asgName: WHISPER_ASG_NAME,
+      capacityProviderId: 'WhisperCapacityProvider',
+      capacityProviderName: WHISPER_CAPACITY_PROVIDER,
+      azRebalanceId: 'WhisperAzRebalanceSuspended',
+      maxCapacity: 10,
+      // Spot only: the On-Demand pool below now holds the first worker. An
+      // On-Demand base here launched an idle On-Demand host beside the Spot
+      // host that actually received the task.
+      distribution: {
+        onDemandBaseCapacity: 0,
         onDemandAllocationStrategy: 'prioritized',
         onDemandPercentageAboveBaseCapacity: 0,
         spotAllocationStrategy: 'price-capacity-optimized',
         spotMaxPrice: '1.10',
       },
-    };
-    cfnAsg.launchTemplate = undefined;
-
-    // ECS Capacity Provider with managed scaling
-    const capacityProvider = new ecs.AsgCapacityProvider(this, 'WhisperCapacityProvider', {
-      capacityProviderName: WHISPER_CAPACITY_PROVIDER,
-      autoScalingGroup: asg,
-      enableManagedScaling: true,
-      enableManagedTerminationProtection: false,
-      minimumScalingStepSize: 1,
-      maximumScalingStepSize: 2,
-      targetCapacityPercent: 100,
-      // ECS managed draining (ADR-009 host lifecycle amendment). Left unset, aws-cdk-lib adds its own
-      // InstanceDrainHook Lambda, which cannot drain a host that has not yet
-      // registered with ECS: when AZRebalance picked a just-launched host,
-      // the hook logged "container instance ARN None", returned, and the
-      // host then received a RunTask task and was terminated ~300 s later
-      // with no STOPPED reason. Managed draining is ECS-native, tracks
-      // registration itself and makes CDK omit the hook entirely.
-      enableManagedDraining: true,
     });
-
-    this.cluster.addAsgCapacityProvider(capacityProvider);
-
-    // Reclaim a stopped task's writable layer quickly instead of ECS's
-    // 3-hour default -- with the 30 GiB root volume this used to be, a
-    // just-finished task's layer sitting around that long was enough on its
-    // own to starve the next task's disk needs on an instance ECS reused for
-    // a second task within the same ~16-27 minute Spot lifetime (the
-    // disk-full incident above; instances always terminate within that
-    // window, so this only matters for back-to-back tasks landing on one
-    // still-warm instance, not long-lived idle capacity). 3m (just above the
-    // minimum of 1m) leaves a small margin for awslogs to flush the task's
-    // final log lines before its layer is removed. Deliberately NOT
-    // touching image cleanup here: the 15GB Whisper image is large enough
-    // that evicting it on an idle instance would make the next task on that
-    // (still-warm) instance re-pull it from ECR, and the 200 GiB volume
-    // above no longer needs the space. This line doesn't depend on running
-    // after addAsgCapacityProvider (above) -- they append distinct keys to
-    // the same ecs.config file -- but is kept below it for readability,
-    // grouped with the capacity provider it tunes.
-    asg.addUserData(
-      'echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m >> /etc/ecs/ecs.config',
-      // Stop placing new tasks on a Spot host that has received its
-      // two-minute interruption notice (ADR-009). Running tasks still die with
-      // the host; this setting does not re-run them.
-      'echo ECS_ENABLE_SPOT_INSTANCE_DRAINING=true >> /etc/ecs/ecs.config',
-    );
-
-    // Suspend AZRebalance (ADR-009): rebalancing terminates healthy hosts,
-    // including one that just accepted a Whisper task, to even out AZs --
-    // the root cause of silently killed transcriptions. CloudFormation has no
-    // suspended-processes property, so this follows the existing
-    // custom-resource precedent. Deleting the resource resumes the process.
-    // The constant physical ID means a redeploy does not re-suspend after a
-    // manual resume; docs/runbooks/stt-pipeline-troubleshooting.md checks
-    // SuspendedProcesses and re-suspends.
-    const azRebalanceCall = (action: 'suspendProcesses' | 'resumeProcesses'): cr.AwsSdkCall => ({
-      service: 'AutoScaling',
-      action,
-      parameters: { AutoScalingGroupName: asg.autoScalingGroupName, ScalingProcesses: ['AZRebalance'] },
-      physicalResourceId: cr.PhysicalResourceId.of('ttobak-whisper-asg-azrebalance-suspended'),
+    addGpuPool({
+      asgId: 'WhisperOnDemandAsg',
+      asgName: WHISPER_ONDEMAND_ASG_NAME,
+      capacityProviderId: 'WhisperOnDemandCapacityProvider',
+      capacityProviderName: WHISPER_ONDEMAND_CAPACITY_PROVIDER,
+      azRebalanceId: 'WhisperOnDemandAzRebalanceSuspended',
+      // One worker plus headroom for two runs that both observed an idle cluster.
+      maxCapacity: 2,
+      distribution: {
+        onDemandBaseCapacity: 0,
+        onDemandAllocationStrategy: 'prioritized',
+        onDemandPercentageAboveBaseCapacity: 100,
+      },
     });
-    const azRebalance = new cr.AwsCustomResource(this, 'WhisperAzRebalanceSuspended', {
-      onCreate: azRebalanceCall('suspendProcesses'),
-      onUpdate: azRebalanceCall('suspendProcesses'),
-      onDelete: azRebalanceCall('resumeProcesses'),
-      policy: cr.AwsCustomResourcePolicy.fromStatements([new iam.PolicyStatement({
-        actions: ['autoscaling:SuspendProcesses', 'autoscaling:ResumeProcesses'],
-        resources: [`arn:aws:autoscaling:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:autoScalingGroup:*:autoScalingGroupName/${WHISPER_ASG_NAME}`],
-      })]),
-      installLatestAwsSdk: false,
-    });
-    azRebalance.node.addDependency(asg);
 
     // Task execution role
     const executionRole = new iam.Role(this, 'WhisperExecutionRole', {
