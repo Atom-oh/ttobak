@@ -57,7 +57,7 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const SCHEDULE_OFF_TIMEOUT: Duration = Duration::from_secs(60);
 const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
 /// SIGTERM to SIGKILL.
-const KILL_GRACE: Duration = Duration::from_secs(3);
+pub(crate) const KILL_GRACE: Duration = Duration::from_secs(3);
 /// Wait for the pipes to close after the CLI exits (orphans may hold them).
 const READER_GRACE: Duration = Duration::from_secs(2);
 
@@ -510,7 +510,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// A regular, non-symlink file of at most `cap` bytes; `None` otherwise.
-fn read_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
+pub(crate) fn read_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()
         .read(true)

@@ -241,7 +241,12 @@ fn validate_highlights(h: &Highlights) -> Result<(), &'static str> {
 }
 
 /// `report run` argv after the node binary.
-fn report_argv(args: &PeriodArgs, server: &Path, highlights: Option<&Path>) -> Vec<OsString> {
+fn report_argv(
+    args: &PeriodArgs,
+    server: &Path,
+    highlights: Option<&Path>,
+    excluded: &[String],
+) -> Vec<OsString> {
     let mut v: Vec<OsString> = vec![
         server.into(),
         "report".into(),
@@ -255,6 +260,9 @@ fn report_argv(args: &PeriodArgs, server: &Path, highlights: Option<&Path>) -> V
     if let Some(path) = highlights {
         v.extend(["--highlights-file".into(), path.into()]);
     }
+    for channel in excluded {
+        v.extend(["--exclude-slack-channel".into(), channel.into()]);
+    }
     v.push("--noninteractive".into());
     v
 }
@@ -267,6 +275,33 @@ pub struct ReportSettings {
     pub use_bedrock: bool,
     #[serde(default)]
     pub aws_profile: Option<String>,
+    /// Slack channels left out of every report run (names only, local).
+    #[serde(default)]
+    pub excluded_slack_channels: Vec<String>,
+}
+
+/// At most 100 channel names, as the CLI accepts them: lowercase letters
+/// (or uncased letters such as Hangul), digits, `.`, `_` and `-`, 1 to 80
+/// characters, not starting with a symbol. Duplicates are dropped in order.
+pub(crate) fn normalize_channels(names: Vec<String>) -> Result<Vec<String>, &'static str> {
+    if names.len() > 100 {
+        return Err("invalid-argument");
+    }
+    let letter = |c: char| (c.is_alphabetic() && !c.is_uppercase()) || c.is_ascii_digit();
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        let mut chars = name.chars();
+        let ok = name.chars().count() <= 80
+            && chars.next().is_some_and(letter)
+            && chars.all(|c| letter(c) || matches!(c, '.' | '_' | '-'));
+        if !ok {
+            return Err("invalid-argument");
+        }
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    Ok(out)
 }
 
 /// A malformed `report` value becomes the default instead of failing the
@@ -552,8 +587,15 @@ async fn run_report(
     if !intake_runner::local_adapter(&launch.home).is_some_and(|b| supports_report(&b)) {
         return Outcome::failed("ADAPTER_OUTDATED");
     }
-    let mut cmd =
-        intake_runner::node_command(&launch, report_argv(args, &launch.server, highlights));
+    let mut cmd = intake_runner::node_command(
+        &launch,
+        report_argv(
+            args,
+            &launch.server,
+            highlights,
+            &intake.snapshot().report.excluded_slack_channels,
+        ),
+    );
     let user = std::env::var("USER").ok();
     let logname = std::env::var("LOGNAME").ok();
     for (k, v) in user_env(user.as_deref(), logname.as_deref())
@@ -596,6 +638,9 @@ pub struct ReportSettingsView {
     aws_profile: Option<String>,
     /// Local AWS profile names only.
     profiles: Vec<String>,
+    excluded_slack_channels: Vec<String>,
+    /// The cached `report slack-channels` result (candidates), if any.
+    slack_channels: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -692,6 +737,8 @@ pub async fn report_settings_get(
         use_bedrock: s.use_bedrock,
         aws_profile: s.aws_profile,
         profiles: crate::aws_profiles::list(),
+        excluded_slack_channels: s.excluded_slack_channels,
+        slack_channels: cached_slack_channels(&intake),
     })
 }
 
@@ -700,7 +747,13 @@ pub async fn report_settings_set(
     intake: State<'_, IntakeState>,
     use_bedrock: bool,
     aws_profile: Option<String>,
+    excluded_slack_channels: Option<Vec<String>>,
 ) -> Result<ReportSettingsView, String> {
+    // An older SPA omits the list: keep the stored one.
+    let excluded = match excluded_slack_channels {
+        Some(list) => Some(normalize_channels(list).map_err(str::to_string)?),
+        None => None,
+    };
     intake.available()?;
     validate_bedrock(use_bedrock, aws_profile.as_deref()).map_err(str::to_string)?;
     let profiles = crate::aws_profiles::list();
@@ -709,13 +762,75 @@ pub async fn report_settings_set(
         s.report = ReportSettings {
             use_bedrock,
             aws_profile: aws_profile.clone(),
+            excluded_slack_channels: excluded
+                .clone()
+                .unwrap_or_else(|| s.report.excluded_slack_channels.clone()),
         }
     })?;
+    let s = intake.snapshot().report;
     Ok(ReportSettingsView {
         use_bedrock,
         aws_profile,
         profiles,
+        excluded_slack_channels: s.excluded_slack_channels,
+        slack_channels: cached_slack_channels(&intake),
     })
+}
+
+const SLACK_CHANNELS_FILE: &str = "slack-channels.json";
+const MAX_SLACK_CHANNELS_BYTES: u64 = 256 * 1024;
+const SLACK_CHANNELS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+fn slack_channels_path(intake: &IntakeState) -> Result<PathBuf, String> {
+    Ok(intake.available()?.with_file_name(SLACK_CHANNELS_FILE))
+}
+
+fn cached_slack_channels(intake: &IntakeState) -> Option<Value> {
+    let path = slack_channels_path(intake).ok()?;
+    let bytes = intake_runner::read_capped(&path, MAX_SLACK_CHANNELS_BYTES)?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Runs `report slack-channels` (the owner's channels of the last 90 days) and
+/// caches the result in the app config folder. Exclusive with report runs.
+#[tauri::command]
+pub async fn report_slack_channels_refresh(app: AppHandle) -> Result<Value, String> {
+    let intake = app.state::<IntakeState>();
+    let path = slack_channels_path(&intake)?;
+    let report = app.state::<ReportState>();
+    let cancel = report.try_begin()?;
+    let outcome = match intake_runner::node_launch(&intake).await {
+        Ok(launch) => {
+            let args = vec![
+                launch.server.clone().into(),
+                "report".into(),
+                "slack-channels".into(),
+            ];
+            let cmd = intake_runner::node_command(&launch, args);
+            intake_runner::run_child(
+                cmd,
+                report.track(),
+                SLACK_CHANNELS_TIMEOUT,
+                intake_runner::KILL_GRACE,
+                Some(cancel),
+                |_| {},
+            )
+            .await
+        }
+        Err(code) => Outcome::failed(code),
+    };
+    report.end();
+    let result = outcome
+        .result
+        .filter(|v| v.get("ok").and_then(Value::as_bool) == Some(true))
+        .ok_or_else(|| outcome.code.unwrap_or_else(|| "EXIT_FAILED".into()))?;
+    let bytes = serde_json::to_vec(&result).map_err(|_| "save-failed".to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    intake_runner::write_new_private(&tmp, &bytes)
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .map_err(|_| "save-failed".to_string())?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -734,6 +849,7 @@ mod tests {
         let stale = ReportSettings {
             use_bedrock: true,
             aws_profile: None,
+            excluded_slack_channels: Vec::new(),
         };
         assert!(settings_attention(&stale));
         assert!(!settings_attention(&ReportSettings::default()));
@@ -866,11 +982,52 @@ mod tests {
     }
 
     #[test]
+    fn report_args_include_exclusions() {
+        let week = validate_period(ReportPeriod::Week, None, None).expect("week");
+        let channels =
+            normalize_channels(vec!["양국".into(), "random".into(), "양국".into()]).expect("valid");
+        assert_eq!(channels, vec!["양국".to_string(), "random".to_string()]);
+        let argv = argv_strings(report_argv(&week, Path::new("/s.mjs"), None, &channels));
+        let tail: Vec<&str> = argv.iter().map(String::as_str).skip(5).collect();
+        assert_eq!(
+            tail,
+            [
+                "--exclude-slack-channel",
+                "양국",
+                "--exclude-slack-channel",
+                "random",
+                "--noninteractive"
+            ]
+        );
+    }
+
+    #[test]
+    fn exclusions_are_bounded() {
+        let many: Vec<String> = (0..101).map(|i| format!("c{i}")).collect();
+        assert_eq!(normalize_channels(many), Err("invalid-argument"));
+        for bad in ["#random", "Upper", "a b", "", &"x".repeat(81)] {
+            assert_eq!(
+                normalize_channels(vec![bad.to_string()]),
+                Err("invalid-argument"),
+                "{bad}"
+            );
+        }
+        assert!(normalize_channels((0..100).map(|i| format!("c{i}")).collect()).is_ok());
+    }
+
+    #[test]
+    fn old_settings_without_exclusions_load() {
+        let s: ReportSettings =
+            serde_json::from_str(r#"{"useBedrock":false,"awsProfile":null}"#).expect("old");
+        assert!(s.excluded_slack_channels.is_empty());
+    }
+
+    #[test]
     fn report_argv_maps_period_and_dates() {
         let server = Path::new("/h/.ttobak/server.mjs");
         let week = validate_period(ReportPeriod::Week, None, None).expect("week");
         assert_eq!(
-            argv_strings(report_argv(&week, server, None)),
+            argv_strings(report_argv(&week, server, None, &[])),
             [
                 "/h/.ttobak/server.mjs",
                 "report",
@@ -885,7 +1042,7 @@ mod tests {
             (ReportPeriod::Year, "year"),
         ] {
             let a = validate_period(p, None, None).expect("preset");
-            assert_eq!(argv_strings(report_argv(&a, server, None))[4], name);
+            assert_eq!(argv_strings(report_argv(&a, server, None, &[]))[4], name);
         }
         let custom = validate_period(ReportPeriod::Custom, s("2026-01-01"), s("2026-03-31"))
             .expect("custom");
@@ -893,7 +1050,8 @@ mod tests {
             argv_strings(report_argv(
                 &custom,
                 server,
-                Some(Path::new("/t/d/highlights.json"))
+                Some(Path::new("/t/d/highlights.json")),
+                &[],
             )),
             [
                 "/h/.ttobak/server.mjs",
@@ -1063,11 +1221,13 @@ mod tests {
         let off = ReportSettings {
             use_bedrock: false,
             aws_profile: s("cc-bedrock"),
+            excluded_slack_channels: Vec::new(),
         };
         assert_eq!(report_env(&off, &profiles), Ok(vec![]));
         let on = ReportSettings {
             use_bedrock: true,
             aws_profile: s("cc-bedrock"),
+            excluded_slack_channels: Vec::new(),
         };
         assert_eq!(
             report_env(&on, &profiles),
@@ -1079,6 +1239,7 @@ mod tests {
         let on_default_chain = ReportSettings {
             use_bedrock: true,
             aws_profile: None,
+            excluded_slack_channels: Vec::new(),
         };
         // Bedrock without a chosen profile timed out on 2026-11-11: refused.
         assert_eq!(
@@ -1089,6 +1250,7 @@ mod tests {
         let gone = ReportSettings {
             use_bedrock: true,
             aws_profile: s("removed"),
+            excluded_slack_channels: Vec::new(),
         };
         assert_eq!(report_env(&gone, &profiles), Err("profile-missing"));
 
@@ -1128,6 +1290,7 @@ mod tests {
             ReportSettings {
                 use_bedrock: true,
                 aws_profile: s("p"),
+                excluded_slack_channels: Vec::new(),
             }
         );
         let bad = IntakeSettings::from_bytes(

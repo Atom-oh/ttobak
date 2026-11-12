@@ -133,8 +133,37 @@ export interface ReportSettings {
   awsProfile: string | null;
 }
 
+/** Cached `report slack-channels` result: the owner's channels of the last 90 days. */
+export interface SlackChannelCandidates {
+  channels: { name: string; count: number }[];
+  partial?: boolean;
+  since?: string;
+}
+
+export interface SlackChannelRow {
+  name: string;
+  /** Posts in the window; null for an exclusion no longer among the candidates. */
+  count: number | null;
+  included: boolean;
+}
+
+/** Every candidate is included unless excluded; exclusions that dropped out
+ * of the candidates stay listed (unchecked) so they can be undone. */
+export function channelRows(candidates: SlackChannelCandidates | null | undefined, excluded: string[]): SlackChannelRow[] {
+  const listed = (candidates?.channels ?? []).map(channel => ({ name: channel.name, count: channel.count, included: !excluded.includes(channel.name) }));
+  const stale = excluded.filter(name => !listed.some(row => row.name === name)).map(name => ({ name, count: null, included: false }));
+  return [...listed, ...stale];
+}
+
+export function toggleExcluded(excluded: string[], name: string): string[] {
+  return excluded.includes(name) ? excluded.filter(item => item !== name) : [...excluded, name];
+}
+
 export interface ReportSettingsView extends ReportSettings {
   profiles: string[];
+  /** Absent in apps before Slack channel exclusions. */
+  excludedSlackChannels?: string[];
+  slackChannels?: SlackChannelCandidates | null;
 }
 
 export interface ReportStateView {
