@@ -1,6 +1,6 @@
 'use client';
 
-import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions } from './intake';
+import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 
 interface TauriEvent<T> {
@@ -755,6 +755,37 @@ export function onIntakeProgress(handler: (line: string) => void): () => void {
 
 export function onIntakeFinished(handler: (finished: IntakeFinished) => void): () => void {
   return subscribeTauriEvent<IntakeFinished, IntakeFinished>('intake://finished', (raw) => raw, handler);
+}
+
+// ---------------------------------------------------------------- one-click setup
+// Commands and events of mac-app/src-tauri/src/setup_runner.rs.
+
+/** Setup state, or `null` when the installed app predates one-click setup. */
+export async function getSetupState(): Promise<{ running: boolean; last: SetupFinished | null } | null> {
+  try {
+    return await invoke<{ running: boolean; last: SetupFinished | null }>('setup_get_state');
+  } catch (err) {
+    if (isCommandNotFound(err)) return null;
+    throw err;
+  }
+}
+
+/** Starts one setup run; `approve` lists the new servers the user confirmed. */
+export function startSetup(approve: string[], acceptPrivateCalendar: boolean): Promise<void> {
+  return invoke<void>('setup_start', { approve, acceptPrivateCalendar });
+}
+
+export function onSetupStep(handler: (step: SetupStep) => void): () => void {
+  return subscribeTauriEvent<SetupStep, SetupStep>('setup://step', (raw) => raw, handler);
+}
+
+/** The setup run took the intake run slot. */
+export function onSetupRunning(handler: () => void): () => void {
+  return subscribeTauriEvent<unknown, null>('setup://running', () => null, () => handler());
+}
+
+export function onSetupFinished(handler: (finished: SetupFinished) => void): () => void {
+  return subscribeTauriEvent<SetupFinished, SetupFinished>('setup://finished', (raw) => raw, handler);
 }
 
 // ---------------------------------------------------------------- SA report
