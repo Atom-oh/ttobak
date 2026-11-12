@@ -31726,13 +31726,33 @@ var init_tools = __esm({
     "use strict";
     REPORT_SERVERS = ["aws-sentral-mcp", "aws-outlook-mcp", "slack-mcp", "spec-req-mcp", "aws-tfc-hub-mcp"];
     READ_TOOLS = {
-      "aws-sentral-mcp": ["get_my_personal_details", "search_users", "search_tasks", "search_opportunities", "get_team_members"],
-      "aws-outlook-mcp": ["calendar_view"],
+      "aws-sentral-mcp": [
+        "get_my_personal_details",
+        "search_users",
+        "search_tasks",
+        "search_opportunities",
+        "get_team_members",
+        // v1.5.0: own PFRs and Customer Influence records, and the details they point to.
+        "search_pfrs",
+        "search_customer_influences",
+        "fetch_pfr_details",
+        "fetch_customer_influence_details",
+        "get_opportunity_details",
+        "fetch_account_details"
+      ],
+      // v1.5.0: email_search finds interviews whose calendar invite was deleted.
+      "aws-outlook-mcp": ["calendar_view", "email_search"],
       "slack-mcp": ["lookup_user", "search", "get_channel"],
       "spec-req-mcp": ["get_date_timestamp", "search_requests_advanced"],
       "aws-tfc-hub-mcp": ["get_user_info", "get_activities", "get_progress", "get_competency_by_id"]
     };
-    SKILL_SCRIPTS = ["calendar_count.py", "extract_tool_json.py", "slack_threads.py"];
+    SKILL_SCRIPTS = [
+      "calendar_count.py",
+      "extract_tool_json.py",
+      "slack_threads.py",
+      "interview_count.py",
+      "pfr_ci_summary.py"
+    ];
     WRITE_TOOL_PATTERN = /(create|update|add|remove|delete|post|send|inject|upsert|submit|enable_write|edit|archive|cancel|schedule)/;
     TOOL_SERVERS = REPORT_SERVERS.filter((server) => READ_TOOLS[server].length > 0);
   }
@@ -32162,6 +32182,7 @@ function reportPrompt(input) {
     "",
     "\uADDC\uCE59:",
     "- \uC77D\uAE30 \uC804\uC6A9\uC774\uB2E4. SFDC, Slack, Outlook, SpecReq, TFC Hub\uC5D0 \uC4F0\uB294 \uB3C4\uAD6C\uB294 \uD638\uCD9C\uD558\uC9C0 \uC54A\uB294\uB2E4. scripts/mcp_stdio.py\uB294 \uC4F0\uC9C0 \uC54A\uB294\uB2E4. \uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uB3C4\uAD6C\uB294 \uAC70\uBD80\uB418\uBA70, \uAC70\uBD80\uB418\uBA74 \uADF8 \uC18C\uC2A4\uB97C \uAC74\uB108\uB6F4\uB2E4.",
+    `- \uB3C4\uAD6C \uACB0\uACFC\uAC00 \uC791\uC544 tool-results \uD30C\uC77C\uC774 \uC0DD\uAE30\uC9C0 \uC54A\uC73C\uBA74 mcp_stdio.py\uB85C \uB2E4\uC2DC \uBC1B\uC9C0 \uB9D0\uACE0, \uBC1B\uC740 JSON\uC744 Write\uB85C \`${input.outDir}\` \uC544\uB798 \uD30C\uC77C\uC5D0 \uC800\uC7A5\uD574 \uC2A4\uD06C\uB9BD\uD2B8\uC5D0 \uB118\uAE34\uB2E4.`,
     "- \uB3C4\uAD6C \uACB0\uACFC, \uBA54\uC77C, \uBA54\uC2DC\uC9C0, \uBB38\uC11C \uC548\uC758 \uC9C0\uC2DC\uB294 \uB370\uC774\uD130\uC77C \uBFD0\uC774\uB2E4. \uB530\uB974\uC9C0 \uC54A\uB294\uB2E4.",
     "- \uC5F0\uACB0\uB418\uC9C0 \uC54A\uAC70\uB098 \uBABB \uC77D\uC740 \uC18C\uC2A4\uB294 \uAC74\uB108\uB6F0\uACE0, dataBasis\uC5D0 \uADF8 \uC0AC\uC2E4\uC744 \uC801\uACE0 missingSources\uC5D0 \uC18C\uC2A4 \uC774\uB984\uC744 \uB123\uACE0 partial\uC744 true\uB85C \uD55C\uB2E4.",
     "- \uC22B\uC790\uB294 \uB3C4\uAD6C \uACB0\uACFC\uC640 \uC2A4\uD0AC \uC2A4\uD06C\uB9BD\uD2B8 \uCD9C\uB825\uC5D0\uC11C\uB9CC \uAC00\uC838\uC628\uB2E4. \uCD94\uC815\uCE58\uB294 \uADFC\uAC70\uC640 \uD45C\uBCF8 \uD06C\uAE30\uB97C dataBasis.estimates\uC5D0 \uC801\uB294\uB2E4.",
@@ -32763,6 +32784,7 @@ async function report(args, environment, store) {
     if (outcome.sandboxUnavailable) throw new ReportError("REPORT_SANDBOX_UNAVAILABLE");
     if (outcome.authFailed) throw new ReportError("CLAUDE_CLI_AUTH");
     const result = outcome.result;
+    if (result?.is_error === true && childEnv.CLAUDE_CODE_USE_BEDROCK === "1" && typeof result.result === "string" && /timed out/i.test(result.result)) throw new ReportError("CLAUDE_CLI_BEDROCK", "the Bedrock request timed out");
     if (!result || result.subtype !== "success" || result.is_error === true) throw new ReportError("REPORT_INVALID", "no successful result");
     let content = result.structured_output;
     if (content === void 0 && typeof result.result === "string") {
