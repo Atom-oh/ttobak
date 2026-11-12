@@ -312,8 +312,9 @@ message on save; update the adapter first.
   read fails, `directoryUnavailable` is `true` and every event keeps the share
   fields recorded in the ledger; unchanged events are not re-sent, so no share
   is removed because of a missing directory.
-- **Matching.** The deterministic matcher (`intake/match.ts`) compares title
-  and location with names and aliases, and attendee and organizer domains with
+- **Matching.** The deterministic matcher (`intake/match.ts`) compares the
+  untruncated title and sanitized location (up to 8 KB each; longer text yields
+  candidates only) with names and aliases, and attendee and organizer domains with
   account domains, excluding own domains. Exactly one account sends
   `shareAccountId` with `shareEvidence` (`title`, `location`, `domain`; never
   matched text). Several accounts send up to five `candidateAccountIds`. No

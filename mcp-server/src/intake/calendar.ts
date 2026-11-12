@@ -260,7 +260,7 @@ function truncateBytes(value: string, bytes: number): string {
 }
 
 /** Removes join links (and their passcodes) and repeated room names. */
-export function sanitizeLocation(location: string | undefined): string | undefined {
+export function sanitizeLocation(location: string | undefined, bytes = 256): string | undefined {
   if (!location) return undefined;
   const parts: string[] = [];
   for (const raw of location.split(/[;\n]/)) {
@@ -268,7 +268,7 @@ export function sanitizeLocation(location: string | undefined): string | undefin
       .replace(/\S*(?:pwd|passcode|password)=\S*/gi, '').replace(/\s+/g, ' ').trim();
     if (part && !parts.includes(part)) parts.push(part);
   }
-  const joined = truncateBytes(parts.join('; '), 256).trim();
+  const joined = truncateBytes(parts.join('; '), bytes).trim();
   return joined || undefined;
 }
 
@@ -375,6 +375,9 @@ function applyShare(event: CalendarEvent, fields: ShareFields | undefined): void
   if (candidates.length) event.candidateAccountIds = [...new Set(candidates)].sort().slice(0, 5);
 }
 
+/** Bound on the untruncated text matched for sharing (Outlook subjects are far shorter). */
+const MATCH_TEXT_BYTES = 8192;
+
 function decideSharing(event: CalendarEvent, item: OutlookItem, previous: LedgerEntry | undefined, sharing: PlanSharing): void {
   // seriesKey is not sent yet: the server keys overrides by it, and a series hide does
   // not reach already-synced occurrences, so overrides stay per occurrence for now.
@@ -390,7 +393,15 @@ function decideSharing(event: CalendarEvent, item: OutlookItem, previous: Ledger
     return;
   }
   const domains = [...(facts?.domains ?? []), ...(event.organizerDomain ? [event.organizerDomain] : [])];
-  const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
+  // Match the untruncated subject and location: a byte cut could turn a longer word into an
+  // alias hit or drop a second account's alias, and a single match may be shared automatically.
+  const subject = item.subject?.trim() ? item.subject : event.title;
+  const matched = sharing.matcher.match({ title: truncateBytes(subject, MATCH_TEXT_BYTES),
+    location: sanitizeLocation(item.location, MATCH_TEXT_BYTES), domains });
+  // Text beyond even that bound is still cut, so its single match is only a candidate.
+  const overlong = Buffer.byteLength(subject) > MATCH_TEXT_BYTES || Buffer.byteLength(item.location ?? '') > MATCH_TEXT_BYTES;
+  const result: typeof matched = overlong && matched.kind === 'matched'
+    ? { kind: 'candidate', accountIds: [matched.accountId] } : matched;
   // A lookup without an answer must not drop a share that rested on attendee domains.
   // A directory that no longer lists the account (membership gone) drops the share instead.
   if (facts == null && previous?.share?.shareEvidence?.includes('domain') &&

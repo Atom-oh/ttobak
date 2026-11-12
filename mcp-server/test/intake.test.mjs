@@ -959,6 +959,18 @@ test('planner: Private category, private meetings, matches, candidates, domain e
   // A directory that no longer lists the shared account drops a domain share kept without an answer.
   const gone = sharingPlan(items, ledger, new Map([['d', null]]), { accounts: [DIRECTORY.accounts[1]] });
   assert.equal('shareAccountId' in gone.mutations[0].event, false);
+  // Matching uses the untruncated subject and location, not the 512/256-byte copies sent.
+  const cut = sharingPlan([at('x', '11', { subject: `${'a'.repeat(508)} HNBX` })], {}, new Map([['x', facts([])]]));
+  assert.equal(cut.mutations[0].event.title.endsWith(' HNB'), true, 'the sent title is cut inside a word');
+  assert.equal('shareAccountId' in cut.mutations[0].event, false, 'a byte cut never creates an alias hit');
+  assert.equal('candidateAccountIds' in cut.mutations[0].event, false);
+  const pair = sharingPlan([at('y', '12', { subject: 'sync', location: `Hana Bank ${'r'.repeat(300)}; KB Card` })], {},
+    new Map([['y', facts([])]]));
+  assert.equal('shareAccountId' in pair.mutations[0].event, false, 'a second alias past the cut keeps the pair ambiguous');
+  assert.deepEqual(pair.mutations[0].event.candidateAccountIds, ['acct-hana', 'acct-kb']);
+  const huge = sharingPlan([at('z', '13', { subject: `HNB ${'b'.repeat(9000)}` })], {}, new Map([['z', facts([])]]));
+  assert.equal('shareAccountId' in huge.mutations[0].event, false, 'text beyond the match bound is a candidate only');
+  assert.deepEqual(huge.mutations[0].event.candidateAccountIds, ['acct-hana']);
   // Without a privacy answer a title match is only a candidate, unless already shared to that account.
   const titleItem = [at('t', '11', { subject: 'HNB weekly' })];
   const unknown = sharingPlan(titleItem, {}, new Map());
