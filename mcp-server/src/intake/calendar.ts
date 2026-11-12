@@ -21,7 +21,7 @@ const LEDGER_RETENTION_DAYS = 120;
 const MAX_BATCH = 12;
 const UNTITLED = '(제목 없음)';
 
-/** The owner's own response, as selected in `calendar.responses`. Declined events are never synced. */
+/** The owner's own response, as selected in `options.calendarResponses`. Declined events are never synced. */
 export const CALENDAR_RESPONSES = ['accept', 'organizer', 'tentative', 'none'] as const;
 export type CalendarResponse = typeof CALENDAR_RESPONSES[number];
 /** New and legacy selections: everything except events the owner has not answered. */
@@ -105,6 +105,12 @@ export interface CalendarState {
   ledger: Ledger;
   reconcileRequired: boolean;
   pending: null | { request: Record<string, unknown>; set: Ledger; remove: string[] };
+  /**
+   * Occurrences of the last complete read excluded only by an unselected
+   * response (never declined ones). Their SpecReq tasks stay open, so an event
+   * the owner answers later, or a response selected again, keeps its task.
+   */
+  held?: Ledger;
 }
 
 // ---------- time helpers (pure) ----------
@@ -290,6 +296,8 @@ export interface Plan {
   mutations: Mutation[];
   set: Ledger;
   remove: string[];
+  /** See `CalendarState.held`. */
+  held: Ledger;
   counts: CalendarCounts;
   preview: { title: string; startsAt: string; op: 'upsert' | 'remove' | 'unchanged' }[];
 }
@@ -307,6 +315,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   const mutations: Mutation[] = [];
   const set: Ledger = {};
   const remove: string[] = [];
+  const held: Ledger = {};
   const preview: Plan['preview'] = [];
   const seen = new Set<string>();
   const removeTracked = (id: string) => {
@@ -347,6 +356,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     }
     if (!wanted.has(response)) {
       counts.excludedByResponse++;
+      if (response !== 'decline') held[item.meetingId] = { fp: '', startsAt: start.toISOString(), endsAt: end.toISOString() };
       if (removeTracked(item.meetingId)) preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
@@ -377,7 +387,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   }
   const key = (mutation: Mutation) => mutation.op === 'upsert' ? mutation.event.externalId : mutation.externalId;
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
-  return { mutations, set, remove, counts, preview };
+  return { mutations, set, remove, held, counts, preview };
 }
 
 /** Splits mutations into batches of at most 12 within the request byte budget. */
@@ -426,7 +436,8 @@ export function loadState(store: IntakeStore, sourceId: string, scope: string): 
   const state = store.read<CalendarState>(...statePath({ sourceId, scope }));
   if (state === null) return emptyState(sourceId, scope);
   if (state.version !== 1 || state.sourceId !== sourceId || state.scope !== scope ||
-      typeof state.ledger !== 'object' || state.ledger === null) {
+      typeof state.ledger !== 'object' || state.ledger === null ||
+      (state.held !== undefined && (typeof state.held !== 'object' || state.held === null))) {
     throw new IntakeError('STORE_INVALID', 'calendar state does not match its source');
   }
   return state;
@@ -527,6 +538,9 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
       'items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity');
   }
 
+  // Recorded before any removal is sent, so the task step never closes a held occurrence's task.
+  state.held = plan.held;
+  store.write(state, ...statePath(state));
   const api = options.api!;
   const groups = batches(plan.mutations);
   if (!groups.length) groups.push([]);
@@ -547,6 +561,7 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
+  state.held = pruneLedger(state.held ?? {}, now);
   store.write(state, ...statePath(state));
   const upserted = new Map<string, OutlookItem>();
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
