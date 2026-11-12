@@ -74,6 +74,10 @@ test('components wire the copy and the empty-body call', () => {
   assert.match(manager, /accountApi\.newsSources\.collect\(/);
   assert.match(manager, /COLLECT_LIMITS/);
   assert.match(manager, /지금 수집/);
+  // Hidden while the deployed crawler cannot run a manual collection.
+  assert.equal(c.COLLECT_NOW_AVAILABLE, false);
+  assert.match(manager, /isAccount && COLLECT_NOW_AVAILABLE && \(/);
+  assert.match(manager, /\{COLLECT_NOW_AVAILABLE && <p/);
   const account = read('../src/components/account/AccountNewsSources.tsx');
   assert.match(account, /이 고객 뉴스 수집 시작/);
   assert.match(account, /newsSources\.create\(accountId, input,/);
