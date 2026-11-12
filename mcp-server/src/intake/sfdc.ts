@@ -18,7 +18,7 @@ export const SFDC_REGISTRY_TOOL: ToolExpectation = { name: 'get_registry_assignm
   properties: ['employeeIdentifier', 'hierarchyLevel', 'limit', 'after'] };
 export const SFDC_TASKS_TOOL: ToolExpectation = { name: 'search_tasks', properties: ['condition', 'limit', 'after'] };
 /** Read tool of the `sfdc-contacts` step, which runs after a successful sync on the same session.
- * It is allowed but checked only by that step, so a changed contacts tool never fails the SFDC sync. */
+ * It is allowed and checked only while that step is on, so a changed contacts tool never fails the SFDC sync. */
 export const SFDC_CONTACTS_TOOL: ToolExpectation = { name: 'search_contacts', properties: ['condition', 'limit', 'after'] };
 /** Tools the SFDC performance sync requires. */
 export const SFDC_TOOLS: readonly ToolExpectation[] = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];

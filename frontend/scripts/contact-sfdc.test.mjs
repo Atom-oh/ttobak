@@ -34,6 +34,10 @@ test('left contacts move to the end and the order is stable', () => {
 test('copy is verbatim and the tooltip shows the date', () => {
   assert.equal(BADGE_LABELS.sfdc, 'SFDC');
   assert.equal(BADGE_LABELS.leftSfdc, 'SFDC에서 빠짐');
-  assert.equal(leftSfdcTooltip('2026-11-01T03:00:00Z'), 'SFDC에서 빠진 날짜: 2026-11-01');
+  assert.equal(leftSfdcTooltip('2026-11-01T03:00:00Z', 'Asia/Seoul'), 'SFDC에서 빠진 날짜: 2026-11-01');
+  // 20:00 UTC is the next day in Seoul: the viewer's date, not the UTC prefix.
+  assert.equal(leftSfdcTooltip('2026-10-31T20:00:00Z', 'Asia/Seoul'), 'SFDC에서 빠진 날짜: 2026-11-01');
+  assert.equal(leftSfdcTooltip('2026-11-01T03:00:00Z', 'America/Los_Angeles'), 'SFDC에서 빠진 날짜: 2026-10-31');
   assert.equal(leftSfdcTooltip('garbage'), 'SFDC에서 빠진 날짜: garbage');
+  assert.equal(leftSfdcTooltip('2026-13-45T00:00:00Z'), 'SFDC에서 빠진 날짜: 2026-13-45T00:00:00Z');
 });
