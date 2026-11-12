@@ -110,3 +110,25 @@ func TestReleaseAccountNewsCollectRemovesOnlyItsClaim(t *testing.T) {
 		t.Fatalf("lost claim: %v", err)
 	}
 }
+
+// The crawler marks a claimed request started with its own
+// lastCollectStartedRequestId/lastCollectStartedAt; such a row still decodes,
+// and Go never models (so never rewrites) the worker's attributes.
+func TestGetSourceDecodesCollectAttributes(t *testing.T) {
+	for _, startedAt := range []string{`{"S":"2026-11-12T01:00:05+00:00"}`, `{"N":"1794013205"}`} {
+		repo := indexingWire(t, func(target string, _ map[string]interface{}) string {
+			if target != "DynamoDB_20120810.GetItem" {
+				t.Fatalf("target %s", target)
+			}
+			return `{"Item":{"PK":{"S":"CRAWLER#acct_acc_0000abcd"},"SK":{"S":"CONFIG"},"sourceId":{"S":"acct_acc_0000abcd"},` +
+				`"sourceName":{"S":"n"},"accountId":{"S":"acc"},"status":{"S":"idle"},"newsQueries":{"L":[{"S":"q"}]},` +
+				`"lastCollectRequestedAt":{"S":"2026-11-12T01:00:00Z"},"lastCollectRequestId":{"S":"r1"},` +
+				`"lastCollectStartedRequestId":{"S":"r1"},"lastCollectStartedAt":` + startedAt + `}}`
+		})
+		src, err := NewCrawlerRepository(repo.client, "synthetic").GetSource(context.Background(), "acct_acc_0000abcd")
+		if err != nil || src == nil || src.LastCollectRequestedAt != "2026-11-12T01:00:00Z" || src.LastCollectRequestID != "r1" ||
+			src.AccountID != "acc" || len(src.NewsQueries) != 1 || src.NextCollectAllowedAt != "" {
+			t.Fatalf("%s: %+v %v", startedAt, src, err)
+		}
+	}
+}

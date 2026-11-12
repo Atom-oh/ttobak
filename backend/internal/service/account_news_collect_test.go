@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,6 +77,10 @@ func TestCollectNow_PublishesOneContractEvent(t *testing.T) {
 	event := f.published[0]
 	if event.SourceID != collectSource || event.AccountID != newsAcctA || event.RequestID != resp.RequestID || event.RequestID != f.repo.claims[0] || !workerAccepts(event) {
 		t.Fatalf("event %+v", event)
+	}
+	// The worker runs only when the stored claim ID equals the event's.
+	if stored := f.crawler.sources[collectSource]; stored.LastCollectRequestID != event.RequestID || stored.LastCollectRequestedAt != resp.RequestedAt {
+		t.Fatalf("stored claim %+v", stored)
 	}
 	raw, _ := json.Marshal(event)
 	var keys map[string]any
@@ -245,5 +250,42 @@ func TestNewsCollectPublisher(t *testing.T) {
 	}
 	if err := NewsCollectPublisher(nil)(context.Background(), event); !errors.Is(err, ErrNewsCollectUnavailable) {
 		t.Fatalf("nil client: %v", err)
+	}
+}
+
+// The API's claim and the worker's start marker are outside the source
+// revision, so neither changes which articles are current.
+func TestCollectAttributesStayOutsideSourceRevision(t *testing.T) {
+	base := map[string]any{
+		"PK": "CRAWLER#" + collectSource, "SK": "CONFIG", "sourceId": collectSource, "sourceName": "Beta news",
+		"ownerId": "owner", "status": "idle", "accountId": newsAcctA, "newsQueries": []string{"Beta"},
+	}
+	want, err := newsSourceRevision(newsAV(t, base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	marked := map[string]any{}
+	for k, v := range base {
+		marked[k] = v
+	}
+	marked["lastCollectRequestedAt"], marked["lastCollectRequestId"] = "2026-11-12T01:00:00Z", "r1"
+	marked["lastCollectStartedRequestId"], marked["lastCollectStartedAt"] = "r1", 1794013205
+	if got, err := newsSourceRevision(newsAV(t, marked)); err != nil || got != want {
+		t.Fatalf("revision changed: %q %q %v", got, want, err)
+	}
+}
+
+// A listed source whose CONFIG carries the claim lists normally.
+func TestCollectClaimedSourceListsNormally(t *testing.T) {
+	f := newCollectTest()
+	f.crawler.sources[collectSource].LastCollectRequestedAt = "2026-11-11T00:00:00Z"
+	f.crawler.sources[collectSource].LastCollectRequestID = "r0"
+	listed, err := f.svc.List(context.Background(), "user-1", newsAcctA)
+	if err != nil || len(listed) != 1 || listed[0].NextCollectAllowedAt != "" {
+		t.Fatalf("list: %+v %v", listed, err)
+	}
+	raw, _ := json.Marshal(listed[0])
+	if strings.Contains(string(raw), "lastCollect") {
+		t.Fatalf("claim attributes are internal: %s", raw)
 	}
 }

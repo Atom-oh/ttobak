@@ -1183,16 +1183,19 @@ one whose IDs do not fit the crawler contract (`accountId` and the request ID
 `[A-Za-z0-9-]{1,64}`, `sourceId` = `acct_{accountId}_{8 lowercase hex}`). Each
 source accepts at most one request per hour, from any member: one transaction
 checks the ref, account and `MEMBER#` row and sets the CONFIG's
-`lastCollectRequestedAt` (UTC RFC3339, seconds) and `lastCollectRequestId` only
-when the previous request is absent or at least 3,600 seconds old. These two
-attributes are outside the source revision fingerprint. Then a
+`lastCollectRequestedAt` (UTC RFC3339, seconds) and `lastCollectRequestId` (the
+event's `requestId`) only when the previous request is absent or at least 3,600
+seconds old. Both writes are update expressions touching only these attributes;
+they and the crawler's own `lastCollectStarted*` markers are outside the source
+revision fingerprint. Then a
 `NewsCollectRequested` event (`ttobak.crawler`, detail `sourceId`, `accountId`,
 `requestId` only) goes to the default bus and the route returns 202
 `{ "requestId", "requestedAt", "nextAllowedAt" }`. Within the hour it returns
 429 `RATE_LIMITED` with the standard error body plus `nextAllowedAt` (no
 `Retry-After` header); after a refused claim the CONFIG is re-read, so a source
 deleted or disabled meanwhile is 404. If the event is not accepted, the claim is
-released (conditional on its request ID) and the route returns 503; if the
+released (both attributes removed, conditional on its request ID, so a late
+event for it is refused as unclaimed) and the route returns 503; if the
 release also fails the claim expires after the hour. The collection itself is
 asynchronous and bounded by the crawler (it skips a source crawled in the last
 30 minutes and stops at 40 model calls); its outcome is visible only as the
