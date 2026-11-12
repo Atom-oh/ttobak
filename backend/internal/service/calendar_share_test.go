@@ -393,7 +393,7 @@ func TestSetEventSharingSeriesScope(test *testing.T) {
 	if err != nil || event.SharingMode != "auto" || event.ShareAccountID != "acc_1" || !reflect.DeepEqual(event.ShareEvidence, []string{"title"}) {
 		test.Fatalf("auto: %+v %v", event, err)
 	}
-	if store.overrideWrites[2] != "delete "+calendarTestSeriesKey || store.overrideWrites[3] != "delete "+eventID {
+	if store.overrideWrites[2] != "delete "+eventID || store.overrideWrites[3] != "delete "+calendarTestSeriesKey {
 		test.Fatalf("auto must clear the series and the occurrence override: %v", store.overrideWrites)
 	}
 	if call := store.shareStates[2]; call.Share == nil || call.Share.State != "shared" || call.Share.AccountID != "acc_1" {

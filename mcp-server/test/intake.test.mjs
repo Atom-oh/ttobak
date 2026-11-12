@@ -957,6 +957,9 @@ test('planner: Private category, private meetings, matches, candidates, domain e
   const decided = sharingPlan(items, ledger, new Map([['d', facts([])], ['m', facts([])]]));
   assert.equal('shareAccountId' in decided.mutations[0].event, false);
   assert.equal(decided.mutations[1].event.shareAccountId, 'acct-hana');
+  // A directory that no longer lists the shared account drops a domain share kept without an answer.
+  const gone = sharingPlan(items, ledger, new Map([['d', null]]), { accounts: [DIRECTORY.accounts[1]] });
+  assert.equal('shareAccountId' in gone.mutations[0].event, false);
   // Without a privacy answer a title match is only a candidate, unless already shared to that account.
   const titleItem = [at('t', '11', { subject: 'HNB weekly' })];
   const unknown = sharingPlan(titleItem, {}, new Map());
@@ -1066,6 +1069,22 @@ test('sync: Private category added after sharing re-sends the event as private',
   const before = api.calls.length;
   const second = await runCalendar({ ...base, source: source(titled(['private'])) });
   assert.deepEqual([second.counts.upserts, second.counts.private], [6, 6]);
+  const resent = upsertsOf(api.calls.slice(before));
+  assert.equal(resent.length, 6);
+  assert.ok(resent.every(event => event.private === true && !('shareAccountId' in event)));
+});
+
+test('sync: privacy lookups run while the directory is unavailable', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const api = fakeApi({ directory: DIRECTORY });
+  const privateAttendees = () => ({ async factsFor() { return { domains: [], isPrivate: true }; }, save() {}, unavailable: 0 });
+  const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE_A, zone: ZONE, now: NOW, dryRun: false, acceptUnknownSensitivity: true };
+  const titled = subject => request => twoEvents(request).map(entry => ({ ...entry, subject }));
+  await runCalendar({ ...base, attendees: publicAttendees(), source: source(titled('HNB sync')) });
+  api.directory = new Error('HTTP 503');
+  const before = api.calls.length;
+  const result = await runCalendar({ ...base, attendees: privateAttendees(), source: source(titled('HNB sync v2')) });
+  assert.equal(result.counts.directoryUnavailable, true);
   const resent = upsertsOf(api.calls.slice(before));
   assert.equal(resent.length, 6);
   assert.ok(resent.every(event => event.private === true && !('shareAccountId' in event)));

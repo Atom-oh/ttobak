@@ -397,10 +397,13 @@ func (svc *CalendarService) SetEventSharing(ctx context.Context, userID, sourceI
 	scopeKey := calendarScopeKey(input, eventID)
 	var override *repository.CalendarOverrideRow
 	if request.Mode == calendarModeAuto {
-		err = svc.store.DeleteCalendarOverride(ctx, userID, normalizedSource, scopeKey)
-		// Automatic mode also clears an occurrence override stored before the series key.
-		if err == nil && scopeKey != eventID {
+		// Automatic mode also clears an occurrence override stored before the series key,
+		// first: a failure between the two deletes then leaves the series override in force.
+		if scopeKey != eventID {
 			err = svc.store.DeleteCalendarOverride(ctx, userID, normalizedSource, eventID)
+		}
+		if err == nil {
+			err = svc.store.DeleteCalendarOverride(ctx, userID, normalizedSource, scopeKey)
 		}
 	} else {
 		override = &repository.CalendarOverrideRow{Mode: request.Mode, AccountID: request.AccountID}

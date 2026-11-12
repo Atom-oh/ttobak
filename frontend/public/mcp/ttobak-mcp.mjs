@@ -25257,7 +25257,11 @@ function buildMatcher(accounts, ownDomains2) {
     ),
     domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d))
   }));
+  const listed = new Set(accounts.map((a) => a.accountId));
   return {
+    lists(accountId) {
+      return listed.has(accountId);
+    },
     match(input) {
       const title = normalize(input.title);
       const location = normalize(input.location ?? "");
@@ -25509,7 +25513,7 @@ function decideSharing(event, item, previous, sharing) {
   }
   const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
   const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
-  if (facts == null && previous?.share?.shareEvidence?.includes("domain") && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
+  if (facts == null && previous?.share?.shareEvidence?.includes("domain") && !!previous.share.shareAccountId && sharing.matcher.lists(previous.share.shareAccountId) && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
     applyShare(event, previous.share);
   } else if (result.kind === "matched" && facts == null) {
     if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
@@ -25740,7 +25744,7 @@ async function runCalendar(options) {
   const directory = await readDirectory(options.api);
   const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
   const facts = /* @__PURE__ */ new Map();
-  if (matcher && options.attendees) {
+  if (options.attendees) {
     for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
     options.attendees.save(now);
   }
