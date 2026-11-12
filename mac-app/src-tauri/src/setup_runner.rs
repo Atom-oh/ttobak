@@ -360,14 +360,15 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
     for step in cli.steps.clone() {
         run.push(step);
     }
+    // Re-arm before reading the remembered cancel, so no cancel falls between.
+    let cancel = state.rearm_cancel();
     let cancelled = state.cancel_requested();
+    let mut finished = None;
     if should_run_intake(&cli, cli_code.as_deref(), cancelled) {
         let action = IntakeAction::Setup {
             accept_private_calendar,
             skip: BTreeSet::new(),
         };
-        // `intake_cancel` now reaches this phase.
-        let cancel = state.rearm_cancel();
         let outcome = intake::execute(app, &action, intake::RUN_TIMEOUT, Some(cancel), true).await;
         let payload = json!({
             "action": RunKind::Setup,
@@ -377,12 +378,17 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
         });
         *state.last_result.lock() = Some(payload.clone());
         run.push(intake_step(&outcome));
-        let _ = app.emit(intake::FINISHED_EVENT, payload);
+        finished = Some(payload);
     } else {
         let reason = intake_skip_reason(&cli, cli_code.as_deref(), cancelled);
         run.push(StepView::new("intake", StepStatus::Skipped, Some(reason)));
     }
+    // Release the slot first (as start_job does), then tell intake consumers.
     state.finish_run();
+    let _ = app.emit(
+        intake::FINISHED_EVENT,
+        finished.unwrap_or_else(|| json!({ "action": RunKind::OneClickSetup, "exitCode": null, "result": null, "code": null })),
+    );
     json!({ "steps": run.steps, "needsApproval": cli.needs_approval, "warnings": cli.warnings })
 }
 

@@ -36,8 +36,10 @@ and a server failure does not stop `intake setup`. New registries, servers or
 URLs end the run with a confirmation; Install (`setupInstall`) runs it again with those keys
 approved. Pressing it again with nothing new installs nothing: skills and
 servers report current (packages and connection setup still report ok). A
-TTOBAK login failure in the package step does not stop connection setup, which
-imports the TTOBAK endpoints on a fresh Mac; the panel then offers the login.
+TTOBAK login failure in the package step does not stop connection setup, and
+the panel then offers the login. Without a saved selection, sign-in and login
+read the TTOBAK endpoints from the host's own `ttobak` MCP entry (Claude, then
+Codex, then Kiro), after `TTOBAK_*` variables and the saved selection.
 
 Install and update the adapter:
 
