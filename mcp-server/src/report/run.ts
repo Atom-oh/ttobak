@@ -288,7 +288,7 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
 
 /** Fields the CLI or the schema fixes (ids, identity, period, codes), not model prose. */
 const STRUCTURAL_KEYS = new Set(['schemaVersion', 'periodKey', 'period', 'alias', 'generatedAt', 'model', 'partial',
-  'missingSources', 'highlights', 'id', 'severity']);
+  'highlights', 'id', 'severity']);
 
 /** A string equal to an excluded channel name, `#name` not followed by an
  * ASCII name character (so `#양국에서` and `#random에서` count, `#random-ops`

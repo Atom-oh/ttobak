@@ -106,10 +106,15 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
     setBedrockPending(useBedrock && !awsProfile);
     // Bedrock without a profile cannot be saved: wait for the profile choice.
     if (useBedrock && !awsProfile) return;
+    if (channelsBusy) return;
+    // One settings save at a time (each replaces the stored settings).
+    setChannelsBusy(true);
     try {
       setSettings(await setReportSettings(useBedrock, awsProfile));
     } catch (err) {
       setSettingsError(reportMessage(errorCode(err)));
+    } finally {
+      setChannelsBusy(false);
     }
   };
 
@@ -235,13 +240,13 @@ export function ReportGenerateDialog({ rows, userId, state, progress, startedAt,
               <summary className="cursor-pointer text-sm font-semibold text-slate-700 dark:text-text-main">고급 설정</summary>
               <div className="mt-3 space-y-3 text-sm">
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" disabled={!settings} checked={(settings?.useBedrock ?? false) || bedrockPending}
+                  <input type="checkbox" disabled={!settings || channelsBusy} checked={(settings?.useBedrock ?? false) || bedrockPending}
                     onChange={event => void updateSettings(event.target.checked, bedrockToggleProfile(settings))} />
                   <span>Amazon Bedrock으로 Claude 실행</span>
                 </label>
                 {settings && (settings.useBedrock || bedrockPending) && (
                   <label className="block text-xs font-semibold text-slate-600 dark:text-text-muted">AWS 프로필
-                    <select value={settings.awsProfile ?? ''} onChange={event => void updateSettings(true, event.target.value || null)}
+                    <select value={settings.awsProfile ?? ''} disabled={channelsBusy} onChange={event => void updateSettings(true, event.target.value || null)}
                       className={`${inputClass} mt-1`}>
                       <option value="" disabled>프로필 선택</option>
                       {profiles.map(profile => <option key={profile} value={profile}>{profile}</option>)}

@@ -664,3 +664,10 @@ test('channel names follow the app rule: letters that are not uppercase', async 
   }
   assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'ⅷ-team']), 0);
 });
+
+test('a missing-source note naming an excluded channel is rejected', async t => {
+  const ctx = setup(t, { events: success(content({ missingSources: ['Slack #random (excluded)'] })) });
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 2);
+  assert.equal(ctx.output().code, 'REPORT_EXCLUDED_CHANNEL');
+  assert.equal(ctx.puts.length, 0);
+});

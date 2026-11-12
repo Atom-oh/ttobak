@@ -811,6 +811,14 @@ pub async fn report_settings_set(
 }
 
 const SLACK_CHANNELS_FILE: &str = "slack-channels.json";
+const SLACK_CHANNELS_MARKER: &[u8] = b"report slack-channels";
+
+/// The installed adapter has `report slack-channels` (its usage text).
+fn supports_slack_channels(adapter: &[u8]) -> bool {
+    adapter
+        .windows(SLACK_CHANNELS_MARKER.len())
+        .any(|w| w == SLACK_CHANNELS_MARKER)
+}
 const MAX_SLACK_CHANNELS_BYTES: u64 = 256 * 1024;
 const SLACK_CHANNELS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -830,6 +838,10 @@ fn cached_slack_channels(intake: &IntakeState) -> Option<Value> {
 pub async fn report_slack_channels_refresh(app: AppHandle) -> Result<Value, String> {
     let intake = app.state::<IntakeState>();
     let path = slack_channels_path(&intake)?;
+    let home = intake_runner::home_dir().ok_or("HOME_MISSING")?;
+    if !intake_runner::local_adapter(&home).is_some_and(|b| supports_slack_channels(&b)) {
+        return Err("ADAPTER_OUTDATED".into());
+    }
     let report = app.state::<ReportState>();
     let _busy = report.begin_channels()?;
     let outcome = match intake_runner::node_launch(&intake).await {
@@ -1011,6 +1023,14 @@ mod tests {
         );
         assert_eq!(tmpdir_env(Some("relative".into())), None);
         assert_eq!(tmpdir_env(None), None);
+    }
+
+    #[test]
+    fn channel_refresh_needs_an_adapter_with_the_command() {
+        assert!(supports_slack_channels(
+            b"... ttobak-mcp report slack-channels [--days 1-180]"
+        ));
+        assert!(!supports_slack_channels(b"ttobak-mcp report run --period"));
     }
 
     #[test]

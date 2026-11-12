@@ -10,6 +10,8 @@ import type { IntakeStore } from '../intake/store.js';
 import { ReportError } from './errors.js';
 
 export interface SlackChannelsEnvironment extends IntakeEnvironment {
+  /** Cancels the refresh (the CLI wires SIGINT/SIGTERM to it). */
+  signal?: AbortSignal;
   /** Test seam: replaces the Slack connector's `search` call. */
   slackSearch?: (args: Record<string, unknown>) => Promise<unknown>;
   /** Test seam: replaces the pause between search calls. */
@@ -53,6 +55,7 @@ export async function slackChannels(args: string[], environment: SlackChannelsEn
     for (let page = 1; ; page++) {
       if (page > MAX_PAGES) { partial = true; break; }
       if (page > 1) await sleep(PAUSE_MS);
+      if (environment.signal?.aborted) throw new ReportError('REPORT_CANCELLED');
       const result = await search({ query: `from:me after:${after}`, count: 100, page, scope: 'messages', sort: 'timestamp' }) as {
         pages?: unknown; messages?: { matches?: unknown };
       };

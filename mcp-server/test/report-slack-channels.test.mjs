@@ -19,7 +19,7 @@ function fixture(t, pages) {
     slackSearch: async args => { calls.push(args); return { page: args.page, pages: pages.length, messages: { matches: pages[args.page - 1] ?? [] } }; },
     sleep: async ms => { sleeps.push(ms); },
   };
-  return { calls, sleeps, run: args => runReport(['slack-channels', ...args], environment), output: () => JSON.parse(stdout.at(-1)) };
+  return { calls, sleeps, environment, run: args => runReport(['slack-channels', ...args], environment), output: () => JSON.parse(stdout.at(-1)) };
 }
 
 test('channels are counted per channel and sorted by count', async t => {
@@ -52,4 +52,14 @@ test('days are bounded', async t => {
   assert.equal(await ctx.run(['--days', '0']), 2);
   assert.equal(await ctx.run(['--days', '181']), 2);
   assert.equal(ctx.output().code, 'INVALID_ARGUMENT');
+});
+
+test('a cancel stops paging', async t => {
+  const ctx = fixture(t, Array.from({ length: 10 }, () => [match('work')]));
+  const controller = new AbortController();
+  ctx.environment.sleep = async () => { controller.abort(); };
+  ctx.environment.signal = controller.signal;
+  assert.equal(await ctx.run([]), 2);
+  assert.equal(ctx.output().code, 'REPORT_CANCELLED');
+  assert.equal(ctx.calls.length, 1);
 });

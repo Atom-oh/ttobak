@@ -32614,6 +32614,7 @@ async function slackChannels(args, environment, store) {
         break;
       }
       if (page2 > 1) await sleep(PAUSE_MS);
+      if (environment.signal?.aborted) throw new ReportError("REPORT_CANCELLED");
       const result = await search({ query: `from:me after:${after}`, count: 100, page: page2, scope: "messages", sort: "timestamp" });
       const matches2 = Array.isArray(result?.messages?.matches) ? result.messages.matches : [];
       for (const match of matches2) {
@@ -33012,7 +33013,6 @@ var init_run2 = __esm({
       "generatedAt",
       "model",
       "partial",
-      "missingSources",
       "highlights",
       "id",
       "severity"
