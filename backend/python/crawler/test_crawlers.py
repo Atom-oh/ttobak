@@ -5,6 +5,7 @@ Uses stdlib unittest + unittest.mock only -- no external test frameworks.
 
 import io
 import json
+from datetime import timedelta
 import os
 import unittest
 from unittest import mock
@@ -2195,6 +2196,189 @@ class TestSigv4PostHttpsGuard(unittest.TestCase):
             news_crawler.WEB_SEARCH_GATEWAY_URL = original
 
 
+# ---------------------------------------------------------------------------
+# Manual "collect now" (NewsCollectRequested)
+# ---------------------------------------------------------------------------
+
+_MANUAL_SOURCE = 'acct_8f14e45f-ceea-467a-9575-6d1b3c0a1e01_0a1b2c3d'
+_MANUAL_ACCOUNT = '8f14e45f-ceea-467a-9575-6d1b3c0a1e01'
+
+
+def _manual_event(**overrides):
+    request = {'sourceId': _MANUAL_SOURCE, 'accountId': _MANUAL_ACCOUNT,
+               'requestId': 'req-1'}
+    request.update(overrides)
+    return {'manualCollect': request}
+
+
+def _manual_row(**overrides):
+    row = {'PK': f'CRAWLER#{_MANUAL_SOURCE}', 'SK': 'CONFIG',
+           'accountId': _MANUAL_ACCOUNT, 'status': 'active',
+           'sourceName': 'Row Name', 'newsQueries': ['cloud'],
+           'customUrls': [], 'lastCrawledAt': '2020-01-01T00:00:00+00:00'}
+    row.update(overrides)
+    return row
+
+
+class TestManualCollect(unittest.TestCase):
+    def setUp(self):
+        self.table = mock.MagicMock()
+        self.table.get_item.return_value = {'Item': _manual_row()}
+        patches = [
+            mock.patch.object(news_crawler, 'table', self.table),
+            mock.patch.dict(os.environ, {'NEWS_LEGACY_WRITES': 'on'}),
+            mock.patch.object(news_crawler, 'WEB_SEARCH_GATEWAY_URL', 'https://gw.example/mcp'),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.crawl = mock.patch.object(news_crawler, '_crawl', wraps=news_crawler._crawl)
+
+    def _run(self, event):
+        with self.crawl as crawl, \
+                mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None)) as search:
+            return news_crawler.handler(event, None), crawl, search
+
+    def test_builds_config_from_row_and_ignores_extra_event_fields(self):
+        event = _manual_event(sourceName='Event Name', newsQueries=['evil'],
+                              customUrls=['https://evil.example'])
+        result, crawl, search = self._run(event)
+        self.assertEqual(result['status'], 'COMPLETED')
+        self.assertEqual(result['requestId'], 'req-1')
+        self.table.get_item.assert_called_once_with(
+            Key={'PK': f'CRAWLER#{_MANUAL_SOURCE}', 'SK': 'CONFIG'}, ConsistentRead=True)
+        config = crawl.call_args.args[0]
+        self.assertEqual(config, {'sourceId': _MANUAL_SOURCE, 'sourceName': 'Row Name',
+                                  'newsQueries': ['cloud'], 'customUrls': []})
+        queries = [c.args[0] for c in search.call_args_list]
+        self.assertFalse(any('evil' in q or 'Event' in q for q in queries))
+        history = self.table.put_item.call_args.kwargs['Item']
+        self.assertEqual(history['trigger'], 'manual')
+        self.assertEqual(history['requestId'], 'req-1')
+        self.assertEqual(history['summaryLimit'], 40)
+        self.assertFalse(history['summaryLimitReached'])
+        self.table.update_item.assert_called_once()
+
+    def test_legacy_falsy_list_values_are_empty(self):
+        self.table.get_item.return_value = {'Item': _manual_row(newsQueries='', customUrls=None)}
+        result, crawl, _ = self._run(_manual_event())
+        self.assertEqual(result['status'], 'COMPLETED')
+        self.assertEqual(crawl.call_args.args[0]['newsQueries'], [])
+        self.assertEqual(crawl.call_args.args[0]['customUrls'], [])
+
+    def test_refusals_do_no_work(self):
+        cases = {
+            'NOT_FOUND': ({}, _manual_event()),
+            'ACCOUNT_MISMATCH': ({'Item': _manual_row(accountId='other')}, _manual_event()),
+            'SOURCE_DISABLED': ({'Item': _manual_row(status='disabled')}, _manual_event()),
+            'OPERATOR_SOURCE': ({'Item': _manual_row(globalNewsSource=True)}, _manual_event()),
+            'INVALID_CONFIG': ({'Item': _manual_row(newsQueries='scalar')}, _manual_event()),
+        }
+        for code, (row, event) in cases.items():
+            with self.subTest(code=code):
+                self.table.reset_mock()
+                self.table.get_item.return_value = row
+                result, crawl, search = self._run(event)
+                self.assertEqual((result['status'], result['code']), ('REFUSED', code))
+                crawl.assert_not_called()
+                search.assert_not_called()
+                self.table.put_item.assert_not_called()
+                self.table.update_item.assert_not_called()
+
+    def test_bad_shapes_refused_before_any_read(self):
+        too_long = 'a' * 65
+        events = {
+            'AMBIGUOUS_EVENT': [dict(_manual_event(), sourceId=_MANUAL_SOURCE),
+                                dict(_manual_event(), newsQueries=['x'])],
+            'INVALID_REQUEST': [
+                {'manualCollect': 'x'},
+                _manual_event(sourceId='wooribank'),
+                _manual_event(sourceId='acct_other_0a1b2c3d'),
+                _manual_event(sourceId=_MANUAL_SOURCE + '0'),
+                _manual_event(sourceId=f'acct_{_MANUAL_ACCOUNT}_0A1B2C3D'),
+                _manual_event(accountId='../x'),
+                _manual_event(accountId=too_long),
+                _manual_event(requestId=''),
+                _manual_event(requestId='a\nb'),
+                _manual_event(requestId='a/b'),
+                _manual_event(requestId=7),
+                _manual_event(sourceId=None),
+            ],
+        }
+        for code, cases in events.items():
+            for event in cases:
+                with self.subTest(code=code, event=event):
+                    self.table.reset_mock()
+                    result, crawl, _ = self._run(event)
+                    self.assertEqual((result['status'], result['code']), ('REFUSED', code))
+                    self.table.get_item.assert_not_called()
+                    crawl.assert_not_called()
+
+    def test_disabled_when_legacy_writes_off(self):
+        with mock.patch.dict(os.environ, {'NEWS_LEGACY_WRITES': 'off'}):
+            result, crawl, _ = self._run(_manual_event())
+        self.assertEqual(result['status'], 'DISABLED')
+        self.table.get_item.assert_not_called()
+        crawl.assert_not_called()
+
+    def test_skipped_when_crawled_within_30_minutes(self):
+        now = news_crawler.datetime.now(news_crawler.timezone.utc)
+        for minutes, status in ((5, 'SKIPPED_RECENT'), (29, 'SKIPPED_RECENT'),
+                                (-10, 'SKIPPED_RECENT'), (31, 'COMPLETED')):
+            with self.subTest(minutes=minutes):
+                self.table.reset_mock()
+                stamp = (now - timedelta(minutes=minutes)).isoformat()
+                self.table.get_item.return_value = {'Item': _manual_row(lastCrawledAt=stamp)}
+                result, crawl, _ = self._run(_manual_event())
+                self.assertEqual(result['status'], status)
+                if status == 'SKIPPED_RECENT':
+                    crawl.assert_not_called()
+                    self.table.put_item.assert_not_called()
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_summary_cap_stops_model_calls_and_is_reported(self, _exists, _s3, _meta):
+        self.table.get_item.return_value = {'Item': _manual_row(newsQueries=['q1', 'q2', 'q3'])}
+
+        def search(query, max_results=10):
+            return ([{'title': f'{query} {i}', 'url': f'https://ex.example/{query}/{i}',
+                      'text': 'x' * 150} for i in range(30)], None)
+
+        with mock.patch.object(news_crawler, '_gateway_web_search', side_effect=search) as gw, \
+                mock.patch.object(news_crawler, '_summarize_and_tag',
+                                  return_value=('p', '## b', [], True, 1.0)) as model:
+            result = news_crawler.handler(_manual_event(), None)
+        self.assertEqual(model.call_count, 40)
+        self.assertEqual(result['docsAdded'], 40)
+        self.assertTrue(result['summaryLimitReached'])
+        self.assertEqual(result['summariesUsed'], 40)
+        self.assertEqual(gw.call_count, 2)  # collection stops; later queries never search
+        history = self.table.put_item.call_args.kwargs['Item']
+        self.assertTrue(history['summaryLimitReached'])
+        self.assertEqual(history['summariesUsed'], 40)
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_scheduled_shape_has_no_cap_or_manual_fields(self, _exists, _s3, _meta):
+        def search(query, max_results=10):
+            return ([{'title': f'{query} {i}', 'url': f'https://ex.example/{query}/{i}',
+                      'text': 'x' * 150} for i in range(30)], None)
+
+        with mock.patch.object(news_crawler, '_gateway_web_search', side_effect=search), \
+                mock.patch.object(news_crawler, '_summarize_and_tag',
+                                  return_value=('p', '## b', [], True, 1.0)) as model:
+            result = news_crawler.handler({'sourceId': 'woori', 'sourceName': 'S',
+                                           'newsQueries': ['q1', 'q2']}, None)
+        self.assertGreater(model.call_count, 40)
+        self.assertEqual(set(result), {'docsAdded', 'docsUpdated', 'errors'})
+        self.table.get_item.assert_not_called()
+        history = self.table.put_item.call_args.kwargs['Item']
+        self.assertNotIn('trigger', history)
+        self.assertNotIn('summaryLimit', history)
+
+
 def load_tests(loader, tests, pattern):
     # Keep the established CI entry point complete as staged news modules land.
     tests.addTests(loader.loadTestsFromName("test_news_candidates"))
@@ -2208,6 +2392,7 @@ def load_tests(loader, tests, pattern):
     tests.addTests(loader.loadTestsFromName("test_news_runtime"))
     tests.addTests(loader.loadTestsFromName("test_news_schedule"))
     return tests
+
 
 
 if __name__ == '__main__':

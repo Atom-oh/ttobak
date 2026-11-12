@@ -83,6 +83,97 @@ describe('CrawlerStack', () => {
     }
   });
 
+  describe('manual news collection', () => {
+    const collectRule = () => {
+      const rules = template.findResources('AWS::Events::Rule', {
+        Properties: { Name: 'ttobak-news-collect-requested' },
+      });
+      expect(Object.keys(rules)).toHaveLength(1);
+      return Object.values(rules)[0].Properties;
+    };
+    const newsCrawlerId = () => Object.keys(template.findResources('AWS::Lambda::Function', {
+      Properties: { FunctionName: 'ttobak-crawler-news' },
+    }))[0];
+    const queueId = () => {
+      const queues = template.findResources('AWS::SQS::Queue', {
+        Properties: { QueueName: 'ttobak-news-collect-failures' },
+      });
+      expect(Object.keys(queues)).toHaveLength(1);
+      return Object.keys(queues)[0];
+    };
+
+    test('matches only the NewsCollectRequested contract on the default bus', () => {
+      const rule = collectRule();
+      expect(rule.EventBusName).toBeUndefined();
+      expect(rule.EventPattern).toEqual({
+        source: ['ttobak.crawler'],
+        'detail-type': ['NewsCollectRequested'],
+        detail: {
+          sourceId: [{ prefix: 'acct_' }],
+          accountId: [{ exists: true }],
+          requestId: [{ exists: true }],
+        },
+      });
+    });
+
+    test('has one news crawler target with only the manual IDs, no retries and its DLQ', () => {
+      const rule = collectRule();
+      expect(rule.Targets).toHaveLength(1);
+      const [target] = rule.Targets;
+      expect(target.Arn).toEqual({ 'Fn::GetAtt': [newsCrawlerId(), 'Arn'] });
+      expect(target.RetryPolicy).toEqual({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 3600 });
+      expect(target.DeadLetterConfig).toEqual({ Arn: { 'Fn::GetAtt': [queueId(), 'Arn'] } });
+      expect(target.InputTransformer.InputPathsMap).toEqual({
+        'detail-sourceId': '$.detail.sourceId',
+        'detail-accountId': '$.detail.accountId',
+        'detail-requestId': '$.detail.requestId',
+      });
+      expect(JSON.parse(target.InputTransformer.InputTemplate.replace(/<(detail-\w+)>/g, '"$1"')))
+        .toEqual({ manualCollect: {
+          sourceId: 'detail-sourceId', accountId: 'detail-accountId', requestId: 'detail-requestId',
+        } });
+    });
+
+    test('Lambda does not retry a failed async invocation and records it', () => {
+      template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+        FunctionName: { Ref: newsCrawlerId() },
+        MaximumRetryAttempts: 0,
+        MaximumEventAgeInSeconds: 3600,
+        DestinationConfig: { OnFailure: { Destination: { 'Fn::GetAtt': [queueId(), 'Arn'] } } },
+      });
+      template.hasResourceProperties('AWS::SQS::Queue', {
+        QueueName: 'ttobak-news-collect-failures', SqsManagedSseEnabled: true,
+      });
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: { Statement: [{
+          Action: 'sqs:SendMessage', Effect: 'Allow', Resource: { 'Fn::GetAtt': [queueId(), 'Arn'] },
+        }] },
+      });
+    });
+
+    test('alarms on delivery failures, dropped async events and failure backlog', () => {
+      const ruleId = Object.keys(template.findResources('AWS::Events::Rule', {
+        Properties: { Name: 'ttobak-news-collect-requested' },
+      }))[0];
+      for (const metricName of ['FailedInvocations', 'InvocationsFailedToBeSentToDlq']) {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          Namespace: 'AWS/Events', MetricName: metricName,
+          Dimensions: [{ Name: 'RuleName', Value: { Ref: ruleId } }],
+        });
+      }
+      for (const metricName of ['AsyncEventsDropped', 'DestinationDeliveryFailures']) {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          Namespace: 'AWS/Lambda', MetricName: metricName,
+          Dimensions: [{ Name: 'FunctionName', Value: { Ref: newsCrawlerId() } }],
+        });
+      }
+      template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        MetricName: 'ApproximateNumberOfMessagesVisible',
+        Dimensions: [{ Name: 'QueueName', Value: { 'Fn::GetAtt': [queueId(), 'QueueName'] } }],
+      });
+    });
+  });
+
   test('exports state machine ARN', () => {
     template.hasOutput('StateMachineArn', {});
   });

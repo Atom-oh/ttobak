@@ -8,6 +8,8 @@ import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { NewsPublication } from './news-publication';
 import { NEWS_MODEL_ID } from './model-config';
@@ -167,6 +169,82 @@ export class CrawlerStack extends cdk.Stack {
       schedule: events.Schedule.cron({ hour: '19', minute: '0' }),
       targets: [new eventsTargets.SfnStateMachine(stateMachine)],
     });
+
+    // Manual "collect now" for one account-owned source (ADR-004). The event
+    // carries only IDs; the handler rereads CONFIG, skips a source crawled in
+    // the last 30 minutes and caps one run at 40 model calls. Neither
+    // EventBridge nor Lambda retries, so one failed request is charged once.
+    // The async invoke config below applies only to asynchronous invocations:
+    // the workflow's CrawlNews task invokes synchronously (RequestResponse)
+    // and keeps its own Step Functions retry behavior.
+    const collectFailures = new sqs.Queue(this, 'NewsCollectFailures', {
+      queueName: 'ttobak-news-collect-failures',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(7),
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    // A destination grant would mutate the upstream AiStack role; own the
+    // exact permission here instead (same as PipelineFailures.watchFunction).
+    const collectFailureDelivery = new iam.Policy(this, 'NewsCollectFailureDelivery', {
+      roles: [props.crawlerRole],
+      statements: [new iam.PolicyStatement({
+        actions: ['sqs:SendMessage'], resources: [collectFailures.queueArn],
+      })],
+    });
+    newsCrawler.configureAsyncInvoke({
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.hours(1),
+      onFailure: { bind: () => ({ destination: collectFailures.queueArn }) },
+    });
+    newsCrawler.node.addDependency(collectFailureDelivery);
+    const collectRule = new events.Rule(this, 'NewsCollectRequestedRule', {
+      ruleName: 'ttobak-news-collect-requested',
+      eventPattern: {
+        source: ['ttobak.crawler'],
+        detailType: ['NewsCollectRequested'],
+        detail: {
+          sourceId: events.Match.prefix('acct_'),
+          accountId: events.Match.exists(),
+          requestId: events.Match.exists(),
+        },
+      },
+    });
+    collectRule.addTarget(new eventsTargets.LambdaFunction(newsCrawler, {
+      event: events.RuleTargetInput.fromObject({
+        manualCollect: {
+          sourceId: events.EventField.fromPath('$.detail.sourceId'),
+          accountId: events.EventField.fromPath('$.detail.accountId'),
+          requestId: events.EventField.fromPath('$.detail.requestId'),
+        },
+      }),
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.hours(1),
+      deadLetterQueue: collectFailures,
+    }));
+    const collectAlarm = (id: string, metric: cloudwatch.IMetric, description: string) =>
+      new cloudwatch.Alarm(this, id, {
+        metric, threshold: 1, evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        alarmDescription: description,
+      });
+    for (const metricName of ['FailedInvocations', 'InvocationsFailedToBeSentToDlq']) {
+      collectAlarm(`NewsCollect${metricName}Alarm`, new cloudwatch.Metric({
+        namespace: 'AWS/Events', metricName, dimensionsMap: { RuleName: collectRule.ruleName },
+        statistic: 'Sum', period: cdk.Duration.minutes(5),
+      }), 'Manual news collection was not delivered; it is not retried. Inspect the failure queue.');
+    }
+    collectAlarm('NewsCollectAsyncEventsDroppedAlarm', newsCrawler.metric('AsyncEventsDropped', {
+      statistic: 'Sum', period: cdk.Duration.minutes(5),
+    }), 'A manual news collection failed or expired and is not retried. Inspect the failure queue.');
+    collectAlarm('NewsCollectDestinationDeliveryFailuresAlarm', newsCrawler.metric('DestinationDeliveryFailures', {
+      statistic: 'Sum', period: cdk.Duration.minutes(5),
+    }), 'A failed manual news collection could not be recorded in the failure queue.');
+    collectAlarm('NewsCollectFailuresBacklogAlarm', collectFailures.metricApproximateNumberOfMessagesVisible({
+      statistic: 'Maximum', period: cdk.Duration.minutes(5),
+    }), 'A manual news collection failed. Do not blindly redrive: each replay spends search and model calls.');
 
     new cdk.CfnOutput(this, 'StateMachineArn', {
       value: stateMachine.stateMachineArn,
