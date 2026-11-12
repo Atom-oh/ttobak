@@ -202,6 +202,37 @@ class TestDiscovery(unittest.TestCase):
             with self.assertRaisesRegex(discovery.DiscoveryRejected, "STATE_UNAVAILABLE"):
                 self.run_discovery([article()], lookup=lookup)
 
+    def test_first_query_that_finds_a_url_supplies_its_matched_term(self):
+        config = source(sourceName="우리은행", newsQueries=["AI"])
+        def gateway(query, *_args, **_kwargs):
+            # The identity query finds nothing; the keyword query is the first finder.
+            if query == '"우리은행"':
+                return [], None
+            return [article(1)], None
+        result, _, _ = self.run_discovery(config=config, gateway=mock.Mock(side_effect=gateway))
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(result["candidates"][0]["matchedTerm"], "우리은행 AI")
+        self.assertGreater(result["duplicateRejected"], 0)
+        from news_worker import _candidate
+        _candidate(result["candidates"][0])
+
+    def test_matched_term_does_not_change_identity_revision_or_hash(self):
+        config = source(sourceName="우리은행", newsQueries=["AI"],
+                        customUrls=["https://example.com/manual"])
+        tagged, _, _ = self.run_discovery([article(1)], config=config)
+        with mock.patch.object(pipeline, "matched_term", return_value=None):
+            plain, _, _ = self.run_discovery([article(1)], config=config)
+        self.assertEqual(tagged["sourceRevision"], plain["sourceRevision"])
+        self.assertEqual(tagged["sourceRevision"], discovery.source_revision(config))
+        custom, search = tagged["candidates"]
+        self.assertNotIn("matchedTerm", custom)
+        self.assertEqual(search["matchedTerm"], "우리은행")
+        self.assertNotIn("matchedTerm", plain["candidates"][1])
+        self.assertEqual({k: v for k, v in search.items() if k != "matchedTerm"},
+                         plain["candidates"][1])
+        self.assertEqual(search["candidateId"],
+                         pipeline.candidate_id("acme", "https://example.com/1"))
+
     def test_custom_url_is_prioritized_and_skips_only_relevance(self):
         result, _, _ = self.run_discovery(
             [article()], config=source(customUrls=["https://example.com/manual"]))

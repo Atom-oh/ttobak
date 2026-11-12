@@ -10,6 +10,7 @@ import {
   MAX_PROACTIVE_ATTEMPTS,
   proactiveGuard,
   proactiveSearchStore,
+  automaticAnswerStore,
   registerProactiveAttempt,
   completeProactiveAsk,
   rollbackProactiveClaimState,
@@ -18,13 +19,15 @@ import {
 } from '@/lib/proactiveSearch';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 import type { QuestionDraft, QAReferenceEvidence } from '@/lib/meetingReferences';
+import { meetingQuestions } from '@/lib/assistantSuggestions';
 
 interface LiveQAPanelProps {
   transcriptContext?: string;
   meetingId?: string;
+  meetingTitle?: string;
   onDetectedQuestionsChange?: (count: number) => void;
   serverDetectedQuestions?: string[];
-  /** One detection round's search-answerable questions, generation-tagged — the panel auto-fires at most one per generation */
+  /** One detection round's spoken answerable questions; at most one fires per generation. */
   proactiveBatch?: ProactiveBatch;
   onAskedQuestion?: (question: string) => void;
   questionDraft?: QuestionDraft;
@@ -49,12 +52,6 @@ interface QAEntry {
   /** Auto-fired from a detected question (not typed by the user) */
   isProactive?: boolean;
 }
-
-const suggestedQuestions = [
-  '주요 논의 사항은?',
-  '결정된 액션 아이템은?',
-  '핵심 키워드 정리해줘',
-];
 
 // Cross-instance proactive-search state (claim set, batch/in-flight guards,
 // opt-in store) lives in lib/proactiveSearch.ts — both panel instances (the
@@ -81,7 +78,7 @@ function newLiveSessionId(meetingId?: string): string {
   return `qa-${meetingId || 'live'}-${crypto.randomUUID()}`;
 }
 
-function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes, questionDraft }: LiveQAPanelProps) {
+function MeetingLiveQAPanel({ transcriptContext, meetingId, meetingTitle, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes, questionDraft }: LiveQAPanelProps) {
   const [wsUrl, setWsUrl] = useState('');
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
@@ -127,6 +124,14 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   );
   const toggleProactiveSearch = useCallback(() => {
     proactiveSearchStore.set(!proactiveSearchStore.get());
+  }, []);
+  const automaticAnswersEnabled = useSyncExternalStore(
+    automaticAnswerStore.subscribe,
+    automaticAnswerStore.get,
+    () => false,
+  );
+  const toggleAutomaticAnswers = useCallback(() => {
+    automaticAnswerStore.set(!automaticAnswerStore.get());
   }, []);
   // Failures before reservation can retry; HTTP reserves before dispatch.
   const proactiveClaimByEntryRef = useRef<Map<string, { question: string; epoch: number }>>(new Map());
@@ -217,16 +222,16 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     }
   }, [qaHistory]);
 
-  // Merge server-detected questions
+  // Replace each detection round, including an empty round.
   useEffect(() => {
-    if (serverDetectedQuestions && serverDetectedQuestions.length > 0) {
+    if (serverDetectedQuestions) {
       const newQuestions = serverDetectedQuestions.filter(q => !askedQuestions.includes(q));
-      if (newQuestions.length > 0) {
-        setDetectedQuestions(newQuestions);
-        onDetectedQuestionsChange?.(newQuestions.length);
-      }
+      setDetectedQuestions(newQuestions);
     }
-  }, [serverDetectedQuestions, askedQuestions, onDetectedQuestionsChange]);
+  }, [serverDetectedQuestions, askedQuestions]);
+  useEffect(() => {
+    onDetectedQuestionsChange?.(detectedQuestions.length);
+  }, [detectedQuestions.length, onDetectedQuestionsChange]);
 
   // Fetch follow-up question suggestions for each completed answer.
   // Reuses the detect-questions endpoint (its prompt already generates
@@ -246,10 +251,12 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     qaApi.detectQuestions(context, askedQuestions)
       .then((res) => {
         if (!activeRef.current) return;
-        if (res.questions.length > 0) {
+        const followUps = res.questions
+          .filter(q => q !== target.question && !askedQuestions.includes(q)).slice(0, 3);
+        if (followUps.length > 0) {
           setQaHistory((prev) =>
             prev.map((e) =>
-              e.id === target.id ? { ...e, followUps: res.questions.slice(0, 3) } : e,
+              e.id === target.id ? { ...e, followUps } : e,
             ),
           );
         }
@@ -414,11 +421,7 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       setAskedQuestions(prev => [...prev, q.trim()]);
       onAskedQuestion?.(q.trim());
     }
-    setDetectedQuestions(prev => {
-      const next = prev.filter(dq => dq !== q.trim());
-      onDetectedQuestionsChange?.(next.length);
-      return next;
-    });
+    setDetectedQuestions(prev => prev.filter(dq => dq !== q.trim()));
     setError(null);
     setIsAsking(true);
 
@@ -444,7 +447,9 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     }
 
     // Try WebSocket streaming first
-    const ws = await ensureWebSocket();
+    // Automatic turns use HTTP QA so their read-only/egress policy reaches
+    // the async worker. Manual questions retain streaming.
+    const ws = opts?.proactive ? null : await ensureWebSocket();
     if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
     if (ws) {
       // API Gateway WebSocket has a 32KB per-frame limit (separate from, and
@@ -494,16 +499,20 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     try {
       if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
       setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
-      const response = await qaApi.ask(q.trim(), transcriptContext, sessionId, meetingId, (jobId) => {
+      const answerContext = opts?.proactive
+        ? truncateToUtf8ByteLimit(transcriptContext, 28_000)
+        : transcriptContext;
+      const response = await qaApi.ask(q.trim(), answerContext, sessionId, meetingId, (jobId) => {
         const claim = proactiveClaimByEntryRef.current.get(entryId);
-        if (!activeRef.current || activeEntryIdRef.current !== entryId || (claim && claim.epoch !== proactiveGuard.epoch)) {
+        if (!activeRef.current || activeEntryIdRef.current !== entryId
+          || (claim && (claim.epoch !== proactiveGuard.epoch || !automaticAnswerStore.get()))) {
           throw new ApiError(499, 'QA_CANCELLED', 'QA request cancelled before submission');
         }
         assignedJobId = jobId;
         submitted = true;
         if (claim) retainProactiveSubmission(claim.question, jobId);
         setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, jobId } : e));
-      });
+      }, opts?.proactive ? { automatic: true, allowWebSearch: proactiveSearchEnabled } : undefined);
       if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
       if (!response.answer?.trim()) throw new Error('답변이 비어 있습니다. 다시 시도해주세요.');
       recordProactiveAsked(entryId);
@@ -554,9 +563,10 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       }
     }
   }, [
-    isAsking, onAskedQuestion, onDetectedQuestionsChange, ensureWebSocket,
+    isAsking, onAskedQuestion, ensureWebSocket,
     transcriptContext, meetingId, sessionId, armWatchdog,
     rollbackProactiveClaim, recordProactiveAsked, handleStreamMessage, finishDraft,
+    proactiveSearchEnabled,
   ]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -588,12 +598,8 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     return () => observer.disconnect();
   }, []);
 
-  // Proactive search: when the question detector flags a question as
-  // search-answerable, fire it automatically so the answer is already on
-  // screen by the time someone would have typed it. OFF by default —
-  // auto-firing sends conversation-derived queries to an external web
-  // search provider, so it requires the explicit header toggle (persisted
-  // per-user opt-in). Guards keep it from becoming spam: at most ONE
+  // Automatic answers have their own per-user preference. Optional external
+  // search is enforced by HTTP QA policy. At most ONE
   // auto-ask per detection GENERATION (ProactiveBatch.id — consumed the
   // moment any instance fires from it and never re-armed by rollback; the
   // rest of the batch stays as tappable suggestion chips), each question
@@ -609,7 +615,7 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // lib/proactiveSearch.ts): instance-local refs would let the OTHER
   // mounted panel instance re-consume the same generation.
   useEffect(() => {
-    if (!proactiveSearchEnabled) return;
+    if (!automaticAnswersEnabled) return;
     if (!proactiveBatch || proactiveBatch.questions.length === 0) return;
     // Generation guard: each detection round fires at most once, across
     // BOTH instances. Only pre-submission failures below the attempt cap become
@@ -628,39 +634,58 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     handleAsk(next, { proactive: true });
     // handleAsk identity changes are harmless as a dep: the module-level
     // consumed-generation marker prevents a re-run from refiring the batch.
-  }, [proactiveSearchEnabled, proactiveBatch, isAsking, question, askedQuestions, isPanelVisible, handleAsk]);
+  }, [automaticAnswersEnabled, proactiveBatch, isAsking, question, askedQuestions, isPanelVisible, handleAsk]);
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
         <span className="material-symbols-outlined text-primary">auto_awesome</span>
-        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">AI 어시스턴트 · KB Q&A</h3>
-        {/* Proactive-search opt-in: auto-fires detected questions, which sends
-            conversation-derived queries to an external web search — default off. */}
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">미팅 AI 어시스턴트</h3>
+        <span className="ml-auto text-[10px] text-slate-400 dark:text-slate-500 font-mono">⌘K</span>
+        <div className="flex w-full items-center gap-2">
         <button
           type="button"
+          role="switch"
+          aria-checked={automaticAnswersEnabled}
+          aria-label="대화에서 나온 질문 자동 답변"
+          onClick={toggleAutomaticAnswers}
+          title="현재 미팅에서 나온 질문에 자동으로 답변합니다."
+          className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+            automaticAnswersEnabled
+              ? 'bg-primary/5 border-primary/30 text-primary'
+              : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500'
+          }`}
+        >
+          <span className="material-symbols-outlined text-sm" aria-hidden="true">auto_awesome</span>
+          자동 답변 {automaticAnswersEnabled ? 'ON' : 'OFF'}
+        </button>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={proactiveSearchEnabled}
+          aria-label="자동 답변에 외부 검색 허용"
           onClick={toggleProactiveSearch}
-          title="대화에서 감지된 질문을 자동으로 검색해 답을 미리 띄웁니다. 회의 내용에서 추출된 검색어가 외부 웹 검색으로 전송되므로 기본 꺼짐입니다."
-          className={`ml-auto flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-full border transition-colors ${
+          title="자동 답변에 외부 웹·문서 검색을 허용합니다. 미팅 내용에서 추출된 검색어가 외부로 전송됩니다."
+          className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
             proactiveSearchEnabled
               ? 'bg-sky-50 dark:bg-sky-900/20 border-sky-300 dark:border-sky-700 text-sky-600 dark:text-sky-400'
               : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500'
           }`}
         >
           <span className="material-symbols-outlined text-xs">travel_explore</span>
-          선제 검색 {proactiveSearchEnabled ? 'ON' : 'OFF'}
+          외부 검색 {proactiveSearchEnabled ? 'ON' : 'OFF'}
         </button>
-        <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">⌘K</span>
+        </div>
       </div>
 
       {/* Chat History */}
       <div ref={containerRef} className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
         {qaHistory.length === 0 ? (
           <div className="space-y-4">
-            <QAEmptyState isLive />
+            <QAEmptyState isLive meetingTitle={meetingTitle} automaticAnswersEnabled={automaticAnswersEnabled} />
             <QASuggestedQuestions
-              questions={detectedQuestions.length > 0 ? detectedQuestions : suggestedQuestions}
+              questions={detectedQuestions.length > 0 ? detectedQuestions : meetingQuestions(meetingTitle)}
               isDetected={detectedQuestions.length > 0}
               onAsk={handleAsk}
               disabled={isAsking}
