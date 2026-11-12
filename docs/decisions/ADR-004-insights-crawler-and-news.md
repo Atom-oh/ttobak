@@ -131,8 +131,8 @@ finalization, HISTORY receipt and scheduled recovery. Against the daily run:
 articles a manual run published are skipped by later runs, rejected ones are
 evaluated again, and two overlapping runs reserving the same article fail the
 later reservation. The
-legacy `ttobak-crawler-news` source still contains its former manual branch, but
-no rule targets it any more; a follow-up change removes it. With the route's
+legacy `ttobak-crawler-news` manual branch was removed; that function refuses a
+stray `manualCollect` event without writing. With the route's
 admission check in place the web Collect now button is shown again; its copy
 says a 202 is an accepted request, not a started run.
 
