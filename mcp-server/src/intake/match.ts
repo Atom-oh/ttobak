@@ -25,8 +25,6 @@ export interface MatchInput {
 
 export interface Matcher {
   match(input: MatchInput): MatchResult;
-  /** Whether the directory lists the account (the caller is still a direct member). */
-  lists(accountId: string): boolean;
 }
 
 export const DEFAULT_OWN_DOMAINS = ['amazon.com'];
@@ -85,11 +83,7 @@ export function buildMatcher(accounts: DirectoryAccount[], ownDomains: string[])
     domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d)),
   }));
 
-  const listed = new Set(accounts.map((a) => a.accountId));
   return {
-    lists(accountId: string): boolean {
-      return listed.has(accountId);
-    },
     match(input: MatchInput): MatchResult {
       const title = normalize(input.title);
       const location = normalize(input.location ?? '');
