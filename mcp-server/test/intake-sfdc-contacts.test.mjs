@@ -449,6 +449,52 @@ test('server_results_are_counted_and_suppressed_ids_are_remembered_locally', asy
   assert.ok(!ledger.includes('@') && !ledger.includes('acct-1'));
 });
 
+test('time budget defers the remaining accounts and the result stays ok', async () => {
+  const B = id('001XX0000000A02');
+  const C = id('001XX0000000A03');
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1'], [B, 'acct-2'], [C, 'acct-3']] });
+  const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B')]],
+    [B]: [[contactRecord(id('003XX0000000F02'), 'C', 'D', { accountId: B })]] });
+  // Start at 0; the first Account starts at 0, the second just before 8 minutes, the third after.
+  const ticks = [0, 0, 8 * 60_000 - 1, 8 * 60_000];
+  const now = () => ticks.length > 1 ? ticks.shift() : ticks[0];
+  const result = await runSfdcContacts({ session: source, api, dryRun: false, now });
+  assert.equal(result.result, 'ok');
+  assert.equal(result.counts.accounts, 2);
+  assert.equal(result.counts.deferred, 1);
+  assert.deepEqual(api.syncs.map(sync => sync.accountId), ['acct-1', 'acct-2']);
+  const fresh = await runSfdcContacts({ session: source, api: contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] }), dryRun: true });
+  assert.equal(fresh.counts.deferred, 0, 'the real clock stays within the budget');
+});
+
+test('deferred accounts run first next time, so every account is reached in turn', async t => {
+  const store = new IntakeStore(tempHome(t));
+  const B = id('001XX0000000A02');
+  const C = id('001XX0000000A03');
+  const mappings = [[ACCOUNT_A, 'acct-1'], [B, 'acct-2'], [C, 'acct-3']];
+  const source = contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B')]],
+    [B]: [[contactRecord(id('003XX0000000F02'), 'C', 'D', { accountId: B })]],
+    [C]: [[contactRecord(id('003XX0000000F03'), 'E', 'F', { accountId: C })]] });
+  // Each run has time for exactly one Account.
+  const oneAccount = () => { const ticks = [0, 0, 8 * 60_000]; return () => ticks.length > 1 ? ticks.shift() : ticks[0]; };
+  const order = [];
+  for (let run = 0; run < 4; run++) {
+    const api = contactsApi({ mappings });
+    const result = await runSfdcContacts({ session: source, api, dryRun: false, store, scope: SCOPE, now: oneAccount() });
+    assert.equal(result.result, 'ok');
+    assert.equal(result.counts.deferred, 2);
+    order.push(...api.syncs.map(sync => sync.accountId));
+  }
+  assert.deepEqual(order, ['acct-1', 'acct-2', 'acct-3', 'acct-1']);
+  // A full pass clears the resume point, so the next one starts from the first Account again.
+  const full = contactsApi({ mappings });
+  await runSfdcContacts({ session: source, api: full, dryRun: false, store, scope: SCOPE });
+  assert.deepEqual(full.syncs.map(sync => sync.accountId), ['acct-2', 'acct-3', 'acct-1']);
+  const next = contactsApi({ mappings });
+  await runSfdcContacts({ session: source, api: next, dryRun: false, store, scope: SCOPE });
+  assert.deepEqual(next.syncs.map(sync => sync.accountId), ['acct-1', 'acct-2', 'acct-3']);
+});
+
 test('dry_run_sends_nothing_and_reports_counts', async () => {
   const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
   const result = await runSfdcContacts({ session: contactSource({ [ACCOUNT_A]: [[contactRecord(id('003XX0000000F01'), 'A', 'B')]] }),
