@@ -820,14 +820,14 @@ export const dictionaryApi = {
     api.delete<void>(`${DICT}/term`, { body: JSON.stringify({ phrase }) }),
 
   // Layer routes: `personal`, `common`, `account:{id}`.
-  listLayer: (layer: DictionaryLayer) =>
-    api.get<{ items: DictTermItem[] }>(`${layerPath(layer)}/terms`),
+  listLayer: (layer: DictionaryLayer, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.get<{ items: DictTermItem[] }>(`${layerPath(layer)}/terms`, options),
   listDeletedCommon: () =>
     api.get<{ items: DeletedCommonTerm[] }>(`${layerPath('common')}/terms?deleted=1`),
-  createLayerTerm: (layer: DictionaryLayer, input: CreateDictTermInput) =>
-    api.post<DictTermMutationResponse>(`${layerPath(layer)}/terms`, input),
-  updateLayerTerm: (layer: DictionaryLayer, termId: string, patch: TermPatch, version: number) =>
-    api.patch<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}`, { ...patch, version }),
+  createLayerTerm: (layer: DictionaryLayer, input: CreateDictTermInput, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.post<DictTermMutationResponse>(`${layerPath(layer)}/terms`, input, options),
+  updateLayerTerm: (layer: DictionaryLayer, termId: string, patch: TermPatch, version: number, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.patch<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}`, { ...patch, version }, options),
   deleteLayerTerm: (layer: DictionaryLayer, termId: string, version: number) =>
     api.delete<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}?version=${version}`),
   updateCommon: (termId: string, patch: TermPatch, version: number) =>
