@@ -358,6 +358,9 @@ its topic and rewrite the affected rules in place, without dated amendments or a
 new numbered file per decision. Keep historical records labeled
 and link successors rather than restating abandoned plans as rules. Use paths and
 symbols instead of fragile line numbers or copied implementation blocks.
+PRs with user-visible, API, configuration or operational changes add an entry under
+`## [Unreleased]` in `CHANGELOG.md`; versions, tags and the in-app `/changelog`
+notes follow `docs/runbooks/releases.md`.
 
 After changing this file, run `python3 scripts/docs/sync_review_context.py`, then
 `python3 scripts/docs/check_docs.py`. The generated review extract intentionally

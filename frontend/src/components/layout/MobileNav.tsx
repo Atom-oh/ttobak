@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 import { UserGuideButton } from '@/components/layout/UserGuideButton';
+import { ReleaseLink } from '@/components/layout/ReleaseLink';
 import { NAV_GROUPS, SETTINGS_ITEM } from '@/lib/navigation';
 
 const navItems = [
@@ -77,6 +78,7 @@ function MenuSheet({ onClose }: { onClose: () => void }) {
         <div className="flex flex-wrap gap-1.5">
           <SheetLink {...SETTINGS_ITEM} onNavigate={onClose} />
           <UserGuideButton variant="sheet" />
+          <ReleaseLink variant="sheet" onNavigate={onClose} />
         </div>
       </div>
     </>
