@@ -229,6 +229,14 @@ version expiry; a delete marker is not immediate physical deletion of all versio
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
 one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
+Skill package zips live under skillpkg/ (`skillpkg/org/{sha256}.zip`,
+`skillpkg/user/{userId}/{sha256}.zip`); uploads in progress under
+`skillpkg/staging/` expire after one day, current and noncurrent.
+`skillpkg/org/` and `skillpkg/user/` are in the OAC read allowlist and are
+downloaded through the shared signed `/media/*` URLs (S3 presign fallback);
+the staging prefix is not served. Org package objects are not deleted when old
+history rows are pruned (no lifecycle rule; a cleanup pass is a follow-up). The API role's existing bucket read/write
+grant covers the prefix.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.
