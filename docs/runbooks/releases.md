@@ -60,7 +60,7 @@ and [frontend release](frontend-release.md) to ship a tagged revision.
    SHA=$(git rev-parse origin/main)   # confirm this is the release PR merge commit
    git tag -a vX.Y.Z "$SHA" -m "vX.Y.Z"
    git push origin refs/tags/vX.Y.Z
-   awk '/^## \[X.Y.Z\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md > notes.md
+   awk '/^## \[X.Y.Z\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
    gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file notes.md
    ```
 
