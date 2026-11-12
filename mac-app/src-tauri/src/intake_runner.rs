@@ -52,12 +52,12 @@ const MAX_LOGIN_PATH_BYTES: usize = 8192;
 const MAX_NAME_BYTES: usize = 128;
 
 /// A run, setup or login is killed with its process group after this.
-const RUN_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+pub(crate) const RUN_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// `intake schedule off` only removes a LaunchAgent.
 const SCHEDULE_OFF_TIMEOUT: Duration = Duration::from_secs(60);
 const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
 /// SIGTERM to SIGKILL.
-const KILL_GRACE: Duration = Duration::from_secs(3);
+pub(crate) const KILL_GRACE: Duration = Duration::from_secs(3);
 /// Wait for the pipes to close after the CLI exits (orphans may hold them).
 const READER_GRACE: Duration = Duration::from_secs(2);
 
@@ -73,8 +73,8 @@ const WAKE_CATCH_UP_DELAY: Duration = Duration::from_secs(45);
 
 const SETTINGS_FILE: &str = "intake.json";
 const WAKE_EVENT: &str = "native-system-wake";
-const PROGRESS_EVENT: &str = "intake://progress";
-const FINISHED_EVENT: &str = "intake://finished";
+pub(crate) const PROGRESS_EVENT: &str = "intake://progress";
+pub(crate) const FINISHED_EVENT: &str = "intake://finished";
 
 // ---------------------------------------------------------------- pure parts
 
@@ -504,7 +504,7 @@ fn now_secs() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     home.is_absolute().then_some(home)
 }
@@ -598,6 +598,8 @@ pub enum RunKind {
     ScheduleOff,
     /// `intake_set_options`: tracked and exclusive, but not a run.
     Options,
+    /// `setup_start`: the adapter's `setup apply`, then `intake setup`.
+    OneClickSetup,
 }
 
 /// What a finished run is recorded against.
@@ -618,13 +620,13 @@ pub struct IntakeState {
     running: Mutex<Option<RunKind>>,
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     /// Process group of the current run (0 = none); killed on app exit.
-    pgid: AtomicI32,
+    pub(crate) pgid: AtomicI32,
     /// Set by the app-exit path before `kill_running`; no new child spawns.
-    shutting_down: AtomicBool,
-    progress: Mutex<ProgressLog>,
+    pub(crate) shutting_down: AtomicBool,
+    pub(crate) progress: Mutex<ProgressLog>,
     /// Bumped per begun run; a reader of an older run never writes progress.
     run_gen: AtomicU64,
-    last_result: Mutex<Option<Value>>,
+    pub(crate) last_result: Mutex<Option<Value>>,
     update_available: Mutex<Option<bool>>,
     adapter_busy: AtomicBool,
     /// Scheduler wake-up; `reevaluate` makes it ask `should_catch_up`.
@@ -638,7 +640,7 @@ pub struct IntakeState {
 }
 
 impl IntakeState {
-    fn new(settings_path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(settings_path: Option<PathBuf>) -> Self {
         let settings = settings_path
             .as_deref()
             .and_then(|p| read_capped(p, MAX_SETTINGS_BYTES))
@@ -696,7 +698,7 @@ impl IntakeState {
     /// Claims the run slot. Refused while another run or an adapter update
     /// is going; both checks happen under the `running` lock, which
     /// `begin_adapter_update` also takes, so the two never overlap.
-    fn try_begin(&self, kind: RunKind) -> Result<oneshot::Receiver<()>, String> {
+    pub(crate) fn try_begin(&self, kind: RunKind) -> Result<oneshot::Receiver<()>, String> {
         let mut running = self.running.lock();
         if running.is_some() {
             return Err("RUN_IN_PROGRESS".into());
@@ -726,7 +728,7 @@ impl IntakeState {
         Ok(AdapterGuard(self))
     }
 
-    fn end(&self) {
+    pub(crate) fn end(&self) {
         *self.cancel.lock() = None;
         *self.running.lock() = None;
     }
@@ -1114,7 +1116,7 @@ pub(crate) async fn run_child(
 /// Runs one CLI action to completion in the claimed run slot (its pgid is
 /// recorded for app-exit cleanup). Progress lines are kept and emitted when
 /// `progress` is set.
-async fn execute(
+pub(crate) async fn execute(
     app: &AppHandle,
     action: &IntakeAction,
     timeout: Duration,

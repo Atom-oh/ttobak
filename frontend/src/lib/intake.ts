@@ -75,7 +75,7 @@ export interface IntakeStateView {
   nodePath: string | null;
   nodeMissing: boolean;
   schedule: IntakeSchedule;
-  running: IntakeAction | 'scheduleOff' | 'options' | null;
+  running: IntakeAction | 'scheduleOff' | 'options' | 'oneClickSetup' | null;
   lastResult: IntakeFinished | null;
   status: unknown;
   selection: IntakeSelectionEntry[];
@@ -252,6 +252,59 @@ export function showLaunchAgentWarning(state: Pick<IntakeStateView, 'launchAgent
 /** Message for a finished run; empty on success. */
 export function finishedMessage(finished: IntakeFinished | null | undefined): string {
   return finished?.code ? intakeCodeLabel(finished.code) : '';
+}
+
+// ---------------------------------------------------------------- one-click setup
+// Steps of mac-app/src-tauri/src/setup_runner.rs; copy keys in
+// docs/superpowers/plans/2026-11-12-one-click-intake-setup-ui-copy.json.
+
+export type SetupStepStatus = 'ok' | 'current' | 'skipped' | 'failed' | 'needs-approval';
+
+export interface SetupStep {
+  id: string;
+  status: SetupStepStatus;
+  code?: string;
+  items?: string[];
+}
+
+export interface SetupFinished {
+  steps: SetupStep[];
+  needsApproval: { key: string; label: string }[];
+  warnings: string[];
+}
+
+const SETUP_STEP_LABELS: Record<string, string> = {
+  path: 'PATH 정리', adapter: '수집 도구', packages: '패키지 받기', skills: '스킬 설치', servers: 'MCP 서버', intake: '연결 설정',
+};
+
+const SETUP_STATUS_LABELS: Record<SetupStepStatus, string> = {
+  ok: '완료', current: '최신', skipped: '건너뜀', failed: '실패', 'needs-approval': '확인 필요',
+};
+
+const SETUP_CODE_TEXT: Record<string, string> = {
+  TOOLBOX_MISSING: 'toolbox나 aim이 없어 MCP 서버 설치는 건너뛰었어요.',
+  ADAPTER_OUTDATED: '수집 도구가 예전 버전이라 패키지를 설치하지 못했어요. 다시 [한 번에 설정]을 누르세요.',
+  SKILL_PATH_UNSAFE: '~/.claude/skills 안에 링크가 있어 스킬을 설치하지 않았어요.',
+  SKILL_WRITE_FAILED: '스킬 파일을 쓰지 못했어요. ~/.claude/skills 권한을 확인하세요.',
+  PACKAGE_INVALID: '받은 패키지가 검증을 통과하지 못했어요.',
+  PACKAGE_INTEGRITY: '받은 패키지가 TTOBAK 기록과 달라 설치하지 않았어요.',
+  PACKAGE_DOWNLOAD: '패키지를 내려받지 못했어요. 다시 시도하세요.',
+  INSTALL_FAILED: '일부 MCP 서버를 설치하지 못했어요.',
+  LOGIN_SHELL_UNAVAILABLE: '로그인 셸의 PATH를 읽지 못해 기본 PATH를 썼어요.',
+  AWAITING_APPROVAL: '새 MCP 서버 설치를 확인한 뒤 진행해요.',
+};
+
+export function setupStepLabel(id: string): string {
+  return Object.prototype.hasOwnProperty.call(SETUP_STEP_LABELS, id) ? SETUP_STEP_LABELS[id] : id;
+}
+
+export function setupStatusLabel(status: SetupStepStatus): string {
+  return SETUP_STATUS_LABELS[status] ?? status;
+}
+
+/** Korean text for a step code; intake codes keep their own copy. */
+export function setupCodeText(code: string): string {
+  return Object.prototype.hasOwnProperty.call(SETUP_CODE_TEXT, code) ? SETUP_CODE_TEXT[code] : intakeCodeLabel(code);
 }
 
 export interface IntakeSetupRow {

@@ -171,6 +171,12 @@ warning when the CLI LaunchAgent is also installed, per-source status, setup wit
 private-calendar consent and skip toggles, sync options (calendar responses
 to sync and the SFDC contacts switch, when the app build reports them), run
 now, login, cancel and a live progress log. A failed state read shows a one-line error. 
+An app build with `setup_start` adds `OneClickSetup` at the top of that section:
+one primary setup button (copy key `setupButton`) with an optional private-calendar consent box, a
+live list of steps (PATH, adapter, packages, skills, MCP servers, connection
+setup) each with ok, current, skipped, failed or needs-approval and a Korean
+reason, an amber confirmation listing never-approved MCP servers with
+Install and Cancel (`setupInstall`, `setupCancel`), and any warnings.
 In Mic mode, `MicSelector` remembers the chosen device; when that device no
 longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
 rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is

@@ -234,3 +234,16 @@ test('adapter update accepts the legacy response of older apps', () => {
   assert.equal(intake.normalizeAdapterUpdate(null), null);
   assert.equal(intake.normalizeAdapterUpdate({ adapter: 'x' }), null);
 });
+
+test('one-click setup steps and statuses have fixed copy', () => {
+  const copy = JSON.parse(readFileSync(new URL('../../docs/superpowers/plans/2026-11-12-one-click-intake-setup-ui-copy.json', import.meta.url), 'utf8'));
+  assert.deepEqual(['path', 'adapter', 'packages', 'skills', 'servers', 'intake'].map(intake.setupStepLabel),
+    [copy.stepPath, copy.stepAdapter, copy.stepPackages, copy.stepSkills, copy.stepServers, copy.stepIntake]);
+  assert.deepEqual(['ok', 'current', 'skipped', 'failed', 'needs-approval'].map(status => intake.setupStatusLabel(status)),
+    [copy.statusOk, copy.statusCurrent, copy.statusSkipped, copy.statusFailed, copy.statusNeedsApproval]);
+  assert.equal(intake.setupCodeText('TOOLBOX_MISSING'), copy.toolboxMissing);
+  assert.ok(intake.setupCodeText('AUTH_EXPIRED_MIDWAY').includes('mwinit -o'));
+  assert.ok(/[가-힣]/.test(intake.setupCodeText('ADAPTER_OUTDATED')));
+  assert.ok(/[가-힣]/.test(intake.setupCodeText('SKILL_PATH_UNSAFE')));
+  assert.equal(intake.setupStepLabel('other'), 'other');
+});

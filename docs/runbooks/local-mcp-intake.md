@@ -25,6 +25,15 @@ and `~/.local/bin` when they exist and are missing, so the AIM wrappers find
 `aim` even when only `~/.zshrc` adds it; `intake_refresh_path` recaptures the
 login PATH. Nothing else from your shell reaches the run.
 
+One-click setup (copy key `setupButton`, command `setup_start`) runs in order, reporting each
+step: PATH repair (`intake_refresh_path`), adapter update, the adapter's
+`setup apply` (skill packages and MCP servers, see "Skill packages" below) and
+`intake setup --noninteractive`. A failed adapter step stops the rest, an
+adapter without `setup apply` reports `ADAPTER_OUTDATED` for the package step,
+and a server failure does not stop `intake setup`. New registries, servers or
+URLs end the run with a confirmation; Install (`setupInstall`) runs it again with those keys
+approved. Pressing it again with nothing new reports every step current.
+
 Install and update the adapter:
 
 - The adapter is `~/.ttobak/server.mjs`. Settings shows whether it is present and

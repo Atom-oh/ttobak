@@ -46,6 +46,8 @@
     "allow-intake-check-adapter",
     "allow-intake-update-adapter",
     "allow-intake-refresh-path",
+    "allow-setup-start",
+    "allow-setup-get-state",
     "allow-intake-set-options",
     "allow-report-generate",
     "allow-report-cancel",
