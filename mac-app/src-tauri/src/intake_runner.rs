@@ -52,7 +52,7 @@ const MAX_LOGIN_PATH_BYTES: usize = 8192;
 const MAX_NAME_BYTES: usize = 128;
 
 /// A run, setup or login is killed with its process group after this.
-const RUN_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+pub(crate) const RUN_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// `intake schedule off` only removes a LaunchAgent.
 const SCHEDULE_OFF_TIMEOUT: Duration = Duration::from_secs(60);
 const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -73,8 +73,8 @@ const WAKE_CATCH_UP_DELAY: Duration = Duration::from_secs(45);
 
 const SETTINGS_FILE: &str = "intake.json";
 const WAKE_EVENT: &str = "native-system-wake";
-const PROGRESS_EVENT: &str = "intake://progress";
-const FINISHED_EVENT: &str = "intake://finished";
+pub(crate) const PROGRESS_EVENT: &str = "intake://progress";
+pub(crate) const FINISHED_EVENT: &str = "intake://finished";
 
 // ---------------------------------------------------------------- pure parts
 
@@ -598,6 +598,8 @@ pub enum RunKind {
     ScheduleOff,
     /// `intake_set_options`: tracked and exclusive, but not a run.
     Options,
+    /// `setup_start`: the adapter's `setup apply`, then `intake setup`.
+    OneClickSetup,
 }
 
 /// What a finished run is recorded against.
@@ -618,13 +620,13 @@ pub struct IntakeState {
     running: Mutex<Option<RunKind>>,
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     /// Process group of the current run (0 = none); killed on app exit.
-    pgid: AtomicI32,
+    pub(crate) pgid: AtomicI32,
     /// Set by the app-exit path before `kill_running`; no new child spawns.
-    shutting_down: AtomicBool,
-    progress: Mutex<ProgressLog>,
+    pub(crate) shutting_down: AtomicBool,
+    pub(crate) progress: Mutex<ProgressLog>,
     /// Bumped per begun run; a reader of an older run never writes progress.
     run_gen: AtomicU64,
-    last_result: Mutex<Option<Value>>,
+    pub(crate) last_result: Mutex<Option<Value>>,
     update_available: Mutex<Option<bool>>,
     adapter_busy: AtomicBool,
     /// Scheduler wake-up; `reevaluate` makes it ask `should_catch_up`.
@@ -633,12 +635,14 @@ pub struct IntakeState {
     schedule_changed: AtomicBool,
     /// A due slot found the runner busy; re-evaluate when that run ends.
     retry_after_run: AtomicBool,
+    /// A cancel was asked for during the current run (also between phases).
+    cancel_requested: AtomicBool,
     /// A delayed wake re-evaluation is pending.
     wake_pending: AtomicBool,
 }
 
 impl IntakeState {
-    fn new(settings_path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(settings_path: Option<PathBuf>) -> Self {
         let settings = settings_path
             .as_deref()
             .and_then(|p| read_capped(p, MAX_SETTINGS_BYTES))
@@ -660,6 +664,7 @@ impl IntakeState {
             reevaluate: AtomicBool::new(false),
             schedule_changed: AtomicBool::new(false),
             retry_after_run: AtomicBool::new(false),
+            cancel_requested: AtomicBool::new(false),
             wake_pending: AtomicBool::new(false),
         }
     }
@@ -696,7 +701,7 @@ impl IntakeState {
     /// Claims the run slot. Refused while another run or an adapter update
     /// is going; both checks happen under the `running` lock, which
     /// `begin_adapter_update` also takes, so the two never overlap.
-    fn try_begin(&self, kind: RunKind) -> Result<oneshot::Receiver<()>, String> {
+    pub(crate) fn try_begin(&self, kind: RunKind) -> Result<oneshot::Receiver<()>, String> {
         let mut running = self.running.lock();
         if running.is_some() {
             return Err("RUN_IN_PROGRESS".into());
@@ -705,6 +710,7 @@ impl IntakeState {
             return Err("ADAPTER_UPDATING".into());
         }
         *running = Some(kind);
+        self.cancel_requested.store(false, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         *self.cancel.lock() = Some(tx);
         self.run_gen.fetch_add(1, Ordering::SeqCst);
@@ -726,9 +732,56 @@ impl IntakeState {
         Ok(AdapterGuard(self))
     }
 
-    fn end(&self) {
+    pub(crate) fn end(&self) {
         *self.cancel.lock() = None;
         *self.running.lock() = None;
+    }
+
+    /// A fresh cancel channel for the next phase of a multi-phase run;
+    /// `intake_cancel` then reaches that phase.
+    pub(crate) fn rearm_cancel(&self) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        *self.cancel.lock() = Some(tx);
+        rx
+    }
+
+    /// Cancels the current run (phase); false when nothing listens.
+    pub(crate) fn send_cancel(&self) -> bool {
+        if self.running.lock().is_some() {
+            self.cancel_requested.store(true, Ordering::SeqCst);
+        }
+        self.cancel
+            .lock()
+            .take()
+            .is_some_and(|tx| tx.send(()).is_ok())
+    }
+
+    /// Ends a run and re-evaluates a slot that came due meanwhile, as
+    /// `start_job` does.
+    pub(crate) fn finish_run(&self) {
+        self.end();
+        if self.retry_after_run.swap(false, Ordering::SeqCst) {
+            self.poke(true);
+        }
+    }
+
+    pub(crate) fn cancel_requested(&self) -> bool {
+        self.cancel_requested.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_retry_after_run(&self) {
+        self.retry_after_run.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retry_pending(&self) -> bool {
+        self.retry_after_run.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reevaluate_pending(&self) -> bool {
+        self.reevaluate.load(Ordering::SeqCst)
     }
 
     fn poke(&self, reevaluate: bool) {
@@ -1119,7 +1172,7 @@ pub(crate) async fn run_child(
 /// Runs one CLI action to completion in the claimed run slot (its pgid is
 /// recorded for app-exit cleanup). Progress lines are kept and emitted when
 /// `progress` is set.
-async fn execute(
+pub(crate) async fn execute(
     app: &AppHandle,
     action: &IntakeAction,
     timeout: Duration,
@@ -1565,11 +1618,7 @@ pub async fn intake_login(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn intake_cancel(state: State<'_, IntakeState>) -> Result<bool, String> {
     state.available()?;
-    Ok(state
-        .cancel
-        .lock()
-        .take()
-        .is_some_and(|tx| tx.send(()).is_ok()))
+    Ok(state.send_cancel())
 }
 
 /// Compares the served adapter with `~/.ttobak/server.mjs`. Offline or an

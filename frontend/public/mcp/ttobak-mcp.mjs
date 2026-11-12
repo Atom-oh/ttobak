@@ -30930,7 +30930,8 @@ __export(run_exports, {
   sfdcRun: () => sfdcRun,
   signIn: () => signIn,
   syncOptions: () => syncOptions,
-  tokenEmail: () => tokenEmail
+  tokenEmail: () => tokenEmail,
+  ttobakConfig: () => ttobakConfig
 });
 import { homedir as homedir6 } from "node:os";
 import { join as join9, resolve as resolve3 } from "node:path";
@@ -30977,11 +30978,13 @@ function flags(args, allowed) {
   }
   return result;
 }
-function ttobakConfig(selection, env) {
-  const apiUrl = env.TTOBAK_API_URL || selection?.ttobak?.apiUrl || "";
-  const cognitoDomain = env.TTOBAK_COGNITO_DOMAIN || selection?.ttobak?.cognitoDomain || "";
-  const clientId = env.TTOBAK_CLIENT_ID || selection?.ttobak?.clientId || "";
-  const userPoolId = env.TTOBAK_USER_POOL_ID || selection?.ttobak?.userPoolId;
+function ttobakConfig(selection, env, home) {
+  const saved = selection?.ttobak;
+  const host = home && !(saved?.apiUrl && saved.cognitoDomain && saved.clientId) ? hostTtobakEndpoints(home, "claude") : {};
+  const apiUrl = env.TTOBAK_API_URL || saved?.apiUrl || host.TTOBAK_API_URL || "";
+  const cognitoDomain = env.TTOBAK_COGNITO_DOMAIN || saved?.cognitoDomain || host.TTOBAK_COGNITO_DOMAIN || "";
+  const clientId = env.TTOBAK_CLIENT_ID || saved?.clientId || host.TTOBAK_CLIENT_ID || "";
+  const userPoolId = env.TTOBAK_USER_POOL_ID || saved?.userPoolId || host.TTOBAK_USER_POOL_ID;
   if (!apiUrl || !cognitoDomain || !clientId) {
     throw new IntakeError("INVALID_ARGUMENT", "TTOBAK_API_URL, TTOBAK_COGNITO_DOMAIN and TTOBAK_CLIENT_ID are required (env or a host ttobak entry)");
   }
@@ -31124,7 +31127,7 @@ async function signIn(selection, environment, dryRun, noninteractive) {
   let scope = environment.scope;
   let me = environment.me;
   if (!dryRun && !api) {
-    const config2 = ttobakConfig(selection, environment.env);
+    const config2 = ttobakConfig(selection, environment.env, environment.home);
     const auth = environment.authFactory?.(config2, { interactive: !noninteractive }) ?? new CognitoAuth2(config2, { interactive: !noninteractive });
     api = new TtobakApi(auth, config2.apiUrl);
     let idToken;
@@ -31147,7 +31150,7 @@ async function signIn(selection, environment, dryRun, noninteractive) {
 }
 function directoryOnlyApi(selection, environment) {
   try {
-    const config2 = ttobakConfig(selection, environment.env);
+    const config2 = ttobakConfig(selection, environment.env, environment.home);
     return new TtobakApi(
       new CognitoAuth2(config2, { interactive: false, tokenDirectory: join9(environment.home, ".ttobak") }),
       config2.apiUrl
@@ -31185,7 +31188,7 @@ async function openMeetingFacts(environment, store, selection, scope, me, now) {
 }
 async function login2(environment, store) {
   const selection = store.read("selection.json");
-  const config2 = ttobakConfig(selection, environment.env);
+  const config2 = ttobakConfig(selection, environment.env, environment.home);
   const auth = environment.authFactory?.(config2, { interactive: true }) ?? new CognitoAuth2(config2, { interactive: true });
   let idToken;
   try {
