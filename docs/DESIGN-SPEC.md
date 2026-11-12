@@ -830,7 +830,10 @@ shows a hint). It takes a period (this week, this quarter, this year, custom
 start/end of at most 400 days, ending no more than two calendar years ago) and four highlight lists, one item per line,
 prefilled from the newest stored report of the same period kind and checked
 like the Mac runner before `report_generate`. An advanced section holds the
-Bedrock toggle and AWS profile picker (`report_settings_get/set`). While a run
+Bedrock toggle and AWS profile picker (`report_settings_get/set`) and, in an app
+build that reports exclusions, a Slack channel checklist (posts in the last 90
+days, unchecked means excluded, stale exclusions stay listed) with a refresh
+button (`report_slack_channels_refresh`). While a run
 goes, the dialog shows elapsed time, progress lines and Cancel; closing it keeps
 the run going. A successful `report://finished` reloads the list and opens the
 new report; a failure shows the Korean label of its code (report labels, then the shared runner labels). The report tab stays
