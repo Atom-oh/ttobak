@@ -292,6 +292,46 @@ expire after seven days. Errors use `{error:{code,message}}` with `400`, `401`,
 `403`, `404`, `409`, `413` and `500`, as for the private calendar. Responses use
 `Cache-Control: private, no-store`.
 
+## Skill packages
+
+Org and personal skill packages (internal-mcp-setup layout zips) that the Mac
+app's one-click setup installs (ADR-003, local intake). Code:
+`backend/internal/handler/skill_package.go`, `backend/internal/service/skill_package*.go`.
+
+| Method | Path | Who | Result |
+|---|---|---|---|
+| GET | `/api/skill-packages` | any user | `{org, personal, effective, downloads}`: the org row, the caller's personal row, their merge and 5-minute download URLs (signed `/media/*`, S3 presign fallback) for those two zips only |
+| POST | `/api/skill-packages/personal/upload` | any user | presigned POST `{url, fields, uploadId, expiresIn}` for `skillpkg/staging/{caller}/{uploadId}.zip`, `content-length-range` 1 to 20 MiB, 10 minutes |
+| POST | `/api/skill-packages/personal/complete` | any user | body `{uploadId}`; validates the staged zip, stores it by sha256 and replaces the caller's personal package |
+| DELETE | `/api/skill-packages/personal` | any user | deletes the row, then its object; `404` when none |
+| POST | `/api/skill-packages/org/upload` | admin | the same presigned POST for the org package |
+| POST | `/api/skill-packages/org/complete` | admin | the same completion for the org package; keeps the newest 5 version rows |
+| GET | `/api/skill-packages/org/versions` | admin | `{versions}` newest first |
+| POST | `/api/skill-packages/org/rollback` | admin | body `{sha256}` of a kept version; makes it current |
+
+Validation (`ValidateSkillPackage`) never extracts or runs anything: at most
+20 MiB, 500 entries and 50 MiB uncompressed; one top-level folder; no absolute,
+backslash or dot-segment names, symlinks or special files; each
+`skills/<name>` (`^[a-z0-9][a-z0-9-]{0,63}$`) has `SKILL.md`; an
+`sa-performance-report` skill has the report layout files. Server lists come
+from `ttobak-manifest.json`, else the installer script's literal
+`TOOLBOX_REGISTRIES`, `TOOLBOX_MCPS_BASE`, `AIM_MCPS_BASE` and `HTTP_MCPS`
+arrays (no expansion; `*_EXTRA` ignored); registries are `s3://`, HTTP servers
+`https://`. A failure is `400 {error:{code:"INVALID_PACKAGE", message:"<rule>: <detail>"}}`.
+
+Merge: a personal skill replaces the org skill of the same name, other org
+skills stay, server lists are unioned and an HTTP name conflict keeps the org
+URL (`effective.conflicts`). An `uploadId` is 32 lowercase hex characters under
+the caller's own staging prefix (another user's is `404`). Completion stores
+the validated bytes themselves, never a copy of the staged object. A concurrent
+upload or rollback of the same current row, or a delete of a personal package
+replaced since it was read, is `409`. Pruned org history removes rows only:
+objects are content-addressed and never deleted inline, so a concurrent rollback
+cannot lose its object; a replaced personal object is deleted only when the live
+row no longer points at it. Bodies are at most 4 KiB with no unknown
+fields; responses use `Cache-Control: private, no-store`. Failed best-effort
+object deletes are listed in `warnings`.
+
 ## SpecReq tasks
 
 Private per-occurrence task rows for calendar events, implemented in
@@ -2302,6 +2342,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/performance/reports/{periodKey}` | `performanceHandler.GetReport` |
 | PUT | `/api/performance/reports/{periodKey}` | `performanceHandler.PutReport` |
 | DELETE | `/api/performance/reports/{periodKey}` | `performanceHandler.DeleteReport` |
+| GET | `/api/skill-packages` | `skillPackageHandler.Get` |
+| POST | `/api/skill-packages/personal/upload` | `skillPackageHandler.StartPersonalUpload` |
+| POST | `/api/skill-packages/personal/complete` | `skillPackageHandler.CompletePersonalUpload` |
+| DELETE | `/api/skill-packages/personal` | `skillPackageHandler.DeletePersonal` |
 | GET | `/api/specreq-tasks` | `specReqTaskHandler.List` |
 | GET | `/api/specreq-tasks/{eventId}` | `specReqTaskHandler.Get` |
 | POST | `/api/specreq-tasks` | `specReqTaskHandler.Create` |
@@ -2449,6 +2493,10 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/users/{userId}/resend-invite` | `userAdminHandler.ResendInvite` |
 | POST | `/api/settings/users/{userId}/reset-password` | `userAdminHandler.ResetPassword` |
 | PUT | `/api/settings/users/{userId}/name` | `userAdminHandler.UpdateUserName` |
+| POST | `/api/skill-packages/org/upload` | `skillPackageHandler.StartOrgUpload` |
+| POST | `/api/skill-packages/org/complete` | `skillPackageHandler.CompleteOrgUpload` |
+| GET | `/api/skill-packages/org/versions` | `skillPackageHandler.ListOrgVersions` |
+| POST | `/api/skill-packages/org/rollback` | `skillPackageHandler.RollbackOrg` |
 | GET | `/api/settings/dictionary` | `dictHandler.GetDictionary` |
 | PUT | `/api/settings/dictionary` | `dictHandler.UpdateDictionary` |
 | DELETE | `/api/settings/dictionary/term` | `dictHandler.DeleteTerm` |

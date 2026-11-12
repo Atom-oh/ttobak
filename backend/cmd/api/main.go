@@ -123,6 +123,9 @@ func init() {
 	projectService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
+	// Org and personal skill packages for the Mac app's one-click setup; downloads use
+	// the shared signed /media/* path (S3 presign fallback).
+	skillPackageHandler := handler.NewSkillPackageHandler(service.NewSkillPackageService(repo, service.NewS3SkillPackageStore(s3Client, bucketName, uploadService.GeneratePresignedDownloadURLWithTTL)))
 	uploadService.SetAudioCropEnabled(os.Getenv("AUDIO_CROP_ENABLED") == "1")
 	// Same-domain CloudFront-signed download URLs (ADR-027). Loaded once at
 	// cold start in the background (two SSM reads, no longer on the init
@@ -373,6 +376,10 @@ func init() {
 		r.Get("/api/performance/reports/{periodKey}", performanceHandler.GetReport)
 		r.Put("/api/performance/reports/{periodKey}", performanceHandler.PutReport)
 		r.Delete("/api/performance/reports/{periodKey}", performanceHandler.DeleteReport)
+		r.Get("/api/skill-packages", skillPackageHandler.Get)
+		r.Post("/api/skill-packages/personal/upload", skillPackageHandler.StartPersonalUpload)
+		r.Post("/api/skill-packages/personal/complete", skillPackageHandler.CompletePersonalUpload)
+		r.Delete("/api/skill-packages/personal", skillPackageHandler.DeletePersonal)
 		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
 		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
 		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
@@ -564,6 +571,12 @@ func init() {
 			r.Post("/api/settings/users/{userId}/resend-invite", userAdminHandler.ResendInvite)
 			r.Post("/api/settings/users/{userId}/reset-password", userAdminHandler.ResetPassword)
 			r.Put("/api/settings/users/{userId}/name", userAdminHandler.UpdateUserName)
+
+			// Organization skill package (default for every user).
+			r.Post("/api/skill-packages/org/upload", skillPackageHandler.StartOrgUpload)
+			r.Post("/api/skill-packages/org/complete", skillPackageHandler.CompleteOrgUpload)
+			r.Get("/api/skill-packages/org/versions", skillPackageHandler.ListOrgVersions)
+			r.Post("/api/skill-packages/org/rollback", skillPackageHandler.RollbackOrg)
 		})
 
 		// Dictionary routes

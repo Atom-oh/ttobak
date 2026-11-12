@@ -605,4 +605,14 @@ configuration.
   redirects, at most 8 MiB, must contain `intake setup`) and swaps it in
   atomically, keeping one `server.mjs.bak`. Update is refused during a run;
   check is allowed.
+- Skill packages: [Setup] installs skills and MCP servers from packages stored
+  in TTOBAK, never from the user's Slack, mail or Downloads folder. An admin
+  uploads the organization package, the default for everyone; any user may
+  upload a personal package that only they receive. A personal skill replaces
+  the org skill of the same name; server lists are unioned and never shrink.
+  The server validates a package on upload (bounded size and entries, safe
+  names, no links, literal server lists only) and the Mac validates it again;
+  nothing inside a package is executed, and packages change a Mac only when
+  its user presses [Setup]. Installing a package never widens the report
+  run's tool allowlist (ADR-023).
 
