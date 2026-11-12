@@ -57,8 +57,9 @@ export function SkillPackageSettings({ isAdmin }: { isAdmin: boolean }) {
     } catch (err) {
       setError(errorText(err));
     } finally {
-      setBusy(false);
+      // Refresh before re-enabling the buttons, so a later action never races it.
       await load();
+      setBusy(false);
     }
   };
 
