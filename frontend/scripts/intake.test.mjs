@@ -157,3 +157,13 @@ test('setup rows show each connector with its skip reason', () => {
   assert.deepEqual(plain(intake.setupConnectorRows({ action: 'setup', result: null })), []);
   assert.deepEqual(plain(intake.setupConnectorRows(null)), []);
 });
+
+test('sfdcContacts row has its label and a counts summary', () => {
+  const rows = plain(intake.sourceRows({ sfdcContacts: { lastRunAt: '2026-11-10T00:00:00Z', result: 'ok',
+    counts: { fetched: 30, created: 4, filled: 2, marked: 1, unmarked: 0, unchanged: 20 } } }, []));
+  assert.equal(rows[0].source, 'sfdcContacts');
+  assert.equal(rows[0].label, 'SFDC 연락처');
+  assert.equal(rows[0].counts, '가져옴 30 · 생성 4 · 보강 2 · 빠짐 1 · 복귀 0');
+  const selected = plain(intake.sourceRows({}, [{ connector: 'sfdcContacts', disabled: false }]));
+  assert.equal(selected[0].label, 'SFDC 연락처');
+});
