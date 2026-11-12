@@ -27,14 +27,19 @@ export type CalendarResponse = typeof CALENDAR_RESPONSES[number];
 /** New and legacy selections: everything except events the owner has not answered. */
 export const DEFAULT_CALENDAR_RESPONSES: readonly CalendarResponse[] = ['accept', 'organizer', 'tentative'];
 
-/** Maps the `calendar_view` `response` field; any other or missing value is `none`. */
-export function responseOf(value: string | undefined): CalendarResponse | 'decline' {
+/**
+ * Maps the `calendar_view` `response` field. A missing or unrecognised value is
+ * `unknown`: such an event is neither added nor removed, so a provider change
+ * never mass-removes synced events.
+ */
+export function responseOf(value: string | undefined): CalendarResponse | 'decline' | 'unknown' {
   switch (value) {
-    case 'Accept': return 'accept';
+    case 'Accept': case 'Accepted': return 'accept';
     case 'Organizer': return 'organizer';
     case 'Tentative': case 'TentativelyAccepted': return 'tentative';
-    case 'Decline': return 'decline';
-    default: return 'none';
+    case 'None': case 'NoResponseReceived': case 'NotResponded': return 'none';
+    case 'Decline': case 'Declined': return 'decline';
+    default: return 'unknown';
   }
 }
 
@@ -92,6 +97,8 @@ export interface CalendarCounts {
   excluded: number;
   /** Events whose owner response is not selected (declined events always). */
   excludedByResponse: number;
+  /** Events with a missing or unrecognised response: neither added nor removed. */
+  responseUnknown: number;
   skippedLong: number;
   skippedInvalid: number;
   cancelledUntracked: number;
@@ -202,7 +209,7 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
       ...(typeof value.isCanceled === 'boolean' ? { isCanceled: value.isCanceled } : {}),
       ...(typeof value.isAllDay === 'boolean' ? { isAllDay: value.isAllDay } : {}),
       ...(typeof value.sensitivity === 'string' ? { sensitivity: value.sensitivity } : {}),
-      // A non-string response is treated as missing (`none`), never as a failed page.
+      // A non-string response is treated as missing (`unknown`), never as a failed page.
       ...(typeof value.response === 'string' ? { response: value.response } : {}),
       ...(typeof email === 'string' ? { organizer: { email } } : {}),
     };
@@ -307,7 +314,7 @@ export interface Plan {
 export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string,
   responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES): Plan {
   const wanted = new Set<string>(responses);
-  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, excludedByResponse: 0, skippedLong: 0,
+  const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, excludedByResponse: 0, responseUnknown: 0, skippedLong: 0,
     skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0 };
   const mutations: Mutation[] = [];
   const set: Ledger = {};
@@ -338,14 +345,21 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
       else preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
-    if (!wanted.has(responseOf(item.response))) {
-      counts.excludedByResponse++;
-      if (removeTracked(item.meetingId)) preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
-      continue;
-    }
+    // Privacy first, so a private title never reaches a response-removal preview.
     if (excludedSensitivity(item)) {
       counts.excluded++;
       removeTracked(item.meetingId);
+      continue;
+    }
+    const response = responseOf(item.response);
+    if (response === 'unknown') {
+      // Kept as it is: neither added nor removed until the response is known.
+      counts.responseUnknown++;
+      continue;
+    }
+    if (!wanted.has(response)) {
+      counts.excludedByResponse++;
+      if (removeTracked(item.meetingId)) preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
     if (end.getTime() - start.getTime() > LONG_EVENT_MS) {

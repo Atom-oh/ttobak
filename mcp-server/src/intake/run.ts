@@ -636,7 +636,7 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     let output: unknown;
     if (command === 'hosts' && rest.length === 0) {
       output = { ok: true, hosts: listHosts(environment.home, parsePathList(environment.env.PATH)) };
-    } else if (command === 'select') output = await select(rest, environment, store);
+    } else if (command === 'select') output = await withRunLock(store, () => select(rest, environment, store));
     else if (command === 'calendar') output = await withRunLock(store, () => calendar(rest, environment, store));
     else if (command === 'sfdc') output = await withRunLock(store, () => sfdc(rest, environment, store));
     else if (command === 'options') output = await withRunLock(store, async () => options(rest, store));

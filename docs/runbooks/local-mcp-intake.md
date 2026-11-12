@@ -184,11 +184,11 @@ never opens a browser; the LaunchAgent uses it.
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
 | `intake options [--calendar-responses <csv>] [--sfdc-contacts on\|off]` | Stores the given [sync options](#sync-options) and prints `{ok, options:{calendarResponses, sfdcContacts}}`; with no flags it only prints them. An unknown value exits 2 with `INVALID_ARGUMENT`. |
 
-`run`, `setup`, `options`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
+`run`, `setup`, `select`, `options`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
 (`<pid> <random token>`, the same `IntakeStore.lock` as the per-connector locks).
 A second concurrent run exits 2 with `RUN_IN_PROGRESS` and touches no state; a lock
 whose process is gone is reclaimed under a serializing `run.lock.break` lock. `status`, `hosts`,
-`schedule`, `login` and `select` do not take it.
+`schedule` and `login` do not take it.
 
 The window is the past 7 days through the next 30 days in the Mac's time zone,
 read as 7-day `calendar_view` requests.
@@ -202,22 +202,24 @@ is kept. Absent fields mean the defaults; the first selection stores them.
 - `calendarResponses`: any of `accept`, `organizer`, `tentative`, `none`;
   default `accept,organizer,tentative`; an empty list syncs no events. The
   `calendar_view` `response` maps `Accept`, `Organizer`, `Tentative` or
-  `TentativelyAccepted`, and `NoResponseReceived` or `None`; any other or
-  missing value counts as `none`. `Decline` is always excluded. If a complete
-  read has at least one item and none carries a string `response`, the field
-  was renamed or dropped: the calendar step fails with `SCHEMA_CHANGED` before
-  any upsert or removal, and a dry run reports the same code.
+  `TentativelyAccepted`, and `NoResponseReceived`, `NotResponded` or `None`.
+  `Decline` is always excluded. A missing or unrecognised value is unknown:
+  the event is neither added nor removed (dry runs count `responseUnknown`),
+  so a provider change never mass-removes synced events. If a complete read
+  has at least one item and none carries a string `response`, the field was
+  renamed or dropped: the calendar step fails with `SCHEMA_CHANGED` before any
+  upsert or removal, and a dry run reports the same code.
 - `sfdcContacts`: default on. Off skips the [contacts step](#sfdc-contacts-step)
   with result `disabled`, which is not a failure.
 
 An event whose response is not selected is excluded like a private one: it is
 not sent, and a tracked copy is removed on the next real run. Dry runs report
-`excludedByResponse`. The response itself never reaches TTOBAK.
+`excludedByResponse`. A private event is excluded before the response is
+checked, so its title never appears in a removal preview. The response itself never reaches TTOBAK.
 
 After the update, the first real run (possibly a scheduled one, before you open
-Settings) removes previously synced events that are declined, unanswered, or
-have a missing or unknown response. Settings shows copy key
-`defaultsRemoveNote` while the defaults apply. To keep the unanswered ones,
+Settings) removes previously synced events that are declined or unanswered. Settings shows copy key
+`defaultsRemoveNote` while the no-response box is unchecked. To keep the unanswered ones,
 check the no-response box (copy key `responseNone`) in Settings, or run
 `intake options --calendar-responses accept,organizer,tentative,none`, before
 the next run. Declined events cannot be kept.
