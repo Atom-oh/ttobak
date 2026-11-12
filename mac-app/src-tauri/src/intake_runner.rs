@@ -1607,19 +1607,48 @@ pub async fn intake_refresh_path(state: State<'_, IntakeState>) -> Result<PathRe
         .map_err(str::to_string)
 }
 
-/// Downloads and installs the served adapter, keeping one `server.mjs.bak`.
-#[tauri::command]
-pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterView, String> {
-    state.available()?;
+/// The served bundle differs from the installed one (or none is installed).
+pub(crate) fn adapter_changed(current: Option<&[u8]>, served: &[u8]) -> bool {
+    current != Some(served)
+}
+
+/// Result of [Update]: the new adapter view and whether the file changed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterUpdate {
+    adapter: AdapterView,
+    changed: bool,
+}
+
+/// Fetches the served adapter and installs it when it differs, keeping one
+/// `server.mjs.bak`. Returns whether anything changed.
+pub(crate) async fn update_adapter(state: &IntakeState, home: &Path) -> Result<bool, String> {
     let _busy = state.begin_adapter_update()?;
-    let home = home_dir().ok_or("unavailable")?;
-    let served = fetch_adapter().await.map_err(str::to_string)?;
-    install_adapter(&home.join(".ttobak"), &served).map_err(|e| {
-        log::warn!("adapter install failed: {:?}", e.kind());
-        "save-failed".to_string()
+    let served = fetch_adapter().await.map_err(|e| {
+        log::info!("adapter fetch failed: {e}");
+        e.to_string()
     })?;
+    let changed = adapter_changed(local_adapter(home).as_deref(), &served);
+    if changed {
+        install_adapter(&home.join(".ttobak"), &served).map_err(|e| {
+            log::warn!("adapter install failed: {:?}", e.kind());
+            "save-failed".to_string()
+        })?;
+    }
     *state.update_available.lock() = Some(false);
-    Ok(adapter_view(&state, Some(&home)))
+    Ok(changed)
+}
+
+/// Downloads and installs the served adapter; always reports the outcome.
+#[tauri::command]
+pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterUpdate, String> {
+    state.available()?;
+    let home = home_dir().ok_or("unavailable")?;
+    let changed = update_adapter(&state, &home).await?;
+    Ok(AdapterUpdate {
+        adapter: adapter_view(&state, Some(&home)),
+        changed,
+    })
 }
 
 #[cfg(test)]
@@ -1934,6 +1963,13 @@ mod tests {
         assert_eq!(parse_login_path(b"/usr/bin\n/bin"), None);
         assert_eq!(parse_login_path(&[b'/'; 9000]), None);
         assert_eq!(parse_login_path(b"/usr/\xffbin"), None);
+    }
+
+    #[test]
+    fn adapter_update_reports_unchanged_bytes() {
+        assert!(!adapter_changed(Some(b"same"), b"same"));
+        assert!(adapter_changed(Some(b"old"), b"new"));
+        assert!(adapter_changed(None, b"new"));
     }
 
     #[test]

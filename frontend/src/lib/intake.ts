@@ -30,6 +30,12 @@ const CODE_LABELS: Record<string, string> = {
   SERVER_NOT_CONFIGURED: '이 Mac의 Claude/Codex/Kiro 설정에서 해당 MCP 서버를 찾지 못했어요.',
   SKIPPED_BY_USER: '건너뛰도록 선택했어요.',
   SCHEMA_CHANGED: 'MCP 서버의 도구 형식이 바뀌어 연결하지 못했어요.',
+  // Rejections of intake_update_adapter (Mac app).
+  network: 'TTOBAK에서 수집 도구를 받지 못했어요. 네트워크를 확인하고 다시 시도하세요.',
+  'adapter-invalid': '받은 수집 도구 파일이 올바르지 않아 설치하지 않았어요.',
+  'save-failed': '수집 도구를 저장하지 못했어요. ~/.ttobak 폴더 권한을 확인하세요.',
+  unavailable: '이 앱에서는 수집 설정을 쓸 수 없어요.',
+  busy: '업데이트 중이에요. 잠시 후 다시 시도하세요.',
   // A step result, not an error code: the step is switched off in the sync options.
   disabled: '꺼짐',
 };
@@ -92,6 +98,11 @@ export interface IntakeSourceRow {
 /** Korean text for an intake or runner code; unknown codes show as-is. */
 export function intakeCodeLabel(code: string): string {
   return Object.prototype.hasOwnProperty.call(CODE_LABELS, code) ? CODE_LABELS[code] : code;
+}
+
+/** Result line of [Update]: the adapter was replaced, or was already current. */
+export function adapterUpdateMessage(changed: boolean): string {
+  return changed ? '수집 도구를 최신 버전으로 바꿨어요.' : '수집 도구가 이미 최신이에요.';
 }
 
 /** The code of an invoke rejection (Tauri commands reject with a string code). */

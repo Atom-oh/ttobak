@@ -732,8 +732,14 @@ export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {
   return invoke<IntakeStateView['adapter']>('intake_check_adapter');
 }
 
-export function updateIntakeAdapter(): Promise<IntakeStateView['adapter']> {
-  return invoke<IntakeStateView['adapter']>('intake_update_adapter');
+export interface IntakeAdapterUpdate {
+  adapter: IntakeStateView['adapter'];
+  /** False when the installed adapter already matched the served one. */
+  changed: boolean;
+}
+
+export function updateIntakeAdapter(): Promise<IntakeAdapterUpdate> {
+  return invoke<IntakeAdapterUpdate>('intake_update_adapter');
 }
 
 export function onIntakeProgress(handler: (line: string) => void): () => void {

@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useIntake } from '@/hooks/useIntake';
 import {
-  errorCode, finishedMessage, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
+  adapterUpdateMessage, errorCode, finishedMessage, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
   optionsSaveErrorText, savedOptions, scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows,
   SYNC_OPTIONS_COPY, syncOptionsValue, syncOptionsView, type IntakeConnector, type IntakeFinished, type IntakeScheduleKind, type SyncOptionsView,
 } from '@/lib/intake';
 import {
   cancelIntake, checkIntakeAdapter, isTauri, runIntakeLogin, runIntakeNow, runIntakeSetup, setIntakeNodePath,
-  setIntakeOptions, setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter,
+  setIntakeOptions, setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter, type IntakeAdapterUpdate,
 } from '@/lib/tauri';
 
 const buttonClass = 'rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-white/10 dark:text-text-main dark:hover:bg-white/5';
@@ -27,6 +27,7 @@ function formatTime(iso: string | null): string {
  * browser or an app build without intake. */
 export function IntakeSettings() {
   const [message, setMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const onFinished = useCallback((finished: IntakeFinished) => setMessage(finishedMessage(finished) || null), []);
   const { state, setState, progress, loadError, refresh, markStarted } = useIntake(onFinished);
   const [busy, setBusy] = useState(false);
@@ -71,6 +72,7 @@ export function IntakeSettings() {
   const act = async (work: () => Promise<unknown>, after?: (value: unknown) => void, errorText = intakeCodeLabel) => {
     setBusy(true);
     setMessage(null);
+    setNotice(null);
     try {
       const value = await work();
       after?.(value);
@@ -98,7 +100,11 @@ export function IntakeSettings() {
             {state.adapter.updateAvailable && state.adapter.present && ' · 새 버전이 있어요'}
           </span>
           <button type="button" className={buttonClass} disabled={busy || running}
-            onClick={() => void act(updateIntakeAdapter, value => setState(current => current ? { ...current, adapter: value as typeof current.adapter } : current))}>
+            onClick={() => void act(updateIntakeAdapter, value => {
+              const update = value as IntakeAdapterUpdate;
+              setState(current => current ? { ...current, adapter: update.adapter } : current);
+              setNotice(adapterUpdateMessage(update.changed));
+            })}>
             {INTAKE_COPY.update}
           </button>
         </div>
@@ -280,6 +286,7 @@ export function IntakeSettings() {
           </div>
         )}
 
+        {notice && <p role="status" className="text-sm text-slate-700 dark:text-text-secondary">{notice}</p>}
         {message && <p role="status" className="text-sm text-red-600 dark:text-red-400">{message}</p>}
 
         {running && !quiet && (

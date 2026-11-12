@@ -215,3 +215,12 @@ test('sync options: defaults note, saved result and adapter-too-old text', () =>
   assert.equal(intake.optionsSaveErrorText('INVALID_ARGUMENT'), '수집 도구를 업데이트한 뒤 다시 시도하세요.');
   assert.equal(intake.optionsSaveErrorText('RUN_IN_PROGRESS'), '이미 수집 중이에요.');
 });
+
+test('adapter update always reports a result', () => {
+  assert.equal(intake.adapterUpdateMessage(true), '수집 도구를 최신 버전으로 바꿨어요.');
+  assert.equal(intake.adapterUpdateMessage(false), '수집 도구가 이미 최신이에요.');
+  for (const code of ['network', 'adapter-invalid', 'save-failed', 'unavailable', 'busy', 'RUN_IN_PROGRESS']) {
+    const label = intake.intakeCodeLabel(code);
+    assert.ok(label && label !== code, `label for ${code}`);
+  }
+});
