@@ -8,7 +8,8 @@ import { createInterface } from 'node:readline/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { TtobakApi } from '../api.js';
 import { CognitoAuth } from '../auth.js';
-import { CALENDAR_TOOL, SCOPE_PATTERN, runCalendar, type CalendarCounts } from './calendar.js';
+import { CALENDAR_RESPONSES, CALENDAR_TOOL, DEFAULT_CALENDAR_RESPONSES, SCOPE_PATTERN, runCalendar, type CalendarCounts,
+  type CalendarResponse } from './calendar.js';
 import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type ConnectorId, type TaskConnectorId } from './connectors.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
@@ -36,6 +37,12 @@ export interface Selection {
     acceptUnknownSensitivity?: boolean; disabled?: boolean };
   /** The SA performance connector keeps its own source and ledger, like calendar. */
   sfdc?: ConnectorSelection & { sourceId: string };
+  /**
+   * Sync options (`intake options`), kept apart from the connector entries so a
+   * choice made before a connector is selected is not lost. Absent fields (legacy)
+   * mean the defaults: `DEFAULT_CALENDAR_RESPONSES` and contacts on.
+   */
+  options?: { calendarResponses?: CalendarResponse[]; sfdcContacts?: boolean };
   ttobak?: { apiUrl: string; cognitoDomain: string; clientId: string; userPoolId?: string };
 }
 
@@ -65,7 +72,8 @@ export interface RunStatus {
   sfdcContacts?: {
     lastRunAt: string;
     lastSuccessAt?: string;
-    result: 'ok' | IntakeCode;
+    /** `disabled`: skipped because `options.sfdcContacts` is off. */
+    result: 'ok' | 'disabled' | IntakeCode;
     counts?: SfdcContactCounts;
   };
 }
@@ -134,6 +142,7 @@ const USAGE = `Usage:
   ttobak-mcp intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
   ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+  ttobak-mcp intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake login
   ttobak-mcp intake status`;
@@ -257,9 +266,10 @@ export async function selectConnector(connector: ConnectorId, request: SelectReq
   const ttobak = ttobakConfig(previous, { ...hostTtobakEndpoints(environment.home, host), ...definedTtobakEnv(environment.env) });
   if (connector === 'sfdc') {
     const sourceId = previous?.sfdc?.server === server ? previous.sfdc.sourceId : randomUUID();
-    // The other connector's selection is kept.
+    // The other connector's selection and the sync options are kept; a first selection stores the defaults.
     store.write({ ...previous, version: 1,
-      sfdc: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString() }, ttobak } satisfies Selection,
+      sfdc: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString() },
+      options: syncOptions(previous), ttobak } satisfies Selection,
     'selection.json');
     return { ok: true, connector, host, server, sourceId, pathDirectories: pathDirs.length };
   }
@@ -271,6 +281,7 @@ export async function selectConnector(connector: ConnectorId, request: SelectReq
     version: 1,
     calendar: { host, server, sourceId, pathDirs, selectedAt: environment.now().toISOString(),
       ...(request.acceptUnknownSensitivity ? { acceptUnknownSensitivity: true } : {}) },
+    options: syncOptions(previous),
     ttobak,
   };
   store.write(selection, 'selection.json');
@@ -386,6 +397,7 @@ export async function calendarRun(options: ConnectorRunOptions, environment: Int
     const result = await runCalendar({
       store, api, sourceId: selected.sourceId, scope, zone: environment.zone, now: startedAt, dryRun,
       reconcile: options.reconcile === true, acceptUnknownSensitivity: selected.acceptUnknownSensitivity === true,
+      responses: syncOptions(selection).calendarResponses,
       source: { view: async request => resultJson(await active.call(CALENDAR_TOOL.name, request), CALENDAR_TOOL.name) },
     });
     status.calendar = {
@@ -462,8 +474,9 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     previous = store.read<RunStatus>('status.json')?.sfdc;
     let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
+    const contactsOn = syncOptions(selection).sfdcContacts;
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS,
-      [SFDC_CONTACTS_TOOL]);
+      contactsOn ? [SFDC_CONTACTS_TOOL] : []);
     const active = session;
     const source: SfdcSource = { call: async (tool, request) => resultJson(await active.call(tool, request), tool) };
     const result = await runSfdc({
@@ -475,7 +488,7 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     // The contacts step reuses this session and sign-in. Its failures never change the
     // SFDC result; `intake run` reports them as a partial failure.
     const sfdcContacts = api ? await sfdcContactsStep(store, source, api, scope, dryRun, environment.now(),
-      async () => { await active.requireTool(SFDC_CONTACTS_TOOL); }) : undefined;
+      contactsOn, async () => { await active.requireTool(SFDC_CONTACTS_TOOL); }) : undefined;
     return { ok: true, connector: 'sfdc', dryRun, counts: result.counts, ...(sfdcContacts ? { sfdcContacts } : {}) };
   } catch (error) {
     const entry: NonNullable<RunStatus['sfdc']> = { ...(previous ?? {}), lastRunAt: startedAt.toISOString(),
@@ -491,15 +504,18 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
 
 /** Runs `sfdc-contacts` and records its status entry (`lastRunAt`, `lastSuccessAt`, `result`, `counts` only). */
 async function sfdcContactsStep(store: IntakeStore, source: SfdcSource, api: TtobakApi, scope: string | undefined,
-  dryRun: boolean, ranAt: Date, requireTool: () => Promise<void>,
-): Promise<{ result: 'ok' | IntakeCode; counts?: SfdcContactCounts }> {
-  let step: { result: 'ok' | IntakeCode; counts?: SfdcContactCounts };
-  try {
-    // A missing or changed `search_contacts` fails this step only (SCHEMA_CHANGED).
-    await requireTool();
-    step = await runSfdcContacts({ session: source, api, dryRun, store, ...(scope ? { scope } : {}) });
-  } catch (error) {
-    step = { result: intakeCode(error) };
+  dryRun: boolean, ranAt: Date, on: boolean, requireTool: () => Promise<void>,
+): Promise<{ result: 'ok' | 'disabled' | IntakeCode; counts?: SfdcContactCounts }> {
+  let step: { result: 'ok' | 'disabled' | IntakeCode; counts?: SfdcContactCounts };
+  if (!on) step = { result: 'disabled' };
+  else {
+    try {
+      // A missing or changed `search_contacts` fails this step only (SCHEMA_CHANGED).
+      await requireTool();
+      step = await runSfdcContacts({ session: source, api, dryRun, store, ...(scope ? { scope } : {}) });
+    } catch (error) {
+      step = { result: intakeCode(error) };
+    }
   }
   try {
     const status = store.read<RunStatus>('status.json') ?? {};
@@ -549,7 +565,7 @@ export async function runConnectors(options: { dryRun: boolean; noninteractive: 
       // The SFDC contacts step is its own source: a failure is partial, Midway expiry stops the run.
       const contacts = 'sfdcContacts' in rest ? rest.sfdcContacts : undefined;
       if (contacts?.result === 'AUTH_EXPIRED_MIDWAY') { code = 'AUTH_EXPIRED_MIDWAY'; break; }
-      if (contacts && contacts.result !== 'ok') code ??= 'PARTIAL_FAILURE';
+      if (contacts && contacts.result !== 'ok' && contacts.result !== 'disabled') code ??= 'PARTIAL_FAILURE';
     } catch (error) {
       const failure = intakeCode(error);
       results[id] = { result: failure };
@@ -572,6 +588,47 @@ async function run(args: string[], environment: IntakeEnvironment, store: Intake
     ...(only ? { only } : {}) }, environment, store);
 }
 
+export interface SyncOptions { calendarResponses: CalendarResponse[]; sfdcContacts: boolean }
+
+/** The stored sync options (known names, canonical order), with the defaults for absent fields. */
+export function syncOptions(selection: Selection | null | undefined): SyncOptions {
+  const stored = selection?.options?.calendarResponses;
+  const calendarResponses = Array.isArray(stored)
+    ? CALENDAR_RESPONSES.filter(response => stored.includes(response)) : [...DEFAULT_CALENDAR_RESPONSES];
+  return { calendarResponses, sfdcContacts: selection?.options?.sfdcContacts !== false };
+}
+
+/**
+ * `intake options`: prints the sync options, after storing any given ones in
+ * the top-level `options` object. A value is stored even when its connector is
+ * not selected yet, so the Settings choice applies once it is.
+ */
+function options(args: string[], store: IntakeStore) {
+  const given = flags(args, { '--calendar-responses': 'value', '--sfdc-contacts': 'value' });
+  const csv = given['--calendar-responses'];
+  const contacts = given['--sfdc-contacts'];
+  let responses: CalendarResponse[] | undefined;
+  if (typeof csv === 'string') {
+    const parts = csv === '' ? [] : csv.split(',');
+    if (parts.some(part => !(CALENDAR_RESPONSES as readonly string[]).includes(part))) {
+      throw new IntakeError('INVALID_ARGUMENT', '--calendar-responses takes accept, organizer, tentative and none');
+    }
+    responses = CALENDAR_RESPONSES.filter(response => parts.includes(response));
+  }
+  if (contacts !== undefined && contacts !== 'on' && contacts !== 'off') {
+    throw new IntakeError('INVALID_ARGUMENT', '--sfdc-contacts must be on or off');
+  }
+  const selection = store.read<Selection>('selection.json');
+  if (responses || contacts !== undefined) {
+    const current = syncOptions(selection);
+    store.write({ ...(selection ?? {}), version: 1, options: {
+      calendarResponses: responses ?? current.calendarResponses,
+      sfdcContacts: contacts === undefined ? current.sfdcContacts : contacts === 'on' } } satisfies Selection,
+    'selection.json');
+  }
+  return { ok: true, options: syncOptions(store.read<Selection>('selection.json')) };
+}
+
 export async function runIntake(args: string[], environment: IntakeEnvironment): Promise<number> {
   const store = new IntakeStore(environment.home);
   try {
@@ -579,9 +636,10 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     let output: unknown;
     if (command === 'hosts' && rest.length === 0) {
       output = { ok: true, hosts: listHosts(environment.home, parsePathList(environment.env.PATH)) };
-    } else if (command === 'select') output = await select(rest, environment, store);
+    } else if (command === 'select') output = await withRunLock(store, () => select(rest, environment, store));
     else if (command === 'calendar') output = await withRunLock(store, () => calendar(rest, environment, store));
     else if (command === 'sfdc') output = await withRunLock(store, () => sfdc(rest, environment, store));
+    else if (command === 'options') output = await withRunLock(store, async () => options(rest, store));
     else if (command === 'login' && rest.length === 0) {
       const { email } = await login(environment, store);
       output = { ok: true, email };

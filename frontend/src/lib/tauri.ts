@@ -1,6 +1,6 @@
 'use client';
 
-import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView } from './intake';
+import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView } from './performanceReport';
 
 interface TauriEvent<T> {
@@ -719,6 +719,13 @@ export function cancelIntake(): Promise<boolean> {
 /** Removes the CLI's LaunchAgent (`intake schedule off`); emits no finished event. */
 export function turnOffIntakeLaunchAgent(): Promise<unknown> {
   return invoke<unknown>('intake_launch_agent_off');
+}
+
+/** Stores the sync options (`intake options`); resolves to the CLI's `{ok, options}`. */
+export function setIntakeOptions(options: IntakeSyncOptions): Promise<unknown> {
+  return invoke<unknown>('intake_set_options', {
+    calendarResponses: options.calendarResponses, sfdcContacts: options.sfdcContacts,
+  });
 }
 
 export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {

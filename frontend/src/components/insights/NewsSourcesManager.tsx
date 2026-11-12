@@ -10,7 +10,7 @@ import {
   type AccountEditForm, type DirectoryState, type NewsSourceItem, type NewsSourceKind,
 } from '@/lib/newsRegistration';
 import type { AccountSummary } from '@/types/meeting';
-import { COLLECT_LIMITS, COLLECT_READY, collectFailure, collectView, nextLimitAt, type CollectState } from '@/lib/newsCollect';
+import { COLLECT_LIMITS, COLLECT_NOW_AVAILABLE, COLLECT_READY, collectFailure, collectView, nextLimitAt, type CollectState } from '@/lib/newsCollect';
 import { NewsKindBadge } from './NewsOrigin';
 
 export interface NewsSourcesState extends DirectoryState {
@@ -384,7 +384,7 @@ function SourceRow({ item, userId, onChanged }: { item: NewsSourceItem; userId: 
               </>
             ) : (
               <>
-                {isAccount && (
+                {isAccount && COLLECT_NOW_AVAILABLE && (
                   <button type="button" onClick={() => void collectNow.collect()} disabled={collectNow.view.disabled}
                     aria-label={`${item.sourceName} 지금 수집`} aria-describedby={collectNow.view.note ? `collect-${item.sourceId}` : undefined}
                     className={`${quietButton} border border-border-subtle`}>{collectNow.inFlight ? '요청 중…' : '지금 수집'}</button>
@@ -431,7 +431,7 @@ export function NewsSourcesManager({ userId, initialAccountId, list, onClose }: 
 
       <div className="glass-panel rounded-xl p-5">
         <h4 className="text-base font-semibold text-text-main">등록한 소스</h4>
-        <p className="mt-1 text-xs text-text-secondary">{COLLECT_LIMITS}</p>
+        {COLLECT_NOW_AVAILABLE && <p className="mt-1 text-xs text-text-secondary">{COLLECT_LIMITS}</p>}
         {sources === null ? (
           <p className="mt-3 text-sm text-text-secondary" role="status">불러오는 중…</p>
         ) : unavailable ? (

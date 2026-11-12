@@ -36,6 +36,11 @@ Install and update the adapter:
   executable regular file named `node`; any other value is rejected with one
   generic message.
 
+Sync options (copy key `syncOptionsTitle`) set which calendar events sync, by
+your own response, and whether the SFDC contacts step runs. Save runs
+`intake options` in the exclusive run slot; see
+[Sync options](#sync-options).
+
 Connect sources (the setup button runs `intake setup`):
 
 - Setup lists the selected server per connector, as in the Quick start below.
@@ -110,6 +115,7 @@ Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
 intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
 intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
 intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
 intake login
 ```
@@ -176,15 +182,59 @@ never opens a browser; the LaunchAgent uses it.
 | `intake login` | Interactive Cognito sign-in (a browser may open; use it only from an explicit user action). Prints `{ok:true,email}`; exits 2 with `{ok:false,code}` on failure. It does not take the run lock. |
 | `intake status` | Shows the selection (names only) and the last calendar and task results and counts. |
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
+| `intake options [--calendar-responses <csv>] [--sfdc-contacts on\|off]` | Stores the given [sync options](#sync-options) and prints `{ok, options:{calendarResponses, sfdcContacts}}`; with no flags it only prints them. An unknown value exits 2 with `INVALID_ARGUMENT`. |
 
-`run`, `setup`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
+`run`, `setup`, `select`, `options`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
 (`<pid> <random token>`, the same `IntakeStore.lock` as the per-connector locks).
 A second concurrent run exits 2 with `RUN_IN_PROGRESS` and touches no state; a lock
 whose process is gone is reclaimed under a serializing `run.lock.break` lock. `status`, `hosts`,
-`schedule`, `login` and `select` do not take it.
+`schedule` and `login` do not take it.
 
 The window is the past 7 days through the next 30 days in the Mac's time zone,
 read as 7-day `calendar_view` requests.
+
+### Sync options
+
+Stored in the top-level `options` object of `~/.ttobak/intake/selection.json`,
+apart from the connector entries, so a value set before a connector is selected
+is kept. Absent fields mean the defaults; the first selection stores them.
+
+- `calendarResponses`: any of `accept`, `organizer`, `tentative`, `none`;
+  default `accept,organizer,tentative`; an empty list syncs no events. The
+  `calendar_view` `response` maps `Accept` or `Accepted`, `Organizer`,
+  `Tentative` or `TentativelyAccepted`, and `NoResponseReceived`, `NotResponded`
+  or `None`. `Decline` or `Declined` is always excluded. Any item with a
+  missing or unrecognised value fails the calendar step, dry runs included,
+  with `SCHEMA_CHANGED` before any change, so a provider change can neither
+  stop syncing silently nor mass-remove synced events.
+- `sfdcContacts`: default on. Off skips the [contacts step](#sfdc-contacts-step)
+  with result `disabled`, which is not a failure.
+
+An event whose response is not selected is excluded like a private one: it is
+not sent, and a tracked copy is removed on the next real run. Dry runs report
+`excludedByResponse`. A private event is excluded before the response is
+checked, so its title never appears in a removal preview. An occurrence
+excluded only by an unselected response (not a declined one) is recorded as
+held in the calendar state, and its SpecReq task stays open: when the owner
+answers the invitation or selects the response again, the event syncs again
+with the same task. Holds accumulate across runs and end only when the
+occurrence is observed cancelled, private or declined, when its upsert is
+acknowledged into the ledger, or when the calendar retention prunes it. A read
+that does not return the occurrence, a skipped re-upsert (too long, invalid)
+or a rejected batch keeps the hold. A held occurrence stays tracked, so a
+decline still closes its task even past the task list cap. A declined, cancelled or deleted occurrence closes its task as
+before. The response itself never reaches TTOBAK.
+
+After the update, the first real run (possibly a scheduled one, before you open
+Settings) removes previously synced events that are declined or unanswered. Settings shows copy key
+`defaultsRemoveNote` while the no-response box is unchecked. To keep the unanswered ones,
+check the no-response box (copy key `responseNone`) in Settings, or run
+`intake options --calendar-responses accept,organizer,tentative,none`, before
+the next run. Declined events cannot be kept.
+
+The options take effect only with an updated adapter (`~/.ttobak/server.mjs`).
+An older adapter has no `intake options` and Settings shows the `adapterTooOld`
+message on save; update the adapter first.
 
 ## Behavior
 
@@ -445,7 +495,7 @@ assignments are reconciled (see below).
 `intake select sfdc --host <claude|codex|kiro> --server aws-sentral-mcp` checks
 the input schemas of `get_my_personal_details`, `get_registry_assignments` and
 `search_tasks`, and keeps the calendar selection. `search_contacts` is allowed
-and checked only by the contacts step. `intake sfdc [--dry-run]
+and checked only by the contacts step while it is on. `intake sfdc [--dry-run]
 [--noninteractive] [--reconcile]` then reads and syncs; a dry run prints counts
 only and makes no TTOBAK calls. It holds `sfdc.lock`.
 
@@ -497,12 +547,14 @@ SFDC and keeps its ledger.
 
 After a successful SFDC sync, the same `intake sfdc` or `intake run`, on the
 same `aws-sentral-mcp` session, runs `sfdc-contacts`
-(`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`.
-A missing or changed `search_contacts` fails the step with `SCHEMA_CHANGED`;
-the SFDC performance sync keeps its result.
+(`mcp-server/src/intake/sfdc-contacts.ts`). It reads only `search_contacts`,
+which is on the session allowlist only while the step is on. A missing or
+changed `search_contacts` fails the step with `SCHEMA_CHANGED`; the SFDC
+performance sync keeps its result.
 `intake sfdc` still exits 0 when this step fails, like the calendar's task
 step: the failure is in its `sfdcContacts.result` and in `status.json`; only
-`intake run` turns it into `PARTIAL_FAILURE`.
+`intake run` turns it into `PARTIAL_FAILURE`. With `sfdcContacts` off in the
+[sync options](#sync-options) the step makes no call and records `disabled`.
 
 - **IDs.** Every SFDC ID (contact and account IDs from `search_contacts`,
   mapped SFDC account IDs, stored `sfdcContactId` links and ledger entries) is
@@ -537,8 +589,9 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   and family name in either order; Latin names match only as given) without
   a conflicting email links it. A contact already
   linked to another SFDC ID, already matched by email, or whose email is
-  ambiguous (for example shared by two SFDC people) is not a name candidate. Several candidates, or several SFDC contacts for one candidate,
-  are `ambiguous` and skipped this run. No match creates a contact. When the
+  ambiguous (for example shared by two SFDC people) is not a name candidate.
+  Several candidates, or several SFDC contacts for one candidate, are
+  `ambiguous` and skipped this run. No match creates a contact. When the
   Account's read is incomplete (a failed page, a cap, a truncated mapping
   listing or more than 20 SFDC accounts), a missing person could make a match
   ambiguous, so only contacts that already carry the SFDC link are filled;
@@ -563,8 +616,19 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   `lastSuccessAt`, `result` and `counts`: `accounts`, `fetched`, `created`,
   `filled`, `unchanged`, `alreadyLinked`, `suppressed`, `conflict`, `invalid`,
   `ambiguous`, `skippedInternal`, `skippedCap`, `skippedAccountCap`,
-  `incomplete`, `deferredIncomplete`, `accountMismatch`, `marked`, `unmarked`, `skipped`, `forbidden`, `invalidIds`,
-  `ledgerReset`.
+  `incomplete`, `deferredIncomplete`, `accountMismatch`, `marked`,
+  `unmarked`, `skipped`, `forbidden`, `invalidIds`, `ledgerReset`, `deferred`.
+  Settings shows the counts also when the result is a failure code, with
+  `skipped`, `ambiguous`, `forbidden`, `incomplete`, `deferredIncomplete`,
+  `accountMismatch` and `deferred` only when non-zero.
+- **Time budget.** No new Account starts once the step has run 8 minutes
+  (`SFDC_CONTACTS_BUDGET_MS`); the rest count as `deferred` and the result
+  stays `ok`. The step stores where it stopped (`sfdc-contacts/<scope>/resume.json`,
+  a TTOBAK Account ID only), and the next run starts after that Account, so
+  every Account is reached in turn; a full pass clears it. The budget only
+  stops a new Account from starting: an Account already begun may still take
+  several bounded MCP calls (each up to 120 seconds), so it usually, but not
+  provably, finishes before the app's 20-minute run timeout.
 - **Failures.** A failed page or a failed Account request becomes the step's
   `result` while later Accounts still run, so `intake run` reports
   `PARTIAL_FAILURE`; the SFDC sources keep their own result.

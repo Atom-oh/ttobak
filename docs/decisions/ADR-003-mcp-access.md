@@ -522,8 +522,31 @@ configuration.
   (ADR-021). Emails are compared on the Mac only; no email or phone reaches a
   request, log, status file or ledger. A failure of the step is a
   `PARTIAL_FAILURE` of `intake run`; `AUTH_EXPIRED_MIDWAY` stops it.
-  `search_contacts` is allowed but checked only by the step, so a missing or
-  changed contacts tool fails only the step (`SCHEMA_CHANGED`).
+  `search_contacts` is allowed and checked only while the step is on (off, the
+  session does not allow it at all), so a missing or changed contacts tool
+  fails only the step (`SCHEMA_CHANGED`). No new Account starts after 8
+  minutes; the rest are `deferred`, and a stored resume point (an Account ID)
+  starts the next run after the last Account begun, so every Account is
+  reached in turn. The budget does not bound an Account already begun, so it
+  makes a status write before the app's 20-minute timeout likely, not certain.
+- **Sync options (amendment, 2026-11-11).** `intake options` stores a
+  top-level `options` object in `selection.json`: `calendarResponses` (the
+  owner's own responses to sync; default accept, organizer and tentative;
+  declined events never sync) and `sfdcContacts` (default on; off records the
+  contacts step as `disabled`). An event with an unselected response is
+  excluded like a private one, so a tracked copy is removed through the
+  existing removal path. The response is read on the Mac only. The Mac app
+  sets the options with typed values (`intake_set_options`). The first real
+  run after the update, possibly scheduled, therefore removes synced events
+  that are declined or unanswered (any missing or unrecognised response fails
+  the calendar step with `SCHEMA_CHANGED` before any change); the
+  owner keeps unanswered ones by selecting `none` (Settings or `intake
+  options`) before that run, and Settings shows that note while `none` is
+  not selected. Declined events cannot be kept. A SpecReq task is not closed
+  for an occurrence excluded only by an unselected response (held in the
+  calendar state), so answering the invitation later keeps its task. A hold
+  ends only on an observed cancel, private flag or decline, an acknowledged
+  re-upsert, or retention.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** is owned by the Mac app, which runs `intake run
   --noninteractive` (all selected sync connectors) itself, with launch and wake
