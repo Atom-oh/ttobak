@@ -146,6 +146,14 @@ export class StorageStack extends cdk.Stack {
           noncurrentVersionExpiration: cdk.Duration.days(7),
         },
         {
+          // Presigned skill package uploads that were never completed
+          // (completion validates, copies and deletes the staged object).
+          id: 'ExpireSkillPackageStaging',
+          prefix: 'skillpkg/staging/',
+          expiration: cdk.Duration.days(1),
+          noncurrentVersionExpiration: cdk.Duration.days(1),
+        },
+        {
           id: 'AudioToIA',
           prefix: 'audio/',
           transitions: [
@@ -318,7 +326,9 @@ exports.handler = async () => {
         actions: ['s3:GetObject'],
         principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
         // audio-playback: ADR-014 remuxed (seekable) copies of meeting audio.
-        resources: ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf'].map((prefix) =>
+        // skillpkg/org and skillpkg/user: stored skill package zips; the
+        // staging prefix of unfinished uploads is never served.
+        resources: ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf', 'skillpkg/org', 'skillpkg/user'].map((prefix) =>
           this.bucket.arnForObjects(`${prefix}/*`)
         ),
         conditions: {

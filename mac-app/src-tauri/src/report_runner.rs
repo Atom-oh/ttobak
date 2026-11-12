@@ -287,9 +287,23 @@ fn validate_profile(profile: Option<&str>, profiles: &[String]) -> Result<(), &'
     }
 }
 
+/// Bedrock needs a chosen AWS profile: without one the CLI's Bedrock request
+/// can hang until it times out (2026-11-11).
+fn validate_bedrock(use_bedrock: bool, profile: Option<&str>) -> Result<(), &'static str> {
+    if use_bedrock && profile.is_none() {
+        return Err("profile-required");
+    }
+    Ok(())
+}
+
+/// A stored setting saved before the guard: Bedrock on without a profile.
+fn settings_attention(s: &ReportSettings) -> bool {
+    validate_bedrock(s.use_bedrock, s.aws_profile.as_deref()).is_err()
+}
+
 /// The report variables of the child environment: none unless Bedrock is
-/// enabled; then `TTOBAK_REPORT_USE_BEDROCK=1` and, when chosen and still
-/// present, `TTOBAK_REPORT_AWS_PROFILE`.
+/// enabled; then `TTOBAK_REPORT_USE_BEDROCK=1` and the chosen, still present
+/// `TTOBAK_REPORT_AWS_PROFILE` (Bedrock without a profile is refused).
 fn report_env(
     s: &ReportSettings,
     profiles: &[String],
@@ -297,6 +311,7 @@ fn report_env(
     if !s.use_bedrock {
         return Ok(Vec::new());
     }
+    validate_bedrock(s.use_bedrock, s.aws_profile.as_deref())?;
     validate_profile(s.aws_profile.as_deref(), profiles)?;
     let mut env = vec![("TTOBAK_REPORT_USE_BEDROCK", "1".to_string())];
     if let Some(p) = &s.aws_profile {
@@ -590,6 +605,8 @@ pub struct ReportStateView {
     last_result: Option<Value>,
     progress: Vec<String>,
     settings: ReportSettings,
+    /// Bedrock is on without a profile; the dialog asks for a fix.
+    settings_attention: bool,
 }
 
 /// Starts one background report run; finishes with `report://finished`.
@@ -655,11 +672,13 @@ pub async fn report_get_state(
     report: State<'_, ReportState>,
 ) -> Result<ReportStateView, String> {
     intake.available()?;
+    let settings = intake.snapshot().report;
     Ok(ReportStateView {
         running: *report.running.lock(),
         last_result: report.last_result.lock().clone(),
         progress: report.progress.lock().to_vec(),
-        settings: intake.snapshot().report,
+        settings_attention: settings_attention(&settings),
+        settings,
     })
 }
 
@@ -683,6 +702,7 @@ pub async fn report_settings_set(
     aws_profile: Option<String>,
 ) -> Result<ReportSettingsView, String> {
     intake.available()?;
+    validate_bedrock(use_bedrock, aws_profile.as_deref()).map_err(str::to_string)?;
     let profiles = crate::aws_profiles::list();
     validate_profile(aws_profile.as_deref(), &profiles).map_err(str::to_string)?;
     intake.update_settings(|s| {
@@ -704,6 +724,19 @@ mod tests {
 
     fn s(v: &str) -> Option<String> {
         Some(v.to_string())
+    }
+
+    #[test]
+    fn bedrock_without_profile_is_refused() {
+        assert_eq!(validate_bedrock(true, None), Err("profile-required"));
+        assert_eq!(validate_bedrock(false, None), Ok(()));
+        assert_eq!(validate_bedrock(true, Some("cc-bedrock")), Ok(()));
+        let stale = ReportSettings {
+            use_bedrock: true,
+            aws_profile: None,
+        };
+        assert!(settings_attention(&stale));
+        assert!(!settings_attention(&ReportSettings::default()));
     }
 
     fn argv_strings(v: Vec<OsString>) -> Vec<String> {
@@ -1047,9 +1080,10 @@ mod tests {
             use_bedrock: true,
             aws_profile: None,
         };
+        // Bedrock without a chosen profile timed out on 2026-11-11: refused.
         assert_eq!(
             report_env(&on_default_chain, &profiles),
-            Ok(vec![("TTOBAK_REPORT_USE_BEDROCK", "1".to_string())])
+            Err("profile-required")
         );
         // A stored profile that has since disappeared refuses the run.
         let gone = ReportSettings {

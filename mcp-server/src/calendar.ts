@@ -3,6 +3,7 @@ import { ApiResponseError, type TtobakApi } from './api.js';
 import { readingError } from './reading.js';
 
 export const MAX_CALENDAR_API_BYTES = 14_000;
+export const MAX_CALENDAR_DIRECTORY_BYTES = 64 * 1024;
 const MAX_RESULT_BYTES = 32_000;
 const MAX_REVISION = Number.MAX_SAFE_INTEGER - 1;
 const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
@@ -21,6 +22,13 @@ const eventFields = {
   endDate: { type: 'string', format: 'date', description: 'All-day exclusive local end date at midnight.' },
   location: textSchema(256, false), accountId: identifierSchema,
   organizerDomain: { type: 'string', pattern: '^[a-z0-9.-]{1,253}$', description: 'Lowercase organizer email domain only; never a name or local part.' },
+  shareAccountId: { ...identifierSchema, description: 'Account to share this occurrence with; the caller must be a direct member.' },
+  shareEvidence: { type: 'array', maxItems: 3, uniqueItems: true, items: { enum: ['domain', 'location', 'title'] },
+    description: 'Evidence kinds for shareAccountId, never matched text.' },
+  candidateAccountIds: { type: 'array', maxItems: 5, uniqueItems: true, items: identifierSchema,
+    description: 'Owner-only account suggestions; must not repeat shareAccountId.' },
+  private: { type: 'boolean', description: 'Never shared (Outlook Private category or private meeting); forbids shareAccountId and candidates.' },
+  seriesKey: { type: 'string', pattern: '^[0-9a-f]{64}$', description: 'Opaque series key (64 lowercase hex).' },
 };
 const requiredEventFields = ['externalId', 'title', 'startsAt', 'endsAt', 'timeZone'];
 const syncFields = {
@@ -29,7 +37,8 @@ const syncFields = {
     description: 'Exact expected revision. The next receipt revision must also be a safe JavaScript integer.' },
   windowStart: timestampSchema, windowEnd: timestampSchema, complete: { type: 'boolean' },
   mutations: {
-    type: 'array', maxItems: 20, description: 'At most 20 distinct occurrence IDs. Only explicit removals delete events.',
+    type: 'array', maxItems: 20, description: 'At most 20 distinct occurrence IDs, or at most 12 when any upsert carries ' +
+      'share fields (the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE). Only explicit removals delete events.',
     items: { oneOf: [
       { type: 'object', properties: { op: { const: 'upsert' }, event: {
         type: 'object', properties: eventFields, required: requiredEventFields, additionalProperties: false,
@@ -56,6 +65,8 @@ export const CALENDAR_TOOLS: Tool[] = [
     description: 'Locally sync caller-supplied Outlook occurrences to your private calendar. Requires user intent. ' +
       'Use stable occurrence-level external IDs and a positive window of at most 93 elapsed days. ' +
       'An empty complete batch reports progress without inferring deletions. ' +
+      'A batch whose upserts carry share fields (shareAccountId, candidateAccountIds or private) must contain at most 12 mutations; ' +
+      'the server rejects transactions over 100 items with HTTP 413 CALENDAR_BATCH_TOO_LARGE. ' +
       'On ambiguous delivery, retry the identical batch ID, expected revision, source and full payload. ' +
       'Returns the actual server receipt; never fetches Outlook or creates meetings.',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -146,6 +157,7 @@ function eventInput(value: unknown): asserts value is RecordValue {
   if ('location' in value && !validText(value.location, 256, false)) invalid('location');
   if ('organizerDomain' in value && (typeof value.organizerDomain !== 'string' || !/^[a-z0-9.-]{1,253}$/.test(value.organizerDomain))) invalid('organizerDomain');
   if ('accountId' in value && (typeof value.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.accountId))) invalid('accountId');
+  sharingInput(value);
   if (!validText(value.timeZone, 128) || value.timeZone === 'Local' || /^[+-]/.test(value.timeZone)) invalid('timeZone');
   if ('isAllDay' in value && typeof value.isAllDay !== 'boolean') invalid('isAllDay');
   let formatter: Intl.DateTimeFormat;
@@ -171,6 +183,28 @@ function eventInput(value: unknown): asserts value is RecordValue {
   const encoded = JSON.stringify(payload) + '\n';
   const separatorBytes = Array.from(encoded).filter(character => [8232, 8233].includes(character.charCodeAt(0))).length * 3;
   if (Buffer.byteLength(encoded) + separatorBytes > 4096) invalid('encrypted event payload byte limit');
+}
+
+const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
+const EVIDENCE = ['domain', 'location', 'title'];
+
+// Mirrors the server's normalizeCalendarSharing rules.
+function sharingInput(value: RecordValue): void {
+  const share = value.shareAccountId;
+  if (share !== undefined && (typeof share !== 'string' || !IDENTIFIER.test(share))) invalid('shareAccountId');
+  const evidence = value.shareEvidence, candidates = value.candidateAccountIds;
+  if (evidence !== undefined && (!Array.isArray(evidence) || evidence.length > 3 ||
+      evidence.some(kind => typeof kind !== 'string' || !EVIDENCE.includes(kind)) ||
+      new Set(evidence).size !== evidence.length)) invalid('shareEvidence');
+  if (candidates !== undefined && (!Array.isArray(candidates) || candidates.length > 5 ||
+      candidates.some(id => typeof id !== 'string' || !IDENTIFIER.test(id) || id === share) ||
+      new Set(candidates).size !== candidates.length)) invalid('candidateAccountIds');
+  if (value.private !== undefined && typeof value.private !== 'boolean') invalid('private');
+  if (value.seriesKey !== undefined && (typeof value.seriesKey !== 'string' || !/^[0-9a-f]{64}$/.test(value.seriesKey))) invalid('seriesKey');
+  if (Array.isArray(evidence) && evidence.length > 0 && share === undefined) invalid('shareEvidence without shareAccountId');
+  if (value.private === true && (share !== undefined || (Array.isArray(candidates) && candidates.length > 0))) {
+    invalid('private event sharing');
+  }
 }
 
 function syncInput(args: RecordValue): { sourceId: string; body: CalendarSyncRequest } {

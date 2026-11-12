@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Shared mutable state for the live QA panel's proactive search feature.
+ * Shared state for automatic live QA answers and optional external search.
  *
  * Lives in lib/, NOT inside the LiveQAPanel component module, for two
  * reasons: (a) repo layering — non-component modules (auth.ts, AuthProvider,
@@ -164,6 +164,28 @@ export function setProactiveSearchUser(userId: string | null) {
   proactiveSearchUserId = userId;
   proactiveSearchListeners.forEach((l) => l());
 }
+
+/** Automatic read-only answers are independent of external-search consent. */
+export const automaticAnswerStore = {
+  get(): boolean {
+    if (!proactiveSearchUserId) return false;
+    try {
+      return localStorage.getItem(`ttobak.automaticAnswers.${proactiveSearchUserId}`) !== '0';
+    } catch { return false; }
+  },
+  set(value: boolean) {
+    if (proactiveSearchUserId) {
+      try {
+        localStorage.setItem(`ttobak.automaticAnswers.${proactiveSearchUserId}`, value ? '1' : '0');
+      } catch { /* do not activate when preferences cannot be persisted */ }
+    }
+    proactiveSearchListeners.forEach((l) => l());
+  },
+  subscribe(listener: () => void) {
+    proactiveSearchListeners.add(listener);
+    return () => { proactiveSearchListeners.delete(listener); };
+  },
+};
 
 export const proactiveSearchStore = {
   get(): boolean {

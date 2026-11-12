@@ -488,6 +488,7 @@ function retryableQAError(error: unknown): boolean {
 
 async function askQA(request: {
   mode: 'ask' | 'meeting'; question: string; context?: string; sessionId?: string; meetingId?: string;
+  automatic?: boolean; allowWebSearch?: boolean;
 }, onSubmit?: (jobId?: string) => void): Promise<QAResponse> {
   const auth = await getAuthHeaders();
   const userId = tokenUserId(auth.Authorization?.slice(7) || null);
@@ -577,16 +578,18 @@ async function askQA(request: {
 
 export const qaApi = {
   ask: (question: string, context?: string, sessionId?: string, meetingId?: string,
-        onSubmit?: (jobId?: string) => void) =>
-    askQA({ mode: 'ask', question, context, sessionId, meetingId }, onSubmit),
+        onSubmit?: (jobId?: string) => void,
+        policy?: { automatic: boolean; allowWebSearch: boolean }) =>
+    askQA({ mode: 'ask', question, context, sessionId, meetingId, ...policy }, onSubmit),
 
   askMeeting: (meetingId: string, question: string, sessionId?: string) =>
     askQA({ mode: 'meeting', question, sessionId, meetingId }),
 
-  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
-    api.post<{ questions: string[]; proactive?: string[] }>(
+  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string,
+                    meetingTitle?: string, meetingContext?: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/lib/liveQuestionDetector').LiveDetectionResult>(
       '/api/qa/detect-questions',
-      { transcript, previousQuestions, summary }
+      { transcript, previousQuestions, summary, meetingTitle, meetingContext }, options
     ),
 };
 
@@ -817,14 +820,14 @@ export const dictionaryApi = {
     api.delete<void>(`${DICT}/term`, { body: JSON.stringify({ phrase }) }),
 
   // Layer routes: `personal`, `common`, `account:{id}`.
-  listLayer: (layer: DictionaryLayer) =>
-    api.get<{ items: DictTermItem[] }>(`${layerPath(layer)}/terms`),
+  listLayer: (layer: DictionaryLayer, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.get<{ items: DictTermItem[] }>(`${layerPath(layer)}/terms`, options),
   listDeletedCommon: () =>
     api.get<{ items: DeletedCommonTerm[] }>(`${layerPath('common')}/terms?deleted=1`),
-  createLayerTerm: (layer: DictionaryLayer, input: CreateDictTermInput) =>
-    api.post<DictTermMutationResponse>(`${layerPath(layer)}/terms`, input),
-  updateLayerTerm: (layer: DictionaryLayer, termId: string, patch: TermPatch, version: number) =>
-    api.patch<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}`, { ...patch, version }),
+  createLayerTerm: (layer: DictionaryLayer, input: CreateDictTermInput, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.post<DictTermMutationResponse>(`${layerPath(layer)}/terms`, input, options),
+  updateLayerTerm: (layer: DictionaryLayer, termId: string, patch: TermPatch, version: number, options?: Pick<FetchOptions, 'expectedUserId' | 'signal'>) =>
+    api.patch<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}`, { ...patch, version }, options),
   deleteLayerTerm: (layer: DictionaryLayer, termId: string, version: number) =>
     api.delete<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}?version=${version}`),
   updateCommon: (termId: string, patch: TermPatch, version: number) =>
