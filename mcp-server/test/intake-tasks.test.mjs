@@ -1080,11 +1080,38 @@ test('an occurrence excluded only by its response keeps its task; a declined one
   assert.equal(unanswered.output.counts.removals, 1);
   assert.equal(unanswered.output.tasks.counts.closed, 0);
   assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
+  // A missing response field next keeps the hold rather than releasing the task.
+  // A second, declined item keeps the read from looking like a dropped response field.
+  const unknown = await run(api, [occurrence({ response: undefined }),
+    occurrence({ meetingId: 'occ-2', response: 'Decline' })], work);
+  assert.equal(unknown.output.tasks.counts.closed, 0);
+  assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
   // Answered again: synced again with the same open task.
   const accepted = await run(api, [occurrence()], work);
   assert.equal(accepted.output.counts.upserts, 1);
   assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
   // Declined: removed and the task closes.
+  const declined = await run(api, [occurrence({ response: 'Decline' })], work);
+  assert.equal(declined.output.tasks.counts.closed, 1);
+  assert.equal(api.tasks.get(created.eventId).state, 'closed');
+});
+
+test('past the task list cap a held occurrence that is then declined closes its task', async t => {
+  const { run } = await taskHome(t);
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  await run(api, [occurrence()], work);
+  const [created] = api.tasks.values();
+  await run(api, [occurrence({ response: 'None' })], work);
+  assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
+  const rows = [...api.tasks.entries()];
+  api.tasks.clear();
+  for (let index = 0; index < 1000; index++) {
+    const eventId = (index + 1).toString(16).padStart(64, '0');
+    api.tasks.set(eventId, { eventId, sourceId: 'other', state: 'closed', occurrenceStartsAt: '2026-11-01T00:00:00Z',
+      occurrenceEndsAt: '2026-11-01T01:00:00Z', createdAt: '2026-11-01T00:00:00Z', stateChangedAt: '2026-11-01T00:00:00Z', version: 1 });
+  }
+  for (const [eventId, row] of rows) api.tasks.set(eventId, row);
   const declined = await run(api, [occurrence({ response: 'Decline' })], work);
   assert.equal(declined.output.tasks.counts.closed, 1);
   assert.equal(api.tasks.get(created.eventId).state, 'closed');
