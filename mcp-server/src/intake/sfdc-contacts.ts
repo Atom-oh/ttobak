@@ -32,13 +32,15 @@ const CONTACT_PAGE = 25;
 const CONTACT_PAGE_BYTES = 512 * 1024;
 const MAX_CONTACT_PAGES = 1_000;
 const MAX_LEDGER_IDS = 20_000;
+/** No new Account starts after this; the app kills a run at 20 minutes, and status must still be written. */
+export const SFDC_CONTACTS_BUDGET_MS = 8 * 60_000;
 
 const INTERNAL_RECORD_TYPES = new Set(['Stakeholder Map - Internal Contacts', 'Project Resource']);
 const RESULTS = ['created', 'filled', 'unchanged', 'alreadyLinked', 'suppressed', 'conflict', 'invalid'] as const;
 type SyncResult = typeof RESULTS[number];
 
 export interface SfdcContactCounts {
-  /** TTOBAK Accounts with at least one mapped SFDC account. */
+  /** TTOBAK Accounts with at least one mapped SFDC account that this run processed. */
   accounts: number;
   /** `search_contacts` records read, before filtering. */
   fetched: number;
@@ -71,6 +73,8 @@ export interface SfdcContactCounts {
   invalidIds: number;
   /** Corrupt suppression ledgers that were treated as empty. */
   ledgerReset: number;
+  /** TTOBAK Accounts not started because the time budget ran out; they run next time. */
+  deferred: number;
 }
 
 export interface SfdcContactsResult { result: 'ok' | IntakeCode; counts: SfdcContactCounts }
@@ -115,7 +119,7 @@ function emptyCounts(): SfdcContactCounts {
   return { accounts: 0, fetched: 0, created: 0, filled: 0, unchanged: 0, alreadyLinked: 0, suppressed: 0, conflict: 0,
     invalid: 0, ambiguous: 0, skippedInternal: 0, skippedCap: 0, skippedAccountCap: 0, incomplete: 0,
     deferredIncomplete: 0, accountMismatch: 0, marked: 0,
-    unmarked: 0, skipped: 0, forbidden: 0, invalidIds: 0, ledgerReset: 0 };
+    unmarked: 0, skipped: 0, forbidden: 0, invalidIds: 0, ledgerReset: 0, deferred: 0 };
 }
 
 // ---------- matching (pure) ----------
@@ -492,6 +496,24 @@ function readLedger(store: IntakeStore | undefined, scope: string | undefined, a
   }
 }
 
+/** Where a budget-limited run stopped: the next run starts after this TTOBAK Account (IDs only). */
+interface ResumePoint { version: 1; after: string | null }
+
+function resumePath(scope: string): string[] {
+  return ['sfdc-contacts', scope, 'resume.json'];
+}
+
+/** Accounts in ID order, rotated to start after the stored resume point, so deferred ones go first. */
+function rotated<T>(accounts: Map<string, T>, store: IntakeStore | undefined, scope: string | undefined): [string, T][] {
+  const entries = [...accounts];
+  if (!store || !scope) return entries;
+  let after: unknown = null;
+  try { after = store.read<ResumePoint>(...resumePath(scope))?.after ?? null; } catch { after = null; }
+  if (typeof after !== 'string') return entries;
+  const start = entries.findIndex(([id]) => id > after);
+  return start <= 0 ? entries : [...entries.slice(start), ...entries.slice(0, start)];
+}
+
 // ---------- orchestration ----------
 
 export interface SfdcContactsOptions {
@@ -502,6 +524,10 @@ export interface SfdcContactsOptions {
   /** Local state for the suppression ledger; without both, nothing is remembered. */
   store?: IntakeStore;
   scope?: string;
+  /** Milliseconds clock; injectable for tests. */
+  now?: () => number;
+  /** Defaults to `SFDC_CONTACTS_BUDGET_MS`. */
+  budgetMs?: number;
 }
 
 /**
@@ -511,6 +537,9 @@ export interface SfdcContactsOptions {
  */
 export async function runSfdcContacts(options: SfdcContactsOptions): Promise<SfdcContactsResult> {
   const { session, api, dryRun, store } = options;
+  const now = options.now ?? Date.now;
+  const budgetMs = options.budgetMs ?? SFDC_CONTACTS_BUDGET_MS;
+  const startedAt = now();
   const scope = options.scope && SCOPE_PATTERN.test(options.scope) ? options.scope : undefined;
   const counts = emptyCounts();
   let failure: IntakeCode | undefined;
@@ -518,7 +547,15 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
   try {
     const mappings = await mappedAccounts(api);
     counts.invalidIds += mappings.invalidIds;
-    for (const [accountId, group] of mappings.accounts) {
+    let index = 0;
+    let last: string | null = null;
+    const order = rotated(mappings.accounts, store, scope);
+    for (const [accountId, group] of order) {
+      // Out of time: the next run starts after the last Account begun here, so every Account is
+      // reached in turn; the result stays ok and `deferred` is shown in Settings.
+      if (now() - startedAt >= budgetMs) { counts.deferred = order.length - index; break; }
+      index++;
+      last = accountId;
       counts.accounts++;
       let current: ExistingContact[];
       try { current = await existingContacts(api, accountId, counts); } catch (error) {
@@ -597,6 +634,11 @@ export async function runSfdcContacts(options: SfdcContactsOptions): Promise<Sfd
           fail('STORE_INVALID');
         }
       }
+    }
+    if (!dryRun && store && scope) {
+      // A finished pass clears the resume point; a deferred one records where it stopped.
+      const point: ResumePoint = { version: 1, after: counts.deferred ? last : null };
+      try { store.write(point, ...resumePath(scope)); } catch { fail('STORE_INVALID'); }
     }
   } catch (error) {
     if (intakeCode(error) === 'AUTH_EXPIRED_MIDWAY') throw error;

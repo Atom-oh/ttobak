@@ -25217,6 +25217,11 @@ function responseOf(value) {
       return "unknown";
   }
 }
+function assertResponsesPresent(items) {
+  if (items.length > 0 && !items.some((item2) => typeof item2.response === "string")) {
+    throw new IntakeError("SCHEMA_CHANGED", "calendar_view items carry no response field");
+  }
+}
 function zoneParts(instant2, zone) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: zone,
@@ -25561,6 +25566,7 @@ async function runCalendar(options2) {
   const window = syncWindow(now, zone);
   const items = [];
   for (const request2 of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request2)));
+  assertResponsesPresent(items);
   const plan = planCalendar(items, state.ledger, window, zone, options2.responses);
   if (plan.counts.responseUnknown > 0) {
     throw new IntakeError("SCHEMA_CHANGED", `${plan.counts.responseUnknown} calendar_view items carry no known response`);
@@ -28188,7 +28194,8 @@ function emptyCounts() {
     skipped: 0,
     forbidden: 0,
     invalidIds: 0,
-    ledgerReset: 0
+    ledgerReset: 0,
+    deferred: 0
   };
 }
 function normalizeName(value) {
@@ -28492,8 +28499,27 @@ function readLedger(store, scope, accountId) {
     return { ids: /* @__PURE__ */ new Set(), reset: true };
   }
 }
+function resumePath(scope) {
+  return ["sfdc-contacts", scope, "resume.json"];
+}
+function rotated(accounts, store, scope) {
+  const entries3 = [...accounts];
+  if (!store || !scope) return entries3;
+  let after = null;
+  try {
+    after = store.read(...resumePath(scope))?.after ?? null;
+  } catch {
+    after = null;
+  }
+  if (typeof after !== "string") return entries3;
+  const start = entries3.findIndex(([id]) => id > after);
+  return start <= 0 ? entries3 : [...entries3.slice(start), ...entries3.slice(0, start)];
+}
 async function runSfdcContacts(options2) {
   const { session, api, dryRun, store } = options2;
+  const now = options2.now ?? Date.now;
+  const budgetMs = options2.budgetMs ?? SFDC_CONTACTS_BUDGET_MS;
+  const startedAt = now();
   const scope = options2.scope && SCOPE_PATTERN.test(options2.scope) ? options2.scope : void 0;
   const counts = emptyCounts();
   let failure2;
@@ -28503,7 +28529,16 @@ async function runSfdcContacts(options2) {
   try {
     const mappings = await mappedAccounts(api);
     counts.invalidIds += mappings.invalidIds;
-    for (const [accountId, group] of mappings.accounts) {
+    let index = 0;
+    let last = null;
+    const order = rotated(mappings.accounts, store, scope);
+    for (const [accountId, group] of order) {
+      if (now() - startedAt >= budgetMs) {
+        counts.deferred = order.length - index;
+        break;
+      }
+      index++;
+      last = accountId;
       counts.accounts++;
       let current;
       try {
@@ -28595,13 +28630,21 @@ async function runSfdcContacts(options2) {
         }
       }
     }
+    if (!dryRun && store && scope) {
+      const point = { version: 1, after: counts.deferred ? last : null };
+      try {
+        store.write(point, ...resumePath(scope));
+      } catch {
+        fail("STORE_INVALID");
+      }
+    }
   } catch (error3) {
     if (intakeCode(error3) === "AUTH_EXPIRED_MIDWAY") throw error3;
     fail(intakeCode(error3));
   }
   return { result: failure2 ?? "ok", counts };
 }
-var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_PAGES2, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
+var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_PAGES2, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, SFDC_CONTACTS_BUDGET_MS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
 var init_sfdc_contacts = __esm({
   "src/intake/sfdc-contacts.ts"() {
     "use strict";
@@ -28622,6 +28665,7 @@ var init_sfdc_contacts = __esm({
     CONTACT_PAGE_BYTES = 512 * 1024;
     MAX_CONTACT_PAGES = 1e3;
     MAX_LEDGER_IDS = 2e4;
+    SFDC_CONTACTS_BUDGET_MS = 8 * 6e4;
     INTERNAL_RECORD_TYPES = /* @__PURE__ */ new Set(["Stakeholder Map - Internal Contacts", "Project Resource"]);
     RESULTS = ["created", "filled", "unchanged", "alreadyLinked", "suppressed", "conflict", "invalid"];
     CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
