@@ -76,7 +76,7 @@ export interface IntakeStateView {
 }
 
 export interface IntakeSourceRow {
-  source: 'calendar' | 'sfdc' | 'tasks';
+  source: 'calendar' | 'sfdc' | 'sfdcContacts' | 'tasks';
   label: string;
   lastRunAt: string | null;
   lastSuccessAt: string | null;
@@ -151,12 +151,14 @@ function countsText(source: IntakeSourceRow['source'], raw: unknown): string | n
   if (!counts) return null;
   if (source === 'calendar') return summary([['가져옴', counts.fetched], ['반영', counts.upserts], ['삭제', counts.removals]]);
   if (source === 'sfdc') return summary([['담당 고객', record(counts.assignments)?.fetched], ['활동', record(counts.tasks)?.fetched]]);
+  if (source === 'sfdcContacts') return summary([['가져옴', counts.fetched], ['생성', counts.created], ['보강', counts.filled], ['빠짐', counts.marked], ['복귀', counts.unmarked]]);
   return summary([['할 일', counts.tasks], ['생성', counts.created]]);
 }
 
 const SOURCES: { source: IntakeSourceRow['source']; label: string }[] = [
   { source: 'calendar', label: '캘린더' },
   { source: 'sfdc', label: 'SFDC' },
+  { source: 'sfdcContacts', label: 'SFDC 연락처' },
   { source: 'tasks', label: '할 일' },
 ];
 
