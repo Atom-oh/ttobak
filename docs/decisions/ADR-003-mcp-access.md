@@ -571,6 +571,15 @@ configuration.
   fail closed with `SENSITIVITY_UNKNOWN`; `--accept-unknown-sensitivity` means
   accepting that private items reach the user's private TTOBAK calendar. Dry
   runs report the count.
+- Account sharing never relies on that consent. The runner proposes Accounts
+  only: a match is sent as `candidateAccountIds`, never as `shareAccountId`, so
+  the runner shares nothing by itself; a share is the owner's choice in TTOBAK or
+  an explicit `shareAccountId` in a stdio calendar sync call. An
+  Outlook `Private` category or a joined `get_meeting` answering `isPrivate: true`
+  sends `private: true`; a previously private event stays private when a later
+  lookup has no answer. The server ranks an owner `account` override above
+  `private`, so an event the owner shared in TTOBAK stays shared until that
+  override is cleared. Automatic sharing is a separate, later decision.
 - The task step adds exactly two provider writes, both by the deterministic
   runner (this replaces "no unattended provider writes" for these two tools):
   - `acknowledge_request`, only when `get_request` shows `NEXT_UP` with me as

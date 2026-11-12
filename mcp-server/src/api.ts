@@ -14,7 +14,7 @@ import type { MeetingCatalogOptions } from './meeting-catalog.js';
 import type { VaultReadingOptions } from './vault-reading.js';
 import { billingReadingOptions, type BillingReadingOptions } from './billing-reading.js';
 import { canonicalContact, type ContactInput, type ContactListOptions } from './account-contacts.js';
-import { MAX_CALENDAR_API_BYTES, type CalendarSyncRequest, type CalendarPageQuery, type CalendarEventQuery } from './calendar.js';
+import { MAX_CALENDAR_API_BYTES, MAX_CALENDAR_DIRECTORY_BYTES, type CalendarSyncRequest, type CalendarPageQuery, type CalendarEventQuery } from './calendar.js';
 import { canonicalEvent, type EventInput, type EventListOptions } from './account-events.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
@@ -381,6 +381,12 @@ export class TtobakApi {
     return (result?.projects ?? []).flatMap(project => typeof project?.projectId === 'string'
       ? [{ projectId: project.projectId, ...(typeof project.sfdcOpptyId === 'string' && project.sfdcOpptyId ? { sfdcOpptyId: project.sfdcOpptyId } : {}) }]
       : []);
+  }
+
+  /** One page of accounts the caller may share calendar events with (direct memberships), capped at 64 KiB. */
+  async calendarShareDirectory(cursor = '') {
+    const query = cursor ? `?${new URLSearchParams({ cursor })}` : '';
+    return this.request('GET', `/api/calendar/share-directory${query}`, undefined, MAX_CALENDAR_DIRECTORY_BYTES, false, true);
   }
 
   async calendarSyncStatus(options: CalendarPageQuery) {
