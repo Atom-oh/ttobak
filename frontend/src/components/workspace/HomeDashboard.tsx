@@ -140,7 +140,7 @@ function HomeContent({ userId }: { userId: string }) {
           <WorkspaceActions />
         </div>
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-          <PrivateUpcomingMeetings />
+          <PrivateUpcomingMeetings accounts={accountList.accounts} />
           <section className={cardClass} aria-labelledby="account-insights-heading">
             <h2 id="account-insights-heading" className="text-lg font-bold text-text-main">고객 인사이트</h2>
             <p className="mt-1 text-sm text-text-secondary">다음 대화 전에 짚어볼 내용</p>
