@@ -185,6 +185,9 @@ func init() {
 	accountPeopleService.SetPeopleResolvePublisher(peopleResolvePublisher)
 	accountPeopleHandler := handler.NewAccountPeopleHandler(accountPeopleService)
 	accountEventsHandler := handler.NewAccountEventsHandler(service.NewAccountEventsService(repo))
+	// Customer brief producer: the summarize worker runs the requested brief
+	// (GatewayStack rule); the API only claims runs and reads the sealed row.
+	customerBriefHandler := handler.NewCustomerBriefHandler(service.NewCustomerBriefService(repo, service.CustomerBriefSources{}, nil, service.CustomerBriefPublisher(ebClient)))
 	accountReadingHandler := handler.NewAccountReadingHandler(service.NewAccountReadingService(repo.MetadataView()))
 	meetingCatalogHandler := handler.NewMeetingCatalogHandler(service.NewMeetingCatalogService(repo.MetadataView()))
 	vaultReadingHandler := handler.NewVaultReadingHandler(service.NewVaultReadingService(repo.MetadataView()))
@@ -429,6 +432,8 @@ func init() {
 		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
 		r.Get("/api/accounts/{accountId}/insights", accountHandler.ListAccountInsights)
 		r.Get("/api/accounts/{accountId}/brief", accountHandler.GetAccountBrief)
+		r.Get("/api/accounts/{accountId}/customer-brief", customerBriefHandler.Get)
+		r.Post("/api/accounts/{accountId}/customer-brief", customerBriefHandler.Request)
 		r.Get("/api/accounts/{accountId}/research", researchHandler.ListAccountResearch)
 		r.Get("/api/accounts/{accountId}/projects", projectHandler.ListAccountProjects)
 		r.Post("/api/accounts/{accountId}/documents", accountHandler.PutDocument)
