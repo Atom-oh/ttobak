@@ -25567,7 +25567,7 @@ async function runCalendar(options2) {
       "items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity"
     );
   }
-  state.held = plan.held;
+  state.held = { ...state.held ?? {}, ...plan.held };
   store.write(state, ...statePath(state));
   const api = options2.api;
   const groups = batches2(plan.mutations);
@@ -25593,7 +25593,7 @@ async function runCalendar(options2) {
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
-  state.held = pruneLedger(state.held ?? {}, now);
+  state.held = pruneLedger(plan.held, now);
   store.write(state, ...statePath(state));
   const upserted = /* @__PURE__ */ new Map();
   for (const item2 of items) if (Object.hasOwn(plan.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);

@@ -217,7 +217,9 @@ excluded only by an unselected response (not a declined one) is recorded as
 held in the calendar state, and its SpecReq task stays open: when the owner
 answers the invitation or selects the response again, the event syncs again
 with the same task. A later unknown response, or a read that does not return
-the occurrence, keeps the hold until the calendar retention prunes it, and a held
+the occurrence, keeps the hold until the calendar retention prunes it. A hold
+is released only after the run's batches are all acknowledged, so a rejected
+or unconfirmed re-upsert keeps it. A held
 occurrence stays tracked, so a decline still closes its task even past the
 task list cap. A declined, cancelled or deleted occurrence closes its task as
 before. The response itself never reaches TTOBAK.
