@@ -290,9 +290,10 @@ function RecordPageInner() {
   // choices are never overwritten.
   const autoLinkRecordingRef = useRef(false);
   const { changeRecordingAccount } = postRecording;
-  // Clearing is refused while a link to the existing draft is still pending.
-  const recordingAccountPending = !!postRecording.serverMeetingId && !!postRecording.recordingLinks.accountId
-    && postRecording.recordingLinks.accountId !== postRecording.recordingLinks.boundAccountId;
+  // Clearing is refused only while a link request is in flight or of unknown
+  // outcome; a deferred choice nothing has sent yet is local.
+  const recordingAccountPending = !!postRecording.recordingLinks.accountLinkInFlight;
+  const recordingAccountLocked = recordingAccountPending || !!postRecording.recordingLinks.accountUncertain;
   const calendarLink = useCalendarAutoLink({
     userId: user?.userId,
     accountId: referenceAccountId,
@@ -304,9 +305,9 @@ function RecordPageInner() {
     applyToRecording: (id) => { void changeRecordingAccount(id); },
     initialSource: searchParams.get('accountId') ? 'url' : 'none',
     enabled: !isUploadMode,
-    canDismiss: !recordingAccountPending,
+    canDismiss: !recordingAccountLocked,
   });
-  const { markSource: markAccountSource, invalidate: invalidateAutoLink } = calendarLink;
+  const { markSource: markAccountSource, invalidate: invalidateAutoLink, dropAutoLink } = calendarLink;
   // Stop, failure and return to idle end the recording's lookup: a late
   // calendar result must not link or retitle anything afterwards.
   const endAutoLinkRecording = useCallback(() => {
@@ -314,6 +315,12 @@ function RecordPageInner() {
     invalidateAutoLink();
   }, [invalidateAutoLink]);
   useEffect(() => { if (postRecording.step !== null) endAutoLinkRecording(); }, [postRecording.step, endAutoLinkRecording]);
+  // A flow dismissed without saving (step back to null) keeps no calendar values.
+  const previousStepRef = useRef(postRecording.step);
+  useEffect(() => {
+    if (previousStepRef.current !== null && postRecording.step === null) dropAutoLink();
+    previousStepRef.current = postRecording.step;
+  }, [postRecording.step, dropAutoLink]);
   const recordingLive = session.isRecording || isNativeRecording;
   const wasRecordingLiveRef = useRef(false);
   useEffect(() => {
@@ -328,7 +335,8 @@ function RecordPageInner() {
     || calendarLink.autoLink.accountId === postRecording.recordingLinks.accountId)
     // A draft already bound to it can only switch Accounts in RecordingLinkControls.
     ? <AutoLinkChip name={calendarLink.autoLink.name}
-      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId ? undefined : calendarLink.dismiss}
+      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId
+        || (recordingAccountLocked && !recordingAccountPending) ? undefined : calendarLink.dismiss}
       pending={recordingAccountPending} /> : null;
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
@@ -960,6 +968,9 @@ function RecordPageInner() {
 
   const handleRecordingStart = async (stream: MediaStream | null) => {
     setNativeWarnings([]);
+    // A previous recording's auto link (e.g. one that failed back to idle)
+    // never carries into this one; this start looks the calendar up again.
+    const released = calendarLink.dropAutoLink();
     if (stream && audioSource === 'tab') {
       const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
       setTabSharingLabel(label);
@@ -975,7 +986,7 @@ function RecordPageInner() {
     setFlowBusy(true);
     autoLinkRecordingRef.current = true;
     try {
-      const draft = postRecording.createDraftMeeting();
+      const draft = postRecording.createDraftMeeting(released);
       calendarLink.check();
       await draft;
     } finally {

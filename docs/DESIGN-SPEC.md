@@ -175,8 +175,11 @@ Account list. The page then sets the Account (and the title, only if still empty
 shows an `AutoLinkChip` with a change button that clears the link for the rest of
 the page session and reverts the auto-filled title unless it was edited; once a draft is bound to that Account the button is hidden and
 RecordingLinkControls switches Accounts. During a recording the link goes through
-`changeRecordingAccount`; the change button waits while that link to an existing
-draft is pending. Creation still validates membership; calendar or Account
+`changeRecordingAccount`; the change button waits only while a link request is in
+flight. A choice made before the draft exists stays local (replaceable or clearable)
+until save links it. The hook owns the Account and title it filled (subject trimmed
+to 200 code points) until someone changes them; a user or MCP choice, a new start, a
+leftover upload or a dismissed flow clears whatever it still owns. Creation still validates membership; calendar or Account
 failures show nothing.
 
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when

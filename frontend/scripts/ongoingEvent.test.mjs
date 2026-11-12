@@ -95,6 +95,13 @@ test('calendar pages are followed within a bound; a remaining cursor abstains', 
   assert.equal(stale.seen.length, 1);
 });
 
+test('a long calendar subject is trimmed before it fills the title', () => {
+  assert.equal(ongoing.autoLinkTitle('  Weekly sync  '), 'Weekly sync');
+  const long = ongoing.autoLinkTitle('가'.repeat(250));
+  assert.equal(Array.from(long).length, ongoing.AUTO_TITLE_MAX);
+  assert.equal(Array.from(ongoing.autoLinkTitle('😀'.repeat(201))).length, 200, 'code points, never a split pair');
+});
+
 test('lookup window and chip copy', () => {
   const window = ongoing.ongoingEventWindow(now);
   assert.equal(window.from, '2026-11-11T04:00:00.000Z');
@@ -109,7 +116,7 @@ test('record page marks URL, MCP and user Account sources before auto-link', () 
   assert.doesNotMatch(page, /onAccountChange=\{setReferenceAccountId\}/, 'every picker marks a user choice');
   assert.match(page, /markAccountSource\('user'\); void postRecording\.changeRecordingAccount/);
   assert.match(page, /enabled: !isUploadMode/, 'upload mode never auto-links');
-  assert.match(page, /accountId === postRecording\.recordingLinks\.boundAccountId \? undefined : calendarLink\.dismiss/,
+  assert.match(page, /accountId === postRecording\.recordingLinks\.boundAccountId\s*\|\| \(recordingAccountLocked && !recordingAccountPending\) \? undefined : calendarLink\.dismiss/,
     'a bound draft hides the change button');
   const chip = readFileSync(new URL('../src/components/record/AutoLinkChip.tsx', import.meta.url), 'utf8');
   assert.match(chip, /\{onChange && <button/);
@@ -382,4 +389,49 @@ test('the change button waits while the draft link is pending', async context =>
   assert.deepEqual(f.recording, ['acc-1', '']);
   const chip = readFileSync(new URL('../src/components/record/AutoLinkChip.tsx', import.meta.url), 'utf8');
   assert.match(chip, /disabled=\{pending\}/);
+});
+
+test('a user change releases calendar values, so a leftover upload inherits none', async context => {
+  const controls = autoLinkFixture(context, { active: true });
+  controls.start();
+  await controls.resolveCalendar();
+  controls.result().markSource('user'); // RecordingLinkControls picks another customer
+  controls.render();
+  assert.equal(controls.page().accountId, '', 'the auto Account no longer sits on the page');
+  assert.equal(controls.page().title, '', 'nor its unedited title');
+  assert.equal(controls.result().dropAutoLink(), undefined, 'the leftover path sees no calendar values');
+  const picker = autoLinkFixture(context);
+  picker.start();
+  await picker.resolveCalendar();
+  picker.result().markSource('user');
+  picker.page().setAccountId('acc-user');
+  picker.render();
+  assert.equal(picker.page().accountId, 'acc-user', "the user's choice is kept");
+  assert.equal(picker.page().title, '');
+  const edited = autoLinkFixture(context);
+  edited.start();
+  await edited.resolveCalendar();
+  edited.page().setTitle('My title');
+  edited.render();
+  edited.result().markSource('user');
+  edited.render();
+  assert.equal(edited.page().title, 'My title', 'an edited title is the user\'s');
+});
+
+test('a recording that failed to idle does not carry its auto link into the next start', async context => {
+  const f = autoLinkFixture(context);
+  f.start();
+  await f.resolveCalendar();
+  assert.equal(f.page().accountId, 'acc-1');
+  // The next start drops what the previous auto link still owns, then looks up again.
+  assert.deepEqual({ ...f.result().dropAutoLink() }, { accountId: '', title: '' });
+  f.result().check();
+  f.render();
+  assert.equal(f.page().accountId, '');
+  assert.equal(f.page().title, '');
+  assert.equal(f.calls.length, 2, 'the new start reads the calendar itself');
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /const released = calendarLink\.dropAutoLink\(\);[\s\S]*?createDraftMeeting\(released\);\s*calendarLink\.check\(\);/,
+    'handleRecordingStart releases before creating its draft');
+  assert.match(page, /previousStepRef\.current !== null && postRecording\.step === null\) dropAutoLink\(\)/, 'a dismissed flow releases too');
 });

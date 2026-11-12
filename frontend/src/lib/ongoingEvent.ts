@@ -66,6 +66,14 @@ export function ongoingEventWindow(now: Date): { from: string; to: string } {
   return { from: new Date(now.getTime() - WINDOW_MS).toISOString(), to: new Date(now.getTime() + WINDOW_MS).toISOString() };
 }
 
+/** Meeting titles have no server bound; a long calendar subject is trimmed
+ * to this many code points before it fills the title. */
+export const AUTO_TITLE_MAX = 200;
+
+export function autoLinkTitle(subject: string): string {
+  return Array.from(subject.trim()).slice(0, AUTO_TITLE_MAX).join('').trim();
+}
+
 export function autoLinkedLabel(name: string): string {
   return `고객사: ${name} (일정에서 자동 연결)`;
 }
