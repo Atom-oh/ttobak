@@ -84,6 +84,8 @@
     ["api.account.listAccountMeetings", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/meetings"],
     ["api.account.listAccountInsights", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/insights"],
     ["api.account.getAccountBrief", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/brief"],
+    ["api.customerBrief.get", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/customer-brief"],
+    ["api.customerBrief.request", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/accounts/{accountId}/customer-brief"],
     ["api.research.listAccountResearch", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/research"],
     ["api.project.listAccountProjects", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}/projects"],
     ["api.account.putDocument", "ttobak-api-bridge", ["read", "share", "write"], true, "POST", "/api/accounts/{accountId}/documents"],
