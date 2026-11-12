@@ -2,7 +2,7 @@
 // zip64, no encryption. Names and modes are checked by package.ts; read()
 // never returns more than an entry's declared size.
 
-import { crc32, inflateRawSync } from 'node:zlib';
+import { inflateRawSync } from 'node:zlib';
 import { SetupError } from './errors.js';
 
 export const MAX_ZIP_BYTES = 20 * 1024 * 1024;
@@ -19,6 +19,19 @@ export interface ZipEntry {
 }
 
 const invalid = (rule: string) => new SetupError('PACKAGE_INVALID', rule);
+
+// zlib.crc32 needs Node 20.15+; the adapter also runs on Node 18 (bundle target).
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+function crc32(data: Buffer): number {
+  let c = 0xffffffff;
+  for (const byte of data) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
 
 export function readZip(data: Buffer): ZipEntry[] {
   if (data.length > MAX_ZIP_BYTES) throw invalid('zip-too-large');

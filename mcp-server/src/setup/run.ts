@@ -9,6 +9,7 @@ import { IntakeStore } from '../intake/store.js';
 import { READ_TOOLS, SKILL_SCRIPTS } from '../report/tools.js';
 import { SetupError } from './errors.js';
 import { fetchEffective, httpsDownload, type Downloader } from './fetch.js';
+import type { PackageManifest, PackageServers } from './package.js';
 import { applyServers, planServers, type SetupEnv } from './servers.js';
 import { installSkills, planSkills, type StepResult } from './skills.js';
 
@@ -22,7 +23,8 @@ export interface SetupEnvironment extends IntakeEnvironment {
 const USAGE = `Usage:
   ttobak-mcp setup plan [--noninteractive]
   ttobak-mcp setup apply [--approve <key>]... [--noninteractive]`;
-const MAX_APPROVALS = 50;
+// Four server lists of at most 100 entries each (package validation).
+const MAX_APPROVALS = 400;
 const MAX_KEY_BYTES = 600;
 const KNOWN_TOOLS = new Set<string>(Object.values(READ_TOOLS).flat());
 
@@ -56,6 +58,21 @@ function failureCode(error: unknown): string {
   if (error instanceof SetupError) return error.code;
   const message = error instanceof Error ? error.message : '';
   return message.startsWith('TTOBAK_LOGIN_REQUIRED') ? 'TTOBAK_LOGIN_REQUIRED' : 'TTOBAK_UNAVAILABLE';
+}
+
+/** Union of the validated packages' server lists, org first; on an HTTP name
+ * conflict the org URL wins (the server's MergeSkillPackages rule). */
+export function mergedServers(packages: Partial<Record<'org' | 'personal', PackageManifest>>): PackageServers {
+  const out: PackageServers = { toolboxRegistries: [], toolboxServers: [], aimServers: [], httpServers: {} };
+  for (const manifest of [packages.org, packages.personal]) {
+    if (!manifest) continue;
+    const s = manifest.servers;
+    out.toolboxRegistries = [...new Set([...out.toolboxRegistries, ...s.toolboxRegistries])];
+    out.toolboxServers = [...new Set([...out.toolboxServers, ...s.toolboxServers])];
+    out.aimServers = [...new Set([...out.aimServers, ...s.aimServers])];
+    for (const [name, url] of Object.entries(s.httpServers)) if (!Object.hasOwn(out.httpServers, name)) out.httpServers[name] = url;
+  }
+  return out;
 }
 
 /** Tool calls in the report skill's data-sources that the report run would deny. */
@@ -107,7 +124,8 @@ async function setup(args: string[], environment: SetupEnvironment, store: Intak
     }
 
     const env: SetupEnv = { home: environment.home, path: environment.env.PATH ?? '', run: commandRunner(environment) };
-    const plan = await planServers(env, view.effective.servers);
+    // The lists of the packages validated here, not the API's copy: these become argv.
+    const plan = await planServers(env, mergedServers(packages));
     const known = new Set(plan.actions.map(action => action.key));
     for (const key of options.approve) if (!known.has(key)) warnings.push(`알 수 없는 승인 항목을 무시했어요: ${key}`);
     const approve = options.approve.filter(key => known.has(key));

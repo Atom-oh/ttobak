@@ -32513,7 +32513,12 @@ var init_errors6 = __esm({
 });
 
 // src/setup/zip.ts
-import { crc32, inflateRawSync } from "node:zlib";
+import { inflateRawSync } from "node:zlib";
+function crc32(data) {
+  let c = 4294967295;
+  for (const byte of data) c = CRC_TABLE[(c ^ byte) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
 function readZip(data) {
   if (data.length > MAX_ZIP_BYTES) throw invalid3("zip-too-large");
   const end = findEnd(data);
@@ -32573,7 +32578,7 @@ function readBody(data, offset, method, compressed, size, crc) {
   if (out.length !== size || crc32(out) !== crc) throw invalid3("not-zip");
   return out;
 }
-var MAX_ZIP_BYTES, MAX_ENTRIES, MAX_UNCOMPRESSED, invalid3;
+var MAX_ZIP_BYTES, MAX_ENTRIES, MAX_UNCOMPRESSED, invalid3, CRC_TABLE;
 var init_zip = __esm({
   "src/setup/zip.ts"() {
     "use strict";
@@ -32582,6 +32587,11 @@ var init_zip = __esm({
     MAX_ENTRIES = 500;
     MAX_UNCOMPRESSED = 50 * 1024 * 1024;
     invalid3 = (rule) => new SetupError("PACKAGE_INVALID", rule);
+    CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+      return c >>> 0;
+    });
   }
 });
 
@@ -32924,6 +32934,10 @@ async function planServers(env, servers) {
       unavailable.push(`toolbox:${name}`);
       continue;
     }
+    if (register && !claude && !install) {
+      unavailable.push(`claude:${name}`);
+      continue;
+    }
     add(`toolbox:${name}`, `toolbox \uC11C\uBC84 ${name}`, [
       install ? [toolbox, "install", name] : null,
       register && claude ? [claude, "mcp", "add", "-s", "user", name, "--", name] : null
@@ -32939,7 +32953,11 @@ async function planServers(env, servers) {
     add(`aim:${name}`, `AIM \uC11C\uBC84 ${name}`, [[aimBinary, "mcp", "install", "--clients", "claude-code", name]], true);
   }
   for (const [name, url2] of Object.entries(servers.httpServers)) {
-    if (registered.has(name) || !claude) continue;
+    if (registered.has(name)) continue;
+    if (!claude) {
+      unavailable.push(`http:${name}=${url2}`);
+      continue;
+    }
     add(`http:${name}=${url2}`, `HTTP \uC11C\uBC84 ${name} (${url2})`, [[claude, "mcp", "add", "-s", "user", "-t", "http", name, url2]], false);
   }
   return { actions, unavailable };
@@ -32950,16 +32968,18 @@ function dirname4(path2) {
 async function applyServers(env, plan, approve) {
   const confirmed = new Set(approve);
   const pending = plan.actions.filter((action) => !action.approved && !confirmed.has(action.key));
-  if (pending.length) return { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) };
+  const runnable = plan.actions.filter((action) => action.approved || confirmed.has(action.key));
+  const asking = { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) };
+  if (runnable.length === 0 && pending.length) return asking;
   if (plan.actions.length === 0) {
     return plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "current" };
   }
-  if (plan.actions.some((action) => action.midway) && !existsSync5(join13(env.home, ".midway", "cookie"))) {
+  if (runnable.some((action) => action.midway) && !existsSync5(join13(env.home, ".midway", "cookie"))) {
     return { id: "servers", status: "failed", code: "AUTH_EXPIRED_MIDWAY" };
   }
-  addApprovals(env.home, plan.actions.filter((action) => confirmed.has(action.key)).map((action) => action.key));
+  addApprovals(env.home, runnable.filter((action) => confirmed.has(action.key)).map((action) => action.key));
   const failed = [];
-  for (const action of plan.actions) {
+  for (const action of runnable) {
     for (const command of action.commands) {
       const result = await env.run(command, INSTALL_TIMEOUT_MS);
       if (result.code === 0) continue;
@@ -32968,7 +32988,8 @@ async function applyServers(env, plan, approve) {
       break;
     }
   }
-  return failed.length ? { id: "servers", status: "failed", code: "INSTALL_FAILED", items: failed } : { id: "servers", status: "ok" };
+  if (failed.length) return { id: "servers", status: "failed", code: "INSTALL_FAILED", items: failed };
+  return pending.length ? asking : { id: "servers", status: "ok" };
 }
 var LIST_TIMEOUT_MS, INSTALL_TIMEOUT_MS, MAX_CONFIG_BYTES2;
 var init_servers = __esm({
@@ -33086,6 +33107,7 @@ var init_skills = __esm({
 // src/setup/run.ts
 var run_exports3 = {};
 __export(run_exports3, {
+  mergedServers: () => mergedServers,
   runSetup: () => runSetup
 });
 import { execFile as execFile5 } from "node:child_process";
@@ -33124,6 +33146,18 @@ function failureCode(error3) {
   if (error3 instanceof SetupError) return error3.code;
   const message = error3 instanceof Error ? error3.message : "";
   return message.startsWith("TTOBAK_LOGIN_REQUIRED") ? "TTOBAK_LOGIN_REQUIRED" : "TTOBAK_UNAVAILABLE";
+}
+function mergedServers(packages) {
+  const out = { toolboxRegistries: [], toolboxServers: [], aimServers: [], httpServers: {} };
+  for (const manifest of [packages.org, packages.personal]) {
+    if (!manifest) continue;
+    const s = manifest.servers;
+    out.toolboxRegistries = [.../* @__PURE__ */ new Set([...out.toolboxRegistries, ...s.toolboxRegistries])];
+    out.toolboxServers = [.../* @__PURE__ */ new Set([...out.toolboxServers, ...s.toolboxServers])];
+    out.aimServers = [.../* @__PURE__ */ new Set([...out.aimServers, ...s.aimServers])];
+    for (const [name, url2] of Object.entries(s.httpServers)) if (!Object.hasOwn(out.httpServers, name)) out.httpServers[name] = url2;
+  }
+  return out;
 }
 function deniedTools2(text5) {
   const names = /* @__PURE__ */ new Set();
@@ -33173,7 +33207,7 @@ async function setup2(args, environment, store) {
       steps.push(plans.length === 0 ? { id: "skills", status: "skipped" } : changed.length ? { id: "skills", status: "ok", items: changed } : { id: "skills", status: "current" });
     }
     const env = { home: environment.home, path: environment.env.PATH ?? "", run: commandRunner(environment) };
-    const plan = await planServers(env, view.effective.servers);
+    const plan = await planServers(env, mergedServers(packages));
     const known = new Set(plan.actions.map((action) => action.key));
     for (const key of options2.approve) if (!known.has(key)) warnings.push(`\uC54C \uC218 \uC5C6\uB294 \uC2B9\uC778 \uD56D\uBAA9\uC744 \uBB34\uC2DC\uD588\uC5B4\uC694: ${key}`);
     const approve = options2.approve.filter((key) => known.has(key));
@@ -33220,7 +33254,7 @@ var init_run3 = __esm({
     USAGE3 = `Usage:
   ttobak-mcp setup plan [--noninteractive]
   ttobak-mcp setup apply [--approve <key>]... [--noninteractive]`;
-    MAX_APPROVALS = 50;
+    MAX_APPROVALS = 400;
     MAX_KEY_BYTES = 600;
     KNOWN_TOOLS = new Set(Object.values(READ_TOOLS).flat());
   }

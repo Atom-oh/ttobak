@@ -79,6 +79,7 @@ export async function planServers(env: SetupEnv, servers: PackageServers): Promi
     const register = name !== 'aim' && !registered.has(name);
     if (!install && !register) continue;
     if (install && !toolbox) { unavailable.push(`toolbox:${name}`); continue; }
+    if (register && !claude && !install) { unavailable.push(`claude:${name}`); continue; }
     add(`toolbox:${name}`, `toolbox 서버 ${name}`, [install ? [toolbox as string, 'install', name] : null,
       register && claude ? [claude, 'mcp', 'add', '-s', 'user', name, '--', name] : null], install);
   }
@@ -90,7 +91,8 @@ export async function planServers(env: SetupEnv, servers: PackageServers): Promi
     add(`aim:${name}`, `AIM 서버 ${name}`, [[aimBinary, 'mcp', 'install', '--clients', 'claude-code', name]], true);
   }
   for (const [name, url] of Object.entries(servers.httpServers)) {
-    if (registered.has(name) || !claude) continue;
+    if (registered.has(name)) continue;
+    if (!claude) { unavailable.push(`http:${name}=${url}`); continue; }
     add(`http:${name}=${url}`, `HTTP 서버 ${name} (${url})`, [[claude, 'mcp', 'add', '-s', 'user', '-t', 'http', name, url]], false);
   }
   return { actions, unavailable };
@@ -100,21 +102,24 @@ function dirname(path: string): string {
   return path.slice(0, path.lastIndexOf('/')) || '/';
 }
 
-/** Runs approved actions; `approve` adds keys the user just confirmed. */
+/** Runs approved actions; `approve` adds keys the user just confirmed. Items
+ * still unapproved are reported as needs-approval after the others ran. */
 export async function applyServers(env: SetupEnv, plan: ServerPlan, approve: string[]): Promise<StepResult> {
   const confirmed = new Set(approve);
   const pending = plan.actions.filter(action => !action.approved && !confirmed.has(action.key));
-  if (pending.length) return { id: 'servers', status: 'needs-approval', items: pending.map(action => action.key) };
+  const runnable = plan.actions.filter(action => action.approved || confirmed.has(action.key));
+  const asking: StepResult = { id: 'servers', status: 'needs-approval', items: pending.map(action => action.key) };
+  if (runnable.length === 0 && pending.length) return asking;
   if (plan.actions.length === 0) {
     return plan.unavailable.length ? { id: 'servers', status: 'skipped', code: 'TOOLBOX_MISSING', items: plan.unavailable }
       : { id: 'servers', status: 'current' };
   }
-  if (plan.actions.some(action => action.midway) && !existsSync(join(env.home, '.midway', 'cookie'))) {
+  if (runnable.some(action => action.midway) && !existsSync(join(env.home, '.midway', 'cookie'))) {
     return { id: 'servers', status: 'failed', code: 'AUTH_EXPIRED_MIDWAY' };
   }
-  addApprovals(env.home, plan.actions.filter(action => confirmed.has(action.key)).map(action => action.key));
+  addApprovals(env.home, runnable.filter(action => confirmed.has(action.key)).map(action => action.key));
   const failed: string[] = [];
-  for (const action of plan.actions) {
+  for (const action of runnable) {
     for (const command of action.commands) {
       const result = await env.run(command, INSTALL_TIMEOUT_MS);
       if (result.code === 0) continue;
@@ -123,5 +128,6 @@ export async function applyServers(env: SetupEnv, plan: ServerPlan, approve: str
       break;
     }
   }
-  return failed.length ? { id: 'servers', status: 'failed', code: 'INSTALL_FAILED', items: failed } : { id: 'servers', status: 'ok' };
+  if (failed.length) return { id: 'servers', status: 'failed', code: 'INSTALL_FAILED', items: failed };
+  return pending.length ? asking : { id: 'servers', status: 'ok' };
 }

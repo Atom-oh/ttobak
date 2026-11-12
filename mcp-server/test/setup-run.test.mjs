@@ -36,7 +36,7 @@ function fixture(t, { skills = { 'demo/SKILL.md': '# demo' }, api } = {}) {
     download: async () => zip,
     runCommand: async argv => { commands.push(argv.map(part => part.replace(bin + '/', ''))); return { code: 0, stdout: '', stderr: '' }; },
   };
-  return { home, stdout, commands, run: args => runSetup(args, environment), output: () => JSON.parse(stdout.at(-1)) };
+  return { home, stdout, commands, view, run: args => runSetup(args, environment), output: () => JSON.parse(stdout.at(-1)) };
 }
 
 const installs = commands => commands.filter(argv => argv[1] !== 'list' && argv.join(' ') !== 'toolbox registry list');
@@ -106,10 +106,26 @@ test('skill references a tool the report run denies', async t => {
 
 test('arguments are bounded', async t => {
   const ctx = fixture(t);
-  const many = Array.from({ length: 51 }, (_, i) => ['--approve', `aim:s${i}`]).flat();
+  const many = Array.from({ length: 401 }, (_, i) => ['--approve', `aim:s${i}`]).flat();
   assert.equal(await ctx.run(['apply', ...many]), 2);
   assert.equal(ctx.output().code, 'INVALID_ARGUMENT');
   assert.equal(await ctx.run(['apply', '--approve', 'x'.repeat(601)]), 2);
   assert.equal(await ctx.run(['plan', '--approve', 'aim:x']), 2);
   assert.equal(await ctx.run(['bogus']), 2);
+});
+
+test('servers come from the re-validated packages, never from the view', async t => {
+  const ctx = fixture(t, { api: { skillPackages: async () => {
+    const view = JSON.parse(JSON.stringify(ctx.view));
+    view.effective.servers = { toolboxRegistries: [], toolboxServers: ['--evil'], aimServers: ['injected-mcp'], httpServers: { x: 'http://bad' } };
+    return view;
+  } } });
+  assert.equal(await ctx.run(['apply']), 0);
+  const out = ctx.output();
+  assert.deepEqual(out.needsApproval.map(item => item.key), ['aim:new-mcp']);
+});
+
+test('the zip reader does not need zlib.crc32 (Node 18)', async () => {
+  const source = readFileSync(new URL('../src/setup/zip.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /\bcrc32\b[^(]*from 'node:zlib'|import \{[^}]*crc32[^}]*\} from 'node:zlib'/);
 });

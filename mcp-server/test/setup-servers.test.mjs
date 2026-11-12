@@ -124,3 +124,21 @@ test('other install failures are reported per item', async t => {
   assert.equal(result.code, 'INSTALL_FAILED');
   assert.deepEqual(result.items, ['aim:delta-mcp']);
 });
+
+test('approving some items installs those and keeps asking for the rest', async t => {
+  const e = env(t);
+  const plan = await planServers(e, SERVERS);
+  const result = await applyServers(e, plan, ['aim:delta-mcp']);
+  assert.equal(result.status, 'needs-approval');
+  assert.deepEqual(result.items, ['registry:s3://example-registry-two/tools.json', 'toolbox:beta-mcp', 'http:docs-mcp=https://docs.example.com/mcp']);
+  assert.deepEqual(installs(e.calls), [['aim', 'mcp', 'install', '--clients', 'claude-code', 'delta-mcp']]);
+  const again = await planServers(e, SERVERS);
+  assert.ok(again.actions.find(action => action.key === 'aim:delta-mcp').approved);
+});
+
+test('items that need claude are reported when claude is missing', async t => {
+  const e = env(t, { claude: false });
+  const plan = await planServers(e, { toolboxRegistries: [], toolboxServers: ['builder-mcp'], aimServers: [], httpServers: { 'docs-mcp': 'https://docs.example.com/mcp' } });
+  assert.deepEqual(plan.actions, []);
+  assert.deepEqual(plan.unavailable, ['claude:builder-mcp', 'http:docs-mcp=https://docs.example.com/mcp']);
+});
