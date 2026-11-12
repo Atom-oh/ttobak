@@ -19,6 +19,12 @@ export function sortContactsForDisplay<T extends Pick<AccountContact, 'sfdcLeftA
   return [...contacts.filter((c) => !c.sfdcLeftAt), ...contacts.filter((c) => c.sfdcLeftAt)];
 }
 
-export function leftSfdcTooltip(leftAt: string): string {
-  return `SFDC에서 빠진 날짜: ${/^\d{4}-\d{2}-\d{2}/.test(leftAt) ? leftAt.slice(0, 10) : leftAt}`;
+/** The departure date in the viewer's local calendar (`YYYY-MM-DD`); an unparsable value is shown as-is. */
+export function leftSfdcTooltip(leftAt: string, timeZone?: string): string {
+  const time = /^\d{4}-\d{2}-\d{2}/.test(leftAt) ? Date.parse(leftAt) : NaN;
+  if (!Number.isFinite(time)) return `SFDC에서 빠진 날짜: ${leftAt}`;
+  const parts = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', ...(timeZone ? { timeZone } : {}) })
+    .formatToParts(new Date(time));
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? '';
+  return `SFDC에서 빠진 날짜: ${part('year')}-${part('month')}-${part('day')}`;
 }
