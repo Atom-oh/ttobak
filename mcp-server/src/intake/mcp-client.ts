@@ -11,7 +11,7 @@ import type { SpawnSpec } from './hosts.js';
 
 export const MAX_RESULT_BYTES = 4 * 1024 * 1024;
 const MAX_STDERR_BYTES = 16 * 1024;
-const AUTH_PATTERN = /midway|mwinit|cookie|unauthori[sz]ed|\b401\b|\b403\b|expired|sign[ -]?in|authenticat/i;
+export const AUTH_PATTERN = /midway|mwinit|cookie|unauthori[sz]ed|\b401\b|\b403\b|expired|sign[ -]?in|authenticat/i;
 
 /**
  * The server answered the call with a tool-level error (`isError`), as opposed
