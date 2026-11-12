@@ -53,9 +53,10 @@ stdio bundle `frontend/public/mcp/ttobak-mcp.mjs` (exact path). That bundle is
 reviewed through its `mcp-server/src` sources; `test-mcp.yml` rebuilds it and
 fails unless it is byte-identical.
 
-Current limits: workflow input is the first 3,000 filtered diff lines; Kiro also
-has a 100,000-byte diff cap. These are partial-review limits, not proof of a clean
-full diff. For a change exceeding them, split into reviewable PRs or obtain
+Current limits: the legacy panel input is the first 3,000 filtered diff lines.
+The specialist review (`ROLE_REVIEW=1`) prepares its own complete diff and blocks
+it above 200,000 bytes or 6,000 lines, or above 95,000 bytes or 3,000 lines when a
+Kiro role is routed. These are review limits, not proof of a clean full diff. For a change exceeding them, split into reviewable PRs or obtain
 complete, attributable review coverage before merging. Do not disable gates or
 claim the excluded suffix passed review. Prompt changes are first used by the
 privileged workflow after reaching the trusted base; local/mock validation does
@@ -109,7 +110,7 @@ The Claude Code hook `.claude/hooks/review-size-check.sh` blocks `gh pr create` 
 `git push` when the diff the specialist review would receive exceeds its limits.
 Run it by hand with `python3 scripts/pr-review/check_review_size.py --base origin/main`.
 It mirrors CI: merge-base diff, `role-input-scope.json` exclusions from the base
-revision, and the limits imported from `scripts/pr-review/role_review.py`. Split an
+revision, and the routing-dependent limits from `scripts/pr-review/role_review.py`. Split an
 oversized change into stacked PRs. The hook never blocks on checker or git errors.
 
 ## Local validation
