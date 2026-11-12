@@ -171,6 +171,11 @@ warning when the CLI LaunchAgent is also installed, per-source status, setup wit
 private-calendar consent and skip toggles, sync options (calendar responses
 to sync and the SFDC contacts switch, when the app build reports them), run
 now, login, cancel and a live progress log. A failed state read shows a one-line error. 
+`SkillPackageSettings` (browser and app) shows the org and personal skill package
+versions, the effective skill list with an org or personal badge, personal zip
+upload and delete, and for admins org zip upload and the version list with
+rollback (the admin gate is cosmetic; the API enforces it). Validation failures
+show fixed Korean copy per rule plus the rule's detail only.
 In Mic mode, `MicSelector` remembers the chosen device; when that device no
 longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
 rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
