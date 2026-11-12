@@ -44,6 +44,7 @@ const COMMANDS: &[&str] = &[
     "report_get_state",
     "report_settings_get",
     "report_settings_set",
+    "report_slack_channels_refresh",
     // Granted only to the local overlay windows (capabilities/caption-overlay.json).
     "caption_overlay_idle",
 ];
