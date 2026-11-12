@@ -182,7 +182,7 @@ test('syncOptionsView shows the defaults and the fixed labels', () => {
   assert.equal(set.sfdcContacts, false);
   assert.equal(plain(intake.syncOptionsView({ calendarResponses: [], sfdcContacts: true })).responses.some(row => row.checked), false);
   assert.equal(intake.SYNC_OPTIONS_COPY.title, '동기화 옵션');
-  assert.equal(intake.SYNC_OPTIONS_COPY.uncheckedRemovedNote, '선택을 끈 항목은 다음 동기화 때 TTOBAK에서 지워져요.');
+  assert.equal(intake.SYNC_OPTIONS_COPY.uncheckedRemovedNote, '선택을 끈 응답의 일정은 다음 동기화 때 TTOBAK에서 지워져요.');
   assert.equal(intake.SYNC_OPTIONS_COPY.declinedNote, '거절한 일정은 항상 제외돼요.');
 });
 
@@ -197,7 +197,7 @@ test('sync options: defaults note, saved result and adapter-too-old text', () =>
   assert.equal(intake.syncOptionsView({ calendarResponses: ['accept'], sfdcContacts: true, defaults: true }).defaults, true);
   assert.equal(intake.syncOptionsView({ calendarResponses: ['accept'], sfdcContacts: true }).defaults, false);
   assert.equal(intake.syncOptionsView(undefined).defaults, false);
-  assert.equal(intake.SYNC_OPTIONS_COPY.defaultsRemoveNote, '기본 설정에서는 아직 응답하지 않은 일정이 다음 동기화 때 TTOBAK에서 지워져요.');
+  assert.equal(intake.SYNC_OPTIONS_COPY.defaultsRemoveNote, '지금 설정에서는 아직 응답하지 않은 일정이 다음 동기화 때 TTOBAK에서 지워져요.');
   assert.deepEqual(plain(intake.savedOptions({ ok: true, options: { calendarResponses: ['none', 'accept', 'x'], sfdcContacts: false } })),
     { calendarResponses: ['accept', 'none'], sfdcContacts: false, defaults: false });
   assert.equal(intake.savedOptions(null), null);

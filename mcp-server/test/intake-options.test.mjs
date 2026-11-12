@@ -38,13 +38,25 @@ const upserted = plan => plan.mutations.filter(m => m.op === 'upsert').map(m => 
 test('calendar_filter_excludes_unselected_responses', () => {
   const window = syncWindow(NOW, ZONE);
   const plan = planCalendar(ITEMS, {}, window, ZONE, ['accept', 'none']);
-  assert.deepEqual(upserted(plan), ['acc', 'missing', 'none', 'none2', 'odd'], 'unknown and missing count as none');
+  assert.deepEqual(upserted(plan), ['acc', 'none', 'none2']);
   assert.equal(plan.counts.excludedByResponse, 4);
+  assert.equal(plan.counts.responseUnknown, 2, 'missing and unrecognised responses are neither added nor removed');
   const organizerOnly = planCalendar(ITEMS, {}, window, ZONE, ['organizer']);
   assert.deepEqual(upserted(organizerOnly), ['org']);
   const tentative = planCalendar(ITEMS, {}, window, ZONE, ['tentative']);
   assert.deepEqual(upserted(tentative), ['ten', 'ten2']);
   assert.equal(planCalendar(ITEMS, {}, window, ZONE, []).counts.upserts, 0, 'an empty set syncs nothing');
+});
+
+test('an unknown response never removes a synced copy, and a private title stays out of the preview', () => {
+  const window = syncWindow(NOW, ZONE);
+  const ledger = { missing: { fp: 'x', startsAt: '2026-11-16T01:00:00.000Z', endsAt: '2026-11-16T02:00:00.000Z' },
+    secret: { fp: 'x', startsAt: '2026-11-19T01:00:00.000Z', endsAt: '2026-11-19T02:00:00.000Z' } };
+  const items = [item('missing', '16'), { ...item('secret', '19', 'None'), subject: 'private-title', sensitivity: 'Private' }];
+  const plan = planCalendar(items, ledger, window, ZONE);
+  assert.deepEqual(plan.remove, ['secret'], 'only the private event is removed');
+  assert.equal(plan.counts.responseUnknown, 1);
+  assert.ok(!JSON.stringify(plan.preview).includes('private-title'));
 });
 
 test('declined_always_excluded', () => {
@@ -74,7 +86,8 @@ test('default_responses_exclude_no_response', async t => {
   assert.equal(await runIntake(['calendar', '--dry-run'], env), 0, lines.at(-1));
   const dry = JSON.parse(lines.at(-1));
   assert.equal(dry.counts.upserts, 4);
-  assert.equal(dry.counts.excludedByResponse, 5);
+  assert.equal(dry.counts.excludedByResponse, 3);
+  assert.equal(dry.counts.responseUnknown, 2);
 });
 
 function fakeApi() {
@@ -99,14 +112,14 @@ test('turning_off_a_response_removes_synced_copies', async t => {
   const base = { store, api, sourceId: SOURCE_ID, scope: SCOPE, zone: ZONE, now: NOW, dryRun: false,
     source: { async view() { return ITEMS; } } };
   const first = await runCalendar({ ...base, responses: ['accept', 'organizer', 'tentative', 'none'] });
-  assert.equal(first.counts.upserts, 8);
+  assert.equal(first.counts.upserts, 6, 'missing and unrecognised responses are not added');
   const second = await runCalendar({ ...base, responses: ['accept'] });
-  assert.equal(second.counts.removals, 7);
+  assert.equal(second.counts.removals, 5);
   const removed = api.calls.at(-1).mutations.filter(m => m.op === 'remove').map(m => m.externalId).sort();
-  assert.deepEqual(removed, ['missing', 'none', 'none2', 'odd', 'org', 'ten', 'ten2']);
+  assert.deepEqual(removed, ['none', 'none2', 'org', 'ten', 'ten2']);
   // The dry run reports the exclusions; nothing is removed twice.
   const dry = await runCalendar({ ...base, dryRun: true, responses: ['accept'] });
-  assert.equal(dry.counts.excludedByResponse, 8);
+  assert.equal(dry.counts.excludedByResponse, 6);
   const third = await runCalendar({ ...base, responses: ['accept'] });
   assert.equal(third.counts.removals, 0);
 });

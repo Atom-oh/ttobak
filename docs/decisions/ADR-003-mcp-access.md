@@ -522,7 +522,8 @@ configuration.
   (ADR-021). Emails are compared on the Mac only; no email or phone reaches a
   request, log, status file or ledger. A failure of the step is a
   `PARTIAL_FAILURE` of `intake run`; `AUTH_EXPIRED_MIDWAY` stops it.
-  `search_contacts` is allowed and checked only while the step is on, so a missing or
+  `search_contacts` is allowed and checked only while the step is on (off, the
+  session does not allow it at all), so a missing or
   changed contacts tool fails only the step (`SCHEMA_CHANGED`).
 - **Sync options (amendment, 2026-11-11).** `intake options` stores a
   top-level `options` object in `selection.json`: `calendarResponses` (the
@@ -533,10 +534,11 @@ configuration.
   existing removal path. The response is read on the Mac only. The Mac app
   sets the options with typed values (`intake_set_options`). The first real
   run after the update, possibly scheduled, therefore removes synced events
-  that are declined, unanswered or have a missing or unknown response; the
+  that are declined or unanswered (an event with a missing or unrecognised
+  response is neither added nor removed); the
   owner keeps unanswered ones by selecting `none` (Settings or `intake
-  options`) before that run, and Settings shows that note while the defaults
-  apply. Declined events cannot be kept.
+  options`) before that run, and Settings shows that note while `none` is
+  not selected. Declined events cannot be kept.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** is owned by the Mac app, which runs `intake run
   --noninteractive` (all selected sync connectors) itself, with launch and wake
