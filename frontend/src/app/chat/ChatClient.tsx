@@ -4,11 +4,12 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { qaApi, chatApi, QA_POLL_DEADLINE_MS } from '@/lib/api';
+import { qaApi, chatApi, meetingsApi, QA_POLL_DEADLINE_MS } from '@/lib/api';
+import { assistantCards } from '@/lib/assistantSuggestions';
 import { getRuntimeConfig, runtimeWebSocketUrl } from '@/lib/runtimeConfig';
 import { RealtimeWebSocket, isTerminalModelError, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage } from '@/components/qa';
-import type { ChatSession } from '@/types/meeting';
+import type { ChatSession, Meeting } from '@/types/meeting';
 
 interface ChatEntry {
   id: string;
@@ -22,12 +23,6 @@ interface ChatEntry {
   isStreaming?: boolean;
 }
 
-const suggestedQuestions = [
-  '이번 주 미팅 요약해줘',
-  '미완료 액션아이템 모아줘',
-  '최근 공유받은 미팅 정리해줘',
-  'EKS 관련 논의 요약해줘',
-];
 // Shared QA Lambda: 300 seconds, plus bounded transport grace.
 const ANSWER_TIMEOUT_MS = 330_000;
 
@@ -42,6 +37,22 @@ export function ChatClient() {
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [showSessions, setShowSessions] = useState(false);
+  const [recentMeetings, setRecentMeetings] = useState<{ userId: string; meetings: Meeting[] } | null>(null);
+  const cards = useMemo(() => assistantCards(
+    recentMeetings?.userId === user?.userId ? recentMeetings?.meetings || [] : [],
+  ), [recentMeetings, user?.userId]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.userId) return;
+    const userId = user.userId;
+    const controller = new AbortController();
+    meetingsApi.list({ limit: 30 }, { signal: controller.signal }).then(result => {
+      if (!controller.signal.aborted) setRecentMeetings({ userId, meetings: result.meetings || [] });
+    }).catch(() => {
+      // Keep useful generic cards when recent metadata is unavailable.
+    });
+    return () => controller.abort();
+  }, [isAuthenticated, user?.userId]);
 
   const currentSessionId = useMemo(() => {
     const ts = Date.now();
@@ -389,25 +400,31 @@ export function ChatClient() {
         {/* Chat area */}
         <div ref={containerRef} className="flex-1 overflow-y-auto min-h-0">
           {chatHistory.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full px-4 py-12">
+            <div className="flex flex-col items-center justify-center min-h-full px-4 py-8 sm:py-12">
               <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 dark:bg-primary/20 mb-6">
                 <span className="material-symbols-outlined text-primary text-4xl">smart_toy</span>
               </div>
               <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
-                무엇이든 물어보세요
+                {user?.name ? `${user.name.slice(0, 80)}님, 오늘은 무엇을 도와드릴까요?` : '오늘은 무엇을 도와드릴까요?'}
               </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 text-center max-w-md mb-8">
-                모든 미팅 기록과 지식베이스를 기반으로 답변합니다. 미팅 요약, 액션아이템, 특정 주제 검색 등을 도와드려요.
+                최근 미팅과 자주 다룬 주제를 바탕으로 시작해 보세요. 접근 가능한 미팅 기록과 지식베이스에서 답변을 찾습니다.
               </p>
-              <div className="flex flex-wrap justify-center gap-2 max-w-lg">
-                {suggestedQuestions.map((sq, i) => (
+              <div className="grid w-full max-w-2xl grid-cols-1 sm:grid-cols-2 gap-3">
+                {cards.map(card => (
                   <button
-                    key={i}
-                    onClick={() => handleAsk(sq)}
+                    key={card.label}
+                    onClick={() => handleAsk(card.question)}
                     disabled={isAsking}
-                    className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-200 dark:hover:bg-white/10 hover:border-primary/30 transition-colors disabled:opacity-50"
+                    className="group flex flex-col gap-2 p-4 text-left bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl hover:bg-primary/5 hover:border-primary/30 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                   >
-                    {sq}
+                    <span className="flex items-center gap-2 text-xs font-semibold text-primary">
+                      <span className="material-symbols-outlined text-lg" aria-hidden="true">{card.icon}</span>
+                      {card.label}
+                      <span className="material-symbols-outlined ml-auto text-sm opacity-40 group-hover:opacity-100" aria-hidden="true">north_east</span>
+                    </span>
+                    <span className="text-sm font-medium text-slate-800 dark:text-slate-200 break-words">{card.question}</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-full">{card.detail}</span>
                   </button>
                 ))}
               </div>
