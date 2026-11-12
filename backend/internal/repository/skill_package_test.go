@@ -52,3 +52,24 @@ func TestListSkillPackageVersionsNewestFirst(test *testing.T) {
 		test.Fatalf("versions = %v, %v", versions, err)
 	}
 }
+
+func TestDeleteSkillPackageConditionOnlyWithSHA(test *testing.T) {
+	var conditions []any
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		body := performanceBody(test, request)
+		if performanceTarget(request) != "DeleteItem" {
+			test.Fatalf("unexpected call %s", performanceTarget(request))
+		}
+		conditions = append(conditions, body["ConditionExpression"])
+		return summaryHTTPResponse(200, `{}`, nil), nil
+	})
+	if err := repo.DeleteSkillPackage(test.Context(), "USER#a", model.SkillPackagePersonalSK, strings.Repeat("a", 64)); err != nil {
+		test.Fatal(err)
+	}
+	if err := repo.DeleteSkillPackage(test.Context(), model.SkillPackageOrgPK, "VERSION#x", ""); err != nil {
+		test.Fatal(err)
+	}
+	if conditions[0] == nil || conditions[1] != nil {
+		test.Fatalf("conditions = %v", conditions)
+	}
+}

@@ -48,7 +48,10 @@ func (f *fakeSkillPackageRepo) ListSkillPackageVersions(_ context.Context) ([]mo
 	return out, nil
 }
 
-func (f *fakeSkillPackageRepo) DeleteSkillPackage(_ context.Context, pk, sk string) error {
+func (f *fakeSkillPackageRepo) DeleteSkillPackage(_ context.Context, pk, sk, expectedSHA string) error {
+	if row, ok := f.rows[f.key(pk, sk)]; expectedSHA != "" && (!ok || row.SHA256 != expectedSHA) {
+		return repository.ErrConditionFailed
+	}
 	delete(f.rows, f.key(pk, sk))
 	return nil
 }
@@ -232,10 +235,11 @@ func TestOrgHistoryKeepsFive(t *testing.T) {
 	if len(versions) != model.SkillPackageOrgVersionsKept {
 		t.Fatalf("versions = %d", len(versions))
 	}
+	// Pruning removes history rows only; content-addressed objects are never
+	// deleted inline, so a concurrent rollback cannot lose its object.
 	for i, key := range keys {
-		_, present := store.objects[key]
-		if present != (i >= 2) {
-			t.Fatalf("object %d present=%v", i, present)
+		if _, present := store.objects[key]; !present {
+			t.Fatalf("object %d deleted", i)
 		}
 	}
 	current, _ := repo.GetSkillPackage(t.Context(), model.SkillPackageOrgPK, model.SkillPackageCurrentSK)
@@ -359,5 +363,87 @@ func TestPruneKeepsTheCurrentObjectAfterRollback(t *testing.T) {
 	}
 	if _, ok := store.objects[current.ObjectKey]; !ok {
 		t.Fatal("the prune deleted the object the current row points to")
+	}
+}
+
+// raceRepo runs a hook once, right after the first matching call.
+type raceRepo struct {
+	*fakeSkillPackageRepo
+	afterGet func()
+	afterPut func(row model.SkillPackage)
+}
+
+func (r *raceRepo) GetSkillPackage(ctx context.Context, pk, sk string) (*model.SkillPackage, error) {
+	row, err := r.fakeSkillPackageRepo.GetSkillPackage(ctx, pk, sk)
+	if hook := r.afterGet; hook != nil {
+		r.afterGet = nil
+		hook()
+	}
+	return row, err
+}
+
+func (r *raceRepo) PutSkillPackage(ctx context.Context, row model.SkillPackage, previousSHA string) error {
+	if err := r.fakeSkillPackageRepo.PutSkillPackage(ctx, row, previousSHA); err != nil {
+		return err
+	}
+	if hook := r.afterPut; hook != nil && row.SK == model.SkillPackagePersonalSK {
+		r.afterPut = nil
+		hook(row)
+	}
+	return nil
+}
+
+func TestDeletePersonalIsConditional(t *testing.T) {
+	svc, repo, store := newSkillPackageFixture(t)
+	stage(store, "alice", packageZip(t, "old"))
+	if _, err := svc.CompleteUpload(t.Context(), "alice", model.SkillPackageScopePersonal, testUploadID); err != nil {
+		t.Fatal(err)
+	}
+	newer := packageZip(t, "newer")
+	race := &raceRepo{fakeSkillPackageRepo: repo}
+	race.afterGet = func() {
+		// Another tab completes a new upload between the read and the delete.
+		svc.repo = repo
+		stage(store, "alice", newer)
+		if _, err := svc.CompleteUpload(t.Context(), "alice", model.SkillPackageScopePersonal, testUploadID); err != nil {
+			t.Fatal(err)
+		}
+		svc.repo = race
+	}
+	svc.repo = race
+	if _, err := svc.DeletePersonal(t.Context(), "alice"); !errors.Is(err, repository.ErrConditionFailed) {
+		t.Fatalf("err = %v", err)
+	}
+	row, _ := repo.GetSkillPackage(t.Context(), "USER#alice", model.SkillPackagePersonalSK)
+	if row == nil || row.SHA256 != shaOf(newer) {
+		t.Fatalf("the newer package row was removed: %+v", row)
+	}
+	if _, ok := store.objects[row.ObjectKey]; !ok {
+		t.Fatal("the newer package object was removed")
+	}
+}
+
+func TestReplacedPersonalObjectSurvivesWhenStillCurrent(t *testing.T) {
+	svc, repo, store := newSkillPackageFixture(t)
+	first := packageZip(t, "first")
+	stage(store, "alice", first)
+	if _, err := svc.CompleteUpload(t.Context(), "alice", model.SkillPackageScopePersonal, testUploadID); err != nil {
+		t.Fatal(err)
+	}
+	race := &raceRepo{fakeSkillPackageRepo: repo}
+	race.afterPut = func(row model.SkillPackage) {
+		// A concurrent completion republishes the first bytes before this
+		// completion deletes the object it replaced.
+		previous := row
+		previous.SHA256, previous.ObjectKey = shaOf(first), "skillpkg/user/alice/"+shaOf(first)+".zip"
+		repo.rows[repo.key(row.PK, row.SK)] = previous
+	}
+	svc.repo = race
+	stage(store, "alice", packageZip(t, "second"))
+	if _, err := svc.CompleteUpload(t.Context(), "alice", model.SkillPackageScopePersonal, testUploadID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.objects["skillpkg/user/alice/"+shaOf(first)+".zip"]; !ok {
+		t.Fatal("the object the current row points to was deleted")
 	}
 }

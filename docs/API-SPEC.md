@@ -305,7 +305,7 @@ app's one-click setup installs (ADR-003, local intake). Code:
 | POST | `/api/skill-packages/personal/complete` | any user | body `{uploadId}`; validates the staged zip, stores it by sha256 and replaces the caller's personal package |
 | DELETE | `/api/skill-packages/personal` | any user | deletes the row, then its object; `404` when none |
 | POST | `/api/skill-packages/org/upload` | admin | the same presigned POST for the org package |
-| POST | `/api/skill-packages/org/complete` | admin | the same completion for the org package; keeps the newest 5 versions |
+| POST | `/api/skill-packages/org/complete` | admin | the same completion for the org package; keeps the newest 5 version rows |
 | GET | `/api/skill-packages/org/versions` | admin | `{versions}` newest first |
 | POST | `/api/skill-packages/org/rollback` | admin | body `{sha256}` of a kept version; makes it current |
 
@@ -324,8 +324,11 @@ skills stay, server lists are unioned and an HTTP name conflict keeps the org
 URL (`effective.conflicts`). An `uploadId` is 32 lowercase hex characters under
 the caller's own staging prefix (another user's is `404`). Completion stores
 the validated bytes themselves, never a copy of the staged object. A concurrent
-upload or rollback of the same current row is `409`; deleting the personal
-package is unconditional. Bodies are at most 4 KiB with no unknown
+upload or rollback of the same current row, or a delete of a personal package
+replaced since it was read, is `409`. Pruned org history removes rows only:
+objects are content-addressed and never deleted inline, so a concurrent rollback
+cannot lose its object; a replaced personal object is deleted only when the live
+row no longer points at it. Bodies are at most 4 KiB with no unknown
 fields; responses use `Cache-Control: private, no-store`. Failed best-effort
 object deletes are listed in `warnings`.
 

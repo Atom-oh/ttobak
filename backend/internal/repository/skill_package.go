@@ -94,9 +94,23 @@ func (r *DynamoDBRepository) ListSkillPackageVersions(ctx context.Context) ([]mo
 	return rows, nil
 }
 
-// DeleteSkillPackage removes one row; a missing row is not an error.
-func (r *DynamoDBRepository) DeleteSkillPackage(ctx context.Context, pk, sk string) error {
-	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: skillPackageKey(pk, sk)}); err != nil {
+// DeleteSkillPackage removes one row. With expectedSHA it deletes only while
+// the stored sha256 still matches (ErrConditionFailed otherwise); without it a
+// missing row is not an error.
+func (r *DynamoDBRepository) DeleteSkillPackage(ctx context.Context, pk, sk, expectedSHA string) error {
+	input := &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: skillPackageKey(pk, sk)}
+	if expectedSHA != "" {
+		built, err := expression.NewBuilder().WithCondition(expression.Name("sha256").Equal(expression.Value(expectedSHA))).Build()
+		if err != nil {
+			return err
+		}
+		input.ConditionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues = built.Condition(), built.Names(), built.Values()
+	}
+	if _, err := r.client.DeleteItem(ctx, input); err != nil {
+		var rejected *types.ConditionalCheckFailedException
+		if errors.As(err, &rejected) {
+			return errors.Join(ErrConditionFailed, err)
+		}
 		return fmt.Errorf("delete skill package: %w", err)
 	}
 	return nil

@@ -234,7 +234,8 @@ Skill package zips live under skillpkg/ (`skillpkg/org/{sha256}.zip`,
 `skillpkg/staging/` expire after one day, current and noncurrent.
 `skillpkg/org/` and `skillpkg/user/` are in the OAC read allowlist and are
 downloaded through the shared signed `/media/*` URLs (S3 presign fallback);
-the staging prefix is not served. The API role's existing bucket read/write
+the staging prefix is not served. Org package objects are not deleted when old
+history rows are pruned (no lifecycle rule; a cleanup pass is a follow-up). The API role's existing bucket read/write
 grant covers the prefix.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation

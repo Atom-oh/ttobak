@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"time"
 
@@ -39,7 +40,8 @@ type SkillPackageRepository interface {
 	GetSkillPackage(ctx context.Context, pk, sk string) (*model.SkillPackage, error)
 	PutSkillPackage(ctx context.Context, row model.SkillPackage, previousSHA string) error
 	ListSkillPackageVersions(ctx context.Context) ([]model.SkillPackage, error)
-	DeleteSkillPackage(ctx context.Context, pk, sk string) error
+	// DeleteSkillPackage is conditional on expectedSHA unless it is "".
+	DeleteSkillPackage(ctx context.Context, pk, sk, expectedSHA string) error
 }
 
 // SkillPackageStore holds the package zips. Size returns ErrNotFound for a
@@ -169,6 +171,8 @@ func (s *SkillPackageService) CompleteUpload(ctx context.Context, userID, scope,
 	result := &SkillPackageResult{Warnings: []string{}}
 	dropStaged := func() {
 		if err := s.store.Delete(ctx, staged); err != nil {
+			// Also logged: a rejected upload returns no result to carry the warning.
+			log.Printf("skill package staging cleanup failed: %v", err)
 			result.Warnings = append(result.Warnings, "staged upload not removed")
 		}
 	}
@@ -213,11 +217,9 @@ func (s *SkillPackageService) CompleteUpload(ctx context.Context, userID, scope,
 		return nil, err
 	}
 	if scope == model.SkillPackageScopeOrg {
-		result.Warnings = append(result.Warnings, s.pruneOrgVersions(ctx, key)...)
+		result.Warnings = append(result.Warnings, s.pruneOrgVersions(ctx)...)
 	} else if previous != nil && previous.ObjectKey != key {
-		if err := s.store.Delete(ctx, previous.ObjectKey); err != nil {
-			result.Warnings = append(result.Warnings, "previous package object not removed")
-		}
+		result.Warnings = append(result.Warnings, s.deleteUnreferenced(ctx, userID, previous.ObjectKey)...)
 	}
 	result.Package = &row
 	return result, nil
@@ -230,9 +232,12 @@ func shaOrEmpty(row *model.SkillPackage) string {
 	return row.SHA256
 }
 
-// pruneOrgVersions keeps the newest kept versions and deletes older rows and
-// their objects unless another kept version or the current row uses them.
-func (s *SkillPackageService) pruneOrgVersions(ctx context.Context, currentKey string) []string {
+// pruneOrgVersions keeps the newest kept history rows and deletes older rows.
+// Package objects are content-addressed and never deleted here: a rollback
+// that commits after the history read could otherwise point the current row
+// at an object being removed. Unreferenced org objects are left for a later
+// cleanup pass.
+func (s *SkillPackageService) pruneOrgVersions(ctx context.Context) []string {
 	versions, err := s.repo.ListSkillPackageVersions(ctx)
 	if err != nil {
 		return []string{"old org versions not pruned"}
@@ -240,31 +245,30 @@ func (s *SkillPackageService) pruneOrgVersions(ctx context.Context, currentKey s
 	if len(versions) <= model.SkillPackageOrgVersionsKept {
 		return nil
 	}
-	inUse := map[string]bool{currentKey: true}
-	// A rollback may have pointed the current row at an older version.
-	current, err := s.repo.GetSkillPackage(ctx, model.SkillPackageOrgPK, model.SkillPackageCurrentSK)
-	if err != nil {
-		return []string{"old org versions not pruned"}
-	}
-	if current != nil {
-		inUse[current.ObjectKey] = true
-	}
-	for _, kept := range versions[:model.SkillPackageOrgVersionsKept] {
-		inUse[kept.ObjectKey] = true
-	}
 	var warnings []string
 	for _, old := range versions[model.SkillPackageOrgVersionsKept:] {
-		if err := s.repo.DeleteSkillPackage(ctx, old.PK, old.SK); err != nil {
+		if err := s.repo.DeleteSkillPackage(ctx, old.PK, old.SK, ""); err != nil {
 			warnings = append(warnings, "old org version not pruned")
-			continue
-		}
-		if !inUse[old.ObjectKey] {
-			if err := s.store.Delete(ctx, old.ObjectKey); err != nil {
-				warnings = append(warnings, "old org package object not removed")
-			}
 		}
 	}
 	return warnings
+}
+
+// deleteUnreferenced deletes a replaced personal object unless the caller's
+// live row points at it again (a concurrent completion of the same bytes).
+func (s *SkillPackageService) deleteUnreferenced(ctx context.Context, userID, key string) []string {
+	pk, sk := packageRowKey(model.SkillPackageScopePersonal, userID)
+	live, err := s.repo.GetSkillPackage(ctx, pk, sk)
+	if err != nil {
+		return []string{"previous package object not removed"}
+	}
+	if live != nil && live.ObjectKey == key {
+		return nil
+	}
+	if err := s.store.Delete(ctx, key); err != nil {
+		return []string{"previous package object not removed"}
+	}
+	return nil
 }
 
 // DeletePersonal removes the caller's personal package row, then its object.
@@ -277,13 +281,13 @@ func (s *SkillPackageService) DeletePersonal(ctx context.Context, userID string)
 	if row == nil {
 		return nil, ErrNotFound
 	}
-	if err := s.repo.DeleteSkillPackage(ctx, pk, sk); err != nil {
+	// Conditional on the row read above: a completion that replaced it in
+	// between keeps its package (409).
+	if err := s.repo.DeleteSkillPackage(ctx, pk, sk, row.SHA256); err != nil {
 		return nil, err
 	}
 	result := &SkillPackageResult{Warnings: []string{}}
-	if err := s.store.Delete(ctx, row.ObjectKey); err != nil {
-		result.Warnings = append(result.Warnings, "package object not removed")
-	}
+	result.Warnings = append(result.Warnings, s.deleteUnreferenced(ctx, userID, row.ObjectKey)...)
 	return result, nil
 }
 
