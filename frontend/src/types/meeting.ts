@@ -575,7 +575,15 @@ export interface ContactInput {
   notes?: string;
 }
 
-export interface AccountContact extends ContactInput { contactId: string; revision: string }
+export interface AccountContact extends ContactInput {
+  contactId: string;
+  revision: string;
+  /** Server-owned SFDC link fields; never shown or edited in the form. */
+  source?: string;
+  sfdcContactId?: string;
+  sfdcAccountId?: string;
+  sfdcLeftAt?: string;
+}
 
 /** A shared event (schedule) of an account; direct members only (ADR-021, contact encryption). */
 export interface EventAttendee { contactId?: string; name: string; email?: string }

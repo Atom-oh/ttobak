@@ -21,7 +21,7 @@ function fixture(confirmDialog = async () => true) {
   const deletions = [];
   const api = { contacts: async () => ({ contacts: [{ contactId: 'id', revision: 'rev', name: 'Private Name', notes: 'Private Note' }] }), updateContact: async () => { throw denied; }, deleteContact: async (...args) => { deletions.push(args); throw denied; } };
   const ContactImport = () => null;
-  const modules = { react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '@/lib/api': { accountApi: api }, '@/lib/dialog': { confirmDialog }, '@/lib/contactImport': { CONTACT_FIELDS: [['name', '이름']], isContactAccessDenied: (e) => e?.status === 403 || e?.status === 401 }, '@/components/ContactImport': { ContactImport } };
+  const modules = { react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '@/lib/api': { accountApi: api }, '@/lib/dialog': { confirmDialog }, '@/lib/contactImport': { CONTACT_FIELDS: [['name', '이름']], isContactAccessDenied: (e) => e?.status === 403 || e?.status === 401 }, '@/lib/contactSfdc': { BADGE_LABELS: {}, contactBadges: () => [], sortContactsForDisplay: (list) => list, leftSfdcTooltip: () => '' }, '@/components/ContactImport': { ContactImport } };
   const exports = {};
   vm.runInNewContext(output, { exports, require: (name) => modules[name], AbortController, window: { confirm: () => true } });
   const draw = () => { cursor = 0; effects = []; const result = exports.AccountContacts({ accountId: 'a', userId: 'u' }); effects.forEach((fn) => fn()); return result; };
