@@ -5,6 +5,14 @@ export interface NewsCollectResponse { requestId: string; requestedAt: string; n
 
 export const COLLECT_STARTED = '수집을 시작했어요. 몇 분 뒤 새 기사가 목록에 나타나요.';
 export const COLLECT_FAILED = '수집을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.';
+/**
+ * Off: the deployed crawler runs the versioned publication path with legacy
+ * writes disabled, and the manual collection worker is a legacy writer that
+ * returns without collecting there. Showing the button would confirm a run
+ * that never happens. Turn on only when manual collection runs on the
+ * versioned path.
+ */
+export const COLLECT_NOW_AVAILABLE = false;
 export const COLLECT_LIMITS = '고객사 전용 소스는 소스마다 한 시간에 한 번 바로 수집할 수 있고, 한 번에 새 기사를 40건 정도까지 가져와요.';
 
 /** Row state: `requested` keeps the 202's next allowed time; `limited` keeps the 429 time. */
