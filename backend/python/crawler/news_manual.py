@@ -54,8 +54,12 @@ RELEASE_CONDITION = (
 )
 RELEASE_UPDATE = 'REMOVE lastCollectRequestedAt, lastCollectRequestId'
 # Refusal receipt: same partition, an SK no history/document reader matches
-# (they query HISTORY#, DOC#, CONFIG or NEWS* prefixes). One per request.
+# (they query HISTORY#, DOC#, CONFIG or NEWS* prefixes), ordered by time:
+# COLLECTREFUSAL#{UTC second}#{requestId}. At most one per source per
+# RECEIPT_INTERVAL_SECONDS; releases are not rate-limited.
 REFUSAL_PREFIX = 'COLLECTREFUSAL#'
+RECEIPT_INTERVAL_SECONDS = 300
+_RECEIPT_TIME = '%Y-%m-%dT%H:%M:%SZ'
 
 
 def _table():
@@ -97,20 +101,22 @@ def parse_request(event):
 
 
 def daily_window(now):
-    """True from the lead (the child timeout) before the daily schedule until it.
+    """True from the lead (the child timeout) before the daily schedule until
+    the grace after it, which covers a delayed daily start; wraps at midnight.
 
     Raises ValueError on missing/invalid configuration, which the caller
-    refuses: hour, minute and lead come from the CDK schedule and timeout.
+    refuses: all four values come from the CDK schedule and constants.
     """
-    values = [os.environ.get(k, '') for k in
-              ('NEWS_DAILY_HOUR_UTC', 'NEWS_DAILY_MINUTE_UTC', 'NEWS_DAILY_LEAD_SECONDS')]
+    values = [os.environ.get(k, '') for k in ('NEWS_DAILY_HOUR_UTC', 'NEWS_DAILY_MINUTE_UTC',
+                                              'NEWS_DAILY_LEAD_SECONDS', 'NEWS_DAILY_GRACE_SECONDS')]
     if not all(re.fullmatch(r'[0-9]{1,5}', v) for v in values):
         raise ValueError('INVALID_CONFIGURATION')
-    hour, minute, lead = (int(v) for v in values)
-    if hour > 23 or minute > 59 or not 0 < lead < 86400:
+    hour, minute, lead, grace = (int(v) for v in values)
+    if hour > 23 or minute > 59 or not 0 < lead < 43200 or not 0 < grace < 43200:
         raise ValueError('INVALID_CONFIGURATION')
-    until_schedule = (hour * 3600 + minute * 60 - int(now) % 86400) % 86400
-    return 0 < until_schedule <= lead
+    # Signed seconds since the nearest schedule time, in [-43200, 43200).
+    offset = (int(now) - hour * 3600 - minute * 60 + 43200) % 86400 - 43200
+    return -lead <= offset < grace
 
 
 def _running(sfn, variable):
@@ -179,11 +185,22 @@ def release(table, source_id, account_id, request_id, code):
     except Exception as e:  # The claim then expires after the hour.
         logger.warning(f'manual collect: release={type(e).__name__} requestId={request_id}')
     now = int(time.time())
+    pk = f'CRAWLER#{source_id}'
     try:
+        # A long refusal condition must not write a 400-day receipt per request.
+        latest = table.query(
+            KeyConditionExpression='PK = :pk AND begins_with(SK, :prefix)',
+            ExpressionAttributeValues={':pk': pk, ':prefix': REFUSAL_PREFIX},
+            ScanIndexForward=False, Limit=1, ConsistentRead=True).get('Items') or []
+        if latest:
+            last = datetime.strptime(latest[0]['SK'][len(REFUSAL_PREFIX):][:20], _RECEIPT_TIME)
+            if now - last.replace(tzinfo=timezone.utc).timestamp() < RECEIPT_INTERVAL_SECONDS:
+                logger.info(f'manual collect: receipt=RECENT requestId={request_id}')
+                return
+        stamp = datetime.fromtimestamp(now, timezone.utc).strftime(_RECEIPT_TIME)
         table.put_item(Item={
-            'PK': f'CRAWLER#{source_id}', 'SK': REFUSAL_PREFIX + request_id,
-            'requestId': request_id, 'code': code,
-            'refusedAt': datetime.fromtimestamp(now, timezone.utc).isoformat(),
+            'PK': pk, 'SK': f'{REFUSAL_PREFIX}{stamp}#{request_id}',
+            'requestId': request_id, 'code': code, 'refusedAt': stamp,
             'pendingShareExpiresAt': now + ACCOUNTING_RETENTION_SECONDS,
         }, ConditionExpression='attribute_not_exists(PK)')
     except Exception as e:
@@ -209,9 +226,10 @@ def handler(event, context):
         _policy(int(time.time()))
     except StateRejected as error:
         return _refuse(source_id, account_id, request_id, error.reason)
-    # Discovery has reserved concurrency 1 and no invoke retries. A run
-    # started within the child timeout before the daily schedule would hold
-    # that slot when the daily parent's children begin and throttle them.
+    # Discovery has reserved concurrency 1; a throttled discovery waits for the
+    # slot (bounded retry). A manual run near the daily schedule (from the
+    # child timeout before until the grace after, for a delayed start) would
+    # delay the daily batch, so it is refused.
     try:
         in_window = daily_window(time.time())
     except ValueError:
@@ -221,13 +239,10 @@ def handler(event, context):
     sfn = _sfn()
     if _running(sfn, 'DAILY_STATE_MACHINE_ARN'):
         return _refuse(source_id, account_id, request_id, 'DAILY_RUNNING')
-    # A run started beside any discovering child would be throttled after the
-    # claim. This is check-then-start: two starters cannot interleave
-    # (reserved concurrency 1), but a daily child or another run can still
-    # begin between these checks and this run's discovery. That residual
-    # window is UNMITIGATED: the later discovery is throttled. If it is this
-    # run, the request is spent with no run and no receipt; if it is a daily
-    # child, that source fails for the day.
+    # Cost and fairness guards, not correctness: a manual run would otherwise
+    # queue for discovery behind or inside an active run. These are
+    # check-then-start; a run beginning after them only makes the later
+    # discovery wait for the slot.
     if _running(sfn, 'PUBLICATION_STATE_MACHINE_ARN'):
         return _refuse(source_id, account_id, request_id, 'RUN_IN_PROGRESS')
     table = _table()

@@ -863,16 +863,19 @@ the `NewsPublication` construct of the same stack, so no cross-stack edge) as
 claim release and claim are in ADR-004; it starts `ttobak-news-publication`
 once as `manual-{requestId}` with `{sourceId, runId}`, the input the daily
 parent passes. Its environment carries `NEWS_DAILY_HOUR_UTC`,
-`NEWS_DAILY_MINUTE_UTC` and `NEWS_DAILY_LEAD_SECONDS`, derived from the same
-constants as the daily rule and the child timeout, for the `DAILY_WINDOW`
-refusal. Its role has `GetItem`/`UpdateItem`/`PutItem` on `CRAWLER#*` keys of
-the table (`PutItem` only for the `COLLECTREFUSAL#` receipt),
+`NEWS_DAILY_MINUTE_UTC`, `NEWS_DAILY_LEAD_SECONDS` and
+`NEWS_DAILY_GRACE_SECONDS`, derived from the same constants as the daily rule,
+the child timeout and `NEWS_DAILY_GRACE` (15 minutes), for the `DAILY_WINDOW`
+refusal. Its role has `GetItem`/`UpdateItem`/`PutItem`/`Query` on `CRAWLER#*`
+keys of the table (`PutItem`/`Query` only for `COLLECTREFUSAL#` receipts),
 `states:StartExecution` on the publication state machine only,
 `states:ListExecutions` on the daily and publication state machines only, its
 own log group and, through the Lambda failure destination, `sqs:SendMessage` on
-the failure queue. Reserved concurrency is one. Discovery's reserved concurrency
-of one is why it refuses while either state machine runs; the race between these
-checks and discovery remains unmitigated (ADR-004). Delivery failures and failed
+the failure queue. Reserved concurrency is one. The publication child's
+`DiscoverArticles` task retries only `Lambda.TooManyRequestsException` (30
+seconds, backoff 1, 24 attempts, derived from the 600-second discovery timeout),
+so a run meeting discovery's single reserved slot waits instead of failing; the
+starter's running checks are cost and fairness guards. Delivery failures and failed
 async invocations land in SSE-SQS `ttobak-news-collect-failures` (seven-day
 retention, redrive denied), with alarms on rule
 `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, starter

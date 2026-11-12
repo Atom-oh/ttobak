@@ -18,6 +18,7 @@ ENV = {
     'NEWS_RUN_LIMIT_USD': '2', 'NEWS_MONTH_LIMIT_USD': '25',
     'PUBLICATION_STATE_MACHINE_ARN': 'arn:child', 'DAILY_STATE_MACHINE_ARN': 'arn:daily',
     'NEWS_DAILY_HOUR_UTC': '19', 'NEWS_DAILY_MINUTE_UTC': '10', 'NEWS_DAILY_LEAD_SECONDS': '2700',
+    'NEWS_DAILY_GRACE_SECONDS': '900',
 }
 NOW = 1794441600  # 2026-11-12T00:00:00Z
 
@@ -40,6 +41,7 @@ class TestManualStarter(unittest.TestCase):
     def setUp(self):
         self.table = mock.Mock()
         self.table.update_item.return_value = {}
+        self.table.query.return_value = {'Items': []}
         self.sfn = mock.Mock()
         self.sfn.list_executions.return_value = {'executions': []}
         self.sfn.start_execution.return_value = {'executionArn': 'arn'}
@@ -77,11 +79,17 @@ class TestManualStarter(unittest.TestCase):
                        'lastCollectStartedRequestId <> :rid'):
             self.assertIn(clause, update['ConditionExpression'])
         self.assertEqual(update['ExpressionAttributeValues'], {':acc': 'acct-1', ':rid': REQUEST})
+        query = self.table.query.call_args.kwargs
+        self.assertEqual(query['ExpressionAttributeValues'],
+                         {':pk': f'CRAWLER#{SOURCE}', ':prefix': 'COLLECTREFUSAL#'})
+        self.assertEqual((query['ScanIndexForward'], query['Limit'], query['ConsistentRead']),
+                         (False, 1, True))
         receipt = self.table.put_item.call_args.kwargs
+        stamp = receipt['Item']['refusedAt']
         self.assertEqual(receipt['Item'], {
-            'PK': f'CRAWLER#{SOURCE}', 'SK': f'COLLECTREFUSAL#{REQUEST}', 'requestId': REQUEST,
-            'code': code, 'refusedAt': '2026-11-12T00:00:00+00:00',
-            'pendingShareExpiresAt': NOW + 400 * 86400})
+            'PK': f'CRAWLER#{SOURCE}', 'SK': f'COLLECTREFUSAL#{stamp}#{REQUEST}',
+            'requestId': REQUEST, 'code': code, 'refusedAt': stamp,
+            'pendingShareExpiresAt': int(news_manual.time.time()) + 400 * 86400})
         self.assertEqual(receipt['ConditionExpression'], 'attribute_not_exists(PK)')
 
     def test_happy_path_claims_and_starts_one_named_run(self):
@@ -185,6 +193,8 @@ class TestManualStarter(unittest.TestCase):
             ({'NEWS_DAILY_MINUTE_UTC': '60'}, 'INVALID_CONFIGURATION'),
             ({'NEWS_DAILY_LEAD_SECONDS': '0'}, 'INVALID_CONFIGURATION'),
             ({'NEWS_DAILY_LEAD_SECONDS': '-5'}, 'INVALID_CONFIGURATION'),
+            ({'NEWS_DAILY_GRACE_SECONDS': ''}, 'INVALID_CONFIGURATION'),
+            ({'NEWS_DAILY_GRACE_SECONDS': '43200'}, 'INVALID_CONFIGURATION'),
         ]
         for changes, code in cases:
             with self.subTest(code=code, changes=changes), \
@@ -200,25 +210,44 @@ class TestManualStarter(unittest.TestCase):
             self.table.reset_mock()
             self.assertEqual(self.run_handler()['code'], 'INVALID_CONFIGURATION')
 
-    def test_daily_window_boundaries(self):
-        day = NOW  # 2026-11-12T00:00:00Z
-        for clock, refused in (((18, 24, 59), False), ((18, 25, 0), True),
-                               ((19, 9, 59), True), ((19, 10, 0), False)):
-            hour, minute, second = clock
-            with self.subTest(clock=clock), \
-                    mock.patch.object(news_manual.time, 'time',
-                                      return_value=day + hour * 3600 + minute * 60 + second):
+    def at(self, hour, minute, second):
+        return mock.patch.object(news_manual.time, 'time',
+                                 return_value=NOW + hour * 3600 + minute * 60 + second)
+
+    def test_daily_window_boundaries_and_grace(self):
+        for clock, refused in (((18, 24, 59), False), ((18, 25, 0), True), ((19, 9, 59), True),
+                               ((19, 10, 0), True), ((19, 24, 59), True), ((19, 25, 0), False)):
+            with self.subTest(clock=clock), self.at(*clock):
                 self.table.reset_mock()
                 self.sfn.reset_mock()
                 result = self.run_handler()
                 if refused:
                     self.assertEqual(result['code'], 'DAILY_WINDOW')
                     self.sfn.list_executions.assert_not_called()
-                    self.sfn.start_execution.assert_not_called()
-                    self.table.put_item.assert_called_once()
+                    self.assert_released('DAILY_WINDOW')
                 else:
                     self.assertEqual(result['status'], 'STARTED')
                     self.assertEqual(self.sfn.list_executions.call_count, 2)
+
+    def test_daily_window_wraps_midnight(self):
+        with mock.patch.dict(os.environ, {'NEWS_DAILY_HOUR_UTC': '0', 'NEWS_DAILY_MINUTE_UTC': '10'}):
+            for clock, refused in (((23, 24, 59), False), ((23, 25, 0), True), ((0, 0, 0), True),
+                                   ((0, 24, 59), True), ((0, 25, 0), False), ((12, 0, 0), False)):
+                with self.subTest(clock=clock), self.at(*clock):
+                    self.assertEqual(news_manual.daily_window(news_manual.time.time()), refused)
+
+    def test_one_receipt_per_source_per_five_minutes(self):
+        with mock.patch.dict(os.environ, {'NEWS_PIPELINE_MODE': 'off'}):
+            for age, written in ((299, False), (300, True)):
+                with self.subTest(age=age):
+                    self.table.reset_mock()
+                    stamp = news_manual.datetime.fromtimestamp(
+                        NOW - age, news_manual.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    self.table.query.return_value = {
+                        'Items': [{'SK': f'COLLECTREFUSAL#{stamp}#other-request'}]}
+                    self.assertEqual(self.run_handler()['code'], 'PIPELINE_DISABLED')
+                    self.table.update_item.assert_called_once()  # always released
+                    self.assertEqual(self.table.put_item.called, written)
 
     def test_release_failures_do_not_raise(self):
         with mock.patch.dict(os.environ, {'NEWS_PIPELINE_MODE': 'off'}):
