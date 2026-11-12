@@ -694,7 +694,8 @@ Prerequisites:
   either logged in (`claude`, then `/login`) or Bedrock through the `env` of
   `~/.claude/settings.json` (only the model-auth keys are carried over;
   `TTOBAK_REPORT_USE_BEDROCK=1|0` and `TTOBAK_REPORT_AWS_PROFILE` override them).
-- The skill is the internal-mcp-setup v1.4.0 layout, installed at
+- The skill is the internal-mcp-setup v1.4.0 layout or later (v1.5.0 is the
+  reviewed allowlist), installed at
   `~/.claude/skills/sa-performance-report` (or in a plugin cache). A copy without
   `scripts/calendar_count.py` and `references/report-structure.md` fails with
   `SKILL_OUTDATED` before the CLI starts.
@@ -724,10 +725,14 @@ Behavior:
 - The CLI runs with `--permission-mode dontAsk`, `--strict-mcp-config`,
   `--setting-sources project,local` (no user permission rules) and an explicit
   read-only `--allowedTools` list (`mcp-server/src/report/tools.ts`): the read
-  tools of the skill's data-sources, file reads only in the skill, `work/` and
+  tools that the v1.5.0 skill's data-sources call (v1.5.0 added the PFR,
+  Customer Influence and detail reads of `aws-sentral-mcp` and Outlook
+  `email_search` for interviews; `ccmt-mcp` and `search_campaigns` stay out), file reads only in the skill, `work/` and
   session directories, writes only in `work/out/` (Write, Edit and MultiEdit
   of `work/.claude/**` are denied), no sub-agents, and Bash only for
-  the three counting scripts. Bash runs only in Claude Code's sandbox, set by
+  the five counting scripts of the v1.5.0 skill (`calendar_count.py`,
+  `extract_tool_json.py`, `slack_threads.py`, `interview_count.py`,
+  `pfr_ci_summary.py`). Bash runs only in Claude Code's sandbox, set by
   the run's `--settings` file: `sandbox.enabled`, `failIfUnavailable`,
   `allowUnsandboxedCommands: false`, no network, writes only in `work/out/`
   (`work/.claude` is in `denyWrite`) and
