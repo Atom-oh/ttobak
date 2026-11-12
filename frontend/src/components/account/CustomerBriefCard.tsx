@@ -26,6 +26,8 @@ const secondaryButton = 'min-h-11 rounded-lg border border-border-subtle px-4 te
  * answers 404 (not a direct member, or the backend is not deployed yet).
  * All brief text is model output rendered as plain React text.
  */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export function CustomerBriefCard({ accountId, userId }: { accountId: string; userId: string }) {
   const [view, setView] = useState<View>({ phase: 'loading' });
   const [busy, setBusy] = useState(false);
@@ -55,20 +57,28 @@ export function CustomerBriefCard({ accountId, userId }: { accountId: string; us
     getRef.current?.abort();
     const controller = new AbortController();
     getRef.current = controller;
+    // A request that never settles must not hold up the next poll or the
+    // ten-minute limit, so each read gives up after REQUEST_TIMEOUT_MS.
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
     try {
       const response = await accountApi.customerBrief.get(accountId, { signal: controller.signal, expectedUserId: userId });
       if (controller.signal.aborted) return;
       accept(applyResponse(briefRef.current, response, 'get'));
     } catch (failure) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted && !expired) return;
       if (hidesCard(errorStatus(failure))) {
         setView({ phase: 'hidden' });
       } else if (kind === 'initial') {
         setView({ phase: 'loadError' });
       }
     } finally {
+      clearTimeout(timer);
       if (getRef.current === controller) getRef.current = null;
-      if (!controller.signal.aborted && kind === 'polling') setPollTick(tick => tick + 1);
+      if ((!controller.signal.aborted || expired) && kind === 'polling') setPollTick(tick => tick + 1);
     }
   }, [accountId, userId, accept]);
 
