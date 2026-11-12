@@ -410,7 +410,27 @@ account's contacts or free text; times are entered in the viewer's zone and sent
 as UTC RFC 3339; limits mirror the API (`src/lib/accountEvents.ts`), and deletes
 confirm with the shared dialog. Inherited readers do not see the tab.
 
-For direct members the general tab starts with **AWS signals** and then the
+For direct members the general tab opens with the **customer brief** card
+(`components/account/CustomerBriefCard.tsx`, pure logic in `src/lib/customerBrief.ts`):
+the caller's private one-page pre-meeting summary from
+`GET/POST /api/accounts/{id}/customer-brief`. A 404 (not a direct member, or the
+API not deployed) hides the card. Without a brief it shows one explanatory line
+and a create button. While a run is queued or running it shows a polite live
+in-progress line above the previous brief and polls GET every 5 seconds, pausing
+while the tab is hidden and stopping on any terminal state, on unmount or after
+10 minutes (then a slow-run notice with a manual recheck). A failed run keeps the
+previous brief under a per-error-code message with retry; POST 409 polls, 503
+shows the generic failure. Sections render in order and are omitted when empty:
+next meeting, one-line situation, since the last meeting, recent news with a
+"why it matters" line, questions to ask, unfamiliar terms with an in/not in
+dictionary text badge. The footer shows the generation time (relative within a
+day; invalid times show nothing) and a regenerate button. Every statement lists
+source chips with a kind word and a CSS-truncated label (full text in `title`);
+meeting chips link to the meeting and news chips to `/insights/{sourceId}/{docHash}`
+(id split at the last colon, each segment validated and encoded); insight, event
+and unknown kinds are plain chips. All brief text renders as text nodes only.
+
+Below the brief come **AWS signals** and then the
 **engagement flow**, above members and contacts (`components/account/`). Signals
 show the account's recent news (with a new-opportunity-candidate badge, linked
 opportunities and unlink) or an explicit no-source / no-recent-news state with
