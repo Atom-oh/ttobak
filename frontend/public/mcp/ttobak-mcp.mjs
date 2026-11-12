@@ -25462,6 +25462,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: "upsert" });
   }
+  for (const [id, entry2] of Object.entries(priorHeld)) if (!seen.has(id)) held[id] = entry2;
   for (const [id, entry2] of Object.entries(ledger)) {
     if (seen.has(id)) continue;
     const start = new Date(entry2.startsAt), end = new Date(entry2.endsAt);

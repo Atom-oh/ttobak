@@ -216,7 +216,8 @@ checked, so its title never appears in a removal preview. An occurrence
 excluded only by an unselected response (not a declined one) is recorded as
 held in the calendar state, and its SpecReq task stays open: when the owner
 answers the invitation or selects the response again, the event syncs again
-with the same task. A later unknown response keeps the hold, and a held
+with the same task. A later unknown response, or a read that does not return
+the occurrence, keeps the hold until the calendar retention prunes it, and a held
 occurrence stays tracked, so a decline still closes its task even past the
 task list cap. A declined, cancelled or deleted occurrence closes its task as
 before. The response itself never reaches TTOBAK.

@@ -381,6 +381,9 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: 'upsert' });
   }
+  // A hold this read did not observe carries forward, like an unresolved ledger entry; only an
+  // observed decision (selected, declined, cancelled) or retention pruning releases it.
+  for (const [id, entry] of Object.entries(priorHeld)) if (!seen.has(id)) held[id] = entry;
   for (const [id, entry] of Object.entries(ledger)) {
     if (seen.has(id)) continue;
     const start = new Date(entry.startsAt), end = new Date(entry.endsAt);

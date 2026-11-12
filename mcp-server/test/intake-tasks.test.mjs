@@ -1096,6 +1096,22 @@ test('an occurrence excluded only by its response keeps its task; a declined one
   assert.equal(api.tasks.get(created.eventId).state, 'closed');
 });
 
+test('a held occurrence missing from a later read keeps its task', async t => {
+  const { run } = await taskHome(t);
+  const api = await fakeTaskApi({ eventAccounts: { 'occ-1': 'acct-1' }, accounts: { 'acct-1': account('AM', [ALICE]) } });
+  const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
+  await run(api, [occurrence()], work);
+  const [created] = api.tasks.values();
+  await run(api, [occurrence({ response: 'None' })], work);
+  // The provider omits it (rescheduled away, or dropped): the hold carries forward.
+  const gone = await run(api, [occurrence({ meetingId: 'occ-2', response: 'Decline' })], work);
+  assert.equal(gone.output.tasks.counts.closed, 0);
+  assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
+  const back = await run(api, [occurrence()], work);
+  assert.equal(back.output.counts.upserts, 1);
+  assert.notEqual(api.tasks.get(created.eventId).state, 'closed');
+});
+
 test('past the task list cap a held occurrence that is then declined closes its task', async t => {
   const { run } = await taskHome(t);
   const work = { FAKE_WORK_DETAILS: JSON.stringify(details(['alice@amazon.com'])) };
