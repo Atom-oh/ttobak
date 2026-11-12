@@ -80,30 +80,44 @@ no request was accepted in the last hour, then publishes `NewsCollectRequested`
 release also fails the claim expires after the hour. Rule
 `ttobak-news-collect-requested` delivers the IDs, without retries, to the
 starter `news_manual.handler` (`ttobak-news-manual`). The starter validates the
-ID grammar; applies the publication handlers' own activation gate (any source in
-`all` mode, only the canary source in `canary`, nothing when `off`) and pricing
-check; refuses with `DAILY_RUNNING` while the `ttobak-news-daily` parent has a
-running execution and with `RUN_IN_PROGRESS` while any `ttobak-news-publication`
-child runs (discovery has reserved concurrency 1 and no invoke retries, so a
-concurrent run would be throttled after the claim; this check-then-start leaves
-only a daily child starting before the manual discovery, which the API's daily
-window covers); then makes one conditional claim on the CONFIG row (event
-account, non-disabled, non-operator source, the API's `lastCollectRequestId`, not
-yet started) that sets `lastCollectStartedRequestId`/`lastCollectStartedAt`.
-Every refusal before or at the claim does no work. Only then does it start
-`ttobak-news-publication` once as `manual-{requestId}`; an existing execution of
-that name is success, and a failed start keeps the started marker so a duplicate
-delivery cannot create a second paid run. The claim attributes are outside the
-source revision fingerprint and the publication CONFIG fields. The starter never
-searches, fetches or calls a model. A manual run is an ordinary versioned run:
-its own `NEWSRUN#` row, 30-minute admission window, at most 20 candidates and 60
-attempts, the $2 run cap, the relevance gate and publication rules, the shared
-$25 monthly source budget, finalization, HISTORY receipt and scheduled recovery.
-Against the daily run: articles a manual run published are skipped by later runs,
-rejected ones are evaluated again, and two overlapping runs reserving the same
-article fail the later reservation, which is why the starter refuses while the
-daily parent runs (the API's daily window is a separate check). The legacy
-`ttobak-crawler-news` manual consumer was removed.
+ID grammar (`INVALID_REQUEST` otherwise, with nothing written), then refuses
+before its own claim with: the publication handlers' activation gate
+(`PIPELINE_DISABLED`, `LEGACY_WRITER_ENABLED`) and pricing check
+(`INVALID_PRICING`); `DAILY_WINDOW` from the child timeout (45 minutes) before
+the daily schedule until it (18:25 to 19:10 UTC; hour, minute and lead come from
+the CDK schedule and timeout, and missing values refuse as
+`INVALID_CONFIGURATION`); `DAILY_RUNNING` while `ttobak-news-daily` runs; and
+`RUN_IN_PROGRESS` while any `ttobak-news-publication` child runs. Discovery has
+reserved concurrency 1 and no invoke retries, so an overlapping run would be
+throttled at discovery before it creates a run row. Each of these refusals is
+not the request's fault: it releases the API's claim (conditionally removes
+both attributes for this request ID, only while not started) so the member can
+ask again, and writes one `COLLECTREFUSAL#{requestId}` item under the source
+(request ID, code, time, 400-day `pendingShareExpiresAt`) that no history or
+document reader matches; a failed release condition writes no receipt, and
+release or receipt errors are logged, not raised. Then one conditional claim on
+the CONFIG row (event account, non-disabled, non-operator source, the API's
+`lastCollectRequestId`, not yet started) sets
+`lastCollectStartedRequestId`/`lastCollectStartedAt`; its refusals do no work.
+Only then does it start `ttobak-news-publication` once as `manual-{requestId}`;
+an existing execution of that name is success, and a failed start keeps the
+started marker so a duplicate delivery cannot create a second paid run. The
+claim attributes are outside the source revision fingerprint and the
+publication CONFIG fields. The starter never searches, fetches or calls a model.
+A manual run is an ordinary versioned run: its own `NEWSRUN#` row, 30-minute
+admission window, at most 20 candidates and 60 attempts, the $2 run cap, the
+relevance gate and publication rules, the shared $25 monthly source budget,
+finalization, HISTORY receipt and scheduled recovery. Against the daily run:
+articles a manual run published are skipped by later runs, rejected ones are
+evaluated again, and two overlapping runs reserving the same article fail the
+later reservation. A residual race is unmitigated: a daily child or another run
+can begin in the seconds between the starter's checks and its run's discovery.
+The later discovery is then throttled; if it is the manual run, the request is
+spent with no run and no receipt; if it is a daily child, that source fails for
+the day. Retrying discovery on throttling in the child workflow would close it,
+but changes the publication workflow and needs its own release acceptance. The
+legacy `ttobak-crawler-news` manual consumer was removed; it refuses a stray
+`manualCollect` event without writing.
 
 ### Evidence
 

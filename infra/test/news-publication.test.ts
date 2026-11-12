@@ -2,7 +2,9 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import { NewsPublication } from '../lib/news-publication';
+import {
+  NEWS_CHILD_TIMEOUT, NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC, NewsPublication,
+} from '../lib/news-publication';
 
 // Resolve only the token shapes used by this isolated template, without a
 // context lookup, deployment, or credentials. Unknown shapes fail the test.
@@ -268,12 +270,19 @@ describe('private news publication release', () => {
     expect(env.PUBLICATION_STATE_MACHINE_ARN).toEqual({ Ref: childId });
     expect(env.DAILY_STATE_MACHINE_ARN).toEqual({ Ref: dailyId });
     expect(fn.Properties.ReservedConcurrentExecutions).toBe(1);
+    // The pre-daily window comes from the same constants as the rule and the child timeout.
+    const dailyRule = resources.find(r => r.Properties?.Name === 'ttobak-news-daily');
+    expect(dailyRule.Properties.ScheduleExpression)
+      .toBe(`cron(${NEWS_DAILY_MINUTE_UTC} ${NEWS_DAILY_HOUR_UTC} * * ? *)`);
+    expect(definition.TimeoutSeconds).toBe(NEWS_CHILD_TIMEOUT.toSeconds());
+    expect([env.NEWS_DAILY_HOUR_UTC, env.NEWS_DAILY_MINUTE_UTC, env.NEWS_DAILY_LEAD_SECONDS])
+      .toEqual([NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC, NEWS_CHILD_TIMEOUT.toSeconds()].map(String));
     const statements = resources.filter(r => r.Type === 'AWS::IAM::Policy'
       && r.Properties.Roles.some((role: any) => role.Ref === roleId))
       .flatMap(p => p.Properties.PolicyDocument.Statement);
     const actions = statements.flatMap(s => Array.isArray(s.Action) ? s.Action : [s.Action]).sort();
-    expect(actions).toEqual(['dynamodb:GetItem', 'dynamodb:UpdateItem', 'logs:CreateLogStream',
-      'logs:PutLogEvents', 'states:ListExecutions', 'states:StartExecution']);
+    expect(actions).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+      'logs:CreateLogStream', 'logs:PutLogEvents', 'states:ListExecutions', 'states:StartExecution']);
     const byAction = (action: string) => statements.find(s =>
       (Array.isArray(s.Action) ? s.Action : [s.Action]).includes(action));
     expect(byAction('states:StartExecution').Resource).toEqual({ Ref: childId });

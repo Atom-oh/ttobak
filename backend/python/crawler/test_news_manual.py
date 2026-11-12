@@ -17,6 +17,7 @@ ENV = {
     'NEWS_INPUT_USD_PER_MTOK': '0.125', 'NEWS_OUTPUT_USD_PER_MTOK': '0.50',
     'NEWS_RUN_LIMIT_USD': '2', 'NEWS_MONTH_LIMIT_USD': '25',
     'PUBLICATION_STATE_MACHINE_ARN': 'arn:child', 'DAILY_STATE_MACHINE_ARN': 'arn:daily',
+    'NEWS_DAILY_HOUR_UTC': '19', 'NEWS_DAILY_MINUTE_UTC': '10', 'NEWS_DAILY_LEAD_SECONDS': '2700',
 }
 NOW = 1794441600  # 2026-11-12T00:00:00Z
 
@@ -61,6 +62,27 @@ class TestManualStarter(unittest.TestCase):
             self.table.update_item.assert_not_called()
         self.table.put_item.assert_not_called()
         self.table.delete_item.assert_not_called()
+
+    def assert_released(self, code):
+        """The API claim is released, a receipt written, and nothing started."""
+        self.sfn.start_execution.assert_not_called()
+        self.table.get_item.assert_not_called()
+        self.table.update_item.assert_called_once()
+        update = self.table.update_item.call_args.kwargs
+        self.assertEqual(update['Key'], {'PK': f'CRAWLER#{SOURCE}', 'SK': 'CONFIG'})
+        self.assertEqual(update['UpdateExpression'],
+                         'REMOVE lastCollectRequestedAt, lastCollectRequestId')
+        self.assertEqual(update['ConditionExpression'], news_manual.RELEASE_CONDITION)
+        for clause in ('attribute_exists(PK)', 'accountId = :acc', 'lastCollectRequestId = :rid',
+                       'lastCollectStartedRequestId <> :rid'):
+            self.assertIn(clause, update['ConditionExpression'])
+        self.assertEqual(update['ExpressionAttributeValues'], {':acc': 'acct-1', ':rid': REQUEST})
+        receipt = self.table.put_item.call_args.kwargs
+        self.assertEqual(receipt['Item'], {
+            'PK': f'CRAWLER#{SOURCE}', 'SK': f'COLLECTREFUSAL#{REQUEST}', 'requestId': REQUEST,
+            'code': code, 'refusedAt': '2026-11-12T00:00:00+00:00',
+            'pendingShareExpiresAt': NOW + 400 * 86400})
+        self.assertEqual(receipt['ConditionExpression'], 'attribute_not_exists(PK)')
 
     def test_happy_path_claims_and_starts_one_named_run(self):
         result = self.run_handler()
@@ -151,7 +173,7 @@ class TestManualStarter(unittest.TestCase):
                 sfn.assert_not_called()
                 table.assert_not_called()
 
-    def test_pipeline_gates_refuse_before_any_sdk_call(self):
+    def test_pipeline_gates_release_the_claim_without_step_functions(self):
         cases = [
             ({'NEWS_PIPELINE_MODE': 'off'}, 'PIPELINE_DISABLED'),
             ({'NEWS_PIPELINE_MODE': 'typo'}, 'PIPELINE_DISABLED'),
@@ -159,16 +181,57 @@ class TestManualStarter(unittest.TestCase):
              'PIPELINE_DISABLED'),
             ({'NEWS_LEGACY_WRITES': 'on'}, 'LEGACY_WRITER_ENABLED'),
             ({'NEWS_PRICE_VERIFIED_ON': '2026-01-01'}, 'INVALID_PRICING'),
+            ({'NEWS_DAILY_HOUR_UTC': ''}, 'INVALID_CONFIGURATION'),
+            ({'NEWS_DAILY_MINUTE_UTC': '60'}, 'INVALID_CONFIGURATION'),
+            ({'NEWS_DAILY_LEAD_SECONDS': '0'}, 'INVALID_CONFIGURATION'),
+            ({'NEWS_DAILY_LEAD_SECONDS': '-5'}, 'INVALID_CONFIGURATION'),
         ]
         for changes, code in cases:
             with self.subTest(code=code, changes=changes), \
                     mock.patch.dict(os.environ, changes), \
-                    mock.patch.object(news_manual, '_sfn') as sfn, \
-                    mock.patch.object(news_manual, '_table') as table:
+                    mock.patch.object(news_manual, '_sfn') as sfn:
+                self.table.reset_mock()
                 result = self.run_handler()
                 self.assertEqual((result['status'], result['code']), ('REFUSED', code))
                 sfn.assert_not_called()
-                table.assert_not_called()
+                self.assert_released(code)
+        with mock.patch.dict(os.environ, {'NEWS_DAILY_HOUR_UTC': ''}):
+            del os.environ['NEWS_DAILY_HOUR_UTC']
+            self.table.reset_mock()
+            self.assertEqual(self.run_handler()['code'], 'INVALID_CONFIGURATION')
+
+    def test_daily_window_boundaries(self):
+        day = NOW  # 2026-11-12T00:00:00Z
+        for clock, refused in (((18, 24, 59), False), ((18, 25, 0), True),
+                               ((19, 9, 59), True), ((19, 10, 0), False)):
+            hour, minute, second = clock
+            with self.subTest(clock=clock), \
+                    mock.patch.object(news_manual.time, 'time',
+                                      return_value=day + hour * 3600 + minute * 60 + second):
+                self.table.reset_mock()
+                self.sfn.reset_mock()
+                result = self.run_handler()
+                if refused:
+                    self.assertEqual(result['code'], 'DAILY_WINDOW')
+                    self.sfn.list_executions.assert_not_called()
+                    self.sfn.start_execution.assert_not_called()
+                    self.table.put_item.assert_called_once()
+                else:
+                    self.assertEqual(result['status'], 'STARTED')
+                    self.assertEqual(self.sfn.list_executions.call_count, 2)
+
+    def test_release_failures_do_not_raise(self):
+        with mock.patch.dict(os.environ, {'NEWS_PIPELINE_MODE': 'off'}):
+            # A failed condition (already started, replaced or gone): no receipt.
+            self.table.update_item.side_effect = client_error('ConditionalCheckFailedException')
+            self.assertEqual(self.run_handler()['code'], 'PIPELINE_DISABLED')
+            self.table.put_item.assert_not_called()
+            # A release error still records the receipt; a receipt error is logged.
+            self.table.update_item.side_effect = client_error('ThrottlingException')
+            self.table.put_item.side_effect = client_error('ThrottlingException')
+            self.assertEqual(self.run_handler()['code'], 'PIPELINE_DISABLED')
+            self.table.put_item.assert_called_once()
+            self.sfn.start_execution.assert_not_called()
 
     def test_canary_source_is_accepted(self):
         with mock.patch.dict(os.environ, {'NEWS_PIPELINE_MODE': 'canary',
@@ -189,10 +252,10 @@ class TestManualStarter(unittest.TestCase):
                                    (False, True, 'RUN_IN_PROGRESS')):
             with self.subTest(code=code, daily=daily, child=child):
                 self.running(daily, child)
+                self.table.reset_mock()
                 result = self.run_handler()
                 self.assertEqual((result['status'], result['code']), ('REFUSED', code))
-                self.assert_no_work()
-                self.table.get_item.assert_not_called()
+                self.assert_released(code)
 
     def test_list_executions_error_on_either_machine_fails_closed(self):
         for daily, child in ((client_error('AccessDeniedException'), False),

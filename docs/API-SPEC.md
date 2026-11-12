@@ -1196,10 +1196,16 @@ revision fingerprint. Then a
 deleted or disabled meanwhile is 404. If the event is not accepted, the claim is
 released (both attributes removed, conditional on its request ID, so a late
 event for it is refused as unclaimed) and the route returns 503; if the
-release also fails the claim expires after the hour. The collection itself is
-asynchronous: one versioned publication run named `manual-{requestId}` with
-that run's limits (ADR-004); its outcome is visible only as the source's
-HISTORY receipt and new articles. Account-kind items of
+release also fails the claim expires after the hour. A 202 means the request was
+accepted and queued, not that it will run: the starter may still refuse it with
+`PIPELINE_DISABLED`, `LEGACY_WRITER_ENABLED`, `INVALID_PRICING`,
+`INVALID_CONFIGURATION`, `DAILY_WINDOW` (from 45 minutes before the 19:10 UTC
+daily schedule), `DAILY_RUNNING` or `RUN_IN_PROGRESS`. It then releases the
+hourly claim, records a non-history `COLLECTREFUSAL#{requestId}` receipt and
+collects nothing (ADR-004); the route does not yet check these conditions
+before answering. Otherwise the collection is one asynchronous versioned
+publication run named `manual-{requestId}` with that run's limits; its outcome
+is visible only as the source's HISTORY receipt and new articles. Account-kind items of
 `GET /api/news-sources`, the PUT response and the per-account GET carry
 `nextCollectAllowedAt` (UTC RFC3339) while a request is within the hour; it is
 omitted when collection may be requested now.

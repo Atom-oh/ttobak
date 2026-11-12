@@ -869,6 +869,10 @@ def handler(event, context):
     # changes. Deployment drains the old revision before archiving legacy data.
     if os.environ.get("NEWS_LEGACY_WRITES", "on") != "on":
         return {"status": "DISABLED", "docsAdded": 0, "docsUpdated": 0, "errors": []}
+    # Manual collection runs through news_manual; a stray event writes nothing.
+    if isinstance(event, dict) and 'manualCollect' in event:
+        return {"status": "REFUSED", "code": "MANUAL_NOT_SUPPORTED",
+                "docsAdded": 0, "docsUpdated": 0, "errors": []}
     start_time = time.time()
     source_id = event.get('sourceId', 'unknown')
     source_name = event.get('sourceName', '')

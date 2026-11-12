@@ -56,6 +56,15 @@ class TestLegacyNewsDrain(unittest.TestCase):
                 search.assert_not_called()
                 history.assert_not_called()
 
+    def test_manual_event_is_refused_without_writes(self):
+        with mock.patch.dict(os.environ, {"NEWS_LEGACY_WRITES": "on"}), \
+                mock.patch.object(news_crawler, "_generate_search_queries") as search, \
+                mock.patch.object(news_crawler, "_record_history") as history:
+            result = news_crawler.handler({"manualCollect": {"sourceId": "acct_a_0123abcd"}}, None)
+        self.assertEqual(result["code"], "MANUAL_NOT_SUPPORTED")
+        search.assert_not_called()
+        history.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 1. orchestrator.handler

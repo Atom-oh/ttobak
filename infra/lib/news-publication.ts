@@ -14,6 +14,11 @@ import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
 import { NEWS_MODEL_ID, extractionModelResources } from './model-config';
 
+/** Daily schedule (UTC) and child timeout; the manual starter derives its window from them. */
+export const NEWS_DAILY_HOUR_UTC = 19;
+export const NEWS_DAILY_MINUTE_UTC = 10;
+export const NEWS_CHILD_TIMEOUT = cdk.Duration.minutes(45);
+
 interface NewsPublicationProps {
   table: dynamodb.ITable;
   kbBucket: s3.IBucket;
@@ -205,7 +210,7 @@ export class NewsPublication extends Construct {
     this.stateMachine = new sfn.StateMachine(this, 'Workflow', {
       stateMachineName: 'ttobak-news-publication',
       definitionBody: sfn.DefinitionBody.fromChainable(discoverTask.next(choose)),
-      timeout: cdk.Duration.minutes(45),
+      timeout: NEWS_CHILD_TIMEOUT,
     });
     const schedule = makeFunction('Schedule', 'news_schedule.handler', 120, 1);
     schedule.role.addToPolicy(new iam.PolicyStatement({
@@ -307,14 +312,18 @@ export class NewsPublication extends Construct {
       timeout: cdk.Duration.hours(23),
     });
     // Manual collection (ADR-004): claims an API-claimed request and starts
-    // the child once. No search, fetch or model access; refuses while the
-    // daily parent or any child runs.
+    // the child once. No search, fetch or model access; refuses within the
+    // child timeout before the daily schedule and while any run is active.
     const manual = makeFunction('Manual', 'news_manual.handler', 30, 1, {
       PUBLICATION_STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
       DAILY_STATE_MACHINE_ARN: daily.stateMachineArn,
+      NEWS_DAILY_HOUR_UTC: String(NEWS_DAILY_HOUR_UTC),
+      NEWS_DAILY_MINUTE_UTC: String(NEWS_DAILY_MINUTE_UTC),
+      NEWS_DAILY_LEAD_SECONDS: String(NEWS_CHILD_TIMEOUT.toSeconds()),
     });
     manual.role.addToPolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+      // PutItem only for the COLLECTREFUSAL# receipt of a refused request.
+      actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem', 'dynamodb:PutItem'],
       resources: [props.table.tableArn], conditions: crawlerKeys,
     }));
     manual.role.addToPolicy(new iam.PolicyStatement({
@@ -352,7 +361,9 @@ export class NewsPublication extends Construct {
     });
     const dailyRule = new events.Rule(this, 'DailySchedule', {
       ruleName: 'ttobak-news-daily',
-      schedule: events.Schedule.cron({ hour: '19', minute: '10' }),
+      schedule: events.Schedule.cron({
+        hour: String(NEWS_DAILY_HOUR_UTC), minute: String(NEWS_DAILY_MINUTE_UTC),
+      }),
       targets: [new targets.SfnStateMachine(daily, {
         input: events.RuleTargetInput.fromObject({
           scheduledAt: events.EventField.fromPath('$.time'),

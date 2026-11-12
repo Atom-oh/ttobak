@@ -1,8 +1,9 @@
 """Manual "collect now" starter for one account-owned news source (ADR-004).
 
 Claims the API-claimed request on the CONFIG row and starts the versioned
-publication workflow once as manual-{requestId}. It never searches, fetches
-or calls a model; the child run owns that and its run and monthly budgets.
+publication workflow once as manual-{requestId}. A refusal before the claim
+releases the API's hourly claim and records a COLLECTREFUSAL# receipt. It never
+searches, fetches or calls a model; the child run owns that and its budgets.
 """
 
 import json
@@ -16,7 +17,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from news_runtime import SDK_CONFIG, _enabled, _policy
-from news_store import StateRejected
+from news_store import ACCOUNTING_RETENTION_SECONDS, StateRejected
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -42,6 +43,19 @@ CLAIM_CONDITION = (
     'OR lastCollectStartedRequestId <> :rid)'
 )
 CLAIM_UPDATE = 'SET lastCollectStartedRequestId = :rid, lastCollectStartedAt = :now'
+# Release of the API's hourly claim after a refusal that is not the request's
+# fault, so the member can ask again. Like Go ReleaseAccountNewsCollect it
+# removes only this request's claim; it also requires the row/account and a
+# request this starter has not started.
+RELEASE_CONDITION = (
+    'attribute_exists(PK) AND accountId = :acc AND lastCollectRequestId = :rid '
+    'AND (attribute_not_exists(lastCollectStartedRequestId) '
+    'OR lastCollectStartedRequestId <> :rid)'
+)
+RELEASE_UPDATE = 'REMOVE lastCollectRequestedAt, lastCollectRequestId'
+# Refusal receipt: same partition, an SK no history/document reader matches
+# (they query HISTORY#, DOC#, CONFIG or NEWS* prefixes). One per request.
+REFUSAL_PREFIX = 'COLLECTREFUSAL#'
 
 
 def _table():
@@ -80,6 +94,23 @@ def parse_request(event):
     if not source_id.startswith(prefix) or not _SOURCE_SUFFIX_RE.fullmatch(source_id[len(prefix):]):
         return None
     return source_id, account_id, request_id
+
+
+def daily_window(now):
+    """True from the lead (the child timeout) before the daily schedule until it.
+
+    Raises ValueError on missing/invalid configuration, which the caller
+    refuses: hour, minute and lead come from the CDK schedule and timeout.
+    """
+    values = [os.environ.get(k, '') for k in
+              ('NEWS_DAILY_HOUR_UTC', 'NEWS_DAILY_MINUTE_UTC', 'NEWS_DAILY_LEAD_SECONDS')]
+    if not all(re.fullmatch(r'[0-9]{1,5}', v) for v in values):
+        raise ValueError('INVALID_CONFIGURATION')
+    hour, minute, lead = (int(v) for v in values)
+    if hour > 23 or minute > 59 or not 0 < lead < 86400:
+        raise ValueError('INVALID_CONFIGURATION')
+    until_schedule = (hour * 3600 + minute * 60 - int(now) % 86400) % 86400
+    return 0 < until_schedule <= lead
 
 
 def _running(sfn, variable):
@@ -131,32 +162,74 @@ def refusal_code(table, source_id, account_id, request_id):
     return 'CLAIM_REJECTED'
 
 
+def release(table, source_id, account_id, request_id, code):
+    """Release the API's claim and record a refusal receipt; never raises."""
+    key = {'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'}
+    try:
+        table.update_item(Key=key, ConditionExpression=RELEASE_CONDITION,
+                          UpdateExpression=RELEASE_UPDATE,
+                          ExpressionAttributeValues={':acc': account_id, ':rid': request_id})
+    except ClientError as e:
+        reason = e.response.get('Error', {}).get('Code', 'ERROR')
+        logger.warning(f'manual collect: release={reason} requestId={request_id}')
+        if reason == 'ConditionalCheckFailedException':
+            # Not this request's live claim (already started, replaced or
+            # gone): a receipt would misdescribe it.
+            return
+    except Exception as e:  # The claim then expires after the hour.
+        logger.warning(f'manual collect: release={type(e).__name__} requestId={request_id}')
+    now = int(time.time())
+    try:
+        table.put_item(Item={
+            'PK': f'CRAWLER#{source_id}', 'SK': REFUSAL_PREFIX + request_id,
+            'requestId': request_id, 'code': code,
+            'refusedAt': datetime.fromtimestamp(now, timezone.utc).isoformat(),
+            'pendingShareExpiresAt': now + ACCOUNTING_RETENTION_SECONDS,
+        }, ConditionExpression='attribute_not_exists(PK)')
+    except Exception as e:
+        logger.warning(f'manual collect: receipt={type(e).__name__} requestId={request_id}')
+
+
+def _refuse(source_id, account_id, request_id, code):
+    release(_table(), source_id, account_id, request_id, code)
+    return _result('REFUSED', code, request_id)
+
+
 def handler(event, context):
     request = parse_request(event)
     if request is None:
+        # No trustworthy IDs: nothing is released or recorded.
         return _result('REFUSED', 'INVALID_REQUEST')
     source_id, account_id, request_id = request
-    # The versioned handlers' own activation and pricing gates, before any SDK
-    # call: a request they would reject is refused here and not consumed.
+    # Every refusal before the claim below is not the request's fault: it
+    # releases the API's hourly claim and records a receipt (_refuse).
+    # The versioned handlers' own activation and pricing gates first.
     try:
         _enabled(source_id)
         _policy(int(time.time()))
     except StateRejected as error:
-        return _result('REFUSED', error.reason, request_id)
+        return _refuse(source_id, account_id, request_id, error.reason)
+    # Discovery has reserved concurrency 1 and no invoke retries. A run
+    # started within the child timeout before the daily schedule would hold
+    # that slot when the daily parent's children begin and throttle them.
+    try:
+        in_window = daily_window(time.time())
+    except ValueError:
+        return _refuse(source_id, account_id, request_id, 'INVALID_CONFIGURATION')
+    if in_window:
+        return _refuse(source_id, account_id, request_id, 'DAILY_WINDOW')
     sfn = _sfn()
-    # Backstop for the API's daily window: an overlapping daily run would fail
-    # the later reservation of a shared article. Refused before the claim, so
-    # nothing is consumed.
     if _running(sfn, 'DAILY_STATE_MACHINE_ARN'):
-        return _result('REFUSED', 'DAILY_RUNNING', request_id)
-    # Discovery has reserved concurrency 1 and no invoke retries, so a run
-    # started beside any discovering child would be throttled after the claim.
-    # This is check-then-start: two starters cannot interleave (reserved
-    # concurrency 1), but a daily child can still begin between this check and
-    # this run's discovery. That residual window is what the API's daily-window
-    # refusal covers.
+        return _refuse(source_id, account_id, request_id, 'DAILY_RUNNING')
+    # A run started beside any discovering child would be throttled after the
+    # claim. This is check-then-start: two starters cannot interleave
+    # (reserved concurrency 1), but a daily child or another run can still
+    # begin between these checks and this run's discovery. That residual
+    # window is UNMITIGATED: the later discovery is throttled. If it is this
+    # run, the request is spent with no run and no receipt; if it is a daily
+    # child, that source fails for the day.
     if _running(sfn, 'PUBLICATION_STATE_MACHINE_ARN'):
-        return _result('REFUSED', 'RUN_IN_PROGRESS', request_id)
+        return _refuse(source_id, account_id, request_id, 'RUN_IN_PROGRESS')
     table = _table()
     if not claim(table, source_id, account_id, request_id):
         return _result('REFUSED', refusal_code(table, source_id, account_id, request_id), request_id)
@@ -170,7 +243,7 @@ def handler(event, context):
         if e.response.get('Error', {}).get('Code') != 'ExecutionAlreadyExists':
             # Do not undo the started marker: a duplicate delivery must not
             # create a second paid run. The request is spent; the failure
-            # queue records it and the API's hourly claim expires normally.
+            # queue records it and the hourly claim expires normally.
             logger.error('manual collect: outcome=START_FAILED requestId=%s', request_id)
             raise
         return _result('STARTED', 'ALREADY_STARTED', request_id)

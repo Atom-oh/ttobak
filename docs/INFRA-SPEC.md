@@ -849,21 +849,29 @@ CrawlerStack rule `ttobak-news-collect-requested` routes default-bus
 the `NewsPublication` construct of the same stack, so no cross-stack edge) as
 `{"manualCollect":{sourceId,accountId,requestId}}` (ADR-004). Neither EventBridge
 (`retryAttempts: 0`, one-hour event age) nor Lambda (async `MaximumRetryAttempts:
-0`, one-hour age) retries a failure. The starter's checks and claim are in
-ADR-004; it starts `ttobak-news-publication` once as `manual-{requestId}` with
-`{sourceId, runId}`, the input the daily parent passes. Its role has `GetItem`/`UpdateItem` on `CRAWLER#*` keys of the table,
+0`, one-hour age) retries a failure. The starter's checks, refusal codes,
+claim release and claim are in ADR-004; it starts `ttobak-news-publication`
+once as `manual-{requestId}` with `{sourceId, runId}`, the input the daily
+parent passes. Its environment carries `NEWS_DAILY_HOUR_UTC`,
+`NEWS_DAILY_MINUTE_UTC` and `NEWS_DAILY_LEAD_SECONDS`, derived from the same
+constants as the daily rule and the child timeout, for the `DAILY_WINDOW`
+refusal. Its role has `GetItem`/`UpdateItem`/`PutItem` on `CRAWLER#*` keys of
+the table (`PutItem` only for the `COLLECTREFUSAL#` receipt),
 `states:StartExecution` on the publication state machine only,
-`states:ListExecutions` on the daily and publication state machines only (it
-refuses `DAILY_RUNNING`/`RUN_IN_PROGRESS` while either runs, because discovery's
-reserved concurrency of one would throttle an overlapping run), its own log group and,
-through the Lambda failure destination, `sqs:SendMessage` on the failure queue.
-Reserved concurrency is one. Delivery failures and failed async invocations land
-in SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied),
-with alarms on rule `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, starter
-`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. A started
-request is spent: do not redrive it; a replay is refused as a duplicate. The
-legacy `ttobak-crawler-news` function no longer has an async invoke configuration
-or queue permission.
+`states:ListExecutions` on the daily and publication state machines only, its
+own log group and, through the Lambda failure destination, `sqs:SendMessage` on
+the failure queue. Reserved concurrency is one. Discovery's reserved concurrency
+of one is why it refuses while either state machine runs; the race between these
+checks and discovery remains unmitigated (ADR-004). Delivery failures and failed
+async invocations land in SSE-SQS `ttobak-news-collect-failures` (seven-day
+retention, redrive denied), with alarms on rule
+`FailedInvocations`/`InvocationsFailedToBeSentToDlq`, starter
+`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. Inspect,
+do not redrive: a request whose started marker is set is spent and a replay is
+refused as a duplicate, but a failure before the marker (ListExecutions or claim
+error) leaves it unset, so a replay within the hour would start a paid run. The
+legacy `ttobak-crawler-news` function no longer has an async invoke
+configuration or queue permission.
 
 ## Summary privacy writer activation
 
