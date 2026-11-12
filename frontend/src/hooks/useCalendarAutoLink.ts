@@ -143,10 +143,12 @@ export function useCalendarAutoLink({ userId, accountId, setAccountId, title, se
   /** The chip's change button: clear the auto link and let the user pick. */
   const dismiss = useCallback(() => {
     if (!latestRef.current.canDismiss) return;
+    const autoAccount = autoAccountRef.current;
     releaseAuto('user');
     setAutoLink(null);
     const latest = latestRef.current;
-    if (latest.isRecordingActive()) latest.applyToRecording('');
+    // After stop the recording may still carry the deferred auto choice.
+    if (latest.isRecordingActive() || (autoAccount && latest.recordingAccountId === autoAccount)) latest.applyToRecording('');
   }, [releaseAuto]);
 
   /** A new recording start, a leftover upload or a cancelled flow: end any

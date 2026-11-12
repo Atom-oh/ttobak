@@ -335,13 +335,6 @@ function RecordPageInner() {
     if (autoLinkSource() !== 'auto') markAccountSource('user');
     setReferenceAccountId(id);
   }, [autoLinkSource, markAccountSource]);
-  const autoLinkChip = calendarLink.autoLink && (calendarLink.autoLink.accountId === referenceAccountId
-    || calendarLink.autoLink.accountId === postRecording.recordingLinks.accountId)
-    // A draft already bound to it can only switch Accounts in RecordingLinkControls.
-    ? <AutoLinkChip name={calendarLink.autoLink.name}
-      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId
-        || (recordingAccountLocked && !recordingAccountPending) ? undefined : calendarLink.dismiss}
-      pending={recordingAccountPending} /> : null;
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
   const persistRecordingNotes = postRecording.persistNotes;
@@ -389,6 +382,14 @@ function RecordPageInner() {
   // WAV is handed off. Keep that reservation in the parent across mode
   // changes so another draft cannot replace this recording's meeting ID.
   const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording || browserFinalizing;
+  const autoLinkChip = calendarLink.autoLink && (calendarLink.autoLink.accountId === referenceAccountId
+    || calendarLink.autoLink.accountId === postRecording.recordingLinks.accountId)
+    // A draft already bound to it can only switch Accounts in RecordingLinkControls.
+    ? <AutoLinkChip name={calendarLink.autoLink.name}
+      // Hidden while a stopped browser recording finalizes or a draft is created.
+      onChange={calendarLink.autoLink.accountId === postRecording.recordingLinks.boundAccountId || browserFinalizing || flowBusy
+        || (recordingAccountLocked && !recordingAccountPending) ? undefined : calendarLink.dismiss}
+      pending={recordingAccountPending} /> : null;
   // A recording that settles back to idle without saving (failure, cancel,
   // a dismissed flow) keeps no calendar values the auto link still owns.
   const autoSessionOpenRef = useRef(false);

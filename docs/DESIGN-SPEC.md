@@ -176,7 +176,7 @@ shows an `AutoLinkChip` with a change button that clears the link for the rest o
 the page session and reverts the auto-filled title unless it was edited; once a draft is bound to that Account the button is hidden and
 RecordingLinkControls switches Accounts. During a recording the link goes through
 `changeRecordingAccount`; the change button waits only while a link request is in
-flight. A choice made before the draft exists stays local (replaceable or clearable)
+flight and is hidden while a draft is created or a stopped browser recording finalizes. A choice made before the draft exists stays local (replaceable or clearable)
 until save links it. The hook owns the Account and title it filled (subject trimmed
 to 200 code points) until someone changes them; a user or MCP choice (MCP releases
 before writing its own), a new start, a leftover upload or settling back to idle

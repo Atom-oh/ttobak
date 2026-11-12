@@ -117,7 +117,7 @@ test('record page marks URL, MCP and user Account sources before auto-link', () 
   assert.doesNotMatch(page, /onAccountChange=\{setReferenceAccountId\}/, 'every picker marks a user choice');
   assert.match(page, /markAccountSource\('user'\); void postRecording\.changeRecordingAccount/);
   assert.match(page, /enabled: !isUploadMode/, 'upload mode never auto-links');
-  assert.match(page, /accountId === postRecording\.recordingLinks\.boundAccountId\s*\|\| \(recordingAccountLocked && !recordingAccountPending\) \? undefined : calendarLink\.dismiss/,
+  assert.match(page, /accountId === postRecording\.recordingLinks\.boundAccountId \|\| browserFinalizing \|\| flowBusy\s*\|\| \(recordingAccountLocked && !recordingAccountPending\) \? undefined : calendarLink\.dismiss/,
     'a bound draft hides the change button');
   const chip = readFileSync(new URL('../src/components/record/AutoLinkChip.tsx', import.meta.url), 'utf8');
   assert.match(chip, /\{onChange && <button/);
@@ -180,7 +180,7 @@ function autoLinkFixture(context, { initialTitle = '', initialSource = 'none', e
     const [accountId, setAccountId] = harness.react.useState('');
     const [title, setTitle] = harness.react.useState(initialTitle);
     seen.result = runAutoLink({
-      userId: 'owner', accountId, setAccountId, title, setTitle, recordingAccountId: undefined,
+      userId: 'owner', accountId, setAccountId, title, setTitle, recordingAccountId: props.recordingAccountId,
       isRecordingActive: () => active, applyToRecording: id => recording.push(id), initialSource, enabled: props.enabled,
       canDismiss: props.canDismiss,
     });
@@ -465,4 +465,16 @@ test('browsing references while auto-linked keeps the chip and title', async con
   const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /if \(autoLinkSource\(\) !== 'auto'\) markAccountSource\('user'\);/);
   assert.equal(page.split('onAccountChange={browseReferenceAccount}').length - 1, 3);
+});
+
+test('declining after stop clears the deferred recording Account', async context => {
+  const f = autoLinkFixture(context); // stopped: not active
+  f.start();
+  await f.resolveCalendar();
+  f.props.recordingAccountId = 'acc-1'; // deferred onto the recording
+  f.render();
+  f.result().dismiss();
+  assert.deepEqual(f.recording, [''], 'the save step then links nothing (recording-links test)');
+  const page = readFileSync(new URL('../src/app/record/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /boundAccountId \|\| browserFinalizing \|\| flowBusy/, 'no change button while finalizing');
 });
