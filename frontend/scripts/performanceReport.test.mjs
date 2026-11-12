@@ -180,3 +180,13 @@ test('elapsed and generated time formatting', () => {
   assert.equal(report.formatGeneratedAt('2026-11-10T16:00:00Z'), '2026-11-11 01:00');
   assert.equal(report.formatGeneratedAt('nope'), '');
 });
+
+test('Bedrock needs a profile', () => {
+  const copy = JSON.parse(readFileSync(new URL('../../docs/superpowers/plans/2026-11-12-one-click-intake-setup-ui-copy.json', import.meta.url), 'utf8'));
+  assert.equal(report.reportCodeLabel('CLAUDE_CLI_BEDROCK'), copy.claudeCliBedrock);
+  assert.equal(report.reportCodeLabel('profile-required'), copy.profileRequired);
+  assert.equal(report.bedrockNeedsProfile({ useBedrock: true, awsProfile: null }), true);
+  assert.equal(report.bedrockNeedsProfile({ useBedrock: true, awsProfile: 'cc-bedrock' }), false);
+  assert.equal(report.bedrockNeedsProfile({ useBedrock: false, awsProfile: null }), false);
+  assert.equal(report.bedrockNeedsProfile(null), false);
+});

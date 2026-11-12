@@ -220,6 +220,9 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
     if (outcome.sandboxUnavailable) throw new ReportError('REPORT_SANDBOX_UNAVAILABLE');
     if (outcome.authFailed) throw new ReportError('CLAUDE_CLI_AUTH');
     const result = outcome.result;
+    // A Bedrock request that never answers (no or wrong AWS profile) ends as a timed-out error result.
+    if (result?.is_error === true && childEnv.CLAUDE_CODE_USE_BEDROCK === '1' && typeof result.result === 'string'
+      && /timed out/i.test(result.result)) throw new ReportError('CLAUDE_CLI_BEDROCK', 'the Bedrock request timed out');
     if (!result || result.subtype !== 'success' || result.is_error === true) throw new ReportError('REPORT_INVALID', 'no successful result');
     let content: unknown = result.structured_output;
     if (content === undefined && typeof result.result === 'string') {

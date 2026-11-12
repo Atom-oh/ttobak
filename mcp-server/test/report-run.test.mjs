@@ -570,3 +570,15 @@ test('expired_custom_period_fails_before_claude', async t => {
   assert.equal(ctx.output().code, 'REPORT_PERIOD_EXPIRED');
   assert.ok(!existsSync(join(ctx.home, 'record.json')));
 });
+
+test('bedrock timeout maps to CLAUDE_CLI_BEDROCK', async t => {
+  const events = [{ type: 'system', subtype: 'init', model: 'm' },
+    { type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Request timed out' }];
+  const bedrock = setup(t, { events, exitCode: 1 }, { env: { TTOBAK_REPORT_USE_BEDROCK: '1' } });
+  assert.equal(await bedrock.run(), 2);
+  assert.equal(bedrock.output().code, 'CLAUDE_CLI_BEDROCK');
+  // The same failure without Bedrock stays a generic invalid result.
+  const direct = setup(t, { events, exitCode: 1 }, { env: { TTOBAK_REPORT_USE_BEDROCK: '0' } });
+  assert.equal(await direct.run(), 2);
+  assert.equal(direct.output().code, 'REPORT_INVALID');
+});
