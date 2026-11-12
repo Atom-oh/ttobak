@@ -24,4 +24,9 @@ const reportHelp = execFileSync(process.execPath, [fileURLToPath(new URL('../dis
   cwd, encoding: 'utf8', env: { PATH: process.env.PATH ?? '' },
 });
 assert.match(reportHelp, /ttobak-mcp report run --period/, 'The bundled report command must start');
-console.log('Bundle reproducibility, stdio reading/calendar, intake/report start and HTTP artifact tests passed.');
+const setupHelp = execFileSync(process.execPath, [fileURLToPath(new URL('../dist/ttobak-mcp.mjs', import.meta.url)), 'setup', '--help'], {
+  cwd, encoding: 'utf8', env: { PATH: process.env.PATH ?? '' },
+});
+// The Mac app detects one-click setup support by this text in the adapter.
+assert.match(setupHelp, /ttobak-mcp setup apply/, 'The bundled setup command must start');
+console.log('Bundle reproducibility, stdio reading/calendar, intake/report/setup start and HTTP artifact tests passed.');

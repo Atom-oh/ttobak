@@ -9999,26 +9999,26 @@ var init_json_schema_processors = __esm({
     };
     fileProcessor = (schema, _ctx, json2, _params) => {
       const _json = json2;
-      const file2 = {
+      const file3 = {
         type: "string",
         format: "binary",
         contentEncoding: "binary"
       };
       const { minimum, maximum, mime } = schema._zod.bag;
       if (minimum !== void 0)
-        file2.minLength = minimum;
+        file3.minLength = minimum;
       if (maximum !== void 0)
-        file2.maxLength = maximum;
+        file3.maxLength = maximum;
       if (mime) {
         if (mime.length === 1) {
-          file2.contentMediaType = mime[0];
-          Object.assign(_json, file2);
+          file3.contentMediaType = mime[0];
+          Object.assign(_json, file3);
         } else {
-          Object.assign(_json, file2);
+          Object.assign(_json, file3);
           _json.anyOf = mime.map((m) => ({ contentMediaType: m }));
         }
       } else {
-        Object.assign(_json, file2);
+        Object.assign(_json, file3);
       }
     };
     successProcessor = (_schema, _ctx, json2, _params) => {
@@ -18641,7 +18641,7 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options2);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse3(serialize(uri, options2), options2);
+        parse4(serialize(uri, options2), options2);
       }
       return uri;
     }
@@ -18681,8 +18681,8 @@ var require_fast_uri = __commonJS({
     function resolveComponent(base, relative2, options2, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse3(serialize(base, options2), options2);
-        relative2 = parse3(serialize(relative2, options2), options2);
+        base = parse4(serialize(base, options2), options2);
+        relative2 = parse4(serialize(relative2, options2), options2);
       }
       options2 = options2 || {};
       if (!options2.tolerant && relative2.scheme) {
@@ -18981,7 +18981,7 @@ var require_fast_uri = __commonJS({
       }
       return { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme };
     }
-    function parse3(uri, opts) {
+    function parse4(uri, opts) {
       return parseWithStatus(uri, opts).parsed;
     }
     function normalizeString(uri, opts) {
@@ -19018,7 +19018,7 @@ var require_fast_uri = __commonJS({
       resolveComponent,
       equal,
       serialize,
-      parse: parse3
+      parse: parse4
     };
     module.exports = fastUri;
     module.exports.default = fastUri;
@@ -19429,7 +19429,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text4, msg) => text4 + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text5, msg) => text5 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -19858,8 +19858,8 @@ var require_multipleOf = __commonJS({
         const { gen, data, schemaCode, it } = cxt;
         const prec = it.opts.multipleOfPrecision;
         const res = gen.let("res");
-        const invalid3 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
-        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid3}))`);
+        const invalid4 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
+        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid4}))`);
       }
     };
     exports.default = def;
@@ -24060,6 +24060,10 @@ var init_api2 = __esm({
         return this.request("GET", "/api/performance/mappings", void 0, MAX_PERFORMANCE_MAPPINGS_BYTES, false, true);
       }
       /** Owner-private SA performance report of one period; replaces an earlier one. */
+      /** Org and personal skill packages of the signed-in user (docs/API-SPEC.md "Skill packages"). */
+      async skillPackages() {
+        return this.request("GET", "/api/skill-packages", void 0, 1024 * 1024, false, true);
+      }
       async putPerformanceReport(periodKey, report2) {
         return this.request(
           "PUT",
@@ -24682,7 +24686,7 @@ var init_api2 = __esm({
             (res) => {
               const chunks = [];
               let received = 0, finished = false;
-              const fail = (error3) => {
+              const fail2 = (error3) => {
                 if (finished) return;
                 finished = true;
                 chunks.length = 0;
@@ -24690,11 +24694,11 @@ var init_api2 = __esm({
                 res.destroy();
                 req.destroy();
               };
-              const tooLarge = () => fail(new Error(maxResponseBytes === MAX_READING_BYTES ? "READING_LIMIT: HTTP reading response exceeds 32000 bytes" : `RESULT_TOO_LARGE: HTTP API response exceeds ${maxResponseBytes} bytes`));
-              res.on("error", fail);
-              res.on("aborted", () => fail(new Error("TTOBAK response was aborted")));
+              const tooLarge = () => fail2(new Error(maxResponseBytes === MAX_READING_BYTES ? "READING_LIMIT: HTTP reading response exceeds 32000 bytes" : `RESULT_TOO_LARGE: HTTP API response exceeds ${maxResponseBytes} bytes`));
+              res.on("error", fail2);
+              res.on("aborted", () => fail2(new Error("TTOBAK response was aborted")));
               res.on("close", () => {
-                if (!finished) fail(new Error("TTOBAK response ended before completion"));
+                if (!finished) fail2(new Error("TTOBAK response ended before completion"));
               });
               res.on("data", (chunk) => {
                 if (finished) return;
@@ -25243,15 +25247,15 @@ function normalizeDomain(s) {
 function domainMatches(domain2, d) {
   return domain2 === d || domain2.endsWith("." + d);
 }
-function containsTerm(text4, term) {
-  if (!text4) return false;
-  if (HANGUL.test(term)) return text4.includes(term);
+function containsTerm(text5, term) {
+  if (!text5) return false;
+  if (HANGUL.test(term)) return text5.includes(term);
   let from = 0;
   for (; ; ) {
-    const i = text4.indexOf(term, from);
+    const i = text5.indexOf(term, from);
     if (i < 0) return false;
-    const before = [...text4.slice(0, i)].pop();
-    const after = [...text4.slice(i + term.length)][0];
+    const before = [...text5.slice(0, i)].pop();
+    const after = [...text5.slice(i + term.length)][0];
     if ((before === void 0 || !LETTER_OR_DIGIT.test(before)) && (after === void 0 || !LETTER_OR_DIGIT.test(after))) {
       return true;
     }
@@ -25706,12 +25710,12 @@ async function serverRevision(api, sourceId) {
   let cursor;
   for (let page2 = 0; page2 < 1e3; page2++) {
     const result = await callCalendarTool("ttobak_calendar_sync_status", cursor ? { cursor } : {}, api);
-    const text4 = result.content?.[0]?.type === "text" ? result.content[0].text : "";
+    const text5 = result.content?.[0]?.type === "text" ? result.content[0].text : "";
     if (result.isError) {
-      if (/TTOBAK_LOGIN_REQUIRED/.test(text4)) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+      if (/TTOBAK_LOGIN_REQUIRED/.test(text5)) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
       throw new IntakeError("TTOBAK_UNAVAILABLE", "calendar source status could not be read");
     }
-    const value = JSON.parse(text4);
+    const value = JSON.parse(text5);
     const match = value.sources.find((source) => source.sourceId.toLowerCase() === sourceId.toLowerCase());
     if (match) return match.revision;
     if (value.nextCursor === null) return 0;
@@ -26087,9 +26091,9 @@ var init_connectors = __esm({
 function isTable(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function parseToml(text4) {
-  if (text4.includes("\0")) throw new TomlSyntaxError(1);
-  return new Parser(text4.replace(/^﻿/, "")).parse();
+function parseToml(text5) {
+  if (text5.includes("\0")) throw new TomlSyntaxError(1);
+  return new Parser(text5.replace(/^﻿/, "")).parse();
 }
 var MAX_DEPTH, TomlSyntaxError, Parser;
 var init_toml = __esm({
@@ -26102,8 +26106,8 @@ var init_toml = __esm({
       }
     };
     Parser = class {
-      constructor(text4) {
-        this.text = text4;
+      constructor(text5) {
+        this.text = text5;
       }
       text;
       pos = 0;
@@ -26443,12 +26447,12 @@ function entry(host, value) {
   }
   return { transport: "stdio", disabled, command: expand(value.command, host), args, env, cwd };
 }
-function entries(host, text4) {
+function entries(host, text5) {
   let servers;
   try {
-    if (host === "codex") servers = parseToml(text4).mcp_servers;
+    if (host === "codex") servers = parseToml(text5).mcp_servers;
     else {
-      const parsed = JSON.parse(text4);
+      const parsed = JSON.parse(text5);
       servers = record16(parsed) ? parsed.mcpServers : void 0;
     }
   } catch {
@@ -26495,15 +26499,15 @@ function parsePathList(value) {
 }
 function listHosts(home, pathDirs) {
   return HOSTS.map((host) => {
-    const file2 = hostFileLabel(host);
-    let text4;
+    const file3 = hostFileLabel(host);
+    let text5;
     let parsed;
     try {
-      text4 = readHostFile(home, host);
-      if (text4 === null) return { host, file: file2, status: "missing", servers: [] };
-      parsed = entries(host, text4);
+      text5 = readHostFile(home, host);
+      if (text5 === null) return { host, file: file3, status: "missing", servers: [] };
+      parsed = entries(host, text5);
     } catch {
-      return { host, file: file2, status: "invalid", servers: [] };
+      return { host, file: file3, status: "invalid", servers: [] };
     }
     const servers = [...parsed].map(([name, value]) => ({
       host,
@@ -26512,14 +26516,14 @@ function listHosts(home, pathDirs) {
       disabled: value.disabled,
       commandFound: value.transport === "stdio" && resolveCommand(value.command, pathDirs, home) !== null
     })).sort((first, second) => first.name.localeCompare(second.name));
-    return { host, file: file2, status: "ok", servers };
+    return { host, file: file3, status: "ok", servers };
   });
 }
 function resolveServer(home, host, name, pathDirs) {
   if (!HOSTS.includes(host) || !NAME.test(name)) throw new IntakeError("INVALID_ARGUMENT", "host or server name");
-  const text4 = readHostFile(home, host);
-  if (text4 === null) throw new IntakeError("SERVER_NOT_CONFIGURED", `${host} has no configuration file`);
-  const value = entries(host, text4).get(name);
+  const text5 = readHostFile(home, host);
+  if (text5 === null) throw new IntakeError("SERVER_NOT_CONFIGURED", `${host} has no configuration file`);
+  const value = entries(host, text5).get(name);
   if (!value) throw new IntakeError("SERVER_NOT_CONFIGURED", `${name} is not configured in ${host}`);
   if (value.disabled) throw new IntakeError("SERVER_NOT_CONFIGURED", `${name} is disabled in ${host}`);
   if (value.transport === "remote") throw new IntakeError("SERVER_NOT_SUPPORTED", `${name} in ${host} is a remote server`);
@@ -26533,9 +26537,9 @@ function hostTtobakEndpoints(home, preferred) {
   for (const host of order) {
     let servers;
     try {
-      const text4 = readHostFile(home, host);
-      if (text4 === null) continue;
-      servers = entries(host, text4);
+      const text5 = readHostFile(home, host);
+      if (text5 === null) continue;
+      servers = entries(host, text5);
     } catch {
       continue;
     }
@@ -27652,7 +27656,7 @@ var require_parse = __commonJS({
       }
       return parsed;
     }
-    function parse3(command, args, options2) {
+    function parse4(command, args, options2) {
       if (args && !Array.isArray(args)) {
         options2 = args;
         args = null;
@@ -27671,7 +27675,7 @@ var require_parse = __commonJS({
       };
       return options2.shell ? parsed : parseNonShell(parsed);
     }
-    module.exports = parse3;
+    module.exports = parse4;
   }
 });
 
@@ -27730,16 +27734,16 @@ var require_cross_spawn = __commonJS({
   "node_modules/cross-spawn/index.js"(exports, module) {
     "use strict";
     var cp = __require("child_process");
-    var parse3 = require_parse();
+    var parse4 = require_parse();
     var enoent = require_enoent();
     function spawn4(command, args, options2) {
-      const parsed = parse3(command, args, options2);
+      const parsed = parse4(command, args, options2);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
       return spawned;
     }
     function spawnSync(command, args, options2) {
-      const parsed = parse3(command, args, options2);
+      const parsed = parse4(command, args, options2);
       const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
@@ -27747,7 +27751,7 @@ var require_cross_spawn = __commonJS({
     module.exports = spawn4;
     module.exports.spawn = spawn4;
     module.exports.sync = spawnSync;
-    module.exports._parse = parse3;
+    module.exports._parse = parse4;
     module.exports._enoent = enoent;
   }
 });
@@ -27936,9 +27940,9 @@ var init_stdio2 = __esm({
 function resultJson(result, tool) {
   if (result.structuredContent !== void 0) return result.structuredContent;
   const texts2 = (result.content ?? []).filter((item2) => item2.type === "text").map((item2) => item2.text);
-  for (const text4 of texts2) {
-    const wrapped = /<untrusted_content_[A-Za-z0-9]+>\s*([\s\S]*?)\s*<\/untrusted_content_[A-Za-z0-9]+>/.exec(text4);
-    const candidate = (wrapped ? wrapped[1] : text4).trim();
+  for (const text5 of texts2) {
+    const wrapped = /<untrusted_content_[A-Za-z0-9]+>\s*([\s\S]*?)\s*<\/untrusted_content_[A-Za-z0-9]+>/.exec(text5);
+    const candidate = (wrapped ? wrapped[1] : text5).trim();
     if (!candidate.startsWith("[") && !candidate.startsWith("{")) continue;
     try {
       return JSON.parse(candidate);
@@ -28036,8 +28040,8 @@ var init_mcp_client = __esm({
           throw new IntakeError("PARSE_FAILED", `${name} result exceeds ${MAX_RESULT_BYTES2} bytes`);
         }
         if (result.isError) {
-          const text4 = (result.content ?? []).map((item2) => item2.type === "text" ? item2.text : "").join(" ");
-          if (AUTH_PATTERN.test(text4) || AUTH_PATTERN.test(this.stderr())) {
+          const text5 = (result.content ?? []).map((item2) => item2.type === "text" ? item2.text : "").join(" ");
+          if (AUTH_PATTERN.test(text5) || AUTH_PATTERN.test(this.stderr())) {
             throw new IntakeError("AUTH_EXPIRED_MIDWAY", `${name} reported an authentication failure`);
           }
           throw new ToolResultError(`${name} returned an error`);
@@ -28932,7 +28936,7 @@ async function runSfdcContacts(options2) {
   const scope = options2.scope && SCOPE_PATTERN.test(options2.scope) ? options2.scope : void 0;
   const counts = emptyCounts();
   let failure2;
-  const fail = (code) => {
+  const fail2 = (code) => {
     failure2 ??= code;
   };
   try {
@@ -28955,12 +28959,12 @@ async function runSfdcContacts(options2) {
       } catch (error3) {
         if (error3 instanceof IntakeError) {
           if (error3.code === "TTOBAK_LOGIN_REQUIRED") throw error3;
-          fail(error3.code);
+          fail2(error3.code);
           continue;
         }
         const code = apiFailure(error3);
         if (code === "forbidden") counts.forbidden++;
-        else fail(code);
+        else fail2(code);
         continue;
       }
       const sfdcAccountIds = group.ids.slice(0, MAX_SFDC_ACCOUNTS);
@@ -28977,7 +28981,7 @@ async function runSfdcContacts(options2) {
         people.push(...read.people);
         present[sfdcAccountId] = read.ids;
         if (!read.complete || read.invalidIds) complete = false;
-        if (read.failure) fail(read.failure);
+        if (read.failure) fail2(read.failure);
       }
       if (Object.values(present).reduce((sum, ids) => sum + ids.length, 0) > MAX_PRESENT_TOTAL) complete = false;
       if (!complete) counts.incomplete++;
@@ -29014,12 +29018,12 @@ async function runSfdcContacts(options2) {
       } catch (error3) {
         if (error3 instanceof IntakeError) {
           if (error3.code === "TTOBAK_LOGIN_REQUIRED") throw error3;
-          fail(error3.code);
+          fail2(error3.code);
           continue;
         }
         const code = apiFailure(error3);
         if (code === "forbidden") counts.forbidden++;
-        else fail(code);
+        else fail2(code);
         continue;
       }
       counts.marked += response.marked;
@@ -29035,7 +29039,7 @@ async function runSfdcContacts(options2) {
         try {
           store.write({ version: 1, suppressed: ids }, ...ledgerPath(scope, accountId));
         } catch {
-          fail("STORE_INVALID");
+          fail2("STORE_INVALID");
         }
       }
     }
@@ -29044,12 +29048,12 @@ async function runSfdcContacts(options2) {
       try {
         store.write(point, ...resumePath(scope));
       } catch {
-        fail("STORE_INVALID");
+        fail2("STORE_INVALID");
       }
     }
   } catch (error3) {
     if (intakeCode(error3) === "AUTH_EXPIRED_MIDWAY") throw error3;
-    fail(intakeCode(error3));
+    fail2(intakeCode(error3));
   }
   return { result: failure2 ?? "ok", counts };
 }
@@ -29749,10 +29753,10 @@ function enqueueNotice(store, scope, notice, now = /* @__PURE__ */ new Date()) {
   return true;
 }
 function compactQueue(store, now) {
-  const text4 = store.readText(QUEUE_FILE);
-  if (text4 === null) return;
+  const text5 = store.readText(QUEUE_FILE);
+  if (text5 === null) return;
   const cutoff = now.getTime() - QUEUE_RETENTION_MS;
-  const kept = text4.split("\n").filter((line) => {
+  const kept = text5.split("\n").filter((line) => {
     if (!line) return false;
     try {
       const created = Date.parse(JSON.parse(line).createdAt ?? "");
@@ -29794,8 +29798,8 @@ var init_notify = __esm({
 
 // src/intake/slack-draft.ts
 function clip2(value, maxChars) {
-  const text4 = typeof value === "string" ? value.replace(/[\r\n]+/g, " ").trim() : "";
-  return Array.from(text4).slice(0, maxChars).join("");
+  const text5 = typeof value === "string" ? value.replace(/[\r\n]+/g, " ").trim() : "";
+  return Array.from(text5).slice(0, maxChars).join("");
 }
 function renderSlackRequest(fields2) {
   const values = {
@@ -29804,8 +29808,8 @@ function renderSlackRequest(fields2) {
     when: escapeSlack(clip2(fields2.localDateTime, 64)),
     me: escapeSlack(clip2(fields2.myName, 100))
   };
-  const text4 = SLACK_REQUEST_TEMPLATE.replace(/\{(account|title|when|me)\}/g, (_match, key) => values[key]);
-  return Array.from(text4).slice(0, SLACK_TEXT_MAX_CHARS).join("");
+  const text5 = SLACK_REQUEST_TEMPLATE.replace(/\{(account|title|when|me)\}/g, (_match, key) => values[key]);
+  return Array.from(text5).slice(0, SLACK_TEXT_MAX_CHARS).join("");
 }
 function draftChannels(draft) {
   if (!isRecord(draft)) return [];
@@ -29822,7 +29826,7 @@ function matchUser(payload, email3) {
   const id = typeof user.id === "string" ? user.id : "";
   return USER_ID.test(id) && user.isBot === false && user.deleted === false ? id : "";
 }
-async function prepareDraft(session, counterpartEmail, text4, options2 = {}) {
+async function prepareDraft(session, counterpartEmail, text5, options2 = {}) {
   try {
     const userId = matchUser(
       resultJson(await session.call("lookup_user", { query: counterpartEmail }), "lookup_user"),
@@ -29834,15 +29838,15 @@ async function prepareDraft(session, counterpartEmail, text4, options2 = {}) {
       "open_dm_channel"
     )?.channel);
     if (!CHANNEL_ID.test(channel)) return "failed";
-    const listed = resultJson(await session.call("list_drafts", {}), "list_drafts");
-    const drafts = Array.isArray(listed) ? listed : isRecord(listed) && Array.isArray(listed.drafts) ? listed.drafts : null;
+    const listed2 = resultJson(await session.call("list_drafts", {}), "list_drafts");
+    const drafts = Array.isArray(listed2) ? listed2 : isRecord(listed2) && Array.isArray(listed2.drafts) ? listed2.drafts : null;
     if (!drafts) return "failed";
-    if (isRecord(listed) && listed.total !== void 0 && listed.total !== drafts.length) return "failed";
+    if (isRecord(listed2) && listed2.total !== void 0 && listed2.total !== drafts.length) return "failed";
     for (const draft of drafts) {
       const channels = draftChannels(draft);
       if (channels.length === 0 || channels.includes(channel)) return "kept_existing";
     }
-    const posted = await session.call("post_draft", { channel, text: text4 });
+    const posted = await session.call("post_draft", { channel, text: text5 });
     try {
       const reply = resultJson(posted, "post_draft");
       if (isRecord(reply) && reply.replacedExisting === true) options2.onReplaced?.(1);
@@ -29866,7 +29870,7 @@ function draftEntry(store, scope, eventId) {
   if (!isRecord(entry2) || !ENTRY_OUTCOMES.includes(entry2.outcome)) return { at: "", outcome: "failed" };
   return entry2;
 }
-async function draftOnce(store, scope, eventId, session, counterpartEmail, text4, options2 = {}) {
+async function draftOnce(store, scope, eventId, session, counterpartEmail, text5, options2 = {}) {
   if (!EVENT_ID_PATTERN3.test(eventId)) throw new IntakeError("INVALID_ARGUMENT", "task event ID is invalid");
   const existing = draftEntry(store, scope, eventId);
   if (existing) return existing.outcome === "attempting" ? "failed" : existing.outcome;
@@ -29877,7 +29881,7 @@ async function draftOnce(store, scope, eventId, session, counterpartEmail, text4
     store.write(ledger, ...ledgerPath3(scope));
   };
   save2({ at: now().toISOString(), outcome: "attempting" });
-  const outcome = await prepareDraft(session, counterpartEmail, text4, options2);
+  const outcome = await prepareDraft(session, counterpartEmail, text5, options2);
   save2({ at: now().toISOString(), outcome });
   return outcome;
 }
@@ -29937,9 +29941,9 @@ function apiCode(error3) {
   const message = error3 instanceof Error ? error3.message : "";
   return message.startsWith("TTOBAK_LOGIN_REQUIRED") ? "TTOBAK_LOGIN_REQUIRED" : "TTOBAK_UNAVAILABLE";
 }
-function seenPath(scope, file2 = "seen.json") {
+function seenPath(scope, file3 = "seen.json") {
   if (!/^[0-9a-f]{32}$/.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "task scope is invalid");
-  return ["tasks", scope, file2];
+  return ["tasks", scope, file3];
 }
 function loadIdentity(store, scope) {
   const raw = store.read(...seenPath(scope, "identity.json"));
@@ -30290,9 +30294,9 @@ var init_tasks = __esm({
       }
       /** SA/SSA member emails across the accounts I belong to directly; null when they cannot all be read. */
       async saEmailsOfMyAccounts() {
-        const listed = await this.options.api.listAccounts();
-        if (!listed || !Array.isArray(listed.accounts)) throw new IntakeError("PARSE_FAILED", "account list has an unexpected shape");
-        const mine = listed.accounts.filter((account) => account && str(account.accountId) && !account.inheritedFromAccountId);
+        const listed2 = await this.options.api.listAccounts();
+        if (!listed2 || !Array.isArray(listed2.accounts)) throw new IntakeError("PARSE_FAILED", "account list has an unexpected shape");
+        const mine = listed2.accounts.filter((account) => account && str(account.accountId) && !account.inheritedFromAccountId);
         if (mine.length > MEMBER_ACCOUNTS_MAX) return null;
         const emails = /* @__PURE__ */ new Set();
         for (const account of mine) {
@@ -30671,13 +30675,13 @@ var init_tasks = __esm({
               continue;
             }
             attempts++;
-            const text4 = renderSlackRequest({
+            const text5 = renderSlackRequest({
               accountName: info.name,
               meetingTitle: task.event?.title ?? "",
               localDateTime: this.localWhen(task),
               myName: this.amazonLogin()
             });
-            const outcome = await draftOnce(store, scope, task.eventId, session, email3, text4, { now: () => this.options.now });
+            const outcome = await draftOnce(store, scope, task.eventId, session, email3, text5, { now: () => this.options.now });
             outcomes.set(task.eventId, outcome);
             if (outcome === "drafted") this.counts.drafted++;
           } catch (error3) {
@@ -30765,7 +30769,7 @@ async function setup(args, environment, store) {
   const ask = environment.prompt;
   if (!options2.yes && !ask) throw new IntakeError("INVALID_ARGUMENT", "interactive setup needs a terminal; pass --yes");
   const say = (line) => environment.stderr?.(line);
-  const question = async (text4) => (await ask(text4)).trim();
+  const question = async (text5) => (await ask(text5)).trim();
   const connectors = {};
   let dryRun = {};
   let synced = false;
@@ -31600,14 +31604,14 @@ async function runIntake(args, environment) {
       return result.ok ? 0 : 2;
     } else if (command === "status" && rest.length === 0) {
       const selection = store.read("selection.json");
-      const listed = {};
+      const listed2 = {};
       for (const id of ["calendar", "sfdc", "meetings", "specreq", "slack"]) {
         const entry2 = selection?.[id];
-        if (entry2) listed[id] = { host: entry2.host, server: entry2.server, ...entry2.disabled ? { disabled: true } : {} };
+        if (entry2) listed2[id] = { host: entry2.host, server: entry2.server, ...entry2.disabled ? { disabled: true } : {} };
       }
       output = {
         ok: true,
-        selection: listed,
+        selection: listed2,
         status: store.read("status.json") ?? {}
       };
     } else {
@@ -31810,10 +31814,10 @@ function findClaude(home, env) {
 }
 function skillAt(directory) {
   try {
-    const file2 = join10(directory, "SKILL.md");
-    if (!statSync3(file2).isFile()) return null;
+    const file3 = join10(directory, "SKILL.md");
+    if (!statSync3(file3).isFile()) return null;
     const path2 = realpathSync2(directory);
-    return SAFE_PATH.test(path2) ? { path: path2, mtime: statSync3(file2).mtimeMs } : null;
+    return SAFE_PATH.test(path2) ? { path: path2, mtime: statSync3(file3).mtimeMs } : null;
   } catch {
     return null;
   }
@@ -31850,12 +31854,12 @@ function findSkill(home) {
     path2 = found[0]?.path;
   }
   if (!path2) throw new ReportError("SKILL_MISSING", `${SKILL} is not installed`);
-  for (const file2 of SKILL_LAYOUT) {
+  for (const file3 of SKILL_LAYOUT) {
     try {
-      if (statSync3(join10(path2, file2)).isFile()) continue;
+      if (statSync3(join10(path2, file3)).isFile()) continue;
     } catch {
     }
-    throw new ReportError("SKILL_OUTDATED", `${SKILL} lacks ${file2}; update it with the internal-mcp-setup v1.4.0 installer`);
+    throw new ReportError("SKILL_OUTDATED", `${SKILL} lacks ${file3}; update it with the internal-mcp-setup v1.4.0 installer`);
   }
   return path2;
 }
@@ -32345,8 +32349,8 @@ function cell(value, max, field) {
 function texts(value, maxItems, maxRunes, field) {
   return list(value, maxItems, field).map((item2) => text2(item2, maxRunes, field));
 }
-function optional3(source, name, parse3) {
-  return name in source ? { [name]: parse3(source[name]) } : {};
+function optional3(source, name, parse4) {
+  return name in source ? { [name]: parse4(source[name]) } : {};
 }
 function highlights(value, field, code) {
   try {
@@ -32627,17 +32631,17 @@ function today(now, zone) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
 function readHighlights(path2) {
-  let text4;
+  let text5;
   try {
     const stat = statSync4(path2);
     if (!stat.isFile() || stat.size > MAX_HIGHLIGHTS_FILE_BYTES) throw new Error("rejected");
-    text4 = readFileSync8(path2, "utf8");
+    text5 = readFileSync8(path2, "utf8");
   } catch {
     throw new ReportError("INVALID_ARGUMENT", "highlights file is unreadable");
   }
   let value;
   try {
-    value = JSON.parse(text4);
+    value = JSON.parse(text5);
   } catch {
     throw new ReportError("INVALID_ARGUMENT", "highlights file is not JSON");
   }
@@ -32905,6 +32909,782 @@ var init_run2 = __esm({
     [--highlights-file <path>] [--noninteractive]`;
     namePattern = (value) => value.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&").replace(/\s+/g, "\\s*");
     DEFAULT_PARTNER_DOMAINS = ["anthropic.com", "openai.com", "github.com", "mongodb.com", "megazone.com", "mz.co.kr"];
+  }
+});
+
+// src/setup/errors.ts
+var SetupError;
+var init_errors6 = __esm({
+  "src/setup/errors.ts"() {
+    "use strict";
+    SetupError = class extends Error {
+      constructor(code, detail = "") {
+        super(detail ? `${code}: ${detail}` : code);
+        this.code = code;
+      }
+      code;
+    };
+  }
+});
+
+// src/setup/zip.ts
+import { inflateRawSync } from "node:zlib";
+function crc32(data) {
+  let c = 4294967295;
+  for (const byte of data) c = CRC_TABLE[(c ^ byte) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
+function readZip(data) {
+  if (data.length > MAX_ZIP_BYTES) throw invalid3("zip-too-large");
+  const end = findEnd(data);
+  const count = data.readUInt16LE(end + 10);
+  if (count > MAX_ENTRIES) throw invalid3("too-many-entries");
+  let offset = data.readUInt32LE(end + 16);
+  const entries3 = [];
+  let total = 0;
+  for (let index = 0; index < count; index++) {
+    if (offset + 46 > data.length || data.readUInt32LE(offset) !== 33639248) throw invalid3("not-zip");
+    const madeBy = data.readUInt16LE(offset + 4) >> 8;
+    const flags3 = data.readUInt16LE(offset + 8);
+    const method = data.readUInt16LE(offset + 10);
+    const crc = data.readUInt32LE(offset + 16);
+    const compressed = data.readUInt32LE(offset + 20);
+    const size = data.readUInt32LE(offset + 24);
+    const nameLength = data.readUInt16LE(offset + 28);
+    const skip = nameLength + data.readUInt16LE(offset + 30) + data.readUInt16LE(offset + 32);
+    const external = data.readUInt32LE(offset + 38);
+    const localOffset = data.readUInt32LE(offset + 42);
+    if (compressed === 4294967295 || size === 4294967295 || localOffset === 4294967295) throw invalid3("not-zip");
+    const name = data.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    total += size;
+    if (total > MAX_UNCOMPRESSED) throw invalid3("uncompressed-too-large");
+    entries3.push({
+      name,
+      size,
+      mode: madeBy === 3 ? external >>> 16 : 0,
+      encrypted: (flags3 & 1) === 1,
+      read: () => readBody(data, localOffset, method, compressed, size, crc)
+    });
+    offset += 46 + skip;
+  }
+  return entries3;
+}
+function findEnd(data) {
+  const floor = Math.max(0, data.length - 22 - 65535);
+  for (let index = data.length - 22; index >= floor; index--) {
+    if (data.readUInt32LE(index) === 101010256) return index;
+  }
+  throw invalid3("not-zip");
+}
+function readBody(data, offset, method, compressed, size, crc) {
+  if (offset + 30 > data.length || data.readUInt32LE(offset) !== 67324752) throw invalid3("not-zip");
+  const start = offset + 30 + data.readUInt16LE(offset + 26) + data.readUInt16LE(offset + 28);
+  if (start + compressed > data.length) throw invalid3("not-zip");
+  const body = data.subarray(start, start + compressed);
+  let out;
+  if (method === 0) out = Buffer.from(body);
+  else if (method === 8) {
+    try {
+      out = inflateRawSync(body, { maxOutputLength: Math.max(size, 1) });
+    } catch {
+      throw invalid3("uncompressed-too-large");
+    }
+  } else throw invalid3("not-zip");
+  if (out.length !== size || crc32(out) !== crc) throw invalid3("not-zip");
+  return out;
+}
+var MAX_ZIP_BYTES, MAX_ENTRIES, MAX_UNCOMPRESSED, invalid3, CRC_TABLE;
+var init_zip = __esm({
+  "src/setup/zip.ts"() {
+    "use strict";
+    init_errors6();
+    MAX_ZIP_BYTES = 20 * 1024 * 1024;
+    MAX_ENTRIES = 500;
+    MAX_UNCOMPRESSED = 50 * 1024 * 1024;
+    invalid3 = (rule) => new SetupError("PACKAGE_INVALID", rule);
+    CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+      return c >>> 0;
+    });
+  }
+});
+
+// src/setup/package.ts
+import { posix } from "node:path";
+function fail(rule, detail = "") {
+  const clean = [...detail.replace(new RegExp("\\p{Cc}", "gu"), "")].slice(0, 120).join("");
+  throw new SetupError("PACKAGE_INVALID", clean ? `${rule}: ${clean}` : rule);
+}
+function entryName(entry2) {
+  const type = entry2.mode & S_IFMT;
+  const isDir = type === 16384 || entry2.name.endsWith("/");
+  const name = isDir ? entry2.name.replace(/\/$/, "") : entry2.name;
+  if (!name || name.startsWith("/") || /[\\\0]/.test(name) || posix.normalize(name) !== name || name.split("/").some((part) => part === "" || part === "." || part === "..")) fail("unsafe-path", entry2.name);
+  if (!isDir && (entry2.encrypted || type !== 0 && type !== 32768)) fail("not-regular-file", entry2.name);
+  return { name, isDir };
+}
+function text3(entry2, rule) {
+  if (entry2.size > TEXT_MAX) fail(rule);
+  try {
+    return entry2.read().toString("utf8");
+  } catch {
+    fail(rule);
+  }
+}
+function validatePackage(data) {
+  let entries3;
+  try {
+    entries3 = readZip(data);
+  } catch (error3) {
+    if (error3 instanceof SetupError) throw error3;
+    fail("not-zip");
+  }
+  let root = "";
+  const files = /* @__PURE__ */ new Map();
+  const skills = /* @__PURE__ */ new Map();
+  for (const entry2 of entries3) {
+    const { name, isDir } = entryName(entry2);
+    const parts = name.split("/");
+    if (!root) root = parts[0];
+    if (parts[0] !== root || parts.length === 1 && !isDir) fail("top-level", name);
+    if (isDir) continue;
+    files.set(name, entry2);
+    if (parts.length >= 4 && parts[1] === "skills") {
+      const inside = skills.get(parts[2]) ?? /* @__PURE__ */ new Set();
+      inside.add(parts.slice(3).join("/"));
+      skills.set(parts[2], inside);
+    } else if (parts.length === 3 && parts[1] === "skills") fail("bad-skill-name", parts[2]);
+  }
+  if (!root || skills.size === 0) fail("no-skills");
+  for (const [skill, inside] of skills) {
+    if (!NAME2.test(skill)) fail("bad-skill-name", skill);
+    if (!inside.has("SKILL.md")) fail("skill-missing-md", skill);
+    if (skill === "sa-performance-report") {
+      for (const required2 of SKILL_LAYOUT) if (!inside.has(required2)) fail("report-skill-layout", required2);
+    }
+  }
+  const manifest = {
+    version: "",
+    root,
+    skills: [...skills.keys()].sort(),
+    files,
+    servers: { toolboxRegistries: [], toolboxServers: [], aimServers: [], httpServers: {} }
+  };
+  const manifestFile = files.get(`${root}/ttobak-manifest.json`);
+  const script = files.get(`${root}/setup-internal-mcp.sh`);
+  if (manifestFile) parseManifest(text3(manifestFile, "bad-manifest"), manifest);
+  else if (script) parseScript(text3(script, "bad-server-list"), manifest);
+  if (!manifest.version) manifest.version = root;
+  checkServers(manifest.servers);
+  return manifest;
+}
+function parseManifest(raw, manifest) {
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    fail("bad-manifest");
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
+  }
+  const keys2 = ["version", "toolboxRegistries", "toolboxServers", "aimServers", "httpServers"];
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !keys2.includes(key))) fail("bad-manifest");
+  const lists = ["toolboxRegistries", "toolboxServers", "aimServers"];
+  if (lists.some((key) => value[key] !== void 0 && (!Array.isArray(value[key]) || value[key].some((item2) => typeof item2 !== "string")))) fail("bad-manifest");
+  const http = value.httpServers ?? {};
+  if (typeof http !== "object" || Array.isArray(http) || Object.values(http).some((item2) => typeof item2 !== "string")) fail("bad-manifest");
+  if (value.version !== void 0 && (typeof value.version !== "string" || value.version && !VERSION.test(value.version))) fail("bad-manifest", "version");
+  manifest.version = value.version ?? "";
+  manifest.servers = {
+    toolboxRegistries: dedupe(value.toolboxRegistries),
+    toolboxServers: dedupe(value.toolboxServers),
+    aimServers: dedupe(value.aimServers),
+    httpServers: { ...http }
+  };
+}
+function parseScript(script, manifest) {
+  const version3 = /^VERSION="([^"\n]*)"[ \t]*$/m.exec(script);
+  if (version3 && VERSION.test(version3[1])) manifest.version = version3[1];
+  const values = {};
+  for (const name of ARRAYS) {
+    const starts = [...script.matchAll(new RegExp(`^${name}=\\(`, "gm"))];
+    if (starts.length > 1) fail("bad-server-list", name);
+    if (starts.length === 0) continue;
+    const tokens = arrayTokens(script.slice(starts[0].index + starts[0][0].length));
+    if (!tokens) fail("bad-server-list", name);
+    values[name] = tokens;
+  }
+  const http = {};
+  for (const pair of values.HTTP_MCPS ?? []) {
+    const at = pair.indexOf("=");
+    if (at < 0) fail("bad-server-list", "HTTP_MCPS");
+    http[pair.slice(0, at)] = pair.slice(at + 1);
+  }
+  manifest.servers = {
+    toolboxRegistries: dedupe(values.TOOLBOX_REGISTRIES),
+    toolboxServers: dedupe(values.TOOLBOX_MCPS_BASE),
+    aimServers: dedupe(values.AIM_MCPS_BASE),
+    httpServers: http
+  };
+}
+function arrayTokens(rest) {
+  const tokens = [];
+  for (let index = 0; index < rest.length; ) {
+    const c = rest[index];
+    if (c === " " || c === "	" || c === "\n" || c === "\r") index++;
+    else if (c === ")") return tokens;
+    else if (c === "#") {
+      const end = rest.indexOf("\n", index);
+      if (end < 0) return null;
+      index = end;
+    } else if (c === '"') {
+      const end = rest.indexOf('"', index + 1);
+      if (end < 0) return null;
+      const token = rest.slice(index + 1, end);
+      if (!token || /[$`\\\n]/.test(token) || !BARE.test(token)) return null;
+      tokens.push(token);
+      index = end + 1;
+    } else {
+      const match = /[ \t\r\n)]/.exec(rest.slice(index));
+      if (!match) return null;
+      const token = rest.slice(index, index + match.index);
+      if (!BARE.test(token)) return null;
+      tokens.push(token);
+      index += match.index;
+    }
+    if (tokens.length > MAX_SERVERS) return null;
+  }
+  return null;
+}
+function checkServers(servers) {
+  const http = Object.entries(servers.httpServers);
+  if ([servers.toolboxRegistries, servers.toolboxServers, servers.aimServers, http].some((list2) => list2.length > MAX_SERVERS)) {
+    fail("bad-server-list", "too many entries");
+  }
+  for (const registry3 of servers.toolboxRegistries) if (!REGISTRY.test(registry3)) fail("bad-registry", registry3);
+  for (const name of [...servers.toolboxServers, ...servers.aimServers]) if (!NAME2.test(name)) fail("bad-server-name", name);
+  for (const [name, address] of http) {
+    if (!NAME2.test(name)) fail("bad-server-name", name);
+    if (!httpsUrl(address)) fail("bad-http-url", name);
+  }
+}
+function httpsUrl(address) {
+  if (address.length > 512 || /[\s"'`$\\]/.test(address)) return false;
+  try {
+    const url2 = new URL(address);
+    return url2.protocol === "https:" && !!url2.hostname && !url2.username && !url2.password && !url2.hash;
+  } catch {
+    return false;
+  }
+}
+var NAME2, REGISTRY, VERSION, BARE, TEXT_MAX, MAX_SERVERS, ARRAYS, S_IFMT, dedupe;
+var init_package = __esm({
+  "src/setup/package.ts"() {
+    "use strict";
+    init_claude();
+    init_errors6();
+    init_zip();
+    NAME2 = /^[a-z0-9][a-z0-9-]{0,63}$/;
+    REGISTRY = /^s3:\/\/[a-z0-9][a-z0-9.-]{2,62}\/[A-Za-z0-9._/-]{1,512}$/;
+    VERSION = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/;
+    BARE = /^[A-Za-z0-9._:/=@+-]+$/;
+    TEXT_MAX = 1024 * 1024;
+    MAX_SERVERS = 100;
+    ARRAYS = ["TOOLBOX_REGISTRIES", "TOOLBOX_MCPS_BASE", "AIM_MCPS_BASE", "HTTP_MCPS"];
+    S_IFMT = 61440;
+    dedupe = (list2) => [...new Set(Array.isArray(list2) ? list2.map(String) : [])];
+  }
+});
+
+// src/setup/fetch.ts
+import { createHash as createHash9 } from "node:crypto";
+import { get } from "node:https";
+function isRow(value) {
+  const row = value;
+  return !!row && typeof row === "object" && typeof row.version === "string" && SHA.test(String(row.sha256));
+}
+function parseView(value) {
+  const view = value;
+  const bad = () => new SetupError("TTOBAK_UNAVAILABLE", "unexpected skill package response");
+  if (!view || typeof view !== "object" || !view.effective || !Array.isArray(view.effective.skills) || !view.downloads) throw bad();
+  for (const scope of ["org", "personal"]) if (view[scope] !== null && !isRow(view[scope])) throw bad();
+  for (const skill of view.effective.skills) {
+    if (!skill || !NAME3.test(String(skill.name)) || skill.source !== "org" && skill.source !== "personal") throw bad();
+  }
+  return view;
+}
+async function fetchEffective(api, download = httpsDownload) {
+  const view = parseView(await api.skillPackages());
+  const packages = {};
+  for (const scope of ["org", "personal"]) {
+    const row = view[scope];
+    if (!row) continue;
+    const url2 = view.downloads[scope];
+    if (typeof url2 !== "string" || !url2.startsWith("https://")) throw new SetupError("PACKAGE_DOWNLOAD", scope);
+    let data;
+    try {
+      data = await download(url2);
+    } catch {
+      throw new SetupError("PACKAGE_DOWNLOAD", scope);
+    }
+    if (createHash9("sha256").update(data).digest("hex") !== row.sha256) throw new SetupError("PACKAGE_INTEGRITY", scope);
+    packages[scope] = validatePackage(data);
+  }
+  return { view, packages };
+}
+var NAME3, SHA, DOWNLOAD_TIMEOUT_MS, httpsDownload;
+var init_fetch = __esm({
+  "src/setup/fetch.ts"() {
+    "use strict";
+    init_errors6();
+    init_package();
+    init_zip();
+    NAME3 = /^[a-z0-9][a-z0-9-]{0,63}$/;
+    SHA = /^[0-9a-f]{64}$/;
+    DOWNLOAD_TIMEOUT_MS = 12e4;
+    httpsDownload = (url2) => new Promise((resolve4, reject) => {
+      const request2 = get(url2, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
+        if (response.statusCode !== 200) {
+          response.resume();
+          reject(new Error(`status ${response.statusCode}`));
+          return;
+        }
+        const chunks = [];
+        let size = 0;
+        response.on("data", (chunk) => {
+          size += chunk.length;
+          if (size > MAX_ZIP_BYTES) {
+            request2.destroy(new Error("too large"));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => resolve4(Buffer.concat(chunks)));
+        response.on("error", reject);
+      });
+      request2.on("timeout", () => request2.destroy(new Error("timeout")));
+      request2.on("error", reject);
+    });
+  }
+});
+
+// src/setup/approvals.ts
+import { mkdirSync as mkdirSync7, readFileSync as readFileSync9, renameSync as renameSync5, statSync as statSync5, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join13 } from "node:path";
+function readApprovals(home) {
+  try {
+    if (statSync5(file2(home)).size > MAX_BYTES) return /* @__PURE__ */ new Set();
+    const value = JSON.parse(readFileSync9(file2(home), "utf8"));
+    return new Set(Array.isArray(value.approved) ? value.approved.filter((key) => typeof key === "string") : []);
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function addApprovals(home, keys2) {
+  const approved = readApprovals(home);
+  for (const key of keys2) approved.add(key);
+  const directory = join13(home, ".ttobak", "setup");
+  mkdirSync7(directory, { recursive: true, mode: 448 });
+  const temporary = `${file2(home)}.tmp-${process.pid}`;
+  writeFileSync6(temporary, JSON.stringify({ approved: [...approved].slice(-MAX_KEYS) }) + "\n", { mode: 384 });
+  renameSync5(temporary, file2(home));
+}
+var MAX_BYTES, MAX_KEYS, file2;
+var init_approvals = __esm({
+  "src/setup/approvals.ts"() {
+    "use strict";
+    MAX_BYTES = 256 * 1024;
+    MAX_KEYS = 500;
+    file2 = (home) => join13(home, ".ttobak", "setup", "approvals.json");
+  }
+});
+
+// src/setup/servers.ts
+import { existsSync as existsSync5, readFileSync as readFileSync10, statSync as statSync6 } from "node:fs";
+import { join as join14 } from "node:path";
+function jsonKeys(path2, pick2) {
+  try {
+    if (statSync6(path2).size > MAX_CONFIG_BYTES2) return /* @__PURE__ */ new Set();
+    const picked = pick2(JSON.parse(readFileSync10(path2, "utf8")));
+    return new Set(picked && typeof picked === "object" && !Array.isArray(picked) ? Object.keys(picked) : []);
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+async function listed(env, toolbox, args) {
+  const result = await env.run([toolbox, ...args], LIST_TIMEOUT_MS);
+  return result.code === 0 ? result.stdout.split("\n") : [];
+}
+async function planServers(env, servers) {
+  const dirs = parsePathList(env.path);
+  const find = (name) => resolveCommand(name, dirs, env.home);
+  const toolbox = find("toolbox");
+  const aim = find("aim");
+  const claude = find("claude");
+  const approvals = readApprovals(env.home);
+  const registered = jsonKeys(join14(env.home, ".claude.json"), (value) => value.mcpServers);
+  const aimInstalled = jsonKeys(join14(env.home, ".aim", "config.json"), (value) => value.toolBundles);
+  const registries = toolbox ? (await listed(env, toolbox, ["registry", "list"])).flatMap((line) => line.trim().split(/\s+/)) : [];
+  const tools = toolbox ? (await listed(env, toolbox, ["list", "--installed"])).map((line) => line.trim().split(/\s+/)[0]) : [];
+  const actions = [];
+  const unavailable = [];
+  const add = (key, label, commands, midway) => {
+    const runnable = commands.filter((command) => !!command);
+    if (runnable.length) actions.push({ key, label, commands: runnable, approved: approvals.has(key), midway });
+  };
+  for (const registry3 of servers.toolboxRegistries) {
+    if (registries.includes(registry3)) continue;
+    if (!toolbox) {
+      unavailable.push(`registry:${registry3}`);
+      continue;
+    }
+    add(`registry:${registry3}`, `toolbox \uB808\uC9C0\uC2A4\uD2B8\uB9AC ${registry3}`, [[toolbox, "registry", "add", registry3]], true);
+  }
+  for (const name of servers.toolboxServers) {
+    const install = !tools.includes(name);
+    const register = !registered.has(name);
+    if (!install && !register) continue;
+    if (install && !toolbox) {
+      unavailable.push(`toolbox:${name}`);
+      continue;
+    }
+    if (register && !claude) {
+      unavailable.push(`claude:${name}`);
+      if (!install) continue;
+    }
+    add(`toolbox:${name}`, `toolbox \uC11C\uBC84 ${name}`, [
+      install ? [toolbox, "install", name] : null,
+      register && claude ? [claude, "mcp", "add", "-s", "user", name, "--", name] : null
+    ], install);
+  }
+  const aimBinary = aim ?? (toolbox ? join14(dirname4(toolbox), "aim") : null);
+  const installAim = !aim && toolbox && !tools.includes("aim") ? [toolbox, "install", "aim"] : null;
+  for (const name of servers.aimServers) {
+    if (aimInstalled.has(name)) continue;
+    if (!aimBinary) {
+      unavailable.push(`aim:${name}`);
+      continue;
+    }
+    add(`aim:${name}`, `AIM \uC11C\uBC84 ${name}`, [installAim, [aimBinary, "mcp", "install", "--clients", "claude-code", name]], true);
+  }
+  for (const [name, url2] of Object.entries(servers.httpServers)) {
+    if (registered.has(name)) continue;
+    if (!claude) {
+      unavailable.push(`http:${name}=${url2}`);
+      continue;
+    }
+    add(`http:${name}=${url2}`, `HTTP \uC11C\uBC84 ${name} (${url2})`, [[claude, "mcp", "add", "-s", "user", "-t", "http", name, url2]], false);
+  }
+  return { actions, unavailable };
+}
+function dirname4(path2) {
+  return path2.slice(0, path2.lastIndexOf("/")) || "/";
+}
+async function applyServers(env, plan, approve) {
+  const confirmed = new Set(approve);
+  const pending = plan.actions.filter((action) => !action.approved && !confirmed.has(action.key));
+  const runnable = plan.actions.filter((action) => action.approved || confirmed.has(action.key));
+  const asking = { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) };
+  if (runnable.length === 0 && pending.length) return asking;
+  if (plan.actions.length === 0) {
+    return plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "current" };
+  }
+  if (runnable.some((action) => action.midway) && !existsSync5(join14(env.home, ".midway", "cookie"))) {
+    return { id: "servers", status: "failed", code: "AUTH_EXPIRED_MIDWAY" };
+  }
+  addApprovals(env.home, runnable.filter((action) => confirmed.has(action.key)).map((action) => action.key));
+  const failed = [];
+  const done = /* @__PURE__ */ new Set();
+  for (const action of runnable) {
+    for (const command of action.commands) {
+      if (done.has(command.join("\0"))) continue;
+      const result = await env.run(command, INSTALL_TIMEOUT_MS);
+      if (result.code === 0) {
+        done.add(command.join("\0"));
+        continue;
+      }
+      if (AUTH_PATTERN.test(result.stderr)) return { id: "servers", status: "failed", code: "AUTH_EXPIRED_MIDWAY", items: [action.key] };
+      failed.push(action.key);
+      break;
+    }
+  }
+  if (failed.length) return { id: "servers", status: "failed", code: "INSTALL_FAILED", items: failed };
+  if (pending.length) return asking;
+  return plan.unavailable.length ? { id: "servers", status: "ok", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "ok" };
+}
+var LIST_TIMEOUT_MS, INSTALL_TIMEOUT_MS, MAX_CONFIG_BYTES2;
+var init_servers = __esm({
+  "src/setup/servers.ts"() {
+    "use strict";
+    init_hosts();
+    init_mcp_client();
+    init_approvals();
+    LIST_TIMEOUT_MS = 6e4;
+    INSTALL_TIMEOUT_MS = 5 * 6e4;
+    MAX_CONFIG_BYTES2 = 8 * 1024 * 1024;
+  }
+});
+
+// src/setup/skills.ts
+import { cpSync, existsSync as existsSync6, lstatSync as lstatSync6, mkdirSync as mkdirSync8, readFileSync as readFileSync11, renameSync as renameSync6, unlinkSync as unlinkSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join15 } from "node:path";
+function skillFiles(manifest, name) {
+  if (!manifest || !manifest.skills.includes(name)) return null;
+  const prefix = `${manifest.root}/skills/${name}/`;
+  const files = [];
+  for (const [entryName2, entry2] of manifest.files) {
+    if (entryName2.startsWith(prefix)) files.push({ path: entryName2.slice(prefix.length), data: entry2.read(), mode: entry2.mode });
+  }
+  return files;
+}
+function sameFile(path2, data) {
+  try {
+    const stat = lstatSync6(path2);
+    return stat.isFile() && stat.size === data.length && readFileSync11(path2).equals(data);
+  } catch {
+    return false;
+  }
+}
+function planSkills(home, effective, packages) {
+  return effective.map((skill) => {
+    const files = skillFiles(packages[skill.source], skill.name);
+    if (!files) return { name: skill.name, source: skill.source, state: "missing", files: [] };
+    const dir = join15(skillsRoot(home), skill.name);
+    const state = !existsSync6(dir) ? "install" : files.every((file3) => sameFile(join15(dir, file3.path), file3.data)) ? "current" : "update";
+    return { name: skill.name, source: skill.source, state, files };
+  });
+}
+function noLinks(home, path2) {
+  const relative2 = path2.slice(home.length + 1).split("/");
+  let current = home;
+  for (const part of relative2) {
+    current = join15(current, part);
+    try {
+      if (lstatSync6(current).isSymbolicLink()) return false;
+    } catch {
+      return true;
+    }
+  }
+  return true;
+}
+function stamp(now) {
+  const iso2 = now.toISOString();
+  return `${iso2.slice(0, 10).replace(/-/g, "")}-${iso2.slice(11, 19).replace(/:/g, "")}`;
+}
+function backup(home, name, now) {
+  mkdirSync8(backupRoot(home), { recursive: true, mode: 448 });
+  let target = join15(backupRoot(home), `${name}-${stamp(now)}`);
+  for (let n = 2; existsSync6(target); n++) target = join15(backupRoot(home), `${name}-${stamp(now)}-${n}`);
+  cpSync(join15(skillsRoot(home), name), target, { recursive: true, verbatimSymlinks: true, errorOnExist: true });
+}
+function installSkills(home, plans, _packages, now) {
+  if (plans.length === 0) return { id: "skills", status: "skipped" };
+  const missing = plans.filter((plan) => plan.state === "missing").map((plan) => plan.name);
+  if (missing.length) return { id: "skills", status: "failed", code: "PACKAGE_INVALID", items: missing };
+  const changed = plans.filter((plan) => plan.state !== "current");
+  for (const plan of changed) {
+    const dir = join15(skillsRoot(home), plan.name);
+    const targets = plan.files.map((file3) => join15(dir, file3.path));
+    if (![skillsRoot(home), dir, ...targets].every((path2) => path2.startsWith(`${skillsRoot(home)}/`) || path2 === skillsRoot(home)) || ![backupRoot(home), ...targets].every((path2) => noLinks(home, path2))) {
+      return { id: "skills", status: "failed", code: "SKILL_PATH_UNSAFE", items: [plan.name] };
+    }
+  }
+  const installed = [];
+  for (const plan of changed) {
+    const dir = join15(skillsRoot(home), plan.name);
+    try {
+      if (plan.state === "update") backup(home, plan.name, now);
+      for (const file3 of plan.files) {
+        const target = join15(dir, file3.path);
+        mkdirSync8(join15(target, ".."), { recursive: true });
+        const temporary = `${target}.tmp-${process.pid}`;
+        writeFileSync7(temporary, file3.data, { mode: file3.mode & 73 ? 493 : 420, flag: "wx" });
+        try {
+          renameSync6(temporary, target);
+        } catch (error3) {
+          try {
+            unlinkSync4(temporary);
+          } catch {
+          }
+          throw error3;
+        }
+      }
+      installed.push(plan.name);
+    } catch {
+      return { id: "skills", status: "failed", code: "SKILL_WRITE_FAILED", items: [plan.name, ...installed] };
+    }
+  }
+  return installed.length ? { id: "skills", status: "ok", items: installed } : { id: "skills", status: "current" };
+}
+var skillsRoot, backupRoot;
+var init_skills = __esm({
+  "src/setup/skills.ts"() {
+    "use strict";
+    skillsRoot = (home) => join15(home, ".claude", "skills");
+    backupRoot = (home) => join15(home, ".claude", "skills-backup");
+  }
+});
+
+// src/setup/run.ts
+var run_exports3 = {};
+__export(run_exports3, {
+  mergedServers: () => mergedServers,
+  runSetup: () => runSetup
+});
+import { execFile as execFile5 } from "node:child_process";
+function parse3(args) {
+  const [command, ...rest] = args;
+  if (command !== "plan" && command !== "apply") throw new SetupError("INVALID_ARGUMENT", "expected plan or apply");
+  const approve = [];
+  let noninteractive = false;
+  for (let index = 0; index < rest.length; index++) {
+    if (rest[index] === "--noninteractive") noninteractive = true;
+    else if (rest[index] === "--approve" && command === "apply") {
+      const key = rest[++index];
+      if (!key || Buffer.byteLength(key) > MAX_KEY_BYTES || approve.length >= MAX_APPROVALS) throw new SetupError("INVALID_ARGUMENT", "--approve");
+      approve.push(key);
+    } else throw new SetupError("INVALID_ARGUMENT", `unexpected argument ${JSON.stringify(rest[index].slice(0, 40))}`);
+  }
+  return { apply: command === "apply", approve, noninteractive };
+}
+function commandRunner(environment) {
+  return environment.runCommand ?? ((argv, timeoutMs) => new Promise((resolve4) => {
+    const env = { HOME: environment.home, PATH: environment.env.PATH ?? "", LANG: "en_US.UTF-8" };
+    for (const key of ["USER", "LOGNAME"]) if (environment.env[key]) env[key] = environment.env[key];
+    execFile5(
+      argv[0],
+      argv.slice(1),
+      { env, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: environment.home },
+      (error3, stdout, stderr) => resolve4({
+        code: error3 ? typeof error3.code === "number" ? error3.code : 1 : 0,
+        stdout: String(stdout),
+        stderr: String(stderr)
+      })
+    );
+  }));
+}
+function failureCode(error3) {
+  if (error3 instanceof SetupError) return error3.code;
+  if (error3 instanceof IntakeError) return error3.code === "INVALID_ARGUMENT" ? "TTOBAK_LOGIN_REQUIRED" : error3.code;
+  const message = error3 instanceof Error ? error3.message : "";
+  return message.startsWith("TTOBAK_LOGIN_REQUIRED") ? "TTOBAK_LOGIN_REQUIRED" : "TTOBAK_UNAVAILABLE";
+}
+function mergedServers(packages) {
+  const out = { toolboxRegistries: [], toolboxServers: [], aimServers: [], httpServers: {} };
+  for (const manifest of [packages.org, packages.personal]) {
+    if (!manifest) continue;
+    const s = manifest.servers;
+    out.toolboxRegistries = [.../* @__PURE__ */ new Set([...out.toolboxRegistries, ...s.toolboxRegistries])];
+    out.toolboxServers = [.../* @__PURE__ */ new Set([...out.toolboxServers, ...s.toolboxServers])];
+    out.aimServers = [.../* @__PURE__ */ new Set([...out.aimServers, ...s.aimServers])];
+    for (const [name, url2] of Object.entries(s.httpServers)) if (!Object.hasOwn(out.httpServers, name)) out.httpServers[name] = url2;
+  }
+  return out;
+}
+function deniedTools2(text5) {
+  const names = /* @__PURE__ */ new Set();
+  for (const match of text5.matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+) \{/g)) {
+    if (!KNOWN_TOOLS.has(match[1])) names.add(match[1]);
+  }
+  for (const match of text5.matchAll(/scripts\/([a-z0-9_]+\.py)/g)) {
+    if (match[1] !== "mcp_stdio.py" && !SKILL_SCRIPTS.includes(match[1])) names.add(match[1]);
+  }
+  return [...names].sort();
+}
+async function setup2(args, environment, store) {
+  const options2 = parse3(args);
+  const progress = (line) => environment.stderr?.(line);
+  let release;
+  try {
+    release = store.lock("run");
+  } catch {
+    throw new SetupError("RUN_IN_PROGRESS");
+  }
+  try {
+    const warnings = [];
+    const steps = [];
+    progress("TTOBAK\uC5D0\uC11C \uC2A4\uD0AC \uD328\uD0A4\uC9C0\uB97C \uD655\uC778\uD558\uACE0 \uC788\uC5B4\uC694.");
+    let fetched;
+    try {
+      const { api } = await signIn(store.read("selection.json"), environment, false, options2.noninteractive);
+      if (!api) throw new SetupError("TTOBAK_LOGIN_REQUIRED");
+      fetched = await fetchEffective(api, environment.download ?? httpsDownload);
+    } catch (error3) {
+      steps.push({ id: "packages", status: "failed", code: failureCode(error3) }, { id: "skills", status: "skipped" }, { id: "servers", status: "skipped" });
+      return { ok: false, dryRun: !options2.apply, steps, needsApproval: [], warnings };
+    }
+    const { view, packages } = fetched;
+    steps.push({ id: "packages", status: view.org || view.personal ? "ok" : "skipped" });
+    const report2 = view.effective.skills.find((skill) => skill.name === "sa-performance-report");
+    const sources = report2 && packages[report2.source]?.files.get(`${packages[report2.source]?.root}/skills/sa-performance-report/references/data-sources.md`);
+    if (sources) {
+      for (const name of deniedTools2(sources.read().toString("utf8"))) warnings.push(`\uB9AC\uD3EC\uD2B8 \uC2E4\uD589\uC774 \uD5C8\uC6A9\uD558\uC9C0 \uC54A\uB294 \uB3C4\uAD6C: ${name}`);
+    }
+    const plans = planSkills(environment.home, view.effective.skills, packages);
+    if (options2.apply) {
+      progress("\uC2A4\uD0AC\uC744 \uC124\uCE58\uD558\uACE0 \uC788\uC5B4\uC694.");
+      steps.push(installSkills(environment.home, plans, packages, environment.now()));
+    } else {
+      const changed = plans.filter((plan2) => plan2.state !== "current").map((plan2) => plan2.name);
+      steps.push(plans.length === 0 ? { id: "skills", status: "skipped" } : changed.length ? { id: "skills", status: "ok", items: changed } : { id: "skills", status: "current" });
+    }
+    const env = { home: environment.home, path: environment.env.PATH ?? "", run: commandRunner(environment) };
+    const plan = await planServers(env, mergedServers(packages));
+    const known = new Set(plan.actions.map((action) => action.key));
+    for (const key of options2.approve) if (!known.has(key)) warnings.push(`\uC54C \uC218 \uC5C6\uB294 \uC2B9\uC778 \uD56D\uBAA9\uC744 \uBB34\uC2DC\uD588\uC5B4\uC694: ${key}`);
+    const approve = options2.approve.filter((key) => known.has(key));
+    let servers;
+    if (options2.apply) {
+      progress("MCP \uC11C\uBC84\uB97C \uD655\uC778\uD558\uACE0 \uC788\uC5B4\uC694.");
+      servers = await applyServers(env, plan, approve);
+    } else {
+      const pending = plan.actions.filter((action) => !action.approved);
+      servers = pending.length ? { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) } : plan.actions.length ? { id: "servers", status: "ok", items: plan.actions.map((action) => action.key) } : plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "current" };
+      if (servers.status !== "skipped" && plan.unavailable.length) servers.code = "TOOLBOX_MISSING";
+    }
+    steps.push(servers);
+    const confirmed = new Set(approve);
+    const needsApproval = plan.actions.filter((action) => !action.approved && !confirmed.has(action.key)).map((action) => ({ key: action.key, label: action.label }));
+    if (plan.unavailable.length) warnings.push(`toolbox, aim \uB610\uB294 claude\uAC00 \uC5C6\uC5B4 \uAC74\uB108\uB6F4 \uD56D\uBAA9: ${plan.unavailable.join(", ")}`);
+    return { ok: !steps.some((step) => step.status === "failed"), dryRun: !options2.apply, steps, needsApproval, warnings };
+  } finally {
+    release();
+  }
+}
+async function runSetup(args, environment) {
+  if (args[0] === "--help" || args[0] === "help") {
+    environment.stdout(USAGE3);
+    return 0;
+  }
+  try {
+    environment.stdout(JSON.stringify(await setup2(args, environment, new IntakeStore(environment.home))));
+    return 0;
+  } catch (error3) {
+    const code = failureCode(error3);
+    environment.stdout(JSON.stringify({ ok: false, code, message: error3 instanceof SetupError ? error3.message : code }));
+    return 2;
+  }
+}
+var USAGE3, MAX_APPROVALS, MAX_KEY_BYTES, KNOWN_TOOLS;
+var init_run3 = __esm({
+  "src/setup/run.ts"() {
+    "use strict";
+    init_errors4();
+    init_run();
+    init_store();
+    init_tools();
+    init_errors6();
+    init_fetch();
+    init_servers();
+    init_skills();
+    USAGE3 = `Usage:
+  ttobak-mcp setup plan [--noninteractive]
+  ttobak-mcp setup apply [--approve <key>]... [--noninteractive]`;
+    MAX_APPROVALS = 400;
+    MAX_KEY_BYTES = 600;
+    KNOWN_TOOLS = new Set(Object.values(READ_TOOLS).flat());
   }
 });
 
@@ -33857,9 +34637,9 @@ var CognitoAuth = class {
     }
     try {
       const files = this.config.userPoolId === void 0 ? this.logoutFiles() : [this.cachePath(CognitoJwtVerifier.parseUserPoolId(this.config.userPoolId).issuer)];
-      for (const file2 of files) {
+      for (const file3 of files) {
         try {
-          unlinkSync(file2);
+          unlinkSync(file3);
         } catch (error3) {
           if (error3.code !== "ENOENT") throw error3;
         }
@@ -33890,8 +34670,8 @@ var CognitoAuth = class {
       for (let entry2 = directory.readSync(); entry2; entry2 = directory.readSync()) {
         if (++entries3 > MAX_LOGOUT_ENTRIES) throw new Error("Credential directory exceeds removal limit");
         if (!entry2.isFile() || !/^[0-9a-f]{64}\.json$/.test(entry2.name)) continue;
-        const file2 = join(this.tokenDirectory, entry2.name);
-        const fd = openSync(file2, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        const file3 = join(this.tokenDirectory, entry2.name);
+        const fd = openSync(file3, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
         let saved;
         try {
           const info = fstatSync(fd);
@@ -33918,7 +34698,7 @@ var CognitoAuth = class {
         } catch {
           continue;
         }
-        if (JSON.stringify(saved.deployment) === JSON.stringify(this.binding(issuer)) && file2 === this.cachePath(issuer)) files.push(file2);
+        if (JSON.stringify(saved.deployment) === JSON.stringify(this.binding(issuer)) && file3 === this.cachePath(issuer)) files.push(file3);
       }
     } finally {
       directory.closeSync();
@@ -34452,8 +35232,8 @@ function record11(value) {
 }
 function kbReadingResult(value, options2) {
   if (!record11(value) || !Array.isArray(value.files) || value.files.length > options2.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
-  for (const file2 of value.files) {
-    if (!record11(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
+  for (const file3 of value.files) {
+    if (!record11(file3) || typeof file3.fileId !== "string" || !file3.fileId || Buffer.byteLength(file3.fileId) > 1024 || /[/\\]/.test(file3.fileId) || typeof file3.fileName !== "string" || typeof file3.fileType !== "string" || typeof file3.size !== "number" || !Number.isSafeInteger(file3.size) || file3.size < 0 || typeof file3.lastModified !== "string" || typeof file3.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file3.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid KB file metadata");
     }
   }
@@ -34570,12 +35350,12 @@ function vaultReadingResult(value, options2) {
   } else {
     const manifest = options2.section === "manifest";
     if (!hash2(value.revision) || (manifest ? value.consistency !== "current_group" || value.unionKey !== "path" || !["meetings", "personal_docs", "account_docs"].includes(value.phase) : value.mode !== "text" || value.fileId !== options2.fileId || !path(value.path) || !hash2(value.sourceRevision) || value.consistency !== "current_source_and_group" || !["meeting", "document"].includes(value.sourceKind) || !["body", "attachments"].includes(value.phase) || value.sourceKind === "document" && value.phase === "attachments" || value.sourceKind === "meeting" && value.phase === "body" && value.page.complete)) throw new Error("INVALID_READING_RESPONSE: invalid vault source");
-    const text4 = manifest ? value.dataJson : value.markdown, f = value.fragment;
-    if (typeof text4 !== "string" || !record14(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text4).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
+    const text5 = manifest ? value.dataJson : value.markdown, f = value.fragment;
+    if (typeof text5 !== "string" || !record14(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text5).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
     if (manifest && f.startOffset === 0 && f.complete) {
       try {
-        const files = JSON.parse(text4);
-        if (!Array.isArray(files) || files.some((file2) => !record14(file2) || typeof file2.fileId !== "string" || !file2.fileId.length || file2.fileId.length > 2048 || !path(file2.path) || !hash2(file2.sourceMetadataRevision) || !["text", "non_text"].includes(file2.mode))) throw new Error("bad manifest");
+        const files = JSON.parse(text5);
+        if (!Array.isArray(files) || files.some((file3) => !record14(file3) || typeof file3.fileId !== "string" || !file3.fileId.length || file3.fileId.length > 2048 || !path(file3.path) || !hash2(file3.sourceMetadataRevision) || !["text", "non_text"].includes(file3.mode))) throw new Error("bad manifest");
       } catch {
         throw new Error("INVALID_READING_RESPONSE: invalid completed vault manifest group");
       }
@@ -34815,10 +35595,10 @@ ${err.message}`;
         }
       }
     }
-    const { id, file: file2 } = active.info;
-    const bytes = existsSync(file2) ? statSync2(file2).size : 0;
+    const { id, file: file3 } = active.info;
+    const bytes = existsSync(file3) ? statSync2(file3).size : 0;
     if (bytes <= WAV_HEADER_BYTES) {
-      rmSync(file2, { force: true });
+      rmSync(file3, { force: true });
       this.removeSidecar(id);
       throw new Error(`Recording produced no audio: ${active.stderr.trim() || "empty file"}`);
     }
@@ -34839,12 +35619,12 @@ ${err.message}`;
     };
   }
   /** Reports whether the file is effectively silent (e.g. host lacks mic permission). */
-  async silenceCheck(file2) {
-    const name = basename2(file2);
-    if (dirname2(file2) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN2.test(name.slice(0, -".wav".length))) {
+  async silenceCheck(file3) {
+    const name = basename2(file3);
+    if (dirname2(file3) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN2.test(name.slice(0, -".wav".length))) {
       throw new Error("silenceCheck accepts only a recording in the recordings directory");
     }
-    const { stderr } = await this.run(["-hide_banner", "-nostats", "-i", file2, "-af", "volumedetect", "-f", "null", "-"]);
+    const { stderr } = await this.run(["-hide_banner", "-nostats", "-i", file3, "-af", "volumedetect", "-f", "null", "-"]);
     const maxVolumeDb = parseMaxVolume(stderr);
     return { maxVolumeDb, silent: maxVolumeDb !== null && maxVolumeDb < SILENCE_THRESHOLD_DB };
   }
@@ -35081,8 +35861,8 @@ function sendAppRequest(request2, options2 = {}) {
       ) : new AppControlError("connection_failed", `Could not reach the TTOBAK Mac app: ${err.code ?? err.message}`)
     )));
     function finish() {
-      const text4 = Buffer.concat(chunks).toString("utf8");
-      const first = text4.split("\n", 1)[0];
+      const text5 = Buffer.concat(chunks).toString("utf8");
+      const first = text5.split("\n", 1)[0];
       let parsed;
       try {
         parsed = JSON.parse(first);
@@ -35675,11 +36455,11 @@ async function callTool(request2, options2) {
       }
       case "ttobak_login": {
         await auth.getIdToken();
-        return text3("Authenticated successfully with TTOBAK.");
+        return text4("Authenticated successfully with TTOBAK.");
       }
       case "ttobak_status": {
         const status = auth.getStatus ? await auth.getStatus() : { authenticated: auth.isAuthenticated() };
-        return text3(
+        return text4(
           `Authenticated: ${status.authenticated}
 ` + (status.identity ? `Signed in: ${JSON.stringify(status.identity)}
 ` : "") + `API: ${API_URL}
@@ -35723,7 +36503,7 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         const { name: name2, description, sfdcOpptyId, sfdcUrl, stage } = args;
         if (!name2) return error2("name is required");
         const result = await api.createProject({ name: name2, description, sfdcOpptyId, sfdcUrl, stage });
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_projects": {
         const options3 = navigationOptions(args);
@@ -35746,21 +36526,21 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         if (!projectId) return error2("projectId is required");
         if (!name2) return error2("name is required");
         const result = await api.updateProject(projectId, { name: name2, description, sfdcOpptyId, sfdcUrl, stage });
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_link_project_account": {
         const { projectId, accountId } = args;
         if (!projectId) return error2("projectId is required");
         if (!accountId) return error2("accountId is required");
         const result = await api.linkProjectAccount(projectId, accountId);
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_unlink_project_account": {
         const { projectId, accountId } = args;
         if (!projectId) return error2("projectId is required");
         if (!accountId) return error2("accountId is required");
         await api.unlinkProjectAccount(projectId, accountId);
-        return text3(`Unlinked account ${accountId} from project ${projectId}.`);
+        return text4(`Unlinked account ${accountId} from project ${projectId}.`);
       }
       case "ttobak_export_vault": {
         const options3 = vaultReadingOptions(args);
@@ -35771,7 +36551,7 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         if (typeof title !== "string" || !title.trim()) return error2("title is required");
         if (typeof markdown !== "string" || !markdown.trim()) return error2("markdown is required");
         const result = await api.putDocument(accountId, { title, markdown, docType, path: path2, idempotencyKey });
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_documents": {
         const options3 = documentCatalogOptions(args);
@@ -35786,32 +36566,32 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         if (typeof title !== "string" || !title.trim()) return error2("title is required");
         if (markdown !== void 0 && typeof markdown !== "string") return error2("markdown must be a string");
         const result = await api.updateDocument(accountId, docId, { title, markdown, docType, path: path2 });
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_ask": {
         const { question, meetingId, sessionId } = args;
         if (!question) return error2("question is required");
         const result = await api.askQuestion(question, meetingId, sessionId);
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_kb_upload": {
         if (options2.mode === "http") {
           const { data, fileName: fileName2 } = decodeUpload(args);
           const fileType2 = args.fileType;
           if (fileType2 !== void 0 && typeof fileType2 !== "string") return error2("fileType must be a string");
-          return text3(JSON.stringify(await api.uploadBytesToKB(data, fileName2, fileType2), null, 2));
+          return text4(JSON.stringify(await api.uploadBytesToKB(data, fileName2, fileType2), null, 2));
         }
         const { filePath, fileName, fileType } = args;
         if (!filePath) return error2("filePath is required");
         const result = await api.uploadToKB(filePath, fileName, fileType);
-        return text3(
+        return text4(
           `Uploaded to Knowledge Base: ${JSON.stringify(result)}
 Retrieval is scoped to you -- only your own ttobak_ask queries can find this file. Call ttobak_kb_sync to index it now; if that returns "skipped" (a deployment without the KB env vars), it is still indexed by the next completed meeting summary or document-bearing crawler run.`
         );
       }
       case "ttobak_kb_sync": {
         const result = await api.syncKB();
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_kb_list_files": {
         const options3 = kbReadingOptions(args);
@@ -35821,7 +36601,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         const { fileId } = args;
         if (!fileId) return error2("fileId is required");
         await api.deleteKBFile(fileId);
-        return text3(
+        return text4(
           `Deleted Knowledge Base file ${fileId}. It stays retrievable (by you only -- retrieval is user-scoped) until the next ingestion run: call ttobak_kb_sync to reindex now, or wait for the next completed meeting summary / document-bearing crawler run.`
         );
       }
@@ -35832,7 +36612,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           for (const key of ["accountId", "fileType", "docType", "path"]) {
             if (args[key] !== void 0 && typeof args[key] !== "string") return error2(`${key} must be a string`);
           }
-          return text3(JSON.stringify(await api.uploadDocumentBytes(data, args.title, fileName2, args), null, 2));
+          return text4(JSON.stringify(await api.uploadDocumentBytes(data, args.title, fileName2, args), null, 2));
         }
         const { filePath, title, accountId, fileName, fileType, docType, path: path2 } = args;
         if (!filePath) return error2("filePath is required");
@@ -35844,13 +36624,13 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           docType,
           path: path2
         });
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_create_account": {
         const { name: name2, aliases, domains, industry, parentAccountId } = args;
         if (!name2) return error2("name is required");
         const result = await api.createAccount({ name: name2, aliases, domains, industry, parentAccountId });
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_add_account_member": {
         const { accountId, email: email3, role } = args;
@@ -35858,15 +36638,15 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         if (!email3) return error2("email is required");
         if (!role) return error2("role is required");
         const result = await api.addAccountMember(accountId, email3, role);
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_audio_devices": {
-        return text3(JSON.stringify({ devices: await requireRecorder(options2).listDevices() }, null, 2));
+        return text4(JSON.stringify({ devices: await requireRecorder(options2).listDevices() }, null, 2));
       }
       case "ttobak_start_recording": {
         if (typeof args.title !== "string") return error2("title is required");
         const info = await requireRecorder(options2).start({ title: args.title, device: args.device, maxMinutes: args.maxMinutes });
-        return text3(JSON.stringify({
+        return text4(JSON.stringify({
           recordingId: info.id,
           title: info.title,
           device: info.device,
@@ -35877,7 +36657,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
       }
       case "ttobak_recording_status": {
         const rec = requireRecorder(options2);
-        return text3(JSON.stringify({ active: rec.status(), saved: rec.listSaved() }, null, 2));
+        return text4(JSON.stringify({ active: rec.status(), saved: rec.listSaved() }, null, 2));
       }
       case "ttobak_stop_recording": {
         const rec = requireRecorder(options2);
@@ -35896,10 +36676,10 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
             warnings.push(`Recording appears silent (max ${silence.maxVolumeDb} dB): grant this MCP host app microphone access in System Settings > Privacy & Security > Microphone.`);
           }
           if (args.upload === false || silence?.silent && args.allowSilent !== true) {
-            return text3(JSON.stringify({ uploaded: false, ...kept, warnings, next: "ttobak_upload_audio with recordingId" }, null, 2));
+            return text4(JSON.stringify({ uploaded: false, ...kept, warnings, next: "ttobak_upload_audio with recordingId" }, null, 2));
           }
           const uploaded = await uploadAudio(options2, stopped.file, target, stopped.title, stopped.startedAt, stopped.id);
-          return text3(JSON.stringify({
+          return text4(JSON.stringify({
             ...uploaded,
             durationSeconds: stopped.durationSeconds,
             warnings: [...warnings, ...uploaded.warnings]
@@ -35934,7 +36714,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
               saved.id,
               previousUpload
             );
-            return text3(JSON.stringify(result2, null, 2));
+            return text4(JSON.stringify(result2, null, 2));
           } finally {
             release();
           }
@@ -35942,7 +36722,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         if (previousUpload !== void 0) return error2("previousUpload applies only to a kept recordingId");
         const { path: path2 } = api.resolveMeetingAudio(filePath);
         const result = await uploadAudio(options2, path2, target, title ?? basename4(path2, extname2(path2)));
-        return text3(JSON.stringify(result, null, 2));
+        return text4(JSON.stringify(result, null, 2));
       }
       case "ttobak_app_status":
       case "ttobak_app_start_recording":
@@ -35966,7 +36746,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         try {
           const reply = await sendAppRequest(request3, options2.appControl);
           if (!reply.ok) return error2(`${reply.error?.code}: ${reply.error?.message}`);
-          return text3(JSON.stringify(reply.data ?? {}, null, 2));
+          return text4(JSON.stringify(reply.data ?? {}, null, 2));
         } catch (e) {
           if (e instanceof AppControlError) return error2(`${e.code}: ${e.message}`);
           throw e;
@@ -35974,7 +36754,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
       }
       case "ttobak_logout": {
         await auth.logout?.();
-        return text3("Logged out. Saved credentials for this deployment and profile were removed.");
+        return text4("Logged out. Saved credentials for this deployment and profile were removed.");
       }
       default:
         return error2(`Unknown tool: ${name}`);
@@ -35985,7 +36765,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
     return error2(msg);
   }
 }
-function text3(content) {
+function text4(content) {
   return { content: [{ type: "text", text: content }] };
 }
 function error2(message) {
@@ -36006,16 +36786,16 @@ function meetingTarget(args) {
   }
   return { participants, accountId };
 }
-async function uploadAudio(options2, file2, target, title, date4, recordingId, previousUpload) {
+async function uploadAudio(options2, file3, target, title, date4, recordingId, previousUpload) {
   const { api } = options2;
   const rec = requireRecorder(options2);
-  const { path: path2, size, ext, type } = api.resolveMeetingAudio(file2);
+  const { path: path2, size, ext, type } = api.resolveMeetingAudio(file3);
   const saved = recordingId ? rec.getSaved(recordingId) : void 0;
   const save2 = (progress) => {
     if (recordingId) rec.saveProgress(recordingId, progress);
   };
   const message = (e) => e instanceof Error ? e.message : String(e);
-  const retry = recordingId ? `ttobak_upload_audio with recordingId ${recordingId}` : `ttobak_upload_audio with filePath ${file2}`;
+  const retry = recordingId ? `ttobak_upload_audio with recordingId ${recordingId}` : `ttobak_upload_audio with filePath ${file3}`;
   const warnings = [];
   let meetingId = saved?.meetingId;
   const created = !meetingId;
@@ -36076,7 +36856,7 @@ async function uploadAudio(options2, file2, target, title, date4, recordingId, p
     throw new Error(`${message(e)}. The audio is stored for meeting ${id}, but upload-complete did not confirm, so the meeting may or may not be bound to it. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.` : `Check ${api.meetingUrl(id)}: if it shows the audio or a transcription, nothing more is needed; otherwise delete that meeting and retry ${retry} (creates a new meeting; the file is never deleted).`));
   }
   if (recordingId && resumedComplete) {
-    warnings.push(`Completed an audio upload made by an earlier attempt; transcription may already have finished before the meeting was bound and then never produce notes. The local recording ${recordingId} is kept. Check ${api.meetingUrl(id)}: if notes appear, delete ${file2} and its .json sidecar; otherwise retry ${retry} with previousUpload "reupload".`);
+    warnings.push(`Completed an audio upload made by an earlier attempt; transcription may already have finished before the meeting was bound and then never produce notes. The local recording ${recordingId} is kept. Check ${api.meetingUrl(id)}: if notes appear, delete ${file3} and its .json sidecar; otherwise retry ${retry} with previousUpload "reupload".`);
   } else if (recordingId) {
     try {
       rec.discard(recordingId);
@@ -36119,7 +36899,7 @@ function createMcpServer(options2) {
     if (options2.mode === "http" && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
       const content = result.content[0];
       const receipt = !("isError" in result && result.isError) && mutationReceipt(request2.params.name, content?.type === "text" ? content.text : "");
-      return receipt ? text3(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
+      return receipt ? text4(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
     }
     return result;
   });
@@ -36147,8 +36927,14 @@ async function main() {
     }
     return;
   }
+  if (cliArguments[0] === "setup") {
+    const { runSetup: runSetup2 } = await Promise.resolve().then(() => (init_run3(), run_exports3));
+    const { defaultEnvironment: defaultEnvironment2 } = await Promise.resolve().then(() => (init_run(), run_exports));
+    process.exitCode = await runSetup2(cliArguments.slice(1), defaultEnvironment2());
+    return;
+  }
   if (cliArguments.includes("--help")) {
-    console.log("Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help. Downloaded adapter: stdio only; HTTP requires the installed server package.");
+    console.log("Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help | ttobak-mcp setup --help. Downloaded adapter: stdio only; HTTP requires the installed server package.");
     return;
   }
   if (cliArguments.length && (cliArguments.length !== 2 || cliArguments[0] !== "--transport")) {
