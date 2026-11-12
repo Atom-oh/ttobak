@@ -64,7 +64,10 @@ const labelText = 'block text-sm font-medium text-text-secondary';
 const primaryButton = 'rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 disabled:opacity-50';
 const quietButton = 'rounded-lg px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50';
 const SETTINGS_HREF = '/settings#crawler-sources';
-const EDIT_EFFECT = '수정하면 이전 설정으로 수집된 기사 일부가 목록에서 빠질 수 있어요.';
+// Readers list only articles published under the source's current
+// configuration, and the pipeline never republishes an article it already
+// published, so an edit hides this source's earlier articles for good.
+const EDIT_EFFECT = '이름·검색어·다른 이름을 바꾸면 이 소스로 지금까지 수집된 기사가 목록에서 사라지고 다시 나타나지 않아요. 바꾼 뒤 새로 수집되는 기사부터 다시 쌓여요.';
 
 const KIND_CHOICES: { kind: NewsSourceKind; label: string; help: string }[] = [
   { kind: 'account', label: '고객사 전용 뉴스', help: '선택한 고객사의 구성원만 이 뉴스를 봅니다.' },
