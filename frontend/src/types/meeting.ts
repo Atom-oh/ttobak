@@ -424,6 +424,8 @@ export interface CrawlerSource {
   lastCrawledAt: string;
   status: string;
   documentCount: number;
+  /** Account sources: when "collect now" is allowed again; absent when allowed now. */
+  nextCollectAllowedAt?: string;
 }
 
 export interface CrawlerSubscription {
