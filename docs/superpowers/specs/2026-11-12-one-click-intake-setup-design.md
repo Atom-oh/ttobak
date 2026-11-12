@@ -121,7 +121,8 @@ internal-mcp-setup-vX.Y.Z/
   committed as a static public file.
 - No new public route; downloads use the existing signed-URL pattern.
   Update API-SPEC, INFRA-SPEC (new S3 prefix, OAC allowlist if served via
-  `/media/*`) and add an ADR for package trust and merge.
+  `/media/*`) and record package trust and merge in ADR-003, the record that
+  owns local intake (decision records are topic records, ADR-001 to ADR-030).
 
 ## Web UI
 
@@ -229,8 +230,9 @@ as skipped or current.
 
 ## Inputs and decisions made by the author (owner may override)
 
-- The v1.5.0 zip is the owner's `~/Downloads/internal-mcp-setup-v1.5.0.zip`;
-  copy it into test fixtures (skills tree and script only). Capture real
+- The v1.5.0 zip is the owner's `~/Downloads/internal-mcp-setup-v1.5.0.zip`.
+  Its internal skill text is not committed: tests use synthetic packages with
+  the same layout and script grammar. Capture real
   outputs of `toolbox registry list`, `toolbox list --installed`,
   `claude mcp list` and the `~/.aim/config.json` shape on the owner's Mac
   as fixtures before writing the "already present?" checks.
