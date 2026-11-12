@@ -42,6 +42,20 @@ describe('StorageStack', () => {
     });
   });
 
+  test('unfinished skill package uploads under skillpkg/staging/ expire after one day', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([{
+          Id: 'ExpireSkillPackageStaging',
+          Status: 'Enabled',
+          ExpirationInDays: 1,
+          NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+          Prefix: 'skillpkg/staging/',
+        }]),
+      },
+    });
+  });
+
   test('vocabulary table files under vocab/ expire after one day, including noncurrent versions', () => {
     template.hasResourceProperties('AWS::S3::Bucket', {
       LifecycleConfiguration: {

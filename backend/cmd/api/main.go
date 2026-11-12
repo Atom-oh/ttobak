@@ -108,6 +108,8 @@ func init() {
 	performanceService := service.NewPerformanceService(repo, accountService)
 	performanceService.SetMissedSources(calendarService, meetingService)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
+	// Org and personal skill packages for the Mac app's one-click setup.
+	skillPackageHandler := handler.NewSkillPackageHandler(service.NewSkillPackageService(repo, service.NewS3SkillPackageStore(s3Client, bucketName)))
 	calendarRepo := repository.NewCalendarRepository(dynamoClient, tableName)
 	specReqTaskHandler := handler.NewSpecReqTaskHandler(service.NewSpecReqTaskService(
 		repository.NewSpecReqTaskRepository(dynamoClient, tableName),
@@ -373,6 +375,10 @@ func init() {
 		r.Get("/api/performance/reports/{periodKey}", performanceHandler.GetReport)
 		r.Put("/api/performance/reports/{periodKey}", performanceHandler.PutReport)
 		r.Delete("/api/performance/reports/{periodKey}", performanceHandler.DeleteReport)
+		r.Get("/api/skill-packages", skillPackageHandler.Get)
+		r.Post("/api/skill-packages/personal/upload", skillPackageHandler.StartPersonalUpload)
+		r.Post("/api/skill-packages/personal/complete", skillPackageHandler.CompletePersonalUpload)
+		r.Delete("/api/skill-packages/personal", skillPackageHandler.DeletePersonal)
 		r.Get("/api/specreq-tasks", specReqTaskHandler.List)
 		r.Get("/api/specreq-tasks/{eventId}", specReqTaskHandler.Get)
 		r.Post("/api/specreq-tasks", specReqTaskHandler.Create)
@@ -564,6 +570,12 @@ func init() {
 			r.Post("/api/settings/users/{userId}/resend-invite", userAdminHandler.ResendInvite)
 			r.Post("/api/settings/users/{userId}/reset-password", userAdminHandler.ResetPassword)
 			r.Put("/api/settings/users/{userId}/name", userAdminHandler.UpdateUserName)
+
+			// Organization skill package (default for every user).
+			r.Post("/api/skill-packages/org/upload", skillPackageHandler.StartOrgUpload)
+			r.Post("/api/skill-packages/org/complete", skillPackageHandler.CompleteOrgUpload)
+			r.Get("/api/skill-packages/org/versions", skillPackageHandler.ListOrgVersions)
+			r.Post("/api/skill-packages/org/rollback", skillPackageHandler.RollbackOrg)
 		})
 
 		// Dictionary routes
