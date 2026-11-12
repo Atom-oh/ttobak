@@ -48,7 +48,7 @@ export function QAChatMessage({ question, answer, sources, sourceDetails, usedKB
           {isProactive && (
             <span className="flex items-center gap-1 text-[10px] font-semibold text-sky-600 dark:text-sky-400 uppercase mb-0.5">
               <span className="material-symbols-outlined text-xs">travel_explore</span>
-              선제 검색 · 대화에서 감지된 질문
+              자동 답변 · 대화에서 나온 질문
             </span>
           )}
           <p className="text-sm text-slate-900 dark:text-gray-100">{question}</p>

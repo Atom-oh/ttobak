@@ -2,7 +2,7 @@
 
 - Status: Accepted. Merges earlier records; each section below keeps one record's
   rules, and dates inside mark owner decisions.
-- Implementation checked: 2026-11-11.
+- Implementation checked: 2026-11-12.
 
 A shared daily crawl feeds the insights knowledge base; results pass a relevance gate and can be curated; versioned news publication is a separate, conditional pipeline. The sections below keep, in order, the crawler insights record, the pipeline repair and service discovery record, the relevance gate and curation record, and the conditional news publication record.
 
@@ -313,6 +313,19 @@ After activation, rollback must retain these publication-aware API/QA readers an
 the tombstone-preserving writer. Disable and drain writer executions before a
 writer rollback; never restore a reader that exposes `DELETED` rows. Record the
 minimum deployed reader/writer revisions in the activation acceptance record.
+
+2026-11-12: the versioned worker writes `matchedTerm` on search DOC rows. Discovery
+records the human term of the first query that found a URL (the query builder's
+quote marks removed, one line, at most 200 code points, otherwise omitted);
+near-duplicate grouping keeps the lead's term. Custom-URL rows never carry it,
+and an absent or invalid value writes nothing rather than failing publication.
+The field is display metadata outside `candidateId`, `documentHash`, the source
+revision, claims and cost budgets; it is part of the deterministic published row,
+so a same-attempt retry keeps the same completion digest. Readers already project
+it and tolerate its absence, so the change is additive and needs no reader-first
+ordering. The legacy writer's copy in `news_crawler.py` is inert while
+`NewsLegacyWrites=off`. Deployed acceptance is recorded separately in the
+[release contract](../runbooks/knowledge-grade-news-release.md#search-term-display-field-2026-11-12).
 
 The source fingerprint is repeated in Go with fixed crawler-produced vectors
 covering Korean, supplementary Unicode, U+2028/U+2029, literal escape sequences,
