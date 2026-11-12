@@ -47,14 +47,18 @@ func briefTransaction(t *testing.T, target string, body map[string]any) (map[str
 func TestCustomerBriefQueueRequiresMembershipAndClearsExpiredBrief(t *testing.T) {
 	now := time.Now().UTC()
 	next := &model.CustomerBriefState{AccountID: "acct", UserID: "user", RunID: "run2", RequestedAt: now, UpdatedAt: now, LeaseUntil: now.Add(time.Minute).UnixMilli(), ExpiresAt: now.Add(time.Hour).Unix()}
+	kept := *next
+	kept.BriefExpiresAt = now.Add(time.Minute).Unix()
 	for name, tc := range map[string]struct {
 		prior   *model.CustomerBriefState
+		next    *model.CustomerBriefState
 		clear   bool
 		require []string
 	}{
-		"absent":  {nil, false, []string{"attribute_not_exists"}},
-		"pending": {&model.CustomerBriefState{AccountID: "acct", UserID: "user", RunID: "run1", Status: model.AnalysisQueued, LeaseUntil: 5}, false, []string{"run1", "pendingShareExpiresAt"}},
-		"expired": {&model.CustomerBriefState{AccountID: "acct", UserID: "user", RunID: "run1", Status: model.AnalysisSucceeded}, true, []string{"run1", "succeeded"}},
+		"absent":  {nil, next, false, []string{"attribute_not_exists"}},
+		"pending": {&model.CustomerBriefState{AccountID: "acct", UserID: "user", RunID: "run1", Status: model.AnalysisQueued, LeaseUntil: 5}, next, false, []string{"run1", "pendingShareExpiresAt"}},
+		"kept":    {&model.CustomerBriefState{AccountID: "acct", UserID: "user", RunID: "run1", Status: model.AnalysisSucceeded}, &kept, false, []string{"run1"}},
+		"expired": {&model.CustomerBriefState{AccountID: "acct", UserID: "user", RunID: "run1", Status: model.AnalysisSucceeded}, next, true, []string{"run1", "succeeded"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo := actionAnalysisWire(t, func(target string, body map[string]any) {
@@ -75,8 +79,17 @@ func TestCustomerBriefQueueRequiresMembershipAndClearsExpiredBrief(t *testing.T)
 				if tc.clear != strings.Contains(expression, "REMOVE") {
 					t.Fatalf("content removal mismatch: %s", expression)
 				}
+				names := update["ExpressionAttributeNames"].(map[string]any)
+				pinned := false
+				for _, name := range names {
+					pinned = pinned || name == "briefExpiresAt"
+				}
+				// Clearing removes briefExpiresAt; keeping pins it; otherwise untouched.
+				if pinned != (tc.clear || tc.next.BriefExpiresAt != 0) {
+					t.Fatalf("briefExpiresAt handling: %s %v", expression, names)
+				}
 			}, 200, `{}`)
-			if err := repo.QueueCustomerBrief(context.Background(), tc.prior, next, tc.clear); err != nil {
+			if err := repo.QueueCustomerBrief(context.Background(), tc.prior, tc.next, tc.clear); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -112,11 +125,12 @@ func TestCustomerBriefCompleteSealsAndPublishesAtomically(t *testing.T) {
 				found = true
 			}
 		}
-		ttl := false
+		ttl, briefExpiry := false, false
 		for _, name := range update["ExpressionAttributeNames"].(map[string]any) {
 			ttl = ttl || name == model.PendingShareTTLAttribute
+			briefExpiry = briefExpiry || name == "briefExpiresAt"
 		}
-		if !found || !ttl {
+		if !found || !ttl || !briefExpiry {
 			t.Fatal("sealed content or expiry not written")
 		}
 	}, 200, `{}`)

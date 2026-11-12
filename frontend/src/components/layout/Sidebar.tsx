@@ -7,6 +7,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { useTheme } from '@/hooks/useTheme';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 import { UserGuideButton } from '@/components/layout/UserGuideButton';
+import { ReleaseLink } from '@/components/layout/ReleaseLink';
 import { NAV_GROUPS, SETTINGS_ITEM, isNavActive } from '@/lib/navigation';
 
 function NavItem({ href, icon, label, isActive }: { href: string; icon: string; label: string; isActive: boolean }) {
@@ -126,8 +127,9 @@ export function Sidebar({ activePath }: { activePath: string }) {
           )}
         </div>
 
-        {/* Dark Mode Toggle + User Profile */}
+        {/* Release notes + Dark Mode Toggle + User Profile */}
         <div className="flex flex-col gap-3 pt-4 border-t border-slate-200 dark:border-white/10">
+          <ReleaseLink variant="sidebar" />
           {/* Dark Mode Toggle */}
           <button
             onClick={toggleDark}

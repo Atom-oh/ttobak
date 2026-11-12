@@ -14,6 +14,7 @@ import type { AccountFocusGraph, AccountPeoplePage, MeetingPeopleEdges, MentionG
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
 import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
+import type { CustomerBriefResponse } from '@/types/customerBrief';
 import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
 import type { NewsSourceItem, NewsSourcesPage } from '@/lib/newsRegistration';
@@ -1050,6 +1051,13 @@ export const accountApi = {
     api.get<AccountSignals>(`/api/accounts/${encodeURIComponent(id)}/signals`, { ...options, cache: 'no-store' }),
   flow: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<AccountFlow>(`/api/accounts/${encodeURIComponent(id)}/flow`, { ...options, cache: 'no-store' }),
+  // The caller's private pre-meeting brief (direct members only; 404 otherwise).
+  customerBrief: {
+    get: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.get<CustomerBriefResponse>(`/api/accounts/${encodeURIComponent(id)}/customer-brief`, { ...options, cache: 'no-store' }),
+    request: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+      api.post<CustomerBriefResponse>(`/api/accounts/${encodeURIComponent(id)}/customer-brief`, undefined, { ...options, cache: 'no-store' }),
+  },
   graph: (id: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     api.get<AccountGraph>(`/api/accounts/${encodeURIComponent(id)}/graph`, { ...options, cache: 'no-store' }),
   links: {
