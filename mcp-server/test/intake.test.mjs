@@ -929,8 +929,7 @@ test('planner: Private category, private meetings, matches, candidates, domain e
     for (const field of ['shareAccountId', 'shareEvidence', 'candidateAccountIds']) assert.equal(field in byId[id], false);
   }
   assert.deepEqual([byId.t.shareAccountId, byId.t.shareEvidence], ['acct-hana', ['title']]);
-  assert.equal(byId.t.seriesKey, sha(`${SOURCE_ID}|series-1`));
-  assert.equal('seriesKey' in byId.p, false);
+  assert.equal('seriesKey' in byId.t, false, 'seriesKey is not sent yet');
   assert.deepEqual(byId.l.shareEvidence, ['location']);
   assert.deepEqual(byId.c.candidateAccountIds, ['acct-hana', 'acct-kb']);
   assert.equal('shareAccountId' in byId.c, false);
@@ -1217,7 +1216,7 @@ test('CLI: own domains, meetings-connector attendee domains and no attendee data
   const events = upsertsOf(api.calls);
   assert.equal(events.filter(event => event.private === true && !('shareAccountId' in event)).length, 1);
   assert.ok(events.filter(event => !event.private).every(event => event.shareAccountId === 'acct-hana' &&
-    JSON.stringify(event.shareEvidence) === '["domain"]' && event.seriesKey === sha(`${stored.calendar.sourceId}|series-fixture`)));
+    JSON.stringify(event.shareEvidence) === '["domain"]' && !('seriesKey' in event)));
   assert.equal(await runIntake(['status'], environment), 0);
   assert.equal(JSON.parse(lines.at(-1)).status.calendar.counts.shared, 5);
 

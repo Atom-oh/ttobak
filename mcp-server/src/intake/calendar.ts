@@ -376,7 +376,8 @@ function applyShare(event: CalendarEvent, fields: ShareFields | undefined): void
 }
 
 function decideSharing(event: CalendarEvent, item: OutlookItem, previous: LedgerEntry | undefined, sharing: PlanSharing): void {
-  if (item.seriesId) event.seriesKey = createHash('sha256').update(`${sharing.sourceId}|${item.seriesId}`).digest('hex');
+  // seriesKey is not sent yet: the server keys overrides by it, and a series hide does
+  // not reach already-synced occurrences, so overrides stay per occurrence for now.
   const facts = sharing.facts.get(item.meetingId);
   // Fail closed: a private meeting, or one that was private when its lookup failed or was not
   // attempted (for example with the meetings connector deselected), is never shared.
@@ -646,7 +647,8 @@ export interface CalendarRunOptions {
 
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_DIRECTORY_ACCOUNTS = 1000;
-// At most 200 accounts per server page; stop at ten pages (2,000 accounts).
+// The server sends at most 200 accounts per page; stop after ten pages. A page over
+// 1,000 entries is malformed.
 const MAX_DIRECTORY_PAGES = 10;
 
 /** Validates the share directory; malformed entries are dropped, a malformed whole is null. */

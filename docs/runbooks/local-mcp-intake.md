@@ -246,7 +246,8 @@ message on save; update the adapter first.
   lowercase email domain (`organizerDomain`) go to TTOBAK. Locations have join
   URLs and passcodes removed. The organizer's name and email local part,
   attendees, body, categories and response are dropped.
-  Recurring items also send `seriesKey`, the hex SHA-256 of `sourceId|seriesId`.
+  `seriesKey` is not sent yet, so sharing overrides apply per occurrence; a
+  series-wide hide needs a server fan-out to already-synced occurrences first.
 - **Exclusions.** Items flagged `Private` or `Confidential` are excluded, and
   removed if they were tracked. Events longer than 93 days are skipped. Real
   runs fail with `SENSITIVITY_UNKNOWN` when any item lacks a sensitivity flag,
@@ -280,6 +281,10 @@ message on save; update the adapter first.
 
 ## Deploy order and rollback
 
+- Deploy the API with the account-sharing contract (`shareAccountId`,
+  `candidateAccountIds`, `private`, the share directory route) before publishing
+  a runner that sends share fields. An older API rejects those fields with 400,
+  so a misordered window fails the calendar run instead of granting shares.
 - Deploy the API before any runner that sends `organizerDomain`. The calendar
   request decoder is strict, so an API that predates `organizerDomain` rejects
   such batches with 400 and every calendar run fails until the API is updated.
