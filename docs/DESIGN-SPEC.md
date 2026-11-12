@@ -177,6 +177,11 @@ live list of steps (PATH, adapter, packages, skills, MCP servers, connection
 setup) each with ok, current, skipped, failed or needs-approval and a Korean
 reason, an amber confirmation listing never-approved MCP servers with
 Install and Cancel (`setupInstall`, `setupCancel`), and any warnings.
+`SkillPackageSettings` (browser and app) shows the org and personal skill package
+versions, the effective skill list with an org or personal badge, personal zip
+upload and delete, and for admins org zip upload and the version list with
+rollback (the admin gate is cosmetic; the API enforces it). Validation failures
+show fixed Korean copy per rule plus the rule's detail only.
 In Mic mode, `MicSelector` remembers the chosen device; when that device no
 longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
 rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
