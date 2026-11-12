@@ -386,6 +386,31 @@ fn parse_login_path(out: &[u8]) -> Option<String> {
     Some(s.to_string())
 }
 
+/// Directories the app appends to the login PATH when they exist and are
+/// missing: `aim` lives in `~/.toolbox/bin` (often added only by `~/.zshrc`,
+/// which a login shell does not read) and the AIM server wrappers in
+/// `~/.aim/mcp-servers` exec it.
+const PATH_REPAIR_DIRS: [&str; 3] = [".toolbox/bin", ".aim/mcp-servers", ".local/bin"];
+
+/// `path` with each existing, absent `PATH_REPAIR_DIRS` entry appended in
+/// order. Entries that would not be absolute are never added.
+pub(crate) fn repair_path(path: &str, home: &Path, is_dir: impl Fn(&Path) -> bool) -> String {
+    let mut out = path.to_string();
+    if !home.is_absolute() {
+        return out;
+    }
+    for rel in PATH_REPAIR_DIRS {
+        let dir = home.join(rel);
+        let Some(entry) = dir.to_str() else { continue };
+        if entry.contains(':') || out.split(':').any(|e| e == entry) || !is_dir(&dir) {
+            continue;
+        }
+        out.push(':');
+        out.push_str(entry);
+    }
+    out
+}
+
 /// `$SHELL` when it is an absolute path to an existing file, else zsh.
 fn login_shell(shell: Option<&std::ffi::OsStr>) -> PathBuf {
     shell
@@ -806,12 +831,15 @@ impl Outcome {
 }
 
 /// The stored login PATH, captured once on first need.
+/// The stored login PATH (captured once when absent), repaired on every use
+/// so a value cached before the toolbox or AIM install still finds them.
 async fn login_path(state: &IntakeState, home: &Path) -> String {
     if let Some(p) = state.snapshot().login_path {
-        return p;
+        return repair_path(&p, home, Path::is_dir);
     }
     match capture_login_path(home).await {
         Some(p) => {
+            let p = repair_path(&p, home, Path::is_dir);
             if let Err(e) = state.update_settings(|s| s.login_path = Some(p.clone())) {
                 log::warn!("login PATH not stored: {e}");
             }
@@ -819,9 +847,44 @@ async fn login_path(state: &IntakeState, home: &Path) -> String {
         }
         None => {
             log::warn!("login shell PATH unavailable; using the fallback PATH");
-            FALLBACK_PATH.to_string()
+            repair_path(FALLBACK_PATH, home, Path::is_dir)
         }
     }
+}
+
+/// Result of a forced PATH recapture: the directories the repair appended and
+/// whether the login shell answered (otherwise the fallback PATH was used).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathRefresh {
+    pub added: Vec<String>,
+    pub captured: bool,
+}
+
+/// Recaptures the login PATH (ignoring the stored value), repairs and stores it.
+pub(crate) async fn refresh_login_path(
+    state: &IntakeState,
+    home: &Path,
+) -> Result<PathRefresh, &'static str> {
+    let captured = capture_login_path(home).await;
+    let base = captured
+        .clone()
+        .unwrap_or_else(|| FALLBACK_PATH.to_string());
+    let repaired = repair_path(&base, home, Path::is_dir);
+    let added = repaired
+        .split(':')
+        .skip(base.split(':').count())
+        .map(str::to_string)
+        .collect();
+    if captured.is_some() {
+        state
+            .update_settings(|s| s.login_path = Some(repaired.clone()))
+            .map_err(|_| "save-failed")?;
+    }
+    Ok(PathRefresh {
+        added,
+        captured: captured.is_some(),
+    })
 }
 
 /// `$SHELL -l -c 'printf %s "$PATH"'`: the only shell use. Fixed script, no
@@ -1534,6 +1597,16 @@ impl Drop for AdapterGuard<'_> {
     }
 }
 
+/// Recaptures and repairs the login PATH that intake and report runs use.
+#[tauri::command]
+pub async fn intake_refresh_path(state: State<'_, IntakeState>) -> Result<PathRefresh, String> {
+    state.available()?;
+    let home = home_dir().ok_or("unavailable")?;
+    refresh_login_path(&state, &home)
+        .await
+        .map_err(str::to_string)
+}
+
 /// Downloads and installs the served adapter, keeping one `server.mjs.bak`.
 #[tauri::command]
 pub async fn intake_update_adapter(state: State<'_, IntakeState>) -> Result<AdapterView, String> {
@@ -1861,6 +1934,41 @@ mod tests {
         assert_eq!(parse_login_path(b"/usr/bin\n/bin"), None);
         assert_eq!(parse_login_path(&[b'/'; 9000]), None);
         assert_eq!(parse_login_path(b"/usr/\xffbin"), None);
+    }
+
+    #[test]
+    fn repair_path_appends_missing_existing_dirs() {
+        let home = Path::new("/Users/u");
+        let exists = |p: &Path| p.ends_with(".toolbox/bin") || p.ends_with(".local/bin");
+        assert_eq!(
+            repair_path("/usr/bin:/bin", home, exists),
+            "/usr/bin:/bin:/Users/u/.toolbox/bin:/Users/u/.local/bin"
+        );
+    }
+
+    #[test]
+    fn repair_path_keeps_present_dirs_once() {
+        let home = Path::new("/Users/u");
+        let path = "/Users/u/.toolbox/bin:/usr/bin:/Users/u/.aim/mcp-servers";
+        assert_eq!(
+            repair_path(path, home, |_| true),
+            format!("{path}:/Users/u/.local/bin")
+        );
+        assert_eq!(repair_path(path, home, |_| false), path);
+    }
+
+    #[test]
+    fn repair_path_result_still_parses() {
+        let repaired = repair_path("/usr/bin", Path::new("/Users/u"), |_| true);
+        assert_eq!(
+            parse_login_path(repaired.as_bytes()).as_deref(),
+            Some(repaired.as_str())
+        );
+        // A HOME that would make an invalid entry adds nothing.
+        assert_eq!(
+            repair_path("/usr/bin", Path::new("rel"), |_| true),
+            "/usr/bin"
+        );
     }
 
     #[test]
