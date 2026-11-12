@@ -26,28 +26,53 @@ export const BRIEF_COPY = {
   termAdded: '고객 사전에 추가했어요',
   termFull: '고객 사전이 가득 찼어요. 사전 설정에서 정리해 주세요.',
   termDenied: '이 고객 사전에 추가할 권한이 없어요.',
+  termInvalid: '이 용어는 사전에 넣을 수 없는 형식이에요.',
   termFailed: '추가하지 못했어요. 다시 시도해 주세요.',
 } as const;
 
 /** Outcome of adding a brief term to the customer's dictionary layer. */
-export type AddTermOutcome = 'added' | 'full' | 'denied' | 'failed';
+export type AddTermOutcome = 'added' | 'full' | 'denied' | 'invalid' | 'failed';
 
-/**
- * Maps a failed create to what the row shows. A term that already exists is
- * the result the user wanted, so it counts as added.
- */
-export function addTermOutcome(failure: unknown): AddTermOutcome {
+/** What to do after a failed create: `exists` means look the term up before deciding. */
+export function addTermFailure(failure: unknown): AddTermOutcome | 'exists' {
   const { status, code } = (failure ?? {}) as { status?: unknown; code?: unknown };
-  if (code === 'TERM_EXISTS') return 'added';
+  if (code === 'TERM_EXISTS') return 'exists';
   if (code === 'DICTIONARY_FULL') return 'full';
   if (status === 403 || status === 404) return 'denied';
+  // The server rejected the term itself; the same request cannot succeed.
+  if (status === 400) return 'invalid';
   return 'failed';
 }
 
-/** The create request for a brief term, or null when the term has no letters or digits. */
+/**
+ * How an existing row resolves a TERM_EXISTS. An active row is what the user
+ * wanted. A suggested row is not used for recognition, so it must be
+ * activated with its version. No matching row (deleted meanwhile, or a list
+ * that could not show it) is a failure the user can retry.
+ */
+export function existingTermAction(
+  items: readonly { termId?: unknown; displayAs?: unknown; state?: unknown; version?: unknown }[] | null | undefined,
+  termKey: string,
+  keyOf: (displayAs: string) => string,
+): { action: 'added' } | { action: 'activate'; termId: string; version: number } | { action: 'failed' } {
+  const row = (items ?? []).find(item => typeof item.displayAs === 'string' && keyOf(item.displayAs) === termKey);
+  if (!row) return { action: 'failed' };
+  if (row.state === 'active') return { action: 'added' };
+  if (row.state === 'suggested' && typeof row.termId === 'string' && typeof row.version === 'number') {
+    return { action: 'activate', termId: row.termId, version: row.version };
+  }
+  return { action: 'failed' };
+}
+
+/**
+ * The create request for a brief term, or null when the server would reject
+ * it anyway: no letters or digits, or outside its 2-40 code points.
+ */
 export function addTermInput(term: unknown): { displayAs: string } | null {
   if (typeof term !== 'string') return null;
-  const displayAs = term.trim();
+  const displayAs = term.normalize('NFKC').trim();
+  const length = Array.from(displayAs).length;
+  if (length < 2 || length > 40) return null;
   return /[\p{L}\p{N}]/u.test(displayAs) ? { displayAs } : null;
 }
 

@@ -426,8 +426,11 @@ next meeting, one-line situation, since the last meeting, recent news with a
 "why it matters" line, questions to ask, unfamiliar terms with an in/not in
 dictionary text badge. A term not in the dictionary has an add action that
 creates it as a manual term in this customer's Account layer through the
-existing layer term endpoint; an already existing term counts as added, and a
-full dictionary or a refused write is stated in one line. The footer shows the generation time (relative within a
+existing layer term endpoint, bound to the signed-in user. If the term already
+exists, an active row counts as added and a suggested row is activated with its
+version; a full dictionary, a refused write or a term the server cannot accept
+is stated in one line. The action is keyed by the term, so a regenerated brief
+does not inherit another term's state. The footer shows the generation time (relative within a
 day; invalid times show nothing) and a regenerate button. Every statement lists
 source chips with a kind word and a CSS-truncated label (full text in `title`);
 meeting chips link to the meeting and news chips to `/insights/{sourceId}/{docHash}`

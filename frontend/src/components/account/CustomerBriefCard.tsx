@@ -3,9 +3,10 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { accountApi, dictionaryApi } from '@/lib/api';
+import { normalizeTermKey } from '@/lib/dictionary';
 import {
   BRIEF_COPY, GENERIC_FAILURE, POLL_INTERVAL_MS, SECTION_TITLES,
-  addTermInput, addTermOutcome, applyResponse, formatGeneratedAt, formatLocalDateTime, hidesCard, pollDecision, postErrorAction,
+  addTermFailure, addTermInput, applyResponse, existingTermAction, formatGeneratedAt, formatLocalDateTime, hidesCard, pollDecision, postErrorAction,
   sourceHref, sourceKindLabel,
   type AddTermOutcome, type Brief, type BriefSource, type BriefState, type BriefStatement,
 } from '@/lib/customerBrief';
@@ -188,7 +189,7 @@ export function CustomerBriefCard({ accountId, userId }: { accountId: string; us
       <button type="button" className={primaryButton} onClick={() => void requestBrief()} disabled={disabled}>{BRIEF_COPY.create}</button>
     </div>}
 
-    {brief && <BriefBody brief={brief} accountId={accountId} />}
+    {brief && <BriefBody brief={brief} accountId={accountId} userId={userId} />}
 
     {brief && <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
       <span className="text-xs text-text-secondary">{generated ? `${generated} 생성` : ''}</span>
@@ -197,25 +198,47 @@ export function CustomerBriefCard({ accountId, userId }: { accountId: string; us
   </section>;
 }
 
-/** Adds one unfamiliar term to this customer's dictionary layer. */
-function AddTermButton({ accountId, term }: { accountId: string; term: string }) {
+/**
+ * Adds one unfamiliar term to this customer's dictionary layer. Rendered with
+ * the term as its key, so a regenerated brief never inherits another term's
+ * state. Every request is bound to the signed-in user.
+ */
+function AddTermButton({ accountId, userId, term }: { accountId: string; userId: string; term: string }) {
   const [phase, setPhase] = useState<'idle' | 'saving' | AddTermOutcome>('idle');
   const input = addTermInput(term);
   if (!input) return null;
   const add = async () => {
     if (phase === 'saving' || phase === 'added') return;
     setPhase('saving');
+    const layer = `account:${accountId}` as const;
+    const bound = { expectedUserId: userId };
     try {
-      await dictionaryApi.createLayerTerm(`account:${accountId}`, input);
+      await dictionaryApi.createLayerTerm(layer, input, bound);
       setPhase('added');
     } catch (failure) {
-      setPhase(addTermOutcome(failure));
+      const next = addTermFailure(failure);
+      if (next !== 'exists') { setPhase(next); return; }
+      // The row exists: an active one is done, a suggested one must be switched on.
+      try {
+        const page = await dictionaryApi.listLayer(layer, bound);
+        const existing = existingTermAction(page.items, normalizeTermKey(input.displayAs), normalizeTermKey);
+        if (existing.action === 'activate') {
+          await dictionaryApi.updateLayerTerm(layer, existing.termId, { state: 'active' }, existing.version, bound);
+          setPhase('added');
+        } else {
+          setPhase(existing.action);
+        }
+      } catch (lookupFailure) {
+        const fallback = addTermFailure(lookupFailure);
+        setPhase(fallback === 'exists' ? 'failed' : fallback);
+      }
     }
   };
   if (phase === 'added') return <span role="status" className="text-xs text-text-secondary">{BRIEF_COPY.termAdded}</span>;
-  const note = phase === 'full' ? BRIEF_COPY.termFull : phase === 'denied' ? BRIEF_COPY.termDenied : phase === 'failed' ? BRIEF_COPY.termFailed : '';
+  const note = phase === 'full' ? BRIEF_COPY.termFull : phase === 'denied' ? BRIEF_COPY.termDenied
+    : phase === 'invalid' ? BRIEF_COPY.termInvalid : phase === 'failed' ? BRIEF_COPY.termFailed : '';
   return <>
-    <button type="button" disabled={phase === 'saving' || phase === 'full' || phase === 'denied'} onClick={() => void add()}
+    <button type="button" disabled={phase === 'saving' || phase === 'full' || phase === 'denied' || phase === 'invalid'} onClick={() => void add()}
       aria-label={`${term} ${BRIEF_COPY.addTerm}`}
       className="rounded-sm text-xs font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50">
       {phase === 'saving' ? BRIEF_COPY.addingTerm : BRIEF_COPY.addTerm}</button>
@@ -223,7 +246,7 @@ function AddTermButton({ accountId, term }: { accountId: string; term: string })
   </>;
 }
 
-function BriefBody({ brief, accountId }: { brief: Brief; accountId: string }) {
+function BriefBody({ brief, accountId, userId }: { brief: Brief; accountId: string; userId: string }) {
   const { nextMeeting, situation, sinceLast, news, questions, terms } = brief.content;
   const startsAt = nextMeeting ? formatLocalDateTime(nextMeeting.startsAt) : null;
   return <div className="space-y-4 text-sm text-text-main">
@@ -249,13 +272,13 @@ function BriefBody({ brief, accountId }: { brief: Brief; accountId: string }) {
     {questions.length > 0 && <BriefSection title={SECTION_TITLES.questions}><StatementList items={questions} /></BriefSection>}
     {terms.length > 0 && <BriefSection title={SECTION_TITLES.terms}>
       <ul className="space-y-3">
-        {terms.map((item, index) => <li key={index} className="min-w-0">
+        {terms.map((item, index) => <li key={`${index}:${item.term}`} className="min-w-0">
           <p className="flex flex-wrap items-center gap-2">
             <span className="font-semibold">{item.term}</span>
             <span className="rounded-full border border-border-subtle px-2 py-0.5 text-xs text-text-secondary">
               {item.inDictionary ? BRIEF_COPY.inDictionary : BRIEF_COPY.notInDictionary}
             </span>
-            {!item.inDictionary && <AddTermButton accountId={accountId} term={item.term} />}
+            {!item.inDictionary && <AddTermButton key={item.term} accountId={accountId} userId={userId} term={item.term} />}
           </p>
           {item.gloss && <p className="mt-0.5 break-words text-text-secondary">{item.gloss}</p>}
           <SourceChips sources={item.sources} />
