@@ -320,6 +320,8 @@ class TaskRun {
     const tracked: Record<string, string> = {};
     const state = loadState(store, sourceId, scope);
     this.held = new Set(Object.keys(state.held ?? {}).map(externalId => calendarEventId(sourceId, externalId)));
+    // A held occurrence stays tracked, so a later decline still closes its task by direct lookup.
+    for (const [externalId, entry] of Object.entries(state.held ?? {})) tracked[calendarEventId(sourceId, externalId)] = entry.endsAt;
     for (const [externalId, entry] of Object.entries(state.ledger)) {
       const eventId = calendarEventId(sourceId, externalId);
       tracked[eventId] = entry.endsAt;
