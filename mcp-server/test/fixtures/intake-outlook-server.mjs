@@ -29,9 +29,10 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   const [month, day, year] = String(request.params.arguments.start_date).split('-');
   const date = `${year}-${month}-${day}`;
   const items = [{
-    meetingId: `occ-${date}`, meetingChangeKey: 'k1', subject: `Synthetic ${date}`,
+    meetingId: `occ-${date}`, meetingChangeKey: 'k1', subject: process.env.FAKE_OUTLOOK_SUBJECT || `Synthetic ${date}`,
     start: `${date}T10:00:00+09:00`, end: `${date}T11:00:00+09:00`,
-    location: 'Room 1; https://example.invalid/j/1?pwd=abc', status: 'Busy', categories: [],
+    location: 'Room 1; https://example.invalid/j/1?pwd=abc', status: 'Busy',
+    categories: process.env.FAKE_OUTLOOK_CATEGORY ? [process.env.FAKE_OUTLOOK_CATEGORY] : [], seriesId: 'series-fixture',
     organizer: { name: 'Fixture', email: 'fixture@example.invalid' },
     isCanceled: false, isRecurring: false, isAllDay: false, response: 'Accept',
   }];
