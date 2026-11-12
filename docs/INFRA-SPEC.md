@@ -229,6 +229,14 @@ version expiry; a delete marker is not immediate physical deletion of all versio
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
 one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
+Skill package zips live under skillpkg/ (`skillpkg/org/{sha256}.zip`,
+`skillpkg/user/{userId}/{sha256}.zip`); uploads in progress under
+`skillpkg/staging/` expire after one day, current and noncurrent.
+`skillpkg/org/` and `skillpkg/user/` are in the OAC read allowlist and are
+downloaded through the shared signed `/media/*` URLs (S3 presign fallback);
+the staging prefix is not served. Org package objects are not deleted when old
+history rows are pruned (no lifecycle rule; a cleanup pass is a follow-up). The API role's existing bucket read/write
+grant covers the prefix.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.
@@ -718,7 +726,9 @@ ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
 `backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
 regulator sources as such); `all` reads every
-searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
+searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Both modes
+exclude account-owned sources (CONFIG `accountId`, or a row-less `acct_` ID;
+ADR-008, 2026-11-12). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global
