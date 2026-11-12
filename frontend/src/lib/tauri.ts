@@ -779,6 +779,11 @@ export function onSetupStep(handler: (step: SetupStep) => void): () => void {
   return subscribeTauriEvent<SetupStep, SetupStep>('setup://step', (raw) => raw, handler);
 }
 
+/** The setup run took the intake run slot. */
+export function onSetupRunning(handler: () => void): () => void {
+  return subscribeTauriEvent<unknown, null>('setup://running', () => null, () => handler());
+}
+
 export function onSetupFinished(handler: (finished: SetupFinished) => void): () => void {
   return subscribeTauriEvent<SetupFinished, SetupFinished>('setup://finished', (raw) => raw, handler);
 }

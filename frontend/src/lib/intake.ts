@@ -283,7 +283,7 @@ const SETUP_STATUS_LABELS: Record<SetupStepStatus, string> = {
 
 const SETUP_CODE_TEXT: Record<string, string> = {
   TOOLBOX_MISSING: 'toolbox나 aim이 없어 MCP 서버 설치는 건너뛰었어요.',
-  ADAPTER_OUTDATED: '수집 도구가 예전 버전이라 패키지를 설치하지 못했어요. 다시 [한 번에 설정]을 누르세요.',
+  ADAPTER_OUTDATED: '받은 수집 도구에 패키지 설치 기능이 아직 없어요. 수집 도구 업데이트가 배포된 뒤 다시 누르세요.',
   SKILL_PATH_UNSAFE: '~/.claude/skills 안에 링크가 있어 스킬을 설치하지 않았어요.',
   SKILL_WRITE_FAILED: '스킬 파일을 쓰지 못했어요. ~/.claude/skills 권한을 확인하세요.',
   PACKAGE_INVALID: '받은 패키지가 검증을 통과하지 못했어요.',
@@ -292,6 +292,7 @@ const SETUP_CODE_TEXT: Record<string, string> = {
   INSTALL_FAILED: '일부 MCP 서버를 설치하지 못했어요.',
   LOGIN_SHELL_UNAVAILABLE: '로그인 셸의 PATH를 읽지 못해 기본 PATH를 썼어요.',
   AWAITING_APPROVAL: '새 MCP 서버 설치를 확인한 뒤 진행해요.',
+  CANCELLED: '취소했어요.',
 };
 
 export function setupStepLabel(id: string): string {

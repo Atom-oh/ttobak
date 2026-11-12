@@ -245,5 +245,6 @@ test('one-click setup steps and statuses have fixed copy', () => {
   assert.ok(intake.setupCodeText('AUTH_EXPIRED_MIDWAY').includes('mwinit -o'));
   assert.ok(/[가-힣]/.test(intake.setupCodeText('ADAPTER_OUTDATED')));
   assert.ok(/[가-힣]/.test(intake.setupCodeText('SKILL_PATH_UNSAFE')));
+  assert.equal(intake.setupCodeText('CANCELLED'), '취소했어요.');
   assert.equal(intake.setupStepLabel('other'), 'other');
 });

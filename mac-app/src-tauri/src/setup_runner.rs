@@ -20,6 +20,8 @@ use crate::intake_runner::{self as intake, IntakeState, Outcome, PathRefresh, Pr
 const SETUP_MARKER: &[u8] = b"ttobak-mcp setup apply";
 const STEP_EVENT: &str = "setup://step";
 const FINISHED_EVENT: &str = "setup://finished";
+/// The run now holds the intake run slot (the UI shows cancel and progress).
+const RUNNING_EVENT: &str = "setup://running";
 const CLI_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 // The adapter's limit: four server lists of at most 100 entries each.
 const MAX_APPROVALS: usize = 400;
@@ -222,6 +224,12 @@ pub(crate) fn skipped_after(ids: &[&str]) -> Vec<StepView> {
         .collect()
 }
 
+/// `intake setup` runs unless new servers wait for approval or the user
+/// cancelled the package step.
+pub(crate) fn should_run_intake(cli: &CliSteps, cli_code: Option<&str>) -> bool {
+    cli.run_intake() && cli_code != Some("CANCELLED")
+}
+
 fn intake_step(outcome: &Outcome) -> StepView {
     if outcome.exit_code == Some(0) && outcome.code.is_none() {
         StepView::new("intake", StepStatus::Ok, None)
@@ -322,8 +330,10 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
             return json!({ "steps": run.steps, "needsApproval": [], "warnings": [] });
         }
     };
+    let _ = app.emit(RUNNING_EVENT, json!({}));
+    let mut cli_code: Option<String> = None;
     if intake::local_adapter(&home).is_some_and(|b| supports_setup(&b)) {
-        cli = run_cli(app, &state, approve, cancel).await;
+        (cli, cli_code) = run_cli(app, &state, approve, cancel).await;
     } else {
         cli.steps = vec![StepView::new(
             "packages",
@@ -335,12 +345,14 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
     for step in cli.steps.clone() {
         run.push(step);
     }
-    if cli.run_intake() {
+    if should_run_intake(&cli, cli_code.as_deref()) {
         let action = IntakeAction::Setup {
             accept_private_calendar,
             skip: BTreeSet::new(),
         };
-        let outcome = intake::execute(app, &action, intake::RUN_TIMEOUT, None, true).await;
+        // `intake_cancel` now reaches this phase.
+        let cancel = state.rearm_cancel();
+        let outcome = intake::execute(app, &action, intake::RUN_TIMEOUT, Some(cancel), true).await;
         let payload = json!({
             "action": RunKind::Setup,
             "exitCode": outcome.exit_code,
@@ -351,13 +363,14 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
         run.push(intake_step(&outcome));
         let _ = app.emit(intake::FINISHED_EVENT, payload);
     } else {
-        run.push(StepView::new(
-            "intake",
-            StepStatus::Skipped,
-            Some("AWAITING_APPROVAL"),
-        ));
+        let reason = if cli_code.as_deref() == Some("CANCELLED") {
+            "CANCELLED"
+        } else {
+            "AWAITING_APPROVAL"
+        };
+        run.push(StepView::new("intake", StepStatus::Skipped, Some(reason)));
     }
-    state.end();
+    state.finish_run();
     json!({ "steps": run.steps, "needsApproval": cli.needs_approval, "warnings": cli.warnings })
 }
 
@@ -366,10 +379,10 @@ async fn run_cli(
     state: &IntakeState,
     approve: Vec<String>,
     cancel: tokio::sync::oneshot::Receiver<()>,
-) -> CliSteps {
+) -> (CliSteps, Option<String>) {
     let launch = match intake::node_launch(state).await {
         Ok(l) => l,
-        Err(code) => return cli_steps(None, Some(code)),
+        Err(code) => return (cli_steps(None, Some(code)), Some(code.to_string())),
     };
     let mut args: Vec<OsString> = vec![
         launch.server.clone().into(),
@@ -400,7 +413,10 @@ async fn run_cli(
         on_line,
     )
     .await;
-    cli_steps(outcome.result.as_ref(), outcome.code.as_deref())
+    (
+        cli_steps(outcome.result.as_ref(), outcome.code.as_deref()),
+        outcome.code,
+    )
 }
 
 /// Starts one setup run; each step emits `setup://step`, the end `setup://finished`.
@@ -576,6 +592,39 @@ mod tests {
                 .as_deref(),
             Some("RUN_IN_PROGRESS")
         );
+    }
+
+    #[test]
+    fn cancelled_cli_skips_intake() {
+        let parsed = cli_steps(None, Some("CANCELLED"));
+        assert!(!should_run_intake(&parsed, Some("CANCELLED")));
+        assert!(should_run_intake(&parsed, Some("TIMEOUT")));
+    }
+
+    #[test]
+    fn cancel_reaches_every_phase() {
+        let state = crate::intake_runner::IntakeState::new(None);
+        let mut first = state
+            .try_begin(crate::intake_runner::RunKind::OneClickSetup)
+            .expect("begin");
+        let mut second = state.rearm_cancel();
+        assert!(state.send_cancel());
+        assert!(second.try_recv().is_ok());
+        // The first phase's receiver no longer belongs to the run.
+        assert!(first.try_recv().is_err());
+    }
+
+    #[test]
+    fn finishing_a_setup_run_reevaluates_a_due_slot() {
+        let state = crate::intake_runner::IntakeState::new(None);
+        let _rx = state
+            .try_begin(crate::intake_runner::RunKind::OneClickSetup)
+            .expect("begin");
+        state.mark_retry_after_run();
+        state.finish_run();
+        assert!(!state.retry_pending());
+        assert!(state.reevaluate_pending());
+        assert!(state.try_begin(crate::intake_runner::RunKind::Run).is_ok());
     }
 
     #[test]

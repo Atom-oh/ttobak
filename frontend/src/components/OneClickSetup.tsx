@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   errorCode, setupCodeText, setupStatusLabel, setupStepLabel, type SetupFinished, type SetupStep,
 } from '@/lib/intake';
-import { getSetupState, onSetupFinished, onSetupStep, startSetup } from '@/lib/tauri';
+import { getSetupState, onSetupFinished, onSetupRunning, onSetupStep, startSetup } from '@/lib/tauri';
 
 const buttonClass = 'rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-white/10 dark:text-text-main dark:hover:bg-white/5';
 const primaryClass = 'rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50';
@@ -18,7 +18,7 @@ const statusClass: Record<SetupStep['status'], string> = {
   'needs-approval': 'text-amber-700 dark:text-amber-300',
 };
 
-/** [한 번에 설정] of the intake section: PATH, adapter, skill packages, MCP
+/** [한 번에 설정] of the intake section (onDone refreshes the intake state): PATH, adapter, skill packages, MCP
  * servers and `intake setup`, with a live result per step. Hidden in an app
  * build without the setup commands. */
 export function OneClickSetup({ disabled, onDone }: { disabled: boolean; onDone: () => void }) {
@@ -39,14 +39,19 @@ export function OneClickSetup({ disabled, onDone }: { disabled: boolean; onDone:
         if (state.last) { setFinished(state.last); setSteps(state.last.steps); }
       })
       .catch(() => {});
-    const offStep = onSetupStep(step => setSteps(current => [...current.filter(item => item.id !== step.id), step]));
+    const offStep = onSetupStep(step => {
+      setSteps(current => [...current.filter(item => item.id !== step.id), step]);
+      // The intake section shows the run (cancel, progress log) once it holds the run slot.
+      onDone();
+    });
     const offFinished = onSetupFinished(result => {
       setRunning(false);
       setFinished(result);
       setSteps(result.steps);
       onDone();
     });
-    return () => { active = false; offStep(); offFinished(); };
+    const offRunning = onSetupRunning(onDone);
+    return () => { active = false; offStep(); offFinished(); offRunning(); };
   }, [onDone]);
 
   if (!supported) return null;

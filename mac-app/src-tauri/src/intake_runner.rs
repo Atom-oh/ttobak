@@ -733,6 +733,46 @@ impl IntakeState {
         *self.running.lock() = None;
     }
 
+    /// A fresh cancel channel for the next phase of a multi-phase run;
+    /// `intake_cancel` then reaches that phase.
+    pub(crate) fn rearm_cancel(&self) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        *self.cancel.lock() = Some(tx);
+        rx
+    }
+
+    /// Cancels the current run (phase); false when nothing listens.
+    pub(crate) fn send_cancel(&self) -> bool {
+        self.cancel
+            .lock()
+            .take()
+            .is_some_and(|tx| tx.send(()).is_ok())
+    }
+
+    /// Ends a run and re-evaluates a slot that came due meanwhile, as
+    /// `start_job` does.
+    pub(crate) fn finish_run(&self) {
+        self.end();
+        if self.retry_after_run.swap(false, Ordering::SeqCst) {
+            self.poke(true);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_retry_after_run(&self) {
+        self.retry_after_run.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retry_pending(&self) -> bool {
+        self.retry_after_run.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reevaluate_pending(&self) -> bool {
+        self.reevaluate.load(Ordering::SeqCst)
+    }
+
     fn poke(&self, reevaluate: bool) {
         if reevaluate {
             self.reevaluate.store(true, Ordering::SeqCst);
@@ -1562,11 +1602,7 @@ pub async fn intake_login(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn intake_cancel(state: State<'_, IntakeState>) -> Result<bool, String> {
     state.available()?;
-    Ok(state
-        .cancel
-        .lock()
-        .take()
-        .is_some_and(|tx| tx.send(()).is_ok()))
+    Ok(state.send_cancel())
 }
 
 /// Compares the served adapter with `~/.ttobak/server.mjs`. Offline or an
