@@ -600,3 +600,74 @@ test('v1.5.0 read tools and scripts are allowed, nothing else is added', async t
   assert.ok(!allowed.some(rule => rule.includes('search_campaigns')));
   assert.ok(!allowed.some(rule => rule.includes('mcp_stdio')));
 });
+
+test('exclusions enter the prompt as data', async t => {
+  const ctx = setup(t);
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', '양국',
+    '--exclude-slack-channel', 'random']), 0);
+  const { argv } = ctx.recorded();
+  const prompt = argv[argv.indexOf('-p') + 1];
+  assert.ok(prompt.includes('["양국","random"]'), prompt.slice(-800));
+});
+
+test('a report mentioning an excluded channel is rejected', async t => {
+  const mentioned = content({ summary: '이번 분기 #random 채널에서 답변을 많이 했다.' });
+  const ctx = setup(t, { events: success(mentioned) });
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 2);
+  assert.equal(ctx.output().code, 'REPORT_EXCLUDED_CHANNEL');
+  assert.equal(ctx.puts.length, 0);
+  // A word that merely contains the name is not a mention.
+  const ok = setup(t, { events: success(content({ summary: 'randomized rollout' })) });
+  assert.equal(await ok.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 0);
+});
+
+test('invalid channel name is INVALID_ARGUMENT', async t => {
+  const ctx = setup(t);
+  for (const name of ['#random', 'Upper', 'a b', '', 'x'.repeat(81)]) {
+    assert.equal(await ctx.run(['run', '--period', 'quarter', '--exclude-slack-channel', name]), 2);
+    assert.equal(ctx.output().code, 'INVALID_ARGUMENT', name);
+  }
+  const many = Array.from({ length: 101 }, (_, i) => ['--exclude-slack-channel', `c${i}`]).flat();
+  assert.equal(await ctx.run(['run', '--period', 'quarter', ...many]), 2);
+});
+
+test('Korean mentions of an excluded channel are rejected too', async t => {
+  for (const summary of ['#양국에서 점심을 정했다.', '#random에서 답변했다.', '양국 채널에서 이야기했다.']) {
+    const ctx = setup(t, { events: success(content({ summary })) });
+    assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', '양국',
+      '--exclude-slack-channel', 'random']), 2, summary);
+    assert.equal(ctx.output().code, 'REPORT_EXCLUDED_CHANNEL', summary);
+  }
+  // Another channel whose name only extends an excluded ASCII name is not a mention.
+  const ok = setup(t, { events: success(content({ summary: '#random-ops 채널에서 답변했다.' })) });
+  assert.equal(await ok.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 0);
+});
+
+test('channel names use ASCII digits only, like the app', async t => {
+  const ctx = setup(t);
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--exclude-slack-channel', 'team٣']), 2);
+  assert.equal(ctx.output().code, 'INVALID_ARGUMENT');
+});
+
+test('structural fields never count as a channel mention', async t => {
+  // Section ids such as sales and the owner's alias are not model prose.
+  const ctx = setup(t);
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'customers',
+    '--exclude-slack-channel', 'alice']), 0, JSON.stringify(ctx.output()));
+});
+
+test('channel names follow the app rule: letters that are not uppercase', async t => {
+  const ctx = setup(t);
+  // Ⅷ (an uppercase letter number) is refused; ⅷ (lowercase) is a letter, as in Rust.
+  for (const name of ['Ⅷ', 'Xy']) {
+    assert.equal(await ctx.run(['run', '--period', 'quarter', '--exclude-slack-channel', name]), 2, name);
+  }
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'ⅷ-team']), 0);
+});
+
+test('a missing-source note naming an excluded channel is rejected', async t => {
+  const ctx = setup(t, { events: success(content({ missingSources: ['Slack #random (excluded)'] })) });
+  assert.equal(await ctx.run(['run', '--period', 'quarter', '--noninteractive', '--exclude-slack-channel', 'random']), 2);
+  assert.equal(ctx.output().code, 'REPORT_EXCLUDED_CHANNEL');
+  assert.equal(ctx.puts.length, 0);
+});

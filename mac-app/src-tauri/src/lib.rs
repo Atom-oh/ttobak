@@ -842,6 +842,7 @@ pub fn run() {
             report_runner::report_get_state,
             report_runner::report_settings_get,
             report_runner::report_settings_set,
+            report_runner::report_slack_channels_refresh,
         ])
         .setup(|app| {
             // Caption translation; failure only disables it.
