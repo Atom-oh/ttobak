@@ -29,8 +29,8 @@ export const DEFAULT_CALENDAR_RESPONSES: readonly CalendarResponse[] = ['accept'
 
 /**
  * Maps the `calendar_view` `response` field. A missing or unrecognised value is
- * `unknown`: such an event is neither added nor removed, so a provider change
- * never mass-removes synced events.
+ * `unknown`, which fails the calendar step closed (`SCHEMA_CHANGED`), so a
+ * provider change never silently stops syncing or mass-removes events.
  */
 export function responseOf(value: string | undefined): CalendarResponse | 'decline' | 'unknown' {
   switch (value) {
@@ -215,7 +215,7 @@ export function parseOutlookItems(payload: unknown): OutlookItem[] {
       ...(typeof value.isCanceled === 'boolean' ? { isCanceled: value.isCanceled } : {}),
       ...(typeof value.isAllDay === 'boolean' ? { isAllDay: value.isAllDay } : {}),
       ...(typeof value.sensitivity === 'string' ? { sensitivity: value.sensitivity } : {}),
-      // A non-string response is treated as missing (`unknown`), never as a failed page.
+      // A non-string response is treated as missing (`unknown`); the run then fails closed.
       ...(typeof value.response === 'string' ? { response: value.response } : {}),
       ...(typeof email === 'string' ? { organizer: { email } } : {}),
     };
@@ -308,8 +308,10 @@ export interface Plan {
   mutations: Mutation[];
   set: Ledger;
   remove: string[];
-  /** See `CalendarState.held`. */
+  /** Occurrences this read excluded only by an unselected response; see `CalendarState.held`. */
   held: Ledger;
+  /** Occurrences this read observed cancelled, private or declined: their holds end. */
+  released: string[];
   counts: CalendarCounts;
   preview: { title: string; startsAt: string; op: 'upsert' | 'remove' | 'unchanged' }[];
 }
@@ -320,7 +322,7 @@ export interface Plan {
  * tracked copy is removed explicitly.
  */
 export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string,
-  responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES, priorHeld: Ledger = {}): Plan {
+  responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES): Plan {
   const wanted = new Set<string>(responses);
   const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, excludedByResponse: 0, responseUnknown: 0, skippedLong: 0,
     skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0 };
@@ -328,6 +330,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   const set: Ledger = {};
   const remove: string[] = [];
   const held: Ledger = {};
+  const released: string[] = [];
   const preview: Plan['preview'] = [];
   const seen = new Set<string>();
   const removeTracked = (id: string) => {
@@ -350,6 +353,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     counts.fetched++;
     if (item.sensitivity === undefined) counts.sensitivityUnknown++;
     if (item.isCanceled) {
+      released.push(item.meetingId);
       if (!removeTracked(item.meetingId)) counts.cancelledUntracked++;
       else preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
@@ -357,19 +361,20 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     // Privacy first, so a private title never reaches a response-removal preview.
     if (excludedSensitivity(item)) {
       counts.excluded++;
+      released.push(item.meetingId);
       removeTracked(item.meetingId);
       continue;
     }
     const response = responseOf(item.response);
     if (response === 'unknown') {
-      // Kept as it is: neither added nor removed until the response is known, and a prior hold stays.
+      // runCalendar fails the step on any unknown response; nothing is planned for it.
       counts.responseUnknown++;
-      if (priorHeld[item.meetingId]) held[item.meetingId] = { fp: '', startsAt: start.toISOString(), endsAt: end.toISOString() };
       continue;
     }
     if (!wanted.has(response)) {
       counts.excludedByResponse++;
-      if (response !== 'decline') held[item.meetingId] = { fp: '', startsAt: start.toISOString(), endsAt: end.toISOString() };
+      if (response === 'decline') released.push(item.meetingId);
+      else held[item.meetingId] = { fp: '', startsAt: start.toISOString(), endsAt: end.toISOString() };
       if (removeTracked(item.meetingId)) preview.push({ title: item.subject ?? UNTITLED, startsAt: item.start, op: 'remove' });
       continue;
     }
@@ -393,9 +398,6 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     counts.upserts++;
     preview.push({ title: event.title, startsAt: event.startsAt, op: 'upsert' });
   }
-  // A hold this read did not observe carries forward, like an unresolved ledger entry; only an
-  // observed decision (selected, declined, cancelled) or retention pruning releases it.
-  for (const [id, entry] of Object.entries(priorHeld)) if (!seen.has(id)) held[id] = entry;
   for (const [id, entry] of Object.entries(ledger)) {
     if (seen.has(id)) continue;
     const start = new Date(entry.startsAt), end = new Date(entry.endsAt);
@@ -403,7 +405,7 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
   }
   const key = (mutation: Mutation) => mutation.op === 'upsert' ? mutation.event.externalId : mutation.externalId;
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
-  return { mutations, set, remove, held, counts, preview };
+  return { mutations, set, remove, held, released, counts, preview };
 }
 
 /** Splits mutations into batches of at most 12 within the request byte budget. */
@@ -548,17 +550,23 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const items: OutlookItem[] = [];
   for (const request of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request)));
   assertResponsesPresent(items);
-  const plan = planCalendar(items, state.ledger, window, zone, options.responses, state.held);
+  const plan = planCalendar(items, state.ledger, window, zone, options.responses);
+  // Fail closed, dry runs included: an unmapped or missing response would otherwise stop syncing
+  // silently (nothing new is added) or, if read as unanswered, remove synced events.
+  if (plan.counts.responseUnknown > 0) {
+    throw new IntakeError('SCHEMA_CHANGED', `${plan.counts.responseUnknown} calendar_view items carry no known response`);
+  }
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {
     throw new IntakeError('SENSITIVITY_UNKNOWN',
       'items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity');
   }
 
-  // New holds are recorded before any removal is sent, so the task step never closes a held
-  // occurrence's task. Prior holds are released only after every batch is acknowledged: a
-  // re-selected occurrence keeps its hold until its upsert is in the ledger.
+  // Holds accumulate: new ones are stored before any removal is sent, so the task step never
+  // closes a held occurrence's task. A hold ends only when the occurrence is observed cancelled,
+  // private or declined (now), when its upsert is acknowledged into the ledger, or by retention.
   state.held = { ...(state.held ?? {}), ...plan.held };
+  for (const id of plan.released) delete state.held[id];
   store.write(state, ...statePath(state));
   const api = options.api!;
   const groups = batches(plan.mutations);
@@ -580,7 +588,8 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
     await send(api, store, state);
   }
   state.ledger = pruneLedger(state.ledger, now);
-  state.held = pruneLedger(plan.held, now);
+  for (const id of Object.keys(state.held)) if (Object.hasOwn(state.ledger, id)) delete state.held[id];
+  state.held = pruneLedger(state.held, now);
   store.write(state, ...statePath(state));
   const upserted = new Map<string, OutlookItem>();
   for (const item of items) if (Object.hasOwn(plan.set, item.meetingId) && !upserted.has(item.meetingId)) upserted.set(item.meetingId, item);
