@@ -320,7 +320,7 @@ export interface Plan {
  * tracked copy is removed explicitly.
  */
 export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Window, zone: string,
-  responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES): Plan {
+  responses: readonly CalendarResponse[] = DEFAULT_CALENDAR_RESPONSES, priorHeld: Ledger = {}): Plan {
   const wanted = new Set<string>(responses);
   const counts: CalendarCounts = { fetched: 0, upserts: 0, removals: 0, unchanged: 0, excluded: 0, excludedByResponse: 0, responseUnknown: 0, skippedLong: 0,
     skippedInvalid: 0, cancelledUntracked: 0, unresolved: 0, sensitivityUnknown: 0 };
@@ -362,8 +362,9 @@ export function planCalendar(items: OutlookItem[], ledger: Ledger, window: Windo
     }
     const response = responseOf(item.response);
     if (response === 'unknown') {
-      // Kept as it is: neither added nor removed until the response is known.
+      // Kept as it is: neither added nor removed until the response is known, and a prior hold stays.
       counts.responseUnknown++;
+      if (priorHeld[item.meetingId]) held[item.meetingId] = { fp: '', startsAt: start.toISOString(), endsAt: end.toISOString() };
       continue;
     }
     if (!wanted.has(response)) {
@@ -544,7 +545,7 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const items: OutlookItem[] = [];
   for (const request of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request)));
   assertResponsesPresent(items);
-  const plan = planCalendar(items, state.ledger, window, zone, options.responses);
+  const plan = planCalendar(items, state.ledger, window, zone, options.responses, state.held);
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options.acceptUnknownSensitivity) {
     throw new IntakeError('SENSITIVITY_UNKNOWN',

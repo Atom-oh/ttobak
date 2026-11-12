@@ -25385,7 +25385,7 @@ function validEvent(event, window) {
     return false;
   }
 }
-function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES) {
+function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES, priorHeld = {}) {
   const wanted = new Set(responses);
   const counts = {
     fetched: 0,
@@ -25438,6 +25438,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     const response = responseOf(item2.response);
     if (response === "unknown") {
       counts.responseUnknown++;
+      if (priorHeld[item2.meetingId]) held[item2.meetingId] = { fp: "", startsAt: start.toISOString(), endsAt: end.toISOString() };
       continue;
     }
     if (!wanted.has(response)) {
@@ -25563,7 +25564,7 @@ async function runCalendar(options2) {
   const items = [];
   for (const request2 of viewRequests(window, zone)) items.push(...parseOutlookItems(await source.view(request2)));
   assertResponsesPresent(items);
-  const plan = planCalendar(items, state.ledger, window, zone, options2.responses);
+  const plan = planCalendar(items, state.ledger, window, zone, options2.responses, state.held);
   if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
   if (plan.counts.sensitivityUnknown > 0 && !options2.acceptUnknownSensitivity) {
     throw new IntakeError(
@@ -29772,6 +29773,7 @@ var init_tasks = __esm({
         const tracked = {};
         const state = loadState(store, sourceId, scope);
         this.held = new Set(Object.keys(state.held ?? {}).map((externalId) => calendarEventId(sourceId, externalId)));
+        for (const [externalId, entry2] of Object.entries(state.held ?? {})) tracked[calendarEventId(sourceId, externalId)] = entry2.endsAt;
         for (const [externalId, entry2] of Object.entries(state.ledger)) {
           const eventId = calendarEventId(sourceId, externalId);
           tracked[eventId] = entry2.endsAt;
