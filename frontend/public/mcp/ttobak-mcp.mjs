@@ -25199,16 +25199,22 @@ import { createHash as createHash4, randomUUID as randomUUID3 } from "node:crypt
 function responseOf(value) {
   switch (value) {
     case "Accept":
+    case "Accepted":
       return "accept";
     case "Organizer":
       return "organizer";
     case "Tentative":
     case "TentativelyAccepted":
       return "tentative";
+    case "None":
+    case "NoResponseReceived":
+    case "NotResponded":
+      return "none";
     case "Decline":
+    case "Declined":
       return "decline";
     default:
-      return "none";
+      return "unknown";
   }
 }
 function assertResponsesPresent(items) {
@@ -25294,7 +25300,7 @@ function parseOutlookItems(payload) {
       ...typeof value.isCanceled === "boolean" ? { isCanceled: value.isCanceled } : {},
       ...typeof value.isAllDay === "boolean" ? { isAllDay: value.isAllDay } : {},
       ...typeof value.sensitivity === "string" ? { sensitivity: value.sensitivity } : {},
-      // A non-string response is treated as missing (`none`), never as a failed page.
+      // A non-string response is treated as missing (`unknown`), never as a failed page.
       ...typeof value.response === "string" ? { response: value.response } : {},
       ...typeof email3 === "string" ? { organizer: { email: email3 } } : {}
     };
@@ -25388,6 +25394,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     unchanged: 0,
     excluded: 0,
     excludedByResponse: 0,
+    responseUnknown: 0,
     skippedLong: 0,
     skippedInvalid: 0,
     cancelledUntracked: 0,
@@ -25422,14 +25429,19 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
       else preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
-    if (!wanted.has(responseOf(item2.response))) {
-      counts.excludedByResponse++;
-      if (removeTracked(item2.meetingId)) preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
-      continue;
-    }
     if (excludedSensitivity(item2)) {
       counts.excluded++;
       removeTracked(item2.meetingId);
+      continue;
+    }
+    const response = responseOf(item2.response);
+    if (response === "unknown") {
+      counts.responseUnknown++;
+      continue;
+    }
+    if (!wanted.has(response)) {
+      counts.excludedByResponse++;
+      if (removeTracked(item2.meetingId)) preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
     if (end.getTime() - start.getTime() > LONG_EVENT_MS) {
@@ -31115,7 +31127,7 @@ async function runIntake(args, environment) {
     let output;
     if (command === "hosts" && rest.length === 0) {
       output = { ok: true, hosts: listHosts(environment.home, parsePathList(environment.env.PATH)) };
-    } else if (command === "select") output = await select(rest, environment, store);
+    } else if (command === "select") output = await withRunLock(store, () => select(rest, environment, store));
     else if (command === "calendar") output = await withRunLock(store, () => calendar(rest, environment, store));
     else if (command === "sfdc") output = await withRunLock(store, () => sfdc(rest, environment, store));
     else if (command === "options") output = await withRunLock(store, async () => options(rest, store));

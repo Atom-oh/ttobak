@@ -266,8 +266,8 @@ export const SYNC_OPTIONS_COPY = {
   calendarResponsesLabel: '가져올 일정',
   declinedNote: '거절한 일정은 항상 제외돼요.',
   sfdcContactsToggle: 'SFDC 연락처 가져오기',
-  uncheckedRemovedNote: '선택을 끈 항목은 다음 동기화 때 TTOBAK에서 지워져요.',
-  defaultsRemoveNote: '기본 설정에서는 아직 응답하지 않은 일정이 다음 동기화 때 TTOBAK에서 지워져요.',
+  uncheckedRemovedNote: '선택을 끈 응답의 일정은 다음 동기화 때 TTOBAK에서 지워져요.',
+  defaultsRemoveNote: '지금 설정에서는 아직 응답하지 않은 일정이 다음 동기화 때 TTOBAK에서 지워져요.',
   adapterTooOld: '수집 도구를 업데이트한 뒤 다시 시도하세요.',
   save: '저장',
 } as const;

@@ -199,14 +199,16 @@ export function IntakeSettings() {
                 </label>
               ))}
             </div>
+            <p className={mutedClass}>{SYNC_OPTIONS_COPY.uncheckedRemovedNote}</p>
             <p className={mutedClass}>{SYNC_OPTIONS_COPY.declinedNote}</p>
-            {syncOptions.defaults && <p className={mutedClass}>{SYNC_OPTIONS_COPY.defaultsRemoveNote}</p>}
+            {/* Shown whenever unanswered events are not kept, not only before options are stored. */}
+            {!syncOptions.responses.some(row => row.response === 'none' && row.checked)
+              && <p className={mutedClass}>{SYNC_OPTIONS_COPY.defaultsRemoveNote}</p>}
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={syncOptions.sfdcContacts} disabled={busy || running}
                 onChange={event => setOptionsForm({ ...syncOptions, sfdcContacts: event.target.checked })} />
               <span>{SYNC_OPTIONS_COPY.sfdcContactsToggle}</span>
             </label>
-            <p className={mutedClass}>{SYNC_OPTIONS_COPY.uncheckedRemovedNote}</p>
             <div>
               <button type="button" className={buttonClass} disabled={busy || running || !optionsForm}
                 onClick={() => optionsForm && void act(() => setIntakeOptions(syncOptionsValue(optionsForm)), value => {

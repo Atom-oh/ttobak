@@ -82,12 +82,12 @@ test('two_stale_claimants_exactly_one_wins', async t => {
   }
 });
 
-test('setup_and_run_hold_the_lock', async t => {
+test('every selection or state writer holds the lock', async t => {
   const home = tempHome(t);
   const dir = join(home, '.ttobak', 'intake');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(join(dir, 'run.lock'), `${process.pid} held-by-test`);
-  for (const command of ['run', 'setup', 'calendar', 'sfdc']) {
+  for (const command of ['run', 'setup', 'calendar', 'sfdc', 'select', 'options']) {
     const lines = [];
     const code = await runIntake([command], { home, env: { PATH: '/usr/bin' }, now: () => new Date(), zone: 'UTC',
       stdout: line => lines.push(line) });
