@@ -37,6 +37,7 @@ function fixture(table, created) {
   const modules = {
     react: harness.react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '@/lib/api': { accountApi: api },
     '@/lib/contactImport': contactImport, '@/lib/contactBulkImport': bulk, '@/lib/contactFile': { readContactFile: async () => table },
+    '@/lib/contactFileDrop': compile('../src/lib/contactFileDrop.ts', { require: name => { assert.equal(name, 'react'); return harness.react; } }),
   };
   const { ContactImport } = compile('../src/components/ContactImport.tsx', {
     require: name => { assert.ok(name in modules, `unexpected dependency: ${name}`); return modules[name]; }, AbortController, DOMException, Error,
@@ -88,5 +89,41 @@ test('remapping keeps manual choices except for the matching columns', async () 
     assert.deepEqual(checks(), [true, true]);
     select('회사').props.onChange({ target: { value: '0' } });
     assert.deepEqual(checks(), [true, false]);
+  } finally { screen.unmount(); }
+});
+
+function dropEvent(files, types = ['Files']) {
+  const event = { prevented: false, preventDefault() { this.prevented = true; }, dataTransfer: { types, files, dropEffect: 'none' } };
+  return event;
+}
+
+test('dropping one Remember file on the import zone loads it like the picker', async () => {
+  const screen = fixture([['회사', '이름'], ['하나은행', 'Kim']], []);
+  try {
+    const zone = () => nodes(screen.draw()).find(node => node.props?.['data-contact-drop-zone']);
+    const over = dropEvent([]);
+    zone().props.onDragOver(over);
+    assert.equal(over.prevented, true);
+    assert.equal(over.dataTransfer.dropEffect, 'copy');
+    const drop = dropEvent([{ name: 'remember.csv' }]);
+    zone().props.onDrop(drop);
+    assert.equal(drop.prevented, true);
+    await settle();
+    assert.equal(nodes(screen.draw()).filter(node => node.type === 'tr').length, 2);
+  } finally { screen.unmount(); }
+});
+
+test('dropping several files is refused, and text drags are left to the page', async () => {
+  const screen = fixture([['회사', '이름'], ['하나은행', 'Kim']], []);
+  try {
+    const zone = () => nodes(screen.draw()).find(node => node.props?.['data-contact-drop-zone']);
+    const text = dropEvent([], ['text/plain']);
+    zone().props.onDrop(text);
+    assert.equal(text.prevented, false);
+    zone().props.onDrop(dropEvent([{ name: 'a.csv' }, { name: 'b.csv' }]));
+    await settle();
+    const tree = screen.draw();
+    assert.ok(nodes(tree).some(node => node.props?.role === 'alert' && node.props.children === '파일은 한 번에 하나만 끌어다 놓을 수 있습니다.'));
+    assert.equal(nodes(tree).filter(node => node.type === 'tr').length, 0);
   } finally { screen.unmount(); }
 });

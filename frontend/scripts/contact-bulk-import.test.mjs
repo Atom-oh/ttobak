@@ -44,6 +44,8 @@ function componentFixture(api, table) {
     '@/lib/contactImport': contactImport,
     '@/lib/contactBulkImport': load(),
     '@/lib/contactFile': { readContactFile: async () => table },
+
+    '@/lib/contactFileDrop': compile('../src/lib/contactFileDrop.ts', { require: name => { assert.equal(name, 'react'); return harness.react; } }),
   };
   const { BulkContactImport } = compile('../src/components/BulkContactImport.tsx', {
     require: name => {
