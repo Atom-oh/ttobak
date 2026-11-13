@@ -54,3 +54,12 @@ test('groupDraftsByDay uses KST days, newest first', () => {
   ]);
   assert.deepEqual(plain(cu.groupDraftsByDay([])), []);
 });
+
+test('validateSourceForm requires https and a 1-100 character label', () => {
+  assert.equal(cu.validateSourceForm('https://example.com/feed', 'Blog'), '');
+  assert.notEqual(cu.validateSourceForm('http://example.com/feed', 'Blog'), '');
+  assert.notEqual(cu.validateSourceForm('not a url', 'Blog'), '');
+  assert.notEqual(cu.validateSourceForm('https://example.com', '   '), '');
+  assert.notEqual(cu.validateSourceForm('https://example.com', 'x'.repeat(101)), '');
+  assert.equal(cu.validateSourceForm('https://example.com', 'x'.repeat(100)), '');
+});

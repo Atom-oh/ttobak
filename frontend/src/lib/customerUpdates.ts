@@ -72,6 +72,23 @@ export const COPY = {
   'settings.sources.header': '고객 업데이트 소스',
   'settings.sources.slackHint': 'Mac 앱에서 채널을 선택할 수 있어요',
   'settings.sources.backfillHelp': '처음 등록하면 최근 3일치만 가져옵니다.',
+  'settings.sources.urlLabel': '주소',
+  'settings.sources.urlPlaceholder': 'https://example.com/feed',
+  'settings.sources.labelLabel': '이름',
+  'settings.sources.labelPlaceholder': '예: 고객사 공식 블로그',
+  'settings.sources.kindLabel': '종류',
+  'settings.sources.add': '추가',
+  'settings.sources.adding': '추가 중...',
+  'settings.sources.pause': '일시중지',
+  'settings.sources.resume': '재개',
+  'settings.sources.delete': '삭제',
+  'settings.sources.deleteConfirm': '이 소스를 삭제할까요?',
+  'settings.sources.empty': '등록된 소스가 없습니다.',
+  'settings.sources.statusActive': '수집 중',
+  'settings.sources.statusDisabled': '일시중지됨',
+  'settings.sources.errorHttps': '주소는 https로 시작해야 합니다.',
+  'settings.sources.errorLabel': '이름은 1자 이상 100자 이하로 입력해 주세요.',
+  'settings.sources.loadFailed': '소스를 불러오지 못했습니다.',
   'source.kind.slack': 'Slack 채널',
   'source.kind.rss': 'RSS',
   'source.kind.site': '사이트',
@@ -150,4 +167,20 @@ export function guessSourceKind(url: string): 'rss' | 'site' | 'youtube' {
   const path = parsed.pathname.toLowerCase();
   if (/(^|\/)(feed|rss|atom)(\/|\.xml)?$/.test(path) || /\.(rss|atom|xml)$/.test(path)) return 'rss';
   return 'site';
+}
+
+export const SOURCE_LABEL_MAX = 100;
+
+/** Client-side check before adding a source; the server stays the authority. Returns a COPY message or ''. */
+export function validateSourceForm(url: string, label: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return COPY['settings.sources.errorHttps'];
+  }
+  if (parsed.protocol !== 'https:') return COPY['settings.sources.errorHttps'];
+  const length = Array.from(label.trim()).length;
+  if (length < 1 || length > SOURCE_LABEL_MAX) return COPY['settings.sources.errorLabel'];
+  return '';
 }

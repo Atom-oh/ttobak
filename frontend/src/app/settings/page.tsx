@@ -7,6 +7,8 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { IntegrationSettings } from '@/components/IntegrationSettings';
 import { CrawlerSettings } from '@/components/CrawlerSettings';
+import { CustomerUpdateSourcesSettings } from '@/components/CustomerUpdateSourcesSettings';
+import { COPY } from '@/lib/customerUpdates';
 import { McpGuide } from '@/components/McpGuide';
 import { MacAppInstall } from '@/components/MacAppInstall';
 import { InviteUser } from '@/components/InviteUser';
@@ -132,6 +134,12 @@ export default function SettingsPage() {
             <section id="crawler-sources" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
               <h3 className="section-header mb-4">Crawler Sources</h3>
               <CrawlerSettings />
+            </section>
+
+            {/* Customer update sources */}
+            <section id="customer-update-sources" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">{COPY['settings.sources.header']}</h3>
+              <CustomerUpdateSourcesSettings />
             </section>
 
             {/* MCP client connection guides */}
