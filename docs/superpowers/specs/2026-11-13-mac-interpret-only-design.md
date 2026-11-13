@@ -1,6 +1,9 @@
 # Mac interpret-only mode: design
 
-Date: 2026-11-13. Status: approved by the user on 2026-11-13.
+Date: 2026-11-13. Status: historical design record; approved by the user on
+2026-11-13. Current behavior is in the code and ADR-024. Repository docs are
+English and UI copy is Korean: backticked camelCase names such as `navLabel`
+are keys of `docs/superpowers/plans/2026-11-13-mac-interpret-only-ui-copy.json`.
 
 ## Intent
 
@@ -17,14 +20,14 @@ WAV bound to a meeting ID.
 ## Goals
 
 - Mac app only: a dedicated screen, reached from a sidebar entry labelled
-  「통역」, that runs live interpretation with no meeting.
+  `navLabel`, that runs live interpretation with no meeting.
 - Hears both sources at once: microphone and system audio, mixed the same
   way a native recording mixes them.
 - Start and stop from that screen. While running it shows the original text
   and its translation, large enough to read comfortably.
 - Same interpretation controls as the record page: target language
-  (`TRANSLATION_TARGETS`, default `한국어 ↔ English`) and the opt-in
-  "초안 번역 (비용↑)" interim toggle.
+  (`TRANSLATION_TARGETS`, default `bilingualTarget`) and the opt-in
+  `interimToggle` interim toggle.
 - Nothing is persisted: no audio file, no meeting, no transcript, no upload.
 
 ## Non-goals
@@ -121,26 +124,23 @@ WAV bound to a meeting ID.
 
 - New static route `/interpret`. Add it to FrontendStack `knownPages`
   (`infra/lib/frontend-stack.ts`) and to the header title map.
-- Sidebar gets a 「통역」 item (icon `translate`) rendered only when
+- Sidebar gets a `navLabel` item (icon `translate`) rendered only when
   `isTauri()` is true, so browsers and mobile never see it.
 - Layout:
 
   ```
-  ┌──────────────────────────────────────────────────────────┐
-  │ 실시간 통역            [한국어 ↔ English ▾] [☐ 초안 번역]   │
-  │ [마이크: MacBook Pro 마이크 ▾]      ▁▃▅▂ 00:12:41  [■ 정지] │
-  ├──────────────────────────────────────────────────────────┤
-  │  So the migration window is next Tuesday.                 │
-  │  그래서 마이그레이션 일정은 다음 주 화요일입니다.             │
-  │                                                           │
-  │  네, 그 전에 백업부터 확인하겠습니다.                        │
-  │  Yes, we'll verify the backup before then.                │
-  │                                                           │
-  │  (통역 중…)                                               │
-  └──────────────────────────────────────────────────────────┘
+  +----------------------------------------------------------+
+  | title                                  [ ] interimToggle |
+  | [microphone v]             level  00:12:41  [stopButton] |
+  +----------------------------------------------------------+
+  | language select (TranslationView header)                 |
+  |  original caption          |  translated caption         |
+  |  original caption          |  translated caption         |
+  |  (pending caption)                                       |
+  +----------------------------------------------------------+
   ```
 
-  Idle state shows a single 「통역 시작」 button and a line stating that
+  Idle state shows a single `startButton` button and a line stating that
   nothing is recorded or saved. The translation list fills the remaining
   window height (not the record page's 48vh card) and uses larger text.
   Reuse `TranslationView` where it fits; extend it with a size variant
@@ -160,7 +160,7 @@ WAV bound to a meeting ID.
     whole feature here, so the screen reconnects by itself. It keeps the
     native capture running, discards the failed STT session, and starts a
     fresh one, up to three attempts with a short backoff, showing
-    "다시 연결 중…". Text already on screen is kept. If all attempts fail
+    `reconnecting`. Text already on screen is kept. If all attempts fail
     it stops the capture and shows the error. This retry lives in the
     interpret screen's own code; `sttManager.ts` and
     `transcribeStreamingClient.ts` behavior on the record page must not

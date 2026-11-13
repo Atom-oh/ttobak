@@ -51,6 +51,20 @@ only meeting URLs and discards the rest; Firefox is not detected. Turn it off in
 permission with `tccutil reset AppleEvents click.atomai.ttobak.mac`. See
 [ADR-017](../docs/decisions/ADR-017-mac-meeting-detection-prompts.md).
 
+## Live interpretation
+
+The interpretation menu entry opens a screen that interprets what the microphone and the
+Mac's own sound carry, with no meeting: nothing is recorded, uploaded or saved.
+Choose the microphone before starting. It stops by itself after 10 minutes with
+no recognized speech, when the Mac sleeps, or when a recording starts. An app
+build older than this feature shows an update notice instead.
+
+Manual checks on a real Mac (no CI covers them): both sources are heard; no
+file appears under the recordings temp directory during or after a session and
+the leftover list stays empty after a forced quit; starting a recording from
+the record screen, a meeting prompt and MCP each stop the session first; sleep
+stops it; the idle stop fires; captions reconnect after a network drop.
+
 ## Recovery and limits
 
 Wait for upload completion before closing the lid. Idle-sleep prevention does not

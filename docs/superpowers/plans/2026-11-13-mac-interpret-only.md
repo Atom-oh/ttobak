@@ -1,5 +1,8 @@
 # Mac Interpret-Only Mode Implementation Plan
 
+Status: historical implementation plan for 2026-11-13; current behavior is in
+the code and ADR-024.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Mac-app-only `/interpret` screen that listens to microphone plus system audio and shows live interpretation, with no meeting, no audio file, and nothing persisted.
@@ -20,7 +23,7 @@
 - Every new command is in `build.rs` `COMMANDS` and granted in `capabilities/default.json`.
 - `sttManager.ts` and `transcribeStreamingClient.ts` behavior on `/record` does not change.
 - All new UI is gated on `isTauri()`; web and mobile are unaffected.
-- User-facing copy is Korean and exactly as written in this plan; repository docs and code comments are English.
+- User-facing copy is Korean; exact strings live in `docs/superpowers/plans/2026-11-13-mac-interpret-only-ui-copy.json` and `<copy `key`>` in this plan stands for that key's value. Repository docs and code comments are English.
 - Auto-stop: 10 minutes (`600_000` ms) with no recognized speech. Reconnect: at most 3 attempts, delays `1000`, `2000`, `4000` ms.
 - Mac changes have no CI; report native validation limits honestly.
 
@@ -172,19 +175,19 @@ fn take_any_takes_either_kind() {
   - `startNativeListening(inputDeviceUid?: string): Promise<NativeListenStart>` → `invoke('start_listening', { inputDeviceUid: inputDeviceUid || null })`
   - `stopNativeListening(): Promise<{ stopped: boolean; stop_timed_out: boolean }>`
   - `onNativeListeningStopped(handler: (reason: 'sleep' | 'recording') => void): () => void`
-  - `export const INTERPRET_VERSION_SKEW_MESSAGE = '설치된 Mac 앱 버전이 오래되어 통역 기능이 없습니다 — 앱을 업데이트해주세요.'`
+  - `export const INTERPRET_VERSION_SKEW_MESSAGE = <copy `versionSkew`>`
 - Produces in `interpretSession.ts` (no React, no DOM, timers injected):
   - `export const INTERPRET_IDLE_STOP_MS = 600_000`
   - `export const INTERPRET_RECONNECT_DELAYS_MS = [1000, 2000, 4000]`
   - `export const INTERPRET_MESSAGES` with exactly:
-    - `notSaved: '통역 내용과 소리는 저장되지 않습니다.'`
-    - `idleStopped: '10분 동안 인식된 말이 없어 통역을 멈췄습니다.'`
-    - `sleepStopped: 'Mac이 잠자기에 들어가 통역을 멈췄습니다.'`
-    - `recordingStopped: '녹음이 시작되어 통역을 멈췄습니다.'`
-    - `reconnecting: '다시 연결 중…'`
-    - `reconnectFailed: '실시간 자막 연결이 끊어져 통역을 멈췄습니다. 네트워크를 확인한 뒤 다시 시작해 주세요.'`
-    - `unavailable: '실시간 자막을 사용할 수 없어 통역을 시작할 수 없습니다 (AWS 인증/연결 필요).'`
-    - `macOnly: '통역 전용 모드는 Mac 앱에서만 사용할 수 있습니다.'`
+    - `notSaved: <copy `notSaved`>`
+    - `idleStopped: <copy `idleStopped`>`
+    - `sleepStopped: <copy `sleepStopped`>`
+    - `recordingStopped: <copy `recordingStopped`>`
+    - `reconnecting: <copy `reconnecting`>`
+    - `reconnectFailed: <copy `reconnectFailed`>`
+    - `unavailable: <copy `unavailable`>`
+    - `macOnly: <copy `macOnly`>`
   - `class ReconnectBudget { next(): number | null; reset(): void }`: `next()` returns the next delay, `null` once the three are used; `reset()` restores all three.
   - `class IdleStop { constructor(ms: number, onIdle: () => void, timers?: { set(fn: () => void, ms: number): unknown; clear(id: unknown): void }); start(): void; touch(): void; stop(): void }`: `onIdle` fires once, `ms` after the last `start()`/`touch()`; `touch()` before `start()` or after `stop()` does nothing.
 
@@ -222,7 +225,7 @@ test('touch after stop or before start never arms the timer', () => {
 
 test('idle stop is 10 minutes and messages are fixed', () => {
   assert.equal(m.INTERPRET_IDLE_STOP_MS, 600_000);
-  assert.equal(m.INTERPRET_MESSAGES.idleStopped, '10분 동안 인식된 말이 없어 통역을 멈췄습니다.');
+  assert.equal(m.INTERPRET_MESSAGES.idleStopped, <copy `idleStopped`>);
 });
 ```
 
@@ -258,9 +261,9 @@ Hook behavior (each line is a requirement):
 
 Page behavior:
 - Auth guard and `AppLayout activePath="/interpret"` as in `app/dictionary/page.tsx`.
-- Not `isTauri()` (checked after mount to avoid a hydration mismatch): show `macOnly` and a link to `/record` labelled `녹음 화면에서 실시간 통역 사용하기`; render no controls.
-- Header row: title `실시간 통역`, target-language `<select aria-label="통역 언어 선택">` from `TRANSLATION_TARGETS` (default `BILINGUAL_TARGET`), checkbox `초안 번역 (비용↑)` with the record page's `title` text.
-- Second row: `NativeMicSelector` (disabled unless `phase === 'idle'`), level meter, elapsed time `HH:MM:SS`, and one button: `통역 시작` when idle, `정지` otherwise (disabled while `'stopping'`).
+- Not `isTauri()` (checked after mount to avoid a hydration mismatch): show `macOnly` and a link to `/record` labelled `recordLink`; render no controls.
+- Header row: title `title`, target-language `<select>` (`languageSelectLabel`) from `TRANSLATION_TARGETS` (default `BILINGUAL_TARGET`), checkbox `interimToggle` with the record page's `title` text.
+- Second row: `NativeMicSelector` (disabled unless `phase === 'idle'`), level meter, elapsed time `HH:MM:SS`, and one button: `startButton` when idle, `stopButton` otherwise (disabled while `'stopping'`).
 - Idle and never started: the `notSaved` line. `error` uses `role="alert"`; `notice` and `warnings` use `role="status"`.
 - Body: `<TranslationView fill size="large" isActive={phase !== 'idle'} …/>` filling the remaining height.
 
@@ -280,8 +283,8 @@ Page behavior:
 
 **Interfaces:**
 - Produces:
-  - `export const INTERPRET_ITEM: NavItem = { href: '/interpret', icon: 'translate', label: '통역' }`
-  - `export function navGroupsFor(isMacApp: boolean): NavGroup[]`: `NAV_GROUPS` unchanged when `false`; when `true`, a copy with `INTERPRET_ITEM` inserted immediately after `/meetings` in the `업무` group. `NAV_GROUPS` itself is not mutated.
+  - `export const INTERPRET_ITEM: NavItem = { href: '/interpret', icon: 'translate', label: <copy `navLabel`> }`
+  - `export function navGroupsFor(isMacApp: boolean): NavGroup[]`: `NAV_GROUPS` unchanged when `false`; when `true`, a copy with `INTERPRET_ITEM` inserted immediately after `/meetings` in the work group (`workGroupName`). `NAV_GROUPS` itself is not mutated.
   - Header title map entry `'/interpret': 'Interpretation'`.
 
 - [ ] **Step 1: Write failing tests:**
@@ -290,7 +293,7 @@ Page behavior:
 test('interpret entry appears only in the Mac app, after Meetings', () => {
   const web = nav.navGroupsFor(false).flatMap((g) => g.items.map((i) => i.href));
   assert.ok(!web.includes('/interpret'));
-  const work = nav.navGroupsFor(true).find((g) => g.name === '업무').items.map((i) => i.href);
+  const work = nav.navGroupsFor(true).find((g) => g.name === <copy `workGroupName`>).items.map((i) => i.href);
   assert.equal(work[work.indexOf('/meetings') + 1], '/interpret');
   assert.ok(!nav.NAV_GROUPS.flatMap((g) => g.items).some((i) => i.href === '/interpret'));
 });
