@@ -13,10 +13,13 @@ import type { AccountFlow, AccountGraph, AccountLink, AccountLinkInput, AccountS
 import type { AccountFocusGraph, AccountPeoplePage, MeetingPeopleEdges, MentionGroupsPage, PeopleEdgeInput, PeopleEdgeKey, PeopleLink, ResolveMentionResult } from '@/types/meeting';
 import type { AccountKBKind, AccountKBPage } from '@/lib/accountKB';
 import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/types/specreqTask';
-import type { CalendarEventPage, CalendarEventQuery, CalendarSourcePage } from '@/types/calendar';
 import type { CustomerBriefResponse } from '@/types/customerBrief';
 import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
+import type {
+  AccountCalendarPage, CalendarEvent, CalendarEventPage, CalendarEventQuery, CalendarShareDirectoryAccount,
+  CalendarSharingRequest, CalendarSourcePage,
+} from '@/types/calendar';
 import type { NewsSourceItem, NewsSourcesPage } from '@/lib/newsRegistration';
 import type { NewsCollectResponse } from '@/lib/newsCollect';
 
@@ -196,6 +199,20 @@ export const calendarApi = {
     if (query.limit) params.set('limit', String(query.limit));
     return apiFetch<CalendarSourcePage>(`/api/calendar/sources?${params}`, { ...options, cache: 'no-store' });
   },
+  accountCalendar: (accountId: string, query: { from: string; to: string; limit?: number; cursor?: string },
+    options?: { signal?: AbortSignal; expectedUserId?: string }) => {
+    const params = new URLSearchParams({ from: query.from, to: query.to });
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.limit) params.set('limit', String(query.limit));
+    return apiFetch<AccountCalendarPage>(`/api/accounts/${encodeURIComponent(accountId)}/calendar?${params}`, { ...options, cache: 'no-store' });
+  },
+  setSharing: (sourceId: string, eventId: string, request: CalendarSharingRequest,
+    options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<CalendarEvent>(`/api/calendar/sources/${encodeURIComponent(sourceId)}/events/${encodeURIComponent(eventId)}/sharing`, {
+      ...options, method: 'PUT', body: JSON.stringify(request),
+    }),
+  shareDirectory: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<{ accounts: CalendarShareDirectoryAccount[] }>('/api/calendar/share-directory', { ...options, cache: 'no-store' }),
 };
 
 // Owner-only SA performance routes; every call reads the caller's own rows.

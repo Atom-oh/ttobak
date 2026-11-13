@@ -314,9 +314,9 @@ message on save; update the adapter first.
 - **Private.** An item with the Outlook category `Private` (any case), or
   whose joined `get_meeting` says `isPrivate: true`, is sent with
   `private: true` and no share fields. If the runner shared it, this re-sends
-  it and the server records a veto. An owner `account` override set in TTOBAK
-  still beats `private` (`decideCalendarShare`): such an event stays shared
-  until the owner clears the override.
+  it and the server records a veto. `private` also beats an owner `account`
+  override set in TTOBAK (`decideCalendarShare`): the event is unshared and
+  the override Account is vetoed.
 - **Removals.** Only a cancelled or excluded *tracked* occurrence is removed.
   Absence is reported as `unresolved` and never deleted.
 - **Delivery.**
@@ -518,7 +518,7 @@ request ID), `slack/<scope>/drafts.json` and `notify/<scope>/sent.json`
    - an all-day event.
 4. Run `intake calendar` and compare with `ttobak_list_calendar_events`.
    Re-run and confirm that the mutations are empty.
-5. Record the date and results in ADR-003 local intake's status line.
+5. Record the date and results in ADR-026's status line.
 
 ### Task step acceptance
 

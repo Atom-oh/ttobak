@@ -93,7 +93,12 @@ Personal reads omit a revoked association; an inaccessible Account-filtered read
 
 Owner event views also carry `sharingMode` (`auto`, `account` or `hidden`) and,
 when present, `shareAccountId`, `shareEvidence`, `candidateAccountIds` and
-`private`. A shared event is visible to direct Account members only; any sharer's
+`private`. `shareAccountId` and `shareEvidence` reflect the stored granted share
+only; a vetoed or collision-dropped event has none. A hidden override that
+was stored while its share change failed still reports the granted share,
+and members can read the event until a retried unshare or the next sync
+applies it. `Private`
+beats an `account` override. A shared event is visible to direct Account members only; any sharer's
 veto hides the meeting from the Account calendar. `AccountCalendarEvent` contains
 `meetingKey`, `title`, `startsAt`, `endsAt`, `timeZone`, `isAllDay`, optional
 `startDate`, `endDate`, `location`, `sharedBy` (at most five emails) and
@@ -102,7 +107,7 @@ use the same query, limit and 14,000-byte rules as personal reads, and
 return `503` when any shared meeting on the page has no decryptable row. Shared events are not
 exposed to QA, briefs, insights, KB, vault export or any MCP tool.
 
-Account-sharing fields are validated and stored encrypted with the
+Account-sharing fields (ADR-026) are validated and stored encrypted with the
 event: `shareAccountId` and each of at most five distinct `candidateAccountIds`
 use the Account ID format and differ from each other; `shareEvidence` holds up to
 three distinct kinds (`title`, `location`, `domain`) and requires

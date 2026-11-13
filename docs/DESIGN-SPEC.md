@@ -441,6 +441,18 @@ Concurrent callers share one load, and the Account list paints the last loaded
 list before an expired entry reloads. Account mutations, session grant bootstrap, sign-out and session
 expiry drop it. It is never persisted and does not authorize reads.
 
+Calendar sharing (`src/lib/calendarSharing.ts` owns the pure helpers and the Korean copy
+`SHARING_COPY`): owner event cards show a badge (shared with the resolved account name and an
+evidence tooltip of title/location/attendee domain, candidate, or private) and actions. A granted
+share (`shareAccountId`) always shows as shared with unshare available, even under a hidden override
+or `Private` that has not taken effect yet. Assign opens a
+picker of direct-membership accounts from the share directory, candidates first; unshare sets mode
+hidden; back to automatic sets mode auto. Each action disables its buttons while pending, replaces the
+event with the response, and shows an alert on failure. The Account Meetings tab renders
+`AccountSchedule`, which reads only the account calendar route (never personal events), lists
+deduplicated shared events with a shared-by count, and pages on demand with a load-more button until the
+cursor is null.
+
 Direct members also get an Account **Events** tab (labelled in Korean in the UI): upcoming events by
 default and past events (descending, bounded at the time the list opened so its
 cursor stays valid), with create, edit and delete. Attendees come from the
