@@ -6,7 +6,8 @@
 //! Each window loads the bundled `src/caption-overlay.html` (a local origin),
 //! holds no token, makes no network request and may call only
 //! `caption_overlay_idle`, which changes nothing but its own window's click
-//! pass-through (`capabilities/caption-overlay.json`). Caption text is never
+//! pass-through, and `caption_overlay_dismiss`, which closes only its own
+//! window (`capabilities/caption-overlay.json`). Caption text is never
 //! logged.
 //!
 //! Each page listens with a target scoped to its own window, so an event sent
@@ -632,9 +633,53 @@ pub fn caption_overlay_idle(window: WebviewWindow, idle: bool) -> Result<(), Cap
     set_pass_through(&window, idle)
 }
 
+/// The caption language of an overlay window label, or `None` for any other
+/// window.
+pub fn overlay_lang(label: &str) -> Option<&'static str> {
+    ["ko", "en", "ja", "zh"]
+        .into_iter()
+        .find(|lang| caption_model::window_label(lang) == Some(label))
+}
+
+/// The close button on an overlay window. Closes only the calling window,
+/// saves it as closed and tells the main window (`caption-window-closed`,
+/// `{lang}`) so its panel stops translating for it. Granted only to the
+/// overlay capability; the remote SPA closes windows with
+/// `caption_overlay_close`.
+#[tauri::command]
+pub fn caption_overlay_dismiss(
+    app: AppHandle,
+    state: State<'_, CaptionState>,
+    window: WebviewWindow,
+) -> Result<(), CaptionError> {
+    let lang = overlay_lang(window.label())
+        .ok_or_else(|| CaptionError::invalid("Not a caption window."))?;
+    window.close().map_err(|e| window_error("close", e))?;
+    mark_closed(&state, lang)?;
+    if let Err(e) = app.emit_to(
+        "main",
+        "caption-window-closed",
+        serde_json::json!({ "lang": lang }),
+    ) {
+        log::warn!("could not report the closed caption window to the page: {e}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_overlay_labels_name_a_caption_language() {
+        for lang in ["ko", "en", "ja", "zh"] {
+            let label = caption_model::window_label(lang).expect("label");
+            assert_eq!(overlay_lang(label), Some(lang));
+        }
+        for label in ["main", "caption-fr", "caption-", "ko", ""] {
+            assert_eq!(overlay_lang(label), None, "{label}");
+        }
+    }
 
     #[test]
     fn each_overlay_window_has_its_own_push_lane() {
@@ -826,6 +871,7 @@ mod tests {
         assert_eq!(
             granted,
             [
+                "allow-caption-overlay-dismiss",
                 "allow-caption-overlay-idle",
                 "core:event:allow-listen",
                 "core:event:allow-unlisten",
@@ -837,7 +883,9 @@ mod tests {
             assert_ne!(*p, "core:event:default");
             assert!(!p.contains("allow-emit"), "{p}");
             assert!(
-                p.starts_with("core:") || *p == "allow-caption-overlay-idle",
+                p.starts_with("core:")
+                    || *p == "allow-caption-overlay-idle"
+                    || *p == "allow-caption-overlay-dismiss",
                 "app command permission {p}"
             );
         }

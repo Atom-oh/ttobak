@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isCommandNotFound, isTauri } from '@/lib/tauri';
+import { isCommandNotFound, isTauri, onCaptionWindowClosed } from '@/lib/tauri';
 import {
   CaptionOverlayController,
   TIMED_PREVIEW_MS,
@@ -172,6 +172,18 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
     controller.stop();
     controller.setLanguages(openRef.current);
   }, [isRecording, runPreview, cancelPreviewTimer]);
+
+  // A window closed from its own close button: the Mac app already closed and
+  // saved it, so only this panel's state and the translation engine follow.
+  useEffect(() => {
+    if (!isTauri()) return;
+    return onCaptionWindowClosed((lang) => {
+      const closed = openRef.current.find((item) => item === lang);
+      if (!closed) return;
+      applyLangs(openRef.current.filter((item) => item !== closed), extraRef.current);
+      setView((previous) => previous && patchWindow(previous, closed, { open: false }));
+    });
+  }, [applyLangs]);
 
   const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
     controllerRef.current?.update(id, text, isFinal, languageCode);

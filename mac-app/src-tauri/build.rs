@@ -51,6 +51,7 @@ const COMMANDS: &[&str] = &[
     "report_slack_channels_refresh",
     // Granted only to the local overlay windows (capabilities/caption-overlay.json).
     "caption_overlay_idle",
+    "caption_overlay_dismiss",
 ];
 
 fn main() {

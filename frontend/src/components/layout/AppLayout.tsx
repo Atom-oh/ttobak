@@ -28,8 +28,11 @@ export function AppLayout({ activePath, children, showMobileNav = true, breadcru
           <DesktopHeader activePath={activePath} breadcrumbs={breadcrumbs} isRecording={isRecording} />
         </div>
 
-        {/* Page Content */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden overflow-y-auto animate-in">
+        {/* Page Content. `relative` makes this scroller the containing block of
+            absolutely positioned descendants (`sr-only` labels): with the body as
+            their containing block they escape the clip and lengthen the document,
+            so the whole window scrolls behind the layout. */}
+        <div className="relative flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden overflow-y-auto animate-in">
           {children}
         </div>
       </main>
