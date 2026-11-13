@@ -1386,9 +1386,13 @@ pub mod macos {
                 kAudioAggregateDeviceIsStackedKey,
                 CFBoolean::false_value().as_CFType(),
             ),
+            // Not auto-start: with it, the aggregate's IO (microphone
+            // included) does not begin until some tapped process plays
+            // sound ("Starting tap after waiting for writers" in
+            // coreaudiod), so a quiet Mac captured nothing at all.
             (
                 kAudioAggregateDeviceTapAutoStartKey,
-                CFBoolean::true_value().as_CFType(),
+                CFBoolean::false_value().as_CFType(),
             ),
             (
                 kAudioAggregateDeviceMainSubDeviceKey,
