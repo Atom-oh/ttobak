@@ -495,3 +495,30 @@ shipped.
   and [repository](../../backend/internal/repository/customer_brief.go), with
   their tests.
 - Delivery: [INFRA-SPEC](../INFRA-SPEC.md) customer brief worker delivery.
+
+## Customer update drafts (2026-11-13)
+
+### Decision
+
+- Draft reads and changes require a current **direct** member of the account;
+  inherited read access does not qualify, and lists drop drafts of accounts the
+  caller no longer directly belongs to.
+- A draft row (`USER#{userId}` / `CUDRAFT#{accountId}#{urlHash}`) keeps only keys,
+  `entityType`, `accountId`, `urlHash`, `status`, `revision`, `runId`, timestamps,
+  `pendingShareExpiresAt` and `sealed` in plaintext. Source URL and title, why,
+  body, edited body, opportunities, links and dismiss reason are one JSON payload
+  sealed with the record sealer, bound to
+  `{purpose: ttobak-customer-update-draft, userId, accountId, urlHash}`.
+- Writes and reads fail closed without the key (503 `DRAFTS_UNAVAILABLE`).
+  Unsealed rows or rows bound to another record are never served. A revision
+  update re-seals the whole payload under the revision condition.
+- Lists read metadata only and open just the returned page.
+- Drafts expire after 90 days through `pendingShareExpiresAt`; reads treat expired
+  rows as absent before the sweep.
+- The shared `CUURL#{urlHash}` row holds only a normalized public https URL and
+  what was derived from that public page, never user, account or draft data.
+
+### Evidence
+
+- [Repository](../../backend/internal/repository/customer_update.go) and
+  [service](../../backend/internal/service/customer_update.go), with their tests.

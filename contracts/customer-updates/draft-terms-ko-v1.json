@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "note": "Terms used by the deterministic draft checks (Python checks.py and Go CheckUpdateDraft). Both implementations mirror these lists and test against this file.",
+  "opportunityWords": ["oppty", "opportunity", "오퍼튜니티", "기회 단계"],
+  "meetingOfferWords": ["미팅", "세션", "자리", "통화", "시간"],
+  "figureUnits": ["원", "달러", "USD", "KRW", "%"],
+  "figureExamples": ["$12,000", "월 1,200만원", "35% 증가"]
+}

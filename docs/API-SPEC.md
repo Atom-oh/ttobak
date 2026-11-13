@@ -1757,6 +1757,48 @@ linked account. The service list unions those access paths; project deletion
 rejects remaining relationships. Canonical sets and reverse references change in
 one transaction. See account/project handlers and services for each mutation gate.
 
+#### Customer update drafts
+
+Authenticated routes (`CustomerUpdateHandler`); no public route. Per-user
+sources, uploaded links and drafts live under the caller's partition.
+Account-scoped routes require a direct member (inherited read access does not
+qualify).
+
+| Route | Body limit | Result |
+|---|---|---|
+| `GET /api/customer-updates/sources` | | `{ "sources": [...] }` |
+| `POST /api/customer-updates/sources` | 8 KiB | 201 source |
+| `PATCH /api/customer-updates/sources/{sourceId}` | 8 KiB | `{ "status": "updated" }` |
+| `DELETE /api/customer-updates/sources/{sourceId}` | | 204 |
+| `POST /api/customer-updates/links` | 512 KiB | `{ accepted, duplicate, rejected }` |
+| `GET /api/customer-updates/drafts` | | `{ drafts, nextCursor }` |
+| `GET /api/accounts/{accountId}/customer-update-drafts` | | `{ drafts, nextCursor }` |
+| `PATCH /api/customer-updates/drafts/{accountId}/{urlHash}` | 16 KiB | updated draft |
+| `GET`/`PUT /api/accounts/{accountId}/customer-update-setting` | 1 KiB | `{ "enabled": bool }` |
+
+The two draft list routes take `limit` (default 30, max 50) and an opaque
+`cursor`. The service reads up to `model.MaxUpdateDraftsScan` (1,000) of the
+caller's draft rows for the scope, drops expired drafts and drafts of accounts
+the caller is no longer a direct member of, and orders the rest open drafts
+(`status: "new"`) first, then newest `createdAt` first, ties by `urlHash`
+ascending. Pages are cut from that ordered list; the cursor encodes an offset
+into it. An absent cursor starts at the first draft; a cursor that does not
+decode to a non-negative offset, or lies beyond the list, returns 400.
+`nextCursor` is `""` on the last page. Drafts always carry `opportunities` and
+`links` as arrays (never `null`).
+
+`urlHash` must match `^[0-9a-f]{64}$`. Bodies reject unknown fields; `PUT`
+requires `enabled`. Uploading links for a paused (`disabled`) Slack source
+returns 409 `CONFLICT` before any write. Draft `PATCH` carries `action`, `body`,
+`reason` and the expected `revision`; a stale revision returns 409 `CONFLICT`.
+Invalid input returns 400, a missing user 401, `ErrForbidden` 403, `ErrNotFound`
+404; other failures return a generic 500.
+
+Draft text is KMS-sealed at rest (ADR-015, customer update drafts). Without the
+record key, draft list and `PATCH` routes return 503 `DRAFTS_UNAVAILABLE` and write
+nothing. A row that cannot be opened is left out of a list page; on `PATCH` it
+returns the generic 500. Responses never include the sealed value.
+
 ### Staged summary-sharing privacy
 
 Meeting detail adds `summarySharing`: `canCreateGrant`, `canShareToAccount`,
@@ -2542,6 +2584,16 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/crawler/sources/{sourceId}` | `crawlerHandler.UpdateSource` |
 | DELETE | `/api/crawler/sources/{sourceId}` | `crawlerHandler.Unsubscribe` |
 | GET | `/api/crawler/sources/{sourceId}/history` | `crawlerHandler.GetHistory` |
+| GET | `/api/customer-updates/sources` | `customerUpdateHandler.ListSources` |
+| POST | `/api/customer-updates/sources` | `customerUpdateHandler.AddSource` |
+| PATCH | `/api/customer-updates/sources/{sourceId}` | `customerUpdateHandler.PatchSource` |
+| DELETE | `/api/customer-updates/sources/{sourceId}` | `customerUpdateHandler.DeleteSource` |
+| POST | `/api/customer-updates/links` | `customerUpdateHandler.UploadLinks` |
+| GET | `/api/customer-updates/drafts` | `customerUpdateHandler.ListDrafts` |
+| GET | `/api/accounts/{accountId}/customer-update-drafts` | `customerUpdateHandler.ListAccountDrafts` |
+| PATCH | `/api/customer-updates/drafts/{accountId}/{urlHash}` | `customerUpdateHandler.PatchDraft` |
+| GET | `/api/accounts/{accountId}/customer-update-setting` | `customerUpdateHandler.GetSetting` |
+| PUT | `/api/accounts/{accountId}/customer-update-setting` | `customerUpdateHandler.PutSetting` |
 | GET | `/api/insights` | `insightsHandler.ListInsights` |
 | GET | `/api/insights/{sourceId}/{docHash}` | `insightsHandler.GetDocumentContent` |
 | DELETE | `/api/insights/{sourceId}/{docHash}` | `insightsHandler.DeleteDocument` |
