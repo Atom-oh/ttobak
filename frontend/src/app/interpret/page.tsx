@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
 import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
 import { TranslationView } from '@/components/TranslationView';
+import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { useInterpretSession } from '@/hooks/useInterpretSession';
 import { INTERPRET_MESSAGES, formatElapsed } from '@/lib/interpretSession';
 import { BILINGUAL_TARGET } from '@/lib/liveTranslation';
@@ -41,8 +43,20 @@ function Interpreter() {
   const [targetLang, setTargetLang] = useState(BILINGUAL_TARGET);
   const [interimTranslation, setInterimTranslation] = useState(false);
   const [inputUid, setInputUid] = useState(readNativeInputPreference);
-  const session = useInterpretSession({ targetLang, interimTranslation });
+  // The caption windows need the session's phase and the session needs their
+  // segment handler; the ref breaks that cycle (as on the record page).
+  const captionLinkRef = useRef<Pick<CaptionOverlayState, 'extraLanguage' | 'onSegment'> | null>(null);
+  const getExtraLanguage = useCallback(() => captionLinkRef.current?.extraLanguage, []);
+  const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
+    captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
+  }, []);
+  const session = useInterpretSession({ targetLang, interimTranslation, onSegment, getExtraLanguage });
   const idle = session.phase === 'idle';
+  const captions = useCaptionOverlay({ isRecording: !idle });
+  const { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment } = captions;
+  useEffect(() => {
+    captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
+  }, [captionExtraLanguage, captionOnSegment]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 lg:p-6">
@@ -117,6 +131,9 @@ function Interpreter() {
           마이크와 Mac에서 나는 소리를 함께 듣고 통역합니다. {INTERPRET_MESSAGES.notSaved}
         </p>
       )}
+
+      {/* Floating caption windows for a projector or a shared screen. */}
+      <CaptionOverlayPanel {...captions} isRecording={!idle} onExpandedChange={captions.setArranging} />
 
       <div className="min-h-0 flex-1">
         <TranslationView
