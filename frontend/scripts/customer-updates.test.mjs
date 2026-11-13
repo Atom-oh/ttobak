@@ -186,8 +186,15 @@ test('More after a status change re-reads so the 31st draft appears exactly once
 });
 
 test('mergeRereadDrafts refreshes shown drafts in place and appends new ones', () => {
-  const out = plain(cu.mergeRereadDrafts([mk('a', '1'), mk('a', '2')], [mk('a', '2', 'dismissed'), mk('a', '3'), mk('a', '1')]));
+  const out = plain(cu.mergeRereadDrafts([mk('a', '1'), mk('a', '2')], [mk('a', '2', 'dismissed'), mk('a', '3'), mk('a', '1')], true));
   assert.deepEqual(out.map((d) => [d.urlHash, d.status]), [['1', 'new'], ['2', 'dismissed'], ['3', 'new']]);
+});
+
+test('mergeRereadDrafts drops unlisted shown drafts only when the re-read reached the end', () => {
+  const shown = [mk('a', '1'), mk('a', 'gone'), mk('a', '2')];
+  const reread = [mk('a', '2'), mk('a', '1')];
+  assert.deepEqual(plain(cu.mergeRereadDrafts(shown, reread, true)).map((d) => d.urlHash), ['1', '2']);
+  assert.deepEqual(plain(cu.mergeRereadDrafts(shown, reread, false)).map((d) => d.urlHash), ['1', 'gone', '2']);
 });
 
 test('editSaveRevision submits the base revision until a conflict is acknowledged', () => {
@@ -203,10 +210,24 @@ test('cards save edits from their base revision and lists apply only the latest 
   assert.match(card, /input\.action === 'edit'\) setEditConflict\(true\)/);
   assert.match(card, /status === 403 && onAccessLost/);
   assert.match(read('components/AccountDraftsTab.tsx'), /onAccessLost=\{onAccessLost\}/);
+  assert.match(read('app/drafts/page.tsx'), /onAccessLost=\{reload\}/);
   for (const path of ['components/AccountDraftsTab.tsx', 'app/drafts/page.tsx']) {
     const src = read(path);
+    assert.match(src, /inFlight\.current \|\| draftStatusChanged\(drafts, next\)\) statusChanged\.current = true;\n    inFlight\.current = 0;\n    generation\.current\+\+;/, path);
     assert.match(src, /loadMoreAfterStatusChange\(fetchPage, drafts\)/, path);
     assert.match(src, /draftStatusChanged\(drafts, next\)/, path);
     assert.ok((src.match(/gen [!=]== generation\.current/g) ?? []).length >= 4, path);
+    // Each card is bound to the user the list was loaded for.
+    assert.equal((src.match(/<CustomerUpdateDraftCard /g) ?? []).length, (src.match(/draft=\{draft\} userId=\{userId\}/g) ?? []).length, path);
   }
+});
+
+test('draft and source mutations are bound to the signed-in user', () => {
+  const read = (path) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+  assert.match(read('components/CustomerUpdateDraftCard.tsx'), /patchDraft\([^;]*\{ expectedUserId: userId \}\)/);
+  const settings = read('components/CustomerUpdateSourcesSettings.tsx');
+  const calls = settings.match(/customerUpdatesApi\.\w+\([^;]*;/g) ?? [];
+  assert.equal(calls.length, 4);
+  for (const call of calls) assert.match(call, /expectedUserId: userId/, call);
+  assert.match(read('app/settings/page.tsx'), /<CustomerUpdateSourcesSettings userId=\{user\.userId\} \/>/);
 });

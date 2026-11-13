@@ -38,6 +38,8 @@ export default function DraftsPage() {
   // Only the latest list request applies; a status change makes the offset cursor stale.
   const generation = useRef(0);
   const statusChanged = useRef(false);
+  // Generation of the list request in flight, or 0.
+  const inFlight = useRef(0);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace('/');
@@ -50,6 +52,7 @@ export default function DraftsPage() {
 
   const reload = useCallback(async () => {
     const gen = ++generation.current;
+    inFlight.current = gen;
     setError('');
     try {
       const result = await loadDraftPages(fetchPage, pagesLoaded.current);
@@ -62,6 +65,7 @@ export default function DraftsPage() {
       if (gen === generation.current) setError(COPY['drafts.loadFailed']);
     } finally {
       if (gen === generation.current) setLoading(false);
+      if (inFlight.current === gen) inFlight.current = 0;
     }
   }, [fetchPage]);
 
@@ -87,6 +91,7 @@ export default function DraftsPage() {
 
   const loadMore = async () => {
     const gen = ++generation.current;
+    inFlight.current = gen;
     setMoreBusy(true);
     setError('');
     try {
@@ -107,12 +112,17 @@ export default function DraftsPage() {
     } catch {
       if (gen === generation.current) setError(COPY['drafts.loadFailed']);
     } finally {
+      if (inFlight.current === gen) inFlight.current = 0;
       setMoreBusy(false);
     }
   };
 
   const onChanged = (next: UpdateDraft) => {
-    if (draftStatusChanged(drafts, next)) statusChanged.current = true;
+    // Drop a list response read before this change committed; a dropped request
+    // or a status change leaves the offset cursor stale, so the next More re-reads.
+    if (inFlight.current || draftStatusChanged(drafts, next)) statusChanged.current = true;
+    inFlight.current = 0;
+    generation.current++;
     setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
   };
   const { open, handled } = useMemo(() => splitHandledDrafts(drafts), [drafts]);
@@ -150,7 +160,7 @@ export default function DraftsPage() {
                 <section key={group.accountId} aria-label={nameOf(group.accountId)} className="space-y-3">
                   <h3 className="text-lg font-bold text-slate-900 dark:text-text-main">{nameOf(group.accountId)}</h3>
                   {group.drafts.map((draft) => (
-                    <CustomerUpdateDraftCard key={`${draft.accountId}:${draft.urlHash}`} draft={draft} accountName={nameOf(draft.accountId)} onChanged={onChanged} onConflict={reload} />
+                    <CustomerUpdateDraftCard key={`${draft.accountId}:${draft.urlHash}`} draft={draft} userId={userId} accountName={nameOf(draft.accountId)} onChanged={onChanged} onConflict={reload} onAccessLost={reload} />
                   ))}
                 </section>
               ))}
@@ -162,7 +172,7 @@ export default function DraftsPage() {
                   </summary>
                   <div className="mt-3 space-y-3">
                     {handled.map((draft) => (
-                      <CustomerUpdateDraftCard key={`${draft.accountId}:${draft.urlHash}`} draft={draft} accountName={nameOf(draft.accountId)} onChanged={onChanged} onConflict={reload} />
+                      <CustomerUpdateDraftCard key={`${draft.accountId}:${draft.urlHash}`} draft={draft} userId={userId} accountName={nameOf(draft.accountId)} onChanged={onChanged} onConflict={reload} onAccessLost={reload} />
                     ))}
                   </div>
                 </details>

@@ -24,6 +24,8 @@ const DISMISS_REASONS = Object.keys(DISMISS_REASON_LABELS) as DismissReason[];
 
 interface Props {
   draft: UpdateDraft;
+  /** The signed-in user the list was loaded for; mutations are bound to it. */
+  userId: string;
   accountName: string;
   /** Called with the draft the server returned after a successful action. */
   onChanged: (draft: UpdateDraft) => void;
@@ -33,7 +35,7 @@ interface Props {
   onAccessLost?: () => void;
 }
 
-export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConflict, onAccessLost }: Props) {
+export function CustomerUpdateDraftCard({ draft, userId, accountName, onChanged, onConflict, onAccessLost }: Props) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
   // The revision the edit started from; after a 409 the next explicit save targets the latest one.
@@ -69,7 +71,7 @@ export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConfl
     setBusy(true);
     setMessage('');
     try {
-      const next = await customerUpdatesApi.patchDraft(draft.accountId, draft.urlHash, { ...input, revision });
+      const next = await customerUpdatesApi.patchDraft(draft.accountId, draft.urlHash, { ...input, revision }, { expectedUserId: userId });
       onChanged(next);
       return true;
     } catch (err) {

@@ -139,7 +139,7 @@ export default function SettingsPage() {
             {/* Customer update sources */}
             <section id="customer-update-sources" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
               <h3 className="section-header mb-4">{COPY['settings.sources.header']}</h3>
-              <CustomerUpdateSourcesSettings />
+              {user && <CustomerUpdateSourcesSettings userId={user.userId} />}
             </section>
 
             {/* MCP client connection guides */}

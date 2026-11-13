@@ -20,7 +20,7 @@ const INPUT_CLASS =
   'w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400';
 const LABEL_CLASS = 'block text-sm font-medium text-slate-700 dark:text-text-secondary mb-1';
 
-export function CustomerUpdateSourcesSettings() {
+export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
   const [sources, setSources] = useState<UpdateSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,14 +33,14 @@ export function CustomerUpdateSourcesSettings() {
 
   const load = useCallback(async () => {
     try {
-      const data = await customerUpdatesApi.listSources();
+      const data = await customerUpdatesApi.listSources({ expectedUserId: userId });
       setSources(data.sources || []);
     } catch {
       setError(COPY['settings.sources.loadFailed']);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     load();
@@ -61,7 +61,7 @@ export function CustomerUpdateSourcesSettings() {
     setAdding(true);
     setError(null);
     try {
-      await customerUpdatesApi.addSource({ kind, url: url.trim(), label: label.trim() });
+      await customerUpdatesApi.addSource({ kind, url: url.trim(), label: label.trim() }, { expectedUserId: userId });
       setUrl('');
       setLabel('');
       setKind('site');
@@ -80,7 +80,7 @@ export function CustomerUpdateSourcesSettings() {
     try {
       await customerUpdatesApi.patchSource(source.sourceId, {
         status: source.status === 'active' ? 'disabled' : 'active',
-      });
+      }, { expectedUserId: userId });
       await load();
     } catch {
       setError(COPY['settings.sources.actionFailed']);
@@ -94,7 +94,7 @@ export function CustomerUpdateSourcesSettings() {
     setBusyId(source.sourceId);
     setError(null);
     try {
-      await customerUpdatesApi.deleteSource(source.sourceId);
+      await customerUpdatesApi.deleteSource(source.sourceId, { expectedUserId: userId });
       await load();
     } catch {
       setError(COPY['settings.sources.actionFailed']);

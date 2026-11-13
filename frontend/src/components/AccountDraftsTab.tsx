@@ -56,6 +56,8 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
   // Only the latest list request applies; a status change makes the offset cursor stale.
   const generation = useRef(0);
   const statusChanged = useRef(false);
+  // Generation of the list request in flight, or 0.
+  const inFlight = useRef(0);
   const fetchPage = useCallback(
     (cursor: string | undefined) => customerUpdatesApi.listAccountDrafts(accountId, cursor, { expectedUserId: userId }),
     [accountId, userId],
@@ -63,6 +65,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
 
   const reload = useCallback(async () => {
     const gen = ++generation.current;
+    inFlight.current = gen;
     try {
       const result = await loadDraftPages(fetchPage, pagesLoaded.current);
       if (gen !== generation.current) return;
@@ -74,11 +77,14 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
       if (gen !== generation.current) return;
       if (isAccessLost(err)) onAccessLost();
       else setError(COPY['drafts.loadFailed']);
+    } finally {
+      if (inFlight.current === gen) inFlight.current = 0;
     }
   }, [fetchPage, onAccessLost]);
 
   const loadMore = async () => {
     const gen = ++generation.current;
+    inFlight.current = gen;
     setMoreBusy(true);
     setError('');
     try {
@@ -101,6 +107,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
       if (isAccessLost(err)) onAccessLost();
       else setError(COPY['drafts.loadFailed']);
     } finally {
+      if (inFlight.current === gen) inFlight.current = 0;
       setMoreBusy(false);
     }
   };
@@ -121,7 +128,11 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
   };
 
   const onChanged = (next: UpdateDraft) => {
-    if (draftStatusChanged(drafts, next)) statusChanged.current = true;
+    // Drop a list response read before this change committed; a dropped request
+    // or a status change leaves the offset cursor stale, so the next More re-reads.
+    if (inFlight.current || draftStatusChanged(drafts, next)) statusChanged.current = true;
+    inFlight.current = 0;
+    generation.current++;
     setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
   };
   const { open, handled } = splitHandledDrafts(drafts);
@@ -148,7 +159,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
         <section key={group.day} aria-label={group.day} className="space-y-3">
           <h3 className="text-sm font-semibold text-slate-500 dark:text-text-muted">{group.day}</h3>
           {group.drafts.map((draft) => (
-            <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} accountName={accountName} onChanged={onChanged} onConflict={reload} onAccessLost={onAccessLost} />
+            <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} userId={userId} accountName={accountName} onChanged={onChanged} onConflict={reload} onAccessLost={onAccessLost} />
           ))}
         </section>
       ))}
@@ -160,7 +171,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
           </summary>
           <div className="mt-3 space-y-3">
             {handled.map((draft) => (
-              <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} accountName={accountName} onChanged={onChanged} onConflict={reload} onAccessLost={onAccessLost} />
+              <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} userId={userId} accountName={accountName} onChanged={onChanged} onConflict={reload} onAccessLost={onAccessLost} />
             ))}
           </div>
         </details>

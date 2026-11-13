@@ -207,11 +207,14 @@ export async function loadDraftPages(
 /**
  * Merges a re-read from the first page into what is shown: shown drafts keep
  * their visible order with the server copy when the re-read has one, then
- * drafts not yet shown follow in server order.
+ * drafts not yet shown follow in server order. When the re-read reached the
+ * last page, a shown draft the server no longer lists is dropped; otherwise it
+ * is kept because it may be on a later page.
  */
-export function mergeRereadDrafts(shown: UpdateDraft[], reread: UpdateDraft[]): UpdateDraft[] {
+export function mergeRereadDrafts(shown: UpdateDraft[], reread: UpdateDraft[], reachedEnd: boolean): UpdateDraft[] {
   const fresh = new Map(reread.map((d) => [draftKey(d), d]));
-  return appendDraftPage(shown.map((d) => fresh.get(draftKey(d)) ?? d), reread);
+  const kept = reachedEnd ? shown.filter((d) => fresh.has(draftKey(d))) : shown;
+  return appendDraftPage(kept.map((d) => fresh.get(draftKey(d)) ?? d), reread);
 }
 
 /**
@@ -234,7 +237,7 @@ export async function loadMoreAfterStatusChange(
     cursor = page.nextCursor || undefined;
     pages++;
   } while (cursor && reread.length < shown.length + pageSize);
-  return { drafts: mergeRereadDrafts(shown, reread), nextCursor: cursor ?? '', pages };
+  return { drafts: mergeRereadDrafts(shown, reread, !cursor), nextCursor: cursor ?? '', pages };
 }
 
 /** True when `next` changes the status of a draft that is shown. */
