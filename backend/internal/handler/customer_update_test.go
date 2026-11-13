@@ -252,6 +252,18 @@ func (r *draftListRepo) UpdateSource(context.Context, string, string, *string, *
 	return nil
 }
 func (r *draftListRepo) DeleteSource(context.Context, string, string) error { return nil }
+func (r *draftListRepo) PutSourceWithFeedSub(context.Context, string, *model.UpdateSource, *model.UpdateFeedSub) error {
+	return nil
+}
+func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, string, *model.UpdateFeedSub) error {
+	return nil
+}
+func (r *draftListRepo) DeleteSourceWithFeedSub(context.Context, string, string, string) error {
+	return nil
+}
+func (r *draftListRepo) GetFeedState(context.Context, string) (*model.UpdateFeedState, error) {
+	return nil, nil
+}
 func (r *draftListRepo) PutItemsIfAbsent(context.Context, string, string, []model.UpdateItem) (int, error) {
 	return 0, nil
 }

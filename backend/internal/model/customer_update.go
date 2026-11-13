@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -101,6 +102,9 @@ type UpdateSource struct {
 	Status        string    `json:"status" dynamodbav:"status"`
 	CreatedAt     time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	BackfilledAt  time.Time `json:"backfilledAt" dynamodbav:"backfilledAt"`
+	// FeedError is the feed's last fetch error while it keeps failing. It is
+	// derived when sources are listed and never stored on the source row.
+	FeedError string `json:"feedError,omitempty" dynamodbav:"-"`
 }
 
 // UpdateItem is one normalized link seen from one or more sources.
@@ -246,6 +250,19 @@ func numericLastLabel(host string) bool {
 	return true
 }
 
+// allLabelsInteger reports whether every dot-separated label parses as an
+// integer in base 0 (decimal, 0x hex, leading-0 octal). Such hosts are IPv4
+// spellings (0x7f.0x1, 0177.0.0.0x1) that resolvers may treat as addresses.
+// Out-of-range integers still count as integers.
+func allLabelsInteger(host string) bool {
+	for _, label := range strings.Split(host, ".") {
+		if _, err := strconv.ParseUint(label, 0, 64); err != nil && !errors.Is(err, strconv.ErrRange) {
+			return false
+		}
+	}
+	return true
+}
+
 func isHexDigit(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
@@ -290,7 +307,7 @@ func NormalizeUpdateURL(raw string) (string, string, error) {
 		return "", "", rejectUpdateURL("userinfo")
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if host == "" || !strings.Contains(host, ".") || net.ParseIP(host) != nil || strings.Contains(host, ":") || numericLastLabel(host) {
+	if host == "" || !strings.Contains(host, ".") || net.ParseIP(host) != nil || strings.Contains(host, ":") || numericLastLabel(host) || allLabelsInteger(host) {
 		return "", "", rejectUpdateURL("host")
 	}
 	if isUpdateInternalHost(host) {

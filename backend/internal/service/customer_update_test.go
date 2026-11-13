@@ -37,6 +37,16 @@ type mockUpdateRepo struct {
 	opt           map[string]bool
 	openCalls     int
 	openErr       map[string]error // urlHash -> OpenDraft error
+
+	subPuts      []model.UpdateFeedSub // PutSourceWithFeedSub registry rows
+	statusSubs   []model.UpdateFeedSub // SetSourceStatusWithFeedSub rows
+	deletedFeeds []string              // DeleteSourceWithFeedSub feedHash
+	plainDeletes int
+	labelUpdates []string // UpdateSource labels
+	statusUpdate int      // plain UpdateSource calls that carried a status
+	feedStates   map[string]*model.UpdateFeedState
+	feedStateErr error
+	statusSubErr error
 }
 
 func newMockUpdateRepo() *mockUpdateRepo {
@@ -53,10 +63,44 @@ func (m *mockUpdateRepo) PutSourceIfAbsent(_ context.Context, _ string, s *model
 func (m *mockUpdateRepo) ListSources(_ context.Context, _ string, _ int) ([]model.UpdateSource, error) {
 	return m.sources, nil
 }
-func (m *mockUpdateRepo) UpdateSource(_ context.Context, _, _ string, _ *string, _ *string) error {
+func (m *mockUpdateRepo) UpdateSource(_ context.Context, _, _ string, label *string, status *string) error {
+	if label != nil {
+		m.labelUpdates = append(m.labelUpdates, *label)
+	}
+	if status != nil {
+		m.statusUpdate++
+	}
 	return m.updateSrcErr
 }
-func (m *mockUpdateRepo) DeleteSource(context.Context, string, string) error { return nil }
+func (m *mockUpdateRepo) DeleteSource(context.Context, string, string) error {
+	m.plainDeletes++
+	return nil
+}
+func (m *mockUpdateRepo) PutSourceWithFeedSub(_ context.Context, _ string, s *model.UpdateSource, sub *model.UpdateFeedSub) error {
+	if m.putSourceErr != nil {
+		return m.putSourceErr
+	}
+	m.sources = append(m.sources, *s)
+	m.subPuts = append(m.subPuts, *sub)
+	return nil
+}
+func (m *mockUpdateRepo) SetSourceStatusWithFeedSub(_ context.Context, _, _ string, sub *model.UpdateFeedSub) error {
+	if m.statusSubErr != nil {
+		return m.statusSubErr
+	}
+	m.statusSubs = append(m.statusSubs, *sub)
+	return nil
+}
+func (m *mockUpdateRepo) DeleteSourceWithFeedSub(_ context.Context, _, _, feedHash string) error {
+	m.deletedFeeds = append(m.deletedFeeds, feedHash)
+	return nil
+}
+func (m *mockUpdateRepo) GetFeedState(_ context.Context, feedHash string) (*model.UpdateFeedState, error) {
+	if m.feedStateErr != nil {
+		return nil, m.feedStateErr
+	}
+	return m.feedStates[feedHash], nil
+}
 func (m *mockUpdateRepo) PutItemsIfAbsent(_ context.Context, _, _ string, items []model.UpdateItem) (int, error) {
 	m.putCalls++
 	if m.putFailAt != 0 && m.putCalls == m.putFailAt {
@@ -804,5 +848,171 @@ func TestDirectMemberChecker(t *testing.T) {
 	boom := errors.New("boom")
 	if err := NewDirectMemberChecker(&mockDirectMemberRepo{err: boom}).RequireDirectMember(context.Background(), "u1", "a1"); !errors.Is(err, boom) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func feedTestHash(t *testing.T, raw string) (string, string) {
+	t.Helper()
+	normalized, hash, err := model.NormalizeUpdateURL(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return normalized, hash
+}
+
+func TestCustomerUpdateAddSourceRegistersFeed(t *testing.T) {
+	repo := newMockUpdateRepo()
+	svc := newUpdateSvc(repo, &mockMembers{})
+	got, err := svc.AddSource(context.Background(), "u1", &model.AddUpdateSourceRequest{Kind: "rss", Label: "B", URL: "https://example.com/feed?utm_source=a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, hash := feedTestHash(t, "https://example.com/feed")
+	if len(repo.subPuts) != 1 {
+		t.Fatalf("registry rows = %d", len(repo.subPuts))
+	}
+	sub := repo.subPuts[0]
+	if sub.FeedHash != hash || sub.URL != normalized || sub.Kind != "rss" || sub.UserID != "u1" ||
+		sub.SourceID != got.SourceID || sub.Status != model.UpdateSourceActive {
+		t.Fatalf("sub = %+v", sub)
+	}
+
+	// A second user with a plain URL gets the same feed hash.
+	repo2 := newMockUpdateRepo()
+	if _, err := newUpdateSvc(repo2, &mockMembers{}).AddSource(context.Background(), "u2", &model.AddUpdateSourceRequest{Kind: "rss", Label: "B", URL: "https://example.com/feed"}); err != nil {
+		t.Fatal(err)
+	}
+	if repo2.subPuts[0].FeedHash != sub.FeedHash {
+		t.Fatalf("feed hashes differ: %s vs %s", repo2.subPuts[0].FeedHash, sub.FeedHash)
+	}
+}
+
+func TestCustomerUpdateAddSourceSlackHasNoRegistryRow(t *testing.T) {
+	repo := newMockUpdateRepo()
+	if _, err := newUpdateSvc(repo, &mockMembers{}).AddSource(context.Background(), "u1", &model.AddUpdateSourceRequest{Kind: "slack", Label: "C", LocalSourceID: "local-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.subPuts) != 0 || len(repo.sources) != 1 {
+		t.Fatalf("subs=%d sources=%d", len(repo.subPuts), len(repo.sources))
+	}
+}
+
+func TestCustomerUpdatePatchStatusUsesTransaction(t *testing.T) {
+	_, hash := feedTestHash(t, "https://example.com/feed")
+	newRepo := func() *mockUpdateRepo {
+		r := newMockUpdateRepo()
+		r.sources = []model.UpdateSource{
+			{SourceID: "src1", Kind: "rss", URL: "https://example.com/feed", Status: "active"},
+			{SourceID: "src2", Kind: "slack", LocalSourceID: "l", Status: "active"},
+		}
+		return r
+	}
+	disabled, label := model.UpdateSourceDisabled, "New"
+
+	repo := newRepo()
+	if err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "src1", &model.PatchUpdateSourceRequest{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.statusSubs) != 1 || repo.statusSubs[0].Status != "disabled" || repo.statusSubs[0].FeedHash != hash ||
+		repo.statusSubs[0].SourceID != "src1" || repo.statusSubs[0].UserID != "u1" || repo.statusSubs[0].URL != "https://example.com/feed" {
+		t.Fatalf("statusSubs = %+v", repo.statusSubs)
+	}
+	if repo.statusUpdate != 0 {
+		t.Fatal("status must not go through the plain update")
+	}
+
+	// Label and status in one PATCH: transaction first, then the label.
+	repo = newRepo()
+	if err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "src1", &model.PatchUpdateSourceRequest{Status: &disabled, Label: &label}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.statusSubs) != 1 || len(repo.labelUpdates) != 1 || repo.labelUpdates[0] != "New" || repo.statusUpdate != 0 {
+		t.Fatalf("subs=%d labels=%v statusUpdate=%d", len(repo.statusSubs), repo.labelUpdates, repo.statusUpdate)
+	}
+
+	// A failed transaction applies no label.
+	repo = newRepo()
+	repo.statusSubErr = repository.ErrConditionFailed
+	err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "src1", &model.PatchUpdateSourceRequest{Status: &disabled, Label: &label})
+	if !errors.Is(err, ErrNotFound) || len(repo.labelUpdates) != 0 {
+		t.Fatalf("err=%v labels=%v", err, repo.labelUpdates)
+	}
+
+	// Label-only and Slack status changes use the plain path.
+	repo = newRepo()
+	if err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "src1", &model.PatchUpdateSourceRequest{Label: &label}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.statusSubs) != 0 || len(repo.labelUpdates) != 1 {
+		t.Fatalf("label-only: subs=%d labels=%v", len(repo.statusSubs), repo.labelUpdates)
+	}
+	if err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "src2", &model.PatchUpdateSourceRequest{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.statusSubs) != 0 || repo.statusUpdate != 1 {
+		t.Fatalf("slack: subs=%d statusUpdate=%d", len(repo.statusSubs), repo.statusUpdate)
+	}
+
+	// A status change for an unknown source falls through to the conditional update.
+	repo = newRepo()
+	repo.updateSrcErr = repository.ErrConditionFailed
+	if err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "missing", &model.PatchUpdateSourceRequest{Status: &disabled}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCustomerUpdateDeleteSourceRemovesRegistryRow(t *testing.T) {
+	_, hash := feedTestHash(t, "https://example.com/feed")
+	repo := newMockUpdateRepo()
+	repo.sources = []model.UpdateSource{
+		{SourceID: "src1", Kind: "rss", URL: "https://example.com/feed"},
+		{SourceID: "src2", Kind: "slack", LocalSourceID: "l"},
+	}
+	svc := newUpdateSvc(repo, &mockMembers{})
+	if err := svc.DeleteSource(context.Background(), "u1", "src1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.deletedFeeds) != 1 || repo.deletedFeeds[0] != hash || repo.plainDeletes != 0 {
+		t.Fatalf("deleted=%v plain=%d", repo.deletedFeeds, repo.plainDeletes)
+	}
+	if err := svc.DeleteSource(context.Background(), "u1", "src2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteSource(context.Background(), "u1", "absent"); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.deletedFeeds) != 1 || repo.plainDeletes != 2 {
+		t.Fatalf("deleted=%v plain=%d", repo.deletedFeeds, repo.plainDeletes)
+	}
+}
+
+func TestCustomerUpdateListSourcesFeedError(t *testing.T) {
+	_, failing := feedTestHash(t, "https://example.com/failing")
+	_, healthy := feedTestHash(t, "https://example.com/healthy")
+	repo := newMockUpdateRepo()
+	repo.sources = []model.UpdateSource{
+		{SourceID: "a", Kind: "rss", URL: "https://example.com/failing"},
+		{SourceID: "b", Kind: "rss", URL: "https://example.com/healthy"},
+		{SourceID: "c", Kind: "site", URL: "https://example.com/nostate"},
+		{SourceID: "d", Kind: "slack", LocalSourceID: "l"},
+	}
+	repo.feedStates = map[string]*model.UpdateFeedState{
+		failing: {FeedHash: failing, Failures: 3, LastError: "timeout"},
+		healthy: {FeedHash: healthy, Failures: 0, LastError: "old"},
+	}
+	got, err := newUpdateSvc(repo, &mockMembers{}).ListSources(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].FeedError != "timeout" || got[1].FeedError != "" || got[2].FeedError != "" || got[3].FeedError != "" {
+		t.Fatalf("feed errors = %q %q %q %q", got[0].FeedError, got[1].FeedError, got[2].FeedError, got[3].FeedError)
+	}
+	if repo.sources[0].FeedError != "" {
+		t.Fatal("the repository's rows must not be mutated")
+	}
+
+	repo.feedStateErr = errors.New("boom")
+	if _, err := newUpdateSvc(repo, &mockMembers{}).ListSources(context.Background(), "u1"); err == nil {
+		t.Fatal("feed state read failure must surface")
 	}
 }
