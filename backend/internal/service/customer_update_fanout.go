@@ -153,7 +153,9 @@ func (f *CustomerUpdateFanout) fanOneSub(ctx context.Context, run *fanoutRun, su
 		}
 	}
 
-	created := 0
+	// accepted counts created plus duplicate items, so a retry whose items all
+	// exist still heals a pending marker lost to an earlier partial failure.
+	accepted := 0
 	seen := make(map[string]bool, len(entries))
 	deliver := func() error {
 		for _, e := range entries {
@@ -179,14 +181,14 @@ func (f *CustomerUpdateFanout) fanOneSub(ctx context.Context, run *fanoutRun, su
 			if err != nil {
 				return err
 			}
-			created += n
+			accepted++
 			stats.Delivered += n
 		}
 		return nil
 	}
 	derr := deliver()
 	// Mark pending even after a partial failure so written items are not stranded.
-	if created > 0 {
+	if accepted > 0 {
 		if merr := f.repo.MarkPending(ctx, sub.UserID); merr != nil {
 			derr = errors.Join(derr, merr)
 		}

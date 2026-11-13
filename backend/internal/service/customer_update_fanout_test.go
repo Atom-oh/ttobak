@@ -23,6 +23,7 @@ type fanoutMock struct {
 	putErr       map[string]error // by userID
 	pendingURLs  []string
 	marked       []string
+	markErr      error
 	fannedAt     map[string]time.Time // userID -> at
 	existingURLs map[string]bool
 }
@@ -86,7 +87,7 @@ func (m *fanoutMock) EnsureURLPending(_ context.Context, _, url string) error {
 }
 func (m *fanoutMock) MarkPending(_ context.Context, userID string) error {
 	m.marked = append(m.marked, userID)
-	return nil
+	return m.markErr
 }
 
 var fanoutNow = time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
@@ -148,7 +149,7 @@ func TestFanout_DeliversAndRejects(t *testing.T) {
 	}
 }
 
-func TestFanout_DuplicateItemsNotMarked(t *testing.T) {
+func TestFanout_DuplicateItemsStillMarkPending(t *testing.T) {
 	m := newFanoutMock()
 	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
 	m.pages[""] = []model.UpdateFeedSub{s}
@@ -164,8 +165,58 @@ func TestFanout_DuplicateItemsNotMarked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Delivered != 0 || len(m.marked) != 0 {
+	if st.Delivered != 0 || len(m.marked) != 1 {
 		t.Fatalf("stats=%+v marked=%v", st, m.marked)
+	}
+}
+
+func TestFanout_LostMarkerHealedOnRetry(t *testing.T) {
+	m := newFanoutMock()
+	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
+	m.pages[""] = []model.UpdateFeedSub{s}
+	m.states[s.FeedHash] = &model.UpdateFeedState{UpdatedAt: fanoutNow.Add(-time.Minute)}
+	m.entries[s.FeedHash] = []model.UpdateFeedEntry{fanoutEntry(1, fanoutNow.Add(-time.Hour), "https://example.com/a")}
+	f := fanoutSvc(m)
+	m.markErr = errors.New("mark failed")
+	if _, err := f.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.fannedAt["u1"]; ok {
+		t.Fatal("FannedAt must stay unchanged when MarkPending fails")
+	}
+	// Retry: the item already exists (duplicate) but the marker is healed.
+	m.markErr = nil
+	m.marked = nil
+	st, err := f.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 0 || len(m.marked) != 1 || !m.fannedAt["u1"].Equal(fanoutNow) {
+		t.Fatalf("stats=%+v marked=%v fannedAt=%v", st, m.marked, m.fannedAt)
+	}
+}
+
+func TestFanout_DisabledSubOnSameFeedGetsNothing(t *testing.T) {
+	m := newFanoutMock()
+	d, a := fanoutSub("feedaaaaaaaaaaaaaa", "u1"), fanoutSub("feedaaaaaaaaaaaaaa", "u2")
+	d.Status = model.UpdateSourceDisabled
+	m.pages[""] = []model.UpdateFeedSub{d, a}
+	m.states[a.FeedHash] = &model.UpdateFeedState{UpdatedAt: fanoutNow.Add(-time.Minute)}
+	m.entries[a.FeedHash] = []model.UpdateFeedEntry{fanoutEntry(1, fanoutNow.Add(-time.Hour), "https://example.com/a")}
+	st, err := fanoutSvc(m).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.fannedAt["u1"]; ok {
+		t.Fatal("disabled sub must not get FannedAt")
+	}
+	for k := range m.existingURLs {
+		if k[:2] == "u1" {
+			t.Fatalf("disabled sub received item %s", k)
+		}
+	}
+	if st.Subs != 2 || st.Skipped != 1 || st.Delivered != 1 || !m.fannedAt["u2"].Equal(fanoutNow) {
+		t.Fatalf("stats=%+v fannedAt=%v", st, m.fannedAt)
 	}
 }
 
