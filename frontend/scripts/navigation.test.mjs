@@ -20,7 +20,7 @@ const labels = nav.NAV_GROUPS.map(g => [g.name, g.items.map(i => i.label)]);
 test('menu groups follow the agreed order', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(labels)), [
     ['', ['Home', 'Assistant']],
-    ['업무', ['Meetings', 'Accounts', 'Projects', 'Docs', 'SA Activity']],
+    ['업무', ['Meetings', 'Accounts', 'Projects', 'Docs', 'SA Activity', '고객 초안']],
     ['지식', ['Library', 'Deep Research', 'News & Updates', 'Custom Dictionary']],
   ]);
   assert.equal(nav.SETTINGS_ITEM.href, '/settings');

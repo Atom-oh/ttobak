@@ -22,6 +22,7 @@ import type {
 } from '@/types/calendar';
 import type { NewsSourceItem, NewsSourcesPage } from '@/lib/newsRegistration';
 import type { NewsCollectResponse } from '@/lib/newsCollect';
+import type { AddUpdateSourceInput, PatchUpdateDraftInput, PatchUpdateSourceInput, UpdateDraft, UpdateDraftsPage, UpdateSource } from '@/lib/customerUpdates';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -785,6 +786,30 @@ export const newsSourcesApi = {
     const suffix = q.toString();
     return api.get<NewsSourcesPage>(`/api/news-sources${suffix ? `?${suffix}` : ''}`, { ...options, cache: 'no-store' });
   },
+};
+
+// Customer update drafts API
+type CustomerUpdatesOptions = { signal?: AbortSignal; expectedUserId?: string };
+const draftsQuery = (cursor?: string) => (cursor ? `?cursor=${encodeURIComponent(cursor)}` : '');
+export const customerUpdatesApi = {
+  listSources: (options?: CustomerUpdatesOptions) =>
+    api.get<{ sources: UpdateSource[] }>('/api/customer-updates/sources', { ...options, cache: 'no-store' }),
+  addSource: (input: AddUpdateSourceInput, options?: CustomerUpdatesOptions) =>
+    api.post<UpdateSource>('/api/customer-updates/sources', input, options),
+  patchSource: (sourceId: string, input: PatchUpdateSourceInput, options?: CustomerUpdatesOptions) =>
+    api.patch<{ status: string }>(`/api/customer-updates/sources/${encodeURIComponent(sourceId)}`, input, options),
+  deleteSource: (sourceId: string, options?: CustomerUpdatesOptions) =>
+    api.delete<void>(`/api/customer-updates/sources/${encodeURIComponent(sourceId)}`, options),
+  listDrafts: (cursor?: string, options?: CustomerUpdatesOptions) =>
+    api.get<UpdateDraftsPage>(`/api/customer-updates/drafts${draftsQuery(cursor)}`, { ...options, cache: 'no-store' }),
+  listAccountDrafts: (accountId: string, cursor?: string, options?: CustomerUpdatesOptions) =>
+    api.get<UpdateDraftsPage>(`/api/accounts/${encodeURIComponent(accountId)}/customer-update-drafts${draftsQuery(cursor)}`, { ...options, cache: 'no-store' }),
+  patchDraft: (accountId: string, urlHash: string, body: PatchUpdateDraftInput, options?: CustomerUpdatesOptions) =>
+    api.patch<UpdateDraft>(`/api/customer-updates/drafts/${encodeURIComponent(accountId)}/${encodeURIComponent(urlHash)}`, body, options),
+  getSetting: (accountId: string, options?: CustomerUpdatesOptions) =>
+    api.get<{ enabled: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/customer-update-setting`, { ...options, cache: 'no-store' }),
+  putSetting: (accountId: string, enabled: boolean, options?: CustomerUpdatesOptions) =>
+    api.put<{ enabled: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/customer-update-setting`, { enabled }, options),
 };
 
 // Insights API

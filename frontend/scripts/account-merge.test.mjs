@@ -234,6 +234,7 @@ function detailFixture({ viewer, account = {}, transferOwner = async () => ({}) 
     '@/components/account/AccountPeople': { AccountPeople: empty },
     '@/components/account/CustomerBriefCard': { CustomerBriefCard: empty },
     '@/components/account/AccountKB': { AccountKB: empty },
+    '@/components/AccountDraftsTab': { AccountDraftsTab: () => null },
     '@/lib/accountOverview': { eventProjectLinks: () => ({}) },
     '@/components/workspace/AccountWorkspaceSelector': { AccountWorkspaceSelector: empty, useAccountWorkspaceAccounts: () => ({ accounts: [], loading: false, error: null }) },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({}) },

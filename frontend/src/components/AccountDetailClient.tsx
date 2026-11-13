@@ -5,7 +5,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { accountApi, projectApi } from '@/lib/api';
+import { accountApi, customerUpdatesApi, projectApi } from '@/lib/api';
+import { AccountDraftsTab } from '@/components/AccountDraftsTab';
 import { accountCapabilities } from '@/lib/accountAccess';
 import { addMemberWithInvite, planMemberOutcome } from '@/lib/accountInvite';
 import { uploadDocFile } from '@/lib/upload';
@@ -354,6 +355,8 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     return byEvent;
   }, [accountId, user?.userId]);
   const eventLinksState = useAccountSection(loadEventLinks, eventsVisible && tab === 'events', onAccessLost);
+  const loadUpdateDrafts = useCallback((signal: AbortSignal) => customerUpdatesApi.listAccountDrafts(accountId, undefined, { signal, expectedUserId: user?.userId }), [accountId, user?.userId]);
+  const updateDraftsState = useAccountSection(loadUpdateDrafts, !!account && eventsVisible && tab === 'update-drafts', onAccessLost);
   const retryEventLinks = eventLinksState.retry;
   // Every link or news-source mutation changes all of these views.
   const refreshOverview = useCallback(() => {
@@ -796,6 +799,15 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
               {tab === 'events' && eventsVisible && user?.userId && (
                 <AccountEvents key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
                   eventLinks={eventLinksState.data ?? undefined} onLinksChanged={refreshOverview} />
+              )}
+              {tab === 'update-drafts' && eventsVisible && user?.userId && (
+                <>
+                  <SectionStatus {...updateDraftsState} />
+                  {updateDraftsState.data && (
+                    <AccountDraftsTab key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}
+                      accountName={account.name} initial={updateDraftsState.data} onAccessLost={onAccessLost} />
+                  )}
+                </>
               )}
               {tab === 'kb' && eventsVisible && user?.userId && (
                 <AccountKB key={`${accountId}:${user.userId}:${membershipRevision}`} accountId={accountId} userId={user.userId}

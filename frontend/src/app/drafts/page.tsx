@@ -1,0 +1,197 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/components/auth/AuthProvider';
+import { AppLayout } from '@/components/layout/AppLayout';
+import { CustomerUpdateDraftCard } from '@/components/CustomerUpdateDraftCard';
+import { accountApi, customerUpdatesApi } from '@/lib/api';
+import {
+  COPY,
+  appendDraftPage,
+  draftStatusChanged,
+  groupDraftsByAccount,
+  loadDraftPages,
+  loadMoreAfterStatusChange,
+  normalizeDraft,
+  normalizeDraftsPage,
+  replaceDraft,
+  shortAccountId,
+  showDraftsEmpty,
+  splitHandledDrafts,
+  type UpdateDraft,
+} from '@/lib/customerUpdates';
+
+// Cross-account inbox of the signed-in user's customer update drafts.
+export default function DraftsPage() {
+  const { isLoading, isAuthenticated, user, membershipRevision } = useAuth();
+  const router = useRouter();
+  const userId = user?.userId ?? '';
+  const [drafts, setDrafts] = useState<UpdateDraft[]>([]);
+  const [nextCursor, setNextCursor] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [moreBusy, setMoreBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [names, setNames] = useState<Map<string, string>>(new Map());
+  // Pages loaded so far, so a reload after a conflict keeps what the user had open.
+  const pagesLoaded = useRef(1);
+  // Only the latest list request applies; a status change makes the offset cursor stale.
+  const generation = useRef(0);
+  const statusChanged = useRef(false);
+  // Generation of the list request in flight, or 0.
+  const inFlight = useRef(0);
+
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) router.replace('/');
+  }, [isLoading, isAuthenticated, router]);
+
+  const fetchPage = useCallback(
+    (cursor: string | undefined) => customerUpdatesApi.listDrafts(cursor, { expectedUserId: userId }),
+    [userId],
+  );
+
+  const reload = useCallback(async () => {
+    const gen = ++generation.current;
+    inFlight.current = gen;
+    setError('');
+    try {
+      const result = await loadDraftPages(fetchPage, pagesLoaded.current);
+      if (gen !== generation.current) return;
+      pagesLoaded.current = result.pages;
+      statusChanged.current = false;
+      setDrafts(result.drafts);
+      setNextCursor(result.nextCursor);
+    } catch {
+      if (gen === generation.current) setError(COPY['drafts.loadFailed']);
+    } finally {
+      if (gen === generation.current) setLoading(false);
+      if (inFlight.current === gen) inFlight.current = 0;
+    }
+  }, [fetchPage]);
+
+  useEffect(() => {
+    if (!userId) return;
+    // A user or membership change starts over from the first page.
+    pagesLoaded.current = 1;
+    void Promise.resolve().then(reload);
+  }, [userId, membershipRevision, reload]);
+
+  // Account names are best effort: an unresolved id shows shortened.
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    Promise.resolve()
+      .then(() => accountApi.list({ expectedUserId: userId }))
+      .then((result) => {
+        if (active && Array.isArray(result?.accounts)) setNames(new Map(result.accounts.map((a) => [a.accountId, a.name])));
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [userId, membershipRevision]);
+
+  const loadMore = async () => {
+    const gen = ++generation.current;
+    inFlight.current = gen;
+    setMoreBusy(true);
+    setError('');
+    try {
+      if (statusChanged.current) {
+        const result = await loadMoreAfterStatusChange(fetchPage, drafts);
+        if (gen !== generation.current) return;
+        statusChanged.current = false;
+        pagesLoaded.current = result.pages;
+        setDrafts(result.drafts);
+        setNextCursor(result.nextCursor);
+      } else {
+        const page = normalizeDraftsPage(await fetchPage(nextCursor));
+        if (gen !== generation.current) return;
+        setDrafts((prev) => appendDraftPage(prev, page.drafts));
+        setNextCursor(page.nextCursor);
+        pagesLoaded.current += 1;
+      }
+    } catch {
+      if (gen === generation.current) setError(COPY['drafts.loadFailed']);
+    } finally {
+      if (inFlight.current === gen) inFlight.current = 0;
+      setMoreBusy(false);
+    }
+  };
+
+  const onChanged = (next: UpdateDraft) => {
+    // Drop a list response read before this change committed; a dropped request
+    // or a status change leaves the offset cursor stale, so the next More re-reads.
+    if (inFlight.current || draftStatusChanged(drafts, next)) statusChanged.current = true;
+    inFlight.current = 0;
+    generation.current++;
+    setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
+  };
+  const { open, handled } = useMemo(() => splitHandledDrafts(drafts), [drafts]);
+  const groups = useMemo(() => groupDraftsByAccount(open), [open]);
+  const nameOf = (accountId: string) => names.get(accountId) || shortAccountId(accountId);
+
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><p role="status">불러오는 중…</p></div>;
+  if (!isAuthenticated || !userId) return null;
+
+  return (
+    <AppLayout activePath="/drafts">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="workspace-page space-y-6">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">{COPY['drafts.title']}</h2>
+            <p className="text-slate-600 dark:text-text-muted mt-2">{COPY['drafts.pageHint']}</p>
+          </div>
+
+          {error && (
+            <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-600 dark:text-red-400">
+              <span>{error}</span>
+              <button type="button" onClick={reload} className="font-semibold text-primary hover:underline">다시 시도</button>
+            </div>
+          )}
+
+          {loading ? (
+            <p role="status" className="text-sm text-slate-600 dark:text-text-muted">불러오는 중…</p>
+          ) : (
+            <>
+              {showDraftsEmpty(drafts, nextCursor) && !error && (
+                <p className="text-sm text-slate-600 dark:text-text-muted">{COPY['drafts.empty']}</p>
+              )}
+
+              {groups.map((group) => (
+                <section key={group.accountId} aria-label={nameOf(group.accountId)} className="space-y-3">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-text-main">{nameOf(group.accountId)}</h3>
+                  {group.drafts.map((draft) => (
+                    <CustomerUpdateDraftCard key={`${draft.accountId}:${draft.urlHash}`} draft={draft} userId={userId} accountName={nameOf(draft.accountId)} onChanged={onChanged} onConflict={reload} onAccessLost={reload} />
+                  ))}
+                </section>
+              ))}
+
+              {handled.length > 0 && (
+                <details>
+                  <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-text-secondary">
+                    {COPY['drafts.handled']} ({handled.length})
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    {handled.map((draft) => (
+                      <CustomerUpdateDraftCard key={`${draft.accountId}:${draft.urlHash}`} draft={draft} userId={userId} accountName={nameOf(draft.accountId)} onChanged={onChanged} onConflict={reload} onAccessLost={reload} />
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              {nextCursor && (
+                <button
+                  type="button"
+                  disabled={moreBusy}
+                  onClick={loadMore}
+                  className="min-h-9 px-4 rounded-lg text-sm font-medium border border-slate-200 dark:border-white/10 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-primary"
+                >
+                  {COPY['drafts.more']}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </AppLayout>
+  );
+}
