@@ -308,11 +308,14 @@ export class NewsPublication extends Construct {
       sfn.Condition.isString('$.publication.output.status'),
     );
     const diagnostics = new sfn.Pass(this, 'ReadDailyDiagnostics', {
-      parameters: { 'errorsJson.$': 'States.JsonToString($.publication.output.errors)' },
+      parameters: { 'faultsJson.$': 'States.JsonToString($.publication.output.faults)' },
     });
+    // `faults` holds only what makes the run itself unhealthy (search, storage,
+    // budget, expiry, recovery). Per-article rejections stay in `errors` and do
+    // not fail the source: rejecting articles is the pipeline working.
     diagnostics.next(new sfn.Choice(this, 'DailyDiagnosticsComplete')
       // JSON serialization distinguishes [] from {}, null, and the string "[]".
-      .when(sfn.Condition.stringEquals('$.errorsJson', '[]'), completed)
+      .when(sfn.Condition.stringEquals('$.faultsJson', '[]'), completed)
       .otherwise(failed));
     const finalized = new sfn.Pass(this, 'ReadFinalizedIdentity', {
       parameters: { 'candidatesJson.$': 'States.JsonToString($.publication.output.candidates)' },
@@ -329,7 +332,7 @@ export class NewsPublication extends Construct {
         sfn.Condition.or(
           sfn.Condition.stringEquals('$.publication.output.status', 'COMPLETED'),
           sfn.Condition.stringEquals('$.publication.output.status', 'PARTIAL')),
-        sfn.Condition.isPresent('$.publication.output.errors'),
+        sfn.Condition.isPresent('$.publication.output.faults'),
         sfn.Condition.isPresent('$.publication.output.usageComplete'),
         sfn.Condition.isBoolean('$.publication.output.usageComplete'),
         sfn.Condition.booleanEquals('$.publication.output.usageComplete', true)), diagnostics)

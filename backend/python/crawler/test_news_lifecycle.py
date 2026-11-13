@@ -154,6 +154,7 @@ class TestRunTransactions(unittest.TestCase):
             self.assertEqual(self.history(), [])
         receipt = self.runs.finish(self.run, NOW + ACCEPT_SECONDS, recovery=True)
         self.assertIn("RECOVERED_WITHOUT_OUTCOMES", receipt["errors"])
+        self.assertIn("RECOVERED_WITHOUT_OUTCOMES", receipt["faults"])
         self.assertEqual(receipt["chargedUsd"], 0)
         self.assertEqual(self.runs.finish(self.run, NOW + ACCEPT_SECONDS + 1, recovery=True), receipt)
         self.assertEqual(len(self.history()), 1)
@@ -278,6 +279,7 @@ class TestRunTransactions(unittest.TestCase):
                                  "privateRawQuery": "must not enter history"}]}
         receipt = self.runs.finish(self.run, NOW + 1, discovery=discovery)
         self.assertEqual(receipt["errors"], ["SEARCH_FAILED"])
+        self.assertEqual(receipt["faults"], ["SEARCH_FAILED"])
         self.assertEqual(receipt["queryCount"], 2)
         self.assertNotIn("must not enter history", str(self.history()))
 
@@ -288,7 +290,39 @@ class TestRunTransactions(unittest.TestCase):
         self.assertEqual(receipt["status"], "PARTIAL")
         self.assertEqual(receipt["workerOutcomes"], {"FETCH_REJECTED": 1})
         self.assertEqual(receipt["errors"], ["ACCESS_DENIED"])
+        self.assertEqual(receipt["faults"], [])
         self.assertEqual(receipt["chargedUsd"], 0)
+
+    def test_only_run_level_outcomes_are_faults(self):
+        def outcome(status, reason):
+            return {"sourceId": self.run.source_id, "runId": self.run.run_id,
+                    "status": status, "reason": reason}
+        receipt = self.runs.finish(self.run, NOW + 1, outcomes=[
+            outcome("FETCH_REJECTED", "HTTP_403"), outcome("FETCH_REJECTED", "JS_SHELL"),
+            outcome("FETCH_REJECTED", "RUN_BUDGET"), outcome("DEFERRED", "MODEL_BUDGET"),
+            outcome("FAILED", "STORAGE_REJECTED")])
+        self.assertEqual(receipt["errors"], ["HTTP_403", "JS_SHELL", "MODEL_BUDGET",
+                                             "RUN_BUDGET", "STORAGE_REJECTED"])
+        self.assertEqual(receipt["faults"], ["MODEL_BUDGET", "RUN_BUDGET", "STORAGE_REJECTED"])
+
+    def attempt_faults(self, status, reason):
+        self.reserve()
+        self.store.finish(
+            self.job, now=NOW + 1, status=status, reason=reason, known_cost="0.1",
+            usage_complete=True, usage={"inputTokens": 100, "outputTokens": 10})
+        receipt = self.runs.finish(self.run, NOW + 10)
+        self.assertEqual(receipt["status"], "PARTIAL")
+        self.assertEqual(receipt["errors"], [reason])
+        return receipt["faults"]
+
+    def test_rejected_article_is_not_a_run_fault(self):
+        self.assertEqual(self.attempt_faults("REJECTED", "NOT_RELEVANT"), [])
+
+    def test_budget_rejection_is_a_run_fault(self):
+        self.assertEqual(self.attempt_faults("REJECTED", "RUN_BUDGET"), ["RUN_BUDGET"])
+
+    def test_failed_attempt_is_a_run_fault(self):
+        self.assertEqual(self.attempt_faults("FAILED", "SOURCE_CHANGED"), ["SOURCE_CHANGED"])
 
     def test_foreign_worker_result_cannot_enter_run_history(self):
         with self.assertRaisesRegex(StateRejected, "INVALID_WORKER_RESULTS"):
