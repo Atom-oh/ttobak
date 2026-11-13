@@ -968,6 +968,7 @@ row and shows reload copy.
 | `request_needed` | Copy the Slack request (also shown in a read-only field) and "I sent it" (`markRequested`). |
 | `needs_account` | Account picker over my accounts (`pickAccount`); waiting copy once an account is set. |
 | `needs_owner` | Owner picker over the account's direct `SA`/`SSA` members with a user ID, excluding me and pending members (`pickOwner`). |
+| `needs_account`, `needs_owner` | Also "not a customer meeting" (`close`): the task leaves the list, and intake neither recreates nor reclassifies a closed task. |
 | mine `issue_needed`, theirs `requested` | SpecReq ID input accepting a UUID (`linkSpecReq`). |
 
 A linked SpecReq shows its ID in a code element with a copy button; there is no known SpecReq page URL, so no link is rendered. When the account cannot be resolved, the copy button stays disabled and a hint explains why. The Slack
