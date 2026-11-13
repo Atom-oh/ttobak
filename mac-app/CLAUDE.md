@@ -46,6 +46,8 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | cleanup_recording | Validated inactive/finalized path; removes WAV and adopted entry |
 | release_recording_power | Releases only the path's idle-sleep protection, preserving recovery data |
 | list_leftover_recordings | Startup-adopted inactive WAVs, newest first; not current-session recordings |
+| start_listening | input_device_uid?; live interpretation capture with no file; returns optional warnings and input; AlreadyRunning while a recording or another start holds the slot |
+| stop_listening | returns stopped (false when nothing was listening), stop_timed_out; idempotent, never stops a recording |
 | control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
 | control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
@@ -107,7 +109,7 @@ their saved `open` flags) when the main window is destroyed, and need
 `macOSPrivateApi` for transparency. `interpreter.rs` mirrors
 `backend/internal/service/translate.go`; keep them aligned.
 native-mic-muted ({muted, app Zoom|Google Meet, reason muted}) reports
-the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. Remote event capability grants must
+the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. native-listening-stopped ({reason sleep|recording}) goes to the main window only when something other than `stop_listening` ended a listening session. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the
 ACL for every command called from the remote SPA: each command must be listed in
 `build.rs` COMMANDS and its `allow-*` permission granted in
@@ -167,6 +169,11 @@ ACL for every command called from the remote SPA: each command must be listed in
   by 60 seconds of stalled progress, never a total duration (the check's request
   timeout is cleared from the found `Update`). Releases follow
   `docs/runbooks/mac-app-release.md`; sign only with the pinned "TTOBAK Dev" identity.
+- A listening session (`start_listening`) shares the recorder slot with
+  recordings, so the two never capture together. It has no path and writes no
+  file: it is never a recording for status, upload, cleanup, leftover adoption
+  or meeting detection. `start_recording` stops it first, `sleep.rs` stops it
+  at will-sleep, and the updater treats it as busy.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.
 

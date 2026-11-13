@@ -97,13 +97,22 @@ mod mac {
         match message {
             CAN_SYSTEM_SLEEP => allow(),
             SYSTEM_WILL_SLEEP => {
-                let recording = app
-                    .state::<RecorderState>()
-                    .recorder
-                    .lock()
-                    .snapshot()
-                    .recording;
-                if !recording {
+                let snapshot = app.state::<RecorderState>().recorder.lock().snapshot();
+                if snapshot.listening {
+                    // Live interpretation has nothing to save: stop the
+                    // capture, tell the page why, then let the system sleep.
+                    log::info!("system will sleep while listening: stopping");
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let stop = crate::end_listening(&app, Some("sleep"));
+                        if tokio::time::timeout(STOP_DEADLINE, stop).await.is_err() {
+                            log::warn!("listening stop not finished before the deadline");
+                        }
+                        allow();
+                    });
+                    return;
+                }
+                if !snapshot.recording {
                     allow();
                     return;
                 }
