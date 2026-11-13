@@ -243,6 +243,9 @@ func init() {
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName, bucketName)
 	insightsService.SetAccountMemberReader(repo)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
+	customerUpdateHandler := handler.NewCustomerUpdateHandler(service.NewCustomerUpdateService(
+		repository.NewCustomerUpdateRepository(dynamoClient, tableName),
+		service.NewDirectMemberChecker(repo), nil))
 	sfnClient := sfn.NewFromConfig(cfg, func(o *sfn.Options) { o.TracerProvider = awsTracing })
 	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo, insightsService)
 	accountNewsService.SetNewsSourceDirectory(crawlerRepo, repo)
@@ -614,6 +617,18 @@ func init() {
 		r.Put("/api/crawler/sources/{sourceId}", crawlerHandler.UpdateSource)
 		r.Delete("/api/crawler/sources/{sourceId}", crawlerHandler.Unsubscribe)
 		r.Get("/api/crawler/sources/{sourceId}/history", crawlerHandler.GetHistory)
+
+		// Customer update drafts
+		r.Get("/api/customer-updates/sources", customerUpdateHandler.ListSources)
+		r.Post("/api/customer-updates/sources", customerUpdateHandler.AddSource)
+		r.Patch("/api/customer-updates/sources/{sourceId}", customerUpdateHandler.PatchSource)
+		r.Delete("/api/customer-updates/sources/{sourceId}", customerUpdateHandler.DeleteSource)
+		r.Post("/api/customer-updates/links", customerUpdateHandler.UploadLinks)
+		r.Get("/api/customer-updates/drafts", customerUpdateHandler.ListDrafts)
+		r.Get("/api/accounts/{accountId}/customer-update-drafts", customerUpdateHandler.ListAccountDrafts)
+		r.Patch("/api/customer-updates/drafts/{accountId}/{urlHash}", customerUpdateHandler.PatchDraft)
+		r.Get("/api/accounts/{accountId}/customer-update-setting", customerUpdateHandler.GetSetting)
+		r.Put("/api/accounts/{accountId}/customer-update-setting", customerUpdateHandler.PutSetting)
 
 		// Insights
 		r.Get("/api/insights", insightsHandler.ListInsights)
