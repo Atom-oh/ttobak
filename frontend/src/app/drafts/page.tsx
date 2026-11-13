@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -8,9 +8,14 @@ import { CustomerUpdateDraftCard } from '@/components/CustomerUpdateDraftCard';
 import { accountApi, customerUpdatesApi } from '@/lib/api';
 import {
   COPY,
+  appendDraftPage,
   groupDraftsByAccount,
+  loadDraftPages,
+  normalizeDraft,
+  normalizeDraftsPage,
   replaceDraft,
   shortAccountId,
+  showDraftsEmpty,
   splitHandledDrafts,
   type UpdateDraft,
 } from '@/lib/customerUpdates';
@@ -26,6 +31,8 @@ export default function DraftsPage() {
   const [moreBusy, setMoreBusy] = useState(false);
   const [error, setError] = useState('');
   const [names, setNames] = useState<Map<string, string>>(new Map());
+  // Pages loaded so far, so a reload after a conflict keeps what the user had open.
+  const pagesLoaded = useRef(1);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace('/');
@@ -34,9 +41,13 @@ export default function DraftsPage() {
   const reload = useCallback(async () => {
     setError('');
     try {
-      const page = await customerUpdatesApi.listDrafts(undefined, { expectedUserId: userId });
-      setDrafts(page.drafts || []);
-      setNextCursor(page.nextCursor || '');
+      const result = await loadDraftPages(
+        (cursor) => customerUpdatesApi.listDrafts(cursor, { expectedUserId: userId }),
+        pagesLoaded.current,
+      );
+      pagesLoaded.current = result.pages;
+      setDrafts(result.drafts);
+      setNextCursor(result.nextCursor);
     } catch {
       setError(COPY['drafts.loadFailed']);
     } finally {
@@ -46,6 +57,8 @@ export default function DraftsPage() {
 
   useEffect(() => {
     if (!userId) return;
+    // A user or membership change starts over from the first page.
+    pagesLoaded.current = 1;
     void Promise.resolve().then(reload);
   }, [userId, membershipRevision, reload]);
 
@@ -66,12 +79,10 @@ export default function DraftsPage() {
     setMoreBusy(true);
     setError('');
     try {
-      const page = await customerUpdatesApi.listDrafts(nextCursor, { expectedUserId: userId });
-      setDrafts((prev) => {
-        const seen = new Set(prev.map((d) => `${d.accountId}:${d.urlHash}`));
-        return [...prev, ...(page.drafts || []).filter((d) => !seen.has(`${d.accountId}:${d.urlHash}`))];
-      });
-      setNextCursor(page.nextCursor || '');
+      const page = normalizeDraftsPage(await customerUpdatesApi.listDrafts(nextCursor, { expectedUserId: userId }));
+      setDrafts((prev) => appendDraftPage(prev, page.drafts));
+      setNextCursor(page.nextCursor);
+      pagesLoaded.current += 1;
     } catch {
       setError(COPY['drafts.loadFailed']);
     } finally {
@@ -79,7 +90,7 @@ export default function DraftsPage() {
     }
   };
 
-  const onChanged = (next: UpdateDraft) => setDrafts((prev) => replaceDraft(prev, next));
+  const onChanged = (next: UpdateDraft) => setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
   const { open, handled } = useMemo(() => splitHandledDrafts(drafts), [drafts]);
   const groups = useMemo(() => groupDraftsByAccount(open), [open]);
   const nameOf = (accountId: string) => names.get(accountId) || shortAccountId(accountId);
@@ -107,7 +118,7 @@ export default function DraftsPage() {
             <p role="status" className="text-sm text-slate-600 dark:text-text-muted">불러오는 중…</p>
           ) : (
             <>
-              {drafts.length === 0 && !error && (
+              {showDraftsEmpty(drafts, nextCursor) && !error && (
                 <p className="text-sm text-slate-600 dark:text-text-muted">{COPY['drafts.empty']}</p>
               )}
 

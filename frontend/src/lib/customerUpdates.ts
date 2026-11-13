@@ -89,6 +89,9 @@ export const COPY = {
   'settings.sources.errorHttps': '주소는 https로 시작해야 합니다.',
   'settings.sources.errorLabel': '이름은 1자 이상 100자 이하로 입력해 주세요.',
   'settings.sources.loadFailed': '소스를 불러오지 못했습니다.',
+  'settings.sources.errorAddress': '이 주소는 사용할 수 없습니다. 내부 주소이거나 올바르지 않은 주소입니다.',
+  'settings.sources.errorLimit': '소스는 30개까지 등록할 수 있습니다.',
+  'settings.sources.actionFailed': '소스를 변경하지 못했습니다. 다시 시도해 주세요.',
   'source.kind.slack': 'Slack 채널',
   'source.kind.rss': 'RSS',
   'source.kind.site': '사이트',
@@ -141,6 +144,78 @@ export const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
   already_known: COPY['dismiss.already_known'],
   not_now: COPY['dismiss.not_now'],
 };
+
+/** Returns the draft with `opportunities` and `links` as arrays even when the server sent null or omitted them. */
+export function normalizeDraft(d: UpdateDraft): UpdateDraft {
+  const raw = d as UpdateDraft & { opportunities?: unknown; links?: unknown };
+  return {
+    ...d,
+    opportunities: Array.isArray(raw.opportunities) ? raw.opportunities : [],
+    links: Array.isArray(raw.links) ? raw.links : [],
+  };
+}
+
+/** Normalizes every draft of a page; a missing list or cursor becomes empty. */
+export function normalizeDraftsPage(page: UpdateDraftsPage): UpdateDraftsPage {
+  const raw = (page ?? {}) as { drafts?: unknown; nextCursor?: unknown };
+  return {
+    drafts: Array.isArray(raw.drafts) ? (raw.drafts as UpdateDraft[]).map(normalizeDraft) : [],
+    nextCursor: typeof raw.nextCursor === 'string' ? raw.nextCursor : '',
+  };
+}
+
+const draftKey = (d: Pick<UpdateDraft, 'accountId' | 'urlHash'>) => `${d.accountId}:${d.urlHash}`;
+
+/**
+ * Appends a later page in server order. Drafts already shown keep their
+ * position; a draft repeated by the next page (the list shifted) is skipped.
+ */
+export function appendDraftPage(shown: UpdateDraft[], more: UpdateDraft[]): UpdateDraft[] {
+  const seen = new Set(shown.map(draftKey));
+  const out = [...shown];
+  for (const d of more) {
+    const key = draftKey(d);
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(d);
+    }
+  }
+  return out;
+}
+
+/**
+ * Reloads from the first page up to `pages` pages (at least one), stopping
+ * early at the last page, so a reload keeps what the user had loaded.
+ */
+export async function loadDraftPages(
+  fetchPage: (cursor: string | undefined) => Promise<UpdateDraftsPage>,
+  pages: number,
+): Promise<{ drafts: UpdateDraft[]; nextCursor: string; pages: number }> {
+  let drafts: UpdateDraft[] = [];
+  let cursor: string | undefined;
+  let loaded = 0;
+  const want = Math.max(1, Math.floor(pages) || 1);
+  do {
+    const page = normalizeDraftsPage(await fetchPage(cursor));
+    drafts = appendDraftPage(drafts, page.drafts);
+    cursor = page.nextCursor || undefined;
+    loaded++;
+  } while (cursor && loaded < want);
+  return { drafts, nextCursor: cursor ?? '', pages: loaded };
+}
+
+/** The empty-state message shows only when nothing is loaded and no page remains. */
+export function showDraftsEmpty(drafts: UpdateDraft[], nextCursor: string): boolean {
+  return drafts.length === 0 && !nextCursor;
+}
+
+/** Korean message for a failed source add: 400 unusable address, 409 source limit, otherwise generic. */
+export function sourceAddErrorMessage(err: unknown): string {
+  const status = (err as { status?: unknown } | null)?.status;
+  if (status === 400) return COPY['settings.sources.errorAddress'];
+  if (status === 409) return COPY['settings.sources.errorLimit'];
+  return COPY['settings.sources.actionFailed'];
+}
 
 /** The text to copy: the edited body when present, otherwise the generated body. */
 export function draftCopyText(d: Pick<UpdateDraft, 'body' | 'editedBody'>): string {

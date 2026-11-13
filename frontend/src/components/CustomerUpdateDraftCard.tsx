@@ -55,6 +55,7 @@ export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConfl
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, [menuOpen]);
 
+  const opportunities = draft.opportunities ?? [];
   const handled = draft.status !== 'new';
   const shownBody = draftCopyText(draft);
 
@@ -112,10 +113,10 @@ export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConfl
     <article className="glass-panel rounded-xl p-5 space-y-3 border border-slate-200 dark:border-white/10">
       <header className="flex flex-wrap items-center gap-2">
         <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary">{COPY['card.badge']}</span>
-        {draft.opportunities.length === 0 ? (
+        {opportunities.length === 0 ? (
           <h3 className="text-base font-bold text-slate-900 dark:text-text-main">{accountName}</h3>
         ) : (
-          draft.opportunities.map((oppty) => (
+          opportunities.map((oppty) => (
             <h3 key={oppty.projectId} className="text-base font-bold text-slate-900 dark:text-text-main">
               {accountName} · {oppty.name} ({oppty.stage})
             </h3>

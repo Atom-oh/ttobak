@@ -220,7 +220,7 @@ Rules the tests pin:
 **Interfaces:**
 - Produces in `customerUpdates.ts`: types `UpdateSource`, `UpdateDraft`, `UpdateDraftOppty`, `DismissReason`; `SOURCE_KIND_LABELS` (copy keys `source.kind.*`); `DISMISS_REASON_LABELS` (copy keys `dismiss.*`); `draftCopyText(d: UpdateDraft): string` (returns `editedBody || body`, nothing else); `groupDraftsByDay(drafts): {day: string; drafts: UpdateDraft[]}[]` (KST day, newest first); `guessSourceKind(url: string): 'rss'|'site'|'youtube'`.
 - Produces in `api.ts`: `customerUpdatesApi.{listSources, addSource, patchSource, deleteSource, listDrafts(cursor?), listAccountDrafts(accountId, cursor?), patchDraft(accountId, urlHash, body), getSetting(accountId), putSetting(accountId, enabled)}`, each taking the usual `options` with `expectedUserId`.
-- Produces in `accountTabs.ts`: `'drafts'` added to `ACCOUNT_TABS` after `'insights'`, label from copy key `tab.drafts.label`, visible only when `eventsVisible` is true (the direct-member flag).
+- Produces in `accountTabs.ts`: `'update-drafts'` added to `ACCOUNT_TABS` after `'insights'`, label from copy key `tab.drafts.label`, visible only when `eventsVisible` is true (the direct-member flag).
 
 - [ ] **Step 1: Write failing tests** (`node:test`, loaded with the `loadModule` helper pattern from `scripts/intake.test.mjs`):
 
@@ -231,8 +231,8 @@ assert.equal(guessSourceKind('https://www.youtube.com/@aws'), 'youtube');
 assert.equal(guessSourceKind('https://aws.amazon.com/blogs/aws/feed/'), 'rss');
 assert.equal(guessSourceKind('https://example.com/news'), 'site');
 // account-tabs.test.mjs
-assert.equal(parseAccountTab('drafts', false, true), 'drafts');
-assert.equal(parseAccountTab('drafts', false, false), 'general');
+assert.equal(parseAccountTab('update-drafts', false, true), 'update-drafts');
+assert.equal(parseAccountTab('update-drafts', false, false), 'general');
 ```
 
 - [ ] **Step 2: Run** `(cd frontend && npm run test:unit)`. Expected: FAIL.
@@ -256,7 +256,7 @@ Behavior: lists sources with kind label, label and status; an add form with one 
 
 **Files:**
 - Create: `frontend/src/components/CustomerUpdateDraftCard.tsx`, `frontend/src/components/AccountDraftsTab.tsx`, `frontend/src/app/drafts/page.tsx`
-- Modify: `frontend/src/components/AccountDetailClient.tsx` (panel for `tab === 'drafts'`, loaded with `useAccountSection`, member key as other member-only panels), `frontend/src/lib/navigation.ts` (entry labelled `nav.drafts` → `/drafts`), `infra/lib/frontend-stack.ts` (`knownPages` add `'/drafts'`), `infra/test/frontend-stack.test.ts` (row for `/drafts`), `docs/DESIGN-SPEC.md` (rows under "Screens and components")
+- Modify: `frontend/src/components/AccountDetailClient.tsx` (panel for `tab === 'update-drafts'`, loaded with `useAccountSection`, member key as other member-only panels), `frontend/src/lib/navigation.ts` (entry labelled `nav.drafts` → `/drafts`), `infra/lib/frontend-stack.ts` (`knownPages` add `'/drafts'`), `infra/test/frontend-stack.test.ts` (row for `/drafts`), `docs/DESIGN-SPEC.md` (rows under "Screens and components")
 
 Card layout, top to bottom: header `{accountName} · {opportunity name} ({stage})` for each opportunity; `{card.source}: {sourceTitle}` linking to `sourceURL` with `rel="noopener noreferrer"`; `{card.why}: {why}`; the body in a bordered block; buttons `card.copy`, `card.edit`, `card.adopt`, `card.dismiss` (a menu with the three `dismiss.*` reasons). Edit turns the body into a textarea capped at 2,000 characters and saves through `patchDraft` with the current `revision`; a `409` reloads the draft and shows `card.conflict`. Adopted and dismissed drafts collapse under a `drafts.handled` disclosure. The tab also has the per-account toggle `drafts.toggle` bound to the setting route. Empty state: `drafts.empty`.
 

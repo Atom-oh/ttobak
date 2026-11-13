@@ -7,6 +7,7 @@ import {
   COPY,
   SOURCE_KIND_LABELS,
   guessSourceKind,
+  sourceAddErrorMessage,
   validateSourceForm,
   type UpdateSource,
   type UpdateSourceKind,
@@ -34,8 +35,8 @@ export function CustomerUpdateSourcesSettings() {
     try {
       const data = await customerUpdatesApi.listSources();
       setSources(data.sources || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : COPY['settings.sources.loadFailed']);
+    } catch {
+      setError(COPY['settings.sources.loadFailed']);
     } finally {
       setLoading(false);
     }
@@ -67,7 +68,7 @@ export function CustomerUpdateSourcesSettings() {
       setKindTouched(false);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : COPY['settings.sources.loadFailed']);
+      setError(sourceAddErrorMessage(err));
     } finally {
       setAdding(false);
     }
@@ -81,8 +82,8 @@ export function CustomerUpdateSourcesSettings() {
         status: source.status === 'active' ? 'disabled' : 'active',
       });
       await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : COPY['settings.sources.loadFailed']);
+    } catch {
+      setError(COPY['settings.sources.actionFailed']);
     } finally {
       setBusyId(null);
     }
@@ -95,8 +96,8 @@ export function CustomerUpdateSourcesSettings() {
     try {
       await customerUpdatesApi.deleteSource(source.sourceId);
       await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : COPY['settings.sources.loadFailed']);
+    } catch {
+      setError(COPY['settings.sources.actionFailed']);
     } finally {
       setBusyId(null);
     }

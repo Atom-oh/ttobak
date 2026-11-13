@@ -1,11 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { customerUpdatesApi } from '@/lib/api';
 import {
   COPY,
+  appendDraftPage,
   groupDraftsByDay,
+  loadDraftPages,
+  normalizeDraft,
+  normalizeDraftsPage,
   replaceDraft,
+  showDraftsEmpty,
   splitHandledDrafts,
   type UpdateDraft,
   type UpdateDraftsPage,
@@ -24,8 +29,10 @@ interface Props {
 const isAccessLost = (err: unknown) => [401, 403, 404].includes((err as { status?: number } | null)?.status ?? 0);
 
 export function AccountDraftsTab({ accountId, userId, accountName, initial, onAccessLost }: Props) {
-  const [drafts, setDrafts] = useState<UpdateDraft[]>(initial.drafts || []);
-  const [nextCursor, setNextCursor] = useState(initial.nextCursor || '');
+  const [drafts, setDrafts] = useState<UpdateDraft[]>(() => normalizeDraftsPage(initial).drafts);
+  const [nextCursor, setNextCursor] = useState(() => normalizeDraftsPage(initial).nextCursor);
+  // Pages loaded so far, so a reload after a conflict keeps what the user had open.
+  const pagesLoaded = useRef(1);
   const [moreBusy, setMoreBusy] = useState(false);
   const [error, setError] = useState('');
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -46,9 +53,13 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
 
   const reload = useCallback(async () => {
     try {
-      const page = await customerUpdatesApi.listAccountDrafts(accountId, undefined, { expectedUserId: userId });
-      setDrafts(page.drafts || []);
-      setNextCursor(page.nextCursor || '');
+      const result = await loadDraftPages(
+        (cursor) => customerUpdatesApi.listAccountDrafts(accountId, cursor, { expectedUserId: userId }),
+        pagesLoaded.current,
+      );
+      pagesLoaded.current = result.pages;
+      setDrafts(result.drafts);
+      setNextCursor(result.nextCursor);
     } catch (err) {
       if (isAccessLost(err)) onAccessLost();
       else setError(COPY['drafts.loadFailed']);
@@ -59,12 +70,10 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
     setMoreBusy(true);
     setError('');
     try {
-      const page = await customerUpdatesApi.listAccountDrafts(accountId, nextCursor, { expectedUserId: userId });
-      setDrafts((prev) => {
-        const seen = new Set(prev.map((d) => d.urlHash));
-        return [...prev, ...(page.drafts || []).filter((d) => !seen.has(d.urlHash))];
-      });
-      setNextCursor(page.nextCursor || '');
+      const page = normalizeDraftsPage(await customerUpdatesApi.listAccountDrafts(accountId, nextCursor, { expectedUserId: userId }));
+      setDrafts((prev) => appendDraftPage(prev, page.drafts));
+      setNextCursor(page.nextCursor);
+      pagesLoaded.current += 1;
     } catch (err) {
       if (isAccessLost(err)) onAccessLost();
       else setError(COPY['drafts.loadFailed']);
@@ -88,7 +97,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
     }
   };
 
-  const onChanged = (next: UpdateDraft) => setDrafts((prev) => replaceDraft(prev, next));
+  const onChanged = (next: UpdateDraft) => setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
   const { open, handled } = splitHandledDrafts(drafts);
   const days = groupDraftsByDay(open);
 
@@ -107,7 +116,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
       {toggleError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{toggleError}</p>}
       {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
-      {drafts.length === 0 && <p className="text-sm text-slate-600 dark:text-text-muted">{COPY['drafts.empty']}</p>}
+      {showDraftsEmpty(drafts, nextCursor) && <p className="text-sm text-slate-600 dark:text-text-muted">{COPY['drafts.empty']}</p>}
 
       {days.map((group) => (
         <section key={group.day} aria-label={group.day} className="space-y-3">

@@ -94,3 +94,54 @@ test('replaceDraft swaps only the matching draft', () => {
   const out = plain(cu.replaceDraft([mk('a', '1'), mk('a', '2'), mk('b', '2')], next));
   assert.deepEqual(out.map((d) => d.status), ['new', 'adopted', 'new']);
 });
+
+test('normalizeDraft turns null or missing opportunities and links into arrays', () => {
+  const fromNull = plain(cu.normalizeDraft({ ...mk('a', '1'), opportunities: null, links: null }));
+  assert.deepEqual([fromNull.opportunities, fromNull.links], [[], []]);
+  const fromMissing = plain(cu.normalizeDraft(mk('a', '2')));
+  assert.deepEqual([fromMissing.opportunities, fromMissing.links], [[], []]);
+  const kept = plain(cu.normalizeDraft({ ...mk('a', '3'), opportunities: [{ projectId: 'p', name: 'n', stage: 's' }], links: ['https://x.example/'] }));
+  assert.equal(kept.opportunities.length, 1);
+  assert.deepEqual(kept.links, ['https://x.example/']);
+});
+
+test('normalizeDraftsPage tolerates a null list and cursor', () => {
+  assert.deepEqual(plain(cu.normalizeDraftsPage({ drafts: null, nextCursor: null })), { drafts: [], nextCursor: '' });
+  assert.deepEqual(plain(cu.normalizeDraftsPage(null)), { drafts: [], nextCursor: '' });
+  const page = plain(cu.normalizeDraftsPage({ drafts: [{ ...mk('a', '1'), links: null }], nextCursor: 'MQ' }));
+  assert.deepEqual(page.drafts[0].links, []);
+  assert.equal(page.nextCursor, 'MQ');
+});
+
+test('appendDraftPage keeps shown drafts in place and skips repeats', () => {
+  const out = plain(cu.appendDraftPage([mk('a', '1'), mk('b', '2')], [mk('b', '2'), mk('a', '3'), mk('b', '1')]));
+  assert.deepEqual(out.map((d) => `${d.accountId}:${d.urlHash}`), ['a:1', 'b:2', 'a:3', 'b:1']);
+});
+
+test('loadDraftPages reloads as many pages as were loaded and stops at the end', async () => {
+  const pages = { '': { drafts: [mk('a', '1')], nextCursor: 'p2' }, p2: { drafts: [mk('a', '2')], nextCursor: 'p3' }, p3: { drafts: [mk('a', '3')], nextCursor: '' } };
+  const calls = [];
+  const fetchPage = async (cursor) => { calls.push(cursor ?? ''); return pages[cursor ?? '']; };
+  const two = plain(await cu.loadDraftPages(fetchPage, 2));
+  assert.deepEqual([two.drafts.map((d) => d.urlHash), two.nextCursor, two.pages], [['1', '2'], 'p3', 2]);
+  assert.deepEqual(calls, ['', 'p2']);
+  const all = await cu.loadDraftPages(fetchPage, 9);
+  assert.deepEqual([all.drafts.length, all.nextCursor, all.pages], [3, '', 3]);
+  const one = await cu.loadDraftPages(fetchPage, 0);
+  assert.equal(one.pages, 1);
+});
+
+test('showDraftsEmpty waits until no page remains', () => {
+  assert.equal(cu.showDraftsEmpty([], ''), true);
+  assert.equal(cu.showDraftsEmpty([], 'MQ'), false);
+  assert.equal(cu.showDraftsEmpty([mk('a', '1')], ''), false);
+});
+
+test('sourceAddErrorMessage maps statuses to Korean copy only', () => {
+  assert.equal(cu.sourceAddErrorMessage({ status: 400, message: 'Invalid request' }), cu.COPY['settings.sources.errorAddress']);
+  assert.equal(cu.sourceAddErrorMessage({ status: 409, message: 'Conflict' }), cu.COPY['settings.sources.errorLimit']);
+  assert.equal(cu.sourceAddErrorMessage({ status: 500, message: 'internal error' }), cu.COPY['settings.sources.actionFailed']);
+  assert.equal(cu.sourceAddErrorMessage('boom'), cu.COPY['settings.sources.actionFailed']);
+  assert.equal(cu.sourceAddErrorMessage(null), cu.COPY['settings.sources.actionFailed']);
+  assert.notEqual(cu.COPY['settings.sources.actionFailed'], cu.COPY['settings.sources.loadFailed']);
+});
