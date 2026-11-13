@@ -17,6 +17,9 @@ manifests.
 - Customer update drafts API, storage side only with no collector or generator yet:
   followed sources, link upload, owner-private drafts and a per-account opt-out
   (#957).
+- Customer update drafts on the web: followed-source settings, an account drafts tab
+  and the `/drafts` inbox with copy, done and dismiss actions; lists stay empty
+  until the collector and generator ship (#958).
 
 ## [1.0.0] - 2026-11-11
 
