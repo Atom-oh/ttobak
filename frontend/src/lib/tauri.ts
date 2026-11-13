@@ -504,6 +504,15 @@ export function onNativeListeningStopped(handler: (reason: NativeListeningStopRe
   );
 }
 
+/** A caption window was closed from its own close button (`caption_overlay_dismiss`); the value is its language code. */
+export function onCaptionWindowClosed(handler: (lang: string) => void): () => void {
+  return subscribeTauriEvent<{ lang?: unknown }, string>(
+    'caption-window-closed',
+    (payload) => (typeof payload?.lang === 'string' ? payload.lang : ''),
+    handler,
+  );
+}
+
 /** Subscribe to upload progress emitted by the `upload_recording` command. */
 export function onNativeUploadProgress(
   handler: (progress: TauriUploadProgress) => void,

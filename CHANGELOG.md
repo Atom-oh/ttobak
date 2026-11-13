@@ -14,6 +14,9 @@ manifests.
 ### Added
 
 - Personalized Assistant cards and meeting-aware questions; automatic read-only answers to spoken questions, enabled by default with a separate external-search opt-in (#894).
+- Customer update drafts API, storage side only with no collector or generator yet:
+  followed sources, link upload, owner-private drafts and a per-account opt-out
+  (#957).
 
 ## [1.0.0] - 2026-11-11
 
