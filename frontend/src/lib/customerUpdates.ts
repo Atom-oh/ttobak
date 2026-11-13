@@ -1,0 +1,153 @@
+// Customer update drafts: API types, Korean UI copy and pure helpers.
+// Every string from the API is rendered as text only (never as HTML).
+
+export type UpdateSourceKind = 'slack' | 'rss' | 'site' | 'youtube';
+export type DismissReason = 'not_relevant' | 'already_known' | 'not_now';
+export type UpdateDraftStatus = 'new' | 'adopted' | 'dismissed';
+
+export interface UpdateSource {
+  sourceId: string;
+  kind: UpdateSourceKind;
+  label: string;
+  url: string;
+  localSourceId: string;
+  status: 'active' | 'disabled';
+  createdAt: string;
+  backfilledAt: string;
+}
+
+export interface UpdateDraftOppty {
+  projectId: string;
+  name: string;
+  stage: string;
+}
+
+export interface UpdateDraft {
+  accountId: string;
+  urlHash: string;
+  sourceUrl: string;
+  sourceTitle: string;
+  why: string;
+  body: string;
+  editedBody: string;
+  opportunities: UpdateDraftOppty[];
+  links: string[];
+  status: UpdateDraftStatus;
+  dismissReason: DismissReason | '';
+  revision: number;
+  runId: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: number;
+}
+
+export interface UpdateDraftsPage {
+  drafts: UpdateDraft[];
+  nextCursor: string;
+}
+
+export interface AddUpdateSourceInput {
+  kind: UpdateSourceKind;
+  label?: string;
+  url?: string;
+  localSourceId?: string;
+}
+
+export interface PatchUpdateSourceInput {
+  label?: string;
+  status?: 'active' | 'disabled';
+}
+
+export interface PatchUpdateDraftInput {
+  action: 'edit' | 'adopt' | 'dismiss' | 'reopen';
+  body?: string;
+  reason?: DismissReason;
+  revision: number;
+}
+
+/** Mirrors the `copy` map of contracts/customer-updates/ui-copy-ko-v1.json. */
+export const COPY = {
+  'tab.drafts.label': '초안',
+  'nav.drafts': '고객 초안',
+  'settings.sources.header': '고객 업데이트 소스',
+  'settings.sources.slackHint': 'Mac 앱에서 채널을 선택할 수 있어요',
+  'settings.sources.backfillHelp': '처음 등록하면 최근 3일치만 가져옵니다.',
+  'source.kind.slack': 'Slack 채널',
+  'source.kind.rss': 'RSS',
+  'source.kind.site': '사이트',
+  'source.kind.youtube': 'YouTube',
+  'dismiss.not_relevant': '관련 없음',
+  'dismiss.already_known': '이미 앎',
+  'dismiss.not_now': '시기 아님',
+  'card.badge': '초안',
+  'card.source': '출처',
+  'card.why': '왜 관련 있나',
+  'card.copy': '복사',
+  'card.edit': '수정',
+  'card.adopt': '채택함',
+  'card.dismiss': '버림',
+  'card.conflict': '다른 곳에서 수정되었습니다. 다시 확인해 주세요.',
+  'drafts.handled': '처리한 초안',
+  'drafts.toggle': '이 고객의 초안 받기',
+  'drafts.empty': '아직 초안이 없습니다. 설정에서 소스를 등록하면 관련 있는 소식만 초안으로 쌓입니다.',
+  'drafts.more': '더 보기',
+  'mac.links.setupLabel': 'Slack 링크',
+  'mac.links.busy': '이미 수집 중',
+  'mac.links.load': '채널 불러오기',
+  'mac.links.save': '저장',
+  'mac.links.note': 'Slack 글 본문은 Mac 밖으로 나가지 않고, 글에 포함된 공개 링크만 올라갑니다. 처음에는 최근 3일치만 가져옵니다.',
+  'mac.links.updateApp': 'Mac 앱을 업데이트하면 Slack 채널을 선택할 수 있어요.',
+  'mac.links.tooMany': '채널은 20개까지 선택할 수 있습니다.',
+  'intake.runNow': '지금 수집',
+} as const;
+
+export const SOURCE_KIND_LABELS: Record<UpdateSourceKind, string> = {
+  slack: COPY['source.kind.slack'],
+  rss: COPY['source.kind.rss'],
+  site: COPY['source.kind.site'],
+  youtube: COPY['source.kind.youtube'],
+};
+
+export const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
+  not_relevant: COPY['dismiss.not_relevant'],
+  already_known: COPY['dismiss.already_known'],
+  not_now: COPY['dismiss.not_now'],
+};
+
+/** The text to copy: the edited body when present, otherwise the generated body. */
+export function draftCopyText(d: Pick<UpdateDraft, 'body' | 'editedBody'>): string {
+  return d.editedBody || d.body;
+}
+
+const KST_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+/** Groups drafts by KST calendar day of createdAt: newest day first, newest draft first. */
+export function groupDraftsByDay(drafts: UpdateDraft[]): { day: string; drafts: UpdateDraft[] }[] {
+  const stamped = drafts
+    .map((draft) => ({ draft, at: Date.parse(draft.createdAt) }))
+    .filter((entry) => Number.isFinite(entry.at))
+    .sort((a, b) => b.at - a.at);
+  const groups: { day: string; drafts: UpdateDraft[] }[] = [];
+  for (const { draft, at } of stamped) {
+    const day = KST_DAY.format(new Date(at));
+    const last = groups[groups.length - 1];
+    if (last && last.day === day) last.drafts.push(draft);
+    else groups.push({ day, drafts: [draft] });
+  }
+  return groups;
+}
+
+/** Best-effort kind for a pasted URL; the user can still change it. */
+export function guessSourceKind(url: string): 'rss' | 'site' | 'youtube' {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return 'site';
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) return 'youtube';
+  const path = parsed.pathname.toLowerCase();
+  if (/(^|\/)(feed|rss|atom)(\/|\.xml)?$/.test(path) || /\.(rss|atom|xml)$/.test(path)) return 'rss';
+  return 'site';
+}

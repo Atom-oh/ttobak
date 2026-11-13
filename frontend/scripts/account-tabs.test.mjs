@@ -5,10 +5,13 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
-const tabs = {};
-vm.runInNewContext(ts.transpileModule(read('../src/lib/accountTabs.ts'), {
+const transpile = (path) => ts.transpileModule(read(path), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText, { exports: tabs, URLSearchParams });
+}).outputText;
+const copyModule = {};
+vm.runInNewContext(transpile('../src/lib/customerUpdates.ts'), { exports: copyModule, Intl, URL });
+const tabs = {};
+vm.runInNewContext(transpile('../src/lib/accountTabs.ts'), { exports: tabs, URLSearchParams });
 
 test('unknown_tab_falls_back_to_overview', () => {
   assert.equal(tabs.parseAccountTab(null, true), 'general');
@@ -17,6 +20,14 @@ test('unknown_tab_falls_back_to_overview', () => {
   assert.equal(tabs.parseAccountTab('DOCS', true), 'general');
   assert.equal(tabs.parseAccountTab('docs', false), 'docs');
   assert.equal(tabs.parseAccountTab('meetings', false), 'meetings');
+});
+
+test('drafts_tab_is_for_direct_members_only', () => {
+  assert.equal(tabs.parseAccountTab('drafts', false, true), 'drafts');
+  assert.equal(tabs.parseAccountTab('drafts', false, false), 'general');
+  assert.equal(tabs.ACCOUNT_TAB_LABELS.drafts, copyModule.COPY['tab.drafts.label']);
+  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'drafts', 'projects', 'docs', 'kb']);
+  assert.ok(!tabs.visibleAccountTabs(false, false).includes('drafts'));
 });
 
 test('billing_hidden_falls_back_to_overview', () => {
@@ -78,7 +89,7 @@ test('events_tab_is_only_for_direct_members', () => {
   assert.equal(tabs.parseAccountTab('events', false), 'general');
   assert.equal(tabs.parseAccountTab('events', false, true), 'events');
   assert.ok(!tabs.visibleAccountTabs(true).includes('events'));
-  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'projects', 'docs', 'kb']);
+  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'drafts', 'projects', 'docs', 'kb']);
   assert.equal(tabs.ACCOUNT_TAB_LABELS.events, '일정');
 });
 
