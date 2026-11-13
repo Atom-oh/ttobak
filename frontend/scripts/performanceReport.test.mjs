@@ -180,3 +180,42 @@ test('elapsed and generated time formatting', () => {
   assert.equal(report.formatGeneratedAt('2026-11-10T16:00:00Z'), '2026-11-11 01:00');
   assert.equal(report.formatGeneratedAt('nope'), '');
 });
+
+test('Bedrock needs a profile', () => {
+  const copy = JSON.parse(readFileSync(new URL('../../docs/superpowers/plans/2026-11-12-one-click-intake-setup-ui-copy.json', import.meta.url), 'utf8'));
+  assert.equal(report.reportCodeLabel('CLAUDE_CLI_BEDROCK'), copy.claudeCliBedrock);
+  assert.equal(report.reportCodeLabel('profile-required'), copy.profileRequired);
+  assert.equal(report.bedrockNeedsProfile({ useBedrock: true, awsProfile: null }), true);
+  assert.equal(report.bedrockNeedsProfile({ useBedrock: true, awsProfile: 'cc-bedrock' }), false);
+  assert.equal(report.bedrockNeedsProfile({ useBedrock: false, awsProfile: null }), false);
+  assert.equal(report.bedrockNeedsProfile(null), false);
+});
+
+test('turning Bedrock off never sends a profile that is gone', () => {
+  const settings = { useBedrock: true, awsProfile: 'removed', profiles: ['cc-bedrock'] };
+  assert.equal(report.bedrockToggleProfile(settings), null);
+  assert.equal(report.bedrockToggleProfile(settings), null);
+  const present = { useBedrock: false, awsProfile: 'cc-bedrock', profiles: ['cc-bedrock'] };
+  assert.equal(report.bedrockToggleProfile(present), 'cc-bedrock');
+  assert.equal(report.bedrockToggleProfile(present), 'cc-bedrock');
+  assert.equal(report.bedrockToggleProfile(null), null);
+});
+
+test('Slack channel rows: candidates checked unless excluded, stale exclusions kept', () => {
+  const rows = report.channelRows({ channels: [{ name: 'sa-team', count: 3 }, { name: '양국', count: 1 }] }, ['양국', 'old-hobby']);
+  assert.deepEqual(plain(rows), [
+    { name: 'sa-team', count: 3, included: true },
+    { name: '양국', count: 1, included: false },
+    { name: 'old-hobby', count: null, included: false },
+  ]);
+  assert.deepEqual(plain(report.channelRows(null, [])), []);
+  assert.deepEqual(plain(report.toggleExcluded(['a'], 'b')), ['a', 'b']);
+  assert.deepEqual(plain(report.toggleExcluded(['a', 'b'], 'a')), ['b']);
+});
+
+test('Slack exclusion codes have Korean copy', () => {
+  for (const code of ['REPORT_EXCLUDED_CHANNEL', 'SLACK_NOT_SELECTED']) {
+    assert.ok(/[가-힣]/.test(report.reportCodeLabel(code)), code);
+  }
+  assert.ok(report.reportCodeLabel('REPORT_EXCLUDED_CHANNEL').includes('강조'));
+});

@@ -35,8 +35,8 @@ describe('CrawlerStack', () => {
     template = Template.fromStack(stack);
   });
 
-  test('creates 4 legacy and 5 private publication Lambda functions', () => {
-    template.resourceCountIs('AWS::Lambda::Function', 9);
+  test('creates 4 legacy and 6 private publication Lambda functions', () => {
+    template.resourceCountIs('AWS::Lambda::Function', 10);
   });
 
   test('creates Step Functions state machine', () => {
@@ -81,6 +81,120 @@ describe('CrawlerStack', () => {
         expect(resource.Properties.Environment?.Variables?.NEWS_LEGACY_WRITES).toBeUndefined();
       }
     }
+  });
+
+  describe('manual news collection', () => {
+    const collectRule = () => {
+      const rules = template.findResources('AWS::Events::Rule', {
+        Properties: { Name: 'ttobak-news-collect-requested' },
+      });
+      expect(Object.keys(rules)).toHaveLength(1);
+      return Object.values(rules)[0].Properties;
+    };
+    const functionId = (name: string) => {
+      const found = Object.keys(template.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: name },
+      }));
+      expect(found).toHaveLength(1);
+      return found[0];
+    };
+    const starterId = () => functionId('ttobak-news-manual');
+    const queueId = () => {
+      const queues = template.findResources('AWS::SQS::Queue', {
+        Properties: { QueueName: 'ttobak-news-collect-failures' },
+      });
+      expect(Object.keys(queues)).toHaveLength(1);
+      return Object.keys(queues)[0];
+    };
+
+    test('matches only the NewsCollectRequested contract on the default bus', () => {
+      const rule = collectRule();
+      expect(rule.EventBusName).toBeUndefined();
+      expect(rule.EventPattern).toEqual({
+        source: ['ttobak.crawler'],
+        'detail-type': ['NewsCollectRequested'],
+        detail: {
+          sourceId: [{ prefix: 'acct_' }],
+          accountId: [{ exists: true }],
+          requestId: [{ exists: true }],
+        },
+      });
+    });
+
+    test('has one versioned starter target with only the manual IDs, no retries and its DLQ', () => {
+      const rule = collectRule();
+      expect(rule.Targets).toHaveLength(1);
+      const [target] = rule.Targets;
+      expect(target.Arn).toEqual({ 'Fn::GetAtt': [starterId(), 'Arn'] });
+      expect(target.RetryPolicy).toEqual({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 3600 });
+      expect(target.DeadLetterConfig).toEqual({ Arn: { 'Fn::GetAtt': [queueId(), 'Arn'] } });
+      expect(target.InputTransformer.InputPathsMap).toEqual({
+        'detail-sourceId': '$.detail.sourceId',
+        'detail-accountId': '$.detail.accountId',
+        'detail-requestId': '$.detail.requestId',
+      });
+      expect(JSON.parse(target.InputTransformer.InputTemplate.replace(/<(detail-\w+)>/g, '"$1"')))
+        .toEqual({ manualCollect: {
+          sourceId: 'detail-sourceId', accountId: 'detail-accountId', requestId: 'detail-requestId',
+        } });
+    });
+
+    test('the starter does not retry a failed async invocation and records it', () => {
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: 'ttobak-news-manual', Handler: 'news_manual.handler',
+      });
+      const configs = template.findResources('AWS::Lambda::EventInvokeConfig');
+      expect(Object.values(configs).map((c: any) => c.Properties)).toEqual([{
+        FunctionName: { Ref: starterId() },
+        Qualifier: '$LATEST',
+        MaximumRetryAttempts: 0,
+        MaximumEventAgeInSeconds: 3600,
+        DestinationConfig: { OnFailure: { Destination: { 'Fn::GetAtt': [queueId(), 'Arn'] } } },
+      }]);
+      template.hasResourceProperties('AWS::SQS::Queue', {
+        QueueName: 'ttobak-news-collect-failures', SqsManagedSseEnabled: true,
+      });
+      const sends = Object.values(template.findResources('AWS::IAM::Policy'))
+        .flatMap((p: any) => p.Properties.PolicyDocument.Statement.map((s: any) => ({ s, p })))
+        .filter(({ s }) => [].concat(s.Action).includes('sqs:SendMessage' as never));
+      expect(sends).toHaveLength(1);
+      expect(sends[0].s.Resource).toEqual({ 'Fn::GetAtt': [queueId(), 'Arn'] });
+      const starterRole = template.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: 'ttobak-news-manual' },
+      })[starterId()].Properties.Role['Fn::GetAtt'][0];
+      expect(sends[0].p.Properties.Roles).toEqual([{ Ref: starterRole }]);
+    });
+
+    test('the legacy news crawler no longer receives manual requests', () => {
+      const legacy = functionId('ttobak-crawler-news');
+      const targets = Object.values(template.findResources('AWS::Events::Rule'))
+        .flatMap((r: any) => r.Properties.Targets ?? []);
+      expect(targets.some((t: any) => JSON.stringify(t.Arn).includes(legacy))).toBe(false);
+      expect(Object.values(template.findResources('AWS::Lambda::EventInvokeConfig'))
+        .some((c: any) => c.Properties.FunctionName?.Ref === legacy)).toBe(false);
+    });
+
+    test('alarms on delivery failures, dropped async events and failure backlog', () => {
+      const ruleId = Object.keys(template.findResources('AWS::Events::Rule', {
+        Properties: { Name: 'ttobak-news-collect-requested' },
+      }))[0];
+      for (const metricName of ['FailedInvocations', 'InvocationsFailedToBeSentToDlq']) {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          Namespace: 'AWS/Events', MetricName: metricName,
+          Dimensions: [{ Name: 'RuleName', Value: { Ref: ruleId } }],
+        });
+      }
+      for (const metricName of ['AsyncEventsDropped', 'DestinationDeliveryFailures']) {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          Namespace: 'AWS/Lambda', MetricName: metricName,
+          Dimensions: [{ Name: 'FunctionName', Value: { Ref: starterId() } }],
+        });
+      }
+      template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        MetricName: 'ApproximateNumberOfMessagesVisible',
+        Dimensions: [{ Name: 'QueueName', Value: { 'Fn::GetAtt': [queueId(), 'QueueName'] } }],
+      });
+    });
   });
 
   test('exports state machine ARN', () => {

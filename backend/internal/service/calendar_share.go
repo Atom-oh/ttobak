@@ -179,28 +179,17 @@ func (svc *CalendarService) directMember(ctx context.Context, lookups *calendarS
 	return member, nil
 }
 
-func (svc *CalendarService) calendarOverride(ctx context.Context, lookups *calendarShareLookups, userID, sourceID string, input model.CalendarEventInput, eventID string) (*repository.CalendarOverrideRow, error) {
-	cacheKey := sourceID + "/" + calendarScopeKey(input, eventID) + "/" + eventID
+func (svc *CalendarService) calendarOverride(ctx context.Context, lookups *calendarShareLookups, userID, sourceID, scopeKey string) (*repository.CalendarOverrideRow, error) {
+	cacheKey := sourceID + "/" + scopeKey
 	if override, checked := lookups.overrides[cacheKey]; checked {
 		return override, nil
 	}
-	override, err := svc.storedCalendarOverride(ctx, userID, sourceID, input, eventID)
+	override, err := svc.store.GetCalendarOverride(ctx, userID, sourceID, scopeKey)
 	if err != nil {
 		return nil, err
 	}
 	lookups.overrides[cacheKey] = override
 	return override, nil
-}
-
-// storedCalendarOverride reads the series override and falls back to the occurrence's own:
-// events synced before the runner sent seriesKey stored their overrides by event ID, and a
-// hide set there must keep applying once the series key arrives.
-func (svc *CalendarService) storedCalendarOverride(ctx context.Context, userID, sourceID string, input model.CalendarEventInput, eventID string) (*repository.CalendarOverrideRow, error) {
-	override, err := svc.store.GetCalendarOverride(ctx, userID, sourceID, calendarScopeKey(input, eventID))
-	if err != nil || override != nil || input.SeriesKey == "" || input.SeriesKey == eventID {
-		return override, err
-	}
-	return svc.store.GetCalendarOverride(ctx, userID, sourceID, eventID)
 }
 
 // resolveCalendarShare checks membership for the decided accounts. A requested non-member
@@ -303,7 +292,7 @@ func (svc *CalendarService) planCalendarSyncShares(ctx context.Context, userID, 
 		previous, recorded := calendarGrantedShareKey(old, userID)
 		// Read after this occurrence's row, never from a batch cache: a hide that lands between
 		// two occurrences must reach the later one, whose row version then matches it.
-		override, err := svc.storedCalendarOverride(ctx, userID, sourceID, input, eventID)
+		override, err := svc.store.GetCalendarOverride(ctx, userID, sourceID, calendarScopeKey(input, eventID))
 		if err != nil {
 			return nil, err
 		}
@@ -405,14 +394,7 @@ func (svc *CalendarService) SetEventSharing(ctx context.Context, userID, sourceI
 	scopeKey := calendarScopeKey(input, eventID)
 	var override *repository.CalendarOverrideRow
 	if request.Mode == calendarModeAuto {
-		// Automatic mode also clears an occurrence override stored before the series key,
-		// first: a failure between the two deletes then leaves the series override in force.
-		if scopeKey != eventID {
-			err = svc.store.DeleteCalendarOverride(ctx, userID, normalizedSource, eventID)
-		}
-		if err == nil {
-			err = svc.store.DeleteCalendarOverride(ctx, userID, normalizedSource, scopeKey)
-		}
+		err = svc.store.DeleteCalendarOverride(ctx, userID, normalizedSource, scopeKey)
 	} else {
 		override = &repository.CalendarOverrideRow{Mode: request.Mode, AccountID: request.AccountID}
 		err = svc.store.PutCalendarOverride(ctx, userID, normalizedSource, scopeKey, *override)
@@ -423,7 +405,7 @@ func (svc *CalendarService) SetEventSharing(ctx context.Context, userID, sourceI
 	for attempt := 0; ; attempt++ {
 		// Each attempt plans from the stored override, not this request's: a concurrent call
 		// may have replaced it, and the last override written must decide the share state.
-		if override, err = svc.storedCalendarOverride(ctx, userID, normalizedSource, input, eventID); err != nil {
+		if override, err = svc.store.GetCalendarOverride(ctx, userID, normalizedSource, calendarScopeKey(input, eventID)); err != nil {
 			return nil, err
 		}
 		// The change carries the row version this plan was read from; a newer row fails it.

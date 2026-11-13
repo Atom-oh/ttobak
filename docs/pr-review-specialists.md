@@ -41,8 +41,14 @@ or empty reports, missing paths, invalid fingerprints, model selection errors,
 quota exhaustion and failed required roles block coverage. A JSON shape is
 evidence of protocol completion, not proof that the model found every defect.
 
-The common protocol accepts a complete diff within 3,000 lines and 95,000 UTF-8
-bytes. It blocks oversized input without awarding credit for a prefix. Existing
+The common protocol accepts a complete diff within 6,000 lines and 200,000 UTF-8
+bytes when routing leaves both Kiro roles inactive, as in CI. Any active Kiro role
+restores 3,000 lines and 95,000 bytes, because Kiro passes its whole request as one
+argv string (Linux `MAX_ARG_STRLEN`, 131,072 bytes). That argv limit also bounds
+the claude-self instruction and the chair prompt. Codex, claude-self and chair
+inputs travel on stdin within a 256 KiB request bound. The measured #920 review
+(75.6 KB, 1,350 lines) took 162 s for claude-self and 219 s for codex against the
+900 s per-call timeout. It blocks oversized input without awarding credit for a prefix. Existing
 repository-specific chunking is governed by its own implementation and budget;
 do not remove chunk attestations or raise limits to obtain a pass.
 

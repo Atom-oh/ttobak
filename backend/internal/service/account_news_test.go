@@ -41,6 +41,24 @@ type accountNewsTestRepo struct {
 	updateErr error
 	// One-shot hooks between reconcile's counter read, ref list and write.
 	afterReconcileRead, afterReconcileList func()
+	// claim decides each collect claim (nil: accepted); releases records
+	// released request IDs and releaseErr fails them.
+	claim      func(sourceID, requestID string, at, cutoff time.Time) error
+	claims     []string
+	releases   []string
+	releaseErr error
+}
+
+func (r *accountNewsTestRepo) ClaimAccountNewsCollect(_ context.Context, _, _, sourceID, requestID string, at, cutoff time.Time) error {
+	r.claims = append(r.claims, requestID)
+	if r.claim != nil {
+		return r.claim(sourceID, requestID, at, cutoff)
+	}
+	return nil
+}
+func (r *accountNewsTestRepo) ReleaseAccountNewsCollect(_ context.Context, _, requestID string) error {
+	r.releases = append(r.releases, requestID)
+	return r.releaseErr
 }
 
 func (r *accountNewsTestRepo) GetAccount(context.Context, string) (*model.Account, error) {
@@ -152,9 +170,26 @@ type accountNewsTestCrawler struct {
 	sources map[string]*model.CrawlerSource
 	docs    map[string][]model.CrawledDocument
 	limits  []int32
+	// stale, when set for an ID, is what an eventually consistent GetSource
+	// still returns; GetSourceConsistent always sees sources.
+	stale           map[string]*model.CrawlerSource
+	consistentReads int
 }
 
 func (c *accountNewsTestCrawler) GetSource(_ context.Context, id string) (*model.CrawlerSource, error) {
+	src := c.sources[id]
+	if old, ok := c.stale[id]; ok {
+		src = old
+	}
+	if src == nil {
+		return nil, nil
+	}
+	copied := *src
+	return &copied, nil
+}
+
+func (c *accountNewsTestCrawler) GetSourceConsistent(_ context.Context, id string) (*model.CrawlerSource, error) {
+	c.consistentReads++
 	src := c.sources[id]
 	if src == nil {
 		return nil, nil

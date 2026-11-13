@@ -9,6 +9,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GatewayStack } from '../lib/gateway-stack';
+import {
+  NEWS_CHILD_TIMEOUT, NEWS_DAILY_GRACE, NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC, newsDailyWindowEnvironment,
+} from '../lib/news-publication';
 
 describe('GatewayStack', () => {
   let template: Template;
@@ -464,6 +467,18 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     expect(withInterpreter.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
     const api = withInterpreter[0].Properties.Environment.Variables;
     expect(api.BEDROCK_SUMMARY_MODEL_ID).toBeUndefined();
+  });
+
+  test('API Lambda gets the manual starter\'s window values and both news state machine ARNs', () => {
+    const fns = Object.values(template.findResources('AWS::Lambda::Function'));
+    const api = fns.find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect([api.NEWS_DAILY_HOUR_UTC, api.NEWS_DAILY_MINUTE_UTC, api.NEWS_DAILY_LEAD_SECONDS, api.NEWS_DAILY_GRACE_SECONDS])
+      .toEqual([NEWS_DAILY_HOUR_UTC, NEWS_DAILY_MINUTE_UTC, NEWS_CHILD_TIMEOUT.toSeconds(), NEWS_DAILY_GRACE.toSeconds()].map(String));
+    expect(api).toMatchObject(newsDailyWindowEnvironment());
+    const arn = (name: string) => ({ 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':states:',
+      { Ref: 'AWS::Region' }, ':', { Ref: 'AWS::AccountId' }, `:stateMachine:${name}`]] });
+    expect(api.NEWS_DAILY_STATE_MACHINE_ARN).toEqual(arn('ttobak-news-daily'));
+    expect(api.NEWS_PUBLICATION_STATE_MACHINE_ARN).toEqual(arn('ttobak-news-publication'));
   });
 
   test('API Lambda carries the translate cost guard limits from context with defaults', () => {

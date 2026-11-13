@@ -50,6 +50,33 @@ describe('AiStack', () => {
       .flatMap(policy => policy.Properties.PolicyDocument.Statement as Array<{ Sid?: string; Action: unknown; Resource: unknown }>);
   }
 
+  test('keeps the crawler role name export that the deployed CrawlerStack imports', () => {
+    // The name must stay byte-identical: the deployed export is
+    // TtobakAiStack:ExportsOutputRefTtobakCrawlerRoleCA4BC0F21ACEEF28, and
+    // CloudFormation rejects deleting an export another stack still uses.
+    const outputs = template.findOutputs('*', {
+      Export: { Name: 'TestAiStack:ExportsOutputRefTtobakCrawlerRoleCA4BC0F21ACEEF28' },
+    });
+    const values = Object.values(outputs);
+    expect(values).toHaveLength(1);
+    expect(values[0].Value).toEqual({ Ref: 'TtobakCrawlerRoleCA4BC0F2' });
+  });
+
+  test('API may list executions of exactly the two news state machines, by name', () => {
+    const api = statementsOf('TtobakApiRole');
+    const list = api.filter(statement => JSON.stringify(statement.Action).includes('states:ListExecutions'));
+    expect(list).toHaveLength(1);
+    expect(list[0].Sid).toBe('SfnListNewsExecutions');
+    expect(list[0].Action).toBe('states:ListExecutions');
+    const arn = (name: string) => ({ 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':states:',
+      { Ref: 'AWS::Region' }, ':', { Ref: 'AWS::AccountId' }, `:stateMachine:${name}`]] });
+    expect(list[0].Resource).toEqual([arn('ttobak-news-daily'), arn('ttobak-news-publication')]);
+    expect(JSON.stringify(list[0].Resource)).not.toContain('*');
+    // The research StartExecution grant is unchanged and no other states:* grant exists.
+    const states = api.filter(statement => JSON.stringify(statement.Action).includes('states:'));
+    expect(states.map(statement => statement.Sid).sort()).toEqual(['SfnListNewsExecutions', 'SfnStartResearch']);
+  });
+
   test('API vocabulary management is scoped to ttobak-vocab-* names', () => {
     const vocab = statementsOf('TtobakApiRole').filter(statement => statement.Sid === 'TranscribeVocabulary');
     expect(vocab).toHaveLength(1);

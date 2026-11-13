@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -300,11 +301,18 @@ func maximalNewsSource(id, accountID string) *model.CrawlerSource {
 		SourceID: id, SourceName: worst(400), AccountID: accountID, Status: worst(100), LastCrawledAt: worst(100),
 		DocumentCount: -1 << 62, NewsQueries: list(40, 400), Aliases: list(30, 300), NewsSources: list(30, 300),
 		CustomUrls: list(30, 5000),
+		// The latest claim RFC3339 parses; an hour later needs a 5-digit year.
+		LastCollectRequestedAt: "9999-12-31T23:59:59Z",
 	}
 }
 
 func TestListAllNewsSources_ItemAndPageBounds(t *testing.T) {
-	item := newsSourceItem(maximalNewsSource("acct_acc-a_00000001", newsAcctA), model.NewsSourceKindAccount, newsAcctA, strings.Repeat("\x01", 500))
+	maximal := maximalNewsSource("acct_acc-a_00000001", newsAcctA)
+	item := newsSourceItem(maximal, model.NewsSourceKindAccount, newsAcctA, strings.Repeat("\x01", 500))
+	item.NextCollectAllowedAt = nextCollectAllowedAt(maximal.LastCollectRequestedAt, time.Now())
+	if len(item.NextCollectAllowedAt) != 21 {
+		t.Fatalf("worst nextCollectAllowedAt: %q", item.NextCollectAllowedAt)
+	}
 	encoded, err := json.Marshal(item)
 	if err != nil || !item.ListsTruncated || len(encoded) > maxNewsSourceItemBytes {
 		t.Fatalf("maximal item: %d bytes, truncated %v, %v", len(encoded), item.ListsTruncated, err)

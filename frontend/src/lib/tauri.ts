@@ -1,7 +1,7 @@
 'use client';
 
-import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView } from './intake';
-import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView } from './performanceReport';
+import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
+import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 
 interface TauriEvent<T> {
   payload: T;
@@ -721,12 +721,26 @@ export function turnOffIntakeLaunchAgent(): Promise<unknown> {
   return invoke<unknown>('intake_launch_agent_off');
 }
 
+/** Stores the sync options (`intake options`); resolves to the CLI's `{ok, options}`. */
+export function setIntakeOptions(options: IntakeSyncOptions): Promise<unknown> {
+  return invoke<unknown>('intake_set_options', {
+    calendarResponses: options.calendarResponses, sfdcContacts: options.sfdcContacts,
+  });
+}
+
 export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {
   return invoke<IntakeStateView['adapter']>('intake_check_adapter');
 }
 
-export function updateIntakeAdapter(): Promise<IntakeStateView['adapter']> {
-  return invoke<IntakeStateView['adapter']>('intake_update_adapter');
+export interface IntakeAdapterUpdate {
+  adapter: IntakeStateView['adapter'];
+  /** False when the installed adapter already matched the served one. */
+  changed: boolean;
+}
+
+/** Older apps resolve with the bare adapter view; use `normalizeAdapterUpdate`. */
+export function updateIntakeAdapter(): Promise<IntakeAdapterUpdate | IntakeStateView['adapter']> {
+  return invoke<IntakeAdapterUpdate | IntakeStateView['adapter']>('intake_update_adapter');
 }
 
 export function onIntakeProgress(handler: (line: string) => void): () => void {
@@ -741,6 +755,37 @@ export function onIntakeProgress(handler: (line: string) => void): () => void {
 
 export function onIntakeFinished(handler: (finished: IntakeFinished) => void): () => void {
   return subscribeTauriEvent<IntakeFinished, IntakeFinished>('intake://finished', (raw) => raw, handler);
+}
+
+// ---------------------------------------------------------------- one-click setup
+// Commands and events of mac-app/src-tauri/src/setup_runner.rs.
+
+/** Setup state, or `null` when the installed app predates one-click setup. */
+export async function getSetupState(): Promise<{ running: boolean; last: SetupFinished | null } | null> {
+  try {
+    return await invoke<{ running: boolean; last: SetupFinished | null }>('setup_get_state');
+  } catch (err) {
+    if (isCommandNotFound(err)) return null;
+    throw err;
+  }
+}
+
+/** Starts one setup run; `approve` lists the new servers the user confirmed. */
+export function startSetup(approve: string[], acceptPrivateCalendar: boolean): Promise<void> {
+  return invoke<void>('setup_start', { approve, acceptPrivateCalendar });
+}
+
+export function onSetupStep(handler: (step: SetupStep) => void): () => void {
+  return subscribeTauriEvent<SetupStep, SetupStep>('setup://step', (raw) => raw, handler);
+}
+
+/** The setup run took the intake run slot. */
+export function onSetupRunning(handler: () => void): () => void {
+  return subscribeTauriEvent<unknown, null>('setup://running', () => null, () => handler());
+}
+
+export function onSetupFinished(handler: (finished: SetupFinished) => void): () => void {
+  return subscribeTauriEvent<SetupFinished, SetupFinished>('setup://finished', (raw) => raw, handler);
 }
 
 // ---------------------------------------------------------------- SA report
@@ -769,8 +814,15 @@ export function getReportSettings(): Promise<ReportSettingsView> {
   return invoke<ReportSettingsView>('report_settings_get');
 }
 
-export function setReportSettings(useBedrock: boolean, awsProfile: string | null): Promise<ReportSettingsView> {
-  return invoke<ReportSettingsView>('report_settings_set', awsProfile ? { useBedrock, awsProfile } : { useBedrock });
+export function setReportSettings(useBedrock: boolean, awsProfile: string | null, excludedSlackChannels?: string[]): Promise<ReportSettingsView> {
+  return invoke<ReportSettingsView>('report_settings_set', {
+    useBedrock, ...(awsProfile ? { awsProfile } : {}), ...(excludedSlackChannels ? { excludedSlackChannels } : {}),
+  });
+}
+
+/** Re-reads the owner's Slack channels of the last 90 days (a few minutes). */
+export function refreshSlackChannels(): Promise<SlackChannelCandidates> {
+  return invoke<SlackChannelCandidates>('report_slack_channels_refresh');
 }
 
 export function onReportProgress(handler: (line: string) => void): () => void {

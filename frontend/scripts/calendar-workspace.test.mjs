@@ -453,12 +453,16 @@ test('source page failures preserve progress and cursor without automatic fetch;
   assert.equal(runner.render().sourcesNextCursor, null);
 });
 
-function markup(props = {}) {
+const expandedInternal = { getItem: key => key === 'ttobak-calendar-internal-collapsed' ? 'expanded' : null, setItem() {} };
+
+// Display fixtures read internal events, so the internal group is expanded
+// unless a test passes its own storage (`null` means no saved choice).
+function markup(props = {}, storage = expandedInternal) {
   const load = loader({
     react: React, 'react/jsx-runtime': jsxRuntime,
     'next/link': { default: ({ children, ...attributes }) => React.createElement('a', attributes, children) },
     '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {}, '@/components/workspace/SpecReqTaskActions': {}, '@/lib/api': { calendarApi: {} },
-  });
+  }, storage ? { window: { localStorage: storage } } : {});
   const { UpcomingMeetings } = load('@/components/workspace/UpcomingMeetings');
   return renderToStaticMarkup(React.createElement(UpcomingMeetings, {
     events: [], sources: [source], state: 'ready', now: new Date(now), window: windowQuery, ...props,
@@ -531,4 +535,35 @@ test('timed events format in the viewer timezone, including the previous local d
     if (previousZone === undefined) delete process.env.TZ;
     else process.env.TZ = previousZone;
   }
+});
+
+test('customer events come first with known Account chips; internal events collapse by default', () => {
+  const rows = [
+    event('internal-early', { startsAt: '2026-11-07T10:00:00Z', endsAt: '2026-11-07T11:00:00Z', title: 'Internal sync' }),
+    event('customer', { startsAt: '2026-11-07T12:00:00Z', endsAt: '2026-11-07T13:00:00Z', title: 'Customer call', accountId: 'acc-1' }),
+    event('unknown-name', { startsAt: '2026-11-07T14:00:00Z', endsAt: '2026-11-07T15:00:00Z', title: 'Other customer', accountId: 'acc-2' }),
+  ];
+  const accounts = [{ accountId: 'acc-1', name: 'Synthetic Corp' }];
+  const collapsed = markup({ events: rows, accounts }, null);
+  const agenda = collapsed.slice(collapsed.indexOf('조회 기간 일정'));
+  assert.match(agenda, /aria-expanded="false"[^>]*>.*사내 일정 1건/);
+  assert.doesNotMatch(agenda, /Internal sync/);
+  assert.ok(agenda.indexOf('Customer call') < agenda.indexOf('Other customer'));
+  assert.match(agenda, /Synthetic Corp/);
+  assert.equal(agenda.split('<article ').slice(1).filter(card => card.includes('rounded-full')).length, 1, 'no chip without a known name');
+  const expanded = markup({ events: rows, accounts });
+  const open = expanded.slice(expanded.indexOf('조회 기간 일정'));
+  assert.match(open, /aria-expanded="true"/);
+  assert.ok(open.indexOf('Other customer') < open.indexOf('Internal sync'));
+});
+
+test('an Account page lists events ungrouped without chips', () => {
+  const rows = [
+    event('first', { startsAt: '2026-11-07T10:00:00Z', endsAt: '2026-11-07T11:00:00Z', title: 'First', accountId: 'acc-1' }),
+    event('second', { startsAt: '2026-11-07T12:00:00Z', endsAt: '2026-11-07T13:00:00Z', title: 'Second' }),
+  ];
+  const output = markup({ events: rows, accountId: 'acc-1', accounts: [{ accountId: 'acc-1', name: 'Synthetic Corp' }] }, null);
+  assert.doesNotMatch(output, /사내 일정|Synthetic Corp/);
+  const agenda = output.slice(output.indexOf('조회 기간 일정'));
+  assert.ok(agenda.indexOf('First') < agenda.indexOf('Second'));
 });

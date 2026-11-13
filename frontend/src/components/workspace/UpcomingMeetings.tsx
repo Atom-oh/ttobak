@@ -6,6 +6,8 @@ import type { CalendarEvent, CalendarShareDirectoryAccount, CalendarSharingReque
 import { useCalendarEvents, useCalendarWindow } from '@/hooks/useCalendarEvents';
 import { useSpecReqTasks, type SpecReqTasksState } from '@/hooks/useSpecReqTasks';
 import type { SpecReqTaskView } from '@/types/specreqTask';
+import type { AccountSummary } from '@/types/meeting';
+import { internalEventsToggleLabel, partitionCustomerEvents, readInternalEventsCollapsed, writeInternalEventsCollapsed } from '@/lib/calendarDisplay';
 import { SpecReqStateBadge, SpecReqTasks, type SpecReqTasksProps } from '@/components/workspace/SpecReqTasks';
 import { calendarApi } from '@/lib/api';
 import {
@@ -38,10 +40,12 @@ export interface UpcomingMeetingsProps {
   directory?: CalendarShareDirectoryAccount[];
   onSharing?: (event: CalendarEvent, request: CalendarSharingRequest) => Promise<void>;
   sharingError?: string | null;
+  /** Accounts the caller already loaded; customer events show their names. */
+  accounts?: AccountSummary[];
 }
 
-export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight }: {
-  accountId?: string; onAccessLost?: () => void; highlight?: string;
+export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight, accounts }: {
+  accountId?: string; onAccessLost?: () => void; highlight?: string; accounts?: AccountSummary[];
 }) {
   const { now, window } = useCalendarWindow();
   const calendar = useCalendarEvents({ ...window, accountId, onAccessLost });
@@ -70,7 +74,7 @@ export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight }: 
   };
   return <UpcomingMeetings {...calendar} events={events} now={now} window={window} onRetry={calendar.retry}
     onLoadMore={calendar.loadMore} onLoadMoreSources={calendar.loadMoreSources}
-    accountId={accountId} tasks={specReq.tasks} tasksState={specReq.state} tasksPartial={specReq.partial} onRetryTasks={specReq.retry} onTransitionTask={specReq.transition} highlight={highlight}
+    accountId={accountId} tasks={specReq.tasks} tasksState={specReq.state} tasksPartial={specReq.partial} onRetryTasks={specReq.retry} onTransitionTask={specReq.transition} highlight={highlight} accounts={accounts}
     directory={directory} onSharing={userId ? onSharing : undefined} sharingError={sharingError} />;
 }
 
@@ -126,8 +130,9 @@ function SharingControls({ event, directory, onSharing }: {
   </div>;
 }
 
-function EventCard({ event, now, warning, task, directory, onSharing }: {
-  event: CalendarEvent; now: number; warning: boolean; task?: SpecReqTaskView; directory?: CalendarShareDirectoryAccount[];
+function EventCard({ event, now, warning, task, accountName, directory, onSharing }: {
+  event: CalendarEvent; now: number; warning: boolean; task?: SpecReqTaskView; accountName?: string;
+  directory?: CalendarShareDirectoryAccount[];
   onSharing?: (event: CalendarEvent, request: CalendarSharingRequest) => Promise<void>;
 }) {
   return (
@@ -136,6 +141,7 @@ function EventCard({ event, now, warning, task, directory, onSharing }: {
         <span>{event.isAllDay ? '종일' : Date.parse(event.startsAt) <= now ? '진행 중' : '예정'}</span>
         {warning && <span className="text-text-muted">동기화 상태 확인 필요</span>}
         {task && <SpecReqStateBadge state={task.state} />}
+        {accountName && <span className="max-w-full truncate rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">{accountName}</span>}
       </div>
       <h3 className="mt-2 break-words font-semibold text-text-main">{event.title}</h3>
       <p className="mt-2 text-sm text-text-secondary">
@@ -175,7 +181,7 @@ function AgendaEvents({ events, label, renderEvent }: {
 
 export function UpcomingMeetings({ events, sources, state, onRetry, now, window: queryWindow,
   nextCursor, sourcesNextCursor, onLoadMore, onLoadMoreSources, isLoadingMore, isLoadingSources,
-  eventsError, sourcesError, accountId, tasks, tasksState, tasksPartial, onRetryTasks, onTransitionTask, highlight, directory, onSharing, sharingError }: UpcomingMeetingsProps) {
+  eventsError, sourcesError, accountId, tasks, tasksState, tasksPartial, onRetryTasks, onTransitionTask, highlight, accounts, directory, onSharing, sharingError }: UpcomingMeetingsProps) {
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     if (now || state !== 'ready') return;
@@ -195,11 +201,29 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
   const allDay = visible.filter(event => event.isAllDay);
   const displayWindow = queryWindow ? `${queryWindow.from}:${queryWindow.to}` : 'rolling';
   const taskByEvent = new Map((tasks ?? []).map(task => [task.eventId, task]));
+  // Inside an Account page every event already belongs to that Account.
+  const grouped = !accountId;
+  const accountNames = new Map((accounts ?? []).map(account => [account.accountId, account.name]));
+  const { customer, internal } = partitionCustomerEvents(timed);
+  const internalCount = internal.length + allDay.length;
+  // Internal rows render only after client-side loading, so reading the
+  // preference during the first client render cannot change server markup.
+  const [internalCollapsed, setInternalCollapsed] = useState(() => readInternalEventsCollapsed());
+  const toggleInternal = () => {
+    const next = !internalCollapsed;
+    setInternalCollapsed(next);
+    writeInternalEventsCollapsed(next);
+  };
   const renderEvent = (event: CalendarEvent) => {
     const status = statuses.get(event.sourceId);
-    return <EventCard key={event.eventId} event={event} now={timestamp} task={taskByEvent.get(event.eventId)} directory={directory} onSharing={onSharing}
-      warning={!status || !status.current || status.stale || !status.covered} />;
+    return <EventCard key={event.eventId} event={event} now={timestamp} warning={!status || !status.current || status.stale || !status.covered}
+      task={taskByEvent.get(event.eventId)} accountName={grouped && event.accountId ? accountNames.get(event.accountId) : undefined}
+      directory={directory} onSharing={onSharing} />;
   };
+  const allDaySection = allDay.length > 0 && <div className="space-y-3">
+    <h3 className="pt-3 text-sm font-semibold text-text-main">종일 일정</h3>
+    <AgendaEvents key={`all-day:${displayWindow}`} events={allDay} label="종일" renderEvent={renderEvent} />
+  </div>;
 
   return (
     <section className="min-w-0 space-y-5" aria-label="내 Outlook 일정">
@@ -260,11 +284,23 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
             {!visible.length && <p className="text-sm text-text-secondary">
               {completeWindow ? '보고된 동기화 범위에 일정이 없습니다.' : '불러온 일정이 없습니다. 동기화 범위와 진행 상태를 확인하세요.'}
             </p>}
-            <AgendaEvents key={`timed:${displayWindow}`} events={timed} label="시간 지정" renderEvent={renderEvent} />
-            {allDay.length > 0 && <div className="space-y-3">
-              <h3 className="pt-3 text-sm font-semibold text-text-main">종일 일정</h3>
-              <AgendaEvents key={`all-day:${displayWindow}`} events={allDay} label="종일" renderEvent={renderEvent} />
-            </div>}
+            {!grouped ? <>
+              <AgendaEvents key={`timed:${displayWindow}`} events={timed} label="시간 지정" renderEvent={renderEvent} />
+              {allDaySection}
+            </> : <>
+              <AgendaEvents key={`customer:${displayWindow}`} events={customer} label="고객" renderEvent={renderEvent} />
+              {internalCount > 0 && <div className="space-y-3">
+                <button type="button" aria-expanded={!internalCollapsed} aria-controls="calendar-internal-events" onClick={toggleInternal}
+                  className="flex items-center gap-1 rounded-lg px-1 py-1 text-sm font-semibold text-text-secondary hover:text-text-main focus-visible:outline-2 focus-visible:outline-primary">
+                  <span className="material-symbols-outlined text-base" aria-hidden="true">{internalCollapsed ? 'expand_more' : 'expand_less'}</span>
+                  {internalEventsToggleLabel(internalCount)}
+                </button>
+                {!internalCollapsed && <div id="calendar-internal-events" className="space-y-3">
+                  <AgendaEvents key={`internal:${displayWindow}`} events={internal} label="시간 지정" renderEvent={renderEvent} />
+                  {allDaySection}
+                </div>}
+              </div>}
+            </>}
             {sharingError && <p role="alert" className="text-sm text-error">{sharingError}</p>}
             {eventsError && <p role="alert" className="text-sm text-text-secondary">추가 일정을 불러오지 못했습니다. 불러온 일정은 유지됩니다.</p>}
             {nextCursor && <div className="space-y-2 text-sm text-text-secondary">

@@ -5,6 +5,7 @@ import { accountApi } from '@/lib/api';
 import { confirmDialog } from '@/lib/dialog';
 import { CONTACT_FIELDS, isContactAccessDenied } from '@/lib/contactImport';
 import type { AccountContact, ContactInput } from '@/types/meeting';
+import { BADGE_LABELS, contactBadges, leftSfdcTooltip, sortContactsForDisplay } from '@/lib/contactSfdc';
 import { ContactImport, type ImportTargetAccount } from '@/components/ContactImport';
 
 export function AccountContacts({ accountId, userId, account }: { accountId: string; userId: string; account: ImportTargetAccount }) {
@@ -98,8 +99,9 @@ export function AccountContacts({ accountId, userId, account }: { accountId: str
         <div className="mt-3 flex gap-3"><button type="button" disabled={saving || !form.name.trim()} onClick={() => void save()} className="rounded bg-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-40">저장</button><button type="button" disabled={saving} onClick={() => { setForm(null); setEditing(null); }} className="text-sm">취소</button></div>
       </div>}
       {contacts.length === 0 && !loading && !error && <p className="text-sm text-slate-500">등록된 연락처가 없습니다.</p>}
-      <div className="space-y-2">{contacts.map((contact) => <div key={contact.contactId} className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-2 text-sm dark:border-white/5">
-        <div><div className="font-semibold">{contact.name} {contact.title && <span className="font-normal text-slate-500">{contact.title}</span>}</div><div className="text-xs text-slate-500">{[contact.company, contact.department, contact.email, contact.phone || contact.workPhone].filter(Boolean).join(' · ')}</div>
+      <div className="space-y-2">{sortContactsForDisplay(contacts).map((contact) => <div key={contact.contactId} className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-2 text-sm dark:border-white/5">
+        <div><div className="font-semibold">{contact.name} {contact.title && <span className="font-normal text-slate-500">{contact.title}</span>}
+          {contactBadges(contact).map((badge) => <span key={badge} title={badge === 'leftSfdc' ? leftSfdcTooltip(contact.sfdcLeftAt || '') : undefined} className={`ml-1 rounded px-1.5 py-0.5 align-middle text-[10px] font-semibold ${badge === 'leftSfdc' ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300' : 'bg-primary/10 text-primary'}`}>{BADGE_LABELS[badge]}</span>)}</div><div className="text-xs text-slate-500">{[contact.company, contact.department, contact.email, contact.phone || contact.workPhone].filter(Boolean).join(' · ')}</div>
           {(contact.address || contact.fax || contact.notes || contact.cardRegisteredAt || contact.cardBook || contact.group || (contact.phone && contact.workPhone)) && <details className="mt-1 text-xs text-slate-500"><summary className="cursor-pointer">상세 정보</summary><div className="mt-1 whitespace-pre-wrap">{CONTACT_FIELDS.filter(([field]) => field !== 'name' && contact[field]).map(([field, label]) => <div key={field}>{label}: {contact[field]}</div>)}</div></details>}
         </div>
         <div className="flex gap-3"><button type="button" disabled={saving} onClick={() => { const { contactId, ...values } = contact; setEditing(contactId); setForm(values); }} className="text-xs text-primary">수정</button><button type="button" disabled={saving} onClick={() => void remove(contact)} className="text-xs text-red-600">삭제</button></div>

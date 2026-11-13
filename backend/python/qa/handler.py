@@ -23,6 +23,7 @@ from connector_grants import current_grants
 
 from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
+from live_assistant import parse_live_questions, AUTOMATIC_ANSWER_PROMPT
 from tools import TOOL_DEFINITIONS, execute_tool
 from transcript_storage import resolve_transcript
 from source_context import SourceReader
@@ -109,7 +110,8 @@ def _execute_job_request(user_id, request, state):
     else:
         result = handle_ask(request['question'], request['context'], request['meetingId'],
                             request['sessionId'], user_id, source_state=state, model_client=_ASYNC_MODEL,
-                            mutation_guard=mutations)
+                            mutation_guard=mutations, automatic=request.get('automatic', False),
+                            allow_web_search=request.get('allowWebSearch', False))
     if mutations.uncertain:
         raise JobError('QA_MUTATION_OUTCOME_UNKNOWN',
                        'A research creation may have completed. Check this job before submitting again.')
@@ -567,7 +569,11 @@ def _handle_existing_verified_http(event, context, verified_user_id=None):
         question = body.get('question', '').strip()
         if not question:
             return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'question is required'}})
-        return handle_ask(question, body.get('context'), body.get('meetingId'), body.get('sessionId'), user_id)
+        if any(key in body and type(body[key]) is not bool for key in ('automatic', 'allowWebSearch')):
+            return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'QA policy flags must be boolean'}})
+        return handle_ask(question, body.get('context'), body.get('meetingId'), body.get('sessionId'), user_id,
+                          automatic=body.get('automatic', False),
+                          allow_web_search=body.get('allowWebSearch', False))
     elif path == '/api/qa/detect-questions':
         return handle_detect_questions(body)
     elif path.startswith('/api/qa/meeting/'):
@@ -1212,6 +1218,8 @@ def _qa_model_input(messages, transcript, meeting_notes, meeting_id, source_stat
         system.append({'text': CLIENT_LIVE_NOTE})
     if source_state.get('attachmentContext'):
         system.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+    if source_state.get('automaticAnswer') is True:
+        system.append({'text': AUTOMATIC_ANSWER_PROMPT})
     return system, input_turn, input_excerpt
 
 
@@ -1303,7 +1311,10 @@ def _agentic_converse(messages, transcript, session_id, user_id, meeting_notes, 
                 modelId=BEDROCK_MODEL_ID,
                 system=system_messages,
                 messages=project_current_input(messages, input_turn, input_excerpt),
-                toolConfig={"tools": TOOL_DEFINITIONS},
+                toolConfig={"tools": [
+                    tool for tool in TOOL_DEFINITIONS
+                    if context.get('allowed_tools') is None or tool['toolSpec']['name'] in context['allowed_tools']
+                ]},
                 inferenceConfig={"maxTokens": QA_OUTPUT_TOKENS},
             )
         except Exception as e:
@@ -1391,7 +1402,8 @@ def extract_text_answer(message):
 
 
 def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id=None, *,
-               source_state=None, model_client=None, mutation_guard=None):
+               source_state=None, model_client=None, mutation_guard=None,
+               automatic=False, allow_web_search=False):
     """Handle POST /api/qa/ask — agentic Q&A with tool-use loop."""
     try:
         source_state = source_state if source_state is not None else new_source_state()
@@ -1402,6 +1414,9 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             return response(err['status'], {'error': {'code': err['code'], 'message': err['message']}})
         # Load existing conversation or start new
         messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
+        # History cannot grant mutation/egress permission to an automatic turn.
+        source_state['automaticAnswer'] = automatic is True
+        source_state['allowAutomaticWebSearch'] = automatic is True and allow_web_search is True
 
         # Persist only the receipt. The model-call view adds a bounded current
         # input excerpt without copying rolling transcript bytes into history.
@@ -1519,20 +1534,25 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *,
 
 def handle_detect_questions(body):
     """Handle POST /api/qa/detect-questions — extract topic-aware questions from transcript."""
-    transcript = body.get('transcript', '').strip()
+    if not isinstance(body, dict) or any(
+            not isinstance(body.get(key, ''), str)
+            for key in ('transcript', 'summary', 'meetingTitle', 'meetingContext')):
+        return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'Detection context must be text'}})
+    transcript = body.get('transcript', '').strip()[-6000:]
     if not transcript:
         return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'transcript is required'}})
 
-    summary = body.get('summary', '').strip()
-    previous_questions = body.get('previousQuestions', [])
-
-    # Build context: summary (for topic understanding) + transcript
-    user_content = ''
-    if summary:
-        user_content += f'## 현재 미팅 요약\n{summary}\n\n'
-    user_content += f'## 최근 대화 내용\n{transcript}'
-    if previous_questions:
-        user_content += '\n\n이미 제안된 질문:\n' + '\n'.join(f'- {q}' for q in previous_questions)
+    previous_questions = body.get('previousQuestions') or []
+    if not isinstance(previous_questions, list):
+        return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'previousQuestions must be an array'}})
+    # Meeting-authored text stays inside one bounded data object.
+    user_content = json.dumps({
+        'meetingTitle': body.get('meetingTitle', '').strip()[:120],
+        'meetingContext': body.get('meetingContext', '').strip()[:3000],
+        'summary': body.get('summary', '').strip()[-3000:],
+        'recentTranscript': transcript,
+        'answeredQuestions': [q[:500] for q in previous_questions[-50:] if isinstance(q, str)],
+    }, ensure_ascii=False)
 
     try:
         resp = bedrock_runtime.converse(
@@ -1542,7 +1562,7 @@ def handle_detect_questions(body):
                 {'role': 'user', 'content': [{'text': user_content}]}
             ],
             # no temperature: Claude 5.x models reject it (ValidationException)
-            inferenceConfig={'maxTokens': 512},
+            inferenceConfig={'maxTokens': 1024},
         )
 
         answer = ''
@@ -1550,12 +1570,12 @@ def handle_detect_questions(body):
             if 'text' in block:
                 answer += block['text']
 
-        questions, proactive = parse_detected_questions(answer)
+        questions, proactive, automatic = parse_live_questions(answer)
     except Exception as e:
-        logger.warning(f'Question detection failed: {e}')
-        questions, proactive = [], []
+        logger.warning('Question detection failed (%s)', type(e).__name__)
+        questions, proactive, automatic = [], [], []
 
-    return response(200, {'questions': questions, 'proactive': proactive})
+    return response(200, {'questions': questions, 'proactive': proactive, 'automatic': automatic})
 
 
 def parse_detected_questions(raw):
@@ -1567,33 +1587,8 @@ def parse_detected_questions(raw):
     flag. Duplicates are dropped (first occurrence wins, including its search
     flag). proactive is always a subset of questions.
     """
-    text = raw.strip()
-    # a model may wrap the array in a Markdown code fence (```json ... ```)
-    fence = re.fullmatch(r'```[A-Za-z]*\s*(.*?)\s*```', text, re.S)
-    if fence:
-        text = fence.group(1)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return [], []
-    if not isinstance(parsed, list):
-        return [], []
-    questions, proactive = [], []
-    seen = set()
-    for item in parsed:
-        q, is_search = None, False
-        if isinstance(item, str) and item.strip():
-            q = item.strip()
-        elif isinstance(item, dict) and isinstance(item.get('q'), str) and item['q'].strip():
-            q = item['q'].strip()
-            is_search = item.get('search') is True
-        if q is None or q in seen:
-            continue
-        seen.add(q)
-        questions.append(q)
-        if is_search:
-            proactive.append(q)
-    return questions[:5], [q for q in proactive if q in questions[:5]]
+    questions, proactive, _ = parse_live_questions(raw)
+    return questions, proactive
 
 
 def response(status_code, body):

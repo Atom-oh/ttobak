@@ -302,8 +302,10 @@ pub struct Detector {
     /// A meeting whose end was reported while recording; its audio returning
     /// resumes it at once (no sustain), cancelling the pending stop.
     ended_while_recording: Option<Detection>,
-    /// Source keys present in the latest observation.
-    present: HashSet<String>,
+    /// Source keys in the latest observation that may start or resume a
+    /// detection. The stop guard uses the same rule as resume, so an
+    /// output-only notification sound cannot refuse a pending stop.
+    resumable: HashSet<String>,
 }
 
 impl Detector {
@@ -312,12 +314,32 @@ impl Detector {
         self.active.as_ref()
     }
 
+    /// Observes sources that all may start a detection.
+    #[cfg(test)]
     pub fn observe(&mut self, now_ms: u64, sources: &[Source], recording: bool) -> Vec<Event> {
+        self.observe_audio(now_ms, sources, sources, recording)
+    }
+
+    /// Observes the meeting sources with audio running (`sources`) and the
+    /// subset that may start or resume a detection (`starters`). A source
+    /// outside `starters` only keeps an already tracked meeting alive: a
+    /// native app playing a notification or calendar reminder sound without
+    /// using the microphone is not a meeting.
+    pub fn observe_audio(
+        &mut self,
+        now_ms: u64,
+        sources: &[Source],
+        starters: &[Source],
+        recording: bool,
+    ) -> Vec<Event> {
         let mut events = Vec::new();
         let present: HashSet<String> = sources.iter().map(|s| s.key()).collect();
+        let starting: HashSet<String> = starters.iter().map(|s| s.key()).collect();
         for key in &present {
-            self.first_seen.entry(key.clone()).or_insert(now_ms);
             self.last_seen.insert(key.clone(), now_ms);
+        }
+        for key in &starting {
+            self.first_seen.entry(key.clone()).or_insert(now_ms);
         }
         // Forget sources gone past the grace period.
         let expired: Vec<String> = self
@@ -335,14 +357,14 @@ impl Detector {
         }
         // A brief absence restarts the sustain window, not the grace period:
         // the window starts again at the next observation that sees it.
-        self.first_seen.retain(|key, _| present.contains(key));
-        self.present = present.clone();
+        self.first_seen.retain(|key, _| starting.contains(key));
+        self.resumable = starting.clone();
 
         if !recording {
             self.ended_while_recording = None;
         }
         if let Some(ended) = self.ended_while_recording.take() {
-            if present.contains(&ended.source.key()) && self.active.is_none() {
+            if starting.contains(&ended.source.key()) && self.active.is_none() {
                 // Resumed: track it again under the same ID, immediately.
                 self.active = Some(ended.clone());
                 self.silent = true;
@@ -367,7 +389,7 @@ impl Detector {
             }
             return events;
         }
-        let ready = sources.iter().find(|s| {
+        let ready = starters.iter().find(|s| {
             let key = s.key();
             !self.suppressed.contains(&key)
                 && self
@@ -411,9 +433,10 @@ impl Detector {
         !self.silent && self.active.as_ref().is_some_and(|d| d.id == id)
     }
 
-    /// Whether `source`'s audio was present in the latest observation.
+    /// Whether `source` was observed in a form that resumes its meeting
+    /// (a starter) in the latest observation.
     pub fn is_present(&self, source: &Source) -> bool {
-        self.present.contains(&source.key())
+        self.resumable.contains(&source.key())
     }
 
     /// The announced meeting, if any (a silently tracked one is not offered).
@@ -632,6 +655,49 @@ mod tests {
     }
 
     #[test]
+    fn native_output_alone_never_starts_a_detection() {
+        // Zoom playing a calendar reminder or notification sound.
+        let mut d = Detector::default();
+        for t in (0..=60_000).step_by(1_000) {
+            assert!(d.observe_audio(t, &[ZOOM], &[], false).is_empty());
+        }
+        // The microphone opening (joining the meeting) starts the window.
+        assert!(d.observe_audio(61_000, &[ZOOM], &[ZOOM], false).is_empty());
+        let events = d.observe_audio(64_000, &[ZOOM], &[ZOOM], false);
+        assert!(matches!(&events[..], [Event::Detected(det)] if det.source == ZOOM));
+    }
+
+    #[test]
+    fn output_keeps_a_detected_meeting_alive_after_the_mic_closes() {
+        let mut d = Detector::default();
+        d.observe_audio(0, &[ZOOM], &[ZOOM], false);
+        d.observe_audio(3_000, &[ZOOM], &[ZOOM], false);
+        // Listen-only: the app released the microphone but plays audio.
+        for t in (4_000..=60_000).step_by(1_000) {
+            assert!(d.observe_audio(t, &[ZOOM], &[], false).is_empty());
+        }
+        assert!(d.active().is_some());
+    }
+
+    #[test]
+    fn output_alone_does_not_resume_an_ended_meeting() {
+        let mut d = Detector::default();
+        d.observe_audio(0, &[ZOOM], &[ZOOM], true);
+        d.observe_audio(3_000, &[ZOOM], &[ZOOM], true);
+        d.observe_audio(4_000, &[], &[], true);
+        assert!(matches!(
+            &d.observe_audio(24_000, &[], &[], true)[..],
+            [Event::Ended(_)]
+        ));
+        // A notification sound must not cancel the pending stop.
+        assert!(d.observe_audio(25_000, &[ZOOM], &[], true).is_empty());
+        assert!(matches!(
+            &d.observe_audio(26_000, &[ZOOM], &[ZOOM], true)[..],
+            [Event::Tracking(_)]
+        ));
+    }
+
+    #[test]
     fn a_gap_restarts_the_sustain_window() {
         let mut d = Detector::default();
         d.observe(0, &[ZOOM], false);
@@ -700,6 +766,14 @@ mod tests {
         d.observe(0, &[ZOOM], true);
         assert!(d.is_present(&ZOOM));
         d.observe(1_000, &[], true);
+        assert!(!d.is_present(&ZOOM));
+    }
+
+    #[test]
+    fn output_alone_does_not_count_as_present_for_the_stop_guard() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        d.observe_audio(1_000, &[ZOOM], &[], true);
         assert!(!d.is_present(&ZOOM));
     }
 

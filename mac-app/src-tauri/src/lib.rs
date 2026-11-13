@@ -52,6 +52,7 @@ mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
 mod report_runner;
+mod setup_runner;
 mod sleep;
 mod update;
 mod update_policy;
@@ -835,11 +836,16 @@ pub fn run() {
             intake_runner::intake_cancel,
             intake_runner::intake_check_adapter,
             intake_runner::intake_update_adapter,
+            intake_runner::intake_refresh_path,
+            setup_runner::setup_start,
+            setup_runner::setup_get_state,
+            intake_runner::intake_set_options,
             report_runner::report_generate,
             report_runner::report_cancel,
             report_runner::report_get_state,
             report_runner::report_settings_get,
             report_runner::report_settings_set,
+            report_runner::report_slack_channels_refresh,
         ])
         .setup(|app| {
             // Caption translation; failure only disables it.
@@ -855,6 +861,7 @@ pub fn run() {
             intake_runner::start(app.handle().clone());
             // SA report runs (separate run slot from intake).
             report_runner::manage(app);
+            setup_runner::manage(app);
             // App menu with the update item; failure keeps Tauri's default menu.
             if let Err(e) = update::install_menu(app.handle()) {
                 log::warn!("update menu unavailable: {e}");

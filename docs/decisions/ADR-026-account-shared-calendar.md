@@ -36,7 +36,8 @@ wider access. The Outlook source exposes no sensitivity flag (observed
   as invalid on read; no writer produces one.
 - **Manual overrides.** Sharing mode (`auto`, `account`, `hidden`) is stored as a
   `CalendarOverrideRow` per series (`seriesKey`) or occurrence and beats
-  automatic results. `hidden` vetoes both the automatic Account and the currently
+  automatic results. The runner does not send `seriesKey` yet, so overrides
+  apply per occurrence until a series-wide hide fans out to synced occurrences. `hidden` vetoes both the automatic Account and the currently
   shared Account, so an event carries at most two vetoes (accepted limit).
   Override rows have no TTL and persist until cleared, because the choice must
   outlive the event rows it governs.
@@ -63,7 +64,7 @@ wider access. The Outlook source exposes no sensitivity flag (observed
 - **Transaction budget.** At most 100 items per transaction
   (`calendarMaxTransactItems`). The runner sends at most 12 mutations per batch
   (`MAX_BATCH` in `mcp-server/src/intake/calendar.ts`); the server rejects larger
-  batches with 400.
+  batches with 413 `CALENDAR_BATCH_TOO_LARGE`.
 - **Mac runner.** A deterministic matcher (`mcp-server/src/intake/match.ts`)
   matches titles, locations and attendee domains to Accounts (evidence kinds
   `title`, `location`, `domain`). Attendee domains come from

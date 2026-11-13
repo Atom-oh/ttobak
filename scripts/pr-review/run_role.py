@@ -19,7 +19,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 
-from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, strip_controls, accepted_response, record, SCHEMA_CODES, CURRENT_SCHEMA_CORRECTION
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_ARGV_BYTES, MAX_STDIN_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, strip_controls, accepted_response, record, SCHEMA_CODES, CURRENT_SCHEMA_CORRECTION
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -212,7 +212,7 @@ def run(work, tag, kiro_startup=None):
             else:
                 install_agent(cwd)
                 instruction = framed_prompt + "\n" + payload
-                if len(instruction.encode()) >= MAX_REQUEST_BYTES:
+                if len(instruction.encode()) >= MAX_ARGV_BYTES:
                     code, error = 1, "Complete Kiro input exceeds argument limit."
                 else:
                     command = [
@@ -239,7 +239,7 @@ def run(work, tag, kiro_startup=None):
                         rejection_recorded = False
                         verify_kiro_startup(startup, work, plan, tag, nonce)
                         command[2] = framed_prompt + "\n" + payload
-                        if len(command[2].encode()) >= MAX_REQUEST_BYTES:
+                        if len(command[2].encode()) >= MAX_ARGV_BYTES:
                             code, output, error = 1, "", "Complete Kiro input exceeds argument limit."
                             break
                         remaining = deadline - time.monotonic()
@@ -333,11 +333,18 @@ def run(work, tag, kiro_startup=None):
                     command[-2] = str(final_output)
                     command[-1] = "-"
                     delivered = framed_prompt + "\n" + payload
+                    if len(delivered.encode()) >= MAX_STDIN_REQUEST_BYTES:
+                        code, output, error = 1, "", "Complete Codex request exceeds input limit."
+                        break
                 else:
                     command[2] = framed_prompt
                     delivered = payload
                     schema = command[command.index("--json-schema") + 1]
-                    if len((framed_prompt + payload + schema).encode()) >= MAX_REQUEST_BYTES:
+                    # The instruction and schema are argv strings; the payload is stdin.
+                    if any(len(value.encode()) >= MAX_ARGV_BYTES for value in (framed_prompt, schema)):
+                        code, output, error = 1, "", "Claude instruction exceeds argument limit."
+                        break
+                    if len((framed_prompt + payload + schema).encode()) >= MAX_STDIN_REQUEST_BYTES:
                         code, output, error = 1, "", "Complete Claude request exceeds input limit."
                         break
                 call_timeout = timeout

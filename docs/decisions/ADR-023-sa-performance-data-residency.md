@@ -77,6 +77,15 @@ contacts below.
   ADR-003 (local intake)'s rule that host configuration is referenced, never copied to disk.
   Raw MCP results stay in the run's working directory on the Mac, which the
   runner deletes after the run.
+- **Report tool allowlist follows a reviewed skill version.** The report run
+  may call only the read tools and skill scripts listed in
+  `mcp-server/src/report/tools.ts`, currently those of `sa-performance-report`
+  v1.5.0. Installing a newer skill never widens the list; each version's
+  additions are reviewed as a code change.
+- **Slack channel exclusions stay on the Mac.** The owner's excluded channel
+  names live in the app's local intake settings and the candidate list in its
+  config folder; they reach the run prompt as data, and a report that still
+  names an excluded channel is rejected before upload.
 - **Encryption exception.** `PERF*` rows use the table's default encryption at
   rest plus owner-only authorization, with no field-level envelope sealing as in
   ADR-021. This is an accepted exception to the rule that sensitive DynamoDB

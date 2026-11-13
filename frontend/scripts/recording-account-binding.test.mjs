@@ -133,6 +133,13 @@ test('persistent Account rejection can be skipped while preserving pending audio
     assert.deepEqual(f.navigations, ['/?uploaded=draft']);
   }
 });
+test('draft overrides drop a page Account and title (leftover upload without an auto link)', async () => {
+  const f = fixture(direct);
+  assert.equal(await f.hook.createDraftMeeting({ accountId: '', title: '' }), 'draft');
+  assert.equal(f.creates[0].accountId, undefined);
+  assert.notEqual(f.creates[0].title, 'Prepared recording');
+});
+
 test('an inherited reference selection cannot bind the recording draft', async () => {
   const f = fixture(inherited);
   assert.equal(await f.hook.createDraftMeeting(), 'draft');

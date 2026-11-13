@@ -20,6 +20,7 @@ and accounting semantics.
 | `news_runtime.finalize_handler` | Exact `discovery`, `outcomes` object | Atomically writes final accounting/history; callable after disabling writers |
 | `news_recovery.handler` | Empty object | Recovers expired runs using a leased scan cursor; callable after disabling writers |
 | `news_schedule.handler` | `scheduledAt`, optionally `expectedSourcesSha256` | Lists current source identities with bounded strong pagination; pins the original UTC day and optionally the exact replay set; no writes or model calls |
+| `news_manual.handler` | Exact `{"manualCollect":{sourceId,accountId,requestId}}` from rule `ttobak-news-collect-requested` | Applies the activation and pricing gates, refuses while the daily parent runs, conditionally marks the API-claimed request started, then starts one `manual-{requestId}` publication execution; no search, fetch, model call or other write |
 
 These functions require private IAM invocation. They must not be exposed through
 an unauthenticated function URL or a new public application route.
@@ -72,8 +73,10 @@ installed with news writes disabled. `NewsPipelineMode` permits `off`, `canary`
 and `all`; CloudFormation rejects canary mode without a source ID and rejects
 all mode unless legacy writes are off. See the dated activation contract below.
 
-Discovery, worker, finalization, recovery and scheduling each have a separate Lambda role
-and retained 30-day log group. DynamoDB item/transaction operations are confined
+Discovery, worker, finalization, recovery, scheduling and the manual starter each
+have a separate Lambda role and retained 30-day log group. The starter may only
+read/update/put `CRAWLER#*` items, list executions of both state machines, start
+`ttobak-news-publication` and send to `ttobak-news-collect-failures`. DynamoDB item/transaction operations are confined
 to `CRAWLER#*` keys on the existing table. Recovery and source scheduling receive
 exact-table Scan. Scheduling also has an IAM projection attribute allowlist;
 recovery bounds its projection in the request, without an IAM attribute condition.
@@ -87,9 +90,12 @@ Discovery times out after ten minutes; each worker after fourteen minutes.
 The Map runs one worker at a time so a settled reservation can free allowance
 before the next candidate. The workflow has a 45-minute overall timeout; the
 runtime's original 30-minute admission window still rejects late reservations.
-Tasks have no implicit invocation retry. A caught worker invocation failure
-becomes a bounded failed outcome; execution termination or an unfinished lease
-leaves the run for scheduled recovery. Finalization does not pretend a live
+Tasks have no implicit invocation retry. The one exception is discovery, which
+retries only `Lambda.TooManyRequestsException` for up to 12 minutes (30-second
+interval, 24 attempts) so a run waits for its single reserved slot; a throttled
+invocation never ran, so this cannot duplicate work or charges. A caught
+worker invocation failure becomes a bounded failed outcome; execution
+termination or an unfinished lease leaves the run for scheduled recovery. Finalization does not pretend a live
 attempt completed.
 
 Recovery runs every five minutes with a two-minute Lambda timeout below its
@@ -304,6 +310,42 @@ successful. The short `FINALIZED` result and duplicate-start catch mean reuse of
 an existing execution, not proof that its historical crawl succeeded. Inspect the
 original history and child/parent failure or timeout alarms on replay.
 
+### Manual collection starter
+
+`ttobak-news-manual` is a second entry point that starts the publication
+workflow (ADR-004); its `manual-{requestId}` runs are ordinary runs with the
+limits above. Before claiming it refuses `DAILY_WINDOW` from the child timeout
+before the daily schedule until a 15-minute grace after it, and, as cost and
+fairness guards, `DAILY_RUNNING` while a daily parent runs and
+`RUN_IN_PROGRESS` while any publication child runs. These and the mode/pricing
+refusals release the API's hourly claim and write at most one
+`COLLECTREFUSAL#` receipt per source per five minutes. Overlaps with
+discovery's single slot are handled by the discovery throttle retry above; if
+the daily start is delayed past the grace before any daily execution exists, a
+manual run can start and the daily children wait for the slot.
+
+A ListExecutions or claim error starts nothing and leaves the started marker
+unset; a StartExecution error leaves the request spent. Inspect failure-queue
+messages and never redrive them: a spent request is refused as
+`DUPLICATE_REQUEST`, but one failed before its marker would start a paid run if
+replayed within the hour.
+
+Source tests and declared resources do not prove delivery. After a targeted,
+exclusive CrawlerStack deployment, record from the actual starter role: the
+refusal codes with the deployed mode, `DAILY_WINDOW`, `DAILY_RUNNING` and
+`RUN_IN_PROGRESS` refusals (or their ListExecutions calls on both state
+machines) with the released claim and receipt, a throttled discovery retried
+and then succeeded with no duplicate attempt or charge (the observed error
+name must be `Lambda.TooManyRequestsException`), one accepted request that
+produced exactly one `manual-{requestId}` execution and a finalized receipt with
+its `NEWSRUN#` row, a duplicate delivery refused without a second execution,
+the legacy news function's removed async configuration, and, after the targeted
+AiStack and then GatewayStack deployments, a 409 `COLLECT_DAILY_WINDOW` (with
+`nextAllowedAt`) from the collect route inside the window and a 409
+`COLLECT_BUSY` while a daily or publication run is in progress, each with no
+claim written and no `NewsCollectRequested` event. Record the deployed
+starter and child function revisions with that evidence.
+
 ### Daily admission retention and bounded replay
 
 The daily EventBridge target forwards its original `time` as `scheduledAt`.
@@ -433,6 +475,25 @@ reporting their notices. Reruns are idempotent, never touch user-owned rows
 includes the rows from its next run (10 active sources of the 30-source limit).
 Acceptance is a later daily execution with `docsAdded > 0` and matching
 `GSI4PK=DOC#news` rows; a successful seed or deployment alone is not.
+
+## Search term display field (2026-11-12)
+
+The worker adds an optional `matchedTerm` string to search DOC rows (ADR-004).
+It is not part of candidate/document identity, the source revision or budgets.
+The current API reader projects it and checks it within the 24,000-byte record
+limit; QA ignores it; readers without it ignore the attribute. Release steps:
+
+1. Confirm the deployed API Lambda includes the `matchedTerm` projection
+   (PR #886 or later) so the term is visible; an older reader is safe but hides it.
+2. Deploy CrawlerStack alone with `--exclusively`; no parameter or flag changes.
+   Record the deployed worker and discovery code SHA-256 as the minimum writer
+   revision for this field.
+3. Acceptance is a later daily execution whose new search `DOC#` row carries
+   `matchedTerm` and whose Insights card shows it. Custom-URL rows have none.
+   Rows published earlier stay without the field; there is no backfill.
+
+Rollback is the normal writer rollback; rows already written keep the attribute
+and remain readable. Steps 1-3 have no recorded evidence yet.
 
 ## Rollback and retention
 

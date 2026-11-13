@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useIntake } from '@/hooks/useIntake';
+import { OneClickSetup } from '@/components/OneClickSetup';
 import {
-  errorCode, finishedMessage, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
-  scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows, type IntakeConnector, type IntakeFinished,
-  type IntakeScheduleKind,
+  adapterUpdateMessage, errorCode, finishedMessage, normalizeAdapterUpdate, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
+  optionsSaveErrorText, savedOptions, scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows,
+  SYNC_OPTIONS_COPY, syncOptionsValue, syncOptionsView, type IntakeConnector, type IntakeFinished, type IntakeScheduleKind, type SyncOptionsView,
 } from '@/lib/intake';
 import {
   cancelIntake, checkIntakeAdapter, isTauri, runIntakeLogin, runIntakeNow, runIntakeSetup, setIntakeNodePath,
-  setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter,
+  setIntakeOptions, setIntakeSchedule, turnOffIntakeLaunchAgent, updateIntakeAdapter,
 } from '@/lib/tauri';
 
 const buttonClass = 'rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-white/10 dark:text-text-main dark:hover:bg-white/5';
@@ -27,14 +28,17 @@ function formatTime(iso: string | null): string {
  * browser or an app build without intake. */
 export function IntakeSettings() {
   const [message, setMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const onFinished = useCallback((finished: IntakeFinished) => setMessage(finishedMessage(finished) || null), []);
   const { state, setState, progress, loadError, refresh, markStarted } = useIntake(onFinished);
+  const refreshAfterSetup = useCallback(() => { void refresh(); }, [refresh]);
   const [busy, setBusy] = useState(false);
   const [nodeInput, setNodeInput] = useState('');
   const [form, setForm] = useState<{ kind: IntakeScheduleKind; first: string; second: string } | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const [acceptPrivate, setAcceptPrivate] = useState(false);
   const [skip, setSkip] = useState<IntakeConnector[]>([]);
+  const [optionsForm, setOptionsForm] = useState<SyncOptionsView | null>(null);
 
   // Best effort, once the state is loaded: offline leaves updateAvailable null.
   const loaded = state !== null;
@@ -63,16 +67,20 @@ export function IntakeSettings() {
   const scheduleValue = scheduleFromForm(schedule.kind, schedule.first, schedule.second);
   const rows = sourceRows(state.status, state.selection);
   const setupRows = running ? [] : setupConnectorRows(state.lastResult);
+  // Background commands without a progress log or cancel.
+  const quiet = state.running === 'scheduleOff' || state.running === 'options';
+  const syncOptions = optionsForm ?? syncOptionsView(state.options);
 
-  const act = async (work: () => Promise<unknown>, after?: (value: unknown) => void) => {
+  const act = async (work: () => Promise<unknown>, after?: (value: unknown) => void, errorText = intakeCodeLabel) => {
     setBusy(true);
     setMessage(null);
+    setNotice(null);
     try {
       const value = await work();
       after?.(value);
     } catch (err) {
       const code = errorCode(err);
-      setMessage(code === 'invalid-node-path' ? 'node 경로가 올바르지 않아요.' : intakeCodeLabel(code));
+      setMessage(code === 'invalid-node-path' ? 'node 경로가 올바르지 않아요.' : errorText(code));
     } finally {
       setBusy(false);
       await refresh();
@@ -88,13 +96,19 @@ export function IntakeSettings() {
     <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
       <h3 className="section-header mb-4">{INTAKE_COPY.sectionTitle}</h3>
       <div className="flex flex-col gap-5 text-sm text-slate-700 dark:text-text-secondary">
+        <OneClickSetup disabled={busy || running} onDone={refreshAfterSetup} onLogin={() => start('login', runIntakeLogin)} />
         <div className="flex flex-wrap items-center gap-3">
           <span>
             {state.adapter.present ? '수집 도구 설치됨' : intakeCodeLabel('ADAPTER_MISSING')}
             {state.adapter.updateAvailable && state.adapter.present && ' · 새 버전이 있어요'}
           </span>
           <button type="button" className={buttonClass} disabled={busy || running}
-            onClick={() => void act(updateIntakeAdapter, value => setState(current => current ? { ...current, adapter: value as typeof current.adapter } : current))}>
+            onClick={() => void act(updateIntakeAdapter, value => {
+              // An older installed app answers with the bare adapter view.
+              const update = normalizeAdapterUpdate(value);
+              if (update) setState(current => current ? { ...current, adapter: update.adapter } : current);
+              setNotice(adapterUpdateMessage(update?.changed ?? null));
+            })}>
             {INTAKE_COPY.update}
           </button>
         </div>
@@ -181,6 +195,44 @@ export function IntakeSettings() {
           </table>
         )}
 
+        {state.options && (
+          <fieldset className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 dark:border-white/10">
+            <legend className="px-1 text-sm font-semibold">{SYNC_OPTIONS_COPY.title}</legend>
+            <p className={mutedClass}>{SYNC_OPTIONS_COPY.calendarResponsesLabel}</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {syncOptions.responses.map(row => (
+                <label key={row.response} className="flex items-center gap-2">
+                  <input type="checkbox" checked={row.checked} disabled={busy || running}
+                    onChange={event => setOptionsForm({ ...syncOptions, responses: syncOptions.responses.map(item =>
+                      item.response === row.response ? { ...item, checked: event.target.checked } : item) })} />
+                  <span>{row.label}</span>
+                </label>
+              ))}
+            </div>
+            <p className={mutedClass}>{SYNC_OPTIONS_COPY.uncheckedRemovedNote}</p>
+            <p className={mutedClass}>{SYNC_OPTIONS_COPY.declinedNote}</p>
+            {/* Shown whenever unanswered events are not kept, not only before options are stored. */}
+            {!syncOptions.responses.some(row => row.response === 'none' && row.checked)
+              && <p className={mutedClass}>{SYNC_OPTIONS_COPY.defaultsRemoveNote}</p>}
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={syncOptions.sfdcContacts} disabled={busy || running}
+                onChange={event => setOptionsForm({ ...syncOptions, sfdcContacts: event.target.checked })} />
+              <span>{SYNC_OPTIONS_COPY.sfdcContactsToggle}</span>
+            </label>
+            <div>
+              <button type="button" className={buttonClass} disabled={busy || running || !optionsForm}
+                onClick={() => optionsForm && void act(() => setIntakeOptions(syncOptionsValue(optionsForm)), value => {
+                  // Show the saved values at once instead of the stale state until the refresh resolves.
+                  const saved = savedOptions(value);
+                  if (saved) setState(current => current ? { ...current, options: saved } : current);
+                  setOptionsForm(null);
+                }, optionsSaveErrorText)}>
+                {SYNC_OPTIONS_COPY.save}
+              </button>
+            </div>
+          </fieldset>
+        )}
+
         <div className="flex flex-wrap gap-2">
           <button type="button" className={buttonClass} disabled={busy || running} aria-expanded={setupOpen}
             onClick={() => setSetupOpen(open => !open)}>{INTAKE_COPY.connectSetup}</button>
@@ -190,7 +242,7 @@ export function IntakeSettings() {
             <button type="button" className={buttonClass} disabled={busy || running}
               onClick={() => start('login', runIntakeLogin)}>{INTAKE_COPY.ttobakLogin}</button>
           )}
-          {running && state.running !== 'scheduleOff' && (
+          {running && !quiet && (
             <button type="button" className={buttonClass} onClick={() => void act(cancelIntake)}>{INTAKE_COPY.cancel}</button>
           )}
         </div>
@@ -238,9 +290,10 @@ export function IntakeSettings() {
           </div>
         )}
 
+        {notice && <p role="status" className="text-sm text-slate-700 dark:text-text-secondary">{notice}</p>}
         {message && <p role="status" className="text-sm text-red-600 dark:text-red-400">{message}</p>}
 
-        {running && state.running !== 'scheduleOff' && (
+        {running && !quiet && (
           <details open className="rounded-lg border border-slate-200 p-3 dark:border-white/10">
             <summary className="cursor-pointer text-sm font-semibold">수집 중… 진행 기록</summary>
             <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-slate-600 dark:text-text-muted">

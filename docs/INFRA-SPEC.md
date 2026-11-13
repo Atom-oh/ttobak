@@ -30,7 +30,7 @@ The account KB reference rows live in `ttobak-main` (ADR-021, relationship links
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
 | TtobakObservabilityStack | OTLP collector (Fargate, internal ALB) writing to the mgmt ClickHouse PrivateLink | None |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
-| TtobakCrawlerStack | Crawling/ingestion workflow and workers; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
+| TtobakCrawlerStack | Crawling/ingestion workflow and workers; manual account news collection rule and versioned starter; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU On-Demand/Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
@@ -229,6 +229,14 @@ version expiry; a delete marker is not immediate physical deletion of all versio
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
 one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
+Skill package zips live under skillpkg/ (`skillpkg/org/{sha256}.zip`,
+`skillpkg/user/{userId}/{sha256}.zip`); uploads in progress under
+`skillpkg/staging/` expire after one day, current and noncurrent.
+`skillpkg/org/` and `skillpkg/user/` are in the OAC read allowlist and are
+downloaded through the shared signed `/media/*` URLs (S3 presign fallback);
+the staging prefix is not served. Org package objects are not deleted when old
+history rows are pruned (no lifecycle rule; a cleanup pass is a follow-up). The API role's existing bucket read/write
+grant covers the prefix.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.
@@ -547,7 +555,8 @@ PENDING placeholders.
 ## Frontend and deployment
 
 FrontendStack owns the static bucket, CloudFront SPA router, runtime config,
-signing key setup and media behavior. Dynamic routes are mapped by knownPages;
+signing key setup and media behavior. Static pages (including `/changelog`) and
+dynamic routes are mapped by knownPages;
 404 fallback alone is not the complete routing mechanism. config.json is deployed
 separately from next build. Both Chat and Live QA use its relative `wsUrl: "/ws"`;
 the client accepts only the same-site WS path. Local development defaults to REST;
@@ -717,7 +726,9 @@ ADR-008). `ttobak:newsTermsSources` (`global` by default, or `all`) sets
 crawler source qualifies as global (`IsGlobalNewsSource`; the operator CLI
 `backend/cmd/seed-news-sources`, dry run by default, creates the Korean financial
 regulator sources as such); `all` reads every
-searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Invalid values
+searched, non-synthetic source (ADR-008, owner decision 2026-11-09). Both modes
+exclude account-owned sources (CONFIG `accountId`, or a row-less `acct_` ID;
+ADR-008, 2026-11-12). Invalid values
 fail synth. `infra/cdk.json` sets `all`. Rolling back to `global` takes effect
 with up to a seven-day lag: candidate history keeps sightings from formerly
 eligible sources for the repeat window, so one such sighting plus one global
@@ -838,6 +849,57 @@ function depends on the rule so the consumer exists before a producer route
 ships; no route publishes yet. No IAM change: the summarize role already has the
 table grant, `kms:Decrypt`/`kms:GenerateDataKey` for sealing and calendar
 decryption, and the `BEDROCK_MODEL_ID` model resources.
+
+## Manual news collection delivery
+
+CrawlerStack rule `ttobak-news-collect-requested` routes default-bus
+`ttobak.crawler` events with detail-type `NewsCollectRequested`
+(`{sourceId,accountId,requestId}`, identifiers only; `sourceId` must start with
+`acct_`) to the starter `ttobak-news-manual` (`news_manual.handler`, declared in
+the `NewsPublication` construct of the same stack, so no cross-stack edge) as
+`{"manualCollect":{sourceId,accountId,requestId}}` (ADR-004). Neither EventBridge
+(`retryAttempts: 0`, one-hour event age) nor Lambda (async `MaximumRetryAttempts:
+0`, one-hour age) retries a failure. The starter's checks, refusal codes,
+claim release and claim are in ADR-004; it starts `ttobak-news-publication`
+once as `manual-{requestId}` with `{sourceId, runId}`, the input the daily
+parent passes. Its environment carries `NEWS_DAILY_HOUR_UTC`,
+`NEWS_DAILY_MINUTE_UTC`, `NEWS_DAILY_LEAD_SECONDS` and
+`NEWS_DAILY_GRACE_SECONDS`, derived from the same constants as the daily rule,
+the child timeout and `NEWS_DAILY_GRACE` (15 minutes), for the `DAILY_WINDOW`
+refusal. Its role has `GetItem`/`UpdateItem`/`PutItem`/`Query` on `CRAWLER#*`
+keys of the table (`PutItem`/`Query` only for `COLLECTREFUSAL#` receipts),
+`states:StartExecution` on the publication state machine only,
+`states:ListExecutions` on the daily and publication state machines only, its
+own log group and, through the Lambda failure destination, `sqs:SendMessage` on
+the failure queue. Reserved concurrency is one. The publication child's
+`DiscoverArticles` task retries only `Lambda.TooManyRequestsException` (30
+seconds, backoff 1, 24 attempts, derived from the 600-second discovery timeout),
+so a run meeting discovery's single reserved slot waits instead of failing; the
+starter's running checks are cost and fairness guards. Delivery failures and failed
+async invocations land in SSE-SQS `ttobak-news-collect-failures` (seven-day
+retention, redrive denied), with alarms on rule
+`FailedInvocations`/`InvocationsFailedToBeSentToDlq`, starter
+`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. Inspect,
+do not redrive: a request whose started marker is set is spent and a replay is
+refused as a duplicate, but a failure before the marker (ListExecutions or claim
+error) leaves it unset, so a replay within the hour would start a paid run. The
+legacy `ttobak-crawler-news` function no longer has an async invoke
+configuration or queue permission, and its manual branch is removed.
+
+The API's advisory admission check for the collect route uses AiStack's API role
+statement `SfnListNewsExecutions`: `states:ListExecutions` on exactly
+`ttobak-news-daily` and `ttobak-news-publication`, ARNs built from those names
+with the stack's partition, region and account (no wildcard, no CrawlerStack
+reference). GatewayStack gives the API function the starter's
+`NEWS_DAILY_HOUR_UTC`, `NEWS_DAILY_MINUTE_UTC`, `NEWS_DAILY_LEAD_SECONDS` and
+`NEWS_DAILY_GRACE_SECONDS` from the same exported constants
+(`newsDailyWindowEnvironment` in `news-publication.ts`) plus
+`NEWS_DAILY_STATE_MACHINE_ARN` and `NEWS_PUBLICATION_STATE_MACHINE_ARN` built the
+same way. No stack edge changes. Deploy AiStack (the role) before GatewayStack
+(the function that calls it), each with `--exclusively`, and the frontend
+(which shows the button again) after GatewayStack. A GatewayStack deployed
+first fails the lookups with access denied, so the route answers 503 rather
+than accepting unchecked.
 
 ## Summary privacy writer activation
 

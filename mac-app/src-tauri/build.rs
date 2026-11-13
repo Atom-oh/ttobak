@@ -37,11 +37,16 @@ const COMMANDS: &[&str] = &[
     "intake_cancel",
     "intake_check_adapter",
     "intake_update_adapter",
+    "intake_refresh_path",
+    "setup_start",
+    "setup_get_state",
+    "intake_set_options",
     "report_generate",
     "report_cancel",
     "report_get_state",
     "report_settings_get",
     "report_settings_set",
+    "report_slack_channels_refresh",
     // Granted only to the local overlay windows (capabilities/caption-overlay.json).
     "caption_overlay_idle",
 ];

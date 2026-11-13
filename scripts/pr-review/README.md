@@ -114,9 +114,14 @@ required; this presentation contract is not a confidentiality guarantee.
 
 ## Limits and checks
 
-Limits: 95,000 diff bytes (UTF-8), 3,000 lines, 24,000 context bytes, <128 KiB
-request; projects may lower them. Oversize blocks. No chunk coordinator or
+Limits: 200,000 diff bytes (UTF-8) and 6,000 lines with no active Kiro role;
+95,000 bytes and 3,000 lines when a Kiro role is routed. 24,000 context bytes.
+Argv strings (Kiro full input, claude-self instruction, chair prompt) stay under
+131,072 bytes; stdin requests stay under 256 KiB. Projects may lower them. Oversize blocks. No chunk coordinator or
 combining partial PASS results; preserve custody/budgets.
+The specialist protocol prepares its own complete diff from git, so the
+workflow's 3,000-line prefix and its "diff truncated" banner apply only to the
+legacy lens panel (`ROLE_REVIEW` unset).
 
 Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py'`.
 Offline CI: `.github/workflows/pr-review-roles-tests.yml`. Also verify

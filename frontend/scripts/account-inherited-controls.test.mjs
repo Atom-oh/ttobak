@@ -67,6 +67,7 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     '@/components/account/AccountSignals': { AccountSignals: () => React.createElement('div', null, 'account signals panel') },
     '@/components/account/AccountFlow': { AccountFlow: none },
     '@/components/account/AccountLinksPanel': { AccountLinksPanel: none },
+    '@/components/account/CustomerBriefCard': { CustomerBriefCard: none },
     '@/components/account/AccountKB': { AccountKB: none },
     '@/components/ShareButton': { DocumentShareButton: none },
     '@/components/IndexStatus': { IndexStatus: none },

@@ -1,0 +1,4 @@
+Registry                   Location
+--------                   --------
+builder-tools              s3://example-builder-tools/tools.json
+example-registry-one       s3://example-registry-one/tools.json

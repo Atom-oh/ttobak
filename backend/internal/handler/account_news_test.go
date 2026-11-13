@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/model"
@@ -58,6 +60,15 @@ func (s *accountNewsStub) ListAll(_ context.Context, user, cursor string, limit 
 	return &model.NewsSourcesResponse{Sources: []model.NewsSourceItem{{SourceID: "s", Kind: model.NewsSourceKindCommon, CanEdit: true}}}, nil
 }
 
+func (s *accountNewsStub) CollectNow(_ context.Context, user, account, sourceID string) (*model.NewsCollectResponse, error) {
+	s.calls++
+	s.user, s.account, s.sourceID = user, account, sourceID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &model.NewsCollectResponse{RequestID: "r1", RequestedAt: "2026-11-12T01:00:00Z", NextAllowedAt: "2026-11-12T02:00:00Z"}, nil
+}
+
 func accountNewsRouter(s *accountNewsStub) http.Handler {
 	h := NewAccountNewsHandler(s)
 	r := chi.NewRouter()
@@ -66,6 +77,7 @@ func accountNewsRouter(s *accountNewsStub) http.Handler {
 	r.Put("/accounts/{accountId}/news-sources/{sourceId}", h.Update)
 	r.Delete("/accounts/{accountId}/news-sources/{sourceId}", h.Delete)
 	r.Get("/news-sources", h.ListAll)
+	r.Post("/accounts/{accountId}/news-sources/{sourceId}/collect", h.Collect)
 	return r
 }
 
@@ -153,5 +165,67 @@ func TestAccountNews_NonMemberForbidden(t *testing.T) {
 	}
 	if w := contactRequest(h, "PUT", "/accounts/a/news-sources/acct_a_00000001", `{"sourceName":"n"}`); w.Code != 404 {
 		t.Fatalf("update not found: %d", w.Code)
+	}
+}
+
+func TestAccountNewsCollectHTTP(t *testing.T) {
+	const path = "/accounts/a/news-sources/acct_a_0000abcd/collect"
+	limited := &service.NewsCollectLimitError{NextAllowedAt: time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)}
+	window := &service.NewsCollectWindowError{NextAllowedAt: time.Date(2026, 11, 12, 19, 25, 0, 0, time.UTC)}
+	for name, tc := range map[string]struct {
+		path, body string
+		err        error
+		status     int
+		code       string
+		called     bool
+	}{
+		"accepted":     {path, "", nil, 202, "", true},
+		"query":        {path + "?force=1", "", nil, 400, "BAD_REQUEST", false},
+		"body":         {path, "{}", nil, 400, "BAD_REQUEST", false},
+		"huge body":    {path, strings.Repeat("x", 2048), nil, 400, "BAD_REQUEST", false},
+		"limited":      {path, "", limited, 429, "RATE_LIMITED", true},
+		"wrapped":      {path, "", fmt.Errorf("x: %w", limited), 429, "RATE_LIMITED", true},
+		"not found":    {path, "", service.ErrNotFound, 404, "NOT_FOUND", true},
+		"non-member":   {path, "", service.ErrForbidden, 403, "FORBIDDEN", true},
+		"invalid":      {path, "", service.ErrInvalidInput, 400, "BAD_REQUEST", true},
+		"merging":      {path, "", service.ErrAccountMerging, 409, model.ErrCodeAccountMerging, true},
+		"unavailable":  {path, "", service.ErrNewsCollectUnavailable, 503, "INTERNAL_ERROR", true},
+		"daily window": {path, "", window, 409, model.ErrCodeCollectDailyWindow, true},
+		"busy":         {path, "", fmt.Errorf("x: %w", service.ErrNewsCollectBusy), 409, model.ErrCodeCollectBusy, true},
+		"internal":     {path, "", fmt.Errorf("boom"), 500, "INTERNAL_ERROR", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &accountNewsStub{err: tc.err}
+			w := contactRequest(accountNewsRouter(s), "POST", tc.path, tc.body)
+			if w.Code != tc.status || (s.calls == 1) != tc.called || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Retry-After") != "" {
+				t.Fatalf("%d calls=%d %s", w.Code, s.calls, w.Body.String())
+			}
+			var body struct {
+				Error         model.APIError `json:"error"`
+				RequestID     string         `json:"requestId"`
+				NextAllowedAt string         `json:"nextAllowedAt"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error.Code != tc.code {
+				t.Fatalf("body: %s %v", w.Body.String(), err)
+			}
+			switch tc.status {
+			case 202:
+				if body.RequestID != "r1" || body.NextAllowedAt != "2026-11-12T02:00:00Z" || s.user != "viewer" || s.account != "a" || s.sourceID != "acct_a_0000abcd" {
+					t.Fatalf("accepted: %+v %+v", body, s)
+				}
+			case 429:
+				if body.NextAllowedAt != "2026-11-12T02:00:00Z" {
+					t.Fatalf("limited: %s", w.Body.String())
+				}
+			default:
+				if tc.code == model.ErrCodeCollectDailyWindow {
+					if body.NextAllowedAt != "2026-11-12T19:25:00Z" {
+						t.Fatalf("daily window: %s", w.Body.String())
+					}
+				} else if body.NextAllowedAt != "" {
+					t.Fatalf("only 429 and the daily window carry nextAllowedAt: %s", w.Body.String())
+				}
+			}
+		})
 	}
 }

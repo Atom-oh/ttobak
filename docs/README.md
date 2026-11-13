@@ -33,6 +33,7 @@ Billing team access: [ADR-012](decisions/ADR-012-billing-origin-identity-and-tea
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
+| [Releases and tags](runbooks/releases.md) | Semantic `vX.Y.Z` app tags, CHANGELOG sections and in-app `/changelog` notes | `frontend/src/lib/releaseNotes.ts`, `frontend/scripts/release-notes.test.mjs`, `CHANGELOG.md` |
 | [Descendant Account sharing](runbooks/account-descendant-sharing.md) | Read-only inheritance, conditional relation bootstrap, activation and rollback | ADR-015, API/QA feature parameter |
 | [Model deployment](runbooks/model-deployment.md) | Environment/preset selection, exact model grants, acceptance and rollback | Model configuration, AI/Gateway stacks and infrastructure workflow |
 | [Observability](runbooks/observability.md) | OTel collector, ClickHouse PrivateLink, credentials and activation | ObservabilityStack and AWS-Demo-Platform ClickHouse |

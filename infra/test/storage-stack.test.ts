@@ -42,6 +42,20 @@ describe('StorageStack', () => {
     });
   });
 
+  test('unfinished skill package uploads under skillpkg/staging/ expire after one day', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([{
+          Id: 'ExpireSkillPackageStaging',
+          Status: 'Enabled',
+          ExpirationInDays: 1,
+          NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+          Prefix: 'skillpkg/staging/',
+        }]),
+      },
+    });
+  });
+
   test('vocabulary table files under vocab/ expire after one day, including noncurrent versions', () => {
     template.hasResourceProperties('AWS::S3::Bucket', {
       LifecycleConfiguration: {
@@ -64,7 +78,7 @@ describe('StorageStack', () => {
             Sid: 'AllowCloudFrontOACRead',
             Action: 's3:GetObject',
             Resource: Match.arrayWith(
-              ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf'].map((prefix) =>
+              ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf', 'skillpkg/org', 'skillpkg/user'].map((prefix) =>
                 Match.objectLike({
                   'Fn::Join': Match.arrayWith([
                     Match.arrayWith([Match.stringLikeRegexp(`/${prefix}/\\*$`)]),

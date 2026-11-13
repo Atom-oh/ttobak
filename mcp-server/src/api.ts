@@ -214,6 +214,27 @@ export const PERFORMANCE_SOURCES = ['sfdc-assignments', 'sfdc-tasks'] as const;
 export type PerformanceSource = typeof PERFORMANCE_SOURCES[number];
 const MAX_PERFORMANCE_API_BYTES = 14_000;
 const MAX_PERFORMANCE_MAPPINGS_BYTES = 2_000_000;
+/** 200 results of at most a few hundred bytes each, plus counts. */
+const MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES = 256 * 1024;
+
+/** One `create` or `link` item of `POST /api/accounts/{accountId}/contacts/sfdc-sync`. */
+export interface SfdcContactSyncItem {
+  action: 'create' | 'link';
+  sfdcContactId: string;
+  sfdcAccountId: string;
+  name: string;
+  title: string;
+  contactId?: string;
+  revision?: string;
+}
+
+/** `present` is required exactly when `snapshotComplete` is true (API-SPEC). */
+export interface SfdcContactSyncBody {
+  snapshotComplete: boolean;
+  sfdcAccountIds: string[];
+  present?: Record<string, string[]>;
+  items: SfdcContactSyncItem[];
+}
 
 /** `POST /api/performance/sources/{source}/sync` body; the server rejects unknown fields. */
 export interface PerformanceSyncBody {
@@ -316,6 +337,12 @@ export class TtobakApi {
   }
 
   /** Owner-private SA performance report of one period; replaces an earlier one. */
+  /** Org and personal skill packages of the signed-in user (docs/API-SPEC.md "Skill packages"). */
+  async skillPackages() {
+    // Two rows and the merge, each with up to 400 server entries.
+    return this.request('GET', '/api/skill-packages', undefined, 1024 * 1024, false, true);
+  }
+
   async putPerformanceReport(periodKey: string, report: unknown) {
     return this.request('PUT', `/api/performance/reports/${performanceReportKey(periodKey)}`, report,
       MAX_PERFORMANCE_API_BYTES, false, true);
@@ -427,10 +454,17 @@ export class TtobakApi {
     return this.get('/api/accounts');
   }
 
-  async listAccountContacts(accountId: string, options: ContactListOptions) {
+  /** One contact page; `maxResponseBytes` lets local intake read full 25-contact pages (each contact at most 12,000 bytes). */
+  async listAccountContacts(accountId: string, options: ContactListOptions, maxResponseBytes = MAX_READING_BYTES) {
     const query = new URLSearchParams({ limit: String(options.limit) });
     if (options.cursor !== undefined) query.set('cursor', options.cursor);
-    return this.request('GET', `/api/accounts/${identifier(accountId, 'accountId')}/contacts?${query}`, undefined, MAX_READING_BYTES);
+    return this.request('GET', `/api/accounts/${identifier(accountId, 'accountId')}/contacts?${query}`, undefined, maxResponseBytes);
+  }
+
+  /** One bounded SFDC contact batch of the Mac intake; the body carries no email or phone. */
+  async syncSfdcContacts(accountId: string, body: SfdcContactSyncBody) {
+    return this.request('POST', `/api/accounts/${identifier(accountId, 'accountId')}/contacts/sfdc-sync`, body,
+      MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES);
   }
 
   get requiresContactIdempotency() { return !!this.options.privateTransport; }

@@ -134,7 +134,7 @@ test('server resolution re-reads one entry in memory and classifies unusable ent
 });
 
 function item(id, start, end, extra = {}) {
-  return { meetingId: id, subject: `t-${id}`, start, end, isCanceled: false, isAllDay: false, ...extra };
+  return { meetingId: id, subject: `t-${id}`, start, end, isCanceled: false, isAllDay: false, response: 'Accept', ...extra };
 }
 
 test('calendar sends organizer domain only', () => {
@@ -163,7 +163,7 @@ test('calendar organizer name and local part never leave the parser', async t =>
     return { meetings: [{
       meetingId: `org-${year}${month}${day}`, subject: 'Quarterly review', sensitivity: 'Normal',
       start: `${year}-${month}-${day}T10:00:00+09:00`, end: `${year}-${month}-${day}T11:00:00+09:00`,
-      isCanceled: false, isAllDay: false,
+      isCanceled: false, isAllDay: false, response: 'Organizer',
       organizer: { name: CANARY, email: `${local}@Customer.Example.COM`, address: `${local}@customer.example.com` },
       attendees: [{ name: CANARY, email: `${local}@customer.example.com` }], body: CANARY,
     }] };
@@ -905,7 +905,7 @@ const facts = (domains, isPrivate = false) => ({ domains, isPrivate });
 const publicAttendees = () => ({ async factsFor() { return { domains: [], isPrivate: false }; }, save() {}, unavailable: 0 });
 
 function sharingPlan(items, ledger = {}, factMap = new Map(), directory = DIRECTORY) {
-  return planCalendar(parseOutlookItems(items), ledger, syncWindow(NOW, ZONE), ZONE, {
+  return planCalendar(parseOutlookItems(items), ledger, syncWindow(NOW, ZONE), ZONE, undefined, {
     sourceId: SOURCE_ID, facts: factMap, matcher: directory ? buildMatcher(directory.accounts, ['amazon.com']) : null,
   });
 }
@@ -929,8 +929,7 @@ test('planner: Private category, private meetings, matches, candidates, domain e
     for (const field of ['shareAccountId', 'shareEvidence', 'candidateAccountIds']) assert.equal(field in byId[id], false);
   }
   assert.deepEqual([byId.t.shareAccountId, byId.t.shareEvidence], ['acct-hana', ['title']]);
-  assert.equal(byId.t.seriesKey, sha(`${SOURCE_ID}|series-1`));
-  assert.equal('seriesKey' in byId.p, false);
+  assert.equal('seriesKey' in byId.t, false, 'seriesKey is not sent yet');
   assert.deepEqual(byId.l.shareEvidence, ['location']);
   assert.deepEqual(byId.c.candidateAccountIds, ['acct-hana', 'acct-kb']);
   assert.equal('shareAccountId' in byId.c, false);
@@ -960,6 +959,28 @@ test('planner: Private category, private meetings, matches, candidates, domain e
   // A directory that no longer lists the shared account drops a domain share kept without an answer.
   const gone = sharingPlan(items, ledger, new Map([['d', null]]), { accounts: [DIRECTORY.accounts[1]] });
   assert.equal('shareAccountId' in gone.mutations[0].event, false);
+  // Matching uses the untruncated subject and location, not the 512/256-byte copies sent.
+  const cut = sharingPlan([at('x', '11', { subject: `${'a'.repeat(508)} HNBX` })], {}, new Map([['x', facts([])]]));
+  assert.equal(cut.mutations[0].event.title.endsWith(' HNB'), true, 'the sent title is cut inside a word');
+  assert.equal('shareAccountId' in cut.mutations[0].event, false, 'a byte cut never creates an alias hit');
+  assert.equal('candidateAccountIds' in cut.mutations[0].event, false);
+  const pair = sharingPlan([at('y', '12', { subject: 'sync', location: `Hana Bank ${'r'.repeat(300)}; KB Card` })], {},
+    new Map([['y', facts([])]]));
+  assert.equal('shareAccountId' in pair.mutations[0].event, false, 'a second alias past the cut keeps the pair ambiguous');
+  assert.deepEqual(pair.mutations[0].event.candidateAccountIds, ['acct-hana', 'acct-kb']);
+  const huge = sharingPlan([at('z', '13', { subject: `HNB ${'b'.repeat(9000)}` })], {}, new Map([['z', facts([])]]));
+  assert.equal('shareAccountId' in huge.mutations[0].event, false, 'text beyond the match bound is a candidate only');
+  assert.deepEqual(huge.mutations[0].event.candidateAccountIds, ['acct-hana']);
+  // A location that passes the bound raw but not after sanitizing ("a;b" becomes "a; b") is a candidate only.
+  const rooms = `Hana Bank;${Array.from({ length: 1300 }, (_, i) => `q${1000 + i};`).join('')}KB Card`;
+  assert.ok(Buffer.byteLength(rooms) <= 8192 && Buffer.byteLength(sanitizeLocation(rooms, Infinity)) > 8192);
+  const grown = sharingPlan([at('g', '14', { subject: 'sync', location: rooms })], {}, new Map([['g', facts([])]]));
+  assert.equal('shareAccountId' in grown.mutations[0].event, false);
+  assert.deepEqual(grown.mutations[0].event.candidateAccountIds, ['acct-hana']);
+  // A kept domain share is not replaced by a match to another account while lookups have no answer.
+  const moved = sharingPlan([at('d', '14', { subject: 'KB Card sync' })], ledger, new Map([['d', null]]));
+  assert.deepEqual([moved.mutations[0].event.shareAccountId, moved.mutations[0].event.shareEvidence], ['acct-hana', ['domain']]);
+  assert.equal('candidateAccountIds' in moved.mutations[0].event, false);
   // Without a privacy answer a title match is only a candidate, unless already shared to that account.
   const titleItem = [at('t', '11', { subject: 'HNB weekly' })];
   const unknown = sharingPlan(titleItem, {}, new Map());
@@ -1217,7 +1238,7 @@ test('CLI: own domains, meetings-connector attendee domains and no attendee data
   const events = upsertsOf(api.calls);
   assert.equal(events.filter(event => event.private === true && !('shareAccountId' in event)).length, 1);
   assert.ok(events.filter(event => !event.private).every(event => event.shareAccountId === 'acct-hana' &&
-    JSON.stringify(event.shareEvidence) === '["domain"]' && event.seriesKey === sha(`${stored.calendar.sourceId}|series-fixture`)));
+    JSON.stringify(event.shareEvidence) === '["domain"]' && !('seriesKey' in event)));
   assert.equal(await runIntake(['status'], environment), 0);
   assert.equal(JSON.parse(lines.at(-1)).status.calendar.counts.shared, 5);
 

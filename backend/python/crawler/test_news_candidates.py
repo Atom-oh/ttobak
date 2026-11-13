@@ -233,6 +233,36 @@ class TestCandidateDiscovery(unittest.TestCase):
         ])
         self.assertEqual(len(grouped), 2)
 
+    def test_matched_term_strips_query_builder_quotes(self):
+        queries = news_pipeline.expand_queries("우리은행", ["Woori Bank"], ["AI"], None)
+        terms = [news_pipeline.matched_term(query.text) for query in queries]
+        self.assertEqual(terms[:4], ["우리은행", "Woori Bank", "우리은행 AI", "Woori Bank AI"])
+        self.assertIn("우리은행 투자", terms)
+        self.assertTrue(all(term and '"' not in term for term in terms))
+        keyword_only = news_pipeline.expand_queries("", [], ["망분리 완화"], None)
+        self.assertEqual(news_pipeline.matched_term(keyword_only[0].text), "망분리 완화")
+        # Idempotent: the worker may revalidate a stored term with the same function.
+        self.assertEqual(news_pipeline.matched_term("우리은행 AI"), "우리은행 AI")
+
+    def test_invalid_or_over_long_matched_term_is_dropped_not_truncated(self):
+        self.assertEqual(news_pipeline.matched_term("가" * 200), "가" * 200)
+        for value in (None, 3, ["a"], "", '""', "  ", "가" * 201, '"' + "가" * 201 + '"',
+                      "a\x00b", "a\x07b", "a\x9fb", "a\x7fb", "a\ud800b"):
+            with self.subTest(value=value):
+                self.assertIsNone(news_pipeline.matched_term(value))
+        self.assertEqual(news_pipeline.matched_term('"a"\n b'), "a b")
+
+    def test_grouping_keeps_lead_matched_term_and_is_unchanged_without_it(self):
+        plain = [candidate("우리은행 AI 플랫폼 확대", "https://a.example/1", "2026-08-08"),
+                 candidate("우리은행 AI 플랫폼 확대 발표", "https://b.example/2", "2026-08-09")]
+        tagged = [dict(plain[0], matchedTerm="우리은행"), dict(plain[1], matchedTerm="우리은행 AI")]
+        without = news_pipeline.group_near_duplicates(plain)
+        grouped = news_pipeline.group_near_duplicates(tagged)
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(grouped[0]["matchedTerm"], "우리은행")
+        self.assertNotIn("matchedTerm", without[0])
+        self.assertEqual({k: v for k, v in grouped[0].items() if k != "matchedTerm"}, without[0])
+
     def test_custom_url_bypasses_only_relevance(self):
         item = news_pipeline.custom_url_candidate(
             source_id="woori", source_name="우리은행",
@@ -248,3 +278,4 @@ class TestCandidateDiscovery(unittest.TestCase):
                       "canonicalUrl", "discoveredAt", "queryClass",
                       "corroboratingSources"):
             self.assertIn(field, item)
+        self.assertNotIn("matchedTerm", item)

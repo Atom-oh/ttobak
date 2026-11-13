@@ -70,6 +70,26 @@ type NewsSourceItem struct {
 	CanEdit       bool     `json:"canEdit"`
 	// ListsTruncated reports that a list or string was cut to item bounds.
 	ListsTruncated bool `json:"listsTruncated,omitempty"`
+	// NextCollectAllowedAt (account kind only) is when "collect now" may be
+	// requested again; omitted when it may be requested now.
+	NextCollectAllowedAt string `json:"nextCollectAllowedAt,omitempty"`
+}
+
+// NewsCollectRequested is the EventBridge detail of a "collect now" request
+// (source ttobak.crawler). It carries identifiers only; the crawler re-reads
+// the CONFIG row and refuses anything that does not match.
+type NewsCollectRequested struct {
+	SourceID  string `json:"sourceId"`
+	AccountID string `json:"accountId"`
+	RequestID string `json:"requestId"`
+}
+
+// NewsCollectResponse acknowledges an accepted "collect now" request. The run
+// itself is asynchronous; RequestedAt and NextAllowedAt are UTC RFC3339.
+type NewsCollectResponse struct {
+	RequestID     string `json:"requestId"`
+	RequestedAt   string `json:"requestedAt"`
+	NextAllowedAt string `json:"nextAllowedAt"`
 }
 
 // NewsSourcesResponse is one page of the caller's news sources. Truncated

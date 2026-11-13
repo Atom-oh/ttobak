@@ -91,7 +91,8 @@ test('account page filters by accountId', () => {
 
 test('badge appears on the event with a task', () => {
   const output = markup({
-    events: [event(id('a')), event(id('f'), { startsAt: '2026-11-07T12:00:00Z', endsAt: '2026-11-07T13:00:00Z' })],
+    // A customer event is listed outside the collapsed internal group.
+    events: [event(id('a'), { accountId: 'acc-1' }), event(id('f'), { startsAt: '2026-11-07T12:00:00Z', endsAt: '2026-11-07T13:00:00Z' })],
     tasks: [task(id('a'), 'requested', { event: undefined })], tasksState: 'ready',
   });
   const cards = output.split('<article ').slice(1);

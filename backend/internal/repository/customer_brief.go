@@ -102,7 +102,8 @@ func validCustomerBriefState(s *model.CustomerBriefState) bool {
 
 // QueueCustomerBrief claims a new run over prior (nil for an absent row).
 // A pending prior is replaceable only after its lease or the row expired.
-// clearContent drops an expired brief so it can never be read again.
+// clearContent drops a brief past its expiry so it can never be read again;
+// otherwise a set next.BriefExpiresAt pins the retained brief's expiry.
 func (r *DynamoDBRepository) QueueCustomerBrief(ctx context.Context, prior, next *model.CustomerBriefState, clearContent bool) error {
 	if !validCustomerBriefState(next) || prior != nil && (prior.AccountID != next.AccountID || prior.UserID != next.UserID) {
 		return ErrConditionFailed
@@ -130,7 +131,9 @@ func (r *DynamoDBRepository) QueueCustomerBrief(ctx context.Context, prior, next
 		Set(expression.Name("entityType"), expression.Value(model.EntityTypeCustomerBrief))
 	if clearContent {
 		update = update.Remove(expression.Name("sealed")).Remove(expression.Name("generatedAt")).
-			Remove(expression.Name("resultHash")).Remove(expression.Name("modelId"))
+			Remove(expression.Name("resultHash")).Remove(expression.Name("modelId")).Remove(expression.Name("briefExpiresAt"))
+	} else if next.BriefExpiresAt != 0 {
+		update = update.Set(expression.Name("briefExpiresAt"), expression.Value(next.BriefExpiresAt))
 	}
 	return r.customerBriefWrite(ctx, next.AccountID, next.UserID, update, condition)
 }
@@ -189,6 +192,7 @@ func (r *DynamoDBRepository) CompleteCustomerBrief(ctx context.Context, state *m
 		Set(expression.Name("generatedAt"), expression.Value(now)).
 		Set(expression.Name("resultHash"), expression.Value(resultHash)).
 		Set(expression.Name("modelId"), expression.Value(modelID)).
+		Set(expression.Name("briefExpiresAt"), expression.Value(now.Add(model.CustomerBriefTTL).Unix())).
 		Set(expression.Name(model.PendingShareTTLAttribute), expression.Value(now.Add(model.CustomerBriefTTL).Unix()))
 	return r.customerBriefWrite(ctx, state.AccountID, state.UserID, update, condition)
 }

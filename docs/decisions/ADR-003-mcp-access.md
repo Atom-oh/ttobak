@@ -486,9 +486,11 @@ configuration.
   - a journaled batch before each send, identical retry on ambiguous delivery,
     and `complete:true` last;
   - a 409 stops the runner until `--reconcile`.
-- **Residency.** Calendar stays private. The SFDC connector stores only the
-  opportunity ID, name and stage, for accounts a member mapped. The SpecReq
-  connector stores ID, title, status, account and a summary of at most 1,000 bytes.
+- **Residency.** Calendar stays private. The SFDC connector's owner-private
+  fields and its account-shared contacts follow ADR-023's residency tables,
+  including the SFDC contacts row (name, title, company and IDs; never email or
+  phone). The SpecReq connector stores ID, title, status, account and a summary
+  of at most 1,000 bytes.
 - **Task connectors (amendment, 2026-11-10).** After a synced calendar run,
   under the same run lock, the runner keeps one private TTOBAK task per
   occurrence ([meeting SpecReq tasks design](../superpowers/specs/2026-11-10-meeting-specreq-tasks-design.md),
@@ -512,6 +514,39 @@ configuration.
   never navigate the app (a reload could discard unsaved input), and the task
   strip on the meetings page shows the task. Delivery is unverified until the
   Mac acceptance in the runbook.
+- **SFDC contacts step (amendment, 2026-11-11).** After a successful `sfdc`
+  sync, on the same session, the runner reads `search_contacts` (a
+  read tool on the `sfdc` allowlist) for every SFDC account mapped to a TTOBAK
+  Account, matches the people against that Account's contacts on the Mac and
+  sends one bounded batch per Account to `POST /api/accounts/{id}/contacts/sfdc-sync`
+  (ADR-021). Emails are compared on the Mac only; no email or phone reaches a
+  request, log, status file or ledger. A failure of the step is a
+  `PARTIAL_FAILURE` of `intake run`; `AUTH_EXPIRED_MIDWAY` stops it.
+  `search_contacts` is allowed and checked only while the step is on (off, the
+  session does not allow it at all), so a missing or changed contacts tool
+  fails only the step (`SCHEMA_CHANGED`). No new Account starts after 8
+  minutes; the rest are `deferred`, and a stored resume point (an Account ID)
+  starts the next run after the last Account begun, so every Account is
+  reached in turn. The budget does not bound an Account already begun, so it
+  makes a status write before the app's 20-minute timeout likely, not certain.
+- **Sync options (amendment, 2026-11-11).** `intake options` stores a
+  top-level `options` object in `selection.json`: `calendarResponses` (the
+  owner's own responses to sync; default accept, organizer and tentative;
+  declined events never sync) and `sfdcContacts` (default on; off records the
+  contacts step as `disabled`). An event with an unselected response is
+  excluded like a private one, so a tracked copy is removed through the
+  existing removal path. The response is read on the Mac only. The Mac app
+  sets the options with typed values (`intake_set_options`). The first real
+  run after the update, possibly scheduled, therefore removes synced events
+  that are declined or unanswered (any missing or unrecognised response fails
+  the calendar step with `SCHEMA_CHANGED` before any change); the
+  owner keeps unanswered ones by selecting `none` (Settings or `intake
+  options`) before that run, and Settings shows that note while `none` is
+  not selected. Declined events cannot be kept. A SpecReq task is not closed
+  for an occurrence excluded only by an unselected response (held in the
+  calendar state), so answering the invitation later keeps its task. A hold
+  ends only on an observed cancel, private flag or decline, an acknowledged
+  re-upsert, or retention.
 - **Writes stay stdio/local.** No new HTTP MCP tool or public route is added.
 - **Scheduling** is owned by the Mac app, which runs `intake run
   --noninteractive` (all selected sync connectors) itself, with launch and wake
@@ -541,7 +576,8 @@ configuration.
   (no meetings connector, the read budget spent, a failed lookup or over 50
   attendee domains) a match is sent only as a candidate, an event already shared
   to the same account keeps its share, and a previously private event stays
-  private.
+  private. The server ranks `private` above an owner `account` override
+  (ADR-026), so a private event is never shared, even one the owner assigned.
 - The task step adds exactly two provider writes, both by the deterministic
   runner (this replaces "no unattended provider writes" for these two tools):
   - `acknowledge_request`, only when `get_request` shows `NEXT_UP` with me as
@@ -569,4 +605,14 @@ configuration.
   redirects, at most 8 MiB, must contain `intake setup`) and swaps it in
   atomically, keeping one `server.mjs.bak`. Update is refused during a run;
   check is allowed.
+- Skill packages: [Setup] installs skills and MCP servers from packages stored
+  in TTOBAK, never from the user's Slack, mail or Downloads folder. An admin
+  uploads the organization package, the default for everyone; any user may
+  upload a personal package that only they receive. A personal skill replaces
+  the org skill of the same name; server lists are unioned and never shrink.
+  The server validates a package on upload (bounded size and entries, safe
+  names, no links, literal server lists only) and the Mac validates it again;
+  nothing inside a package is executed, and packages change a Mac only when
+  its user presses [Setup]. Installing a package never widens the report
+  run's tool allowlist (ADR-023).
 

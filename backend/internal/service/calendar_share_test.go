@@ -226,32 +226,6 @@ func TestSyncOverrideHiddenBeatsMatch(test *testing.T) {
 	}
 }
 
-// An occurrence hidden before the runner sent seriesKey stored its override by event ID;
-// the first sync carrying the series key must still apply it.
-func TestSyncFallsBackToOccurrenceOverride(test *testing.T) {
-	svc, store, _, _, membership := calendarShareFixture()
-	membership.addMember("acc_1", "owner", "owner@example.com")
-	request := calendarShareRequest(func(event *model.CalendarEventInput) {
-		event.ShareAccountID, event.ShareEvidence = "acc_1", []string{"domain"}
-	})
-	eventID := calendarEventID(calendarSourceID, request.Mutations[0].Event.ExternalID)
-	store.overrides = map[string]*repository.CalendarOverrideRow{"owner/" + calendarSourceID + "/" + eventID: {Mode: "hidden"}}
-	if _, err := svc.Sync(context.Background(), "owner", calendarSourceID, request); err != nil {
-		test.Fatal(err)
-	}
-	if mutation := store.batches[0].Mutations[0]; mutation.Share == nil || mutation.Share.State != "veto" || mutation.Share.AccountID != "acc_1" {
-		test.Fatalf("occurrence hide must veto under a series key: %+v", mutation.Share)
-	}
-	// A series override still beats the occurrence's own.
-	store.overrides["owner/"+calendarSourceID+"/"+calendarTestSeriesKey] = &repository.CalendarOverrideRow{Mode: "account", AccountID: "acc_1"}
-	if _, err := svc.Sync(context.Background(), "owner", calendarSourceID, calendarNextBatch(request, 1)); err != nil {
-		test.Fatal(err)
-	}
-	if mutation := store.batches[1].Mutations[0]; mutation.Share == nil || mutation.Share.State != "shared" {
-		test.Fatalf("series override must win: %+v", mutation.Share)
-	}
-}
-
 // A hide that lands after one occurrence's override read must reach the next occurrence of
 // the same series in the batch; a batch-wide override cache would share it.
 func TestSyncReadsOverridePerOccurrence(test *testing.T) {
@@ -393,8 +367,8 @@ func TestSetEventSharingSeriesScope(test *testing.T) {
 	if err != nil || event.SharingMode != "auto" || event.ShareAccountID != "acc_1" || !reflect.DeepEqual(event.ShareEvidence, []string{"title"}) {
 		test.Fatalf("auto: %+v %v", event, err)
 	}
-	if store.overrideWrites[2] != "delete "+eventID || store.overrideWrites[3] != "delete "+calendarTestSeriesKey {
-		test.Fatalf("auto must clear the series and the occurrence override: %v", store.overrideWrites)
+	if store.overrideWrites[2] != "delete "+calendarTestSeriesKey {
+		test.Fatalf("auto must clear the override: %v", store.overrideWrites)
 	}
 	if call := store.shareStates[2]; call.Share == nil || call.Share.State != "shared" || call.Share.AccountID != "acc_1" {
 		test.Fatalf("auto must restore the automatic share: %+v", call)

@@ -34,8 +34,8 @@ the owner and teammates, not the public.
   app for `updateBusy` over the control socket, and never force-kills the app: when
   the app is not busy it asks the app to quit and waits.
 - **Updater:** `tauri-plugin-updater` against `mac/latest.json` with a minisign
-  public key in `tauri.conf.json` (still a placeholder, so in-app updates stay
-  disabled until the key is set) and `requireSignedVersion: true`, so a signature
+  public key in `tauri.conf.json` (set 2026-11-13; the private key and its
+  password stay on the owner's Mac per the release runbook) and `requireSignedVersion: true`, so a signature
   is bound to its version and an old signed archive cannot be replayed as a newer
   release. The update logic is Rust (`update.rs`, `update_policy.rs`); a local popup
   (`update_prompt.rs`, `mac-app/src/update-prompt.html`) offers Update and Later (Korean labels). Update

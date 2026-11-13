@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as destinations from 'aws-cdk-lib/aws-lambda-destinations';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -8,6 +9,8 @@ import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { NewsPublication } from './news-publication';
 import { NEWS_MODEL_ID } from './model-config';
@@ -168,18 +171,86 @@ export class CrawlerStack extends cdk.Stack {
       targets: [new eventsTargets.SfnStateMachine(stateMachine)],
     });
 
-    new cdk.CfnOutput(this, 'StateMachineArn', {
-      value: stateMachine.stateMachineArn,
-      exportName: 'TtobakCrawlerStateMachineArn',
-    });
-
-    new NewsPublication(this, 'NewsPublication', {
+    const publication = new NewsPublication(this, 'NewsPublication', {
       table: props.table,
       kbBucket: props.kbBucket,
       artifactBucket: props.artifactBucket,
       webSearchGatewayUrl: props.webSearchGatewayUrl,
       webSearchGatewayArn: props.webSearchGatewayArn,
       legacyWrites: legacyWrites.valueAsString,
+    });
+
+    // Manual "collect now" for one account-owned source (ADR-004). The event
+    // carries only IDs. The versioned starter claims the API-claimed request
+    // on the CONFIG row and starts one manual-{requestId} publication run;
+    // the run's own caps and the source's monthly budget apply. Neither
+    // EventBridge nor Lambda retries a failure.
+    const starter = publication.manualStarter;
+    const collectFailures = new sqs.Queue(this, 'NewsCollectFailures', {
+      queueName: 'ttobak-news-collect-failures',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(7),
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    // The starter role is owned by this stack; the destination grants it
+    // SendMessage on this queue only.
+    starter.configureAsyncInvoke({
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.hours(1),
+      onFailure: new destinations.SqsDestination(collectFailures),
+    });
+    const collectRule = new events.Rule(this, 'NewsCollectRequestedRule', {
+      ruleName: 'ttobak-news-collect-requested',
+      eventPattern: {
+        source: ['ttobak.crawler'],
+        detailType: ['NewsCollectRequested'],
+        detail: {
+          sourceId: events.Match.prefix('acct_'),
+          accountId: events.Match.exists(),
+          requestId: events.Match.exists(),
+        },
+      },
+    });
+    collectRule.addTarget(new eventsTargets.LambdaFunction(starter, {
+      event: events.RuleTargetInput.fromObject({
+        manualCollect: {
+          sourceId: events.EventField.fromPath('$.detail.sourceId'),
+          accountId: events.EventField.fromPath('$.detail.accountId'),
+          requestId: events.EventField.fromPath('$.detail.requestId'),
+        },
+      }),
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.hours(1),
+      deadLetterQueue: collectFailures,
+    }));
+    const collectAlarm = (id: string, metric: cloudwatch.IMetric, description: string) =>
+      new cloudwatch.Alarm(this, id, {
+        metric, threshold: 1, evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        alarmDescription: description,
+      });
+    for (const metricName of ['FailedInvocations', 'InvocationsFailedToBeSentToDlq']) {
+      collectAlarm(`NewsCollect${metricName}Alarm`, new cloudwatch.Metric({
+        namespace: 'AWS/Events', metricName, dimensionsMap: { RuleName: collectRule.ruleName },
+        statistic: 'Sum', period: cdk.Duration.minutes(5),
+      }), 'Manual news collection was not delivered; it is not retried. Inspect the failure queue.');
+    }
+    collectAlarm('NewsCollectAsyncEventsDroppedAlarm', starter.metric('AsyncEventsDropped', {
+      statistic: 'Sum', period: cdk.Duration.minutes(5),
+    }), 'A manual news collection failed or expired and is not retried. Inspect the failure queue.');
+    collectAlarm('NewsCollectDestinationDeliveryFailuresAlarm', starter.metric('DestinationDeliveryFailures', {
+      statistic: 'Sum', period: cdk.Duration.minutes(5),
+    }), 'A failed manual news collection could not be recorded in the failure queue.');
+    collectAlarm('NewsCollectFailuresBacklogAlarm', collectFailures.metricApproximateNumberOfMessagesVisible({
+      statistic: 'Maximum', period: cdk.Duration.minutes(5),
+    }), 'A manual news collection failed. Do not blindly redrive: a started request is spent and a replay is refused.');
+
+    new cdk.CfnOutput(this, 'StateMachineArn', {
+      value: stateMachine.stateMachineArn,
+      exportName: 'TtobakCrawlerStateMachineArn',
     });
   }
 }
