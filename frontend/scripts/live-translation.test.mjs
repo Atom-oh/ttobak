@@ -694,3 +694,15 @@ test('bilingual view shows the original for zh sources and keeps ko/en layout', 
   assert.equal(count(ko, '다음 주 배포'), 1);
   assert.equal(count(ko, 'Deploy next week'), 1);
 });
+
+test('the large size enlarges caption text only; the default markup is unchanged', () => {
+  const state = fixture();
+  state.translator.update('a', '안녕하세요.', true, 'ko-KR');
+  const base = renderView(state);
+  assert.equal(renderView(state, { size: 'default' }), base);
+  assert.doesNotMatch(base, /text-xl/);
+  const large = renderView(state, { size: 'large' });
+  assert.match(large, /<p lang="ko" class="[^"]*text-xl leading-relaxed/);
+  assert.equal(large.replaceAll('text-xl leading-relaxed', 'text-sm leading-relaxed'), base);
+  state.translator.stop();
+});

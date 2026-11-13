@@ -1,5 +1,7 @@
 'use client';
 
+import { useSyncExternalStore } from 'react';
+
 import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 
@@ -28,6 +30,16 @@ declare global {
 
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+const subscribeNever = () => () => {};
+
+/**
+ * `isTauri()` for rendering: `null` while prerendering and hydrating, so the
+ * static HTML is the same for every client, then the real answer.
+ */
+export function useIsMacApp(): boolean | null {
+  return useSyncExternalStore<boolean | null>(subscribeNever, isTauri, () => null);
 }
 
 function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
