@@ -291,7 +291,11 @@ mod command_acl_tests {
             .collect();
         // Granted to a local window only (the update prompt, the caption
         // overlays), never to the remote SPA.
-        const LOCAL_ONLY: &[&str] = &["update_prompt_choose", "caption_overlay_idle"];
+        const LOCAL_ONLY: &[&str] = &[
+            "update_prompt_choose",
+            "caption_overlay_idle",
+            "caption_overlay_dismiss",
+        ];
         for command in &declared {
             let permission = format!("allow-{}", command.replace('_', "-"));
             if LOCAL_ONLY.contains(&command.as_str()) {
@@ -1017,6 +1021,7 @@ pub fn run() {
             caption_overlay::caption_overlay_set_style,
             caption_overlay::caption_overlay_push,
             caption_overlay::caption_overlay_idle,
+            caption_overlay::caption_overlay_dismiss,
             intake_runner::intake_get_state,
             intake_runner::intake_set_schedule,
             intake_runner::intake_set_node_path,

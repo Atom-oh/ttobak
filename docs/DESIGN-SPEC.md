@@ -288,8 +288,10 @@ language (Korean, English, the extra language) has an open/close toggle, disable
 a profile is chosen. Each open window gets a style editor: font, size (16-160), font and
 outline colors, outline width (0-12) and background opacity. Controls live in this
 panel, never on the projected window. Hovering a caption window shows a dashed
-outline, a grip-glyph move handle at the top centre and a diagonal resize grip at the
-bottom-right corner (minimum 320x80); they fade out within about 200 ms when the
+outline, a grip-glyph move handle at the top centre, a small close button at the
+top-right corner and a diagonal resize grip at the bottom-right corner (minimum
+320x80); the window has rounded corners and closing it there also unchecks it in the
+panel; they fade out within about 200 ms when the
 pointer leaves, and the whole window stays draggable. A note says Zoom shows the overlay only when the
 whole screen is shared, not a single window. Choosing or changing the profile or region raises a
 native Mac confirmation; if the user cancels, the panel shows a Korean "change cancelled" message

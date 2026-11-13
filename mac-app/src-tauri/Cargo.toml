@@ -1,6 +1,6 @@
 [package]
 name = "ttobak-mac"
-version = "0.1.0"
+version = "0.2.0"
 description = "TTOBAK Mac App — system audio and microphone capture for desktop meetings"
 authors = ["TTOBAK"]
 edition = "2021"
