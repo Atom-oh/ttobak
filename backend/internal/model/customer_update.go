@@ -278,3 +278,59 @@ func NormalizeUpdateURL(raw string) (string, string, error) {
 	sum := sha256.Sum256([]byte(normalized))
 	return normalized, hex.EncodeToString(sum[:]), nil
 }
+
+// AddUpdateSourceRequest creates a source. Slack sources carry LocalSourceID
+// and no URL; other kinds carry a URL and no LocalSourceID.
+type AddUpdateSourceRequest struct {
+	Kind          string `json:"kind"`
+	Label         string `json:"label"`
+	URL           string `json:"url"`
+	LocalSourceID string `json:"localSourceId"`
+}
+
+// PatchUpdateSourceRequest changes the label and/or status of a source.
+type PatchUpdateSourceRequest struct {
+	Label  *string `json:"label,omitempty"`
+	Status *string `json:"status,omitempty"`
+}
+
+// UpdateUploadLink is one link uploaded from a local Slack source.
+type UpdateUploadLink struct {
+	URL    string `json:"url"`
+	SeenAt string `json:"seenAt"`
+}
+
+// UploadUpdateLinksRequest uploads links for one slack source.
+type UploadUpdateLinksRequest struct {
+	SourceID string             `json:"sourceId"`
+	Links    []UpdateUploadLink `json:"links"`
+}
+
+// UploadUpdateLinksResponse counts the outcome of each uploaded link.
+type UploadUpdateLinksResponse struct {
+	Accepted  int `json:"accepted"`
+	Duplicate int `json:"duplicate"`
+	Rejected  int `json:"rejected"`
+}
+
+// Draft actions for PatchUpdateDraftRequest.
+const (
+	UpdateDraftActionEdit    = "edit"
+	UpdateDraftActionAdopt   = "adopt"
+	UpdateDraftActionDismiss = "dismiss"
+	UpdateDraftActionReopen  = "reopen"
+)
+
+// PatchUpdateDraftRequest applies one action to a draft at an expected revision.
+type PatchUpdateDraftRequest struct {
+	Action   string `json:"action"`
+	Body     string `json:"body"`
+	Reason   string `json:"reason"`
+	Revision int    `json:"revision"`
+}
+
+// UpdateDraftsPage is one page of drafts.
+type UpdateDraftsPage struct {
+	Drafts     []UpdateDraft `json:"drafts"`
+	NextCursor string        `json:"nextCursor"`
+}
