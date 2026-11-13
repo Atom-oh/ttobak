@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 import zlib
+from collections import namedtuple
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlsplit
@@ -29,6 +30,7 @@ from news_pipeline import canonicalize_url
 MAX_REDIRECTS = 5
 MAX_COMPRESSED_BYTES = 2 * 1024 * 1024
 MAX_DECODED_BYTES = 4 * 1024 * 1024
+MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_BODY_CHARS = 30000
 MIN_BODY_CHARS = 800
 MIN_BLOCKS = 4
@@ -39,6 +41,10 @@ MAX_ATTEMPTS = 3
 MAX_ATTEMPT_SECONDS = 40
 _READ_CHUNK = 65536
 ALLOWED_CONTENT_TYPES = {"text/html", "application/xhtml+xml", "text/plain"}
+FEED_CONTENT_TYPES = {"application/rss+xml", "application/atom+xml", "application/xml",
+                      "text/xml", "text/html", "application/xhtml+xml"}
+_XML_TYPES = {"application/rss+xml", "application/atom+xml", "application/xml", "text/xml"}
+FeedDocument = namedtuple("FeedDocument", "final_url content_type text")
 _REDIRECT_CODES = {301, 302, 303, 307, 308}
 _HEADERS = {
     "User-Agent": "TtobakCrawler/2.0",
@@ -237,7 +243,7 @@ def _open_address(parsed, answer, deadline, *, method="GET", body=None, headers=
         raise
 
 
-def _read_bounded(response):
+def _read_bounded(response, too_large="BODY_TOO_LARGE"):
     header = response.headers.get("Content-Length")
     transfer = (response.headers.get("Transfer-Encoding") or "").lower()
     if (len(response.headers.get_all("Content-Length", [])) > 1
@@ -254,7 +260,7 @@ def _read_bounded(response):
         except ValueError:
             raise FetchRejected("INVALID_LENGTH") from None
         if expected > MAX_COMPRESSED_BYTES:
-            raise FetchRejected("BODY_TOO_LARGE")
+            raise FetchRejected(too_large)
     chunks = []
     total = 0
     while True:
@@ -263,7 +269,7 @@ def _read_bounded(response):
             break
         total += len(chunk)
         if total > MAX_COMPRESSED_BYTES:
-            raise FetchRejected("BODY_TOO_LARGE")
+            raise FetchRejected(too_large)
         chunks.append(chunk)
     if expected is not None and total != expected:
         raise FetchRejected("INCOMPLETE_BODY")
@@ -296,7 +302,13 @@ def _body_charset(raw, headers):
                                    for value in http_charsets):
         raise FetchRejected("DECODE_ERROR")
     declarations.extend(http_charsets)
-    if headers.get_content_type() != "text/plain":
+    content_type = headers.get_content_type()
+    if content_type in _XML_TYPES:
+        match = re.match(rb"(?:\xef\xbb\xbf)?\s*<\?xml[^>]*?\bencoding\s*=\s*[\"']([A-Za-z0-9._-]+)[\"']",
+                         raw[:1024])
+        if match:
+            declarations.append(match.group(1).decode("ascii"))
+    elif content_type != "text/plain":
         parser = _CharsetExtractor()
         parser.feed(raw[:4096].decode("ascii", errors="ignore"))
         declarations.extend(parser.charsets)
@@ -313,7 +325,7 @@ def _body_charset(raw, headers):
     return "utf-8-sig" if charset == "utf-8" else charset
 
 
-def _decode_body(raw, headers):
+def _decode_body(raw, headers, max_bytes=MAX_DECODED_BYTES, too_large="BODY_TOO_LARGE"):
     if len(headers.get_all("Content-Encoding", [])) > 1:
         raise FetchRejected("UNSUPPORTED_ENCODING")
     encoding = (headers.get("Content-Encoding") or "identity").lower().strip()
@@ -322,9 +334,9 @@ def _decode_body(raw, headers):
     try:
         if encoding == "gzip":
             with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
-                raw = stream.read(MAX_DECODED_BYTES + 1)
-        if len(raw) > MAX_DECODED_BYTES:
-            raise FetchRejected("BODY_TOO_LARGE")
+                raw = stream.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise FetchRejected(too_large)
         return raw.decode(_body_charset(raw, headers))
     except (OSError, EOFError, zlib.error, UnicodeError, LookupError):
         raise FetchRejected("DECODE_ERROR") from None
@@ -480,7 +492,9 @@ def normalize_html(html, url):
                        parser.published_at[:100], body, blocks)
 
 
-def _fetch_once(url, *, https_only=False):
+def _fetch_text(url, *, https_only, allowed_types, type_reason="UNSUPPORTED_CONTENT_TYPE",
+                max_decoded=MAX_DECODED_BYTES, size_reason="BODY_TOO_LARGE"):
+    """Shared validated transport: returns (final_url, content_type, decoded text)."""
     deadline = time.monotonic() + MAX_ATTEMPT_SECONDS
     current = url
     for redirect in range(MAX_REDIRECTS + 1):
@@ -502,31 +516,44 @@ def _fetch_once(url, *, https_only=False):
                 raise FetchRejected(f"HTTP_{response.status}")
             raw_types = response.headers.get_all("Content-Type", [])
             if (len(raw_types) != 1
-                    or raw_types[0].split(";", 1)[0].strip().lower()
-                    not in ALLOWED_CONTENT_TYPES):
-                raise FetchRejected("UNSUPPORTED_CONTENT_TYPE")
+                    or raw_types[0].split(";", 1)[0].strip().lower() not in allowed_types):
+                raise FetchRejected(type_reason)
             content_type = response.headers.get_content_type()
-            if content_type not in ALLOWED_CONTENT_TYPES:
-                raise FetchRejected("UNSUPPORTED_CONTENT_TYPE")
-            text = _decode_body(_read_bounded(response), response.headers)
+            if content_type not in allowed_types:
+                raise FetchRejected(type_reason)
+            text = _decode_body(_read_bounded(response, size_reason), response.headers,
+                                max_decoded, size_reason)
         finally:
             response.close()
             connection.close()
-        if content_type == "text/plain":
-            blocks = tuple(p.strip() for p in re.split(r"\n\s*\n", text) if p.strip())
-            article = ArticleBody(current, current, canonicalize_url(current), "", "",
-                                  _quality_body(blocks), blocks)
-        else:
-            article = normalize_html(text, current)
-        return ArticleBody(url, current, article.canonical_url, article.title,
-                           article.published_at, article.body, article.blocks)
+        return current, content_type, text
     raise FetchRejected("REDIRECT_LIMIT")
 
 
-def fetch_article(url, *, https_only=False):
+def _fetch_once(url, *, https_only=False):
+    current, content_type, text = _fetch_text(
+        url, https_only=https_only, allowed_types=ALLOWED_CONTENT_TYPES)
+    if content_type == "text/plain":
+        blocks = tuple(p.strip() for p in re.split(r"\n\s*\n", text) if p.strip())
+        article = ArticleBody(current, current, canonicalize_url(current), "", "",
+                              _quality_body(blocks), blocks)
+    else:
+        article = normalize_html(text, current)
+    return ArticleBody(url, current, article.canonical_url, article.title,
+                       article.published_at, article.body, article.blocks)
+
+
+def _fetch_feed_once(url):
+    current, content_type, text = _fetch_text(
+        url, https_only=True, allowed_types=FEED_CONTENT_TYPES, type_reason="content_type",
+        max_decoded=MAX_FEED_BYTES, size_reason="too_large")
+    return FeedDocument(current, content_type, text)
+
+
+def _with_attempts(fetch):
     for attempt in range(MAX_ATTEMPTS):
         try:
-            return _fetch_once(url, https_only=True) if https_only else _fetch_once(url)
+            return fetch()
         except FetchRejected as error:
             reason = error.reason
             retry = reason in ("HTTP_429", "DNS_TEMPORARY") or reason.startswith("HTTP_5")
@@ -538,3 +565,13 @@ def fetch_article(url, *, https_only=False):
             raise FetchRejected(reason) from None
         time.sleep(min(2 ** attempt, 8) + random.uniform(0, 0.5))
     raise FetchRejected("FETCH_ERROR")
+
+
+def fetch_article(url, *, https_only=False):
+    return _with_attempts(
+        lambda: _fetch_once(url, https_only=True) if https_only else _fetch_once(url))
+
+
+def fetch_feed_document(url):
+    """Fetch an RSS/Atom/site document over https only with the hardened transport."""
+    return _with_attempts(lambda: _fetch_feed_once(url))

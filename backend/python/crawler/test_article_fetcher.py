@@ -332,6 +332,104 @@ class TestArticleFetch(unittest.TestCase):
             self.fetch_with(*(response(status=302, Location="/a") for _ in range(6)))
 
 
+class TestFeedFetch(unittest.TestCase):
+    ATOM = "<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'><title>고객 소식</title></feed>"
+
+    def setUp(self):
+        patcher = mock.patch.object(fetcher, "_resolve_addresses", side_effect=public_resolver)
+        self.resolve = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def fetch_with(self, *responses, url="https://example.com/feed"):
+        pairs = [(mock.Mock(), item) for item in responses]
+        with mock.patch.object(fetcher, "_open_response", side_effect=pairs) as opened:
+            document = fetcher.fetch_feed_document(url)
+        for connection, item in pairs:
+            connection.close.assert_called_once()
+            item.close.assert_called_once()
+        return document, opened
+
+    def test_atom_response_returns_decoded_text(self):
+        document, _ = self.fetch_with(response(
+            self.ATOM.encode(), **{"Content-Type": "Application/Atom+XML; charset=utf-8"}))
+        self.assertEqual(document.final_url, "https://example.com/feed")
+        self.assertEqual(document.content_type, "application/atom+xml")
+        self.assertEqual(document.text, self.ATOM)
+
+    def test_utf8_xml_without_charset_header_decodes(self):
+        document, _ = self.fetch_with(response(
+            self.ATOM.encode(), **{"Content-Type": "application/xml"}))
+        self.assertIn("고객 소식", document.text)
+
+    def test_declared_xml_encoding_is_honored_and_conflicts_rejected(self):
+        euc = "<?xml version='1.0' encoding='euc-kr'?><a>고객</a>".encode("euc-kr")
+        document, _ = self.fetch_with(response(euc, **{"Content-Type": "text/xml"}))
+        self.assertIn("고객", document.text)
+        with self.assertRaisesRegex(fetcher.FetchRejected, "DECODE_ERROR"):
+            self.fetch_with(response(euc, **{"Content-Type": "text/xml; charset=utf-8"}))
+
+    def test_site_page_types_are_allowed(self):
+        document, _ = self.fetch_with(response(b"<html></html>"))
+        self.assertEqual(document.content_type, "text/html")
+
+    def test_disallowed_content_type_is_rejected(self):
+        with self.assertRaises(fetcher.FetchRejected) as raised:
+            self.fetch_with(response(b"{}", **{"Content-Type": "application/json"}))
+        self.assertEqual(raised.exception.reason, "content_type")
+
+    def test_body_over_cap_is_rejected_as_too_large(self):
+        body = b"<a>" + b"x" * fetcher.MAX_FEED_BYTES + b"</a>"
+        with self.assertRaises(fetcher.FetchRejected) as raised:
+            self.fetch_with(response(body, **{"Content-Type": "application/xml"}))
+        self.assertEqual(raised.exception.reason, "too_large")
+
+    def test_gzip_expanding_over_cap_is_rejected_as_too_large(self):
+        packed = gzip.compress(b"<a>" + b"x" * fetcher.MAX_FEED_BYTES + b"</a>")
+        self.assertLess(len(packed), fetcher.MAX_COMPRESSED_BYTES)
+        with self.assertRaises(fetcher.FetchRejected) as raised:
+            self.fetch_with(response(packed, **{"Content-Type": "application/xml",
+                                                "Content-Encoding": "gzip"}))
+        self.assertEqual(raised.exception.reason, "too_large")
+
+    def test_http_url_is_rejected_before_resolving(self):
+        with mock.patch.object(fetcher, "_open_response") as opened:
+            with self.assertRaisesRegex(fetcher.FetchRejected, "INSECURE_REDIRECT"):
+                fetcher.fetch_feed_document("http://example.com/feed")
+        opened.assert_not_called()
+        self.resolve.assert_not_called()
+
+    def test_redirect_to_non_global_address_is_rejected_on_the_hop(self):
+        first = response(status=302, Location="https://internal.example/feed")
+
+        def resolve(host, port, deadline):
+            ip = "10.0.0.5" if host == "internal.example" else "93.184.216.34"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+        connection = mock.Mock()
+        self.resolve.side_effect = resolve
+        with mock.patch.object(fetcher, "_open_response", return_value=(connection, first)) as opened:
+            with self.assertRaisesRegex(fetcher.FetchRejected, "BLOCKED_HOST"):
+                fetcher.fetch_feed_document("https://example.com/feed")
+        opened.assert_called_once()
+        connection.close.assert_called_once()
+
+    def test_https_to_http_redirect_is_rejected(self):
+        first = response(status=301, Location="http://example.com/feed")
+        connection = mock.Mock()
+        with mock.patch.object(fetcher, "_open_response", return_value=(connection, first)) as opened:
+            with self.assertRaisesRegex(fetcher.FetchRejected, "INSECURE_REDIRECT"):
+                fetcher.fetch_feed_document("https://example.com/feed")
+        opened.assert_called_once()
+
+    def test_transient_status_is_retried(self):
+        with mock.patch.object(fetcher, "_fetch_feed_once",
+                               side_effect=[fetcher.FetchRejected("HTTP_503"),
+                                            fetcher.FeedDocument("u", "text/xml", "x")]) as once, \
+                mock.patch.object(fetcher.time, "sleep"):
+            self.assertEqual(fetcher.fetch_feed_document("https://example.com/f").text, "x")
+        self.assertEqual(once.call_count, 2)
+
+
 class TestArticleNormalization(unittest.TestCase):
     def test_wrapped_plain_text_paywall_markers_are_rejected(self):
         for separator in ("\n", "\t", "   ", "\n\n"):
