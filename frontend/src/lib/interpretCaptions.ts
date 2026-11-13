@@ -4,8 +4,6 @@
 /** The caption fields the list needs; the rest passes through. */
 export interface CaptionLine {
   id: string;
-  order: number;
-  original: string;
   translated: string;
   status: string;
 }
@@ -14,13 +12,20 @@ export interface CaptionLine {
 export const MAX_CAPTION_LINES = 200;
 
 /**
- * Adds or replaces one caption line. A skipped line, and a failed or empty
- * one, is removed, as in the caption window. Lines stay in speaking order.
+ * Adds or replaces one caption line, as the caption window does: a skipped or
+ * failed line is removed, and an update with no text yet (a final waiting for
+ * its translation) leaves the shown draft alone.
+ *
+ * Lines stay in arrival order: a known ID is replaced in place and a new one
+ * is appended. The engine's own `order` is not used, because closing and
+ * reopening a caption window recreates its engine and restarts that counter.
  */
 export function upsertCaptionLine<Line extends CaptionLine>(lines: Line[], line: Line): Line[] {
-  const rest = lines.filter((item) => item.id !== line.id);
-  if (line.status === 'skipped' || line.status === 'error' || !line.translated) {
-    return rest.length === lines.length ? lines : rest;
+  const index = lines.findIndex((item) => item.id === line.id);
+  if (line.status === 'skipped' || line.status === 'error') {
+    return index < 0 ? lines : lines.filter((item) => item.id !== line.id);
   }
-  return [...rest, line].sort((left, right) => left.order - right.order).slice(-MAX_CAPTION_LINES);
+  if (!line.translated) return lines;
+  if (index >= 0) return lines.map((item, at) => (at === index ? line : item));
+  return [...lines, line].slice(-MAX_CAPTION_LINES);
 }
