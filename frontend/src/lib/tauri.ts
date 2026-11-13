@@ -489,14 +489,17 @@ export function onNativeAudioLevel(handler: (level: number) => void): () => void
   return subscribeTauriEvent<number, number>('native-audio-level', (v) => v, handler);
 }
 
+/** Why the Mac app ended a listening session by itself. */
+export type NativeListeningStopReason = 'system-sleep' | 'recording';
+
 /**
  * The Mac app ended a listening session by itself: the system is going to
  * sleep, or a recording started. Not sent for `stopNativeListening`.
  */
-export function onNativeListeningStopped(handler: (reason: 'sleep' | 'recording') => void): () => void {
-  return subscribeTauriEvent<{ reason?: string }, 'sleep' | 'recording'>(
+export function onNativeListeningStopped(handler: (reason: NativeListeningStopReason) => void): () => void {
+  return subscribeTauriEvent<{ reason?: string }, NativeListeningStopReason>(
     'native-listening-stopped',
-    (payload) => (payload?.reason === 'sleep' ? 'sleep' : 'recording'),
+    (payload) => (payload?.reason === 'system-sleep' ? 'system-sleep' : 'recording'),
     handler,
   );
 }

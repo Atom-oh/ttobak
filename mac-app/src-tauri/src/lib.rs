@@ -565,7 +565,7 @@ async fn stop_listening(app: AppHandle) -> Result<ListenStopResponse, AppError> 
 /// `(stopped, stop_timed_out)`. The handle is taken under the recorder lock
 /// and the blocking Core Audio stop runs after the lock is released, bounded
 /// by `STOP_CAPTURE_TIMEOUT`. `reason` is set when something other than the
-/// page ended the session (`"sleep"`, `"recording"`); the page is then told
+/// page ended the session (`"system-sleep"`, `"recording"`); the page is then told
 /// through `native-listening-stopped`.
 pub(crate) async fn end_listening(app: &AppHandle, reason: Option<&'static str>) -> (bool, bool) {
     let handle = {

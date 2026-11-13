@@ -109,7 +109,7 @@ their saved `open` flags) when the main window is destroyed, and need
 `macOSPrivateApi` for transparency. `interpreter.rs` mirrors
 `backend/internal/service/translate.go`; keep them aligned.
 native-mic-muted ({muted, app Zoom|Google Meet, reason muted}) reports
-the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. native-listening-stopped ({reason sleep|recording}) goes to the main window only when something other than `stop_listening` ended a listening session. Remote event capability grants must
+the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. native-listening-stopped ({reason system-sleep|recording}) goes to the main window only when something other than `stop_listening` ended a listening session. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the
 ACL for every command called from the remote SPA: each command must be listed in
 `build.rs` COMMANDS and its `allow-*` permission granted in

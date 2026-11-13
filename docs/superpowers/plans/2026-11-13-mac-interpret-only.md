@@ -145,7 +145,7 @@ fn take_any_takes_either_kind() {
 - Produces (wire contract):
   - `start_listening(input_device_uid: Option<String>) -> { warnings: Vec<String>, input: Option<SelectedInput> }`. Errors: `AlreadyRunning` while a recording or another start exists.
   - `stop_listening() -> { stopped: bool, stop_timed_out: bool }`. Idempotent: `{ stopped: false, stop_timed_out: false }` when nothing is listening; never stops a recording.
-  - Event `native-listening-stopped`, `emit_to("main", …)`, payload `{ "reason": "sleep" | "recording" }`. Not emitted for a `stop_listening` call.
+  - Event `native-listening-stopped`, `emit_to("main", …)`, payload `{ "reason": "system-sleep" | "recording" }`. Not emitted for a `stop_listening` call.
   - Internal `async fn end_listening(state: &RecorderState, app: &AppHandle, reason: Option<&'static str>) -> (bool, bool)` returning `(stopped, stop_timed_out)`: takes the listening handle under the lock, releases the lock, runs `Backend::stop_listening` in `spawn_blocking` raced against `STOP_CAPTURE_TIMEOUT`, drops the listening power assertion, and emits the event when `reason` is `Some`.
   - `RecorderState.listening_power: Mutex<Option<power::PowerAssertion>>` (macOS only), acquired with reason `"TTOBAK live interpretation"` after a successful start, released by `end_listening`.
 

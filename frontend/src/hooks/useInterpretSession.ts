@@ -243,7 +243,7 @@ export function useInterpretSession({ targetLang, interimTranslation }: UseInter
           // The Mac app already stopped the capture.
           capturingRef.current = false;
           void end({
-            notice: reason === 'sleep' ? INTERPRET_MESSAGES.sleepStopped : INTERPRET_MESSAGES.recordingStopped,
+            notice: reason === 'system-sleep' ? INTERPRET_MESSAGES.sleepStopped : INTERPRET_MESSAGES.recordingStopped,
           }, false);
         }),
       ];

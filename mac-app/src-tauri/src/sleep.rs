@@ -104,7 +104,7 @@ mod mac {
                     log::info!("system will sleep while listening: stopping");
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let stop = crate::end_listening(&app, Some("sleep"));
+                        let stop = crate::end_listening(&app, Some("system-sleep"));
                         if tokio::time::timeout(STOP_DEADLINE, stop).await.is_err() {
                             log::warn!("listening stop not finished before the deadline");
                         }
