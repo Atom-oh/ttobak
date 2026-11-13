@@ -13,6 +13,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { NewsPublication } from './news-publication';
+import { CustomerUpdates } from './customer-updates';
 import { NEWS_MODEL_ID } from './model-config';
 
 export interface CrawlerStackProps extends cdk.StackProps {
@@ -179,6 +180,9 @@ export class CrawlerStack extends cdk.Stack {
       webSearchGatewayArn: props.webSearchGatewayArn,
       legacyWrites: legacyWrites.valueAsString,
     });
+
+    // Customer update collection: hourly feed collector and 10-minute fan-out worker.
+    new CustomerUpdates(this, 'CustomerUpdates', { table: props.table });
 
     // Manual "collect now" for one account-owned source (ADR-004). The event
     // carries only IDs. The versioned starter claims the API-claimed request

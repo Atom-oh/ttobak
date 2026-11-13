@@ -4,7 +4,7 @@
   rules, and dates inside mark owner decisions.
 - Implementation checked: 2026-11-12.
 
-A shared daily crawl feeds the insights knowledge base; results pass a relevance gate and can be curated; versioned news publication is a separate, conditional pipeline. The sections below keep, in order, the crawler insights record, the pipeline repair and service discovery record, the relevance gate and curation record, and the conditional news publication record.
+A shared daily crawl feeds the insights knowledge base; results pass a relevance gate and can be curated; versioned news publication is a separate, conditional pipeline. The sections below keep, in order, the crawler insights record, the pipeline repair and service discovery record, the relevance gate and curation record, the conditional news publication record, and customer update collection.
 
 ## Shared Crawled Knowledge and Insights
 
@@ -508,3 +508,40 @@ GPT web-search path.
 - `infra/test/news-publication.test.ts`
 - `backend/python/qa/news_text.py`
 - `backend/python/qa/test_news_text.py`
+
+## Customer update collection
+
+Followed RSS, site and YouTube sources feed per-user customer update inboxes
+(drafts are a separate topic). Two functions share one table and never share a
+writer for the same rows.
+
+- **Registry.** `CUFEEDS` rows list active distinct feeds. State and entries
+  live under `CUFEED#{feedHash}`. The collector (`update_collector.handler`,
+  hourly) fetches each distinct feed once through the validated transport,
+  https only, with a 2 MiB response cap. Many followers never multiply fetches.
+- **Backfill and baseline.** A feed's first run keeps entries from the last 3
+  days, at most 50. A `site` source with no feed stores a link baseline on its
+  first run, then writes at most 30 new links per run; other kinds never use the
+  site path.
+- **Failures.** A failed run records one code (`fetch`, `content_type`, `too_large`, `parse` or `no_feed`) and
+  a failure count on the state row; the source list shows it as a feed error.
+  After 5 consecutive failures the feed is retried at most once a day. A
+  successful run resets the count.
+- **Retention.** Entries expire after 7 days through `pendingShareExpiresAt`.
+- **Fan-out.** Python never writes `USER#` rows. The Go worker
+  (`customer-updates`, `{"kind":"tick"}` every 10 minutes, reserved concurrency
+  1) reads registry subscriptions, delivers entries to `USER#` inbox rows with
+  put-if-absent, and advances a per-subscriber `fannedAt` watermark. The 50-entry
+  cap per run never splits a group of entries with the same timestamp, so the
+  watermark cannot skip an entry.
+- **Logs.** Only the first 12 characters of the feed hash and counts; never URLs,
+  titles or user data.
+- **IAM.** The collector role holds `Query` on leading key `CUFEEDS` and
+  `GetItem`/`PutItem`/`UpdateItem`/`Query` on `CUFEED#*`. The worker role holds
+  `Query`/`GetItem`/`PutItem`/`UpdateItem`/`DeleteItem`/`TransactWriteItems` on
+  `USER#*`, `CUFEEDS`, `CUFEED#*`, `CUURL#*` and `CUPENDING`. Neither has KMS, S3,
+  Bedrock or secret access; neither has a function URL.
+
+Evidence: `backend/python/crawler/update_collector.py`,
+`backend/python/crawler/update_feeds.py`, `backend/cmd/customer-updates/main.go`,
+`infra/lib/customer-updates.ts`, `infra/test/customer-updates.test.ts`.

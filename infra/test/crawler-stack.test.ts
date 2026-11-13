@@ -35,8 +35,8 @@ describe('CrawlerStack', () => {
     template = Template.fromStack(stack);
   });
 
-  test('creates 4 legacy and 6 private publication Lambda functions', () => {
-    template.resourceCountIs('AWS::Lambda::Function', 10);
+  test('creates 4 legacy, 6 private publication and 2 customer update Lambda functions', () => {
+    template.resourceCountIs('AWS::Lambda::Function', 12);
   });
 
   test('creates Step Functions state machine', () => {

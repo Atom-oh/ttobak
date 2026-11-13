@@ -21,6 +21,7 @@ manifests.
 - Customer update drafts on the web: followed-source settings, an account drafts tab
   and the `/drafts` inbox with copy, done and dismiss actions; lists stay empty
   until the collector and generator ship (#961).
+- Customer update collection: hourly feed collector and a 10-minute fan-out worker deliver new links from followed RSS, site and YouTube sources into each subscriber's inbox; source lists report a feed error (#PR).
 
 ### Changed
 
