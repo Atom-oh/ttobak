@@ -114,7 +114,7 @@ func (f *CustomerUpdateFanout) feedEntries(ctx context.Context, run *fanoutRun, 
 	if es, ok := run.entries[key]; ok {
 		return es, nil
 	}
-	es, err := f.repo.ListFeedEntries(ctx, feedHash, since, fanoutEntryLimit)
+	es, err := f.repo.ListFeedEntries(ctx, feedHash, since, fanoutEntryLimit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +142,15 @@ func (f *CustomerUpdateFanout) fanOneSub(ctx context.Context, run *fanoutRun, su
 	entries, err := f.feedEntries(ctx, run, sub.FeedHash, since)
 	if err != nil {
 		return err
+	}
+
+	at := run.tick
+	if len(entries) > fanoutEntryLimit {
+		var undelivered int
+		entries, at, undelivered = capEntries(entries)
+		if undelivered > 0 {
+			log.Printf("customer update fan-out: %d entries share one seenAt beyond the cap, not delivered feed=%s", undelivered, shortHash(sub.FeedHash))
+		}
 	}
 
 	created := 0
@@ -186,10 +195,26 @@ func (f *CustomerUpdateFanout) fanOneSub(ctx context.Context, run *fanoutRun, su
 		return derr
 	}
 
-	at := run.tick
-	if len(entries) >= fanoutEntryLimit {
-		// More may remain: resume after the last delivered entry next tick.
-		at = entries[len(entries)-1].SeenAt.UTC()
-	}
 	return f.repo.SetFeedSubFannedAt(ctx, sub, at)
+}
+
+// capEntries trims a read of fanoutEntryLimit+1 entries (oldest first) to the
+// entries to deliver now and the FannedAt to record. Entries sharing one seenAt
+// are never split across ticks, because the next read is strictly after FannedAt.
+// undelivered is nonzero only when all entries share one seenAt: the first
+// fanoutEntryLimit are delivered and the rest are dropped to avoid looping.
+func capEntries(entries []model.UpdateFeedEntry) (deliver []model.UpdateFeedEntry, at time.Time, undelivered int) {
+	t := entries[fanoutEntryLimit].SeenAt.UTC()
+	last := entries[fanoutEntryLimit-1].SeenAt.UTC()
+	if last.Before(t) {
+		return entries[:fanoutEntryLimit], last, 0
+	}
+	n := 0
+	for n < len(entries) && entries[n].SeenAt.UTC().Before(t) {
+		n++
+	}
+	if n == 0 {
+		return entries[:fanoutEntryLimit], t, len(entries) - fanoutEntryLimit
+	}
+	return entries[:n], entries[n-1].SeenAt.UTC(), 0
 }

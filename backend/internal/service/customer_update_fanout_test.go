@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -283,5 +284,77 @@ func TestFanout_ListErrorReturned(t *testing.T) {
 	m.listErr = errors.New("list failed")
 	if _, err := fanoutSvc(m).Run(context.Background()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func tieEntries(counts map[time.Time]int) []model.UpdateFeedEntry {
+	var times []time.Time
+	for t := range counts {
+		times = append(times, t)
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+	var es []model.UpdateFeedEntry
+	for _, t := range times {
+		for k := 0; k < counts[t]; k++ {
+			es = append(es, fanoutEntry(len(es), t, fmt.Sprintf("https://example.com/p%d", len(es))))
+		}
+	}
+	return es
+}
+
+func capSetup(es []model.UpdateFeedEntry) (*fanoutMock, model.UpdateFeedSub) {
+	m := newFanoutMock()
+	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
+	m.pages[""] = []model.UpdateFeedSub{s}
+	m.states[s.FeedHash] = &model.UpdateFeedState{UpdatedAt: fanoutNow.Add(-time.Minute)}
+	m.entries[s.FeedHash] = es
+	return m, s
+}
+
+func TestFanout_TieGroupSpanningCapStaysWhole(t *testing.T) {
+	t1, t2 := fanoutNow.Add(-2*time.Hour), fanoutNow.Add(-time.Hour)
+	m, s := capSetup(tieEntries(map[time.Time]int{t1: 30, t2: 30}))
+	m.states[s.FeedHash].UpdatedAt = t2
+	f := fanoutSvc(m)
+	st, err := f.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 30 || !m.fannedAt["u1"].Equal(t1) {
+		t.Fatalf("tick 1: %+v fannedAt=%v", st, m.fannedAt["u1"])
+	}
+	// Tick 2 with the stored FannedAt delivers the rest, nothing twice.
+	s.FannedAt = m.fannedAt["u1"]
+	m.pages[""] = []model.UpdateFeedSub{s}
+	st, err = f.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 30 || !m.fannedAt["u1"].Equal(fanoutNow) {
+		t.Fatalf("tick 2: %+v fannedAt=%v", st, m.fannedAt["u1"])
+	}
+}
+
+func TestFanout_CapBoundaryBetweenGroupsDeliversFifty(t *testing.T) {
+	t1, t2 := fanoutNow.Add(-2*time.Hour), fanoutNow.Add(-time.Hour)
+	m, _ := capSetup(tieEntries(map[time.Time]int{t1: 50, t2: 10}))
+	st, err := fanoutSvc(m).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 50 || !m.fannedAt["u1"].Equal(t1) {
+		t.Fatalf("%+v fannedAt=%v", st, m.fannedAt["u1"])
+	}
+}
+
+func TestFanout_SingleTieGroupOverCapDoesNotLoop(t *testing.T) {
+	t1 := fanoutNow.Add(-time.Hour)
+	m, _ := capSetup(tieEntries(map[time.Time]int{t1: 55}))
+	st, err := fanoutSvc(m).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 50 || !m.fannedAt["u1"].Equal(t1) {
+		t.Fatalf("%+v fannedAt=%v", st, m.fannedAt["u1"])
 	}
 }
