@@ -228,12 +228,12 @@ func (s *CustomerUpdateService) UploadLinks(ctx context.Context, userID string, 
 		// put-if-absent, so a retry can never leave an item without its URL row.
 		// An orphan URL row is harmless and expires by TTL.
 		if err := s.repo.EnsureURLPending(ctx, hash, normalized); err != nil {
-			return nil, err
+			return nil, s.markAfterPartialUpload(ctx, userID, resp.Accepted, err)
 		}
 		// One item per call so the created count identifies which links are new.
 		created, err := s.repo.PutItemsIfAbsent(ctx, userID, req.SourceID, []model.UpdateItem{item})
 		if err != nil {
-			return nil, err
+			return nil, s.markAfterPartialUpload(ctx, userID, resp.Accepted, err)
 		}
 		if created == 0 {
 			resp.Duplicate++
@@ -241,12 +241,27 @@ func (s *CustomerUpdateService) UploadLinks(ctx context.Context, userID string, 
 		}
 		resp.Accepted++
 	}
-	if resp.Accepted > 0 {
+	// MarkPending is an idempotent put, so a retry whose links are all duplicates
+	// still heals a marker lost to an earlier partial failure.
+	if resp.Accepted+resp.Duplicate > 0 {
 		if err := s.repo.MarkPending(ctx, userID); err != nil {
 			return nil, err
 		}
 	}
 	return resp, nil
+}
+
+// markAfterPartialUpload returns cause; when this call already wrote items it
+// first marks pending work (best effort) so they are not stranded, joining a
+// MarkPending failure with cause.
+func (s *CustomerUpdateService) markAfterPartialUpload(ctx context.Context, userID string, written int, cause error) error {
+	if written == 0 {
+		return cause
+	}
+	if err := s.repo.MarkPending(ctx, userID); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
 }
 
 func updateExpired(expiresAt int64, now time.Time) bool {

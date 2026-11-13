@@ -19,6 +19,9 @@ type mockUpdateRepo struct {
 	listed        []model.UpdateDraft
 	ensureCalls   int
 	ensureErr     error
+	putCalls      int
+	putFailAt     int // 1-based PutItemsIfAbsent call that fails; 0 = never
+	putErr        error
 	markCalls     int
 	putSourceErr  error
 	updateSrcErr  error
@@ -47,6 +50,10 @@ func (m *mockUpdateRepo) UpdateSource(_ context.Context, _, _ string, _ *string,
 }
 func (m *mockUpdateRepo) DeleteSource(context.Context, string, string) error { return nil }
 func (m *mockUpdateRepo) PutItemsIfAbsent(_ context.Context, _, _ string, items []model.UpdateItem) (int, error) {
+	m.putCalls++
+	if m.putFailAt != 0 && m.putCalls == m.putFailAt {
+		return 0, m.putErr
+	}
 	n := 0
 	for _, it := range items {
 		if !m.items[it.URLHash] {
@@ -286,6 +293,43 @@ func TestCustomerUpdateUploadLinks(t *testing.T) {
 		}
 		if resp.Accepted != 1 || resp.Duplicate != 1 || repo.ensureCalls != 1 {
 			t.Fatalf("resp = %+v ensure=%d", resp, repo.ensureCalls)
+		}
+	})
+
+	t.Run("item write failure after partial progress still marks pending", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.sources = []model.UpdateSource{slack}
+		repo.putFailAt = 3
+		repo.putErr = errors.New("put failed")
+		_, err := newUpdateSvc(repo, &mockMembers{}).UploadLinks(context.Background(), "u1",
+			&model.UploadUpdateLinksRequest{SourceID: "slack1", Links: []model.UpdateUploadLink{
+				{URL: "https://example.com/1"}, {URL: "https://example.com/2"},
+				{URL: "https://example.com/3"}, {URL: "https://example.com/4"},
+			}})
+		if !errors.Is(err, repo.putErr) {
+			t.Fatalf("err = %v, want put error", err)
+		}
+		if repo.markCalls != 1 || len(repo.items) != 2 {
+			t.Fatalf("mark=%d items=%d, want 1 and 2", repo.markCalls, len(repo.items))
+		}
+	})
+
+	t.Run("retry of all-duplicate links heals the pending marker", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.sources = []model.UpdateSource{slack}
+		for _, u := range []string{"https://example.com/1", "https://example.com/2"} {
+			_, h, _ := model.NormalizeUpdateURL(u)
+			repo.items[h] = true
+		}
+		resp, err := newUpdateSvc(repo, &mockMembers{}).UploadLinks(context.Background(), "u1",
+			&model.UploadUpdateLinksRequest{SourceID: "slack1", Links: []model.UpdateUploadLink{
+				{URL: "https://example.com/1"}, {URL: "https://example.com/2"},
+			}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Accepted != 0 || resp.Duplicate != 2 || repo.markCalls != 1 {
+			t.Fatalf("resp = %+v mark=%d", resp, repo.markCalls)
 		}
 	})
 
