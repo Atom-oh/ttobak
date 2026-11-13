@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SttManager, type TranscribeStreamingConfig } from '@/lib/sttManager';
-import type { ExtraLiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
+import type { ExtraLiveLanguage, FixedLiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import {
   INTERPRET_VERSION_SKEW_MESSAGE, isCommandNotFound, isTauri, onNativeListeningStopped, onNativePcmChunk,
@@ -23,6 +23,8 @@ interface UseInterpretSessionOptions {
   onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
   /** Third recognition language chosen for the caption windows, read when a caption session starts. */
   getExtraLanguage?: () => ExtraLiveLanguage | undefined;
+  /** The one language to recognize, or undefined to identify it per utterance; read when a caption session starts. */
+  getFixedLanguage?: () => FixedLiveLanguage | undefined;
 }
 
 type SessionState = InterpretState<TranslationEntry, NativeSelectedInput>;
@@ -65,17 +67,21 @@ async function loadTranscribeConfig(): Promise<TranscribeStreamingConfig | null>
  * `useRecordingSession`, which carries the meeting, transcript and upload
  * flow this screen must never reach.
  */
-export function useInterpretSession({ targetLang, interimTranslation, onSegment, getExtraLanguage }: UseInterpretSessionOptions) {
+export function useInterpretSession({
+  targetLang, interimTranslation, onSegment, getExtraLanguage, getFixedLanguage,
+}: UseInterpretSessionOptions) {
   const [state, setState] = useState<SessionState>(IDLE_STATE);
   const [elapsedMs, setElapsedMs] = useState(0);
   const controllerRef = useRef<Controller | null>(null);
   const optionsRef = useRef({ targetLang, interimTranslation });
   const onSegmentRef = useRef(onSegment);
   const getExtraLanguageRef = useRef(getExtraLanguage);
+  const getFixedLanguageRef = useRef(getFixedLanguage);
   useEffect(() => {
     onSegmentRef.current = onSegment;
     getExtraLanguageRef.current = getExtraLanguage;
-  }, [onSegment, getExtraLanguage]);
+    getFixedLanguageRef.current = getFixedLanguage;
+  }, [onSegment, getExtraLanguage, getFixedLanguage]);
 
   useEffect(() => {
     optionsRef.current.targetLang = targetLang;
@@ -114,6 +120,7 @@ export function useInterpretSession({ targetLang, interimTranslation, onSegment,
           interimTranslation: options.interimTranslation,
           transcribeStreamingConfig,
           extraLanguage: getExtraLanguageRef.current?.(),
+          fixedLanguage: getFixedLanguageRef.current?.(),
           onSegment: (id, text, isFinal, languageCode) =>
             onSegmentRef.current?.(`${session}/${id}`, text, isFinal, languageCode),
         });
