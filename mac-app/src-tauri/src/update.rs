@@ -533,10 +533,11 @@ mod tests {
         )));
     }
 
-    /// The checked-in placeholder must still parse as the plugin's config, or
-    /// plugin init would fail and the app would not launch (ruling 2).
+    /// The checked-in config must parse as the plugin's config, or plugin init
+    /// would fail and the app would not launch (ruling 2), and it must carry the
+    /// real updater key so release builds check for updates.
     #[test]
-    fn checked_in_updater_config_parses_and_is_unconfigured() {
+    fn checked_in_updater_config_parses_and_is_configured() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).expect("json");
         let updater = conf["plugins"]["updater"].clone();
@@ -551,7 +552,7 @@ mod tests {
         // version with an older signed archive must be rejected.
         assert!(parsed.require_signed_version);
         assert!(!parsed.allow_downgrades);
-        assert!(!pubkey_configured(updater["pubkey"].as_str()));
+        assert!(pubkey_configured(updater["pubkey"].as_str()));
     }
 
     /// The release manifest carries an extra `sha256` per platform; the
