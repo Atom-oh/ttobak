@@ -9,6 +9,15 @@
     {"raw": "https://10.0.0.5/x", "rejected": "host"},
     {"raw": "https://localhost/x", "rejected": "host"},
     {"raw": "https://team.slack.com/archives/C1/p1", "rejected": "internal_host"},
-    {"raw": "https://w.amazon.com/bin/view/X", "rejected": "internal_host"}
+    {"raw": "https://w.amazon.com/bin/view/X", "rejected": "internal_host"},
+    {"raw": "https://127.1/x", "rejected": "host"},
+    {"raw": "https://0x7f.0.0.1/x", "rejected": "host"},
+    {"raw": "https://1.2.3/x", "rejected": "host"},
+    {"raw": "https://example.com/a%20b/c%2fd?q=a%2bb%20c", "normalized": "https://example.com/a%20b/c%2Fd?q=a%2Bb%20c"},
+    {"raw": "https://example.com/%7Euser/a+b", "normalized": "https://example.com/%7Euser/a+b"},
+    {"raw": "https://example.com/café/x", "normalized": "https://example.com/caf%C3%A9/x"},
+    {"raw": "https://example.com/caf%c3%a9/x", "normalized": "https://example.com/caf%C3%A9/x"},
+    {"raw": "https://example.com/a?b=1&a=2&a=1", "normalized": "https://example.com/a?a=2&a=1&b=1"},
+    {"raw": "https://example.com/a?a=&b&&c=1", "normalized": "https://example.com/a?a=&b&c=1"}
   ]
 }

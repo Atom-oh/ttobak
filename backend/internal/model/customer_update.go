@@ -34,6 +34,9 @@ const (
 	MaxUpdateLinksPerUpload = 200
 	MaxUpdateURLLength      = 2048
 	MaxDraftBodyRunes       = 2000
+	// MaxUpdateDraftsScan bounds how many of a caller's draft rows one list
+	// request reads before ordering and paging them in memory.
+	MaxUpdateDraftsScan = 1000
 
 	UpdateDraftTTL    = 90 * 24 * time.Hour
 	UpdateDecisionTTL = 180 * 24 * time.Hour
@@ -166,6 +169,17 @@ type UpdateDraft struct {
 	ExpiresAt     int64              `json:"expiresAt" dynamodbav:"pendingShareExpiresAt"`
 }
 
+// NormalizeSlices replaces nil Opportunities and Links with empty slices so a
+// draft never stores DynamoDB NULL for them or serializes them as JSON null.
+func (d *UpdateDraft) NormalizeSlices() {
+	if d.Opportunities == nil {
+		d.Opportunities = []UpdateDraftOppty{}
+	}
+	if d.Links == nil {
+		d.Links = []string{}
+	}
+}
+
 // ErrUpdateURLRejected is wrapped with one reason: scheme, userinfo, host,
 // internal_host or length.
 var ErrUpdateURLRejected = errors.New("update url rejected")
@@ -213,6 +227,49 @@ func isUpdateInternalHost(host string) bool {
 	return false
 }
 
+// numericLastLabel reports whether the host's last label is only ASCII digits.
+// No public top-level domain is numeric, and such hosts include IPv4 shorthand
+// forms (127.1, 0x7f.0.0.1, 1.2.3) that resolvers may treat as addresses.
+func numericLastLabel(host string) bool {
+	last := host[strings.LastIndex(host, ".")+1:]
+	if last == "" {
+		return false
+	}
+	for i := 0; i < len(last); i++ {
+		if last[i] < '0' || last[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// upperPercentHex uppercases the two hex digits of every %XX escape.
+func upperPercentHex(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	b := []byte(s)
+	for i := 0; i+2 < len(b); i++ {
+		if b[i] == '%' && isHexDigit(b[i+1]) && isHexDigit(b[i+2]) {
+			b[i+1] = toUpperASCII(b[i+1])
+			b[i+2] = toUpperASCII(b[i+2])
+			i += 2
+		}
+	}
+	return string(b)
+}
+
+func toUpperASCII(c byte) byte {
+	if c >= 'a' && c <= 'z' {
+		return c - 'a' + 'A'
+	}
+	return c
+}
+
 // NormalizeUpdateURL canonicalizes a link (https only, lowercase host, no
 // default port or fragment, tracking parameters dropped, sorted query) and
 // returns it with the lowercase hex SHA-256 of the normalized form. Failures
@@ -230,7 +287,7 @@ func NormalizeUpdateURL(raw string) (string, string, error) {
 		return "", "", rejectUpdateURL("userinfo")
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if host == "" || !strings.Contains(host, ".") || net.ParseIP(host) != nil || strings.Contains(host, ":") {
+	if host == "" || !strings.Contains(host, ".") || net.ParseIP(host) != nil || strings.Contains(host, ":") || numericLastLabel(host) {
 		return "", "", rejectUpdateURL("host")
 	}
 	if isUpdateInternalHost(host) {
@@ -258,7 +315,7 @@ func NormalizeUpdateURL(raw string) (string, string, error) {
 			if youtubeWatch && key != "v" {
 				continue
 			}
-			pairs = append(pairs, pair)
+			pairs = append(pairs, upperPercentHex(pair))
 		}
 	}
 	sort.SliceStable(pairs, func(i, j int) bool {
@@ -267,11 +324,18 @@ func NormalizeUpdateURL(raw string) (string, string, error) {
 		return ki < kj
 	})
 
-	out := url.URL{Scheme: "https", Host: host, Path: u.Path, RawPath: u.RawPath, RawQuery: strings.Join(pairs, "&")}
-	if out.Path == "" {
-		out.Path = "/"
+	// EscapedPath keeps a valid escaped form as given and percent-encodes
+	// anything else (non-ASCII as UTF-8); escape hex is then uppercased so
+	// %c3%a9 and %C3%A9 normalize alike. Query pairs are kept verbatim apart
+	// from the same hex uppercasing.
+	path := upperPercentHex(u.EscapedPath())
+	if path == "" {
+		path = "/"
 	}
-	normalized := out.String()
+	normalized := "https://" + host + path
+	if len(pairs) > 0 {
+		normalized += "?" + strings.Join(pairs, "&")
+	}
 	if len(normalized) > MaxUpdateURLLength {
 		return "", "", rejectUpdateURL("length")
 	}

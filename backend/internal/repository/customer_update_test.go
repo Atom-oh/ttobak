@@ -1,13 +1,104 @@
 package repository
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 )
+
+// assertAbsentOrExpired checks the create condition admits an absent row or an
+// expired TTL row (pendingShareExpiresAt <= now).
+func assertAbsentOrExpired(t *testing.T, in *dynamodb.PutItemInput, now time.Time) {
+	t.Helper()
+	if in.ConditionExpression == nil {
+		t.Fatal("condition missing")
+	}
+	c := *in.ConditionExpression
+	if !strings.Contains(c, "attribute_not_exists") || !strings.Contains(c, " OR ") || !strings.Contains(c, "<=") {
+		t.Fatalf("condition = %s", c)
+	}
+	var ttlName bool
+	for _, n := range in.ExpressionAttributeNames {
+		if n == "pendingShareExpiresAt" {
+			ttlName = true
+		}
+	}
+	if !ttlName {
+		t.Fatalf("TTL attribute not referenced: %v", in.ExpressionAttributeNames)
+	}
+	var nowValue bool
+	for _, v := range in.ExpressionAttributeValues {
+		if n, ok := v.(*types.AttributeValueMemberN); ok && n.Value == strconv.FormatInt(now.Unix(), 10) {
+			nowValue = true
+		}
+	}
+	if !nowValue {
+		t.Fatalf(":now value %d missing: %v", now.Unix(), in.ExpressionAttributeValues)
+	}
+}
+
+func TestCustomerUpdateCreatesTreatExpiredRowsAsAbsent(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	item, err := itemPutInput("tbl", "u1", &model.UpdateItem{URLHash: "h1", SourceIDs: []string{"s1"}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAbsentOrExpired(t, item, now)
+	url, err := urlPendingInput("tbl", "h1", "https://example.com/a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAbsentOrExpired(t, url, now)
+	draft, err := draftPutInput("tbl", "u1", &model.UpdateDraft{AccountID: "a1", URLHash: "h1"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAbsentOrExpired(t, draft, now)
+}
+
+func TestCustomerUpdateDraftPutInputStoresEmptyLists(t *testing.T) {
+	d := &model.UpdateDraft{AccountID: "a1", URLHash: "h1"}
+	in, err := draftPutInput("tbl", "u1", d, time.Unix(1000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"opportunities", "links"} {
+		l, ok := in.Item[name].(*types.AttributeValueMemberL)
+		if !ok || len(l.Value) != 0 {
+			t.Fatalf("%s = %#v, want empty list", name, in.Item[name])
+		}
+	}
+	if d.Opportunities != nil || d.Links != nil || d.ExpiresAt != 0 || d.Status != "" {
+		t.Fatal("input draft must not be mutated")
+	}
+	if got := in.Item["status"].(*types.AttributeValueMemberS).Value; got != model.UpdateDraftNew {
+		t.Fatalf("status = %q", got)
+	}
+}
+
+func TestCustomerUpdateDraftRevisionUpdateNeverWritesNull(t *testing.T) {
+	expr, err := draftRevisionUpdate(&model.UpdateDraft{AccountID: "a1", URLHash: "h"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empties := 0
+	for _, v := range expr.Values() {
+		if _, ok := v.(*types.AttributeValueMemberNULL); ok {
+			t.Fatalf("NULL value written: %v", expr.Values())
+		}
+		if l, ok := v.(*types.AttributeValueMemberL); ok && len(l.Value) == 0 {
+			empties++
+		}
+	}
+	if empties != 2 {
+		t.Fatalf("want 2 empty lists (opportunities, links), got %d: %v", empties, expr.Values())
+	}
+}
 
 func TestCustomerUpdateDraftRevisionUpdate(t *testing.T) {
 	d := &model.UpdateDraft{AccountID: "acc1", URLHash: "h", EditedBody: "x", Status: model.UpdateDraftNew}

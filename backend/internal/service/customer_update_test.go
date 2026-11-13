@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +20,9 @@ type mockUpdateRepo struct {
 	items         map[string]bool // urlHash -> exists
 	drafts        map[string]*model.UpdateDraft
 	listed        []model.UpdateDraft
+	listPage      int // rows per repository page; 0 = 7
+	listCalls     int
+	listLimits    []int
 	ensureCalls   int
 	ensureErr     error
 	putCalls      int
@@ -76,8 +82,32 @@ func (m *mockUpdateRepo) GetDraft(_ context.Context, _, accountID, urlHash strin
 	c := *d
 	return &c, nil
 }
-func (m *mockUpdateRepo) ListDrafts(context.Context, string, string, int, string) ([]model.UpdateDraft, string, error) {
-	return m.listed, "next", nil
+
+// ListDrafts pages m.listed in key order; the cursor is the decimal index of
+// the next row, mirroring the repository's opaque LastEvaluatedKey.
+func (m *mockUpdateRepo) ListDrafts(_ context.Context, _, _ string, limit int, cursor string) ([]model.UpdateDraft, string, error) {
+	m.listCalls++
+	m.listLimits = append(m.listLimits, limit)
+	start := 0
+	if cursor != "" {
+		start, _ = strconv.Atoi(cursor)
+	}
+	size := m.listPage
+	if size == 0 {
+		size = 7
+	}
+	if size > limit {
+		size = limit
+	}
+	end := start + size
+	if end > len(m.listed) {
+		end = len(m.listed)
+	}
+	next := ""
+	if end < len(m.listed) {
+		next = strconv.Itoa(end)
+	}
+	return append([]model.UpdateDraft(nil), m.listed[start:end]...), next, nil
 }
 func (m *mockUpdateRepo) UpdateDraftIfRevision(_ context.Context, _ string, d *model.UpdateDraft, expected int) error {
 	if m.updateDrftErr != nil {
@@ -242,6 +272,21 @@ func TestCustomerUpdateUploadLinks(t *testing.T) {
 		})
 	}
 
+	t.Run("disabled source conflicts before any write", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		paused := slack
+		paused.Status = model.UpdateSourceDisabled
+		repo.sources = []model.UpdateSource{paused}
+		_, err := newUpdateSvc(repo, &mockMembers{}).UploadLinks(context.Background(), "u1",
+			&model.UploadUpdateLinksRequest{SourceID: "slack1", Links: []model.UpdateUploadLink{{URL: "https://example.com/a"}}})
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("err = %v, want ErrConflict", err)
+		}
+		if repo.ensureCalls != 0 || repo.putCalls != 0 || repo.markCalls != 0 {
+			t.Fatalf("writes happened: ensure=%d put=%d mark=%d", repo.ensureCalls, repo.putCalls, repo.markCalls)
+		}
+	})
+
 	t.Run("mixed outcomes", func(t *testing.T) {
 		repo := newMockUpdateRepo()
 		repo.sources = []model.UpdateSource{slack}
@@ -380,8 +425,133 @@ func TestCustomerUpdateListDrafts(t *testing.T) {
 		if members.calls["a1"] != 1 || members.calls["a2"] != 1 {
 			t.Fatalf("calls = %v", members.calls)
 		}
-		if page.NextCursor != "next" {
-			t.Fatalf("cursor = %q", page.NextCursor)
+		if page.NextCursor != "" {
+			t.Fatalf("cursor = %q, want empty on the last page", page.NextCursor)
+		}
+	})
+
+	at := func(h int) time.Time { return updateTestNow.Add(-time.Duration(h) * time.Hour) }
+
+	t.Run("open first, newest first, ties by url hash", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.listPage = 2
+		repo.listed = []model.UpdateDraft{
+			{AccountID: "a1", URLHash: "h1", Status: model.UpdateDraftAdopted, CreatedAt: at(0)},
+			{AccountID: "a1", URLHash: "h2", Status: model.UpdateDraftNew, CreatedAt: at(5)},
+			{AccountID: "a1", URLHash: "h4", Status: model.UpdateDraftNew, CreatedAt: at(1)},
+			{AccountID: "a1", URLHash: "h3", Status: model.UpdateDraftNew, CreatedAt: at(1)},
+			{AccountID: "a1", URLHash: "h5", Status: model.UpdateDraftDismissed, CreatedAt: at(3)},
+		}
+		page, err := newUpdateSvc(repo, &mockMembers{}).ListDrafts(context.Background(), "u1", "a1", 10, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, d := range page.Drafts {
+			got = append(got, d.URLHash)
+		}
+		if strings.Join(got, ",") != "h3,h4,h2,h1,h5" {
+			t.Fatalf("order = %v", got)
+		}
+		if repo.listCalls != 3 {
+			t.Fatalf("repository pages read = %d, want 3 (drained)", repo.listCalls)
+		}
+	})
+
+	t.Run("handled rows do not consume open slots and pages are stable", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.listPage = 3
+		// Key order puts many handled rows before the open ones.
+		for i := 0; i < 6; i++ {
+			repo.listed = append(repo.listed, model.UpdateDraft{AccountID: "a1", URLHash: fmt.Sprintf("d%d", i), Status: model.UpdateDraftDismissed, CreatedAt: at(i)})
+		}
+		for i := 0; i < 3; i++ {
+			repo.listed = append(repo.listed, model.UpdateDraft{AccountID: "a1", URLHash: fmt.Sprintf("n%d", i), Status: model.UpdateDraftNew, CreatedAt: at(10 + i)})
+		}
+		svc := newUpdateSvc(repo, &mockMembers{})
+		first, err := svc.ListDrafts(context.Background(), "u1", "", 3, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, d := range first.Drafts {
+			if d.URLHash != fmt.Sprintf("n%d", i) {
+				t.Fatalf("first page = %+v", first.Drafts)
+			}
+		}
+		if first.NextCursor == "" {
+			t.Fatal("first page must have a cursor")
+		}
+		second, err := svc.ListDrafts(context.Background(), "u1", "", 4, first.NextCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(second.Drafts) != 4 || second.Drafts[0].URLHash != "d0" || second.Drafts[3].URLHash != "d3" {
+			t.Fatalf("second page = %+v", second.Drafts)
+		}
+		third, err := svc.ListDrafts(context.Background(), "u1", "", 4, second.NextCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(third.Drafts) != 2 || third.NextCursor != "" {
+			t.Fatalf("third page = %+v cursor=%q", third.Drafts, third.NextCursor)
+		}
+	})
+
+	t.Run("bad cursor is invalid input", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.listed = []model.UpdateDraft{{AccountID: "a1", URLHash: "h1"}, {AccountID: "a1", URLHash: "h2"}}
+		enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+		for _, c := range []string{"zz!", "next", enc("-1"), enc("abc"), enc("01"), enc("3"), enc(" 1"), strings.Repeat("A", 40)} {
+			if _, err := newUpdateSvc(repo, &mockMembers{}).ListDrafts(context.Background(), "u1", "", 1, c); !errors.Is(err, ErrInvalidInput) {
+				t.Errorf("cursor %q: err = %v, want ErrInvalidInput", c, err)
+			}
+		}
+		page, err := newUpdateSvc(repo, &mockMembers{}).ListDrafts(context.Background(), "u1", "", 1, enc("1"))
+		if err != nil || len(page.Drafts) != 1 || page.NextCursor != "" {
+			t.Fatalf("offset 1: page=%+v err=%v", page, err)
+		}
+	})
+
+	t.Run("scan stops at the cap", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.listPage = 300
+		for i := 0; i < model.MaxUpdateDraftsScan+50; i++ {
+			repo.listed = append(repo.listed, model.UpdateDraft{AccountID: "a1", URLHash: fmt.Sprintf("h%04d", i), Status: model.UpdateDraftNew, CreatedAt: updateTestNow})
+		}
+		svc := newUpdateSvc(repo, &mockMembers{})
+		total := 0
+		cursor := ""
+		for {
+			page, err := svc.ListDrafts(context.Background(), "u1", "a1", 100, cursor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			total += len(page.Drafts)
+			if page.NextCursor == "" {
+				break
+			}
+			cursor = page.NextCursor
+		}
+		if total != model.MaxUpdateDraftsScan {
+			t.Fatalf("total = %d, want %d", total, model.MaxUpdateDraftsScan)
+		}
+		for _, l := range repo.listLimits {
+			if l < 1 || l > model.MaxUpdateDraftsScan {
+				t.Fatalf("repository limit %d out of range", l)
+			}
+		}
+	})
+
+	t.Run("nil slices are returned as empty arrays", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.listed = []model.UpdateDraft{{AccountID: "a1", URLHash: "h1"}}
+		page, err := newUpdateSvc(repo, &mockMembers{}).ListDrafts(context.Background(), "u1", "a1", 10, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(page)
+		if !strings.Contains(string(b), `"opportunities":[]`) || !strings.Contains(string(b), `"links":[]`) || strings.Contains(string(b), "null") {
+			t.Fatalf("json = %s", b)
 		}
 	})
 
@@ -511,6 +681,20 @@ func TestCustomerUpdatePatchDraft(t *testing.T) {
 			&model.PatchUpdateDraftRequest{Action: "adopt"})
 		if !errors.Is(err, ErrForbidden) {
 			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("nil slices are returned as empty arrays", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.drafts["a1#"+hash] = base()
+		got, err := newUpdateSvc(repo, &mockMembers{}).PatchDraft(context.Background(), "u1", "a1", hash,
+			&model.PatchUpdateDraftRequest{Action: "adopt", Revision: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(got)
+		if !strings.Contains(string(b), `"opportunities":[]`) || !strings.Contains(string(b), `"links":[]`) {
+			t.Fatalf("json = %s", b)
 		}
 	})
 

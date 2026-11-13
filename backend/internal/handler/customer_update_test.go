@@ -228,3 +228,66 @@ func TestCustomerUpdateListLimits(t *testing.T) {
 		t.Errorf("account list args: %+v", f)
 	}
 }
+
+// draftListRepo is a minimal repository for wiring the real service; only
+// ListDrafts returns data.
+type draftListRepo struct{ drafts []model.UpdateDraft }
+
+func (r *draftListRepo) PutSourceIfAbsent(context.Context, string, *model.UpdateSource) error {
+	return nil
+}
+func (r *draftListRepo) ListSources(context.Context, string, int) ([]model.UpdateSource, error) {
+	return nil, nil
+}
+func (r *draftListRepo) UpdateSource(context.Context, string, string, *string, *string) error {
+	return nil
+}
+func (r *draftListRepo) DeleteSource(context.Context, string, string) error { return nil }
+func (r *draftListRepo) PutItemsIfAbsent(context.Context, string, string, []model.UpdateItem) (int, error) {
+	return 0, nil
+}
+func (r *draftListRepo) EnsureURLPending(context.Context, string, string) error { return nil }
+func (r *draftListRepo) MarkPending(context.Context, string) error              { return nil }
+func (r *draftListRepo) GetDraft(context.Context, string, string, string) (*model.UpdateDraft, error) {
+	return nil, nil
+}
+func (r *draftListRepo) ListDrafts(context.Context, string, string, int, string) ([]model.UpdateDraft, string, error) {
+	return r.drafts, "", nil
+}
+func (r *draftListRepo) UpdateDraftIfRevision(context.Context, string, *model.UpdateDraft, int) error {
+	return nil
+}
+func (r *draftListRepo) GetAccountOpt(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+func (r *draftListRepo) PutAccountOpt(context.Context, string, string, bool) error { return nil }
+
+type allowAllMembers struct{}
+
+func (allowAllMembers) RequireDirectMember(context.Context, string, string) error { return nil }
+
+func TestCustomerUpdateListDraftsBadCursorIs400(t *testing.T) {
+	svc := service.NewCustomerUpdateService(&draftListRepo{drafts: []model.UpdateDraft{{AccountID: "a1", URLHash: "h1"}}}, allowAllMembers{}, nil)
+	h := NewCustomerUpdateHandler(svc)
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, "u1")))
+		})
+	})
+	r.Get("/api/customer-updates/drafts", h.ListDrafts)
+	r.Get("/api/accounts/{accountId}/customer-update-drafts", h.ListAccountDrafts)
+	for _, path := range []string{
+		"/api/customer-updates/drafts?cursor=not-a-cursor",
+		"/api/customer-updates/drafts?cursor=OTk", // offset 99, beyond the list
+		"/api/accounts/a1/customer-update-drafts?cursor=%21",
+	} {
+		if rec := doCU(r, "GET", path, ""); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"`+model.ErrCodeBadRequest+`"`) {
+			t.Errorf("%s: got %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	rec := doCU(r, "GET", "/api/customer-updates/drafts", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"links":[]`) || !strings.Contains(rec.Body.String(), `"nextCursor":""`) {
+		t.Fatalf("first page: %d %s", rec.Code, rec.Body.String())
+	}
+}
