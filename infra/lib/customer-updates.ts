@@ -55,6 +55,8 @@ export class CustomerUpdates extends Construct {
       environment: { TABLE_NAME: props.table.tableName },
       timeout: cdk.Duration.minutes(10), memorySize: 512,
     });
+    // The EventBridge retryAttempts below does not stop Lambda's own async retries.
+    this.collector.configureAsyncInvoke({ retryAttempts: 0 });
     collectorParts.role.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:Query'], resources: [props.table.tableArn],
       conditions: leadingKeys(['CUFEEDS']),
@@ -83,9 +85,9 @@ export class CustomerUpdates extends Construct {
       timeout: cdk.Duration.minutes(5), memorySize: 512,
       reservedConcurrentExecutions: 1,
     });
+    this.worker.configureAsyncInvoke({ retryAttempts: 0 });
     workerParts.role.addToPolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-        'dynamodb:DeleteItem', 'dynamodb:TransactWriteItems'],
+      actions: ['dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
       resources: [props.table.tableArn],
       conditions: leadingKeys(['USER#*', 'CUFEEDS', 'CUFEED#*', 'CUURL#*', 'CUPENDING']),
     }));

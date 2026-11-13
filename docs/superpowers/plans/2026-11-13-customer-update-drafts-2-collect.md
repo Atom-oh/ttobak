@@ -1,6 +1,6 @@
 # Customer Update Drafts, Plan 2: Server collectors and fan-out
 
-Status: historical implementation plan for 2026-11-13; current behavior is in the code and ADR-026.
+Status: historical implementation plan for 2026-11-13; current behavior is in the code and ADR-004.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -178,3 +178,5 @@ Resources:
 ## Deployment notes
 
 Deploy `TtobakCrawlerStack` individually with `--exclusively` after merge. Acceptance: register an RSS source in Settings, wait for one collector run and one tick, and confirm `CUITEM#` rows exist for that user with `state = new`. No drafts appear until Plans 3 and 4 ship.
+
+Sources created before this deploy get a registry row when their owner next opens Settings.

@@ -918,12 +918,15 @@ no VPC, function URL or other public resource (ADR-004):
   `backend/cmd/customer-updates` built as `bootstrap`, 512 MB, 5 minutes,
   reserved concurrency 1) runs from rule `ttobak-customer-update-tick`,
   `rate(10 minutes)`, input `{"kind":"tick"}`, no retries, 10-minute maximum
-  event age. Its own role has `Query`/`GetItem`/`PutItem`/`UpdateItem`/`DeleteItem`/
-  `TransactWriteItems` on the table with leading keys `USER#*`, `CUFEEDS`,
-  `CUFEED#*`, `CUURL#*` and `CUPENDING`, plus its own log group.
+  event age. Its own role has `Query`/`GetItem`/`PutItem`/`UpdateItem` on the
+  table with leading keys `USER#*`, `CUFEEDS`, `CUFEED#*`, `CUURL#*` and
+  `CUPENDING`, plus its own log group.
 
-Both policies use `dynamodb:LeadingKeys` with a `Null` guard and have no KMS,
-S3, Bedrock or secret statement. Deploy TtobakCrawlerStack with `--exclusively`.
+Both functions also set Lambda asynchronous invocation retries to 0
+(`AWS::Lambda::EventInvokeConfig`), since the schedule target setting does not
+cover Lambda's own retries. Both policies use `dynamodb:LeadingKeys` with a
+`Null` guard and have no KMS, S3, Bedrock or secret statement. Deploy
+TtobakCrawlerStack with `--exclusively`.
 
 ## Summary privacy writer activation
 

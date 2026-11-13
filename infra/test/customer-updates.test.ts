@@ -109,10 +109,18 @@ describe('CustomerUpdates', () => {
     expect(dyn).toHaveLength(1);
     expect(leadingKeys(dyn[0])).toEqual(['USER#*', 'CUFEEDS', 'CUFEED#*', 'CUURL#*', 'CUPENDING']);
     expect(asArray(dyn[0].Action).sort()).toEqual([
-      'dynamodb:DeleteItem', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query',
-      'dynamodb:TransactWriteItems', 'dynamodb:UpdateItem']);
+      'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem']);
     expect(dyn[0].Condition.Null).toEqual({ 'dynamodb:LeadingKeys': 'false' });
   });
+
+  test.each([['collector', collector], ['worker', worker]])(
+    '%s has Lambda async retries disabled', (_name, f) => {
+      const configs = Object.values(template.findResources('AWS::Lambda::EventInvokeConfig', {
+        Properties: { FunctionName: { Ref: f.id } },
+      })) as any[];
+      expect(configs).toHaveLength(1);
+      expect(configs[0].Properties.MaximumRetryAttempts).toBe(0);
+    });
 
   test('collect rule: hourly, no retries', () => {
     const rule = Object.values(template.findResources('AWS::Events::Rule', {

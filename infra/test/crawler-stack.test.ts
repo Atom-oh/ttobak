@@ -143,7 +143,9 @@ describe('CrawlerStack', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
         FunctionName: 'ttobak-news-manual', Handler: 'news_manual.handler',
       });
-      const configs = template.findResources('AWS::Lambda::EventInvokeConfig');
+      const configs = template.findResources('AWS::Lambda::EventInvokeConfig', {
+        Properties: { FunctionName: { Ref: starterId() } },
+      });
       expect(Object.values(configs).map((c: any) => c.Properties)).toEqual([{
         FunctionName: { Ref: starterId() },
         Qualifier: '$LATEST',
