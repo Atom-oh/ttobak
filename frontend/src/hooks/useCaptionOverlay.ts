@@ -20,7 +20,7 @@ import {
   type CaptionStyle,
   type WindowLayout,
 } from '@/lib/captionOverlay';
-import type { ExtraLiveLanguage } from '@/lib/liveTranslation';
+import type { ExtraLiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
 
 // Mac app only: drives the floating caption windows. Outside the Mac app the
 // hook makes no calls and reports `supported: false`. Caption text is never logged.
@@ -53,7 +53,13 @@ function errorCode(err: unknown): string {
   return typeof code === 'string' ? code : 'aws-error';
 }
 
-export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): CaptionOverlayState {
+export interface CaptionOverlayOptions {
+  isRecording: boolean;
+  /** Receives every caption update of an open window, for an in-app copy. Nothing is stored. */
+  onEntry?: (lang: CaptionLang, entry: TranslationEntry) => void;
+}
+
+export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOptions): CaptionOverlayState {
   const [supported, setSupported] = useState(false);
   const [view, setView] = useState<CaptionSettingsView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +71,10 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
   const reopenedRef = useRef(false);
   const arrangingRef = useRef(false);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onEntryRef = useRef(onEntry);
+  useEffect(() => {
+    onEntryRef.current = onEntry;
+  }, [onEntry]);
 
   const cancelPreviewTimer = useCallback(() => {
     if (previewTimerRef.current === null) return;
@@ -144,7 +154,10 @@ export function useCaptionOverlay({ isRecording }: { isRecording: boolean }): Ca
 
   useEffect(() => {
     if (!isTauri()) return;
-    const controller = new CaptionOverlayController({ onError: setError });
+    const controller = new CaptionOverlayController({
+      onError: setError,
+      onEntry: (lang, entry) => onEntryRef.current?.(lang, entry),
+    });
     controllerRef.current = controller;
     getCaptionSettings().then(applyView, handleLoadError);
     return () => {

@@ -56,8 +56,8 @@ async function loadTranscribeConfig(): Promise<TranscribeStreamingConfig | null>
 /**
  * Live interpretation with no meeting (Mac app only). The Mac app captures
  * microphone plus system audio without writing a file (`start_listening`);
- * the PCM feeds Transcribe Streaming and each caption is translated through
- * `/api/translate`. Nothing is saved: no meeting, transcript, upload or
+ * the PCM feeds Transcribe Streaming and each recognized segment goes to
+ * the caption windows' engines (`onSegment`). Nothing is saved: no meeting, transcript, upload or
  * browser storage, and caption text is never logged here.
  *
  * The session logic lives in `lib/interpretController.ts`; this hook wires it
@@ -108,7 +108,9 @@ export function useInterpretSession({ targetLang, interimTranslation, onSegment,
             },
           },
           targetLang: options.targetLang,
-          translationEnabled: true,
+          // The screen shows the caption windows' own translations (the
+          // user's AWS profile); the server translation is not requested.
+          translationEnabled: false,
           interimTranslation: options.interimTranslation,
           transcribeStreamingConfig,
           extraLanguage: getExtraLanguageRef.current?.(),
