@@ -260,7 +260,7 @@ function truncateBytes(value: string, bytes: number): string {
 }
 
 /** Removes join links (and their passcodes) and repeated room names. */
-export function sanitizeLocation(location: string | undefined): string | undefined {
+export function sanitizeLocation(location: string | undefined, bytes = 256): string | undefined {
   if (!location) return undefined;
   const parts: string[] = [];
   for (const raw of location.split(/[;\n]/)) {
@@ -268,7 +268,7 @@ export function sanitizeLocation(location: string | undefined): string | undefin
       .replace(/\S*(?:pwd|passcode|password)=\S*/gi, '').replace(/\s+/g, ' ').trim();
     if (part && !parts.includes(part)) parts.push(part);
   }
-  const joined = truncateBytes(parts.join('; '), 256).trim();
+  const joined = truncateBytes(parts.join('; '), bytes).trim();
   return joined || undefined;
 }
 
@@ -375,6 +375,9 @@ function applyShare(event: CalendarEvent, fields: ShareFields | undefined): void
   if (candidates.length) event.candidateAccountIds = [...new Set(candidates)].sort().slice(0, 5);
 }
 
+/** Bound on the untruncated text matched for sharing (Outlook subjects are far shorter). */
+const MATCH_TEXT_BYTES = 8192;
+
 function decideSharing(event: CalendarEvent, item: OutlookItem, previous: LedgerEntry | undefined, sharing: PlanSharing): void {
   // seriesKey is not sent yet: the server keys overrides by it, and a series hide does
   // not reach already-synced occurrences, so overrides stay per occurrence for now.
@@ -385,16 +388,39 @@ function decideSharing(event: CalendarEvent, item: OutlookItem, previous: Ledger
     event.private = true;
     return;
   }
-  // This runner proposes Accounts only: a match is sent as a candidate, never as an
-  // automatic share. The owner shares from TTOBAK (an account override).
   if (!sharing.matcher) {
-    applyShare(event, { candidateAccountIds: previous?.share?.candidateAccountIds });
+    applyShare(event, previous?.share);
     return;
   }
   const domains = [...(facts?.domains ?? []), ...(event.organizerDomain ? [event.organizerDomain] : [])];
-  const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
-  if (result.kind === 'matched') applyShare(event, { candidateAccountIds: [result.accountId] });
-  else if (result.kind === 'candidate') applyShare(event, { candidateAccountIds: result.accountIds });
+  // Match the untruncated subject and location: a byte cut could turn a longer word into an
+  // alias hit or drop a second account's alias, and a single match may be shared automatically.
+  const subject = item.subject?.trim() ? item.subject : event.title;
+  // Sanitizing can lengthen a location (parts are rejoined with "; "), so the bound is
+  // measured on the sanitized, untruncated text.
+  const location = sanitizeLocation(item.location, Number.POSITIVE_INFINITY) ?? '';
+  const matched = sharing.matcher.match({ title: truncateBytes(subject, MATCH_TEXT_BYTES),
+    location: truncateBytes(location, MATCH_TEXT_BYTES), domains });
+  // Text beyond even that bound is still cut, so its single match is only a candidate.
+  const overlong = Buffer.byteLength(subject) > MATCH_TEXT_BYTES || Buffer.byteLength(location) > MATCH_TEXT_BYTES;
+  const result: typeof matched = overlong && matched.kind === 'matched'
+    ? { kind: 'candidate', accountIds: [matched.accountId] } : matched;
+  // A lookup without an answer must not drop a share that rested on attendee domains.
+  // A directory that no longer lists the account (membership gone) drops the share instead.
+  if (facts == null && previous?.share?.shareEvidence?.includes('domain') &&
+      !!previous.share.shareAccountId && sharing.matcher.lists(previous.share.shareAccountId) &&
+      !(result.kind === 'matched' && result.accountId === previous.share.shareAccountId)) {
+    applyShare(event, previous.share);
+  } else if (result.kind === 'matched' && facts == null) {
+    // Without a privacy answer a new automatic share is withheld: an event already
+    // shared to this account keeps its share, otherwise the match is only a candidate.
+    if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
+    else applyShare(event, { candidateAccountIds: [result.accountId] });
+  } else if (result.kind === 'matched') {
+    applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
+  } else if (result.kind === 'candidate') {
+    applyShare(event, { candidateAccountIds: result.accountIds });
+  }
 }
 
 export interface Plan {
@@ -709,8 +735,12 @@ export async function runCalendar(options: CalendarRunOptions): Promise<Calendar
   const directory = await readDirectory(options.api);
   const matcher = directory ? buildMatcher(directory, options.ownDomains?.length ? options.ownDomains : DEFAULT_OWN_DOMAINS) : null;
   const facts = new Map<string, MeetingFacts | null>();
-  if (matcher && options.attendees) {
-    for (const item of sharingCandidates(items, window)) facts.set(item.meetingId, await options.attendees.factsFor(item));
+  // Privacy lookups do not depend on the directory: without it, events that keep a
+  // previous share are still looked up, so a private answer reaches that run too.
+  const lookups = sharingCandidates(items, window)
+    .filter(item => matcher || state.ledger[item.meetingId]?.share?.shareAccountId);
+  if (options.attendees && (matcher || lookups.length)) {
+    for (const item of lookups) facts.set(item.meetingId, await options.attendees.factsFor(item));
     options.attendees.save(now);
   }
   const plan = planCalendar(items, state.ledger, window, zone, options.responses, { sourceId, matcher, facts });
