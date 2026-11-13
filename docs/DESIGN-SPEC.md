@@ -558,6 +558,10 @@ is labeled contained. Matching rows are preselected and listed first (exact, the
 contained, then the rest, each by normalized company); other rows start
 unselected. A file that maps neither company nor email keeps every row selected
 in file order. Import still runs only when the user confirms the selected rows.
+The file picker on this tab and in Settings' bulk import sits in a dashed drop
+zone (`useContactFileDrop` in `src/lib/contactFileDrop.ts`): dropping exactly one
+file loads it like the picker, several files are refused with a message, and a
+drop while an import runs is ignored. Other drop targets keep their own handling.
 Existing and earlier imported rows are checked for matching email or phone;
 shared office numbers can cause skips, and concurrent imports can race. Import is
 scoped to the currently selected Account and authenticated user. Manual entry,

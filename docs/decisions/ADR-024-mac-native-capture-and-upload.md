@@ -14,6 +14,10 @@
   capability is granted only to `https://ttobak.atomai.click`.
 - Minimum macOS is 14.2, where the process tap API exists. The screen is never
   captured.
+- The main window sets `dragDropEnabled: false`, so file drops reach the page's
+  HTML5 drop zones instead of Tauri's native drop events. `FileDropGuard` blocks
+  a file dropped outside any zone, which would otherwise navigate the WebView to
+  the local file.
 
 ### Capture
 

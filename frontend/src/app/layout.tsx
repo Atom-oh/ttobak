@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/components/auth/AuthProvider';
 import { NativeControlBridge } from '@/components/NativeControlBridge';
+import { FileDropGuard } from '@/components/FileDropGuard';
 import { MeetingDetectionBanner } from '@/components/MeetingDetectionBanner';
 import { DialogRouteGuard } from '@/components/DialogRouteGuard';
 
@@ -52,6 +53,7 @@ export default function RootLayout({
       <body className="font-sans antialiased bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100">
         <AuthProvider>
           <NativeControlBridge />
+          <FileDropGuard />
           <MeetingDetectionBanner />
           <DialogRouteGuard />
           {children}

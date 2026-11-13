@@ -13,6 +13,7 @@ manifests.
 
 ### Added
 
+- Drag and drop a Remember CSV or .xlsx export onto the contact import fields on the Account page and in Settings, in the browser and the Mac app; the Mac app's other upload drop zones now receive drops too.
 - Personalized Assistant cards and meeting-aware questions; automatic read-only answers to spoken questions, enabled by default with a separate external-search opt-in (#894).
 
 ## [1.0.0] - 2026-11-11
