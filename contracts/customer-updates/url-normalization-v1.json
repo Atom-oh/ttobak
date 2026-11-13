@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {"raw": "https://AWS.amazon.com/about-aws/whats-new/2026/11/x/?utm_source=slack&sc_channel=sm#top", "normalized": "https://aws.amazon.com/about-aws/whats-new/2026/11/x/"},
+    {"raw": "https://example.com/a?b=2&a=1&gclid=zz", "normalized": "https://example.com/a?a=1&b=2"},
+    {"raw": "https://example.com:443/a", "normalized": "https://example.com/a"},
+    {"raw": "https://www.youtube.com/watch?v=abc123&t=10s", "normalized": "https://www.youtube.com/watch?v=abc123"},
+    {"raw": "http://example.com/a", "rejected": "scheme"},
+    {"raw": "https://user:pw@example.com/", "rejected": "userinfo"},
+    {"raw": "https://10.0.0.5/x", "rejected": "host"},
+    {"raw": "https://localhost/x", "rejected": "host"},
+    {"raw": "https://team.slack.com/archives/C1/p1", "rejected": "internal_host"},
+    {"raw": "https://w.amazon.com/bin/view/X", "rejected": "internal_host"}
+  ]
+}
