@@ -25272,10 +25272,10 @@ function buildMatcher(accounts, ownDomains2) {
     ),
     domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d))
   }));
-  const listed = new Set(accounts.map((a) => a.accountId));
+  const listed2 = new Set(accounts.map((a) => a.accountId));
   return {
     lists(accountId) {
-      return listed.has(accountId);
+      return listed2.has(accountId);
     },
     match(input) {
       const title = normalize(input.title);
